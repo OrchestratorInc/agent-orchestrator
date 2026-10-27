@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
-import type { EndpointKind } from "./endpoints";
+import { normalizeServerHost, type EndpointKind } from "./endpoints";
 import { useCallback, useEffect, useState } from "react";
 
 // The user points the app at their AO daemon (over Tailscale/LAN). We store the
@@ -41,17 +41,13 @@ export const DEFAULT_CONFIG: ServerConfig = {
 };
 
 export function authHeaders(cfg: ServerConfig): Record<string, string> {
-	return cfg.password ? { Authorization: `Bearer ${cfg.password}` } : {};
+	return {
+		...(cfg.password ? { Authorization: `Bearer ${cfg.password}` } : {}),
+		...(cfg.hostId ? { "X-AO-Expected-Host-ID": cfg.hostId } : {}),
+	};
 }
 
-// Strip a pasted scheme (http://, ws://, …) and trailing slashes so we never
-// build a double-scheme URL like "http://https://host".
-export function normalizeServerHost(host: string): string {
-	return host
-		.trim()
-		.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
-		.replace(/\/+$/, "");
-}
+export { normalizeServerHost } from "./endpoints";
 
 // Non-secret host/port/TLS config lives in AsyncStorage (plaintext app sandbox).
 const KEY = "ao.serverConfig";
@@ -115,6 +111,26 @@ export function muxUrl(cfg: ServerConfig): string {
 	// The Go daemon serves the terminal mux at /mux on the same HTTP port as the
 	// REST API (not a separate mux port).
 	return `${cfg.secure ? "wss" : "ws"}://${normalizeServerHost(cfg.host)}:${cfg.httpPort}/mux`;
+}
+
+/**
+ * What identifies the machine a config points at, for state that belongs to a
+ * daemon rather than to an address.
+ *
+ * The same daemon answers over LAN, Tailscale and the tunnel, and the app races
+ * those on every reconnect, so keying such state by address gives one machine
+ * several identities and loses the state on every network change. A pairing
+ * migrated from the single-server config has no identity until it connects
+ * once, so it falls back to the address.
+ *
+ * One function because two callers already need the same rule — the chat event
+ * cursor (eventCursorKey) and the store's retained project list — and a machine
+ * that counted as the same one for the cursor but a different one for the
+ * project list would be a bug in whichever disagreed.
+ */
+export function machineIdentity(cfg: ServerConfig): string {
+	if (cfg.hostId) return `host.${cfg.hostId}`;
+	return `${cfg.secure ? "https" : "http"}.${cfg.host}.${cfg.httpPort}`;
 }
 
 export function isConfigured(cfg: ServerConfig): boolean {

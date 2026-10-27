@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -35,6 +36,18 @@ func openConversation(t *testing.T) (*conversation, *scriptedServer) {
 	}
 	t.Cleanup(func() { _ = conv.Close() })
 	return conv.(*conversation), srv
+}
+
+func TestReadHistoryIgnoresEmptyCompletedTurnError(t *testing.T) {
+	conv, srv := openProviderFailureConversation(t)
+	srv.reply("thread/read", `{"thread":{"id":"thread-1","turns":[{"id":"turn-a","status":"completed","error":{}}]}}`)
+	events, err := conv.ReadHistory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1].Kind != ports.ChatEventTurnCompleted || events[1].Err != nil || events[1].TurnState != "completed" {
+		t.Fatalf("empty error changed history: %#v", events)
+	}
 }
 
 func TestReadHistoryReconstructsNativeTurnsForTheChatTimeline(t *testing.T) {
@@ -79,6 +92,24 @@ func TestReadHistoryReconstructsNativeTurnsForTheChatTimeline(t *testing.T) {
 	}
 	if events[4].TurnState != "completed" {
 		t.Errorf("recovered turn state = %q", events[4].TurnState)
+	}
+}
+
+func TestReadHistoryPreservesStructuredProviderFailure(t *testing.T) {
+	conv, srv := openConversation(t)
+	srv.reply("thread/read", `{"thread":{"id":"thread-1","turns":[`+
+		`{"id":"turn-a","status":"failed","items":[],"error":{"message":"Usage limit reached","additionalDetails":"Resets tomorrow."}}`+
+		`]}}`)
+
+	events, err := conv.ReadHistory(context.Background())
+	if err != nil {
+		t.Fatalf("ReadHistory: %v", err)
+	}
+	if len(events) != 2 || events[1].Kind != ports.ChatEventTurnCompleted {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[1].Err == nil || events[1].Err.Error() != "Usage limit reached\n\nResets tomorrow." {
+		t.Fatalf("completion error = %#v", events[1].Err)
 	}
 }
 
@@ -239,6 +270,28 @@ func TestRollbackRefusesATurnTheProviderDoesNotHave(t *testing.T) {
 // The provider refuses a rollback while a turn runs. That refusal must reach the
 // caller as a conflict, not as an internal failure: it is an ordinary thing to press
 // undo a moment too early.
+func TestRollbackUsesRevertWhenTheProviderRemovedRollback(t *testing.T) {
+	for _, code := range []int{-32600, -32601} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			conv, srv := openConversation(t)
+			srv.reply("thread/read", threadWithTurns)
+			srv.replyError("thread/rollback", code, "Invalid request: unknown variant `thread/rollback`")
+			srv.reply("thread/revert", `{"thread":{"id":"thread-1"}}`)
+			if err := conv.Rollback(context.Background(), "turn-b"); err != nil {
+				t.Fatal(err)
+			}
+			sent := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/revert" })
+			var params map[string]any
+			if err := json.Unmarshal(sent.Params, &params); err != nil {
+				t.Fatal(err)
+			}
+			if len(params) != 2 || params["threadId"] != "thread-1" || params["beforeTurnId"] != "turn-b" {
+				t.Fatalf("revert target = %v, want thread-1 before turn-b", params)
+			}
+		})
+	}
+}
+
 func TestRollbackTranslatesTheMidTurnRefusal(t *testing.T) {
 	conv, srv := openConversation(t)
 	srv.reply("thread/read", threadWithTurns)
@@ -250,6 +303,9 @@ func TestRollbackTranslatesTheMidTurnRefusal(t *testing.T) {
 	}
 	if !isRefusal(err) {
 		t.Errorf("err = %v, want a provider refusal", err)
+	}
+	if srv.sentMethod("thread/revert") {
+		t.Fatal("a busy refusal must not trigger a destructive fallback")
 	}
 	if !strings.Contains(err.Error(), "turn is in progress") {
 		t.Errorf("err = %v, want the provider's own explanation carried through", err)

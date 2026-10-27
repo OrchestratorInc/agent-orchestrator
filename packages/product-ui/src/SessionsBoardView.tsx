@@ -4,6 +4,8 @@ import {
 	memo,
 	startTransition,
 	useEffect,
+	useLayoutEffect,
+	useRef,
 	useState,
 	type HTMLAttributes,
 	type ReactElement,
@@ -20,6 +22,7 @@ import {
 } from "./icons";
 import {
 	attentionZone,
+	defaultProductUITranslator,
 	getDisplayStatusLabel,
 	getKanbanColumnView,
 	getSessionStatusView,
@@ -28,6 +31,7 @@ import {
 	type ProductUITranslator,
 } from "./session-presentation";
 import type { KanbanColumn, SessionActivity, SessionStatus } from "./session-models";
+import { UserAvatar } from "./UserAvatar";
 import { cn } from "./utils";
 
 export type BoardSessionPresentation = {
@@ -52,6 +56,14 @@ export type BoardSessionPresentation = {
 	 * send one falls back to the translated {@link status} label.
 	 */
 	displayStatus?: string;
+	statusReadiness?: "checking" | "ready" | "unavailable";
+	/**
+	 * Daemon-confirmed termination fact. `status` can already read "merged"
+	 * while the session is still live (the SCM merged before the session
+	 * exited), so the finished-card PR progress footer requires this in
+	 * addition to `status` before it renders.
+	 */
+	isTerminated?: boolean;
 	provider: string;
 	status: SessionStatus;
 	statusPresentation?: BoardSessionStatusPresentation;
@@ -70,17 +82,32 @@ export type BoardSessionStatusPresentation = {
 
 export type BoardPullRequestState = "closed" | "open" | "draft" | "merged";
 
-export type BoardReviewerAvatar = {
-	login: string;
-	url?: string;
+// Display statuses that mean work is still turning, and so earn the spinning
+// loader beside the card's status label: the review the PR is waiting on, or an
+// AO-driven loop working the PR. Settled phrases ("Mergeable", "Approved",
+// "Merged") are deliberately absent — see #4725 and #5081.
+const IN_PROGRESS_DISPLAY_STATUSES = new Set<string>([
+	"Review pending",
+	"Fixing CI failures",
+	"Addressing comments",
+	"Reviewing",
+]);
+
+export type BoardReviewerPresentation = {
+	id: string;
+	avatarUrl?: string;
 };
 
 export type BoardPullRequestPresentation = {
 	commentCount?: number;
 	number: number;
-	reviewerAvatars?: BoardReviewerAvatar[];
+	reviewers?: BoardReviewerPresentation[];
 	state: BoardPullRequestState;
 	url: string;
+};
+
+export type BoardPullRequestProgress = Record<BoardPullRequestState, number> & {
+	total: number;
 };
 
 export type BoardUsagePresentation = {
@@ -89,6 +116,7 @@ export type BoardUsagePresentation = {
 };
 
 export type BoardPullRequestLabels = {
+	progress?: (progress: BoardPullRequestProgress) => string;
 	short: string;
 	states: Record<BoardPullRequestState, string>;
 };
@@ -191,8 +219,11 @@ function BoardColumnView<TSession extends BoardSessionPresentation>({
 
 export type SessionCardViewProps = {
 		action?: ReactNode;
+	/** Latest session artifacts, shown as evidence below the PRs. */
+	artifacts?: ReactNode;
 	branchAction?: ReactNode;
 	branchIcon?: ReactNode;
+	branchLabel?: ReactNode;
 	error?: string;
 	externalLink: ExternalLinkComponent;
 	footer?: ReactNode;
@@ -208,15 +239,22 @@ export type SessionCardViewProps = {
 	prs?: BoardPullRequestPresentation[];
 	renderAvatar: (provider: string) => ReactNode;
 	renderUsage?: (usage: BoardUsagePresentation) => ReactNode;
+	/** Live cost on the machine (memory, CPU while working), shown before
+	 * token usage. Grey unless this card is part of the fix for a tight machine. */
+	resource?: BoardUsagePresentation & { tone?: "neutral" | "warning" | "critical" };
 	session: BoardSessionPresentation;
+	/** A short label above the title, such as whose session this is. */
+	tag?: ReactNode;
 	translate?: ProductUITranslator;
 	usage?: BoardUsagePresentation;
 };
 
 export function SessionCardView({
 	action,
+	artifacts,
 	branchAction,
 	branchIcon,
+	branchLabel,
 	error,
 	externalLink,
 	footer,
@@ -227,28 +265,61 @@ export function SessionCardView({
 	prs = [],
 	renderAvatar,
 	renderUsage = (usage) => <SessionUsageMetricView usage={usage} />,
+	resource,
 	session,
+	tag,
 	translate,
 	usage,
 }: SessionCardViewProps) {
+	const translateStatus = translate ?? defaultProductUITranslator;
 	const badge = getSessionStatusView(session.status, translate);
 	const statusPresentation = session.statusPresentation;
 	const needsAttention = boardSessionNeedsAttention(session);
 	const needsAttentionChip = needsAttention;
 	const column = getKanbanColumnView(toKanbanColumn(session.kanbanColumn, session.status), translate);
+	const statusClassName =
+		session.displayStatus === "Closed without merge"
+			? "text-status-exited"
+			: session.status === "mergeable" || session.displayStatus === "Mergeable"
+				? "text-success"
+				: (session.statusPresentation?.className ?? column.titleClassName);
 	const branch = session.branch ?? "";
-	const showBranch = branch !== "" && !sameLabel(branch, session.title) && !sameLabel(branch, session.id);
+	const showBranch = Boolean(branchLabel) || (branch !== "" && !sameLabel(branch, session.title) && !sameLabel(branch, session.id));
 	const renderedStatusLabel =
-		statusPresentation?.label ??
-		(session.displayStatus ? getDisplayStatusLabel(session.displayStatus, translate) : badge.label);
+		session.statusReadiness === "checking"
+			? translateStatus("session.statusChecking")
+			: session.statusReadiness === "unavailable"
+				? translateStatus("session.statusUnavailable")
+				: (statusPresentation?.label ??
+					(session.displayStatus ? getDisplayStatusLabel(session.displayStatus, translate) : badge.label));
+	// Additive summary footer, not a replacement for renderedStatusLabel: it
+	// only appears once the daemon confirms the session is actually finished
+	// ("terminated", or "merged" with isTerminated true -- a live session can
+	// already read "merged" before it exits and gain more PRs).
+	const isFinishedForPullRequestProgress =
+		session.status === "terminated" ||
+		(session.status === "merged" && session.isTerminated === true);
+	const pullRequestProgressLabel =
+		prs.length > 0 && isFinishedForPullRequestProgress
+			? labels.pr.progress?.(countBoardPullRequests(prs))
+			: undefined;
 	const showStatusLoader =
+		session.statusReadiness === "checking" || (session.statusReadiness !== "unavailable" &&
 		!needsAttention &&
 		session.displayStatus !== "Needs human review" &&
+		// "Draft" describes the PR, not work AO is turning, so it gets no loader
+		// even while the worker is live.
+		session.displayStatus !== "Draft" &&
 		(session.status === "working" ||
-			session.status === "review_pending" ||
-			session.displayStatus === "Fixing CI failures" ||
-			session.displayStatus === "Addressing comments" ||
-			session.displayStatus === "Reviewing");
+			// The label reads `displayStatus`, so the loader must too. `status`
+			// aggregates the session's WORST open PR while `displayStatus` describes
+			// its BEST one, so keying the loader off `status` spun a settled
+			// "Mergeable" card forever whenever a sibling PR was still review-pending
+			// (#5081). Fall back to `status` only for a daemon too old to send
+			// `displayStatus`.
+			(session.displayStatus
+				? IN_PROGRESS_DISPLAY_STATUSES.has(session.displayStatus)
+				: session.status === "review_pending")));
 
 	return (
 		<div
@@ -258,7 +329,7 @@ export function SessionCardView({
 				"group relative w-full rounded-lg border border-border text-left transition-[background-color,box-shadow,transform] duration-[120ms] ease-out",
 				badge.cardClassName ?? "border-border bg-surface",
 				interactive &&
-					"cursor-pointer hover:bg-interactive-hover focus-within:bg-interactive-hover active:scale-[0.99] has-[.pr-link:active]:scale-100",
+					"cursor-pointer hover:bg-interactive-hover focus-within:bg-interactive-hover active:scale-[0.99] has-[button:active]:scale-100 has-[a:active]:scale-100",
 				needsAttention &&
 					"animate-attention-card-pulse border-status-needs-you bg-[color-mix(in_srgb,var(--color-status-needs-you)_8%,var(--color-surface))]",
 			)}
@@ -273,6 +344,11 @@ export function SessionCardView({
 				/>
 			) : null}
 			<div className="px-3.5 pb-2.5 pt-2.5">
+				{tag ? (
+					<div className="mb-1.5 flex min-w-0" data-testid="board-session-tag">
+						{tag}
+					</div>
+				) : null}
 				<div className="flex min-w-0 items-center gap-2.5">
 					{renderAvatar(session.provider)}
 					<div
@@ -289,9 +365,9 @@ export function SessionCardView({
 					) : null}
 				</div>
 				{showBranch && (
-					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-mono text-2xs text-muted-foreground">
+					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground">
 						{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
-						<span className="truncate text-muted-foreground">{branch}</span>
+						{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
 						{branchAction}
 					</div>
 				)}
@@ -299,7 +375,7 @@ export function SessionCardView({
 			{prs.length > 0 && (
 				<div className="flex min-w-0 flex-col gap-1.5 px-3.5 pb-1">
 					{prs.length > 0 && (
-						<div className="flex min-w-0 flex-col gap-y-1 font-mono text-2xs text-muted-foreground">
+						<div className="flex min-w-0 flex-col gap-y-1 font-sans text-2xs text-muted-foreground">
 							{groupBoardPullRequests(prs).flatMap((group) => {
 								const compact = group.prs.filter((pr) => (pr.commentCount ?? 0) === 0);
 								const commented = group.prs.filter((pr) => (pr.commentCount ?? 0) > 0);
@@ -319,6 +395,7 @@ export function SessionCardView({
 					)}
 				</div>
 			)}
+			{artifacts ? <div className="relative z-10 min-w-0 px-3.5 pb-2">{artifacts}</div> : null}
 			<div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 border-t border-border px-3.5 py-2.5">
 				<div className="flex min-w-0 flex-1">
 					<span
@@ -326,26 +403,40 @@ export function SessionCardView({
 							"inline-flex min-w-0 max-w-full items-center text-2xs font-medium",
 							needsAttentionChip
 								? "text-status-needs-you"
-								: session.status === "mergeable" || session.displayStatus === "Mergeable"
-									? "text-success"
-									: (statusPresentation?.className ?? column.titleClassName),
+								: statusClassName,
 						)}
 						data-kanban-column={statusPresentation ? undefined : column.column}
 						data-testid="session-status"
 					>
 						{showStatusLoader ? <LoaderCircleIcon aria-hidden="true" className="mr-1 size-icon-2xs animate-spin" /> : null}
-						<span className="min-w-0 truncate">
-							{renderedStatusLabel}
-						</span>
+						<span className="min-w-0 truncate">{renderedStatusLabel}</span>
 					</span>
 				</div>
 				<div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap text-2xs text-muted-foreground">
+					{resource ? (
+						<SessionUsageMetricView
+							className={cn(resource.tone === "critical" && "text-destructive", resource.tone === "warning" && "text-warning")}
+							data-resource-tone={resource.tone ?? "neutral"}
+							data-testid="session-resource"
+							usage={resource}
+						/>
+					) : null}
+					{resource ? <span aria-hidden="true" className="text-border-strong">·</span> : null}
 					{usage ? renderUsage(usage) : null}
 					{usage ? <span aria-hidden="true" className="text-border-strong">·</span> : null}
 					<span className="tabular-nums text-muted-foreground" title={labels.updatedAt(session.updatedAt)}>
 						{labels.formatTime(session.updatedAt)}
 					</span>
 				</div>
+				{pullRequestProgressLabel ? (
+					<div
+						className="col-span-2 min-w-0 truncate text-2xs text-muted-foreground"
+						data-testid="session-pr-progress"
+						title={pullRequestProgressLabel}
+					>
+						{pullRequestProgressLabel}
+					</div>
+				) : null}
 			</div>
 			{error ? (
 				<div className="border-t border-border px-3.5 py-1.5 text-2xs text-destructive" role="alert">
@@ -358,6 +449,7 @@ export function SessionCardView({
 }
 
 function boardSessionNeedsAttention(session: BoardSessionPresentation): boolean {
+	if (session.statusReadiness && session.statusReadiness !== "ready") return false;
 	if (session.statusPresentation) return false;
 	switch (session.displayStatus) {
 		case "Blocked":
@@ -380,7 +472,7 @@ export const SessionUsageMetricView = forwardRef<
 	<span
 		{...props}
 		className={cn(
-			"inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-2xs text-muted-foreground",
+			"inline-flex shrink-0 items-center gap-1 whitespace-nowrap font-sans text-2xs text-muted-foreground",
 			className,
 		)}
 		ref={ref}
@@ -411,30 +503,42 @@ function BoardPullRequestGroup({
 	const statusLabel = labels.states[group.state];
 	const linkClassName = "pr-link hover:underline";
 	return (
-		<div className="flex min-w-0 items-center gap-x-2">
+		// Wraps so a session with several PRs of one state stays inside the card
+		// instead of shrinking its gaps away and spilling past the edge.
+		<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
 			{group.prs.map((pr) => {
 				const hasComments = (pr.commentCount ?? 0) > 0;
 				return (
 					<Fragment key={pr.url || pr.number}>
 						<ExternalLink
 							ariaLabel={`PR #${pr.number} ${statusLabel}`}
-							className={cn("inline-flex min-w-0 items-center gap-x-2 py-0.5", linkClassName)}
+							// `shrink-0` keeps wrapping the only way a crowded row can resolve:
+							// without it the row squeezes entries into each other, and the
+							// number below — which has no box of its own to be clipped by —
+							// paints straight over its neighbour and past the card's edge.
+							// `max-w-full` is the floor for the one case wrapping cannot fix,
+							// a single entry wider than the row, which truncates instead.
+							className={cn(
+								"inline-flex min-w-0 max-w-full shrink-0 items-center gap-x-2 py-0.5",
+								linkClassName,
+							)}
 							href={pr.url}
 							stopPropagation
 						>
 			<PullRequestLifecycleIcon state={group.state} />
 			<span className="sr-only">{labels.short}</span>
-			<span className="font-mono text-xs font-medium text-foreground">#{pr.number}</span>
+			<span className="truncate font-sans text-xs font-medium text-foreground">#{pr.number}</span>
 			<span className="sr-only">{statusLabel}</span>
 			{hasComments ? (
 				<div className="-ml-0.5 flex shrink-0 items-center pl-1">
-					{(pr.reviewerAvatars ?? [])
+					{(pr.reviewers ?? [])
 						.slice(0, 3)
-						.map((avatar, index) => (
-							<ReviewerAvatar
-								avatar={avatar}
-								className={index > 0 ? "-ml-1.5" : undefined}
-								key={`${avatar.login}-${index}`}
+						.map((reviewer, index) => (
+							<UserAvatar
+								className={cn("size-5 rounded-full border-2 border-surface object-cover ring-1 ring-border", index > 0 && "-ml-1.5")}
+								imageUrl={reviewer.avatarUrl}
+								key={`${reviewer.id}-${index}`}
+								name={reviewer.id}
 							/>
 						))}
 				</div>
@@ -458,34 +562,6 @@ function BoardPullRequestGroup({
 	);
 }
 
-function reviewerInitials(login: string): string {
-	return login
-		.replace(/^@/, "")
-		.trim()
-		.split(/[-_\s]+/)
-		.filter(Boolean)
-		.slice(0, 2)
-		.map((part) => part[0]?.toUpperCase() ?? "")
-		.join("") || "?";
-}
-
-function ReviewerAvatar({ avatar, className }: { avatar: BoardReviewerAvatar; className?: string }) {
-	const [failed, setFailed] = useState(false);
-	const commonClassName = cn("size-5 rounded-full border-2 border-surface ring-1 ring-border", className);
-	if (avatar.url && !failed) {
-		return (
-			<img
-				alt=""
-				className={cn(commonClassName, "object-cover")}
-				onError={() => setFailed(true)}
-				referrerPolicy="no-referrer"
-				src={avatar.url}
-			/>
-		);
-	}
-	return <span aria-hidden="true" className={cn(commonClassName, "inline-flex items-center justify-center bg-muted text-[9px] font-semibold text-muted-foreground")}>{reviewerInitials(avatar.login)}</span>;
-}
-
 function PullRequestLifecycleIcon({ state }: { state: BoardPullRequestState }) {
 	const className = cn("size-icon-sm shrink-0", lifecycleClassName(state));
 	return <GitPullRequestIcon aria-hidden="true" className={className} />;
@@ -501,6 +577,18 @@ export function groupBoardPullRequests(
 		else groups.set(pr.state, { state: pr.state, prs: [pr] });
 	}
 	return Array.from(groups.values());
+}
+
+function countBoardPullRequests(prs: BoardPullRequestPresentation[]): BoardPullRequestProgress {
+	const progress: BoardPullRequestProgress = {
+		closed: 0,
+		draft: 0,
+		merged: 0,
+		open: 0,
+		total: prs.length,
+	};
+	for (const pr of prs) progress[pr.state] += 1;
+	return progress;
 }
 
 function lifecycleClassName(state: BoardPullRequestState): string {
@@ -539,6 +627,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 	renderSessionCard,
 	resetKey,
 	sessions,
+	trailing,
 }: {
 	labels: {
 		archive: string;
@@ -549,10 +638,31 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 	/** Collapse and drop deferred cards when the board scope changes (e.g. projectId). */
 	resetKey?: string;
 	sessions: TSession[];
+	/** Right-aligned status in the bar, outside the toggle (e.g. memory pressure). */
+	trailing?: ReactNode;
 }) {
 	const prefersReducedMotion = useReducedMotion();
 	const [expanded, setExpanded] = useState(false);
 	const [cardsReady, setCardsReady] = useState(false);
+	const archiveRef = useRef<HTMLDivElement>(null);
+
+	// Clip the lanes behind the sheet without resizing their scroll viewports.
+	// A clear archive must reveal the window material, not the active cards.
+	useLayoutEffect(() => {
+		const archive = archiveRef.current;
+		const board = archive?.parentElement;
+		if (!archive || !board) return;
+		const updateHeight = () => {
+			board.style.setProperty("--sessions-archive-height", `${archive.getBoundingClientRect().height}px`);
+		};
+		updateHeight();
+		const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateHeight);
+		observer?.observe(archive);
+		return () => {
+			observer?.disconnect();
+			board.style.removeProperty("--sessions-archive-height");
+		};
+	}, [sessions.length > 0 || Boolean(trailing)]);
 
 	useEffect(() => {
 		setExpanded(false);
@@ -573,35 +683,41 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 		};
 	}, [expanded, cardsReady]);
 
-	if (sessions.length === 0) return null;
+	if (sessions.length === 0 && !trailing) return null;
 
 	return (
-		<div className="absolute inset-x-0 bottom-0 z-20 border-t border-border-strong bg-background px-3">
-			{/* Full-row hit target: the control stretches edge-to-edge so empty
-			    space beside the label toggles archive too. Height must match
-			    archiveToggleOffsetClassName on the board. */}
-			<button
-				aria-expanded={expanded}
-				aria-label={labels.archiveAria}
-				className={cn(
-					"group flex w-full min-w-0 items-center gap-2 py-0 text-muted-foreground transition-colors hover:text-foreground",
-					archiveToggleHeightClassName,
-					expanded ? "min-h-11" : "min-h-row-md",
+		<div ref={archiveRef} className="absolute inset-x-0 bottom-0 z-20 border-t border-border-strong bg-background px-3">
+			<div className={cn("flex items-center gap-2", archiveToggleHeightClassName)}>
+				{/* Full-row hit target: the control stretches edge-to-edge so empty
+				    space beside the label toggles archive too. Height must match
+				    archiveToggleOffsetClassName on the board. */}
+				{sessions.length > 0 ? (
+					<button
+						aria-expanded={expanded}
+						aria-label={labels.archiveAria}
+						className={cn(
+							"group flex h-full min-w-0 flex-1 items-center gap-2 py-0 text-muted-foreground transition-colors hover:text-foreground",
+							expanded ? "min-h-11" : "min-h-row-md",
+						)}
+						onClick={() => setExpanded((open) => !open)}
+						type="button"
+					>
+						<ChevronIcon
+							className={cn(
+								"size-icon-2xs shrink-0 transition-transform duration-[140ms] ease-[cubic-bezier(0.25,0.46,0.45,0.94)]",
+								prefersReducedMotion && "transition-none",
+								expanded && "rotate-90",
+							)}
+							direction="right"
+						/>
+						<span className="text-2xs font-medium tracking-wide-sm">{labels.archive}</span>
+						<span className="ml-1.5 font-sans text-micro text-passive">{sessions.length}</span>
+					</button>
+				) : (
+					<div className="min-w-0 flex-1" />
 				)}
-				onClick={() => setExpanded((open) => !open)}
-				type="button"
-			>
-				<ChevronIcon
-					className={cn(
-						"size-icon-2xs shrink-0 transition-transform duration-[140ms] ease-[cubic-bezier(0.25,0.46,0.45,0.94)]",
-						prefersReducedMotion && "transition-none",
-						expanded && "rotate-90",
-					)}
-					direction="right"
-				/>
-				<span className="text-2xs font-medium tracking-wide-sm">{labels.archive}</span>
-				<span className="ml-1.5 font-mono text-micro text-passive">{sessions.length}</span>
-			</button>
+				{trailing ? <div className="flex shrink-0 items-center">{trailing}</div> : null}
+			</div>
 			{/* Keep the sheet mounted after first open; height tracks `expanded`. */}
 			{cardsReady ? (
 				<motion.div
@@ -641,6 +757,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 	renderSessionCard: (session: TSession) => ReactNode;
 	resetKey?: string;
 	sessions: TSession[];
+	trailing?: ReactNode;
 }) => ReactElement | null;
 
 function sameLabel(a: string, b: string): boolean {

@@ -1,9 +1,12 @@
-import { TriangleAlert } from "lucide-react";
+import { AppLink } from "./AppLink";
+import { Pencil, Plus, TriangleAlert } from "lucide-react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
 import { cn } from "../lib/utils";
 import { Label } from "./ui/label";
-import { SettingsInlineInput, SettingsRow } from "./settings/SettingsRow";
+import { SettingsRow } from "./settings/SettingsRow";
+import { Button } from "./ui/button";
 import { Switch } from "./ui/switch";
 
 type TrackerIntakeConfig = components["schemas"]["TrackerIntakeConfig"];
@@ -34,10 +37,13 @@ export function intakeNeedsRule(form: IntakeForm): boolean {
 // buildIntake produces the payload field, scrubbing empties so a disabled or
 // blank intake serializes to `undefined` (omit) rather than an empty object the
 // daemon would persist.
-export function buildIntake(form: IntakeForm): TrackerIntakeConfig | undefined {
+export function buildIntake(
+	form: IntakeForm,
+	existing?: TrackerIntakeConfig,
+): TrackerIntakeConfig | undefined {
 	const next: TrackerIntakeConfig = {
+		...existing,
 		enabled: form.enabled || undefined,
-		provider: undefined,
 		repo: form.repo.trim() || undefined,
 		assignee: form.assignee.trim() || undefined,
 	};
@@ -121,47 +127,7 @@ export function IntakeFields({
 	const needsRule = intakeNeedsRule(form);
 	if (variant === "settings") {
 		return (
-			<div className="flex flex-col gap-1.5">
-				<SettingsRow label={t("settings.project.enableIssueIntake")}>
-					<Switch
-						aria-label={t("settings.project.enableIssueIntake")}
-						checked={form.enabled}
-						onCheckedChange={(enabled) => onChange({ enabled })}
-					/>
-				</SettingsRow>
-				{form.enabled && (
-					<>
-						{repoPreview && (
-							<SettingsRow label={t("settings.project.repository")}>
-								{repoPreview.value ? (
-									<a
-										href={`https://${repoPreview.host ?? "github.com"}/${repoPreview.value}`}
-										target="_blank"
-										rel="noopener noreferrer"
-										className="settings-row-value text-settings-accent hover:underline"
-									>
-										{repoPreview.value}
-									</a>
-								) : (
-									<span className="settings-row-value">
-										{t("settings.project.repoNotDetected")}
-									</span>
-								)}
-							</SettingsRow>
-						)}
-						<SettingsRow label={t("settings.project.assignee")}>
-							<SettingsInlineInput
-								id="intakeAssignee"
-								label={t("settings.project.assignee")}
-								value={form.assignee}
-								onChange={(assignee) => onChange({ assignee })}
-								placeholder={t("settings.project.intakeAssigneePlaceholder")}
-							/>
-						</SettingsRow>
-						{needsRule && <IntakeAssigneeError />}
-					</>
-				)}
-			</div>
+			<IntakeSettingsFields form={form} onChange={onChange} repoPreview={repoPreview} />
 		);
 	}
 	return (
@@ -201,14 +167,14 @@ export function IntakeFields({
 					{repoPreview && (
 						<IntakeField label={t("settings.project.repository")} labelClassName={labelClassName}>
 							{repoPreview.value ? (
-								<a
+								<AppLink
 									href={`https://${repoPreview.host ?? "github.com"}/${repoPreview.value}`}
 									target="_blank"
 									rel="noopener noreferrer"
 									className="text-control text-accent hover:underline"
 								>
 									{repoPreview.value}
-								</a>
+								</AppLink>
 							) : (
 								<span className="text-control text-muted-foreground">
 									{t("settings.project.repoNotDetected")}
@@ -229,6 +195,125 @@ export function IntakeFields({
 						/>
 					</IntakeField>
 					{!compact && needsRule && <IntakeAssigneeError />}
+				</>
+			)}
+		</div>
+	);
+}
+
+function IntakeSettingsFields({
+	form,
+	onChange,
+	repoPreview,
+}: {
+	form: IntakeForm;
+	onChange: (patch: Partial<IntakeForm>) => void;
+	repoPreview?: { value?: string; host?: string };
+}) {
+	const { t } = useTranslation();
+	const [assigneeEditing, setAssigneeEditing] = useState(false);
+	const inputRef = useRef<HTMLInputElement>(null);
+	const trimmedAssignee = form.assignee.trim();
+	const hasAssignee = trimmedAssignee.length > 0;
+
+	useEffect(() => {
+		if (!assigneeEditing) return;
+		const input = inputRef.current;
+		if (!input) return;
+		input.focus();
+		input.select();
+	}, [assigneeEditing]);
+
+	const finishAssigneeEditing = () => {
+		setAssigneeEditing(false);
+	};
+
+	const onAssigneeKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+		if (event.key === "Enter") {
+			event.preventDefault();
+			finishAssigneeEditing();
+			return;
+		}
+		if (event.key === "Escape") {
+			event.preventDefault();
+			event.stopPropagation();
+			setAssigneeEditing(false);
+		}
+	};
+
+	return (
+		<div className="flex flex-col gap-1.5">
+			<SettingsRow
+				description={t("settings.project.intakeDescription")}
+				label={t("settings.project.enableIssueIntake")}
+			>
+				<Switch
+					aria-label={t("settings.project.enableIssueIntake")}
+					checked={form.enabled}
+					onCheckedChange={(enabled) => {
+						onChange({ enabled });
+						if (!enabled) setAssigneeEditing(false);
+					}}
+				/>
+			</SettingsRow>
+			{form.enabled && (
+				<>
+					{repoPreview && (
+						<SettingsRow label={t("settings.project.repository")}>
+							{repoPreview.value ? (
+								<AppLink
+									href={`https://${repoPreview.host ?? "github.com"}/${repoPreview.value}`}
+									target="_blank"
+									rel="noopener noreferrer"
+									className="settings-row-value text-settings-accent hover:underline"
+								>
+									{repoPreview.value}
+								</AppLink>
+							) : (
+								<span className="settings-row-value">{t("settings.project.repoNotDetected")}</span>
+							)}
+						</SettingsRow>
+					)}
+					<SettingsRow label={t("settings.project.assignee")}>
+						{assigneeEditing ? (
+							<input
+								ref={inputRef}
+								id="intakeAssignee"
+								aria-label={t("settings.project.assignee")}
+								className="settings-inline-edit-input w-80 max-w-full"
+								value={form.assignee}
+								onChange={(event) => onChange({ assignee: event.target.value })}
+								onBlur={finishAssigneeEditing}
+								onKeyDown={onAssigneeKeyDown}
+								placeholder={t("settings.project.intakeAssigneePlaceholder")}
+							/>
+						) : hasAssignee ? (
+							<div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+								<span className="settings-row-value truncate" title={trimmedAssignee}>
+									{trimmedAssignee}
+								</span>
+								<Button
+									type="button"
+									size="sm"
+									variant="ghost"
+									className="shrink-0 text-settings-muted hover:text-settings-label"
+									aria-label={t("settings.field.edit", { label: t("settings.project.assignee") })}
+									onClick={() => setAssigneeEditing(true)}
+								>
+									<Pencil className="size-3.5" aria-hidden="true" />
+									{t("settings.project.editAssignee")}
+								</Button>
+							</div>
+						) : (
+							<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => setAssigneeEditing(true)}>
+								<Plus className="size-3.5" aria-hidden="true" />
+								{t("settings.project.addAssignee")}
+							</Button>
+						)}
+					</SettingsRow>
+					{!hasAssignee && !assigneeEditing && (
+						<p className="px-1 text-pretty text-xs leading-4 text-settings-muted">{t("settings.project.intakeAssigneeHint")}</p>
+					)}
 				</>
 			)}
 		</div>

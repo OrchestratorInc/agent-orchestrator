@@ -1,6 +1,7 @@
 // defineConfig comes from vitest/config (a superset of vite's) so the `test`
 // block typechecks; vitest itself must be pointed at this file explicitly
 // (package.json test script) because it only auto-discovers vite.config.*.
+import { execFileSync } from "node:child_process";
 import { defineConfig } from "vitest/config";
 import type { Plugin } from "vite";
 import { fileURLToPath, URL } from "node:url";
@@ -42,6 +43,38 @@ const POSTHOG_ORIGINS = (() => {
 	return origins;
 })();
 
+function gitValue(args: string[], fallback: string): string {
+	try {
+		const value = execFileSync("git", args, {
+			cwd: fileURLToPath(new URL("../", import.meta.url)),
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+		return value || fallback;
+	} catch {
+		return fallback;
+	}
+}
+
+function gitIsDirty(): boolean {
+	try {
+		return execFileSync("git", ["status", "--porcelain", "--untracked-files=all"], {
+			cwd: fileURLToPath(new URL("../", import.meta.url)),
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim().length > 0;
+	} catch {
+		return false;
+	}
+}
+
+const DEV_BUILD_INFO = {
+	branch: gitValue(["branch", "--show-current"], "main"),
+	commit: gitValue(["rev-parse", "--short", "HEAD"], "unknown"),
+	worktree: gitValue(["rev-parse", "--show-toplevel"], "unknown"),
+	isDirty: gitIsDirty(),
+};
+
 // Cloud terminals attach over a ticketed wss:// dialed directly from the
 // renderer (the WorkOS token stays in the main process; the single-use ticket
 // is the socket's whole authorization — see lib/cloud-terminal-mux.ts), so the
@@ -50,8 +83,9 @@ const POSTHOG_ORIGINS = (() => {
 // setting the build cannot read; list the baked defaults and fold in a
 // developer's AO_CLOUD_CONTROL_PLANE_URL override so a custom control plane
 // keeps a working terminal in packaged builds too.
-const CLOUD_CP_WS_ORIGINS = (() => {
-	const origins = ["wss://staging-api.aoagents.dev", "wss://api.aoagents.dev"];
+// The hosted cloud control planes, plus AO_CLOUD_CONTROL_PLANE_URL when set.
+const CLOUD_CP_ORIGINS = (() => {
+	const origins = ["https://staging-api.aoagents.dev", "https://api.aoagents.dev"];
 	const override = process.env.AO_CLOUD_CONTROL_PLANE_URL?.trim();
 	if (!override) return origins;
 	let url: URL;
@@ -60,10 +94,12 @@ const CLOUD_CP_WS_ORIGINS = (() => {
 	} catch {
 		return origins;
 	}
-	const origin = `${url.protocol === "http:" ? "ws:" : "wss:"}//${url.host}`;
+	const origin = `${url.protocol === "http:" ? "http:" : "https:"}//${url.host}`;
 	if (!origins.includes(origin)) origins.push(origin);
 	return origins;
 })();
+
+const CLOUD_CP_WS_ORIGINS = CLOUD_CP_ORIGINS.map((origin) => origin.replace(/^http/, "ws"));
 
 // CSP for the renderer. The daemon is loopback-only, so network access is
 // pinned to 127.0.0.1 (REST + SSE over http, terminal mux over ws), plus the
@@ -73,22 +109,29 @@ const CLOUD_CP_WS_ORIGINS = (() => {
 // needs it. Enforcing CSP in dev keeps dev/packaged parity — a connect-src
 // gap then fails on the developer's screen, not weeks later in a packaged
 // build (that skew is exactly how the cloud-terminal block in #4666 shipped).
-function contentSecurityPolicy(mode: "build" | "serve"): string {
+export function contentSecurityPolicy(mode: "build" | "serve"): string {
 	return [
 		"default-src 'self'",
 		// react-refresh injects its inline preamble in serve mode; a hash is
 		// impractical because the preamble changes with the plugin version.
 		mode === "serve" ? "script-src 'self' 'unsafe-inline'" : "script-src 'self'",
 		"style-src 'self' 'unsafe-inline'",
-		// Repository owner avatars are loaded directly by the renderer. Keep the
-		// allowlist narrow to the providers supported by the clone flow.
-		"img-src 'self' data: http://127.0.0.1:* https://github.com https://avatars.githubusercontent.com https://gitlab.com https://bitbucket.org https://unavatar.io",
+		// Repository avatars can come from self-hosted SCM instances whose origins
+		// are only known at runtime. Keep the broad exception limited to images;
+		// scripts, connections, frames, and other resource classes remain scoped.
+		"img-src 'self' data: http://127.0.0.1:* http://*.localhost:* https:",
+		// A cloud session's audio and video artifacts stream from its control plane.
+		["media-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
 		"font-src 'self' data:",
 		[
 			"connect-src",
 			"'self'",
 			"http://127.0.0.1:*",
 			"ws://127.0.0.1:*",
+			// Session artifact files are read from the daemon's artifact preview
+			// origin (ao-preview-artifact.<id>.localhost:<port>), a subdomain of
+			// localhost that 'self' and 127.0.0.1 do not cover.
+			"http://*.localhost:*",
 			// Vite serves on localhost, which 'self' does not cover for the ws://
 			// HMR socket.
 			mode === "serve" ? "ws://localhost:*" : "",
@@ -99,20 +142,25 @@ function contentSecurityPolicy(mode: "build" | "serve"): string {
 			.join(" "),
 		"object-src 'none'",
 		"base-uri 'self'",
-		"frame-src 'none'",
+		// Agent HTML renders (RenderFrame) are the only frames: sandboxed pages
+		// served by the loopback daemon.
+		// 'self' lets dev:web, whose API base is relative, frame a page; the page
+		// keeps its own sandbox from the daemon's CSP header either way.
+		// *.localhost is the inline-artifact origin an HTML artifact is framed from.
+		// A cloud session's HTML artifact is framed from its control plane, whose
+		// response CSP sandboxes it.
+		["frame-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
 	].join("; ");
 }
 
 const injectCspMeta: Plugin = {
 	name: "inject-csp-meta",
-	transformIndexHtml(_html, ctx) {
+	apply: "build",
+	transformIndexHtml() {
 		return [
 			{
 				tag: "meta",
-				attrs: {
-					"http-equiv": "Content-Security-Policy",
-					content: contentSecurityPolicy(ctx.server ? "serve" : "build"),
-				},
+				attrs: { "http-equiv": "Content-Security-Policy", content: contentSecurityPolicy("build") },
 				injectTo: "head-prepend",
 			},
 		];
@@ -145,6 +193,12 @@ const productUiReactBoundary: Plugin = {
 };
 
 export default defineConfig({
+	define: {
+		"import.meta.env.VITE_AO_GIT_BRANCH": JSON.stringify(DEV_BUILD_INFO.branch),
+		"import.meta.env.VITE_AO_GIT_COMMIT": JSON.stringify(DEV_BUILD_INFO.commit),
+		"import.meta.env.VITE_AO_GIT_WORKTREE": JSON.stringify(DEV_BUILD_INFO.worktree),
+		"import.meta.env.VITE_AO_GIT_DIRTY": JSON.stringify(String(DEV_BUILD_INFO.isDirty)),
+	},
 	// "@/" → the renderer root (src/renderer), the shadcn/ui import convention.
 	resolve: {
 		alias: {
@@ -198,10 +252,10 @@ export default defineConfig({
 		environment: "jsdom",
 		testTimeout: 20_000,
 		// Anchor node_modules at any depth: a bare "node_modules/**" replaces
-		// vitest's default "**/node_modules/**" and only matches the root, so the
-		// tracked src/landing preview app's nested node_modules would otherwise
-		// have its vendored third-party test suites collected and run.
-		exclude: ["**/node_modules/**", "dist/**", "dist-electron/**", "e2e/**"],
+		// vitest's default "**/node_modules/**" and only matches the root.
+		// The docs site is its own package with its own Vitest config and
+		// dependencies; the docs CI step runs its tests.
+		exclude: ["**/node_modules/**", "dist/**", "dist-electron/**", "e2e/**", "src/docs/**"],
 		globals: true,
 		setupFiles: "./src/renderer/test/setup.ts",
 	},

@@ -3,6 +3,8 @@ package systeminstall
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -58,8 +60,28 @@ func (s installCapabilitiesStub) Probe(ctx context.Context) (ports.InstallCapabi
 			Prefix: homebrewPrefix, PrefixWritable: s.writable,
 			Formulae: formulae, Casks: casks, Err: s.homebrewErr,
 		},
-		MacApplicationsWritable: true,
 	}, nil
+}
+
+func TestOpenCodeV2NPMPlanUsesPrivatePrefixWhenGlobalPrefixIsReadOnly(t *testing.T) {
+	s := newTestService("darwin", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/usr/local", writable: false}
+	privatePrefix := s.privateNPMPrefixes[TargetOpencodeV2]
+	var probed string
+	s.pathWritable = pathWritableProbeFunc(func(_ context.Context, path string) (bool, error) {
+		probed = path
+		return true, nil
+	})
+	plan := s.planNPM(TargetOpencodeV2, "@opencode/cli")
+	if plan.Unsupported {
+		t.Fatalf("plan = %+v, want private install available", plan)
+	}
+	if probed != privatePrefix || plan.ExpectedDestination != filepath.Join(privatePrefix, "bin") {
+		t.Fatalf("private prefix probe/destination = (%q, %q), want %q", probed, plan.ExpectedDestination, privatePrefix)
+	}
+	if !slices.Contains(plan.Command, privatePrefix) {
+		t.Fatalf("command = %v, want private prefix %q", plan.Command, privatePrefix)
+	}
 }
 
 func TestAgentPlansSnapshotsCapabilitiesOnce(t *testing.T) {
@@ -101,8 +123,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 27 {
-		t.Fatalf("got %d plans, want 27", len(plans))
+	if len(plans) != 38 {
+		t.Fatalf("got %d plans, want 38", len(plans))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -119,6 +141,68 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	}
 }
 
+func TestOpenCodeV2UsesOfficialRecipesAndWarnsAboutReplacingV1(t *testing.T) {
+	const replacement = "replaces the default OpenCode 1"
+	for _, tc := range []struct {
+		goos string
+		want map[string]string
+	}{
+		{goos: "darwin", want: map[string]string{
+			"homebrew":           "brew install anomalyco/tap/opencode-v2",
+			"npm":                "npm install -g --prefix",
+			"official-installer": "https://opencode.ai/v2/install",
+		}},
+		{goos: "linux", want: map[string]string{
+			"npm":                "npm install -g --prefix",
+			"official-installer": "https://opencode.ai/v2/install",
+		}},
+		{goos: "windows", want: map[string]string{
+			"npm": "npm install -g --prefix",
+		}},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			s := newTestService(tc.goos, "brew", "npm", "bash")
+			s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
+			plans, err := s.AgentPlans(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got AgentPlan
+			for _, plan := range plans {
+				if plan.AgentID == "opencode-v2" {
+					got = plan
+					break
+				}
+			}
+			if got.AgentID == "" {
+				t.Fatal("OpenCode 2 install plan is missing")
+			}
+			if got.DocumentationURL != "https://opencode.ai/v2/docs" {
+				t.Fatalf("OpenCode 2 plan metadata = %+v", got)
+			}
+			if len(got.Methods) != len(tc.want) {
+				t.Fatalf("OpenCode 2 methods = %+v, want %d official choices", got.Methods, len(tc.want))
+			}
+			for _, method := range got.Methods {
+				want, ok := tc.want[method.ID]
+				if !ok {
+					t.Fatalf("unexpected OpenCode 2 method %+v", method)
+				}
+				if !strings.Contains(method.Command, want) {
+					t.Errorf("%s command = %q, want %q", method.ID, method.Command, want)
+				}
+				if method.ID == "npm" {
+					if method.Notice != "" || !strings.Contains(method.Command, "opencode-v2-home") {
+						t.Errorf("npm method must install into the private prefix without a replacement warning: %+v", method)
+					}
+				} else if !strings.Contains(method.Notice, replacement) {
+					t.Errorf("%s notice = %q, want replacement warning", method.ID, method.Notice)
+				}
+			}
+		})
+	}
+}
+
 func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -132,6 +216,7 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 		{"codex npm", "linux", TargetCodex, []string{"npm"}, "npm", "npm install -g @openai/codex"},
 		{"copilot winget", "windows", TargetCopilot, []string{"winget", "npm"}, "winget", "winget install -e --id GitHub.Copilot --silent --accept-package-agreements --accept-source-agreements --disable-interactivity"},
 		{"vibe pipx", "linux", TargetVibe, []string{"pipx"}, "pipx", "pipx install mistral-vibe"},
+		{"openhands uv", "windows", TargetOpenHands, []string{"uv"}, "uv", "uv tool install openhands"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -140,6 +225,23 @@ func TestAgentPlanSelectsAvailableFallback(t *testing.T) {
 				t.Fatalf("plan = %+v, want method %q command %q", plan, tt.wantMethod, tt.wantCommand)
 			}
 		})
+	}
+}
+
+func TestGeminiMacInstallUsesSupportedNPMRelease(t *testing.T) {
+	s := newTestService("darwin", "brew", "npm")
+	s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
+	planner, err := s.newRequestPlanner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans := planner.agentMethodPlans(TargetGemini, AgentOperationInstall)
+	if len(plans) != 1 || plans[0].Method != "npm" || plans[0].Unsupported ||
+		strings.Join(plans[0].Command, " ") != "npm install -g @google/gemini-cli@latest" {
+		t.Fatalf("Gemini install plans = %+v, want supported npm release only", plans)
+	}
+	if _, err := planner.resolveAgentMethod(TargetGemini, "homebrew", AgentOperationInstall); err == nil {
+		t.Fatal("Homebrew method should not be offered while its Gemini CLI formula is below the required version")
 	}
 }
 
@@ -156,7 +258,9 @@ func TestOfficialInstallerPlansAreAutomaticAndServerOwned(t *testing.T) {
 		{"linux", TargetAider, []string{"sh"}, "https://aider.chat/install.sh", "sh"},
 		{"linux", TargetGrok, []string{"bash"}, "https://x.ai/cli/install.sh", "bash"},
 		{"linux", TargetKimi, []string{"bash"}, "https://code.kimi.com/kimi-code/install.sh", "bash"},
+		{"darwin", TargetGoose, []string{"bash"}, "https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh", "bash"},
 		{"linux", TargetGoose, []string{"bash"}, "https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh", "bash"},
+		{"windows", TargetGoose, []string{"pwsh.exe"}, "https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1", "pwsh.exe"},
 		{"linux", TargetDevin, []string{"bash"}, "https://cli.devin.ai/install.sh", "bash"},
 		{"windows", TargetKiro, []string{"powershell.exe"}, "https://cli.kiro.dev/install.ps1", "powershell.exe"},
 		{"linux", TargetMuse, []string{"bash"}, "https://dev.meta.ai/install.sh", "bash"},
@@ -213,7 +317,55 @@ func TestOfficialInstallersRejectUnsupportedOperatingSystems(t *testing.T) {
 	}
 }
 
-func TestPackageManagerMethodsStayPreferredBeforeOfficialInstaller(t *testing.T) {
+func TestGooseWindowsUsesPowerShellInstallerCommand(t *testing.T) {
+	plan := newTestService("windows", "pwsh.exe").planAgent(TargetGoose)
+	if plan.Unsupported || plan.Method != "official-installer" || plan.Script == nil {
+		t.Fatalf("Goose Windows plan = %+v, want available official installer", plan)
+	}
+	if plan.Script.URL != "https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1" {
+		t.Fatalf("Goose Windows installer URL = %q", plan.Script.URL)
+	}
+	wantInterpreter := "/usr/bin/pwsh.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File"
+	if got := strings.Join(plan.Script.Interpreter, " "); got != wantInterpreter {
+		t.Fatalf("Goose Windows installer interpreter = %q, want %q", got, wantInterpreter)
+	}
+	if !slices.Equal(plan.Script.Env, []string{"CONFIGURE=false"}) {
+		t.Fatalf("Goose Windows installer env = %v, want CONFIGURE=false", plan.Script.Env)
+	}
+}
+
+func TestHermesPrefersHomebrewAndFallsBackToOfficialInstaller(t *testing.T) {
+	for _, tc := range []struct {
+		goos, shell, url string
+		args             []string
+	}{
+		{"darwin", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--non-interactive"}},
+		{"linux", "bash", "https://hermes-agent.nousresearch.com/install.sh", []string{"--non-interactive"}},
+		{"windows", "powershell.exe", "https://hermes-agent.nousresearch.com/install.ps1", []string{"-NonInteractive"}},
+	} {
+		t.Run(tc.goos+" without Homebrew", func(t *testing.T) {
+			plan := newTestService(tc.goos, tc.shell).planAgent(TargetHermes)
+			if plan.Unsupported || plan.Method != "official-installer" || plan.Script == nil {
+				t.Fatalf("Hermes plan = %+v, want available official installer", plan)
+			}
+			if plan.Script.URL != tc.url || !slices.Equal(plan.Script.Args, tc.args) {
+				t.Fatalf("Hermes installer = %s %v, want %s %v", plan.Script.URL, plan.Script.Args, tc.url, tc.args)
+			}
+			if !strings.HasSuffix(displayCommand(plan), strings.Join(tc.args, " ")) {
+				t.Fatalf("display omits installer arguments: %q", displayCommand(plan))
+			}
+		})
+	}
+	// The official installer clones GitHub, so Homebrew's release bottle wins.
+	s := newTestService("darwin", "brew", "bash")
+	s.installCapabilities = installCapabilitiesStub{homebrewPrefix: "/opt/homebrew", writable: true}
+	plan := s.planAgent(TargetHermes)
+	if plan.Unsupported || plan.Method != "homebrew" || plan.Package != "hermes-agent" {
+		t.Fatalf("Hermes plan with Homebrew = %+v, want homebrew hermes-agent", plan)
+	}
+}
+
+func TestOfficialInstallerIsPreferredOverPackageManagers(t *testing.T) {
 	s := newTestService("darwin", "brew", "npm", "sh")
 	s.installCapabilities = installCapabilitiesStub{
 		prefix: "/Users/test/.npm", homebrewPrefix: "/opt/homebrew", writable: true,
@@ -226,12 +378,15 @@ func TestPackageManagerMethodsStayPreferredBeforeOfficialInstaller(t *testing.T)
 		if plan.AgentID != string(TargetCodex) {
 			continue
 		}
+		if plan.Method != "official-installer" {
+			t.Fatalf("recommended method = %q, want official-installer", plan.Method)
+		}
 		if len(plan.Methods) != 3 {
 			t.Fatalf("methods = %+v", plan.Methods)
 		}
 		want := []string{"homebrew", "npm", "official-installer"}
 		for i, method := range plan.Methods {
-			if method.ID != want[i] || method.Recommended != (i == 0) {
+			if method.ID != want[i] || method.Recommended != (i == 2) {
 				t.Fatalf("method[%d] = %+v", i, method)
 			}
 		}
@@ -295,7 +450,7 @@ func TestHomebrewReinstallRepairsThroughInstallWhenPackageIsNotOwned(t *testing.
 }
 
 func TestKiroReinstallIsUnavailableWithoutVerifiedHeadlessRecipe(t *testing.T) {
-	s := newTestService("darwin", "bash", "kiro-cli")
+	s := newTestService("windows", "powershell.exe", "kiro-cli")
 	planner, err := s.newRequestPlanner(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -317,17 +472,13 @@ func TestKiroReinstallIsUnavailableWithoutVerifiedHeadlessRecipe(t *testing.T) {
 	}
 }
 
-func TestKiroFreshInstallRequiresWritableApplications(t *testing.T) {
-	s := newTestService("darwin", "bash")
-	planner, err := s.newRequestPlanner(context.Background())
-	if err != nil {
-		t.Fatal(err)
+func TestKiroMacOSInstallRequiresInteractiveVendorFlow(t *testing.T) {
+	plan := newTestService("darwin", "bash").planAgent(TargetKiro)
+	if !plan.Unsupported || plan.Method != "manual" || plan.Script != nil || len(plan.Command) != 0 {
+		t.Fatalf("Kiro macOS plan = %+v, want manual interactive installation", plan)
 	}
-	planner.capabilities.MacApplicationsWritable = false
-
-	_, err = planner.resolveAgentMethod(TargetKiro, "official-installer", AgentOperationInstall)
-	if !errors.Is(err, ErrInstallMethod) || !strings.Contains(err.Error(), "/Applications") {
-		t.Fatalf("fresh Kiro install error = %v", err)
+	if !strings.Contains(plan.Reason, "must be run interactively") || plan.DocsURL == "" {
+		t.Fatalf("Kiro macOS guidance = %+v, want interactive reason and documentation", plan)
 	}
 }
 
@@ -487,7 +638,7 @@ func TestKimchiUsesOnlyDocumentedInstallMethods(t *testing.T) {
 		if agent.DocumentationURL != "https://docs.kimchi.dev/docs/coding-getting-started" {
 			t.Fatalf("documentation URL = %q", agent.DocumentationURL)
 		}
-		if agent.Method != "homebrew" || agent.Command != "brew install getkimchi/tap/kimchi" {
+		if agent.Method != "official-installer" || agent.Command != "/usr/bin/sh <downloaded from https://github.com/getkimchi/kimchi/releases/latest/download/install.sh>" {
 			t.Fatalf("recommended Kimchi plan = %+v", agent)
 		}
 		for _, method := range agent.Methods {
@@ -558,5 +709,18 @@ func TestAgentTargetsAreValidButPrerequisitesAreNotHarnessRows(t *testing.T) {
 		if !Valid(target) || IsAgentTarget(target) {
 			t.Fatalf("prerequisite target %q was classified incorrectly", target)
 		}
+	}
+}
+
+func TestCodewhaleInstallPlanIsManualOnly(t *testing.T) {
+	plan := newTestService("darwin", "brew", "npm", "sh").planAgent(TargetCodewhale)
+	if !plan.Unsupported || plan.Method != "manual" || len(plan.Command) != 0 || plan.Script != nil {
+		t.Fatalf("Codewhale plan = %+v, want command-free manual plan", plan)
+	}
+	if plan.DocsURL != "https://github.com/Hmbown/Codewhale" {
+		t.Fatalf("Codewhale documentation URL = %q", plan.DocsURL)
+	}
+	if !strings.Contains(plan.Reason, "does not automatically install Codewhale") {
+		t.Fatalf("Codewhale reason = %q", plan.Reason)
 	}
 }

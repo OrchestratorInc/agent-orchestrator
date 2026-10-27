@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -29,6 +30,20 @@ type fakeUsageHookRecorder struct {
 	gotSignal usagesvc.HookSignal
 	calls     int
 	err       error
+}
+
+type fakeNativeSessionResolver struct {
+	id    string
+	ok    bool
+	err   error
+	got   ports.NativeSessionResolveConfig
+	calls int
+}
+
+func (f *fakeNativeSessionResolver) ResolveNativeSessionID(_ context.Context, cfg ports.NativeSessionResolveConfig) (string, bool, error) {
+	f.calls++
+	f.got = cfg
+	return f.id, f.ok, f.err
 }
 
 func (f *fakeUsageHookRecorder) RecordHook(_ context.Context, id domain.SessionID, signal usagesvc.HookSignal) error {
@@ -86,6 +101,120 @@ func TestSessionsAPI_ActivityForwardsUsageMetadataWithoutChangingActivity(t *tes
 		usage.gotSignal.ProviderHint != "zai" ||
 		usage.gotSignal.SubagentTranscriptPath != "/tmp/sub.jsonl" {
 		t.Fatalf("usage signal = %+v", usage.gotSignal)
+	}
+}
+
+func TestSessionsAPI_ActivityContentionRemainsRetryableAndRecordsUsage(t *testing.T) {
+	activity := &fakeActivityRecorder{err: ports.ErrActivityProjectionContention}
+	usage := &fakeUsageHookRecorder{}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil,
+		httpd.APIDeps{Activity: activity, UsageHooks: usage}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity",
+		`{"state":"idle","event":"stop","agentSessionId":"native-1","launchId":"launch-1","usage":{"harness":"claude-code","transcriptPath":"/tmp/main.jsonl"}}`)
+	if status != http.StatusServiceUnavailable || !strings.Contains(string(body), "ACTIVITY_PROJECTION_BUSY") {
+		t.Fatalf("contention should be explicitly retryable: %d %s", status, body)
+	}
+	if usage.calls != 1 || usage.gotSignal.TranscriptPath != "/tmp/main.jsonl" {
+		t.Fatalf("projection contention discarded independent usage signal: %+v", usage)
+	}
+}
+
+func TestSessionsAPI_CodewhaleLifecycleMapsRootEvents(t *testing.T) {
+	tests := []struct {
+		kind      string
+		wantState domain.ActivityState
+		wantEvent string
+		valid     bool
+	}{
+		{"session.started", "", "session-start", false},
+		{"turn.started", domain.ActivityActive, "user-prompt-submit", true},
+		{"turn.completed", domain.ActivityWaitingInput, "stop", true},
+		{"turn.failed", domain.ActivityWaitingInput, "stop", true},
+		{"turn.interrupted", domain.ActivityWaitingInput, "stop", true},
+		{"turn.stalled", domain.ActivityWaitingInput, "stop", true},
+		{"session.ended", domain.ActivityExited, "session-end", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.kind, func(t *testing.T) {
+			recorder := &fakeActivityRecorder{}
+			srv := newActivityTestServer(t, recorder)
+			body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity/codewhale?launchId=launch-7", `{
+				"at":"2026-09-24T10:00:00Z",
+				"event":{"schema_version":1,"seq":3,"event":"native-name","kind":"`+tc.kind+`","thread_id":"sess_native-1","turn_id":"turn-2","timestamp":"2026-09-24T10:00:01Z"}
+			}`)
+			if status != http.StatusOK {
+				t.Fatalf("status=%d body=%s", status, body)
+			}
+			got := recorder.gotSignal
+			if recorder.calls != 1 || got.State != tc.wantState || got.Valid != tc.valid || got.Event != tc.wantEvent || got.AgentSessionID != "" || got.LaunchID != "launch-7" || got.ProviderTurnID != "turn-2" {
+				t.Fatalf("signal = %+v, calls=%d", got, recorder.calls)
+			}
+			if !got.Timestamp.Equal(time.Date(2026, 9, 24, 10, 0, 1, 0, time.UTC)) {
+				t.Fatalf("timestamp = %v", got.Timestamp)
+			}
+		})
+	}
+}
+
+func TestSessionsAPI_CodewhaleLifecycleCapturesSavedConversationIDForRestore(t *testing.T) {
+	const savedSessionID = "0e9dfb74-4a65-4067-964f-152e432cccb6"
+	recorder := &fakeActivityRecorder{}
+	resolver := &fakeNativeSessionResolver{id: savedSessionID, ok: true}
+	dataDir := t.TempDir()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(
+		config.Config{DataDir: dataDir},
+		log,
+		nil,
+		httpd.APIDeps{Activity: recorder, NativeSessions: resolver},
+		httpd.ControlDeps{},
+	))
+	t.Cleanup(srv.Close)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity/codewhale?launchId=launch-7", `{
+		"event":{"schema_version":1,"kind":"turn.completed","thread_id":"sess_beec7292","turn_id":"3e380029-07a3-4585-b301-e9d86913bb53"}
+	}`)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d body=%s", status, body)
+	}
+	if resolver.calls != 1 || resolver.got.DataDir != dataDir || resolver.got.SessionID != "ao-1" || resolver.got.LaunchID != "launch-7" {
+		t.Fatalf("resolver calls=%d config=%+v", resolver.calls, resolver.got)
+	}
+	if recorder.gotSignal.AgentSessionID != savedSessionID {
+		t.Fatalf("AgentSessionID=%q, want saved UUID; hook thread id must not be persisted", recorder.gotSignal.AgentSessionID)
+	}
+}
+
+func TestSessionsAPI_CodewhaleLifecycleIgnoresSubagents(t *testing.T) {
+	recorder := &fakeActivityRecorder{}
+	srv := newActivityTestServer(t, recorder)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity/codewhale?launchId=launch-7",
+		`{"event":{"schema_version":1,"kind":"subagent.spawned","thread_id":"sess_native-1"}}`)
+	if status != http.StatusOK || recorder.calls != 0 {
+		t.Fatalf("status=%d calls=%d body=%s", status, recorder.calls, body)
+	}
+}
+
+func TestSessionsAPI_CodewhaleLifecycleRequiresGenerationAndSchema(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		url  string
+		body string
+	}{
+		{"missing launch", "/api/v1/sessions/ao-1/activity/codewhale", `{"event":{"schema_version":1,"kind":"turn.started","thread_id":"sess_1"}}`},
+		{"wrong schema", "/api/v1/sessions/ao-1/activity/codewhale?launchId=launch-1", `{"event":{"schema_version":2,"kind":"turn.started","thread_id":"sess_1"}}`},
+		{"missing thread", "/api/v1/sessions/ao-1/activity/codewhale?launchId=launch-1", `{"event":{"schema_version":1,"kind":"turn.started"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := &fakeActivityRecorder{}
+			srv := newActivityTestServer(t, recorder)
+			_, status, _ := doRequest(t, srv, "POST", tc.url, tc.body)
+			if status != http.StatusBadRequest || recorder.calls != 0 {
+				t.Fatalf("status=%d calls=%d", status, recorder.calls)
+			}
+		})
 	}
 }
 
@@ -265,6 +394,24 @@ func TestSessionsAPI_ActivityAcceptsBlocked(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_ActivityForwardsClaudeSubagentFacts(t *testing.T) {
+	rec := &fakeActivityRecorder{}
+	srv := newActivityTestServer(t, rec)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity",
+		`{"state":"idle","event":"stop","agentSessionId":"native-1","launchId":"launch-1","runningSubagentIds":["child-1","child-2"]}`)
+	if status != http.StatusOK {
+		t.Fatalf("activity = %d, want 200; body=%s", status, body)
+	}
+	if rec.gotSignal.RunningSubagentIDs == nil || len(*rec.gotSignal.RunningSubagentIDs) != 2 {
+		t.Fatalf("running children = %+v", rec.gotSignal.RunningSubagentIDs)
+	}
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity",
+		`{"event":"subagent-stop","subagentId":"child-1","launchId":"launch-1"}`)
+	if status != http.StatusOK || rec.gotSignal.SubagentID != "child-1" || rec.gotSignal.Valid {
+		t.Fatalf("child completion: status=%d body=%s signal=%+v", status, body, rec.gotSignal)
+	}
+}
+
 func TestSessionsAPI_ActivityThreadsCorrelationFields(t *testing.T) {
 	// The optional correlation fields ride into the signal (sanitized); a
 	// body without them (old CLIs) keeps producing a plain state-only signal,
@@ -280,6 +427,40 @@ func TestSessionsAPI_ActivityThreadsCorrelationFields(t *testing.T) {
 	want := ports.ActivitySignal{Valid: true, State: domain.ActivityActive, Event: "post-tool-use", ToolName: "Bash", ToolUseID: "toolu_42", LaunchID: "launch-7"}
 	if rec.gotSignal != want {
 		t.Fatalf("recorder signal = %#v, want %#v", rec.gotSignal, want)
+	}
+}
+
+func TestSessionsAPI_ActivityThreadsConversationCheckpointOrigin(t *testing.T) {
+	rec := &fakeActivityRecorder{}
+	srv := newActivityTestServer(t, rec)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity",
+		`{"state":"active","event":"user-prompt-submit","conversationCheckpointOrigin":"coordination","coordinationId":"report-batch:abc123","providerTurnId":"native-turn"}`)
+	if status != http.StatusOK {
+		t.Fatalf("activity = %d, want 200; body=%s", status, body)
+	}
+	if rec.gotSignal.ConversationCheckpointOrigin != domain.ConversationCheckpointOriginCoordination {
+		t.Fatalf("checkpoint origin = %q, want coordination", rec.gotSignal.ConversationCheckpointOrigin)
+	}
+	if rec.gotSignal.ProviderTurnID != "native-turn" {
+		t.Fatalf("provider turn = %q", rec.gotSignal.ProviderTurnID)
+	}
+	if rec.gotSignal.CoordinationID != "report-batch:abc123" {
+		t.Fatalf("coordination id = %q", rec.gotSignal.CoordinationID)
+	}
+}
+
+func TestSessionsAPI_ActivityRejectsUnknownConversationCheckpointOrigin(t *testing.T) {
+	rec := &fakeActivityRecorder{}
+	srv := newActivityTestServer(t, rec)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity",
+		`{"state":"active","event":"user-prompt-submit","conversationCheckpointOrigin":"provider"}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("activity = %d, want 400; body=%s", status, body)
+	}
+	if !strings.Contains(string(body), `"code":"INVALID_CONVERSATION_CHECKPOINT_ORIGIN"`) {
+		t.Fatalf("body = %s, want stable checkpoint-origin error code", body)
 	}
 }
 
@@ -303,11 +484,11 @@ func TestSessionsAPI_ActivityThreadsAgentSessionIDWithState(t *testing.T) {
 	srv := newActivityTestServer(t, rec)
 
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/activity",
-		`{"state":"idle","event":"stop","agentSessionId":"native-session-1"}`)
+		`{"state":"idle","event":"stop","agentSessionId":"native-session-1","observedAt":"2026-09-13T00:00:00Z"}`)
 	if status != http.StatusOK {
 		t.Fatalf("activity = %d, want 200; body=%s", status, body)
 	}
-	want := ports.ActivitySignal{Valid: true, State: domain.ActivityIdle, Event: "stop", AgentSessionID: "native-session-1"}
+	want := ports.ActivitySignal{Valid: true, State: domain.ActivityIdle, Event: "stop", AgentSessionID: "native-session-1", Timestamp: time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)}
 	if rec.gotSignal != want {
 		t.Fatalf("recorder signal = %#v, want %#v", rec.gotSignal, want)
 	}

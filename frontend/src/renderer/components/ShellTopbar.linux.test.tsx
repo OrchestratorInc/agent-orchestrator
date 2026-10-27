@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { paramsMock, useWorkspaceQueryMock } = vi.hoisted(() => ({
+const { locationMock, paramsMock, useWorkspaceQueryMock } = vi.hoisted(() => ({
+	locationMock: { pathname: "/" },
 	paramsMock: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
 	useWorkspaceQueryMock: vi.fn(),
 }));
@@ -13,14 +14,20 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
 	return {
 		...actual,
+		useLocation: () => locationMock,
 		useNavigate: () => vi.fn(),
 		useParams: () => paramsMock,
 	};
 });
 
 vi.mock("../hooks/useWorkspaceQuery", () => ({
-	useWorkspaceScope: () => ({ ...useWorkspaceQueryMock(), data: {} }),
+	useWorkspaceQuery: useWorkspaceQueryMock,
+	useWorkspaceScope: () => {
+		const result = useWorkspaceQueryMock();
+		return { ...result, data: result.data ?? {} };
+	},
 	workspaceQueryKey: ["workspaces"],
+	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 }));
 
 vi.mock("../lib/platform", async (importOriginal) => {
@@ -75,5 +82,23 @@ describe("ShellTopbar on Linux", () => {
 
 		const header = screen.getByTestId("board-topbar-label").closest("header");
 		expect(header).toHaveStyle({ paddingLeft: "18px" });
+	});
+
+	it("hides the cue runner on project boards", () => {
+		paramsMock.projectId = "proj-1";
+		useWorkspaceQueryMock.mockReturnValue({
+			data: { project: { id: "proj-1", name: "Project", kind: "single_repo" } },
+			isError: false,
+			isLoading: false,
+		});
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider>
+					<ShellTopbar />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 	});
 });

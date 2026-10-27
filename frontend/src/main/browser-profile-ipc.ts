@@ -5,7 +5,11 @@ import {
 	type BrowserProfile,
 	type BrowserProfileListState,
 	type BrowserProfileMenuInput,
+	type BrowserProfileSelectInput,
 	type BrowserProfileViewState,
+	type BrowserProfileUsage,
+	type BrowserProfileUsageResult,
+	type BrowserProfileDeleteResult,
 } from "../shared/browser-profiles";
 import type { BrowserImportRequest } from "../shared/browser-profile-import";
 import type { BrowserProfileImportService } from "./browser-profile-import";
@@ -29,6 +33,8 @@ export type BrowserProfileIpcHost = {
 	refreshProfileState?: (profileId: string) => void;
 	getProfileSwitchInfo: (viewId: string) => { hasNavigated: boolean; agentActive: boolean } | null;
 	switchProfile: (viewId: string, profileId: string | null) => Promise<BrowserProfileViewState>;
+	getProfileUsage: (profileId: string) => BrowserProfileUsage[];
+	detachProfile: (profileId: string) => Promise<void>;
 	isProfileLive: (profileId: string) => boolean;
 	clearProfileData: (profileId: string) => Promise<void>;
 };
@@ -42,6 +48,7 @@ export type BrowserProfileIpcOptions = {
 	importer: BrowserProfileImportService;
 	buildMenu: (items: BrowserProfileMenuItem[]) => BrowserProfileMenu;
 	confirmSwitch: (labels: BrowserProfileMenuInput["labels"]) => Promise<boolean>;
+	reportSwitchFailure: (message: string, labels: BrowserProfileMenuInput["labels"]) => void;
 };
 
 export type BrowserProfileIpc = {
@@ -123,7 +130,11 @@ function trustedShellSender(event: IpcMainInvokeEvent, shellWebContents: WebCont
 }
 
 function listStateWithStoreError(store: BrowserProfileStore): BrowserProfileListState {
-	return { profiles: store.profiles, ...(store.error ? { error: store.error } : {}) };
+	return {
+		profiles: store.profiles,
+		defaultProfileId: store.getDefaultProfileId(),
+		...(store.error ? { error: store.error } : {}),
+	};
 }
 
 function profileLabel(profile: BrowserProfile): string {
@@ -141,7 +152,8 @@ export function registerBrowserProfileIpc(options: BrowserProfileIpcOptions): Br
 	};
 
 	handle("browserProfiles:list", async (event) => {
-		if (!trustedShellSender(event, options.shellWebContents)) return { profiles: [] } satisfies BrowserProfileListState;
+		if (!trustedShellSender(event, options.shellWebContents))
+			return { profiles: [], defaultProfileId: null } satisfies BrowserProfileListState;
 		await options.store.load();
 		return listStateWithStoreError(options.store);
 	});
@@ -162,17 +174,58 @@ export function registerBrowserProfileIpc(options: BrowserProfileIpcOptions): Br
 		const profileId = profileIdFromInput(isRecord(input) ? input.id : undefined);
 		return options.store.runProfileOperation(profileId, () => options.host.isProfileLive(profileId), () => options.host.clearProfileData(profileId));
 	});
-	handle("browserProfiles:delete", async (event, input: unknown) => {
-		if (!trustedShellSender(event, options.shellWebContents)) throw invalid("Untrusted browser profile sender.");
-		const profileId = profileIdFromInput(isRecord(input) ? input.id : undefined);
-		return options.store.runProfileOperation(profileId, () => options.host.isProfileLive(profileId), async () => {
-			await options.host.clearProfileData(profileId);
-			await options.store.deleteProfile(profileId);
-		});
+	handle("browserProfiles:usage", async (event, input: unknown): Promise<BrowserProfileUsageResult> => {
+		if (!trustedShellSender(event, options.shellWebContents)) return { sessions: [], error: "Browser profile access was denied." };
+		try {
+			const profileId = profileIdFromInput(isRecord(input) ? input.id : undefined);
+			await options.store.load();
+			if (!options.store.getProfile(profileId)) return { sessions: [], error: "This browser profile no longer exists." };
+			return { sessions: options.host.getProfileUsage(profileId) };
+		} catch {
+			return { sessions: [], error: "Could not check browsers using this profile. Please try again." };
+		}
 	});
-	handle("browserProfiles:import:discover", async (event) => {
+	handle("browserProfiles:delete", async (event, input: unknown): Promise<BrowserProfileDeleteResult> => {
+		if (!trustedShellSender(event, options.shellWebContents)) return { error: "Browser profile access was denied." };
+		try {
+			const profileId = profileIdFromInput(isRecord(input) ? input.id : undefined);
+			const confirmed = isRecord(input) ? input.confirmedViewIds : undefined;
+			if (!Array.isArray(confirmed) || !confirmed.every((id) => typeof id === "string")) {
+				return { error: "Review the affected sessions before deleting this profile." };
+			}
+			// Reserve against new selections before switching existing browsers.
+			await options.store.runProfileOperation(profileId, () => false, async () => {
+				const usage = options.host.getProfileUsage(profileId);
+				if (usage.some((session) => !confirmed.includes(session.viewId))) {
+					throw invalid("The affected sessions changed. Review the updated list and confirm again.");
+				}
+				await options.host.detachProfile(profileId);
+				if (options.host.isProfileLive(profileId)) {
+					throw invalid("A browser is still using this profile. Please try again.");
+				}
+				await options.host.clearProfileData(profileId);
+				await options.store.deleteProfile(profileId);
+			});
+			return {};
+		} catch (error) {
+			// Only intentional domain messages cross IPC; storage/runtime errors may
+			// include paths or Electron details and get a safe, actionable fallback.
+			const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+			const readable = ["INVALID_ARGUMENT", "BROWSER_PROFILE_ACTIVE", "BROWSER_PROFILE_SWITCH_FAILED", "BROWSER_PROFILE_NOT_FOUND"].includes(String(code));
+			return { error: readable && error instanceof Error ? error.message :
+				"Could not finish deleting the profile. Some browsers may already be temporary. Please check the session list and try again." };
+		}
+	});
+	handle("browserProfiles:setDefault", async (event, input: unknown) => {
+		if (!trustedShellSender(event, options.shellWebContents)) throw invalid("Untrusted browser profile sender.");
+		if (!isRecord(input)) throw invalid("Browser profile input is invalid.");
+		const profileId = input.id === null ? null : profileIdFromInput(input.id);
+		await options.store.setDefaultProfileId(profileId);
+		return undefined;
+	});
+	handle("browserProfiles:import:discover", async (event, input: unknown) => {
 		if (!trustedShellSender(event, options.shellWebContents)) return { sources: [] };
-		return options.importer.discover();
+		return options.importer.discover(isRecord(input) && typeof input.sourceId === "string" ? { sourceId: input.sourceId } : undefined);
 	});
 	handle("browserProfiles:import:start", async (event, input: unknown) => {
 		if (!trustedShellSender(event, options.shellWebContents)) throw invalid("Untrusted browser profile sender.");
@@ -184,6 +237,15 @@ export function registerBrowserProfileIpc(options: BrowserProfileIpcOptions): Br
 		const viewId = viewIdFromInput(rawViewId);
 		if (!options.host.isRendererOwned(event, viewId)) return { ...EMPTY_PROFILE_STATE };
 		return options.host.getProfileState(viewId) ?? { ...EMPTY_PROFILE_STATE, viewId };
+	});
+	handle("browser:profile:select", async (event, input: unknown) => {
+		if (!isRecord(input)) throw invalid("Browser profile selection is invalid.");
+		const viewId = viewIdFromInput(input.viewId);
+		if (!options.host.isRendererOwned(event, viewId)) return undefined;
+		const profileId = input.profileId === null ? null : profileIdFromInput(input.profileId);
+		const labels = labelsFromInput(input.labels) satisfies BrowserProfileSelectInput["labels"];
+		await selectFromMenu(viewId, profileId, labels, options);
+		return undefined;
 	});
 	handle("browser:profile:menu", (event, input: unknown) => {
 		if (!isRecord(input)) throw invalid("Browser profile menu input is invalid.");
@@ -247,5 +309,6 @@ async function selectFromMenu(
 		await options.host.switchProfile(viewId, profileId);
 	} catch (error) {
 		console.error("browser profile switch failed:", error);
+		options.reportSwitchFailure(error instanceof Error ? error.message : "Browser profile could not be switched.", labels);
 	}
 }

@@ -109,6 +109,10 @@ func latestCompletedRunForOtherSHA(runs []domain.ReviewRun, prURL, targetSHA str
 	return latest, found
 }
 
+// latestRunsByPRAndSHA picks the authoritative run per PR head: the newest
+// running pass while any reviewer is still working on that head, otherwise the
+// newest pass. Several reviewers may review one head at once, so a reviewer that
+// finished first must not hide one that is still running.
 func latestRunsByPRAndSHA(runs []domain.ReviewRun) map[string]domain.ReviewRun {
 	latest := make(map[string]domain.ReviewRun)
 	for _, run := range runs {
@@ -116,7 +120,20 @@ func latestRunsByPRAndSHA(runs []domain.ReviewRun) map[string]domain.ReviewRun {
 			continue
 		}
 		key := run.PRURL + "\x00" + run.TargetSHA
-		if existing, ok := latest[key]; !ok || run.CreatedAt.After(existing.CreatedAt) {
+		existing, ok := latest[key]
+		if !ok {
+			latest[key] = run
+			continue
+		}
+		runRunning := run.Status == domain.ReviewRunRunning
+		existingRunning := existing.Status == domain.ReviewRunRunning
+		if runRunning != existingRunning {
+			if runRunning {
+				latest[key] = run
+			}
+			continue
+		}
+		if run.CreatedAt.After(existing.CreatedAt) {
 			latest[key] = run
 		}
 	}

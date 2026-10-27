@@ -1,13 +1,18 @@
 package codexappserver
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestCapacityNormalizationIncludesBucketsAndRejectsMalformedWindows(t *testing.T) {
@@ -54,6 +59,87 @@ func TestSparseCapacityNormalizationKeepsUnknownReachedState(t *testing.T) {
 	observed := capacityObservationFromEnvelope(envelope, time.Now(), true)
 	if observed.Overall == nil || observed.Overall.Reached != domain.CodexCapacityReachUnknown {
 		t.Fatalf("reached = %#v", observed.Overall)
+	}
+}
+
+func TestCapacityAutoResumeResetRetainsNativeSafety(t *testing.T) {
+	now := time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC)
+	const single = `{"primary":{"usedPercent":100,"resetsAt":1785664860},"secondary":null}`
+	for _, tc := range []struct {
+		name    string
+		body    string
+		partial bool
+		reset   int64
+	}{
+		{"complete default codex identity", `{"rateLimits":` + single + `}`, false, 1785664860},
+		{"all saturated windows wait for latest", `{"rateLimits":{"limitId":"codex","primary":{"usedPercent":100,"resetsAt":1785664860},"secondary":{"usedPercent":100,"resetsAt":1785664920}}}`, false, 1785664920},
+		{"duplicate canonical bucket", `{"rateLimits":` + single + `,"rateLimitsByLimitId":{"codex":` + single + `}}`, false, 1785664860},
+		{"conflicting canonical bucket", `{"rateLimits":` + single + `,"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":10},"secondary":null}}}`, false, 0},
+		{"additional bucket is ambiguous", `{"rateLimits":` + single + `,"rateLimitsByLimitId":{"model":` + single + `}}`, false, 0},
+		{"partial observation", `{"rateLimits":` + single + `}`, true, 0},
+		{"omitted window is unknown", `{"rateLimits":{"primary":{"usedPercent":100,"resetsAt":1785664860}}}`, false, 0},
+		{"other limit identity", `{"rateLimits":{"limitId":"other","primary":{"usedPercent":100,"resetsAt":1785664860},"secondary":null}}`, false, 0},
+		{"spend control", `{"rateLimits":{"primary":{"usedPercent":100,"resetsAt":1785664860},"secondary":null,"spendControlReached":true}}`, false, 0},
+		{"nonrolling refusal", `{"rateLimits":{"primary":{"usedPercent":100,"resetsAt":1785664860},"secondary":null,"rateLimitReachedType":"workspace_member_usage_limit_reached"}}`, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var envelope capacityReadEnvelope
+			if err := json.Unmarshal([]byte(tc.body), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			got := capacityObservationFromEnvelope(envelope, now, tc.partial)
+			if (tc.reset == 0 && got.AutoResumeResetsAt != nil) ||
+				(tc.reset != 0 && (got.AutoResumeResetsAt == nil || got.AutoResumeResetsAt.Unix() != tc.reset)) {
+				t.Fatalf("safe account reset = %v, want Unix %d", got.AutoResumeResetsAt, tc.reset)
+			}
+		})
+	}
+}
+
+func TestSafeCapacityReadErrorRedactsProviderMessage(t *testing.T) {
+	raw := fmt.Errorf("rate limit read failed: %w", &rpcError{
+		Code:    -32000,
+		Message: "request rejected for secret-account@example.com with token secret-token",
+	})
+
+	got := safeCapacityReadError(raw)
+
+	if !errors.Is(got, ports.ErrCodexCapacityRequestRejected) {
+		t.Fatalf("error = %v, want safe provider rejection", got)
+	}
+	if strings.Contains(got.Error(), "secret-account") || strings.Contains(got.Error(), "secret-token") {
+		t.Fatalf("safe error leaked provider details: %v", got)
+	}
+}
+
+func TestSafeCapacityReadErrorIdentifiesRevokedOAuthToken(t *testing.T) {
+	raw := fmt.Errorf("rate limit read failed: %w", &rpcError{
+		Code:    -32603,
+		Message: `usage failed: 401 Unauthorized; body={"code":"token_revoked","detail":"secret-account@example.com"}`,
+	})
+
+	got := safeCapacityReadError(raw)
+
+	if !errors.Is(got, ports.ErrCodexOAuthTokenRevoked) {
+		t.Fatalf("error = %v, want safe revoked-token error", got)
+	}
+	if strings.Contains(got.Error(), "secret-account") {
+		t.Fatalf("safe error leaked provider details: %v", got)
+	}
+	if isRevokedOAuthTokenError(&rpcError{Code: -32603, Message: "token_revoked without a 401 response"}) {
+		t.Fatal("an ambiguous provider message was classified as a revoked OAuth token")
+	}
+}
+
+func TestSafeCapacityReadErrorClassifiesTransportAndContextFailures(t *testing.T) {
+	if got := safeCapacityReadError(errors.New("connection failed with private details")); !errors.Is(got, ports.ErrCodexCapacityProviderUnavailable) {
+		t.Fatalf("transport error = %v, want provider unavailable", got)
+	}
+	if got := safeCapacityReadError(context.DeadlineExceeded); !errors.Is(got, context.DeadlineExceeded) {
+		t.Fatalf("deadline error = %v, want deadline exceeded", got)
+	}
+	if got := safeCapacityReadError(context.Canceled); !errors.Is(got, context.Canceled) {
+		t.Fatalf("cancelled error = %v, want context cancelled", got)
 	}
 }
 

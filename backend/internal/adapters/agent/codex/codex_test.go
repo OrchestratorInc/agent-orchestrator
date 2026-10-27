@@ -14,6 +14,41 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+func TestResolveCodexBinaryFindsLocalAppDataNPMShimOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows install location")
+	}
+	localAppData := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("APPDATA", "")
+	t.Setenv("LOCALAPPDATA", localAppData)
+	t.Setenv("USERPROFILE", t.TempDir())
+	want := filepath.Join(localAppData, "npm", "codex.cmd")
+	if err := os.MkdirAll(filepath.Dir(want), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(want, []byte("@echo off\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveCodexBinary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("ResolveCodexBinary() = %q, want %q", got, want)
+	}
+}
+
+func TestInvalidateBinaryResolutionClearsCachedPath(t *testing.T) {
+	p := &Plugin{resolvedBinary: "old-codex"}
+
+	p.InvalidateBinaryResolution()
+
+	if p.resolvedBinary != "" {
+		t.Fatalf("resolvedBinary = %q, want empty after invalidation", p.resolvedBinary)
+	}
+}
+
 func TestNativeConversationIDRequiresCapturedCodexThreadForTUI(t *testing.T) {
 	p := &Plugin{}
 	if id, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{
@@ -159,6 +194,9 @@ func sessionHookFlags(t *testing.T) []string {
 		"-c", `hooks.SessionStart=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"session-start") + `,timeout=5}]}]`,
 		"-c", `hooks.UserPromptSubmit=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"user-prompt-submit") + `,timeout=5}]}]`,
 		"-c", `hooks.PermissionRequest=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"permission-request") + `,timeout=5}]}]`,
+		"-c", `hooks.PostToolUse=[{matcher="^(spawn_agent|collaborationspawn_agent)$",hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"post-tool-use") + `,timeout=5}]}]`,
+		"-c", `hooks.SubagentStart=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"subagent-start") + `,timeout=5}]}]`,
+		"-c", `hooks.SubagentStop=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"subagent-stop") + `,timeout=5}]}]`,
 		"-c", `hooks.Stop=[{hooks=[{type="command",command=` + codexTOMLBasicString(prefix+"stop") + `,timeout=5}]}]`,
 	}
 }
@@ -395,6 +433,46 @@ func TestGetLaunchCommandAppendsConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestGetLaunchCommandAppendsConfiguredEffort(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Config: ports.AgentConfig{Effort: "  high  "},
+		Prompt: "review this change",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSubsequence(cmd, []string{"-c", "model_reasoning_effort='high'"}) {
+		t.Fatalf("command %#v missing trimmed model_reasoning_effort config", cmd)
+	}
+	if containsSubsequence(cmd, []string{"-c", "model_reasoning_effort='  high  '"}) {
+		t.Fatalf("command %#v used untrimmed effort", cmd)
+	}
+}
+
+func TestGetLaunchCommandSetsTheFastTierEitherWay(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+	for _, tt := range []struct {
+		launch domain.AgentLaunchOptions
+		want   string
+	}{
+		{domain.AgentLaunchOptions{FastMode: true}, "service_tier='priority'"},
+		{domain.AgentLaunchOptions{FastModeOff: true}, "service_tier='default'"},
+	} {
+		cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{Config: ports.AgentConfig{Launch: tt.launch}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !containsSubsequence(cmd, []string{"-c", tt.want}) {
+			t.Fatalf("command %#v missing %s", cmd, tt.want)
+		}
+	}
+	if cmd, _ := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{}); contains(cmd, "service_tier='default'") || contains(cmd, "service_tier='priority'") {
+		t.Fatalf("command %#v set a tier nobody chose", cmd)
+	}
+}
+
 func TestGetLaunchCommandOmitsBlankConfiguredModel(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "codex"}
 
@@ -613,6 +691,11 @@ func TestGetConfigSpecReportsModelField(t *testing.T) {
 			Key:         "model",
 			Type:        ports.ConfigFieldString,
 			Description: "Model override passed to `codex --model`.",
+		},
+		{
+			Key:         "effort",
+			Type:        ports.ConfigFieldString,
+			Description: "Reasoning effort override passed to `codex -c model_reasoning_effort`.",
 		},
 	}
 	if !reflect.DeepEqual(spec.Fields, want) {
@@ -890,6 +973,23 @@ func TestGetRestoreCommandAppendsConfiguredModel(t *testing.T) {
 	}
 }
 
+func TestGetRestoreCommandAppendsConfiguredEffort(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "codex"}
+
+	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Config: ports.AgentConfig{Effort: "high"},
+		Session: ports.SessionRef{
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "thread-123"},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
+	}
+	if !containsSubsequence(cmd, []string{"-c", "model_reasoning_effort='high'"}) {
+		t.Fatalf("restore command %#v missing configured effort", cmd)
+	}
+}
+
 func TestGetRestoreCommandFalseWithoutAgentSessionID(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "codex"}
 
@@ -1030,12 +1130,35 @@ func TestDoctorLaunchProbesMirrorLaunchFlags(t *testing.T) {
 	}
 	joined := strings.Join(override, " ")
 	for _, want := range []string{
-		"hooks.SessionStart=", "hooks.UserPromptSubmit=", "hooks.PermissionRequest=", "hooks.Stop=",
+		"hooks.SessionStart=", "hooks.UserPromptSubmit=", "hooks.PermissionRequest=", "hooks.PostToolUse=", "hooks.SubagentStart=", "hooks.SubagentStop=", "hooks.Stop=",
 		"notice.hide_rate_limit_model_nudge=true",
 		`projects={`,
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("override probe missing %q in %s", want, joined)
 		}
+	}
+}
+
+// An account home links its sessions folder to the computer's own, so the
+// rollout of a conversation started on another account is visible through it.
+func TestNativeConversationExistsFollowsALinkedSessionsFolder(t *testing.T) {
+	p := &Plugin{}
+	id := "019fc430-1234-7abc-8def-0123456789ab"
+	shared := t.TempDir()
+	activeDir := filepath.Join(shared, "sessions", "2026", "10", "17")
+	if err := os.MkdirAll(activeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(activeDir, "rollout-2026-10-17T02-00-00-"+id+".jsonl"), []byte("{\"type\":\"session_meta\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	account := t.TempDir()
+	if err := os.Symlink(filepath.Join(shared, "sessions"), filepath.Join(account, "sessions")); err != nil {
+		t.Fatal(err)
+	}
+	exists, err := p.NativeConversationExists(context.Background(), ports.SessionRef{}, id, map[string]string{"CODEX_HOME": account})
+	if err != nil || !exists {
+		t.Fatalf("rollout through a linked sessions folder: exists=%v err=%v", exists, err)
 	}
 }

@@ -2,17 +2,17 @@ import {
 	memo,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
-	type MouseEvent,
 	type ReactNode,
 	type RefObject,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Check, Plus, Send as SendIcon } from "lucide-react";
+import { Check, LoaderCircle, Plus, Send as SendIcon, type LucideIcon } from "lucide-react";
 import type { FileAnnotationTarget } from "../../shared/file-annotations";
 import {
 	type WorkspaceCompareMode,
@@ -21,30 +21,49 @@ import {
 } from "../hooks/useSessionWorkspaceFiles";
 import { useParsedDiff } from "../hooks/useParsedDiff";
 import { useDiffHighlight } from "../hooks/useDiffHighlight";
+import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
 import { statusLabel, statusTone } from "../lib/workspace-file-status";
 import type { DiffRow, DiffRowKind } from "../lib/diff-parser";
 import type { DiffRun } from "../lib/diff-highlight";
-import type { DiffSelectionLine } from "../../shared/diff-selection";
 import { Button } from "./ui/button";
-import { DiffSelectionMenu } from "./DiffSelectionMenu";
 import { ImageDiffView } from "./ImageDiffView";
 import "./chat/code-theme.css";
 
 type WorkspaceFileStatus = WorkspaceFileSummary["status"];
 
-export type ActiveFileAnnotationTarget = FileAnnotationTarget & { rowIndex?: number };
+export type ActiveFileAnnotationTarget = FileAnnotationTarget & {
+	rowIndex?: number;
+	/** Keeps one shared annotation model from rendering the composer in two panes. */
+	surface?: "focused" | "review";
+};
 export type FileAnnotationStatus = "idle" | "sending" | "sent" | "error";
 export type FileAnnotationModel = {
-	target: ActiveFileAnnotationTarget | null;
-	draft: string;
+	/** Every open comment box, oldest first. They can sit on several lines and files at once. */
+	targets: ActiveFileAnnotationTarget[];
+	/** State of the send in progress or just finished, whichever comments it covers. */
 	status: FileAnnotationStatus;
+	/** The same, for one box: idle unless the send covers that comment. */
+	statusFor: (target: ActiveFileAnnotationTarget) => FileAnnotationStatus;
 	error: string;
+	/** Opens a box on `target`, or closes the one already open there. */
 	begin: (target: ActiveFileAnnotationTarget) => void;
-	setDraft: (draft: string) => void;
-	cancel: () => void;
-	submit: () => Promise<void>;
+	draftFor: (target: ActiveFileAnnotationTarget) => string;
+	setDraft: (target: ActiveFileAnnotationTarget, draft: string) => void;
+	/** Closes the box on `target`, or every box when no target is given. */
+	cancel: (target?: ActiveFileAnnotationTarget) => void;
+	/** Sends the comment on `target` (`text` is that box's local draft), or every written comment when no target is given. */
+	submit: (target?: ActiveFileAnnotationTarget, text?: string) => Promise<void>;
 };
+
+/** Closes every open box that `match` picks out, leaving comments elsewhere alone. */
+export function cancelFileAnnotations(annotation: FileAnnotationModel, match: (target: ActiveFileAnnotationTarget) => boolean): void {
+	for (const target of annotation.targets.filter(match)) annotation.cancel(target);
+}
+
+export function fileAnnotationKey(target: ActiveFileAnnotationTarget): string {
+	return [target.surface ?? "", target.scope ?? "", target.side, target.line ?? "", target.path, target.quote ?? ""].join("\u0000");
+}
 
 // Split (old | new) view only means something when both sides have content to
 // compare. Added files have nothing on the old side; deleted files have
@@ -68,6 +87,7 @@ export function ReviewDiffBody({
 	filePath,
 	onActiveSelectionChange,
 	sessionId,
+	hostId,
 	split,
 	wrap,
 }: {
@@ -78,10 +98,12 @@ export function ReviewDiffBody({
 	filePath: string;
 	onActiveSelectionChange: (active: boolean) => void;
 	sessionId: string;
+	hostId?: string;
 	split: boolean;
 	wrap: boolean;
 }) {
 	const { t } = useTranslation();
+	void filePath;
 	const { rows, pending } = useParsedDiff(detail.diff);
 	// An image has no readable line diff, so it renders as the images themselves
 	// rather than the binary placeholder.
@@ -90,6 +112,7 @@ export function ReviewDiffBody({
 			<ImageDiffView
 				path={detail.path}
 				sessionId={sessionId}
+				hostId={hostId}
 				split={split}
 				status={detail.status}
 				version={detailLoadedAt}
@@ -108,12 +131,10 @@ export function ReviewDiffBody({
 	return (
 		<DiffView
 			annotation={annotation}
-			filePath={filePath}
 			onActiveSelectionChange={onActiveSelectionChange}
 			path={detail.path}
 			previousPath={detail.previousPath}
 			rows={rows}
-			sessionId={sessionId}
 			split={split}
 			truncated={detail.diffTruncated}
 			wrap={wrap}
@@ -133,44 +154,12 @@ const diffMarkerGlyph: Record<Exclude<DiffRowKind, "hunk">, string> = {
 	context: " ",
 };
 
-// isSelectionActiveIn is the shared check used both by the live selectionchange
-// listener and the context-menu handler: a real (non-collapsed) selection whose
+// A real (non-collapsed) selection whose
 // anchor lives inside this DiffView's scroll container.
 function isSelectionActiveIn(selection: Selection | null, container: HTMLElement | null): boolean {
 	if (!selection || !container || selection.isCollapsed) return false;
 	return selection.anchorNode !== null && container.contains(selection.anchorNode);
 }
-
-// closestDiffRowElement climbs from a Range boundary (which for a text
-// selection is almost always a text node, and text nodes have no `.closest`)
-// up to the nearest `[data-diff-row]` element, or null if the boundary isn't
-// inside a real diff row (e.g. it landed on a hunk band or an empty
-// split-view placeholder).
-function closestDiffRowElement(node: Node | null): Element | null {
-	if (!node) return null;
-	const element = node instanceof Element ? node : node.parentElement;
-	return element?.closest?.("[data-diff-row]") ?? null;
-}
-
-// toDiffSelectionLine maps a DiffRow to the shared DiffSelectionLine shape.
-// Hunk rows never carry data-row-index themselves, but a multi-hunk selection
-// range can still include one in the middle of the sliced rows[min..max] —
-// this drops it defensively rather than emitting a bogus "hunk" line.
-function toDiffSelectionLine(row: DiffRow): DiffSelectionLine | null {
-	if (row.kind === "hunk") return null;
-	return { kind: row.kind, oldNo: row.oldNo, newNo: row.newNo, text: row.text };
-}
-
-function isNotNull<T>(value: T | null): value is T {
-	return value !== null;
-}
-
-type DiffViewMenuState = {
-	open: boolean;
-	position: { x: number; y: number };
-	lines: DiffSelectionLine[];
-	selectedText: string;
-};
 
 // SessionFilesView has no per-file scroll box — the Files panel is one
 // continuous list, and an expanded file's rows scroll as part of that same
@@ -253,23 +242,19 @@ function useSharedScrollRowVirtualizer(
 
 function DiffView({
 	annotation,
-	filePath,
 	onActiveSelectionChange,
 	path,
 	previousPath,
 	rows,
-	sessionId,
 	split,
 	truncated,
 	wrap,
 }: {
 	annotation: FileAnnotationModel;
-	filePath: string;
 	onActiveSelectionChange: (active: boolean) => void;
 	path: string;
 	previousPath?: string;
 	rows: DiffRow[];
-	sessionId: string;
 	split: boolean;
 	truncated?: boolean;
 	wrap: boolean;
@@ -277,7 +262,6 @@ function DiffView({
 	const { t } = useTranslation();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [hasSelection, setHasSelection] = useState(false);
-	const [menuState, setMenuState] = useState<DiffViewMenuState | null>(null);
 	const shouldVirtualize = !split && rows.length > ROW_VIRTUALIZE_THRESHOLD;
 	const { listRef, virtualizer } = useSharedScrollRowVirtualizer(containerRef, rows.length, shouldVirtualize);
 	const highlight = useDiffHighlight(rows, path, previousPath);
@@ -294,47 +278,9 @@ function DiffView({
 		return () => document.removeEventListener("selectionchange", onSelectionChange);
 	}, []);
 
-	const menuOpen = menuState?.open ?? false;
 	useEffect(() => {
-		onActiveSelectionChange(hasSelection || menuOpen);
-	}, [hasSelection, menuOpen, onActiveSelectionChange]);
-
-	const onContextMenu = useCallback(
-		(event: MouseEvent<HTMLDivElement>) => {
-			const container = containerRef.current;
-			const selection = window.getSelection();
-			if (!isSelectionActiveIn(selection, container) || !selection) return;
-
-			// Only past this point do we know we're overriding a real selection —
-			// the native context menu must stay untouched for a collapsed selection
-			// or one outside this container.
-			event.preventDefault();
-
-			const range = selection.getRangeAt(0);
-			const startRow = closestDiffRowElement(range.startContainer);
-			const endRow = closestDiffRowElement(range.endContainer);
-			if (!startRow || !endRow) return;
-
-			const startIndex = Number(startRow.getAttribute("data-row-index"));
-			const endIndex = Number(endRow.getAttribute("data-row-index"));
-			if (!Number.isFinite(startIndex) || !Number.isFinite(endIndex)) return;
-
-			const min = Math.min(startIndex, endIndex);
-			const max = Math.max(startIndex, endIndex);
-			const lines = rows
-				.slice(min, max + 1)
-				.map(toDiffSelectionLine)
-				.filter(isNotNull);
-
-			setMenuState({
-				open: true,
-				position: { x: event.clientX, y: event.clientY },
-				lines,
-				selectedText: selection.toString(),
-			});
-		},
-		[rows],
-	);
+		onActiveSelectionChange(hasSelection);
+	}, [hasSelection, onActiveSelectionChange]);
 
 	return (
 		<div>
@@ -344,8 +290,7 @@ function DiffView({
 				</div>
 			) : null}
 			<div
-				className="diff-code session-files-diff-scrollbar overflow-x-auto overflow-y-visible bg-terminal font-mono text-xs leading-row text-terminal-foreground"
-				onContextMenu={onContextMenu}
+				className="diff-code session-files-diff-scrollbar select-text overflow-x-auto overflow-y-visible bg-terminal font-mono text-xs leading-row text-terminal-foreground"
 				ref={containerRef}
 			>
 				{split ? (
@@ -411,15 +356,6 @@ function DiffView({
 					</div>
 				)}
 			</div>
-			<DiffSelectionMenu
-				filePath={filePath}
-				lines={menuState?.lines ?? []}
-				onOpenChange={(open) => setMenuState((current) => (current ? { ...current, open } : current))}
-				open={menuOpen}
-				position={menuState?.position ?? { x: 0, y: 0 }}
-				selectedText={menuState?.selectedText ?? ""}
-				sessionId={sessionId}
-			/>
 		</div>
 	);
 }
@@ -459,7 +395,7 @@ function DiffRowContentInner({ annotation, index, path, previousPath, row, runs,
 				data-row-index={index}
 			>
 				<LineFeedbackButton
-					active={isAnnotationRow(annotation.target, path, index)}
+					active={rowAnnotationTargets(annotation.targets, path, index).length > 0}
 					onClick={() => annotation.begin(lineAnnotationTarget(path, previousPath, row, index))}
 					t={t}
 					target={lineAnnotationTarget(path, previousPath, row, index)}
@@ -480,7 +416,9 @@ function DiffRowContentInner({ annotation, index, path, previousPath, row, runs,
 					{renderDiffRuns(runs, row.kind === "add")}
 				</span>
 			</div>
-			{isAnnotationRow(annotation.target, path, index) ? <FileAnnotationComposer annotation={annotation} /> : null}
+			{rowAnnotationTargets(annotation.targets, path, index).map((target) => (
+				<FileAnnotationComposer annotation={annotation} key={fileAnnotationKey(target)} target={target} />
+			))}
 		</div>
 	);
 }
@@ -488,8 +426,8 @@ function DiffRowContentInner({ annotation, index, path, previousPath, row, runs,
 // `annotation` is a fresh object on every SessionFilesView render (its draft
 // text, send status, etc. all live there), so a plain memo would never skip
 // a re-render — every row would see a "changed" prop on every keystroke
-// anywhere in the panel, on top of every scroll tick. Only a row that IS or
-// WAS the active annotation target actually needs to re-render when
+// anywhere in the panel, on top of every scroll tick. Only a row that HAS or
+// HAD an open annotation box actually needs to re-render when
 // `annotation` changes; every other row only cares about `row`/`index`/
 // `path`/`previousPath`/`wrap`, which are stable across scroll-driven
 // re-renders. This is what actually lets scrolling skip re-running the
@@ -506,8 +444,8 @@ const DiffRowContent = memo(DiffRowContentInner, (prev, next) => {
 	) {
 		return false;
 	}
-	const prevActive = isAnnotationRow(prev.annotation.target, prev.path, prev.index);
-	const nextActive = isAnnotationRow(next.annotation.target, next.path, next.index);
+	const prevActive = rowAnnotationTargets(prev.annotation.targets, prev.path, prev.index).length > 0;
+	const nextActive = rowAnnotationTargets(next.annotation.targets, next.path, next.index).length > 0;
 	return !prevActive && !nextActive;
 });
 
@@ -603,10 +541,11 @@ function SplitDiff({
 								t={t}
 							/>
 						</div>
-						{(splitRow.leftIndex !== null && isAnnotationRow(annotation.target, path, splitRow.leftIndex)) ||
-						(splitRow.rightIndex !== null && isAnnotationRow(annotation.target, path, splitRow.rightIndex)) ? (
-							<FileAnnotationComposer annotation={annotation} />
-						) : null}
+						{[splitRow.leftIndex, splitRow.leftIndex === splitRow.rightIndex ? null : splitRow.rightIndex].flatMap((rowIndex) =>
+							rowIndex === null ? [] : rowAnnotationTargets(annotation.targets, path, rowIndex),
+						).map((target) => (
+							<FileAnnotationComposer annotation={annotation} key={fileAnnotationKey(target)} target={target} />
+						))}
 					</div>
 				),
 			)}
@@ -648,7 +587,7 @@ function SplitSide({
 		>
 			{target ? (
 				<LineFeedbackButton
-					active={isAnnotationRow(annotation.target, path, rowIndex)}
+					active={rowAnnotationTargets(annotation.targets, path, rowIndex).some((open) => open.side === side)}
 					onClick={() => annotation.begin(target)}
 					t={t}
 					target={target}
@@ -679,11 +618,12 @@ function lineAnnotationTarget(
 		lineKind: row.kind === "hunk" ? undefined : row.kind,
 		lineText: row.text,
 		rowIndex,
+		surface: "focused",
 	};
 }
 
-function isAnnotationRow(target: ActiveFileAnnotationTarget | null, path: string, rowIndex: number): boolean {
-	return target?.path === path && target.side !== "file" && target.rowIndex === rowIndex;
+function rowAnnotationTargets(targets: ActiveFileAnnotationTarget[], path: string, rowIndex: number): ActiveFileAnnotationTarget[] {
+	return targets.filter((target) => target.surface !== "review" && target.path === path && target.side !== "file" && target.rowIndex === rowIndex);
 }
 
 // `t` comes from the caller (which already holds one useTranslation()
@@ -702,14 +642,40 @@ function LineFeedbackButton({
 	t: TFunction;
 	target: ActiveFileAnnotationTarget;
 }) {
-	if (active) return null;
 	const side = t(target.side === "old" ? "files.oldSide" : "files.newSide");
 	const label = t("files.addLineFeedback", { file: target.path, line: target.line, side });
+	return <LineFeedbackButtonControl expanded={active} label={label} onClick={onClick} />;
+}
+
+// The single AO line-feedback affordance used by both the original diff rows
+// and the Pierre-backed viewers. Pierre only provides the hovered-line slot;
+// the control, styling, and annotation behavior remain AO-owned.
+export function LineFeedbackButtonControl({
+	expanded = false,
+	gutter = false,
+	label,
+	onClick,
+}: {
+	expanded?: boolean;
+	gutter?: boolean;
+	label: string;
+	onClick: () => void;
+}) {
 	return (
 		<Button
 			aria-label={label}
-			className="absolute inset-y-0 left-6 z-20 my-auto size-6 rounded-sm border-primary/70 opacity-0 shadow-md shadow-black/30 transition-opacity active:translate-y-0 active:scale-100 focus-visible:opacity-100 group-hover/line:opacity-100"
-			onClick={onClick}
+			aria-expanded={expanded || undefined}
+			className={cn(
+				"z-20 size-6 rounded-sm border-primary/70 shadow-md shadow-black/30 active:translate-y-0 active:scale-100",
+				gutter
+					? "relative size-5"
+					: "absolute inset-y-0 left-6 my-auto opacity-0 transition-opacity focus-visible:opacity-100 group-hover/line:opacity-100",
+			)}
+			data-utility-button={gutter ? "" : undefined}
+			onClick={(event) => {
+				event.stopPropagation();
+				onClick();
+			}}
 			size={null}
 			type="button"
 			variant="primary"
@@ -719,78 +685,195 @@ function LineFeedbackButton({
 	);
 }
 
-export function FileAnnotationComposer({ annotation }: { annotation: FileAnnotationModel }) {
+// Like the browser's annotation box: one rounded card with a single
+// auto-growing line, and the send shortcut, Cancel and Send underneath so the
+// way out and the way forward are both obvious. ⌘/Ctrl+Enter sends (plain Enter
+// adds a line, as the hint says), Esc cancels.
+const COMPOSER_MAX_HEIGHT_PX = 160;
+
+export function FileAnnotationComposer({ annotation, target }: { annotation: FileAnnotationModel; target: ActiveFileAnnotationTarget }) {
 	const { t } = useTranslation();
-	const target = annotation.target;
-	if (!target) return null;
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
+	// Typing stays local to the box, so the diffs that read the shared model
+	// don't re-render per keystroke; the model hears the text on send, when the
+	// box loses focus (so a comment started elsewhere, or a send from another
+	// box, sees it), or when the box goes away (a virtualized row can unmount
+	// and remount it).
+	const [text, setText] = useState(() => annotation.draftFor(target));
+	const textRef = useRef(text);
+	textRef.current = text;
+	const saveDraftRef = useRef(() => annotation.setDraft(target, textRef.current));
+	saveDraftRef.current = () => annotation.setDraft(target, textRef.current);
+	useEffect(() => () => saveDraftRef.current(), []);
+	// Only the newest box takes focus, so an older one scrolling back into view
+	// doesn't pull the caret away from the comment being written.
+	const newest = annotation.targets[annotation.targets.length - 1] === target;
+	useEffect(() => {
+		if (!newest) return;
+		const frame = window.requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+		return () => window.cancelAnimationFrame(frame);
+	}, [newest, target]);
+	const fitHeight = useCallback(() => {
+		const textarea = textareaRef.current;
+		if (!textarea) return;
+		// Back to one row first; an empty box stays one row, so a placeholder that
+		// wrapped while a popover was still settling its width can't size it.
+		textarea.style.height = "";
+		if (!textarea.value) return;
+		textarea.style.height = `${Math.min(textarea.scrollHeight, COMPOSER_MAX_HEIGHT_PX)}px`;
+	}, []);
+	useLayoutEffect(fitHeight, [fitHeight, text, target]);
+	// Text rewraps when the box's width changes (popover settling, panel resize).
+	useEffect(() => {
+		const textarea = textareaRef.current;
+		if (!textarea || typeof ResizeObserver === "undefined") return;
+		let width = textarea.clientWidth;
+		const observer = new ResizeObserver(() => {
+			if (textarea.clientWidth === width) return;
+			width = textarea.clientWidth;
+			fitHeight();
+		});
+		observer.observe(textarea);
+		return () => observer.disconnect();
+	}, [fitHeight, target]);
 	const side = target.side === "file" ? "" : t(target.side === "old" ? "files.oldSide" : "files.newSide");
 	const targetLabel =
-		target.side === "file"
+		target.quote != null
+			? t("files.selectionFeedbackTarget", { file: target.path })
+			: target.side === "file"
 			? t("files.fileFeedbackTarget", { file: target.path })
 			: t("files.lineFeedbackTarget", { file: target.path, line: target.line, side });
-	const submit = () => void annotation.submit();
+	// The quoted page selection, unless the box has its own text selected.
+	const quoteToCopy = (box: HTMLTextAreaElement) => (box.selectionStart === box.selectionEnd ? target.quote : undefined);
+	const status = annotation.statusFor(target);
+	const sending = status === "sending";
+	const sent = status === "sent";
+	const submit = () => {
+		if (!text.trim() || sending || sent) return;
+		void annotation.submit(target, text);
+	};
+	// The button sends this box; the shortcut sends every written comment, so
+	// a review with several boxes open goes out in one keystroke.
+	const writtenCount = annotation.targets.filter((open) => (open === target ? text : annotation.draftFor(open)).trim()).length;
+	const submitAll = () => {
+		if (sending || sent) return;
+		annotation.setDraft(target, text);
+		void annotation.submit();
+	};
 
 	return (
-		<form
-			className="border-y border-border/70 bg-surface px-3 py-2 font-sans"
-			onSubmit={(event) => {
-				event.preventDefault();
-				submit();
-			}}
-		>
-			<div className="mb-1.5 flex items-center justify-between gap-2">
-				<span className="min-w-0 truncate font-mono text-caption text-passive">{targetLabel}</span>
-				{annotation.status === "sent" ? (
-					<span className="inline-flex items-center gap-1 text-caption text-success" role="status">
-						<Check className="size-icon-sm" aria-hidden="true" />
-						{t("files.feedbackSent")}
-					</span>
-				) : null}
-			</div>
-			<textarea
-				aria-label={t("files.feedbackLabel", { target: targetLabel })}
-				autoFocus
-				className="min-h-20 w-full resize-y rounded-md border border-input bg-background px-2.5 py-2 text-sm text-foreground outline-none placeholder:text-passive focus-visible:outline-none disabled:opacity-60"
-				disabled={annotation.status === "sending" || annotation.status === "sent"}
-				onChange={(event) => annotation.setDraft(event.target.value)}
-				onKeyDown={(event) => {
-					if (event.key === "Escape") {
-						event.preventDefault();
-						annotation.cancel();
-					} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-						event.preventDefault();
-						submit();
-					}
+		<div className="p-2 font-sans">
+			<form
+				className="rounded-2xl border border-border bg-background px-2.5 py-2"
+				onSubmit={(event) => {
+					event.preventDefault();
+					submit();
 				}}
-				placeholder={t("files.feedbackPlaceholder")}
-				value={annotation.draft}
-			/>
-			{annotation.status === "error" ? (
-				<p className="mt-1.5 text-xs text-error" role="alert">
-					{annotation.error}
-				</p>
-			) : null}
-			<div className="mt-2 flex items-center justify-end gap-1.5">
-				<span className="mr-auto text-caption text-passive">{t("files.feedbackShortcut")}</span>
-				<Button
-					disabled={annotation.status === "sending" || annotation.status === "sent"}
-					onClick={annotation.cancel}
-					size="sm"
-					type="button"
-					variant="ghost"
-				>
-					{t("files.cancelFeedback")}
-				</Button>
-				<Button
-					disabled={!annotation.draft.trim() || annotation.status === "sending" || annotation.status === "sent"}
-					size="sm"
-					type="submit"
-				>
-					<SendIcon className="size-icon-sm" aria-hidden="true" />
-					{annotation.status === "sending" ? t("files.sendingFeedback") : t("files.sendFeedback")}
-				</Button>
-			</div>
-		</form>
+			>
+				<textarea
+					aria-label={t("files.feedbackLabel", { target: targetLabel })}
+					className={cn(
+						"board-scrollbar block min-h-7 w-full resize-none border-0 bg-transparent py-1 text-[13px] leading-5 text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60",
+						// Empty, a placeholder that wraps in a narrow column is clipped rather
+						// than growing a scrollbar in a one-line box.
+						text ? "overflow-y-auto" : "overflow-hidden",
+					)}
+					disabled={sending || sent}
+					onBlur={() => annotation.setDraft(target, text)}
+					// Focusing the box clears the page selection it was opened from, so
+					// Cmd/Ctrl+C (or Edit > Copy) with nothing selected in the box copies
+					// the quoted selection.
+					onCopy={(event) => {
+						const quote = quoteToCopy(event.currentTarget);
+						if (quote === undefined) return;
+						event.preventDefault();
+						event.clipboardData.setData("text/plain", quote);
+					}}
+					onChange={(event) => {
+						const next = event.target.value;
+						setText(next);
+						// The review bar counts written comments, so tell the model when
+						// this box starts or stops having text, not on every keystroke.
+						if (Boolean(next.trim()) !== Boolean(text.trim())) annotation.setDraft(target, next);
+					}}
+					onKeyDown={(event) => {
+						if (event.key === "Escape") {
+							event.preventDefault();
+							annotation.cancel(target);
+						} else if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) {
+							event.preventDefault();
+							submitAll();
+						} else if (event.key.toLowerCase() === "c" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+							const quote = quoteToCopy(event.currentTarget);
+							if (quote === undefined) return;
+							event.preventDefault();
+							void aoBridge.clipboard.writeText(quote);
+						}
+					}}
+					placeholder={t("files.feedbackPlaceholder")}
+					ref={textareaRef}
+					rows={1}
+					title={targetLabel}
+					value={text}
+				/>
+				{status === "error" ? (
+					<p className="pt-1 text-xs text-error" role="alert">
+						{annotation.error}
+					</p>
+				) : null}
+				<div className="mt-1 flex items-center justify-end gap-1">
+					{/* Truncates rather than squeezing the buttons in a narrow split column. */}
+					<span className="mr-auto min-w-0 truncate text-caption text-passive">{writtenCount > 1 ? t("files.feedbackShortcutAll") : t("files.feedbackShortcut")}</span>
+					<Button
+						className="px-2 text-xs text-muted-foreground hover:text-foreground"
+						disabled={sending}
+						onClick={() => annotation.cancel(target)}
+						size="sm"
+						type="button"
+						variant="ghost"
+					>
+						{t("files.cancelFeedback")}
+					</Button>
+					<Button
+						aria-label={sent ? t("files.feedbackSent") : t("files.sendFeedback")}
+						className="text-muted-foreground hover:text-foreground disabled:opacity-100"
+						disabled={!text.trim() || sending || sent}
+						size="icon-sm"
+						title={sent ? t("files.feedbackSent") : t("files.sendFeedback")}
+						type="submit"
+						variant="ghost"
+					>
+						{sending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : sent ? <Check aria-hidden="true" className="text-success" /> : <SendIcon aria-hidden="true" className={cn(!text.trim() && "opacity-50")} />}
+					</Button>
+				</div>
+			</form>
+		</div>
+	);
+}
+
+// Each box sends its own comment; once several are written, this bar sends
+// or drops them all together. `surface` keeps it to the pane that holds
+// comments; the send covers every pane's.
+export function FileAnnotationSendBar({ annotation, className, surface }: { annotation: FileAnnotationModel; className?: string; surface: "focused" | "review" }) {
+	const { t } = useTranslation();
+	const written = annotation.targets.filter((target) => annotation.draftFor(target).trim());
+	const here = written.some((target) => (surface === "review" ? target.surface !== "focused" : target.surface !== "review"));
+	if (!here || written.length < 2) return null;
+	const sending = annotation.status === "sending";
+	const sent = annotation.status === "sent";
+	return (
+		<div className={cn("flex min-h-9 shrink-0 items-center gap-1 border-t border-border bg-background px-3 py-1 font-sans", className)} data-testid="file-feedback-bar">
+			<span className="mr-auto min-w-0 truncate text-xs text-muted-foreground" role="status">
+				{annotation.status === "error" ? <span className="text-error">{annotation.error}</span> : sent ? t("files.feedbackSent") : null}
+			</span>
+			<Button className="px-2 text-xs text-muted-foreground hover:bg-error/10 hover:text-error focus-visible:text-error active:bg-error/15 dark:hover:bg-error/10" disabled={sending || sent} onClick={() => annotation.cancel()} size="sm" type="button" variant="ghost">
+				{t("files.discardFeedback")}
+			</Button>
+			<Button className="px-2 text-xs" disabled={sending || sent} onClick={() => void annotation.submit()} size="sm" type="button" variant="primary">
+				{sending ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : sent ? <Check aria-hidden="true" /> : <SendIcon aria-hidden="true" />}
+				{t("files.sendAllFeedback", { count: written.length })}
+			</Button>
+		</div>
 	);
 }
 
@@ -831,6 +914,23 @@ export function PanelMessage({ action, children, compact = false }: { action?: R
 				<p>{children}</p>
 				{action ?? null}
 			</div>
+		</div>
+	);
+}
+
+/**
+ * A pane with nothing to show: an icon over a short heading and an optional
+ * way out, a little above the middle of the space it fills (where the eye
+ * lands), so it reads as a state of the pane rather than a stray line at its top.
+ */
+export function EmptyMessage({ icon: Icon, title, action }: { icon: LucideIcon; title: ReactNode; action?: ReactNode }) {
+	return (
+		<div className="flex min-h-[180px] flex-1 flex-col items-center justify-center gap-3 p-6 pb-[15vh] text-center" data-testid="empty-message">
+			<span aria-hidden="true" className="flex size-10 items-center justify-center rounded-lg bg-interactive-hover text-muted-foreground">
+				<Icon className="size-5" />
+			</span>
+			<p className="max-w-xs text-heading-sm font-medium text-foreground">{title}</p>
+			{action ?? null}
 		</div>
 	);
 }

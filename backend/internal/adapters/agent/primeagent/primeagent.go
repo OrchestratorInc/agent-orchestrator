@@ -25,12 +25,19 @@ type Plugin struct {
 	binaryMu       sync.Mutex
 	resolvedBinary string
 	runCommand     primeCommandRunner
+	// extensionFlag remembers, per binary, whether it accepts --extension.
+	extensionMu   sync.Mutex
+	extensionFlag map[string]bool
 }
 
 // New returns a ready-to-register Prime Agent adapter.
 func New() *Plugin {
 	return &Plugin{}
 }
+
+// EmitsSemanticMessageAcceptance reports that AO's Prime Agent plugin includes
+// the accepted prompt text in its user-prompt-submit callback.
+func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
 
 // AugmentRuntimeEnv points Prime Agent at AO's isolated profile so persistent
 // daemon/config state stays under AO_DATA_DIR instead of the user's normal
@@ -45,6 +52,7 @@ func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
 var _ ports.AgentNativeSessionTerminator = (*Plugin)(nil)
 var _ ports.ActiveTurnSteerer = (*Plugin)(nil)
@@ -111,7 +119,10 @@ func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemP
 		return nil, err
 	}
 
-	cmd := []string{binary, "--session-dir", sessions, "--extension", extensionPath}
+	cmd := []string{binary, "--session-dir", sessions}
+	if p.acceptsExtension(ctx, binary) {
+		cmd = append(cmd, "--extension", extensionPath)
+	}
 	resolvedPrompt, err := resolveSystemPrompt(ctx, systemPrompt, systemPromptFile)
 	if err != nil {
 		return nil, err
@@ -120,6 +131,9 @@ func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemP
 		cmd = append(cmd, "--append-system-prompt", resolvedPrompt)
 	}
 	agentbase.AppendModelFlag(&cmd, cfg, "--model")
+	if effort := strings.TrimSpace(cfg.Effort); effort != "" {
+		cmd = append(cmd, "--thinking", effort)
+	}
 	return cmd, nil
 }
 
@@ -223,4 +237,41 @@ func (p *Plugin) primeAgentBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+	// A binary replaced in place may have changed its flags too.
+	p.extensionMu.Lock()
+	p.extensionFlag = nil
+	p.extensionMu.Unlock()
+}
+
+// acceptsExtension reports whether binary's help lists --extension: prime-agent
+// 0.10 (the Rust rewrite) exits at once when given it. An unreadable help keeps it.
+func (p *Plugin) acceptsExtension(ctx context.Context, binary string) bool {
+	p.extensionMu.Lock()
+	defer p.extensionMu.Unlock()
+	if accepts, ok := p.extensionFlag[binary]; ok {
+		return accepts
+	}
+	runner := p.runCommand
+	if runner == nil {
+		runner = runPrimeCommand
+	}
+	runCtx, cancel := context.WithTimeout(ctx, primeCommandTimeout)
+	defer cancel()
+	out, err := runner(runCtx, binary, "", nil, "--help")
+	if err != nil && len(out) == 0 {
+		return true
+	}
+	if p.extensionFlag == nil {
+		p.extensionFlag = map[string]bool{}
+	}
+	p.extensionFlag[binary] = strings.Contains(string(out), "--extension")
+	return p.extensionFlag[binary]
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 )
@@ -19,14 +20,19 @@ import (
 // reviewerHandleId is the live reviewer pane's runtime handle, for the UI to
 // attach its terminal over /mux (empty when no reviewer has run).
 type ListReviewsResponse struct {
-	ReviewerHandleID string                     `json:"reviewerHandleId"`
-	ReviewerHarness  domain.ReviewerHarness     `json:"reviewerHarness,omitempty"`
-	Reviews          []reviewcore.PRReviewState `json:"reviews"`
+	ReviewerHandleID      string                     `json:"reviewerHandleId"`
+	ReviewerHarness       domain.ReviewerHarness     `json:"reviewerHarness,omitempty"`
+	ReviewerActivityState string                     `json:"reviewerActivityState,omitempty" enum:"active,idle,waiting_input,blocked,exited"`
+	Reviews               []reviewcore.PRReviewState `json:"reviews"`
 	// Runs is every recorded pass for this session, newest first. Reviews only
 	// carries the current and previous run per PR, which cannot answer "what did
 	// the other reviewer say" once a third pass has run — so the client cannot
 	// show one summary across reviewers without this.
-	Runs []domain.ReviewRun `json:"runs"`
+	Runs            []domain.ReviewRun      `json:"runs"`
+	ReviewerSurface *domain.ReviewerSurface `json:"reviewerSurface,omitempty"`
+	// ActiveReviewers is every reviewer with a live pane or a running pass,
+	// selected reviewer first. Several reviewers can work on one worker at once.
+	ActiveReviewers []domain.ReviewerSurface `json:"activeReviewers"`
 }
 
 // ReviewRunResponse is the body of submit (200). It carries the run plus the
@@ -43,9 +49,13 @@ type TriggerReviewResponse struct {
 	ReviewerHandleID string                     `json:"reviewerHandleId"`
 	Reviews          []reviewcore.PRReviewState `json:"reviews"`
 	Runs             []domain.ReviewRun         `json:"runs"`
+	ReviewerSurface  *domain.ReviewerSurface    `json:"reviewerSurface,omitempty"`
 	// Created is true when a new review pass was started (HTTP 201) and false
 	// when an existing run for the same commit was reused (HTTP 200).
 	Created bool `json:"created" description:"True when a new review pass was started; false when an existing run for the same commit was reused."`
+	// AutoInjectEnabled is true when this request turned the worker session's
+	// review auto-inject on.
+	AutoInjectEnabled bool `json:"autoInjectEnabled" description:"True when this request turned the worker session's review auto-inject on."`
 }
 
 // CancelReviewResponse is the body of cancel (200). reviews carries the
@@ -122,14 +132,27 @@ func (c *ReviewsController) activity(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
+	state := domain.ActivityState(strings.TrimSpace(in.State))
+	if state != "" {
+		switch state {
+		case domain.ActivityActive, domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityBlocked, domain.ActivityExited:
+		default:
+			// Reviewer hooks are best-effort. If a reviewer CLI stops emitting one
+			// of AO's known activity states, degrade to a no-op instead of turning
+			// review-run polling into a surfaced hook failure.
+			state = ""
+		}
+	}
 	agentSessionID := capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.AgentSessionID)))
-	if strings.TrimSpace(in.State) == "" && agentSessionID == "" {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "REVIEW_ACTIVITY_OR_SESSION_ID_REQUIRED", "Reviewer activity state or agent session ID is required", nil)
+	if state == "" && agentSessionID == "" {
+		envelope.WriteJSON(w, http.StatusOK, SetReviewActivityResponse{OK: true, ReviewSessionID: reviewSessionID})
 		return
 	}
 	if err := c.Svc.ApplyReviewActivitySignal(r.Context(), reviewSessionID, reviewsvc.ActivitySignal{
 		Event:          capActivityMeta(domain.SanitizeControlChars(in.Event)),
+		State:          state,
 		AgentSessionID: agentSessionID,
+		LaunchID:       capActivityMeta(domain.SanitizeControlChars(strings.TrimSpace(in.LaunchID))),
 	}); err != nil {
 		if errors.Is(err, reviewsvc.ErrNotFound) {
 			envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "REVIEW_NOT_FOUND", "Unknown review session", nil)
@@ -173,7 +196,16 @@ func (c *ReviewsController) trigger(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 		return
 	}
-	res, err := c.Svc.Trigger(r.Context(), sessionID(r), in.Harness, in.AgentConfig)
+	res, err := c.Svc.TriggerRequested(r.Context(), sessionID(r), reviewsvc.TriggerRequest{
+		Harness:            in.Harness,
+		Config:             in.AgentConfig,
+		Source:             domain.ReviewTriggerSource(strings.TrimSpace(in.Source)),
+		InterfaceMode:      in.InterfaceMode,
+		PRURL:              strings.TrimSpace(in.PRURL),
+		RejectReviewedHead: in.RejectReviewedHead,
+		Rerun:              in.Rerun,
+		EnableAutoInject:   in.EnableAutoInject,
+	})
 	if err != nil {
 		writeReviewError(w, r, err)
 		return
@@ -193,10 +225,12 @@ func (c *ReviewsController) trigger(w http.ResponseWriter, r *http.Request) {
 		runs = []domain.ReviewRun{}
 	}
 	envelope.WriteJSON(w, status, TriggerReviewResponse{
-		ReviewerHandleID: res.ReviewerHandleID,
-		Reviews:          reviews,
-		Runs:             runs,
-		Created:          res.Created,
+		ReviewerHandleID:  res.ReviewerHandleID,
+		Reviews:           reviews,
+		Runs:              runs,
+		Created:           res.Created,
+		AutoInjectEnabled: res.AutoInjectEnabled,
+		ReviewerSurface:   reviewerSurfacePayload(res.ReviewerSurface),
 	})
 }
 
@@ -260,7 +294,7 @@ func (c *ReviewsController) kill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	workerID := sessionID(r)
-	if err := c.Svc.TerminateReviewer(r.Context(), workerID, "cancelled because reviewer session was killed"); err != nil {
+	if err := c.Svc.ArchiveReviewer(r.Context(), workerID); err != nil {
 		writeReviewError(w, r, err)
 		return
 	}
@@ -269,15 +303,8 @@ func (c *ReviewsController) kill(w http.ResponseWriter, r *http.Request) {
 		writeReviewError(w, r, err)
 		return
 	}
-	reviews := res.Reviews
-	if reviews == nil {
-		reviews = []reviewcore.PRReviewState{}
-	}
-	runs := res.Runs
-	if runs == nil {
-		runs = []domain.ReviewRun{}
-	}
-	envelope.WriteJSON(w, http.StatusOK, KillReviewResponse{ReviewerHandleID: res.ReviewerHandleID, ReviewerHarness: res.ReviewerHarness, Reviews: reviews, Runs: runs})
+	response := reviewsResponse(res, nil, nil)
+	envelope.WriteJSON(w, http.StatusOK, KillReviewResponse{ReviewerHandleID: response.ReviewerHandleID, ReviewerHarness: response.ReviewerHarness, Reviews: response.Reviews, Runs: response.Runs})
 }
 
 func (c *ReviewsController) restore(w http.ResponseWriter, r *http.Request) {
@@ -338,11 +365,28 @@ func reviewsResponse(res reviewcore.SessionReviews, reviews []reviewcore.PRRevie
 		runs = []domain.ReviewRun{}
 	}
 	return ListReviewsResponse{
-		ReviewerHandleID: res.ReviewerHandleID,
-		ReviewerHarness:  res.ReviewerHarness,
-		Reviews:          reviews,
-		Runs:             runs,
+		ReviewerHandleID:      res.ReviewerHandleID,
+		ReviewerHarness:       res.ReviewerHarness,
+		ReviewerActivityState: string(res.ReviewerActivityState),
+		Reviews:               reviews,
+		Runs:                  runs,
+		ReviewerSurface:       reviewerSurfacePayload(res.ReviewerSurface),
+		ActiveReviewers:       activeReviewersPayload(res.ActiveReviewers),
 	}
+}
+
+func activeReviewersPayload(surfaces []domain.ReviewerSurface) []domain.ReviewerSurface {
+	if surfaces == nil {
+		return []domain.ReviewerSurface{}
+	}
+	return surfaces
+}
+
+func reviewerSurfacePayload(surface domain.ReviewerSurface) *domain.ReviewerSurface {
+	if surface.ReviewID == "" {
+		return nil
+	}
+	return &surface
 }
 
 func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
@@ -391,8 +435,16 @@ func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEW_INVALID", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrNotFound):
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "REVIEW_NOT_FOUND", err.Error(), nil)
+	case errors.Is(err, reviewsvc.ErrReviewAlreadyRunning):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_ALREADY_RUNNING", err.Error(), nil)
+	case errors.Is(err, reviewsvc.ErrHeadAlreadyReviewed):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_HEAD_ALREADY_REVIEWED", err.Error(), nil)
+	case errors.Is(err, reviewsvc.ErrPROwnedElsewhere):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEW_PR_OWNED_BY_OTHER_SESSION", err.Error(), nil)
 	case errors.Is(err, reviewsvc.ErrAgentBinaryNotFound):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "REVIEWER_BINARY_NOT_FOUND", err.Error(), nil)
+	case errors.Is(err, ports.ErrChatAuthRequired):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "REVIEWER_AUTH_REQUIRED", "The reviewer agent is installed but not authenticated", nil)
 	default:
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "REVIEW_OPERATION_FAILED", "Review operation failed", nil)
 	}

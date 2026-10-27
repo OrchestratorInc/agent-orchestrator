@@ -6,6 +6,7 @@
 //   message.updated / message.part.updated -> `ao hooks opencode user-prompt-submit`
 //   tool.execute.before / tool.execute.after -> `ao hooks opencode active`
 //   session.status (status.type == idle)   -> `ao hooks opencode stop`
+//                                             (carries the turn's final assistant text)
 //   permission.asked / question.asked      -> `ao hooks opencode permission-blocked`
 //   permission/question reply or rejection -> `ao hooks opencode active`
 //
@@ -13,7 +14,7 @@
 // hook command as JSON on stdin, run with cwd set to the worktree so AO can
 // correlate the opencode session to its AO session. Every invocation is
 // best-effort and must never crash the user's opencode session: a missing `ao`
-// binary is a guarded no-op (`command -v ao`), and spawn exceptions, non-zero
+// binary is a guarded no-op (`Bun.which`), and spawn exceptions, non-zero
 // exit codes, and malformed event payloads are caught and surfaced through
 // opencode's structured logger (client.app.log) for diagnosis — never rethrown.
 //
@@ -38,11 +39,15 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
   // trimmed by the host runtime.
   const launchID: string = (process.env.AO_RUNTIME_LAUNCH_ID ?? "").trim()
   const messageStore = new Map<string, any>()
+  // This turn's assistant message ids and the assistant text part updated last: the turn's final message.
+  const assistantMessages = new Set<string>()
+  let lastAssistantText = ""
 
-  // Wrap in `sh -c` with a guard so a missing `ao` binary is a silent no-op
-  // (exit 0) rather than a per-event error in the user's session.
-  function hookCmd(hookName: string): string[] {
-    return ["sh", "-c", `if ! command -v ao >/dev/null 2>&1; then exit 0; fi; exec ao hooks opencode ${hookName}`]
+  // Resolve AO through Bun so the same command works on Unix and Windows. A
+  // missing binary remains a silent no-op rather than a per-event error.
+  function hookCmd(hookName: string): string[] | null {
+    const ao = Bun.which("ao")
+    return ao ? [ao, "hooks", "opencode", hookName] : null
   }
 
   // Report a hook failure through opencode's structured logger. Best-effort: the
@@ -73,7 +78,9 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
   // rethrown, so reporting failures are diagnosable without crashing opencode.
   function callHookSync(hookName: string, payload: Record<string, unknown>) {
     try {
-      const result = Bun.spawnSync(hookCmd(hookName), {
+      const command = hookCmd(hookName)
+      if (!command) return
+      const result = Bun.spawnSync(command, {
         cwd: directory,
         env: { ...process.env, AO_RUNTIME_LAUNCH_ID: launchID },
         stdin: new TextEncoder().encode(JSON.stringify({ ...payload, launch_id: launchID }) + "\n"),
@@ -86,7 +93,7 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
         logHookFailure(hookName, `exited ${result.exitCode}${stderr ? `: ${stderr}` : ""}`)
       }
     } catch (err) {
-      // The spawn itself failed (e.g. no `sh` on PATH). Never propagate.
+      // The spawn itself failed. Never propagate.
       logHookFailure(hookName, err instanceof Error ? err.message : String(err))
     }
   }
@@ -95,6 +102,8 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
     if (currentSessionID === sessionID) return false
     promptReports.clear()
     messageStore.clear()
+    assistantMessages.clear()
+    lastAssistantText = ""
     currentModel = null
     currentSessionID = sessionID
     return true
@@ -135,6 +144,7 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
               callHookSync("session-start", { session_id: msg.sessionID })
             }
             if (msg.role === "assistant" && msg.modelID) currentModel = msg.modelID
+            if (msg.role === "assistant" && msg.id) assistantMessages.add(msg.id)
             // Fallback: some `opencode run` flows never deliver message.part.updated
             // for the prompt, so start the turn from the user message itself.
             if (msg.role === "user") {
@@ -154,6 +164,9 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
               const prompt = part.text ?? ""
               if (sessionID) reportUserPrompt(sessionID, msg.id, prompt)
               if (prompt.length > 0) messageStore.delete(part.messageID)
+            } else if (assistantMessages.has(part.messageID) && part.type === "text" && !part.synthetic && !part.ignored &&
+              typeof part.text === "string" && part.text.trim().length > 0) {
+              lastAssistantText = part.text
             }
             break
           }
@@ -168,7 +181,9 @@ export const aoActivity: Plugin = async ({ directory, client }) => {
             if (props?.status?.type !== "idle") break
             const sessionID = props?.sessionID ?? currentSessionID
             if (!sessionID) break
-            callHookSync("stop", { session_id: sessionID, model: currentModel ?? "" })
+            callHookSync("stop", { session_id: sessionID, model: currentModel ?? "", last_assistant_message: lastAssistantText })
+            assistantMessages.clear()
+            lastAssistantText = ""
             break
           }
 

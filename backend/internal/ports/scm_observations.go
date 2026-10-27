@@ -104,12 +104,6 @@ type SCMIdentity struct {
 	Human bool
 }
 
-// SCMIdentityResolver lazily resolves the account authenticated with the
-// active SCM provider.
-type SCMIdentityResolver interface {
-	AuthenticatedIdentity(ctx context.Context) (SCMIdentity, error)
-}
-
 // ScopedIdentityResolver resolves the authenticated identity for a specific
 // provider key and host. Multi-provider implementations use this to delegate
 // to the matching sub-provider's identity method, passing host through so
@@ -144,6 +138,8 @@ type SCMPRObservation struct {
 	// branch lives in. It matches the base repo for same-repo PRs and differs
 	// for PRs opened from a fork, so branch-prefix attribution can ignore forks.
 	HeadRepo string
+	// BaseRepo is the provider's current full name of the base repository.
+	BaseRepo string
 	// TargetBranch is the PR base/target branch name.
 	TargetBranch string
 	// HeadSHA is the current head commit SHA for the PR.
@@ -158,6 +154,9 @@ type SCMPRObservation struct {
 	ChangedFiles int
 	// Author is the provider login/name of the PR author.
 	Author string
+	// AuthorAvatarURL is the provider-hosted profile image URL for the PR author.
+	// It is optional because not every provider or historical record supplies one.
+	AuthorAvatarURL string
 	// BaseSHA is the current base branch SHA when the provider supplies it.
 	BaseSHA string
 	// MergeCommitSHA is the merge commit SHA when the PR has one.

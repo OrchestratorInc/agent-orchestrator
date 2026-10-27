@@ -17,13 +17,10 @@ const (
 	ReviewerKiloCode   ReviewerHarness = "kilocode"
 	ReviewerKimchi     ReviewerHarness = "kimchi"
 	ReviewerOpenCode   ReviewerHarness = "opencode"
+	ReviewerOpenCodeV2 ReviewerHarness = "opencode-v2"
 	ReviewerKiro       ReviewerHarness = "kiro"
 	ReviewerPi         ReviewerHarness = "pi"
-	ReviewerQwen       ReviewerHarness = "qwen"
 	ReviewerAgy        ReviewerHarness = "agy"
-	ReviewerContinue   ReviewerHarness = "continue"
-	ReviewerGoose      ReviewerHarness = "goose"
-	ReviewerVibe       ReviewerHarness = "vibe"
 	ReviewerDevin      ReviewerHarness = "devin"
 	ReviewerDroid      ReviewerHarness = "droid"
 	ReviewerKimi       ReviewerHarness = "kimi"
@@ -47,13 +44,10 @@ var AllReviewerHarnesses = []ReviewerHarness{
 	ReviewerKiloCode,
 	ReviewerKimchi,
 	ReviewerOpenCode,
+	ReviewerOpenCodeV2,
 	ReviewerKiro,
 	ReviewerPi,
-	ReviewerQwen,
 	ReviewerAgy,
-	ReviewerContinue,
-	ReviewerGoose,
-	ReviewerVibe,
 	ReviewerDevin,
 	ReviewerDroid,
 	ReviewerKimi,

@@ -11,14 +11,15 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestWriteErrorSerializesWrappedReportingOwner(t *testing.T) {
 	err := fmt.Errorf("outer: %w", fmt.Errorf("middle: %w", ownership.Own(
-		apierr.Internal("AGENT_SWITCH_FAILED", "Agent switch failed"),
-		ownership.OwnerAgentSwitchSaga,
+		apierr.Internal("INTERNAL", "Internal failure"),
+		ownership.OwnerHTTP,
 	)))
-	req, captured := WithErrorCapture(httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/switch-agent", nil))
+	req, captured := WithErrorCapture(httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/kill", nil))
 	rec := httptest.NewRecorder()
 
 	WriteError(rec, req, err)
@@ -30,15 +31,15 @@ func TestWriteErrorSerializesWrappedReportingOwner(t *testing.T) {
 	if decodeErr := json.Unmarshal(rec.Body.Bytes(), &body); decodeErr != nil {
 		t.Fatalf("decode response: %v", decodeErr)
 	}
-	if body.ReportingOwner != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("reporting_owner = %q, want %q", body.ReportingOwner, ownership.OwnerAgentSwitchSaga)
+	if body.ReportingOwner != ownership.OwnerHTTP {
+		t.Fatalf("reporting_owner = %q, want %q", body.ReportingOwner, ownership.OwnerHTTP)
 	}
-	if body.Code != "AGENT_SWITCH_FAILED" || body.Message != "Agent switch failed" {
+	if body.Code != "INTERNAL" || body.Message != "Internal failure" {
 		t.Fatalf("body = %+v, want normal API error presentation", body)
 	}
 	gotCapture := captured()
-	if !errors.Is(gotCapture.Err, err) || gotCapture.ReportingOwner != ownership.OwnerAgentSwitchSaga {
-		t.Fatalf("captured = %+v, want raw error and saga owner", gotCapture)
+	if !errors.Is(gotCapture.Err, err) || gotCapture.ReportingOwner != ownership.OwnerHTTP {
+		t.Fatalf("captured = %+v, want raw error and HTTP owner", gotCapture)
 	}
 }
 
@@ -63,7 +64,7 @@ func TestWriteErrorOmitsUnknownReportingOwner(t *testing.T) {
 
 func TestWriteAPIErrorRemainsUnowned(t *testing.T) {
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/switch-agent", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects", nil)
 
 	WriteAPIError(rec, req, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
 
@@ -150,6 +151,33 @@ func TestWriteError_NonTransientStays500(t *testing.T) {
 				t.Fatalf("status = %d, want 500", status)
 			}
 		})
+	}
+}
+
+func TestWriteError_WorkspaceRepoUnavailableMapsTo404(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/s1/workspace/files", nil)
+	// The sentinel reaches WriteError wrapped by application layers, so match
+	// the wrapped shape too.
+	err := fmt.Errorf("git -C /repo status: %w", ports.ErrWorkspaceRepoUnavailable)
+
+	WriteError(rec, req, err)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	var body APIError
+	if decodeErr := json.Unmarshal(rec.Body.Bytes(), &body); decodeErr != nil {
+		t.Fatalf("decode response: %v", decodeErr)
+	}
+	if body.Code != "PROJECT_FOLDER_MISSING" {
+		t.Fatalf("code = %q, want PROJECT_FOLDER_MISSING", body.Code)
+	}
+	if body.Error != "not_found" {
+		t.Fatalf("error = %q, want not_found", body.Error)
+	}
+	if body.Message != "Project repository is missing from disk" {
+		t.Fatalf("message = %q, want the missing-repo message", body.Message)
 	}
 }
 

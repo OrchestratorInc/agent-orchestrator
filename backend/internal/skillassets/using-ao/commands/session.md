@@ -1,6 +1,54 @@
 # ao session
 
-Manage agent sessions: list, inspect, rename, kill, restore, clean up, and claim PRs.
+Manage agent sessions: list, inspect, rename, kill, restore, exit or resume an
+agent, switch harnesses, clean up, and claim PRs.
+
+## In-app session links
+
+When referring a user or another agent to a session in AO Chat or the AO
+terminal, emit this canonical link:
+
+```text
+ao://sessions/{project-id}/{session-id}
+```
+
+- Use stable IDs returned by `ao project ls` and `ao session ls`, or the current
+  session's `AO_PROJECT_ID` and `AO_SESSION_ID`. Never use display names as
+  identity; renaming a session must not change its link.
+- Treat the project ID and session ID as separate URL path segments. Encode
+  either ID with URL percent encoding if it contains characters that are not
+  safe in one segment.
+- To link a file in a session's artifact directory for the human, append
+  `/artifacts/{path}`, where `{path}` is relative to that directory and each
+  segment is percent-encoded: `ao://sessions/{project-id}/{session-id}/artifacts/{path}`.
+  Opening it navigates to the session and opens the artifact.
+- Emit only these navigation routes. Do not append query strings, fragments,
+  action names, credentials, authorities, or extra path segments.
+- The link is handled only inside a currently running AO desktop app. It is not
+  an operating-system protocol link and must not be described as supporting
+  cold launch or navigation from external applications.
+- A session link navigates; it never sends a message, executes a command, or
+  performs another action.
+
+Example for project `mercury` and session `mer-3`:
+
+```text
+ao://sessions/mercury/mer-3
+```
+
+## Taking over from another agent
+
+When a session is switched to you from another agent, AO starts you with an
+`<ao-handoff-request>` note. Treat the conversation in it as your own history
+with this user:
+
+- What the user said there still holds, including facts, preferences, and
+  values they asked to be remembered. Use them when asked.
+- Requests in it were already handled. Do not carry them out again.
+- The workspace and git are the truth for files; check them before relying on
+  the note.
+- The note is clipped to fit. Run `ao session history` when you need a turn in
+  full or anything the note does not show.
 
 ## Syntax
 
@@ -74,6 +122,27 @@ ao session get mer-3 --json
 
 ---
 
+### ao session history
+
+Print a session's turns, newest first, in full. Use it after taking over a
+session to read what the handoff note left out.
+
+**Syntax:**
+```
+ao session history [id] [flags]
+```
+
+The id defaults to the current session.
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `--offset` | Number of newest turns to skip | 0 |
+| `--limit` | Turns to print (at most 50) | 10 |
+
+---
+
 ### ao session kill
 
 Terminate a session.
@@ -100,7 +169,7 @@ ao session kill mer-3
 
 ### ao session rename
 
-Rename a session.
+Rename a worker session. The project orchestrator cannot be renamed, including by itself; the daemon refuses with `ORCHESTRATOR_RENAME_UNSUPPORTED`.
 
 **Syntax:**
 ```
@@ -124,7 +193,7 @@ ao session rename mer-3 "fix-auth-bug"
 
 ### ao session restore
 
-Relaunch a terminated session.
+Restore a terminated session or resume an exited agent.
 
 **Syntax:**
 ```
@@ -146,6 +215,50 @@ ao session restore mer-3
 
 ---
 
+### ao session exit-agent
+
+Exit an agent without terminating its AO session. The session can later be
+resumed in place.
+
+**Syntax:**
+```
+ao session exit-agent <id> [flags]
+```
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `--json` | Output as JSON | - |
+| `-p, --project string` | Project id to scope the lookup | - |
+
+---
+
+### ao session resume-agent
+
+Resume an exited agent in its existing AO session.
+
+**Syntax:**
+```
+ao session resume-agent <id> [flags]
+```
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `--json` | Output as JSON | - |
+| `-p, --project string` | Project id to scope the lookup | - |
+
+**Examples:**
+
+```bash
+ao session exit-agent mer-3
+ao session resume-agent mer-3
+```
+
+---
+
 ### ao session cleanup
 
 Clean up terminated sessions by reclaiming eligible workspaces. Dirty worktrees are skipped by the daemon.
@@ -159,6 +272,7 @@ ao session cleanup [flags]
 
 | Flag | Meaning | Default / Required |
 |---|---|---|
+| `--dry-run` | Preview which sessions would be cleaned without removing anything | - |
 | `-p, --project string` | Filter by project ID | - |
 | `-y, --yes` | Skip confirmation prompt | - |
 
@@ -174,11 +288,18 @@ ao session cleanup -y
 ao session cleanup -p agent-orchestrator
 ```
 
+```bash
+# Preview eligible cleanup candidates
+ao session cleanup --dry-run
+```
+
 ---
 
 ### ao session claim-pr
 
 Attach an existing PR to the current AO session, or target another session explicitly.
+Use this for authorized implementation continuation. Reviewing someone else's PR
+does not require or permit a claim; use a normal review-only worker session.
 
 **Syntax:**
 ```

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,6 +25,7 @@ import (
 )
 
 var enabled atomic.Bool
+var installID atomic.Pointer[string]
 
 var captureGate = struct {
 	sync.Mutex
@@ -33,17 +35,30 @@ var captureGate = struct {
 }{}
 
 var (
-	homePath = regexp.MustCompile(`/(?:Users|home)/[^\s"']+`)
-	winPath  = regexp.MustCompile(`[A-Za-z]:\\[^\s"']+|\\\\[^\s"']+`)
+	homePath = regexp.MustCompile(`/(?:Users|home)/[^\r\n"']+`)
+	winPath  = regexp.MustCompile(`[A-Za-z]:\\[^\r\n"']+|\\\\[^\r\n"']+`)
 )
 
 func scrub(s string) string {
-	return winPath.ReplaceAllString(homePath.ReplaceAllString(s, "[redacted-path]"), "[redacted-path]")
+	return winPath.ReplaceAllStringFunc(homePath.ReplaceAllStringFunc(s, scrubPath), scrubPath)
+}
+
+func scrubPath(path string) string {
+	for _, marker := range []string{" failed", " denied", " error", " no such file"} {
+		if i := strings.Index(path, marker); i >= 0 {
+			return "[redacted-path]" + path[i:]
+		}
+	}
+	if i := strings.Index(path, ": "); i >= 0 {
+		return "[redacted-path]" + path[i+1:]
+	}
+	return "[redacted-path]"
 }
 
 // Config configures the daemon Sentry client.
 type Config struct {
 	DSN         string
+	InstallID   string
 	Release     string
 	Environment string
 	SampleRate  float64 // <=0 or >1 defaults to 1.0
@@ -54,6 +69,7 @@ type Config struct {
 // no-op. Safe to call once at daemon startup.
 func Init(cfg Config) error {
 	enabled.Store(false)
+	installID.Store(&cfg.InstallID)
 	if cfg.DSN == "" {
 		return nil
 	}
@@ -210,9 +226,15 @@ func CapturePanic(ctx context.Context, recovered any, stack string, tags map[str
 func applyTags(scope *sentry.Scope, tags map[string]string) {
 	scope.SetTag("platform", "daemon")
 	for k, v := range tags {
+		if k == "install_id" {
+			continue
+		}
 		if v != "" {
 			scope.SetTag(k, v)
 		}
+	}
+	if id := installID.Load(); id != nil && *id != "" {
+		scope.SetTag("install_id", *id)
 	}
 }
 

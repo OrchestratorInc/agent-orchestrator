@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	codexreview "github.com/aoagents/agent-orchestrator/backend/internal/adapters/reviewer/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -19,6 +20,50 @@ type fakeReviewer struct {
 	gotInv           ports.ReviewInvocation
 	workingDirectory string
 	env              map[string]string
+}
+
+type recordingReviewChatStop struct {
+	ReviewerChatController
+	stopped      string
+	interrupted  string
+	interruptErr error
+}
+
+func (c *recordingReviewChatStop) StopReviewChat(_ context.Context, reviewID string) error {
+	c.stopped = reviewID
+	return nil
+}
+
+func (c *recordingReviewChatStop) InterruptReviewChat(_ context.Context, reviewID string) error {
+	c.interrupted = reviewID
+	return c.interruptErr
+}
+
+func TestCancelReviewerChatInterruptsWithoutStoppingItsController(t *testing.T) {
+	for _, harness := range []domain.ReviewerHarness{domain.ReviewerCodex, domain.ReviewerClaudeCode} {
+		t.Run(string(harness), func(t *testing.T) {
+			chat := &recordingReviewChatStop{}
+			launcher := NewLauncher(fakeReviewerResolver{}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
+			if err := launcher.Cancel(context.Background(), "review-chat:review-1", harness); err != nil {
+				t.Fatalf("Cancel: %v", err)
+			}
+			if chat.stopped != "" || chat.interrupted != "review-1" {
+				t.Fatalf("reviewer Chat cancel: stopped=%q interrupted=%q", chat.stopped, chat.interrupted)
+			}
+		})
+	}
+}
+
+func TestCancelReviewerChatPreservesInterruptFailure(t *testing.T) {
+	want := errors.New("provider interrupt failed")
+	chat := &recordingReviewChatStop{interruptErr: want}
+	launcher := NewLauncher(fakeReviewerResolver{}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
+	if err := launcher.Cancel(context.Background(), "review-chat:review-1", domain.ReviewerCodex); !errors.Is(err, want) {
+		t.Fatalf("Cancel = %v, want %v", err, want)
+	}
+	if chat.stopped != "" {
+		t.Fatal("failed cancellation must not tear down the controller")
+	}
 }
 
 func (f *fakeReviewer) ReviewCommand(_ context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
@@ -38,18 +83,24 @@ func TestLauncherSpawnEnvCannotOverrideWorkerContext(t *testing.T) {
 		"AO_REVIEW_SESSION_ID":      "hacked-review",
 		EnvRunFile:                  "hacked-run-file",
 		"REVIEW_ONLY":               "1",
+		"SHARED":                    "adapter",
 	}}
 	rt := &fakeRuntime{}
 	dataDir := t.TempDir()
 	runFile := filepath.Join(t.TempDir(), "running.json")
 	l := NewLauncher(fakeReviewerResolver{reviewer: reviewer, ok: true}, rt, dataDir, WithRunFilePath(runFile))
 
-	if _, err := l.Spawn(context.Background(), launchSpec()); err != nil {
+	spec := launchSpec()
+	spec.ProjectEnv = map[string]string{"PROJECT_TOKEN": "review-value", "SHARED": "project"}
+	if _, err := l.Spawn(context.Background(), spec); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 
 	if rt.createCfg.Env["REVIEW_ONLY"] != "1" {
 		t.Fatalf("reviewer env dropped adapter value: %v", rt.createCfg.Env)
+	}
+	if rt.createCfg.Env["PROJECT_TOKEN"] != "review-value" || rt.createCfg.Env["SHARED"] != "adapter" {
+		t.Fatalf("reviewer env did not preserve project values and adapter precedence: %#v", rt.createCfg.Env)
 	}
 	if _, ok := rt.createCfg.Env[sessionmanager.EnvSessionID]; ok {
 		t.Fatalf("reviewer env must not set worker %s: %v", sessionmanager.EnvSessionID, rt.createCfg.Env)
@@ -194,14 +245,69 @@ func TestLauncherSpawnPrependsNodeRuntimeForNodeShimReviewer(t *testing.T) {
 	}
 	reviewerWithCommand := reviewerCommandFunc{reviewer: reviewer, reviewCommand: reviewerCommand}
 	rt := &fakeRuntime{}
-	l := newTestLauncher(t, reviewerWithCommand, rt)
+	dataDir := t.TempDir()
+	exe := filepath.Join(t.TempDir(), "ao")
+	l := NewLauncher(
+		fakeReviewerResolver{reviewer: reviewerWithCommand, ok: true},
+		rt,
+		dataDir,
+		WithExecutable(func() (string, error) { return exe, nil }),
+	)
+
+	if _, err := l.Spawn(context.Background(), launchSpec()); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	// The daemon-dir pin stays at the head: the reviewer binary is invoked by
+	// absolute path, and `env node` skips the daemon dir (which holds `ao`, not
+	// `node`) to reach the node dir behind it.
+	parts := strings.Split(rt.createCfg.Env["PATH"], string(os.PathListSeparator))
+	if len(parts) < 3 || parts[0] != filepath.Dir(exe) || parts[1] != binDir || parts[2] != nodeDir {
+		t.Fatalf("runtime PATH = %q, want daemon dir, reviewer bin, then node dir", rt.createCfg.Env["PATH"])
+	}
+}
+
+// A foreign `ao` beside the reviewer binary must not win a bare `ao` typed into
+// a reviewer pane: the launch-binary prepend puts that directory in front of
+// the pin, and the pin has to be moved back. Same failure as #3562, one context
+// over.
+func TestLauncherSpawnKeepsDaemonAOAheadOfLaunchBinaryDir(t *testing.T) {
+	home := t.TempDir()
+	binDir := filepath.Join(home, "reviewer", "bin")
+	reviewerBin := filepath.Join(binDir, "codex")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{reviewerBin, filepath.Join(binDir, "ao")} {
+		if err := os.WriteFile(name, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// binDir is deliberately NOT on the inherited PATH, which is what makes the
+	// launch-binary prepend happen at all (a GUI-launched app does not see the
+	// npm global bin the agent CLI and the legacy `ao` share).
+	basePath := t.TempDir()
+	t.Setenv("PATH", basePath)
+
+	reviewer := &fakeReviewer{env: map[string]string{"PATH": basePath}}
+	reviewerCommand := func(_ context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
+		reviewer.gotInv = inv
+		return ports.ReviewCommandSpec{Argv: []string{reviewerBin, "--review"}, Env: reviewer.env}, nil
+	}
+	rt := &fakeRuntime{}
+	exe := filepath.Join(t.TempDir(), "ao")
+	l := NewLauncher(
+		fakeReviewerResolver{reviewer: reviewerCommandFunc{reviewer: reviewer, reviewCommand: reviewerCommand}, ok: true},
+		rt,
+		t.TempDir(),
+		WithExecutable(func() (string, error) { return exe, nil }),
+	)
 
 	if _, err := l.Spawn(context.Background(), launchSpec()); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 	parts := strings.Split(rt.createCfg.Env["PATH"], string(os.PathListSeparator))
-	if len(parts) < 2 || parts[0] != binDir || parts[1] != nodeDir {
-		t.Fatalf("runtime PATH = %q, want reviewer bin then node dir first", rt.createCfg.Env["PATH"])
+	if len(parts) == 0 || parts[0] != filepath.Dir(exe) {
+		t.Fatalf("reviewer PATH = %q, want the daemon dir %q first", rt.createCfg.Env["PATH"], filepath.Dir(exe))
 	}
 }
 
@@ -247,18 +353,25 @@ type fakeRestoringReviewer struct {
 	gotRestore  ports.ReviewInvocation
 	restoreSpec ports.ReviewCommandSpec
 	restoreOK   bool
+	restoreErr  error
 }
 
 func (f *fakeRestoringReviewer) ReviewRestoreCommand(_ context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	f.restored = true
 	f.gotRestore = inv
+	if f.restoreErr != nil {
+		return ports.ReviewCommandSpec{}, false, f.restoreErr
+	}
 	if !f.restoreOK {
 		return ports.ReviewCommandSpec{}, false, nil
 	}
-	if len(f.restoreSpec.Argv) > 0 || f.restoreSpec.InitialMessage != "" || f.restoreSpec.AgentSessionID != "" {
+	if len(f.restoreSpec.Argv) > 0 || f.restoreSpec.InitialMessage != "" || f.restoreSpec.AgentSessionID != "" || f.restoreSpec.NativeResumed {
 		return f.restoreSpec, true, nil
 	}
-	return ports.ReviewCommandSpec{Argv: []string{"agent", "resume", inv.AgentSessionID}}, true, nil
+	return ports.ReviewCommandSpec{
+		Argv:          []string{"agent", "resume", inv.AgentSessionID},
+		NativeResumed: true,
+	}, true, nil
 }
 
 func (f *fakeCancellableReviewer) ReviewCancel(context.Context) (ports.ReviewCancelSpec, error) {
@@ -332,26 +445,44 @@ func (f fakeAgentAuthResolver) AuthStatus(context.Context, domain.ReviewerHarnes
 }
 
 type fakeRuntime struct {
-	createCfg     ports.RuntimeConfig
-	sentMsg       string
-	sentMsgs      []string
-	sentInput     string
-	sentInputs    []string
-	sentTo        string
-	alive         bool
-	interrupt     string
-	interrupts    int
-	destroyed     string
-	destroyBefore bool
-	created       bool
-	output        string
-	outputReads   int
+	createCfg         ports.RuntimeConfig
+	createErr         error
+	sentMsg           string
+	sentMsgs          []string
+	sentInput         string
+	sentInputs        []string
+	sentTo            string
+	alive             bool
+	unsupervisedAlive bool
+	supervisedRecord  bool
+	interrupt         string
+	interrupts        int
+	destroyed         string
+	destroyBefore     bool
+	created           bool
+	output            string
+	outputReads       int
+	exactRef          ports.SupervisedProcessRef
 }
 
 func (f *fakeRuntime) Create(_ context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
 	f.createCfg = cfg
 	f.created = true
+	if f.createErr != nil {
+		return ports.RuntimeHandle{}, f.createErr
+	}
 	return ports.RuntimeHandle{ID: string(cfg.SessionID)}, nil
+}
+
+func TestLauncherRedactsProjectEnvFromRuntimeError(t *testing.T) {
+	rt := &fakeRuntime{createErr: errors.New("failed with project-secret")}
+	l := newTestLauncher(t, &fakeReviewer{}, rt)
+	spec := launchSpec()
+	spec.ProjectEnv = map[string]string{"PROJECT_TOKEN": "project-secret"}
+	_, err := l.Spawn(context.Background(), spec)
+	if err == nil || strings.Contains(err.Error(), "project-secret") {
+		t.Fatalf("reviewer exposed project env value: %v", err)
+	}
 }
 func (f *fakeRuntime) Destroy(_ context.Context, handle ports.RuntimeHandle) error {
 	f.destroyed = handle.ID
@@ -362,6 +493,19 @@ func (f *fakeRuntime) Destroy(_ context.Context, handle ports.RuntimeHandle) err
 }
 func (f *fakeRuntime) IsAlive(_ context.Context, _ ports.RuntimeHandle) (bool, error) {
 	return f.alive, nil
+}
+func (f *fakeRuntime) IsChildAlive(_ context.Context, _ ports.RuntimeHandle) (bool, error) {
+	return f.alive, nil
+}
+func (f *fakeRuntime) IsUnsupervisedReviewerAlive(_ context.Context, _ ports.RuntimeHandle) (bool, error) {
+	return f.unsupervisedAlive, nil
+}
+func (f *fakeRuntime) IsExactSupervisedProcessAlive(_ context.Context, _ ports.RuntimeHandle, ref ports.SupervisedProcessRef) (bool, error) {
+	f.exactRef = ref
+	return f.alive, nil
+}
+func (f *fakeRuntime) HasSupervisedProcessRecord(_ context.Context, _ ports.RuntimeHandle) (bool, error) {
+	return f.supervisedRecord, nil
 }
 func (f *fakeRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
 	f.outputReads++
@@ -542,6 +686,7 @@ func TestLauncherRestoreTerminalUsesReviewerRestoreCommandWhenAvailable(t *testi
 		restoreSpec: ports.ReviewCommandSpec{
 			Argv:           []string{"agent", "resume", "native-reviewer-1"},
 			Env:            map[string]string{"PATH": "/restore/bin"},
+			NativeResumed:  true,
 			InitialMessage: "restored task",
 		},
 	}
@@ -564,6 +709,9 @@ func TestLauncherRestoreTerminalUsesReviewerRestoreCommandWhenAvailable(t *testi
 	}
 	if launch.HandleID != "review-mer-1" {
 		t.Fatalf("handle = %q, want review-mer-1", launch.HandleID)
+	}
+	if !launch.NativeResumed {
+		t.Fatal("native reviewer restore was not reported")
 	}
 	if !reviewer.restored {
 		t.Fatal("restore command was not used")
@@ -594,7 +742,8 @@ func TestLauncherRestoreTerminalFallsBackToFreshCommand(t *testing.T) {
 	rt := &fakeRuntime{}
 	l := newTestLauncher(t, reviewer, rt)
 
-	if _, err := l.RestoreTerminal(context.Background(), launchSpec()); err != nil {
+	launch, err := l.RestoreTerminal(context.Background(), launchSpec())
+	if err != nil {
 		t.Fatalf("RestoreTerminal: %v", err)
 	}
 	if !reviewer.restored {
@@ -602,6 +751,74 @@ func TestLauncherRestoreTerminalFallsBackToFreshCommand(t *testing.T) {
 	}
 	if got := rt.createCfg.Argv; len(got) != 2 || got[0] != "greptile" || got[1] != "review" {
 		t.Fatalf("fallback argv = %#v", got)
+	}
+	if launch.NativeResumed {
+		t.Fatal("fresh-command fallback reported a native resume")
+	}
+}
+
+func TestLauncherSpawnResumesRecordedNativeConversationWithNewTask(t *testing.T) {
+	reviewer := &fakeRestoringReviewer{
+		restoreOK: true,
+		restoreSpec: ports.ReviewCommandSpec{
+			Argv:           []string{"agent", "resume", "native-reviewer-1", "--", "new task"},
+			AgentSessionID: "native-reviewer-1",
+			NativeResumed:  true,
+		},
+	}
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, reviewer, rt)
+	spec := launchSpec()
+	spec.AgentSessionID = "native-reviewer-1"
+
+	launch, err := l.Spawn(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if !reviewer.restored || !launch.NativeResumed {
+		t.Fatalf("recorded conversation was not resumed: reviewer=%+v launch=%+v", reviewer, launch)
+	}
+	if reviewer.gotRestore.RunID != spec.RunID || !strings.HasPrefix(reviewer.gotRestore.Prompt, reviewerTaskMessagePrefix) {
+		t.Fatalf("restore invocation lost new review task: %+v", reviewer.gotRestore)
+	}
+	if got := strings.Join(rt.createCfg.Argv, " "); got != "agent resume native-reviewer-1 -- new task" {
+		t.Fatalf("runtime argv = %q", got)
+	}
+}
+
+func TestLauncherSpawnWithoutNativeConversationUsesFreshCommand(t *testing.T) {
+	reviewer := &fakeRestoringReviewer{restoreOK: true}
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, reviewer, rt)
+
+	launch, err := l.Spawn(context.Background(), launchSpec())
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if reviewer.restored {
+		t.Fatal("first launch attempted a native restore")
+	}
+	if launch.NativeResumed {
+		t.Fatal("first launch reported a native resume")
+	}
+	if got := rt.createCfg.Argv; len(got) != 2 || got[0] != "greptile" || got[1] != "review" {
+		t.Fatalf("fresh argv = %#v", got)
+	}
+}
+
+func TestLauncherSpawnPropagatesRestoreErrorWithoutFreshFallback(t *testing.T) {
+	reviewer := &fakeRestoringReviewer{restoreErr: errors.New("Session ID is already in use")}
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, reviewer, rt)
+	spec := launchSpec()
+	spec.AgentSessionID = "native-reviewer-1"
+
+	_, err := l.Spawn(context.Background(), spec)
+	if err == nil || !strings.Contains(err.Error(), "already in use") {
+		t.Fatalf("Spawn error = %v, want live-duplicate error", err)
+	}
+	if rt.created {
+		t.Fatal("restore error was masked by a fresh reviewer launch")
 	}
 }
 
@@ -697,12 +914,60 @@ func TestLauncherNotifyKeepsEarlierTaskReferenceImmutable(t *testing.T) {
 }
 
 func TestLauncherAlive(t *testing.T) {
-	l := NewLauncher(fakeReviewerResolver{ok: true}, &fakeRuntime{alive: true}, t.TempDir())
-	if ok, _ := l.Alive(context.Background(), "review-mer-1"); !ok {
+	rt := &fakeRuntime{alive: true, supervisedRecord: true}
+	l := NewLauncher(fakeReviewerResolver{ok: true}, rt, t.TempDir())
+	if ok, _ := l.Alive(context.Background(), "review-mer-1", ""); !ok {
 		t.Fatal("want alive true")
 	}
-	if ok, _ := l.Alive(context.Background(), ""); ok {
+	if ok, _ := l.Alive(context.Background(), "review-mer-1", "launch-1"); !ok {
+		t.Fatal("want supervised reviewer alive")
+	}
+	if rt.exactRef.SessionID != "review-mer-1" || rt.exactRef.LaunchID != "launch-1" {
+		t.Fatalf("exact process ref = %+v", rt.exactRef)
+	}
+	if ok, _ := l.Alive(context.Background(), "", ""); ok {
 		t.Fatal("empty handle should not be alive")
+	}
+}
+
+func TestLauncherAliveFallsBackForLegacyReviewerLaunch(t *testing.T) {
+	rt := &fakeRuntime{alive: true, unsupervisedAlive: true}
+	l := NewLauncher(fakeReviewerResolver{ok: true}, rt, t.TempDir())
+	if alive, err := l.Alive(context.Background(), "review-mer-1", "launch-1"); err != nil || !alive {
+		t.Fatalf("Alive() = (%v, %v), want legacy child alive", alive, err)
+	}
+	if rt.exactRef.LaunchID != "" {
+		t.Fatalf("exact supervised probe used for legacy launch: %+v", rt.exactRef)
+	}
+}
+
+func TestLauncherAliveDoesNotTreatReviewerExitSinkAsAlive(t *testing.T) {
+	rt := &fakeRuntime{alive: true, supervisedRecord: false, unsupervisedAlive: false}
+	l := NewLauncher(fakeReviewerResolver{ok: true}, rt, t.TempDir())
+	if alive, err := l.Alive(context.Background(), "review-mer-1", "launch-1"); err != nil || alive {
+		t.Fatalf("Alive() = (%v, %v), want exited reviewer", alive, err)
+	}
+}
+
+func TestLauncherSupervisesReviewerLaunch(t *testing.T) {
+	rt := &fakeRuntime{}
+	l := NewLauncher(
+		fakeReviewerResolver{reviewer: &fakeReviewer{}, ok: true},
+		rt,
+		t.TempDir(),
+		WithExecutable(func() (string, error) { return "/usr/local/bin/ao", nil }),
+	)
+	spec := launchSpec()
+	spec.LaunchID = "launch-1"
+	if _, err := l.Spawn(context.Background(), spec); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	want := "/usr/local/bin/ao agent-process supervise --session review-mer-1 --activity-review review-1 --launch launch-1 -- greptile review"
+	if got := strings.Join(rt.createCfg.Argv, " "); got != want {
+		t.Fatalf("runtime argv = %q, want %q", got, want)
+	}
+	if rt.createCfg.Env[sessionmanager.EnvSupervisedProcess] != "1" || rt.createCfg.Env[sessionmanager.EnvRuntimeLaunchID] != "launch-1" {
+		t.Fatalf("supervisor env = %#v", rt.createCfg.Env)
 	}
 }
 
@@ -764,6 +1029,22 @@ func TestLauncherSpawnUsesReviewerWorkingDirectoryAndInitialMessage(t *testing.T
 	}
 	if rt.createCfg.WorkspacePath != "/ao/reviewer" || rt.sentMsg != "task ref" {
 		t.Fatalf("create = %+v, sent = %q", rt.createCfg, rt.sentMsg)
+	}
+}
+
+func TestLauncherSpawnCanDeferReviewerInitialMessage(t *testing.T) {
+	reviewer := &fakeReviewerWithLaunchSpec{spec: ports.ReviewCommandSpec{
+		Argv: []string{"kiro-cli", "chat"}, InitialMessage: "task ref",
+	}}
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, reviewer, rt)
+	spec := launchSpec()
+	spec.DeferInitialMessage = true
+	if _, err := l.Spawn(context.Background(), spec); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if rt.sentMsg != "" {
+		t.Fatalf("deferred launch sent %q, want no initial message", rt.sentMsg)
 	}
 }
 
@@ -889,8 +1170,8 @@ func TestLauncherPreflightAgentAuthUnauthorizedBlocksReviewer(t *testing.T) {
 		WithAgentAuth(fakeAgentAuthResolver{status: ports.AgentAuthStatusUnauthorized, ok: true}),
 	)
 
-	if err := l.Preflight(context.Background(), domain.ReviewerClaudeCode, "/ws/mer-1"); err == nil || !strings.Contains(err.Error(), "agent auth catalog") {
-		t.Fatalf("err = %v, want agent auth catalog failure", err)
+	if err := l.Preflight(context.Background(), domain.ReviewerClaudeCode, "/ws/mer-1"); !errors.Is(err, ports.ErrChatAuthRequired) {
+		t.Fatalf("err = %v, want ErrChatAuthRequired", err)
 	}
 }
 
@@ -938,5 +1219,62 @@ func TestLauncherPreflightEnvPrefixWithMissingBinary(t *testing.T) {
 	l := NewLauncher(fakeReviewerResolver{reviewer: reviewer, ok: true}, &fakeRuntime{}, "")
 	if err := l.Preflight(context.Background(), domain.ReviewerClaudeCode, "/ws/mer-1"); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("err = %v, want 'not found'", err)
+	}
+}
+
+func TestDeferredCodexTerminalDispatchesTaskOnlyOnNotify(t *testing.T) {
+	t.Setenv("AO_DATA_DIR", t.TempDir())
+	t.Setenv("AO_RUN_FILE", filepath.Join(t.TempDir(), "running.json"))
+	// Resolve a harmless binary; no provider process is started by fakeRuntime.
+	bin := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	rt := &fakeRuntime{}
+	l := newTestLauncher(t, codexreview.New(), rt)
+	spec := launchSpec()
+	spec.Harness = domain.ReviewerCodex
+	spec.WorkspacePath = t.TempDir()
+	spec.InterfaceMode = domain.ReviewerInterfaceTUI
+	spec.DeferInitialMessage = true
+	result, err := l.Spawn(context.Background(), spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range rt.createCfg.Argv {
+		if strings.Contains(arg, "Read and follow the AO review task") {
+			t.Fatal("deferred replacement received task in argv")
+		}
+	}
+	if rt.sentMsg != "" {
+		t.Fatal("deferred replacement received initial message")
+	}
+	if err := l.Notify(context.Background(), result.HandleID, spec); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rt.sentMsg, "Read and follow the AO review task") {
+		t.Fatal("notification omitted review task")
+	}
+}
+
+type recordingReviewBatch struct {
+	ReviewerChatController
+	reviewID, batchID string
+}
+
+func (c *recordingReviewBatch) SendReviewChat(_ context.Context, reviewID, _ string, batchID string) error {
+	c.reviewID, c.batchID = reviewID, batchID
+	return nil
+}
+
+func TestNotifyReviewerChatCarriesItsBatch(t *testing.T) {
+	chat := &recordingReviewBatch{}
+	launcher := NewLauncher(fakeReviewerResolver{reviewer: &fakeReviewer{}, ok: true}, &fakeRuntime{}, t.TempDir(), WithReviewerChat(chat))
+	if err := launcher.Notify(context.Background(), "review-chat:review-1", LaunchSpec{ReviewSessionID: "review-1", WorkerID: "worker-1", BatchID: "batch-1", RunID: "run-1", Harness: domain.ReviewerCodex, WorkspacePath: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if chat.reviewID != "review-1" || chat.batchID != "batch-1" {
+		t.Fatalf("review notification: %+v", chat)
 	}
 }

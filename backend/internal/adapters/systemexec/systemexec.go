@@ -11,11 +11,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // Adapter implements the host executable and command-runner ports.
@@ -30,12 +30,19 @@ var (
 	_ ports.InstallCommandRunner   = Adapter{}
 	_ ports.InstallScriptRunner    = Adapter{}
 	_ ports.InstallCapabilityProbe = Adapter{}
+	_ ports.PathWritableProbe      = Adapter{}
 )
 
 // New creates a host adapter whose installer scratch space stays inside AO's
 // configured data directory.
 func New(dataDir string) Adapter {
 	return newAdapter(dataDir, http.DefaultClient)
+}
+
+// PathWritable reports whether path can be created or written by the current
+// daemon user without changing the filesystem when the probe completes.
+func (Adapter) PathWritable(ctx context.Context, path string) (bool, error) {
+	return pathWritable(ctx, path)
 }
 
 func newAdapter(dataDir string, client *http.Client) Adapter {
@@ -54,15 +61,24 @@ func (Adapter) LookPath(file string) (string, error) {
 // stdin. The small Env list augments the daemon environment rather than
 // replacing PATH and the user's package-manager configuration.
 func (Adapter) RunInstall(ctx context.Context, command ports.InstallCommand, stdout, stderr io.Writer) error {
-	cmd := exec.CommandContext(ctx, command.Argv[0], command.Argv[1:]...) //nolint:gosec // G204: argv is selected from systeminstall's fixed recipes.
-	configureProcessGroup(cmd)
-	cmd.Cancel = func() error { return killProcessTree(cmd) }
+	cmd, err := commandContext(ctx, command.Argv[0], command.Argv[1:]...)
+	if err != nil {
+		return err
+	}
+	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Stdin = strings.NewReader("")
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.Env = append(os.Environ(), command.Env...)
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	// Windows installers persist PATH changes outside the already-running
+	// daemon's process environment. Refresh it before adapter-backed
+	// verification tries to resolve the newly installed executable.
+	refreshExecutablePath()
+	return nil
 }
 
 // Probe takes one cancellation-aware snapshot of the package-manager facts
@@ -79,7 +95,8 @@ func (Adapter) Probe(ctx context.Context) (ports.InstallCapabilities, error) {
 	snapshot.NPM = ports.NPMInstallCapabilities{
 		NodeVersion: nodeVersion, NPMVersion: npmVersion, GlobalPrefix: npmPrefix,
 	}
-	snapshot.NPM.Err = errors.Join(nodeErr, npmVersionErr, npmPrefixErr)
+	snapshot.NPM.RuntimeErr = errors.Join(nodeErr, npmVersionErr)
+	snapshot.NPM.Err = errors.Join(snapshot.NPM.RuntimeErr, npmPrefixErr)
 	if snapshot.NPM.Err == nil {
 		writable, err := pathWritable(ctx, npmPrefix)
 		if err != nil {
@@ -105,18 +122,17 @@ func (Adapter) Probe(ctx context.Context) (ports.InstallCapabilities, error) {
 		}
 		snapshot.Homebrew.PrefixWritable = writable
 	}
-	if runtime.GOOS == "darwin" {
-		snapshot.MacApplicationsWritable, snapshot.MacApplicationsWritableErr = pathWritable(ctx, "/Applications")
-	}
 	return snapshot, nil
 }
 
 func capabilityOutput(parent context.Context, name string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // fixed read-only argv from Probe.
-	configureProcessGroup(cmd)
-	cmd.Cancel = func() error { return killProcessTree(cmd) }
+	cmd, err := commandContext(ctx, name, args...)
+	if err != nil {
+		return "", err
+	}
+	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.Output()
 	if err != nil {
@@ -169,7 +185,12 @@ func pathWritable(ctx context.Context, path string) (bool, error) {
 
 // Run executes argv with ctx and connects its output to the supplied writers.
 func (Adapter) Run(ctx context.Context, argv []string, stdout, stderr io.Writer) error {
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // G204: argv is built from systeminstall's fixed target allowlist.
+	cmd, err := commandContext(ctx, argv[0], argv[1:]...)
+	if err != nil {
+		return err
+	}
+	aoprocess.ConfigureTreeCancellation(cmd)
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	return cmd.Run()

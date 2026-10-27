@@ -3,22 +3,14 @@
 package systemexec
 
 import (
-	"errors"
+	"context"
 	"os/exec"
-	"syscall"
+
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-func configureProcessGroup(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+func commandContext(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
+	return aoprocess.CommandContext(ctx, name, args...), nil //nolint:gosec // Callers supply server-owned argv.
 }
 
-func killProcessTree(cmd *exec.Cmd) error {
-	if cmd.Process == nil {
-		return nil
-	}
-	err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	if errors.Is(err, syscall.ESRCH) {
-		return nil
-	}
-	return err
-}
+func refreshExecutablePath() {}

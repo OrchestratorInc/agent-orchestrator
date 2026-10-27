@@ -10,6 +10,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // errCapture is a request-scoped slot WriteError records the raw service error
@@ -24,9 +25,15 @@ type errCapture struct{ captured CapturedError }
 type CapturedError struct {
 	Err            error
 	ReportingOwner ownership.Owner
+	Fields         map[string]any
 }
 
 type errCaptureKey struct{}
+
+var safeTelemetryFields = map[string]struct{}{
+	"browser_command":    {},
+	"runtime_link_state": {},
+}
 
 // WithErrorCapture returns a copy of the request whose context carries an
 // error-capture slot, plus a getter for the error recorded by WriteError while
@@ -40,8 +47,32 @@ func WithErrorCapture(r *http.Request) (*http.Request, func() CapturedError) {
 // captureError records err for the request if a capture slot is present.
 func captureError(r *http.Request, err error) {
 	if c, ok := r.Context().Value(errCaptureKey{}).(*errCapture); ok {
-		c.captured = CapturedError{Err: err, ReportingOwner: ownership.OwnerOf(err)}
+		c.captured.Err = err
+		c.captured.ReportingOwner = ownership.OwnerOf(err)
 	}
+}
+
+// CaptureError records a safe, structured error for request telemetry before a
+// controller writes a response directly with WriteAPIError.
+func CaptureError(r *http.Request, err error) {
+	captureError(r, err)
+}
+
+// SetTelemetryField records a bounded, privacy-safe field for the request's
+// structured telemetry. Callers must only pass values that are already safe to
+// export; request bodies, URLs, and page content must never be stored here.
+func SetTelemetryField(r *http.Request, key string, value any) {
+	c, ok := r.Context().Value(errCaptureKey{}).(*errCapture)
+	if !ok || c == nil {
+		return
+	}
+	if _, allowed := safeTelemetryFields[key]; !allowed {
+		return
+	}
+	if c.captured.Fields == nil {
+		c.captured.Fields = make(map[string]any)
+	}
+	c.captured.Fields[key] = value
 }
 
 // APIError is the locked wire shape for every non-2xx response.
@@ -51,7 +82,7 @@ type APIError struct {
 	Message        string          `json:"message"`
 	RequestID      string          `json:"requestId,omitempty"`
 	Details        map[string]any  `json:"details,omitempty"`
-	ReportingOwner ownership.Owner `json:"reporting_owner,omitempty" enum:"http,agent_switch_saga"`
+	ReportingOwner ownership.Owner `json:"reporting_owner,omitempty" enum:"http"`
 }
 
 // WriteJSON serialises v as JSON with the given status.
@@ -97,6 +128,18 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	if isTransient(err) {
 		writeAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "SERVICE_UNAVAILABLE",
 			"The service is momentarily unavailable, please retry.", nil, reportingOwner)
+		return
+	}
+	// A project whose source repository has been deleted from disk turns any
+	// subsequent filesystem/git operation that reaches it into a raw,
+	// unclassified failure. Map that single, well-defined condition to a clean
+	// 404 before the generic 500 fallthrough so clients can tell "the project
+	// its folder is gone" apart from an internal server fault. Adapters wrap
+	// the same sentinel (ports.ErrWorkspaceRepoUnavailable) with %w, so
+	// errors.Is matches it through any wrapping.
+	if errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "PROJECT_FOLDER_MISSING",
+			"Project repository is missing from disk", nil, reportingOwner)
 		return
 	}
 	writeAPIError(w, r, http.StatusInternalServerError, "internal", "INTERNAL_ERROR", "Internal server error", nil, reportingOwner)

@@ -1,17 +1,41 @@
 import { createCipheriv, createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
+import fs from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BrowserHistoryStore } from "./browser-history-store";
-import { BrowserProfileImportService, decryptWindowsChromiumCookie } from "./browser-profile-import";
+import { BrowserProfileImportService, decryptWindowsChromiumCookie, readMacChromiumPassword } from "./browser-profile-import";
 import { BrowserProfileStore } from "./browser-profile-store";
 import { BROWSER_PROFILE_MAX_COUNT } from "../shared/browser-profiles";
 
 const temporaryDirectories: string[] = [];
 
+describe("macOS import credentials", () => {
+	it("allows time for the prompt and only falls back for a missing item", async () => {
+		const run = vi.fn().mockRejectedValueOnce({ code: 44 }).mockResolvedValueOnce({ stdout: "secret\n" });
+		const signal = new AbortController().signal;
+		expect(await readMacChromiumPassword(["Chrome", "Google Chrome"], signal, run)).toEqual(Buffer.from("secret"));
+		expect(run).toHaveBeenCalledTimes(2);
+		expect(run).toHaveBeenLastCalledWith("security", ["find-generic-password", "-w", "-s", "Google Chrome Safe Storage"], expect.objectContaining({ timeout: 120_000, signal }));
+	});
+
+	it.each([{ code: 51 }, { killed: true, signal: "SIGTERM" }])("stops after denied or timed-out access: %j", async (failure) => {
+		const run = vi.fn().mockRejectedValue(failure);
+		await expect(readMacChromiumPassword(["Chrome", "Google Chrome"], new AbortController().signal, run)).rejects.toThrow("turn off cookies");
+		expect(run).toHaveBeenCalledOnce();
+	});
+
+	it("does not prompt again when the credential response is empty", async () => {
+		const run = vi.fn().mockResolvedValue({ stdout: "\n" });
+		await expect(readMacChromiumPassword(["Chrome", "Google Chrome"], new AbortController().signal, run)).rejects.toThrow("turn off cookies");
+		expect(run).toHaveBeenCalledOnce();
+	});
+});
+
 afterEach(async () => {
+	vi.restoreAllMocks();
 	await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -135,7 +159,646 @@ function chromiumMicros(iso: string): number {
 	return Math.round((Date.parse(iso) / 1_000 + 11_644_473_600) * 1_000_000);
 }
 
+function safariSeconds(iso: string): number {
+	return Date.parse(iso) / 1_000 - 978_307_200;
+}
+
+function safariBinaryCookies(cookies: Array<{
+	domain: string;
+	name: string;
+	value: string;
+	path?: string;
+	expires: string;
+	flags?: number;
+}>): Buffer {
+	const records = cookies.map((cookie) => {
+		const strings = [cookie.domain, cookie.name, cookie.path ?? "/", cookie.value]
+			.map((value) => Buffer.from(`${value}\0`, "utf8"));
+		const offsets: number[] = [];
+		let size = 56;
+		for (const value of strings) {
+			offsets.push(size);
+			size += value.length;
+		}
+		const record = Buffer.alloc(size);
+		record.writeUInt32LE(size, 0);
+		record.writeUInt32LE(cookie.flags ?? 0, 8);
+		offsets.forEach((offset, index) => record.writeUInt32LE(offset, 16 + index * 4));
+		record.writeDoubleLE(safariSeconds(cookie.expires), 40);
+		record.writeDoubleLE(safariSeconds("2025-01-01T00:00:00.000Z"), 48);
+		strings.forEach((value, index) => value.copy(record, offsets[index]));
+		return record;
+	});
+	const headerSize = 12 + records.length * 4;
+	const page = Buffer.alloc(headerSize + records.reduce((total, record) => total + record.length, 0));
+	page.writeUInt32BE(0x100, 0);
+	page.writeUInt32LE(records.length, 4);
+	let recordOffset = headerSize;
+	records.forEach((record, index) => {
+		page.writeUInt32LE(recordOffset, 8 + index * 4);
+		record.copy(page, recordOffset);
+		recordOffset += record.length;
+	});
+	const file = Buffer.alloc(12 + page.length + 8);
+	file.write("cook", 0, "ascii");
+	file.writeUInt32BE(1, 4);
+	file.writeUInt32BE(page.length, 8);
+	page.copy(file, 12);
+	return file;
+}
+
+async function createSafariFixture(root: string): Promise<{ library: string; namedProfileId: string }> {
+	const library = path.join(root, "Library");
+	const container = path.join(library, "Containers", "com.apple.Safari", "Data", "Library");
+	const namedProfileId = "5604E6F5-02ED-4E40-8249-63DE7BC986C8";
+	const safariData = path.join(container, "Safari");
+	await mkdir(path.join(library, "Safari"), { recursive: true });
+	await mkdir(path.join(container, "Cookies"), { recursive: true });
+	await mkdir(path.join(safariData, "Profiles", namedProfileId), { recursive: true });
+	await mkdir(path.join(
+		container,
+		"WebKit",
+		"WebsiteDataStore",
+		namedProfileId.toLowerCase(),
+		"Cookies",
+	), { recursive: true });
+
+	const tabs = new Database(path.join(safariData, "SafariTabs.db"));
+	tabs.exec("CREATE TABLE bookmarks (subtype INTEGER, external_uuid TEXT, title TEXT)");
+	tabs.prepare("INSERT INTO bookmarks VALUES (?, ?, ?)").run(2, "DefaultProfile", "Personal browsing");
+	tabs.prepare("INSERT INTO bookmarks VALUES (?, ?, ?)").run(2, namedProfileId.toLowerCase(), "Work");
+	tabs.close();
+
+	const writeHistory = (file: string, url: string, title: string, visits: number, visitedAt: string) => {
+		const database = new Database(file);
+		database.exec(`
+			CREATE TABLE history_items (id INTEGER PRIMARY KEY, url TEXT, visit_count INTEGER);
+			CREATE TABLE history_visits (id INTEGER PRIMARY KEY, history_item INTEGER, visit_time REAL, title TEXT);
+		`);
+		database.prepare("INSERT INTO history_items VALUES (1, ?, ?)").run(url, visits);
+		database.prepare("INSERT INTO history_visits VALUES (1, 1, ?, ?)").run(safariSeconds(visitedAt), title);
+		database.close();
+	};
+	writeHistory(path.join(library, "Safari", "History.db"), "https://webkit.org/from-safari", "Safari history", 4, "2026-03-01T00:00:00.000Z");
+	writeHistory(path.join(safariData, "Profiles", namedProfileId, "History.db"), "https://example.com/work", "Work history", 2, "2026-03-02T00:00:00.000Z");
+
+	await writeFile(path.join(container, "Cookies", "Cookies.binarycookies"), safariBinaryCookies([
+		{ domain: ".webkit.org", name: "session", value: "safari", expires: "2030-01-01T00:00:00.000Z", flags: 0x25 },
+		{ domain: "github.com", name: "__Host-user_session_same_site", value: "safari", expires: "2030-01-01T00:00:00.000Z", flags: 0x3d },
+		{ domain: ".webkit.org", name: "expired", value: "old", expires: "2020-01-01T00:00:00.000Z" },
+	]));
+	await writeFile(path.join(
+		container,
+		"WebKit",
+		"WebsiteDataStore",
+		namedProfileId.toLowerCase(),
+		"Cookies",
+		"Cookies.binarycookies",
+	), safariBinaryCookies([
+		{ domain: ".example.com", name: "work", value: "named", expires: "2030-01-01T00:00:00.000Z", flags: 0x2c },
+	]));
+	return { library, namedProfileId };
+}
+
 describe("BrowserProfileImportService", () => {
+	it.each(["linux", "darwin", "win32"] as const)("uses registered Firefox names and defaults on %s without changing source files", async (platform) => {
+		const root = await fixtureRoot();
+		const browserRoot = platform === "linux" ? path.join(root, ".mozilla", "firefox")
+			: platform === "darwin" ? path.join(root, "Library", "Application Support", "Firefox")
+				: path.join(root, "Mozilla", "Firefox");
+		const directory = platform === "linux" ? "abc123.Work" : "Profiles/abc123.Work";
+		const absolute = path.join(browserRoot, "nested", "xyz.default-release");
+		for (const profile of [path.join(browserRoot, directory), absolute]) {
+			await mkdir(profile, { recursive: true });
+			const db = new Database(path.join(profile, "places.sqlite"));
+			db.exec("CREATE TABLE moz_places (url TEXT)");
+			db.close();
+		}
+		const registry = `; Firefox registry\r\n[General]\r\nStartWithLastProfile=1\r\n[Profile0]\r\nName=Client Research\r\nIsRelative=1\r\nPath=${directory}\r\nDefault=1\r\n[Profile1]\r\nName=Personal=Archive\r\nIsRelative=0\r\nPath=${absolute}\r\n`;
+		await writeFile(path.join(browserRoot, "profiles.ini"), registry);
+		const before = await Promise.all([directory, path.relative(browserRoot, absolute)].map((dir) => readFile(path.join(browserRoot, dir, "places.sqlite"))));
+		const stateDir = path.join(root, "ao-state");
+		const service = new BrowserProfileImportService({
+			stateDir, profileStore: new BrowserProfileStore({ stateDir }), historyStore: new BrowserHistoryStore({ stateDir }),
+			platform, homeDir: root, env: { APPDATA: root }, fromPartition: vi.fn(),
+		});
+		const discovery = await service.discover();
+		expect(discovery.sources.find((source) => source.name === "Firefox")?.profiles).toEqual([
+			{ id: expect.stringMatching(/^[a-f0-9]{32}$/), name: "Client Research", default: true },
+			{ id: expect.stringMatching(/^[a-f0-9]{32}$/), name: "Personal=Archive", default: false },
+		]);
+		expect(JSON.stringify(discovery)).not.toContain(root);
+		expect(await readFile(path.join(browserRoot, "profiles.ini"), "utf8")).toBe(registry);
+		expect(await Promise.all([directory, path.relative(browserRoot, absolute)].map((dir) => readFile(path.join(browserRoot, dir, "places.sqlite"))))).toEqual(before);
+	});
+
+	it.each(["relative", "absolute", "escape", "symlink"])("validates %s Firefox install defaults and deduplicates registered aliases", async (kind) => {
+		const root = await fixtureRoot();
+		const browserRoot = path.join(root, ".mozilla", "firefox");
+		const profileRoot = path.join(browserRoot, "Profiles", "abc.default-release");
+		await mkdir(profileRoot, { recursive: true });
+		const db = new Database(path.join(profileRoot, "places.sqlite"));
+		db.exec("CREATE TABLE moz_places (url TEXT)");
+		db.close();
+		await symlink(profileRoot, path.join(browserRoot, "linked"));
+		await symlink(profileRoot, path.join(root, "outside"));
+		const selected = kind === "relative" ? "Profiles/abc.default-release" : kind === "absolute" ? profileRoot
+			: kind === "escape" ? "../../outside" : "linked";
+		await writeFile(path.join(browserRoot, "profiles.ini"), `[InstallABC123]\nDefault=${selected}\nLocked=1\n[Profile0]\nName=Client Research\nIsRelative=1\nPath=Profiles/abc.default-release\n[Profile1]\nName=Client Research\nIsRelative=0\nPath=${profileRoot}\n[Profile2]\nName=Client Research\nIsRelative=1\nPath=./Profiles/abc.default-release\n`);
+		const stateDir = path.join(root, "ao-state");
+		const service = new BrowserProfileImportService({
+			stateDir, profileStore: new BrowserProfileStore({ stateDir }), historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "linux", homeDir: root, env: {}, fromPartition: vi.fn(),
+		});
+		expect((await service.discover()).sources[0]?.profiles).toEqual([
+			{ id: expect.stringMatching(/^[a-f0-9]{32}$/), name: "Client Research", default: kind === "relative" || kind === "absolute" },
+		]);
+	});
+
+	it("accepts absolute Firefox registry paths through a canonical parent alias without changing source files", async () => {
+		const root = await fixtureRoot();
+		const canonicalHome = path.join(root, "canonical-home");
+		const aliasHome = path.join(root, "alias-home");
+		const browserRoot = path.join(canonicalHome, ".mozilla", "firefox");
+		const profileRoot = path.join(browserRoot, "Profiles", "abc.Work");
+		await mkdir(profileRoot, { recursive: true });
+		await symlink(canonicalHome, aliasHome);
+		const databaseFile = path.join(profileRoot, "places.sqlite");
+		const db = new Database(databaseFile);
+		db.exec("CREATE TABLE moz_places (url TEXT)");
+		db.close();
+		const aliasedProfile = path.join(aliasHome, ".mozilla", "firefox", "Profiles", "abc.Work");
+		const registryFile = path.join(browserRoot, "profiles.ini");
+		await writeFile(registryFile, `[InstallABC123]\nDefault=${aliasedProfile}\nLocked=1\n[Profile0]\nName=Client Research\nIsRelative=0\nPath=${aliasedProfile}\n`);
+		const before = await Promise.all([registryFile, databaseFile].map(async (file) => {
+			const bytes = await readFile(file);
+			return { bytes, hash: createHash("sha256").update(bytes).digest("hex") };
+		}));
+		const stateDir = path.join(root, "ao-state");
+		const service = new BrowserProfileImportService({
+			stateDir, profileStore: new BrowserProfileStore({ stateDir }), historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "linux", homeDir: aliasHome, env: {}, fromPartition: vi.fn(),
+		});
+		const discovery = await service.discover();
+		expect(discovery.sources.find((source) => source.name === "Firefox")?.profiles).toEqual([
+			{ id: expect.stringMatching(/^[a-f0-9]{32}$/), name: "Client Research", default: true },
+		]);
+		expect(JSON.stringify(discovery)).not.toContain(root);
+		const after = await Promise.all([registryFile, databaseFile].map(async (file) => {
+			const bytes = await readFile(file);
+			return { bytes, hash: createHash("sha256").update(bytes).digest("hex") };
+		}));
+		expect(after).toEqual(before);
+	});
+
+	it("treats valid Firefox install defaults as authoritative for every discovered profile", async () => {
+		const root = await fixtureRoot();
+		const browserRoot = path.join(root, ".mozilla", "firefox");
+		for (const directory of ["legacy.Legacy", "work.Work", "orphan.default-release"]) {
+			const profileRoot = path.join(browserRoot, "Profiles", directory);
+			await mkdir(profileRoot, { recursive: true });
+			const db = new Database(path.join(profileRoot, "places.sqlite"));
+			db.exec("CREATE TABLE moz_places (url TEXT)");
+			db.close();
+		}
+		await writeFile(path.join(browserRoot, "profiles.ini"), "[InstallABC123]\nDefault=Profiles/work.Work\n[InstallDEF456]\nDefault=Profiles/work.Work\n[Profile0]\nName=Legacy\nIsRelative=1\nPath=Profiles/legacy.Legacy\nDefault=1\n[Profile1]\nName=Work\nIsRelative=1\nPath=Profiles/work.Work\n");
+		const stateDir = path.join(root, "ao-state");
+		const service = new BrowserProfileImportService({
+			stateDir, profileStore: new BrowserProfileStore({ stateDir }), historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "linux", homeDir: root, env: {}, fromPartition: vi.fn(),
+		});
+		const discovery = await service.discover();
+		expect(discovery.sources[0]?.profiles).toEqual([
+			{ id: expect.stringMatching(/^[a-f0-9]{32}$/), name: "Work", default: true },
+			{ id: expect.stringMatching(/^[a-f0-9]{32}$/), name: "default-release", default: false },
+			{ id: expect.stringMatching(/^[a-f0-9]{32}$/), name: "Legacy", default: false },
+		]);
+		expect(JSON.stringify(discovery)).not.toContain(root);
+	});
+
+	it.each(["outside", "symlink"])("retains Firefox legacy defaults when the install default is %s", async (kind) => {
+		const root = await fixtureRoot();
+		const browserRoot = path.join(root, ".mozilla", "firefox");
+		for (const directory of ["legacy.Legacy", "work.Work", "orphan.default-release"]) {
+			const profileRoot = path.join(browserRoot, "Profiles", directory);
+			await mkdir(profileRoot, { recursive: true });
+			const db = new Database(path.join(profileRoot, "places.sqlite"));
+			db.exec("CREATE TABLE moz_places (url TEXT)");
+			db.close();
+		}
+		const selected = kind === "outside" ? path.join(root, "outside") : path.join(browserRoot, "linked");
+		if (kind === "outside") await mkdir(selected);
+		else await symlink(path.join(browserRoot, "Profiles", "work.Work"), selected);
+		await writeFile(path.join(browserRoot, "profiles.ini"), `[InstallABC123]\nDefault=${selected}\n[Profile0]\nName=Legacy\nIsRelative=1\nPath=Profiles/legacy.Legacy\nDefault=1\n[Profile1]\nName=Work\nIsRelative=1\nPath=Profiles/work.Work\n`);
+		const stateDir = path.join(root, "ao-state");
+		const service = new BrowserProfileImportService({
+			stateDir, profileStore: new BrowserProfileStore({ stateDir }), historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "linux", homeDir: root, env: {}, fromPartition: vi.fn(),
+		});
+		const discovery = await service.discover();
+		expect(discovery.sources[0]?.profiles).toEqual([
+			{ id: expect.stringMatching(/^[a-f0-9]{32}$/), name: "default-release", default: true },
+			{ id: expect.stringMatching(/^[a-f0-9]{32}$/), name: "Legacy", default: true },
+			{ id: expect.stringMatching(/^[a-f0-9]{32}$/), name: "Work", default: false },
+		]);
+		expect(JSON.stringify(discovery)).not.toContain(root);
+	});
+
+	it.each(["missing", "malformed", "oversized", "symlink", "escape", "profile-symlink"])("safely falls back from a %s Firefox registry", async (kind) => {
+		const root = await fixtureRoot();
+		const browserRoot = path.join(root, ".mozilla", "firefox");
+		for (const profile of [path.join(browserRoot, "abc.Work"), path.join(root, "outside")]) {
+			await mkdir(profile, { recursive: true });
+			const db = new Database(path.join(profile, "places.sqlite"));
+			db.exec("CREATE TABLE moz_places (url TEXT)");
+			db.close();
+		}
+		const file = path.join(browserRoot, "profiles.ini");
+		if (kind === "malformed") await writeFile(file, "[Profile0\nName=Wrong\nIsRelative=1\nPath=abc.Work\nDefault=1");
+		if (kind === "oversized") await writeFile(file, "x".repeat(5 * 1024 * 1024));
+		if (kind === "symlink") {
+			await writeFile(path.join(root, "registry"), "[Profile0]\nName=Wrong\nIsRelative=1\nPath=abc.Work\nDefault=1");
+			await symlink(path.join(root, "registry"), file);
+		}
+		if (kind === "escape") await writeFile(file, `[Profile0]\nName=Outside\nIsRelative=1\nPath=../../outside\n[Profile1]\nName=Outside absolute\nIsRelative=0\nPath=${path.join(root, "outside")}\n`);
+		if (kind === "profile-symlink") {
+			await symlink(path.join(root, "outside"), path.join(browserRoot, "linked"));
+			await writeFile(file, "[Profile0]\nName=Outside\nIsRelative=1\nPath=linked\n");
+		}
+		const stateDir = path.join(root, "ao-state");
+		const service = new BrowserProfileImportService({
+			stateDir, profileStore: new BrowserProfileStore({ stateDir }), historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "linux", homeDir: root, env: {}, fromPartition: vi.fn(),
+		});
+		expect((await service.discover()).sources[0]?.profiles).toEqual([
+			{ id: expect.stringMatching(/^[a-f0-9]{32}$/), name: "Work", default: false },
+		]);
+	});
+
+	it("does not probe Safari protected data during general discovery or another browser import", async () => {
+		const root = await fixtureRoot();
+		await createSafariFixture(root);
+		const firefox = path.join(root, "Library", "Application Support", "Firefox", "Profiles", "test.default");
+		await mkdir(firefox, { recursive: true });
+		const db = new Database(path.join(firefox, "places.sqlite"));
+		db.exec("CREATE TABLE moz_places (url TEXT, title TEXT, visit_count INTEGER, last_visit_date INTEGER); INSERT INTO moz_places VALUES ('https://example.com', 'Firefox', 1, 1767225600000000)");
+		db.close();
+		const original = fs.lstat;
+		const sourceLstatCalls: string[] = [];
+		const sourceLstat = ((file: Parameters<typeof fs.lstat>[0], options: never) => {
+			sourceLstatCalls.push(String(file));
+			if (String(file).includes("com.apple.Safari")) return Promise.reject(Object.assign(new Error("blocked"), { code: "EPERM" }));
+			return original(file, options);
+		}) as typeof fs.lstat;
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const service = new BrowserProfileImportService({ stateDir, profileStore, sourceLstat,
+			historyStore: new BrowserHistoryStore({ stateDir }), platform: "darwin", homeDir: root, env: {},
+			fromPartition: () => ({ cookies: { set: async () => undefined }, clearStorageData: async () => undefined, clearCache: async () => undefined }),
+		});
+		const discovery = await service.discover();
+		expect(discovery.warnings).toBeUndefined();
+		expect(discovery.sources).toEqual(expect.arrayContaining([
+			expect.objectContaining({ name: "Safari", profilesDeferred: true, profiles: [] }),
+			expect.objectContaining({ name: "Firefox" }),
+		]));
+		expect(sourceLstatCalls).toEqual([]);
+
+		const firefoxSource = discovery.sources.find((source) => source.name === "Firefox")!;
+		await expect(service.import({ requestId: "18181818-1818-4818-8818-181818181818", sourceId: firefoxSource.id,
+			profileIds: [firefoxSource.profiles[0]!.id], includeCookies: false, includeHistory: true,
+			destination: { mode: "merge", name: "Firefox despite Safari" },
+		}, vi.fn())).resolves.toMatchObject({ entries: [{ importedHistoryEntries: 1 }] });
+		expect(sourceLstatCalls).toEqual([]);
+
+		const safariSource = discovery.sources.find((source) => source.name === "Safari")!;
+		await expect(service.discover({ sourceId: safariSource.id })).resolves.toMatchObject({
+			sources: [],
+			warnings: ["safari-access-denied"],
+		});
+	});
+
+	it("bounds Safari metadata snapshots and removes discovery staging", async () => {
+		const root = await fixtureRoot();
+		const { library } = await createSafariFixture(root);
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const service = new BrowserProfileImportService({ stateDir, profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }), platform: "darwin", homeDir: root, env: {},
+			fromPartition: () => ({ cookies: { set: async () => undefined }, clearStorageData: async () => undefined, clearCache: async () => undefined }),
+		});
+		const backup = vi.spyOn(Database.prototype, "backup");
+		const shallow = await service.discover();
+		await service.discover({ sourceId: shallow.sources[0]!.id });
+		expect(backup).toHaveBeenCalledWith(expect.stringContaining(path.join(stateDir, "browser-import-staging")));
+		expect(await readdir(path.join(stateDir, "browser-import-staging"))).toEqual([]);
+		backup.mockClear();
+		await truncate(path.join(library, "Containers", "com.apple.Safari", "Data", "Library", "Safari", "SafariTabs.db"), 256 * 1024 * 1024 + 1);
+		const discovery = await service.discover({ sourceId: shallow.sources[0]!.id });
+		expect(backup).not.toHaveBeenCalled();
+		expect(discovery.sources[0]!.profiles[0]!.name).toBe("Personal");
+		expect(await readdir(path.join(stateDir, "browser-import-staging"))).toEqual([]);
+	});
+
+	it("discovers Safari profiles only on macOS and keeps their paths private", async () => {
+		const root = await fixtureRoot();
+		await createSafariFixture(root);
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const createService = (platform: NodeJS.Platform) => new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform,
+			homeDir: root,
+			env: {},
+			fromPartition: () => ({ cookies: { set: async () => undefined }, clearStorageData: async () => undefined, clearCache: async () => undefined }),
+		});
+
+		expect((await createService("win32").discover()).sources).toEqual([]);
+		const darwinService = createService("darwin");
+		const shallow = await darwinService.discover();
+		expect(shallow.sources).toEqual([expect.objectContaining({ name: "Safari", profilesDeferred: true, profiles: [] })]);
+		const discovery = await darwinService.discover({ sourceId: shallow.sources[0]!.id });
+		expect(discovery.sources).toEqual([expect.objectContaining({
+			name: "Safari",
+			family: "safari",
+			cookieSupport: "supported",
+			profiles: [
+				expect.objectContaining({ name: "Personal browsing", default: true }),
+				expect.objectContaining({ name: "Work", default: false }),
+			],
+		})]);
+		expect(JSON.stringify(discovery)).not.toContain(root);
+	});
+
+	it("imports Safari BinaryCookies and Core Data history into a new profile", async () => {
+		const root = await fixtureRoot();
+		await createSafariFixture(root);
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const historyStore = new BrowserHistoryStore({ stateDir });
+		const importedCookies: Array<{ name?: string; value?: string; domain?: string; sameSite?: string; secure?: boolean; httpOnly?: boolean }> = [];
+		const service = new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore,
+			platform: "darwin",
+			homeDir: root,
+			env: {},
+			now: () => new Date("2026-01-01T00:00:00.000Z"),
+			fromPartition: () => ({
+				cookies: { set: async (cookie) => { importedCookies.push(cookie); } },
+				clearStorageData: async () => undefined,
+				clearCache: async () => undefined,
+			}),
+		});
+		const shallow = await service.discover();
+		const source = (await service.discover({ sourceId: shallow.sources[0]!.id })).sources[0]!;
+		const result = await service.import({
+			requestId: "15151515-1515-4515-8515-151515151515",
+			sourceId: source.id,
+			profileIds: [source.profiles[0]!.id],
+			includeCookies: true,
+			includeHistory: true,
+			destination: { mode: "merge", name: "Imported Safari" },
+		}, vi.fn());
+
+		expect(importedCookies).toContainEqual(expect.objectContaining({
+			name: "session",
+			value: "safari",
+			domain: ".webkit.org",
+			secure: true,
+			httpOnly: true,
+			sameSite: "no_restriction",
+		}));
+		expect(importedCookies).toContainEqual(expect.objectContaining({
+			name: "__Host-user_session_same_site",
+			secure: true,
+			httpOnly: true,
+			sameSite: "strict",
+		}));
+		expect(importedCookies.find((cookie) => cookie.name === "__Host-user_session_same_site")).not.toHaveProperty("domain");
+		expect(result.entries[0]).toMatchObject({ importedCookies: 2, skippedCookies: 1, importedHistoryEntries: 1 });
+		expect(result.entries[0]!.warnings).toContainEqual({ code: "expired-cookies-skipped", count: 1 });
+		const profileId = result.entries[0]!.destinationProfile.id;
+		expect(await historyStore.suggest(profileId, "webkit")).toEqual([
+			{ url: "https://webkit.org/from-safari", title: "Safari history" },
+		]);
+		expect(await readdir(path.join(stateDir, "browser-import-staging"))).toEqual([]);
+	});
+
+	it("imports a named Safari profile from its profile-specific stores", async () => {
+		const root = await fixtureRoot();
+		await createSafariFixture(root);
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const historyStore = new BrowserHistoryStore({ stateDir });
+		const importedCookies: Array<{ name?: string; value?: string; sameSite?: string; secure?: boolean; httpOnly?: boolean }> = [];
+		const service = new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore,
+			platform: "darwin",
+			homeDir: root,
+			env: {},
+			now: () => new Date("2026-01-01T00:00:00.000Z"),
+			fromPartition: () => ({
+				cookies: { set: async (cookie) => { importedCookies.push(cookie); } },
+				clearStorageData: async () => undefined,
+				clearCache: async () => undefined,
+			}),
+		});
+		const shallow = await service.discover();
+		const source = (await service.discover({ sourceId: shallow.sources[0]!.id })).sources[0]!;
+		const work = source.profiles.find((profile) => profile.name === "Work")!;
+		const result = await service.import({
+			requestId: "16161616-1616-4616-8616-161616161616",
+			sourceId: source.id,
+			profileIds: [work.id],
+			includeCookies: true,
+			includeHistory: true,
+			destination: { mode: "merge", name: "Safari Work" },
+		}, vi.fn());
+
+		expect(importedCookies).toEqual([expect.objectContaining({ name: "work", value: "named", sameSite: "lax" })]);
+		expect(result.entries[0]).toMatchObject({ importedCookies: 1, importedHistoryEntries: 1 });
+		expect(await historyStore.suggest(result.entries[0]!.destinationProfile.id, "work")).toEqual([
+			{ url: "https://example.com/work", title: "Work history" },
+		]);
+	});
+
+	it("rejects malformed Safari cookie files before creating a destination", async () => {
+		const root = await fixtureRoot();
+		const { library } = await createSafariFixture(root);
+		await writeFile(path.join(
+			library,
+			"Containers",
+			"com.apple.Safari",
+			"Data",
+			"Library",
+			"Cookies",
+			"Cookies.binarycookies",
+		), Buffer.from("cook\0\0\0\x01broken", "binary"));
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const service = new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "darwin",
+			homeDir: root,
+			env: {},
+			fromPartition: () => ({ cookies: { set: async () => undefined }, clearStorageData: async () => undefined, clearCache: async () => undefined }),
+		});
+		const shallow = await service.discover();
+		const source = (await service.discover({ sourceId: shallow.sources[0]!.id })).sources[0]!;
+
+		await expect(service.import({
+			requestId: "17171717-1717-4717-8717-171717171717",
+			sourceId: source.id,
+			profileIds: [source.profiles[0]!.id],
+			includeCookies: true,
+			includeHistory: false,
+			destination: { mode: "merge", name: "Broken Safari" },
+		}, vi.fn())).rejects.toThrow("supported cookie data");
+		expect(profileStore.profiles).toEqual([]);
+		expect(await readdir(path.join(stateDir, "browser-import-staging"))).toEqual([]);
+	});
+
+	it("retries when a Chromium SQLite backup resolves without creating its snapshot", async () => {
+		const root = await fixtureRoot();
+		const { localAppData } = await createChromeFixture(root);
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const backup = vi.spyOn(Database.prototype, "backup");
+		backup.mockImplementationOnce(async () => undefined);
+		const service = new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "win32",
+			homeDir: root,
+			env: { LOCALAPPDATA: localAppData },
+			fromPartition: () => ({ cookies: { set: async () => undefined }, clearStorageData: async () => undefined, clearCache: async () => undefined }),
+		});
+		const source = (await service.discover()).sources[0]!;
+
+		const result = await service.import({
+			requestId: "19191919-1919-4919-8919-191919191919",
+			sourceId: source.id,
+			profileIds: [source.profiles[0]!.id],
+			includeCookies: false,
+			includeHistory: true,
+			destination: { mode: "merge", name: "Retried Chrome" },
+		}, vi.fn());
+
+		expect(backup).toHaveBeenCalledTimes(2);
+		expect(result.entries[0]).toMatchObject({ importedHistoryEntries: 2 });
+		expect(await readdir(path.join(stateDir, "browser-import-staging"))).toEqual([]);
+	});
+
+	it("retries when a Chromium SQLite backup rejects before succeeding", async () => {
+		const root = await fixtureRoot();
+		const { localAppData } = await createChromeFixture(root);
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const backup = vi.spyOn(Database.prototype, "backup");
+		backup.mockRejectedValueOnce(new Error("SQLITE_BUSY: database is locked"));
+		const service = new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "win32",
+			homeDir: root,
+			env: { LOCALAPPDATA: localAppData },
+			fromPartition: () => ({ cookies: { set: async () => undefined }, clearStorageData: async () => undefined, clearCache: async () => undefined }),
+		});
+		const source = (await service.discover()).sources[0]!;
+
+		const result = await service.import({
+			requestId: "21212121-2121-4121-8121-212121212121",
+			sourceId: source.id,
+			profileIds: [source.profiles[0]!.id],
+			includeCookies: false,
+			includeHistory: true,
+			destination: { mode: "merge", name: "Retried Busy Chrome" },
+		}, vi.fn());
+
+		expect(backup).toHaveBeenCalledTimes(2);
+		expect(result.entries[0]).toMatchObject({ importedHistoryEntries: 2 });
+		expect(await readdir(path.join(stateDir, "browser-import-staging"))).toEqual([]);
+	});
+
+	it("returns an actionable Chromium snapshot error when retry cannot create the temporary database copy", async () => {
+		const root = await fixtureRoot();
+		const { localAppData } = await createChromeFixture(root);
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		vi.spyOn(Database.prototype, "backup").mockResolvedValue(undefined);
+		const service = new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "win32",
+			homeDir: root,
+			env: { LOCALAPPDATA: localAppData },
+			fromPartition: () => ({ cookies: { set: async () => undefined }, clearStorageData: async () => undefined, clearCache: async () => undefined }),
+		});
+		const source = (await service.discover()).sources[0]!;
+
+		await expect(service.import({
+			requestId: "20202020-2020-4020-8020-202020202020",
+			sourceId: source.id,
+			profileIds: [source.profiles[0]!.id],
+			includeCookies: false,
+			includeHistory: true,
+			destination: { mode: "merge", name: "Broken Chrome Snapshot" },
+		}, vi.fn())).rejects.toThrow("AO couldn't create a temporary copy of Google Chrome's profile database");
+		expect(profileStore.profiles).toEqual([]);
+		expect(await readdir(path.join(stateDir, "browser-import-staging"))).toEqual([]);
+	});
+
+	it("returns an actionable Chromium snapshot error when backup rejects after retry", async () => {
+		const root = await fixtureRoot();
+		const { localAppData } = await createChromeFixture(root);
+		const stateDir = path.join(root, "ao-state");
+		const profileStore = new BrowserProfileStore({ stateDir });
+		await profileStore.load();
+		const backup = vi.spyOn(Database.prototype, "backup").mockRejectedValue(new Error("SQLITE_BUSY: database is locked"));
+		const service = new BrowserProfileImportService({
+			stateDir,
+			profileStore,
+			historyStore: new BrowserHistoryStore({ stateDir }),
+			platform: "win32",
+			homeDir: root,
+			env: { LOCALAPPDATA: localAppData },
+			fromPartition: () => ({ cookies: { set: async () => undefined }, clearStorageData: async () => undefined, clearCache: async () => undefined }),
+		});
+		const source = (await service.discover()).sources[0]!;
+
+		await expect(service.import({
+			requestId: "22222222-2222-4222-8222-222222222222",
+			sourceId: source.id,
+			profileIds: [source.profiles[0]!.id],
+			includeCookies: false,
+			includeHistory: true,
+			destination: { mode: "merge", name: "Busy Chrome Snapshot" },
+		}, vi.fn())).rejects.toThrow("AO couldn't create a temporary copy of Google Chrome's profile database");
+		expect(backup).toHaveBeenCalledTimes(2);
+		expect(profileStore.profiles).toEqual([]);
+		expect(await readdir(path.join(stateDir, "browser-import-staging"))).toEqual([]);
+	});
+
 	it("removes Chromium v24's domain hash from decrypted Windows cookie values", () => {
 		const host = ".example.com";
 		const key = Buffer.alloc(32, 0x11);
@@ -461,7 +1124,8 @@ describe("BrowserProfileImportService", () => {
 			env: { LOCALAPPDATA: localAppData },
 			fromPartition,
 		});
-		const source = (await service.discover()).sources[0]!;
+		const shallow = await service.discover();
+		const source = (await service.discover({ sourceId: shallow.sources[0]!.id })).sources[0]!;
 
 		await expect(service.import({
 			requestId: "91919191-9191-4191-8191-919191919191",
@@ -532,8 +1196,12 @@ describe("BrowserProfileImportService", () => {
 		const root = await fixtureRoot();
 		const stateDir = path.join(root, "ao-state");
 		const stale = path.join(stateDir, "browser-import-staging", "stale", "snapshot.sqlite");
+		const active = path.join(stateDir, "browser-import-staging", "active", "snapshot.sqlite");
 		await mkdir(path.dirname(stale), { recursive: true });
 		await writeFile(stale, "partial");
+		await fs.utimes(path.dirname(stale), new Date("2020-01-01"), new Date("2020-01-01"));
+		await mkdir(path.dirname(active), { recursive: true });
+		await writeFile(active, "in use");
 		const profileStore = new BrowserProfileStore({ stateDir });
 		await profileStore.load();
 		const service = new BrowserProfileImportService({
@@ -548,7 +1216,10 @@ describe("BrowserProfileImportService", () => {
 		});
 
 		await service.initialize();
-		await expect(stat(path.join(stateDir, "browser-import-staging"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(stat(path.dirname(stale))).rejects.toMatchObject({ code: "ENOENT" });
+		expect(await readFile(active, "utf8")).toBe("in use");
+		await service.dispose();
+		expect(await readFile(active, "utf8")).toBe("in use");
 	});
 
 	it("retains a visible destination when Electron session cleanup cannot start", async () => {
@@ -614,7 +1285,8 @@ describe("BrowserProfileImportService", () => {
 				clearCache: async () => undefined,
 			}),
 		});
-		const source = (await service.discover()).sources[0]!;
+		const shallow = await service.discover();
+		const source = (await service.discover({ sourceId: shallow.sources[0]!.id })).sources[0]!;
 
 		await expect(service.import({
 			requestId: "12121212-1212-4212-8212-121212121212",

@@ -1,6 +1,9 @@
+import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
+import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
 import { captureMobileApiError, httpCategory } from "./sentry";
+import { UnreachableError } from "./connectionError";
 import type { AttentionLevel } from "./theme";
 
 // ---- Types (subset of AO's DashboardSession we use on the phone) ------------
@@ -23,6 +26,7 @@ export type DashboardPR = {
 	ciStatus?: "pending" | "passing" | "failing" | "none";
 	reviewDecision?: "approved" | "changes_requested" | "pending" | "none";
 	mergeability?: {
+		state?: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
 		mergeable?: boolean;
 		ciPassing?: boolean;
 		approved?: boolean;
@@ -32,17 +36,50 @@ export type DashboardPR = {
 	unresolvedThreads?: number;
 };
 
+/**
+ * Where the daemon placed a session in its delivery lifecycle, derived
+ * server-side from durable facts and independently of `status`.
+ *
+ * Mirrors the desktop contract (backend/pkg/contract/kanban.go, surfaced to the
+ * renderer as KANBAN_COLUMNS). The daemon has always sent this; mobile simply
+ * discarded it and re-derived its own grouping, which is how the two boards
+ * came to disagree about the same session.
+ */
+export const KANBAN_COLUMNS = ["building", "validating", "needs_review", "ready", "archive"] as const;
+export type KanbanColumn = (typeof KANBAN_COLUMNS)[number];
+
+export function isKanbanColumn(value: string | null | undefined): value is KanbanColumn {
+	return !!value && (KANBAN_COLUMNS as readonly string[]).includes(value);
+}
+
+export type SessionProvisionStep = {
+	id: "fetch" | "worktree" | "setup" | "agent";
+	status: "pending" | "running" | "done";
+	startedAt?: string;
+	endedAt?: string;
+};
+
 export type DashboardSession = {
 	id: string;
 	projectId: string;
 	/** Opaque daemon runtime handle used only for terminal mux operations. */
 	terminalHandleId?: string;
 	status: string | null;
+	/** The daemon's own board placement. Absent on a daemon too old to send it. */
+	kanbanColumn?: KanbanColumn | null;
+	/**
+	 * The daemon's phrase for what is happening inside that column — richer than
+	 * `status` ("Awaiting PR", "Fixing CI failures"), and already localized on the
+	 * wire so clients print it without a mapping table.
+	 */
+	displayStatus?: string | null;
 	attentionLevel?: AttentionLevel | string | null;
 	activity?: string | null;
 	// Which agent CLI drives this session (claude-code, codex, …). Parsed off the
 	// wire but discarded until the orchestrator tab needed it for brand marks.
 	harness?: string | null;
+	reviewerHarness?: string | null;
+	reviewerConfig?: ReviewerAgentConfig;
 	/** Controller currently committed for this AO session. */
 	mode: SessionMode;
 	branch: string | null;
@@ -55,6 +92,12 @@ export type DashboardSession = {
 	summary: string | null;
 	createdAt: string;
 	lastActivityAt: string;
+	/**
+	 * When something a person would notice last happened (activity-state change,
+	 * PR lifecycle or CI change, review). Absent from daemons that predate it;
+	 * read it through `eventAtOf`, which falls back.
+	 */
+	lastEventAt?: string;
 	pr?: DashboardPR | null;
 	prs?: DashboardPR[];
 	metadata?: Record<string, string>;
@@ -65,8 +108,24 @@ export type DashboardSession = {
 	// finished status: a merged session whose agent is still running belongs on
 	// the board, only a terminated one belongs in the archive.
 	isTerminated?: boolean;
+	provisionState?: "provisioning" | "ready" | "failed";
+	provisionError?: string;
+	/** The daemon's start-up stages while a Chat session provisions. Absent from older daemons. */
+	provisionSteps?: SessionProvisionStep[];
+	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
+	branchNaming?: boolean;
+	/** worker or orchestrator. Absent from rows built before the daemon named kinds. */
+	kind?: string;
+	/** When the stored row last changed. The archive is ordered by it, as on desktop. */
+	updatedAt?: string;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
+	/** Automatically review each new pull-request head. */
+	autoReviewEnabled?: boolean;
+	/** Automatically deliver completed review feedback to the worker. */
+	autoInjectReview?: boolean;
+	/** Automatically deliver failing CI checks to the worker. */
+	autoInjectCI?: boolean;
 };
 
 export type OrchestratorLink = {
@@ -99,6 +158,7 @@ export type ProjectDetail = ProjectInfo & {
 	config?: {
 		agentConfig?: { model?: string };
 		worker?: { agent?: string; agentConfig?: { model?: string } };
+		reviewers?: { harness?: string }[];
 	};
 };
 
@@ -116,8 +176,54 @@ export type SessionsResponse = {
 	stats: DashboardStats;
 	// Returned here so callers don't fetch /projects a second time — getSessions
 	// already needs it to label orchestrators.
-	projects: ProjectInfo[];
+	//
+	// Null when the /projects request itself failed, which is NOT the same fact
+	// as an empty list: the board judges a saved project filter against this, so
+	// folding a failure into [] told it every project was gone (#5058 review).
+	projects: ProjectInfo[] | null;
+	/**
+	 * The archive's size, when the daemon pages it: `sessions` then holds live
+	 * workers only and archived ones are fetched with getArchivedSessions. Null on
+	 * (or absent on) a daemon that predates paging, whose `sessions` still carries
+	 * the archive.
+	 */
+	archive?: ArchiveSummary | null;
 };
+
+
+export type { ArchiveSummary } from "./archive/archiveSummary";
+
+/** One page of a machine's archive, in the daemon's order (pinned, then most recently updated). */
+export type ArchivePage = { sessions: DashboardSession[]; nextCursor: string | null };
+
+/** Archived workers fetched per page when Archive is opened. */
+export const ARCHIVE_PAGE_SIZE = 50;
+
+// Machines whose daemon answered the live-only poll without an archive summary.
+// They predate paging, so they are polled for the full list as before. Checked
+// again now and then, so a daemon upgraded under a running app is picked up.
+const legacyArchiveHosts = new Map<string, number>();
+const LEGACY_ARCHIVE_RECHECK_MS = 15 * 60_000;
+
+/** Forget which machines answered like an older daemon. For tests. */
+export function resetArchivePagingProbes(): void {
+	legacyArchiveHosts.clear();
+}
+
+function archiveHostKey(cfg: ServerConfig): string {
+	return cfg.hostId ?? `${cfg.host}:${cfg.httpPort}`;
+}
+
+function wireArchiveSummary(raw: unknown): ArchiveSummary | null {
+	if (!raw || typeof raw !== "object") return null;
+	const { total, byProject } = raw as { total?: unknown; byProject?: unknown };
+	if (typeof total !== "number") return null;
+	const counts: Record<string, number> = {};
+	if (byProject && typeof byProject === "object") {
+		for (const [project, count] of Object.entries(byProject)) if (typeof count === "number") counts[project] = count;
+	}
+	return { total, byProject: counts };
+}
 
 // ---- Wire types (this repo's Go daemon, /api/v1/*) --------------------------
 //
@@ -133,28 +239,42 @@ type WirePR = {
 	state?: string; // draft | open | merged | closed
 	ci?: string; // unknown | pending | passing | failing
 	review?: string; // none | approved | changes_requested | review_required
-	mergeability?: string; // unknown | mergeable | conflicting | blocked | unstable
+	mergeability?: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
 	reviewComments?: boolean;
 };
 
 type WireSession = {
 	id: string;
-	projectId: string;
+	// Absent for a standalone agent session: the daemon marks the field
+	// omitempty and a standalone session has no project to name.
+	projectId?: string;
 	terminalHandleId?: string;
 	issueId?: string;
 	kind?: string; // worker | orchestrator
 	harness?: string;
+	reviewerHarness?: string;
+	reviewerConfig?: ReviewerAgentConfig;
 	mode?: SessionMode;
 	displayName?: string;
 	activity?: unknown;
 	isTerminated?: boolean;
+	provisionState?: "provisioning" | "ready" | "failed";
+	provisionError?: string;
+	provisionSteps?: SessionProvisionStep[];
+	branchNaming?: boolean;
 	status?: string | null;
+	kanbanColumn?: string | null;
+	displayStatus?: string | null;
 	branch?: string;
 	createdAt?: string;
 	updatedAt?: string;
+	lastEventAt?: string;
 	previewUrl?: string;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
+	autoReviewEnabled?: boolean;
+	autoInjectReview?: boolean;
+	autoInjectCI?: boolean;
 	prs?: WirePR[];
 };
 
@@ -178,6 +298,7 @@ function mapProjectKind(kind?: string): ProjectInfo["kind"] {
 
 function mapPR(pr: WirePR): DashboardPR {
 	const ci = pr.ci === "passing" || pr.ci === "failing" || pr.ci === "pending" ? pr.ci : "none";
+	const mergeability = pr.mergeability ?? "unknown";
 	const review =
 		pr.review === "approved"
 			? "approved"
@@ -194,7 +315,7 @@ function mapPR(pr: WirePR): DashboardPR {
 		isDraft: pr.state === "draft",
 		ciStatus: ci,
 		reviewDecision: review,
-		mergeability: { mergeable: pr.mergeability === "mergeable" },
+		mergeability: { state: mergeability, mergeable: mergeability === "mergeable" },
 		unresolvedThreads: pr.reviewComments ? 1 : 0,
 	};
 }
@@ -217,11 +338,17 @@ function mapSession(s: WireSession): DashboardSession {
 	const prs = (s.prs ?? []).map(mapPR);
 	return {
 		id: s.id,
-		projectId: s.projectId,
+		// "" rather than undefined: every consumer treats the id as a string, and
+		// `shortLabel(undefined)` threw inside render and took the whole board down.
+		projectId: s.projectId ?? "",
 		terminalHandleId: s.terminalHandleId,
 		status: s.status ?? null,
+		kanbanColumn: isKanbanColumn(s.kanbanColumn) ? s.kanbanColumn : null,
+		displayStatus: s.displayStatus?.trim() || null,
 		activity: activityString(s.activity),
 		harness: s.harness ?? null,
+		reviewerHarness: s.reviewerHarness ?? null,
+		reviewerConfig: s.reviewerConfig,
 		mode: s.mode === "chat" ? "chat" : "tui",
 		branch: s.branch ?? null,
 		issueId: s.issueId ?? null,
@@ -231,19 +358,29 @@ function mapSession(s: WireSession): DashboardSession {
 		summary: null,
 		createdAt: s.createdAt ?? "",
 		lastActivityAt: activityLastAt(s.activity) ?? s.updatedAt ?? s.createdAt ?? "",
+		lastEventAt: s.lastEventAt || undefined,
 		pr: prs[0] ?? null,
 		prs,
 		previewUrl: s.previewUrl ?? null,
 		isTerminated: !!s.isTerminated,
+		provisionState: s.provisionState,
+		provisionError: s.provisionError,
+		provisionSteps: s.provisionSteps?.length ? s.provisionSteps : undefined,
+		branchNaming: !!s.branchNaming,
 		isPinned: !!s.isPinned,
 		pinnedAt: s.pinnedAt ?? null,
+		kind: s.kind || undefined,
+		updatedAt: s.updatedAt || undefined,
+		autoReviewEnabled: !!s.autoReviewEnabled,
+		autoInjectReview: s.autoInjectReview ?? true,
+		autoInjectCI: s.autoInjectCI ?? true,
 	};
 }
 
 function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink {
 	return {
 		id: s.id,
-		projectId: s.projectId,
+		projectId: s.projectId ?? "",
 		terminalHandleId: s.terminalHandleId,
 		projectName,
 		status: s.status ?? null,
@@ -260,6 +397,12 @@ function mapOrchestrator(s: WireSession, projectName: string): OrchestratorLink 
 // ---- Low-level fetch with friendly errors ----------------------------------
 
 const REQUEST_TIMEOUT_MS = 12000;
+const DISCONNECT_REQUEST_TIMEOUT_MS = 2000;
+// The daemon gives attachment uploads 10 minutes; allow time for its response.
+// A cold agent resume spawns the chat host and reloads the transcript; the
+// daemon allows the driver 60s for that and cancels it if the client gives up.
+export const RESUME_REQUEST_TIMEOUT_MS = 70_000;
+export const ATTACHMENT_REQUEST_TIMEOUT_MS = 11 * 60_000;
 
 // The server answered, but with an error status. Distinct from the errors fetch
 // itself throws (DNS/refused/timeout), which mean the server was never reached —
@@ -277,6 +420,9 @@ export class ApiError extends Error {
 		// Correlates a client-visible failure with daemon logs. The daemon's error
 		// envelope guarantees this field, so mobile must not discard it.
 		readonly requestId?: string,
+		// The daemon's human-readable message alone, without the status prefix.
+		// Screens render this (via userFacingError), never `message`.
+		readonly detail?: string,
 	) {
 		super(message);
 		this.name = "ApiError";
@@ -288,39 +434,64 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 	// Without a timeout a sleeping/unreachable host (common over Tailscale) hangs
 	// the call for the OS TCP timeout (~75-120s), freezing Kill/send and the poll.
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), timeoutMs);
-	let res: Response;
+	const abortError = () => Object.assign(new Error("Request cancelled"), { name: "AbortError" });
+	if (init?.signal?.aborted) throw abortError();
+	const cancel = () => controller.abort();
+	init?.signal?.addEventListener("abort", cancel);
+	let rejectAbort!: () => void;
+	const aborted = new Promise<never>((_resolve, reject) => {
+		rejectAbort = () => reject(abortError());
+		controller.signal.addEventListener("abort", rejectAbort);
+	});
+	const timer = setTimeout(cancel, timeoutMs);
+	let received: Response | undefined;
+	let bodyText = "";
 	try {
 		const installId = cachedInstallId();
-		res = await fetch(url, {
-			...init,
-			signal: controller.signal,
-			headers: {
-				...authHeaders(cfg),
-				"Content-Type": "application/json",
-				...(installId ? { "X-AO-Install-Id": installId } : {}),
-				...(init?.headers ?? {}),
-			},
-		});
+		await Promise.race([aborted, (async () => {
+			received = await fetch(url, {
+				...init,
+				signal: controller.signal,
+				headers: {
+					...authHeaders(cfg),
+					"Content-Type": "application/json",
+					...(installId ? { "X-AO-Install-Id": installId } : {}),
+					...(init?.headers ?? {}),
+				},
+			});
+			// This boundary serves finite JSON responses, not SSE or downloads.
+			// Finish loading here so writes with no body consumer also release their
+			// timer, and /sessions cannot fan out while its body is still stalled.
+			bodyText = await received.text();
+		})()]);
 	} catch (e) {
-		if ((e as { name?: string })?.name === "AbortError") {
+		// Leaving a screen/host is not a connectivity failure. The poll owner
+		// invalidates its result before cancelling the shared request lifecycle.
+		if (init?.signal?.aborted) throw abortError();
+		if (received && !received.ok) {
+			// Headers already prove an auth/contract failure even if its optional
+			// error envelope stalls. Never turn a 401 into a retryable timeout.
+		} else if ((e as { name?: string })?.name === "AbortError") {
 			// Timed out reaching the host (commonly a sleeping Tailscale peer).
 			captureMobileApiError(path, "timeout");
-			throw new Error("Request timed out - is the server reachable?", { cause: e });
+			throw new UnreachableError("timeout", { cause: e });
+		} else {
+			captureMobileApiError(path, "offline");
+			throw new UnreachableError("offline", { cause: e });
 		}
-		// fetch threw without reaching the server: DNS/refused/offline.
-		captureMobileApiError(path, "offline");
-		throw e;
 	} finally {
 		clearTimeout(timer);
+		init?.signal?.removeEventListener("abort", cancel);
+		controller.signal.removeEventListener("abort", rejectAbort);
 	}
+	const res = received!;
 	if (!res.ok) {
 		// The daemon returns a locked JSON envelope: { error, code, message, requestId }.
 		let detail = "";
 		let code: string | undefined;
 		let requestId: string | undefined;
 		try {
-			const body = await res.json();
+			const body = JSON.parse(bodyText);
 			detail = body?.message ?? body?.error ?? "";
 			code = typeof body?.code === "string" ? body.code : undefined;
 			requestId = typeof body?.requestId === "string" ? body.requestId : undefined;
@@ -335,9 +506,14 @@ async function req(cfg: ServerConfig, path: string, init?: RequestInit, timeoutM
 			`${res.status} ${res.statusText}${detail ? ` - ${detail}` : ""}`,
 			code,
 			requestId,
+			detail || undefined,
 		);
 	}
-	return res;
+	// Keep the existing Response interface for callers; the network body is
+	// already complete. Empty-response statuses cannot carry a Response body.
+	return new Response([204, 205, 304].includes(res.status) ? null : bodyText, {
+		status: res.status, statusText: res.statusText, headers: res.headers,
+	});
 }
 
 /** Shared authenticated JSON request boundary for focused mobile feature modules. */
@@ -347,8 +523,8 @@ export function apiRequest(cfg: ServerConfig, path: string, init?: RequestInit, 
 
 // ---- Reads ------------------------------------------------------------------
 
-export async function getProjects(cfg: ServerConfig): Promise<ProjectInfo[]> {
-	const res = await req(cfg, `${API}/projects`);
+export async function getProjects(cfg: ServerConfig, init?: Pick<RequestInit, "signal">): Promise<ProjectInfo[]> {
+	const res = await req(cfg, `${API}/projects`, init);
 	const data = await res.json();
 	const projects = Array.isArray(data?.projects) ? data.projects : [];
 	return projects.map((p: WireProject) => ({
@@ -365,7 +541,7 @@ export async function getProject(cfg: ServerConfig, id: string): Promise<Project
 	return (data?.project ?? data) as ProjectDetail;
 }
 
-export async function getSessions(cfg: ServerConfig, _projectId?: string): Promise<SessionsResponse> {
+export async function getSessions(cfg: ServerConfig, _projectId?: string, init?: Pick<RequestInit, "signal">): Promise<SessionsResponse> {
 	// The daemon exposes sessions and orchestrators as two lists. Fetch both,
 	// keep worker sessions for the board, and map orchestrators for their screen.
 	//
@@ -376,14 +552,40 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string): Promi
 	// ticks and make the user's next action, typically scanning a fresh pairing
 	// code, fail with 429 before the new password was ever checked. Probing first
 	// caps a bad-credential tick at a single failed attempt.
-	const sessRes = await req(cfg, `${API}/sessions`);
+	//
+	// The poll asks for live workers only, with the archive's size: the archive is
+	// most of a long-running machine's sessions, and over a tunnel the poll runs
+	// every two seconds. A daemon that predates paging leaves the summary out;
+	// that machine is then polled for everything, as before.
+	const hostKey = archiveHostKey(cfg);
+	const legacySince = legacyArchiveHosts.get(hostKey);
+	const tryPaged = legacySince === undefined || Date.now() - legacySince > LEGACY_ARCHIVE_RECHECK_MS;
+	let sessRes = await req(cfg, tryPaged ? `${API}/sessions?active=true&kind=worker` : `${API}/sessions`, init);
+	let sessData = await sessRes.json();
+	let archive = tryPaged ? wireArchiveSummary(sessData?.archived) : null;
+	if (tryPaged) {
+		if (archive) legacyArchiveHosts.delete(hostKey);
+		else {
+			legacyArchiveHosts.set(hostKey, Date.now());
+			// A daemon older still ignores `active` and has already sent everything,
+			// archived rows included; only one that filtered must be asked again.
+			const ignoredFilter = Array.isArray(sessData?.sessions) && sessData.sessions.some((s: WireSession) => s.isTerminated);
+			if (!ignoredFilter) {
+				sessRes = await req(cfg, `${API}/sessions`, init);
+				sessData = await sessRes.json();
+			}
+		}
+	}
+	// A failed /projects is reported as null rather than [] so a caller can tell
+	// "this daemon has no projects" from "we could not ask". It stays caught: an
+	// older daemon, or one blip on that one route, must not knock the board
+	// offline when /sessions answered fine.
 	const [orchRes, projects] = await Promise.all([
-		req(cfg, `${API}/orchestrators`),
-		getProjects(cfg).catch(() => [] as ProjectInfo[]),
+		req(cfg, `${API}/orchestrators`, init),
+		getProjects(cfg, init).catch(() => null),
 	]);
-	const sessData = await sessRes.json();
 	const orchData = await orchRes.json();
-	const nameOf = new Map(projects.map((p) => [p.id, p.name]));
+	const nameOf = new Map((projects ?? []).map((p) => [p.id, p.name]));
 
 	const rawSessions: WireSession[] = Array.isArray(sessData?.sessions) ? sessData.sessions : [];
 	const rawOrchestrators: WireSession[] = Array.isArray(orchData?.sessions) ? orchData.sessions : [];
@@ -397,37 +599,70 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string): Promi
 	// is actually running.
 	const bestByProject = new Map<string, WireSession>();
 	for (const s of rawOrchestrators) {
+		// An orchestrator belongs to a project by definition; one without is not
+		// something this screen can show or restart.
+		if (!s.projectId) continue;
 		const cur = bestByProject.get(s.projectId);
 		// Keep a live orchestrator once found; otherwise take the later entry
 		// (the daemon lists them oldest to newest).
 		if (!cur || cur.isTerminated) bestByProject.set(s.projectId, s);
 	}
 	const orchestrators = [...bestByProject.values()].map((s) =>
-		mapOrchestrator(s, nameOf.get(s.projectId) ?? s.projectId),
+		mapOrchestrator(s, nameOf.get(s.projectId ?? "") ?? s.projectId ?? ""),
 	);
 
-	return { sessions, orchestrators, orchestratorId: null, stats: {}, projects };
+	return { sessions, orchestrators, orchestratorId: null, stats: {}, projects, archive };
+}
+
+/**
+ * One page of a machine's archived workers. Only for a daemon whose poll
+ * reported an archive summary (see getSessions); an older one carries its
+ * archive in the poll itself.
+ */
+export async function getArchivedSessions(
+	cfg: ServerConfig,
+	options: { cursor?: string | null; projectId?: string; limit?: number } = {},
+	init?: Pick<RequestInit, "signal">,
+): Promise<ArchivePage> {
+	const query = new URLSearchParams({ active: "false", kind: "worker", limit: String(options.limit ?? ARCHIVE_PAGE_SIZE) });
+	if (options.cursor) query.set("cursor", options.cursor);
+	if (options.projectId) query.set("project", options.projectId);
+	const res = await req(cfg, `${API}/sessions?${query}`, init);
+	const data = await res.json();
+	const raw: WireSession[] = Array.isArray(data?.sessions) ? data.sessions : [];
+	return {
+		// The daemon has already filtered these; kept defensively so a row that is
+		// live by the time it lands can never be drawn as archived.
+		sessions: raw.filter((s) => s.kind !== "orchestrator" && s.isTerminated).map(mapSession),
+		nextCursor: typeof data?.nextCursor === "string" && data.nextCursor ? data.nextCursor : null,
+	};
 }
 
 // ---- Preview (in-app browser) ----------------------------------------------
 
-// Ask the daemon whether this session has a detectable static preview entry
-// (index.html, or dist/build/public/index.html). Returns a URL the in-app
-// WebView can load, or null when no entry exists yet - the button then reports
-// "no preview". We build the URL from our own base (httpBase honors the TLS
-// toggle) rather than the daemon's `previewUrl`, which hardcodes http:// + its
-// request host and would break over a TLS tunnel (e.g. tailscale serve).
-export async function getPreview(cfg: ServerConfig, id: string, preferredURL?: string): Promise<{ entry: string; url: string; authenticated: boolean } | null> {
+// Load the session's selected app preview, never a discovered repository file.
+// Build static URLs from our configured base so TLS tunnels stay on HTTPS.
+/**
+ * The daemon's preview-files route for a workspace path, each segment escaped.
+ * Shared by the preview button and chat attachment images so the route shape
+ * lives in one place.
+ */
+export function previewFilePath(sessionId: string, path: string): string {
+	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+export async function getPreview(cfg: ServerConfig, id: string): Promise<{ entry: string; url: string; authenticated: boolean } | null> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/preview`);
 	const data = await res.json();
 	const entry = typeof data?.entry === "string" ? data.entry.trim() : "";
 	if (entry) {
-		// Mirror the daemon's files route: /preview/files/<entry>, each segment escaped.
-		const escaped = entry.split("/").map(encodeURIComponent).join("/");
-		const url = `${httpBase(cfg)}${API}/sessions/${encodeURIComponent(id)}/preview/files/${escaped}`;
+		const path = data?.source === "artifact"
+			? `${API}/sessions/${encodeURIComponent(id)}/preview/artifacts/${entry.split("/").map(encodeURIComponent).join("/")}`
+			: previewFilePath(id, entry);
+		const url = `${httpBase(cfg)}${path}`;
 		return { entry, url, authenticated: true };
 	}
-	const external = mobileReachablePreviewURL(preferredURL, cfg.host);
+	const external = mobileReachablePreviewURL(typeof data?.previewUrl === "string" ? data.previewUrl : undefined, cfg.host);
 	return external ? { entry: external.hostname, url: external.href, authenticated: false } : null;
 }
 
@@ -453,7 +688,7 @@ export function mobileReachablePreviewURL(raw: string | undefined, aoHost: strin
 export type AgentInfo = {
 	id: string;
 	label: string;
-	authStatus?: "authorized" | "unauthorized" | "unknown";
+	authStatus?: "authorized" | "unauthorized" | "unknown" | "configured";
 };
 
 export type AgentCatalog = {
@@ -473,6 +708,7 @@ export type AgentModelCatalog = {
 	fetchedAt: string;
 	validatedAt?: string;
 	refreshRecommended?: boolean;
+	refreshState?: "idle" | "queued" | "refreshing" | "error";
 	warning?: string;
 };
 
@@ -487,6 +723,24 @@ export async function getSettings(cfg: ServerConfig): Promise<AOSettings> {
 	return {
 		defaultSessionMode: data?.defaultSessionMode === "tui" ? "tui" : "chat",
 		chatHarnesses: Array.isArray(data?.chatHarnesses) ? data.chatHarnesses.filter((value: unknown): value is string => typeof value === "string") : [],
+	};
+}
+
+/**
+ * The paired desktop's telemetry identity and opt-out. Older daemons without the
+ * route answer 404 (ApiError); callers treat any failure as "no identity" and
+ * keep the phone anonymous.
+ */
+export async function getTelemetryIdentity(cfg: ServerConfig): Promise<DesktopTelemetryIdentity> {
+	const res = await req(cfg, `${API}/telemetry/identity`);
+	const data = await res.json();
+	const str = (value: unknown) => (typeof value === "string" && value !== "" ? value : undefined);
+	return {
+		distinctId: str(data?.distinctId),
+		installId: str(data?.installId),
+		cloudUserId: str(data?.cloudUserId),
+		githubLogin: str(data?.githubLogin),
+		optedOut: data?.optedOut === true,
 	};
 }
 
@@ -510,10 +764,41 @@ export async function refreshAgents(cfg: ServerConfig): Promise<AgentCatalog> {
 	};
 }
 
-export async function getAgentModels(cfg: ServerConfig, agent: string, projectId?: string): Promise<AgentModelCatalog> {
+// The daemon answers an agent it has never discovered with an empty catalog
+// marked refreshing while discovery runs in the background, rather than making
+// the picker wait. Re-read until the discovered list arrives.
+const MODEL_CATALOG_REFRESH_POLL_MS = 1_500;
+
+function pollDelay(signal: AbortSignal | undefined): Promise<void> {
+	return new Promise((resolve) => {
+		const finish = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, MODEL_CATALOG_REFRESH_POLL_MS);
+		signal?.addEventListener("abort", finish, { once: true });
+		if (signal?.aborted) finish();
+	});
+}
+
+/**
+ * Loads an agent's model catalog, re-reading while the daemon is still
+ * discovering it. There is no attempt cap: the daemon bounds discovery (a
+ * readiness wait, then discovery's own timeout) and then saves a result, so a
+ * cold load ends with models or an error. `signal` stops polling when the view
+ * that asked closes.
+ */
+export async function getAgentModels(cfg: ServerConfig, agent: string, projectId?: string, signal?: AbortSignal): Promise<AgentModelCatalog> {
 	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
-	const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
-	return await res.json() as AgentModelCatalog;
+	for (;;) {
+		const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
+		const catalog = await res.json() as AgentModelCatalog;
+		const discovering = catalog?.refreshState === "refreshing" && !catalog.models?.length;
+		if (!discovering || signal?.aborted) return catalog;
+		await pollDelay(signal);
+		if (signal?.aborted) return catalog;
+	}
 }
 
 export async function refreshAgentModels(cfg: ServerConfig, agent: string, projectId?: string): Promise<AgentModelCatalog> {
@@ -528,7 +813,7 @@ export async function refreshAgentModels(cfg: ServerConfig, agent: string, proje
 // its dispatcher can deliver OS push notifications. Keyed daemon-side by install ID.
 export async function registerPushDevice(
 	cfg: ServerConfig,
-	device: { token: string; platform?: string; deviceName?: string },
+	device: { token: string; platform?: string; deviceName?: string; hostName?: string },
 ): Promise<void> {
 	const installId = await getInstallId();
 	await req(cfg, `${API}/push/devices`, {
@@ -568,7 +853,7 @@ export async function unregisterPushDevice(cfg: ServerConfig, token: string): Pr
 // Prefers the install id and falls back to the token so the call still works
 // from a build that predates install ids.
 export async function unpairFromDaemon(cfg: ServerConfig, id: string): Promise<void> {
-	await req(cfg, `${API}/push/pairings/${encodeURIComponent(id)}`, { method: "DELETE" });
+	await req(cfg, `${API}/push/pairings/${encodeURIComponent(id)}`, { method: "DELETE" }, DISCONNECT_REQUEST_TIMEOUT_MS);
 }
 
 // Mark a notification read (best-effort on notification tap) so unread counts
@@ -580,9 +865,29 @@ export async function markNotificationRead(cfg: ServerConfig, id: string): Promi
 	});
 }
 
+export async function clearNotification(cfg: ServerConfig, id: string): Promise<void> {
+	try {
+		await req(cfg, `${API}/notifications/${encodeURIComponent(id)}`, { method: "DELETE" });
+	} catch (cause) {
+		// Another client may have cleared the same row already.
+		if (!(cause instanceof ApiError) || cause.status !== 404 || cause.code !== "NOTIFICATION_NOT_FOUND") throw cause;
+	}
+}
+
+// Clears the machine's whole history, not just the rows the screen has loaded.
+export async function clearAllNotifications(cfg: ServerConfig): Promise<void> {
+	await req(cfg, `${API}/notifications`, { method: "DELETE" });
+}
+
 // ---- Notification history ---------------------------------------------------
 
-export type NotificationType = "needs_input" | "ready_to_merge" | "pr_merged" | "pr_closed_unmerged";
+export type NotificationType =
+	| "needs_input"
+	| "ready_to_merge"
+	| "pr_merged"
+	| "pr_closed_unmerged"
+	| "review_completed"
+	| "review_changes_requested";
 
 export type NotificationRecord = {
 	id: string;
@@ -608,13 +913,14 @@ export type NotificationPage = {
 export async function getNotifications(
 	cfg: ServerConfig,
 	opts: { status?: "unread" | "all"; limit?: number; cursor?: string } = {},
+	init?: Pick<RequestInit, "signal">,
 ): Promise<NotificationPage> {
 	const qs = new URLSearchParams();
 	if (opts.status) qs.set("status", opts.status);
 	if (opts.limit) qs.set("limit", String(opts.limit));
 	if (opts.cursor) qs.set("cursor", opts.cursor);
 	const suffix = qs.toString() ? `?${qs}` : "";
-	const res = await req(cfg, `${API}/notifications${suffix}`);
+	const res = await req(cfg, `${API}/notifications${suffix}`, init);
 	const data = await res.json();
 	return {
 		notifications: Array.isArray(data?.notifications) ? data.notifications : [],
@@ -623,8 +929,13 @@ export async function getNotifications(
 	};
 }
 
-export async function markAllNotificationsRead(cfg: ServerConfig): Promise<void> {
-	await req(cfg, `${API}/notifications/read-all`, { method: "POST" });
+// With ids, only those rows are marked, so unread rows on pages the screen has
+// not loaded yet stay unread. Without ids, every unread row on the machine is.
+export async function markAllNotificationsRead(cfg: ServerConfig, ids?: string[]): Promise<void> {
+	await req(cfg, `${API}/notifications/read-all`, {
+		method: "POST",
+		...(ids && ids.length > 0 ? { body: JSON.stringify({ ids }) } : {}),
+	});
 }
 
 // ---- Pull request detail ----------------------------------------------------
@@ -639,7 +950,32 @@ export async function markAllNotificationsRead(cfg: ServerConfig): Promise<void>
 
 export type PRFailingCheck = { name: string; status?: string; conclusion?: string; url?: string };
 export type PRConflictFile = { path: string; url?: string };
-export type PRUnresolvedReviewer = { reviewerId: string; count: number; reviewUrl?: string; isBot?: boolean };
+export type PRReviewCommentLink = {
+	url?: string;
+	reviewId?: string;
+	file?: string;
+	line?: number;
+	body?: string;
+	autoInjectReview: boolean;
+};
+
+export type PRUnresolvedReviewer = {
+	reviewerId: string;
+	count: number;
+	links: PRReviewCommentLink[];
+	reviewUrl?: string;
+	isBot?: boolean;
+};
+
+export type PRReviewEntry = {
+	reviewerId: string;
+	verdict: "none" | "approved" | "changes_requested" | "review_required";
+	body?: string;
+	reviewUrl?: string;
+	submittedAt: string;
+	isBot?: boolean;
+	autoInjectReview: boolean;
+};
 
 export type SessionPRSummary = {
 	url: string;
@@ -649,6 +985,8 @@ export type SessionPRSummary = {
 	state: "draft" | "open" | "merged" | "closed";
 	repo: string;
 	author: string;
+	/** The head commit the merge is fenced to, so a newer push is never merged unseen. */
+	headSha?: string;
 	sourceBranch: string;
 	targetBranch: string;
 	additions: number;
@@ -659,6 +997,8 @@ export type SessionPRSummary = {
 		decision: "none" | "approved" | "changes_requested" | "review_required";
 		hasUnresolvedHumanComments: boolean;
 		unresolvedBy: PRUnresolvedReviewer[];
+		resolvedBy?: PRUnresolvedReviewer[];
+		reviews?: PRReviewEntry[];
 	};
 	mergeability: {
 		state: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
@@ -669,10 +1009,156 @@ export type SessionPRSummary = {
 	updatedAt?: string;
 };
 
+/** Squash-merges a session PR the way desktop does, fenced to the head commit on screen. */
+export async function mergeSessionPR(cfg: ServerConfig, pr: Pick<SessionPRSummary, "number" | "url" | "headSha">): Promise<void> {
+	if (!pr.headSha) throw new Error(`PR #${pr.number} has no head commit yet; refresh and try again.`);
+	await req(cfg, `${API}/prs/${encodeURIComponent(String(pr.number))}/merge`, {
+		method: "POST",
+		body: JSON.stringify({ prUrl: pr.url, expectedHeadSha: pr.headSha }),
+	});
+}
+
 export async function getSessionPR(cfg: ServerConfig, sessionId: string): Promise<SessionPRSummary[]> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/pr`);
 	const data = await res.json();
 	return Array.isArray(data?.prs) ? data.prs : [];
+}
+
+// ---- AO review detail ------------------------------------------------------
+
+export type ReviewRun = {
+	id: string;
+	reviewId: string;
+	sessionId: string;
+	batchId: string;
+	harness: string;
+	triggerSource: "manual" | "auto";
+	prUrl: string;
+	targetSha: string;
+	status: "running" | "complete" | "delivered" | "failed" | "cancelled";
+	verdict: "" | "approved" | "changes_requested";
+	body: string;
+	githubReviewId: string;
+	createdAt: string;
+	deliveredAt?: string | null;
+	autoInjectReview: boolean;
+};
+
+export type PRReviewState = {
+	prUrl: string;
+	prNumber: number;
+	title: string;
+	targetSha: string;
+	status: "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
+	latestRun?: ReviewRun;
+	previousRun?: ReviewRun;
+};
+
+export type ReviewerSurface = {
+	mode: "chat" | "tui";
+	reviewId: string;
+	harness: string;
+	handleId?: string;
+	controllerError?: string;
+};
+
+export type SessionReviews = {
+	reviewerHandleId: string;
+	reviewerHarness?: string;
+	reviewerActivityState?: "active" | "idle" | "waiting_input" | "blocked" | "exited";
+	reviewerSurface?: ReviewerSurface;
+	reviews: PRReviewState[];
+	runs: ReviewRun[];
+};
+
+export type ReviewerAgentConfig = {
+	effort?: string;
+	mode?: string;
+	model?: string;
+	permissions?: string;
+};
+
+export async function getSessionReviews(cfg: ServerConfig, sessionId: string): Promise<SessionReviews> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews`);
+	const data = await res.json();
+	return {
+		reviewerHandleId: typeof data?.reviewerHandleId === "string" ? data.reviewerHandleId : "",
+		reviewerHarness: typeof data?.reviewerHarness === "string" ? data.reviewerHarness : undefined,
+		reviewerActivityState: data?.reviewerActivityState,
+		reviewerSurface: data?.reviewerSurface,
+		reviews: Array.isArray(data?.reviews) ? data.reviews : [],
+		runs: Array.isArray(data?.runs) ? data.runs : [],
+	};
+}
+
+export async function triggerSessionReview(cfg: ServerConfig, sessionId: string): Promise<SessionReviews & { created: boolean }> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/trigger`, { method: "POST" });
+	const data = await res.json();
+	return { ...mapSessionReviews(data), created: data?.created === true };
+}
+
+export async function cancelSessionReview(cfg: ServerConfig, sessionId: string): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/cancel`, { method: "POST" });
+}
+
+export async function restoreSessionReviewer(cfg: ServerConfig, sessionId: string): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/restore`, { method: "POST" });
+}
+
+export async function killSessionReviewer(cfg: ServerConfig, sessionId: string): Promise<SessionReviews> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/kill`, { method: "POST" });
+	return mapSessionReviews(await res.json());
+}
+
+export async function switchSessionReviewer(
+	cfg: ServerConfig,
+	sessionId: string,
+	harness?: string,
+	agentConfig?: ReviewerAgentConfig,
+): Promise<SessionReviews> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/switch`, {
+		method: "POST",
+		body: JSON.stringify({
+			...(harness ? { harness } : {}),
+			...(agentConfig ? { agentConfig } : {}),
+		}),
+	});
+	return mapSessionReviews(await res.json());
+}
+
+function mapSessionReviews(data: any): SessionReviews {
+	return {
+		reviewerHandleId: typeof data?.reviewerHandleId === "string" ? data.reviewerHandleId : "",
+		reviewerHarness: typeof data?.reviewerHarness === "string" ? data.reviewerHarness : undefined,
+		reviewerActivityState: data?.reviewerActivityState,
+		reviewerSurface: data?.reviewerSurface,
+		reviews: Array.isArray(data?.reviews) ? data.reviews : [],
+		runs: Array.isArray(data?.runs) ? data.runs : [],
+	};
+}
+
+export async function requestSessionRereview(
+	cfg: ServerConfig,
+	sessionId: string,
+	pullRequestUrl: string,
+	reviewerId: string,
+): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/rerequest`, {
+		method: "POST",
+		body: JSON.stringify({ pullRequestUrl, reviewerId }),
+	});
+}
+
+export async function resolveSessionReviewComment(
+	cfg: ServerConfig,
+	sessionId: string,
+	pullRequestUrl: string,
+	commentUrl: string,
+): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/reviews/comments/resolve`, {
+		method: "POST",
+		body: JSON.stringify({ pullRequestUrl, commentUrl }),
+	});
 }
 
 // ---- Writes / actions -------------------------------------------------------
@@ -681,13 +1167,59 @@ export async function killSession(cfg: ServerConfig, id: string): Promise<void> 
 	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/kill`, { method: "POST" });
 }
 
+/** Rename the worker shown on the board without changing its conversation history. */
+export async function renameSession(cfg: ServerConfig, id: string, displayName: string): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}`, {
+		method: "PATCH",
+		body: JSON.stringify({ displayName }),
+	});
+}
+
+export async function pinSession(cfg: ServerConfig, id: string): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/pin`, { method: "POST" });
+}
+
+export async function unpinSession(cfg: ServerConfig, id: string): Promise<void> {
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/pin`, { method: "DELETE" });
+}
+
+/** Automatically launch a review whenever this session's PR head changes. */
+export async function setSessionAutoReview(cfg: ServerConfig, id: string, enabled: boolean): Promise<DashboardSession> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/auto-review`, {
+		method: "PUT",
+		body: JSON.stringify({ enabled }),
+	});
+	const data = await res.json();
+	return mapSession(data?.session ?? data);
+}
+
+/** Automatically send completed AO and GitHub review feedback to the worker. */
+export async function setSessionAutoInjectReview(cfg: ServerConfig, id: string, autoInjectReview: boolean): Promise<DashboardSession> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/auto-inject-review`, {
+		method: "PATCH",
+		body: JSON.stringify({ autoInjectReview }),
+	});
+	const data = await res.json();
+	return mapSession(data?.session ?? data);
+}
+
+/** Automatically send failing CI checks to the worker. */
+export async function setSessionAutoInjectCI(cfg: ServerConfig, id: string, autoInjectCI: boolean): Promise<DashboardSession> {
+	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/auto-inject-ci`, {
+		method: "PATCH",
+		body: JSON.stringify({ autoInjectCI }),
+	});
+	const data = await res.json();
+	return mapSession(data?.session ?? data);
+}
+
 export async function restoreSession(cfg: ServerConfig, id: string): Promise<void> {
 	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/restore`, { method: "POST" });
 }
 
 /** Restart a stopped agent/controller without restoring a terminated AO session. */
 export async function resumeSessionAgent(cfg: ServerConfig, id: string): Promise<void> {
-	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/resume-agent`, { method: "POST" });
+	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/resume-agent`, { method: "POST" }, RESUME_REQUEST_TIMEOUT_MS);
 }
 
 export async function sendMessage(cfg: ServerConfig, id: string, message: string): Promise<void> {
@@ -699,10 +1231,11 @@ export async function sendMessage(cfg: ServerConfig, id: string, message: string
 
 export async function spawnSession(
 	cfg: ServerConfig,
-	opts: { projectId: string; prompt?: string; issueId?: string; harness?: string; mode?: SessionMode },
+	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions`, {
 		method: "POST",
+		headers: opts.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 		body: JSON.stringify({
 			projectId: opts.projectId,
 			prompt: opts.prompt,
@@ -710,16 +1243,24 @@ export async function spawnSession(
 			// The daemon needs an agent harness unless the project configures a
 			// default worker.agent; the spawn screen lets the user pick one.
 			harness: opts.harness || undefined,
+			model: opts.model || undefined,
 			// Mobile is Chat-first. Callers may deliberately request TUI for a harness
 			// that cannot expose a structured controller, but omission must never make
 			// the phone depend on a desktop preference it cannot see.
 			mode: opts.mode ?? "chat",
 			kind: "worker",
+			attachments: opts.attachments?.length ? opts.attachments : undefined,
+			clientRequestId: opts.clientRequestId,
 		}),
-	});
+	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	const data = await res.json();
 	return mapSession(data?.session ?? data);
 }
+
+export type SpawnAttachmentInput = {
+	mimeType: string;
+	data: string;
+};
 
 export async function getSession(cfg: ServerConfig, id: string): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}`);
@@ -729,20 +1270,23 @@ export async function getSession(cfg: ServerConfig, id: string): Promise<Dashboa
 
 export async function delegateTask(
 	cfg: ServerConfig,
-	opts: { projectId: string; brief: string; agent?: string; model?: string; mode: SessionMode },
+	opts: { projectId: string; brief: string; agent?: string; model?: string; mode: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/orchestrators/delegate`, {
 		method: "POST",
+		headers: opts.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 		body: JSON.stringify({
 			projectId: opts.projectId,
 			brief: opts.brief,
 			agent: opts.agent || undefined,
 			model: opts.model || undefined,
 			mode: opts.mode,
+			attachments: opts.attachments?.length ? opts.attachments : undefined,
+			clientRequestId: opts.clientRequestId,
 		}),
-	});
+	}, opts.attachments?.length ? ATTACHMENT_REQUEST_TIMEOUT_MS : undefined);
 	const data = await res.json();
-	if (!data?.workerId) throw new Error("The daemon did not return the new worker session");
+	if (!data?.workerId) throw new Error("Your machine didn't return the new worker. Refresh the board to check whether it started.");
 	return getSession(cfg, data.workerId);
 }
 

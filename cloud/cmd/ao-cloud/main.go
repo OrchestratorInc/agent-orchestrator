@@ -8,21 +8,32 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/analytics"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/artifactstore"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/billing"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/cifeedback"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/config"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/httpapi"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/idlepause"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/interfacereconcile"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/notification"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/prstatus"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/reconcile"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	coderprovider "github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/createos"
 	dockerprovider "github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/docker"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/freestyle"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandboxresolve"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -73,6 +84,27 @@ func provisioningDefaults(cfg config.Config) sandbox.ProvisioningDefaults {
 			Namespace:      cfg.DockerNamespace,
 			WorkerTokenTTL: cfg.DockerWorkerTokenTTL,
 		},
+		Coder: sandbox.CoderConfig{
+			BaseURL:            cfg.CoderURL,
+			Owner:              cfg.CoderOwner,
+			TemplateID:         cfg.CoderTemplateID,
+			AgentName:          cfg.CoderAgentName,
+			Parameters:         cfg.CoderParameters,
+			DurableRoot:        cfg.CoderDurableRoot,
+			WorkerTokenTTL:     cfg.CoderWorkerTokenTTL,
+			AllowedTemplateIDs: cfg.CoderTemplateIDs,
+			// Rollout flag: off keeps ao-worker sessions in the durable root's
+			// repository folder (see config.Config.CoderWorkerWorkingFolder).
+			WorkerWorkingFolder: cfg.CoderWorkerWorkingFolder,
+		},
+		Freestyle: sandbox.FreestyleConfig{
+			BaseURL:           cfg.FreestyleBaseURL,
+			APIKey:            cfg.FreestyleAPIKey,
+			DefaultSnapshot:   cfg.FreestyleDefaultSnapshot,
+			SnapshotByHarness: cfg.FreestyleSnapshotByHarness,
+			WorkerTokenTTL:    cfg.FreestyleWorkerTokenTTL,
+			AutoPauseSeconds:  cfg.FreestyleAutoPauseSeconds,
+		},
 	}
 }
 
@@ -83,75 +115,177 @@ func provisioningDefaults(cfg config.Config) sandbox.ProvisioningDefaults {
 func newSandboxReconciler(
 	cfg config.Config,
 	store *postgres.Store,
+	providerCipher *secrets.Cipher,
 	logger *slog.Logger,
 ) (*reconcile.Reconciler, error) {
-	if cfg.SandboxProvider != sandbox.ProviderNodeOps &&
-		cfg.SandboxProvider != sandbox.ProviderDocker {
+	// Build every provider this control plane offers, not just the default, so a
+	// single CP can serve more than one provider and a client can pick per
+	// session. AvailableSandboxProviders always contains the default, and is
+	// exactly that default for a single-provider deployment.
+	var (
+		nodeOpsProvider   sandbox.Provider
+		dockerProvider    sandbox.Provider
+		coderProvider     sandbox.Provider
+		freestyleProvider sandbox.Provider
+		buildsProvider    bool
+	)
+	for _, provider := range cfg.AvailableSandboxProviders {
+		switch provider {
+		case sandbox.ProviderNodeOps, sandbox.ProviderDocker, sandbox.ProviderCoder, sandbox.ProviderFreestyle:
+			buildsProvider = true
+		}
+	}
+	if !buildsProvider {
 		return nil, nil
 	}
-	var (
-		nodeOpsProvider    sandbox.Provider
-		dockerProvider     sandbox.Provider
-		workerBinary       []byte
-		workerHelperBinary []byte
-	)
-	switch cfg.SandboxProvider {
-	case sandbox.ProviderNodeOps:
-		// The worker binary is read once, at startup. Reading it per provision
-		// would let a mid-flight deploy hand two sandboxes different builds.
-		var err error
-		workerBinary, err = os.ReadFile(cfg.WorkerBinaryPath)
-		if err != nil {
-			return nil, fmt.Errorf("read worker binary %s: %w", cfg.WorkerBinaryPath, err)
-		}
-		if len(workerBinary) == 0 {
-			return nil, fmt.Errorf("worker binary %s is empty", cfg.WorkerBinaryPath)
-		}
-		workerHelperBinary, err = os.ReadFile(cfg.WorkerHelperBinaryPath)
-		if err != nil {
-			return nil, fmt.Errorf("read worker helper binary %s: %w", cfg.WorkerHelperBinaryPath, err)
-		}
-		if len(workerHelperBinary) == 0 {
-			return nil, fmt.Errorf("worker helper binary %s is empty", cfg.WorkerHelperBinaryPath)
-		}
-		sshPubKeys, err := readSSHPubKeys(cfg.NodeOpsSSHKeyPath)
-		if err != nil {
-			return nil, err
-		}
-		nodeOpsProvider = createos.New(createos.Config{
-			BaseURL:      cfg.NodeOpsBaseURL,
-			APIKey:       cfg.NodeOpsAPIKey,
-			DefaultShape: cfg.NodeOpsDefaultShape,
-			DefaultRoot:  cfg.NodeOpsDefaultRootFS,
-			Region:       cfg.NodeOpsRegion,
-			SSHPubKeys:   sshPubKeys,
-		})
-	case sandbox.ProviderDocker:
-		provider, err := dockerprovider.New(dockerprovider.Config{
-			Host:        cfg.DockerHost,
-			WorkerImage: cfg.DockerWorkerImage,
-			Network:     cfg.DockerNetwork,
-			Namespace:   cfg.DockerNamespace,
-		})
-		if err != nil {
-			return nil, err
-		}
-		dockerProvider = provider
+	workerBinary, workerHelperBinary, workerBuilds, err := loadWorkerBinaries(cfg, logger)
+	if err != nil {
+		return nil, err
 	}
-	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider), reconcile.Options{
+	for _, provider := range cfg.AvailableSandboxProviders {
+		switch provider {
+		case sandbox.ProviderFreestyle:
+			freestyleProvider = freestyle.New(freestyle.Config{
+				BaseURL:         cfg.FreestyleBaseURL,
+				APIKey:          cfg.FreestyleAPIKey,
+				DefaultSnapshot: cfg.FreestyleDefaultSnapshot,
+				Logger:          logger,
+			})
+		case sandbox.ProviderNodeOps:
+			sshPubKeys, err := readSSHPubKeys(cfg.NodeOpsSSHKeyPath)
+			if err != nil {
+				return nil, err
+			}
+			nodeOpsProvider = createos.New(createos.Config{
+				BaseURL:      cfg.NodeOpsBaseURL,
+				APIKey:       cfg.NodeOpsAPIKey,
+				DefaultShape: cfg.NodeOpsDefaultShape,
+				DefaultRoot:  cfg.NodeOpsDefaultRootFS,
+				Region:       cfg.NodeOpsRegion,
+				SSHPubKeys:   sshPubKeys,
+			})
+		case sandbox.ProviderDocker:
+			provider, err := dockerprovider.New(dockerprovider.Config{
+				Host:        cfg.DockerHost,
+				WorkerImage: cfg.DockerWorkerImage,
+				Network:     cfg.DockerNetwork,
+				Namespace:   cfg.DockerNamespace,
+			})
+			if err != nil {
+				return nil, err
+			}
+			dockerProvider = provider
+		case sandbox.ProviderCoder:
+			provider, err := coderprovider.New(coderprovider.Config{
+				BaseURL:    cfg.CoderURL,
+				Token:      cfg.CoderAPIToken,
+				Owner:      cfg.CoderOwner,
+				TemplateID: cfg.CoderTemplateID,
+				AgentName:  cfg.CoderAgentName,
+				Parameters: cfg.CoderParameters,
+			})
+			if err != nil {
+				return nil, err
+			}
+			coderProvider = provider
+		}
+	}
+	return reconcile.New(store, sandboxresolve.New(nodeOpsProvider, dockerProvider, coderProvider, freestyleProvider, store, providerCipher),
+		reconcilerOptions(cfg, workerBinary, workerHelperBinary, workerBuilds, logger)), nil
+}
+
+// reconcilerOptions maps the control-plane config onto the reconciler options.
+// It is split out so the config-to-reconciler wiring (keep-warm in particular)
+// is testable without a database or provider credentials.
+func reconcilerOptions(
+	cfg config.Config,
+	workerBinary, workerHelperBinary []byte,
+	workerBuilds map[string]sandbox.WorkerBuild,
+	logger *slog.Logger,
+) reconcile.Options {
+	return reconcile.Options{
 		PublicURL:              cfg.PublicURL,
+		TerminalStreamEnabled:  cfg.TerminalStreamEnabled,
 		WorkerBinary:           workerBinary,
 		WorkerHelperBinary:     workerHelperBinary,
+		WorkerBuilds:           workerBuilds,
 		Interval:               cfg.ReconcileInterval,
 		StartupTimeout:         cfg.SandboxStartupTimeout,
 		HeartbeatTimeout:       cfg.WorkerHeartbeatTimeout,
+		WorkerCheckInTimeout:   cfg.WorkerCheckInTimeout,
 		AllowAnonymousCheckout: cfg.AllowAnonymousCheckout,
+		KeepWarm:               cfg.KeepWarm(),
 		Logger:                 logger,
-	}), nil
+	}
+}
+
+// loadWorkerBinaries reads the worker and helper binaries once at startup, but
+// only where a provider that runs hosted workers (nodeops, coder, or freestyle) is offered.
+// Docker-only deployments bake the worker into their image and need neither.
+// Both the reconciler (to advertise the expected hashes) and the API server (to
+// serve the content-addressed self-update endpoint) read the same bytes.
+//
+// The configured paths hold the linux/amd64 build every provider installs. The
+// control-plane image also ships a linux/arm64 build beside them
+// (<path>-linux-arm64) for Coder workspaces on arm64 hosts; it is optional so a
+// deployment without it keeps working, with arm64 workspaces reported as
+// unsupported.
+func loadWorkerBinaries(cfg config.Config, logger *slog.Logger) (
+	workerBinary, workerHelperBinary []byte,
+	builds map[string]sandbox.WorkerBuild,
+	err error,
+) {
+	needs := false
+	for _, provider := range cfg.AvailableSandboxProviders {
+		if provider == sandbox.ProviderNodeOps || provider == sandbox.ProviderCoder || provider == sandbox.ProviderFreestyle {
+			needs = true
+		}
+	}
+	if !needs {
+		return nil, nil, nil, nil
+	}
+	workerBinary, err = readRequiredBinary(cfg.WorkerBinaryPath, "worker")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	workerHelperBinary, err = readRequiredBinary(cfg.WorkerHelperBinaryPath, "worker helper")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	builds = map[string]sandbox.WorkerBuild{}
+	arm64Worker, workerErr := readRequiredBinary(cfg.WorkerBinaryPath+"-linux-arm64", "arm64 worker")
+	arm64Helper, helperErr := readRequiredBinary(cfg.WorkerHelperBinaryPath+"-linux-arm64", "arm64 worker helper")
+	if workerErr == nil && helperErr == nil {
+		builds[sandbox.ArchARM64] = sandbox.WorkerBuild{Binary: arm64Worker, HelperBinary: arm64Helper}
+	} else if logger != nil {
+		logger.Warn("arm64 worker build unavailable; arm64 Coder workspaces will be reported as unsupported",
+			"worker_error", errorString(workerErr), "helper_error", errorString(helperErr))
+	}
+	return workerBinary, workerHelperBinary, builds, nil
+}
+
+func readRequiredBinary(path, name string) ([]byte, error) {
+	binary, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s binary %s: %w", name, path, err)
+	}
+	if len(binary) == 0 {
+		return nil, fmt.Errorf("%s binary %s is empty", name, path)
+	}
+	return binary, nil
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	// logctx stamps request/user/org/session/provider identifiers from the
+	// context onto every *Context log call (see cloud/docs/support-runbook.md).
+	logger := slog.New(logctx.NewHandler(slog.NewJSONHandler(os.Stdout, nil)))
 	if err := run(logger); err != nil {
 		logger.Error("ao-cloud stopped", "error", err)
 		os.Exit(1)
@@ -193,28 +327,37 @@ func run(logger *slog.Logger) error {
 			return err
 		}
 	}
+	notificationProcessor := notification.NewService(store, notification.Config{Logger: logger})
 
 	var workosVerifier auth.WorkOSVerifier
 	if cfg.WorkOSIssuer != "" {
-		profiles, err := auth.NewWorkOSProfileResolver(cfg.WorkOSAPIKey, nil)
-		if err != nil {
-			return err
-		}
-		organizations, err := auth.NewWorkOSOrganizationResolver(cfg.WorkOSAPIKey, nil)
-		if err != nil {
-			return err
-		}
-		workosVerifier, err = auth.NewOIDCVerifier(
+		workosVerifier, err = newWorkOSVerifier(
 			ctx,
 			cfg.WorkOSIssuer,
 			cfg.WorkOSClientID,
+			cfg.WorkOSAPIKey,
 			cfg.WorkOSJWKSURL,
-			profiles,
-			organizations,
 		)
 		if err != nil {
 			return err
 		}
+	}
+	if cfg.WorkOSLegacyIssuer != "" {
+		legacyVerifier, err := newWorkOSVerifier(
+			ctx,
+			cfg.WorkOSLegacyIssuer,
+			cfg.WorkOSLegacyClientID,
+			cfg.WorkOSLegacyAPIKey,
+			cfg.WorkOSLegacyJWKSURL,
+		)
+		if err != nil {
+			return err
+		}
+		workosVerifier, err = auth.NewFallbackWorkOSVerifier(workosVerifier, legacyVerifier)
+		if err != nil {
+			return err
+		}
+		logger.Info("accepting legacy WorkOS tokens", "legacy_client_id", cfg.WorkOSLegacyClientID)
 	}
 	var providerCipher *secrets.Cipher
 	if len(cfg.ProviderSecretKey) > 0 {
@@ -250,6 +393,7 @@ func run(logger *slog.Logger) error {
 			return err
 		}
 		go githubService.Run(ctx)
+		go githubService.RunAutomaticReviews(ctx, store)
 	}
 	var checkoutBroker httpapi.CheckoutBroker
 	if githubService != nil {
@@ -267,26 +411,61 @@ func run(logger *slog.Logger) error {
 			return err
 		}
 	}
-	reconciler, err := newSandboxReconciler(cfg, store, logger)
+	reviewService := githubService
+	if reviewService == nil {
+		reviewService = githubapp.NewReviewService(store, logger)
+	}
+	// PAT write fallback: a REST-only GitHub client plus the record store lets a
+	// worker's configured personal access token open and claim pull requests
+	// even where the checkout broker is read-only (staging reaches GitHub through
+	// the remote capability broker, whose write methods are stubbed). The PAT is
+	// decrypted per request in the handler via providerCipher; this only needs
+	// the REST client and the store. Constructed whenever PAT decryption is
+	// possible so PAT-first writes behave consistently with PAT-first reads.
+	var patWrites *githubapp.PATWriteService
+	if providerCipher != nil {
+		// Empty base URL defaults to https://api.github.com, matching the App
+		// client; a GitHub Enterprise host would need a config field here.
+		patWrites = githubapp.NewPATWriteService(
+			githubapp.NewRESTClient("", nil), store,
+		)
+	}
+	// The support trail (ao_activity_events): one fire-and-forget writer per
+	// replica, plus a 90-day retention prune.
+	activityRecorder := activity.NewRecorder(store, logger, activity.Options{})
+	store.SetActivityLogger(activityRecorder.Log)
+	// Rollout flag: off keeps new Coder sessions on the <prefix>-<id> names
+	// (see config.Config.CoderReadableWorkspaceNames).
+	store.SetCoderReadableWorkspaceNames(cfg.CoderReadableWorkspaceNames)
+	go activityRecorder.Run(ctx)
+	go activity.RunPruner(ctx, store, activity.Retention, activity.DefaultPruneInterval, logger)
+	reconciler, err := newSandboxReconciler(cfg, store, providerCipher, logger)
 	if err != nil {
 		return err
 	}
-	// The scanner only has anything to do where sandboxes exist to pause.
-	var idlePauseScanner *idlepause.Scanner
 	if reconciler != nil {
+		reconciler.SetActivityRecorder(activityRecorder)
+	}
+	// The scanner only has anything to do where sandboxes exist to pause, and
+	// only when some provider has idle-pause enabled. With both
+	// AO_CLOUD_IDLE_PAUSE_THRESHOLD=0 and AO_CLOUD_FREESTYLE_IDLE_PAUSE_THRESHOLD=0
+	// it never runs. Freestyle, and any other billed sandbox (Coder for an
+	// organization without the coder capability), uses the Freestyle threshold;
+	// every other sandbox uses the general one, and 0 keeps those sessions warm
+	// (the scanner skips them, and the reconciler's KeepWarm follows the general
+	// threshold).
+	var idlePauseScanner *idlepause.Scanner
+	if reconciler != nil && cfg.IdlePauseScannerEnabled() {
 		idlePauseScanner = idlepause.New(store, idlepause.Options{
 			Interval:      cfg.IdlePauseInterval,
 			IdleThreshold: cfg.IdlePauseThreshold,
-			Logger:        logger,
-		})
-	}
-	// The scanner only has anything to refresh where GitHub is configured to
-	// resolve an installation for.
-	var prStatusScanner *prstatus.Scanner
-	if githubService != nil {
-		prStatusScanner = prstatus.New(store, githubService, prstatus.Options{
-			Interval: cfg.PRStatusPollInterval,
-			Logger:   logger,
+			ProviderIdleThresholds: map[string]time.Duration{
+				sandbox.ProviderFreestyle: cfg.FreestyleIdlePauseThreshold,
+			},
+			// Plans meter running minutes the same on every provider, so a
+			// billed Coder sandbox pauses when quiet just as Freestyle does.
+			BilledIdleThreshold: cfg.FreestyleIdlePauseThreshold,
+			Logger:              logger,
 		})
 	}
 	// Worker tokens are only issued where sandboxes are provisioned. Leaving
@@ -297,32 +476,164 @@ func run(logger *slog.Logger) error {
 		workerTokens = worker.NewTokenManager([]byte(cfg.WorkerSigningKey))
 	}
 
+	// The API server serves the content-addressed worker binaries so a worker
+	// with a stale baked copy can self-update; it reads the same startup build
+	// whose hashes the reconciler advertises.
+	apiWorkerBinary, apiWorkerHelperBinary, apiWorkerBuilds, err := loadWorkerBinaries(cfg, nil)
+	if err != nil {
+		return err
+	}
+	// A read-only Coder client backs the template picker endpoint. Built only
+	// when the deployment offers coder; otherwise the picker just shows "Default".
+	var coderTemplates httpapi.CoderTemplateLister
+	for _, provider := range cfg.AvailableSandboxProviders {
+		if provider == sandbox.ProviderCoder {
+			templateClient, err := coderprovider.New(coderprovider.Config{
+				BaseURL:    cfg.CoderURL,
+				Token:      cfg.CoderAPIToken,
+				Owner:      cfg.CoderOwner,
+				TemplateID: cfg.CoderTemplateID,
+				AgentName:  cfg.CoderAgentName,
+				Parameters: cfg.CoderParameters,
+			})
+			if err != nil {
+				return fmt.Errorf("build coder template lister: %w", err)
+			}
+			coderTemplates = templateClient
+			break
+		}
+	}
+	var artifacts *artifactstore.Store
+	if cfg.ArtifactsEnabled {
+		artifacts, err = artifactstore.New(ctx, artifactstore.Config{
+			Bucket:   cfg.ArtifactBucket,
+			Region:   cfg.ArtifactRegion,
+			Endpoint: cfg.ArtifactEndpoint,
+		})
+		if err != nil {
+			return fmt.Errorf("build artifact store: %w", err)
+		}
+		logger.Info("cloud artifacts enabled", "bucket", cfg.ArtifactBucket, "region", cfg.ArtifactRegion)
+		go artifactstore.RunSweeper(ctx, store, artifacts, artifactstore.DefaultSweepInterval, logger)
+	}
+	var artifactShares *httpapi.ArtifactShareOptions
+	if cfg.ArtifactSharesEnabled {
+		artifactShares = &httpapi.ArtifactShareOptions{Origin: cfg.ArtifactShareOrigin, Limit: cfg.ArtifactShareLimit}
+		logger.Info("artifact share links enabled", "origin", cfg.ArtifactShareOrigin, "limit", cfg.ArtifactShareLimit)
+	}
 	apiOptions := httpapi.Options{
-		Store:                   store,
-		WorkOS:                  workosVerifier,
-		LocalAuthEnabled:        cfg.LocalAuthEnabled,
-		LocalSessionTTL:         cfg.LocalSessionTTL,
-		SandboxProvider:         cfg.SandboxProvider,
-		Provisioning:            provisioningDefaults(cfg),
-		WorkerTokens:            workerTokens,
-		WorkerTokenTTL:          cfg.WorkerTokenTTL(),
-		MaxSandboxes:            cfg.MaxSandboxesPerOrg,
-		Environment:             cfg.Environment,
-		Release:                 cfg.Release,
-		Logger:                  logger,
-		GitHub:                  githubService,
-		CheckoutBroker:          checkoutBroker,
-		BrokerAuthToken:         cfg.RepositoryBrokerToken,
-		EnvironmentControlToken: cfg.EnvironmentControlToken,
-		SecretCipher:            providerCipher,
-		WebhookMaxBody:          cfg.GitHub.WebhookMaxBody,
+		Store:                     store,
+		CoderTemplates:            coderTemplates,
+		CoderTemplateIDs:          cfg.CoderTemplateIDs,
+		Transcripts:               store.SessionTranscripts(),
+		WorkOS:                    workosVerifier,
+		LocalAuthEnabled:          cfg.LocalAuthEnabled,
+		LocalSessionTTL:           cfg.LocalSessionTTL,
+		SandboxProvider:           cfg.SandboxProvider,
+		AvailableSandboxProviders: cfg.AvailableSandboxProviders,
+		CapabilityGatedProviders:  cfg.CapabilityGatedProviders,
+		DefaultOrgCapabilities:    cfg.DefaultOrgCapabilities,
+		Provisioning:              provisioningDefaults(cfg),
+		WorkerTokens:              workerTokens,
+		WorkerTokenTTL:            cfg.WorkerTokenTTL(),
+		WorkerBinary:              apiWorkerBinary,
+		WorkerHelperBinary:        apiWorkerHelperBinary,
+		WorkerBuilds:              apiWorkerBuilds,
+		MaxSandboxes:              cfg.MaxSandboxesPerOrg,
+		Environment:               cfg.Environment,
+		Release:                   cfg.Release,
+		Logger:                    logger,
+		GitHub:                    githubService,
+		ReviewService:             reviewService,
+		CheckoutBroker:            checkoutBroker,
+		PATWrites:                 patWrites,
+		BrokerAuthToken:           cfg.RepositoryBrokerToken,
+		EnvironmentControlToken:   cfg.EnvironmentControlToken,
+		SecretCipher:              providerCipher,
+		WebhookMaxBody:            cfg.GitHub.WebhookMaxBody,
+		TerminalStreamEnabled:     cfg.TerminalStreamEnabled,
+		TerminalRelayEnabled:      cfg.TerminalRelayEnabled,
+		NotificationWake:          notificationProcessor.Wake,
+		// Off unless AO_CLOUD_POSTHOG_KEY is set.
+		Analytics:            analytics.NewPostHog(os.Getenv("AO_CLOUD_POSTHOG_KEY"), posthogHost(), cfg.Environment, nil, logger),
+		Activity:             activityRecorder,
+		SupportToken:         cfg.SupportToken,
+		Artifacts:            artifacts,
+		ArtifactAccessSecret: cfg.ProviderSecretKey,
+		ArtifactShares:       artifactShares,
 	}
 	if cfg.Environment == "development" &&
 		os.Getenv("AO_CLOUD_DEVELOPMENT_SKIP_CREDENTIAL_VALIDATION") == "true" {
 		logger.Warn("coding-agent credential validation is disabled for development")
 		apiOptions.CredentialValidator = developmentCredentialValidator{}
 	}
+	if reconciler != nil {
+		apiOptions.SandboxWake = reconciler.Wake
+	}
+	if slices.Contains(cfg.AvailableSandboxProviders, sandbox.ProviderFreestyle) {
+		var grants projectsnapshot.Grants
+		if checkoutBroker != nil {
+			grants = checkoutBroker
+		}
+		projectSnapshots := projectsnapshot.New(projectsnapshot.Config{
+			Provider: sandbox.ProviderFreestyle,
+			VMs: freestyle.New(freestyle.Config{
+				BaseURL: cfg.FreestyleBaseURL,
+				APIKey:  cfg.FreestyleAPIKey,
+				Logger:  logger,
+			}),
+			Store:          store,
+			Grants:         grants,
+			AllowAnonymous: cfg.AllowAnonymousCheckout,
+			Logger:         logger,
+		})
+		apiOptions.ProjectSnapshots = projectSnapshots
+		go projectSnapshots.RunCollector(ctx)
+	}
+	if cfg.BillingEnabled() {
+		store.EnableBilling(cfg.BillingPastDueGrace, cfg.BillingExemptOrgsCreatedBefore)
+		store.SetDefaultOrgBilling(cfg.DefaultOrgBilling)
+		store.SetBillingBusyGrace(cfg.BillingBusyGrace)
+		store.SetPaywalledFeatures(cfg.PaywalledFeatures)
+		apiOptions.Billing = &httpapi.BillingOptions{
+			Stripe:              billing.NewClient(cfg.StripeSecretKey, cfg.StripeBaseURL),
+			WebhookSecret:       cfg.StripeWebhookSecret,
+			PriceIDs:            cfg.StripePriceIDs,
+			ReturnURL:           cfg.BillingReturn(),
+			PortalConfiguration: cfg.StripePortalConfiguration,
+		}
+		go (&billing.Enforcer{Store: store, Logger: logger, Activity: activityRecorder}).Run(ctx)
+		logger.Info("Stripe billing enabled", "plans", len(cfg.StripePriceIDs))
+	}
 	api := httpapi.New(apiOptions)
+	go notificationProcessor.Run(ctx)
+	feedbackDispatcher := cifeedback.New(store, cifeedback.Config{Logger: logger})
+	go feedbackDispatcher.Run(ctx)
+	go sweepComposerLeases(ctx, store, logger)
+	if cfg.TerminalRelayEnabled {
+		logger.Info("experimental terminal relay enabled",
+			"terminal_stream_enabled", cfg.TerminalStreamEnabled,
+			"mode", "local_same_replica")
+	}
+	// The work-wait long-poll and terminal streaming both ride a Postgres NOTIFY
+	// listener. Run it wherever workers connect so WaitForWork can be woken on
+	// enqueue; register the terminal channels only when that feature is on.
+	if reconciler != nil {
+		notifyListener := postgres.NewListener(cfg.DatabaseURL, logger)
+		notifyListener.Handle("ao_worker_work", api.HandleWorkerWorkNotify)
+		notifyListener.Handle("ao_notification_event", api.HandleNotificationEventNotify)
+		notifyListener.Handle("ao_session_event", api.HandleSessionEventNotify)
+		notifyListener.Handle("ao_session_live", api.HandleSessionLiveNotify)
+		api.EnableSessionEventNotify()
+		// Any path that asks a sandbox to run again (resume, a message to a
+		// paused session, a restore) starts provisioning now, not at the next tick.
+		notifyListener.Handle("ao_sandbox_wake", func(string) { reconciler.Wake() })
+		if cfg.TerminalStreamEnabled {
+			notifyListener.Handle("ao_terminal_output", api.HandleTerminalOutputNotify)
+			notifyListener.Handle("ao_terminal_input", api.HandleTerminalInputNotify)
+		}
+		go func() { _ = notifyListener.Run(ctx) }()
+	}
 	server := &http.Server{
 		Addr:              cfg.HTTPAddress,
 		Handler:           api.Handler(),
@@ -344,6 +655,7 @@ func run(logger *slog.Logger) error {
 				"interval", cfg.ReconcileInterval,
 				"startup_timeout", cfg.SandboxStartupTimeout,
 				"heartbeat_timeout", cfg.WorkerHeartbeatTimeout,
+				"checkin_timeout", cfg.WorkerCheckInTimeout,
 			)
 			if err := reconciler.Run(ctx); err != nil {
 				logger.Error("sandbox reconciler stopped", "error", err)
@@ -356,6 +668,7 @@ func run(logger *slog.Logger) error {
 			logger.Info("idle-pause scanner started",
 				"interval", cfg.IdlePauseInterval,
 				"idle_threshold", cfg.IdlePauseThreshold,
+				"freestyle_idle_threshold", cfg.FreestyleIdlePauseThreshold,
 			)
 			if err := idlePauseScanner.Run(ctx); err != nil {
 				logger.Error("idle-pause scanner stopped", "error", err)
@@ -363,14 +676,17 @@ func run(logger *slog.Logger) error {
 		}()
 	}
 
-	if prStatusScanner != nil {
-		go func() {
-			logger.Info("pull request status scanner started", "interval", cfg.PRStatusPollInterval)
-			if err := prStatusScanner.Run(ctx); err != nil {
-				logger.Error("pull request status scanner stopped", "error", err)
-			}
-		}()
-	}
+	transitionDriver := interfacereconcile.NewTransportDriver(store, "interface-coordinator", 45*time.Second, logger)
+	transitionCoordinator := interfacereconcile.New(store, transitionDriver, interfacereconcile.Options{
+		Interval: cfg.InterfaceHandoffInterval,
+		Logger:   logger,
+	})
+	go func() {
+		logger.Info("interface-transition coordinator started", "interval", cfg.InterfaceHandoffInterval)
+		if err := transitionCoordinator.Run(ctx); err != nil {
+			logger.Error("interface-transition coordinator stopped", "error", err)
+		}
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -398,4 +714,47 @@ func (developmentCredentialValidator) Validate(
 	[]byte,
 ) error {
 	return nil
+}
+
+func newWorkOSVerifier(
+	ctx context.Context,
+	issuer string,
+	clientID string,
+	apiKey string,
+	jwksURL string,
+) (auth.WorkOSVerifier, error) {
+	profiles, err := auth.NewWorkOSProfileResolver(apiKey, nil)
+	if err != nil {
+		return nil, err
+	}
+	organizations, err := auth.NewWorkOSOrganizationResolver(apiKey, nil)
+	if err != nil {
+		return nil, err
+	}
+	return auth.NewOIDCVerifier(ctx, issuer, clientID, jwksURL, profiles, organizations)
+}
+
+func posthogHost() string {
+	if host := os.Getenv("AO_CLOUD_POSTHOG_HOST"); host != "" {
+		return host
+	}
+	return "https://us.i.posthog.com"
+}
+
+// sweepComposerLeases hands on shared-session composer leases whose grant
+// expired, so everyone sees the composer free, or passed to the next person
+// in line, within a couple of seconds of a holder going quiet.
+func sweepComposerLeases(ctx context.Context, store *postgres.Store, logger *slog.Logger) {
+	ticker := time.NewTicker(postgres.ComposerSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := store.SweepComposerLeases(ctx); err != nil && ctx.Err() == nil {
+				logger.Warn("sweep composer leases", "error", err)
+			}
+		}
+	}
 }

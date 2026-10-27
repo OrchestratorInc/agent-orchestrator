@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pressly/goose/v3"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -54,12 +56,7 @@ func TestMigrateDefaultsSessionInterfaceToChat(t *testing.T) {
 }
 
 func TestMigrateUpdatesExistingSessionInterfaceDefaultToChat(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 103)
+	db := openMigratedDatabaseCopy(t, 103)
 
 	if _, err := db.Exec(`UPDATE app_settings SET default_session_mode = 'tui' WHERE id = 1`); err != nil {
 		t.Fatalf("seed existing TUI default: %v", err)
@@ -78,12 +75,7 @@ func TestMigrateUpdatesExistingSessionInterfaceDefaultToChat(t *testing.T) {
 }
 
 func TestMigrateRollbackPreservesSessionInterfacePreference(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 103)
+	db := openMigratedDatabaseCopy(t, 103)
 
 	if _, err := db.Exec(`UPDATE app_settings SET default_session_mode = 'chat' WHERE id = 1`); err != nil {
 		t.Fatalf("seed deliberate Chat default: %v", err)
@@ -116,13 +108,7 @@ func TestUsageTablesKeepOnlyDurableCollectionState(t *testing.T) {
 }
 
 func TestUsageCostMigrationKeepsLegacyRowsUnattributedAndUnpriced(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 94)
+	db := openMigratedDatabaseCopy(t, 94)
 	seedUsageMigrationRow(t, db)
 	if err := migrate(db); err != nil {
 		t.Fatalf("apply cost migration: %v", err)
@@ -193,12 +179,7 @@ FROM usage_sources WHERE artifact_path = '/tmp/rollout.jsonl';
 }
 
 func TestUsageSchemaUpgradePreservesEarlierPRData(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+"?_pragma=busy_timeout(5000)")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 43)
+	db := openMigratedDatabaseCopyNoForeignKeys(t, 43)
 
 	// Reproduce the wider tables and burned migration history created by an
 	// earlier checkout of this PR.
@@ -288,13 +269,7 @@ VALUES (1, 1, 1, 'gpt-test', 120, 100, 20, 0, 30, 'event-1');
 }
 
 func TestCanonicalUsageMigrationBackfillsProviderAwareMetrics(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 100)
+	db := openMigratedDatabaseCopy(t, 100)
 	now := time.Unix(1700000000, 0).UTC()
 	if _, err := db.Exec(`
 INSERT INTO projects (id, path, registered_at, config)
@@ -356,13 +331,7 @@ FROM model_usage_events WHERE source_event_key = ?`, test.key).Scan(
 // directly: a pre-0115 profile is seeded through the migrations that shipped
 // before it, then upgraded.
 func TestUsageMeasurementMigrationFoldsCostsAndRetiresDetailTables(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 114)
+	db := openMigratedDatabaseCopy(t, 114)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.Exec(`
@@ -465,13 +434,7 @@ FROM model_usage_events WHERE source_event_key = ?`, test.key).Scan(
 // or the route hint, so all of them must survive as observations: mislabelling
 // one as an inference would invite a later repair to overwrite a fact.
 func TestBillingProviderSourceMigrationMarksExistingAttributionsObserved(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 115)
+	db := openMigratedDatabaseCopy(t, 115)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.Exec(`
@@ -543,13 +506,7 @@ INSERT INTO model_usage_events (
 // harness/source enum rebuild must retain columns introduced by 0113-0116 and
 // leave the bounded provider usage object untouched.
 func TestKimiUsageMigrationPreservesCurrentUsageFacts(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 116)
+	db := openMigratedDatabaseCopy(t, 116)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.Exec(`
@@ -608,13 +565,7 @@ FROM usage_bindings WHERE harness = 'kimi';`, now, now); err != nil {
 }
 
 func TestCompletedPlanMigrationRepairsStructuredStateWithoutChangingProviderEvents(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 118)
+	db := openMigratedDatabaseCopy(t, 118)
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.Exec(`
@@ -721,16 +672,11 @@ FROM (SELECT method, payload_json FROM conversation_provider_events ORDER BY id)
 
 func openMigratedTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
+	version, err := expectedMigrationVersion()
 	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+		t.Fatalf("expected migration version: %v", err)
 	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	if err := migrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	return db
+	return openMigratedDatabaseCopy(t, version)
 }
 
 func tableColumns(t *testing.T, db *sql.DB, table string) []string {
@@ -781,14 +727,35 @@ func TestMigrateAllowsEveryShippedHarness(t *testing.T) {
 	}
 }
 
-func TestMigrateRepairsSkippedMuseHarnessConstraint(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
+func TestCodewhaleHarnessMigrationDownRestoresConstraint(t *testing.T) {
+	db := openMigratedTestDB(t)
+	if _, err := db.Exec(`
+INSERT INTO projects (id, path, registered_at, config)
+VALUES ('codewhale-project', '/repo/codewhale', ?, '{}');
+INSERT INTO sessions (id, project_id, num, harness, activity_last_at, created_at, updated_at)
+VALUES ('codewhale-project-1', 'codewhale-project', 1, 'codewhale', ?, ?, ?);
+`, time.Unix(100, 0).UTC(), time.Unix(101, 0).UTC(), time.Unix(101, 0).UTC(), time.Unix(101, 0).UTC()); err != nil {
+		t.Fatalf("insert codewhale session: %v", err)
 	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 43)
+	if _, err := db.Exec(`DELETE FROM change_log WHERE session_id = 'codewhale-project-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM sessions WHERE id = 'codewhale-project-1'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.DownTo(db, "migrations", 192); err != nil {
+		t.Fatalf("down migration 193: %v", err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO sessions (id, project_id, num, harness, activity_last_at, created_at, updated_at)
+VALUES ('codewhale-project-2', 'codewhale-project', 2, 'codewhale', ?, ?, ?)
+`, time.Unix(102, 0).UTC(), time.Unix(102, 0).UTC(), time.Unix(102, 0).UTC()); err == nil {
+		t.Fatal("codewhale harness remained allowed after migration down")
+	}
+}
+
+func TestMigrateRepairsSkippedMuseHarnessConstraint(t *testing.T) {
+	db := openMigratedDatabaseCopy(t, 43)
 
 	for version := 44; version <= 53; version++ {
 		if _, err := db.Exec(
@@ -821,13 +788,7 @@ VALUES ('agent-orchestrator-1', 'agent-orchestrator', 1, 'muse', ?, ?, ?);
 }
 
 func TestMigrateRepairsSkippedMuseHarnessConstraintWithLegacyQM(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 43)
+	db := openMigratedDatabaseCopy(t, 43)
 
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
 		t.Fatalf("enable writable_schema: %v", err)
@@ -874,13 +835,7 @@ WHERE type = 'table' AND name = 'sessions'`,
 // the constraint. Without the QM pair, the replace() source string omits 'qm'
 // and no-ops, leaving Kimchi inserts to fail with a CHECK violation.
 func TestMigration0054AddsKimchiToLegacyQMConstraint(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 53)
+	db := openMigratedDatabaseCopy(t, 53)
 
 	// Simulate a legacy QM-variant database: swap the constraint from the
 	// post-0053 state (muse, no qm) to the QM variant (muse, qm, no kimchi).
@@ -922,13 +877,7 @@ WHERE type = 'table' AND name = 'sessions'`,
 // without retaining Kimchi. Startup must converge the known constraint without
 // dropping either existing harness or rejecting existing Prime Agent rows.
 func TestMigrateRepairsKimchiConstraintWithPrimeAgentAndLegacyQM(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 80)
+	db := openMigratedDatabaseCopy(t, 80)
 
 	const primeAgentQMConstraint = `CHECK (harness IN ('', 'claude-code', 'codex', 'aider', 'opencode', 'grok', 'droid', 'amp', 'agy', 'crush', 'cursor', 'qwen', 'copilot', 'goose', 'auggie', 'continue', 'devin', 'cline', 'kimi', 'muse', 'kiro', 'kilocode', 'vibe', 'pi', 'autohand', 'qm', 'prime-agent', 'fake'))`
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -991,13 +940,7 @@ VALUES ('agent-orchestrator-1', 'agent-orchestrator', 1, 'prime-agent', ?, ?, ?)
 // constraint. Startup must repair the schema so new OMP sessions can be
 // inserted without losing existing harness variants.
 func TestMigrateRepairsOMPHarnessConstraint(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-	upTo(t, db, 94)
+	db := openMigratedDatabaseCopy(t, 94)
 	if _, err := db.Exec(
 		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`,
 		95,
@@ -1014,7 +957,7 @@ func TestMigrateRepairsOMPHarnessConstraint(t *testing.T) {
 	).Scan(&schema); err != nil {
 		t.Fatalf("read sessions schema: %v", err)
 	}
-	for _, harness := range []string{"'omp'"} {
+	for _, harness := range []string{"'omp'", "'gemini'"} {
 		if !strings.Contains(schema, harness) {
 			t.Fatalf("sessions.harness CHECK is missing %s after repair:\n%s", harness, schema)
 		}
@@ -1026,6 +969,59 @@ INSERT INTO sessions (id, project_id, num, harness, activity_last_at, created_at
 VALUES ('agent-orchestrator-1', 'agent-orchestrator', 1, 'omp', ?, ?, ?);
 `, time.Unix(100, 0).UTC(), time.Unix(101, 0).UTC(), time.Unix(101, 0).UTC(), time.Unix(101, 0).UTC()); err != nil {
 		t.Fatalf("insert omp session after repair: %v", err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO sessions (id, project_id, num, harness, activity_last_at, created_at, updated_at)
+VALUES ('agent-orchestrator-2', 'agent-orchestrator', 2, 'gemini', ?, ?, ?);
+`, time.Unix(102, 0).UTC(), time.Unix(102, 0).UTC(), time.Unix(102, 0).UTC()); err != nil {
+		t.Fatalf("insert gemini session after legacy harness repair: %v", err)
+	}
+}
+
+// TestMigrateAllowsOpenHandsHarness checks both paths to an OpenHands-capable
+// schema: running migration 192, and startup repair of a profile that has 192
+// recorded but still carries the pre-OpenHands physical CHECK constraint.
+func TestMigrateAllowsOpenHandsHarness(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		recorded192 bool
+	}{
+		{name: "migration", recorded192: false},
+		{name: "repair", recorded192: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openMigratedDatabaseCopy(t, 191)
+			if tc.recorded192 {
+				if _, err := db.Exec(
+					`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`,
+					192,
+				); err != nil {
+					t.Fatalf("seed migration 192: %v", err)
+				}
+			}
+			if err := migrate(db); err != nil {
+				t.Fatalf("migrate pre-openhands profile: %v", err)
+			}
+			var schema string
+			if err := db.QueryRow(
+				"SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'",
+			).Scan(&schema); err != nil {
+				t.Fatalf("read sessions schema: %v", err)
+			}
+			for _, harness := range []string{"'omp'", "'unreal-agent'", "'openhands'"} {
+				if !strings.Contains(schema, harness) {
+					t.Fatalf("sessions.harness CHECK is missing %s:\n%s", harness, schema)
+				}
+			}
+			if _, err := db.Exec(`
+INSERT INTO projects (id, path, registered_at, config)
+VALUES ('agent-orchestrator', '/repo/agent-orchestrator', ?, '{}');
+INSERT INTO sessions (id, project_id, num, harness, activity_last_at, created_at, updated_at)
+VALUES ('agent-orchestrator-1', 'agent-orchestrator', 1, 'openhands', ?, ?, ?);
+`, time.Unix(100, 0).UTC(), time.Unix(101, 0).UTC(), time.Unix(101, 0).UTC(), time.Unix(101, 0).UTC()); err != nil {
+				t.Fatalf("insert openhands session: %v", err)
+			}
+		})
 	}
 }
 

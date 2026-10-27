@@ -1,5 +1,5 @@
-import { CheckCircle2, Cookie, History as HistoryIcon, LoaderCircle, TriangleAlert, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, CircleMinus, Cookie, History as HistoryIcon, LoaderCircle, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AoBridge } from "../../../preload";
 import type {
@@ -27,6 +27,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 
 type ImportBridge = AoBridge["browserProfiles"];
 type View = "form" | "running" | "result";
+type ImportFailure = { message: string; recoverable: boolean };
 
 export function BrowserImportDialog({
 	open,
@@ -49,43 +50,113 @@ export function BrowserImportDialog({
 	const [destinationNames, setDestinationNames] = useState<Record<string, string>>({});
 	const [mergeName, setMergeName] = useState("");
 	const [loading, setLoading] = useState(false);
-	const [error, setError] = useState("");
+	const [loadingSourceId, setLoadingSourceId] = useState("");
+	const [error, setError] = useState<ImportFailure | null>(null);
+	const [safariAccessDenied, setSafariAccessDenied] = useState(false);
 	const [progress, setProgress] = useState<BrowserImportProgress | null>(null);
 	const [result, setResult] = useState<BrowserImportResult | null>(null);
+	const errorRef = useRef<HTMLParagraphElement>(null);
+	const selectedSourceIdRef = useRef("");
+	const sourcesRef = useRef<BrowserImportSource[]>([]);
 
 	const source = sources.find((candidate) => candidate.id === sourceId);
 	const selectedProfiles = source?.profiles.filter((profile) => selectedProfileIds.includes(profile.id)) ?? [];
 	const canClose = view !== "running";
 	const requestId = progress?.requestId;
+	const sourceLoading = source ? loadingSourceId === source.id : false;
+	const showSafariAccessDenied = source?.family === "safari" && safariAccessDenied;
+	const resultEmpty = result?.entries.every((entry) => entry.importedCookies + entry.importedHistoryEntries === 0) ?? false;
+	const resultTitle = resultEmpty ? "settings.browserImport.empty" : "settings.browserImport.complete";
+
+	async function loadSourceProfiles(id: string): Promise<BrowserImportSource | null> {
+		if (!bridge) return null;
+		setLoadingSourceId(id);
+		try {
+			const discovery = await bridge.discoverImportSources({ sourceId: id });
+			const accessDenied = discovery.warnings?.includes("safari-access-denied") ?? false;
+			setSafariAccessDenied(accessDenied);
+			const hydrated = discovery.sources.find((candidate) => candidate.id === id) ?? null;
+			if (hydrated) {
+				const nextSources = sourcesRef.current.map((candidate) => candidate.id === id ? hydrated : candidate);
+				sourcesRef.current = nextSources;
+				setSources(nextSources);
+			} else if (!accessDenied) {
+				const nextSources = sourcesRef.current.filter((candidate) => candidate.id !== id);
+				sourcesRef.current = nextSources;
+				setSources(nextSources);
+				if (selectedSourceIdRef.current === id) {
+					const fallback = nextSources.find((candidate) => !candidate.profilesDeferred) ?? nextSources[0];
+					if (fallback) {
+						selectedSourceIdRef.current = fallback.id;
+						applySourceDefaults(fallback, setSourceId, setSelectedProfileIds, setDestinationNames, setMergeName, setDestinationMode);
+					} else {
+						selectedSourceIdRef.current = "";
+						setSourceId("");
+						setSelectedProfileIds([]);
+						setDestinationNames({});
+						setMergeName("");
+					}
+				}
+			}
+			return hydrated;
+		} catch (reason) {
+			setError({ message: reason instanceof Error ? reason.message : t("settings.browserImport.discoveryFailed"), recoverable: false });
+			return null;
+		} finally {
+			setLoadingSourceId((current) => current === id ? "" : current);
+		}
+	}
 
 	useEffect(() => {
 		if (!open) return;
 		setView("form");
 		setSources([]);
+		sourcesRef.current = [];
+		setSafariAccessDenied(false);
+		setLoadingSourceId("");
 		setSourceId("");
+		selectedSourceIdRef.current = "";
 		setSelectedProfileIds([]);
 		setIncludeCookies(true);
 		setIncludeHistory(true);
 		setDestinationMode("separate");
 		setDestinationNames({});
 		setMergeName("");
-		setError("");
+		setError(null);
 		setProgress(null);
 		setResult(null);
 		if (!bridge) {
-			setError(t("settings.browserImport.unavailable"));
+			setError({ message: t("settings.browserImport.unavailable"), recoverable: false });
 			return;
 		}
 		setLoading(true);
 		void bridge.discoverImportSources().then(
 			(discovery) => {
+				sourcesRef.current = discovery.sources;
 				setSources(discovery.sources);
-				const first = discovery.sources[0];
-				if (first) applySourceDefaults(first, setSourceId, setSelectedProfileIds, setDestinationNames, setMergeName, setDestinationMode);
+				setSafariAccessDenied(discovery.warnings?.includes("safari-access-denied") ?? false);
+				const first = discovery.sources.find((candidate) => !candidate.profilesDeferred) ?? discovery.sources[0];
+				if (first) {
+					selectedSourceIdRef.current = first.id;
+					applySourceDefaults(first, setSourceId, setSelectedProfileIds, setDestinationNames, setMergeName, setDestinationMode);
+					if (first.profilesDeferred) {
+						void loadSourceProfiles(first.id).then((hydrated) => {
+							if (hydrated && selectedSourceIdRef.current === first.id) {
+								applySourceDefaults(hydrated, setSourceId, setSelectedProfileIds, setDestinationNames, setMergeName, setDestinationMode);
+							}
+						});
+					}
+				}
 			},
-			(reason) => setError(reason instanceof Error ? reason.message : t("settings.browserImport.discoveryFailed")),
+			(reason) => setError({ message: reason instanceof Error ? reason.message : t("settings.browserImport.discoveryFailed"), recoverable: false }),
 		).finally(() => setLoading(false));
-	}, [bridge, open, t]);
+		// Translation changes must not reset an active import or its outcome.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [bridge, open]);
+
+	useEffect(() => {
+		if (error) errorRef.current?.focus();
+	}, [error]);
 
 	useEffect(() => {
 		if (!bridge || !open) return;
@@ -103,8 +174,16 @@ export function BrowserImportDialog({
 	const selectSource = (id: string) => {
 		const next = sources.find((candidate) => candidate.id === id);
 		if (!next) return;
+		selectedSourceIdRef.current = id;
 		applySourceDefaults(next, setSourceId, setSelectedProfileIds, setDestinationNames, setMergeName, setDestinationMode);
-		setError("");
+		setError(null);
+		if (next.profilesDeferred) {
+			void loadSourceProfiles(id).then((hydrated) => {
+				if (hydrated && selectedSourceIdRef.current === id) {
+					applySourceDefaults(hydrated, setSourceId, setSelectedProfileIds, setDestinationNames, setMergeName, setDestinationMode);
+				}
+			});
+		}
 	};
 
 	const selectProfiles = (ids: string[]) => {
@@ -117,7 +196,7 @@ export function BrowserImportDialog({
 		));
 		if (ids.length <= 1) setDestinationMode("merge");
 		else if (selectedProfileIds.length <= 1) setDestinationMode("separate");
-		setError("");
+		setError(null);
 	};
 
 	const startImport = async () => {
@@ -125,7 +204,7 @@ export function BrowserImportDialog({
 		const id = crypto.randomUUID();
 		setProgress({ requestId: id, phase: "preparing", completed: 0, total: selectedProfiles.length });
 		setView("running");
-		setError("");
+		setError(null);
 		try {
 			const imported = await bridge.import({
 				requestId: id,
@@ -146,7 +225,7 @@ export function BrowserImportDialog({
 			setResult(imported);
 			setView("result");
 		} catch (reason) {
-			setError(reason instanceof Error ? reason.message : t("settings.browserImport.failed"));
+			setError(importFailureMessage(reason, source.name));
 			setView("form");
 		} finally {
 			onImported();
@@ -160,7 +239,7 @@ export function BrowserImportDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={(next) => canClose && onOpenChange(next)}>
-			<DialogContent className={settingsDialogContentClass} showCloseButton={false}>
+			<DialogContent className={view === "result" ? `${settingsDialogContentClass} w-[min(30rem,calc(100vw-var(--space-8)))]` : settingsDialogContentClass} showCloseButton={false}>
 				<DialogClose asChild>
 					<button
 						aria-label={t("common.close")}
@@ -172,19 +251,26 @@ export function BrowserImportDialog({
 					</button>
 				</DialogClose>
 				<div className={settingsDialogHeaderClass}>
-					<DialogTitle className="settings-dialog-title">{t("settings.browserImport.title")}</DialogTitle>
-					<DialogDescription>{t("settings.browserImport.description")}</DialogDescription>
+					<DialogTitle className="settings-dialog-title">{t(view === "result" ? resultTitle : "settings.browserImport.title")}</DialogTitle>
+					<DialogDescription className={view === "result" ? "sr-only" : undefined}>{t("settings.browserImport.description")}</DialogDescription>
 				</div>
 
 				<div className={settingsDialogBodyClass}>
+					{view === "form" && error ? (
+						<p ref={errorRef} tabIndex={-1} className={error.recoverable ? "text-xs text-muted-foreground" : "rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive"} role="alert">{error.recoverable ? t("settings.browserImport.tip", { message: error.message }) : error.message}</p>
+					) : null}
+					{view === "form" && showSafariAccessDenied ? (
+						<p className="text-xs text-muted-foreground" role="status">{t("settings.browserImport.safariAccessUnavailable")}</p>
+					) : null}
 					{view === "form" ? (
 						<ImportForm
 							destinationMode={destinationMode}
 							destinationNames={destinationNames}
-							error={error}
+							error={error?.message ?? ""}
 							includeCookies={includeCookies}
 							includeHistory={includeHistory}
 							loading={loading}
+							sourceLoading={sourceLoading}
 							mergeName={mergeName}
 							onSelectProfiles={selectProfiles}
 							onSelectSource={selectSource}
@@ -192,8 +278,8 @@ export function BrowserImportDialog({
 							selectedProfileIds={selectedProfileIds}
 							setDestinationMode={setDestinationMode}
 							setDestinationNames={setDestinationNames}
-							setIncludeCookies={(value) => { setIncludeCookies(value); setError(""); }}
-							setIncludeHistory={(value) => { setIncludeHistory(value); setError(""); }}
+							setIncludeCookies={(value) => { setIncludeCookies(value); setError(null); }}
+							setIncludeHistory={(value) => { setIncludeHistory(value); setError(null); }}
 							setMergeName={setMergeName}
 							source={source}
 							sourceId={sourceId}
@@ -212,7 +298,7 @@ export function BrowserImportDialog({
 							</div>
 						</div>
 					) : null}
-					{view === "result" && result ? <ResultStep result={result} /> : null}
+					{view === "result" && result ? <ResultStep empty={resultEmpty} includeCookies={includeCookies} includeHistory={includeHistory} result={result} /> : null}
 				</div>
 
 				<div className={settingsDialogFooterClass}>
@@ -226,18 +312,34 @@ export function BrowserImportDialog({
 					) : null}
 					{view === "form" ? (
 						<Button
-							disabled={loading || !source || selectedProfiles.length === 0 || (!includeCookies && !includeHistory) || !namesValid}
+							disabled={loading || sourceLoading || !source || selectedProfiles.length === 0 || (!includeCookies && !includeHistory) || !namesValid}
 							onClick={() => void startImport()}
 							type="button"
 							variant="footer-primary"
 						>
-							{t("settings.browserImport.start")}
+							{t(error?.recoverable && source ? "settings.browserImport.retry" : "settings.browserImport.start")}
 						</Button>
 					) : null}
 				</div>
 			</DialogContent>
 		</Dialog>
 	);
+}
+
+function importFailureMessage(reason: unknown, browser: string): ImportFailure {
+	const fallback = appI18n.t("settings.browserImport.failed");
+	const raw = reason instanceof Error ? reason.message : typeof reason === "string" ? reason : fallback;
+	const message = raw
+		.replace(/^Error invoking remote method '[^']+':\s*(?:Error:\s*)?/i, "")
+		.replace(/^Error:\s*/i, "")
+		.trim();
+	if (browser === "Safari" && /unable to open database file|SQLITE_CANTOPEN|\b(?:EACCES|EPERM)\b/i.test(message)) {
+		return { message: appI18n.t("settings.browserImport.safariAccessUnavailable"), recoverable: false };
+	}
+	if (/couldn't create a temporary copy|unable to open database file|database is locked|SQLITE_(?:BUSY|CANTOPEN|LOCKED)/i.test(message)) {
+		return { message: appI18n.t("settings.browserImport.sourceDatabaseUnavailable", { browser }), recoverable: true };
+	}
+	return { message: message || fallback, recoverable: false };
 }
 
 function ImportForm({
@@ -247,6 +349,7 @@ function ImportForm({
 	profiles,
 	selectedProfileIds,
 	loading,
+	sourceLoading,
 	error,
 	includeCookies,
 	includeHistory,
@@ -267,6 +370,7 @@ function ImportForm({
 	profiles: BrowserImportSource["profiles"];
 	selectedProfileIds: string[];
 	loading: boolean;
+	sourceLoading: boolean;
 	error: string;
 	includeCookies: boolean;
 	includeHistory: boolean;
@@ -290,7 +394,7 @@ function ImportForm({
 	);
 	if (sources.length === 0) {
 		return error
-			? <p className="text-sm text-destructive" role="alert">{error}</p>
+			? null
 			: <p className="text-sm text-muted-foreground">{t("settings.browserImport.noneFound")}</p>;
 	}
 	return (
@@ -313,7 +417,7 @@ function ImportForm({
 								<SelectItem className={selected ? "bg-settings-menu-selected text-foreground" : ""} key={candidate.id} value={candidate.id}>
 									<span className="flex w-full min-w-0 items-center gap-2">
 										<span className="min-w-0 flex-1 truncate">{candidate.name}</span>
-										<span className="text-xs text-muted-foreground">{t("settings.browserImport.profileCount", { count: candidate.profiles.length })}</span>
+										{candidate.profilesDeferred ? null : <span className="text-xs text-muted-foreground">{t("settings.browserImport.profileCount", { count: candidate.profiles.length })}</span>}
 										{selected ? <CheckCircle2 aria-hidden="true" className="size-4 shrink-0 text-accent" /> : null}
 									</span>
 								</SelectItem>
@@ -325,11 +429,15 @@ function ImportForm({
 
 			{source ? (
 				<>
-					<ProfilesStep onChange={onSelectProfiles} selected={selectedProfileIds} source={source} />
+					{sourceLoading ? (
+						<div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+							<LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+							{t("settings.browserImport.detecting")}
+						</div>
+					) : <ProfilesStep onChange={onSelectProfiles} selected={selectedProfileIds} source={source} />}
 					<OptionsStep
 						destinationMode={destinationMode}
 						destinationNames={destinationNames}
-						error={error}
 						includeCookies={includeCookies}
 						includeHistory={includeHistory}
 						mergeName={mergeName}
@@ -363,8 +471,7 @@ function ProfilesStep({ source, selected, onChange }: { source: BrowserImportSou
 							onChange={(event) => onChange(event.target.checked ? [...selected, profile.id] : selected.filter((id) => id !== profile.id))}
 							type="checkbox"
 						/>
-						<span className="text-sm font-medium">{profile.name}</span>
-						{profile.default ? <span className="text-xs text-muted-foreground">{t("settings.browserImport.defaultProfile")}</span> : null}
+						<span className="text-sm font-medium">{profile.name.toLowerCase() === "default" ? t("settings.browserImport.defaultProfile") : profile.name}</span>
 					</label>
 					);
 				})}
@@ -381,7 +488,6 @@ function OptionsStep({
 	destinationMode,
 	destinationNames,
 	mergeName,
-	error,
 	setIncludeCookies,
 	setIncludeHistory,
 	setDestinationMode,
@@ -395,7 +501,6 @@ function OptionsStep({
 	destinationMode: "separate" | "merge";
 	destinationNames: Record<string, string>;
 	mergeName: string;
-	error: string;
 	setIncludeCookies: (value: boolean) => void;
 	setIncludeHistory: (value: boolean) => void;
 	setDestinationMode: (value: "separate" | "merge") => void;
@@ -416,8 +521,7 @@ function OptionsStep({
 					<input checked={includeCookies} className="mt-0.5 size-4 shrink-0 accent-accent" onChange={(event) => setIncludeCookies(event.target.checked)} type="checkbox" />
 				</label>
 				{source.cookieSupport !== "supported" ? (
-					<p className="flex items-start gap-2 text-xs text-warning">
-						<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+					<p className="text-xs text-muted-foreground">
 						{t(capabilityKey(source.cookieSupportReason))}
 					</p>
 				) : null}
@@ -448,40 +552,54 @@ function OptionsStep({
 					<div className="grid gap-2">
 						{profiles.map((profile) => (
 							<label className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] items-center gap-3 text-xs" key={profile.id}>
-								<span className="truncate text-muted-foreground">{profile.name}</span>
+								<span className="truncate text-muted-foreground">{profile.name.toLowerCase() === "default" ? t("settings.browserImport.defaultProfile") : profile.name}</span>
 								<Input maxLength={64} onChange={(event) => setDestinationNames((current) => ({ ...current, [profile.id]: event.target.value }))} value={destinationNames[profile.id] ?? ""} />
 							</label>
 						))}
 					</div>
 				)}
 			</section>
-			{error ? (
-				<p className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive" role="alert">
-					<TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-					{error}
-				</p>
-			) : null}
 		</div>
 	);
 }
 
-function ResultStep({ result }: { result: BrowserImportResult }) {
+function ResultStep({ empty, includeCookies, includeHistory, result }: { empty: boolean; includeCookies: boolean; includeHistory: boolean; result: BrowserImportResult }) {
 	const { t } = useTranslation();
 	return (
-		<div className="space-y-4">
-			<div className="flex items-start gap-3 rounded-lg border border-success/30 bg-success/10 p-3">
-				<CheckCircle2 aria-hidden="true" className="mt-0.5 size-5 text-success" />
-				<div><p className="text-sm font-semibold">{t("settings.browserImport.complete")}</p><p className="text-xs text-muted-foreground">{t("settings.browserImport.completeDescription", { browser: result.sourceName })}</p></div>
-			</div>
+		<div className="space-y-3">
 			{result.entries.map((entry) => (
-				<div className="rounded-lg border border-border p-3" key={entry.destinationProfile.id}>
-					<p className="text-sm font-semibold">{entry.destinationProfile.name}</p>
-					<p className="mt-1 text-xs text-muted-foreground">{t("settings.browserImport.resultCounts", { cookies: entry.importedCookies, history: entry.importedHistoryEntries })}</p>
-					{entry.skippedCookies > 0 ? <p className="mt-1 text-xs text-warning">{t("settings.browserImport.skippedCookies", { count: entry.skippedCookies })}</p> : null}
-					{entry.warnings.map((warning) => <p className="mt-1 text-xs text-warning" key={warning.code}>{warningText(warning)}</p>)}
+				<div className="rounded-lg border border-border px-3" key={entry.destinationProfile.id}>
+					<p className="pt-3 text-sm font-medium">{entry.destinationProfile.name}</p>
+					<p className="pb-2 text-xs text-muted-foreground" role="status">
+						{includeCookies && includeHistory
+							? t("settings.browserImport.resultCounts", { cookies: entry.importedCookies, history: entry.importedHistoryEntries })
+							: includeCookies
+								? t("settings.browserImport.resultCookies", { count: entry.importedCookies })
+								: t("settings.browserImport.resultHistory", { count: entry.importedHistoryEntries })}
+					</p>
+					{[
+						{ selected: includeCookies, Icon: Cookie, label: "settings.browserImport.cookies" as const, count: entry.importedCookies },
+						{ selected: includeHistory, Icon: HistoryIcon, label: "settings.browserImport.history" as const, count: entry.importedHistoryEntries },
+					].filter((item) => item.selected).map(({ Icon, label, count }) => (
+						<div className="flex items-center gap-3 border-t border-border py-3 text-sm" key={label}>
+							<Icon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+							<span className="flex-1">{t(label)}</span>
+							<span className="sr-only">{t(count > 0 ? "settings.browserImport.finished" : "settings.browserImport.empty")}</span>
+							{count > 0
+								? <CheckCircle2 aria-hidden="true" className="size-4 shrink-0 text-success" />
+								: <CircleMinus aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
+						</div>
+					))}
+					{entry.skippedCookies > 0 || entry.warnings.length > 0 ? (
+						<details className="border-t border-border py-3 text-xs text-muted-foreground">
+							<summary className="cursor-pointer">{t("settings.browserImport.importDetails")}{entry.skippedCookies > 0 ? ` · ${t("settings.browserImport.skippedCookies", { count: entry.skippedCookies })}` : ""}</summary>
+							{entry.warnings.map((warning) => <p className="mt-2" key={warning.code}>{warningText(warning)}</p>)}
+							{includeCookies && entry.skippedCookies > 0 ? <p className="mt-2">{t("settings.browserImport.signInAgain")}</p> : null}
+						</details>
+					) : null}
 				</div>
 			))}
-			<p className="text-xs text-muted-foreground">{t("settings.browserImport.useProfile")}</p>
+			{!empty ? <p className="text-xs text-muted-foreground">{t("settings.browserImport.useProfile")}</p> : null}
 		</div>
 	);
 }

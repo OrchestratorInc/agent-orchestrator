@@ -51,15 +51,33 @@ const (
 // either whitespace or rendered with SGR dim styling. Interactive agents use
 // dim text for placeholder suggestions; normal text is a human-authored draft.
 // Plain captures that lose styling therefore fail closed for non-empty text.
-func LastPromptIsEmptyOrDimPlaceholder(output, marker string) bool {
-	return LastPromptComposerState(output, marker) == ComposerEmpty
+// Provider-owned chrome labels are ignored when given.
+func LastPromptIsEmptyOrDimPlaceholder(output, marker string, chromeLabels ...string) bool {
+	return LastPromptComposerState(output, marker, chromeLabels...) == ComposerEmpty
+}
+
+// isPromptChromeLabel reports whether the visible prompt-line text is
+// provider-owned chrome. Some providers paint product labels (their own name,
+// a mode indicator) into the current composer row with default styling, which
+// otherwise is indistinguishable from a human draft.
+func isPromptChromeLabel(text string, chromeLabels []string) bool {
+	if len(chromeLabels) == 0 || text == "" {
+		return false
+	}
+	for _, label := range chromeLabels {
+		if text == strings.TrimSpace(label) {
+			return true
+		}
+	}
+	return false
 }
 
 // LastPromptComposerState classifies a footer-free prompt composer. Normal
 // visible text after the prompt is a draft; whitespace and dim provider
 // placeholder text are empty. Missing or incomplete prompt evidence is
-// unknown.
-func LastPromptComposerState(output, marker string) ComposerState {
+// unknown. chromeLabels names provider-owned text that may be painted into
+// the current prompt row and must never read as a human draft.
+func LastPromptComposerState(output, marker string, chromeLabels ...string) ComposerState {
 	marker = strings.TrimSpace(marker)
 	if marker == "" {
 		return ComposerUnknown
@@ -75,12 +93,14 @@ func LastPromptComposerState(output, marker string) ComposerState {
 		if len(line) < len(markerRunes) || styledString(line[:len(markerRunes)]) != marker {
 			continue
 		}
-		for _, r := range line[len(markerRunes):] {
-			if unicode.IsSpace(r.value) {
-				continue
-			}
-			if !r.dim {
-				return ComposerDraft
+		if !isPromptChromeLabel(strings.TrimSpace(styledString(line[len(markerRunes):])), chromeLabels) {
+			for _, r := range line[len(markerRunes):] {
+				if unicode.IsSpace(r.value) {
+					continue
+				}
+				if !r.dim {
+					return ComposerDraft
+				}
 			}
 		}
 		// Wrapped composer content is rendered on following rows without
@@ -91,6 +111,17 @@ func LastPromptComposerState(output, marker string) ComposerState {
 		// leading-newline human draft as chrome would be destructive.
 		for j := i + 1; j < len(lines); j++ {
 			continuation := lines[j]
+			// A full-width horizontal rule below the prompt ends the composer's
+			// content region: provider status chrome lives below that rule, and
+			// any real draft row above it already returned ComposerDraft. Labeled
+			// or width-drifted rules are why this footer-free fallback runs at
+			// all, so they close the region instead of reading as input.
+			if horizontalRuleWidth(continuation) > 0 {
+				return ComposerEmpty
+			}
+			if isPromptChromeLabel(strings.TrimSpace(styledString(continuation)), chromeLabels) {
+				continue
+			}
 			for _, r := range continuation {
 				if unicode.IsSpace(r.value) {
 					continue
@@ -140,14 +171,17 @@ func LastPromptHasBoldMarker(output, marker string) bool {
 // non-dim status chrome below the lower rule. Only rows inside the bordered
 // composer are considered input. Requiring both matching rules keeps the check
 // fail-closed when a capture is partial or the provider changes its layout.
-func LastBorderedPromptIsEmptyOrDimPlaceholder(output, marker string) bool {
-	return LastBorderedPromptComposerState(output, marker) == ComposerEmpty
+// Provider-owned chrome labels are ignored when given.
+func LastBorderedPromptIsEmptyOrDimPlaceholder(output, marker string, chromeLabels ...string) bool {
+	return LastBorderedPromptComposerState(output, marker, chromeLabels...) == ComposerEmpty
 }
 
 // LastBorderedPromptComposerState classifies only the content between a pair
 // of matching composer rules. Provider status chrome below the lower rule is
-// excluded. An incomplete border is unknown rather than empty.
-func LastBorderedPromptComposerState(output, marker string) ComposerState {
+// excluded. An incomplete border is unknown rather than empty. chromeLabels
+// names provider-owned text that may be painted into the current prompt row
+// and must never read as a human draft.
+func LastBorderedPromptComposerState(output, marker string, chromeLabels ...string) ComposerState {
 	marker = strings.TrimSpace(marker)
 	if marker == "" {
 		return ComposerUnknown
@@ -177,12 +211,17 @@ func LastBorderedPromptComposerState(output, marker string) ComposerState {
 		if upperWidth == 0 || lowerIndex < 0 || upperWidth != lowerWidth {
 			return ComposerUnknown
 		}
-		for _, r := range line[len(markerRunes):] {
-			if !unicode.IsSpace(r.value) && !r.dim {
-				return ComposerDraft
+		if !isPromptChromeLabel(strings.TrimSpace(styledString(line[len(markerRunes):])), chromeLabels) {
+			for _, r := range line[len(markerRunes):] {
+				if !unicode.IsSpace(r.value) && !r.dim {
+					return ComposerDraft
+				}
 			}
 		}
 		for _, continuation := range lines[i+1 : lowerIndex] {
+			if isPromptChromeLabel(strings.TrimSpace(styledString(continuation)), chromeLabels) {
+				continue
+			}
 			for _, r := range continuation {
 				if !unicode.IsSpace(r.value) && !r.dim {
 					return ComposerDraft
@@ -222,8 +261,7 @@ func styledTerminalLines(output string) [][]styledRune {
 		if output[i] == '\x1b' {
 			if next, params, sgr := consumeEscape(output, i); next > i {
 				if sgr {
-					dim = applySGRDim(dim, params)
-					bold = applySGRBold(bold, params)
+					dim, bold = applySGR(dim, bold, params)
 				}
 				i = next
 				continue
@@ -272,28 +310,9 @@ func consumeEscape(output string, start int) (next int, params string, sgr bool)
 	}
 }
 
-func applySGRDim(current bool, params string) bool {
+func applySGR(dim, bold bool, params string) (bool, bool) {
 	if params == "" {
-		return false
-	}
-	for _, raw := range strings.FieldsFunc(params, func(r rune) bool { return r == ';' || r == ':' }) {
-		code, err := strconv.Atoi(raw)
-		if err != nil {
-			continue
-		}
-		switch code {
-		case 0, 22:
-			current = false
-		case 2:
-			current = true
-		}
-	}
-	return current
-}
-
-func applySGRBold(current bool, params string) bool {
-	if params == "" {
-		return false
+		return false, false
 	}
 	fields := strings.Split(params, ";")
 	for i := 0; i < len(fields); i++ {
@@ -307,8 +326,9 @@ func applySGRBold(current bool, params string) bool {
 		}
 		// Extended foreground, background, and underline colors use either
 		// 38:2:... / 38:5:... or semicolon-separated payloads. Their color values
-		// are data, not independent SGR attributes (a palette index of 1 is not
-		// bold). Skip the whole payload before examining later attributes.
+		// are data, not independent SGR attributes (the 2 in 38;2;R;G;B is not
+		// dim, a palette index of 1 is not bold). Skip the whole payload before
+		// examining later attributes.
 		if code == 38 || code == 48 || code == 58 {
 			if strings.Contains(fields[i], ":") || i+1 >= len(fields) {
 				continue
@@ -323,12 +343,14 @@ func applySGRBold(current bool, params string) bool {
 		}
 		switch code {
 		case 0, 22:
-			current = false
+			dim, bold = false, false
 		case 1:
-			current = true
+			bold = true
+		case 2:
+			dim = true
 		}
 	}
-	return current
+	return dim, bold
 }
 
 func trimLeftStyledSpace(line []styledRune) []styledRune {

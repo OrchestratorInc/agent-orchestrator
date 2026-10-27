@@ -20,6 +20,7 @@ const { history } = vi.hoisted(() => ({
 
 vi.mock("@tanstack/react-router", () => ({
 	useCanGoBack: () => false,
+	useNavigate: () => vi.fn(),
 	useRouter: () => ({ history }),
 }));
 
@@ -33,44 +34,35 @@ describe("TitlebarNav", () => {
 		useUiStore.setState({ isSidebarOpen: true });
 	});
 
-	it("uses the compact sidebar-aligned chrome row in native fullscreen", () => {
-		const { container } = render(<TitlebarNav isFullScreen />);
-
+	it.each([false, true])("keeps the same header row with sidebar open=%s", (open) => {
+		useUiStore.setState({ isSidebarOpen: open });
+		const { container, rerender } = render(<TitlebarNav />);
 		const nav = container.querySelector('[data-slot="titlebar-nav"]');
-		expect(nav).toHaveClass("left-titlebar-cluster-left-fullscreen", "h-traffic-light-clearance-fullscreen", "top-0");
-		expect(nav).not.toHaveClass("h-traffic-light-clearance");
-		expect(screen.getByRole("button", { name: "Go back" })).toHaveClass("disabled:opacity-55");
+		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left");
+		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
+		expect(nav).toHaveClass("top-0", "h-traffic-light-clearance", "left-titlebar-cluster-left-fullscreen");
+		// The brand and the history arrows trade places; the hidden one is inert and
+		// aria-hidden (it collapses to width 0 rather than unmounting).
+		const brand = container.querySelector('[data-slot="titlebar-brand"]');
+		const history = container.querySelector('[data-slot="titlebar-history"]');
+		expect(brand?.hasAttribute("aria-hidden")).toBe(!open);
+		expect(history?.hasAttribute("aria-hidden")).toBe(open);
+		if (!open) expect(screen.getByRole("button", { name: "Go back" })).toBeDisabled();
 	});
 
-	it("centers collapsed fullscreen navigation on the inset session topbar", () => {
+	it("nudges the sidebar re-clamp when fullscreen or zoom moves the brand", () => {
+		const onResize = vi.fn();
+		window.addEventListener("resize", onResize);
+		const { rerender } = render(<TitlebarNav />);
+		expect(onResize).toHaveBeenCalledTimes(1);
+		rerender(<TooltipProvider><TitlebarNav isFullScreen /></TooltipProvider>);
+		expect(onResize).toHaveBeenCalledTimes(2);
+		rerender(<TooltipProvider><TitlebarNav zoomFactor={1.25} /></TooltipProvider>);
+		expect(onResize).toHaveBeenCalledTimes(3);
+		// No brand to fit while the sidebar is closed.
 		useUiStore.setState({ isSidebarOpen: false });
-		const { container } = render(<TitlebarNav hasSessionTopbar isFullScreen />);
-
-		const nav = container.querySelector('[data-slot="titlebar-nav"]');
-		expect(nav).toHaveClass("top-1.5", "left-titlebar-cluster-left-fullscreen");
-		expect(nav).not.toHaveClass("top-0");
-	});
-
-	it("keeps expanded fullscreen navigation at the top of the sidebar chrome row", () => {
-		const { container } = render(<TitlebarNav hasSessionTopbar isFullScreen />);
-
-		const nav = container.querySelector('[data-slot="titlebar-nav"]');
-		expect(nav).toHaveClass("top-0");
-		expect(nav).not.toHaveClass("top-1.5");
-	});
-
-	it("retains the traffic-light geometry in a windowed macOS shell", () => {
-		const { container } = render(<TitlebarNav />);
-
-		const nav = container.querySelector('[data-slot="titlebar-nav"]');
-		expect(nav).toHaveClass("left-titlebar-cluster-left", "h-traffic-light-clearance", "-top-0.6");
-	});
-
-	it("hides the fixed navigation cluster while the sidebar is an icon rail", () => {
-		useUiStore.setState({ isSidebarAutoCollapsed: true });
-
-		const { container } = render(<TitlebarNav />);
-
-		expect(container.querySelector('[data-slot="titlebar-nav"]')).toBeNull();
+		rerender(<TooltipProvider><TitlebarNav isFullScreen zoomFactor={1.25} /></TooltipProvider>);
+		expect(onResize).toHaveBeenCalledTimes(3);
+		window.removeEventListener("resize", onResize);
 	});
 });

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -334,6 +335,49 @@ func TestActivateConversationBranchMovesProviderAndGenerationTogether(t *testing
 	}
 }
 
+func TestBranchActivationScopesNativeHistoryFacts(t *testing.T) {
+	for _, nativeID := range []string{"thread-root", "thread-child"} {
+		t.Run(nativeID, func(t *testing.T) {
+			ctx := context.Background()
+			s, session, conversation := seededChatConversation(t)
+			session.Metadata.AgentSessionID = "thread-root"
+			session.Metadata.LatestUserPrompt = "continue"
+			session.Metadata.LatestUserPromptAt = testNow
+			session.Metadata.LatestAssistantUpdate = "old answer"
+			session.Metadata.LatestAssistantUpdateAt = testNow
+			session.Metadata.NativeTranscriptPath = "/old/transcript.jsonl"
+			if err := s.UpdateSession(ctx, session); err != nil {
+				t.Fatal(err)
+			}
+			branch := domain.ConversationBranch{
+				ID: "child", ConversationID: conversation.ID, ParentBranchID: conversation.ActiveBranchID,
+				ProviderConversationID: nativeID,
+			}
+			if err := s.CreateAndActivateConversationBranch(ctx, session.ID, branch, "child-generation", testNow.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			got, found, err := s.GetSession(ctx, session.ID)
+			if err != nil || !found {
+				t.Fatalf("GetSession: found=%v err=%v", found, err)
+			}
+			meta := got.Metadata
+			if meta.AgentSessionID != nativeID || meta.ProviderConversationID != nativeID || meta.ControllerGeneration != "child-generation" {
+				t.Fatalf("native owner not moved with branch: %+v", meta)
+			}
+			if nativeID == "thread-root" {
+				if meta.LatestUserPrompt != "continue" || !meta.LatestUserPromptAt.Equal(testNow) ||
+					meta.LatestAssistantUpdate != "old answer" || !meta.LatestAssistantUpdateAt.Equal(testNow) ||
+					meta.NativeTranscriptPath != "/old/transcript.jsonl" {
+					t.Fatalf("same native owner lost checkpoint: %+v", meta)
+				}
+			} else if meta.LatestUserPrompt != "" || !meta.LatestUserPromptAt.Equal(testNow) ||
+				meta.LatestAssistantUpdate != "" || !meta.LatestAssistantUpdateAt.IsZero() || meta.NativeTranscriptPath != "" {
+				t.Fatalf("new native owner inherited checkpoint or lost last human activity time: %+v", meta)
+			}
+		})
+	}
+}
+
 func TestActivateConversationBranchRollsBackWhenSessionCannotMove(t *testing.T) {
 	ctx := context.Background()
 	s, session, conversation := seededChatConversation(t)
@@ -439,6 +483,170 @@ func TestConversationEditAnchorRejectsMissingOrNonHumanTurn(t *testing.T) {
 	}
 }
 
+func TestEditDeliveryReservationHasOneConcurrentWinner(t *testing.T) {
+	ctx := context.Background()
+	s, _, conversation := seededChatConversation(t)
+	const workers = 8
+	created := make(chan bool, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, won, err := s.ReserveEditDelivery(
+				ctx, conversation.ID, "edit-concurrent", `{"sourceTurnId":"turn-1","text":"edited"}`, testNow)
+			created <- won
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(created)
+	close(errs)
+	winners := 0
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("ReserveEditDelivery: %v", err)
+		}
+	}
+	for won := range created {
+		if won {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("reservation winners = %d, want exactly one", winners)
+	}
+}
+
+func TestBeginEditProviderWorkUsesCurrentConversationOwner(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		scope      domain.ConversationScope
+		rebind     bool
+		stale      bool
+		mode       domain.SessionMode
+		terminated bool
+		wantErr    bool
+	}{
+		{name: "worker", scope: domain.ConversationScopeSession, mode: domain.SessionModeChat},
+		{name: "orchestrator", scope: domain.ConversationScopeProject, mode: domain.SessionModeChat},
+		{name: "rebound orchestrator", scope: domain.ConversationScopeProject, rebind: true, mode: domain.SessionModeChat},
+		{name: "previous orchestrator", scope: domain.ConversationScopeProject, rebind: true, stale: true, mode: domain.SessionModeChat, wantErr: true},
+		{name: "stale generation", scope: domain.ConversationScopeSession, stale: true, mode: domain.SessionModeChat, wantErr: true},
+		{name: "terminal owner", scope: domain.ConversationScopeProject, mode: domain.SessionModeTUI, wantErr: true},
+		{name: "terminated owner", scope: domain.ConversationScopeProject, mode: domain.SessionModeChat, terminated: true, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := newTestStore(t)
+			seedProject(t, s, "edit-owner")
+			rec := sampleRecord("edit-owner")
+			rec.Mode = tt.mode
+			rec.Metadata.ControllerGeneration = "generation-source"
+			source, err := s.CreateSession(ctx, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			conversation, err := s.CreateConversation(ctx, "edit-owner-conversation", tt.scope, source.ProjectID, source.ID, testNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := source
+			if tt.rebind {
+				rec.Metadata.ControllerGeneration = "generation-target"
+				owner, err = s.CreateSession(ctx, rec)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rebound, err := s.CreateConversation(ctx, "unused", tt.scope, owner.ProjectID, owner.ID, testNow.Add(time.Minute))
+				if err != nil || rebound.ID != conversation.ID {
+					t.Fatalf("rebind: conversation=%+v err=%v", rebound, err)
+				}
+			}
+			owner.Mode, owner.IsTerminated = tt.mode, tt.terminated
+			if err := s.UpdateSession(ctx, owner); err != nil {
+				t.Fatal(err)
+			}
+			if _, won, err := s.ReserveEditDelivery(ctx, conversation.ID, "edit-client", "{}", testNow); err != nil || !won {
+				t.Fatalf("reserve: won=%v err=%v", won, err)
+			}
+			generation := owner.Metadata.ControllerGeneration
+			if tt.stale {
+				generation = "stale-generation"
+				if tt.rebind {
+					generation = source.Metadata.ControllerGeneration
+				}
+			}
+			err = s.BeginEditProviderWork(ctx, conversation.ID, "edit-client", generation)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("begin provider work: err=%v, wantErr=%v", err, tt.wantErr)
+			}
+			if !tt.wantErr {
+				if err := s.BeginEditProviderWork(ctx, conversation.ID, "edit-client", generation); err == nil {
+					t.Fatal("same reservation started provider work twice")
+				}
+			}
+		})
+	}
+}
+
+func TestCompleteEditDeliveryRollsBackBranchMutationWhenResultCannotSettle(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	seedBranchTurns(t, s, session, conversation)
+	child := domain.ConversationBranch{
+		ID: "branch-edit-atomic", ConversationID: conversation.ID, SessionID: session.ID,
+		ProviderConversationID: "thread-edit-atomic", ParentBranchID: conversation.ActiveBranchID,
+		ForkAfterTurnID: "turn-1", ReplacedTurnID: "turn-2", ForkAfterSequence: 2,
+	}
+	if err := s.CreateConversationBranch(ctx, child, testNow.Add(time.Minute)); err != nil {
+		t.Fatalf("CreateConversationBranch: %v", err)
+	}
+	activateTestBranch(t, s, session, conversation, child.ID, child.ProviderConversationID, "generation-edit")
+	appendBranchPrompt(t, s, session, conversation, "generation-edit", "replacement", "edited second prompt")
+	turn, err := s.TurnByID(ctx, "turn-replacement")
+	if err != nil {
+		t.Fatalf("TurnByID: %v", err)
+	}
+	if _, created, err := s.ReserveEditDelivery(
+		ctx, conversation.ID, "edit-atomic", `{"sourceTurnId":"turn-2","text":"edited second prompt"}`, testNow); err != nil || !created {
+		t.Fatalf("ReserveEditDelivery: created=%v err=%v", created, err)
+	}
+
+	// The branch update executes first inside CompleteEditDelivery. Settling an
+	// absent handle then fails, and the transaction must undo that first write.
+	err = s.CompleteEditDelivery(ctx, conversation.ID, "missing-edit-handle",
+		conversation.ActiveBranchID, child.ID, turn, testNow.Add(2*time.Minute))
+	if err == nil {
+		t.Fatal("CompleteEditDelivery unexpectedly settled a missing reservation")
+	}
+	gotBranch, err := s.ConversationBranch(ctx, conversation.ID, child.ID)
+	if err != nil {
+		t.Fatalf("ConversationBranch after rollback: %v", err)
+	}
+	if gotBranch.ReplacementTurnID != "" {
+		t.Fatalf("branch replacement survived failed transaction: %q", gotBranch.ReplacementTurnID)
+	}
+	delivery, found, err := s.EditDelivery(ctx, conversation.ID, "edit-atomic")
+	if err != nil || !found || delivery.State != domain.ConversationEditReserved {
+		t.Fatalf("delivery after rollback = %+v found=%v err=%v, want reserved", delivery, found, err)
+	}
+
+	if err := s.CompleteEditDelivery(ctx, conversation.ID, "edit-atomic",
+		conversation.ActiveBranchID, child.ID, turn, testNow.Add(3*time.Minute)); err != nil {
+		t.Fatalf("CompleteEditDelivery valid: %v", err)
+	}
+	gotBranch, err = s.ConversationBranch(ctx, conversation.ID, child.ID)
+	if err != nil || gotBranch.ReplacementTurnID != turn.ID {
+		t.Fatalf("completed branch = %+v err=%v", gotBranch, err)
+	}
+	delivery, found, err = s.EditDelivery(ctx, conversation.ID, "edit-atomic")
+	if err != nil || !found || delivery.State != domain.ConversationEditAccepted || delivery.Turn.ID != turn.ID {
+		t.Fatalf("completed delivery = %+v found=%v err=%v", delivery, found, err)
+	}
+}
+
 func appendBranchPrompt(
 	t *testing.T,
 	s *sqlite.Store,
@@ -507,6 +715,12 @@ func TestConversationBranchSnapshotFollowsOnlyActiveLineage(t *testing.T) {
 	activateTestBranch(t, s, session, conversation, child.ID, child.ProviderConversationID, "generation-child")
 	appendBranchPrompt(t, s, session, conversation, "generation-child", "b-edited", "B edited")
 	appendBranchPrompt(t, s, session, conversation, "generation-child", "c-edited", "C edited")
+	if err := s.SettleTurnByID(ctx, "turn-c-edited", domain.TurnStateCompleted, "", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.LatestVisibleUserTurnSettled(ctx, conversation.ID, session.ID); err != nil || !settled {
+		t.Fatalf("latest turn on child branch settled = %v, %v", settled, err)
+	}
 
 	childSnapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
 	if err != nil {
@@ -515,6 +729,9 @@ func TestConversationBranchSnapshotFollowsOnlyActiveLineage(t *testing.T) {
 	assertMessageTexts(t, childSnapshot.Messages, []string{"A", "B edited", "C edited"})
 
 	activateTestBranch(t, s, session, conversation, rootID, "thread-root", "generation-root-2")
+	if settled, err := s.LatestVisibleUserTurnSettled(ctx, conversation.ID, session.ID); err != nil || settled {
+		t.Fatalf("latest turn on root branch settled = %v, %v", settled, err)
+	}
 	rootSnapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
 	if err != nil {
 		t.Fatalf("LoadConversationSnapshot root: %v", err)
@@ -724,6 +941,7 @@ func TestConversationBranchPointDescribesSiblingNavigation(t *testing.T) {
 	}
 	if point == nil {
 		t.Fatalf("branch points = %+v", snapshot.BranchPoints)
+		return
 	}
 	if point.Position != 3 || point.Total != 3 || point.PreviousBranchID != "branch-child-1" || point.NextBranchID != "" {
 		t.Fatalf("active child branch point = %+v", *point)
@@ -845,6 +1063,68 @@ func TestCommitChatSpawnAtomicallyPublishesProviderBoundaryAndOwner(t *testing.T
 		gotSession.Metadata.ControllerGeneration != session.Metadata.ControllerGeneration {
 		t.Fatalf("committed provider owner = handle %q generation %q",
 			gotSession.Metadata.ProviderConversationID, gotSession.Metadata.ControllerGeneration)
+	}
+}
+
+// Queued intake runs on the fresh provider, so it must share that provider's
+// replay scope. Work the previous provider already received keeps its branch.
+func TestCommitChatSpawnMovesOnlyUndispatchedIntakeToProviderBoundary(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	rootID := conversation.ActiveBranchID
+	appendTurn := func(owner domain.SessionID, generation, turnID, text string) {
+		t.Helper()
+		created, err := s.AppendUserMessage(ctx, conversation.ID, owner, generation, domain.ConversationMessage{
+			ID: "message-" + turnID, Origin: domain.MessageOriginHuman, Text: text, ClientMessageID: "client-" + turnID,
+		}, turnID, testNow)
+		if err != nil || !created {
+			t.Fatalf("AppendUserMessage %s: created=%v err=%v", turnID, created, err)
+		}
+	}
+	appendTurn(session.ID, "generation-root", "turn-dispatched", "already sent")
+	if err := s.BindTurnToProvider(ctx, "turn-dispatched", "provider-turn-root", testNow); err != nil {
+		t.Fatalf("BindTurnToProvider: %v", err)
+	}
+	// A provisioning retry queues intake before its fresh controller exists.
+	if _, err := s.SetSessionProvisionState(ctx, session.ID, domain.SessionProvisionProvisioning, "", testNow); err != nil {
+		t.Fatalf("SetSessionProvisionState: %v", err)
+	}
+	appendTurn(session.ID, "", "turn-intake", "opening brief")
+
+	committedAt := testNow.Add(time.Minute)
+	session.ProvisionState = domain.SessionProvisionReady
+	session.Metadata.ProviderConversationID = "thread-fresh"
+	session.Metadata.ControllerGeneration = "generation-fresh"
+	session.UpdatedAt = committedAt
+	boundary := domain.ConversationBranch{
+		ID: "fresh-provider-boundary", ConversationID: conversation.ID, SessionID: session.ID,
+		ProviderConversationID: "thread-fresh", ParentBranchID: rootID,
+		ForkAfterSequence: 3, ProviderScopeID: "fresh-provider-boundary", CreatedAt: committedAt,
+	}
+	if err := s.CommitChatSpawn(ctx, session, boundary); err != nil {
+		t.Fatalf("CommitChatSpawn: %v", err)
+	}
+
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
+	if err != nil {
+		t.Fatalf("LoadConversationSnapshot: %v", err)
+	}
+	want := map[string]string{"turn-dispatched": rootID, "turn-intake": boundary.ID}
+	for _, turn := range snapshot.Turns {
+		if branch, ok := want[turn.ID]; ok && turn.BranchID != branch {
+			t.Fatalf("turn %s branch = %q, want %q", turn.ID, turn.BranchID, branch)
+		}
+		delete(want, turn.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("turns missing from the active timeline: %v", want)
+	}
+	visible := false
+	for _, message := range snapshot.Messages {
+		visible = visible || message.TurnID == "turn-intake"
+	}
+	if !visible {
+		t.Fatalf("intake prompt hidden after the move: %+v", snapshot.Messages)
 	}
 }
 

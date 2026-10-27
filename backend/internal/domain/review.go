@@ -24,10 +24,45 @@ type Review struct {
 	PRURL     string          `json:"prUrl"`
 	// ReviewerHandleID is the runtime handle of the live reviewer pane, reused
 	// across passes and exposed so the UI can attach its terminal.
-	ReviewerHandleID string    `json:"reviewerHandleId"`
-	AgentSessionID   string    `json:"agentSessionId"`
-	CreatedAt        time.Time `json:"createdAt"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	ReviewerHandleID string `json:"reviewerHandleId"`
+	AgentSessionID   string `json:"agentSessionId"`
+	// ReviewerLaunchID is the AO runtime generation that owns the live reviewer
+	// pane on this row. It fences delayed hooks from an older replaced reviewer.
+	ReviewerLaunchID string `json:"-"`
+	// ReviewerActivityState is the latest activity hook reported by the review
+	// pane itself. It is separate from ReviewRun.Status so the UI can distinguish
+	// "review pass exists" from "reviewer is actively working right now".
+	ReviewerActivityState ActivityState `json:"reviewerActivityState,omitempty"`
+	// InterfaceMode selects the durable reviewer surface. Chat reviewers own a
+	// native conversation; TUI reviewers continue to use their terminal handle.
+	InterfaceMode          ReviewerInterfaceMode `json:"interfaceMode"`
+	ProviderConversationID string                `json:"providerConversationId"`
+	ControllerGeneration   string                `json:"controllerGeneration"`
+	ControllerError        string                `json:"controllerError"`
+	CreatedAt              time.Time             `json:"createdAt"`
+	UpdatedAt              time.Time             `json:"updatedAt"`
+
+	// IsArchived retires the reviewer surface without deleting its history.
+	IsArchived bool `json:"-"`
+}
+
+// ReviewerInterfaceMode selects the durable UI surface for a reviewer.
+type ReviewerInterfaceMode string
+
+const (
+	// ReviewerInterfaceTUI uses the reviewer's terminal handle.
+	ReviewerInterfaceTUI ReviewerInterfaceMode = "tui"
+	// ReviewerInterfaceChat uses a reviewer-owned native chat.
+	ReviewerInterfaceChat ReviewerInterfaceMode = "chat"
+)
+
+// ReviewerSurface gives clients one stable identifier for either reviewer UI.
+type ReviewerSurface struct {
+	Mode            ReviewerInterfaceMode `json:"mode"`
+	ReviewID        string                `json:"reviewId"`
+	Harness         ReviewerHarness       `json:"harness"`
+	HandleID        string                `json:"handleId,omitempty"`
+	ControllerError string                `json:"controllerError,omitempty"`
 }
 
 // ReviewRun is one review pass against a worker's PR.
@@ -40,9 +75,9 @@ type ReviewRun struct {
 	// legacy/single-run delivery.
 	BatchID string          `json:"batchId"`
 	Harness ReviewerHarness `json:"harness"`
-	// TriggerSource records whether this pass was requested by a user or by the
-	// daemon auto-review coordinator.
-	TriggerSource ReviewTriggerSource `json:"triggerSource" enum:"manual,auto"`
+	// TriggerSource records whether this pass was requested by a user, by an
+	// AO agent session through the CLI, or by the daemon auto-review coordinator.
+	TriggerSource ReviewTriggerSource `json:"triggerSource" enum:"manual,agent,auto"`
 	PRURL         string              `json:"prUrl"`
 	// TargetSHA is the PR head commit this pass reviewed.
 	TargetSHA string          `json:"targetSha"`
@@ -70,6 +105,9 @@ type ReviewTriggerSource string
 const (
 	// ReviewTriggerManual marks a user-initiated review pass.
 	ReviewTriggerManual ReviewTriggerSource = "manual"
+	// ReviewTriggerAgent marks a pass an AO agent session (a worker reviewing
+	// its own PR, or an orchestrator) requested through `ao review trigger`.
+	ReviewTriggerAgent ReviewTriggerSource = "agent"
 	// ReviewTriggerAuto marks a daemon-initiated review pass.
 	ReviewTriggerAuto ReviewTriggerSource = "auto"
 )
@@ -107,4 +145,16 @@ type CurrentHeadReviewRun struct {
 	Verdict   ReviewVerdict
 	ID        string
 	CreatedAt time.Time
+}
+
+// ReviewerHandle names one live reviewer pane's runtime handle, independent
+// of whether the worker session that spawned it still exists. A reviewer has
+// no session row of its own — its identity is this review's id and
+// SessionID (the worker it reviews) plus Harness — so the memory diagnostic
+// needs this to find it by anything other than walking session roots.
+type ReviewerHandle struct {
+	ReviewID  string
+	SessionID SessionID
+	Harness   ReviewerHarness
+	HandleID  string
 }

@@ -1,21 +1,28 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
@@ -24,7 +31,10 @@ import (
 // sessionIDPattern bounds the AO_SESSION_ID we will place in a request path to
 // the id alphabet the daemon issues. Validating the externally-set env value
 // before it reaches the loopback URL keeps it from steering the request.
-var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+// Project ids may contain single dots (e.g. "acme.dev"), and session ids
+// inherit them ("acme.dev-2"); dot runs and leading dots stay rejected so the
+// id can never be "." or ".." in a request or file path.
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
 
 const (
 	// hooksLogName is the file under AO_DATA_DIR where hook delivery failures
@@ -45,16 +55,28 @@ const (
 // lifted from the payload when present. All four are optional: an old daemon
 // decodes the body leniently and simply ignores them.
 type setActivityAPIRequest struct {
-	State                 string             `json:"state,omitempty"`
-	Event                 string             `json:"event,omitempty"`
-	ToolName              string             `json:"toolName,omitempty"`
-	ToolUseID             string             `json:"toolUseId,omitempty"`
-	AgentSessionID        string             `json:"agentSessionId,omitempty"`
-	LatestUserPrompt      string             `json:"latestUserPrompt,omitempty"`
-	LatestAssistantUpdate string             `json:"latestAssistantUpdate,omitempty"`
-	TranscriptPath        string             `json:"transcriptPath,omitempty"`
-	LaunchID              string             `json:"launchId,omitempty"`
-	Usage                 *usageHookMetadata `json:"usage,omitempty"`
+	ObservedAt                   time.Time                           `json:"observedAt,omitempty"`
+	State                        string                              `json:"state,omitempty"`
+	Event                        string                              `json:"event,omitempty"`
+	ToolName                     string                              `json:"toolName,omitempty"`
+	ToolUseID                    string                              `json:"toolUseId,omitempty"`
+	SubagentID                   string                              `json:"subagentId,omitempty"`
+	RunningSubagentIDs           *[]string                           `json:"runningSubagentIds,omitempty"`
+	AgentSessionID               string                              `json:"agentSessionId,omitempty"`
+	LatestUserPrompt             string                              `json:"latestUserPrompt,omitempty"`
+	LatestAssistantUpdate        string                              `json:"latestAssistantUpdate,omitempty"`
+	FinalAssistantMessage        string                              `json:"finalAssistantMessage,omitempty"`
+	TurnUserRequest              string                              `json:"turnUserRequest,omitempty"`
+	Harness                      string                              `json:"harness,omitempty"`
+	ConversationCheckpointOrigin domain.ConversationCheckpointOrigin `json:"conversationCheckpointOrigin,omitempty"`
+	CoordinationID               string                              `json:"coordinationId,omitempty"`
+	ProviderTurnID               string                              `json:"providerTurnId,omitempty"`
+	SubmissionID                 string                              `json:"submissionId,omitempty"`
+	TranscriptPath               string                              `json:"transcriptPath,omitempty"`
+	LaunchID                     string                              `json:"launchId,omitempty"`
+	Entrypoint                   string                              `json:"entrypoint,omitempty"`
+	ProcessID                    int                                 `json:"processId,omitempty"`
+	Usage                        *usageHookMetadata                  `json:"usage,omitempty"`
 }
 
 type usageHookMetadata struct {
@@ -93,6 +115,7 @@ const (
 // PermissionRequest payloads); adapters whose payloads lack them yield empty
 // strings and the signal degrades to today's state-only form.
 func activityMeta(payload []byte) (toolName, toolUseID string) {
+	payload = normalizeHookPayload(payload)
 	var p struct {
 		ToolName  string `json:"tool_name"`
 		ToolUseID string `json:"tool_use_id"`
@@ -107,19 +130,126 @@ func activityMeta(payload []byte) (toolName, toolUseID string) {
 	return p.ToolName, p.ToolUseID
 }
 
+// claudeSubagentFacts keeps native child identity separate from the resumable
+// main session id. A non-nil empty slice proves no children remain; nil means
+// Claude could not supply a task-registry snapshot and must not clear children.
+func claudeSubagentFacts(event string, payload []byte) (string, *[]string) {
+	var p struct {
+		AgentID         string          `json:"agent_id"`
+		BackgroundTasks json.RawMessage `json:"background_tasks"`
+	}
+	if json.Unmarshal(normalizeHookPayload(payload), &p) != nil {
+		return "", nil
+	}
+	id := validSubagentID(p.AgentID)
+	if (event != "stop" && event != "subagent-stop") || len(p.BackgroundTasks) == 0 || p.BackgroundTasks[0] != '[' {
+		return id, nil
+	}
+	var tasks []struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(p.BackgroundTasks, &tasks) != nil || len(tasks) > 128 {
+		return id, nil
+	}
+	running := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Type != "subagent" {
+			continue
+		}
+		childID := validSubagentID(task.ID)
+		if childID == "" {
+			return id, nil
+		}
+		running = append(running, childID)
+	}
+	return id, &running
+}
+
+func validSubagentID(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" || len(id) > maxActivityMetaLen || domain.SanitizeControlChars(id) != id {
+		return ""
+	}
+	return id
+}
+
+func codexSubagentID(event string, payload []byte) string {
+	if event != "subagent-start" && event != "subagent-stop" && event != "user-prompt-submit" {
+		return ""
+	}
+	var p struct {
+		AgentID string `json:"agent_id"`
+	}
+	if json.Unmarshal(normalizeHookPayload(payload), &p) != nil {
+		return ""
+	}
+	return validSubagentID(p.AgentID)
+}
+
+// Codex emits PostToolUse for spawn_agent before the new child's
+// SubagentStart hook. The successful tool response carries a task path but
+// not the child's native agent_id, so its tool_use_id is a provisional key.
+func codexSpawnToolUseID(payload []byte) string {
+	var p struct {
+		ToolName     string `json:"tool_name"`
+		ToolUseID    string `json:"tool_use_id"`
+		AgentID      string `json:"agent_id"`
+		ToolResponse string `json:"tool_response"`
+	}
+	if json.Unmarshal(normalizeHookPayload(payload), &p) != nil ||
+		!isCodexSpawnToolName(p.ToolName) || p.AgentID != "" {
+		return ""
+	}
+	id := validSubagentID(p.ToolUseID)
+	if id == "" {
+		return ""
+	}
+	var response struct {
+		TaskName string `json:"task_name"`
+	}
+	if json.Unmarshal([]byte(p.ToolResponse), &response) != nil || response.TaskName == "" {
+		return ""
+	}
+	return id
+}
+
+func isCodexSpawnToolName(name string) bool {
+	return name == "spawn_agent" || name == "collaborationspawn_agent"
+}
+
+// normalizeHookPayload strips a leading UTF-8 BOM so payloads re-encoded by a
+// hook wrapper (notably Windows PowerShell, whose pipeline writes UTF-16 text
+// that surfaces to the child with a BOM prefix) still decode as JSON.
+func normalizeHookPayload(payload []byte) []byte {
+	return bytes.TrimPrefix(payload, []byte("\xef\xbb\xbf"))
+}
+
 // hookAgentSessionID extracts the native resume handle shared by Agy, Copilot,
-// Codex, Claude Code, and other hook payloads. It is independent of activity
-// derivation because SessionStart is intentionally metadata-only for harnesses
-// where process startup is not proof that a turn is active.
+// Codex, Claude Code, Cline, and other hook payloads. It is independent of
+// activity derivation because SessionStart is intentionally metadata-only for
+// harnesses where process startup is not proof that a turn is active.
 func hookAgentSessionID(payload []byte) string {
+	payload = normalizeHookPayload(payload)
 	var p struct {
 		SessionID           string `json:"session_id"`
 		SessionIDCamel      string `json:"sessionId"`
 		ConversationID      string `json:"conversation_id"`
 		ConversationIDCamel string `json:"conversationId"`
+		// Current Cline CLI hooks distinguish the durable CLI session from the
+		// SDK's process-local task/conversation ID. --id resumes the root.
+		SessionContext struct {
+			RootSessionID string `json:"rootSessionId"`
+		} `json:"sessionContext"`
+		// Legacy hook producers expose only the task ID.
+		TaskIDCamel string `json:"taskId"`
+		TaskIDSnake string `json:"task_id"`
 	}
 	_ = json.Unmarshal(payload, &p)
-	id := strings.TrimSpace(p.SessionID)
+	id := strings.TrimSpace(p.SessionContext.RootSessionID)
+	if id == "" {
+		id = strings.TrimSpace(p.SessionID)
+	}
 	if id == "" {
 		id = strings.TrimSpace(p.SessionIDCamel)
 	}
@@ -128,6 +258,12 @@ func hookAgentSessionID(payload []byte) string {
 	}
 	if id == "" {
 		id = strings.TrimSpace(p.ConversationIDCamel)
+	}
+	if id == "" {
+		id = strings.TrimSpace(p.TaskIDCamel)
+	}
+	if id == "" {
+		id = strings.TrimSpace(p.TaskIDSnake)
 	}
 	if len(id) > maxActivityMetaLen {
 		return ""
@@ -139,6 +275,7 @@ func hookAgentSessionID(payload []byte) string {
 // It is a fallback for AO_RUNTIME_LAUNCH_ID when child-process env inheritance
 // is trimmed by the agent runtime.
 func hookLaunchID(payload []byte) string {
+	payload = normalizeHookPayload(payload)
 	var p struct {
 		LaunchID      string `json:"launch_id"`
 		LaunchIDCamel string `json:"launchId"`
@@ -158,6 +295,7 @@ func hookLaunchID(payload []byte) string {
 // decodes separately from conversation facts because hook producers may emit
 // a malformed field in one projection while the other remains useful.
 func hookUsageMetadata(agent string, payload []byte) *usageHookMetadata {
+	payload = normalizeHookPayload(payload)
 	harness := domain.AgentHarness(agent)
 	if harness != domain.HarnessClaudeCode && harness != domain.HarnessCodex {
 		return nil
@@ -239,38 +377,95 @@ func hookRouteFlagEnabled(value string) bool {
 }
 
 type hookConversationSnapshot struct {
+	ProviderTurnID        string
 	LatestUserPrompt      string
 	LatestAssistantUpdate string
+	FinalAssistantMessage string
+	TurnUserRequest       string
+	CheckpointOrigin      domain.ConversationCheckpointOrigin
+	CoordinationID        string
 	TranscriptPath        string
 }
 
-func hookConversationFacts(payload []byte) hookConversationSnapshot {
+func hookConversationFacts(agent domain.AgentHarness, event string, payload []byte) hookConversationSnapshot {
+	payload = normalizeHookPayload(payload)
 	var p struct {
-		Prompt                    string `json:"prompt"`
-		UserPrompt                string `json:"user_prompt"`
-		UserPromptCamel           string `json:"userPrompt"`
-		LastAssistantMessage      string `json:"last_assistant_message"`
-		LastAssistantMessageCamel string `json:"lastAssistantMessage"`
-		AssistantMessage          string `json:"assistant_message"`
-		AssistantMessageCamel     string `json:"assistantMessage"`
-		TranscriptPath            string `json:"transcript_path"`
-		TranscriptPathCamel       string `json:"transcriptPath"`
+		Prompt               string `json:"prompt"`
+		TurnID               string `json:"turn_id"`
+		PromptID             string `json:"prompt_id"`
+		UserPrompt           string `json:"user_prompt"`
+		UserPromptCamel      string `json:"userPrompt"`
+		LastAssistantMessage string `json:"last_assistant_message"`
+		LastAssistantCamel   string `json:"lastAssistantMessage"`
+		PromptResponse       string `json:"prompt_response"`
+		PromptResponseCamel  string `json:"promptResponse"`
+		TranscriptPath       string `json:"transcript_path"`
+		TranscriptPathCamel  string `json:"transcriptPath"`
+		SubagentID           string `json:"agent_id"`
 	}
-	_ = json.Unmarshal(payload, &p)
-	userPrompt := firstHookValue(p.Prompt, p.UserPrompt, p.UserPromptCamel)
-	assistant := firstHookValue(p.LastAssistantMessage, p.LastAssistantMessageCamel, p.AssistantMessage, p.AssistantMessageCamel)
+	decodeErr := json.Unmarshal(payload, &p)
+	observedPrompt := firstHookValue(p.Prompt, p.UserPrompt, p.UserPromptCamel)
+	var userPrompt, assistant, finalMessage, turnID string
+	origin := domain.ConversationCheckpointOriginUnknown
+	// Conversation checkpoints are trusted only at the main-turn boundaries that
+	// own each fact. Several Claude payloads repeat prompt/assistant aliases on
+	// unrelated events, and SubagentStop uses the same shape as the main Stop.
+	// Treating those copies as current main-thread facts can permanently make an
+	// otherwise healthy provider replay look incomplete.
+	if strings.TrimSpace(p.SubagentID) == "" {
+		if event == "user-prompt-submit" || event == "stop" {
+			switch agent {
+			case domain.HarnessCodex:
+				turnID = strings.TrimSpace(p.TurnID)
+			case domain.HarnessClaudeCode:
+				// Queued submissions reuse the executing prompt's ID. Preserve it as
+				// native evidence; only the adapter can resolve its actual ancestry.
+				turnID = strings.TrimSpace(p.PromptID)
+			}
+			if len(turnID) > maxActivityMetaLen || domain.SanitizeControlChars(turnID) != turnID {
+				turnID = ""
+			}
+		}
+		switch event {
+		case "user-prompt-submit":
+			userPrompt = observedPrompt
+			origin = domain.ConversationCheckpointOriginHuman
+		case "stop":
+			// Claude and Continue's Claude-compatible hooks report this field on
+			// Stop. Similar-looking fields from Codex do not carry the same
+			// main-turn guarantee and must not become hard replay checkpoints.
+			if agent == domain.HarnessClaudeCode || agent == domain.HarnessContinue {
+				assistant = p.LastAssistantMessage
+			}
+			finalMessage = firstHookValue(p.LastAssistantMessage, p.LastAssistantCamel, p.PromptResponse, p.PromptResponseCamel)
+		}
+	}
 	// AO's own handoff request and continuation kickoff are coordination turns,
 	// not the latest real user instruction. They remain in provider history but
 	// must not overwrite deterministic user intent.
-	if strings.HasPrefix(strings.TrimSpace(userPrompt), "<ao-handoff-request") {
-		assistant = ""
-	}
-	if isAOCoordinationMessage(userPrompt) {
+	if isAOCoordinationMessage(observedPrompt) {
 		userPrompt = ""
+		assistant = ""
+		finalMessage = ""
+		if event == "user-prompt-submit" || event == "stop" {
+			origin = domain.ConversationCheckpointOriginCoordination
+		}
 	}
+	// The terminal turn history takes a main turn's text from every agent, under
+	// whichever name its hook uses, but only from a payload that decoded cleanly.
+	turnRequest := userPrompt
+	if decodeErr != nil {
+		turnRequest, finalMessage = "", ""
+	}
+	coordinationID, _ := domain.CoordinationDeliveryID(observedPrompt)
 	return hookConversationSnapshot{
+		ProviderTurnID:        turnID,
 		LatestUserPrompt:      capHookText(userPrompt, maxHookInteractionLen),
 		LatestAssistantUpdate: capHookText(assistant, maxHookInteractionLen),
+		FinalAssistantMessage: capHookText(finalMessage, maxHookInteractionLen),
+		TurnUserRequest:       capHookText(turnRequest, maxHookInteractionLen),
+		CheckpointOrigin:      origin,
+		CoordinationID:        coordinationID,
 		TranscriptPath:        capHookText(firstHookValue(p.TranscriptPath, p.TranscriptPathCamel), maxHookTranscriptPath),
 	}
 }
@@ -286,7 +481,8 @@ func firstHookValue(values ...string) string {
 
 func isAOCoordinationMessage(value string) bool {
 	value = strings.TrimSpace(value)
-	return strings.HasPrefix(value, "<ao-handoff-request") ||
+	_, reportDelivery := domain.CoordinationDeliveryID(value)
+	return reportDelivery || strings.HasPrefix(value, "<ao-handoff-request") ||
 		strings.HasPrefix(value, "AO transferred the previous agent's context in hidden system instructions.")
 }
 
@@ -316,6 +512,122 @@ type cursorPermissionHookOutput struct {
 	Permission string `json:"permission"`
 }
 
+// claudePermissionHookOutput is Claude Code's PermissionRequest decision: the
+// hook answers the prompt in place of a human.
+type claudePermissionHookOutput struct {
+	HookSpecificOutput struct {
+		HookEventName string `json:"hookEventName"`
+		Decision      struct {
+			Behavior string `json:"behavior"`
+			Message  string `json:"message,omitempty"`
+		} `json:"decision"`
+	} `json:"hookSpecificOutput"`
+}
+
+// claudePreToolUseDenyOutput is Claude Code's PreToolUse decision: the hook
+// blocks the tool call and hands the reason back to the model.
+type claudePreToolUseDenyOutput struct {
+	HookSpecificOutput struct {
+		HookEventName            string `json:"hookEventName"`
+		PermissionDecision       string `json:"permissionDecision"`
+		PermissionDecisionReason string `json:"permissionDecisionReason"`
+	} `json:"hookSpecificOutput"`
+}
+
+const artifactToolName = "Artifact"
+
+const artifactNudgeReason = "AO does not show Claude artifacts. Write the deliverable as a file in the session artifact directory; " +
+	"in a chat session, use html_render."
+
+// claimArtifactNudge reports whether this is the session's first Artifact tool
+// use, by atomically creating a marker file under AO_DATA_DIR. Any failure
+// reports false so the tool call is allowed.
+func claimArtifactNudge(sessionID string) bool {
+	dataDir := strings.TrimSpace(os.Getenv("AO_DATA_DIR"))
+	if dataDir == "" {
+		return false
+	}
+	dir := filepath.Join(dataDir, "hooks", sessionID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "artifact-nudge"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
+}
+
+// emitArtifactNudge denies the first Claude Code Artifact tool use in a session.
+func (c *commandContext) emitArtifactNudge(agent, event, sessionID string, payload []byte) {
+	if domain.AgentHarness(agent) != domain.HarnessClaudeCode || event != "pre-tool-use" {
+		return
+	}
+	if toolName, _ := activityMeta(payload); toolName != artifactToolName || !claimArtifactNudge(sessionID) {
+		return
+	}
+	var out claudePreToolUseDenyOutput
+	out.HookSpecificOutput.HookEventName = "PreToolUse"
+	out.HookSpecificOutput.PermissionDecision = "deny"
+	out.HookSpecificOutput.PermissionDecisionReason = artifactNudgeReason
+	if err := json.NewEncoder(c.deps.Out).Encode(out); err != nil {
+		c.reportHookFailure(agent, event, sessionID, fmt.Errorf("write artifact nudge: %w", err))
+	}
+}
+
+// reviewerSubmitCommandPattern matches the exact command shapes the review
+// prompt dictates: a single-quoted JSON literal fed through `printf '%s'` into
+// either the GitHub review POST or `ao review submit`. Claude Code ≥ 2.1.257
+// prompts on any Bash command its analyzer cannot verify statically, and allow
+// rules never match such commands, so the headless reviewer would hang. The
+// shape is safe to auto-allow: `printf '%s'` performs no format interpretation
+// and a single-quoted operand (quote-backslash-quote-quote for embedded single
+// quotes, as the prompt instructs) cannot expand or run anything. The
+// captured session id is checked against AO_REVIEW_WORKER_SESSION_ID after the
+// match.
+const reviewerSubmitJSONLiteral = `'[^']*(?:'\\''[^']*)*'`
+
+var reviewerSubmitCommandPattern = regexp.MustCompile(`^printf '%s' ` + reviewerSubmitJSONLiteral + ` \| (?:` +
+	`gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '\.id'` +
+	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+) --reviews -)$`)
+
+const reviewerPermissionDenyMessage = "AO headless reviewer: no human can answer permission prompts. " +
+	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
+	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
+
+// reviewerPermissionDecision answers a Claude Code reviewer's PermissionRequest:
+// allow the exact submit shapes, deny everything else so the session degrades
+// into a denial the model can route around instead of an unanswered prompt.
+func reviewerPermissionDecision(payload []byte, workerSessionID string) claudePermissionHookOutput {
+	var p struct {
+		ToolName  string `json:"tool_name"`
+		ToolInput struct {
+			Command string `json:"command"`
+		} `json:"tool_input"`
+	}
+	_ = json.Unmarshal(payload, &p)
+	var out claudePermissionHookOutput
+	out.HookSpecificOutput.HookEventName = "PermissionRequest"
+	out.HookSpecificOutput.Decision.Behavior = "deny"
+	out.HookSpecificOutput.Decision.Message = reviewerPermissionDenyMessage
+	if p.ToolName != "Bash" {
+		return out
+	}
+	m := reviewerSubmitCommandPattern.FindStringSubmatch(strings.TrimSpace(p.ToolInput.Command))
+	if m == nil {
+		return out
+	}
+	if session := m[reviewerSubmitCommandPattern.SubexpIndex("session")]; workerSessionID == "" || (session != "" && session != workerSessionID) {
+		// An unset AO_REVIEW_WORKER_SESSION_ID means a broken launch (the
+		// launcher always sets it); admit nothing rather than any worker.
+		return out
+	}
+	out.HookSpecificOutput.Decision.Behavior = "allow"
+	out.HookSpecificOutput.Decision.Message = ""
+	return out
+}
+
 // newHooksCommand builds the hidden `ao hooks <agent> <event>` command that
 // agent CLIs invoke from their workspace-local hook config. It reads the native
 // hook payload from stdin and the AO session id from AO_SESSION_ID, derives an
@@ -337,6 +649,7 @@ func newHooksCommand(ctx *commandContext) *cobra.Command {
 }
 
 func (c *commandContext) runHook(ctx context.Context, agent, event string) error {
+	observedAt := c.deps.Now()
 	if isAgyModernHookEvent(agent, event) {
 		// AGY requires every modern hook handler to return a JSON object, even
 		// when the command is running outside an AO-managed session.
@@ -356,6 +669,25 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 		// without a piped payload can't block on EOF.
 		return nil
 	}
+	if agent == "memcode" && strings.HasPrefix(event, "context-chunk-") {
+		if err := memcode.EmitInstructionChunk(c.deps.Out, event); err != nil {
+			c.reportHookFailure(agent, event, sessionID, err)
+		}
+		return nil
+	}
+	if agent == "memcode" && event == "session-start" {
+		reportAfterRestore, err := memcode.EmitStartWitness(c.deps.Out)
+		if err != nil {
+			c.reportHookFailure(agent, event, sessionID, err)
+			return nil
+		}
+		if os.Getenv("AO_MEMCODE_INTERACTIVE_RESTORE") == "1" && !reportAfterRestore {
+			return nil
+		}
+	}
+	if agent == "memcode" && event == "session-end" {
+		return nil
+	}
 	var payload []byte
 	if hookReadsStdin(agent, event) {
 		var err error
@@ -370,20 +702,38 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	if shouldEmitSessionStartContext(agent, event) {
 		c.emitSessionStartContext(agent, event, sessionID)
 	}
+	c.emitArtifactNudge(agent, event, sessionID, payload)
 	if isCursorPermissionHook(agent, event) {
 		return c.runCursorPermissionHook(ctx, agent, event, sessionID, payload)
 	}
 
 	state, hasActivity := activitydispatch.Derive(agent, event, payload)
 	agentSessionID := ""
-	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
+	if agent == "cline" {
+		// Only Cline's adapter knows which hook IDs are resumable. Generic
+		// taskId/session_id aliases can identify non-resumable conversations.
+		agentSessionID, _ = activitydispatch.AgentSessionID(agent, payload)
+	} else if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
 		agentSessionID = hookAgentSessionID(payload)
 	}
-	if adapterSessionID, ok := activitydispatch.AgentSessionID(agent, payload); ok {
-		agentSessionID = adapterSessionID
+	if agent == "memcode" && event == "session-start" {
+		agentSessionID = os.Getenv("MEMCODE_SESSION_ID")
 	}
 	usage := hookUsageMetadata(agent, payload)
-	if !hasActivity && agentSessionID == "" && usage == nil {
+	var subagentID string
+	var runningSubagentIDs *[]string
+	if domain.AgentHarness(agent) == domain.HarnessClaudeCode {
+		subagentID, runningSubagentIDs = claudeSubagentFacts(event, payload)
+	} else if domain.AgentHarness(agent) == domain.HarnessCodex {
+		subagentID = codexSubagentID(event, payload)
+		if event == "post-tool-use" {
+			if spawnID := codexSpawnToolUseID(payload); spawnID != "" {
+				subagentID = spawnID
+				event = "subagent-spawn"
+			}
+		}
+	}
+	if !hasActivity && agentSessionID == "" && usage == nil && subagentID == "" {
 		// Unknown agent, or an event carrying neither activity nor resumable
 		// session metadata: report nothing.
 		return nil
@@ -404,29 +754,115 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	conversation := hookConversationSnapshot{}
 	switch domain.AgentHarness(agent) {
 	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessContinue:
-		conversation = hookConversationFacts(payload)
+		conversation = hookConversationFacts(domain.AgentHarness(agent), event, payload)
+	case domain.HarnessOpenCode, domain.HarnessGrok, domain.HarnessKilocode,
+		domain.HarnessOMP, domain.HarnessPi,
+		domain.HarnessAmp, domain.HarnessPrimeAgent:
+		conversation = hookSemanticAcceptanceFacts(event, payload)
+	}
+	// Every agent's turn text feeds the terminal turn history. It never becomes a replay checkpoint.
+	history := hookConversationFacts(domain.AgentHarness(agent), event, payload)
+	conversation.TurnUserRequest, conversation.FinalAssistantMessage = history.TurnUserRequest, history.FinalAssistantMessage
+	if domain.AgentHarness(agent) == domain.HarnessCopilot && event == "stop" && conversation.FinalAssistantMessage == "" {
+		// Copilot's stop hook names its event log instead of carrying the answer.
+		conversation.FinalAssistantMessage = capHookText(copilot.FinalAssistantMessage(payload), maxHookInteractionLen)
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/activity"
 	req := setActivityAPIRequest{
-		Event:                 event,
-		ToolName:              toolName,
-		ToolUseID:             toolUseID,
-		AgentSessionID:        agentSessionID,
-		LatestUserPrompt:      conversation.LatestUserPrompt,
-		LatestAssistantUpdate: conversation.LatestAssistantUpdate,
-		TranscriptPath:        conversation.TranscriptPath,
-		LaunchID:              launchID,
-		Usage:                 usage,
+		ObservedAt:                   observedAt,
+		Event:                        event,
+		ToolName:                     toolName,
+		ToolUseID:                    toolUseID,
+		SubagentID:                   subagentID,
+		RunningSubagentIDs:           runningSubagentIDs,
+		AgentSessionID:               agentSessionID,
+		LatestUserPrompt:             conversation.LatestUserPrompt,
+		LatestAssistantUpdate:        conversation.LatestAssistantUpdate,
+		FinalAssistantMessage:        conversation.FinalAssistantMessage,
+		TurnUserRequest:              conversation.TurnUserRequest,
+		Harness:                      agent,
+		ConversationCheckpointOrigin: conversation.CheckpointOrigin,
+		CoordinationID:               conversation.CoordinationID,
+		ProviderTurnID:               conversation.ProviderTurnID,
+		TranscriptPath:               conversation.TranscriptPath,
+		LaunchID:                     launchID,
+		Usage:                        usage,
 	}
 	if hasActivity {
 		req.State = string(state)
 	}
-	if err := c.postJSON(ctx, path, req, nil); err != nil {
+	if domain.AgentHarness(agent) == domain.HarnessClaudeCode {
+		// Claude exports its process kind to hook children. It lets the daemon
+		// tell AO's interactive runtime from a side `claude -p` in the same
+		// worktree, which inherits this session's env and launch id (#6454).
+		if entrypoint := strings.TrimSpace(os.Getenv("CLAUDE_CODE_ENTRYPOINT")); len(entrypoint) <= maxActivityMetaLen {
+			req.Entrypoint = entrypoint
+		}
+		// Claude names the process running the hook. The daemon drops hooks
+		// from a Claude process other than the session's terminal one.
+		if pid, err := strconv.Atoi(strings.TrimSpace(os.Getenv("CLAUDE_PID"))); err == nil && pid > 1 {
+			req.ProcessID = pid
+		}
+	}
+	if domain.AgentHarness(agent) == domain.HarnessClaudeCode && event == "user-prompt-submit" &&
+		launchID != "" && agentSessionID != "" && conversation.CheckpointOrigin != domain.ConversationCheckpointOriginUnknown {
+		req.SubmissionID = uuid.NewString()
+		output := sessionStartHookOutput{}
+		output.HookSpecificOutput.HookEventName = "UserPromptSubmit"
+		output.HookSpecificOutput.AdditionalContext = domain.NativeSubmissionContext(req.SubmissionID)
+		if err := json.NewEncoder(c.deps.Out).Encode(output); err != nil {
+			return fmt.Errorf("emit native submission correlation: %w", err)
+		}
+	}
+	if err := c.postActivityHook(ctx, path, req); err != nil {
 		// Surface the failure for diagnosis, but exit 0: a failed activity
 		// report must not disrupt the agent.
 		c.reportHookFailure(agent, event, sessionID, err)
 	}
 	return nil
+}
+
+// hookSemanticAcceptanceFacts extracts only AO's opaque delivery identity.
+// OpenCode and Grok expose accepted prompt text, but ordinary prompt content is
+// not part of their durable conversation-checkpoint contract.
+func hookSemanticAcceptanceFacts(event string, payload []byte) hookConversationSnapshot {
+	if event != "user-prompt-submit" {
+		return hookConversationSnapshot{}
+	}
+	var p struct {
+		Prompt string `json:"prompt"`
+	}
+	if json.Unmarshal(payload, &p) != nil {
+		return hookConversationSnapshot{}
+	}
+	id, ok := domain.CoordinationDeliveryID(p.Prompt)
+	if !ok {
+		return hookConversationSnapshot{}
+	}
+	return hookConversationSnapshot{
+		CheckpointOrigin: domain.ConversationCheckpointOriginCoordination,
+		CoordinationID:   id,
+	}
+}
+
+func (c *commandContext) postActivityHook(ctx context.Context, path string, req setActivityAPIRequest) error {
+	for attempt := 0; ; attempt++ {
+		err := c.postJSON(ctx, path, req, nil)
+		var response apiResponseError
+		// Only this response guarantees the signal did not commit. Retrying
+		// transport errors or generic 503s could duplicate an applied Stop.
+		if attempt >= 3 || !errors.As(err, &response) || response.StatusCode != http.StatusServiceUnavailable ||
+			response.ErrorBody.Code != "ACTIVITY_PROJECTION_BUSY" {
+			return err
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func isCursorPermissionHook(agent, event string) bool {
@@ -458,7 +894,7 @@ func (c *commandContext) runCursorPermissionHook(ctx context.Context, agent, eve
 		AgentSessionID: hookAgentSessionID(payload),
 		LaunchID:       launchID,
 	}
-	if err := c.postJSON(ctx, path, req, nil); err != nil {
+	if err := c.postActivityHook(ctx, path, req); err != nil {
 		c.reportHookFailure(agent, event, sessionID, err)
 		if decision.Permission == "ask" {
 			return fmt.Errorf("persist blocked Cursor activity: %w", err)
@@ -492,6 +928,14 @@ func (c *commandContext) runReviewHook(ctx context.Context, agent, event, review
 		if err != nil {
 			c.reportHookFailure(agent, event, reviewSessionID, fmt.Errorf("read stdin: %w", err))
 		}
+	}
+	if domain.AgentHarness(agent) == domain.HarnessClaudeCode && event == "permission-request" {
+		// Answered here, so the reviewer never parks in blocked (#4810).
+		out := reviewerPermissionDecision(payload, strings.TrimSpace(os.Getenv("AO_REVIEW_WORKER_SESSION_ID")))
+		if err := json.NewEncoder(c.deps.Out).Encode(out); err != nil {
+			c.reportHookFailure(agent, event, reviewSessionID, fmt.Errorf("write permission response: %w", err))
+		}
+		return nil
 	}
 	state, hasActivity := activitydispatch.Derive(agent, event, payload)
 	agentSessionID := ""
@@ -535,7 +979,21 @@ func validLaunchID(value string) string {
 	return value
 }
 
+// openHandsContextHookOutput is OpenHands' hook result shape: it reads
+// additionalContext from the top level and ignores hookSpecificOutput.
+type openHandsContextHookOutput struct {
+	AdditionalContext string `json:"additionalContext"`
+}
+
 func shouldEmitSessionStartContext(agent, event string) bool {
+	if agent == "gemini" {
+		return event == "user-prompt-submit"
+	}
+	if agent == string(domain.HarnessOpenHands) {
+		// OpenHands ignores SessionStart hook output and has no system-prompt
+		// flag; UserPromptSubmit context is appended to each user message.
+		return event == "user-prompt-submit"
+	}
 	if event != "session-start" {
 		return false
 	}
@@ -562,9 +1020,18 @@ func (c *commandContext) emitSessionStartContext(agent, event, sessionID string)
 	if prompt == "" {
 		return
 	}
-	var out sessionStartHookOutput
-	out.HookSpecificOutput.HookEventName = "SessionStart"
-	out.HookSpecificOutput.AdditionalContext = prompt
+	var out any
+	if agent == string(domain.HarnessOpenHands) {
+		out = openHandsContextHookOutput{AdditionalContext: prompt}
+	} else {
+		var start sessionStartHookOutput
+		start.HookSpecificOutput.HookEventName = "SessionStart"
+		if agent == "gemini" {
+			start.HookSpecificOutput.HookEventName = "BeforeAgent"
+		}
+		start.HookSpecificOutput.AdditionalContext = prompt
+		out = start
+	}
 	if err := json.NewEncoder(c.deps.Out).Encode(out); err != nil {
 		c.reportHookFailure(agent, event, sessionID, fmt.Errorf("write session-start context: %w", err))
 	}
@@ -575,7 +1042,9 @@ func (c *commandContext) emitSessionStartContext(agent, event, sessionID string)
 // $AO_DATA_DIR/hooks.log so the failure can be diagnosed after the fact.
 func (c *commandContext) reportHookFailure(agent, event, sessionID string, cause error) {
 	msg := fmt.Sprintf("ao hooks %s %s: %v", agent, event, cause)
-	_, _ = fmt.Fprintln(c.deps.Err, msg)
+	if !errors.Is(cause, errDaemonNotRunning) {
+		_, _ = fmt.Fprintln(c.deps.Err, msg)
+	}
 	dataDir := strings.TrimSpace(os.Getenv("AO_DATA_DIR"))
 	if dataDir == "" {
 		return

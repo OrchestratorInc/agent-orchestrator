@@ -1,5 +1,5 @@
-import { act, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
 
 vi.mock("../hooks/useSystemRequirementsGate", () => ({
@@ -16,15 +16,11 @@ vi.mock("../hooks/useSystemRequirementsGate", () => ({
 }));
 
 describe("DaemonStartupLoader", () => {
-	afterEach(() => vi.useRealTimers());
-
-	it("shows startup progress while the lightweight requirements preflight runs", () => {
-		vi.useFakeTimers();
+	it("shows only the mascot and announces startup to assistive tech", () => {
 		render(<DaemonStartupLoader />);
 
-		expect(screen.getByRole("status", { name: "Agent Orchestrator is starting" })).toBeInTheDocument();
-		expect(screen.getByText("Starting local services")).not.toHaveClass("ao-startup-status");
-		act(() => vi.advanceTimersByTime(2_200));
-		expect(screen.getByText("Connecting to the daemon")).toHaveClass("ao-startup-status");
+		const status = screen.getByRole("status", { name: "Agent Orchestrator is starting" });
+		expect(status.textContent).toBe("");
+		expect(status.querySelector(".ao-startup-logo")).not.toBeNull();
 	});
 });

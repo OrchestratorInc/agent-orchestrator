@@ -18,10 +18,7 @@ func spawnDetached(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	args := make([]string, 0, 5+len(cfg.Argv))
-	args = append(args, "chat-host", cfg.SessionID, cfg.DataDir, cfg.Workdir, "--")
-	args = append(args, cfg.Argv...)
-	cmd := exec.Command(exe, args...)
+	cmd := exec.Command(exe, hostArgs(cfg)...) //nolint:forbidigo // detached chat host has specialized lifetime and session ownership
 	cmd.Dir = cfg.Workdir
 	cmd.Env = cfg.Env
 	cmd.Stdin = nil
@@ -31,5 +28,8 @@ func spawnDetached(ctx context.Context, cfg Config) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("spawn detached chat host: %w", err)
 	}
-	return cmd.Process.Release()
+	// Setsid detaches the host from our session, but it remains our child until
+	// Wait reaps it. Release alone leaves a zombie after each hibernation.
+	go func() { _ = cmd.Wait() }()
+	return nil
 }

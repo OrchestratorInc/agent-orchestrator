@@ -8,8 +8,8 @@ import (
 )
 
 // ShellTerminalRecord is one persisted shell terminal row. It carries only what
-// is needed to re-attach after a daemon restart and to decide, at boot, whether
-// the row belongs to the running app or to a previous one.
+// is needed to re-attach after daemon/desktop restarts. Transient trusted
+// terminals expire when their originating app launch ends.
 type ShellTerminalRecord struct {
 	HandleID   string
 	ProjectID  domain.ProjectID
@@ -18,12 +18,17 @@ type ShellTerminalRecord struct {
 	Title      string
 	AppRunID   string
 	CreatedAt  time.Time
+	Transient  bool // Trusted auth terminal, owned by its app launch.
+	// PreviewCapabilityVerifier authorizes only managed preview lifecycle calls
+	// from this session-scoped shell; the bearer stays in its process environment.
+	PreviewCapabilityVerifier string
 }
 
 // Store is the shell terminal service's persistence surface. The SQLite store
 // satisfies it; the interface lives next to its only consumer so this service
 // does not depend on storage internals.
 type Store interface {
+	SelectRestorableShellTerminals(ctx context.Context, appRunID string) ([]ShellTerminalRecord, error)
 	InsertShellTerminal(ctx context.Context, rec ShellTerminalRecord) error
 	UpdateShellTerminalTitle(ctx context.Context, handleID, title string) (ShellTerminalRecord, bool, error)
 	SelectShellTerminalByHandleID(ctx context.Context, handleID string) (ShellTerminalRecord, bool, error)

@@ -70,15 +70,45 @@ type Sandbox struct {
 	WorkerLastSeenAt *time.Time
 	// StartupStartedAt is the beginning of the current running-intent
 	// provisioning attempt. Unlike UpdatedAt it survives repeated provider
-	// observations such as paused -> resuming -> paused.
+	// observations such as paused -> resuming -> paused. A startup repair
+	// resets it so every reinstalled worker gets a full startup window.
 	StartupStartedAt *time.Time
+	// StartupAttempts counts startup repairs since the worker last checked in
+	// (reset to zero on heartbeat). It bounds the repair loop: past the cap the
+	// sandbox is parked instead of reinstalled forever.
+	StartupAttempts int
 	// DeletionRequestedAt marks when deletion was first attempted. It bounds a
 	// deletion that a provider cannot converge (an unreclaimable box), so the
 	// reconciler gives up past a deadline instead of re-requesting Delete
 	// forever. Nil until the first deletion tick stamps it.
 	DeletionRequestedAt *time.Time
-	LastError           string
-	UpdatedAt           time.Time
+	// KeepAlive is derived when the row is claimed from an active AO turn or a
+	// short user-interaction lease. It is never stored as display state.
+	KeepAlive bool
+	LastError string
+	// StartupErrorCode is the code of the latest user-facing startup error, or
+	// empty when none is recorded (see RecordSandboxStartupError).
+	StartupErrorCode string
+	// StartupErrorAt is when that error was first recorded. One recorded at or
+	// after StartupStartedAt belongs to the current startup window, which only
+	// a user retry, a resume or a restore reopens.
+	StartupErrorAt *time.Time
+	// ProviderFailureID is the failed provider build the reconciler already
+	// acted on, and how (stored as bootstrap_context.providerFailureId): the
+	// bare build id once reported, "<id>#restarted" once it started the one
+	// new build a user retry asked for, "<id>#ignored" when a connected worker
+	// made it leave the failure alone.
+	ProviderFailureID string
+	UpdatedAt         time.Time
+}
+
+// SandboxLifecycle is the small intent/observation projection returned by an
+// explicit resume request.
+type SandboxLifecycle struct {
+	SessionID     string
+	Provider      string
+	DesiredState  string
+	ObservedState string
 }
 
 // SandboxRef identifies a session sandbox across organizations.
@@ -97,6 +127,8 @@ type AccessTicket struct {
 	Scopes      []string
 	WorkerEpoch int64
 	ExpiresAt   time.Time
+	// UserID is the person the ticket was issued to; empty when unknown.
+	UserID string
 }
 
 // WorkerLaunch is the durable session context a bootstrapped worker needs in
@@ -105,14 +137,27 @@ type WorkerLaunch struct {
 	OrgID          string
 	SessionID      string
 	ProjectID      string
+	ProjectName    string
+	ProjectConfig  json.RawMessage
+	AgentConfig    json.RawMessage
 	Kind           string
 	Harness        string
 	DisplayName    string
 	Branch         string
 	Prompt         string
 	AgentSessionID string
-	Mode           string
-	DeniedCommands []string
-	RepositoryURL  string
-	DefaultBranch  string
+	Interface      SessionInterface
+	// ParentSessionID is the orchestrator that spawned this session, empty for
+	// top-level sessions. It gates the worker:report scope and the report
+	// guidance in the worker prompt.
+	ParentSessionID string
+	Mode            string
+	Model           string
+	ReasoningEffort string
+	SelectionAt     time.Time
+	DeniedCommands  []string
+	RepositoryURL   string
+	DefaultBranch   string
+	// RequestedOutput is empty or RequestedOutputArtifact.
+	RequestedOutput string
 }

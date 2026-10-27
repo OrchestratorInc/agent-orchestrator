@@ -223,6 +223,21 @@ func (q *Queries) EnrichModelUsageEventProviderUsage(ctx context.Context, arg En
 	return result.RowsAffected()
 }
 
+const existsUsageSourceByArtifactPath = `-- name: ExistsUsageSourceByArtifactPath :one
+SELECT CAST(EXISTS (
+    SELECT 1
+    FROM usage_sources
+    WHERE artifact_path = ?1
+) AS INTEGER)
+`
+
+func (q *Queries) ExistsUsageSourceByArtifactPath(ctx context.Context, artifactPath string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, existsUsageSourceByArtifactPath, artifactPath)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const finalizeUsageBindingsForSessionLaunch = `-- name: FinalizeUsageBindingsForSessionLaunch :many
 UPDATE usage_bindings
 SET state = 'finalizing',
@@ -238,17 +253,17 @@ WHERE usage_bindings.session_id = ?2
       FROM sessions
       WHERE sessions.id = usage_bindings.session_id
         AND sessions.runtime_launch_id = ?3
-        AND sessions.updated_at = ?4
+        AND sessions.revision = ?4
         AND sessions.is_terminated = 0
   )
 RETURNING id, session_id, harness, native_root_id, initial_model_id, state, last_error_code, updated_at, provider_hint
 `
 
 type FinalizeUsageBindingsForSessionLaunchParams struct {
-	FinalizedAt              time.Time
-	SessionID                domain.SessionID
-	ExpectedRuntimeLaunchID  string
-	ExpectedSessionUpdatedAt time.Time
+	FinalizedAt             time.Time
+	SessionID               domain.SessionID
+	ExpectedRuntimeLaunchID string
+	ExpectedSessionRevision int64
 }
 
 func (q *Queries) FinalizeUsageBindingsForSessionLaunch(ctx context.Context, arg FinalizeUsageBindingsForSessionLaunchParams) ([]UsageBinding, error) {
@@ -256,7 +271,7 @@ func (q *Queries) FinalizeUsageBindingsForSessionLaunch(ctx context.Context, arg
 		arg.FinalizedAt,
 		arg.SessionID,
 		arg.ExpectedRuntimeLaunchID,
-		arg.ExpectedSessionUpdatedAt,
+		arg.ExpectedSessionRevision,
 	)
 	if err != nil {
 		return nil, err
@@ -908,16 +923,19 @@ func (q *Queries) ListLegacyUsageEvents(ctx context.Context, usageSourceID int64
 }
 
 const listLegacyUsageSourceIDs = `-- name: ListLegacyUsageSourceIDs :many
-SELECT DISTINCT us.id
-FROM usage_sources us
-JOIN model_usage_events mue ON mue.usage_source_id = us.id
+SELECT DISTINCT mue.usage_source_id
+FROM model_usage_events mue
 WHERE mue.billing_provider_id IS NULL
    OR mue.billing_provider_source = 'inferred'
-ORDER BY us.id
+ORDER BY mue.usage_source_id
 `
 
 // Open attribution: never attributed, or attributed only by inference and so
-// still replaceable by an observation.
+// still replaceable by an observation. This is exactly what the partial index
+// idx_model_usage_events_open_attribution holds, so the sources are read from
+// that index alone. Every event's usage_source_id references usage_sources, so
+// no join is needed; with the join the planner left the partial index for the
+// full usage_source index once sqlite_stat1 existed.
 func (q *Queries) ListLegacyUsageSourceIDs(ctx context.Context) ([]int64, error) {
 	rows, err := q.db.QueryContext(ctx, listLegacyUsageSourceIDs)
 	if err != nil {
@@ -926,11 +944,11 @@ func (q *Queries) ListLegacyUsageSourceIDs(ctx context.Context) ([]int64, error)
 	defer rows.Close()
 	items := []int64{}
 	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
+		var usage_source_id int64
+		if err := rows.Scan(&usage_source_id); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, usage_source_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

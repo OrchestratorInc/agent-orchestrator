@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { InfiniteQueryObserver, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
 const {
@@ -8,7 +9,11 @@ const {
 	hasTrustedApiBaseUrlMock,
 	subscribeApiBaseUrlMock,
 	unsubscribeBaseUrlMock,
-	setTransportHealthyMock,
+	connectedHostsMock,
+	baseUrlForHostMock,
+	subscribeConnectedHostsMock,
+	unsubscribeConnectedHostsMock,
+	remoteGetMock,
 } = vi.hoisted(() => ({
 	onStatusMock: vi.fn(),
 	removeStatusMock: vi.fn(),
@@ -16,7 +21,11 @@ const {
 	hasTrustedApiBaseUrlMock: vi.fn(() => true),
 	subscribeApiBaseUrlMock: vi.fn(),
 	unsubscribeBaseUrlMock: vi.fn(),
-	setTransportHealthyMock: vi.fn(),
+	connectedHostsMock: vi.fn(() => [] as string[]),
+	baseUrlForHostMock: vi.fn((_hostId: string): string | undefined => undefined),
+	subscribeConnectedHostsMock: vi.fn(),
+	unsubscribeConnectedHostsMock: vi.fn(),
+	remoteGetMock: vi.fn(),
 }));
 
 vi.mock("./bridge", () => ({
@@ -30,7 +39,12 @@ vi.mock("./api-client", () => ({
 	hasTrustedApiBaseUrl: hasTrustedApiBaseUrlMock,
 	subscribeApiBaseUrl: subscribeApiBaseUrlMock,
 }));
-vi.mock("./agent-switch-visibility", () => ({ agentSwitchVisibility: { setTransportHealthy: setTransportHealthyMock } }));
+vi.mock("./host-clients", () => ({
+	connectedHosts: connectedHostsMock,
+	baseUrlForHost: baseUrlForHostMock,
+	subscribeConnectedHosts: subscribeConnectedHostsMock,
+	clientForSessionHost: () => ({ GET: remoteGetMock }),
+}));
 
 import { createEventTransport } from "./event-transport";
 import { getEventsConnectionState, setEventsConnectionState } from "./events-connection";
@@ -64,14 +78,17 @@ class EventSourceStub {
 
 function fakeQueryClient() {
 	return {
-		invalidateQueries: vi.fn(),
+		invalidateQueries: vi.fn().mockResolvedValue(undefined),
+		isFetching: vi.fn().mockReturnValue(0),
 		refetchQueries: vi.fn().mockResolvedValue(undefined),
 		setQueryData: vi.fn(),
+		getQueryData: vi.fn(),
 	} as unknown as Parameters<typeof createEventTransport>[0];
 }
 
 function cdcSources() {
-	return EventSourceStub.instances.filter((source) => source.url.endsWith("/api/v1/events"));
+	// The local stream has no path prefix; remote hosts are mounted under /<host>/.
+	return EventSourceStub.instances.filter((source) => /^http:\/\/127\.0\.0\.1:\d+\/api\/v1\/events\?after=latest$/.test(source.url));
 }
 
 function accountSources() {
@@ -86,7 +103,14 @@ beforeEach(() => {
 	hasTrustedApiBaseUrlMock.mockReset().mockReturnValue(true);
 	subscribeApiBaseUrlMock.mockReset().mockReturnValue(unsubscribeBaseUrlMock);
 	unsubscribeBaseUrlMock.mockReset();
-	setTransportHealthyMock.mockReset();
+	connectedHostsMock.mockReset().mockReturnValue([]);
+	baseUrlForHostMock.mockReset().mockReturnValue(undefined);
+	subscribeConnectedHostsMock.mockReset().mockReturnValue(unsubscribeConnectedHostsMock);
+	unsubscribeConnectedHostsMock.mockReset();
+	remoteGetMock.mockReset().mockResolvedValue({ data: {
+		conversationId: "remote-conversation", sessionId: "same", mode: "chat", controller: "idle",
+		latestSequence: 0, messages: [], activities: [],
+	} });
 	setEventsConnectionState("idle");
 	(globalThis as unknown as { EventSource: unknown }).EventSource = EventSourceStub;
 });
@@ -96,13 +120,197 @@ afterEach(() => {
 });
 
 describe("createEventTransport", () => {
+	it("polls while probing every host, then stops after a delivered stream frame", async () => {
+		vi.useFakeTimers();
+		try {
+			connectedHostsMock.mockReturnValue(["tunnel", "direct"]);
+			baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
+			const client = fakeQueryClient();
+			const disconnect = createEventTransport(client).connect();
+			expect(EventSourceStub.instances.map((source) => source.url)).toContain("http://127.0.0.1:4000/tunnel/api/v1/events?after=latest");
+			expect(EventSourceStub.instances.map((source) => source.url)).toContain("http://127.0.0.1:4000/direct/api/v1/events?after=latest");
+			vi.mocked(client.invalidateQueries).mockClear();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "tunnel"] }, { cancelRefetch: false });
+			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "tunnel"] }, { cancelRefetch: false });
+			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-conversation", "tunnel"] }, { cancelRefetch: false });
+			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "direct"] }, { cancelRefetch: false });
+			EventSourceStub.instances.find((source) => source.url.includes("/direct/"))!.emit("cursor", "0");
+			vi.mocked(client.invalidateQueries).mockClear();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "direct"] }, { cancelRefetch: false });
+			connectedHostsMock.mockReturnValue(["direct"]);
+			(subscribeConnectedHostsMock.mock.calls[0][0] as () => void)();
+			vi.mocked(client.invalidateQueries).mockClear();
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "tunnel"] }, { cancelRefetch: false });
+			disconnect();
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("streams each connected remote host and refreshes only its live conversation page", async () => {
+		const client = fakeQueryClient();
+		connectedHostsMock.mockReturnValue(["box-a", "box-b"]);
+		baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
+		const disconnect = createEventTransport(client).connect();
+		const remoteA = EventSourceStub.instances.find((source) => source.url.includes("/box-a/"))!;
+		const remoteB = EventSourceStub.instances.find((source) => source.url.includes("/box-b/"))!;
+		expect(remoteA.url).toBe("http://127.0.0.1:4000/box-a/api/v1/events?after=latest");
+		expect(remoteB.url).toBe("http://127.0.0.1:4000/box-b/api/v1/events?after=latest");
+		await Promise.resolve();
+		vi.mocked(client.invalidateQueries).mockClear();
+
+		remoteA.emit("session_updated", JSON.stringify({ sessionId: "same", payload: { conversationId: "remote-conversation" } }));
+		remoteA.emit("review_run_updated", JSON.stringify({ sessionId: "same", payload: { reviewId: "review-1", conversationId: "review-conversation" } }));
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["project-config", "box-a"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage", "detail", "box-a"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-reviews", "box-a"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a", "review-1"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-interface-transition", "box-a"] }, { cancelRefetch: false });
+		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", {
+			params: { path: { sessionId: "same" }, query: { beforeSequence: undefined, limit: 200 } },
+		}));
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-b"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["project-config", "box-b"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-usage", "detail", "box-b"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-reviews", "box-b"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-b", "review-1"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-interface-transition", "box-b"] }, { cancelRefetch: false });
+		remoteA.emit("cursor", "0");
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a"] }, { cancelRefetch: false });
+
+		connectedHostsMock.mockReturnValue(["box-b"]);
+		const hostsChanged = subscribeConnectedHostsMock.mock.calls[0][0] as () => void;
+		hostsChanged();
+		expect(remoteA.closed).toBe(true);
+		expect(remoteB.closed).toBe(false);
+		disconnect();
+		expect(remoteB.closed).toBe(true);
+		expect(unsubscribeConnectedHostsMock).toHaveBeenCalledOnce();
+	});
+
+	it("coalesces a burst of remote conversation events into one catch-up fetch", async () => {
+		connectedHostsMock.mockReturnValue(["box-a"]);
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/box-a");
+		const replies: Array<(value: unknown) => void> = [];
+		remoteGetMock.mockImplementation(() => new Promise((resolve) => replies.push(resolve)));
+		const disconnect = createEventTransport(fakeQueryClient()).connect();
+		const remote = EventSourceStub.instances.find((source) => source.url.includes("/box-a/"))!;
+		const event = JSON.stringify({ sessionId: "same", payload: { conversationId: "remote-conversation" } });
+		for (let i = 0; i < 10; i += 1) remote.emit("session_updated", event);
+		expect(remoteGetMock).toHaveBeenCalledOnce();
+		replies[0]({ data: { conversationId: "remote-conversation", sessionId: "same", mode: "chat", controller: "idle", latestSequence: 0, messages: [], activities: [] } });
+		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledTimes(2));
+		replies[1]({ data: { conversationId: "remote-conversation", sessionId: "same", mode: "chat", controller: "idle", latestSequence: 0, messages: [], activities: [] } });
+		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledTimes(2));
+		disconnect();
+	});
+
+	it("refetches only the affected host when its live stream drops", async () => {
+		connectedHostsMock.mockReturnValue(["box-a", "box-b"]);
+		baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		const remoteA = EventSourceStub.instances.find((source) => source.url.includes("/box-a/"))!;
+		remoteA.onopen?.();
+		await Promise.resolve();
+		vi.mocked(client.invalidateQueries).mockClear();
+
+		remoteA.onerror?.();
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-b"] }, { cancelRefetch: false });
+		await Promise.resolve();
+		vi.mocked(client.invalidateQueries).mockClear();
+		remoteA.onerror?.();
+		expect(client.invalidateQueries).not.toHaveBeenCalled();
+		disconnect();
+	});
+
+	it("rebinds a host stream when its reachable address changes", async () => {
+		connectedHostsMock.mockReturnValue(["box-a"]);
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/old");
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		const oldSource = EventSourceStub.instances.find((source) => source.url.includes("/old/"))!;
+
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:5000/new");
+		const hostsChanged = subscribeConnectedHostsMock.mock.calls[0][0] as () => void;
+		hostsChanged();
+		const newSource = EventSourceStub.instances.find((source) => source.url.includes("/new/"))!;
+		expect(oldSource.closed).toBe(true);
+		expect(newSource.url).toBe("http://127.0.0.1:5000/new/api/v1/events?after=latest");
+		await Promise.resolve();
+		vi.mocked(client.invalidateQueries).mockClear();
+
+		oldSource.emit("review_run_updated", JSON.stringify({ payload: { reviewId: "old" } }));
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a", "old"] }, { cancelRefetch: false });
+		newSource.emit("review_run_updated", JSON.stringify({ payload: { reviewId: "new" } }));
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a", "new"] }, { cancelRefetch: false });
+		disconnect();
+	});
+
+	it("ignores every stream callback after disposal", async () => {
+		vi.useFakeTimers();
+		try {
+			const client = fakeQueryClient();
+			const disconnect = createEventTransport(client).connect();
+			const cdc = cdcSources()[0];
+			const accounts = accountSources()[0];
+			disconnect();
+			cdc.onopen?.();
+			cdc.onerror?.();
+			accounts.onopen?.();
+			accounts.onerror?.();
+			accounts.emit("codex_account", JSON.stringify({ accounts: [], accountRevision: 1 }));
+			onStatusMock.mock.calls[0][0]();
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(client.invalidateQueries).not.toHaveBeenCalled();
+			expect(client.refetchQueries).not.toHaveBeenCalled();
+			expect(client.setQueryData).not.toHaveBeenCalled();
+			expect(getEventsConnectionState()).toBe("idle");
+			expect(EventSourceStub.instances).toHaveLength(2);
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("refreshes on a real daemon status change but not on repeated identical pushes", async () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			const pushStatus = onStatusMock.mock.calls[0][0] as (status: { state: string; port?: number; pid?: number }) => void;
+			const conversationRefreshes = () =>
+				(queryClient.invalidateQueries as ReturnType<typeof vi.fn>).mock.calls.filter(
+					([filters]) => JSON.stringify(filters.queryKey) === JSON.stringify(["conversation"]),
+				).length;
+
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			await vi.advanceTimersByTimeAsync(200);
+			const afterFirst = conversationRefreshes();
+			expect(afterFirst).toBeGreaterThan(0);
+
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			pushStatus({ state: "ready", port: 3001, pid: 10 });
+			await vi.advanceTimersByTimeAsync(200);
+			expect(conversationRefreshes()).toBe(afterFirst);
+
+			pushStatus({ state: "ready", port: 3001, pid: 11 });
+			await vi.advanceTimersByTimeAsync(200);
+			expect(conversationRefreshes()).toBeGreaterThan(afterFirst);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("opens the CDC and Codex account SSE connections on connect", () => {
 		createEventTransport(fakeQueryClient()).connect();
 
 		expect(EventSourceStub.instances).toHaveLength(2);
 		expect(cdcSources()).toHaveLength(1);
 		expect(accountSources()).toHaveLength(1);
-		expect(cdcSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/events");
+		expect(cdcSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/events?after=latest");
 		expect(accountSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/agents/codex/accounts/events");
 		// All CDC event types plus onmessage are wired up.
 		expect(cdcSources()[0].listeners).toContain("session_updated");
@@ -134,7 +342,7 @@ describe("createEventTransport", () => {
 		expect(firstAccount.closed).toBe(true);
 		expect(cdcSources()).toHaveLength(2);
 		expect(accountSources()).toHaveLength(2);
-		expect(cdcSources()[1].url).toBe("http://127.0.0.1:3099/api/v1/events");
+		expect(cdcSources()[1].url).toBe("http://127.0.0.1:3099/api/v1/events?after=latest");
 	});
 
 	it("does not make a new daemon port serve the dead port's backoff delay", () => {
@@ -184,11 +392,9 @@ describe("createEventTransport", () => {
 		expect(firstAccount.closed).toBe(true);
 		expect(EventSourceStub.instances).toHaveLength(2);
 		expect(getEventsConnectionState()).toBe("disconnected");
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("active", false);
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("history", false);
 	});
 
-	it("debounces workspace and session invalidation after a status change", () => {
+	it("flushes workspace and session invalidation immediately on the leading edge after a status change", () => {
 		vi.useFakeTimers();
 		try {
 			const queryClient = fakeQueryClient();
@@ -196,12 +402,12 @@ describe("createEventTransport", () => {
 			const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
 
 			onStatusHandler();
-			expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
-			vi.advanceTimersByTime(200);
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspaces"] });
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-agent-switches"] });
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-scm-summary"] });
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage"] });
+			// The first refresh after a quiet period does not wait out the window:
+			// it flushes on the leading edge so a reconnect recovers immediately.
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-scm-summary"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["editor-handoff"] }, { cancelRefetch: false });
 		} finally {
 			vi.useRealTimers();
 		}
@@ -221,7 +427,24 @@ describe("createEventTransport", () => {
 
 			vi.advanceTimersByTime(200);
 
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation"] });
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refreshes event-scoped caches on reopen because the stream starts at the newest event", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].onopen?.();
+
+			vi.advanceTimersByTime(200);
+
+			for (const queryKey of [["session-reviews"], ["session-interface-transition"], ["agent-models"]]) {
+				expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey }, { cancelRefetch: false });
+			}
 		} finally {
 			vi.useRealTimers();
 		}
@@ -253,12 +476,160 @@ describe("createEventTransport", () => {
 			vi.advanceTimersByTime(200);
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
 				queryKey: ["conversation", "chat-1"],
-			});
-			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] });
+			}, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({
 				queryKey: ["session-scm-summary"],
 			});
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({
+				queryKey: ["editor-handoff", "chat-1"],
+			}, { cancelRefetch: false });
 		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// An agent can start a review with `ao review trigger`, and a reviewer can
+	// finish one, without this window asking. The session's reviews must refresh
+	// or the inspector keeps showing the previous verdict.
+	it("refreshes the session's reviews when a review run starts or changes", () => {
+		vi.useFakeTimers();
+		try {
+			for (const type of ["review_run_created", "review_run_updated"]) {
+				const queryClient = fakeQueryClient();
+				const disconnect = createEventTransport(queryClient).connect();
+				cdcSources().at(-1)!.emit(
+					type,
+					JSON.stringify({
+						seq: 7,
+						projectId: "proj-1",
+						sessionId: "worker-1",
+						type,
+						payload: { id: "run-1", reviewId: "review-1", sessionId: "worker-1", pr: "https://github.com/o/r/pull/1" },
+						createdAt: "2026-10-05T06:10:36Z",
+					}),
+				);
+				vi.advanceTimersByTime(1000);
+				expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+					queryKey: ["session-reviews", "worker-1"],
+				}, { cancelRefetch: false });
+				disconnect();
+			}
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("invalidates editor-handoff readiness for a durable session update", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit(
+				"session_updated",
+				JSON.stringify({
+					seq: 44,
+					projectId: "proj-1",
+					sessionId: "session-1",
+					type: "session_updated",
+					payload: { id: "session-1", activity: "idle", isTerminated: false },
+					createdAt: "2026-08-27T02:31:38Z",
+				}),
+			);
+
+			vi.advanceTimersByTime(200);
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+				queryKey: ["editor-handoff", "session-1"],
+			}, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refreshes the agent's device-wide catalog views for catalog CDC naming a project", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit("session_updated", JSON.stringify({
+				seq: 44,
+				projectId: "proj-1",
+				type: "session_updated",
+				payload: { kind: "model_catalog", agentId: "codex", projectId: "proj-1" },
+				createdAt: "2026-09-07T08:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["agent-models", "codex"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("refreshes Settings and project pickers when their shared global catalog changes", () => {
+		vi.useFakeTimers();
+		const queryClient = new QueryClient();
+		let disconnect: (() => void) | undefined;
+		try {
+			const keys = [
+				["agent-models", "codex", ""],
+				["agent-models", "codex", "", "catalog"],
+				["agent-models", "codex", "proj-1"],
+				["agent-models", "claude-code", ""],
+				["agent-models", "remote-box", "codex", ""],
+			];
+			for (const key of keys) queryClient.setQueryData(key, { models: [] });
+			disconnect = createEventTransport(queryClient).connect();
+			cdcSources()[0].emit("session_updated", JSON.stringify({
+				seq: 45, projectId: "", type: "session_updated",
+				payload: { kind: "model_catalog", agentId: "codex", projectId: "" },
+				createdAt: "2026-09-07T08:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			for (const key of keys.slice(0, 3)) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
+			for (const key of keys.slice(3)) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
+		} finally {
+			disconnect?.();
+			queryClient.clear();
+			vi.useRealTimers();
+		}
+	});
+
+	it("refetches cached unavailable state after the post-spawn session update", async () => {
+		vi.useFakeTimers();
+		let disconnect: (() => void) | undefined;
+		let unsubscribe: (() => void) | undefined;
+		try {
+			const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const queryKey = ["editor-handoff", "agent-orchestrator-260"] as const;
+			const queryFn = vi
+				.fn()
+				.mockResolvedValueOnce({ workspaceAvailable: false })
+				.mockResolvedValue({ workspaceAvailable: true });
+			await queryClient.fetchQuery({ queryKey, queryFn, staleTime: 10_000 });
+			const observer = new QueryObserver(queryClient, { queryKey, queryFn, staleTime: 10_000 });
+			unsubscribe = observer.subscribe(() => {});
+			disconnect = createEventTransport(queryClient).connect();
+
+			expect(queryClient.getQueryData(queryKey)).toEqual({ workspaceAvailable: false });
+			cdcSources()[0].emit(
+				"session_updated",
+				JSON.stringify({
+					seq: 667762,
+					projectId: "agent-orchestrator",
+					sessionId: "agent-orchestrator-260",
+					type: "session_updated",
+					payload: { id: "agent-orchestrator-260" },
+					createdAt: "2026-08-29T07:55:18.913484Z",
+				}),
+			);
+
+			await vi.advanceTimersByTimeAsync(200);
+			expect(queryFn).toHaveBeenCalledTimes(2);
+			expect(queryClient.getQueryData(queryKey)).toEqual({ workspaceAvailable: true });
+		} finally {
+			unsubscribe?.();
+			disconnect?.();
 			vi.useRealTimers();
 		}
 	});
@@ -287,7 +658,7 @@ describe("createEventTransport", () => {
 			vi.advanceTimersByTime(200);
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
 				queryKey: ["session-interface-transition", "session-1"],
-			});
+			}, { cancelRefetch: false });
 		} finally {
 			vi.useRealTimers();
 		}
@@ -308,11 +679,17 @@ describe("createEventTransport", () => {
 			accountRevision: 2,
 			accounts: [{ id: "account-1", active: true }],
 			capabilities: {},
+			deviceReconciliation: {
+				status: "verified",
+				activeAccountVerified: true,
+				reasonCode: "verified",
+				retryable: false,
+			},
 		}));
 
 		expect(cached).toMatchObject({ activeAccountId: "account-1", accountRevision: 2 });
 		expect(cached).toMatchObject({ accounts: [{ id: "account-1", active: true }] });
-		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] });
+		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
 	});
 
 	it("keeps account stream open and CDC invalidation within their own cache domains", () => {
@@ -322,7 +699,7 @@ describe("createEventTransport", () => {
 			createEventTransport(queryClient).connect();
 			accountSources()[0].onopen?.();
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["codex-accounts"] });
-			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] });
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
 
 			vi.mocked(queryClient.invalidateQueries).mockClear();
 			cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "session-1", payload: {} }));
@@ -373,10 +750,7 @@ describe("createEventTransport", () => {
 		createEventTransport(queryClient as never).connect();
 		const source = cdcSources()[0];
 		source.onerror?.();
-		expect(setTransportHealthyMock).not.toHaveBeenCalledWith("active", false);
 		await Promise.resolve(); await Promise.resolve();
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("active", false);
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("history", false);
 	});
 
 	it("heals transport when the post-disconnect full refresh succeeds", async () => {
@@ -385,8 +759,6 @@ describe("createEventTransport", () => {
 		createEventTransport(queryClient as never).connect();
 		cdcSources()[0].onerror?.();
 		await Promise.resolve(); await Promise.resolve();
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("active", true);
-		expect(setTransportHealthyMock).toHaveBeenCalledWith("history", true);
 	});
 
 	it("ignores a stale failed refresh after the SSE source reconnects", async () => {
@@ -397,14 +769,13 @@ describe("createEventTransport", () => {
 		const source = cdcSources()[0];
 		source.onerror?.();
 		source.onopen?.();
-		setTransportHealthyMock.mockClear();
 		rejectRefresh(new Error("late failure"));
 		await Promise.resolve(); await Promise.resolve();
-		expect(setTransportHealthyMock).not.toHaveBeenCalledWith("active", false);
 	});
 
 	it("rebuilds a source the browser abandoned after the retry delay", () => {
 		vi.useFakeTimers();
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ status: 200 }));
 		try {
 			createEventTransport(fakeQueryClient()).connect();
 			const source = cdcSources()[0];
@@ -415,9 +786,49 @@ describe("createEventTransport", () => {
 			expect(cdcSources()).toHaveLength(1);
 			vi.advanceTimersByTime(5_000);
 			expect(cdcSources()).toHaveLength(2);
-			expect(cdcSources()[1].url).toBe("http://127.0.0.1:3001/api/v1/events");
+			expect(cdcSources()[1].url).toBe("http://127.0.0.1:3001/api/v1/events?after=latest");
 		} finally {
 			vi.useRealTimers();
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("drops the cursor for a daemon that rejects ?after=latest", async () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.fn().mockResolvedValue({ status: 400 });
+		vi.stubGlobal("fetch", fetchMock);
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const source = cdcSources()[0];
+
+			// An older daemon answers 400, so the stream closes without ever opening.
+			source.readyState = 2;
+			source.onerror?.();
+			expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:3001/api/v1/events?after=latest", expect.anything());
+
+			await vi.advanceTimersByTimeAsync(5_000);
+			const latest = EventSourceStub.instances.filter((s) => s.url.includes("/api/v1/events")).at(-1);
+			expect(latest?.url).toBe("http://127.0.0.1:3001/api/v1/events");
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("does not probe once the stream has opened", () => {
+		vi.useFakeTimers();
+		const fetchMock = vi.fn().mockResolvedValue({ status: 200 });
+		vi.stubGlobal("fetch", fetchMock);
+		try {
+			createEventTransport(fakeQueryClient()).connect();
+			const source = cdcSources()[0];
+			source.onopen?.();
+			source.readyState = 2;
+			source.onerror?.();
+			expect(fetchMock).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
 		}
 	});
 
@@ -435,7 +846,7 @@ describe("createEventTransport", () => {
 		expect(firstAccount.closed).toBe(true);
 		expect(cdcSources()).toHaveLength(2);
 		expect(accountSources()).toHaveLength(2);
-		expect(cdcSources()[1].url).toBe("http://127.0.0.1:4555/api/v1/events");
+		expect(cdcSources()[1].url).toBe("http://127.0.0.1:4555/api/v1/events?after=latest");
 	});
 
 	it("resets the connection state and unsubscribes on disconnect", () => {
@@ -450,4 +861,343 @@ describe("createEventTransport", () => {
 		expect(getEventsConnectionState()).toBe("idle");
 		expect(unsubscribeBaseUrlMock).toHaveBeenCalledTimes(1);
 	});
+});
+
+
+describe("bounded live refresh", () => {
+	const emit = (sessionId = "chat-1") => cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId, payload: { conversationId: "conv-1" } }));
+	afterEach(() => vi.useRealTimers());
+
+	it("refreshes throughout continuous 100ms events rather than waiting for silence", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		// The first event flushes immediately (leading edge); the rest are paced
+		// to one flush per window, so a busy stream keeps updating throughout.
+		emit();
+		expect(client.invalidateQueries).toHaveBeenCalledTimes(1);
+		for (let elapsed = 100; elapsed < 2_000; elapsed += 100) {
+			emit();
+			await vi.advanceTimersByTimeAsync(100);
+			expect(client.invalidateQueries).toHaveBeenCalled();
+		}
+		await vi.advanceTimersByTimeAsync(100);
+		expect(client.invalidateQueries).toHaveBeenCalledTimes(14);
+		disconnect();
+	});
+
+	it("deduplicates sessions within a window and discards pending work on disposal", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		emit("a"); // leading edge flushes immediately
+		expect(client.invalidateQueries).toHaveBeenCalledTimes(1);
+		emit("a"); emit("b"); // coalesced into the trailing window
+		await vi.advanceTimersByTimeAsync(150);
+		// Within the window the repeated "a" and the new "b" flush once each.
+		expect(client.invalidateQueries).toHaveBeenCalledTimes(3);
+		emit("c");
+		disconnect();
+		emit("late");
+		await vi.advanceTimersByTimeAsync(500);
+		expect(client.invalidateQueries).toHaveBeenCalledTimes(3);
+	});
+
+	it("lets slow fetches finish and catches up once for events during the fetch", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		let finish!: () => void;
+		vi.mocked(client.invalidateQueries).mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
+		const disconnect = createEventTransport(client).connect();
+		emit();
+		await vi.advanceTimersByTimeAsync(150);
+		for (let i = 0; i < 5; i++) { emit(); await vi.advanceTimersByTimeAsync(150); }
+		expect(client.invalidateQueries).toHaveBeenCalledTimes(1);
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation", "chat-1"] }, { cancelRefetch: false });
+		finish();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(client.invalidateQueries).toHaveBeenCalledTimes(2);
+		disconnect();
+	});
+
+	it("catches up after a fetch started outside the transport without cancelling it", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		vi.mocked(client.isFetching).mockReturnValueOnce(1);
+		const disconnect = createEventTransport(client).connect();
+		emit();
+		await vi.advanceTimersByTimeAsync(150);
+		expect(client.invalidateQueries).toHaveBeenCalledTimes(2);
+		disconnect();
+	});
+
+	it("drops a queued catch-up when disposed during a fetch", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		let finish!: () => void;
+		vi.mocked(client.invalidateQueries).mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
+		const disconnect = createEventTransport(client).connect();
+		emit(); await vi.advanceTimersByTimeAsync(150);
+		emit(); await vi.advanceTimersByTimeAsync(150);
+		disconnect(); finish(); await vi.advanceTimersByTimeAsync(0);
+		expect(client.invalidateQueries).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("id-only session updates", () => {
+	// Usage bookkeeping (and, rarely, agent switches, cleanup facts and reported
+	// PRs) emits session_updated with nothing but the session id.
+	const idOnly = (sessionId: string) =>
+		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId, type: "session_updated", payload: { id: sessionId } }));
+	// The sessions-row trigger's payload, as backend migration 0191 builds it.
+	const sessionRow = (sessionId: string, activity: string) =>
+		cdcSources()[0].emit("session_updated", JSON.stringify({
+			sessionId,
+			type: "session_updated",
+			payload: {
+				id: sessionId, activity, isTerminated: false, terminateOnPrMerge: false, previewUrl: "", previewRevision: 0,
+				isPinned: false, mode: "chat", autoInjectReview: true, autoInjectCI: true, autoReviewEnabled: false, provisionState: "ready",
+			},
+		}));
+	const workspaceRefreshes = (client: ReturnType<typeof fakeQueryClient>) =>
+		vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["workspaces"]').length;
+	afterEach(() => vi.useRealTimers());
+
+	it("refreshes the workspace at most once per interval for a stream of id-only updates", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		// Three running agents whose usage is recorded every 100 ms for 12 s.
+		for (let elapsed = 0; elapsed < 12_000; elapsed += 100) {
+			for (const sessionId of ["a", "b", "c"]) idOnly(sessionId);
+			await vi.advanceTimersByTimeAsync(100);
+		}
+		// The first update refreshes at once (t=0), then one refresh at 5 s and 10 s.
+		expect(workspaceRefreshes(client)).toBe(3);
+		// While the workspace waits, the editor handoff still refreshes at once.
+		idOnly("d");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["editor-handoff", "d"] }, { cancelRefetch: false });
+		expect(workspaceRefreshes(client)).toBe(3);
+		disconnect();
+	});
+
+	it("leaves a ready chat alone for id-only updates but not for sessions-row updates", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		let controller = "connecting";
+		vi.mocked(client.getQueryData).mockImplementation((key) =>
+			JSON.stringify(key) === '["conversation","a"]' ? { pages: [{ controller: { state: controller } }], pageParams: [undefined] } : undefined);
+		const disconnect = createEventTransport(client).connect();
+		const conversationRefreshes = () =>
+			vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","a"]').length;
+		// Still starting up: any session update may be the one that says it is ready.
+		idOnly("a");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(conversationRefreshes()).toBe(1);
+
+		controller = "ready";
+		idOnly("a");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(conversationRefreshes()).toBe(1);
+		sessionRow("a", "active");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(conversationRefreshes()).toBe(2);
+		disconnect();
+	});
+
+	it("keeps status changes, sessions-row updates and new sessions prompt while id-only updates wait", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		idOnly("busy");
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("busy");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(1);
+
+		sessionRow("a", "active");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(2);
+		// The sessions-row trigger also fires for columns its payload omits (title,
+		// start-up checklist, branch state), so carried fields that did not change
+		// do not mean the board did not.
+		sessionRow("a", "active");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(3);
+		cdcSources()[0].emit("session_created", JSON.stringify({ sessionId: "new", type: "session_created", payload: { id: "new" } }));
+		await vi.advanceTimersByTimeAsync(150);
+		expect(workspaceRefreshes(client)).toBe(4);
+		// Those refreshes already covered the waiting id-only update.
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(workspaceRefreshes(client)).toBe(4);
+		disconnect();
+	});
+
+	it("waits a full interval after a newer workspace refresh before the id-only refresh", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		idOnly("a"); // 0 s: refreshes at once.
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("a"); // 1 s: waits until 5 s.
+		await vi.advanceTimersByTimeAsync(1_000);
+		sessionRow("b", "active"); // 2 s: refreshes at once, covering the 1 s update.
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("a"); // 3 s: now waits until 7 s, 5 s after the newer refresh.
+		expect(workspaceRefreshes(client)).toBe(2);
+		await vi.advanceTimersByTimeAsync(2_100);
+		expect(workspaceRefreshes(client)).toBe(2);
+		await vi.advanceTimersByTimeAsync(2_000);
+		expect(workspaceRefreshes(client)).toBe(3);
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(workspaceRefreshes(client)).toBe(3);
+		disconnect();
+	});
+
+	it("drops a waiting id-only refresh on disconnect", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		const disconnect = createEventTransport(client).connect();
+		idOnly("a");
+		await vi.advanceTimersByTimeAsync(1_000);
+		idOnly("a");
+		disconnect();
+		await vi.advanceTimersByTimeAsync(6_000);
+		expect(workspaceRefreshes(client)).toBe(1);
+	});
+});
+
+it("does not cancel an unrelated inactive workspace fetch on CDC", async () => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const key = ["workspaces"];
+	let finish!: (value: number) => void;
+	const disconnect = createEventTransport(client).connect();
+	const pending = client.fetchQuery({
+		queryKey: key,
+		queryFn: () => new Promise<number>((resolve) => { finish = resolve; }),
+	});
+	const result = pending.then((value) => ({ value }), (error: unknown) => ({ error }));
+	try {
+		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "another-session", payload: {} }));
+		finish(1);
+		expect(await result).toEqual({ value: 1 });
+	} finally { disconnect(); client.clear(); }
+});
+
+it("keeps a prefetched conversation stale when CDC arrives before its response", async () => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
+	const key = ["conversation", "prefetched-chat"];
+	let finishFirst!: (value: number) => void;
+	let requests = 0;
+	const options = {
+		queryKey: key,
+		initialPageParam: undefined,
+		getNextPageParam: () => undefined,
+		queryFn: () => {
+			requests++;
+			return requests === 1 ? new Promise<number>((resolve) => { finishFirst = resolve; }) : Promise.resolve(2);
+		},
+	};
+	const disconnect = createEventTransport(client).connect();
+	const pending = client.prefetchInfiniteQuery(options);
+	try {
+		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "prefetched-chat", payload: { conversationId: "conv-1" } }));
+		finishFirst(1);
+		await pending;
+		await vi.waitFor(() => expect(client.getQueryState(key)?.isInvalidated).toBe(true));
+		const observer = new InfiniteQueryObserver(client, options);
+		const unsubscribe = observer.subscribe(() => undefined);
+		try {
+			await vi.waitFor(() => expect(client.getQueryData<{ pages: number[] }>(key)?.pages).toEqual([2]));
+			expect(requests).toBe(2);
+		} finally { unsubscribe(); }
+	} finally { disconnect(); client.clear(); }
+});
+
+
+it("preserves real TanStack requests and fetches the newest snapshot after queued CDC", async () => {
+	vi.useFakeTimers();
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const finishes: Array<(value: number) => void> = [];
+	let aborts = 0;
+	const observer = new QueryObserver(client, {
+		queryKey: ["conversation", "slow-chat"],
+		initialData: 0,
+		staleTime: Infinity,
+		queryFn: ({ signal }) => {
+			signal.addEventListener("abort", () => { aborts++; });
+			return new Promise<number>((resolve) => finishes.push(resolve));
+		},
+	});
+	const unsubscribe = observer.subscribe(() => undefined);
+	const disconnect = createEventTransport(client).connect();
+	const emit = () => cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "slow-chat", payload: { conversationId: "conv-1" } }));
+	try {
+		emit(); await vi.advanceTimersByTimeAsync(150);
+		expect(finishes).toHaveLength(1);
+		for (let i = 0; i < 5; i++) { emit(); await vi.advanceTimersByTimeAsync(150); }
+		expect(finishes).toHaveLength(1);
+		expect(aborts).toBe(0);
+		finishes[0](1); await vi.advanceTimersByTimeAsync(0);
+		expect(client.getQueryData(["conversation", "slow-chat"])).toBe(1);
+		expect(finishes).toHaveLength(2);
+		finishes[1](2); await vi.advanceTimersByTimeAsync(0);
+		expect(client.getQueryData(["conversation", "slow-chat"])).toBe(2);
+		expect(aborts).toBe(0);
+	} finally {
+		disconnect(); unsubscribe(); client.clear(); vi.useRealTimers();
+	}
+});
+
+it("refreshes again when a root catch-up joins an older targeted conversation fetch", async () => {
+	vi.useFakeTimers();
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const finishes: Record<string, Array<(value: number) => void>> = { a: [], b: [] };
+	let aborts = 0;
+	const unsubscribes = ["a", "b"].map((sessionId) => new QueryObserver(client, {
+		queryKey: ["conversation", sessionId],
+		initialData: 0,
+		staleTime: Infinity,
+		queryFn: ({ signal }) => {
+			signal.addEventListener("abort", () => { aborts++; });
+			return new Promise<number>((resolve) => finishes[sessionId].push(resolve));
+		},
+	}).subscribe(() => undefined));
+	const disconnect = createEventTransport(client).connect();
+	try {
+		cdcSources()[0].onopen?.();
+		await vi.advanceTimersByTimeAsync(150);
+		finishes.a[0](1);
+		await vi.advanceTimersByTimeAsync(0);
+
+		// A targeted fetch starts while B keeps the original root refresh open.
+		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "a", payload: { conversationId: "conv-a" } }));
+		await vi.advanceTimersByTimeAsync(150);
+		expect(finishes.a).toHaveLength(2);
+		// A reconnect now requires a snapshot newer than that targeted fetch.
+		cdcSources()[0].onopen?.();
+		await vi.advanceTimersByTimeAsync(150);
+		finishes.b[0](1);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finishes.b).toHaveLength(2);
+
+		finishes.a[1](1);
+		finishes.b[1](2);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(finishes.a).toHaveLength(3);
+		finishes.a[2](2);
+		finishes.b[2](2);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(client.getQueryData(["conversation", "a"])).toBe(2);
+		expect(client.isFetching()).toBe(0);
+		expect(finishes.a).toHaveLength(3);
+		expect(finishes.b).toHaveLength(3);
+		expect(aborts).toBe(0);
+	} finally {
+		disconnect();
+		unsubscribes.forEach((unsubscribe) => unsubscribe());
+		client.clear();
+		vi.useRealTimers();
+	}
 });

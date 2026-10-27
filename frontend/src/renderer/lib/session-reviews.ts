@@ -2,12 +2,14 @@ import { queryOptions } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { appI18n } from "../i18n";
 import { sortedPRs, type WorkspaceSession } from "../types/workspace";
-import { apiClient, apiErrorMessage } from "./api-client";
+import { apiErrorMessage } from "./api-client";
+import { clientForSessionHost } from "./host-clients";
 import { usesPreviewWorkspaceData as usePreviewData } from "./preview-mode";
 
 export type PRReviewState = components["schemas"]["PRReviewState"];
 export type ReviewsResponse = components["schemas"]["ListReviewsResponse"];
 export type ReviewRunFacts = components["schemas"]["ReviewRun"];
+export type ReviewerActivityState = ReviewsResponse["reviewerActivityState"];
 
 /**
  * Shared query options for a session's AO review states. The query key is the
@@ -15,9 +17,12 @@ export type ReviewRunFacts = components["schemas"]["ReviewRun"];
  * and the command palette both subscribe through this, so React Query shares
  * one cache entry per session and one fetch path (including the preview mock).
  */
-export function sessionReviewsQueryOptions(session: WorkspaceSession, enabled: boolean, staleTime?: number) {
+export const sessionReviewsQueryKey = (sessionId: string, hostId?: string) =>
+	hostId ? ["session-reviews", hostId, sessionId] as const : ["session-reviews", sessionId] as const;
+
+export function sessionReviewsQueryOptions(session: WorkspaceSession, enabled: boolean, staleTime?: number, hostId = session.hostId) {
 	return queryOptions({
-		queryKey: ["session-reviews", session.id] as const,
+		queryKey: sessionReviewsQueryKey(session.id, hostId),
 		enabled,
 		...(staleTime !== undefined ? { staleTime } : {}),
 		refetchInterval: (query) => {
@@ -27,11 +32,11 @@ export function sessionReviewsQueryOptions(session: WorkspaceSession, enabled: b
 		},
 		queryFn: async () => {
 			if (usePreviewData) return mockReviewsResponse(session);
-			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/reviews", {
+			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/reviews", {
 				params: { path: { sessionId: session.id } },
 			});
 			if (error) throw new Error(apiErrorMessage(error, "Unable to load reviews"));
-			return data ?? ({ reviewerHandleId: "", reviews: [], runs: [] } satisfies ReviewsResponse);
+			return data ?? ({ reviewerHandleId: "", reviews: [], runs: [], activeReviewers: [] } satisfies ReviewsResponse);
 		},
 	});
 }
@@ -48,6 +53,28 @@ export function openReviewStatesFor(session: WorkspaceSession, reviewStates: PRR
 
 export function reviewIsRunning(openReviewStates: PRReviewState[]): boolean {
 	return openReviewStates.some((reviewState) => reviewState.status === "running");
+}
+
+export function reviewHasLiveActivity(
+	openReviewStates: PRReviewState[],
+	reviewerActivityState: ReviewerActivityState | undefined,
+	hasReviewerSession: boolean,
+): boolean {
+	if (!reviewIsRunning(openReviewStates)) return false;
+	if (!hasReviewerSession) return false;
+	switch (reviewerActivityState) {
+		case "idle":
+		case "waiting_input":
+		case "exited":
+			return false;
+		case "active":
+		case "blocked":
+			return true;
+		default:
+			// Older daemons do not return reviewer activity state. Keep today's
+			// running-run semantics until a hook says otherwise.
+			return true;
+	}
 }
 
 export function reviewRunDisabled(openReviewStates: PRReviewState[], isTriggering: boolean): boolean {
@@ -199,7 +226,7 @@ function mockReviewsResponse(session: WorkspaceSession): ReviewsResponse {
 			},
 		];
 	});
-	return { reviewerHandleId: `${session.id}-reviewer`, reviews: states, runs };
+	return { reviewerHandleId: `${session.id}-reviewer`, reviews: states, runs, activeReviewers: [] };
 }
 
 function mockReviewTitle(prNumber: number): string {

@@ -75,6 +75,13 @@ describe("native-composition transparency cascade", () => {
 		expect(clearsBackgroundFor((selector) => selector.includes(".browser-panel__viewport"))).toBe(true);
 	});
 
+	it("clears the browser panel body wrapper around the native slot", () => {
+		// `.browser-panel__body` paints an opaque plate over the full viewport
+		// whenever the shell is raised for a toolbar tooltip or dropdown. Leaving
+		// it opaque blanks the live page even when the viewport div is transparent.
+		expect(clearsBackgroundFor((selector) => selector.includes(".browser-panel__body"))).toBe(true);
+	});
+
 	it("clears the app shell root while the browser panel is popped out", () => {
 		// The maximized panel is portaled straight to <body> (SessionView.tsx), so
 		// it is NOT a descendant of `.app-shell-root` and the docked `:has(LIVE_PAGE)`
@@ -94,5 +101,51 @@ describe("native-composition transparency cascade", () => {
 
 	it("clears the popped-out overlay surface", () => {
 		expect(clearsBackgroundFor((selector) => selector.endsWith(".browser-popout-overlay"))).toBe(true);
+	});
+
+	it("clears the popped-out frame that directly wraps the maximized browser panel", () => {
+		// SessionView.tsx portals the maximized browser into a `.browser-popout-frame`
+		// wrapper that paints an opaque `background: var(--bg)` plate. The popped-out
+		// shell clears above target #root ancestors via `:has(.browser-popout-overlay)`
+		// and never match this element, so it must be cleared explicitly — otherwise
+		// raising the transparent shell for a tooltip/menu paints the frame's opaque
+		// background over the native page and blanks it to black (Windows, maximized).
+		expect(clearsBackgroundFor((selector) => selector.includes(".browser-popout-frame"))).toBe(true);
+	});
+
+	it("keeps the expanded browser inset from both window edges", () => {
+		const frameRule = rules().find((rule) => rule.selector === ".browser-popout-frame");
+		expect(frameRule?.body).toMatch(/left:\s*var\(--browser-popout-inline-inset\)/);
+		expect(frameRule?.body).toMatch(/right:\s*var\(--browser-popout-inline-inset\)/);
+	});
+
+	it("masks the reserved macOS titlebar band for the files popout", () => {
+		const maskRule = rules().find((rule) => rule.selector.endsWith(".files-popout-overlay--mac-windowed::before"));
+		expect(maskRule?.body).toMatch(/top:\s*calc\(-1 \* var\(--size-traffic-light-clearance\)\)/);
+		expect(maskRule?.body).toMatch(/height:\s*var\(--size-traffic-light-clearance\)/);
+		expect(maskRule?.body).toMatch(/background:\s*var\(--bg\)/);
+	});
+
+	it("centers the browser address bar between the inspector tabs and actions", () => {
+		const topbarRule = rules().find((rule) => rule.selector.endsWith(".session-inspector__topbar--browser"));
+		// Intrinsic side tracks: the field centers in the gap left by however many tabs there are.
+		expect(topbarRule?.body).toMatch(/grid-template-columns:\s*max-content minmax\(0, 1fr\) max-content/);
+		const hostRule = rules().find((rule) => rule.selector === ".session-inspector__topbar > .browser-panel__topbar-host");
+		expect(hostRule?.body).toMatch(/justify-self:\s*center/);
+		expect(hostRule?.body).toMatch(/width:\s*min\(100%, 240px\)/);
+		// Centered: no offset is applied to the field in any layout.
+		const addressBarRule = rules().find(
+			(rule) => rule.selector.endsWith(".browser-panel__topbar-host > .browser-panel__address-bar"),
+		);
+		expect(addressBarRule?.body ?? "").not.toMatch(/translateX/);
+		expect(css).toMatch(
+			/\.session-inspector__topbar--browser:has\(\.browser-panel__address-bar--editing\) > \.browser-panel__topbar-host\s*{[^}]*width:\s*min\(100%, 52cqw, 560px\)/,
+		);
+		expect(css).toMatch(
+			/@container inspector \(max-width: 440px\)[\s\S]*?\.session-inspector__topbar--browser\s*{[\s\S]*?grid-template-rows:\s*var\(--size-inspector-tabs\) var\(--size-inspector-tabs\)/,
+		);
+		expect(css).toMatch(
+			/@container inspector \(max-width: 440px\)[\s\S]*?> \.browser-panel__topbar-host\s*{[\s\S]*?grid-row:\s*2;[\s\S]*?width:\s*180px/,
+		);
 	});
 });

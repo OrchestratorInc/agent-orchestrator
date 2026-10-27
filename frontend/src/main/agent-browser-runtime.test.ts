@@ -47,7 +47,24 @@ describe("AO action translation", () => {
 			"--interactive",
 			"--compact",
 		]);
+		expect(nativeArgumentsForAction("snapshot", { delta: true })).toEqual(["snapshot", "--compact", "--delta"]);
+		expect(nativeArgumentsForAction("snapshot", { interactive: true, delta: true, full: true })).toEqual([
+			"snapshot",
+			"--interactive",
+			"--compact",
+			"--delta",
+			"--full",
+		]);
+		expect(nativeArgumentsForAction("snapshot", { full: true })).toEqual(["snapshot", "--compact"]);
 		expect(nativeArgumentsForAction("click", { ref: "e2" })).toEqual(["click", "@e2"]);
+		expect(nativeArgumentsForAction("click", { ref: "e2", human: true })).toEqual(["click", "@e2", "--human"]);
+		expect(nativeArgumentsForAction("dblclick", { ref: "e2", human: true })).toEqual(["dblclick", "@e2"]);
+		expect(nativeArgumentsForAction("drag", { ref: "e2", targetRef: "@e5", human: true })).toEqual([
+			"drag",
+			"@e2",
+			"@e5",
+			"--human",
+		]);
 		expect(nativeArgumentsForAction("drag", { ref: "e2", targetRef: "@e5" })).toEqual([
 			"drag",
 			"@e2",
@@ -101,6 +118,7 @@ describe("agent-browser runtime lifecycle", () => {
 		const bridge = {
 			start: vi.fn(overrides.start ?? (async () => "ws://127.0.0.1:1/fixture")),
 			close: vi.fn(overrides.close ?? (async () => undefined)),
+			reconcileTargets: vi.fn(),
 		};
 		const processRunner = vi.fn(
 			overrides.processRunner ?? (async () => ({ stdout: "", stderr: "", exitCode: 0 })),
@@ -120,6 +138,81 @@ describe("agent-browser runtime lifecycle", () => {
 	async function cleanup(dataDir: string): Promise<void> {
 		await rm(dataDir, { recursive: true, force: true });
 	}
+
+	it("resolves AO tab identity separately from native tab numbering and verifies the selected target", async () => {
+		const { dataDir, runtime, processRunner } = await fixture({
+			processRunner: async (_binary, rawArgs) => {
+				const args = rawArgs as string[];
+				const data = args[1] === "list"
+					? { tabs: [{ tabId: "t2", targetId: "t3" }] }
+					: { tabId: "t2", targetId: "t4" };
+				return { stdout: JSON.stringify({ success: true, data }), stderr: "", exitCode: 0 };
+			},
+		});
+		try {
+			await expect(runtime.runAction("session-1", "tab-select", { tabId: "t3" }, provider)).rejects.toMatchObject({
+				code: "AGENT_BROWSER_COMMAND_FAILED",
+				message: "Browser automation did not target AO tab t3",
+			});
+			expect(processRunner.mock.calls.some(([, args]) => JSON.stringify(args) === JSON.stringify(["tab", "t2", "--json"]))).toBe(true);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
+
+	it.each([
+		undefined,
+		[],
+		[{ tabId: "t2", targetId: "t4" }],
+		[{ tabId: "--help", targetId: "t3" }],
+		[{ tabId: "t2", targetId: "t3" }, { tabId: "t3", targetId: "t3" }],
+	])("rejects unavailable or malformed native tab mappings before dispatch: %j", async (tabs) => {
+		const { dataDir, runtime, processRunner } = await fixture({
+			processRunner: async () => ({ stdout: JSON.stringify({ success: true, data: { tabs } }), stderr: "", exitCode: 0 }),
+		});
+		try {
+			await expect(runtime.runAction("session-1", "tab-select", { tabId: "t3" }, provider)).rejects.toMatchObject({
+				code: "AGENT_BROWSER_COMMAND_FAILED",
+			});
+			expect(processRunner.mock.calls.some(([, args]) => (args as string[])[0] === "tab" && (args as string[])[1] !== "list")).toBe(false);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
+
+	it("closes only the requested AO target without using native numeric IDs", async () => {
+		const { dataDir, runtime, bridge, processRunner } = await fixture();
+		const closeTarget = vi.fn();
+		const closeProvider = {
+			...provider,
+			listTargets: () => ["t1", "t3", "t4"].map((id) => ({ id, url: "about:blank", title: id, debugger: {} as never })),
+			closeTarget,
+		};
+		try {
+			await runtime.run("session-1", ["snapshot"], closeProvider);
+			processRunner.mockClear();
+			bridge.reconcileTargets.mockClear();
+			expect(await runtime.runAction("session-1", "tab-close", { tabId: "t3" }, closeProvider)).toMatchObject({
+				tabId: "t3", targetId: "t3", closed: true,
+			});
+			expect(closeTarget).toHaveBeenCalledOnce();
+			expect(closeTarget).toHaveBeenCalledWith("t3");
+			expect(bridge.reconcileTargets).toHaveBeenCalledOnce();
+			expect(processRunner).not.toHaveBeenCalled();
+			await expect(runtime.runAction("session-1", "tab-close", { tabId: "t2" }, closeProvider)).rejects.toMatchObject({
+				code: "AGENT_BROWSER_COMMAND_FAILED",
+			});
+			await expect(runtime.runAction("session-1", "tab-close", { tabId: "t4" }, closeProvider, AbortSignal.abort())).rejects.toMatchObject({
+				code: "AGENT_BROWSER_CANCELLED",
+			});
+			expect(closeTarget).toHaveBeenCalledTimes(1);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
 
 	it("serializes concurrent initialization and removes the owned run root", async () => {
 		const { dataDir, bridge, runtime } = await fixture();
@@ -182,6 +275,70 @@ describe("agent-browser runtime lifecycle", () => {
 		}
 	});
 
+	it("passes --annotate through screenshot and returns the native annotations", async () => {
+		const png = Buffer.from(
+			"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+			"base64",
+		);
+		const annotations = [{ number: 1, ref: "e1", role: "button", name: "Save", box: { x: 1, y: 2, width: 3, height: 4 } }];
+		const commands: string[][] = [];
+		let unreadableAnnotations = false;
+		let failAnnotations = false;
+		const { dataDir, runtime } = await fixture({
+			processRunner: async (...args) => {
+				const command = args[1] as string[];
+				commands.push(command);
+				if (command[0] !== "screenshot") return { stdout: "", stderr: "", exitCode: 0 };
+				if (failAnnotations) {
+					return {
+						stdout: JSON.stringify({ success: false, error: "annotation overlay injection failed" }),
+						stderr: "",
+						exitCode: 0,
+					};
+				}
+				await writeFile(command[1], png);
+				if (unreadableAnnotations) return { stdout: "not json", stderr: "", exitCode: 0 };
+				return {
+					stdout: JSON.stringify({
+						success: true,
+						_boundary: { nonce: "n1", origin: "http://localhost:3000/" },
+						data: { path: command[1], annotations },
+					}),
+					stderr: "",
+					exitCode: 0,
+				};
+			},
+		});
+		try {
+			const plain = await runtime.screenshot("session-1", provider);
+			expect(commands.at(-1)).not.toContain("--annotate");
+			expect(plain.annotations).toBeUndefined();
+
+			const annotated = await runtime.screenshot("session-1", provider, undefined, { annotate: true });
+			expect(commands.at(-1)).toContain("--annotate");
+			expect(annotated).toMatchObject({
+				width: 1,
+				height: 1,
+				annotations,
+				_boundary: { nonce: "n1", origin: "http://localhost:3000/" },
+			});
+
+			failAnnotations = true;
+			await expect(runtime.screenshot("session-1", provider, undefined, { annotate: true })).rejects.toThrow(
+				"annotation overlay injection failed",
+			);
+			failAnnotations = false;
+
+			unreadableAnnotations = true;
+			const unreadable = await runtime.screenshot("session-1", provider, undefined, { annotate: true });
+			expect(unreadable).toMatchObject({ width: 1, height: 1, annotationsUnavailable: true });
+			expect(unreadable.annotations).toBeUndefined();
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
+
 	it("re-disables streaming before every command across native daemon replacement", async () => {
 		let streamingEnabled = true;
 		const calls: string[][] = [];
@@ -210,6 +367,34 @@ describe("agent-browser runtime lifecycle", () => {
 				["stream", "disable"],
 				["get", "url"],
 			]);
+		} finally {
+			await runtime.dispose();
+			await cleanup(dataDir);
+		}
+	});
+
+	it("bounds screenshot capture below the default command timeout", async () => {
+		const timeouts: unknown[] = [];
+		const { dataDir, runtime } = await fixture({
+			processRunner: async (...args) => {
+				const command = args[1] as string[];
+				if (command[0] === "screenshot") {
+					timeouts.push(args[4]);
+					await writeFile(
+						command[1],
+						Buffer.from(
+							"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+							"base64",
+						),
+					);
+				}
+				return { stdout: "", stderr: "", exitCode: 0 };
+			},
+		});
+		try {
+			const screenshot = await runtime.screenshot("session-1", provider);
+			expect(screenshot).toMatchObject({ width: 1, height: 1 });
+			expect(timeouts).toEqual([30_000]);
 		} finally {
 			await runtime.dispose();
 			await cleanup(dataDir);
@@ -457,6 +642,16 @@ describe("agent-browser structured output", () => {
 		expect(thrown).toMatchObject({ code: "STALE_REFERENCE", message: "Reference expired" });
 	});
 
+	it("preserves the native wait-timeout distinction for postcondition observation", () => {
+		let thrown: unknown;
+		try {
+			parseAgentBrowserJSON(JSON.stringify({ success: false, error: "Wait timed out after 2500ms" }));
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toMatchObject({ code: "AGENT_BROWSER_WAIT_TIMEOUT", message: "Wait timed out after 2500ms" });
+	});
+
 	it.each([
 		"Unknown ref: e99",
 		"Could not locate element with role=button name=Sign In",
@@ -483,9 +678,12 @@ describe("agent-browser structured output", () => {
 
 const nativeBinary = process.env.AO_AGENT_BROWSER_TEST_BINARY;
 describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
-	it("connects the pinned native daemon and keeps native tab lifecycle commands aligned", async () => {
+	function setupNativeFixture() {
 		class DebuggerFixture extends EventEmitter {
 			attached = false;
+			constructor(private readonly url = "http://localhost:5173/") {
+				super();
+			}
 			attach() {
 				this.attached = true;
 			}
@@ -498,7 +696,20 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 			}
 			async sendCommand(method: string) {
 				if (method === "Runtime.evaluate") {
-					return { result: { type: "string", value: "http://localhost:5173/" } };
+					return { result: { type: "string", value: this.url } };
+				}
+				if (method === "Accessibility.getFullAXTree") {
+					return {
+						nodes: [
+							{
+								nodeId: "1",
+								ignored: false,
+								role: { type: "role", value: "button" },
+								name: { type: "computedString", value: this.url === "http://localhost:5173/" ? "Save" : "Popup action" },
+								childIds: [],
+							},
+						],
+					};
 				}
 				if (method === "Page.captureScreenshot") {
 					return {
@@ -523,7 +734,7 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 					id: `t${targets.length + 1}`,
 					url,
 					title: "New tab",
-					debugger: new DebuggerFixture(),
+					debugger: new DebuggerFixture(url),
 				};
 				targets.push(target);
 				return target;
@@ -538,6 +749,11 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 			binaryPath: nativeBinary!,
 			dataDir: path.join(shortTempDir, "ao-agent-browser-native-test"),
 		});
+		return { runtime, provider, targets, DebuggerFixture };
+	}
+
+	it("connects the pinned native daemon and keeps native tab lifecycle commands aligned", async () => {
+		const { runtime, provider, targets } = setupNativeFixture();
 		try {
 			const result = await runtime.runAction("native-fixture", "get", { property: "url" }, provider);
 			expect(result.url).toBe("http://localhost:5173/");
@@ -548,6 +764,85 @@ describe.skipIf(!nativeBinary)("agent-browser native compatibility", () => {
 			expect(targets.map((target) => target.id)).toEqual(["t1"]);
 			const screenshot = await runtime.screenshot("native-fixture", provider);
 			expect(screenshot).toMatchObject({ width: 1, height: 1 });
+			const baseline = await runtime.runAction("native-fixture", "snapshot", { delta: true, full: true }, provider);
+			expect(baseline.snapshot).toMatchObject({ kind: "full", revision: expect.any(Number), tree: expect.any(String) });
+			const baselineRevision = (baseline.snapshot as { revision: number }).revision;
+			const next = (await runtime.runAction("native-fixture", "snapshot", { delta: true }, provider)).snapshot as {
+				kind: string;
+				revision: number;
+				baseRevision?: number;
+			};
+			expect(["full", "unchanged", "delta"]).toContain(next.kind);
+			expect(next.revision).toBeGreaterThan(baselineRevision);
+			if (next.kind !== "full") expect(next.baseRevision).toBe(baselineRevision);
+		} finally {
+			await runtime.dispose();
+		}
+	});
+
+	it("discovers externally opened tabs and forgets externally closed tabs without renumbering", async () => {
+		const { runtime, provider, targets, DebuggerFixture } = setupNativeFixture();
+		const sessionId = "native-external-tabs";
+		try {
+			expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({
+				url: "http://localhost:5173/",
+			});
+			for (const tabId of ["t2", "t3"]) {
+				const url = `http://localhost:5173/${tabId}`;
+				// Electron registers a page-opened popup without Target.createTarget.
+				targets.push({ id: tabId, url, title: `Popup ${tabId}`, debugger: new DebuggerFixture(url) });
+				await runtime.runAction(sessionId, "tab-select", { tabId }, provider);
+				expect(await runtime.runAction(sessionId, "tabs", {}, provider)).toMatchObject({
+					tabs: [
+						{ tabId: "t1", targetId: "t1", active: false },
+						{ tabId, targetId: tabId, active: true, url },
+					],
+				});
+				expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({ url });
+				expect(await runtime.runAction(sessionId, "snapshot", {}, provider)).toMatchObject({
+					snapshot: expect.stringContaining('button "Popup action"'),
+				});
+				targets.splice(1, 1);
+				expect(await runtime.runAction(sessionId, "tabs", {}, provider)).toMatchObject({
+					tabs: [{ tabId: "t1", targetId: "t1", active: true }],
+				});
+			}
+		} finally {
+			await runtime.dispose();
+		}
+	});
+
+	it("selects and closes AO targets when a vanished popup leaves a gap in target IDs", async () => {
+		const { runtime, provider, targets, DebuggerFixture } = setupNativeFixture();
+		const sessionId = "native-target-id-gap";
+		// AO's ephemeral t2 disappeared before native discovery. Native IDs will
+		// be t1,t2,t3 for these physical AO targets t1,t3,t4.
+		for (const tabId of ["t3", "t4"]) {
+			const url = `http://localhost:5173/${tabId}`;
+			targets.push({ id: tabId, url, title: `Popup ${tabId}`, debugger: new DebuggerFixture(url) });
+		}
+		try {
+			expect(await runtime.runAction(sessionId, "tabs", {}, provider)).toMatchObject({
+				tabs: [
+					{ tabId: "t1", targetId: "t1" },
+					{ tabId: "t2", targetId: "t3" },
+					{ tabId: "t3", targetId: "t4" },
+				],
+			});
+			expect(await runtime.runAction(sessionId, "tab-select", { tabId: "t3" }, provider)).toMatchObject({
+				tabId: "t3", targetId: "t3",
+			});
+			expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({
+				url: "http://localhost:5173/t3",
+			});
+			expect(await runtime.runAction(sessionId, "tab-close", { tabId: "t3" }, provider)).toMatchObject({
+				tabId: "t3", targetId: "t3", closed: true,
+			});
+			expect(targets.map((target) => target.id)).toEqual(["t1", "t4"]);
+			await runtime.runAction(sessionId, "tab-select", { tabId: "t4" }, provider);
+			expect(await runtime.runAction(sessionId, "get", { property: "url" }, provider)).toMatchObject({
+				url: "http://localhost:5173/t4",
+			});
 		} finally {
 			await runtime.dispose();
 		}

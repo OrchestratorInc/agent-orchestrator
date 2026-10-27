@@ -1,34 +1,91 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AttachableTerminal } from "../hooks/useTerminalSession";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { TerminalMux } from "../lib/terminal-mux";
+import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
+import { useTerminalSession, type AttachableTerminal } from "../hooks/useTerminalSession";
 import { useUiStore } from "../stores/ui-store";
 import { safeTerminalFind } from "./TerminalSearch";
 import { XtermTerminal } from "./XtermTerminal";
 
 const state = vi.hoisted(() => ({
 	fit: vi.fn(),
+	lifecycle: [] as string[],
 	linkHandler: null as null | ((event: MouseEvent, uri: string) => void),
+	queueViewportSyncOnOpen: false,
+	sessionLinkProvider: null as null | {
+		provideLinks: (
+			line: number,
+			callback: (
+				links?: Array<{
+					text: string;
+					range: { start: { x: number; y: number }; end: { x: number; y: number } };
+					activate: (event: MouseEvent) => void;
+				}>,
+			) => void,
+		) => void;
+	},
 	searchAddon: null as null | {
 		clearDecorations: ReturnType<typeof vi.fn>;
 		findNext: ReturnType<typeof vi.fn>;
 		findPrevious: ReturnType<typeof vi.fn>;
 		resultListeners: Set<(results: { resultCount: number; resultIndex: number }) => void>;
 	},
+	mouseMoveListener: vi.fn(),
 	lastTerminal: null as null | {
+		write(data: Uint8Array, done?: () => void): void;
+		cols: number;
+		screenElement: HTMLElement;
 		keyHandler?: (event: KeyboardEvent) => boolean;
 		wheelHandler?: (event: WheelEvent) => boolean;
 		selection: string;
 		options: Record<string, unknown>;
+		rows: number;
+		dimensions?: { css: { cell: { width: number; height: number } } };
+		resize: ReturnType<typeof vi.fn>;
 		modes: { bracketedPasteMode: boolean; mouseTrackingMode: string };
-		buffer: { active: { baseY: number; type: string; viewportY: number } };
+		buffer: {
+			active: {
+				baseY: number;
+				type: string;
+				viewportY: number;
+				length: number;
+				getNullCell: () => {
+					chars: string;
+					width: number;
+					getChars: () => string;
+					getWidth: () => number;
+				};
+				getLine: (
+					row: number,
+				) =>
+					| {
+							translateToString: (trimRight: boolean, startColumn?: number, endColumn?: number) => string;
+							isWrapped: boolean;
+							length?: number;
+							getCell?: (column: number, cell: { chars: string; width: number }) => unknown;
+					  }
+					| undefined;
+			};
+		};
+		bufferLines: Array<{
+			translateToString: (trimRight: boolean, startColumn?: number, endColumn?: number) => string;
+			isWrapped: boolean;
+		}>;
+		selectionRange?: { start: { x: number; y: number }; end: { x: number; y: number } };
+		getSelectionPosition():
+			| { start: { x: number; y: number }; end: { x: number; y: number } }
+			| undefined;
 		scrollLines: ReturnType<typeof vi.fn>;
 		scrollToBottom: ReturnType<typeof vi.fn>;
 		scrollToLine: ReturnType<typeof vi.fn>;
 		refresh: ReturnType<typeof vi.fn>;
 		clear: ReturnType<typeof vi.fn>;
+		dispose: ReturnType<typeof vi.fn>;
 		focus: ReturnType<typeof vi.fn>;
 		selectAll: ReturnType<typeof vi.fn>;
 		dataListeners: Set<(data: string) => void>;
+		renderListeners: Set<() => void>;
 		csiHandlers: Array<{
 			callback: (params: (number | number[])[]) => boolean | Promise<boolean>;
 			id: { final: string; intermediates?: string; prefix?: string };
@@ -37,11 +94,16 @@ const state = vi.hoisted(() => ({
 		selectionListeners: Set<() => void>;
 		scrollListeners: Set<() => void>;
 		_core: {
-			element: { classList: { add: ReturnType<typeof vi.fn>; remove: ReturnType<typeof vi.fn> } };
+			element: {
+				classList: { add: ReturnType<typeof vi.fn>; remove: ReturnType<typeof vi.fn> };
+				getBoundingClientRect: () => DOMRect;
+			};
 			viewport: { scrollBarWidth: number };
 			_selectionService: {
 				enable: ReturnType<typeof vi.fn>;
 				shouldForceSelection: (event: MouseEvent) => boolean;
+				_mouseMoveListener?: EventListener;
+				_dragScrollAmount?: number;
 			};
 		};
 	},
@@ -51,12 +113,43 @@ vi.mock("@xterm/xterm", () => ({
 	Terminal: class FakeTerminal {
 		options: Record<string, unknown>;
 		cols = 80;
+		screenElement = Object.assign(document.createElement("div"), {
+			getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 240 }) as DOMRect,
+		});
 		rows = 24;
+		dimensions?: { css: { cell: { width: number; height: number } } };
+		resize = vi.fn((cols: number, rows: number) => { this.cols = cols; this.rows = rows; });
 		selection = "";
 		keyHandler?: (event: KeyboardEvent) => boolean;
 		wheelHandler?: (event: WheelEvent) => boolean;
 		modes = { bracketedPasteMode: false, mouseTrackingMode: "vt200" };
-		buffer = { active: { baseY: 0, type: "normal", viewportY: 0 } };
+		bufferLines: Array<{
+			translateToString: (trimRight: boolean, startColumn?: number, endColumn?: number) => string;
+			isWrapped: boolean;
+		}> = [];
+		buffer = {
+			active: {
+				baseY: 0,
+				type: "normal",
+				viewportY: 0,
+				length: 1,
+				getNullCell: () => ({
+					chars: "",
+					width: 1,
+					getChars() {
+						return this.chars;
+					},
+					getWidth() {
+						return this.width;
+					},
+				}),
+				getLine: (row: number) => this.bufferLines[row],
+			},
+		};
+		selectionRange?: { start: { x: number; y: number }; end: { x: number; y: number } };
+		getSelectionPosition() {
+			return this.selectionRange;
+		}
 		scrollLines = vi.fn();
 		scrollToBottom = vi.fn();
 		scrollToLine = vi.fn();
@@ -65,6 +158,7 @@ vi.mock("@xterm/xterm", () => ({
 		focus = vi.fn();
 		selectAll = vi.fn();
 		dataListeners = new Set<(data: string) => void>();
+		renderListeners = new Set<() => void>();
 		csiHandlers: Array<{
 			callback: (params: (number | number[])[]) => boolean | Promise<boolean>;
 			id: { final: string; intermediates?: string; prefix?: string };
@@ -86,12 +180,18 @@ vi.mock("@xterm/xterm", () => ({
 		keyListeners = new Set<(event: { key: string }) => void>();
 		selectionListeners = new Set<() => void>();
 		scrollListeners = new Set<() => void>();
+		writeBuffer = "";
 		_core = {
-			element: { classList: { add: vi.fn(), remove: vi.fn() } },
+			element: {
+				classList: { add: vi.fn(), remove: vi.fn() },
+				getBoundingClientRect: () => ({ left: 0, right: 800 }) as DOMRect,
+			},
 			viewport: { scrollBarWidth: 15 },
 			_selectionService: {
 				enable: vi.fn(),
 				shouldForceSelection: () => false,
+				_mouseMoveListener: state.mouseMoveListener,
+				_dragScrollAmount: 0,
 			},
 		};
 
@@ -103,10 +203,22 @@ vi.mock("@xterm/xterm", () => ({
 		loadAddon() {}
 		open(host: HTMLElement) {
 			host.appendChild(document.createElement("textarea"));
+			if (state.queueViewportSyncOnOpen) {
+				window.setTimeout(() => state.lifecycle.push("viewport-sync"), 0);
+			}
 		}
-		write() {}
+		write(data: Uint8Array, done?: () => void) {
+			this.writeBuffer += new TextDecoder().decode(data);
+			if (this.writeBuffer.includes("\x1b[6n")) {
+				this.dataListeners.forEach((listener) => listener("\x1b[7;21R"));
+				this.writeBuffer = "";
+			}
+			done?.();
+		}
 		writeln() {}
-		dispose() {}
+		dispose = vi.fn(() => {
+			state.lifecycle.push("dispose");
+		});
 		onData(listener: (data: string) => void) {
 			this.dataListeners.add(listener);
 			return { dispose: () => this.dataListeners.delete(listener) };
@@ -114,8 +226,9 @@ vi.mock("@xterm/xterm", () => ({
 		onResize() {
 			return { dispose: () => undefined };
 		}
-		onRender() {
-			return { dispose: () => undefined };
+		onRender(listener: () => void) {
+			this.renderListeners.add(listener);
+			return { dispose: () => this.renderListeners.delete(listener) };
 		}
 		onScroll(listener: () => void) {
 			this.scrollListeners.add(listener);
@@ -141,14 +254,18 @@ vi.mock("@xterm/xterm", () => ({
 		attachCustomWheelEventHandler(listener: (event: WheelEvent) => boolean) {
 			this.wheelHandler = listener;
 		}
+		registerLinkProvider(provider: typeof state.sessionLinkProvider) {
+			state.sessionLinkProvider = provider;
+			return { dispose: () => undefined };
+		}
 		unicode = { activeVersion: "" };
 	},
 }));
 
 vi.mock("@xterm/addon-fit", () => ({
 	FitAddon: class FakeFitAddon {
-		fit() {
-			state.fit();
+		proposeDimensions() {
+			return state.fit();
 		}
 	},
 }));
@@ -183,10 +300,6 @@ vi.mock("@xterm/addon-web-links", () => ({
 	},
 }));
 
-vi.mock("@xterm/addon-canvas", () => ({
-	CanvasAddon: class FakeCanvasAddon {},
-}));
-
 vi.mock("@xterm/addon-webgl", () => ({
 	WebglAddon: class FakeWebglAddon {
 		onContextLoss() {}
@@ -205,12 +318,57 @@ function setNavigatorPlatform(platform: string) {
 	});
 }
 
+type TestBufferCell = { chars: string; width: number };
+
+function asciiCells(text: string): TestBufferCell[] {
+	return [...text].map((chars) => ({ chars, width: 1 }));
+}
+
+function testBufferLine(cells: TestBufferCell[], isWrapped = false) {
+	return {
+		isWrapped,
+		length: cells.length,
+		getCell(column: number, target: { chars: string; width: number }) {
+			const cell = cells[column];
+			if (!cell) return undefined;
+			target.chars = cell.chars;
+			target.width = cell.width;
+			return target;
+		},
+		translateToString(trimRight: boolean, startColumn = 0, endColumn = cells.length) {
+			const text = cells
+				.slice(startColumn, endColumn)
+				.filter((cell) => cell.width > 0)
+				.map((cell) => cell.chars || " ")
+				.join("");
+			return trimRight ? text.trimEnd() : text;
+		},
+	};
+}
+
 describe("XtermTerminal", () => {
+	it("reports visible text only after xterm renders nonblank cells", () => {
+		const onVisibleContent = vi.fn();
+		render(<XtermTerminal onVisibleContent={onVisibleContent} theme="dark" />);
+		const terminal = state.lastTerminal!;
+		terminal.bufferLines = [{ translateToString: () => "   ", isWrapped: false }];
+		act(() => terminal.renderListeners.forEach((listener) => listener()));
+		expect(onVisibleContent).not.toHaveBeenCalled();
+		terminal.bufferLines = [{ translateToString: () => "Codex", isWrapped: false }];
+		act(() => terminal.renderListeners.forEach((listener) => listener()));
+		expect(onVisibleContent).toHaveBeenCalledTimes(1);
+		act(() => terminal.renderListeners.forEach((listener) => listener()));
+		expect(onVisibleContent).toHaveBeenCalledTimes(1);
+	});
 	beforeEach(() => {
 		state.fit.mockReset();
+		state.lifecycle.length = 0;
 		state.lastTerminal = null;
 		state.linkHandler = null;
+		state.queueViewportSyncOnOpen = false;
+		state.sessionLinkProvider = null;
 		state.searchAddon = null;
+		state.mouseMoveListener.mockClear();
 		setNavigatorPlatform("Linux x86_64");
 		window.ao!.clipboard.writeText = vi.fn().mockResolvedValue(undefined);
 		window.ao!.clipboard.readText = vi.fn().mockResolvedValue("");
@@ -218,9 +376,48 @@ describe("XtermTerminal", () => {
 		window.ao!.terminal.onFontSizeShortcut = () => () => undefined;
 	});
 
-	it("fits on each observed frame while an ancestor requests live terminal resizing", () => {
+	// FitAddon proposes its 2-column minimum for a host with no layout box (a
+	// tab parked before it was laid out). Adopting it would start the shell at
+	// 2 columns.
+	it("never adopts a fitted grid from a host with no layout box", async () => {
+		state.fit.mockReturnValue({ cols: 2, rows: 5 });
+		let terminal!: AttachableTerminal;
+		render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+
+		act(() => { window.dispatchEvent(new Event("resize")); });
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)); });
+
+		expect(state.lastTerminal!.resize).not.toHaveBeenCalledWith(2, 5);
+		expect(terminal.hasMeasuredGrid).toBe(false);
+	});
+
+	it("publishes its first measured grid even when it equals xterm's default", async () => {
+		const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+		const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+		try {
+			let terminal!: AttachableTerminal;
+			const onVisibleSize = vi.fn();
+			render(<XtermTerminal theme="dark" onVisibleSize={onVisibleSize} onReady={(ready) => { terminal = ready; }} />);
+			const { cols, rows } = state.lastTerminal!;
+			state.fit.mockReturnValue({ cols, rows });
+
+			await waitFor(() => expect(onVisibleSize).toHaveBeenCalledWith(cols, rows));
+			expect(terminal.hasMeasuredGrid).toBe(true);
+			expect(state.lastTerminal!.resize).not.toHaveBeenCalled();
+		} finally {
+			width.mockRestore();
+			height.mockRestore();
+		}
+	});
+
+	it("coalesces live terminal resize observer deliveries into the next frame", () => {
 		const callbacks: ResizeObserverCallback[] = [];
+		const frames: FrameRequestCallback[] = [];
 		const originalResizeObserver = window.ResizeObserver;
+		const requestAnimationFrameSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			frames.push(callback);
+			return frames.length;
+		});
 		class CapturingResizeObserver implements ResizeObserver {
 			constructor(callback: ResizeObserverCallback) {
 				callbacks.push(callback);
@@ -234,6 +431,8 @@ describe("XtermTerminal", () => {
 			writable: true,
 			value: CapturingResizeObserver,
 		});
+		const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(800);
+		const height = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
 		try {
 			render(
 				<div data-terminal-live-resize="true">
@@ -241,17 +440,64 @@ describe("XtermTerminal", () => {
 				</div>,
 			);
 			state.fit.mockClear();
+			frames.length = 0;
 
 			act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
+			act(() => callbacks.at(-1)?.([], {} as ResizeObserver));
 
+			expect(state.fit).not.toHaveBeenCalled();
+			expect(frames).toHaveLength(1);
+			act(() => frames.shift()?.(performance.now()));
 			expect(state.fit).toHaveBeenCalledTimes(1);
 		} finally {
+			width.mockRestore();
+			height.mockRestore();
+			requestAnimationFrameSpy.mockRestore();
 			Object.defineProperty(window, "ResizeObserver", {
 				configurable: true,
 				writable: true,
 				value: originalResizeObserver,
 			});
 		}
+	});
+
+	it.each([
+		["Linux x86_64", 100],
+		["MacIntel", 99],
+	])("resizes before paint from the observer box on %s without reading layout", (platform, cols) => {
+		setNavigatorPlatform(platform);
+		const callbacks: ResizeObserverCallback[] = [];
+		const original = window.ResizeObserver;
+		class CapturingResizeObserver implements ResizeObserver {
+			constructor(callback: ResizeObserverCallback) { callbacks.push(callback); }
+			disconnect() {}
+			observe() {}
+			unobserve() {}
+		}
+		window.ResizeObserver = CapturingResizeObserver;
+		try {
+			const { container, rerender } = render(<XtermTerminal theme="dark" />);
+			const host = container.querySelector(".terminal-xterm-host")!;
+			const terminal = state.lastTerminal!;
+			terminal.dimensions = { css: { cell: { width: 8, height: 16 } } };
+			const entry = (width: number, height = 640) => [{ target: host, contentRect: { width, height } }] as ResizeObserverEntry[];
+			const styleSpy = vi.spyOn(window, "getComputedStyle");
+			const rectSpy = vi.spyOn(host, "getBoundingClientRect");
+			state.fit.mockClear();
+			try {
+				act(() => callbacks.at(-1)?.(entry(800.9), {} as ResizeObserver));
+				expect(terminal.resize).toHaveBeenLastCalledWith(cols, 40);
+				act(() => callbacks.at(-1)?.(entry(801), {} as ResizeObserver));
+				act(() => callbacks.at(-1)?.(entry(0, 0), {} as ResizeObserver));
+				expect(terminal.resize).toHaveBeenCalledTimes(1);
+				expect(state.fit).not.toHaveBeenCalled();
+				expect(styleSpy).not.toHaveBeenCalled();
+				expect(rectSpy).not.toHaveBeenCalled();
+			} finally { styleSpy.mockRestore(); rectSpy.mockRestore(); }
+			rerender(<XtermTerminal theme="dark" isVisible={false} />);
+			act(() => callbacks.at(-1)?.(entry(1000), {} as ResizeObserver));
+			expect(terminal.resize).toHaveBeenCalledTimes(1);
+		} finally { window.ResizeObserver = original; }
 	});
 
 	it("finishes retained activation when xterm emits no render event", async () => {
@@ -263,6 +509,7 @@ describe("XtermTerminal", () => {
 		try {
 			let terminal: AttachableTerminal | undefined;
 			render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+			state.lastTerminal!.buffer.active.baseY = 1;
 			const preparation = terminal!.prepareForActivation();
 			await act(async () => {
 				vi.advanceTimersByTime(250);
@@ -274,6 +521,26 @@ describe("XtermTerminal", () => {
 		} finally {
 			vi.useRealTimers();
 			vi.unstubAllGlobals();
+		}
+	});
+
+	it.each([true, false])("lets xterm drain viewport initialization before disposal (DEV=%s)", (development) => {
+		vi.stubEnv("DEV", development);
+		vi.useFakeTimers();
+		state.queueViewportSyncOnOpen = true;
+		try {
+			const view = render(<XtermTerminal theme="dark" />);
+			const terminal = state.lastTerminal!;
+			view.unmount();
+
+			expect(terminal.dispose).not.toHaveBeenCalled();
+			expect(state.lifecycle).toEqual([]);
+			act(() => vi.runOnlyPendingTimers());
+			expect(state.lifecycle).toEqual(["viewport-sync", "dispose"]);
+			expect(terminal.dispose).toHaveBeenCalledOnce();
+		} finally {
+			vi.useRealTimers();
+			vi.unstubAllEnvs();
 		}
 	});
 
@@ -292,6 +559,246 @@ describe("XtermTerminal", () => {
 		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
 	});
 
+	it("defers an already-permitted focus outside the discrete render update", () => {
+		vi.useFakeTimers();
+		try {
+			const { rerender } = render(<XtermTerminal theme="dark" />);
+			state.lastTerminal!.focus.mockClear();
+
+			rerender(<XtermTerminal focusRequested theme="dark" />);
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+
+			act(() => vi.runOnlyPendingTimers());
+			expect(state.lastTerminal!.focus).toHaveBeenCalledOnce();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not steal focus from an open dialog or another control", () => {
+		const { rerender } = render(<XtermTerminal theme="dark" />);
+		const dialog = document.createElement("div");
+		dialog.setAttribute("role", "dialog");
+		dialog.dataset.state = "open";
+		const dialogInput = document.createElement("input");
+		dialog.appendChild(dialogInput);
+		document.body.appendChild(dialog);
+		dialogInput.focus();
+		state.lastTerminal!.focus.mockClear();
+
+		rerender(<XtermTerminal focusRequested theme="dark" />);
+
+		expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+
+		dialog.remove();
+		const control = document.createElement("button");
+		document.body.appendChild(control);
+		control.focus();
+		rerender(<XtermTerminal theme="dark" />);
+		state.lastTerminal!.focus.mockClear();
+		rerender(<XtermTerminal focusRequested theme="dark" />);
+
+		expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+		control.remove();
+	});
+
+	it("allows the session navigation button to hand focus to the destination TUI", async () => {
+		const { rerender } = render(<XtermTerminal theme="dark" />);
+		const sessionButton = document.createElement("button");
+		sessionButton.setAttribute("aria-current", "page");
+		document.body.appendChild(sessionButton);
+		sessionButton.focus();
+		state.lastTerminal!.focus.mockClear();
+
+		rerender(<XtermTerminal focusRequested theme="dark" />);
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+		sessionButton.remove();
+	});
+
+	it("allows a PTY-launching button to hand focus to the opened terminal", async () => {
+		const { rerender } = render(<XtermTerminal theme="dark" />);
+		const loginButton = document.createElement("button");
+		loginButton.dataset.terminalFocusHandoff = "true";
+		document.body.appendChild(loginButton);
+		loginButton.focus();
+		state.lastTerminal!.focus.mockClear();
+
+		rerender(<XtermTerminal focusRequested theme="dark" />);
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+		loginButton.remove();
+	});
+
+	it("allows an in-pane terminal tab to hand focus to the destination TUI", async () => {
+		const { rerender } = render(<XtermTerminal theme="dark" />);
+		const topbar = document.createElement("div");
+		topbar.dataset.testid = "session-workspace-topbar";
+		const tab = document.createElement("button");
+		tab.setAttribute("aria-current", "true");
+		tab.setAttribute("role", "tab");
+		topbar.appendChild(tab);
+		document.body.appendChild(topbar);
+		tab.focus();
+		state.lastTerminal!.focus.mockClear();
+
+		rerender(<XtermTerminal focusRequested theme="dark" />);
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+		topbar.remove();
+	});
+
+	it("retries terminal focus after a closing dialog releases focus", async () => {
+		const frames: FrameRequestCallback[] = [];
+		const requestAnimationFrameSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			frames.push(callback);
+			return frames.length;
+		});
+		const { rerender } = render(<XtermTerminal theme="dark" />);
+		frames.length = 0;
+		const dialog = document.createElement("div");
+		dialog.setAttribute("role", "dialog");
+		dialog.dataset.state = "open";
+		const dialogInput = document.createElement("input");
+		dialog.appendChild(dialogInput);
+		document.body.appendChild(dialog);
+		dialogInput.focus();
+		state.lastTerminal!.focus.mockClear();
+
+		rerender(<XtermTerminal focusRequested theme="dark" />);
+		dialogInput.blur();
+		dialog.remove();
+		expect(frames).toHaveLength(1);
+		act(() => frames.shift()?.(performance.now()));
+
+		expect(state.lastTerminal!.focus).toHaveBeenCalled();
+		requestAnimationFrameSpy.mockRestore();
+	});
+
+	it("focuses a retained terminal when it becomes visible", async () => {
+		const { rerender } = render(<XtermTerminal focusRequested isVisible={false} theme="dark" />);
+		state.lastTerminal!.focus.mockClear();
+
+		rerender(<XtermTerminal focusRequested isVisible theme="dark" />);
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+	});
+
+	it("restores focus when the cache requests activation focus", async () => {
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+		state.lastTerminal!.focus.mockClear();
+
+		act(() => terminal!.requestActivationFocus());
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+	});
+
+	it("respects an explicit focus opt-out when the cache requests activation focus", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			render(<XtermTerminal focusRequested={false} theme="dark" onReady={(ready) => { terminal = ready; }} />);
+			state.lastTerminal!.focus.mockClear();
+
+			act(() => terminal!.requestActivationFocus());
+			act(() => vi.runOnlyPendingTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("rechecks the focus opt-out before a queued activation focus runs", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			const onReady = (ready: AttachableTerminal) => { terminal = ready; };
+			const { rerender } = render(<XtermTerminal focusRequested theme="dark" onReady={onReady} />);
+			act(() => vi.runOnlyPendingTimers());
+			state.lastTerminal!.focus.mockClear();
+
+			act(() => terminal!.requestActivationFocus());
+			rerender(<XtermTerminal focusRequested={false} theme="dark" onReady={onReady} />);
+			act(() => vi.runOnlyPendingTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not steal focus from a dialog when the cache requests activation focus", () => {
+		vi.useFakeTimers();
+		try {
+			let terminal: AttachableTerminal | undefined;
+			render(<XtermTerminal theme="dark" onReady={(ready) => { terminal = ready; }} />);
+			state.lastTerminal!.focus.mockClear();
+			const dialog = document.createElement("div");
+			dialog.setAttribute("role", "dialog");
+			dialog.dataset.state = "open";
+			const dialogInput = document.createElement("input");
+			dialog.appendChild(dialogInput);
+			document.body.appendChild(dialog);
+			dialogInput.focus();
+
+			act(() => terminal!.requestActivationFocus());
+			act(() => vi.runAllTimers());
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+			dialog.remove();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("allows a tab close button marked as a tab action to hand focus to the terminal", async () => {
+		const { rerender } = render(<XtermTerminal theme="dark" />);
+		const topbar = document.createElement("div");
+		topbar.dataset.testid = "session-workspace-topbar";
+		const close = document.createElement("button");
+		close.setAttribute("data-terminal-tab-action", "true");
+		topbar.appendChild(close);
+		document.body.appendChild(topbar);
+		close.focus();
+		state.lastTerminal!.focus.mockClear();
+
+		rerender(<XtermTerminal focusRequested theme="dark" />);
+
+		await waitFor(() => expect(state.lastTerminal!.focus).toHaveBeenCalled());
+		topbar.remove();
+	});
+
+	it("does not steal focus from other topbar buttons like the session-actions trigger", async () => {
+		const frames: FrameRequestCallback[] = [];
+		const requestAnimationFrameSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			frames.push(callback);
+			return frames.length;
+		});
+		try {
+			const { rerender } = render(<XtermTerminal theme="dark" />);
+			const topbar = document.createElement("div");
+			topbar.dataset.testid = "session-workspace-topbar";
+			// ⋮ trigger and embedded shell chrome are plain buttons in the
+			// topbar with no opt-in marker — they must keep focus.
+			const actionsTrigger = document.createElement("button");
+			actionsTrigger.setAttribute("data-session-actions-trigger", "");
+			topbar.appendChild(actionsTrigger);
+			document.body.appendChild(topbar);
+			actionsTrigger.focus();
+			state.lastTerminal!.focus.mockClear();
+
+			rerender(<XtermTerminal focusRequested theme="dark" />);
+			act(() => frames.splice(0).forEach((callback) => callback(performance.now())));
+
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+			topbar.remove();
+		} finally {
+			requestAnimationFrameSpy.mockRestore();
+		}
+	});
+
 	it("updates the live terminal palette when the named color theme changes", () => {
 		const style = document.createElement("style");
 		style.textContent = `
@@ -299,11 +806,6 @@ describe("XtermTerminal", () => {
 				--color-bg-terminal-opaque: #101317;
 				--color-text-terminal: #d7d7d2;
 				--color-working: #60a5fa;
-			}
-			:root[data-style-theme="github"] {
-				--background: #0d1117;
-				--foreground: #ccd3d8;
-				--primary: #58a6ff;
 			}
 		`;
 		document.head.appendChild(style);
@@ -316,15 +818,58 @@ describe("XtermTerminal", () => {
 
 			act(() => useUiStore.getState().setThemeStyle("github"));
 
+			// Named palettes come from the injected theme catalog stylesheet.
 			expect(state.lastTerminal!.options.theme).toMatchObject({
 				background: "#0d1117",
-				cursor: "#58a6ff",
-				foreground: "#ccd3d8",
+				cursor: "#4493f8",
+				foreground: "#e6edf3",
+				red: "#f85149",
 			});
 		} finally {
 			style.remove();
 			delete document.documentElement.dataset.styleTheme;
 			act(() => useUiStore.setState({ themeStyle: "orchestrate" }));
+		}
+	});
+
+	it.each(["dark", "light"] as const)("toggles transparency on a retained %s terminal", (theme) => {
+		setNavigatorPlatform("MacIntel");
+		useUiStore.setState({ windowTranslucency: true, themeStyle: "github" });
+		const view = render(<XtermTerminal theme={theme} />);
+		const terminal = state.lastTerminal!;
+		const background = theme === "dark" ? "#0d1117" : "#ffffff";
+		try {
+			expect(terminal.options.allowTransparency).toBe(true);
+			expect(terminal.options.theme).toMatchObject({
+				background: "#00000000",
+				black: background,
+				cursorAccent: background,
+			});
+
+			act(() => useUiStore.getState().setWindowTranslucency(false));
+			expect(terminal.options.theme).toMatchObject({ background });
+			act(() => useUiStore.getState().setWindowTranslucency(true));
+			expect(terminal.options.theme).toMatchObject({ background: "#00000000" });
+			act(() => useUiStore.getState().setThemeStyle("orchestrate"));
+			expect(terminal.options.theme).toMatchObject({ background: "#00000000" });
+			expect(state.lastTerminal).toBe(terminal);
+			expect(terminal.dispose).not.toHaveBeenCalled();
+			expect(terminal.clear).not.toHaveBeenCalled();
+		} finally {
+			view.unmount();
+			act(() => useUiStore.setState({ windowTranslucency: false, themeStyle: "orchestrate" }));
+		}
+	});
+
+	it("keeps terminals opaque outside macOS even with a saved transparency preference", () => {
+		useUiStore.setState({ windowTranslucency: true, themeStyle: "github" });
+		const view = render(<XtermTerminal theme="dark" />);
+		try {
+			expect(state.lastTerminal!.options.allowTransparency).toBe(false);
+			expect(state.lastTerminal!.options.theme).toMatchObject({ background: "#0d1117" });
+		} finally {
+			view.unmount();
+			act(() => useUiStore.setState({ windowTranslucency: false, themeStyle: "orchestrate" }));
 		}
 	});
 
@@ -359,7 +904,7 @@ describe("XtermTerminal", () => {
 	it("does not reserve width for the hidden terminal scrollbar outside macOS", () => {
 		const { container } = render(<XtermTerminal theme="dark" />);
 
-		expect(state.lastTerminal!._core.viewport.scrollBarWidth).toBe(0);
+		expect(state.lastTerminal!.options.scrollbar).toEqual({ showScrollbar: false, width: 7 });
 		expect(container.querySelector(".terminal-scrollbar")).toBeNull();
 	});
 
@@ -367,21 +912,61 @@ describe("XtermTerminal", () => {
 		setNavigatorPlatform("MacIntel");
 		const { container } = render(<XtermTerminal theme="dark" />);
 
-		expect(state.lastTerminal!._core.viewport.scrollBarWidth).toBe(7);
+		expect(state.lastTerminal!.options.scrollbar).toEqual({ showScrollbar: true, width: 7 });
 		expect(container.querySelector(".terminal-xterm-host--mac")).not.toBeNull();
 		expect(container.querySelector(".terminal-scrollbar")).not.toBeNull();
 	});
 
-	it("fades the macOS scrollbar after scrolling goes idle", () => {
+	function renderScrollableMacTerminal() {
 		setNavigatorPlatform("MacIntel");
+		vi.useFakeTimers();
 		const { container } = render(<XtermTerminal theme="dark" />);
 		const scrollbar = container.querySelector<HTMLElement>(".terminal-scrollbar")!;
-		scrollbar.dataset.scrollable = "true";
-		vi.useFakeTimers();
+		Object.defineProperty(scrollbar, "clientHeight", { configurable: true, value: 400 });
+		state.lastTerminal!.buffer.active.baseY = 100;
+		// Settle mount-time frames and timers so the test starts idle.
+		act(() => vi.runOnlyPendingTimers());
+		// The scrollbar follows scrolling once per frame, not once per line feed.
+		const scroll = () => act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
+		const nextFrame = () => act(() => vi.advanceTimersToNextFrame());
+		return { scrollbar, scroll, nextFrame };
+	}
 
-		act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
+	it("fades the macOS scrollbar after scrolling goes idle", () => {
+		const { scrollbar, scroll, nextFrame } = renderScrollableMacTerminal();
+
+		scroll();
+		nextFrame();
 		expect(scrollbar.dataset.active).toBe("true");
 
+		act(() => vi.advanceTimersByTime(699));
+		expect(scrollbar.dataset.active).toBe("true");
+		act(() => vi.advanceTimersByTime(1));
+		expect(scrollbar.dataset.active).toBe("false");
+
+		vi.useRealTimers();
+	});
+
+	// Streaming output scrolls continuously; the scrollbar stays up until the
+	// last scroll goes idle, and per-scroll work stays cheap (one frame, then
+	// one pending timer).
+	it("keeps the macOS scrollbar up through continuous scrolling with one pending timer", () => {
+		const { scrollbar, scroll, nextFrame } = renderScrollableMacTerminal();
+
+		const idleTimers = vi.getTimerCount();
+		for (let i = 0; i < 50; i++) scroll();
+		expect(vi.getTimerCount()).toBe(idleTimers + 1);
+		nextFrame();
+		expect(scrollbar.dataset.active).toBe("true");
+		for (let i = 0; i < 50; i++) scroll();
+		nextFrame();
+		expect(vi.getTimerCount()).toBe(idleTimers + 1);
+		act(() => vi.advanceTimersByTime(400));
+		scroll();
+		nextFrame();
+		act(() => vi.advanceTimersByTime(400));
+		scroll();
+		nextFrame();
 		act(() => vi.advanceTimersByTime(699));
 		expect(scrollbar.dataset.active).toBe("true");
 		act(() => vi.advanceTimersByTime(1));
@@ -457,17 +1042,23 @@ describe("XtermTerminal", () => {
 		const textarea = container.querySelector("textarea")!;
 
 		textarea.focus();
-		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true);
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true, true);
 		fontSizeShortcut?.(1);
 		expect(onChangeFontSize).toHaveBeenCalledWith(1);
 
 		const outside = document.createElement("button");
 		document.body.appendChild(outside);
 		outside.focus();
-		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(false);
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(false, false);
 		fontSizeShortcut?.(-1);
 		expect(onChangeFontSize).toHaveBeenCalledTimes(1);
 		outside.remove();
+	});
+
+	it("reports focus for a terminal that does not resize its font, without claiming the zoom chords", () => {
+		const { container } = render(<XtermTerminal theme="dark" />);
+		container.querySelector("textarea")!.focus();
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true, false);
 	});
 
 	it("handles native copy events from inside the terminal", () => {
@@ -559,6 +1150,24 @@ describe("XtermTerminal", () => {
 	it("searches incrementally, reports matches, and navigates in both directions", async () => {
 		setNavigatorPlatform("MacIntel");
 		render(<XtermTerminal theme="dark" />);
+		const frames = new Map<number, FrameRequestCallback>();
+		let nextFrame = 0;
+		const requestAnimationFrameSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			const id = ++nextFrame;
+			frames.set(id, callback);
+			return id;
+		});
+		const cancelAnimationFrameSpy = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+			frames.delete(id);
+		});
+		const flushSearchFrame = () => {
+			const frame = frames.entries().next().value as [number, FrameRequestCallback] | undefined;
+			expect(frame).toBeDefined();
+			if (!frame) return;
+			frames.delete(frame[0]);
+			act(() => frame[1](performance.now()));
+		};
+		try {
 		const shortcut = {
 			altKey: false,
 			ctrlKey: false,
@@ -574,20 +1183,18 @@ describe("XtermTerminal", () => {
 		state.searchAddon!.findNext.mockClear();
 
 		fireEvent.change(input, { target: { value: "needle" } });
-		await waitFor(() =>
-			expect(state.searchAddon!.findNext).toHaveBeenLastCalledWith(
-				"needle",
-				expect.objectContaining({ incremental: true, caseSensitive: false, regex: false }),
-			),
+		flushSearchFrame();
+		expect(state.searchAddon!.findNext).toHaveBeenLastCalledWith(
+			"needle",
+			expect.objectContaining({ incremental: true, caseSensitive: false, regex: false }),
 		);
 
 		fireEvent.click(screen.getByRole("button", { name: "Match case" }));
 		fireEvent.click(screen.getByRole("button", { name: "Use regular expression" }));
-		await waitFor(() =>
-			expect(state.searchAddon!.findNext).toHaveBeenLastCalledWith(
-				"needle",
-				expect.objectContaining({ incremental: true, caseSensitive: true, regex: true }),
-			),
+		flushSearchFrame();
+		expect(state.searchAddon!.findNext).toHaveBeenLastCalledWith(
+			"needle",
+			expect.objectContaining({ incremental: true, caseSensitive: true, regex: true }),
 		);
 
 		act(() =>
@@ -619,6 +1226,58 @@ describe("XtermTerminal", () => {
 		state.searchAddon!.findPrevious.mockClear();
 		fireEvent.keyDown(input, { key: "g", metaKey: true, shiftKey: true });
 		expect(state.searchAddon!.findPrevious).toHaveBeenCalledWith("needle", expect.anything());
+		} finally {
+			requestAnimationFrameSpy.mockRestore();
+			cancelAnimationFrameSpy.mockRestore();
+		}
+	});
+
+	it("coalesces rapid terminal-search input into the latest per-frame xterm scan", async () => {
+		setNavigatorPlatform("MacIntel");
+		render(<XtermTerminal theme="dark" />);
+		const frames = new Map<number, FrameRequestCallback>();
+		let nextFrame = 0;
+		const requestAnimationFrameSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			const id = ++nextFrame;
+			frames.set(id, callback);
+			return id;
+		});
+		const cancelAnimationFrameSpy = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+			frames.delete(id);
+		});
+		try {
+		act(() =>
+			state.lastTerminal!.keyHandler!({
+				altKey: false,
+				ctrlKey: false,
+				key: "f",
+				metaKey: true,
+				preventDefault: vi.fn(),
+				shiftKey: false,
+				stopPropagation: vi.fn(),
+				type: "keydown",
+			} as unknown as KeyboardEvent),
+		);
+		const input = await screen.findByRole("searchbox", { name: "Search terminal" });
+		state.searchAddon!.findNext.mockClear();
+
+		fireEvent.change(input, { target: { value: "n" } });
+		fireEvent.change(input, { target: { value: "ne" } });
+		fireEvent.change(input, { target: { value: "needle" } });
+
+		expect(frames.size).toBe(1);
+		const frame = frames.entries().next().value as [number, FrameRequestCallback];
+		frames.delete(frame[0]);
+		act(() => frame[1](performance.now()));
+		expect(state.searchAddon!.findNext).toHaveBeenCalledTimes(1);
+		expect(state.searchAddon!.findNext).toHaveBeenCalledWith(
+			"needle",
+			expect.objectContaining({ incremental: true }),
+		);
+		} finally {
+			requestAnimationFrameSpy.mockRestore();
+			cancelAnimationFrameSpy.mockRestore();
+		}
 	});
 
 	it("marks an invalid regular expression without calling xterm search", async () => {
@@ -709,6 +1368,89 @@ describe("XtermTerminal", () => {
 		Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
 	});
 
+
+	it.each([true, false])("preserves newer focus after deferred fullscreen completion when visible=%s", async (isVisible) => {
+		let complete!: () => void;
+		const onToggleFullscreen = vi.fn(() => new Promise<void>((resolve) => { complete = resolve; }));
+		const frames: FrameRequestCallback[] = [];
+		const frameSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			frames.push(callback);
+			return frames.length;
+		});
+		const { container, rerender } = render(<XtermTerminal onToggleFullscreen={onToggleFullscreen} theme="dark" />);
+		const control = document.createElement("button");
+		document.body.appendChild(control);
+		try {
+			fireEvent.contextMenu(container.firstElementChild!);
+			fireEvent.click(await screen.findByText("Fullscreen terminal"));
+			rerender(<XtermTerminal isVisible={isVisible} onToggleFullscreen={onToggleFullscreen} theme="dark" />);
+			control.focus();
+			state.lastTerminal!.focus.mockClear();
+			frames.length = 0;
+			await act(async () => complete());
+			expect(control).toHaveFocus();
+			act(() => { while (frames.length) frames.shift()!(performance.now()); });
+			expect(control).toHaveFocus();
+			expect(state.lastTerminal!.focus).not.toHaveBeenCalled();
+		} finally {
+			control.remove();
+			frameSpy.mockRestore();
+		}
+	});
+	it("returns focus to xterm after entering and exiting fullscreen from the menu", async () => {
+		const onToggleFullscreen = vi.fn(async () => undefined);
+		const frames: FrameRequestCallback[] = [];
+		const requestAnimationFrameSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+			frames.push(callback);
+			return frames.length;
+		});
+		const { container, rerender } = render(
+			<div className="terminal-pane-frame">
+				<XtermTerminal onToggleFullscreen={onToggleFullscreen} theme="dark" />
+			</div>,
+		);
+		const trigger = document.createElement("button");
+		document.body.appendChild(trigger);
+		state.lastTerminal!.focus.mockClear();
+		frames.length = 0;
+
+		try {
+			fireEvent.contextMenu(container.querySelector(".terminal-pane-frame")!.firstElementChild!);
+			fireEvent.click(await screen.findByText("Fullscreen terminal"));
+			await act(async () => undefined);
+
+			expect(onToggleFullscreen).toHaveBeenCalledOnce();
+			expect(frames).toHaveLength(1);
+			act(() => frames.shift()?.(performance.now()));
+			expect(frames).toHaveLength(1);
+			act(() => frames.shift()?.(performance.now()));
+			expect(state.lastTerminal!.focus).toHaveBeenCalledOnce();
+
+			const pane = container.querySelector(".terminal-pane-frame")!;
+			Object.defineProperty(document, "fullscreenElement", { configurable: true, value: pane });
+			rerender(
+				<div className="terminal-pane-frame">
+					<XtermTerminal isFullscreen onToggleFullscreen={onToggleFullscreen} theme="dark" />
+				</div>,
+			);
+			frames.length = 0;
+			state.lastTerminal!.focus.mockClear();
+
+			fireEvent.contextMenu(pane.querySelector("div")!);
+			fireEvent.click(await screen.findByText("Exit fullscreen"));
+			await act(async () => undefined);
+			expect(onToggleFullscreen).toHaveBeenCalledTimes(2);
+			expect(frames).toHaveLength(1);
+			act(() => frames.shift()?.(performance.now()));
+			act(() => frames.shift()?.(performance.now()));
+			expect(state.lastTerminal!.focus).toHaveBeenCalledOnce();
+		} finally {
+			Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
+			requestAnimationFrameSpy.mockRestore();
+			trigger.remove();
+		}
+	});
+
 	it("runs context menu copy and select all against the xterm instance", async () => {
 		const { container } = render(<XtermTerminal theme="dark" />);
 		const host = container.firstElementChild!;
@@ -757,6 +1499,232 @@ describe("XtermTerminal", () => {
 
 		expect(window.ao!.clipboard.writeText).not.toHaveBeenCalled();
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
+
+	it("copies the selection to the clipboard when the mouse button is released", async () => {
+		const { container } = render(<XtermTerminal theme="dark" />);
+		const host = container.querySelector(".terminal-xterm-host")!;
+		state.lastTerminal!.selection = "released selection";
+
+		fireEvent.pointerDown(host, { button: 0 });
+		fireEvent.pointerUp(document, { button: 0 });
+
+		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("released selection"));
+		expect(await screen.findByRole("status")).toHaveTextContent("Copied to clipboard");
+	});
+
+	it("does not copy on release when the copy-on-select setting is off", async () => {
+		const { container } = render(<XtermTerminal theme="dark" />);
+		state.lastTerminal!.selection = "keep out of the clipboard";
+		act(() => useUiStore.getState().setTerminalCopyOnSelect(false));
+
+		try {
+			fireEvent.pointerDown(container.querySelector(".terminal-xterm-host")!, { button: 0 });
+			fireEvent.pointerUp(document, { button: 0 });
+			await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+			expect(window.ao!.clipboard.writeText).not.toHaveBeenCalled();
+			expect(screen.queryByRole("status")).not.toBeInTheDocument();
+		} finally {
+			act(() => useUiStore.getState().setTerminalCopyOnSelect(true));
+		}
+	});
+
+	it("ignores releases that did not follow a left-button press inside the terminal", async () => {
+		const { container } = render(<XtermTerminal theme="dark" />);
+		state.lastTerminal!.selection = "should stay out";
+		const host = container.querySelector(".terminal-xterm-host")!;
+
+		fireEvent.pointerUp(document, { button: 0 });
+		fireEvent.pointerDown(host, { button: 2 });
+		fireEvent.pointerUp(document, { button: 2 });
+		fireEvent.pointerDown(host, { button: 2 });
+		fireEvent.pointerUp(document, { button: 0 });
+		await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+		expect(window.ao!.clipboard.writeText).not.toHaveBeenCalled();
+	});
+
+	it("copies on the left release even when a right-button release happened mid-drag", async () => {
+		const { container } = render(<XtermTerminal theme="dark" />);
+		const host = container.querySelector(".terminal-xterm-host")!;
+		state.lastTerminal!.selection = "kept armed";
+
+		fireEvent.pointerDown(host, { button: 0 });
+		fireEvent.pointerUp(document, { button: 2 });
+		fireEvent.pointerUp(document, { button: 0 });
+
+		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("kept armed"));
+	});
+
+	it.each([
+		["pointercancel", () => fireEvent.pointerCancel(document)],
+		["window blur", () => window.dispatchEvent(new Event("blur"))],
+	])("disarms the pending selection on %s so a later release does not copy", async (_name, cancel) => {
+		const { container } = render(<XtermTerminal theme="dark" />);
+		state.lastTerminal!.selection = "stale selection";
+
+		fireEvent.pointerDown(container.querySelector(".terminal-xterm-host")!, { button: 0 });
+		cancel();
+		fireEvent.pointerUp(document, { button: 0 });
+		await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+		expect(window.ao!.clipboard.writeText).not.toHaveBeenCalled();
+		expect(screen.queryByRole("status")).not.toBeInTheDocument();
+	});
+
+	it("joins selected TUI rows that fill the whole grid width when copying", () => {
+		render(<XtermTerminal theme="dark" />);
+		const terminal = state.lastTerminal!;
+		terminal.cols = 5;
+		terminal.bufferLines = [
+			{ isWrapped: false, translateToString: (t) => (t ? "hello" : "hello") },
+			{ isWrapped: false, translateToString: (t) => (t ? "wo" : "wo   ") },
+			{ isWrapped: false, translateToString: (t) => (t ? "next" : "next") },
+		];
+		terminal.selectionRange = { start: { x: 0, y: 0 }, end: { x: 3, y: 2 } };
+		terminal.selection = "hello\nwo\nnext";
+
+		terminal.keyHandler!({
+			key: "c",
+			metaKey: true,
+			ctrlKey: false,
+			shiftKey: false,
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+		} as unknown as KeyboardEvent);
+
+		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("hellowo\nnext");
+	});
+
+	it.each([
+		["joins a visibly full row despite stale backing padding", "hello   ", "hello\nwo", "hellowo"],
+		["keeps a visibly short row separate despite stale backing text", "hi   stale", "hi\nwo", "hi\nwo"],
+	])("%s after a terminal resize", (_name, backingText, selection, expected) => {
+		render(<XtermTerminal theme="dark" />);
+		const terminal = state.lastTerminal!;
+		terminal.cols = 5;
+		terminal.bufferLines = [
+			{
+				isWrapped: false,
+				translateToString: (trimRight, startColumn = 0, endColumn = backingText.length) => {
+					const text = backingText.slice(startColumn, endColumn);
+					return trimRight ? text.trimEnd() : text;
+				},
+			},
+			{ isWrapped: false, translateToString: (trimRight) => (trimRight ? "wo" : "wo   ") },
+		];
+		terminal.selectionRange = { start: { x: 0, y: 0 }, end: { x: 2, y: 1 } };
+		terminal.selection = selection;
+
+		terminal.keyHandler!({
+			key: "c",
+			metaKey: true,
+			ctrlKey: false,
+			shiftKey: false,
+			altKey: false,
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+		} as unknown as KeyboardEvent);
+
+		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(expected);
+	});
+
+	it("joins Windows CRLF rows without changing preserved row breaks", () => {
+		setNavigatorPlatform("Win32");
+		render(<XtermTerminal theme="dark" />);
+		const terminal = state.lastTerminal!;
+		terminal.cols = 5;
+		terminal.bufferLines = [
+			{ isWrapped: false, translateToString: (t) => (t ? "hello" : "hello") },
+			{ isWrapped: false, translateToString: (t) => (t ? "wo" : "wo   ") },
+			{ isWrapped: false, translateToString: (t) => (t ? "next" : "next") },
+		];
+		terminal.selectionRange = { start: { x: 0, y: 0 }, end: { x: 3, y: 2 } };
+		terminal.selection = "hello\r\nwo\r\nnext";
+
+		terminal.keyHandler!({
+			key: "c",
+			metaKey: false,
+			ctrlKey: true,
+			shiftKey: false,
+			altKey: false,
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+		} as unknown as KeyboardEvent);
+
+		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("hellowo\r\nnext");
+	});
+
+	it.each([
+		["Linux x86_64", "bc\nhi"],
+		["Win32", "bc\r\nhi"],
+	])("preserves one row per buffer line for Alt-drag column selections on %s", async (platform, selection) => {
+		setNavigatorPlatform(platform);
+		const { container } = render(<XtermTerminal theme="dark" />);
+		const terminal = state.lastTerminal!;
+		terminal.cols = 5;
+		terminal.bufferLines = [
+			{ isWrapped: false, translateToString: (t) => (t ? "hello" : "hello") },
+			{ isWrapped: false, translateToString: (t) => (t ? "thing" : "thing") },
+		];
+		terminal.selectionRange = { start: { x: 1, y: 0 }, end: { x: 3, y: 1 } };
+		terminal.selection = selection;
+
+		const host = container.querySelector(".terminal-xterm-host")!;
+		fireEvent.pointerDown(host, { altKey: true, button: 0 });
+		fireEvent.pointerUp(document, { altKey: true, button: 0 });
+
+		await waitFor(() => expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith(selection));
+	});
+
+	it("joins full-width rows of wide characters by cell coverage, not string length", () => {
+		render(<XtermTerminal theme="dark" />);
+		const terminal = state.lastTerminal!;
+		// "你好你" occupies all 6 grid cells (3 wide chars) but is only 3 UTF-16
+		// code units long — fullness must not compare string length to cols.
+		terminal.cols = 6;
+		terminal.bufferLines = [
+			{ isWrapped: false, translateToString: (t) => (t ? "你好你" : "你好你") },
+			{ isWrapped: false, translateToString: (t) => (t ? "ab" : "ab    ") },
+		];
+		terminal.selectionRange = { start: { x: 0, y: 0 }, end: { x: 0, y: 1 } };
+		terminal.selection = "你好你\nab";
+
+		terminal.keyHandler!({
+			key: "c",
+			metaKey: true,
+			ctrlKey: false,
+			shiftKey: false,
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+		} as unknown as KeyboardEvent);
+
+		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("你好你ab");
+	});
+
+	it("keeps xterm-wrapped rows merged instead of re-splitting them", () => {
+		render(<XtermTerminal theme="dark" />);
+		const terminal = state.lastTerminal!;
+		terminal.cols = 5;
+		terminal.bufferLines = [
+			{ isWrapped: false, translateToString: () => "hello" },
+			{ isWrapped: true, translateToString: () => "world" },
+			{ isWrapped: false, translateToString: () => "tail" },
+		];
+		terminal.selectionRange = { start: { x: 0, y: 0 }, end: { x: 4, y: 2 } };
+		terminal.selection = "helloworld\ntail";
+
+		terminal.keyHandler!({
+			key: "c",
+			metaKey: true,
+			ctrlKey: false,
+			shiftKey: false,
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+		} as unknown as KeyboardEvent);
+
+		expect(window.ao!.clipboard.writeText).toHaveBeenCalledWith("helloworldtail");
 	});
 
 	it("shows a copied toast after an explicit copy", async () => {
@@ -1039,6 +2007,119 @@ describe("XtermTerminal", () => {
 		expect(onInput).toHaveBeenCalledWith(expected, "shortcut");
 	});
 
+	it.each([
+		["Cmd+Left", { key: "ArrowLeft", metaKey: true }, "\x01"],
+		["Cmd+Right", { key: "ArrowRight", metaKey: true }, "\x05"],
+	])("normalizes macOS %s into beginning/end-of-line input", (_name, init, expected) => {
+		setNavigatorPlatform("MacIntel");
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+
+		const event = {
+			type: "keydown",
+			ctrlKey: false,
+			shiftKey: false,
+			altKey: false,
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+			...init,
+		} as unknown as KeyboardEvent;
+		const allowed = state.lastTerminal!.keyHandler!(event);
+
+		expect(allowed).toBe(false);
+		expect(event.preventDefault).toHaveBeenCalled();
+		expect(event.stopPropagation).toHaveBeenCalled();
+		expect(onInput).toHaveBeenCalledWith(expected, "shortcut");
+	});
+
+	it("does not re-fire macOS Cmd+Left on the following keyup", () => {
+		setNavigatorPlatform("MacIntel");
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+
+		const keyDown = {
+			type: "keydown",
+			key: "ArrowLeft",
+			metaKey: true,
+			ctrlKey: false,
+			shiftKey: false,
+			altKey: false,
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+		} as unknown as KeyboardEvent;
+		expect(state.lastTerminal!.keyHandler!(keyDown)).toBe(false);
+		expect(onInput).toHaveBeenCalledTimes(1);
+
+		const keyUp = { ...keyDown, type: "keyup" } as unknown as KeyboardEvent;
+		expect(state.lastTerminal!.keyHandler!(keyUp)).toBe(true);
+		expect(onInput).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves Windows Home and End to xterm instead of rewriting them to Ctrl+A/E", () => {
+		setNavigatorPlatform("Win32");
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+
+		for (const key of ["Home", "End"]) {
+			const event = {
+				type: "keydown",
+				key,
+				metaKey: false,
+				ctrlKey: false,
+				shiftKey: false,
+				altKey: false,
+				preventDefault: vi.fn(),
+				stopPropagation: vi.fn(),
+			} as unknown as KeyboardEvent;
+			expect(state.lastTerminal!.keyHandler!(event)).toBe(true);
+			expect(event.preventDefault).not.toHaveBeenCalled();
+			expect(onInput).not.toHaveBeenCalled();
+		}
+	});
+
+	it("keeps Windows Ctrl+Left and Ctrl+Right as word movement", () => {
+		setNavigatorPlatform("Win32");
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+
+		const left = {
+			type: "keydown",
+			key: "ArrowLeft",
+			ctrlKey: true,
+			metaKey: false,
+			shiftKey: false,
+			altKey: false,
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+		} as unknown as KeyboardEvent;
+		expect(state.lastTerminal!.keyHandler!(left)).toBe(false);
+		expect(onInput).toHaveBeenCalledWith("\x1b[1;5D", "shortcut");
+
+		const right = { ...left, key: "ArrowRight", preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as KeyboardEvent;
+		expect(state.lastTerminal!.keyHandler!(right)).toBe(false);
+		expect(onInput).toHaveBeenCalledWith("\x1b[1;5C", "shortcut");
+	});
+
+	it("does not treat the Windows key plus arrows as macOS line-boundary shortcuts", () => {
+		setNavigatorPlatform("Win32");
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+
+		const event = {
+			type: "keydown",
+			key: "ArrowLeft",
+			metaKey: true,
+			ctrlKey: false,
+			shiftKey: false,
+			altKey: false,
+			preventDefault: vi.fn(),
+			stopPropagation: vi.fn(),
+		} as unknown as KeyboardEvent;
+		expect(state.lastTerminal!.keyHandler!(event)).toBe(true);
+		expect(event.preventDefault).not.toHaveBeenCalled();
+		expect(onInput).not.toHaveBeenCalled();
+	});
+
 	it("does not re-fire a shortcut on the keyup that follows its keydown", () => {
 		// xterm.js invokes attachCustomKeyEventHandler on keydown, keyup, AND
 		// keypress for the same physical key press. Without gating on event.type,
@@ -1205,6 +2286,160 @@ describe("XtermTerminal", () => {
 		expect(onInput).toHaveBeenCalledWith("\x1b]4;196;rgb:ffff/0000/8000\x07", "protocol");
 	});
 
+	it("forwards the cursor-position reply generated for a PTY request", () => {
+		const onInput = vi.fn();
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="dark" onReady={(ready) => {
+			terminal = ready;
+			return ready.onUserInput(onInput);
+		}} />);
+
+		terminal!.write(new TextEncoder().encode("prompt\x1b"));
+		terminal!.write(new TextEncoder().encode("[6n"));
+
+		expect(onInput).toHaveBeenCalledWith("\x1b[7;21R", "protocol");
+	});
+
+	it("keeps pending cursor credits when more output is queued before parsing", () => {
+		const onInput = vi.fn();
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="dark" onReady={(ready) => {
+			terminal = ready;
+			return ready.onUserInput(onInput);
+		}} />);
+		vi.spyOn(state.lastTerminal!, "write").mockImplementation(() => {});
+		terminal!.write(new TextEncoder().encode("\x1b[6n"));
+		terminal!.write(new TextEncoder().encode("tail"));
+		state.lastTerminal!.dataListeners.forEach((listener) => listener("\x1b[7;21R"));
+		expect(onInput).toHaveBeenCalledWith("\x1b[7;21R", "protocol");
+	});
+
+	it("answers Cursor color-scheme output queries", () => {
+		const onInput = vi.fn();
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="light" supportsCursorColorScheme onReady={(ready) => {
+			terminal = ready;
+			return ready.onUserInput(onInput);
+		}} />);
+		onInput.mockClear();
+		terminal!.write(new TextEncoder().encode("\x1b[?2031h"));
+		expect(onInput).toHaveBeenCalledWith(expect.stringContaining("\x1b[?997;2n"), "protocol");
+	});
+
+	it("returns a CPR to a fresh shell PTY through coverInitialReplay", async () => {
+		markTerminalHandleFresh("fresh-login");
+		let output: (data: Uint8Array) => void = () => {};
+		let opened: () => void = () => {};
+		const sendInput = vi.fn();
+		const mux: TerminalMux = {
+			open: vi.fn(), close: vi.fn(), resize: vi.fn(), dispose: vi.fn(), sendInput,
+			onData: (_id, listener) => { output = listener; return () => {}; },
+			onOpened: (_id, listener) => { opened = listener; return () => {}; },
+			onExit: () => () => {}, onError: () => () => {}, onConnectionChange: () => () => {},
+		};
+		function Shell() {
+			const session = useTerminalSession(undefined, { daemonReady: true, coverInitialReplay: true, shellTerminalHandleId: "fresh-login", createMux: () => mux });
+			return <XtermTerminal theme="dark" onReady={session.attach} />;
+		}
+		render(<QueryClientProvider client={new QueryClient()}><Shell /></QueryClientProvider>);
+		act(() => {
+			opened();
+			output(new TextEncoder().encode("prompt\x1b"));
+			output(new TextEncoder().encode("[6n"));
+		});
+		await waitFor(() => expect(sendInput).toHaveBeenCalledWith("fresh-login", "\x1b[7;21R"));
+	});
+
+	it("stops treating covered output as live after a fresh handle reconnects", async () => {
+		markTerminalHandleFresh("fresh-then-reconnected");
+		const outputs: Array<(data: Uint8Array) => void> = [];
+		const opened: Array<() => void> = [];
+		const connectionChanges: Array<(state: "open" | "closed") => void> = [];
+		const sendInputs = [vi.fn(), vi.fn()];
+		const createMux = vi.fn((): TerminalMux => {
+			const index = outputs.length;
+			return {
+				open: vi.fn(), close: vi.fn(), resize: vi.fn(), dispose: vi.fn(), sendInput: sendInputs[index],
+				onData: (_id, listener) => { outputs[index] = listener; return () => {}; },
+				onOpened: (_id, listener) => { opened[index] = listener; return () => {}; },
+				onExit: () => () => {}, onError: () => () => {},
+				onConnectionChange: (listener) => { connectionChanges[index] = listener; return () => {}; },
+			};
+		});
+		function Shell() {
+			const session = useTerminalSession(undefined, { daemonReady: true, coverInitialReplay: true, shellTerminalHandleId: "fresh-then-reconnected", createMux });
+			return <XtermTerminal theme="dark" onReady={session.attach} />;
+		}
+		render(<QueryClientProvider client={new QueryClient()}><Shell /></QueryClientProvider>);
+		act(() => {
+			opened[0]();
+			connectionChanges[0]("closed");
+		});
+		await waitFor(() => expect(createMux).toHaveBeenCalledTimes(2), { timeout: 2_000 });
+		const xtermWrite = vi.spyOn(state.lastTerminal!, "write");
+		act(() => {
+			opened[1]();
+			outputs[1](new TextEncoder().encode("history\x1b[6n"));
+		});
+		await waitFor(() => expect(xtermWrite).toHaveBeenCalled());
+		expect(sendInputs[1]).not.toHaveBeenCalled();
+	});
+
+	it.each(["remount", "existing"])("discards historical CPRs on %s pane mount", async (scenario) => {
+		const outputs: Array<(data: Uint8Array) => void> = [];
+		const opened: Array<() => void> = [];
+		const sendInputs = [vi.fn(), vi.fn()];
+		const createMux = vi.fn((): TerminalMux => {
+			const index = outputs.length;
+			return {
+				open: vi.fn(), close: vi.fn(), resize: vi.fn(), dispose: vi.fn(), sendInput: sendInputs[index],
+				onData: (_id, listener) => { outputs[index] = listener; return () => {}; },
+				onOpened: (_id, listener) => { opened[index] = listener; return () => {}; },
+				onExit: () => () => {}, onError: () => () => {},
+				onConnectionChange: () => () => {},
+			};
+		});
+		function Shell() {
+			const session = useTerminalSession(undefined, { daemonReady: true, coverInitialReplay: true, shellTerminalHandleId: "mounted-existing", createMux });
+			return <XtermTerminal theme="dark" onReady={session.attach} />;
+		}
+		if (scenario === "remount") {
+			markTerminalHandleFresh("mounted-existing");
+			const first = render(<QueryClientProvider client={new QueryClient()}><Shell /></QueryClientProvider>);
+			act(() => opened[0]());
+			first.unmount();
+		}
+		render(<QueryClientProvider client={new QueryClient()}><Shell /></QueryClientProvider>);
+		const index = outputs.length - 1;
+		const xtermWrite = vi.spyOn(state.lastTerminal!, "write");
+		act(() => {
+			opened[index]();
+			outputs[index](new TextEncoder().encode("history\x1b[6n"));
+		});
+		await waitFor(() => expect(xtermWrite).toHaveBeenCalled());
+		expect(sendInputs[index]).not.toHaveBeenCalled();
+	});
+
+	it("does not forward colour replies xterm makes while parsing a replayed scrollback", () => {
+		const onInput = vi.fn();
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="dark" onReady={(handle) => { terminal = handle; handle.onUserInput(onInput); }} />);
+		// The replay is still being parsed: its write has not called back yet.
+		vi.spyOn(state.lastTerminal!, "write").mockImplementation(() => {});
+		terminal!.write(new TextEncoder().encode("old output\x1b]11;?\x07"), undefined, "replay");
+		state.lastTerminal!.dataListeners.forEach((listener) => listener("\x1b]11;rgb:f5f5/f5f5/f4f4\x07"));
+		expect(onInput).not.toHaveBeenCalled();
+	});
+
+	it("does not forward an unsolicited cursor-position-shaped input", () => {
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+
+		state.lastTerminal!.dataListeners.forEach((listener) => listener("\x1b[7;21R"));
+
+		expect(onInput).not.toHaveBeenCalled();
+	});
+
 	it("updates protocol handling when a retained terminal becomes a Cursor terminal", () => {
 		const onInput = vi.fn();
 		const { rerender } = render(
@@ -1366,10 +2601,36 @@ describe("XtermTerminal", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 		// rowHeight = fontSize(12) * lineHeight(1.35) = 16.2px; -50px => 3 lines up.
-		const suppressed = state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent);
+		const suppressed = state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent);
 
 		expect(suppressed).toBe(false);
 		expect(onInput).toHaveBeenCalledWith("\x1b[<64;1;1M\x1b[<64;1;1M\x1b[<64;1;1M", "wheel");
+	});
+
+	it.each([
+		["transcript body", 180, 70, 5, 2],
+		["pinned header", 180, 50, 5, 1],
+		["outside top-left", 90, 40, 1, 1],
+		["outside bottom-right", 2000, 2000, 80, 24],
+	])("reports actual one-based wheel coordinates over %s", (_name, clientX, clientY, column, row) => {
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+		// Offset grid with 20px cells: models a moved and CSS-scaled terminal.
+		vi.spyOn(state.lastTerminal!.screenElement, "getBoundingClientRect").mockReturnValue({
+			left: 100, top: 50, width: 1600, height: 480,
+		} as DOMRect);
+		for (const [deltaY, button] of [[-1, 64], [1, 65]]) {
+			state.lastTerminal!.wheelHandler!({ clientX, clientY, deltaY, deltaMode: 1 } as WheelEvent);
+			expect(onInput).toHaveBeenLastCalledWith(`\x1b[<${button};${column};${row}M`, "wheel");
+		}
+	});
+
+	it("does not invent mouse coordinates for an unmeasured terminal", () => {
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+		vi.spyOn(state.lastTerminal!.screenElement, "getBoundingClientRect").mockReturnValue({ width: 0, height: 0 } as DOMRect);
+		state.lastTerminal!.wheelHandler!({ clientX: 100, clientY: 100, deltaY: -1, deltaMode: 1 } as WheelEvent);
+		expect(onInput).not.toHaveBeenCalled();
 	});
 
 	it("handles line- and page-mode wheels (Linux/Windows mice), not just pixel deltas", () => {
@@ -1377,12 +2638,12 @@ describe("XtermTerminal", () => {
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
 		// DOM_DELTA_LINE: deltaY is already in lines, so one notch up => one report.
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -1, deltaMode: 1 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -1, deltaMode: 1 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<64;1;1M", "wheel");
 
 		// DOM_DELTA_PAGE: one page down => rows (24) line reports down.
 		onInput.mockClear();
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 1, deltaMode: 2 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 1, deltaMode: 2 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<65;1;1M".repeat(24), "wheel");
 	});
 
@@ -1390,11 +2651,11 @@ describe("XtermTerminal", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenCalledWith("\x1b[<65;1;1M", "wheel");
 
 		onInput.mockClear();
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50, ctrlKey: true } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50, ctrlKey: true } as WheelEvent)).toBe(false);
 		expect(onInput).not.toHaveBeenCalled();
 	});
 
@@ -1406,11 +2667,11 @@ describe("XtermTerminal", () => {
 
 		// rowHeight = 16.2px; -50px => 3 lines up. The pane never sees these bytes;
 		// we scroll the terminal's retained scrollback locally instead.
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(state.lastTerminal!.scrollLines).toHaveBeenLastCalledWith(-3);
 		expect(onInput).not.toHaveBeenCalled();
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(state.lastTerminal!.scrollLines).toHaveBeenLastCalledWith(1);
 		expect(onInput).not.toHaveBeenCalled();
 	});
@@ -1423,11 +2684,11 @@ describe("XtermTerminal", () => {
 		// page key per notch is the best fallback.
 		state.lastTerminal!.buffer.active.type = "alternate";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[5~", "wheel");
 		expect(state.lastTerminal!.scrollLines).not.toHaveBeenCalled();
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[6~", "wheel");
 	});
 
@@ -1440,7 +2701,7 @@ describe("XtermTerminal", () => {
 		// via the paneScrollsByKeyboard hint, tested separately.
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<64;1;1M".repeat(3), "wheel");
 	});
 
@@ -1451,7 +2712,7 @@ describe("XtermTerminal", () => {
 		// hint this would send SGR reports; the hint forces page keys.
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[5~", "wheel");
 	});
 
@@ -1483,6 +2744,121 @@ describe("XtermTerminal", () => {
 		expect(onLinkOpen).toHaveBeenCalledWith("http://localhost:3000");
 		expect(open).not.toHaveBeenCalled();
 		open.mockRestore();
+	});
+
+	it.each(["plain", "OSC 8"])("activates %s session links inside AO", (kind) => {
+		const onSessionLinkOpen = vi.fn();
+		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
+		state.lastTerminal!.modes.mouseTrackingMode = "none";
+		const osc = state.lastTerminal!.options.linkHandler as {
+			activate: (event: MouseEvent, uri: string) => void;
+		};
+		if (kind === "OSC 8") {
+			osc.activate({} as MouseEvent, "ao://sessions/project/session");
+		} else {
+			state.lastTerminal!.buffer.active.getLine = () =>
+				testBufferLine(asciiCells("ao://sessions/project/session"));
+			state.sessionLinkProvider!.provideLinks(1, (links) =>
+				links![0]!.activate({} as MouseEvent),
+			);
+		}
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
+	it("opens a session link on a plain click while an application captures mouse input", () => {
+		const onSessionLinkOpen = vi.fn();
+		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
+		state.lastTerminal!.modes.mouseTrackingMode = "any";
+		const handler = (state.lastTerminal!.options.linkHandler as {
+			activate: (event: MouseEvent, uri: string) => void;
+		}).activate;
+		handler({ ctrlKey: false, metaKey: false } as MouseEvent, "ao://sessions/project/session");
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
+	it("routes malformed AO OSC links to in-app feedback without external dispatch", () => {
+		const open = vi.spyOn(window, "open").mockReturnValue(null);
+		const onSessionLinkOpen = vi.fn();
+		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
+		state.lastTerminal!.modes.mouseTrackingMode = "none";
+		const handler = (state.lastTerminal!.options.linkHandler as {
+			activate: (event: MouseEvent, uri: string) => void;
+		}).activate;
+		handler({} as MouseEvent, "ao://sessions/project/session/kill");
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session/kill");
+		expect(open).not.toHaveBeenCalled();
+		open.mockRestore();
+	});
+
+	it("detects a session URL wrapped across terminal rows without consuming punctuation", () => {
+		const onSessionLinkOpen = vi.fn();
+		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
+		state.lastTerminal!.modes.mouseTrackingMode = "none";
+		state.lastTerminal!.cols = 16;
+		const rows = ["ao://sessions/pr", "oject/session)."];
+		state.lastTerminal!.buffer.active.length = rows.length;
+		state.lastTerminal!.buffer.active.getLine = (line) =>
+			line >= rows.length
+				? undefined
+				: testBufferLine(asciiCells(rows[line]!), line === 1);
+		state.sessionLinkProvider!.provideLinks(2, (links) => {
+			expect(links?.[0]?.text).toBe("ao://sessions/project/session");
+			expect(links?.[0]?.range).toEqual({
+				start: { x: 1, y: 1 },
+				end: { x: 13, y: 2 },
+			});
+			links?.[0]?.activate({} as MouseEvent);
+		});
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
+	});
+
+	it.each([
+		{
+			name: "wide",
+			prefix: [{ chars: "中", width: 2 }, { chars: "", width: 0 }, { chars: " ", width: 1 }],
+			expected: { start: { x: 4, y: 1 }, end: { x: 20, y: 1 } },
+		},
+		{
+			name: "combining",
+			prefix: [{ chars: "e\u0301", width: 1 }, { chars: " ", width: 1 }],
+			expected: { start: { x: 3, y: 1 }, end: { x: 19, y: 1 } },
+		},
+	])("maps a session link after $name characters to terminal cells", ({ prefix, expected }) => {
+		render(<XtermTerminal onSessionLinkOpen={vi.fn()} theme="dark" />);
+		const line = testBufferLine([
+			...prefix,
+			...asciiCells("ao://sessions/p/s"),
+			{ chars: "", width: 1 },
+		]);
+		state.lastTerminal!.buffer.active.length = 1;
+		state.lastTerminal!.buffer.active.getLine = (row) => (row === 0 ? line : undefined);
+
+		state.sessionLinkProvider!.provideLinks(1, (links) => {
+			expect(links?.[0]?.range).toEqual(expected);
+		});
+	});
+
+	it("maps a wrapped session link with a wide character prefix to terminal cells", () => {
+		render(<XtermTerminal onSessionLinkOpen={vi.fn()} theme="dark" />);
+		state.lastTerminal!.cols = 10;
+		const rows = [
+			testBufferLine([
+				{ chars: "中", width: 2 },
+				{ chars: "", width: 0 },
+				{ chars: " ", width: 1 },
+				...asciiCells("ao://se"),
+			]),
+			testBufferLine(asciiCells("ssions/p/s"), true),
+		];
+		state.lastTerminal!.buffer.active.length = rows.length;
+		state.lastTerminal!.buffer.active.getLine = (row) => rows[row];
+
+		state.sessionLinkProvider!.provideLinks(2, (links) => {
+			expect(links?.[0]?.range).toEqual({
+				start: { x: 4, y: 1 },
+				end: { x: 10, y: 2 },
+			});
+		});
 	});
 
 	it.each([
@@ -1569,5 +2945,21 @@ describe("XtermTerminal", () => {
 		window.removeEventListener("drop", bubbled);
 		expect(bubbled).toHaveBeenCalledTimes(1);
 		expect(saveDroppedFile).not.toHaveBeenCalled();
+	});
+
+	it("does not extend a drag selection into a neighboring pane or keep auto-scrolling", () => {
+		render(<XtermTerminal theme="dark" />);
+		const selectionService = state.lastTerminal!._core._selectionService;
+		const listener = selectionService._mouseMoveListener!;
+
+		// Simulate xterm's timer having been armed by a previous drag below the
+		// terminal before the pointer crosses horizontally into the sidebar.
+		selectionService._dragScrollAmount = 1;
+		listener(new MouseEvent("mousemove", { clientX: 801 }));
+		expect(state.mouseMoveListener).not.toHaveBeenCalled();
+		expect(selectionService._dragScrollAmount).toBe(0);
+
+		listener(new MouseEvent("mousemove", { clientX: 800 }));
+		expect(state.mouseMoveListener).toHaveBeenCalledTimes(1);
 	});
 });

@@ -10,6 +10,8 @@ export type WindowComposition = {
 	shellView: WebContentsView;
 	shellWebContents: WebContents;
 	setOverlayOpen: (open: boolean) => void;
+	/** Re-raise the shell after another native view was added above it. */
+	restackShell: () => void;
 	resize: () => void;
 	dispose: () => void;
 };
@@ -26,6 +28,7 @@ export function createWindowComposition(options: {
 	mainWindow: MainWindowHost;
 	WebContentsView: WebContentsViewConstructor;
 	preload: string;
+	platform: NodeJS.Platform;
 }): WindowComposition {
 	const shellView = new options.WebContentsView({
 		webPreferences: {
@@ -48,9 +51,9 @@ export function createWindowComposition(options: {
 	};
 	options.mainWindow.contentView.on("bounds-changed", resize);
 
-	// Forces the compositor to rebuild the shell's surface. Identical bounds are
-	// ignored, so shrink by a pixel and restore on the next tick — the two calls
-	// would otherwise coalesce into a single no-op resize.
+	// Force Chromium to rebuild the shell surface after reordering it. Identical
+	// bounds are ignored, so nudge by one pixel and restore on the next tick.
+	// The shell stays visible throughout; hiding either native view causes a flash.
 	const forceSurfaceRefresh = (): void => {
 		if (options.mainWindow.isDestroyed?.()) return;
 		const bounds = options.mainWindow.contentView.getBounds();
@@ -63,9 +66,7 @@ export function createWindowComposition(options: {
 		}, 0);
 	};
 
-	const setOverlayOpen = (open: boolean): void => {
-		if (overlayOpen === open) return;
-		overlayOpen = open;
+	const placeShell = (open: boolean): void => {
 		if (open) {
 			// Re-adding an existing child raises it above all page/DevTools views.
 			options.mainWindow.contentView.addChildView(shellView);
@@ -79,8 +80,24 @@ export function createWindowComposition(options: {
 		// geometry change rebuilds it. (Symptom: blank on a fresh launch, but
 		// correct at every size once the window has been resized or fullscreened
 		// even once.) Re-applying identical bounds is a no-op, so nudge the height
-		// by a pixel and restore it on the next tick to force a real resize.
-		if (open) forceSurfaceRefresh();
+		// by a pixel and restore it. Keep that repaint macOS-only: the stale
+		// compositor surface has only been observed there.
+		if (open && options.platform === "darwin") forceSurfaceRefresh();
+	};
+
+	const setOverlayOpen = (open: boolean): void => {
+		if (overlayOpen === open) return;
+		overlayOpen = open;
+		placeShell(open);
+	};
+
+	// `addChildView` without an index appends on top, so a browser tab created
+	// while an overlay is open (a long-lived update notice, a dialog during an
+	// agent-driven `ao browser` action) would cover the raised shell until the
+	// overlay toggled again. Put the shell back on top whenever that happens.
+	const restackShell = (): void => {
+		if (!overlayOpen || options.mainWindow.isDestroyed?.()) return;
+		placeShell(true);
 	};
 
 	resize();
@@ -89,10 +106,16 @@ export function createWindowComposition(options: {
 		shellView,
 		shellWebContents: shellView.webContents,
 		setOverlayOpen,
+		restackShell,
 		resize,
 		dispose: () => {
-			options.mainWindow.contentView.removeListener("bounds-changed", resize);
 			try {
+				// Reading `contentView` on an already-destroyed BaseWindow throws
+				// "Object has been destroyed". On window close the `closed` event
+				// fires after the native window is gone, so both calls here can
+				// throw — keep them together and out of the way of the shell
+				// WebContents teardown below, which must always run.
+				options.mainWindow.contentView.removeListener("bounds-changed", resize);
 				options.mainWindow.contentView.removeChildView(shellView);
 			} catch {
 				// The BaseWindow may already have destroyed its content hierarchy.

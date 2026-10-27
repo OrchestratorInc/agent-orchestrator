@@ -24,8 +24,9 @@ var claudeSessionStartMatcher = "startup|resume|clear|compact|fork"
 // claudeManagedHooks is the source of truth for the hooks AO installs:
 // SessionStart (startup/resume/clear/compact/fork), UserPromptSubmit, the tool-use
 // trio (PreToolUse, PostToolUse, PostToolUseFailure), PermissionRequest,
-// Stop, Notification, and SessionEnd. They report normalized session metadata
-// and activity-state signals back into AO's store (see DeriveActivityState).
+// Stop, StopFailure, Notification, and SessionEnd. They report normalized
+// session metadata and activity-state signals back into AO's store (see
+// DeriveActivityState).
 // Notification and SessionEnd carry no matcher: each installs once and fires
 // for every sub-type, and the handler filters on the payload's
 // notification_type / reason field. The tool-use hooks also carry no matcher
@@ -34,8 +35,11 @@ var claudeSessionStartMatcher = "startup|resume|clear|compact|fork"
 // approved tool finishes — the daemon-side precedence rule is what makes these
 // signals safe against parallel-subagent traffic (the naive mapping without it
 // was reverted in PR #5's review). PermissionRequest fires when a permission
-// dialog appears and carries the blocking tool_name; `ao hooks` writes nothing
-// to stdout, so installing it never injects a permission decision.
+// dialog appears and carries the blocking tool_name; for worker sessions
+// `ao hooks` writes nothing to stdout, so installing it never injects a
+// permission decision. Headless reviewer sessions (AO_REVIEW_SESSION_ID set)
+// are the one exception: nobody can answer the dialog there, so the hook
+// replies with an allow/deny decision (see cli.reviewerPermissionDecision, #4810).
 var claudeManagedHooks = []hooksjson.HookSpec{
 	{Event: "SessionStart", Matcher: &claudeSessionStartMatcher, Command: claudeHookCommandPrefix + "session-start"},
 	{Event: "UserPromptSubmit", Command: claudeHookCommandPrefix + "user-prompt-submit"},
@@ -44,7 +48,12 @@ var claudeManagedHooks = []hooksjson.HookSpec{
 	{Event: "PostToolUseFailure", Command: claudeHookCommandPrefix + "post-tool-use-failure"},
 	{Event: "PermissionRequest", Command: claudeHookCommandPrefix + "permission-request"},
 	{Event: "Stop", Command: claudeHookCommandPrefix + "stop"},
+	// StopFailure fires instead of Stop when an API error (rate limit, usage
+	// limit, unknown model, expired login) ends the turn. Without it such a
+	// turn left the session active.
+	{Event: "StopFailure", Command: claudeHookCommandPrefix + "stop-failure"},
 	{Event: "Notification", Command: claudeHookCommandPrefix + "notification"},
+	{Event: "SubagentStart", Command: claudeHookCommandPrefix + "subagent-start"},
 	{Event: "SubagentStop", Command: claudeHookCommandPrefix + "subagent-stop"},
 	{Event: "SessionEnd", Command: claudeHookCommandPrefix + "session-end"},
 }

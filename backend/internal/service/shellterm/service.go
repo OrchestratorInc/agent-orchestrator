@@ -7,23 +7,31 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
 )
 
 // ShellRuntime is the slice of the runtime adapter a shell terminal needs:
-// spawn a PTY around an argv, tear it down, and answer whether it is still
-// alive. It is deliberately narrower than ports.Runtime — a shell terminal
-// never reads captured output the way the activity observer does.
+// spawn a PTY around an argv, exchange reviewed auth input, tear it down, and
+// distinguish child-process liveness from a host retaining scrollback.
 type ShellRuntime interface {
+	ports.RuntimeChildInspector
 	Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error)
 	Destroy(ctx context.Context, handle ports.RuntimeHandle) error
+	GetOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error)
+	SendInput(ctx context.Context, handle ports.RuntimeHandle, input string) error
+	SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error
 	IsAlive(ctx context.Context, handle ports.RuntimeHandle) (bool, error)
 }
 
@@ -31,6 +39,7 @@ type ShellRuntime interface {
 // start in. The daemon wiring adapts the project service to it.
 type ProjectRootLocator interface {
 	ProjectRoot(ctx context.Context, id domain.ProjectID) (string, error)
+	ProjectEnv(ctx context.Context, id domain.ProjectID) (map[string]string, error)
 }
 
 // SessionWorkspaceLocator resolves a session id to the workspace it is
@@ -39,29 +48,33 @@ type ProjectRootLocator interface {
 // of its own yet. The daemon wiring adapts the session service to it.
 type SessionWorkspaceLocator interface {
 	SessionWorkspace(ctx context.Context, id domain.SessionID) (workspacePath string, projectID domain.ProjectID, err error)
+	CueCommandSessionTarget(ctx context.Context, id domain.SessionID) (CueCommandSessionTarget, error)
 }
 
 // Service opens, lists, and closes standalone shell terminals.
 //
-// appRunID is minted once per desktop-app launch and is the mechanism behind
-// the feature's lifetime rule: shells must survive a DAEMON restart but die
-// with the APP. Rows tagged with the current run are re-attachable; rows tagged
-// with any other run are orphans from an app that exited without closing them
-// (a crash or force-kill, where the clean shutdown path never ran) and are
-// destroyed at boot by ReapShellTerminalsFromPreviousAppRuns.
+// User shells survive desktop and daemon restarts. appRunID scopes trusted
+// auth terminals, whose owning authentication flow ends with the app launch.
 type Service struct {
-	runtime  ShellRuntime
-	store    Store
-	projects ProjectRootLocator
-	sessions SessionWorkspaceLocator
-	dataDir  string
-	appRunID string
-	log      *slog.Logger
+	runtime             ShellRuntime
+	store               Store
+	projects            ProjectRootLocator
+	sessions            SessionWorkspaceLocator
+	dataDir             string
+	appRunID            string
+	log                 *slog.Logger
+	previewCapabilities *browser.Authority
+	pendingPreviewMu    sync.Mutex
+	pendingPreview      map[domain.SessionID]string
 
 	// now and newHandleID are injectable so tests can assert on exact ids and
 	// timestamps without a clock or entropy dependency.
 	now         func() time.Time
 	newHandleID func() (string, error)
+	executable  func() (string, error)
+	// initialInputTimeout bounds the wait for an auth terminal's ready marker;
+	// tests shorten it to exercise the timeout path.
+	initialInputTimeout time.Duration
 
 	// gatesMu guards gates itself (the map), not the individual gate mutexes it
 	// holds.
@@ -72,7 +85,6 @@ type Service struct {
 	// never allocates an entry here — only real sessions do, bounding growth to
 	// the shape AO's single-user daemon actually runs.
 	gates map[domain.SessionID]*sessionGate
-
 	// onSessionGateWait, when set, is called the instant a session-scoped
 	// OpenShellTerminal or CloseShellTerminal is about to attempt gate.mu.Lock()
 	// — before the (possibly blocking) call, so it fires whether or not the
@@ -81,6 +93,14 @@ type Service struct {
 	// there, rather than inferring "still blocked" from a goroutine that simply
 	// hasn't run yet.
 	onSessionGateWait func(domain.SessionID)
+}
+
+// IsShellTerminalChildAlive reports whether the command inside a shell
+// terminal is still running. Detached terminal hosts may outlive their child
+// to retain scrollback, so callers that coordinate a command workflow must use
+// this instead of treating host liveness as command liveness.
+func (s *Service) IsShellTerminalChildAlive(ctx context.Context, handleID string) (bool, error) {
+	return s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: strings.TrimSpace(handleID)})
 }
 
 // sessionGate is the admission/teardown barrier for one session's scoped
@@ -146,22 +166,63 @@ func (g *sessionGate) acquire(ctx context.Context, id domain.SessionID) (release
 // NewService builds the shell terminal service. dataDir is the fallback working
 // directory for a shell opened with no project context. A nil logger falls back
 // to slog.Default.
-func NewService(runtime ShellRuntime, store Store, projects ProjectRootLocator, sessions SessionWorkspaceLocator, dataDir, appRunID string, log *slog.Logger) *Service {
+func NewService(shellRuntime ShellRuntime, store Store, projects ProjectRootLocator, sessions SessionWorkspaceLocator, dataDir, appRunID string, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &Service{
-		runtime:     runtime,
-		store:       store,
-		projects:    projects,
-		sessions:    sessions,
-		dataDir:     dataDir,
-		appRunID:    appRunID,
-		log:         log,
-		now:         time.Now,
-		newHandleID: newShellTerminalHandleID,
-		gates:       map[domain.SessionID]*sessionGate{},
+		runtime:             shellRuntime,
+		store:               store,
+		projects:            projects,
+		sessions:            sessions,
+		dataDir:             dataDir,
+		appRunID:            appRunID,
+		log:                 log,
+		previewCapabilities: browser.NewAuthority(),
+		pendingPreview:      make(map[domain.SessionID]string),
+		now:                 time.Now,
+		newHandleID:         newShellTerminalHandleID,
+		executable:          os.Executable,
+		initialInputTimeout: initialInputTimeout,
+		gates:               map[domain.SessionID]*sessionGate{},
 	}
+}
+
+func (s *Service) pinnedEnv(projectEnv map[string]string) map[string]string {
+	path, err := agentlaunch.PinnedPATH(s.executable, os.Getenv, projectEnv, s.dataDir)
+	if err != nil {
+		s.log.Warn("shell terminal PATH not pinned to the daemon binary; a bare `ao` may resolve to a different install", "err", err)
+		return agentlaunch.MergeEnv(projectEnv, nil)
+	}
+	return agentlaunch.MergeEnv(projectEnv, map[string]string{"PATH": path})
+}
+
+// ValidPreviewCapability accepts a shell's preview-only bearer while its
+// launch is in flight or its durable row still belongs to the target session.
+func (s *Service) ValidPreviewCapability(ctx context.Context, sessionID domain.SessionID, token string) (bool, error) {
+	if sessionID == "" || token == "" {
+		return false, nil
+	}
+	s.pendingPreviewMu.Lock()
+	pending := s.pendingPreview[sessionID]
+	s.pendingPreviewMu.Unlock()
+	if s.previewCapabilities.Valid(sessionID, token, pending) {
+		return true, nil
+	}
+	recs, err := s.store.SelectShellTerminalsBySessionID(ctx, sessionID)
+	if err != nil {
+		return false, fmt.Errorf("validate shell preview capability: %w", err)
+	}
+	for _, rec := range recs {
+		if s.previewCapabilities.Valid(sessionID, token, rec.PreviewCapabilityVerifier) {
+			alive, err := s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
+			if err != nil {
+				return false, fmt.Errorf("probe shell preview owner %s: %w", rec.HandleID, err)
+			}
+			return alive, nil
+		}
+	}
+	return false, nil
 }
 
 // sessionGateFor returns the gate for id, creating it on first use.
@@ -199,6 +260,11 @@ func (s *Service) acquireSessionGate(ctx context.Context, id domain.SessionID) (
 // teardown (and the gate) releases — at which point resolveShellTerminalWorkingDir's
 // existence check sees the worktree is gone and falls back to the project root.
 func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInput) (ShellTerminal, error) {
+	title := strings.TrimSpace(in.Title)
+	if utf8.RuneCountInString(title) > maxShellTerminalTitleLen {
+		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_TITLE_TOO_LONG",
+			fmt.Sprintf("A shell terminal title must be at most %d characters", maxShellTerminalTitleLen), nil)
+	}
 	if in.SessionID != "" {
 		if s.sessions == nil {
 			return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")
@@ -223,9 +289,19 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	if err != nil {
 		return ShellTerminal{}, err
 	}
-	openTerminals, err := s.store.SelectShellTerminalsByAppRunID(ctx, s.appRunID)
-	if err != nil {
-		return ShellTerminal{}, fmt.Errorf("open shell terminal: list existing terminals: %w", err)
+	var projectEnv map[string]string
+	if projectID != "" {
+		projectEnv, err = s.projects.ProjectEnv(ctx, projectID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: resolve project environment: %w", err)
+		}
+	}
+	if title == "" {
+		openTerminals, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: list existing terminals: %w", err)
+		}
+		title = nextShellTerminalTitle(openTerminals)
 	}
 	argv, usedFallback := resolveUserLoginShell(in.Shell)
 	if usedFallback {
@@ -236,49 +312,328 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL",
 			"Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
 	}
-	return s.openTerminal(ctx, openTerminalInput{
-		argv: argv, workingDir: workingDir, projectID: projectID,
-		sessionID: in.SessionID, title: nextShellTerminalTitle(openTerminals),
+	env := s.pinnedEnv(projectEnv)
+	if env == nil {
+		env = make(map[string]string, 3)
+	}
+	// A user shell must never inherit the worker-only browser automation bearer
+	// from an unusual daemon launch environment.
+	env["AO_BROWSER_CAPABILITY"] = ""
+	env["AO_PREVIEW_CAPABILITY"] = ""
+	var verifier string
+	if in.SessionID != "" {
+		env["AO_SESSION_ID"] = string(in.SessionID)
+		var token string
+		token, verifier, err = s.previewCapabilities.Issue(in.SessionID)
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: preview capability: %w", err)
+		}
+		env["AO_PREVIEW_CAPABILITY"] = token
+		// The shell can issue its first CLI request before runtime.Create returns
+		// and its durable row is inserted. Admit it only during this launch gap.
+		s.pendingPreviewMu.Lock()
+		s.pendingPreview[in.SessionID] = verifier
+		s.pendingPreviewMu.Unlock()
+		defer func() {
+			s.pendingPreviewMu.Lock()
+			delete(s.pendingPreview, in.SessionID)
+			s.pendingPreviewMu.Unlock()
+		}()
+	}
+	return s.openTerminal(ctx, openTerminalConfig{
+		argv: argv, env: env, projectEnv: projectEnv, projectID: projectID, sessionID: in.SessionID,
+		workingDir: workingDir, title: title,
+		previewVerifier: verifier,
+		startOnAttach:   in.StartOnAttach,
 	})
 }
 
-// OpenCommandTerminal starts a backend-owned command in a standalone terminal.
-// Unlike OpenShellTerminal, this input is never decoded from the public API.
+const authWorkspaceDirectoryName = "auth-workspace"
+
+// OpenCommandTerminal opens a daemon-trusted command in a standalone terminal.
+// Unlike OpenShellTerminal, it never receives public HTTP input. Interactive
+// coding agents start in a dedicated workspace so they cannot mistake the
+// daemon's database/config/runtime directory for a project.
 func (s *Service) OpenCommandTerminal(ctx context.Context, in OpenCommandTerminalInput) (ShellTerminal, error) {
-	return s.openTerminal(ctx, openTerminalInput{
-		argv: in.Argv, env: in.Env, workingDir: in.WorkingDir, title: in.Title,
-		exitOnCommandCompletion: true,
-	})
-}
-
-type openTerminalInput struct {
-	argv                    []string
-	env                     map[string]string
-	workingDir              string
-	projectID               domain.ProjectID
-	sessionID               domain.SessionID
-	title                   string
-	exitOnCommandCompletion bool
-}
-
-func (s *Service) openTerminal(ctx context.Context, in openTerminalInput) (ShellTerminal, error) {
+	if err := validateOpenCommandTerminalInput(in); err != nil {
+		return ShellTerminal{}, err
+	}
 	handleID, err := s.newHandleID()
 	if err != nil {
-		return ShellTerminal{}, fmt.Errorf("open shell terminal: handle id: %w", err)
+		return ShellTerminal{}, fmt.Errorf("open command terminal: handle id: %w", err)
 	}
 
+	workingDir := in.WorkingDir
+	cleanupWorkingDirOnError := false
+	if workingDir == "" {
+		authWorkspaceRoot := filepath.Join(s.dataDir, authWorkspaceDirectoryName)
+		if err := os.MkdirAll(authWorkspaceRoot, 0o700); err != nil {
+			return ShellTerminal{}, fmt.Errorf("open command terminal: create auth workspace: %w", err)
+		}
+		workingDir = filepath.Join(authWorkspaceRoot, handleID)
+		if err := os.Mkdir(workingDir, 0o700); err != nil {
+			return ShellTerminal{}, fmt.Errorf("open command terminal: create private auth workspace: %w", err)
+		}
+		cleanupWorkingDirOnError = true
+	}
+	terminal, err := s.openTerminal(ctx, openTerminalConfig{
+		handleID:                 handleID,
+		argv:                     in.Argv,
+		env:                      in.Env,
+		workingDir:               workingDir,
+		title:                    in.Title,
+		transient:                true,
+		cleanupWorkingDirOnError: cleanupWorkingDirOnError,
+	})
+	if err != nil {
+		return ShellTerminal{}, err
+	}
+	if len(in.InitialInputReadyStates) > 0 {
+		go s.sendInitialInputWhenReady(context.WithoutCancel(ctx), ports.RuntimeHandle{ID: terminal.HandleID}, in.InitialInput, in.InitialInputReadyStates, in.SendInitialInputOnReadyTimeout)
+	}
+	return terminal, nil
+}
+
+// RunCueCommand opens a new normal shell terminal for each trusted command.
+// It never creates or messages an agent session.
+func (s *Service) RunCueCommand(ctx context.Context, in RunCueCommandInput) (ShellTerminal, error) {
+	if err := ctx.Err(); err != nil {
+		return ShellTerminal{}, err
+	}
+	if in.ProjectID == "" {
+		return ShellTerminal{}, apierr.Invalid("CUE_COMMAND_PROJECT_REQUIRED", "A project is required to run a command Cue", nil)
+	}
+	if strings.TrimSpace(in.Command) == "" {
+		return ShellTerminal{}, apierr.Invalid("CUE_COMMAND_REQUIRED", "A command is required to run a command Cue", nil)
+	}
+	workingDir, projectID, err := s.resolveCueCommandWorkingDir(ctx, in.ProjectID, in.SessionID)
+	if err != nil {
+		return ShellTerminal{}, err
+	}
+	if in.SessionID != "" {
+		release, acquireErr := s.acquireSessionGate(ctx, in.SessionID)
+		if acquireErr != nil {
+			return ShellTerminal{}, acquireErr
+		}
+		defer release()
+		// Recheck inside the teardown gate before opening a shell.
+		workingDir, projectID, err = s.resolveCueCommandWorkingDir(ctx, in.ProjectID, in.SessionID)
+		if err != nil {
+			return ShellTerminal{}, err
+		}
+	}
+	records, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
+	if err != nil {
+		return ShellTerminal{}, fmt.Errorf("run cue command: list terminals: %w", err)
+	}
+	argv, usedFallback := resolveUserLoginShell(in.Shell)
+	if usedFallback {
+		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_SHELL_UNAVAILABLE",
+			fmt.Sprintf("The selected shell is unavailable: %s. Choose another shell in Settings.", in.Shell), nil)
+	}
+	if len(argv) == 0 {
+		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SHELL", "Could not determine a shell to launch. Set SHELL (macOS/Linux) or ComSpec (Windows).")
+	}
+	projectEnv, err := s.projects.ProjectEnv(ctx, projectID)
+	if err != nil {
+		return ShellTerminal{}, fmt.Errorf("run cue command: resolve project environment: %w", err)
+	}
+	env := s.pinnedEnv(projectEnv)
+	readiness, err := prepareCueShellReadiness(s.dataDir, argv, env)
+	if err != nil {
+		return ShellTerminal{}, err
+	}
+	defer readiness.cleanup()
+	env = agentlaunch.MergeEnv(env, readiness.env)
+	terminal, err := s.openTerminal(ctx, openTerminalConfig{argv: readiness.argv, env: env, projectEnv: projectEnv, projectID: projectID,
+		sessionID: in.SessionID, workingDir: workingDir, title: nextShellTerminalTitle(records)})
+	if err != nil {
+		return ShellTerminal{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return ShellTerminal{}, err
+	}
+	if err := s.waitForCueShellReady(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, readiness.file); err != nil {
+		return ShellTerminal{}, err
+	}
+	if err := s.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: terminal.HandleID}, in.Command); err != nil {
+		return ShellTerminal{}, fmt.Errorf("run cue command: send to terminal %s: %w", terminal.HandleID, err)
+	}
+	return terminal, nil
+}
+
+func (s *Service) resolveCueCommandWorkingDir(ctx context.Context, projectID domain.ProjectID, sessionID domain.SessionID) (string, domain.ProjectID, error) {
+	if sessionID == "" {
+		root, err := s.resolveProjectRootOrDataDir(ctx, projectID)
+		if err != nil {
+			return "", "", err
+		}
+		if !filepath.IsAbs(root) {
+			return "", "", apierr.Conflict("CUE_TARGET_CONFLICT", "The project root is unavailable", nil)
+		}
+		info, statErr := os.Stat(root)
+		if statErr != nil || !info.IsDir() {
+			return "", "", apierr.Conflict("CUE_TARGET_CONFLICT", "The project root is unavailable", nil)
+		}
+		return filepath.Clean(root), projectID, nil
+	}
+	if s.sessions == nil {
+		return "", "", apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")
+	}
+	target, err := s.sessions.CueCommandSessionTarget(ctx, sessionID)
+	if err != nil {
+		return "", "", fmt.Errorf("run cue command: resolve session %s: %w", sessionID, err)
+	}
+	if target.ProjectID != projectID {
+		return "", "", apierr.Conflict("CUE_TARGET_CONFLICT", "The selected session belongs to another project", nil)
+	}
+	if target.IsTerminated || target.Activity == domain.ActivityExited || target.Activity == domain.ActivityBlocked {
+		return "", "", apierr.Conflict("CUE_TARGET_CONFLICT", "The selected session cannot run command Cues", nil)
+	}
+	workspace := strings.TrimSpace(target.WorkspacePath)
+	if workspace == "" || !filepath.IsAbs(workspace) {
+		return "", "", apierr.Conflict("CUE_TARGET_CONFLICT", "The selected session worktree is unavailable", nil)
+	}
+	info, statErr := os.Stat(workspace)
+	if statErr != nil || !info.IsDir() {
+		return "", "", apierr.Conflict("CUE_TARGET_CONFLICT", "The selected session worktree is unavailable", nil)
+	}
+	return filepath.Clean(workspace), target.ProjectID, nil
+}
+
+const (
+	initialInputTimeout      = 10 * time.Second
+	initialInputPollInterval = 50 * time.Millisecond
+	initialInputOutputLines  = 100
+
+	initialInputFallbackSendTimeout = 5 * time.Second
+)
+
+// MatchInitialInputReadyState returns the first ready state whose marker text
+// appears in output, or nil when the terminal has not reached any of them.
+func MatchInitialInputReadyState(output string, readyStates []InitialInputReadyState) *InitialInputReadyState {
+	for i := range readyStates {
+		if strings.Contains(output, readyStates[i].Text) {
+			return &readyStates[i]
+		}
+	}
+	return nil
+}
+
+// sendInitialInputAfterTimeout delivers the reviewed input once the ready
+// wait has expired without a marker, as long as the terminal is still alive.
+func (s *Service) sendInitialInputAfterTimeout(handle ports.RuntimeHandle, input string) {
+	ctx, cancel := context.WithTimeout(context.Background(), initialInputFallbackSendTimeout)
+	defer cancel()
+	alive, err := s.runtime.IsAlive(ctx, handle)
+	if err != nil || !alive {
+		s.log.Warn("authentication terminal exited before initial input", "handleId", handle.ID, "error", err)
+		return
+	}
+	s.log.Info("authentication terminal showed no ready marker; sending initial input anyway", "handleId", handle.ID)
+	if err := s.runtime.SendMessage(ctx, handle, input); err != nil {
+		s.log.Warn("authentication terminal initial input failed", "handleId", handle.ID, "error", err)
+	}
+}
+
+func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.RuntimeHandle, input string, readyStates []InitialInputReadyState, sendOnTimeout bool) {
+	ctx, cancel := context.WithTimeout(ctx, s.initialInputTimeout)
+	defer cancel()
+	ticker := time.NewTicker(initialInputPollInterval)
+	defer ticker.Stop()
+	for {
+		output, err := s.runtime.GetOutput(ctx, handle, initialInputOutputLines)
+		if err == nil {
+			ready := MatchInitialInputReadyState(output, readyStates)
+			if styled, ok := s.runtime.(ports.StyledTerminalOutputReader); ok {
+				if rendered, styledErr := styled.GetStyledOutput(ctx, handle, initialInputOutputLines); styledErr == nil {
+					if renderedReady := MatchInitialInputReadyState(terminalui.PlainTerminalText(rendered), readyStates); renderedReady != nil {
+						ready = renderedReady
+					}
+				}
+			}
+			if ready != nil && ready.SkipInput {
+				return
+			}
+			if ready == nil {
+				goto wait
+			}
+			if ready.RawPrefix != "" {
+				if err := s.runtime.SendInput(ctx, handle, ready.RawPrefix); err != nil {
+					s.log.Warn("authentication terminal initial input prefix failed", "handleId", handle.ID, "error", err)
+					return
+				}
+			}
+			if err := s.runtime.SendMessage(ctx, handle, input); err != nil {
+				s.log.Warn("authentication terminal initial input failed", "handleId", handle.ID, "error", err)
+			}
+			return
+		}
+	wait:
+		select {
+		case <-ctx.Done():
+			if sendOnTimeout {
+				s.sendInitialInputAfterTimeout(handle, input)
+				return
+			}
+			s.log.Warn("authentication terminal did not become ready for initial input", "handleId", handle.ID)
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+type openTerminalConfig struct {
+	handleID                 string
+	argv                     []string
+	env                      map[string]string
+	projectEnv               map[string]string
+	projectID                domain.ProjectID
+	sessionID                domain.SessionID
+	workingDir               string
+	title                    string
+	transient                bool
+	cleanupWorkingDirOnError bool
+	previewVerifier          string
+	startOnAttach            bool
+}
+
+// openTerminal creates and persists a terminal, rolling the runtime back on
+// every failure after Create so an untracked PTY cannot leak.
+func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (ShellTerminal, error) {
+	handleID := cfg.handleID
+	if handleID == "" {
+		var err error
+		handleID, err = s.newHandleID()
+		if err != nil {
+			return ShellTerminal{}, fmt.Errorf("open shell terminal: handle id: %w", err)
+		}
+	}
+
+	// Stamped before the runtime spawns: concurrent opens finish spawning in
+	// any order, and the list is ordered by creation, so tabs opened in quick
+	// succession must keep the order they were opened in.
+	createdAt := s.now().UTC()
 	// SessionID is the runtime adapters' name for "what to call this PTY"; it
 	// is not a session row and no sessions record is ever created. The
 	// shellterm- prefix keeps the two namespaces disjoint.
 	handle, err := s.runtime.Create(ctx, ports.RuntimeConfig{
-		SessionID:               domain.SessionID(handleID),
-		WorkspacePath:           in.workingDir,
-		Argv:                    in.argv,
-		Env:                     in.env,
-		ExitOnCommandCompletion: in.exitOnCommandCompletion,
+		SessionID:     domain.SessionID(handleID),
+		WorkspacePath: cfg.workingDir,
+		Argv:          cfg.argv,
+		Env:           cfg.env,
+		// A user shell's exit is final, just like a trusted command's exit.
+		// Durability across app launches is a separate persistence policy.
+		ExitOnCommandCompletion: true,
+		StartOnAttach:           cfg.startOnAttach,
+		// Only agent terminals are probed for their rendered screen.
+		LazyStyledOutput: true,
 	})
 	if err != nil {
-		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: runtime: %w", handleID, err)
+		if cfg.cleanupWorkingDirOnError {
+			s.cleanupAuthWorkspace(cfg.workingDir, handleID)
+		}
+		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: runtime: %w", handleID, agentlaunch.RedactError(err, cfg.projectEnv))
 	}
 
 	rec := ShellTerminalRecord{
@@ -286,24 +641,27 @@ func (s *Service) openTerminal(ctx context.Context, in openTerminalInput) (Shell
 		// The resolved project, not the requested one: a session-scoped open
 		// that named no project still belongs to the session's project, and
 		// persisting "" there would leave the row unattributable on the board.
-		ProjectID:  in.projectID,
-		SessionID:  in.sessionID,
-		WorkingDir: in.workingDir,
-		Title:      in.title,
-		AppRunID:   s.appRunID,
-		CreatedAt:  s.now().UTC(),
+		ProjectID:                 cfg.projectID,
+		SessionID:                 cfg.sessionID,
+		WorkingDir:                cfg.workingDir,
+		Title:                     cfg.title,
+		AppRunID:                  s.appRunID,
+		Transient:                 cfg.transient,
+		CreatedAt:                 createdAt,
+		PreviewCapabilityVerifier: cfg.previewVerifier,
 	}
 	if err := s.store.InsertShellTerminal(ctx, rec); err != nil {
-		// Roll back the PTY: an unrecorded runtime would never be reaped,
-		// leaking a tmux session / pty-host for the life of the machine.
-		if destroyErr := s.runtime.Destroy(context.WithoutCancel(ctx), handle); destroyErr != nil {
-			s.log.Warn("shell terminal rollback failed; runtime may be orphaned",
-				"handleId", handle.ID, "error", destroyErr)
+		stillAlive, destroyErr := s.destroyRuntimeConfirmed(context.WithoutCancel(ctx), handle)
+		if stillAlive {
+			destroyErr = agentlaunch.RedactError(destroyErr, cfg.projectEnv)
+			s.log.Warn("shell terminal rollback failed; retaining workspace for live runtime",
+				"handleId", handle.ID, "workingDir", cfg.workingDir, "error", destroyErr)
+		} else if cfg.cleanupWorkingDirOnError {
+			s.cleanupAuthWorkspace(cfg.workingDir, handle.ID)
 		}
 		return ShellTerminal{}, fmt.Errorf("open shell terminal %s: persist: %w", handle.ID, err)
 	}
-
-	s.log.Info("shell terminal opened", "handleId", handle.ID, "workingDir", in.workingDir)
+	s.log.Info("shell terminal opened", "handleId", handle.ID, "workingDir", cfg.workingDir)
 	return shellTerminalFromRecord(rec), nil
 }
 
@@ -330,6 +688,28 @@ func nextShellTerminalTitle(terminals []ShellTerminalRecord) string {
 // maxShellTerminalTitleLen bounds a user-supplied tab name. Tabs are truncated
 // in the UI anyway; this only stops an unbounded string reaching the DB.
 const maxShellTerminalTitleLen = 80
+
+func validateOpenCommandTerminalInput(in OpenCommandTerminalInput) error {
+	if len(in.Argv) == 0 {
+		return apierr.Invalid("SHELL_TERMINAL_COMMAND_REQUIRED", "A shell terminal command is required", nil)
+	}
+	if strings.TrimSpace(in.Title) == "" {
+		return apierr.Invalid("SHELL_TERMINAL_TITLE_REQUIRED", "A shell terminal title is required", nil)
+	}
+	if utf8.RuneCountInString(in.Title) > maxShellTerminalTitleLen {
+		return apierr.Invalid("SHELL_TERMINAL_TITLE_TOO_LONG",
+			fmt.Sprintf("A shell terminal title must be at most %d characters", maxShellTerminalTitleLen), nil)
+	}
+	if in.InitialInput != "" && len(in.InitialInputReadyStates) == 0 {
+		return apierr.Invalid("SHELL_TERMINAL_INITIAL_INPUT_READY_TEXT_REQUIRED", "A reviewed readiness marker is required for automatic terminal input", nil)
+	}
+	for _, state := range in.InitialInputReadyStates {
+		if strings.TrimSpace(state.Text) == "" {
+			return apierr.Invalid("SHELL_TERMINAL_INITIAL_INPUT_READY_TEXT_REQUIRED", "A reviewed readiness marker is required for automatic terminal input", nil)
+		}
+	}
+	return nil
+}
 
 // RenameShellTerminal sets a shell terminal's tab title. The title is trimmed
 // and must be non-empty and within the length bound; an unknown handle is a 404.
@@ -390,7 +770,7 @@ func (s *Service) CloseShellTerminal(ctx context.Context, handleID string) error
 		defer release()
 	}
 
-	stillAlive, destroyErr := s.destroyConfirmed(ctx, handleID)
+	stillAlive, destroyErr := s.destroyConfirmed(ctx, rec)
 	if stillAlive {
 		s.log.Warn("close shell terminal: runtime still alive after destroy", "handleId", handleID, "error", destroyErr)
 		return apierr.Conflict("SHELL_TERMINAL_STILL_RUNNING",
@@ -399,22 +779,23 @@ func (s *Service) CloseShellTerminal(ctx context.Context, handleID string) error
 	return nil
 }
 
-// ListShellTerminalsForCurrentAppRun returns the shells the running app owns,
-// dropping any whose PTY has died (the user typed `exit`, or the machine
-// rebooted out from under a persisted row). Dead rows are deleted as they are
-// found, so the list the UI renders only ever contains attachable panes.
+// ListShellTerminalsForCurrentAppRun returns durable shells from every launch
+// plus the current launch's trusted auth terminals,
+// closing any whose child exited (the user typed `exit`, or the machine
+// rebooted out from under a persisted row). Retained hosts are destroyed before
+// their rows are removed; failed cleanup keeps the row available for retry.
 //
 // A liveness probe that ERRORS is not treated as proof of death — the same rule
 // internal/terminal applies on attach — so a transient runtime hiccup cannot
 // silently delete a working terminal.
 func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]ShellTerminal, error) {
-	recs, err := s.store.SelectShellTerminalsByAppRunID(ctx, s.appRunID)
+	recs, err := s.store.SelectRestorableShellTerminals(ctx, s.appRunID)
 	if err != nil {
 		return nil, fmt.Errorf("list shell terminals: %w", err)
 	}
 	out := make([]ShellTerminal, 0, len(recs))
 	for _, rec := range recs {
-		alive, err := s.runtime.IsAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
+		alive, err := s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
 		if err != nil {
 			s.log.Warn("shell terminal liveness probe failed; keeping row",
 				"handleId", rec.HandleID, "error", err)
@@ -422,8 +803,11 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 			continue
 		}
 		if !alive {
-			if _, delErr := s.store.DeleteShellTerminalByHandleID(ctx, rec.HandleID); delErr != nil {
-				s.log.Warn("pruning dead shell terminal failed", "handleId", rec.HandleID, "error", delErr)
+			// Native hosts retain scrollback after child exit. Tear down that
+			// host before forgetting its row; preserve failures for retry.
+			if stillAlive, destroyErr := s.destroyConfirmed(ctx, rec); stillAlive {
+				s.log.Warn("pruning exited shell terminal: runtime survived cleanup", "handleId", rec.HandleID, "error", destroyErr)
+				out = append(out, shellTerminalFromRecord(rec))
 			}
 			continue
 		}
@@ -432,17 +816,9 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 	return out, nil
 }
 
-// ReapShellTerminalsFromPreviousAppRuns destroys shells left behind by an
-// earlier app run and returns how many rows it cleared. This is the half of the
-// lifetime rule the clean shutdown path cannot cover: when the app crashes or
-// is force-killed, nothing gets to close its terminals, so they are swept here
-// on the next boot instead of leaking forever.
-//
-// Runtime teardown is per-handle and confirmed-dead (see destroyConfirmed): one
-// un-destroyable, still-alive PTY does not stop the rest from being reaped, but
-// its own row is deliberately kept rather than blindly wiped — a boot-time
-// reconciliation pass reading this session's shells later must still be able
-// to see it before removing the worktree it points at.
+// ReapShellTerminalsFromPreviousAppRuns prunes confirmed-dead user shells and
+// destroys abandoned trusted auth terminals. Live or unknown user runtimes
+// are preserved with their original associations and attach handles.
 func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (int64, error) {
 	orphans, err := s.store.SelectShellTerminalsFromPreviousAppRuns(ctx, s.appRunID)
 	if err != nil {
@@ -450,7 +826,17 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 	}
 	var cleared int64
 	for _, rec := range orphans {
-		stillAlive, destroyErr := s.destroyConfirmed(ctx, rec.HandleID)
+		if !rec.Transient {
+			alive, probeErr := s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
+			if probeErr != nil {
+				s.log.Warn("shell terminal liveness probe failed; keeping row", "handleId", rec.HandleID, "error", probeErr)
+				continue
+			}
+			if alive {
+				continue
+			}
+		}
+		stillAlive, destroyErr := s.destroyConfirmed(ctx, rec)
 		if stillAlive {
 			s.log.Warn("reaping orphaned shell terminal: runtime still alive after destroy",
 				"handleId", rec.HandleID, "appRunId", rec.AppRunID, "error", destroyErr)
@@ -464,9 +850,9 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 	return cleared, nil
 }
 
-// destroyConfirmed is the one place a shell terminal's row is allowed to
-// disappear: it destroys the runtime behind handleID and deletes the row only
-// once death is confirmed, so CloseShellTerminal, ReapShellTerminalsFromPreviousAppRuns,
+// destroyConfirmed handles explicit teardown and confirmed child exit. It
+// destroys the runtime and deletes the row only once host death is confirmed,
+// so CloseShellTerminal, ReapShellTerminalsFromPreviousAppRuns,
 // and BeginSessionTeardown can't each independently forget a shell that
 // actually survived.
 //
@@ -479,18 +865,47 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 // could not be confirmed. Callers that need 404-for-unknown-handle semantics
 // (CloseShellTerminal) look the row up themselves beforehand — by the time
 // destroyConfirmed runs, the handle is already known to exist.
-func (s *Service) destroyConfirmed(ctx context.Context, handleID string) (stillAlive bool, destroyErr error) {
-	destroyErr = s.runtime.Destroy(ctx, ports.RuntimeHandle{ID: handleID})
-	if destroyErr != nil {
-		alive, aliveErr := s.runtime.IsAlive(ctx, ports.RuntimeHandle{ID: handleID})
-		if aliveErr != nil || alive {
-			return true, destroyErr
-		}
+func (s *Service) destroyConfirmed(ctx context.Context, rec ShellTerminalRecord) (stillAlive bool, destroyErr error) {
+	handleID := rec.HandleID
+	stillAlive, destroyErr = s.destroyRuntimeConfirmed(ctx, ports.RuntimeHandle{ID: handleID})
+	if stillAlive {
+		return true, destroyErr
 	}
-	if _, err := s.store.DeleteShellTerminalByHandleID(ctx, handleID); err != nil {
+	if deleted, err := s.store.DeleteShellTerminalByHandleID(ctx, handleID); err != nil {
 		s.log.Warn("shell terminal: delete row after destroy failed", "handleId", handleID, "error", err)
+	} else if deleted {
+		s.cleanupAuthWorkspace(rec.WorkingDir, rec.HandleID)
 	}
 	return false, nil
+}
+
+func (s *Service) destroyRuntimeConfirmed(ctx context.Context, handle ports.RuntimeHandle) (stillAlive bool, destroyErr error) {
+	destroyErr = s.runtime.Destroy(ctx, handle)
+	if destroyErr == nil {
+		return false, nil
+	}
+	alive, aliveErr := s.runtime.IsAlive(ctx, handle)
+	if aliveErr != nil || alive {
+		return true, destroyErr
+	}
+	return false, destroyErr
+}
+
+func (s *Service) cleanupAuthWorkspace(workingDir, handleID string) {
+	root := filepath.Clean(filepath.Join(s.dataDir, authWorkspaceDirectoryName))
+	rel, err := filepath.Rel(root, filepath.Clean(workingDir))
+	if err != nil || !strings.HasPrefix(rel, "shellterm-") || filepath.IsAbs(rel) || filepath.Dir(rel) != "." {
+		return
+	}
+	// Runtime handles are opaque and some adapters wrap the requested launch
+	// id (for example ptyhost-v1:shellterm-* on macOS). Only delete the direct
+	// child whose generated id is the complete handle or its final component.
+	if handleID != rel && !strings.HasSuffix(handleID, ":"+rel) {
+		return
+	}
+	if err := os.RemoveAll(workingDir); err != nil {
+		s.log.Warn("shell terminal: remove private auth workspace failed", "workingDir", workingDir, "error", err)
+	}
 }
 
 // BeginSessionTeardown drains every shell terminal scoped to a session and
@@ -529,7 +944,7 @@ func (s *Service) BeginSessionTeardown(ctx context.Context, sessionID domain.Ses
 
 	var stillAlive []error
 	for _, rec := range recs {
-		alive, destroyErr := s.destroyConfirmed(ctx, rec.HandleID)
+		alive, destroyErr := s.destroyConfirmed(ctx, rec)
 		if alive {
 			s.log.Warn("close shell terminal for session: runtime still alive after destroy",
 				"sessionID", sessionID, "handleId", rec.HandleID, "error", destroyErr)
@@ -563,9 +978,10 @@ func (s *Service) resolveShellTerminalWorkingDir(ctx context.Context, projectID 
 		if err != nil {
 			return "", "", fmt.Errorf("open shell terminal: resolve session %s: %w", sessionID, err)
 		}
-		if sessionProjectID != "" {
-			projectID = sessionProjectID
-		}
+		// The session is authoritative even when it is standalone. Keeping a
+		// caller-supplied UI sentinel here would violate shell_terminals'
+		// project foreign key after the PTY has already been created.
+		projectID = sessionProjectID
 		if workspacePath != "" {
 			return workspacePath, projectID, nil
 		}

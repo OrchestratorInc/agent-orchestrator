@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -18,11 +19,48 @@ import (
 const (
 	maxOutstandingWorkerRequests    = 10
 	maxOutstandingWorkspaceRequests = 6
-	maxTerminalOutputBytes          = 4 << 20
+	maxActiveTerminalSessions       = 8
+	// terminalOutputRetainBytes bounds the durable replay log kept for one
+	// terminal. Output past it prunes the oldest frames rather than failing
+	// the terminal: replay is best effort and must never stop live output.
+	terminalOutputRetainBytes = 8 << 20
+	// terminalOutputPruneBytes is what a prune keeps, so a busy terminal
+	// prunes once per couple of MiB instead of on every frame.
+	terminalOutputPruneBytes = 6 << 20
 	// interactiveSessionLease prevents the idle scanner from pausing a sandbox
-	// while a user is connecting to either terminal surface.
+	// while an explicit resume or fresh terminal input is still active.
 	interactiveSessionLease = 2 * time.Minute
+	// unconsumedTicketThreshold is the number of unconsumed tickets minted in
+	// the last interactiveSessionLease window above which we stop refreshing
+	// the sandbox's interactive lease. A broken client that loops minting
+	// tickets but never opening a WebSocket would otherwise keep a sandbox
+	// awake — and billed — indefinitely.
+	unconsumedTicketThreshold = 10
+	// interactionRefreshThrottle bounds how often active terminal input rewrites
+	// the interactive lease. Within one lease window the lease is refreshed at
+	// most once per (interactiveSessionLease - interactionRefreshThrottle), so a
+	// fast typist does not rewrite ao_sandboxes on every keystroke.
+	interactionRefreshThrottle = 30 * time.Second
 )
+
+// isWorkspaceWriteKind reports whether a request kind mutates workspace files
+// and must therefore be gated by the viewer-role and read-only-session checks.
+// The review file-write endpoint dispatches "workspace.review.write", so it has
+// to be covered here too; otherwise a viewer-role member or a read-only session
+// could overwrite files through the review write path while the legacy
+// "workspace.write" path is correctly refused.
+func isWorkspaceWriteKind(kind string) bool {
+	return kind == "workspace.write" || kind == "workspace.review.write"
+}
+
+// isWorkspaceOperateKind reports whether a request kind changes the session,
+// so a viewer may not make it: the file writes, and "workspace.checkout",
+// the Retry that checks the workspace out again and reruns its Setup scripts.
+// A read-only session's owner still retries, so read-only mode gates only the
+// writes.
+func isWorkspaceOperateKind(kind string) bool {
+	return isWorkspaceWriteKind(kind) || kind == "workspace.checkout"
+}
 
 func (s *Store) CreateWorkspaceRequest(
 	ctx context.Context,
@@ -33,7 +71,7 @@ func (s *Store) CreateWorkspaceRequest(
 ) (domain.WorkerRequest, error) {
 	var request domain.WorkerRequest
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
-		if access.Role == "viewer" && kind == "workspace.write" {
+		if access.Role == "viewer" && isWorkspaceOperateKind(kind) {
 			return ErrForbidden
 		}
 		var err error
@@ -78,7 +116,7 @@ func createWorkerRequest(
 	if terminated {
 		return domain.WorkerRequest{}, ErrWorkerUnavailable
 	}
-	if kind == "workspace.write" && effectiveMode(mode, modeCap) == "read-only" {
+	if isWorkspaceWriteKind(kind) && effectiveMode(mode, modeCap) == "read-only" {
 		return domain.WorkerRequest{}, ErrWorkspaceReadOnly
 	}
 	var outstanding int
@@ -109,7 +147,15 @@ func createWorkerRequest(
 			response, error_code, error_message, attempt_count, expires_at`,
 		orgID, sessionID, epoch, kind, payload, intervalString(ttl),
 	), &request)
-	return request, normalizeConstraintError(err)
+	if err != nil {
+		return request, normalizeConstraintError(err)
+	}
+	// Wake a worker blocked in WaitForWork so it claims this request without
+	// busy-polling. Delivered on commit; the durable queue stays authoritative.
+	if _, err := tx.Exec(ctx, `SELECT pg_notify('ao_worker_work', $1)`, sessionID); err != nil {
+		return request, err
+	}
+	return request, nil
 }
 
 func (s *Store) GetWorkspaceRequest(
@@ -157,6 +203,12 @@ func (s *Store) CancelWorkspaceRequest(
 	})
 }
 
+// ClaimWorkerRequest claims the session's next worker request for lease. A
+// claim whose lease lapses is claimed again, up to three attempts, so a
+// request that legitimately runs longer gets a lease that covers it: a Chat
+// steer, and a model catalog, whose discovery may take its whole 20 s budget
+// on a cold worker and would otherwise be claimed again (another discovery)
+// and then failed before the control plane stops waiting.
 func (s *Store) ClaimWorkerRequest(
 	ctx context.Context,
 	orgID, sessionID, workerID string,
@@ -199,7 +251,7 @@ func (s *Store) ClaimWorkerRequest(
 			UPDATE ao_worker_requests request
 			SET status = 'claimed',
 				attempt_count = request.attempt_count + 1,
-				lease_until = now() + $4::interval,
+				lease_until = now() + CASE WHEN request.kind IN ('chat.steer', 'chat.models') THEN interval '30 seconds' ELSE $4::interval END,
 				updated_at = now()
 			FROM candidate
 			WHERE request.id = candidate.id
@@ -210,17 +262,29 @@ func (s *Store) ClaimWorkerRequest(
 			orgID, sessionID, epoch, intervalString(lease),
 		), &request)
 		if errors.Is(err, pgx.ErrNoRows) {
-			_, cleanupErr := tx.Exec(ctx,
-				`UPDATE ao_worker_requests
-				SET status = 'failed', error_code = 'TRANSPORT_TIMEOUT',
-					error_message = 'The worker request expired before completion.',
-					completed_at = now(), updated_at = now()
-				WHERE org_id = $1 AND session_id = $2 AND worker_epoch = $3
-				  AND status IN ('pending', 'claimed')
-				  AND (expires_at <= now() OR attempt_count >= 3)`,
+			var failedInputID string
+			cleanupErr := tx.QueryRow(ctx,
+				`WITH expired AS (
+					UPDATE ao_worker_requests
+					SET status = 'failed', error_code = 'TRANSPORT_TIMEOUT',
+						error_message = 'The worker request expired before completion.',
+						completed_at = now(), updated_at = now()
+					WHERE org_id = $1 AND session_id = $2 AND worker_epoch = $3
+					  AND status IN ('pending', 'claimed')
+					  AND (expires_at <= now() OR attempt_count >= 3)
+					RETURNING id, kind, created_at
+				)
+				SELECT id FROM expired WHERE kind = 'terminal.input'
+				ORDER BY created_at DESC, id DESC LIMIT 1`,
 				orgID, sessionID, epoch,
-			)
-			return cleanupErr
+			).Scan(&failedInputID)
+			if errors.Is(cleanupErr, pgx.ErrNoRows) {
+				return nil
+			}
+			if cleanupErr != nil {
+				return cleanupErr
+			}
+			return settleFailedTerminalInput(ctx, tx, orgID, sessionID, epoch, failedInputID)
 		}
 		if err != nil {
 			return err
@@ -301,7 +365,8 @@ func (s *Store) finishWorkerRequest(
 		}
 		if kind == "terminal.open" {
 			var command struct {
-				TerminalID string `json:"terminalId"`
+				TerminalID  string `json:"terminalId"`
+				ReviewRunID string `json:"reviewRunId"`
 			}
 			if json.Unmarshal(payload, &command) == nil && command.TerminalID != "" {
 				state := "open"
@@ -315,25 +380,204 @@ func (s *Store) finishWorkerRequest(
 					  AND worker_epoch = $6 AND state = 'opening'`,
 					state, message, orgID, sessionID, command.TerminalID, epoch,
 				)
+				if err == nil && status == "failed" && command.ReviewRunID != "" {
+					_, err = failReviewRunTx(ctx, tx, orgID, command.ReviewRunID, sessionID, message)
+					if errors.Is(err, ErrNotFound) {
+						// A cancelled or completed review stays in its terminal state.
+						err = nil
+					}
+				}
 			}
+		}
+		if kind == "chat.steer" {
+			var steer struct {
+				TurnID          string `json:"turnId"`
+				Text            string `json:"text"`
+				ClientMessageID string `json:"clientMessageId"`
+				CommandID       string `json:"commandId"`
+			}
+			if err := json.Unmarshal(payload, &steer); err != nil {
+				return err
+			}
+			commandStatus, eventType := "succeeded", "chat.turn_steered"
+			if status != "succeeded" {
+				commandStatus, eventType = "failed", "chat.turn_steer_failed"
+			}
+			if _, err := tx.Exec(ctx, `UPDATE ao_commands SET status = $1, error_code = $2, error_message = $3, updated_at = now()
+				WHERE org_id = $4 AND session_id = $5 AND id = $6 AND kind = 'turn.steer'`,
+				commandStatus, code, message, orgID, sessionID, steer.CommandID); err != nil {
+				return err
+			}
+			return appendTypedEvent(ctx, tx, orgID, sessionID, eventType, map[string]any{
+				"turnId": steer.TurnID, "text": steer.Text, "clientMessageId": steer.ClientMessageID,
+				"error": message,
+			})
+		}
+		if kind == "terminal.input" && status == "failed" {
+			return settleFailedTerminalInput(ctx, tx, orgID, sessionID, epoch, requestID)
 		}
 		return err
 	})
 }
 
+// An admitted TUI keystroke marks the session active before the worker handles
+// it. If delivery fails, release that optimistic activity only while this
+// request still owns it. An agent hook or a newer prompt replaces that owner.
+func settleFailedTerminalInput(ctx context.Context, tx pgx.Tx, orgID, sessionID string, epoch int64, requestID string) error {
+	_, err := tx.Exec(ctx, `UPDATE ao_sessions session
+		SET activity_state = 'idle',
+			activity_source_request_id = NULL,
+			activity_blocked_tool_name = '',
+			activity_blocked_tool_use_id = '',
+			updated_at = now()
+		FROM ao_worker_requests failed
+		WHERE failed.org_id = $1 AND failed.session_id = $2
+		  AND failed.id = $3 AND failed.worker_epoch = $4
+		  AND failed.kind = 'terminal.input' AND failed.status = 'failed'
+		  AND session.org_id = failed.org_id AND session.id = failed.session_id
+		  AND session.interface = 'tui' AND session.activity_state = 'active'
+		  AND session.is_terminated = false
+		  AND session.activity_source_request_id = failed.id`, orgID, sessionID, requestID, epoch)
+	return err
+}
+
+// A closed TUI is expected while either direction of an interface handoff is
+// in progress. The worker can reopen it after the mode commit, so callers must
+// see worker-unavailable (retryable), not a permanent terminal-exited verdict.
+func agentTerminalExited(terminated, activityExited, terminalClosed, handoffInProgress bool) bool {
+	return terminated || activityExited || (terminalClosed && !handoffInProgress)
+}
+
+func agentTerminalExitVerdict(ctx context.Context, tx pgx.Tx, orgID, sessionID string) (bool, error) {
+	var terminated, activityExited, terminalClosed, handoffInProgress bool
+	err := tx.QueryRow(ctx, `SELECT session.is_terminated, session.activity_state = 'exited',
+		EXISTS (
+			SELECT 1 FROM ao_terminal_sessions terminal
+			WHERE terminal.org_id = session.org_id
+			  AND terminal.session_id = session.id
+			  AND terminal.kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = terminal.org_id
+				  AND review_terminal_run.review_terminal_id = terminal.id
+			)
+			  AND terminal.state IN ('closed', 'failed')
+			  AND NOT EXISTS (
+				SELECT 1 FROM ao_terminal_sessions live
+				WHERE live.org_id = terminal.org_id
+				  AND live.session_id = terminal.session_id
+				  AND live.kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = live.org_id
+				  AND review_terminal_run.review_terminal_id = live.id
+			)
+				  AND live.state IN ('opening', 'open')
+				  AND live.worker_epoch = terminal.worker_epoch
+			  )
+			  AND terminal.worker_epoch = (
+				SELECT MAX(latest.worker_epoch) FROM ao_terminal_sessions latest
+				WHERE latest.org_id = session.org_id
+				  AND latest.session_id = session.id
+				  AND latest.kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = latest.org_id
+				  AND review_terminal_run.review_terminal_id = latest.id
+			)
+			  )
+			  -- Only the newest worker's own agent terminal can prove the agent
+			  -- exited. A replacement worker (a wake, a repair) registers a newer
+			  -- epoch and closes the old epoch's terminals before it has opened
+			  -- its own; that gap means "starting", not "exited", and answering
+			  -- exited there strands the browser behind TERMINAL_SESSION_EXITED.
+			  AND terminal.worker_epoch >= COALESCE((
+				SELECT MAX(connection.epoch) FROM ao_worker_connections connection
+				WHERE connection.org_id = session.org_id
+				  AND connection.session_id = session.id
+			  ), 0)
+		), EXISTS (
+			SELECT 1 FROM ao_interface_transitions transition
+			WHERE transition.org_id = session.org_id
+			  AND transition.session_id = session.id
+			  AND transition.phase NOT IN ('completed', 'failed', 'cancelled')
+		)
+		FROM ao_sessions session
+		WHERE session.org_id = $1 AND session.id = $2`, orgID, sessionID,
+	).Scan(&terminated, &activityExited, &terminalClosed, &handoffInProgress)
+	if err != nil {
+		return false, err
+	}
+	return agentTerminalExited(terminated, activityExited, terminalClosed, handoffInProgress), nil
+}
+
 func (s *Store) IssueTerminalTicket(
 	ctx context.Context,
 	principal domain.Principal,
-	orgID, sessionID, kind string,
+	orgID, sessionID, kind, terminalID string,
 	ttl time.Duration,
 ) (string, []string, error) {
+	// Do this before waking a paused sandbox. A terminated session cannot be
+	// reopened, but a failed terminal row may belong to an older worker epoch:
+	// worker replacement creates a new terminal for the same durable session.
+	// Treating any historical failed terminal as permanent strands the new
+	// worker behind TERMINAL_SESSION_EXITED and leaves the renderer blank.
+	if kind == "agent" && terminalID == "" {
+		var exited bool
+		err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+			var lookupErr error
+			exited, lookupErr = agentTerminalExitVerdict(ctx, tx, orgID, sessionID)
+			return lookupErr
+		})
+		if err != nil {
+			return "", nil, err
+		}
+		if exited {
+			return "", nil, ErrTerminalSessionExited
+		}
+	}
+
 	// Terminal access is an explicit proof of life. Wake an idle-paused sandbox
 	// and reserve a short interaction lease in a committed transaction before
 	// checking worker readiness so the idle scanner cannot immediately undo the
 	// wake while the browser waits for the worker. The browser retries ticket
 	// creation while the reconciler resumes the provider and the worker
 	// heartbeats again.
+	// Count unconsumed tickets minted in the last interactiveSessionLease
+	// window. A legitimate viewer mints ≤1 ticket per connect; a broken
+	// client that loops WebSocket-attach failures produces O(100+) in the
+	// same window. Above the threshold we skip the interactive_until refresh
+	// so the idle scanner can eventually pause — and stop billing — the
+	// sandbox. We still wake a paused sandbox and insert the ticket so the
+	// client receives a normal 201; the suppression is invisible to the
+	// caller and does not block a real viewer whose policy fixes mid-session.
+	var unconsumedRecent int
 	if err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+		return tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM ao_access_tickets
+			WHERE org_id = $1 AND session_id = $2
+			  AND purpose LIKE 'terminal:%'
+			  AND consumed_at IS NULL
+			  AND created_at > now() - $3::interval`,
+			orgID, sessionID, intervalString(interactiveSessionLease),
+		).Scan(&unconsumedRecent)
+	}); err != nil {
+		// Non-fatal: if the count query fails, default to refreshing the
+		// lease (safe path) and let the ticket flow proceed normally.
+		unconsumedRecent = 0
+	}
+	leaseThrottled := unconsumedRecent >= unconsumedTicketThreshold
+	if leaseThrottled {
+		slog.Default().Warn("terminal ticket lease suppressed: too many unconsumed tickets",
+			"org_id", orgID,
+			"session_id", sessionID,
+			"unconsumed_count", unconsumedRecent,
+			"threshold", unconsumedTicketThreshold,
+		)
+	}
+	if err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		// Waking a paused billed session is within the plan only. An unbilled
+		// (Coder, Docker) or running session returns before any lock.
+		if err := s.billing.forAccess(principal, access, orgID).wakeAdmissionTx(ctx, tx, orgID, sessionID, wakeFromPaused); err != nil {
+			return err
+		}
 		_, err := tx.Exec(ctx,
 			`UPDATE ao_sandboxes
 			SET desired_state = CASE WHEN desired_state = 'paused' THEN 'running' ELSE desired_state END,
@@ -343,13 +587,15 @@ func (s *Store) IssueTerminalTicket(
 					ELSE startup_started_at
 				END,
 				interactive_until = CASE
-					WHEN interactive_until IS NULL OR interactive_until < now() + $3::interval
-						THEN now() + $3::interval
+					WHEN $3 THEN interactive_until
+					WHEN interactive_until IS NULL OR interactive_until < now() + $4::interval
+						THEN now() + $4::interval
 					ELSE interactive_until
 				END,
+				last_interaction_at = CASE WHEN $3 THEN last_interaction_at ELSE now() END,
 				updated_at = now()
 			WHERE org_id = $1 AND session_id = $2`,
-			orgID, sessionID, intervalString(interactiveSessionLease),
+			orgID, sessionID, leaseThrottled, intervalString(interactiveSessionLease),
 		)
 		return err
 	}); err != nil {
@@ -379,17 +625,78 @@ func (s *Store) IssueTerminalTicket(
 			  ON worker.org_id = session.org_id
 			 AND worker.session_id = session.id
 			 AND worker.disconnected_at IS NULL
-			 AND worker.ready_at IS NOT NULL
 			WHERE session.org_id = $1 AND session.id = $2
-			  AND sandbox.desired_state = 'running'
-			  AND sandbox.observed_state = 'running'`,
+			  AND sandbox.desired_state = 'running'`,
 			orgID, sessionID,
 		).Scan(&epoch, &mode, &terminated, &deniedCommands)
 		if errors.Is(err, pgx.ErrNoRows) || terminated {
+			// A missing worker is normally a transient provisioning condition. For
+			// the coding-agent terminal, however, a completed terminal is durable
+			// evidence that retrying cannot reconnect it. Preserve the distinction
+			// so the browser does not spin on "Connecting…" forever.
+			if kind == "agent" {
+				exited, lookupErr := agentTerminalExitVerdict(ctx, tx, orgID, sessionID)
+				if lookupErr != nil && !errors.Is(lookupErr, pgx.ErrNoRows) {
+					return lookupErr
+				}
+				if exited {
+					return ErrTerminalSessionExited
+				}
+			}
 			return ErrWorkerUnavailable
 		}
 		if err != nil {
 			return err
+		}
+		// The worker connection registers on bootstrap, but the coding agent only
+		// starts after the repository checkout (tens of seconds later), and the
+		// worker creates the agent terminal (EnsureWorkerAgentTerminal, state
+		// 'open') at that point. Issuing a browser agent ticket on worker-connection
+		// alone lets the browser attach and find-or-create an agent terminal that no
+		// agent is serving; it then times out to 'failed' and poisons the next mint
+		// as a 410. Gate the agent ticket on an already-live agent terminal at this
+		// epoch: until the worker has started the agent, report the worker as merely
+		// unavailable (409) so the browser keeps waiting on "Connecting" instead.
+		// The workspace shell terminal is deliberately available earlier, so this
+		// only applies to kind == "agent".
+		if kind == "agent" {
+			if terminalID != "" {
+				var exists bool
+				if err := tx.QueryRow(ctx,
+					`SELECT EXISTS (
+						SELECT 1 FROM ao_terminal_sessions
+						WHERE org_id = $1 AND session_id = $2 AND id = $3
+						  AND worker_epoch = $4 AND kind = $5
+						  AND state IN ('opening', 'open') AND expires_at > now()
+					)`,
+					orgID, sessionID, terminalID, epoch, kind,
+				).Scan(&exists); err != nil {
+					return err
+				}
+				if !exists {
+					return ErrWorkerUnavailable
+				}
+			} else {
+				var agentTerminalLive bool
+				if err := tx.QueryRow(ctx,
+					`SELECT EXISTS (
+						SELECT 1 FROM ao_terminal_sessions
+						WHERE org_id = $1 AND session_id = $2 AND worker_epoch = $3
+						  AND kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = ao_terminal_sessions.org_id
+				  AND review_terminal_run.review_terminal_id = ao_terminal_sessions.id
+			) AND state IN ('opening', 'open')
+						  AND expires_at > now()
+					)`,
+					orgID, sessionID, epoch,
+				).Scan(&agentTerminalLive); err != nil {
+					return err
+				}
+				if !agentTerminalLive {
+					return ErrWorkerUnavailable
+				}
+			}
 		}
 		mode = effectiveMode(mode, access.ModeCap)
 		deniedCommands = effectiveDeniedCommands(deniedCommands, access.DeniedCommands)
@@ -406,9 +713,9 @@ func (s *Store) IssueTerminalTicket(
 		}
 		_, err = tx.Exec(ctx,
 			`INSERT INTO ao_access_tickets (
-				org_id, session_id, purpose, scopes, token_hash, worker_epoch, expires_at
-			) VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval)`,
-			orgID, sessionID, "terminal:"+kind, scopes, hash[:], epoch, intervalString(ttl),
+				org_id, session_id, purpose, scopes, token_hash, worker_epoch, expires_at, user_id
+			) VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval, NULLIF($8, '')::uuid)`,
+			orgID, sessionID, terminalTicketPurpose(kind, terminalID), scopes, hash[:], epoch, intervalString(ttl), principal.UserID,
 		)
 		return err
 	})
@@ -418,27 +725,69 @@ func (s *Store) IssueTerminalTicket(
 	return token, scopes, nil
 }
 
-// RefreshTerminalInteraction extends the short wake lease for a visible
-// workspace terminal. Agent streams are retained in the browser for output
-// continuity, so they deliberately do not prevent normal idle pause.
+// AgentTerminalLive reports whether the session's coding-agent terminal is
+// open at the connected worker's epoch: the condition IssueTerminalTicket
+// waits for before minting an agent ticket. It is read-only, so the ticket
+// handler can poll it cheaply while the agent starts.
+func (s *Store) AgentTerminalLive(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+) (bool, error) {
+	var live bool
+	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+		return tx.QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1
+				FROM ao_sessions session
+				JOIN ao_sandboxes sandbox
+				  ON sandbox.org_id = session.org_id
+				 AND sandbox.session_id = session.id
+				JOIN ao_worker_connections worker
+				  ON worker.org_id = session.org_id
+				 AND worker.session_id = session.id
+				 AND worker.disconnected_at IS NULL
+				JOIN ao_terminal_sessions terminal
+				  ON terminal.org_id = session.org_id
+				 AND terminal.session_id = session.id
+				 AND terminal.worker_epoch = worker.epoch
+				WHERE session.org_id = $1 AND session.id = $2
+				  AND NOT session.is_terminated
+				  AND sandbox.desired_state = 'running'
+				  AND terminal.kind = 'agent'
+				  AND terminal.state IN ('opening', 'open')
+				  AND terminal.expires_at > now()
+				  AND NOT EXISTS (
+					SELECT 1 FROM ao_review_runs review_terminal_run
+					WHERE review_terminal_run.org_id = terminal.org_id
+					  AND review_terminal_run.review_terminal_id = terminal.id
+				  )
+			)`,
+			orgID, sessionID,
+		).Scan(&live)
+	})
+	return live, err
+}
+
+// RefreshTerminalInteraction extends the short wake lease after actual user
+// input. Merely opening or retaining either terminal stream is not activity.
 func (s *Store) RefreshTerminalInteraction(
 	ctx context.Context,
 	terminal domain.TerminalSession,
 	ttl time.Duration,
 ) error {
-	if terminal.Kind != "workspace" {
-		return nil
-	}
 	return s.withOrg(ctx, terminal.OrgID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx,
 			`UPDATE ao_sandboxes
-			SET interactive_until = now() + $1::interval, updated_at = now()
+			SET interactive_until = now() + $1::interval,
+				last_interaction_at = now(),
+				reconcile_after = now(), updated_at = now()
 			WHERE org_id = $2 AND session_id = $3
 			  AND desired_state = 'running'
 			  AND EXISTS (
 				SELECT 1 FROM ao_terminal_sessions
 				WHERE org_id = $2 AND session_id = $3 AND id = $4
-				  AND worker_epoch = $5 AND kind = 'workspace'
+				  AND worker_epoch = $5
 				  AND state IN ('opening', 'open') AND expires_at > now()
 			  )`,
 			intervalString(ttl), terminal.OrgID, terminal.SessionID,
@@ -452,6 +801,23 @@ func (s *Store) RefreshTerminalInteraction(
 		}
 		return nil
 	})
+}
+
+// lockAgentTerminal serializes agent-terminal find-or-create for one
+// (org, session, worker epoch) tuple. The browser's OpenTerminal(agent) and the
+// worker's EnsureWorkerAgentTerminal are both find-or-create on the same tuple;
+// under Read Committed, two concurrent transactions could each see no existing
+// row and both insert, yielding two agent terminal rows for one epoch — and the
+// worker would then spawn a second interactive agent for the extra row. The
+// transaction-scoped advisory lock makes the pair mutually exclusive, so they
+// always converge on a single row (the loser reuses the winner's). Keyed off a
+// per-epoch string; released automatically at commit/rollback.
+func lockAgentTerminal(ctx context.Context, tx pgx.Tx, orgID, sessionID string, epoch int64) error {
+	_, err := tx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		fmt.Sprintf("ao-agent-terminal:%s:%s:%d", orgID, sessionID, epoch),
+	)
+	return err
 }
 
 func (s *Store) EnsureWorkerAgentTerminal(
@@ -474,20 +840,56 @@ func (s *Store) EnsureWorkerAgentTerminal(
 		if !current {
 			return ErrStaleWorker
 		}
+		if err := lockAgentTerminal(ctx, tx, orgID, sessionID, epoch); err != nil {
+			return err
+		}
 		err = tx.QueryRow(ctx,
 			`UPDATE ao_terminal_sessions
 			SET expires_at = now() + $1::interval, updated_at = now()
 			WHERE id = (
 				SELECT id FROM ao_terminal_sessions
 				WHERE org_id = $2 AND session_id = $3 AND worker_epoch = $4
-				  AND kind = 'agent' AND state IN ('opening', 'open')
+				  AND kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = ao_terminal_sessions.org_id
+				  AND review_terminal_run.review_terminal_id = ao_terminal_sessions.id
+			) AND state IN ('opening', 'open')
 				  AND expires_at > now()
 				ORDER BY created_at DESC
 				LIMIT 1
 			)
-			RETURNING id, state, expires_at`,
+			RETURNING id, state, expires_at, next_output_sequence`,
 			intervalString(ttl), orgID, sessionID, epoch,
-		).Scan(&terminal.ID, &terminal.State, &terminal.ExpiresAt)
+		).Scan(&terminal.ID, &terminal.State, &terminal.ExpiresAt, &terminal.NextOutputSequence)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		// An interface handoff closes the PTY but not the session's terminal
+		// history. Reopen the most recent closed agent terminal instead of
+		// creating a new stream, so the TUI can replay the same scrollback after
+		// ChatUI hands ownership back. Failed terminals are deliberately not
+		// reused; a fresh stream is safer after an actual process failure.
+		err = tx.QueryRow(ctx,
+			`UPDATE ao_terminal_sessions
+			SET worker_epoch = $1, state = 'open', error_message = '',
+				closed_at = NULL, expires_at = now() + $2::interval, updated_at = now()
+			WHERE id = (
+				SELECT id FROM ao_terminal_sessions
+				WHERE org_id = $3 AND session_id = $4
+				  AND kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = ao_terminal_sessions.org_id
+				  AND review_terminal_run.review_terminal_id = ao_terminal_sessions.id
+			) AND state = 'closed'
+				ORDER BY created_at DESC
+				LIMIT 1
+			)
+			RETURNING id, state, expires_at, next_output_sequence`,
+			epoch, intervalString(ttl), orgID, sessionID,
+		).Scan(&terminal.ID, &terminal.State, &terminal.ExpiresAt, &terminal.NextOutputSequence)
 		if err == nil {
 			return nil
 		}
@@ -498,16 +900,16 @@ func (s *Store) EnsureWorkerAgentTerminal(
 			`INSERT INTO ao_terminal_sessions (
 				org_id, session_id, worker_epoch, kind, state, expires_at
 			) VALUES ($1, $2, $3, 'agent', 'open', now() + $4::interval)
-			RETURNING id, state, expires_at`,
+			RETURNING id, state, expires_at, next_output_sequence`,
 			orgID, sessionID, epoch, intervalString(ttl),
-		).Scan(&terminal.ID, &terminal.State, &terminal.ExpiresAt)
+		).Scan(&terminal.ID, &terminal.State, &terminal.ExpiresAt, &terminal.NextOutputSequence)
 	})
 	return terminal, err
 }
 
 func (s *Store) OpenTerminal(
 	ctx context.Context,
-	token, kind string,
+	token, kind, terminalID string,
 	ttl time.Duration,
 ) (domain.TerminalSession, error) {
 	hash := sha256.Sum256([]byte(token))
@@ -519,14 +921,14 @@ func (s *Store) OpenTerminal(
 			WHERE token_hash = $1 AND purpose = $2
 			  AND consumed_at IS NULL AND expires_at > now()
 			RETURNING id, org_id, session_id, purpose, scopes,
-				COALESCE(worker_epoch, 0), expires_at`,
-			hash[:], "terminal:"+kind,
+				COALESCE(worker_epoch, 0), expires_at, COALESCE(user_id::text, '')`,
+			hash[:], terminalTicketPurpose(kind, terminalID),
 		).Scan(
 			&ticket.ID, &ticket.OrgID, &ticket.SessionID, &ticket.Purpose,
-			&ticket.Scopes, &ticket.WorkerEpoch, &ticket.ExpiresAt,
+			&ticket.Scopes, &ticket.WorkerEpoch, &ticket.ExpiresAt, &ticket.UserID,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return classifyInvalidTerminalTicket(ctx, tx, hash[:], "terminal:"+kind)
+			return classifyInvalidTerminalTicket(ctx, tx, hash[:], terminalTicketPurpose(kind, terminalID))
 		}
 		return err
 	})
@@ -537,6 +939,7 @@ func (s *Store) OpenTerminal(
 	terminal := domain.TerminalSession{
 		OrgID: ticket.OrgID, SessionID: ticket.SessionID,
 		WorkerEpoch: ticket.WorkerEpoch, Kind: kind, Scopes: ticket.Scopes,
+		UserID: ticket.UserID,
 	}
 	err = s.withOrg(ctx, ticket.OrgID, func(tx pgx.Tx) error {
 		current, err := workerEpochCurrent(
@@ -548,14 +951,42 @@ func (s *Store) OpenTerminal(
 		if !current {
 			return ErrStaleWorker
 		}
+		if kind == "agent" && terminalID != "" {
+			err := tx.QueryRow(ctx,
+				`UPDATE ao_terminal_sessions
+				SET expires_at = now() + $1::interval, updated_at = now()
+				WHERE org_id = $2 AND session_id = $3 AND id = $4
+				  AND worker_epoch = $5 AND kind = 'agent'
+				  AND state IN ('opening', 'open') AND expires_at > now()
+				RETURNING id, state, expires_at`,
+				intervalString(ttl), ticket.OrgID, ticket.SessionID, terminalID, ticket.WorkerEpoch,
+			).Scan(&terminal.ID, &terminal.State, &terminal.ExpiresAt)
+			if err == nil {
+				return nil
+			}
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrWorkerUnavailable
+			}
+			return err
+		}
 		if kind == "agent" {
+			// Serialize against the worker's own EnsureWorkerAgentTerminal so a
+			// browser open that races the worker cannot create a duplicate agent
+			// terminal row for this epoch (which would spawn a second agent).
+			if err := lockAgentTerminal(ctx, tx, ticket.OrgID, ticket.SessionID, ticket.WorkerEpoch); err != nil {
+				return err
+			}
 			err := tx.QueryRow(ctx,
 				`UPDATE ao_terminal_sessions
 				SET expires_at = now() + $1::interval, updated_at = now()
 				WHERE id = (
 					SELECT id FROM ao_terminal_sessions
 					WHERE org_id = $2 AND session_id = $3
-					  AND worker_epoch = $4 AND kind = 'agent'
+					  AND worker_epoch = $4 AND kind = 'agent' AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_terminal_run
+				WHERE review_terminal_run.org_id = ao_terminal_sessions.org_id
+				  AND review_terminal_run.review_terminal_id = ao_terminal_sessions.id
+			)
 					  AND state IN ('opening', 'open') AND expires_at > now()
 					ORDER BY created_at DESC
 					LIMIT 1
@@ -570,7 +1001,7 @@ func (s *Store) OpenTerminal(
 				return err
 			}
 		}
-		if kind == "workspace" || kind == "agent" {
+		if kind == "agent" {
 			var retiredIDs []string
 			if err := tx.QueryRow(ctx,
 				`WITH retired AS (
@@ -578,6 +1009,11 @@ func (s *Store) OpenTerminal(
 					SET state = 'closed', closed_at = now(), updated_at = now()
 					WHERE org_id = $1 AND session_id = $2 AND worker_epoch = $3
 					  AND kind = $4 AND state IN ('opening', 'open')
+					  AND NOT EXISTS (
+						SELECT 1 FROM ao_review_runs review_terminal_run
+						WHERE review_terminal_run.org_id = ao_terminal_sessions.org_id
+						  AND review_terminal_run.review_terminal_id = ao_terminal_sessions.id
+					  )
 					RETURNING id
 				)
 				SELECT COALESCE(array_agg(id::text), ARRAY[]::text[]) FROM retired`,
@@ -617,7 +1053,7 @@ func (s *Store) OpenTerminal(
 		).Scan(&active); err != nil {
 			return err
 		}
-		if active >= 2 {
+		if active >= maxActiveTerminalSessions {
 			return ErrConflict
 		}
 		if err := tx.QueryRow(ctx,
@@ -639,6 +1075,13 @@ func (s *Store) OpenTerminal(
 		return err
 	})
 	return terminal, err
+}
+
+func terminalTicketPurpose(kind, terminalID string) string {
+	if terminalID == "" {
+		return "terminal:" + kind
+	}
+	return "terminal:" + kind + ":" + terminalID
 }
 
 func classifyInvalidTerminalTicket(
@@ -701,6 +1144,25 @@ func (s *Store) QueueTerminalResize(
 	return s.queueTerminalRequest(ctx, terminal, "terminal.resize", "", payload)
 }
 
+// QueueTerminalRepaint asks the worker to make the terminal's program redraw
+// at its current size. It rides the terminal.resize kind (so it needs no new
+// request kind) with no dimensions; a worker that predates repaint rejects the
+// zero size as invalid and leaves the terminal untouched.
+func (s *Store) QueueTerminalRepaint(
+	ctx context.Context,
+	terminal domain.TerminalSession,
+) error {
+	payload, _ := json.Marshal(map[string]any{
+		"terminalId": terminal.ID,
+		"repaint":    true,
+	})
+	return s.queueTerminalRequest(ctx, terminal, "terminal.resize", "", payload)
+}
+
+func agentTerminalInputMarksSessionActive(terminal domain.TerminalSession, kind string) bool {
+	return terminal.Kind == "agent" && kind == "terminal.input"
+}
+
 func (s *Store) queueTerminalRequest(
 	ctx context.Context,
 	terminal domain.TerminalSession,
@@ -709,6 +1171,46 @@ func (s *Store) queueTerminalRequest(
 	payload []byte,
 ) error {
 	return s.withOrg(ctx, terminal.OrgID, func(tx pgx.Tx) error {
+		// Typing or resizing a terminal is active proof of life for BOTH terminal
+		// surfaces (workspace and agent): keep an in-use sandbox awake, and wake a
+		// paused one so the keystroke that arrives after an idle pause resumes the
+		// box instead of being silently dropped. Idle-but-open output streams never
+		// reach here, so they still pause normally. The lease rewrite is throttled
+		// so a fast typist does not rewrite ao_sandboxes on every keystroke. This
+		// mirrors the wake in IssueTerminalTicket for the in-session case where the
+		// box paused underneath an already-open terminal.
+		if kind == "terminal.input" || kind == "terminal.resize" {
+			// A billed session beyond its plan is not woken by a keystroke; it
+			// stays paused (the plan refusal is shown when the terminal is
+			// opened). This runs before anything is inserted, so the plan
+			// check may take the organization lock.
+			wake, err := s.billing.messageWakeTx(ctx, tx, terminal.OrgID, terminal.SessionID, false)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx,
+				`UPDATE ao_sandboxes
+				SET desired_state = CASE WHEN desired_state = 'paused' THEN 'running' ELSE desired_state END,
+					reconcile_after = CASE WHEN desired_state = 'paused' THEN now() ELSE reconcile_after END,
+					startup_started_at = CASE WHEN desired_state = 'paused' THEN now() ELSE startup_started_at END,
+					interactive_until = now() + $3::interval,
+					updated_at = now()
+				WHERE org_id = $1 AND session_id = $2
+				  AND (desired_state = 'running' OR ($5 AND desired_state = 'paused'))
+				  AND (
+					desired_state = 'paused'
+					OR interactive_until IS NULL
+					OR interactive_until < now() + $4::interval
+				  )`,
+				terminal.OrgID, terminal.SessionID,
+				intervalString(interactiveSessionLease),
+				intervalString(interactiveSessionLease-interactionRefreshThrottle),
+				wake,
+			); err != nil {
+				return err
+			}
+		}
+
 		var current bool
 		if err := tx.QueryRow(ctx,
 			`SELECT EXISTS (
@@ -746,11 +1248,101 @@ func (s *Store) queueTerminalRequest(
 				return nil
 			}
 		}
-		_, err := createWorkerRequest(
+		request, err := createWorkerRequest(
 			ctx, tx, terminal.OrgID, terminal.SessionID, kind, payload, 15*time.Second, "",
 		)
-		return err
+		if err != nil {
+			return err
+		}
+		if agentTerminalInputMarksSessionActive(terminal, kind) {
+			// Terminal keystrokes bypass the chat-message path. Record agent
+			// activity in the same transaction as input admission so a prompt
+			// submitted in TUI cannot appear idle to the switch policy UI.
+			if _, err := tx.Exec(ctx, `UPDATE ao_sessions
+				SET activity_state = 'active', activity_source_request_id = $3,
+					updated_at = now()
+				WHERE org_id = $1 AND id = $2 AND interface = 'tui'
+				  AND is_terminated = false`, terminal.OrgID, terminal.SessionID, request.ID); err != nil {
+				return err
+			}
+		}
+		if kind == "terminal.input" {
+			// Wake the replica holding this terminal's worker stream so it can
+			// claim and push the keystroke immediately instead of waiting for
+			// the worker's next transport poll. The queue row above stays the
+			// durable fallback either way.
+			if _, err := tx.Exec(ctx,
+				`SELECT pg_notify('ao_terminal_input', $1)`, terminal.ID,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+}
+
+// ClaimTerminalInput claims the oldest pending terminal.input request for one
+// terminal on behalf of its worker, so a control-plane replica holding the
+// worker's terminal stream can push it down immediately. It uses the same
+// lease semantics as ClaimWorkerRequest, so it never races the worker's own
+// transport poll into a double delivery.
+func (s *Store) ClaimTerminalInput(
+	ctx context.Context,
+	orgID, sessionID, workerID string,
+	epoch int64,
+	terminalID string,
+	lease time.Duration,
+) (domain.WorkerRequest, bool, error) {
+	var request domain.WorkerRequest
+	var found bool
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		current, err := workerConnectionCurrent(ctx, tx, orgID, sessionID, workerID, epoch)
+		if err != nil {
+			return err
+		}
+		if !current {
+			return ErrStaleWorker
+		}
+		err = scanWorkerRequest(tx.QueryRow(ctx,
+			`WITH candidate AS (
+				SELECT id
+				FROM ao_worker_requests
+				WHERE org_id = $1 AND session_id = $2 AND worker_epoch = $3
+				  AND kind = 'terminal.input'
+				  AND payload->>'terminalId' = $4
+				  AND expires_at > now()
+				  AND (
+					status = 'pending'
+					OR (status = 'claimed' AND lease_until < now())
+				  )
+				  AND attempt_count < 3
+				ORDER BY created_at, id
+				FOR UPDATE SKIP LOCKED
+				LIMIT 1
+			)
+			UPDATE ao_worker_requests request
+			SET status = 'claimed',
+				attempt_count = request.attempt_count + 1,
+				lease_until = now() + $5::interval,
+				updated_at = now()
+			FROM candidate
+			WHERE request.id = candidate.id
+			RETURNING request.id, request.org_id, request.session_id,
+				request.worker_epoch, request.kind, request.payload, request.status,
+				request.response, request.error_code, request.error_message,
+				request.attempt_count, request.expires_at`,
+			orgID, sessionID, epoch, terminalID, intervalString(lease),
+		), &request)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		found = true
+		return nil
+	})
+	return request, found, err
 }
 
 func (s *Store) CloseTerminal(ctx context.Context, terminal domain.TerminalSession) error {
@@ -778,6 +1370,11 @@ func (s *Store) CloseTerminal(ctx context.Context, terminal domain.TerminalSessi
 			)`,
 			terminal.OrgID, terminal.SessionID, terminal.WorkerEpoch, payload,
 		)
+		if err != nil {
+			return err
+		}
+		// Wake a worker blocked in WaitForWork so it claims this terminal.close.
+		_, err = tx.Exec(ctx, `SELECT pg_notify('ao_worker_work', $1)`, terminal.SessionID)
 		return err
 	})
 }
@@ -786,6 +1383,38 @@ func (s *Store) AppendTerminalOutput(
 	ctx context.Context,
 	orgID, sessionID, workerID, terminalID string,
 	epoch int64,
+	data []byte,
+) (int64, error) {
+	return s.appendTerminalOutput(ctx, orgID, sessionID, workerID, terminalID, epoch, 0, data)
+}
+
+// AppendTerminalOutputAt persists a relay frame at its worker-assigned,
+// terminal-local cursor. The cursor makes a direct browser frame and a later
+// replay frame refer to the same bytes even if the relay has not finished its
+// background mirror when the browser disconnects.
+//
+// Storage is best effort and idempotent by cursor. A frame below the next
+// cursor is a resend of one already stored (or already skipped) and is
+// acknowledged without a write. A frame above it means frames were lost in
+// transit: it is stored anyway and the cursor moves past it, so one lost frame
+// can never wedge every later one. Readers infer that discontinuity from the
+// gap between stored sequences.
+func (s *Store) AppendTerminalOutputAt(
+	ctx context.Context,
+	orgID, sessionID, workerID, terminalID string,
+	epoch, sequence int64,
+	data []byte,
+) (int64, error) {
+	if sequence <= 0 {
+		return 0, fmt.Errorf("terminal output sequence must be positive")
+	}
+	return s.appendTerminalOutput(ctx, orgID, sessionID, workerID, terminalID, epoch, sequence, data)
+}
+
+func (s *Store) appendTerminalOutput(
+	ctx context.Context,
+	orgID, sessionID, workerID, terminalID string,
+	epoch, workerSequence int64,
 	data []byte,
 ) (int64, error) {
 	var sequence int64
@@ -797,43 +1426,104 @@ func (s *Store) AppendTerminalOutput(
 		if !current {
 			return ErrStaleWorker
 		}
+		var (
+			state   string
+			expired bool
+			next    int64
+		)
 		err = tx.QueryRow(ctx,
-			`UPDATE ao_terminal_sessions
-			SET next_output_sequence = next_output_sequence + 1,
-				output_bytes = output_bytes + $1,
-				updated_at = now()
-			WHERE org_id = $2 AND session_id = $3 AND id = $4
-			  AND worker_epoch = $5 AND state IN ('opening', 'open')
-			  AND expires_at > now()
-			  AND output_bytes + $1 <= $6
-			RETURNING next_output_sequence - 1`,
-			len(data), orgID, sessionID, terminalID, epoch, maxTerminalOutputBytes,
-		).Scan(&sequence)
+			`SELECT state, expires_at <= now(), next_output_sequence
+			FROM ao_terminal_sessions
+			WHERE org_id = $1 AND session_id = $2 AND id = $3
+			  AND worker_epoch = $4
+			FOR UPDATE`,
+			orgID, sessionID, terminalID, epoch,
+		).Scan(&state, &expired, &next)
 		if errors.Is(err, pgx.ErrNoRows) {
-			_, _ = tx.Exec(ctx,
-				`UPDATE ao_terminal_sessions
-				SET state = 'failed',
-					error_message = 'Terminal output exceeded its limit.',
-					closed_at = now(), updated_at = now()
-				WHERE org_id = $1 AND session_id = $2 AND id = $3
-				  AND worker_epoch = $4 AND state IN ('opening', 'open')
-				  AND output_bytes + $5 > $6`,
-				orgID, sessionID, terminalID, epoch, len(data), maxTerminalOutputBytes,
-			)
-			return ErrTransportExpired
+			return ErrTerminalClosed
 		}
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx,
+		if state != "opening" && state != "open" {
+			return ErrTerminalClosed
+		}
+		if expired {
+			return ErrTerminalExpired
+		}
+		sequence = next
+		if workerSequence > 0 {
+			sequence = workerSequence
+			if workerSequence < next {
+				// Already stored, or skipped by a later frame that arrived first.
+				return nil
+			}
+		}
+		var outputBytes int64
+		if err := tx.QueryRow(ctx,
+			`UPDATE ao_terminal_sessions
+			SET next_output_sequence = $1 + 1,
+				output_bytes = output_bytes + $2,
+				updated_at = now()
+			WHERE org_id = $3 AND session_id = $4 AND id = $5
+			RETURNING output_bytes`,
+			sequence, len(data), orgID, sessionID, terminalID,
+		).Scan(&outputBytes); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO ao_terminal_output (
 				terminal_id, org_id, session_id, sequence, data
 			) VALUES ($1, $2, $3, $4, $5)`,
 			terminalID, orgID, sessionID, sequence, data,
-		)
+		); err != nil {
+			return err
+		}
+		if outputBytes > terminalOutputRetainBytes {
+			if err := pruneTerminalOutput(ctx, tx, orgID, sessionID, terminalID); err != nil {
+				return err
+			}
+		}
+		// Wake any control-plane replica streaming this terminal to a client.
+		// Delivered on commit, so subscribers always find the row.
+		_, err = tx.Exec(ctx, `SELECT pg_notify('ao_terminal_output', $1)`, terminalID)
 		return err
 	})
 	return sequence, err
+}
+
+// pruneTerminalOutput drops the oldest stored frames until the newest ones fit
+// terminalOutputPruneBytes, and sets output_bytes to exactly what is retained.
+// A replay that then starts above sequence 1 is how readers learn the head of
+// the log was pruned.
+func pruneTerminalOutput(
+	ctx context.Context,
+	tx pgx.Tx,
+	orgID, sessionID, terminalID string,
+) error {
+	_, err := tx.Exec(ctx,
+		`WITH retained AS (
+			SELECT sequence,
+				sum(octet_length(data)) OVER (ORDER BY sequence DESC) AS newer_bytes
+			FROM ao_terminal_output
+			WHERE org_id = $1 AND session_id = $2 AND terminal_id = $3
+		), pruned AS (
+			DELETE FROM ao_terminal_output output
+			USING retained
+			WHERE output.org_id = $1 AND output.session_id = $2
+			  AND output.terminal_id = $3
+			  AND output.sequence = retained.sequence
+			  AND retained.newer_bytes > $4
+		)
+		UPDATE ao_terminal_sessions
+		SET output_bytes = (
+			SELECT COALESCE(max(newer_bytes), 0) FROM retained
+			WHERE newer_bytes <= $4
+		)
+		WHERE org_id = $1 AND session_id = $2 AND id = $3`,
+		orgID, sessionID, terminalID, terminalOutputPruneBytes,
+	)
+	return err
 }
 
 func (s *Store) MarkTerminalExited(
@@ -841,6 +1531,7 @@ func (s *Store) MarkTerminalExited(
 	orgID, sessionID, workerID, terminalID string,
 	epoch int64,
 	exitCode int,
+	interfaceHandoff bool,
 ) error {
 	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		current, err := workerConnectionCurrent(
@@ -852,12 +1543,7 @@ func (s *Store) MarkTerminalExited(
 		if !current {
 			return ErrStaleWorker
 		}
-		state := "closed"
-		message := ""
-		if exitCode != 0 {
-			state = "failed"
-			message = fmt.Sprintf("Terminal process exited with status %d.", exitCode)
-		}
+		state, message := terminalExitState(exitCode, interfaceHandoff)
 		tag, err := tx.Exec(ctx,
 			`UPDATE ao_terminal_sessions
 			SET state = $1, error_message = $2, closed_at = now(), updated_at = now()
@@ -871,9 +1557,38 @@ func (s *Store) MarkTerminalExited(
 		if tag.RowsAffected() == 0 {
 			return ErrTransportExpired
 		}
+		if interfaceHandoff {
+			return nil
+		}
+		// A dedicated reviewer that exits without submitting a verdict cannot
+		// remain "running": no process is left to complete it and the UI must
+		// allow the user to retry that commit. A normal terminal is not present
+		// in ao_review_runs, so this update leaves the main agent untouched.
+		reviewError := "Reviewer terminal exited before submitting a verdict."
+		if exitCode != 0 {
+			reviewError = fmt.Sprintf("Reviewer terminal exited with status %d before submitting a verdict.", exitCode)
+		}
+		if _, err := tx.Exec(ctx,
+			`WITH failed_runs AS (
+				UPDATE ao_review_runs
+				SET status = 'failed', last_error = $3, completed_at = now()
+				WHERE org_id = $1 AND review_terminal_id = $2
+					AND status = 'running' AND publish_state = 'pending'
+				RETURNING pull_request_id, target_sha
+			)
+			UPDATE ao_pull_requests pull_request
+			SET ao_review_state = 'needs_review', updated_at = now()
+			FROM failed_runs run
+			WHERE pull_request.org_id = $1 AND pull_request.id = run.pull_request_id
+			  AND pull_request.head_sha = run.target_sha`,
+			orgID, terminalID, reviewError,
+		); err != nil {
+			return err
+		}
 		_, err = tx.Exec(ctx,
 			`UPDATE ao_sessions session
 			SET activity_state = 'exited',
+				activity_source_request_id = NULL,
 				activity_blocked_tool_name = '',
 				activity_blocked_tool_use_id = '',
 				updated_at = now()
@@ -883,11 +1598,34 @@ func (s *Store) MarkTerminalExited(
 				WHERE terminal.org_id = session.org_id
 				  AND terminal.session_id = session.id
 				  AND terminal.id = $3 AND terminal.kind = 'agent'
+			  )
+			  -- Reviewer terminals are independent agent processes. Their exit
+			  -- must not tear down the main session's terminal presentation.
+			  AND NOT EXISTS (
+				SELECT 1 FROM ao_review_runs review_run
+				WHERE review_run.org_id = session.org_id
+				  AND review_run.review_terminal_id = $3
 			  )`,
 			orgID, sessionID, terminalID,
 		)
 		return err
 	})
+}
+
+// terminalExitState keeps an intentional interface handoff reusable. Closing
+// a PTY is expected to make the provider process return a non-zero status on
+// some platforms (for example after the controlling terminal is closed), but
+// that is not a failed agent terminal. Marking the row failed would prevent
+// EnsureWorkerAgentTerminal from reopening it and would lose the persisted TUI
+// scrollback when ChatUI hands the same session back to TUI.
+func terminalExitState(exitCode int, interfaceHandoff bool) (string, string) {
+	if interfaceHandoff {
+		return "closed", ""
+	}
+	if exitCode != 0 {
+		return "failed", fmt.Sprintf("Terminal process exited with status %d.", exitCode)
+	}
+	return "closed", ""
 }
 
 func (s *Store) ListTerminalOutput(
@@ -976,4 +1714,81 @@ func scanWorkerRequest(row scanner, request *domain.WorkerRequest) error {
 		&request.ErrorCode, &request.ErrorMessage, &request.Attempt,
 		&request.ExpiresAt,
 	)
+}
+
+// CreateCoordinatedInterfaceRequest enqueues a worker command under service
+// context for the interface-transition coordinator. Unlike the user-facing
+// CreateWorkspaceRequest it does not require a request principal, and it is
+// fenced to the session's current worker epoch on claim. The coordinator owns
+// the result poll, so the call returns the request row immediately.
+func (s *Store) CreateCoordinatedInterfaceRequest(
+	ctx context.Context,
+	orgID, sessionID, kind string,
+	payload json.RawMessage,
+) (domain.WorkerRequest, error) {
+	var request domain.WorkerRequest
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		var epoch int64
+		var terminated bool
+		if err := tx.QueryRow(ctx,
+			`SELECT worker.epoch, session.is_terminated
+			FROM ao_sessions session
+			JOIN ao_worker_connections worker
+			  ON worker.org_id = session.org_id
+			 AND worker.session_id = session.id
+			 AND worker.disconnected_at IS NULL
+			WHERE session.org_id = $1 AND session.id = $2
+			FOR UPDATE OF session`,
+			orgID, sessionID,
+		).Scan(&epoch, &terminated); errors.Is(err, pgx.ErrNoRows) {
+			return ErrWorkerUnavailable
+		} else if err != nil {
+			return err
+		}
+		if terminated {
+			return ErrWorkerUnavailable
+		}
+		request = domain.WorkerRequest{
+			OrgID: orgID, SessionID: sessionID, WorkerEpoch: epoch,
+			Kind: kind, Payload: payload,
+		}
+		err := scanWorkerRequest(tx.QueryRow(ctx,
+			`INSERT INTO ao_worker_requests (
+				org_id, session_id, worker_epoch, kind, payload, expires_at
+			) VALUES ($1, $2, $3, $4, $5, now() + interval '5 minutes')
+			RETURNING id, org_id, session_id, worker_epoch, kind, payload, status,
+				response, error_code, error_message, attempt_count, expires_at`,
+			orgID, sessionID, epoch, kind, payload,
+		), &request)
+		if err != nil {
+			return normalizeConstraintError(err)
+		}
+		_, err = tx.Exec(ctx, `SELECT pg_notify('ao_worker_work', $1)`, sessionID)
+		return err
+	})
+	return request, err
+}
+
+// GetCoordinatedInterfaceRequestResult returns a worker command row for the
+// coordinator under service context. The response is empty while the worker
+// still owns the request.
+func (s *Store) GetCoordinatedInterfaceRequestResult(
+	ctx context.Context,
+	orgID, sessionID, requestID string,
+) (domain.WorkerRequest, error) {
+	var request domain.WorkerRequest
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		err := scanWorkerRequest(tx.QueryRow(ctx,
+			`SELECT id, org_id, session_id, worker_epoch, kind, payload, status,
+				response, error_code, error_message, attempt_count, expires_at
+			FROM ao_worker_requests
+			WHERE org_id = $1 AND session_id = $2 AND id = $3`,
+			orgID, sessionID, requestID,
+		), &request)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	})
+	return request, err
 }

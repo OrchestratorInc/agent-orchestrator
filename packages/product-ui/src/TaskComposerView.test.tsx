@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement, type ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -31,6 +31,7 @@ function viewProps(overrides: Partial<TaskComposerViewProps> = {}): TaskComposer
 		onPromptChange: vi.fn(),
 		labels: {
 			addFile: "Add file",
+			effort: "Effort",
 			fallbackAction: "Create as Terminal UI",
 			removeFile: (name) => `Remove ${name}`,
 			runsWith: "Runs with",
@@ -68,9 +69,14 @@ function viewProps(overrides: Partial<TaskComposerViewProps> = {}): TaskComposer
 				selectionMode: "catalog",
 			},
 			fetching: false,
-			loading: false,
 			onModelChange: vi.fn(),
 			onModeChange: vi.fn(),
+		},
+		effort: {
+			disabled: false,
+			options: ["low", "high"],
+			value: "high",
+			onChange: vi.fn(),
 		},
 		attachments: {
 			items: [],
@@ -95,6 +101,12 @@ function viewProps(overrides: Partial<TaskComposerViewProps> = {}): TaskComposer
 				onChange={(event) => control.onModelChange(event.target.value)}
 			/>
 		),
+		renderEffortControl: (control) => (
+			<button type="button" aria-label={control.label} onClick={() => control.onChange("low")}>
+				{control.value}
+			</button>
+		),
+		showEffort: true,
 		...overrides,
 	};
 }
@@ -118,7 +130,57 @@ describe("TaskComposerView", () => {
 		expect(props.agent.onChange).toHaveBeenCalledWith("claude-code");
 		fireEvent.change(screen.getByRole("textbox", { name: "Model" }), { target: { value: "gpt-5.1" } });
 		expect(props.model.onModelChange).toHaveBeenCalledWith("gpt-5.1");
+		fireEvent.click(screen.getByRole("button", { name: "Effort" }));
+		expect(props.effort.onChange).toHaveBeenCalledWith("low");
 		expect(screen.getByRole("group", { name: "Runs with" })).toHaveClass("composer-run-controls");
+	});
+
+	it("renders execution context before the task prompt", () => {
+		const { container } = render(
+			<TaskComposerView
+				{...viewProps({ context: <div data-testid="execution-context">project context</div> })}
+			/>,
+		);
+
+		const context = screen.getByTestId("execution-context");
+		const prompt = screen.getByRole("textbox", { name: "Task" });
+		expect(context).toBeInTheDocument();
+		expect(Boolean(context.compareDocumentPosition(prompt) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+		expect(container.querySelector("form")?.firstElementChild).toBe(context);
+	});
+
+	it("omits effort when the selected model does not advertise it", () => {
+		render(<TaskComposerView {...viewProps({ showEffort: false })} />);
+
+		expect(screen.getByRole("group", { name: "Runs with" })).not.toHaveClass("composer-run-controls-with-effort");
+		expect(screen.queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
+	});
+
+	it("claims the caret when asked to autofocus, and reclaims it from a surface that steals it", async () => {
+		render(<TaskComposerView {...viewProps({ autoFocusPrompt: true })} />);
+		const prompt = screen.getByRole("textbox", { name: "Task" });
+		expect(document.activeElement).toBe(prompt);
+
+		// A Radix menu closing behind the dialog pulls focus back to itself for a
+		// frame. The prompt has to win that race or the user gets no caret.
+		const thief = document.createElement("button");
+		document.body.append(thief);
+		thief.focus();
+		expect(document.activeElement).toBe(thief);
+
+		await waitFor(() => expect(document.activeElement).toBe(prompt));
+		thief.remove();
+	});
+
+	it("leaves the caret alone when no autofocus was asked for", () => {
+		const before = document.createElement("button");
+		document.body.append(before);
+		before.focus();
+
+		render(<TaskComposerView {...viewProps()} />);
+
+		expect(document.activeElement).toBe(before);
+		before.remove();
 	});
 
 	it("keeps the surrounding controls stable while typing", () => {
@@ -147,6 +209,17 @@ describe("TaskComposerView", () => {
 
 		rerender(<TaskComposerView {...viewProps({ canSubmit: false })} />);
 		expect(screen.getByRole("button", { name: "Start task" })).toBeDisabled();
+	});
+
+	it("blocks form and Enter submission while project context is unavailable", () => {
+		const props = viewProps({ canSubmit: false });
+		const { container } = render(<TaskComposerView {...props} />);
+		const prompt = screen.getByRole("textbox", { name: "Task" });
+
+		fireEvent.keyDown(prompt, { key: "Enter", shiftKey: false, altKey: false });
+		fireEvent.submit(container.querySelector("form") as HTMLFormElement);
+
+		expect(props.submission.onSubmit).not.toHaveBeenCalled();
 	});
 
 	it("forwards picked, pasted, dropped, and removed attachments", () => {
@@ -301,5 +374,24 @@ describe("TaskComposerView", () => {
 		expect(screen.queryByText("Hidden while the submission error is visible")).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Create as Terminal UI" }));
 		expect(onFallbackAction).toHaveBeenCalledOnce();
+	});
+
+	it("renders a host-provided model notice in place of plain warning text", () => {
+		render(
+			<TaskComposerView
+				{...viewProps({
+					submission: {
+						showFallbackAction: false,
+						isSubmitting: false,
+						modelWarning: <div data-testid="host-notice"><button type="button">Log in</button></div>,
+						onFallbackAction: vi.fn(),
+						onSubmit: vi.fn(),
+					},
+				})}
+			/>,
+		);
+
+		expect(screen.getByTestId("host-notice")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Log in" })).toBeInTheDocument();
 	});
 });

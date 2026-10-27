@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -15,6 +16,31 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestResolveClaudeBinaryFindsLocalAppDataNPMShimOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows install location")
+	}
+	localAppData := t.TempDir()
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("APPDATA", "")
+	t.Setenv("LOCALAPPDATA", localAppData)
+	t.Setenv("USERPROFILE", t.TempDir())
+	want := filepath.Join(localAppData, "npm", "claude.cmd")
+	if err := os.MkdirAll(filepath.Dir(want), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(want, []byte("@echo off\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveClaudeBinary(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("ResolveClaudeBinary() = %q, want %q", got, want)
+	}
+}
 
 func TestNativeConversationIDUsesTheSameClaudeUUIDAcrossInterfaces(t *testing.T) {
 	p := &Plugin{}
@@ -116,11 +142,52 @@ func TestGetLaunchCommandBypassWithPrompt(t *testing.T) {
 
 	want := []string{
 		"claude",
-		"--permission-mode", "bypassPermissions",
+		"--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard,
 		"--", "-add a health check",
 	}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+	}
+}
+
+func TestGetLaunchCommandAvoidsTranscriptOfReusedAOSessionID(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
+	p := &Plugin{resolvedBinary: "claude"}
+	derived := claudeSessionUUID("flash-1")
+
+	sessionIDFlag := func(t *testing.T) string {
+		t.Helper()
+		cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{SessionID: "flash-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, arg := range cmd {
+			if arg == "--session-id" && i+1 < len(cmd) {
+				return cmd[i+1]
+			}
+		}
+		t.Fatalf("no --session-id in %#v", cmd)
+		return ""
+	}
+
+	if got := sessionIDFlag(t); got != derived {
+		t.Fatalf("fresh launch session id = %q, want derived %q", got, derived)
+	}
+
+	project := filepath.Join(configDir, "projects", "-old-data-dir-flash-1")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, derived+".jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := sessionIDFlag(t)
+	if got == derived {
+		t.Fatalf("launch reused the derived id %q that already has a transcript", derived)
+	}
+	if _, err := uuid.Parse(got); err != nil {
+		t.Fatalf("fallback session id %q is not a UUID: %v", got, err)
 	}
 }
 
@@ -458,6 +525,15 @@ func TestGetAgentHooksInstallsClaudeHooks(t *testing.T) {
 	if m := matcherForCommand(config.Hooks["SessionEnd"], "ao hooks claude-code session-end"); m != nil {
 		t.Fatalf("SessionEnd matcher = %v, want none", m)
 	}
+	// A turn ended by an API error fires StopFailure instead of Stop. It must
+	// be installed for every error type (no matcher), or such a turn leaves
+	// the session active.
+	if got := countClaudeHookCommand(config.Hooks["StopFailure"], "ao hooks claude-code stop-failure"); got != 1 {
+		t.Fatalf("StopFailure command count = %d, want 1: %#v", got, config.Hooks["StopFailure"])
+	}
+	if m := matcherForCommand(config.Hooks["StopFailure"], "ao hooks claude-code stop-failure"); m != nil {
+		t.Fatalf("StopFailure matcher = %v, want none", m)
+	}
 }
 
 func TestGetAgentHooksMigratesSessionStartMatcher(t *testing.T) {
@@ -658,7 +734,44 @@ func TestGetRestoreCommandReadsAgentSessionID(t *testing.T) {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
 	// The hook-captured native id wins over the derived fallback.
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--resume", "claude-native-1", "--", "continue from AO"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--resume", "claude-native-1", "--", "continue from AO"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
+	}
+}
+
+func TestGetRestoreCommandAppendsConfiguredModelAndEffort(t *testing.T) {
+	// The caller's per-session tuning must reach native resume (#3218).
+	cmd, ok, err := (&Plugin{resolvedBinary: "claude"}).GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Config:      ports.AgentConfig{Model: "  claude-opus-4-5  ", Effort: "  high  "},
+		Permissions: ports.PermissionModeBypassPermissions,
+		Session: ports.SessionRef{
+			ID:       "sess-r",
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "claude-native-1"},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
+	}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--model", "claude-opus-4-5", "--effort", "high", "--resume", "claude-native-1"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
+	}
+}
+
+func TestGetRestoreCommandOmitsBlankConfiguredModel(t *testing.T) {
+	cmd, ok, err := (&Plugin{resolvedBinary: "claude"}).GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Config:      ports.AgentConfig{Model: "   "},
+		Permissions: ports.PermissionModeBypassPermissions,
+		Session: ports.SessionRef{
+			ID:       "sess-r",
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "claude-native-1"},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
+	}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--resume", "claude-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -678,7 +791,7 @@ func TestGetRestoreCommandReappendsSystemPrompt(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--append-system-prompt", "You are an orchestrator.", "--resume", "claude-native-1"}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--append-system-prompt", "You are an orchestrator.", "--resume", "claude-native-1"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -704,7 +817,7 @@ func TestGetRestoreCommandReappendsSystemPromptFromFile(t *testing.T) {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
 	want := []string{
-		"claude", "--permission-mode", "bypassPermissions",
+		"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard,
 		"--append-system-prompt-file", promptFile,
 		"--resume", "claude-native-1",
 		"--", "continue from AO",
@@ -736,7 +849,7 @@ func TestGetRestoreCommandFallsBackToDerivedUUID(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("restore = (ok=%v, err=%v), want ok", ok, err)
 	}
-	want := []string{"claude", "--permission-mode", "bypassPermissions", "--resume", claudeSessionUUID("sess-r")}
+	want := []string{"claude", "--permission-mode", "bypassPermissions", "--settings", bypassNudgeGuard, "--resume", claudeSessionUUID("sess-r")}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
 	}
@@ -807,104 +920,6 @@ func TestGetLaunchCommandRejectsInvalidConfig(t *testing.T) {
 func TestManifestID(t *testing.T) {
 	if got := New().Manifest().ID; got != "claude-code" {
 		t.Fatalf("manifest id = %q, want claude-code", got)
-	}
-}
-
-func TestClaudeConfigAuthStatusAuthorizedWithOAuthSubscription(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".claude.json")
-	content := `{
-		"hasAvailableSubscription": true,
-		"oauthAccount": {
-			"accountUuid": "account-1",
-			"subscriptionCreatedAt": "2026-01-01T00:00:00Z"
-		}
-	}`
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	status, ok, err := claudeConfigAuthStatus(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
-	}
-}
-
-func TestClaudeConfigAuthStatusAuthorizedWithOAuthAccount(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".claude.json")
-	content := `{"oauthAccount":{"accountUuid":"account-1"}}`
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	status, ok, err := claudeConfigAuthStatus(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
-	}
-}
-
-func TestClaudeConfigAuthStatusAuthorizedWithUserID(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".claude.json")
-	if err := os.WriteFile(path, []byte(`{"userID":"user-1"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	status, ok, err := claudeConfigAuthStatus(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
-	}
-}
-
-func TestClaudeConfigAuthStatusUnknownWithoutOAuthIdentity(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".claude.json")
-	content := `{"oauthAccount":{}}`
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	status, ok, err := claudeConfigAuthStatus(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ok || status != ports.AgentAuthStatusUnknown {
-		t.Fatalf("status = (%q, %v), want (%q, false)", status, ok, ports.AgentAuthStatusUnknown)
-	}
-}
-
-func TestClaudeAuthStatusFromOutputAuthorizedWithCleanJSON(t *testing.T) {
-	status, ok := claudeAuthStatusFromOutput([]byte(`{"loggedIn":true,"authMethod":"oauth_token"}`))
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
-	}
-}
-
-func TestClaudeAuthStatusFromOutputAuthorizedWithPrefixedWarning(t *testing.T) {
-	output := []byte("warning: ignored config line\n{\"loggedIn\":true,\"authMethod\":\"oauth_token\"}\n")
-	status, ok := claudeAuthStatusFromOutput(output)
-	if !ok || status != ports.AgentAuthStatusAuthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
-	}
-}
-
-func TestClaudeAuthStatusFromOutputUnauthorized(t *testing.T) {
-	status, ok := claudeAuthStatusFromOutput([]byte(`{"loggedIn":false}`))
-	if !ok || status != ports.AgentAuthStatusUnauthorized {
-		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusUnauthorized)
-	}
-}
-
-func TestClaudeAuthStatusFromOutputUnknownForUnrecognizedFailure(t *testing.T) {
-	status, ok := claudeAuthStatusFromOutput([]byte("unsupported subcommand on this version"))
-	if ok || status != ports.AgentAuthStatusUnknown {
-		t.Fatalf("status = (%q, %v), want (%q, false)", status, ok, ports.AgentAuthStatusUnknown)
 	}
 }
 
@@ -1252,6 +1267,72 @@ func TestInspectTerminalSurfaceSeparatesClaudeWorkFromComposer(t *testing.T) {
 	}
 }
 
+// Fixtures captured from Claude Code 2.1.273 during a real drain failure
+// (issue #5482): the composer is empty, but Claude paints a multi-line
+// non-dim statusline below the lower rule and transient non-dim chrome
+// between the rules. Provider chrome must never read as a human draft.
+func TestInspectTerminalSurfaceClaude273DoesNotReadChromeAsDraft(t *testing.T) {
+	plugin := &Plugin{}
+	rule := "\x1b[38;2;136;136;136m" + strings.Repeat("─", 118) + "\x1b[m"
+	tests := []struct {
+		name       string
+		output     string
+		wantWork   ports.TerminalSurfaceWorkState
+		wantEditor ports.TerminalComposerState
+	}{
+		{
+			name: "idle empty composer above a multi-line provider statusline",
+			output: "  \x1b[38;2;153;153;153m40100 tokens\x1b[39m\n" +
+				rule + "\n\x1b[39m❯ \x1b[7m \x1b[0m\n" + rule + "\n" +
+				"  glm-5.3 low 40.1k [Rate limited]\n" +
+				"  cwd: /Users/example/worktree\n" +
+				"  ⏵⏵ auto mode on (shift+tab to cycle)",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerEmpty,
+		},
+		{
+			// Mismatched rules make the boxed layout unknown, but the footer-free
+			// fallback still closes the composer at the rule below the prompt:
+			// the statusline below it is provider chrome, not a draft.
+			name: "unmatched composer rules do not read status chrome as draft",
+			output: "\x1b[38;5;244m" + strings.Repeat("─", 48) + "\x1b[39m\n" +
+				"\x1b[39m❯ \x1b[7m \x1b[0m\n" +
+				strings.Repeat("─", 24) + "\n" +
+				"  glm-5.3 low 40.1k [Rate limited]",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerEmpty,
+		},
+		{
+			// Captured live from a stuck session: a bare default-styled
+			// "Claude Code" product label sits on the composer prompt row
+			// between matching rules. It is provider chrome, not a draft.
+			name: "provider product label on the prompt row is not a draft",
+			output: rule + "\n❯  Claude Code\n" + rule + "\n" +
+				"  glm-5.3 low 40.1k [Rate limited]\n" +
+				"  cwd: /Users/example/worktree\n" +
+				"  ⏵⏵ auto mode on (shift+tab to cycle)",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerEmpty,
+		},
+		{
+			// The same label followed by real typed text stays a draft.
+			name: "human text after the label is still a draft",
+			output: rule + "\n❯  Claude Code review please\n" + rule + "\n" +
+				"  ⏵⏵ auto mode on (shift+tab to cycle)",
+			wantWork:   ports.TerminalSurfaceWorkIdle,
+			wantEditor: ports.TerminalComposerDraft,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := plugin.InspectTerminalSurface(tt.output)
+			if got.Work != tt.wantWork || got.Composer != tt.wantEditor {
+				t.Fatalf("InspectTerminalSurface() = %+v, want work=%v composer=%v", got, tt.wantWork, tt.wantEditor)
+			}
+		})
+	}
+}
+
 func contains(values []string, needle string) bool {
 	for _, v := range values {
 		if v == needle {
@@ -1278,4 +1359,342 @@ func containsSubsequence(values, needle []string) bool {
 		}
 	}
 	return false
+}
+
+// bypassNudgeGuard is the per-session flag-settings defaultMode that keeps
+// Claude's auto-mode default dialog out of a bypassPermissions launch.
+const bypassNudgeGuard = `{"permissions":{"defaultMode":"bypassPermissions"}}`
+
+// An explicit AO permission mode also rides as the flag-settings defaultMode,
+// which suppresses Claude's "Make auto mode your default permission mode?"
+// dialog for this session only. The default mode passes neither: its starting
+// mode stays Claude's own resolution from the user's settings.
+func TestLaunchAndRestoreGuardAutoDefaultNudgePerSession(t *testing.T) {
+	tests := []struct {
+		permission ports.PermissionMode
+		mode       string
+	}{
+		{ports.PermissionModeAcceptEdits, "acceptEdits"},
+		{ports.PermissionModeAuto, "auto"},
+		{ports.PermissionModeBypassPermissions, "bypassPermissions"},
+		{ports.PermissionModeDefault, ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.permission), func(t *testing.T) {
+			p := &Plugin{resolvedBinary: "claude"}
+			launch, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{Permissions: tt.permission})
+			if err != nil {
+				t.Fatal(err)
+			}
+			restore, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+				Permissions: tt.permission,
+				Session: ports.SessionRef{ID: "sess-1", Metadata: map[string]string{
+					ports.MetadataKeyAgentSessionID: "claude-native-1",
+				}},
+			})
+			if err != nil || !ok {
+				t.Fatalf("restore: ok=%v err=%v", ok, err)
+			}
+			for name, cmd := range map[string][]string{"launch": launch, "restore": restore} {
+				if tt.mode == "" {
+					if contains(cmd, "--settings") || contains(cmd, "--permission-mode") {
+						t.Fatalf("%s %#v: default mode must defer to Claude's settings", name, cmd)
+					}
+					continue
+				}
+				guard := `{"permissions":{"defaultMode":"` + tt.mode + `"}}`
+				if !containsSubsequence(cmd, []string{"--permission-mode", tt.mode, "--settings", guard}) {
+					t.Fatalf("%s %#v: missing --permission-mode %s with --settings %s", name, cmd, tt.mode, guard)
+				}
+			}
+		})
+	}
+}
+
+// The session's launch settings and the dialog guard go in one --settings
+// flag, so neither is dropped for the other.
+func TestLaunchSettingsShareOneSettingsFlagWithTheNudgeGuard(t *testing.T) {
+	p := &Plugin{resolvedBinary: "claude"}
+	cmd, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		Permissions: ports.PermissionModeBypassPermissions,
+		Config:      ports.AgentConfig{Launch: domain.AgentLaunchOptions{Ultracode: true, AutoCompactWindow: "1m"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	flags := 0
+	for _, arg := range cmd {
+		if arg == "--settings" {
+			flags++
+		}
+	}
+	want := `{"autoCompactEnabled":true,"autoCompactWindow":1000000,"permissions":{"defaultMode":"bypassPermissions"},"ultracode":true}`
+	if flags != 1 || !containsSubsequence(cmd, []string{"--settings", want}) {
+		t.Fatalf("launch %#v: want one --settings %s", cmd, want)
+	}
+}
+
+// PreLaunch marks the dialog seen in the global config only for a launch in
+// AO's default mode whose user settings would make Claude offer it, and never
+// touches the user's settings or permission mode.
+func TestPreLaunchMarksAutoDefaultNudgeSeenOnlyWhenOffered(t *testing.T) {
+	tests := []struct {
+		name         string
+		permission   ports.PermissionMode
+		projectMode  ports.PermissionMode
+		userSettings string
+		wantSeen     bool
+	}{
+		{"default mode, user pins acceptEdits", ports.PermissionModeDefault, "", `{"permissions":{"defaultMode":"acceptEdits"}}`, true},
+		{"project default mode, user pins bypass", "", ports.PermissionModeDefault, `{"permissions":{"defaultMode":"bypassPermissions"}}`, true},
+		{"default mode, user already auto", ports.PermissionModeDefault, "", `{"permissions":{"defaultMode":"auto"}}`, false},
+		{"default mode, user has no defaultMode", ports.PermissionModeDefault, "", `{"permissions":{"allow":["Read"]}}`, false},
+		{"default mode, no user settings", ports.PermissionModeDefault, "", "", false},
+		{"default mode, unparsable user settings", ports.PermissionModeDefault, "", `{not json`, false},
+		{"explicit mode is guarded per session", ports.PermissionModeBypassPermissions, "", `{"permissions":{"defaultMode":"acceptEdits"}}`, false},
+		{"explicit project mode is guarded per session", "", ports.PermissionModeAcceptEdits, `{"permissions":{"defaultMode":"default"}}`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			settingsPath := filepath.Join(home, ".claude", "settings.json")
+			if tt.userSettings != "" {
+				if err := os.MkdirAll(filepath.Dir(settingsPath), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(settingsPath, []byte(tt.userSettings), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			configPath := filepath.Join(home, ".claude.json")
+			seed := `{"userID":"abc","hasCompletedOnboarding":true,"projects":{"/existing":{"hasTrustDialogAccepted":true}}}`
+			if err := os.WriteFile(configPath, []byte(seed), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			workspace := filepath.Join(home, "worktree")
+
+			err := (&Plugin{}).PreLaunch(context.Background(), ports.LaunchConfig{
+				WorkspacePath: workspace,
+				Permissions:   tt.permission,
+				Config:        ports.AgentConfig{Permissions: tt.projectMode},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var root map[string]any
+			data, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(data, &root); err != nil {
+				t.Fatal(err)
+			}
+			if seen := root["hasSeenAutoDefaultNudge"] == true; seen != tt.wantSeen {
+				t.Fatalf("hasSeenAutoDefaultNudge = %v, want %v", root["hasSeenAutoDefaultNudge"], tt.wantSeen)
+			}
+			projects := root["projects"].(map[string]any)
+			if entry, _ := projects[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+				t.Fatalf("workspace not trusted: %v", projects)
+			}
+			if root["userID"] != "abc" || projects["/existing"] == nil {
+				t.Fatalf("existing config dropped: %v", root)
+			}
+			if tt.userSettings != "" {
+				after, err := os.ReadFile(settingsPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(after) != tt.userSettings {
+					t.Fatalf("user settings changed: %s", after)
+				}
+			}
+		})
+	}
+}
+
+// A workspace that is already trusted still gets the nudge flag, and a second
+// PreLaunch with nothing left to record does not rewrite the config.
+func TestPreLaunchMarksAutoDefaultNudgeSeenForTrustedWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, ".claude.json")
+	seed := `{"projects":{"/work":{"hasTrustDialogAccepted":true}}}`
+	if err := os.WriteFile(configPath, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureClaudeLaunchConfigForOS(configPath, "/work", true, "linux"); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(first), `"hasSeenAutoDefaultNudge": true`) {
+		t.Fatalf("nudge flag not recorded: %s", first)
+	}
+	before, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureClaudeLaunchConfigForOS(configPath, "/work", true, "linux"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Fatal("config rewritten although nothing changed")
+	}
+}
+
+// Claude reads its settings and its global config from one directory: a
+// CLAUDE_CONFIG_DIR the launch environment sets, else the daemon's, else the
+// home directory (with settings in ~/.claude). A non-empty legacy .config.json
+// in the config directory is preferred over the global config path.
+func TestClaudeLaunchConfigPathsFollowTheLaunchConfigDir(t *testing.T) {
+	home := t.TempDir()
+	daemonDir := filepath.Join(t.TempDir(), "daemon-claude")
+	projectDir := filepath.Join(t.TempDir(), "project-claude")
+	legacyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(legacyDir, ".config.json"), []byte(`{"projects":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	emptyLegacyDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(emptyLegacyDir, ".config.json"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name         string
+		daemon       string
+		env          map[string]string
+		wantSettings string
+		wantGlobal   string
+	}{
+		{"home", "", nil, filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".claude.json")},
+		{"daemon config dir", daemonDir, nil, filepath.Join(daemonDir, "settings.json"), filepath.Join(daemonDir, ".claude.json")},
+		{"launch config dir wins", daemonDir, map[string]string{"CLAUDE_CONFIG_DIR": projectDir},
+			filepath.Join(projectDir, "settings.json"), filepath.Join(projectDir, ".claude.json")},
+		{"launch clears the config dir", daemonDir, map[string]string{"CLAUDE_CONFIG_DIR": " "},
+			filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".claude.json")},
+		{"launch home", "", map[string]string{"HOME": projectDir},
+			filepath.Join(projectDir, ".claude", "settings.json"), filepath.Join(projectDir, ".claude.json")},
+		{"legacy config", "", map[string]string{"CLAUDE_CONFIG_DIR": legacyDir},
+			filepath.Join(legacyDir, "settings.json"), filepath.Join(legacyDir, ".config.json")},
+		{"empty legacy config", "", map[string]string{"CLAUDE_CONFIG_DIR": emptyLegacyDir},
+			filepath.Join(emptyLegacyDir, "settings.json"), filepath.Join(emptyLegacyDir, ".claude.json")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", home)
+			t.Setenv("CLAUDE_CONFIG_DIR", tt.daemon)
+			settings, global, err := claudeLaunchConfigPaths(tt.env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settings != tt.wantSettings || global != tt.wantGlobal {
+				t.Fatalf("paths = %q, %q; want %q, %q", settings, global, tt.wantSettings, tt.wantGlobal)
+			}
+		})
+	}
+}
+
+// With a project CLAUDE_CONFIG_DIR, PreLaunch reads that directory's settings
+// and records trust and the nudge flag in its .claude.json, creating the
+// directory when Claude has not used it yet. The home and daemon configs are
+// left alone.
+func TestPreLaunchUsesTheLaunchClaudeConfigDir(t *testing.T) {
+	home := t.TempDir()
+	daemonDir := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CLAUDE_CONFIG_DIR", daemonDir)
+	homeSeed := `{"userID":"home"}`
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(homeSeed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(daemonDir, "settings.json"), []byte(`{"permissions":{"defaultMode":"auto"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(home, "worktree")
+	readConfig := func(t *testing.T, path string) map[string]any {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var root map[string]any
+		if err := json.Unmarshal(data, &root); err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
+
+	projectDir := filepath.Join(t.TempDir(), "claude-profile")
+	if err := os.MkdirAll(projectDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "settings.json"), []byte(`{"permissions":{"defaultMode":"acceptEdits"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".claude.json"), []byte(`{"userID":"project"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := (&Plugin{}).PreLaunch(context.Background(), ports.LaunchConfig{
+		WorkspacePath: workspace,
+		Permissions:   ports.PermissionModeDefault,
+		Env:           map[string]string{"CLAUDE_CONFIG_DIR": projectDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := readConfig(t, filepath.Join(projectDir, ".claude.json"))
+	if root["hasSeenAutoDefaultNudge"] != true || root["userID"] != "project" {
+		t.Fatalf("project config = %v, want the nudge flag beside the existing keys", root)
+	}
+	if entry, _ := root["projects"].(map[string]any)[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+		t.Fatalf("workspace not trusted in the project config: %v", root)
+	}
+	if data, err := os.ReadFile(filepath.Join(home, ".claude.json")); err != nil || string(data) != homeSeed {
+		t.Fatalf("home config changed: %s, %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(daemonDir, ".claude.json")); !os.IsNotExist(err) {
+		t.Fatalf("daemon config dir written: %v", err)
+	}
+
+	// A profile Claude has not used yet is created, trusted, and, since its
+	// settings do not exist, left without the nudge flag.
+	fresh := filepath.Join(t.TempDir(), "new-profile")
+	if err := (&Plugin{}).PreLaunch(context.Background(), ports.LaunchConfig{
+		WorkspacePath: workspace,
+		Permissions:   ports.PermissionModeDefault,
+		Env:           map[string]string{"CLAUDE_CONFIG_DIR": fresh},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	root = readConfig(t, filepath.Join(fresh, ".claude.json"))
+	if _, seen := root["hasSeenAutoDefaultNudge"]; seen {
+		t.Fatalf("fresh profile got the nudge flag: %v", root)
+	}
+	if entry, _ := root["projects"].(map[string]any)[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+		t.Fatalf("workspace not trusted in the fresh profile: %v", root)
+	}
+
+	// Without a launch override the daemon's CLAUDE_CONFIG_DIR is used: its
+	// settings already default to auto, so only trust is recorded.
+	if err := (&Plugin{}).PreLaunch(context.Background(), ports.LaunchConfig{
+		WorkspacePath: workspace,
+		Permissions:   ports.PermissionModeDefault,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	root = readConfig(t, filepath.Join(daemonDir, ".claude.json"))
+	if _, seen := root["hasSeenAutoDefaultNudge"]; seen {
+		t.Fatalf("daemon config got the nudge flag although settings default to auto: %v", root)
+	}
+	if entry, _ := root["projects"].(map[string]any)[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
+		t.Fatalf("workspace not trusted in the daemon config: %v", root)
+	}
 }

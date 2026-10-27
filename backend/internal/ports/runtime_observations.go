@@ -37,26 +37,64 @@ type RuntimeFacts struct {
 // a hook and persisted for later restore. A signal without these fields keeps
 // plain state-only semantics.
 type ActivitySignal struct {
-	Valid             bool
-	State             domain.ActivityState
-	Timestamp         time.Time
-	ExpectedUpdatedAt time.Time
-	Event             string
-	ToolName          string
-	ToolUseID         string
-	AgentSessionID    string
+	Valid     bool
+	State     domain.ActivityState
+	Timestamp time.Time
+	// ExpectedRevision fences a daemon observer's pre-probe snapshot. nil is an
+	// unversioned hook, while a pointer to zero is a valid initial revision.
+	ExpectedRevision *int64
+	// ExpectedHarness fences native reports to their provider. Empty preserves
+	// the existing generic hook contract; socket reporters always set it.
+	ExpectedHarness domain.AgentHarness
+	Event           string
+	ToolName        string
+	ToolUseID       string
+	SubagentID      string
+	// RunningSubagentIDs is Claude's authoritative parent task snapshot.
+	// Codex provides child start/stop events instead and leaves this nil.
+	RunningSubagentIDs *[]string
+	AgentSessionID     string
 	// LatestUserPrompt and LatestAssistantUpdate are provider hook facts used
-	// to build a deterministic handoff. They are never promoted to system
-	// instructions and internal <ao-...> coordination turns are filtered by
-	// the hook client before submission.
+	// to build a deterministic handoff. Lifecycle accepts them only from their
+	// main-turn event boundaries (UserPromptSubmit and Stop) under the current
+	// runtime/controller generation. They are never promoted to system instructions,
+	// and internal <ao-...> coordination turns are filtered by the hook client.
 	LatestUserPrompt      string
 	LatestAssistantUpdate string
+	// FinalAssistantMessage and TurnUserRequest are a main turn's final message
+	// and request as the agent's hooks reported them. They only feed the terminal
+	// turn history and are never a replay checkpoint, so every agent may send them.
+	FinalAssistantMessage string
+	TurnUserRequest       string
+	// ConversationCheckpointOrigin distinguishes real human turns from AO's
+	// own coordination. Lifecycle persists coordination provenance across the
+	// prompt-submit/Stop boundary; an empty value is an older hook client.
+	ConversationCheckpointOrigin domain.ConversationCheckpointOrigin
+	// CoordinationID identifies an AO-authored semantic prompt. Native hooks
+	// derive it from AO's prompt envelope; raw terminal writes cannot set it.
+	CoordinationID string
+	// ProviderTurnID identifies the main turn reported by a native hook.
+	ProviderTurnID string
+	// SubmissionID identifies AO's per-invocation prompt-hook context attachment.
+	SubmissionID string
 	// TranscriptPath is a read-only provider-native transcript reference when
 	// the hook exposes one. AO stores the path, never rewrites the transcript.
 	TranscriptPath string
 	// LaunchID is set by AO's process supervisor. Lifecycle rejects a signal
 	// from an older process generation of the same session.
 	LaunchID string
+	// NativeEntrypoint is the provider's own process-kind marker reported by
+	// the hook (Claude's CLAUDE_CODE_ENTRYPOINT). A side `claude -p` run in the
+	// session worktree inherits AO_SESSION_ID and the current LaunchID, so the
+	// generation fence cannot tell it apart from the interactive TUI process AO
+	// launched; this field can. Empty means an older hook client or a provider
+	// that exposes no such marker.
+	NativeEntrypoint string
+	// ProcessID is the pid of the provider process that ran the hook
+	// (Claude's CLAUDE_PID), zero when unknown. A Claude process the agent or
+	// the user starts under the session inherits its env and launch id; the
+	// hook process gate (service/hookprocess) tells it from the terminal's.
+	ProcessID int
 	// ControllerGeneration is the required ownership fence for a runtime-less
 	// Chat controller. It is intentionally internal (provider events never call
 	// the public hook endpoint): lifecycle rejects a Chat signal without the

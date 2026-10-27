@@ -12,20 +12,48 @@
 // own ticket, so the hook's reconnect (which builds a fresh mux) transparently
 // gets a fresh ticket.
 //
+// Both the agent and workspace kinds open their socket DIRECTLY at construction
+// and drive readiness off the CP's structured `starting`/`ready` messages —
+// there is no separate agent-ready SSE wait. The CP's OpenTerminal(agent) is
+// find-or-create for the current worker epoch (it reuses a running agent's
+// terminal), so opening a healthy session's terminal is safe and immediate, and
+// a not-yet-started agent is held in `starting` up to the CP's ready deadline.
+//
 // CP wire (see cloud/internal/httpapi/terminal_handlers.go):
 //   client -> {type:"input",data} | {type:"resize",columns,rows}
 //   server -> {type:"starting"|"ready"|"reset"|"replay_complete"|"input_ack"}
 //             {type:"output",data:<base64>,sequence}
 
 import { base64ToBytes, type MuxConnectionState, type TerminalMux } from "./terminal-mux";
+import { PLAN_REFUSAL_CODES } from "./cloud-cp/client";
+import { publishCloudNotificationHint } from "./cloud-notification-hints";
+import { appI18n } from "../i18n";
+import { useUiStore } from "../stores/ui-store";
 
 export interface CloudTerminalMuxOptions {
 	/** WebSocket base including the API mount, e.g. "wss://host/api/cloud/v1". */
 	wsBaseUrl: string;
 	/** "agent" attaches the running coding agent; "workspace" opens a shell. */
 	kind: "agent" | "workspace";
+	/** Dedicated agent terminal to attach, rather than the session's primary agent terminal. */
+	terminalId?: string;
 	/** Mints a fresh single-use terminal ticket (goes through the CP proxy). */
-	mintTicket: () => Promise<string>;
+	mintTicket: (kind: "agent" | "workspace") => Promise<string>;
+	/**
+	 * Replay cursor shared across mux rebuilds for the same pane. The hook
+	 * discards a mux and builds a fresh one on every reconnect; without a shared
+	 * cursor each new mux would send `after=0` and the control plane would
+	 * replay the whole scrollback again, so the terminal never settles and just
+	 * flickers. Passing a stable ref object lets a rebuilt mux resume from the
+	 * last sequence it received. Omit for a fresh pane (starts at 0).
+	 *
+	 * The mux always sends `after=cursor.value`; the CP decides whether to honor
+	 * it or reset to 0. Today the CP sends `{type:"reset"}` for both kinds, so
+	 * the effective replay is always from 0 (correct across worker-epoch bumps,
+	 * whose per-terminal output sequences restart). The cursor plumbing is kept
+	 * so a future epoch-aware CP can resume within an epoch instead.
+	 */
+	cursor?: { value: number };
 	WebSocketImpl?: typeof WebSocket;
 }
 
@@ -44,17 +72,54 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 	const connectionListeners = new Set<ConnectionListener>();
 
 	let socket: WebSocket | null = null;
-	let after = 0;
+	// Resume from the shared cursor so a rebuilt mux does not replay the whole
+	// scrollback from sequence 0 (the flicker/never-settle bug). advanceCursor
+	// keeps the shared ref in step with our local position.
+	let after = options.cursor?.value ?? 0;
+	const advanceCursor = (sequence: number) => {
+		after = sequence;
+		if (options.cursor) options.cursor.value = sequence;
+	};
 	let disposed = false;
 	let exited = false;
 	let connectionState: MuxConnectionState | undefined;
+	// pendingResize is the newest size the pane asked for; it is replayed on
+	// every (re)connect. sentResize is the size last sent on the current socket,
+	// so an unchanged size is never sent twice.
 	let pendingResize: { cols: number; rows: number } | null = null;
+	let sentResize: { cols: number; rows: number } | null = null;
+	let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+	// reflowed records that the pane fitted to a size other than the last one
+	// sent since that send, so the screen no longer matches the program's.
+	let reflowed = false;
 	const pendingInput: string[] = [];
 
 	const setConnectionState = (next: MuxConnectionState) => {
 		if (disposed || connectionState === next) return;
 		connectionState = next;
 		connectionListeners.forEach((listener) => listener(next));
+	};
+
+	const terminalExited = (error: unknown): boolean =>
+		typeof error === "object" && error !== null && (error as { code?: unknown }).code === "TERMINAL_SESSION_EXITED";
+
+	const reportTerminalExited = () => {
+		if (disposed || exited) return;
+		exited = true;
+		errorListeners.forEach((listener) =>
+			listener("The coding-agent terminal has exited. Start a new session to continue."),
+		);
+	};
+
+	// The org's plan does not allow waking this session (a usage limit, no
+	// plan). That holds for hours or days, so it is reported once as a pane
+	// error rather than polled like a worker that is still starting; the client
+	// already raised the plan prompt for this refusal.
+	const planRefusal = (error: unknown): string | undefined => {
+		if (typeof error !== "object" || error === null) return undefined;
+		const { code, message } = error as { code?: unknown; message?: unknown };
+		if (typeof code !== "string" || !PLAN_REFUSAL_CODES.has(code)) return undefined;
+		return typeof message === "string" && message !== "" ? message : "Your plan does not allow this session to run right now.";
 	};
 
 	const sendJSON = (message: unknown): boolean => {
@@ -67,7 +132,7 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 
 	const handleMessage = (event: MessageEvent) => {
 		if (typeof event.data !== "string") return;
-		let message: { type?: string; data?: string; sequence?: number };
+		let message: { type?: string; data?: string; sequence?: number; eventId?: string; eventType?: string; occurredAt?: string; payload?: unknown };
 		try {
 			message = JSON.parse(event.data);
 		} catch {
@@ -75,82 +140,186 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		}
 		switch (message.type) {
 			case "ready":
-				if (typeof message.sequence === "number") after = message.sequence;
+				if (typeof message.sequence === "number") advanceCursor(message.sequence);
 				openedListeners.forEach((listener) => listener());
 				break;
 			case "output":
-				if (typeof message.sequence === "number") after = message.sequence;
+				if (typeof message.sequence === "number") advanceCursor(message.sequence);
 				if (message.data) {
 					const bytes = base64ToBytes(message.data);
 					dataListeners.forEach((listener) => listener(bytes));
 				}
 				break;
-			// starting / reset / replay_complete / input_ack carry no terminal
-			// output the pane must render.
+			case "reset":
+				// The CP deliberately restarts the stream from sequence 0 (a fresh
+				// workspace shell, or an agent open whose replay must start clean).
+				// Drop our resume cursor and wipe the pane's stale content (clear
+				// screen + scrollback, home the cursor) so the fresh replay does not
+				// stack on top of the old buffer.
+				advanceCursor(0);
+				{
+					const clear = new TextEncoder().encode("\x1b[3J\x1b[H\x1b[2J");
+					dataListeners.forEach((listener) => listener(clear));
+				}
+				break;
+			case "notification_hint":
+				if (typeof message.eventId === "string" && typeof message.eventType === "string" &&
+					typeof message.occurredAt === "string" && message.payload !== null && typeof message.payload === "object" && !Array.isArray(message.payload)) {
+					publishCloudNotificationHint({ source: "cloud", eventId: message.eventId, type: message.eventType, occurredAt: message.occurredAt, payload: message.payload as Record<string, unknown> });
+				}
+				break;
+			case "input_refused":
+				// A shared session's agent terminal dropped this keystroke: someone
+				// else is writing to the agent. Said once, not per keystroke.
+				useUiStore.getState().showGlobalToast(appI18n.t("chat.shared.terminalRefused"), undefined, {
+					placement: "top-center", dedupeKey: "composer-terminal-refused",
+				});
+				break;
+			// starting / replay_complete / input_ack carry no terminal output the
+			// pane must render.
 			default:
 				break;
 		}
 	};
 
-	const connect = async () => {
-		let ticket: string;
-		try {
-			ticket = await options.mintTicket();
-		} catch {
-			if (disposed) return;
-			// A freshly created session's worker may not be connected yet while its
-			// sandbox provisions; the control plane reports that as 409
-			// WORKER_UNAVAILABLE on the ticket request. Treat a mint failure as a
-			// transient disconnect so the hook reattaches with backoff and the
-			// terminal streams once the worker checks in, instead of surfacing a
-			// permanent "worker is not connected" error the user must reload past.
-			setConnectionState("closed");
-			return;
-		}
+	const openSocket = (kind: "agent" | "workspace", ticket: string) => {
 		if (disposed) return;
-		const query = new URLSearchParams({
+	const query = new URLSearchParams({
 			ticket,
-			kind: options.kind,
+			kind,
 			after: String(after),
 			protocol: "2",
-		});
+	});
+	if (options.terminalId) query.set("terminalId", options.terminalId);
 		const url = `${options.wsBaseUrl.replace(/\/+$/, "")}/terminal?${query.toString()}`;
 		const ws = new WS(url);
 		socket = ws;
 		ws.addEventListener("open", () => {
-			if (disposed) return;
-			if (pendingResize) sendJSON({ type: "resize", columns: pendingResize.cols, rows: pendingResize.rows });
+			if (disposed || socket !== ws) return;
+			// A new socket may reach a new worker PTY, so the current size always
+			// goes out once, without waiting for the debounce.
+			sentResize = null;
+			flushResize();
 			for (const input of pendingInput.splice(0)) sendJSON({ type: "input", data: input });
 			setConnectionState("open");
 		});
-		ws.addEventListener("message", handleMessage);
+		ws.addEventListener("message", (event) => {
+			if (socket === ws) handleMessage(event);
+		});
 		ws.addEventListener("close", (event: CloseEvent) => {
-			// A normal closure (1000) is the CP telling us the terminal process
-			// exited or the terminal was closed — the pane is gone, so signal exit
-			// and let the hook stop reattaching. Any other close is a transport
-			// drop the hook should reconnect through (with a fresh ticket).
+			if (socket !== ws) return;
 			if (event.code === 1000 && !exited) {
 				exited = true;
 				exitListeners.forEach((listener) => listener());
 			}
 			setConnectionState("closed");
 		});
-		ws.addEventListener("error", () => setConnectionState("closed"));
+		ws.addEventListener("error", () => {
+			if (socket === ws) setConnectionState("closed");
+		});
 	};
 
-	void connect();
+	const connect = async (kind: "agent" | "workspace") => {
+		let ticket: string;
+		try {
+			ticket = await options.mintTicket(kind);
+		} catch (error) {
+			if (disposed) return;
+			// A control plane that reports the agent terminal has exited (410
+			// TERMINAL_SESSION_EXITED) is terminal: surface it and stop, rather than
+			// looping the ticket mint forever as if the worker were merely not up yet
+			// (the "Connected, but stuck Connecting…" symptom).
+			if (terminalExited(error)) {
+				reportTerminalExited();
+				return;
+			}
+			const refusal = planRefusal(error);
+			if (refusal) {
+				errorListeners.forEach((listener) => listener(refusal));
+				return;
+			}
+			// A freshly created session's worker may not be connected yet while its
+			// sandbox provisions; the control plane reports that as 409
+			// WORKER_UNAVAILABLE on the ticket request. Report this as "waiting",
+			// distinct from a socket-level "closed", so the hook keeps polling for
+			// readiness WITHOUT counting it against the connect-failure circuit
+			// breaker: nothing failed to connect, the worker is simply not up yet.
+			// Only a genuine post-mint socket failure trips the breaker.
+			setConnectionState("waiting");
+			return;
+		}
+		if (disposed) return;
+		openSocket(kind, ticket);
+	};
+
+	// Open directly for both kinds. The CP's find-or-create OpenTerminal plus its
+	// structured starting/ready messages drive readiness, so there is no separate
+	// agent-ready SSE to wait for — that wait was the orchestrator "Connecting…"
+	// stall (a large event log never redelivered the old, low-sequence agent.ready,
+	// so the socket was never even attempted).
+	void connect(options.kind);
+
+	// A hidden/parked pane attaches at 0×0 to keep receiving output WITHOUT
+	// claiming a size — the shared PTY must never be resized from an off-screen
+	// grid. The CP rejects a 0-dimension resize as invalid and closes the socket
+	// (which would loop a parked reconnect), so a 0×0 open/resize sends nothing;
+	// the real size follows from the first visible fit (open for a visible pane,
+	// or resize() when the pane becomes visible).
+	// A real terminal grid is never a handful of columns. A fit measured before the
+	// font metrics or the pane box have settled can propose e.g. 2 columns, and
+	// forwarding that to the remote PTY makes the agent TUI wrap every token to ~2
+	// chars — and because the value is cached in pendingResize and replayed on every
+	// reconnect (worker-epoch flips), it stays broken until an unrelated fit fires.
+	// Ignore an implausibly small grid so only a settled fit ever reaches the PTY.
+	// (This also subsumes the old cols<=0 guard: a parked 0×0 pane still sends
+	// nothing, so the shared PTY is never resized from an off-screen grid.)
+	const MIN_RESIZE_COLS = 20;
+	const MIN_RESIZE_ROWS = 4;
+	// Every resize the PTY receives makes a full-screen TUI redraw its whole
+	// screen, and a dragged side panel fires dozens of fits a second. Coalesce
+	// them: a trailing debounce sends only the size the pane settles on, an
+	// unchanged size is not sent again, and the final size always goes out.
+	// Resizes travel on the open terminal socket, the same live path as input;
+	// while disconnected the newest size waits and is sent on open.
+	const RESIZE_DEBOUNCE_MS = 150;
+	const flushResize = () => {
+		if (resizeTimer !== null) {
+			clearTimeout(resizeTimer);
+			resizeTimer = null;
+		}
+		if (!pendingResize) return;
+		if (sentResize && sentResize.cols === pendingResize.cols && sentResize.rows === pendingResize.rows) {
+			// The burst ended at the size the program already has, so no size
+			// change goes out; but the screen reflowed at the sizes in between.
+			// Ask the program to redraw it (an older control plane ignores the
+			// flag and applies a same-size resize, which changes nothing).
+			if (reflowed && sendJSON({ type: "resize", columns: pendingResize.cols, rows: pendingResize.rows, repaint: true })) {
+				reflowed = false;
+			}
+			return;
+		}
+		if (sendJSON({ type: "resize", columns: pendingResize.cols, rows: pendingResize.rows })) {
+			sentResize = pendingResize;
+			reflowed = false;
+		}
+	};
+	const sendResize = (cols: number, rows: number) => {
+		if (cols < MIN_RESIZE_COLS || rows < MIN_RESIZE_ROWS) return;
+		if (sentResize && (sentResize.cols !== cols || sentResize.rows !== rows)) reflowed = true;
+		pendingResize = { cols, rows };
+		if (resizeTimer !== null) clearTimeout(resizeTimer);
+		resizeTimer = setTimeout(flushResize, RESIZE_DEBOUNCE_MS);
+	};
 
 	return {
 		open: (_id, cols, rows) => {
-			pendingResize = { cols, rows };
-			sendJSON({ type: "resize", columns: cols, rows });
+			sendResize(cols, rows);
 		},
 		sendInput: (_id, input) => {
 			if (!sendJSON({ type: "input", data: input })) pendingInput.push(input);
 		},
 		resize: (_id, cols, rows) => {
-			pendingResize = { cols, rows };
-			sendJSON({ type: "resize", columns: cols, rows });
+			sendResize(cols, rows);
 		},
 		close: () => {
 			if (socket) {
@@ -184,6 +353,8 @@ export function createCloudTerminalMux(options: CloudTerminalMuxOptions): Termin
 		dispose: () => {
 			if (disposed) return;
 			disposed = true;
+			if (resizeTimer !== null) clearTimeout(resizeTimer);
+			resizeTimer = null;
 			dataListeners.clear();
 			exitListeners.clear();
 			openedListeners.clear();

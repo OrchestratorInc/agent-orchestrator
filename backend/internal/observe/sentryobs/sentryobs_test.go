@@ -14,9 +14,10 @@ func TestScrubRedactsLocalPaths(t *testing.T) {
 	cases := map[string]string{
 		// A trailing ':' is part of the matched path run (it must be, for C:\...),
 		// so it is redacted along with the path.
-		"open /Users/alice/secret/notes.md: no such file": "open [redacted-path] no such file",
-		"read /home/bob/ao/worktree/x.go failed":          "read [redacted-path] failed",
-		`stat C:\Users\carol\AppData\ao\db failed`:        "stat [redacted-path] failed",
+		"open /Users/alice/secret/notes.md: no such file":             "open [redacted-path] no such file",
+		"read /home/bob/ao/worktree/x.go failed":                      "read [redacted-path] failed",
+		`stat C:\Users\carol\AppData\ao\db failed`:                    "stat [redacted-path] failed",
+		"open /Users/dave/Library/Mobile Documents/report.md: denied": "open [redacted-path] denied",
 		"no paths here": "no paths here",
 	}
 	for in, want := range cases {
@@ -55,6 +56,53 @@ func TestInitNoDSNIsNoOp(t *testing.T) {
 	CapturePanic(context.TODO(), "kaboom", "stack", nil, "fp")
 	Flush(0)
 }
+
+func TestCaptureTagsAuthoritativeInstallID(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+	CaptureHTTPError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp")
+	select {
+	case event := <-transport.events:
+		if event.Tags["install_id"] != "ins_stable" {
+			t.Fatalf("install tag = %q", event.Tags["install_id"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Sentry event missing")
+	}
+}
+
+func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+	if !Enabled() {
+		t.Fatal("missing installation ID disabled Sentry")
+	}
+	CaptureHTTPError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp")
+	select {
+	case event := <-transport.events:
+		if _, ok := event.Tags["install_id"]; ok {
+			t.Fatal("event used a caller supplied installation ID")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Sentry event missing")
+	}
+}
+
+type recordingTransport struct{ events chan *sentry.Event }
+
+func (*recordingTransport) Configure(sentry.ClientOptions)        {}
+func (*recordingTransport) Flush(time.Duration) bool              { return true }
+func (*recordingTransport) FlushWithContext(context.Context) bool { return true }
+func (*recordingTransport) Close()                                {}
+func (t *recordingTransport) SendEvent(event *sentry.Event)       { t.events <- event }
 
 func TestScrubEventStripsPathsAndContext(t *testing.T) {
 	t.Parallel()

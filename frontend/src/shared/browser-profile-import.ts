@@ -4,10 +4,11 @@ export const BROWSER_IMPORT_MAX_SOURCE_PROFILES = 16;
 export const BROWSER_IMPORT_MAX_HISTORY_ENTRIES = 5_000;
 export const BROWSER_IMPORT_MAX_COOKIES = 20_000;
 
-export type BrowserImportFamily = "chromium" | "firefox";
+export type BrowserImportFamily = "chromium" | "firefox" | "safari";
 export type BrowserImportCookieSupport = "supported" | "partial" | "unsupported";
 export type BrowserImportCookieSupportReason =
 	| "firefox-plaintext"
+	| "safari-plaintext"
 	| "chromium-encryption-partial"
 	| "chromium-encryption-unsupported";
 
@@ -25,10 +26,16 @@ export type BrowserImportSource = {
 	cookieSupport: BrowserImportCookieSupport;
 	cookieSupportReason: BrowserImportCookieSupportReason;
 	historySupport: true;
+	profilesDeferred?: true;
+};
+
+export type BrowserImportDiscoveryRequest = {
+	sourceId?: string;
 };
 
 export type BrowserImportDiscovery = {
 	sources: BrowserImportSource[];
+	warnings?: Array<"safari-access-denied">;
 };
 
 export type BrowserImportDestination =
@@ -77,7 +84,7 @@ export type BrowserImportResult = {
 
 export type BrowserImportProgress = {
 	requestId: string;
-	phase: "preparing" | "reading" | "importing";
+	phase: "preparing" | "permission" | "reading" | "importing";
 	completed: number;
 	total: number;
 };

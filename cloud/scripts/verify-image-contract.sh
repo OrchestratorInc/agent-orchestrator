@@ -47,6 +47,8 @@ control_container="$(docker create "$control_image")"
 worker_container="$(docker create "$worker_image")"
 docker cp "${control_container}:/ao-worker" "$work_dir/control-plane-ao-worker"
 docker cp "${control_container}:/ao" "$work_dir/control-plane-ao"
+docker cp "${control_container}:/ao-worker-linux-arm64" "$work_dir/control-plane-ao-worker-linux-arm64"
+docker cp "${control_container}:/ao-linux-arm64" "$work_dir/control-plane-ao-linux-arm64"
 docker cp "${worker_container}:/ao-worker" "$work_dir/worker-ao-worker"
 
 if [[ ! -x "$work_dir/control-plane-ao-worker" || ! -x "$work_dir/worker-ao-worker" ]]; then
@@ -57,6 +59,32 @@ if [[ ! -x "$work_dir/control-plane-ao" ]]; then
 	echo "Control-plane image must package the AO hook helper." >&2
 	exit 1
 fi
+if [[ ! -x "$work_dir/control-plane-ao-worker-linux-arm64" || ! -x "$work_dir/control-plane-ao-linux-arm64" ]]; then
+	echo "Control-plane image must package the linux/arm64 ao-worker and AO hook helper." >&2
+	exit 1
+fi
+# The uploaded worker binaries must be static Linux ELF executables for the
+# architecture their path promises: /ao-worker and /ao are linux/amd64, the
+# -linux-arm64 siblings are linux/arm64.
+python3 - "$work_dir" <<'PY'
+import sys
+
+MACHINES = {0x3E: "amd64", 0xB7: "arm64"}
+expected = {
+    "control-plane-ao-worker": "amd64",
+    "control-plane-ao": "amd64",
+    "control-plane-ao-worker-linux-arm64": "arm64",
+    "control-plane-ao-linux-arm64": "arm64",
+}
+for name, arch in expected.items():
+    with open(f"{sys.argv[1]}/{name}", "rb") as binary:
+        header = binary.read(20)
+    if header[:4] != b"\x7fELF" or header[4] != 2 or header[5] != 1:
+        raise SystemExit(f"{name} is not a 64-bit little-endian ELF executable")
+    machine = MACHINES.get(int.from_bytes(header[18:20], "little"), "unknown")
+    if machine != arch:
+        raise SystemExit(f"{name} targets {machine}, expected {arch}")
+PY
 if ! cmp -s "$work_dir/control-plane-ao-worker" "$work_dir/worker-ao-worker"; then
 	echo "Control-plane and worker images contain different ao-worker binaries." >&2
 	exit 1

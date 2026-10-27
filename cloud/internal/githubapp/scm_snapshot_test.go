@@ -1,0 +1,448 @@
+package githubapp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
+)
+
+func TestStatusReadTokenUsesGrantedReadPermissions(t *testing.T) {
+	for _, missing := range []string{"statuses", "checks", "contents", "pull_requests"} {
+		t.Run(missing, func(t *testing.T) {
+			posts := 0
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/app/installations/1234":
+					permissions := map[string]string{"contents": "write", "pull_requests": "write", "checks": "read", "statuses": "read"}
+					delete(permissions, missing)
+					_ = json.NewEncoder(w).Encode(map[string]any{"id": 1234, "permissions": permissions})
+				case "/app/installations/1234/access_tokens":
+					posts++
+					if posts == 1 {
+						w.WriteHeader(http.StatusUnprocessableEntity)
+						_, _ = w.Write([]byte(`{"message":"The permissions requested are not granted to this installation."}`))
+						return
+					}
+					var request struct {
+						RepositoryIDs []int64           `json:"repository_ids"`
+						Permissions   map[string]string `json:"permissions"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&request)
+					if len(request.RepositoryIDs) != 1 || request.RepositoryIDs[0] != 42 || request.Permissions[missing] != "" || len(request.Permissions) != 3 {
+						t.Errorf("fallback scope = %+v", request)
+					}
+					for _, permission := range request.Permissions {
+						if permission != "read" {
+							t.Errorf("fallback requested %q permission", permission)
+						}
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"token": "scoped-token", "expires_at": time.Now().Add(time.Hour)})
+				default:
+					t.Errorf("unexpected request %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer gh.Close()
+			client := newAppTestClient(t, gh.URL, gh.Client())
+			_, err := client.statusReadToken(context.Background(), 1234, 42)
+			mandatory := missing == "contents" || missing == "pull_requests"
+			if mandatory {
+				if err == nil || posts != 1 {
+					t.Fatalf("missing required permission: error=%v posts=%d", err, posts)
+				}
+			} else if err != nil || posts != 2 {
+				t.Fatalf("optional permission fallback: error=%v posts=%d", err, posts)
+			}
+		})
+	}
+}
+
+func TestStatusReadTokenDoesNotRetryUnrelatedErrors(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusUnprocessableEntity} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			requests := 0
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"message":"Repository access denied"}`))
+			}))
+			defer gh.Close()
+			_, err := newAppTestClient(t, gh.URL, gh.Client()).statusReadToken(context.Background(), 1234, 42)
+			if err == nil || requests != 1 {
+				t.Fatalf("error=%v requests=%d", err, requests)
+			}
+		})
+	}
+}
+
+func TestPullRequestSnapshotQueryHasBalancedDelimiters(t *testing.T) {
+	if err := validateGraphQLDelimiters(pullRequestSnapshotQuery); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMapRESTMergeability(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name      string
+		mergeable *bool
+		state     string
+		want      contract.Mergeability
+	}{
+		{"clean+mergeable", &yes, "clean", contract.MergeMergeable},
+		{"has_hooks+mergeable", &yes, "has_hooks", contract.MergeMergeable},
+		{"dirty", &no, "dirty", contract.MergeConflicting},
+		{"blocked", &yes, "blocked", contract.MergeBlocked},
+		{"behind", &yes, "behind", contract.MergeBlocked},
+		{"unstable", &yes, "unstable", contract.MergeUnstable},
+		{"nil mergeable stays unknown", nil, "unknown", contract.MergeUnknown},
+		{"clean but not mergeable stays unknown", &no, "clean", contract.MergeUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mapRESTMergeability(tc.mergeable, tc.state); got != tc.want {
+				t.Fatalf("mapRESTMergeability(%v,%q) = %q, want %q", tc.mergeable, tc.state, got, tc.want)
+			}
+		})
+	}
+}
+
+// A private PR snapshot reads commit and branch fields and the combined check
+// rollup. Status-only CI requires Commit statuses access even without check runs.
+func TestPrivatePullRequestSnapshotUsesContentsAndStatusesReadToken(t *testing.T) {
+	var granted map[string]string
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app/installations/1234/access_tokens":
+			var request struct {
+				RepositoryIDs []int64           `json:"repository_ids"`
+				Permissions   map[string]string `json:"permissions"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode token request: %v", err)
+			}
+			if len(request.RepositoryIDs) != 1 || request.RepositoryIDs[0] != 42 {
+				t.Errorf("repository scope = %v, want [42]", request.RepositoryIDs)
+			}
+			granted = request.Permissions
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"token": "private-pr-token", "expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			})
+		case "/graphql":
+			if r.Header.Get("Authorization") != "Bearer private-pr-token" {
+				t.Errorf("GraphQL used unexpected token")
+			}
+			if granted["contents"] != "read" || granted["statuses"] != "read" {
+				_ = json.NewEncoder(w).Encode(map[string]any{"errors": []map[string]string{{"message": "Resource not accessible by integration"}}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+				"number": 1, "url": "https://github.com/owner/private/pull/1", "state": "OPEN",
+				"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "headRefOid": "head123",
+				"commits": map[string]any{"nodes": []map[string]any{{"commit": map[string]any{"statusCheckRollup": map[string]any{
+					"state": "SUCCESS", "contexts": map[string]any{"nodes": []map[string]any{{"__typename": "StatusContext", "context": "CodeRabbit", "state": "SUCCESS"}}},
+				}}}}},
+			}}}})
+		default:
+			t.Errorf("unexpected GitHub request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer gh.Close()
+
+	client := newAppTestClient(t, gh.URL, gh.Client())
+	access, err := client.statusReadToken(context.Background(), 1234, 42)
+	if err != nil {
+		t.Fatalf("mint status token: %v", err)
+	}
+	snapshot, err := client.FetchPullRequestSnapshotWithToken(context.Background(), access.Token, "owner", "private", 1)
+	if err != nil {
+		t.Fatalf("fetch private PR snapshot: %v", err)
+	}
+	if snapshot.Observation.Mergeability != contract.MergeMergeable {
+		t.Fatalf("mergeability = %q, want mergeable", snapshot.Observation.Mergeability)
+	}
+	if snapshot.Observation.CIState != contract.CIPassing {
+		t.Fatalf("CI state = %q, want passing for status-only CI", snapshot.Observation.CIState)
+	}
+	if granted["pull_requests"] != "read" || granted["checks"] != "read" || granted["statuses"] != "read" {
+		t.Fatalf("PR/check/status permissions = %v, want read", granted)
+	}
+}
+
+func TestPrivatePullRequestSnapshotFallsBackWhenStatusRollupIsForbidden(t *testing.T) {
+	var fullQueries, limitedQueries int
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/graphql":
+			var request struct {
+				Query string `json:"query"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request.Query == pullRequestSnapshotQuery {
+				fullQueries++
+				_ = json.NewEncoder(w).Encode(map[string]any{"errors": []map[string]string{{"message": "Resource not accessible by integration"}}})
+				return
+			}
+			if request.Query != pullRequestSnapshotQueryWithoutRollup {
+				t.Errorf("unexpected GraphQL query")
+			}
+			limitedQueries++
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+				"number": 1, "url": "https://github.com/owner/private/pull/1", "state": "OPEN",
+				"mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "headRefOid": "head123",
+			}}}})
+		case "/repos/owner/private/commits/head123/check-runs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"check_runs": []map[string]any{{
+				"id": 42, "name": "test", "status": "completed", "conclusion": "success",
+			}}})
+		case "/repos/owner/private/commits/head123/status":
+			_ = json.NewEncoder(w).Encode(map[string]any{"state": "success", "total_count": 0})
+		default:
+			t.Errorf("unexpected GitHub request %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer gh.Close()
+	client := NewRESTClient(gh.URL, gh.Client())
+	snapshot, err := client.FetchPullRequestSnapshotWithToken(context.Background(), "token", "owner", "private", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fullQueries != 1 || limitedQueries != 1 {
+		t.Fatalf("queries = full %d, limited %d", fullQueries, limitedQueries)
+	}
+	if snapshot.Observation.CIState != contract.CIPassing || len(snapshot.Checks) != 1 || snapshot.Checks[0].ProviderID != "42" {
+		t.Fatalf("fallback checks = %+v, CI state = %q", snapshot.Checks, snapshot.Observation.CIState)
+	}
+}
+
+func TestSnapshotFallbackRequiresBothCISources(t *testing.T) {
+	for _, tc := range []struct {
+		name, state string
+		want        contract.CIState
+	}{
+		{"inaccessible", "", contract.CIUnknown},
+		{"status failure", "failure", contract.CIFailing},
+		{"status pending", "pending", contract.CIPending},
+		{"status success", "success", contract.CIPassing},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/graphql" {
+					var request struct {
+						Query string `json:"query"`
+					}
+					_ = json.NewDecoder(r.Body).Decode(&request)
+					if request.Query == pullRequestSnapshotQuery {
+						_, _ = w.Write([]byte(`{"errors":[{"message":"Resource not accessible by integration"}]}`))
+					} else {
+						_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"number":1,"url":"https://github.com/owner/private/pull/1","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"head123"}}}}`))
+					}
+				} else if strings.HasSuffix(r.URL.Path, "/check-runs") {
+					_, _ = w.Write([]byte(`{"check_runs":[{"id":42,"name":"test","status":"completed","conclusion":"success"}]}`))
+				} else if strings.HasSuffix(r.URL.Path, "/status") && tc.state != "" {
+					_ = json.NewEncoder(w).Encode(map[string]any{"state": tc.state, "total_count": 1})
+				} else {
+					w.WriteHeader(http.StatusForbidden)
+				}
+			}))
+			defer gh.Close()
+			snapshot, err := NewRESTClient(gh.URL, gh.Client()).FetchPullRequestSnapshotWithToken(context.Background(), "token", "owner", "private", 1)
+			if err != nil || snapshot.Observation.CIState != tc.want || snapshot.Observation.Mergeability != contract.MergeMergeable {
+				t.Fatalf("snapshot=%+v error=%v", snapshot.Observation, err)
+			}
+		})
+	}
+}
+
+// When GraphQL reports mergeable=UNKNOWN for an open PR, the fetch must fall back
+// to the REST pulls endpoint (which forces GitHub's computation) and adopt its
+// mergeable_state — the fix for a PR stranded at mergeability=unknown forever.
+func TestFetchPullRequestSnapshotRESTFallbackResolvesUnknownMergeability(t *testing.T) {
+	var restHits int
+	gh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/graphql" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+				"number": 7, "id": "PR_7", "url": "https://github.com/acme/widgets/pull/7", "state": "OPEN",
+				"mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN", "reviewDecision": "REVIEW_REQUIRED",
+				"headRefName": "feature", "headRefOid": "head123", "baseRefName": "main", "baseRefOid": "base123",
+			}}}})
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/repos/acme/widgets/pulls/7" {
+			restHits++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"number": 7, "html_url": "https://github.com/acme/widgets/pull/7", "state": "open",
+				"mergeable": true, "mergeable_state": "clean",
+				"head": map[string]any{"sha": "head123", "ref": "feature"}, "base": map[string]any{"ref": "main"},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer gh.Close()
+
+	client := NewRESTClient(gh.URL, gh.Client())
+	snapshot, err := client.FetchPullRequestSnapshotWithToken(context.Background(), "token", "acme", "widgets", 7)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if restHits != 1 {
+		t.Fatalf("REST pulls endpoint hit %d times, want 1 (fallback on GraphQL UNKNOWN)", restHits)
+	}
+	if snapshot.Observation.Mergeability != contract.MergeMergeable {
+		t.Fatalf("mergeability = %q, want mergeable (resolved via REST fallback)", snapshot.Observation.Mergeability)
+	}
+}
+
+func validateGraphQLDelimiters(document string) error {
+	openers := map[rune]rune{'}': '{', ')': '(', ']': '['}
+	var stack []rune
+	for offset, current := range document {
+		switch current {
+		case '{', '(', '[':
+			stack = append(stack, current)
+		case '}', ')', ']':
+			if len(stack) == 0 || stack[len(stack)-1] != openers[current] {
+				return fmt.Errorf("GraphQL query has unmatched %q at byte %d", current, offset)
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+	if len(stack) > 0 {
+		return fmt.Errorf("GraphQL query has unclosed %q", stack[len(stack)-1])
+	}
+	return nil
+}
+
+func TestNormalizePullRequestSnapshotIncludesReviewsThreadsAndStatusContexts(t *testing.T) {
+	var response githubPullRequestSnapshotResponse
+	if err := json.Unmarshal([]byte(`{
+		"data":{"repository":{"pullRequest":{
+			"number":7,"id":"PR_7","url":"https://github.com/acme/widgets/pull/7",
+			"state":"OPEN","isDraft":false,"merged":false,"closed":false,
+			"title":"Webhook parity","additions":12,"deletions":3,"changedFiles":2,
+			"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"CHANGES_REQUESTED",
+			"headRefName":"feature","headRefOid":"head123","baseRefName":"main","baseRefOid":"base123",
+			"author":{"login":"owner","avatarUrl":"https://avatars.example/owner"},
+			"commits":{"nodes":[{"commit":{"statusCheckRollup":{"state":"FAILURE","contexts":{"nodes":[
+				{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://ci/test","databaseId":11},
+				{"__typename":"StatusContext","context":"lint","state":"SUCCESS","targetUrl":"https://ci/lint"}
+			]}}}}]},
+			"reviews":{"nodes":[
+				{"id":"R1","databaseId":101,"state":"COMMENTED","url":"https://github.com/r1","body":"looks good with one note","submittedAt":"2026-09-22T00:00:00Z","author":{"login":"mohak","__typename":"User"}},
+				{"id":"R2","databaseId":102,"state":"CHANGES_REQUESTED","url":"https://github.com/r2","body":"fix this","submittedAt":"2026-09-22T00:01:00Z","author":{"login":"reviewer","__typename":"User"}}
+			],"pageInfo":{"hasNextPage":false}},
+			"reviewThreads":{"nodes":[
+				{"id":"T1","isResolved":false,"isOutdated":false,"path":"main.go","line":12,"comments":{"nodes":[
+					{"id":"C1","databaseId":201,"body":"rename this","url":"https://github.com/c1","author":{"login":"reviewer","__typename":"User"},"pullRequestReview":{"databaseId":102}}
+				]}},
+				{"id":"T2","isResolved":true,"isOutdated":false,"path":"bot.go","line":4,"comments":{"nodes":[
+					{"id":"C2","databaseId":202,"body":"automated note","url":"https://github.com/c2","author":{"login":"lint-bot","__typename":"Bot"},"pullRequestReview":{"databaseId":101}}
+				]}}
+			],"pageInfo":{"hasNextPage":false}}
+		}}}}
+	`), &response); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := normalizePullRequestSnapshot(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Observation.CIState != contract.CIFailing || len(got.Checks) != 2 {
+		t.Fatalf("checks = %+v, state = %q", got.Checks, got.Observation.CIState)
+	}
+	if len(got.Reviews) != 2 || got.Reviews[0].State != contract.ReviewNone || got.Reviews[0].Body != "looks good with one note" {
+		t.Fatalf("reviews = %+v", got.Reviews)
+	}
+	if len(got.Threads) != 2 || len(got.Comments) != 2 || got.Comments[1].IsBot != true {
+		t.Fatalf("threads = %+v comments = %+v", got.Threads, got.Comments)
+	}
+	if got.Observation.Mergeability != contract.MergeMergeable || got.AuthorAvatarURL == "" {
+		t.Fatalf("snapshot = %+v", got)
+	}
+}
+
+func TestNormalizePullRequestSnapshotMarksPartialReviewWindow(t *testing.T) {
+	response := githubPullRequestSnapshotResponse{}
+	response.Data.Repository.PullRequest.Number = 1
+	response.Data.Repository.PullRequest.URL = "https://github.com/acme/widgets/pull/1"
+	response.Data.Repository.PullRequest.Reviews.PageInfo.HasNextPage = true
+	response.Data.Repository.PullRequest.ReviewThreads.PageInfo.HasNextPage = true
+	got, err := normalizePullRequestSnapshot(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ReviewsPartial {
+		t.Fatal("ReviewsPartial = false, want true")
+	}
+}
+
+func TestNormalizePullRequestSnapshotEncodesNoChecksAsArray(t *testing.T) {
+	tests := []struct {
+		name       string
+		withRollup bool
+	}{
+		{name: "missing rollup"},
+		{name: "empty rollup", withRollup: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var response githubPullRequestSnapshotResponse
+			response.Data.Repository.PullRequest.Number = 1
+			response.Data.Repository.PullRequest.URL = "https://github.com/acme/widgets/pull/1"
+			if tt.withRollup {
+				response.Data.Repository.PullRequest.Commits.Nodes = append(
+					response.Data.Repository.PullRequest.Commits.Nodes,
+					struct {
+						Commit struct {
+							StatusCheckRollup *struct {
+								State    string
+								Contexts struct {
+									Nodes []struct {
+										Type                                 string `json:"__typename"`
+										Name, Status, Conclusion, DetailsURL string
+										DatabaseID                           int64
+										Context, State, TargetURL            string
+									} `json:"nodes"`
+									PageInfo githubPageInfo `json:"pageInfo"`
+								} `json:"contexts"`
+							} `json:"statusCheckRollup"`
+						} `json:"commit"`
+					}{},
+				)
+				response.Data.Repository.PullRequest.Commits.Nodes[0].Commit.StatusCheckRollup = &struct {
+					State    string
+					Contexts struct {
+						Nodes []struct {
+							Type                                 string `json:"__typename"`
+							Name, Status, Conclusion, DetailsURL string
+							DatabaseID                           int64
+							Context, State, TargetURL            string
+						} `json:"nodes"`
+						PageInfo githubPageInfo `json:"pageInfo"`
+					} `json:"contexts"`
+				}{}
+			}
+
+			snapshot, err := normalizePullRequestSnapshot(response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := string(snapshot.Observation.Checks); got != "[]" {
+				t.Fatalf("checks = %s, want []", got)
+			}
+		})
+	}
+}

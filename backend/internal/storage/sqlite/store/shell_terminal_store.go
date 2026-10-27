@@ -18,13 +18,15 @@ func (s *Store) InsertShellTerminal(ctx context.Context, rec shelltermsvc.ShellT
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	_, err := s.qw.InsertShellTerminal(ctx, gen.InsertShellTerminalParams{
-		HandleID:   rec.HandleID,
-		ProjectID:  optionalProjectID(rec.ProjectID),
-		SessionID:  optionalSessionID(rec.SessionID),
-		WorkingDir: rec.WorkingDir,
-		Title:      rec.Title,
-		AppRunID:   rec.AppRunID,
-		CreatedAt:  rec.CreatedAt,
+		HandleID:                  rec.HandleID,
+		ProjectID:                 optionalProjectID(rec.ProjectID),
+		SessionID:                 optionalSessionID(rec.SessionID),
+		WorkingDir:                rec.WorkingDir,
+		Title:                     rec.Title,
+		AppRunID:                  rec.AppRunID,
+		Transient:                 rec.Transient,
+		CreatedAt:                 rec.CreatedAt,
+		PreviewCapabilityVerifier: rec.PreviewCapabilityVerifier,
 	})
 	if err != nil {
 		return fmt.Errorf("insert shell terminal %s: %w", rec.HandleID, err)
@@ -69,8 +71,8 @@ func (s *Store) SelectShellTerminalsBySessionID(ctx context.Context, sessionID d
 }
 
 // SelectShellTerminalsFromPreviousAppRuns returns shell terminals left behind
-// by any app run other than the one given — the orphans the boot-time reaper
-// destroys.
+// by any app run other than the one given. Boot reconciliation preserves live
+// durable shells and destroys only abandoned transient commands.
 func (s *Store) SelectShellTerminalsFromPreviousAppRuns(ctx context.Context, appRunID string) ([]shelltermsvc.ShellTerminalRecord, error) {
 	rows, err := s.qr.SelectShellTerminalsFromPreviousAppRuns(ctx, appRunID)
 	if err != nil {
@@ -128,6 +130,13 @@ func optionalProjectID(id domain.ProjectID) *domain.ProjectID {
 	return &id
 }
 
+func projectIDValue(id *domain.ProjectID) domain.ProjectID {
+	if id == nil {
+		return ""
+	}
+	return *id
+}
+
 // optionalSessionID maps the service's "no session" empty string onto the
 // nullable column, so a session-less shell stores NULL rather than an empty
 // string that would violate the sessions FK.
@@ -140,11 +149,13 @@ func optionalSessionID(id domain.SessionID) sql.NullString {
 
 func shellTerminalFromGen(row gen.ShellTerminal) shelltermsvc.ShellTerminalRecord {
 	rec := shelltermsvc.ShellTerminalRecord{
-		HandleID:   row.HandleID,
-		WorkingDir: row.WorkingDir,
-		Title:      row.Title,
-		AppRunID:   row.AppRunID,
-		CreatedAt:  row.CreatedAt,
+		HandleID:                  row.HandleID,
+		WorkingDir:                row.WorkingDir,
+		Title:                     row.Title,
+		AppRunID:                  row.AppRunID,
+		Transient:                 row.Transient,
+		CreatedAt:                 row.CreatedAt,
+		PreviewCapabilityVerifier: row.PreviewCapabilityVerifier,
 	}
 	if row.ProjectID != nil {
 		rec.ProjectID = *row.ProjectID
@@ -161,4 +172,14 @@ func shellTerminalsFromGen(rows []gen.ShellTerminal) []shelltermsvc.ShellTermina
 		out = append(out, shellTerminalFromGen(row))
 	}
 	return out
+}
+
+// SelectRestorableShellTerminals includes durable shells from all app launches
+// and trusted command terminals belonging to the current launch.
+func (s *Store) SelectRestorableShellTerminals(ctx context.Context, appRunID string) ([]shelltermsvc.ShellTerminalRecord, error) {
+	rows, err := s.qr.SelectRestorableShellTerminals(ctx, appRunID)
+	if err != nil {
+		return nil, fmt.Errorf("select restorable shell terminals: %w", err)
+	}
+	return shellTerminalsFromGen(rows), nil
 }

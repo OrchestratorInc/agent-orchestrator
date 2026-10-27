@@ -2,6 +2,7 @@ package codexappserver
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"sort"
@@ -29,6 +30,24 @@ type capacityWireBucket struct {
 	Secondary            *capacityWireWindow `json:"secondary"`
 	RateLimitReachedType *string             `json:"rateLimitReachedType"`
 	SpendControlReached  *bool               `json:"spendControlReached"`
+	primaryReported      bool
+	secondaryReported    bool
+}
+
+func (w *capacityWireBucket) UnmarshalJSON(data []byte) error {
+	type bucket capacityWireBucket
+	var decoded bucket
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*w = capacityWireBucket(decoded)
+	_, w.primaryReported = fields["primary"]
+	_, w.secondaryReported = fields["secondary"]
+	return nil
 }
 
 type capacityReadEnvelope struct {
@@ -56,7 +75,31 @@ func capacityObservationFromEnvelope(envelope capacityReadEnvelope, observedAt t
 		Plan: plan, Overall: overall, AdditionalBuckets: additional,
 		ResetCredits: normalizeResetCredits(envelope.RateLimitResetCredits),
 		ObservedAt:   observedAt.UTC(), Partial: partial,
+		AutoResumeResetsAt: capacityAutoResumeReset(envelope, observedAt, partial),
 	}
+}
+
+func capacityAutoResumeReset(envelope capacityReadEnvelope, now time.Time, partial bool) *time.Time {
+	if partial {
+		return nil
+	}
+	canonical := func(wire capacityWireBucket) capacityWireBucket {
+		if wire.LimitID == nil {
+			id := "codex"
+			wire.LimitID = &id
+		}
+		return wire
+	}
+	reset := codexUsageLimitResetAt(canonical(envelope.RateLimits), now)
+	if reset.IsZero() {
+		return nil
+	}
+	for id, wire := range envelope.RateLimitsByLimitID {
+		if id != "codex" || !codexUsageLimitResetAt(canonical(wire), now).Equal(reset) {
+			return nil
+		}
+	}
+	return &reset
 }
 
 func normalizeResetCredits(summary *codexproto.RateLimitResetCreditsSummary) *domain.CodexResetCreditsSummary {
@@ -168,9 +211,32 @@ func resetsAtIn(resetsAt *time.Time, now time.Time) int64 {
 func (c *accountClient) ReadCapacity(ctx context.Context) (ports.CodexCapacityObservation, error) {
 	var response capacityReadEnvelope
 	if err := c.conn.request(ctx, codexproto.MethodAccountRateLimitsRead, map[string]any{}, &response); err != nil {
-		return ports.CodexCapacityObservation{}, err
+		return ports.CodexCapacityObservation{}, safeCapacityReadError(err)
 	}
 	return capacityObservationFromEnvelope(response, time.Now().UTC(), false), nil
+}
+
+func safeCapacityReadError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return err
+	}
+	if isRevokedOAuthTokenError(err) {
+		return ports.ErrCodexOAuthTokenRevoked
+	}
+	var providerError *rpcError
+	if errors.As(err, &providerError) {
+		return ports.ErrCodexCapacityRequestRejected
+	}
+	return ports.ErrCodexCapacityProviderUnavailable
+}
+
+func isRevokedOAuthTokenError(err error) bool {
+	var providerError *rpcError
+	if !errors.As(err, &providerError) {
+		return false
+	}
+	message := strings.ToLower(providerError.Message)
+	return strings.Contains(message, "401 unauthorized") && strings.Contains(message, "token_revoked")
 }
 
 func (c *accountClient) ReadUsage(ctx context.Context) (ports.CodexUsageObservation, error) {

@@ -55,7 +55,7 @@ WHERE usage_bindings.session_id = sqlc.arg(session_id)
       FROM sessions
       WHERE sessions.id = usage_bindings.session_id
         AND sessions.runtime_launch_id = sqlc.arg(expected_runtime_launch_id)
-        AND sessions.updated_at = sqlc.arg(expected_session_updated_at)
+        AND sessions.revision = sqlc.arg(expected_session_revision)
         AND sessions.is_terminated = 0
   )
 RETURNING *;
@@ -84,6 +84,13 @@ SELECT *
 FROM usage_sources
 WHERE binding_id = ?
 ORDER BY generation, id;
+
+-- name: ExistsUsageSourceByArtifactPath :one
+SELECT CAST(EXISTS (
+    SELECT 1
+    FROM usage_sources
+    WHERE artifact_path = sqlc.arg(artifact_path)
+) AS INTEGER);
 
 -- name: ListWatchableUsageSources :many
 SELECT us.*
@@ -478,14 +485,17 @@ WHERE id = sqlc.arg(id)
 RETURNING binding_id;
 
 -- name: ListLegacyUsageSourceIDs :many
-SELECT DISTINCT us.id
-FROM usage_sources us
-JOIN model_usage_events mue ON mue.usage_source_id = us.id
 -- Open attribution: never attributed, or attributed only by inference and so
--- still replaceable by an observation.
+-- still replaceable by an observation. This is exactly what the partial index
+-- idx_model_usage_events_open_attribution holds, so the sources are read from
+-- that index alone. Every event's usage_source_id references usage_sources, so
+-- no join is needed; with the join the planner left the partial index for the
+-- full usage_source index once sqlite_stat1 existed.
+SELECT DISTINCT mue.usage_source_id
+FROM model_usage_events mue
 WHERE mue.billing_provider_id IS NULL
    OR mue.billing_provider_source = 'inferred'
-ORDER BY us.id;
+ORDER BY mue.usage_source_id;
 
 -- name: ListLegacyUsageEvents :many
 SELECT

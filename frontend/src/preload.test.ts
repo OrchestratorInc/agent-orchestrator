@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
+import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
+import { SET_CHAT_DRAFT_RISK_CHANNEL } from "./shared/chat-draft-risk";
 import type { AoBridge } from "./preload";
 
 const electronMocks = vi.hoisted(() => {
@@ -65,6 +66,27 @@ describe("preload getPathForFile bridge", () => {
 	});
 });
 
+describe("preload repository branch bridge", () => {
+	it("invokes the main-process branch probe over IPC", async () => {
+		electronMocks.invoke.mockResolvedValueOnce("main");
+
+		await expect(exposedBridge().app.getRepositoryBranch("/repo/project")).resolves.toBe("main");
+
+		expect(electronMocks.invoke).toHaveBeenCalledWith("app:getRepositoryBranch", "/repo/project");
+	});
+});
+
+describe("preload Developer Mode updater bridge", () => {
+	it("sends only the updater eligibility boolean to the main process", async () => {
+		await exposedBridge().updateSettings.setMacDifferentialUpdates(true);
+
+		expect(electronMocks.invoke).toHaveBeenCalledWith(
+			"updateSettings:setMacDifferentialUpdates",
+			true,
+		);
+	});
+});
+
 describe("preload telemetry generation bridge", () => {
 	it("tags captures with the latest broadcast generation without a renderer reload", async () => {
 		telemetryPolicyBroadcastListener?.({}, { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
@@ -73,15 +95,6 @@ describe("preload telemetry generation bridge", () => {
 		await exposedBridge().telemetry.capture({ kind: "message", message: "second" });
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(1, "telemetry:capture", { kind: "message", message: "first", consentGeneration: "generation-off" });
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(2, "telemetry:capture", { kind: "message", message: "second", consentGeneration: "generation-on" });
-	});
-
-	it("attaches the latest policy generation to visibility signals without accepting renderer generation", () => {
-		telemetryPolicyBroadcastListener?.({}, { eventsEnabled: true, consentGeneration: "generation-a", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
-		expect(exposedBridge().telemetry.signalAgentSwitchVisibility({ kind: "focus", value: true })).toBe(true);
-		telemetryPolicyBroadcastListener?.({}, { eventsEnabled: true, consentGeneration: "generation-b", updatedAt: "2026-08-28T10:15:31.000Z", acknowledged: true, state: "applied", environmentVeto: false, durabilitySupported: true });
-		expect(exposedBridge().telemetry.signalAgentSwitchVisibility({ kind: "online", value: false })).toBe(true);
-		expect(electronMocks.send).toHaveBeenNthCalledWith(1, "agent-switch:visibility", { consentGeneration: "generation-a", signal: { kind: "focus", value: true } });
-		expect(electronMocks.send).toHaveBeenNthCalledWith(2, "agent-switch:visibility", { consentGeneration: "generation-b", signal: { kind: "online", value: false } });
 	});
 
 	it("acknowledges renderer queue purge only after every registered cleanup succeeds", async () => {
@@ -213,6 +226,16 @@ describe("preload application shortcut bridges", () => {
 		expect(electronMocks.send).toHaveBeenCalledWith(SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, true);
 	});
 
+	it("reports whether the active Chat draft has an unsafe unload boundary", () => {
+		const copy = { title: "Brouillon", message: "Non enregistré", detail: "Copiez le brouillon", stay: "Rester", leave: "Quitter" };
+		exposedBridge().app.setChatDraftRisk(["persistence-failed", "pending-attachments"], copy);
+
+		expect(electronMocks.send).toHaveBeenCalledWith(SET_CHAT_DRAFT_RISK_CHANNEL, [
+			"persistence-failed",
+			"pending-attachments",
+		], copy);
+	});
+
 	it.each([
 		[NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onNewShellTerminalShortcut(listener)],
 		[CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onCloseShellTerminalShortcut(listener)],
@@ -224,7 +247,7 @@ describe("preload application shortcut bridges", () => {
 		[NEXT_SESSION_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onNextSessionShortcut(listener)],
 		[PREVIOUS_TAB_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onPreviousTabShortcut(listener)],
 		[NEXT_TAB_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onNextTabShortcut(listener)],
-		[FOCUS_TERMINAL_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onFocusTerminalShortcut(listener)],
+		[APP_SHORTCUT_CHANNEL, (listener: () => void) => exposedBridge().app.onShortcut(listener)],
 	] as const)("delivers and disposes %s", (channel, subscribe) => {
 		const listener = vi.fn();
 		const dispose = subscribe(listener);
@@ -262,6 +285,26 @@ describe("preload uiSettings bridge", () => {
 });
 
 describe("preload browser profile bridge", () => {
+	it("sends revisioned bounds and forwards applied acknowledgements", () => {
+		const bridge = exposedBridge();
+		const input = {
+			viewId: "1:worker-1",
+			revision: 7,
+			rect: { x: 10, y: 20, width: 300, height: 200 },
+			visible: true,
+		};
+		bridge.browser.setBounds(input);
+		expect(electronMocks.send).toHaveBeenCalledWith("browser:setBounds", input);
+
+		const listener = vi.fn();
+		const dispose = bridge.browser.onBoundsApplied(listener);
+		const wrapped = electronMocks.listeners.get("browser:boundsApplied");
+		wrapped?.({}, input);
+		expect(listener).toHaveBeenCalledWith(input);
+		dispose();
+		expect(electronMocks.off).toHaveBeenCalledWith("browser:boundsApplied", wrapped);
+	});
+
 	it("routes profile state, native menu, and CRUD calls over IPC", async () => {
 		const bridge = exposedBridge();
 		await bridge.browser.getProfile("1:worker-1");
@@ -278,12 +321,27 @@ describe("preload browser profile bridge", () => {
 				confirm: "Yes",
 			},
 		});
+		await bridge.browser.selectProfile({
+			viewId: "1:worker-1",
+			profileId: null,
+			labels: {
+				temporary: "Temporary",
+				manage: "Manage",
+				switchTitle: "Switch",
+				switchMessage: "Reload",
+				switchDetail: "Unsaved",
+				cancel: "No",
+				confirm: "Yes",
+			},
+		});
 		await bridge.browser.historySuggestions({ viewId: "1:worker-1", query: "git" });
+		await bridge.browser.historyFavicon({ viewId: "1:worker-1", url: "https://github.com/openai" });
+		await bridge.browser.captureScreenshot("1:worker-1");
 		await bridge.browserProfiles.list();
 		await bridge.browserProfiles.create("Work");
 		await bridge.browserProfiles.rename({ id: "profile-id", name: "Personal" });
 		await bridge.browserProfiles.clear("profile-id");
-		await bridge.browserProfiles.delete("profile-id");
+		await bridge.browserProfiles.delete("profile-id", ["1:worker-1"]);
 		await bridge.browserProfiles.discoverImportSources();
 		await bridge.browserProfiles.import({
 			requestId: "11111111-1111-4111-8111-111111111111",
@@ -296,14 +354,22 @@ describe("preload browser profile bridge", () => {
 
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(1, "browser:profile:get", "1:worker-1");
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(2, "browser:profile:menu", expect.objectContaining({ viewId: "1:worker-1" }));
-		expect(electronMocks.invoke).toHaveBeenNthCalledWith(3, "browser:history:suggest", { viewId: "1:worker-1", query: "git" });
-		expect(electronMocks.invoke).toHaveBeenNthCalledWith(4, "browserProfiles:list");
-		expect(electronMocks.invoke).toHaveBeenNthCalledWith(5, "browserProfiles:create", { name: "Work" });
-		expect(electronMocks.invoke).toHaveBeenNthCalledWith(6, "browserProfiles:rename", { id: "profile-id", name: "Personal" });
-		expect(electronMocks.invoke).toHaveBeenNthCalledWith(7, "browserProfiles:clear", { id: "profile-id" });
-		expect(electronMocks.invoke).toHaveBeenNthCalledWith(8, "browserProfiles:delete", { id: "profile-id" });
-		expect(electronMocks.invoke).toHaveBeenNthCalledWith(9, "browserProfiles:import:discover");
-		expect(electronMocks.invoke).toHaveBeenNthCalledWith(10, "browserProfiles:import:start", expect.objectContaining({ destination: { mode: "merge", name: "Work" } }));
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(3, "browser:profile:select", expect.objectContaining({ viewId: "1:worker-1", profileId: null }));
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(4, "browser:history:suggest", { viewId: "1:worker-1", query: "git" });
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(5, "browser:history:favicon", { viewId: "1:worker-1", url: "https://github.com/openai" });
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(6, "browser:captureScreenshot", "1:worker-1");
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(7, "browserProfiles:list");
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(8, "browserProfiles:create", { name: "Work" });
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(9, "browserProfiles:rename", { id: "profile-id", name: "Personal" });
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(10, "browserProfiles:clear", { id: "profile-id" });
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(11, "browserProfiles:delete", { id: "profile-id", confirmedViewIds: ["1:worker-1"] });
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(12, "browserProfiles:import:discover");
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(13, "browserProfiles:import:start", expect.objectContaining({ destination: { mode: "merge", name: "Work" } }));
+	});
+
+	it("requests the sessions affected by profile deletion", async () => {
+		await exposedBridge().browserProfiles.usage("profile-id");
+		expect(electronMocks.invoke).toHaveBeenCalledWith("browserProfiles:usage", { id: "profile-id" });
 	});
 
 	it("validates profile-management event payloads and removes wrapped listeners", () => {
@@ -333,5 +399,25 @@ describe("preload browser profile bridge", () => {
 		expect(progressListener).toHaveBeenCalledWith({ requestId: "request", phase: "reading", completed: 1, total: 2 });
 		progressDispose();
 		expect(electronMocks.off).toHaveBeenCalledWith("browserProfiles:import:progress", progressWrapped);
+	});
+});
+
+describe("preload browser downloads bridge", () => {
+	it("routes download commands and change events over IPC", async () => {
+		const downloads = exposedBridge().browser.downloads;
+		await downloads.list();
+		await downloads.action({ id: "download-1", action: "show" });
+		await downloads.clear();
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(1, "browser:downloads:list");
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(2, "browser:downloads:action", { id: "download-1", action: "show" });
+		expect(electronMocks.invoke).toHaveBeenNthCalledWith(3, "browser:downloads:clear");
+
+		const listener = vi.fn();
+		const dispose = downloads.onChanged(listener);
+		const wrapped = electronMocks.listeners.get("browser:downloadsChanged");
+		wrapped?.({}, { downloads: [] });
+		expect(listener).toHaveBeenCalledWith({ downloads: [] });
+		dispose();
+		expect(electronMocks.off).toHaveBeenCalledWith("browser:downloadsChanged", wrapped);
 	});
 });

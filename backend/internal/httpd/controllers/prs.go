@@ -51,7 +51,13 @@ func (c *PRsController) merge(w http.ResponseWriter, r *http.Request) {
 		writePRError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, MergePRResponse{OK: true, PRNumber: res.PRNumber, Method: res.Method})
+	envelope.WriteJSON(w, http.StatusOK, MergePRResponse{
+		OK:             true,
+		PRNumber:       res.PRNumber,
+		Method:         res.Method,
+		State:          res.State,
+		StateChangedAt: res.StateChangedAt,
+	})
 }
 
 func (c *PRsController) resolveComments(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +66,10 @@ func (c *PRsController) resolveComments(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	prID := chi.URLParam(r, "id")
+	if !prIDPattern.MatchString(prID) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "Invalid PR number", nil)
+		return
+	}
 
 	// Body is optional: omitting it resolves all unresolved threads.
 	var in ResolveCommentsRequest

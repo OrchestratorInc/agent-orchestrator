@@ -125,8 +125,8 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 
 // GetRestoreCommand rebuilds the argv that continues an existing Cline session:
 // `cline [approval flags] --id <agentSessionId>`. Resumes are interactive
-// because no prompt is supplied here. If hooks did not persist the native id,
-// the interactive-hub history is searched by this session's unique worktree.
+// because no prompt is supplied here. History validates the stored native id
+// and recovers missing or stale ids by this session's unique worktree.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -137,8 +137,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	}
 
 	agentSessionID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
-	if agentSessionID == "" && strings.TrimSpace(cfg.Session.WorkspacePath) != "" {
-		agentSessionID, err = clineHistorySessionID(ctx, binary, cfg.Session.WorkspacePath)
+	if strings.TrimSpace(cfg.Session.WorkspacePath) != "" {
+		agentSessionID, err = clineHistorySessionID(ctx, binary, cfg.Session.WorkspacePath, agentSessionID)
 		if err != nil {
 			return nil, false, err
 		}
@@ -158,12 +158,14 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, true, nil
 }
 
-// clineHistorySessionID recovers the provider-assigned resumable id when an
-// interactive Cline hub hook omits sessionContext.rootSessionId. AO gives each
-// session its own worktree, so the newest history entry whose cwd exactly
-// matches that worktree belongs to this AO session.
-func clineHistorySessionID(ctx context.Context, binary, workspacePath string) (string, error) {
-	cmd := aoprocess.CommandContext(ctx, binary, "history", "--json", "--limit", "100") //nolint:gosec // binary is adapter-resolved; args are static
+// clineHistorySessionID prefers a stored native id present in the workspace's
+// history, falling back to its newest entry when the id is missing or stale.
+// AO gives each session its own worktree, so history from another cwd must
+// never be used to recover its conversation.
+func clineHistorySessionID(ctx context.Context, binary, workspacePath, storedID string) (string, error) {
+	// A recent-entry limit cannot prove that a stored native id is stale.
+	// Use the largest portable count to include older saved conversations.
+	cmd := aoprocess.CommandContext(ctx, binary, "history", "--json", "--limit", "2147483647") //nolint:gosec // binary is adapter-resolved; args are static
 	cmd.Dir = workspacePath
 	out, err := cmd.Output()
 	if err != nil {
@@ -178,13 +180,19 @@ func clineHistorySessionID(ctx context.Context, binary, workspacePath string) (s
 		return "", fmt.Errorf("cline: parse session history: %w", err)
 	}
 	want := filepath.Clean(workspacePath)
+	var newestID string
 	for _, entry := range history {
 		id := strings.TrimSpace(entry.SessionID)
 		if filepath.Clean(strings.TrimSpace(entry.CWD)) == want && id != "" && len(id) <= maxHookSessionIDLen {
-			return id, nil
+			if id == storedID {
+				return id, nil
+			}
+			if newestID == "" {
+				newestID = id
+			}
 		}
 	}
-	return "", nil
+	return newestID, nil
 }
 
 // SessionInfo surfaces Cline hook-derived metadata. Metadata is intentionally
@@ -255,4 +263,12 @@ func appendApprovalFlags(cmd *[]string, permissions ports.PermissionMode) {
 		// yolo mode: auto-approve tools with the restricted (safer) toolset.
 		*cmd = append(*cmd, "--yolo")
 	}
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

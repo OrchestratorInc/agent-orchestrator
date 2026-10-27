@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const (
@@ -71,7 +71,7 @@ func (p *Plugin) requireActivityContract(ctx context.Context) error {
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(probeCtx, binary, "--version").CombinedOutput() //nolint:gosec // binary is adapter-resolved, args are static.
+	out, err := aoprocess.CommandContext(probeCtx, binary, "--version").CombinedOutput() //nolint:gosec // binary is adapter-resolved, args are static.
 	if err != nil {
 		return fmt.Errorf("omp.GetAgentHooks: probe omp --version: %w", err)
 	}
@@ -161,7 +161,11 @@ function isRootSession(ctx: any): boolean {
   return ctx.hasUI === true;
 }
 
+` + hookutil.FinalAssistantTextJS + `
 export default function (omp: ExtensionAPI) {
+  // The final message of the current run, kept across continuations until
+  // the run really stops.
+  let lastAssistantText = "";
   omp.on("session_start", async (_event, ctx) => {
     if (!isRootSession(ctx)) return;
     callHookSync("session-start", { session_id: sessionID(ctx) });
@@ -172,6 +176,7 @@ export default function (omp: ExtensionAPI) {
   });
   omp.on("before_agent_start", async (event, ctx) => {
     if (!isRootSession(ctx)) return;
+    lastAssistantText = "";
     callHookSync("user-prompt-submit", { session_id: sessionID(ctx), prompt: event.prompt });
   });
   omp.on("tool_approval_requested", async (event, ctx) => {
@@ -193,8 +198,9 @@ export default function (omp: ExtensionAPI) {
   });
   omp.on("agent_end", async (event, ctx) => {
     if (!isRootSession(ctx)) return;
+    lastAssistantText = finalAssistantText(event) || lastAssistantText;
     if (!event.willContinue) {
-      callHookSync("stop", { session_id: sessionID(ctx) });
+      callHookSync("stop", { session_id: sessionID(ctx), last_assistant_message: lastAssistantText });
     }
   });
   omp.on("session_shutdown", async (_event, ctx) => {

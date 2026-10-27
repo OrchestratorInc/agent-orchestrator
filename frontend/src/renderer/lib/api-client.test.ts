@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	apiClient,
+	apiErrorDetails,
 	apiErrorMessage,
 	getApiBaseUrl,
 	hasTrustedApiBaseUrl,
@@ -70,7 +71,10 @@ describe("apiClient runtime base URL", () => {
 
 		setApiBaseUrl("http://127.0.0.1:3037");
 
+		// A request built against an older address (the daemon moved while it was
+		// being built) still takes the rebase path.
 		const { error } = await apiClient.POST("/api/v1/sessions", {
+			baseUrl: "http://127.0.0.1:3001",
 			body: { projectId: "p1", prompt: "hello" },
 		});
 
@@ -80,6 +84,35 @@ describe("apiClient runtime base URL", () => {
 		expect(seen[0].method).toBe("POST");
 		expect(seen[0].contentType).toBe("application/json");
 		expect(JSON.parse(seen[0].body ?? "{}")).toEqual({ projectId: "p1", prompt: "hello" });
+	});
+
+	// Rebasing buffers the body asynchronously; building against the current
+	// address sends the request in the same task that issued it.
+	it("builds requests against the runtime daemon address and passes them straight to fetch", async () => {
+		const seen: Request[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
+			seen.push(input as Request);
+			return new Response(JSON.stringify({ session: { id: "s1" } }), {
+				status: 201,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
+		setApiBaseUrl("http://127.0.0.1:3037");
+
+		const pending = apiClient.POST("/api/v1/sessions", { body: { projectId: "p1", prompt: "hello" } });
+		expect(seen).toHaveLength(1);
+		const { error } = await pending;
+
+		expect(error).toBeUndefined();
+		expect(seen[0]).toBeInstanceOf(Request);
+		expect(seen[0].url).toBe("http://127.0.0.1:3037/api/v1/sessions");
+		expect(seen[0].method).toBe("POST");
+		expect(await seen[0].json()).toEqual({ projectId: "p1", prompt: "hello" });
+
+		const viaRequest = apiClient.request("post", "/api/v1/sessions", { body: { projectId: "p1", prompt: "again" } });
+		expect(seen).toHaveLength(2);
+		await viaRequest;
+		expect(seen[1].url).toBe("http://127.0.0.1:3037/api/v1/sessions");
 	});
 
 	it("skips the rebase when the request already targets the runtime base URL", async () => {
@@ -149,15 +182,6 @@ describe("apiClient runtime base URL", () => {
 
 		expect(error).toEqual({ code: "exited", message: "AO daemon exited with code 1" });
 	});
-
-	it("leaves workspace and switch-history failures exclusively to visibility reporting", async () => {
-		vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ code: "unavailable", message: "nope", reporting_owner: "http" }), { status: 503, headers: { "Content-Type": "application/json" } }));
-		setApiBaseUrl("http://127.0.0.1:3001");
-		await apiClient.GET("/api/v1/projects");
-		await apiClient.GET("/api/v1/sessions");
-		await apiClient.GET("/api/v1/sessions/{sessionId}/agent-switches", { params: { path: { sessionId: "local-secret" } } });
-		expect(sentryCaptureMock).not.toHaveBeenCalled();
-	});
 });
 
 describe("subscribeApiBaseUrl", () => {
@@ -201,6 +225,10 @@ describe("subscribeApiBaseUrl", () => {
 });
 
 describe("normalizeApiOperation", () => {
+    it("normalizes Stay Awake source identifiers", () => {
+        expect(normalizeApiOperation("POST", "/api/v1/awake/sessions/private-source/end")).toBe("POST /api/v1/awake/sessions/:id/end");
+        expect(normalizeApiOperation("GET", "/api/v1/awake")).toBe("GET /api/v1/awake");
+    });
 	it("replaces identifier segments after resource collections", () => {
 		expect(normalizeApiOperation("get", "/api/v1/projects/my project id")).toBe("GET /api/v1/projects/:id");
 		expect(normalizeApiOperation("POST", "/api/v1/sessions/ao-42/kill")).toBe("POST /api/v1/sessions/:id/kill");
@@ -213,9 +241,6 @@ describe("normalizeApiOperation", () => {
 		);
 		expect(normalizeApiOperation("POST", "/api/v1/agents/codex/accounts/login-operations/72d4db6e-da2c-414c-a6a9-fdbd09a006b6/verify")).toBe(
 			"POST /api/v1/agents/codex/accounts/login-operations/:id/verify",
-		);
-		expect(normalizeApiOperation("POST", "/api/v1/agents/codex/account-switches/switch-1/recover")).toBe(
-			"POST /api/v1/agents/codex/account-switches/:id/recover",
 		);
 	});
 
@@ -235,6 +260,13 @@ describe("normalizeApiOperation", () => {
 		expect(normalizeApiOperation("POST", "/api/v1/projects/clone")).toBe("POST /api/v1/projects/clone");
 		expect(normalizeApiOperation("POST", "/api/v1/projects/initialize")).toBe("POST /api/v1/projects/initialize");
 		expect(normalizeApiOperation("POST", "/api/v1/sessions/cleanup")).toBe("POST /api/v1/sessions/cleanup");
+		expect(normalizeApiOperation("GET", "/api/v1/agents/auth-plans")).toBe("GET /api/v1/agents/auth-plans");
+	});
+
+	it("normalizes agent ids in authentication routes", () => {
+		expect(normalizeApiOperation("POST", "/api/v1/agents/claude-code/auth")).toBe(
+			"POST /api/v1/agents/:id/auth",
+		);
 	});
 
 	it("keeps workspace file routes aligned with the generated API schema", () => {
@@ -252,6 +284,7 @@ describe("normalizeApiOperation", () => {
 	it("normalizes ids for resources a collection heuristic would miss", () => {
 		expect(normalizeApiOperation("GET", "/api/v1/orchestrators/orch-abc")).toBe("GET /api/v1/orchestrators/:id");
 		expect(normalizeApiOperation("POST", "/api/v1/prs/pr-1/merge")).toBe("POST /api/v1/prs/:id/merge");
+		expect(normalizeApiOperation("POST", "/api/v1/sessions/ao-42/renders/r-1/artifact")).toBe("POST /api/v1/sessions/:id/renders/:id/artifact");
 		expect(normalizeApiOperation("POST", "/api/v1/agents/codex/accounts/ensure")).toBe("POST /api/v1/agents/codex/accounts/ensure");
 		expect(normalizeApiOperation("DELETE", "/api/v1/agents/codex/accounts/private-account-id")).toBe("DELETE /api/v1/agents/codex/accounts/:id");
 	});
@@ -289,84 +322,58 @@ describe("api error telemetry", () => {
 		expect(sentryCaptureMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not send saga-owned API failures to generic Sentry capture", async () => {
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					error: "internal",
-					code: "AGENT_SWITCH_FAILED",
-					message: "Agent switch failed",
-					reporting_owner: "agent_switch_saga",
-				}),
-				{ status: 500, headers: { "Content-Type": "application/json" } },
-			),
-		);
+	it("reports a failed project or session list like any other request", async () => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("oops", { status: 500 }));
 		setApiBaseUrl("http://127.0.0.1:3037");
 
-		const { error } = await apiClient.GET("/api/v1/agents");
+		await apiClient.GET("/api/v1/projects");
+		await apiClient.GET("/api/v1/sessions");
 
-		expect(captureMock).toHaveBeenCalledTimes(1);
-		expect(sentryCaptureMock).not.toHaveBeenCalled();
-		expect(apiErrorMessage(error)).toBe("Agent switch failed (AGENT_SWITCH_FAILED)");
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", { operation: "GET /api/v1/projects", error_category: "http_5xx", status: 500 });
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", { operation: "GET /api/v1/sessions", error_category: "http_5xx", status: 500 });
 	});
 
-	it("suppresses saga-owned 4xx responses without changing presentation", async () => {
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					error: "conflict",
-					code: "AGENT_SWITCH_DELIVERY_UNCONFIRMED",
-					message: "The target agent accepted an unconfirmed continuation",
-					reporting_owner: "agent_switch_saga",
-				}),
-				{ status: 409, headers: { "Content-Type": "application/json" } },
-			),
-		);
+	it("drops expected Codex and closed-shell outcomes and still reports GitHub auth and other 401 and 404 responses", async () => {
+		const fetchMock = vi.spyOn(globalThis, "fetch");
 		setApiBaseUrl("http://127.0.0.1:3037");
-
-		const { error } = await apiClient.GET("/api/v1/agents");
-
-		expect(sentryCaptureMock).not.toHaveBeenCalled();
-		expect(apiErrorMessage(error)).toBe(
-			"The target agent accepted an unconfirmed continuation (AGENT_SWITCH_DELIVERY_UNCONFIRMED)",
-		);
-	});
-
-	it("does not trust an unknown reporting owner", async () => {
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({ code: "INTERNAL_ERROR", message: "Internal server error", reporting_owner: "renderer" }),
-				{ status: 500, headers: { "Content-Type": "application/json" } },
-			),
-		);
-		setApiBaseUrl("http://127.0.0.1:3037");
-
+		for (const code of ["CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "SHELL_TERMINAL_NOT_FOUND"]) {
+			fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code, message: "expected" }), {
+				status: code === "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" ? 503 : 404,
+				headers: { "Content-Type": "application/json" },
+			}));
+			await apiClient.GET("/api/v1/agents");
+		}
+		expect(captureMock).not.toHaveBeenCalled();
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code: "GITHUB_AUTH_INVALID", message: "reconnect" }), {
+			status: 401,
+			headers: { "Content-Type": "application/json" },
+		}));
 		await apiClient.GET("/api/v1/agents");
-
-		expect(sentryCaptureMock).toHaveBeenCalledTimes(1);
-	});
-
-	it("does not let a saga-owned response dedupe a later HTTP-owned failure", async () => {
-		vi.spyOn(globalThis, "fetch")
-			.mockResolvedValueOnce(
-				new Response(JSON.stringify({ reporting_owner: "agent_switch_saga" }), {
-					status: 500,
-					headers: { "Content-Type": "application/json" },
-				}),
-			)
-			.mockResolvedValueOnce(
-				new Response(JSON.stringify({ reporting_owner: "http" }), {
-					status: 500,
-					headers: { "Content-Type": "application/json" },
-				}),
-			);
-		setApiBaseUrl("http://127.0.0.1:3037");
-
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({ status: 401, error_category: "http_4xx" }));
+		captureMock.mockClear();
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: "conflict" }), {
+			status: 409,
+			headers: { "Content-Type": "application/json" },
+		}));
+		await apiClient.GET("/api/v1/agents/{agent}/models", { params: { path: { agent: "codex" } } });
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({
+			operation: "GET /api/v1/agents/:id/models",
+			status: 409,
+			error_category: "http_4xx",
+		}));
+		captureMock.mockClear();
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: "not ready" }), {
+			status: 409,
+			headers: { "Content-Type": "application/json" },
+		}));
+		await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/skills", { params: { path: { sessionId: "session-1" } } });
+		expect(captureMock).not.toHaveBeenCalled();
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code: "SESSION_GONE", message: "missing" }), {
+			status: 404,
+			headers: { "Content-Type": "application/json" },
+		}));
 		await apiClient.GET("/api/v1/agents");
-		await apiClient.GET("/api/v1/agents");
-
-		expect(captureMock).toHaveBeenCalledTimes(2);
-		expect(sentryCaptureMock).toHaveBeenCalledTimes(1);
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({ status: 404, error_category: "http_4xx" }));
 	});
 
 	it("reports http_4xx with ids stripped from the operation", async () => {
@@ -433,13 +440,13 @@ describe("api error telemetry", () => {
 });
 
 describe("apiErrorMessage", () => {
-	it("preserves daemon error codes next to human messages", () => {
+	it("shows the human daemon message without technical error codes", () => {
 		expect(apiErrorMessage({ code: "AGENT_BINARY_NOT_FOUND", message: "agent binary not found on PATH" })).toBe(
-			"agent binary not found on PATH (AGENT_BINARY_NOT_FOUND)",
+			"agent binary not found on PATH",
 		);
 	});
 
-	it("does not duplicate a code that is already present in the message", () => {
+	it("preserves the message when it contains parenthetical detail", () => {
 		expect(
 			apiErrorMessage({
 				code: "RUNTIME_PREREQUISITE_MISSING",
@@ -453,6 +460,20 @@ describe("apiErrorMessage", () => {
 			apiErrorMessage({
 				error: { code: "REVIEWER_NOT_FOUND", message: "reviewer has not reviewed this PR" },
 			}),
-		).toBe("reviewer has not reviewed this PR (REVIEWER_NOT_FOUND)");
+		).toBe("reviewer has not reviewed this PR");
 	});
+});
+
+
+describe("apiErrorDetails", () => {
+	it("preserves structured daemon recovery metadata", () => {
+		const details = { existingProjectId: "registered-project", suggestedProjectId: "another-project" };
+		expect(apiErrorDetails({ code: "PATH_ALREADY_REGISTERED", details })).toEqual(details);
+	});
+
+	it.each([undefined, null, "error", {}, { details: null }, { details: "project" }, { details: ["project"] }])(
+		"ignores malformed metadata: %j", (error) => {
+			expect(apiErrorDetails(error)).toBeUndefined();
+		},
+	);
 });

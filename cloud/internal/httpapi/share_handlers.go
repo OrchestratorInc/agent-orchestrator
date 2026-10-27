@@ -67,16 +67,20 @@ type sharedProjectResponse struct {
 		DeniedCommands  []string  `json:"deniedCommands"`
 		RedeemedAt      time.Time `json:"redeemedAt"`
 	} `json:"grant"`
-	Project       projectResponse `json:"project"`
-	SessionID     string          `json:"sessionId,omitempty"`
-	SessionName   string          `json:"sessionName,omitempty"`
-	SharedByEmail string          `json:"sharedByEmail,omitempty"`
-	SharedByName  string          `json:"sharedByName,omitempty"`
+	Project projectResponse `json:"project"`
+	// Member is true when the redeemer already belongs to the project's
+	// organization and needs no grant; the link only says where to go.
+	Member        bool   `json:"member,omitempty"`
+	SessionID     string `json:"sessionId,omitempty"`
+	SessionName   string `json:"sessionName,omitempty"`
+	SharedByEmail string `json:"sharedByEmail,omitempty"`
+	SharedByName  string `json:"sharedByName,omitempty"`
 }
 
 func toSharedProjectResponse(shared domain.SharedProject) sharedProjectResponse {
 	response := sharedProjectResponse{
 		Project:       toProjectResponse(shared.Project),
+		Member:        shared.Member,
 		SessionID:     shared.SessionID,
 		SessionName:   shared.SessionName,
 		SharedByEmail: shared.SharedByEmail,

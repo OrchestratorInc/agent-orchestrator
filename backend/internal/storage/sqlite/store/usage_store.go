@@ -71,16 +71,16 @@ func (s *Store) FinalizeUsageBindingsForSessionLaunch(
 	ctx context.Context,
 	sessionID domain.SessionID,
 	expectedRuntimeLaunchID string,
-	expectedSessionUpdatedAt time.Time,
+	expectedSessionRevision int64,
 	at time.Time,
 ) ([]domain.UsageBindingRecord, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.FinalizeUsageBindingsForSessionLaunch(ctx, gen.FinalizeUsageBindingsForSessionLaunchParams{
-		SessionID:                sessionID,
-		ExpectedRuntimeLaunchID:  expectedRuntimeLaunchID,
-		ExpectedSessionUpdatedAt: expectedSessionUpdatedAt,
-		FinalizedAt:              timeOrNow(at),
+		SessionID:               sessionID,
+		ExpectedRuntimeLaunchID: expectedRuntimeLaunchID,
+		ExpectedSessionRevision: expectedSessionRevision,
+		FinalizedAt:             timeOrNow(at),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("finalize usage bindings for session %s launch %q: %w", sessionID, expectedRuntimeLaunchID, err)
@@ -236,6 +236,17 @@ func (s *Store) HasPendingUsageDiscovery(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("check pending usage discovery: %w", err)
 	}
 	return pending != 0, nil
+}
+
+// HasUsageSourceByPath reports whether any binding already registers a source
+// at this exact artifact path, so one physical transcript cannot be bound to a
+// second session and counted twice.
+func (s *Store) HasUsageSourceByPath(ctx context.Context, artifactPath string) (bool, error) {
+	exists, err := s.qr.ExistsUsageSourceByArtifactPath(ctx, artifactPath)
+	if err != nil {
+		return false, fmt.Errorf("check usage source by path: %w", err)
+	}
+	return exists != 0, nil
 }
 
 // ListLatestRetiredCodexReplacementClaimsByPath returns durable replacement

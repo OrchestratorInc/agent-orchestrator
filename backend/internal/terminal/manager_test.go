@@ -3,6 +3,9 @@ package terminal
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -262,6 +265,260 @@ func TestBeginInputDrainBlocksMuxWritesUntilReleased(t *testing.T) {
 	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "allowed\n" })
 }
 
+func TestHoldInputFencesInputBufferedDuringAttach(t *testing.T) {
+	// A keystroke typed while the attach is still in flight is buffered and
+	// replayed by setPTY. That replay is a pane write like any other: it must
+	// wait for a held fence, or a draft lands after the guard's final empty-frame
+	// proof and concatenates with AO's paste (#5711).
+	pty := newFakePTY()
+	attached := make(chan struct{})
+	src := &fakeSource{alive: true, attachFn: func(ctx context.Context, _, _ uint16) (ports.Stream, error) {
+		select {
+		case <-attached:
+			return pty, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}}
+	mgr := NewManager(src, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("draft"))}
+	eventually(t, time.Second, func() bool { return !mgr.LastInputAt("t1").IsZero() })
+
+	lastInputAt, release := mgr.HoldInput("t1")
+	defer release()
+	if lastInputAt.IsZero() {
+		t.Fatal("HoldInput did not report the buffered keystroke")
+	}
+	close(attached)
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+	time.Sleep(100 * time.Millisecond)
+	if got := string(pty.writtenBytes()); got != "" {
+		t.Fatalf("buffered input reached the pane while the fence was held: %q", got)
+	}
+
+	release()
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "draft" })
+}
+
+func TestBufferedInputReplayUpdatesLastInputAt(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		data  string
+		typed bool
+	}{
+		{name: "human draft", data: "human draft", typed: true},
+		{name: "terminal report", data: "\x1b[I"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pty := newFakePTY()
+			attached := make(chan struct{})
+			src := &fakeSource{alive: true, attachFn: func(ctx context.Context, _, _ uint16) (ports.Stream, error) {
+				select {
+				case <-attached:
+					return pty, nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}}
+			mgr := NewManager(src, nil, testLogger(), WithHeartbeat(0))
+			defer mgr.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c := &connState{mgr: mgr, conn: newFakeConn(), ctx: ctx, cancel: cancel, out: newOutQueue(), terms: map[string]*attachment{}, writers: map[string]*inputWriter{}}
+			defer c.cleanup()
+			c.openTerminal("t1", 24, 80, "")
+			mgr.writeInput("t1", c.lookup("t1"), []byte(tc.data), func() {})
+			replayedAt := time.Now()
+			close(attached)
+			eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == tc.data })
+			lastInputAt, release := mgr.HoldInput("t1")
+			defer release()
+			if tc.typed && lastInputAt.Before(replayedAt) {
+				t.Fatalf("last input at %v predates replay at %v; freshly replayed typing must get a new settle window", lastInputAt, replayedAt)
+			}
+			if !tc.typed && !lastInputAt.IsZero() {
+				t.Fatalf("terminal report changed human input timestamp to %v", lastInputAt)
+			}
+		})
+	}
+}
+
+func TestHeldFenceDoesNotStallTheConnectionsOtherTerminals(t *testing.T) {
+	// HoldInput fences AO's composer check and write against human keystrokes
+	// without dropping them (unlike BeginInputDrain): t1's keys wait on its fence
+	// and land in order on release (#5711). The desktop app multiplexes every
+	// terminal over one connection, so the wait must not stall the connection's
+	// read loop: typing in t2, and pings, keep flowing.
+	p1, p2 := newFakePTY(), newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{p1, p2}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t2", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+
+	_, release := mgr.HoldInput("t1")
+	defer release()
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("he"))}
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("ld"))}
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t2", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("typed"))}
+	eventually(t, time.Second, func() bool { return string(p2.writtenBytes()) == "typed" })
+	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
+	recv(t, conn, chSystem, msgPong, time.Second)
+	if got := string(p1.writtenBytes()); got != "" {
+		t.Fatalf("t1's keystrokes passed its held fence: %q", got)
+	}
+	release()
+	release() // idempotent
+	eventually(t, time.Second, func() bool { return string(p1.writtenBytes()) == "held" })
+}
+
+func TestClosingATerminalStillWritesKeysQueuedBehindItsFence(t *testing.T) {
+	// The client may switch away (close) right after typing. Keys it sent first
+	// still reach the pane once the fence releases, as they did when writes were
+	// synchronous.
+	pty := newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+
+	_, release := mgr.HoldInput("t1")
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("ls\r"))}
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgClose}
+	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
+	recv(t, conn, chSystem, msgPong, time.Second)
+	release()
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "ls\r" })
+}
+
+func TestClosedTerminalsDoNotKeepInputWriters(t *testing.T) {
+	// One long-lived desktop connection opens and closes many terminals. Each
+	// terminal's writer must be retired once it is closed and drained, not kept
+	// until the connection ends.
+	const terminals = 20
+	ptys := make([]*fakePTY, terminals)
+	for i := range ptys {
+		ptys[i] = newFakePTY()
+	}
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: ptys}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Drive the connection's read-loop handlers directly so the test can see
+	// its writers.
+	c := &connState{mgr: mgr, conn: newFakeConn(), ctx: ctx, cancel: cancel, out: newOutQueue(), terms: map[string]*attachment{}, writers: map[string]*inputWriter{}}
+	defer c.cleanup()
+
+	for i := range terminals {
+		id := fmt.Sprintf("t%d", i)
+		c.handle(clientMsg{Ch: chTerminal, ID: id, Type: msgOpen})
+		c.handle(clientMsg{Ch: chTerminal, ID: id, Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("x"))})
+		eventually(t, time.Second, func() bool { return string(ptys[i].writtenBytes()) == "x" })
+		c.handle(clientMsg{Ch: chTerminal, ID: id, Type: msgClose})
+	}
+	eventually(t, time.Second, func() bool {
+		c.closeTerminal("none") // any close sweeps writers that finished draining
+		return len(c.writers) == 0
+	})
+}
+
+func TestReopenedTerminalsWriterWaitsForTheRetiredOne(t *testing.T) {
+	// After a close and reopen, keys the retired writer still holds (behind a
+	// fence or a slow write) must reach the pane before keys typed after the
+	// reopen, so the new writer starts only once the old one has drained.
+	pty := newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+	var a *attachment
+	eventually(t, time.Second, func() bool {
+		mgr.mu.Lock()
+		defer mgr.mu.Unlock()
+		for att := range mgr.attachments {
+			a = att
+		}
+		return a != nil
+	})
+
+	retired := &inputWriter{queue: make(chan queuedInput), done: make(chan struct{}), retired: true}
+	next := &inputWriter{queue: make(chan queuedInput, 1), done: make(chan struct{})}
+	go next.run(mgr, "t1", retired)
+	next.queue <- queuedInput{a: a, raw: []byte("after"), release: func() {}}
+	time.Sleep(50 * time.Millisecond)
+	if got := string(pty.writtenBytes()); got != "" {
+		t.Fatalf("new writer wrote %q while the retired one was still draining", got)
+	}
+	close(retired.done)
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "after" })
+	close(next.queue)
+	<-next.done
+}
+
+func TestKeystrokeReceivedDuringADrainIsDroppedEvenIfWrittenLater(t *testing.T) {
+	// A drain refuses input received while it is held. A keystroke that also
+	// waits on a held fence must not slip through once the drain has ended.
+	pty := newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+
+	_, releaseHold := mgr.HoldInput("t1")
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("queued\n"))}
+	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
+	recv(t, conn, chSystem, msgPong, time.Second)
+	drained := make(chan func())
+	go func() {
+		_, release := mgr.BeginInputDrain("t1")
+		drained <- release
+	}()
+	// The drain waits on the held fence; the next keystroke arrives meanwhile.
+	time.Sleep(20 * time.Millisecond)
+	releaseHold()
+	releaseDrain := <-drained
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("during\n"))}
+	conn.in <- clientMsg{Ch: chSystem, Type: msgPing}
+	recv(t, conn, chSystem, msgPong, time.Second)
+	releaseDrain()
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("after\n"))}
+	eventually(t, time.Second, func() bool { return strings.HasSuffix(string(pty.writtenBytes()), "after\n") })
+	if got := string(pty.writtenBytes()); strings.Contains(got, "during") {
+		t.Fatalf("a keystroke received during the drain reached the pane: %q", got)
+	}
+}
+
 func TestBeginInputDrainReturnsTheLastAcceptedWriteBarrier(t *testing.T) {
 	pty := newFakePTY()
 	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
@@ -292,6 +549,36 @@ func TestBeginInputDrainReturnsTheLastAcceptedWriteBarrier(t *testing.T) {
 	defer releaseSecond()
 	if !second.After(first) {
 		t.Fatalf("second barrier = %s, want after first %s", second, first)
+	}
+}
+
+func TestLastInputAtReadsWithoutBlockingInput(t *testing.T) {
+	pty := newFakePTY()
+	mgr := NewManager(&fakeSource{alive: true, spawner: &fakeSpawner{ptys: []*fakePTY{pty}}}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+	if got := mgr.LastInputAt("t1"); !got.IsZero() {
+		t.Fatalf("LastInputAt before any input = %s, want zero", got)
+	}
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("first\n"))}
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "first\n" })
+
+	first := mgr.LastInputAt("t1")
+	if first.IsZero() {
+		t.Fatal("accepted input was not recorded")
+	}
+	// Reading must not close input: the next keystroke is still written.
+	conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("second\n"))}
+	eventually(t, time.Second, func() bool { return string(pty.writtenBytes()) == "first\nsecond\n" })
+	if !mgr.LastInputAt("t1").After(first) {
+		t.Fatal("LastInputAt did not advance with the next accepted keystroke")
 	}
 }
 
@@ -662,18 +949,124 @@ func TestManagerCloseKillsLiveAttachments(t *testing.T) {
 	}
 }
 
-func TestEnqueueOverflowCancelsConn(t *testing.T) {
-	cancelled := make(chan struct{})
+// newFloodedConn returns a conn whose queue already holds more PTY output than
+// the watermark allows, so the next data frame must wait.
+func newFloodedConn(ctx context.Context, cancel context.CancelFunc) *connState {
 	c := &connState{
-		out:    make(chan serverMsg, 1),
-		cancel: func() { close(cancelled) },
+		ctx:    ctx,
+		cancel: cancel,
+		out:    newOutQueue(),
 		terms:  map[string]*attachment{},
 	}
-	c.enqueue(serverMsg{Ch: chTerminal, Type: msgData}) // fills buffer
-	c.enqueue(serverMsg{Ch: chTerminal, Type: msgData}) // overflow -> cancel
+	c.enqueue(serverMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: strings.Repeat("x", dataWatermark)})
+	return c
+}
+
+// A flood must throttle its own PTY read loop, not tear the connection down:
+// cancelling here would kill every other pane on the same connection.
+func TestEnqueueDataBlocksUntilDrained(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newFloodedConn(ctx, func() { t.Error("a flood must not cancel the connection") })
+
+	done := make(chan struct{})
+	go func() {
+		c.enqueue(serverMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: "more"})
+		close(done)
+	}()
+
 	select {
-	case <-cancelled:
+	case <-done:
+		t.Fatal("data frame must wait while the queue is over the watermark")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	c.out.drain()
+	select {
+	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("overflow must cancel the connection")
+		t.Fatal("draining the queue must release the waiting data frame")
+	}
+}
+
+// The CDC fan-out enqueues session frames on one goroutine shared by every
+// connection, so a flooded connection must never block or drop a control frame.
+func TestEnqueueControlFramesNeverWait(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := newFloodedConn(ctx, func() { t.Error("a control frame must not cancel the connection") })
+
+	done := make(chan struct{})
+	go func() {
+		c.enqueue(serverMsg{Ch: chTerminal, ID: "t1", Type: msgExited})
+		c.enqueue(serverMsg{Ch: chSessions, Type: msgSnapshot})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("control frames must not wait behind a flood")
+	}
+
+	var types []string
+	for _, m := range c.out.drain() {
+		types = append(types, m.Type)
+	}
+	want := []string{msgData, msgExited, msgSnapshot}
+	if !slices.Equal(types, want) {
+		t.Fatalf("frames = %v, want %v (order must be preserved)", types, want)
+	}
+}
+
+// A blocked producer must not outlive its connection, or daemon shutdown hangs.
+func TestEnqueueDataUnblocksOnConnClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	c := newFloodedConn(ctx, cancel)
+
+	done := make(chan struct{})
+	go func() {
+		c.enqueue(serverMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: "more"})
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("cancelling the connection must release a waiting data frame")
+	}
+}
+
+// A shell that starts on its first sized attach must still start when only a
+// secondary viewer (the phone) has reported a grid, including next to a primary
+// that attached without one (a desktop tab parked before it measured).
+func TestLargestGridFallsBackToSecondaryWhenNoPrimaryHasASize(t *testing.T) {
+	phone := &connState{}
+	parkedDesktop := &connState{}
+	members := map[*connState]*termMember{
+		phone:         {cols: 45, rows: 30, primary: false},
+		parkedDesktop: {cols: 0, rows: 0, primary: true},
+	}
+	if cols, rows := largestGrid(members); cols != 45 || rows != 30 {
+		t.Fatalf("largestGrid = %dx%d, want the phone's 45x30", cols, rows)
+	}
+
+	members[parkedDesktop].cols, members[parkedDesktop].rows = 151, 38
+	if cols, rows := largestGrid(members); cols != 151 || rows != 38 {
+		t.Fatalf("largestGrid once the desktop measures = %dx%d, want 151x38", cols, rows)
+	}
+}
+
+func TestTerminalReportsAreNotInput(t *testing.T) {
+	for _, raw := range []string{"\x1b[I", "\x1b[O", "\x1b[?1;2c", "\x1b[12;40R", "\x1b]11;rgb:0000/0000/0000\x07", "\x1b[I\x1b[O",
+		"\x1b[?2026;2$y", "\x1b[?0u", "\x1b[8;38;151t", "\x1bP>|xterm.js(5.5.0)\x1b\\"} {
+		if !terminalReports.MatchString(raw) {
+			t.Errorf("%q should be a terminal report", raw)
+		}
+	}
+	// Keys under the kitty keyboard protocol: Enter, and Ctrl+A.
+	for _, raw := range []string{"a", "\r", "\x1b[A", "hello\x1b[I", "\x03", "\x1b[13u", "\x1b[97;5u"} {
+		if terminalReports.MatchString(raw) {
+			t.Errorf("%q should count as input", raw)
+		}
 	}
 }

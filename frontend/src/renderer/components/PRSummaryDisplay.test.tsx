@@ -14,6 +14,7 @@ const summary = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary =>
 	provider: "github",
 	repo: "acme/repo",
 	author: "ada",
+	authorAvatarUrl: "https://avatars.githubusercontent.com/u/123?v=4",
 	sourceBranch: "fix/dashboard",
 	targetBranch: "main",
 	headSha: "abc123",
@@ -40,10 +41,35 @@ describe("PRSummaryParts", () => {
 		);
 
 		expect(screen.getByRole("link", { name: "ada" })).toHaveAttribute("href", "https://github.com/ada");
+		expect(screen.getByRole("link", { name: "ada" }).querySelector("img")).toHaveAttribute(
+			"src",
+			"https://avatars.githubusercontent.com/u/123?v=4",
+		);
 		expect(screen.getByRole("link", { name: "Checks passing" })).toHaveAttribute(
 			"href",
 			"https://github.com/acme/repo/pull/7/checks",
 		);
+	});
+
+	it("names the person behind a PR AO's GitHub App opened instead of the bot", () => {
+		const { rerender } = render(
+			<PRSummaryMeta
+				pr={summary({
+					author: "ao-by-untrivial",
+					authorAvatarUrl: undefined,
+					openedBy: { name: "Ada Lovelace", githubLogin: "ada", avatarUrl: "https://avatars.githubusercontent.com/u/9?v=4" },
+				})}
+			/>,
+		);
+		expect(screen.getByRole("link", { name: "ada" })).toHaveAttribute("href", "https://github.com/ada");
+		expect(screen.getByText("via AO")).toBeInTheDocument();
+		expect(screen.queryByText("ao-by-untrivial")).not.toBeInTheDocument();
+
+		// Without a connected GitHub account, the AO name shows, unlinked.
+		rerender(<PRSummaryMeta pr={summary({ author: "ao-by-untrivial[bot]", openedBy: { name: "Ada Lovelace" } })} />);
+		expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
+		expect(screen.queryByRole("link", { name: /Ada/ })).not.toBeInTheDocument();
+		expect(screen.queryByText(/ao-by-untrivial/)).not.toBeInTheDocument();
 	});
 
 	it("keeps running checks visible and pulsing beneath a higher-priority review blocker", () => {
