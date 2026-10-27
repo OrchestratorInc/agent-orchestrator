@@ -312,6 +312,9 @@ type hostTunnelResponse struct {
 // remoteHostTunnel gives a linked machine the run token of its tunnel in the
 // account that linked it, so its address stays fixed across restarts. The
 // machine proves the host with the same digest it publishes addresses with.
+// A device of that account could compute the digest from the host token the
+// account lists, but that token already controls the machine, so the run
+// token gives it nothing more.
 // The tunnel is made on the first call and kept; repair asks Cloudflare to
 // make it exist again, for a machine whose address stopped being served.
 func (s *Server) remoteHostTunnel(w http.ResponseWriter, r *http.Request) {

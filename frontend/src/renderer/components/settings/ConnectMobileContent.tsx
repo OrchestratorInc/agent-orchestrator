@@ -429,7 +429,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			if (error) throw new Error(apiErrorMessage(error));
 			// A new password revokes the account link with the old one; link
 			// again so the fixed address survives the next restart. Only while
-			// remote access is on: a LAN-only computer is not listed.
+			// remote access is on: a LAN-only computer is not listed. A lost
+			// device signed in to the account is cut off by signing it out of
+			// the account; a new password is for password-paired devices.
 			if (data && !data.noPublicTunnel) await linkIfSignedIn(data.password ?? "");
 			return data;
 		},
