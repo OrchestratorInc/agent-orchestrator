@@ -8,8 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
+	"regexp"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -45,8 +46,7 @@ type TunnelRunner struct {
 	// nudge makes a quick tunnel ask AO Cloud for the fixed address now.
 	nudge <-chan struct{}
 
-	probeBase    string        // tests replace https://<hostname>
-	probeEvery   time.Duration // zero uses namedProbeInterval
+	deadAfter    time.Duration // zero uses connectorDeadAfter
 	upgradeEvery time.Duration // zero uses fixedUpgradeInterval
 	recheckEvery time.Duration // zero uses fixedRecheckInterval
 }
@@ -173,10 +173,18 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		go t.awaitSettled(settleCtx)
 	}
 
-	var unserved, upgraded, withdrawn atomic.Bool
+	var upgraded, withdrawn atomic.Bool
+	// unserved holds why a fixed connector looks unable to serve its tunnel.
+	var unserved atomic.Pointer[string]
+	markUnserved := func(reason string) {
+		unserved.CompareAndSwap(nil, &reason)
+		stopRun()
+	}
+	var health *connectorHealth
 	switch {
 	case fixed:
-		go t.watchNamedAddress(runCtx, named.Hostname, func() { unserved.Store(true); stopRun() })
+		health = newConnectorHealth(time.Now())
+		go t.watchConnector(runCtx, health, markUnserved)
 		go t.watchFixedTunnel(runCtx, named, func() { withdrawn.Store(true); stopRun() })
 	case t.Fixed != nil:
 		go t.awaitFixedTunnel(runCtx, func() { upgraded.Store(true); stopRun() })
@@ -188,12 +196,15 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		line := scanner.Text()
 		t.Runtime.Line(line)
 		t.logger().Debug("cloudflared", "line", line)
+		if health != nil && health.feed(line, time.Now()) {
+			markUnserved("cloudflare kept refusing the fixed tunnel's connector")
+		}
 	}
 
 	waitErr := cmd.Wait()
 	switch {
-	case unserved.Load():
-		waitErr = errors.New("cloudflare kept answering the fixed address with 530: no connector serves the tunnel")
+	case unserved.Load() != nil:
+		waitErr = errors.New(*unserved.Load())
 		t.repair = true
 	case upgraded.Load():
 		waitErr = errFixedTunnelReady
@@ -210,51 +221,95 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	return errors.New("connector exited")
 }
 
-// watchNamedAddress calls stop once Cloudflare keeps answering this host's
-// address with HTTP 530, its "no connector serves this tunnel" page. That is
-// what a deleted tunnel or a replaced token looks like from outside, and
-// nothing local shows it: measured with a tunnel deleted while connected,
-// cloudflared kept running for minutes, printed only generic connection
-// retries and still reported two ready connections. Stopping it lets the next
-// start provision the tunnel again.
-//
-// Only 530 counts. A network error says nothing about the tunnel, and acting
-// on it would restart a working connector whenever this machine is offline.
-func (t *TunnelRunner) watchNamedAddress(ctx context.Context, hostname string, stop func()) {
-	base, every := t.probeBase, t.probeEvery
-	if base == "" {
-		base = "https://" + hostname
+// watchConnector calls stop once a fixed connector has had no live edge
+// connection for deadAfter, from its start or from when its last one
+// dropped. A tunnel deleted while connected looks like this: measured, the
+// connector printed only "Connection terminated" and "Retrying connection",
+// never a refusal, and never registered again. A connector that cannot reach
+// Cloudflare at all looks the same; stopping it then costs a restart.
+func (t *TunnelRunner) watchConnector(ctx context.Context, h *connectorHealth, stop func(string)) {
+	after := t.deadAfter
+	if after == 0 {
+		after = connectorDeadAfter
 	}
-	if every == 0 {
-		every = namedProbeInterval
-	}
-	misses := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(every):
+		case <-time.After(after / 10):
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/identity", http.NoBody)
-		if err != nil {
-			return
-		}
-		resp, err := namedProbeClient.Do(req)
-		if err != nil {
-			continue
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != 530 {
-			misses = 0
-			continue
-		}
-		misses++
-		if misses >= namedProbeMisses {
-			stop()
+		if since, dead := h.deadSince(); dead && time.Since(since) >= after {
+			stop("the fixed tunnel's connector had no live connection for " + after.String())
 			return
 		}
 	}
 }
+
+// connectorHealth reads a fixed connector's output for the signs that its
+// tunnel is gone. cloudflared has no API for this; these patterns are a
+// contract with its log format, like TunnelLog's.
+type connectorHealth struct {
+	mu      sync.Mutex
+	live    map[string]bool // by connIndex
+	downAt  time.Time       // zero while a connection is live
+	refused int             // refusals in a row
+}
+
+func newConnectorHealth(start time.Time) *connectorHealth {
+	return &connectorHealth{live: map[string]bool{}, downAt: start}
+}
+
+var (
+	connIndexRe = regexp.MustCompile(`\bconnIndex=(\d+)`)
+	connUpRe    = regexp.MustCompile(`\bRegistered tunnel connection\b`)
+	connDownRe  = regexp.MustCompile(`\b(?:Connection terminated|Serve tunnel error|Unregistered tunnel connection|Retrying connection)\b`)
+	// Cloudflare's edge refusing the run token: the tunnel was deleted or its
+	// token replaced. The wording has varied across releases.
+	refusedRe       = regexp.MustCompile(`\bRegister tunnel error from server side\b`)
+	refusedReasonRe = regexp.MustCompile(`error="(?:Unauthorized:[^"]*|Failed to get tunnel|Tunnel not found|Record for tunnel not found|Invalid tunnel secret)"`)
+)
+
+// feed records one output line and reports whether the edge has refused the
+// connector connectorRefusals times in a row. A new tunnel's token can be
+// refused briefly while it propagates, so one refusal is not enough.
+func (h *connectorHealth) feed(line string, now time.Time) (refused bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if refusedRe.MatchString(line) && refusedReasonRe.MatchString(line) {
+		h.refused++
+		return h.refused >= connectorRefusals
+	}
+	m := connIndexRe.FindStringSubmatch(line)
+	if m == nil {
+		return false
+	}
+	switch {
+	case connUpRe.MatchString(line):
+		h.live[m[1]] = true
+		h.refused = 0
+		h.downAt = time.Time{}
+	case connDownRe.MatchString(line):
+		delete(h.live, m[1])
+		if len(h.live) == 0 && h.downAt.IsZero() {
+			h.downAt = now
+		}
+	}
+	return false
+}
+
+// deadSince is when the connector last had no live connection, if it has none.
+func (h *connectorHealth) deadSince() (time.Time, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.downAt, !h.downAt.IsZero()
+}
+
+// A fixed connector is restarted, and its tunnel repaired, after three minutes
+// with no live connection or four refusals in a row.
+const (
+	connectorDeadAfter = 3 * time.Minute
+	connectorRefusals  = 4
+)
 
 // awaitFixedTunnel calls ready once AO Cloud hands out this host's tunnel,
 // while a quick tunnel serves the machine: a signed-in device linked it since
@@ -300,9 +355,8 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func()) {
 // watchFixedTunnel calls withdrawn once AO Cloud stops handing out the tunnel
 // this connector serves: every account removed the machine, its link was
 // revoked by a new pairing password, or the tunnel was remade with a new
-// token. Removal deletes the DNS record too, so the address stops answering
-// at all rather than with 530 and watchNamedAddress cannot see it. An
-// unreachable AO Cloud is not a withdrawal.
+// token. Removal deletes the tunnel while it is connected, and AO Cloud is
+// what says so. An unreachable AO Cloud is not a withdrawal.
 func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel, withdrawn func()) {
 	every := t.recheckEvery
 	if every == 0 {
@@ -335,14 +389,6 @@ const (
 	fixedUpgradeInterval = 30 * time.Second
 	maxFixedUpgradeWait  = 30 * time.Minute
 )
-
-// Probing the named address: about every 30s, and three 530s in a row.
-const (
-	namedProbeInterval = 30 * time.Second
-	namedProbeMisses   = 3
-)
-
-var namedProbeClient = &http.Client{Timeout: 10 * time.Second}
 
 // awaitSettled holds the tunnel out of the endpoint list until its freshly
 // issued hostname has had time to appear in DNS.

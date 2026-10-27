@@ -280,9 +280,9 @@ machine only ever receives its own tunnel's run token.
   `POST /api/cloud/v1/remote-hosts/{hostId}/tunnel`, proving the host with the
   digest of its account token, as the address publish does. It returns the
   stored token without calling Cloudflare, and makes the tunnel only for a host
-  that has none yet. `{"repair":true}`, sent after the
-  machine's address answered 530 three times, makes the tunnel and record exist
-  again, at most once a minute per host.
+  that has none yet. `{"repair":true}`, sent after the machine's connector had
+  no live connection for 3 minutes or was refused four times in a row, makes the
+  tunnel and record exist again, at most once a minute per host.
 - `ao_remote_host_tunnels` keeps one row per host, whichever accounts list it,
   with the run token encrypted like host tokens.
 - Removing the last registration deletes the tunnel and its record before the

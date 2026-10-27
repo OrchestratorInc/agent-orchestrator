@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -93,37 +91,77 @@ func TestTunnelRunnerStartsTheCachedTunnelWhenAOCloudIsDown(t *testing.T) {
 	}
 }
 
-func TestTunnelRunnerStopsAConnectorNobodyCanReach(t *testing.T) {
-	cloud, src := newFixedSource(t)
-	bin, _ := fakeCloudflared(t, registeredLine)
-	r := namedRunner(t, bin, src)
-	// What Cloudflare serves for a deleted tunnel, while cloudflared idles on
-	// as if connected. The first answer is a 200, so only a run of 530s counts.
-	var probes atomic.Int32
-	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if probes.Add(1) > 1 {
-			w.WriteHeader(530)
-		}
-	}))
-	defer edge.Close()
-	r.probeBase, r.probeEvery = edge.URL, 20*time.Millisecond
+// Verbatim cloudflared stderr after its tunnel was deleted while connected
+// (measured): the connection drops and retries, and nothing is refused.
+const droppedLines = `2026-10-26T06:46:58Z ERR Serve tunnel error error="control stream encountered a failure while serving" connIndex=0 event=0 ip=198.41.200.13
+2026-10-26T06:46:58Z INF Retrying connection in up to 16s connIndex=0 event=0 ip=198.41.200.13`
 
+// The edge refusing a deleted tunnel's token, as cloudflared words it.
+const refusedLine = `2026-10-06T12:00:00Z ERR Register tunnel error from server side error="Unauthorized: Tunnel not found" connIndex=0 event=0 ip=198.41.200.23`
+
+// runUntilStopped runs one fixed connector and returns why the runner stopped it.
+func runUntilStopped(t *testing.T, stderr string, deadAfter time.Duration) (*TunnelRunner, *fakeAOCloud, error) {
+	t.Helper()
+	cloud, src := newFixedSource(t)
+	bin, _ := fakeCloudflared(t, stderr)
+	r := namedRunner(t, bin, src)
+	r.deadAfter = deadAfter
 	// The connector would idle for 30s; the runner must not wait for it.
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	err := r.runOnce(ctx)
-	if ctx.Err() != nil || err == nil || !strings.Contains(err.Error(), "530") {
-		t.Fatalf("runOnce = %v (ctx %v)", err, ctx.Err())
+	if ctx.Err() != nil {
+		t.Fatalf("runner never stopped the connector: %v", err)
 	}
-	if n := probes.Load(); n != 1+namedProbeMisses {
-		t.Fatalf("stopped after %d probes, want %d", n, 1+namedProbeMisses)
+	return r, cloud, err
+}
+
+func TestTunnelRunnerRepairsATunnelThatLostEveryConnection(t *testing.T) {
+	r, cloud, err := runUntilStopped(t, registeredLine+"\n"+droppedLines, 100*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "no live connection") || !r.repair {
+		t.Fatalf("runOnce = %v, repair %v", err, r.repair)
 	}
-	if last := r.Runtime.Snapshot().LastError; !strings.Contains(last, "530") {
+	if last := r.Runtime.Snapshot().LastError; !strings.Contains(last, "no live connection") {
 		t.Fatalf("status error = %q", last)
 	}
 	// The next start asks AO Cloud to remake the tunnel.
-	if _, err := r.Fixed.TunnelFor(ctx, r.HostID, r.repair); err != nil || !cloud.repairs[len(cloud.repairs)-1] {
+	if _, err := r.Fixed.TunnelFor(context.Background(), r.HostID, r.repair); err != nil || !cloud.repairs[len(cloud.repairs)-1] {
 		t.Fatalf("next start repairs = %v (%v)", cloud.repairs, err)
+	}
+}
+
+func TestTunnelRunnerRepairsARefusedTunnel(t *testing.T) {
+	refusals := strings.Repeat(refusedLine+"\n", connectorRefusals)
+	// Only the refusals can stop it inside the test's time.
+	r, _, err := runUntilStopped(t, registeredLine+"\n"+refusals, time.Hour)
+	if err == nil || !strings.Contains(err.Error(), "refusing") || !r.repair {
+		t.Fatalf("runOnce = %v, repair %v", err, r.repair)
+	}
+}
+
+func TestConnectorHealthIgnoresWhatAWorkingTunnelPrints(t *testing.T) {
+	start := time.Now()
+	h := newConnectorHealth(start)
+	if since, dead := h.deadSince(); !dead || !since.Equal(start) {
+		t.Fatal("a connector that has not registered yet must count as dead from its start")
+	}
+	second := strings.Replace(registeredLine, "connIndex=0", "connIndex=1", 1)
+	for _, line := range []string{registeredLine, second, droppedLines[:strings.Index(droppedLines, "\n")]} {
+		h.feed(line, time.Now())
+	}
+	// One connection dropping while another serves is an ordinary edge restart.
+	if _, dead := h.deadSince(); dead {
+		t.Fatal("dead while connection 1 is live")
+	}
+	// Refusals while a new token propagates are absorbed until enough come in a row.
+	for i := 1; i < connectorRefusals; i++ {
+		if h.feed(refusedLine, time.Now()) {
+			t.Fatalf("stopped after %d refusals", i)
+		}
+	}
+	h.feed(registeredLine, time.Now())
+	if h.feed(refusedLine, time.Now()) {
+		t.Fatal("a registration did not reset the refusal count")
 	}
 }
 
