@@ -149,6 +149,10 @@ function originReportPreview(text: string): string {
 const STREAM_SETTLE_MS = 140;
 const STREAM_MIN_FRAME_MS = 32;
 const STREAM_MAX_FRAME_DELTA_MS = 100;
+// Long open Markdown blocks are reparsed on each reveal. Beyond this size,
+// coalesce provider snapshots rather than adding intermediate renders.
+const STREAM_SMOOTH_MAX_CHARS = 4000;
+const STREAM_LONG_UPDATE_MS = 100;
 // No frame for this long means the tab was occluded or throttled: nobody watched the
 // animation, so show the current text instead of replaying it.
 const STREAM_STALL_MS = 1000;
@@ -171,23 +175,25 @@ function reconciledStreamPrefix(visibleText: string, targetGraphemes: string[]) 
 }
 
 function useSmoothStreamingText(message: ConversationMessage): string {
+	const [reducedMotion, setReducedMotion] = useState(
+		() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+	);
+	const smooth = message.streaming && !reducedMotion && message.text.length <= STREAM_SMOOTH_MAX_CHARS;
 	// A snapshot can first reach the renderer after the provider has already emitted
 	// text. Keep that first durable burst visible; only later deltas need smoothing.
 	const [visibleText, setVisibleText] = useState(() => message.text);
 	const visibleRef = useRef(visibleText);
 	const targetRef = useRef(message.text);
 	const targetGraphemes = useMemo(
-		() => message.streaming ? streamGraphemes(message.text) : [],
-		[message.text, message.streaming],
+		() => smooth ? streamGraphemes(message.text) : [],
+		[message.text, smooth],
 	);
 	const visibleGraphemeCountRef = useRef(targetGraphemes.length);
 	const targetGraphemesRef = useRef(targetGraphemes);
 	const messageIdRef = useRef(message.id);
 	const frameRef = useRef<number | undefined>(undefined);
 	const lastFrameAtRef = useRef<number | undefined>(undefined);
-	const [reducedMotion, setReducedMotion] = useState(
-		() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-	);
+	const snapshotTimerRef = useRef<number | undefined>(undefined);
 
 	useEffect(() => {
 		const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -197,6 +203,10 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 	}, []);
 
 	const cancelDrain = useCallback(() => {
+		if (snapshotTimerRef.current !== undefined) {
+			window.clearTimeout(snapshotTimerRef.current);
+			snapshotTimerRef.current = undefined;
+		}
 		if (frameRef.current !== undefined) {
 			window.cancelAnimationFrame(frameRef.current);
 			frameRef.current = undefined;
@@ -275,6 +285,21 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 			visibleRef.current = message.text;
 			visibleGraphemeCountRef.current = targetGraphemes.length;
 			setVisibleText(message.text);
+			return;
+		}
+		if (message.text.length > STREAM_SMOOTH_MAX_CHARS) {
+			if (frameRef.current !== undefined) cancelDrain();
+			if (visibleRef.current === message.text) return;
+			if (visibleRef.current.length <= STREAM_SMOOTH_MAX_CHARS) {
+				visibleRef.current = message.text;
+				setVisibleText(message.text);
+			} else if (snapshotTimerRef.current === undefined) {
+				snapshotTimerRef.current = window.setTimeout(() => {
+					snapshotTimerRef.current = undefined;
+					visibleRef.current = targetRef.current;
+					setVisibleText(targetRef.current);
+				}, STREAM_LONG_UPDATE_MS);
+			}
 			return;
 		}
 		// A later combining mark or ZWJ can merge the last visible grapheme into a
@@ -1747,6 +1772,15 @@ function CommandOutput({
 	// Memoized per row: the timeline re-renders once a second while a turn runs, and
 	// only the rows a reader has opened pay for this at all.
 	const output = useMemo(() => stripAnsi(raw), [raw]);
+	// A scroll container still lays out all its text. Bound both a single long
+	// line and newline-heavy logs before Chromium measures the expanding row.
+	// The complete terminal-text projection remains available as a download.
+	const preview = useMemo(() => {
+		let tail = output.slice(-64 * 1024);
+		const first = tail.charCodeAt(0);
+		if (first >= 0xdc00 && first <= 0xdfff) tail = tail.slice(1);
+		return tail.split("\n").slice(-400).join("\n");
+	}, [output]);
 	const streaming = activity.status === "running";
 
 	useEffect(() => {
@@ -1770,8 +1804,27 @@ function CommandOutput({
 						: "border border-border bg-background px-2.5 py-2 text-caption",
 				)}
 			>
-				{output}
+				{preview}
 			</pre>
+			{preview.length < output.length ? (
+				<div className="flex flex-wrap items-center gap-x-2 px-2.5 py-1 text-xs text-muted-foreground">
+					<span>Showing the end of this large output.</span>
+					<button
+						type="button"
+						className="text-accent underline underline-offset-2"
+						onClick={() => {
+							const url = URL.createObjectURL(new Blob([output], { type: "text/plain;charset=utf-8" }));
+							const link = document.createElement("a");
+							link.href = url;
+							link.download = "command-output.txt";
+							link.click();
+							setTimeout(() => URL.revokeObjectURL(url), 0);
+						}}
+					>
+						Download full output
+					</button>
+				</div>
+			) : null}
 			{detail?.outputTruncated ? (
 				<p className="text-xs leading-relaxed text-warning">
 					This command printed more than AO stores, so the output above stops early. Open a shell in
