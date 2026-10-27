@@ -107,6 +107,23 @@ export function splitClaudeModels<T extends { id: string; label: string }>(model
 }
 
 /**
+ * One row per name within a group. Claude reaches one model by several ids (an alias
+ * and its start id), which read the same once labeled. The row for `keep`, the chosen
+ * model, stays; the others' ids become its aliases, so a favourite saved on any shows.
+ */
+export function mergeSameNamedModels<T extends { id: string; label: string; group?: string; aliases?: string[] }>(models: T[], keep?: string): T[] {
+	return models.flatMap((model) => {
+		const twins = models.filter((other) => other.label === model.label && other.group === model.group);
+		if (twins.length === 1) return [model];
+		const kept = twins.find((other) => keep && (other.id === keep || other.aliases?.includes(keep))) ?? twins[0];
+		if (model !== kept) return [];
+		const aliases = [...new Set(twins.flatMap((other) => [...(other === kept ? [] : [other.id]), ...(other.aliases ?? [])]))]
+			.filter((id) => id !== kept.id);
+		return [{ ...kept, aliases }];
+	});
+}
+
+/**
  * Claude's chat model option offers family aliases ("opus", "sonnet[1m]") and bare ids.
  * Maps a choice to its catalog entry: an id to itself, an alias by the name Claude gives
  * it, since an alias can name an older model ("haiku" is Haiku 4.5), and with no name to
