@@ -48,6 +48,13 @@ func New() *Reviewer {
 // Harness identifies the Agy reviewer.
 func (*Reviewer) Harness() domain.ReviewerHarness { return HarnessID }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Agy's sandbox
+// mode is not OS isolation and its tools keep host authority.
+// Verified live on Agy 1.4.7: it asks before commands, but offers always-allow.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerHostTrusted
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 

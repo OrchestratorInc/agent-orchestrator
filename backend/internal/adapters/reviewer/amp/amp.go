@@ -26,6 +26,13 @@ func New() *Reviewer { return &Reviewer{resolveBinary: workeramp.ResolveAmpBinar
 // Harness returns Amp's reviewer identity.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerAmp }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Amp asks
+// before every shell command and a human answers.
+// Unverified: read from this adapter's launch code; no live probe run yet.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerUserApproved
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerPromptReadinessProvider = (*Reviewer)(nil)

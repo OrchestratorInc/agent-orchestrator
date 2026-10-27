@@ -84,6 +84,7 @@ func (c *commandContext) requestShutdown(ctx context.Context, port int) error {
 	if err != nil {
 		return err
 	}
+	setReviewerCallerHeader(req)
 	resp, err := c.deps.HTTPClient.Do(req)
 	if err != nil {
 		return err

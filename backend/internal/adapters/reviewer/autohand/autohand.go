@@ -24,6 +24,13 @@ func New() *Reviewer { return &Reviewer{resolveBinary: workerautohand.ResolveAut
 // Harness returns Autohand's reviewer identity.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerAutohand }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Autohand
+// keeps its normal permission prompts.
+// Verified live on Autohand 0.9.8: it asks before every command.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerUserApproved
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 

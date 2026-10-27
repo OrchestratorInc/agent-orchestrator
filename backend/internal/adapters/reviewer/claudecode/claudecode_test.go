@@ -82,12 +82,13 @@ func TestReviewCommandLaunchesReadOnlyOffBypass(t *testing.T) {
 		t.Fatalf("ReviewCommand: %v", err)
 	}
 
-	// The allowlist is what enforces read-only, so it must launch in an
-	// explicit non-bypass mode: bypassPermissions ignores allow/deny rules
-	// entirely, and an empty mode would defer to a user's defaultMode.
-	if agent.got.Permissions != ports.PermissionModeAuto {
-		t.Fatalf("reviewer must launch in auto permission mode; got %q", agent.got.Permissions)
+	// Auto mode lets Claude's classifier approve commands before AO's hooks
+	// are consulted (#6842), so the reviewer launches in default mode and pins
+	// it through AO-owned flag settings that also carry the guard hooks.
+	if agent.got.Permissions != ports.PermissionModeDefault {
+		t.Fatalf("reviewer must launch in default permission mode; got %q", agent.got.Permissions)
 	}
+	assertReviewerGuardSettings(t, agent.got.ProviderSettings)
 	if agent.got.SessionID == "" {
 		t.Fatal("reviewer must pass its stable AO session id")
 	}
@@ -251,9 +252,10 @@ func TestReviewRestoreCommandUsesNativeSessionIDAndReadOnlyPolicy(t *testing.T) 
 	if agent.gotRestore.Session.Metadata[ports.MetadataKeyAgentSessionID] != "claude-native-1" {
 		t.Fatalf("restore metadata = %#v", agent.gotRestore.Session.Metadata)
 	}
-	if agent.gotRestore.Permissions != ports.PermissionModeAuto {
-		t.Fatalf("restore permissions = %q, want auto", agent.gotRestore.Permissions)
+	if agent.gotRestore.Permissions != ports.PermissionModeDefault {
+		t.Fatalf("restore permissions = %q, want default", agent.gotRestore.Permissions)
 	}
+	assertReviewerGuardSettings(t, agent.gotRestore.ProviderSettings)
 	if agent.gotRestore.Prompt != "read the new review task" || agent.gotRestore.SystemPromptFile != "/ao/prompts/reviewer/system.md" {
 		t.Fatalf("restore prompt configuration = %+v", agent.gotRestore)
 	}
@@ -322,8 +324,10 @@ func TestReviewRestoreCommandEmitsResumeWithPolicySystemPromptAndTask(t *testing
 	if err != nil || !ok {
 		t.Fatalf("ReviewRestoreCommand = (ok=%v, err=%v), want command", ok, err)
 	}
+	if contains(got.Argv, "--permission-mode") {
+		t.Fatalf("restore argv sets a permission mode flag; the flag settings pin default mode: %#v", got.Argv)
+	}
 	for _, want := range [][]string{
-		{"--permission-mode", "auto"},
 		{"--allowedTools", strings.Join(reviewerAllowedTools, ",")},
 		{"--disallowedTools", strings.Join(reviewerDisallowedTools, ",")},
 		{"--append-system-prompt-file", systemPromptFile},
@@ -552,4 +556,41 @@ func flagValue(argv []string, flag string) string {
 		}
 	}
 	return ""
+}
+
+// assertReviewerGuardSettings pins the AO-owned flag settings every reviewer
+// launch carries (#6842): default mode, no switching into bypassPermissions,
+// and the PreToolUse guard plus PermissionRequest hook on the absolute AO path.
+func assertReviewerGuardSettings(t *testing.T, settings map[string]any) {
+	t.Helper()
+	permissions, _ := settings["permissions"].(map[string]any)
+	if permissions["defaultMode"] != "default" || permissions["disableBypassPermissionsMode"] != "disable" {
+		t.Fatalf("permissions settings = %#v", permissions)
+	}
+	hooks, _ := settings["hooks"].(map[string]any)
+	for event, action := range map[string]string{"PreToolUse": "review-guard", "PermissionRequest": "permission-request"} {
+		groups, _ := hooks[event].([]any)
+		if len(groups) != 1 {
+			t.Fatalf("%s hook groups = %#v", event, hooks[event])
+		}
+		entries, _ := groups[0].(map[string]any)["hooks"].([]any)
+		if len(entries) != 1 {
+			t.Fatalf("%s hook entries = %#v", event, groups[0])
+		}
+		command, _ := entries[0].(map[string]any)["command"].(string)
+		if !strings.HasSuffix(command, " hooks claude-code "+action) {
+			t.Fatalf("%s command = %q, want the AO %s hook", event, command, action)
+		}
+		executable := strings.Trim(strings.TrimSuffix(command, " hooks claude-code "+action), `'"`)
+		if !filepath.IsAbs(executable) {
+			t.Fatalf("%s hook runs %q; want an absolute AO path, never a bare PATH lookup", event, executable)
+		}
+	}
+}
+
+func TestReviewerLaunchSettingsFailWhenExecutableIsUnknown(t *testing.T) {
+	r := &Reviewer{agent: &captureAgent{}, executable: func() (string, error) { return "", os.ErrNotExist }}
+	if _, err := r.ReviewCommand(context.Background(), ports.ReviewInvocation{ReviewerID: "review-w1", WorkspacePath: "/ws"}); err == nil {
+		t.Fatal("ReviewCommand launched without a resolvable guard hook; want an error")
+	}
 }

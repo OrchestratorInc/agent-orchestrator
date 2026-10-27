@@ -15,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hooksjson"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
 )
 
 func TestResolveClaudeBinaryFindsLocalAppDataNPMShimOnWindows(t *testing.T) {
@@ -1696,5 +1697,37 @@ func TestPreLaunchUsesTheLaunchClaudeConfigDir(t *testing.T) {
 	}
 	if entry, _ := root["projects"].(map[string]any)[workspace].(map[string]any); entry["hasTrustDialogAccepted"] != true {
 		t.Fatalf("workspace not trusted in the daemon config: %v", root)
+	}
+}
+
+// TestLaunchSettingsMergeProviderSettings pins that host-owned provider
+// settings (the reviewer's guard hooks and pinned mode) share Claude's single
+// --settings flag with the session's own launch choices and win on conflict.
+func TestLaunchSettingsMergeProviderSettings(t *testing.T) {
+	args := claudeLaunchSettingsArgs(
+		domain.AgentLaunchOptions{Ultracode: true},
+		agentruntime.PermissionAuto,
+		map[string]any{
+			"permissions": map[string]any{"defaultMode": "default", "disableBypassPermissionsMode": "disable"},
+			"hooks":       map[string]any{"PreToolUse": []any{"guard"}},
+		},
+	)
+	if len(args) != 2 || args[0] != "--settings" {
+		t.Fatalf("args = %#v, want one --settings flag", args)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(args[1]), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"ultracode":   true,
+		"permissions": map[string]any{"defaultMode": "default", "disableBypassPermissionsMode": "disable"},
+		"hooks":       map[string]any{"PreToolUse": []any{"guard"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("settings = %#v, want %#v", got, want)
+	}
+	if args := claudeLaunchSettingsArgs(domain.AgentLaunchOptions{}, "", nil); args != nil {
+		t.Fatalf("a plain launch gained settings: %#v", args)
 	}
 }

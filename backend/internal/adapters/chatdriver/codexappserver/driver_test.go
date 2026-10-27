@@ -1863,3 +1863,56 @@ func TestCodexResumedThreadKeepsTheUsersConfiguredServiceTier(t *testing.T) {
 		t.Fatalf("serviceTier = %s, want it left to the user's config", tier)
 	}
 }
+
+// TestReviewThreadCarriesReviewGuardHook pins the Codex Chat half of #6842: a
+// review conversation's read-only sandbox has network, so its thread runs AO's
+// review-guard as a PreToolUse hook; an ordinary conversation gets no hook.
+func TestReviewThreadCarriesReviewGuardHook(t *testing.T) {
+	for _, guard := range []bool{true, false} {
+		t.Run("guard="+strconv.FormatBool(guard), func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			conv, err := d.Start(context.Background(), ports.ChatStartConfig{
+				SessionID:     "review-rv-1",
+				WorkspacePath: "/tmp/ws",
+				Permissions:   ports.PermissionModeAuto,
+				ReadOnly:      true,
+				ReviewGuard:   guard,
+			})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer func() { _ = conv.Close() }()
+			start := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/start" })
+			var params struct {
+				Config struct {
+					Hooks struct {
+						PreToolUse []struct {
+							Hooks []struct {
+								Type    string `json:"type"`
+								Command string `json:"command"`
+							} `json:"hooks"`
+						} `json:"PreToolUse"`
+					} `json:"hooks"`
+				} `json:"config"`
+			}
+			if err := json.Unmarshal(start.Params, &params); err != nil {
+				t.Fatalf("thread/start params: %v", err)
+			}
+			groups := params.Config.Hooks.PreToolUse
+			if !guard {
+				if len(groups) != 0 {
+					t.Fatalf("ordinary thread got a review guard: %s", start.Params)
+				}
+				return
+			}
+			if len(groups) != 1 || len(groups[0].Hooks) != 1 || groups[0].Hooks[0].Type != "command" ||
+				!strings.HasSuffix(groups[0].Hooks[0].Command, " hooks codex review-guard") {
+				t.Fatalf("review thread hook config = %s", start.Params)
+			}
+			executable := strings.Trim(strings.TrimSuffix(groups[0].Hooks[0].Command, " hooks codex review-guard"), `'"& `)
+			if !filepath.IsAbs(executable) {
+				t.Fatalf("review guard runs %q; want an absolute AO path", executable)
+			}
+		})
+	}
+}

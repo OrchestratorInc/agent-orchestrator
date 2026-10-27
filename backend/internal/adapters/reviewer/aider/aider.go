@@ -20,6 +20,13 @@ func New() *Reviewer { return &Reviewer{resolveBinary: workeraider.ResolveAiderB
 // Harness returns Aider's reviewer identity.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerAider }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Aider runs in
+// ask mode with manual confirmations.
+// Unverified: read from this adapter's launch code; no live probe run yet.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerUserApproved
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerReusePolicy = (*Reviewer)(nil)

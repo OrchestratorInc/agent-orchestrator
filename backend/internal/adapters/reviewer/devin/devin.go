@@ -32,6 +32,13 @@ func New() *Reviewer {
 // Harness returns Devin's reviewer identity.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerDevin }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Devin runs
+// without OS isolation or a tool policy.
+// Unverified: read from this adapter's launch code; no live probe run yet.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerHostTrusted
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerPromptReadinessProvider = (*Reviewer)(nil)

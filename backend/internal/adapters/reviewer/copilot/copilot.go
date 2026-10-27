@@ -56,6 +56,15 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerCopilot
 }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Copilot's own
+// --allow-tool and --deny-tool rules, written to match the shared reviewer
+// policy, deny writes, commits and pushes, and anything not allowed prompts.
+// Copilot rules stop at the first subcommand, so shell(gh api:*) still admits
+// any GitHub API call (verified on Copilot CLI 1.0.98).
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerEnforcedConfig
+}
+
 // InvalidateBinaryResolution forgets the worker plugin's cached executable, so
 // the next review runs the release an install just switched to.
 func (r *Reviewer) InvalidateBinaryResolution() {

@@ -13,9 +13,10 @@ import (
 // Options carries reviewer policy that must be reapplied when resuming a native
 // agent conversation.
 type Options struct {
-	Permissions     ports.PermissionMode
-	AllowedTools    []string
-	DisallowedTools []string
+	Permissions      ports.PermissionMode
+	AllowedTools     []string
+	DisallowedTools  []string
+	ProviderSettings map[string]any
 }
 
 // Command asks the wrapped agent adapter to resume the reviewer's native
@@ -46,6 +47,7 @@ func Command(ctx context.Context, agent ports.Agent, inv ports.ReviewInvocation,
 		Permissions:      opts.Permissions,
 		AllowedTools:     opts.AllowedTools,
 		DisallowedTools:  opts.DisallowedTools,
+		ProviderSettings: opts.ProviderSettings,
 		Prompt:           prompt,
 		SystemPrompt:     inv.SystemPrompt,
 		SystemPromptFile: inv.SystemPromptFile,

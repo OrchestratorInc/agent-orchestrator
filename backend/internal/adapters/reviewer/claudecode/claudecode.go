@@ -8,6 +8,10 @@ package claudecode
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -20,6 +24,9 @@ import (
 // Reviewer is the claude-code code-review adapter.
 type Reviewer struct {
 	agent ports.Agent
+	// executable resolves the AO binary the review-guard hook runs; nil means
+	// os.Executable (the daemon is the ao binary).
+	executable func() (string, error)
 }
 
 // New builds the claude-code reviewer adapter.
@@ -30,6 +37,13 @@ func New() *Reviewer {
 // Harness identifies this reviewer in the reviewer registry.
 func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerClaudeCode
+}
+
+// ReviewEnforcement reports how the reviewer policy is enforced: a PreToolUse
+// hook passed through AO's own launch settings asks reviewpolicy before every
+// tool call.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerEnforcedHook
 }
 
 // InvalidateBinaryResolution forgets the worker plugin's cached executable, so
@@ -44,23 +58,13 @@ var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)
 
-// reviewerAllowedTools is the read-only tool allowlist the reviewer launches
-// with. The reviewer runs headless (no human to approve prompts) but must stay
-// read-only, so instead of bypassPermissions — which skips the permission
-// system entirely and ignores allow/deny rules — it launches in the default
-// mode where these rules are honored: allow rules auto-approve without
-// prompting, so the reviewer can read the checkout and run the few commands it
-// needs (git diff/log/show to inspect the PR, gh pr view/diff/checks to read
-// PR metadata, printf to pipe review JSON into the downstream commands without
-// writing a worktree file, and `ao review submit` to record the verdict).
-// Claude Code ≥ 2.1.257 still prompts on Bash commands its analyzer cannot
-// verify statically even when an allow rule matches; the PermissionRequest
-// hook AO installs answers those for reviewers (see
-// cli.reviewerPermissionDecision) so the pane never stalls. That hook is also
-// the only route for the `gh api --method POST .../reviews` call that posts
-// the review: a blanket Bash(gh:*) allow rule would admit merges, closes, and
-// arbitrary API mutations that a prefix deny list cannot enumerate (flag
-// spellings, flag order, graphql).
+// reviewerAllowedTools pre-approves the common read-only calls so the
+// headless reviewer does not prompt for them. They are a convenience, not the
+// boundary: every tool call first passes the review-guard PreToolUse hook (see
+// reviewerLaunchSettings), which applies the shared reviewer policy
+// (reviewpolicy) in every permission mode. Commands outside this list that the
+// policy admits prompt, and the PermissionRequest hook answers those with the
+// same policy (see cli.reviewerPermissionDecision), so the pane never stalls.
 var reviewerAllowedTools = []string{
 	"Read",
 	"Grep",
@@ -76,9 +80,8 @@ var reviewerAllowedTools = []string{
 	"Bash(ao review submit:*)",
 }
 
-// reviewerDisallowedTools hard-denies the write paths as defense in depth, so a
-// misbehaving model cannot edit files or move the branch even if a future
-// allowlist entry would otherwise admit it.
+// reviewerDisallowedTools hard-denies the write paths as defense in depth
+// behind the review-guard hook.
 var reviewerDisallowedTools = []string{
 	"Edit",
 	"Write",
@@ -90,11 +93,67 @@ var reviewerDisallowedTools = []string{
 	"Bash(gh pr merge:*)",
 }
 
+// reviewHookTimeoutSeconds bounds each AO hook call, matching the worker hooks.
+const reviewHookTimeoutSeconds = 30
+
+// reviewerLaunchSettings is the AO-owned Claude flag settings every reviewer
+// launch carries. They pin default mode, forbid switching into
+// bypassPermissions, and register the hooks that enforce the shared reviewer
+// policy: PreToolUse (a deny there holds in every mode and for subagents) and
+// PermissionRequest (answers the prompts default mode raises). The hooks run
+// the absolute AO binary and live in the launch flags rather than the
+// checkout's .claude/settings.local.json, which the code under review controls.
+func (r *Reviewer) reviewerLaunchSettings() (map[string]any, error) {
+	resolve := r.executable
+	if resolve == nil {
+		resolve = os.Executable
+	}
+	executable, err := resolve()
+	if err != nil {
+		return nil, fmt.Errorf("claude-code reviewer: resolve AO executable for the review guard: %w", err)
+	}
+	if !filepath.IsAbs(executable) {
+		if executable, err = filepath.Abs(executable); err != nil {
+			return nil, fmt.Errorf("claude-code reviewer: make AO executable absolute: %w", err)
+		}
+	}
+	hook := func(event string) []any {
+		return []any{map[string]any{"hooks": []any{map[string]any{
+			"type":    "command",
+			"command": quoteHookExecutable(executable) + " hooks claude-code " + event,
+			"timeout": reviewHookTimeoutSeconds,
+		}}}}
+	}
+	return map[string]any{
+		"permissions": map[string]any{
+			"defaultMode":                  "default",
+			"disableBypassPermissionsMode": "disable",
+		},
+		"hooks": map[string]any{
+			"PreToolUse":        hook("review-guard"),
+			"PermissionRequest": hook("permission-request"),
+		},
+	}, nil
+}
+
+// quoteHookExecutable quotes the AO path for the shell Claude Code runs hook
+// commands through.
+func quoteHookExecutable(path string) string {
+	if runtime.GOOS == "windows" {
+		return `"` + path + `"`
+	}
+	return `'` + strings.ReplaceAll(path, `'`, `'"'"'`) + `'`
+}
+
 // ReviewCommand builds a claude-code invocation that reviews the worker's
 // checkout for the PR. Production launches provide the standing instructions
 // through an AO-owned prompt file so only the short task-file reference is
 // terminal-visible.
 func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, error) {
+	settings, err := r.reviewerLaunchSettings()
+	if err != nil {
+		return ports.ReviewCommandSpec{}, err
+	}
 	agentSessionID := workeragent.SessionUUID(inv.ReviewerID)
 	argv, err := r.agent.GetLaunchCommand(ctx, ports.LaunchConfig{
 		Config: inv.Config,
@@ -107,12 +166,14 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 		Prompt:           inv.Prompt,
 		SystemPrompt:     inv.SystemPrompt,
 		SystemPromptFile: inv.SystemPromptFile,
-		// Launch off bypassPermissions so the allow/deny lists are enforced.
-		// Set an explicit non-bypass mode instead of deferring to the user's
-		// Claude defaultMode, which may itself be bypassPermissions.
-		Permissions:     ports.PermissionModeAuto,
-		AllowedTools:    reviewerAllowedTools,
-		DisallowedTools: reviewerDisallowedTools,
+		// Default mode keeps every decision with AO's hooks and allow/deny
+		// lists: auto mode lets Claude's classifier approve commands before the
+		// PermissionRequest hook is consulted (#6842). The flag settings pin the
+		// mode so a user's own defaultMode cannot override it.
+		Permissions:      ports.PermissionModeDefault,
+		AllowedTools:     reviewerAllowedTools,
+		DisallowedTools:  reviewerDisallowedTools,
+		ProviderSettings: settings,
 	})
 	if err != nil {
 		return ports.ReviewCommandSpec{}, err
@@ -142,7 +203,7 @@ func (r *Reviewer) PreLaunch(ctx context.Context, inv ports.ReviewInvocation) er
 		SessionID:     workeragent.SessionUUID(inv.ReviewerID),
 		WorkspacePath: inv.WorkspacePath,
 		// The mode ReviewCommand launches with.
-		Permissions: ports.PermissionModeAuto,
+		Permissions: ports.PermissionModeDefault,
 	})
 }
 
@@ -162,10 +223,15 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 	} else if migratedID != "" {
 		inv.AgentSessionID = migratedID
 	}
+	settings, err := r.reviewerLaunchSettings()
+	if err != nil {
+		return ports.ReviewCommandSpec{}, false, err
+	}
 	cmd, ok, err := agentrestore.Command(ctx, r.agent, inv, agentrestore.Options{
-		Permissions:     ports.PermissionModeAuto,
-		AllowedTools:    reviewerAllowedTools,
-		DisallowedTools: reviewerDisallowedTools,
+		Permissions:      ports.PermissionModeDefault,
+		AllowedTools:     reviewerAllowedTools,
+		DisallowedTools:  reviewerDisallowedTools,
+		ProviderSettings: settings,
 	})
 	if err != nil || !ok {
 		return cmd, ok, err

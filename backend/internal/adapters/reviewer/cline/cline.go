@@ -27,6 +27,13 @@ func New() *Reviewer { return &Reviewer{resolveBinary: workercline.ResolveClineB
 // Harness returns Cline's reviewer identity.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerCline }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Cline keeps
+// its normal permission prompts.
+// Unverified: read from this adapter's launch code; no live probe run yet.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerUserApproved
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerPromptReadinessProvider = (*Reviewer)(nil)

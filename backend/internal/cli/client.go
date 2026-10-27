@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -201,6 +202,7 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	if sideID := os.Getenv("AO_SIDE_CONVERSATION_ID"); sideID != "" {
 		req.Header.Set("X-AO-Side-Conversation", sideID)
 	}
+	setReviewerCallerHeader(req)
 
 	// Reuse the injected client's transport (keeps it stubbable in tests) but
 	// give daemon API calls far more headroom than the 2s status-probe timeout.
@@ -265,4 +267,17 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 		return fmt.Errorf("decode response: %w", err)
 	}
 	return nil
+}
+
+// reviewSessionHeader mirrors httpd.ReviewSessionHeader: it tells the daemon a
+// request comes from a reviewer pane, which may only read and submit (#6842).
+const reviewSessionHeader = "X-AO-Review-Session"
+
+// setReviewerCallerHeader marks req as a reviewer's when this CLI runs inside a
+// reviewer pane. Every daemon request path must call it, including the control
+// routes that build their own request.
+func setReviewerCallerHeader(req *http.Request) {
+	if id := strings.TrimSpace(os.Getenv(envReviewSessionID)); id != "" {
+		req.Header.Set(reviewSessionHeader, id)
+	}
 }

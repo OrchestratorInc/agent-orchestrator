@@ -55,6 +55,13 @@ func New() *Reviewer {
 // Harness identifies Pi in the reviewer registry.
 func (*Reviewer) Harness() domain.ReviewerHarness { return domain.ReviewerPi }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: built-in
+// tools are disabled and the AO extension is the whole tool surface.
+// Unverified: read from this adapter's launch code; no live probe run yet.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerEnforcedGateway
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 

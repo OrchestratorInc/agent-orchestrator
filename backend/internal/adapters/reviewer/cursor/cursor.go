@@ -32,6 +32,16 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerCursor
 }
 
+// ReviewEnforcement reports how the reviewer policy is enforced: Cursor asks
+// a human before commands its active allowlist does not cover. Current Cursor
+// CLI does not apply the reviewer profile (it reads CURSOR_CONFIG_DIR, AO sets
+// CURSOR_DATA_DIR; #7297), so that allowlist is the user's own (verified on
+// Cursor CLI 2026.10.22). Cursor loads hooks only from the user's home or the
+// checkout, so AO cannot add a reviewer-only guard.
+func (*Reviewer) ReviewEnforcement() domain.ReviewerEnforcement {
+	return domain.ReviewerUserApproved
+}
+
 // InvalidateBinaryResolution forgets the worker plugin's cached executable, so
 // the next review runs the release an install just switched to.
 func (r *Reviewer) InvalidateBinaryResolution() {

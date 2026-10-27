@@ -763,8 +763,13 @@ type LaunchConfig struct {
 	// relies on: bypassPermissions ignores both lists, so a restricted launch
 	// must leave Permissions off bypass. Empty means no restriction, so worker
 	// sessions are unaffected.
-	AllowedTools     []string
-	DisallowedTools  []string
+	AllowedTools    []string
+	DisallowedTools []string
+	// ProviderSettings are host-owned native settings the adapter merges into
+	// its own launch settings (Claude Code: the single --settings flag). They
+	// travel with the launch, never through a file in the checkout, so the
+	// code under review cannot change them. Empty for ordinary workers.
+	ProviderSettings map[string]any
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
@@ -794,7 +799,9 @@ type RestoreConfig struct {
 	Permissions     PermissionMode
 	AllowedTools    []string
 	DisallowedTools []string
-	Session         SessionRef
+	// ProviderSettings mirrors LaunchConfig.ProviderSettings for a resume.
+	ProviderSettings map[string]any
+	Session          SessionRef
 	// Prompt is an optional new user turn to submit while resuming the native
 	// conversation. Adapters whose CLI accepts a resume-time positional prompt
 	// should append it to the restore command; after-start adapters leave it
