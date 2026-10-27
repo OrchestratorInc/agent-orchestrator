@@ -688,6 +688,7 @@
 	"terminal.sessionLoader.workspace": "Arbeitsbereich wird erstellt",
 	"terminal.sessionLoader.worker": "Verbindung zum Worker wird hergestellt",
 	"terminal.sessionLoader.repositoryAgent": "Repository und Agent werden vorbereitet",
+	"terminal.sessionLoader.chat": "Verbindung zum Chat wird hergestellt",
 	"terminal.sessionLoader.terminal": "Verbindung zum Terminal wird hergestellt",
 	"terminal.sessionLoader.label": "Aktivität zur Sitzungseinrichtung",
 	"terminal.sessionLoader.openCoderWorkspace": "Workspace in Coder öffnen",

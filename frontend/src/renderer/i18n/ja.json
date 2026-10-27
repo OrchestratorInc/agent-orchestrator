@@ -688,6 +688,7 @@
 	"terminal.sessionLoader.workspace": "ワークスペースを作成中",
 	"terminal.sessionLoader.worker": "ワーカーに接続しています",
 	"terminal.sessionLoader.repositoryAgent": "リポジトリとエージェントを準備しています",
+	"terminal.sessionLoader.chat": "チャットに接続しています",
 	"terminal.sessionLoader.terminal": "ターミナルに接続しています",
 	"terminal.sessionLoader.label": "セッション設定の進行状況",
 	"terminal.sessionLoader.openCoderWorkspace": "Coder でワークスペースを開く",

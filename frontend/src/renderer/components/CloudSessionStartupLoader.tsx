@@ -7,12 +7,15 @@ import { MultiStepLoader } from "./ui/multi-step-loader";
 
 export function CloudSessionStartupLoader({
 	activeIndex = 0,
+	chat = false,
 	completed = false,
 	startupNote,
 	coderWorkspaceUrl,
 	setupRun,
 }: {
 	activeIndex?: number;
+	/** A Chat session: its last step connects the conversation, not a terminal. */
+	chat?: boolean;
 	completed?: boolean;
 	startupNote?: string;
 	/** Bring-your-own Coder workspace page, linked beside the workspace step. */
@@ -31,7 +34,7 @@ export function CloudSessionStartupLoader({
 			t("terminal.sessionLoader.workspace"),
 			t("terminal.sessionLoader.worker"),
 			t("terminal.sessionLoader.repositoryAgent"),
-			t("terminal.sessionLoader.terminal"),
+			chat ? t("terminal.sessionLoader.chat") : t("terminal.sessionLoader.terminal"),
 		]}
 		stepAccessories={coderWorkspaceUrl ? [<CoderWorkspaceLinkButton key="workspace" url={coderWorkspaceUrl} />] : undefined}
 	/>;

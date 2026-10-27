@@ -688,6 +688,7 @@
 	"terminal.sessionLoader.workspace": "작업 공간 만드는 중",
 	"terminal.sessionLoader.worker": "워커에 연결하는 중",
 	"terminal.sessionLoader.repositoryAgent": "리포지토리와 에이전트를 준비하는 중",
+	"terminal.sessionLoader.chat": "채팅에 연결하는 중",
 	"terminal.sessionLoader.terminal": "터미널에 연결하는 중",
 	"terminal.sessionLoader.label": "세션 설정 활동",
 	"terminal.sessionLoader.openCoderWorkspace": "Coder에서 워크스페이스 열기",
