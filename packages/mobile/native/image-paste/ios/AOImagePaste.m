@@ -83,19 +83,6 @@ static UITextView *AOFindTextView(UIView *view)
   return nil;
 }
 
-/** An item's image representations, in the pasteboard's own order. Read on main, inside the user's Paste. */
-static NSArray<NSArray *> *AOImageRepresentations(UIPasteboard *pasteboard, NSInteger index)
-{
-  NSIndexSet *item = [NSIndexSet indexSetWithIndex:index];
-  NSMutableArray<NSArray *> *representations = [NSMutableArray new];
-  for (NSString *identifier in [pasteboard pasteboardTypesForItemSet:item].firstObject ?: @[]) {
-    if (![[UTType typeWithIdentifier:identifier] conformsToType:UTTypeImage]) continue;
-    id data = [pasteboard dataForPasteboardType:identifier inItemSet:item].firstObject;
-    if ([data isKindOfClass:NSData.class]) [representations addObject:@[ identifier, data ]];
-  }
-  return representations;
-}
-
 static NSString *AOPassthroughMimeType(NSString *identifier)
 {
   static NSDictionary<NSString *, NSString *> *types;
@@ -113,36 +100,54 @@ static NSString *AOPassthroughMimeType(NSString *identifier)
 }
 
 /**
- * `{ mimeType, bytes, data? }` for one item; no data means too large or unreadable.
- * The first representation the agents take as-is and that fits is sent unchanged.
- * Otherwise the first decodable one is re-encoded as JPEG: HEIC or TIFF, and also a
- * PNG photo over the limit whose JPEG would fit.
+ * Reads one item on main, inside the user's Paste, and only as far as needed:
+ * representations are produced on demand, and some are large (the TIFF of a Retina
+ * screenshot over Universal Clipboard). Walks the types in the pasteboard's order
+ * and stops at the first one the agents take as-is that fits. Failing that, keeps
+ * one source to re-encode as JPEG: the first oversized one already read, else the
+ * item's first image type (HEIC, TIFF). nil when the item holds no image.
  */
-static NSDictionary *AOEncodeImage(NSArray<NSArray *> *representations)
+static NSDictionary *AOReadImageItem(UIPasteboard *pasteboard, NSInteger index)
 {
-  NSString *mimeType = nil;
-  NSData *chosen = nil;
-  NSUInteger smallest = 0;
-  for (NSArray *representation in representations) {
-    NSString *type = AOPassthroughMimeType(representation[0]);
-    NSData *data = representation[1];
-    if (!type) continue;
-    if (data.length <= AOMaxImageBytes) { mimeType = type; chosen = data; break; }
-    smallest = smallest ? MIN(smallest, data.length) : data.length;
+  NSIndexSet *item = [NSIndexSet indexSetWithIndex:index];
+  NSString *firstImageType = nil;
+  NSData *source = nil;
+  NSUInteger oversized = 0;
+  for (NSString *identifier in [pasteboard pasteboardTypesForItemSet:item].firstObject ?: @[]) {
+    if (![[UTType typeWithIdentifier:identifier] conformsToType:UTTypeImage]) continue;
+    if (!firstImageType) firstImageType = identifier;
+    NSString *mimeType = AOPassthroughMimeType(identifier);
+    if (!mimeType) continue;
+    NSData *data = [pasteboard dataForPasteboardType:identifier inItemSet:item].firstObject;
+    if (![data isKindOfClass:NSData.class]) continue;
+    if (data.length <= AOMaxImageBytes) return @{@"mimeType" : mimeType, @"data" : data};
+    oversized = oversized ? MIN(oversized, data.length) : data.length;
+    if (!source) source = data;
   }
-  if (!chosen) {
-    for (NSArray *representation in representations) {
-      UIImage *image = [UIImage imageWithData:representation[1]];
-      NSData *jpeg = image ? UIImageJPEGRepresentation(image, 0.9) : nil;
-      if (!jpeg) continue;
-      mimeType = @"image/jpeg";
-      if (jpeg.length <= AOMaxImageBytes) chosen = jpeg;
-      else smallest = smallest ? MIN(smallest, jpeg.length) : jpeg.length;
-      break;
-    }
+  if (!firstImageType) return nil;
+  if (!source) {
+    NSData *data = [pasteboard dataForPasteboardType:firstImageType inItemSet:item].firstObject;
+    if ([data isKindOfClass:NSData.class]) source = data;
   }
-  if (!chosen) return @{@"mimeType" : mimeType ?: @"image/jpeg", @"bytes" : @(smallest)};
-  return @{@"mimeType" : mimeType, @"bytes" : @(chosen.length), @"data" : [chosen base64EncodedStringWithOptions:0]};
+  NSMutableDictionary *read = [@{@"oversized" : @(oversized)} mutableCopy];
+  if (source) read[@"source"] = source;
+  return read;
+}
+
+/**
+ * `{ mimeType, bytes, data? }` for one read item; no data means too large or
+ * unreadable. Runs off main: base64, and for a re-encode the decode and JPEG.
+ */
+static NSDictionary *AOEncodeImage(NSDictionary *read)
+{
+  NSData *data = read[@"data"];
+  if (data) return @{@"mimeType" : read[@"mimeType"], @"bytes" : @(data.length), @"data" : [data base64EncodedStringWithOptions:0]};
+  UIImage *image = read[@"source"] ? [UIImage imageWithData:read[@"source"]] : nil;
+  NSData *jpeg = image ? UIImageJPEGRepresentation(image, 0.9) : nil;
+  if (jpeg.length && jpeg.length <= AOMaxImageBytes) return @{@"mimeType" : @"image/jpeg", @"bytes" : @(jpeg.length), @"data" : [jpeg base64EncodedStringWithOptions:0]};
+  NSUInteger oversized = [read[@"oversized"] unsignedIntegerValue];
+  NSUInteger bytes = jpeg.length ? (oversized ? MIN(oversized, jpeg.length) : jpeg.length) : oversized;
+  return @{@"mimeType" : @"image/jpeg", @"bytes" : @(bytes)};
 }
 
 @implementation AOImagePaste {
@@ -195,17 +200,17 @@ RCT_EXPORT_METHOD(detach:(nonnull NSNumber *)tag)
 - (void)pasteImagesForTag:(NSNumber *)tag
 {
   UIPasteboard *pasteboard = UIPasteboard.generalPasteboard;
-  NSMutableArray<NSArray<NSArray *> *> *items = [NSMutableArray new];
+  NSMutableArray<NSDictionary *> *items = [NSMutableArray new];
   for (NSInteger index = 0; index < pasteboard.numberOfItems; index++) {
-    NSArray<NSArray *> *representations = AOImageRepresentations(pasteboard, index);
-    if (representations.count) [items addObject:representations];
+    NSDictionary *read = AOReadImageItem(pasteboard, index);
+    if (read) [items addObject:read];
   }
   if (!items.count) return;
   // Decoding, re-encoding and base64 can take a moment on a large photo; keep them off the UI.
   __weak AOImagePaste *weakSelf = self;
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
     NSMutableArray<NSDictionary *> *images = [NSMutableArray new];
-    for (NSArray<NSArray *> *representations in items) [images addObject:AOEncodeImage(representations)];
+    for (NSDictionary *read in items) [images addObject:AOEncodeImage(read)];
     dispatch_async(dispatch_get_main_queue(), ^{
       [weakSelf sendEventWithName:@"AOImagePaste" body:@{@"tag" : tag, @"images" : images}];
     });
