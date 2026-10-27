@@ -49,6 +49,7 @@ import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequ
 import { cachedCloudBillingMode } from "../lib/cloud-offering";
 import { resolveCssColorToHex } from "../lib/css-color";
 import { refreshDaemonStatus } from "../lib/daemon-status";
+import { waitForEventsConnection } from "../lib/events-connection";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { captureProjectAddFailed } from "../lib/project-lifecycle-telemetry";
@@ -128,6 +129,7 @@ export const Route = createFileRoute("/_shell")({
 	loader: async ({ context }) => {
 		await refreshDaemonStatus().catch(() => undefined);
 		if (!usesPreviewWorkspaceData && !hasTrustedApiBaseUrl()) return;
+		if (!usesPreviewWorkspaceData) await waitForEventsConnection();
 		// Fresh on navigation, but deduped: a hover preload followed by its click,
 		// or a quick run of navigations, shares one /projects + /sessions fetch
 		// instead of one each. Mutations and CDC events invalidate regardless.
@@ -1153,6 +1155,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		};
 	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, developerMode]);
 
+	const workspaceStartupConfirmedRef = useRef(false);
+
 	// A daemon port is not enough to render a trustworthy empty state: the
 	// route loader may have cached [] before Electron reported the port. Fetch
 	// against each ready daemon before the board decides between projects and the
@@ -1174,11 +1178,15 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			};
 		}
 
+		// The loader resolved the trusted daemon URL before fetching. Reuse its
+		// fresh snapshot on first mount; later daemon transitions still force a read.
+		const firstReady = !workspaceStartupConfirmedRef.current;
+		workspaceStartupConfirmedRef.current = true;
 		workspaceStartupBaselineRef.current =
 			queryClient.getQueryState(workspaceQueryKey)?.dataUpdatedAt ?? 0;
 		setWorkspaceStartupState("loading");
 		void queryClient
-			.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 })
+			.fetchQuery({ ...workspaceQueryOptions, staleTime: firstReady ? SHELL_LOADER_STALE_MS : 0 })
 			.then(() => {
 				if (active) setWorkspaceStartupState("ready");
 			})
@@ -1189,7 +1197,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		return () => {
 			active = false;
 		};
-	}, [daemonStatus.port, daemonStatus.state, queryClient]);
+	}, [daemonStatus.pid, daemonStatus.port, daemonStatus.state, queryClient]);
 
 	// The first confirmed fetch may fail transiently even though the daemon is
 	// ready. React Query keeps polling and the event transport may invalidate

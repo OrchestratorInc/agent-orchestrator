@@ -8,8 +8,6 @@ const {
 	getStatusMock,
 	onStatusMock,
 	removeStatusMock,
-	connectMock,
-	stopTransportMock,
 	setApiBaseUrlMock,
 	setApiDaemonStatusMock,
 	ensureAgentReadinessMock,
@@ -18,8 +16,6 @@ const {
 	getStatusMock: vi.fn(),
 	onStatusMock: vi.fn(),
 	removeStatusMock: vi.fn(),
-	connectMock: vi.fn(),
-	stopTransportMock: vi.fn(),
 	setApiBaseUrlMock: vi.fn(),
 	setApiDaemonStatusMock: vi.fn(),
 	ensureAgentReadinessMock: vi.fn(),
@@ -28,10 +24,6 @@ const {
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: { daemon: { getStatus: getStatusMock, onStatus: onStatusMock } },
-}));
-
-vi.mock("../lib/event-transport", () => ({
-	createEventTransport: vi.fn(() => ({ connect: connectMock })),
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -58,8 +50,6 @@ beforeEach(() => {
 	getStatusMock.mockReset().mockResolvedValue({ state: "stopped" });
 	onStatusMock.mockReset().mockReturnValue(removeStatusMock);
 	removeStatusMock.mockReset();
-	connectMock.mockReset().mockReturnValue(stopTransportMock);
-	stopTransportMock.mockReset();
 	setApiBaseUrlMock.mockReset();
 	setApiDaemonStatusMock.mockReset();
 	ensureAgentReadinessMock.mockReset().mockResolvedValue({ agents: [] });
@@ -71,7 +61,7 @@ afterEach(() => {
 });
 
 describe("useDaemonStatus", () => {
-	it("applies the initial status, points REST at the reported port, and connects the transport", async () => {
+	it("applies the initial status and points REST at the reported port", async () => {
 		getStatusMock.mockResolvedValue({ state: "ready", port: 3037 });
 		const queryClient = fakeQueryClient();
 
@@ -79,7 +69,6 @@ describe("useDaemonStatus", () => {
 
 		await waitFor(() => expect(result.current).toEqual({ state: "ready", port: 3037 }));
 		expect(setApiBaseUrlMock).toHaveBeenCalledWith("http://127.0.0.1:3037");
-		expect(connectMock).toHaveBeenCalledTimes(1);
 		// Refetching is the (debounced) event transport's job — no direct invalidate.
 		expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
 	});
@@ -374,28 +363,25 @@ describe("useDaemonStatus", () => {
 		await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
 
 		expect(getStatusMock).toHaveBeenCalledTimes(1);
-		expect(stopTransportMock).toHaveBeenCalledTimes(1);
 		expect(removeStatusMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("still connects the transport when the initial IPC status call fails", async () => {
+	it("keeps status unavailable when the initial IPC call fails", async () => {
 		getStatusMock.mockRejectedValue(new Error("ipc unavailable"));
 		const queryClient = fakeQueryClient();
 
 		const { result } = renderHook(() => useDaemonStatus(queryClient));
 
-		await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
+		await act(async () => { await Promise.resolve(); });
 		expect(result.current).toEqual({ state: "stopped" });
 	});
 
-	it("tears down the transport and the status listener on unmount", async () => {
+	it("tears down the status listener on unmount", async () => {
 		const queryClient = fakeQueryClient();
 		const { unmount } = renderHook(() => useDaemonStatus(queryClient));
-		await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
 
 		unmount();
 
-		expect(stopTransportMock).toHaveBeenCalledTimes(1);
 		expect(removeStatusMock).toHaveBeenCalledTimes(1);
 	});
 });

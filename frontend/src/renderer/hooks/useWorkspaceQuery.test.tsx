@@ -39,7 +39,7 @@ vi.mock("./useCloudOrg", () => ({
 }));
 
 import { CloudCpError } from "../lib/cloud-cp";
-import { UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, useCloudSessionQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { beginWorkspaceRead, workspaceQueryOptions, patchWorkspaceSession, toWorkspaceSession, UNKNOWN_CLOUD_PROJECT_REFETCH_DEBOUNCE_MS, cloudProjectsQueryKey, cloudSessionsQueryKey, refetchCloudProjectsForUnknownSessions, useCloudSessionQuery, useWorkspacePolling, useWorkspaceQuery, useWorkspaceScope, useWorkspaceSession, useWorkspaceTraySessions, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 it("preserves the existing local and remote workspace cache keys", () => {
 	expect(workspaceQueryKeyForHost()).toBe(workspaceQueryKey);
@@ -793,6 +793,57 @@ describe("useWorkspacePolling", () => {
 			vi.useRealTimers();
 		}
 	});
+	it("keeps a 15-second full-list cadence under five minutes of row patches", async () => {
+		vi.useFakeTimers();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		let projectName = "Original";
+		const row = { id: "s", projectId: "p", status: "working", activity: { state: "active" }, isTerminated: false } as unknown as import("../../api/schema").components["schemas"]["ControllersSessionView"];
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/projects"
+			? { data: { projects: [{ id: "p", name: projectName, path: "/generated" }] } }
+			: { data: { sessions: [row] } });
+		const shared = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const view = renderHook(() => useWorkspacePolling(), { wrapper: shared });
+		const reads = () => getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions").length;
+		try {
+			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+			expect(reads()).toBe(1);
+			for (let elapsed = 0; elapsed < 300_000; elapsed += 1_000) {
+				if (elapsed === 120_000) projectName = "Renamed without CDC";
+				await act(async () => {
+					patchWorkspaceSession(client, { ...row, displayName: `Update ${elapsed}` });
+					await vi.advanceTimersByTimeAsync(1_000);
+				});
+				if (elapsed === 134_000) expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].name).toBe("Renamed without CDC");
+			}
+			expect(reads()).toBe(21); // Initial snapshot plus twenty independent polls.
+		} finally { view.unmount(); client.clear(); vi.useRealTimers(); }
+	});
+
+	it("keeps the fast checking cadence and stops the timer when disabled", async () => {
+		vi.useFakeTimers();
+		const client = new QueryClient();
+		let readiness = "checking";
+		getMock.mockImplementation(async (path: string) => path === "/api/v1/projects"
+			? { data: { projects: [{ id: "p", name: "Project", path: "/generated" }] } }
+			: { data: { sessions: [{ id: "s", projectId: "p", statusReadiness: readiness, status: "idle", activity: { state: "idle" } }] } });
+		const shared = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const view = renderHook(({ enabled }) => useWorkspacePolling(enabled), { initialProps: { enabled: true }, wrapper: shared });
+		const reads = () => getMock.mock.calls.filter(([path]) => path === "/api/v1/sessions").length;
+		try {
+			await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+			await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+			expect(reads()).toBe(2);
+			readiness = "ready";
+			await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+			expect(reads()).toBe(3);
+			await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+			expect(reads()).toBe(3);
+			view.rerender({ enabled: false });
+			await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+			expect(reads()).toBe(3);
+		} finally { view.unmount(); client.clear(); vi.useRealTimers(); }
+	});
+
 });
 
 describe("cloud projects made elsewhere", () => {
@@ -971,5 +1022,122 @@ describe("cloud projects made elsewhere", () => {
 		});
 		await waitFor(() => expect(listProjectsMock).toHaveBeenCalledTimes(2));
 		focusManager.setFocused(undefined);
+	});
+});
+
+
+describe("patchWorkspaceSession", () => {
+	const row = { id: "row", projectId: "p", harness: "codex", status: "working", activity: { state: "active" }, prs: [] } as unknown as import("../../api/schema").components["schemas"]["ControllersSessionView"];
+	it("ignores a late live row after a newer list reports a CLI termination without an optimistic marker", async () => {
+		const client = new QueryClient();
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", sessions: [toWorkspaceSession(row, { id: "p", name: "Project" })] }]);
+		const oldRowRead = beginWorkspaceRead(client);
+		respondWith({ projects: { data: { projects: [{ id: "p", name: "Project" }] } }, sessions: { data: { sessions: [{ ...row, isTerminated: true }] } } });
+		await client.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0].isTerminated).toBe(true);
+		expect(patchWorkspaceSession(client, { ...row, isTerminated: false }, oldRowRead)).toBe(true);
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0].isTerminated).toBe(true);
+		client.clear();
+	});
+	it.each([false, true])("reconciles a newer CLI termination row when an older live list completes last (commit window: %s)", async (commitWindow) => {
+		const client = new QueryClient();
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", sessions: [toWorkspaceSession(row, { id: "p", name: "Project" })] }]);
+		let finishList!: (value: unknown) => void;
+		getMock.mockImplementation((path: string) => path === "/api/v1/projects"
+			? Promise.resolve({ data: { projects: [{ id: "p", name: "Renamed project" }] } })
+			: new Promise((resolve) => { finishList = resolve; }));
+		const terminate = () => patchWorkspaceSession(client, { ...row, isTerminated: true }, beginWorkspaceRead(client));
+		const pendingList = client.fetchQuery({ ...workspaceQueryOptions, staleTime: 0, queryFn: async (context) => {
+			const snapshot = await workspaceQueryOptions.queryFn(context);
+			if (commitWindow) terminate();
+			return snapshot;
+		} });
+		if (!commitWindow) terminate();
+		finishList({ data: { sessions: [{ ...row, isTerminated: false }] } });
+		await pendingList;
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0]).toMatchObject({ name: "Renamed project", sessions: [{ id: row.id, isTerminated: true }] });
+		// A subsequent authoritative read may legitimately restore the session.
+		respondWith({ projects: { data: { projects: [{ id: "p", name: "Project" }] } }, sessions: { data: { sessions: [{ ...row, isTerminated: false }] } } });
+		await client.fetchQuery({ ...workspaceQueryOptions, staleTime: 0 });
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0].isTerminated).toBe(false);
+		client.clear();
+	});
+	it("does not let an older same-session read replace a newer accepted row", () => {
+		const client = new QueryClient();
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", sessions: [] }]);
+		const old = beginWorkspaceRead(client);
+		const newer = beginWorkspaceRead(client);
+		patchWorkspaceSession(client, { ...row, isTerminated: true }, newer);
+		patchWorkspaceSession(client, { ...row, isTerminated: false }, old);
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0].isTerminated).toBe(true);
+		client.clear();
+	});
+	it("replaces by project and id, adds missing rows, and retains other row references", () => {
+		const client = new QueryClient();
+		const other = toWorkspaceSession({ ...row, id: "other" }, { id: "p", name: "Project" });
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", sessions: [other] }]);
+		expect(patchWorkspaceSession(client, row)).toBe(true);
+		expect(patchWorkspaceSession(client, { ...row, displayName: "Updated" })).toBe(true);
+		const result = client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)!;
+		expect(result[0].sessions).toHaveLength(2);
+		expect(result[0].sessions[0]).toBe(other);
+		expect(result[0].sessions[1]).toMatchObject({ id: "row", title: "Updated", workspaceName: "Project" });
+		client.clear();
+	});
+	it("does not fabricate a missing project or an unloaded cache", () => {
+		const client = new QueryClient();
+		expect(patchWorkspaceSession(client, row)).toBe(false);
+		expect(client.getQueryData(workspaceQueryKey)).toBeUndefined();
+		client.setQueryData(workspaceQueryKey, []);
+		expect(patchWorkspaceSession(client, row)).toBe(false);
+		client.clear();
+	});
+	it("removes ended rows from active-only caches and refreshes archive counts/pages", () => {
+		const client = new QueryClient();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", archivedCount: 0, sessions: [toWorkspaceSession(row, { id: "p", name: "Project" })] }]);
+		expect(patchWorkspaceSession(client, { ...row, isTerminated: true })).toBe(true);
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions).toEqual([]);
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["archived-sessions"] }, { cancelRefetch: false });
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKey }, { cancelRefetch: false });
+		invalidate.mockClear();
+		client.setQueryData(["archived-sessions", "p"], [{ ...row, isTerminated: true }]);
+		expect(patchWorkspaceSession(client, { ...row, isTerminated: false })).toBe(true);
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions).toHaveLength(1);
+		expect(invalidate).toHaveBeenCalledTimes(2);
+		invalidate.mockClear();
+		patchWorkspaceSession(client, { ...row, isTerminated: false });
+		expect(invalidate).not.toHaveBeenCalled();
+		client.clear();
+	});
+	it("patches an existing ended-session detail without reinserting it or reading a list", () => {
+		const client = new QueryClient();
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", archivedCount: 1, sessions: [] }]);
+		client.setQueryData(["session", row.id], toWorkspaceSession(row, { id: "p", name: "Project" }));
+		expect(patchWorkspaceSession(client, { ...row, isTerminated: true, status: "merged", displayName: "Updated archive" })).toBe(true);
+		expect(client.getQueryData(["session", row.id])).toMatchObject({ title: "Updated archive", isTerminated: true, status: "merged" });
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions).toEqual([]);
+		expect(invalidate).not.toHaveBeenCalled();
+		client.clear();
+	});
+	it("does not create a live standalone group for an ended row in an active-only snapshot", () => {
+		const client = new QueryClient();
+		client.setQueryData(workspaceQueryKey, [{ id: "p", name: "Project", archivedCount: 0, sessions: [] }]);
+		expect(patchWorkspaceSession(client, { ...row, projectId: "", isTerminated: true })).toBe(true);
+		expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)).toHaveLength(1);
+		client.clear();
+	});
+	it("creates the standalone workspace and preserves pending optimistic kills", async () => {
+		const { trackOptimisticSessionKill, clearOptimisticSessionKill } = await import("./optimistic-session-kills");
+		const client = new QueryClient();
+		client.setQueryData(workspaceQueryKey, []);
+		client.setQueryData(["session", row.id], toWorkspaceSession(row, { id: "p", name: "Project" }));
+		trackOptimisticSessionKill(row.id);
+		try {
+			expect(patchWorkspaceSession(client, { ...row, projectId: "" })).toBe(true);
+			expect(client.getQueryData<WorkspaceSummary[]>(workspaceQueryKey)?.[0].sessions[0]).toMatchObject({ id: row.id, isTerminated: true, status: "terminated" });
+			expect(client.getQueryData(["session", row.id])).toMatchObject({ id: row.id, isTerminated: true, status: "terminated" });
+		} finally { clearOptimisticSessionKill(row.id); client.clear(); }
 	});
 });

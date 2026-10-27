@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { CancelledError, type QueryClient } from "@tanstack/react-query";
+import { CancelledError, QueryClient } from "@tanstack/react-query";
 import { Suspense, type ComponentType, type PropsWithChildren } from "react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppShortcutEvent, KeybindingOverrides } from "../../shared/shortcuts";
@@ -773,6 +773,33 @@ describe("shell workspace startup", () => {
 		expect(document.querySelector(".center-panel-shell--session > .center-panel-surface")).toBeInTheDocument();
 	});
 
+	it("reads the list once across the route loader and initial ready mount", async () => {
+		const client = new QueryClient();
+		const read = vi.fn(async () => workspaces);
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		shellMocks.queryClient.fetchQuery.mockImplementation((options) => client.fetchQuery({ ...options, queryKey: ["workspaces"], queryFn: read }));
+		const loader = Route.options.loader as (args: { context: { queryClient: Pick<QueryClient, "fetchQuery"> } }) => Promise<unknown>;
+		await loader({ context: { queryClient: shellMocks.queryClient } });
+		const view = await renderShell();
+		await waitFor(() => expect(shellMocks.state.shellValue?.workspaceStartupState).toBe("ready"));
+		expect(read).toHaveBeenCalledTimes(1);
+		view.unmount(); client.clear();
+	});
+
+	it("forces a new read after a subsequent daemon transition", async () => {
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		shellMocks.queryClient.fetchQuery.mockResolvedValue(workspaces);
+		const view = await renderShell();
+		await waitFor(() => expect(shellMocks.state.shellValue?.workspaceStartupState).toBe("ready"));
+		shellMocks.queryClient.fetchQuery.mockClear();
+		shellMocks.state.daemonStatus = { state: "starting", port: 4777 };
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
+		await waitFor(() => expect(shellMocks.queryClient.fetchQuery).toHaveBeenCalledWith(expect.objectContaining({ staleTime: 0 })));
+		view.unmount();
+	});
+
 	it("reveals the shell while session recovery remains pending", async () => {
 		const checking: WorkspaceSummary[] = workspaces.map((workspace) => ({ ...workspace,
 			sessions: workspace.sessions.map((session) => ({ ...session, statusReadiness: "checking" })),
@@ -807,7 +834,7 @@ describe("shell workspace startup", () => {
 		const view = await renderShell();
 		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
 		expect(screen.queryByTestId("sidebar-provider")).not.toBeInTheDocument();
-		expect(shellMocks.queryClient.fetchQuery).toHaveBeenCalledWith(expect.objectContaining({ staleTime: 0 }));
+		expect(shellMocks.queryClient.fetchQuery).toHaveBeenCalledWith(expect.objectContaining({ staleTime: 2_000 }));
 
 		await act(async () => resolveFetch?.(workspaces));
 
@@ -831,7 +858,7 @@ describe("shell workspace startup", () => {
 		await renderShell();
 
 		await waitFor(() =>
-			expect(shellMocks.queryClient.fetchQuery).toHaveBeenCalledWith(expect.objectContaining({ staleTime: 0 })),
+			expect(shellMocks.queryClient.fetchQuery).toHaveBeenCalledWith(expect.objectContaining({ staleTime: 2_000 })),
 		);
 		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
 	});
@@ -852,7 +879,7 @@ describe("shell workspace startup", () => {
 		);
 
 		await waitFor(() =>
-			expect(shellMocks.queryClient.fetchQuery).toHaveBeenCalledWith(expect.objectContaining({ staleTime: 0 })),
+			expect(shellMocks.queryClient.fetchQuery).toHaveBeenCalledWith(expect.objectContaining({ staleTime: 2_000 })),
 		);
 		await waitFor(() => expect(shellMocks.state.shellValue?.workspaceStartupState).toBe("ready"));
 	});

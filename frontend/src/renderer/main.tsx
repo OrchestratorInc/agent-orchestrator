@@ -9,6 +9,7 @@ import { queryClient } from "./lib/query-client";
 import { mergeUnreadNotification, unreadNotificationsQueryKey } from "./lib/notifications";
 import { playNotificationSound } from "./lib/notification-sound-player";
 import { createAppRouter } from "./router";
+import { createEventTransport } from "./lib/event-transport";
 import { TelemetryBoundary } from "./components/TelemetryBoundary";
 import { CloudOnboardingGate } from "./components/CloudOnboardingGate";
 import { CloudNotificationRuntime } from "./components/CloudNotificationRuntime";
@@ -24,6 +25,12 @@ import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
 import { useTelemetryPolicyStore } from "./stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "./stores/analytics-opt-out-store";
 
+// Start listening before route loaders take their first workspace snapshot.
+// The shell loader waits briefly for onopen, so that snapshot covers the stream
+// boundary instead of needing a second startup list read.
+const stopEventTransport = createEventTransport(queryClient).connect();
+window.addEventListener("pagehide", stopEventTransport, { once: true });
+import.meta.hot?.dispose(stopEventTransport);
 const router = createAppRouter(queryClient);
 
 // Main owns consent and only acknowledges opt-out after every live AO shell

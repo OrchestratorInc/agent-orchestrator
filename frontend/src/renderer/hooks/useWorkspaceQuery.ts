@@ -1,4 +1,4 @@
-import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
+import { replaceEqualDeep, focusManager, type QueryClient, type QueryFunctionContext, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
 import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
@@ -146,6 +146,75 @@ export function toWorkspaceSession(
 export const workspaceQueryKey = ["workspaces"] as const;
 export const remoteWorkspaceQueryKey = (hostId: string) => ["remote-workspaces", hostId] as const;
 export const workspaceQueryKeyForHost = (hostId?: string) => hostId ? remoteWorkspaceQueryKey(hostId) : workspaceQueryKey;
+type SessionRow = components["schemas"]["ControllersSessionView"];
+type WorkspaceReads = { clock: number; listVersion: number; rows: Map<string, { version: number; session: SessionRow }> };
+const workspaceReads = new WeakMap<QueryClient, WorkspaceReads>();
+const workspaceListReads = new WeakMap<WorkspaceSummary[], { client: QueryClient; version: number }>();
+function readsFor(client: QueryClient): WorkspaceReads {
+	let state = workspaceReads.get(client);
+	if (!state) { state = { clock: 0, listVersion: 0, rows: new Map() }; workspaceReads.set(client, state); }
+	return state;
+}
+
+/** Capture BEFORE a local session/list request, so late responses cannot undo newer facts. */
+export function beginWorkspaceRead(client: QueryClient): number {
+	return ++readsFor(client).clock;
+}
+
+function patchWorkspaceSnapshot(current: WorkspaceSummary[], session: SessionRow) {
+	const projectId = session.projectId || STANDALONE_WORKSPACE_ID;
+	let project = current.find((workspace) => workspace.id === projectId);
+	if (!project && session.projectId) return undefined;
+	project ??= { id: STANDALONE_WORKSPACE_ID, name: standaloneWorkspaceName(), kind: STANDALONE_PROJECT_KIND, path: "Not attached to a project", sessions: [] };
+	// Active-only caches carry archive counts; legacy daemon snapshots may
+	// still contain terminated rows and keep their previous semantics.
+	const activeOnly = current.some((workspace) => "archivedCount" in workspace && workspace.archivedCount !== undefined);
+	const previous = project.sessions.find((candidate) => candidate.id === session.id);
+	const row = session.projectId ? toWorkspaceSession(session, project) : toLocalWorkspaceSession(session, project.id, project.name);
+	const next = current.map((workspace) => {
+		if (workspace.id !== projectId) {
+			return workspace.sessions.some((candidate) => candidate.id === session.id)
+				? { ...workspace, sessions: workspace.sessions.filter((candidate) => candidate.id !== session.id) }
+				: workspace;
+		}
+		if (activeOnly && session.isTerminated === true) {
+			return { ...workspace, sessions: workspace.sessions.filter((candidate) => candidate.id !== session.id) };
+		}
+		const exists = workspace.sessions.some((candidate) => candidate.id === session.id);
+		return { ...workspace, sessions: exists ? workspace.sessions.map((candidate) => candidate.id === session.id ? row : candidate) : [...workspace.sessions, row] };
+	});
+	if (!current.includes(project) && !(activeOnly && session.isTerminated === true)) next.push({ ...project, sessions: [row] });
+	return { workspaces: applyOptimisticSessionKills(next) ?? next, project, row, previous, activeOnly };
+}
+
+/** Patch a daemon row without losing optimistic kills. False means the project/cache is missing.
+ * Async callers capture beginWorkspaceRead BEFORE their GET and pass its token.
+ * Superseded responses are handled (true) without writing or requesting a fallback.
+ */
+export function patchWorkspaceSession(queryClient: QueryClient, session: SessionRow, readVersion = beginWorkspaceRead(queryClient)): boolean {
+	const reads = readsFor(queryClient);
+	if (readVersion < reads.listVersion || readVersion < (reads.rows.get(session.id)?.version ?? 0)) return true;
+	let patch: ReturnType<typeof patchWorkspaceSnapshot>;
+	queryClient.setQueryData<WorkspaceSummary[]>(workspaceQueryKey, (current) => {
+		patch = current ? patchWorkspaceSnapshot(current, session) : undefined;
+		return patch?.workspaces ?? current;
+	});
+	if (!patch) return false;
+	const wasArchived = patch.activeOnly && patch.previous === undefined && queryClient.getQueriesData<SessionRow[]>({ queryKey: ["archived-sessions"] })
+		.some(([, rows]) => rows?.some((candidate) => candidate.id === session.id));
+	const archiveMembershipChanged = patch.activeOnly && (session.isTerminated === true ? patch.previous !== undefined : wasArchived);
+	reads.rows.set(session.id, { version: readVersion, session });
+	if (queryClient.getQueryData(["session", session.id]) !== undefined) {
+		const detail = applyOptimisticSessionKills([{ ...patch.project, sessions: [patch.row] }])![0].sessions[0];
+		queryClient.setQueryData(["session", session.id], detail);
+	}
+	if (archiveMembershipChanged) {
+		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey }, { cancelRefetch: false });
+		void queryClient.invalidateQueries({ queryKey: ["archived-sessions"] }, { cancelRefetch: false });
+	}
+	return true;
+}
+
 const remoteProjectsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "projects"] as const;
 const remoteSessionsQueryKey = (hostId: string) => [...remoteWorkspaceQueryKey(hostId), "sessions"] as const;
 const lastRemoteHealthRecheck = new Map<string, number>();
@@ -260,7 +329,8 @@ class DaemonNotReadyError extends Error {
 	}
 }
 
-async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
+async function fetchWorkspaces({ client }: QueryFunctionContext): Promise<WorkspaceSummary[]> {
+	const readVersion = beginWorkspaceRead(client);
 	if (usesPreviewWorkspaceData) {
 		const fake =
 			typeof window !== "undefined"
@@ -305,10 +375,13 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 			.filter((session) => !session.projectId)
 			.map((session) => toLocalWorkspaceSession(session, STANDALONE_WORKSPACE_ID, standaloneName)),
 	};
-	const workspaces =
+	const workspaces: WorkspaceSummary[] =
 		standalone.sessions.length > 0 ? placeStandaloneWorkspaceLast([...projects, standalone]) : projects;
-	// Pending optimistic kills must survive CDC/refetch while the daemon kill is in flight.
-	return applyOptimisticSessionKills(workspaces) ?? workspaces;
+	// Tag this result so reconciliation runs at QueryClient's actual cache commit,
+	// including row responses delivered after this async function returns.
+	const result = applyOptimisticSessionKills(workspaces) ?? workspaces;
+	workspaceListReads.set(result, { client, version: readVersion });
+	return result;
 }
 
 async function fetchRemoteProjects(hostId: string) {
@@ -385,6 +458,25 @@ async function fetchRemoteWorkspaces(hostId: string): Promise<WorkspaceSummary[]
 export const workspaceQueryOptions = {
 	queryKey: workspaceQueryKey,
 	queryFn: fetchWorkspaces,
+	structuralSharing: (oldData: unknown, newData: unknown) => {
+		const list = Array.isArray(newData) ? workspaceListReads.get(newData) : undefined;
+		if (!list) return replaceEqualDeep(oldData, newData);
+		// The tag belongs to this network commit, not to the cached array's
+		// lifetime: later explicit writes may restore it as a mutation rollback.
+		workspaceListReads.delete(newData as WorkspaceSummary[]);
+		const reads = readsFor(list.client);
+		if (list.version < reads.listVersion) return oldData;
+		reads.listVersion = list.version;
+		let snapshot = newData as WorkspaceSummary[];
+		for (const [id, row] of reads.rows) {
+			if (row.version > list.version) {
+				snapshot = patchWorkspaceSnapshot(snapshot, row.session)?.workspaces ?? snapshot;
+			} else {
+				reads.rows.delete(id);
+			}
+		}
+		return replaceEqualDeep(oldData, snapshot);
+	},
 	// Retrying before the daemon is up only parks the query in a 1s backoff.
 	// Fetches started meanwhile (the ready-time invalidation, the shell's startup
 	// fetch) join that backoff instead of running, which held the first
@@ -402,7 +494,38 @@ export const workspaceRefetchInterval = (query: Query<WorkspaceSummary[]>) =>
  * re-renders its host (notifyOnChangeProps: []), it only keeps the timer.
  */
 export function useWorkspacePolling(enabled = true) {
-	useQuery({ ...workspaceQueryOptions, refetchInterval: workspaceRefetchInterval, notifyOnChangeProps: [], enabled });
+	const queryClient = useQueryClient();
+	useQuery({ ...workspaceQueryOptions, notifyOnChangeProps: [], enabled });
+	useEffect(() => {
+		if (!enabled) return;
+		const cache = queryClient.getQueryCache();
+		const currentInterval = () => {
+			const query = cache.find<WorkspaceSummary[]>({ queryKey: workspaceQueryKey, exact: true });
+			return query ? workspaceRefetchInterval(query) : 15_000;
+		};
+		let interval = currentInterval();
+		let lastTickAt = Date.now();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const schedule = () => {
+			clearTimeout(timer);
+			timer = setTimeout(() => {
+				lastTickAt = Date.now();
+				schedule();
+				if (focusManager.isFocused()) {
+					void queryClient.refetchQueries({ queryKey: workspaceQueryKey, exact: true, type: "active" }, { cancelRefetch: false });
+				}
+			}, Math.max(0, lastTickAt + interval - Date.now()));
+		};
+		const unsubscribe = cache.subscribe((event) => {
+			if (event.query.queryKey[0] !== workspaceQueryKey[0]) return;
+			const next = currentInterval();
+			// Cache patches must not postpone the independent full-list poll.
+			// Only readiness changes switch between the fast and normal cadence.
+			if (next !== interval) { interval = next; schedule(); }
+		});
+		schedule();
+		return () => { clearTimeout(timer); unsubscribe(); };
+	}, [enabled, queryClient]);
 }
 
 // Cloud projects are a separate query so a control-plane failure can never

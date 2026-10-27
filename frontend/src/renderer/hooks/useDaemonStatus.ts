@@ -3,7 +3,6 @@ import type { QueryClient } from "@tanstack/react-query";
 import { aoBridge } from "../lib/bridge";
 import { applyDaemonStatus, readDaemonStatus, type DaemonStatus } from "../lib/daemon-status";
 import { queryClient as defaultQueryClient } from "../lib/query-client";
-import { createEventTransport } from "../lib/event-transport";
 import { getEventsConnectionState, subscribeEventsConnection } from "../lib/events-connection";
 import {
 	agentReadinessQueryKey,
@@ -29,7 +28,6 @@ export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
 
 	useEffect(() => {
 		let active = true;
-		let stopTransport: () => void = () => undefined;
 		let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 		let statusVersion = 0;
 
@@ -115,10 +113,6 @@ export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
 		window.addEventListener("focus", refreshOnFocus);
 		document.addEventListener("visibilitychange", refreshOnVisibility);
 
-		void Promise.resolve().then(() => {
-			if (active) stopTransport = createEventTransport(queryClient).connect();
-		});
-
 		const stopStatusListener = aoBridge.daemon.onStatus((nextStatus) => {
 			statusVersion += 1;
 			applyStatus(nextStatus);
@@ -137,7 +131,6 @@ export function useDaemonStatus(queryClient: QueryClient = defaultQueryClient) {
 			clearRefresh();
 			window.removeEventListener("focus", refreshOnFocus);
 			document.removeEventListener("visibilitychange", refreshOnVisibility);
-			stopTransport();
 			stopStatusListener();
 			stopEventsConnectionListener();
 		};
