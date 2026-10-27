@@ -22,13 +22,13 @@ function setup(hostId?: string) {
 	return { ...view, onVerify, onClose, onTerminal, user: userEvent.setup() };
 }
 
-	beforeEach(() => {
-		vi.mocked(startAgentUILogin).mockResolvedValue(snapshot);
-		vi.mocked(getAgentUILogin).mockResolvedValue(snapshot);
-		vi.mocked(cancelAgentUILogin).mockResolvedValue(undefined);
-		vi.mocked(actOnAgentUILogin).mockResolvedValue(snapshot);
-		vi.mocked(submitAgentUILoginCode).mockResolvedValue(snapshot);
-	});
+beforeEach(() => {
+	vi.mocked(startAgentUILogin).mockResolvedValue(snapshot);
+	vi.mocked(getAgentUILogin).mockResolvedValue(snapshot);
+	vi.mocked(cancelAgentUILogin).mockResolvedValue(undefined);
+	vi.mocked(actOnAgentUILogin).mockResolvedValue(snapshot);
+	vi.mocked(submitAgentUILoginCode).mockResolvedValue(snapshot);
+});
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 
 describe("HarnessLoginPanel", () => {
@@ -37,7 +37,7 @@ describe("HarnessLoginPanel", () => {
 		const onVerify = vi.fn().mockResolvedValue("configured");
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId: "goose", method: "env_OPENAI_API_KEY", status: "succeeded", loginUrl: undefined, deviceCode: undefined });
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("radio", { name: "OpenAI API key" })).toHaveAccessibleDescription(/device's user environment/);
+		expect(screen.getByRole("button", { name: "OpenAI API key" })).toHaveAccessibleDescription(/device's user environment/);
 		const input = screen.getByLabelText("API key");
 		expect(input).toHaveAttribute("type", "password");
 		await user.type(input, "test-secret");
@@ -64,8 +64,8 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(getAgentUILogin).mockResolvedValue(native);
 		vi.mocked(actOnAgentUILogin).mockResolvedValue({ ...native, nativePrompt: "waiting", selectedOption: undefined });
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("button", { name: "Start native sign-in" })).toBeVisible();
-		await user.click(screen.getByRole("button", { name: "Start native sign-in" }));
+		expect(screen.getByRole("button", { name: "Native sign-in" })).toBeVisible();
+		await user.click(screen.getByRole("button", { name: "Native sign-in" }));
 		expect(startAgentUILogin).toHaveBeenCalledWith("goose", "native", "", undefined);
 		expect(screen.getByText("Selected: OpenAI")).toBeVisible();
 		await user.click(screen.getByRole("button", { name: "Next option" }));
@@ -79,7 +79,7 @@ describe("HarnessLoginPanel", () => {
 		const onVerify = vi.fn().mockResolvedValue(true);
 		vi.mocked(startAgentUILogin).mockResolvedValue(native);
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		await user.click(screen.getByRole("button", { name: "Start native sign-in" }));
+		await user.click(screen.getByRole("button", { name: "Native sign-in" }));
 		await user.click(screen.getByRole("button", { name: "Check sign-in" }));
 		await waitFor(() => expect(cancelAgentUILogin).toHaveBeenCalledWith("goose", "login-1", undefined));
 		expect(onVerify).toHaveBeenCalledTimes(1);
@@ -92,7 +92,7 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(startAgentUILogin).mockResolvedValue(native);
 		const onTerminal = vi.fn().mockResolvedValue(undefined);
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={onTerminal} />);
-		await user.click(screen.getByRole("button", { name: "Start native sign-in" }));
+		await user.click(screen.getByRole("button", { name: "Native sign-in" }));
 		expect(screen.getByText("This native screen needs input that AO cannot safely identify.")).toBeVisible();
 		await user.click(screen.getByRole("button", { name: "Open terminal login" }));
 		expect(cancelAgentUILogin).toHaveBeenCalledWith("goose", "login-1", undefined);
@@ -104,21 +104,21 @@ describe("HarnessLoginPanel", () => {
 		render(<HarnessLoginPanel agentId="goose" methods={[]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={onTerminal} />);
 		expect(screen.getByRole("region", { name: "Sign in to Goose" })).toBeVisible();
 		expect(screen.getByText(/needs interactive input/)).toBeVisible();
-		expect(screen.queryByRole("radio")).toBeNull();
+		expect(screen.getByRole("region", { name: "Sign in to Goose" }).querySelector("[data-login-method]")).toBeNull();
 		await user.click(screen.getByRole("button", { name: "Open terminal login" }));
 		expect(onTerminal).toHaveBeenCalledTimes(1);
 	});
 
 	it("offers the Cline account browser method without a terminal", () => {
 		render(<HarnessLoginPanel agentId="cline" methods={[{ id: "browser", label: "Cline account in browser", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("radio", { name: "Cline account in browser" })).toBeVisible();
-		expect(screen.getByRole("button", { name: "Continue in browser" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Cline account in browser" })).toBeVisible();
+		expect(screen.queryByRole("button", { name: "Continue in browser" })).toBeNull();
 	});
 
 	it.each(["kiro", "cursor", "continue", "grok", "command-code"] as const)("offers %s browser sign-in inline", (agentId) => {
 		render(<HarnessLoginPanel agentId={agentId} methods={[{ id: "browser", label: `${agentId} account in browser`, secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("radio", { name: `${agentId} account in browser` })).toBeVisible();
-		expect(screen.getByRole("button", { name: "Continue in browser" })).toBeVisible();
+		expect(screen.getByRole("button", { name: `${agentId} account in browser` })).toBeVisible();
+		expect(screen.queryByRole("button", { name: "Continue in browser" })).toBeNull();
 		expect(screen.queryByText("Use your ChatGPT account.")).toBeNull();
 		expect(screen.getByRole("button", { name: "Open terminal login" })).not.toBeVisible();
 	});
@@ -126,7 +126,7 @@ describe("HarnessLoginPanel", () => {
 	it.each(["opencode", "opencode-v2"] as const)("offers %s provider keys as masked inline methods", async (agentId) => {
 		const user = userEvent.setup();
 		render(<HarnessLoginPanel agentId={agentId} methods={[{ id: "anthropic_key", label: "Anthropic API key", secret: true }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("radio", { name: "Anthropic API key" })).toBeVisible();
+		expect(screen.getByRole("button", { name: "Anthropic API key" })).toBeVisible();
 		const input = screen.getByLabelText("API key");
 		expect(input).toHaveAttribute("type", "password");
 		await user.type(input, "test-secret");
@@ -135,7 +135,7 @@ describe("HarnessLoginPanel", () => {
 	});
 	it("labels Codewhale's masked provider method with its own credential store", () => {
 		render(<HarnessLoginPanel agentId="codewhale" methods={[{ id: "codewhale_deepseek_key", label: "DeepSeek API key", secret: true }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("radio", { name: "DeepSeek API key" })).toHaveAccessibleDescription("Save a DeepSeek key in CodeWhale's native credential store.");
+		expect(screen.getByRole("button", { name: "DeepSeek API key" })).toHaveAccessibleDescription("Save a DeepSeek key in CodeWhale's native credential store.");
 		expect(screen.getByLabelText("API key")).toHaveAttribute("type", "password");
 	});
 	it("saves an Aider provider key directly without opening a terminal", async () => {
@@ -150,8 +150,9 @@ describe("HarnessLoginPanel", () => {
 		const saved: AgentLoginSnapshot = { ...snapshot, agentId: "aider", method: "aider_openrouter_key", status: "succeeded", loginUrl: undefined, deviceCode: undefined };
 		vi.mocked(startAgentUILogin).mockResolvedValue(saved);
 		render(<HarnessLoginPanel agentId="aider" methods={methods} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("radio", { name: "OpenRouter API key" })).toHaveAccessibleDescription("Save an OpenRouter key in Aider's configuration file.");
-		await user.click(screen.getByRole("radio", { name: "OpenRouter API key" }));
+		expect(screen.getByRole("button", { name: "OpenRouter API key" })).toHaveAccessibleDescription("Save an OpenRouter key in Aider's configuration file.");
+		await user.click(screen.getByRole("button", { name: "OpenRouter API key" }));
+		expect(startAgentUILogin).not.toHaveBeenCalled();
 		const input = screen.getByLabelText("API key");
 		expect(input).toHaveAttribute("type", "password");
 		await user.type(input, "sk-or");
@@ -164,7 +165,7 @@ describe("HarnessLoginPanel", () => {
 		const saved: AgentLoginSnapshot = { ...snapshot, agentId: "gemini", method: "gemini_api_key", status: "succeeded", loginUrl: undefined, deviceCode: undefined };
 		vi.mocked(startAgentUILogin).mockResolvedValue(saved);
 		render(<HarnessLoginPanel agentId="gemini" methods={[{ id: "gemini_api_key", label: "Google AI Studio API key", secret: true }, { id: "native", label: "Other native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("radio", { name: "Google AI Studio API key" })).toHaveAccessibleDescription("Save a Google AI Studio key for Gemini CLI.");
+		expect(screen.getByRole("button", { name: "Google AI Studio API key" })).toHaveAccessibleDescription("Save a Google AI Studio key for Gemini CLI.");
 		const input = screen.getByLabelText("API key");
 		await user.type(input, "sk-gemini");
 		await user.click(screen.getByRole("button", { name: "Save and verify" }));
@@ -178,7 +179,7 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(getAgentUILogin).mockResolvedValue(native);
 		vi.mocked(actOnAgentUILogin).mockResolvedValue({ ...native, nativePrompt: "waiting", nativeOptions: undefined });
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "native", label: "Native sign-in", secret: false }]} onVerify={vi.fn().mockResolvedValue(false)} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		await user.click(screen.getByRole("button", { name: "Start native sign-in" }));
+		await user.click(screen.getByRole("button", { name: "Native sign-in" }));
 		expect(screen.getByRole("button", { name: "2. OpenAI" })).toBeVisible();
 		await user.click(screen.getByRole("button", { name: "2. OpenAI" }));
 		expect(actOnAgentUILogin).toHaveBeenCalledWith("goose", "login-1", "2", undefined);
