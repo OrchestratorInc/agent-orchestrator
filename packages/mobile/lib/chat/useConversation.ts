@@ -38,14 +38,30 @@ import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
 import { withAttachmentReferences } from "./messageAttachments";
-import { loadTurnOptionCatalog } from "./turnOptionsCatalog";
+import { isEmptyTurnOptionCatalog, loadTurnOptionCatalog } from "./turnOptionsCatalog";
 import { NOT_PAIRED_ACTION_COPY } from "../connectionError";
 import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
 const REFRESH_DEBOUNCE_MS = 120;
 const conversationPageCache = createMobileConversationPageCache();
-const turnOptionsCache = createAsyncValueCache<string, { models: ChatModel[]; configOptions: ChatConfigOption[] }>(16, 30_000);
+type TurnOptions = { models: ChatModel[]; configOptions: ChatConfigOption[] };
+const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
+// The last catalog each chat offered, kept past the cache's 30 seconds. A chat
+// opened while hibernated has no catalog until its provider is back, and showing
+// the previous one keeps the model in the composer instead of dropping it.
+const LAST_TURN_OPTIONS_LIMIT = 32;
+const lastTurnOptions = new Map<string, TurnOptions>();
+function rememberTurnOptions(key: string, catalog: TurnOptions) {
+	if (!key || isEmptyTurnOptionCatalog(catalog)) return;
+	lastTurnOptions.delete(key);
+	lastTurnOptions.set(key, catalog);
+	while (lastTurnOptions.size > LAST_TURN_OPTIONS_LIMIT) {
+		const oldest = lastTurnOptions.keys().next().value;
+		if (oldest === undefined) break;
+		lastTurnOptions.delete(oldest);
+	}
+}
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
 
 export type PendingSend = {
@@ -132,8 +148,8 @@ export function useMobileConversation(
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [unavailable, setUnavailable] = useState<{ code?: string; message: string }>();
-	const [models, setModels] = useState<ChatModel[]>([]);
-	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>([]);
+	const [models, setModels] = useState<ChatModel[]>(() => lastTurnOptions.get(cacheKey)?.models ?? []);
+	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>(() => lastTurnOptions.get(cacheKey)?.configOptions ?? []);
 	const [skills, setSkills] = useState<ChatSkill[]>([]);
 	const [pendingSends, setPendingSends] = useState<PendingSend[]>([]);
 	const [completedRetry, setCompletedRetry] = useState<{ id: string; draftText: string }>();
@@ -147,7 +163,6 @@ export function useMobileConversation(
 
 	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
 	const hasConversation = Boolean(snapshot);
-	const hasProviderConfig = Boolean(snapshot?.capabilities?.includes("config_options"));
 
 	const refresh = useCallback(async () => {
 		if (!cfg) return;
@@ -235,17 +250,25 @@ export function useMobileConversation(
 		if (options?.refresh) turnOptionsCache.delete(cacheKey);
 		const catalog = await turnOptionsCache.load(cacheKey, async () => {
 			return loadTurnOptionCatalog({
-				hasProviderConfig,
 				loadModels: () => getConversationModels(cfg, sessionId),
 				loadConfigOptions: () => getConversationConfigOptions(cfg, sessionId),
 			});
 		});
+		if (isEmptyTurnOptionCatalog(catalog)) {
+			// Usually a provider that is not up yet: ask again next time rather than
+			// serving "no choices" for 30 seconds, and keep what it offered before.
+			turnOptionsCache.delete(cacheKey);
+			const known = lastTurnOptions.get(cacheKey);
+			if (known) return known;
+		} else {
+			rememberTurnOptions(cacheKey, catalog);
+		}
 		if (mounted.current) {
 			setModels(catalog.models);
 			setConfigOptions(catalog.configOptions);
 		}
 		return catalog;
-	}, [cacheKey, cfg, configOptions, hasConversation, hasProviderConfig, models, sessionId, unavailable]);
+	}, [cacheKey, cfg, configOptions, hasConversation, models, sessionId, unavailable]);
 
 	const loadSkills = useCallback(async () => {
 		if (!cfg || unavailable || !hasConversation) return skills;
@@ -450,6 +473,7 @@ export function useMobileConversation(
 				const options = await requireConfig(cfg, (c) => setConversationConfigOption(c, sessionId, optionId, value));
 				setConfigOptions(options);
 				turnOptionsCache.set(cacheKey, { models, configOptions: options });
+				rememberTurnOptions(cacheKey, { models, configOptions: options });
 				return options;
 			}),
 		[cacheKey, cfg, models, runAction, sessionId],

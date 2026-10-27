@@ -1,21 +1,58 @@
 import type { ServerConfig } from "../config";
-import { useCallback } from "react";
-import { useFocusEffect } from "expo-router";
+import { useEffect, useRef, useState } from "react";
+import { useIsFocused, useNavigation, useRoute } from "expo-router";
 import { AppState } from "react-native";
 import { apiRequest } from "../api";
 
 let viewSequence = 0;
 
-/** Keep a viewed chat awake. Older daemons can safely ignore this endpoint. */
-export function useChatViewLease(config: ServerConfig | null, sessionId: string): void {
-	useFocusEffect(useCallback(() => {
-		if (!config) return;
+type StackRoute = { key: string; name: string };
+
+/**
+ * The chat is still on screen when only chat sheets sit above it. A sheet is its
+ * own route and blurs the chat beneath, so a focus-only lease was released when
+ * Android opened turn settings, and the chat hibernated behind the open sheet.
+ */
+export function coveredOnlyBySheets(routes: readonly StackRoute[] | undefined, key: string): boolean {
+	const index = routes?.findIndex((route) => route.key === key) ?? -1;
+	return index >= 0 && routes!.slice(index + 1).every((route) => route.name.startsWith("sheets/"));
+}
+
+/**
+ * Keep a viewed chat awake. Older daemons can safely ignore this endpoint.
+ *
+ * `onViewing` runs once each time the chat is registered as viewed. The daemon
+ * wakes a hibernated chat before it answers that request and reports the wake no
+ * other way, so this is when the screen should read the conversation again.
+ */
+export function useChatViewLease(config: ServerConfig | null, sessionId: string, onViewing?: () => void): void {
+	const focused = useIsFocused();
+	const navigation = useNavigation();
+	const { key } = useRoute();
+	const [underSheet, setUnderSheet] = useState(false);
+	const viewing = focused || underSheet;
+	const onViewingRef = useRef(onViewing);
+	useEffect(() => { onViewingRef.current = onViewing; }, [onViewing]);
+
+	useEffect(() => {
+		const update = () => setUnderSheet(coveredOnlyBySheets(navigation.getState()?.routes, key));
+		update();
+		const unsubscribe = [
+			navigation.addListener("state", update),
+			navigation.addListener("focus", update),
+			navigation.addListener("blur", update),
+		];
+		return () => { for (const remove of unsubscribe) remove(); };
+	}, [key, navigation]);
+
+	useEffect(() => {
+		if (!config || !viewing) return;
 		const viewId = `mobile-${Date.now().toString(36)}-${++viewSequence}`;
 		let active = false;
 		let timer: ReturnType<typeof setInterval> | undefined;
 		let tail: Promise<void> = Promise.resolve();
 		let pending = 0;
-		const send = (viewActive: boolean) => {
+		const send = (viewActive: boolean, announce = false) => {
 			pending++;
 			// Release follows any in-flight renewal, so a delayed true request
 			// cannot leave the chat marked as viewed after navigation/background.
@@ -23,13 +60,14 @@ export function useChatViewLease(config: ServerConfig | null, sessionId: string)
 				await apiRequest(config, `/api/v1/sessions/${encodeURIComponent(sessionId)}/chat-view`, {
 					method: "POST", body: JSON.stringify({ viewId, active: viewActive }),
 				});
+				if (announce) onViewingRef.current?.();
 			}).catch(() => {}).finally(() => { pending--; });
 		};
 		const update = (next: boolean) => {
 			if (next === active) return;
 			active = next;
 			clearInterval(timer);
-			send(next);
+			send(next, next);
 			if (next) timer = setInterval(() => { if (pending === 0) send(true); }, 15_000);
 		};
 		update(AppState.currentState === "active");
@@ -39,5 +77,5 @@ export function useChatViewLease(config: ServerConfig | null, sessionId: string)
 			clearInterval(timer);
 			if (active) send(false);
 		};
-	}, [config, sessionId]));
+	}, [config, sessionId, viewing]);
 }

@@ -43,6 +43,7 @@ import { shouldAutoResume } from "./autoResume";
 import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
+import { providerCatalogLive } from "./turnOptionsCatalog";
 import { turnSettingsModelLabel } from "./turnSettingsModel";
 import { brokenMcpServers, can } from "./types";
 import { useMobileConversation } from "./useConversation";
@@ -101,7 +102,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, session.id);
-	useChatViewLease(config, session.id);
+	// Opening a hibernated chat wakes it, and only the lease request says when.
+	useChatViewLease(config, session.id, conversation.refresh);
 	// A load that failed while the desktop was unreachable retries as soon as the
 	// board's poll reconnects, which is what the offline state promises.
 	// Keyed on a failed load, not a missing one, so the first mount doesn't send a
@@ -195,11 +197,18 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		),
 	);
 
+	// Loaded again when the provider comes up: a chat opened while hibernated or
+	// connecting has no catalog to give, and the composer would otherwise keep the
+	// empty one until the screen was reopened.
+	const providerLive = conversation.snapshot ? providerCatalogLive(conversation.snapshot) : undefined;
 	useEffect(() => {
-		if (!conversation.snapshot || turnOptionsRequestedFor.current === session.id) return;
-		turnOptionsRequestedFor.current = session.id;
-		void conversation.loadTurnOptions().catch(() => {});
-	}, [conversation.loadTurnOptions, conversation.snapshot, session.id]);
+		if (providerLive === undefined) return;
+		const key = `${session.id}:${providerLive}`;
+		if (turnOptionsRequestedFor.current === key) return;
+		const woke = providerLive && turnOptionsRequestedFor.current === `${session.id}:false`;
+		turnOptionsRequestedFor.current = key;
+		void conversation.loadTurnOptions(woke ? { refresh: true } : undefined).catch(() => {});
+	}, [conversation.loadTurnOptions, providerLive, session.id]);
 
 	const sessionName = sessionTitle(session);
 	// Codex-style: every surface that shows the agent changed files can open them.
