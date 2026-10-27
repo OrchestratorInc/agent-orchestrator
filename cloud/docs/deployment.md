@@ -141,7 +141,7 @@ Create the bucket in the service's region with public access blocked, bucket
 owner enforced, SSE-S3 encryption, versioning, a policy that refuses requests
 without TLS, and a lifecycle rule. The control plane's sweeper deletes
 uncommitted and replaced versions itself; the lifecycle rule is the backstop:
-it expires noncurrent versions after 30 days, removes delete markers with no
+it expires noncurrent versions after 60 days, removes delete markers with no
 versions left, and aborts incomplete multipart uploads after a day.
 
 ```bash
@@ -163,7 +163,7 @@ aws s3api put-bucket-policy --bucket $B --policy '{"Version":"2012-10-17","State
   "Condition":{"Bool":{"aws:SecureTransport":"false"}}}]}'
 aws s3api put-bucket-lifecycle-configuration --bucket $B \
   --lifecycle-configuration '{"Rules":[{"ID":"expire-old-versions","Status":"Enabled","Filter":{},
-  "NoncurrentVersionExpiration":{"NoncurrentDays":30},
+  "NoncurrentVersionExpiration":{"NoncurrentDays":60},
   "Expiration":{"ExpiredObjectDeleteMarker":true},
   "AbortIncompleteMultipartUpload":{"DaysAfterInitiation":1}}]}'
 ```
