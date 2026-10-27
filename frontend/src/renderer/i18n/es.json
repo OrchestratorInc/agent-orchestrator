@@ -3847,7 +3847,7 @@
 	"settings.harness.loginUi.nativeStart": "Iniciar inicio de sesión nativo",
 	"settings.harness.loginUi.nativeCheck": "Comprobar inicio de sesión",
 	"settings.harness.loginUi.nativeHint": "AO ejecuta el inicio de sesión del harness en segundo plano y muestra aquí los pasos reconocidos.",
-	"settings.harness.loginUi.envHint": "Se guarda en este dispositivo para nuevas sesiones iniciadas por AO. El proveedor comprueba la clave al ejecutar el harness.",
+	"settings.harness.loginUi.envHint": "Se guarda en el entorno del usuario del dispositivo para nuevas apps y sesiones de AO. Reinicia las apps abiertas; el proveedor comprueba la clave al usarla.",
 	"settings.harness.loginUi.nativeChoose": "Elige un proveedor:",
 	"settings.harness.loginUi.nativeInteractive": "Este harness necesita entrada interactiva en su inicio de sesión nativo o configuración de proveedor. Abre su flujo de terminal para continuar.",
 	"settings.harness.loginUi.methods.cline": "Cuenta de Cline en el navegador",

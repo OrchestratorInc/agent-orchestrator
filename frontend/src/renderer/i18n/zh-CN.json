@@ -3760,7 +3760,7 @@
 	"settings.harness.loginUi.nativeStart": "开始原生登录",
 	"settings.harness.loginUi.nativeCheck": "检查登录",
 	"settings.harness.loginUi.nativeHint": "AO 在后台运行 harness 登录，并在此显示已识别的步骤。",
-	"settings.harness.loginUi.envHint": "密钥保存在此设备上，供 AO 新建的会话使用。运行 harness 时由提供商验证密钥。",
+	"settings.harness.loginUi.envHint": "密钥保存在此设备的用户环境中，供新启动的应用和 AO 会话使用。请重启已打开的应用；提供商会在使用时验证密钥。",
 	"settings.harness.loginUi.nativeChoose": "选择提供商：",
 	"settings.harness.loginUi.nativeInteractive": "此 Harness 的原生登录或提供商设置需要交互式输入。请打开其终端流程继续。",
 	"settings.harness.loginUi.methods.cline": "在浏览器中使用 Cline 账户",

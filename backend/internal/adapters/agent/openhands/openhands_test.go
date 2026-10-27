@@ -74,6 +74,15 @@ func TestModelOverride(t *testing.T) {
 	}
 }
 
+func TestProviderKeyEnablesOpenHandsEnvironmentOverride(t *testing.T) {
+	t.Setenv("LLM_API_KEY", "test-secret")
+	cmd, err := testPlugin().GetLaunchCommand(t.Context(), ports.LaunchConfig{})
+	want := []string{"openhands", "--override-with-envs"}
+	if err != nil || !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("launch = %q, %v; want %q", cmd, err, want)
+	}
+}
+
 func TestPermissions(t *testing.T) {
 	for _, tc := range []struct {
 		mode ports.PermissionMode

@@ -151,11 +151,12 @@ type StartAgentAuthResponse struct {
 	Terminal      ShellTerminalResponse `json:"terminal"`
 }
 
-// StartAgentUILoginRequest selects a fixed native login method. The optional
-// credential is passed to stdin and never returned in operation responses.
+// StartAgentUILoginRequest selects a reviewed login method. Credentials are
+// never returned in operation responses; model is required by some key flows.
 type StartAgentUILoginRequest struct {
 	Method string `json:"method"`
 	Secret string `json:"secret,omitempty"`
+	Model  string `json:"model,omitempty"`
 }
 
 // AgentLoginActionRequest selects a fixed navigation action, or a digit 1-9

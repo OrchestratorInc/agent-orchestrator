@@ -26,6 +26,7 @@ type fakeAgentAuthService struct {
 	uiResult    agentauth.LoginSnapshot
 	uiMethod    string
 	uiSecret    string
+	uiModel     string
 	uiOperation string
 	uiCode      string
 	codeCalls   int
@@ -35,6 +36,11 @@ func (f *fakeAgentAuthService) StartLogin(_ context.Context, agentID, method, se
 	f.startedID, f.uiMethod, f.uiSecret = agentID, method, secret
 	f.startCalls++
 	return f.uiResult, f.startErr
+}
+
+func (f *fakeAgentAuthService) StartLoginWithModel(ctx context.Context, agentID, method, secret, model string) (agentauth.LoginSnapshot, error) {
+	f.uiModel = model
+	return f.StartLogin(ctx, agentID, method, secret)
 }
 
 func (f *fakeAgentAuthService) Login(_ context.Context, agentID, id string) (agentauth.LoginSnapshot, error) {
@@ -111,6 +117,14 @@ func TestAgentUILoginPassesCredentialWithoutReturningIt(t *testing.T) {
 		if status != http.StatusOK || svc.uiOperation != "login-1" || svc.startedID != "codex" || headers.Get("Cache-Control") != "no-store" {
 			t.Fatalf("method=%s status=%d", method, status)
 		}
+	}
+}
+
+func TestAgentUILoginPassesModelWithoutReturningCredential(t *testing.T) {
+	svc := &fakeAgentAuthService{uiResult: agentauth.LoginSnapshot{ID: "login-1", AgentID: "qwen", Method: "env_OPENAI_API_KEY", Status: "succeeded"}}
+	body, status, _ := doRequest(t, newAgentAuthTestServer(t, svc), http.MethodPost, "/api/v1/agents/qwen/auth/operations", `{"method":"env_OPENAI_API_KEY","model":"gpt-4o","secret":"test-secret"}`)
+	if status != http.StatusAccepted || svc.uiModel != "gpt-4o" || svc.uiSecret != "test-secret" || strings.Contains(string(body), "test-secret") {
+		t.Fatalf("status=%d model=%q body=%s", status, svc.uiModel, body)
 	}
 }
 
