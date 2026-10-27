@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
+import type { FileAttachmentPayload } from "../hooks/useFileAttachments";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
@@ -73,7 +74,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// Bumped when a saved launch is resolved, so the page re-reads it.
 	const [, setLaunchRevision] = useState(0);
 	// "@" files and attachments go through the prepared worktree's session, which
-	// becomes the task's session on send. Scratchpad has none, so it offers neither.
+	// becomes the task's session on send. Until it is ready, and in Scratchpad, which
+	// has none, attachments stay in the composer and are uploaded with the task.
 	const preparedId = task.preparedSessionId || undefined;
 	const workspaceFiles = useQuery({
 		queryKey: ["new-chat-files", hostKey, preparedId ?? ""],
@@ -227,7 +229,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		}, 0);
 	};
 
-	const send = async (text: string, _attachments?: unknown, clientMessageId: string = crypto.randomUUID()) => {
+	const send = async (text: string, attachments?: FileAttachmentPayload[], clientMessageId: string = crypto.randomUUID()) => {
 		const target = { ...targetRef.current };
 		const saved = readPendingLaunch(hostKey, draftScope, clientMessageId);
 		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
@@ -256,7 +258,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
 			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
-			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay });
+			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments });
 			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
@@ -347,7 +349,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				centerInWindow
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
-				attachLater={!workspaceReady}
+				holdAttachments
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}
 				filePathsTruncated={workspaceFiles.data?.truncated}

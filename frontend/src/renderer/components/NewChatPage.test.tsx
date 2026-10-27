@@ -115,6 +115,17 @@ describe("NewChatPage", () => {
 		}));
 	});
 
+	it("takes attachments before a workspace exists and uploads them with the task", async () => {
+		h.launch.mockResolvedValue("sess-1");
+		renderPage();
+		expect(h.workspace?.holdAttachments).toBe(true);
+		const files = [{ mimeType: "image/png", data: "iVBORw==", name: "shot.png" }];
+
+		await act(async () => { await h.workspace?.onSend?.("What is this?", files, "cid-1"); });
+
+		expect(h.launch).toHaveBeenCalledWith("What is this?", expect.objectContaining({ clientRequestId: "cid-1", attachments: files }));
+	});
+
 	it("returns a refused brief to the composer and restores the selectors", async () => {
 		h.launch.mockRejectedValue(Object.assign(new Error("Agent is not installed"), { name: "TaskCreateError", code: "AGENT_NOT_INSTALLED" }));
 		renderPage();

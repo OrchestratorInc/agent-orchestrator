@@ -604,8 +604,8 @@ export interface ChatWorkspaceProps {
 	centerInWindow?: boolean;
 	/** The project has a setup script, so the start-up checklist lists that step. */
 	showSetupStep?: boolean;
-	/** Show the attach control, disabled, before there is a workspace to attach into. */
-	attachLater?: boolean;
+	/** Keep files the workspace cannot take yet in the composer, sent with the message. */
+	holdAttachments?: boolean;
 }
 
 type ChatWorkspaceActivation =
@@ -810,7 +810,7 @@ function ChatWorkspaceContent({
 	composerTray,
 	centerInWindow = false,
 	showSetupStep = true,
-	attachLater,
+	holdAttachments,
 	draftScope,
 	draftPersistenceAvailable,
 	onRetryDraftPersistence,
@@ -2040,7 +2040,7 @@ function ChatWorkspaceContent({
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
-										attachLater={attachLater}
+										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}

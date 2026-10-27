@@ -2851,7 +2851,6 @@
 	"chat.startup.label": "Configuración de la sesión",
 	"chat.startup.steps": "Pasos de configuración",
 	"chat.startup.running": "Configurando la sesión",
-	"chat.composer.attachLater": "Podrás adjuntar archivos cuando la tarea haya empezado",
 	"chat.startup.failed": "Falló la configuración de la sesión",
 	"chat.action.session.spawned": "Generó un agente",
 	"chat.action.session.terminated": "Terminó un agente",

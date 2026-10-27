@@ -2811,7 +2811,6 @@
 	"chat.startup.label": "Session setup",
 	"chat.startup.steps": "Setup steps",
 	"chat.startup.running": "Setting up session",
-	"chat.composer.attachLater": "Files can be attached once the task has started",
 	"chat.startup.failed": "Session setup failed",
 	"chat.action.session.spawned": "Spawned an agent",
 	"chat.action.session.terminated": "Terminated an agent",

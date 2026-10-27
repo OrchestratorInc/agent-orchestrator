@@ -2802,7 +2802,6 @@
 	"chat.startup.label": "Sitzungseinrichtung",
 	"chat.startup.steps": "Einrichtungsschritte",
 	"chat.startup.running": "Sitzung wird eingerichtet",
-	"chat.composer.attachLater": "Dateien können angehängt werden, sobald die Aufgabe gestartet ist",
 	"chat.startup.failed": "Einrichtung der Sitzung fehlgeschlagen",
 	"chat.action.session.spawned": "Agent gestartet",
 	"chat.action.session.terminated": "Agent beendet",

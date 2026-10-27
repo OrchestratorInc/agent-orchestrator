@@ -2055,6 +2055,26 @@ describe("attachments", () => {
 		expect(screen.getByLabelText("Attach a file")).toBeTruthy();
 	});
 
+	it("holds pasted files without a workspace and sends their bytes with the message", async () => {
+		const { onSend, field } = renderComposer({ draftSessionId: "composer-held-attachments", holdAttachments: true });
+		expect(screen.getByLabelText("Attach a file")).toBeTruthy();
+		await typeInComposer(field, "what is this");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png"), textFile()]) });
+		await screen.findByLabelText("Remove notes.txt");
+		expect(screen.getByLabelText("Remove a.png")).toBeTruthy();
+
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		const [text, files] = onSend.mock.calls[0] ?? [];
+		expect(text).toBe("what is this");
+		expect(files).toEqual([
+			{ mimeType: "image/png", data: expect.any(String), name: "a.png" },
+			{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" },
+		]);
+	});
+
 	it("shows a removable chip per pasted image", async () => {
 		const { field } = renderComposer({
 			onStageAttachments: vi.fn().mockResolvedValue([
