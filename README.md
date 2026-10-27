@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/ao-logo.svg" alt="Orchestrator.inc logo" width="144" height="144" />
+<img src="frontend/assets/icon.png" alt="Orchestrator.inc logo" width="144" height="144" />
 
 <h3>Orchestrator.inc</h3>
 
