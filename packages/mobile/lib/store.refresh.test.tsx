@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
 	onState: undefined as ((value: string) => void) | undefined,
 	onNetwork: undefined as ((value: { isConnected?: boolean; isInternetReachable?: boolean; type?: string }) => void) | undefined,
 	resolve: vi.fn(), sessions: vi.fn(), notifications: vi.fn(), selected: "a",
+	endpoints: [] as unknown[],
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => {} } }));
 vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
@@ -21,7 +22,7 @@ vi.mock("./resolveConfig", () => ({ resolveActiveConfig: state.resolve, runtimeR
 vi.mock("./race", () => ({ IncompatibleHostVersionError: class extends Error {} }));
 vi.mock("./connectRuntime", () => ({ rejectedEndpointNeedsRace: () => false }));
 vi.mock("./hosts", () => ({
-	activeHost: async () => ({ id: state.selected, name: state.selected, endpoints: [], token: "secret" }),
+	activeHost: async () => ({ id: state.selected, name: state.selected, endpoints: state.endpoints, token: "secret" }),
 	loadHosts: async () => [], sameHostConnections: () => true,
 	setActiveHost: async (id: string) => { state.selected = id; },
 }));
@@ -53,7 +54,7 @@ function deferred() {
 async function mount() { await act(async () => { renderer = create(<AppProvider><Harness /></AppProvider>); }); }
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	vi.useFakeTimers(); vi.clearAllMocks(); state.selected = "a";
+	vi.useFakeTimers(); vi.clearAllMocks(); state.selected = "a"; state.endpoints = [];
 	state.resolve.mockImplementation(async () => ({ hostId: state.selected, host: `${state.selected}.test`, httpPort: "3011", muxPort: "3011", password: "secret" }));
 	state.sessions.mockResolvedValue(board("Fresh"));
 	state.notifications.mockResolvedValue({ notifications: [], unreadCount: 0 });
@@ -194,4 +195,23 @@ it("lets an incompatible-version race override reconnecting", async () => {
 	expect(current.errorStatus).toBe(426);
 	expect(current.config).toBeNull();
 	expect(current.linkHealth).toBe("ok");
+});
+
+// On the tunnel with a better LAN address saved, the upgrade check races once a
+// minute. With the phone offline that race can only fail, and a failed race
+// clears the config and drops the rows that "You're offline" promised to keep.
+it("does not race for a better endpoint while the phone is offline", async () => {
+	state.endpoints = [{ kind: "lan", host: "192.168.1.5", port: 3011, secure: false }];
+	state.resolve.mockImplementation(async () => ({ hostId: "a", host: "a.trycloudflare.com", httpPort: "443", muxPort: "443", password: "secret", endpointKind: "tunnel" }));
+	await mount();
+	expect(current.sessions[0].displayName).toBe("Fresh");
+	const races = state.resolve.mock.calls.length;
+	state.sessions.mockRejectedValue(new UnreachableError("offline"));
+	state.resolve.mockResolvedValue(null);
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(65_000); });
+	expect(state.resolve.mock.calls.length).toBe(races);
+	expect(current.config).not.toBeNull();
+	expect(current.sessions[0].displayName).toBe("Fresh");
+	expect(current.linkHealth).toBe("phone-offline");
 });

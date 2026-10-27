@@ -637,6 +637,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		let stopped = false;
 		const check = async () => {
 			if (stopped) return;
+			// Offline, the race can only fail, and a failed race clears the config
+			// and with it the rows "You're offline" promises to keep. Checked before
+			// the resume flag is consumed so a resume still counts once back online.
+			if (isPhoneOffline(phoneNetworkRef.current)) return;
 			const resumed = resumedRef.current;
 			resumedRef.current = false;
 			let known: Endpoint[] = [];
