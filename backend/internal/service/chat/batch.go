@@ -75,6 +75,7 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 				return ports.ChatUserMessage{}, batchInputError{queued.TurnID, err}
 			}
 		}
+		msg = excerptDeliveryMessage(msg)
 		items = append(items, batchInputItem{
 			Kind: "message", Text: msg.Text, Origin: msg.Origin,
 			SenderSessionID: msg.SenderSessionID, SenderProjectID: msg.SenderProjectID,
@@ -87,16 +88,17 @@ func (c *Controller) queuedBatchInput(ctx context.Context, batch []domain.Queued
 		}
 	}
 	if steer != nil {
-		combined.ClientMessageID = steer.ClientMessageID
-		combined.Origin = steer.Origin
-		combined.Settings = steer.Settings
+		rendered := excerptDeliveryMessage(*steer)
+		combined.ClientMessageID = rendered.ClientMessageID
+		combined.Origin = rendered.Origin
+		combined.Settings = rendered.Settings
 		items = append(items, batchInputItem{
-			Kind: "steer", Text: steer.Text, Origin: steer.Origin,
-			SenderSessionID: steer.SenderSessionID, SenderProjectID: steer.SenderProjectID,
-			SenderDisplayName: steer.SenderDisplayName,
-			ContentStart:      len(combined.Content), ContentCount: len(steer.Content),
+			Kind: "steer", Text: rendered.Text, Origin: rendered.Origin,
+			SenderSessionID: rendered.SenderSessionID, SenderProjectID: rendered.SenderProjectID,
+			SenderDisplayName: rendered.SenderDisplayName,
+			ContentStart:      len(combined.Content), ContentCount: len(rendered.Content),
 		})
-		combined.Content = append(combined.Content, steer.Content...)
+		combined.Content = append(combined.Content, rendered.Content...)
 	}
 	encoded, err := json.Marshal(items)
 	if err != nil {

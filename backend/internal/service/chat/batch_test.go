@@ -21,6 +21,8 @@ type deliveredBatchItem struct {
 	SenderSessionID   string               `json:"senderSessionId"`
 	SenderProjectID   string               `json:"senderProjectId"`
 	SenderDisplayName string               `json:"senderDisplayName"`
+	ContentStart      int                  `json:"contentStart"`
+	ContentCount      int                  `json:"contentCount"`
 }
 
 func parseDeliveredBatch(t *testing.T, text string) []deliveredBatchItem {
@@ -113,6 +115,78 @@ func TestQueuedChatMessagesDrainInOneProviderInput(t *testing.T) {
 		if !found {
 			t.Fatalf("transcript lost %s", id)
 		}
+	}
+}
+
+func TestQueuedBatchAttachmentIndicesMatchDeliveredContent(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	caps := productionCaps()
+	caps[ports.ChatCapabilityImages] = true
+	h.conv.setCapabilities(caps)
+	active, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "active", ClientMessageID: "indexed-active", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range []ports.ChatUserMessage{
+		{Text: "context message", ClientMessageID: "indexed-context", Origin: domain.MessageOriginHuman,
+			Content: []ports.ChatContent{{Type: "text", Text: "verified context", Internal: true}}},
+		{Text: "image message", ClientMessageID: "indexed-image", Origin: domain.MessageOriginHuman,
+			Content: []ports.ChatContent{{Type: "image", Data: "aW1hZ2U=", MIMEType: "image/png"}}},
+	} {
+		if _, err := h.svc.Send(ctx, testSession, msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
+		ProviderTurnID: active.ProviderTurnID, TurnState: domain.TurnStateCompleted})
+	h.awaitSnapshot(t, func(store.ConversationSnapshot) bool { return len(h.conv.sentMessages()) == 2 })
+	delivered := h.conv.sentMessages()[1]
+	items := parseDeliveredBatch(t, delivered.Text)
+	if len(items) != 2 || !strings.Contains(items[0].Text, "verified context") ||
+		items[0].ContentCount != 0 || items[1].ContentStart != 0 || items[1].ContentCount != 1 ||
+		len(delivered.Content) != 1 || delivered.Content[0].Data != "aW1hZ2U=" {
+		t.Fatalf("batch indices disagree with delivered content: items=%+v content=%+v", items, delivered.Content)
+	}
+}
+
+func TestSteeredBatchAttachmentIndicesMatchDeliveredContent(t *testing.T) {
+	h, provider := steerHarness(t)
+	ctx := context.Background()
+	caps := provider.Capabilities()
+	caps[ports.ChatCapabilityImages] = true
+	provider.setCapabilities(caps)
+	for _, msg := range []ports.ChatUserMessage{
+		{Text: "context message", ClientMessageID: "steer-indexed-context", Origin: domain.MessageOriginHuman,
+			Content: []ports.ChatContent{{Type: "text", Text: "verified context", Internal: true}}},
+		{Text: "image message", ClientMessageID: "steer-indexed-image", Origin: domain.MessageOriginHuman,
+			Content: []ports.ChatContent{{Type: "image", Data: "cXVldWVk", MIMEType: "image/png"}}},
+	} {
+		if _, err := h.svc.Send(ctx, testSession, msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := h.svc.SteerOrSend(ctx, testSession, ports.ChatUserMessage{
+		Text: "steer message", ClientMessageID: "steer-indexed-steer", Origin: domain.MessageOriginHuman,
+		Content: []ports.ChatContent{
+			{Type: "text", Text: "steer context", Internal: true},
+			{Type: "image", Data: "c3RlZXI=", MIMEType: "image/png"},
+		},
+	}, false)
+	if err != nil || !result.Steered {
+		t.Fatalf("steer = %+v, %v", result, err)
+	}
+	delivered := provider.steers()[0].msg
+	items := parseDeliveredBatch(t, delivered.Text)
+	if len(items) != 3 || !strings.Contains(items[0].Text, "verified context") ||
+		!strings.Contains(items[2].Text, "steer context") ||
+		items[0].ContentCount != 0 || items[1].ContentStart != 0 || items[1].ContentCount != 1 ||
+		items[2].ContentStart != 1 || items[2].ContentCount != 1 ||
+		len(delivered.Content) != 2 || delivered.Content[0].Data != "cXVldWVk" ||
+		delivered.Content[1].Data != "c3RlZXI=" {
+		t.Fatalf("steer indices disagree with delivered content: items=%+v content=%+v", items, delivered.Content)
 	}
 }
 
