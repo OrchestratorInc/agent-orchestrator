@@ -1987,7 +1987,7 @@ describe("SessionView", () => {
 		expect(useTerminalResetStore.getState().reconnecting["sess-2"]).toBe(true);
 	});
 
-	it("keeps restored cloud Chat startup inside the conversation while its workspace comes back", () => {
+	it("shows the startup loader over a restored cloud Chat session while its workspace comes back", () => {
 		const session = workerSession("sess-2");
 		session.mode = "chat";
 		session.runtimeConnected = false;
@@ -2001,21 +2001,45 @@ describe("SessionView", () => {
 
 		render(<SessionView sessionId="sess-2" />);
 
-		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		const loader = screen.getByTestId("cloud-session-loader-screen");
+		expect(loader).toHaveTextContent("Connecting to Chat");
+		expect(loader).not.toHaveTextContent("Connecting your terminal");
+		// The restore's terminal reconnect does not apply to Chat: the workspace
+		// steps run, not the terminal-only step.
+		expect(screen.queryAllByTestId("multi-step-loader-check")).toHaveLength(0);
 		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
 	});
 
 	it.each([
-		["worker", "requested", false],
-		["worker", "running", true],
-		["orchestrator", "requested", false],
-		["orchestrator", "provisioning", true],
-		["orchestrator", "bootstrapping", true],
-		["orchestrator", "running", true],
-	] as const)("keeps cloud Chat %s usable with workspace %s and runtime connected %s", (kind, observedState, runtimeConnected) => {
+		["worker", "coder", "requested"],
+		["orchestrator", "coder", "requested"],
+		["worker", "coder", "provisioning"],
+		["orchestrator", "coder", "bootstrapping"],
+		["worker", "freestyle", "requested"],
+	] as const)("shows the startup loader over a cloud Chat %s on %s while its workspace is %s", (kind, sandboxProvider, observedState) => {
 		const session = workerSession(kind === "orchestrator" ? "sess-orch" : "sess-2");
 		session.mode = "chat";
-		session.runtimeConnected = runtimeConnected;
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider, desiredState: "running", observedState };
+
+		render(<SessionView sessionId={session.id} />);
+
+		const loader = screen.getByTestId("cloud-session-loader-screen");
+		expect(loader).toHaveTextContent("Creating the workspace");
+		expect(loader).toHaveTextContent("Connecting to Chat");
+		expect(loader).not.toHaveTextContent("Connecting your terminal");
+		expect(loader).not.toHaveClass("cloud-session-loader--complete");
+	});
+
+	it.each([
+		["worker", "running"],
+		["orchestrator", "provisioning"],
+		["orchestrator", "bootstrapping"],
+		["orchestrator", "running"],
+	] as const)("keeps cloud Chat %s usable once its worker connects, with workspace %s", (kind, observedState) => {
+		const session = workerSession(kind === "orchestrator" ? "sess-orch" : "sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = true;
 		session.cloud = {
 			orgId: "cloud-org",
 			sandboxProvider: "freestyle",
@@ -2028,6 +2052,62 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
 		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
 		expect(listSessionEventsMock).not.toHaveBeenCalled();
+	});
+
+	it("checks off the Chat startup loader when the worker connects, without waiting for a terminal", () => {
+		vi.useFakeTimers();
+		try {
+			autoAttachSessionTerminal.current = false;
+			const session = workerSession("sess-2");
+			session.mode = "chat";
+			session.runtimeConnected = false;
+			session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "provisioning" };
+			const view = render(<SessionView sessionId="sess-2" />);
+			expect(screen.getByTestId("cloud-session-loader-screen")).not.toHaveClass("cloud-session-loader--complete");
+			act(() => vi.advanceTimersByTime(200));
+
+			session.runtimeConnected = true;
+			session.cloud = { ...session.cloud, observedState: "bootstrapping" };
+			view.rerender(<SessionView sessionId="sess-2" />);
+			expect(screen.getAllByTestId("multi-step-loader-check")).toHaveLength(4);
+			expect(screen.getByTestId("cloud-session-loader-screen")).toHaveClass("cloud-session-loader--complete");
+			act(() => vi.advanceTimersByTime(360));
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+			view.unmount();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("never raises the loader over a connected cloud Chat session for a terminal reconnect", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = true;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "running" };
+		const view = render(<SessionView sessionId="sess-2" />);
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+
+		act(() => useTerminalResetStore.getState().bump("sess-2", 2));
+		view.rerender(<SessionView sessionId="sess-2" />);
+
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+	});
+
+	it("raises the startup loader again when a connected cloud Chat session's workspace restarts", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = true;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "running" };
+		const view = render(<SessionView sessionId="sess-2" />);
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+
+		session.runtimeConnected = false;
+		session.cloud = { ...session.cloud, observedState: "restoring" };
+		view.rerender(<SessionView sessionId="sess-2" />);
+
+		expect(screen.getByTestId("cloud-session-loader-screen")).toHaveTextContent("Connecting to Chat");
 	});
 
 	it("does not skip agent preparation just because the worker reports running", async () => {

@@ -685,6 +685,7 @@
 	"terminal.sessionLoader.workspace": "Creating the workspace",
 	"terminal.sessionLoader.worker": "Connecting to the worker",
 	"terminal.sessionLoader.repositoryAgent": "Preparing your repository and agent",
+	"terminal.sessionLoader.chat": "Connecting to Chat",
 	"terminal.sessionLoader.terminal": "Connecting your terminal",
 	"terminal.sessionLoader.label": "Session setup activity",
 	"terminal.sessionLoader.openCoderWorkspace": "Open the workspace in Coder",

@@ -231,7 +231,7 @@ function cloudStartupStage(observedState: string | undefined, workerConnected: b
 		: 0;
 }
 
-function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, completed = false, startupNote, coderWorkspaceUrl }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string }) {
+function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedState, workerConnected, terminalOnly, chat = false, completed = false, startupNote, coderWorkspaceUrl }: { sessionId: string; orgId: string; createdAt?: string; observedState?: string; workerConnected: boolean; terminalOnly: boolean; chat?: boolean; completed?: boolean; startupNote?: string; coderWorkspaceUrl?: string }) {
 	const { baseUrl, client } = useCloudCp();
 	const queryClient = useQueryClient();
 	// The project's Setup log, fed by this loader's own stream and poll below.
@@ -336,7 +336,7 @@ function CloudSessionLifecycleLoader({ sessionId, orgId, createdAt, observedStat
 	}, [client, orgId, queryClient, sessionId, terminalOnly]);
 	const confirmedFacts = remoteProgress.index > factProgress.index ? remoteProgress : factProgress;
 	const target = confirmedFacts.index > progress.index ? confirmedFacts : progress;
-	return <CloudSessionStartupLoader activeIndex={target.index} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} />;
+	return <CloudSessionStartupLoader activeIndex={target.index} chat={chat} completed={completed} startupNote={startupNote} coderWorkspaceUrl={polledWorkspaceUrl ?? coderWorkspaceUrl} setupRun={setupRun} />;
 }
 
 function CloudInterfaceSwitchLoader({ target }: { target: "chat" | "tui" }) {
@@ -664,8 +664,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// Set by a restore and cleared only by the session's terminal pane once the
 	// fresh worker's terminal exists, so it means anything only while that pane
 	// can mount: a Chat-mode session never mounts one, and would otherwise keep
-	// the "Connecting your terminal" loader up for good. Cloud Chat presents
-	// startup progress inside its conversation instead of this terminal overlay.
+	// the "Connecting your terminal" loader up for good. A cloud Chat session
+	// still shows the startup loader while its workspace comes up.
 	const cloudReconnectRequested = useTerminalResetStore((state) => Boolean(state.reconnecting[sessionId]));
 	const [terminalAttachment, setTerminalAttachment] = useState({ sessionId: "", attached: false });
 	const terminalAttached = terminalAttachment.sessionId === sessionId && terminalAttachment.attached;
@@ -687,7 +687,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// browserOnly limits the orchestrator's inspector tabs, not its terminal.
 	const expectsTerminal = session?.mode !== "chat" && (!browserOnly || Boolean(session?.cloud));
 	const cloudReconnecting = cloudReconnectRequested && expectsTerminal;
-	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected";
+	// A cloud Chat session mounts no terminal, so it is usable once its worker
+	// connects: the worker runs the first turn while the workspace still reports
+	// bootstrapping, and the conversation shows Setup from there on.
+	const chatWorkerConnected = !expectsTerminal && Boolean(session?.runtimeConnected);
+	const sessionReady = expectsTerminal ? terminalAttached : cloudStage === "connected" || chatWorkerConnected;
 	useEffect(() => {
 		if (session?.kind !== "orchestrator" || session.cloud || session.mode === "chat") return;
 		if (terminalAttached || session.provisionState === "failed") {
@@ -705,7 +709,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// relay drop mid-turn). A terminal re-mint (cloudReconnecting, covers a blank
 	// flash) and a genuine workspace restart still raise the loader.
 	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
-	const showLifecycleLoader = expectsTerminal && !startupFailure && ((!session && cloudSessionResolving) || (hasConnectedOnce
+	// The loader covers both interfaces while the workspace starts. A Chat
+	// session whose worker is connected is never covered.
+	const showLifecycleLoader = !chatWorkerConnected && !startupFailure && ((!session && cloudSessionResolving) || (hasConnectedOnce
 		? (cloudReconnecting || workspaceRestarting)
 		: (cloudReconnecting || (cloudStage != null && !isCloudPausedStage(cloudStage) && !sessionReady))));
 	const loaderVisibleLongEnoughRef = useRef("");
@@ -717,7 +723,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		const timer = window.setTimeout(() => { loaderVisibleLongEnoughRef.current = sessionId; }, 200);
 		return () => window.clearTimeout(timer);
 	}, [sessionId, showLifecycleLoader]);
-	const showCompletedLoader = expectsTerminal && !showLifecycleLoader && sessionReady && loaderVisibleLongEnoughRef.current === sessionId && !completionDismissed;
+	const showCompletedLoader = !showLifecycleLoader && sessionReady && loaderVisibleLongEnoughRef.current === sessionId && !completionDismissed;
 	useEffect(() => {
 		if (!showCompletedLoader) return;
 		const timer = window.setTimeout(() => setCompletionDismissed(true), 360);
@@ -2244,6 +2250,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						observedState={session?.cloud?.observedState}
 						workerConnected={Boolean(session?.runtimeConnected)}
 						terminalOnly={cloudReconnecting && !workspaceRestarting}
+						chat={!expectsTerminal}
 						completed={showCompletedLoader}
 						startupNote={startupProblem?.phase === "retrying" ? startupProblem.message : undefined}
 						coderWorkspaceUrl={session?.cloud?.coderWorkspaceUrl}

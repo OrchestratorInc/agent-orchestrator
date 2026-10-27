@@ -693,6 +693,7 @@
 	"terminal.sessionLoader.workspace": "Criando o espaço de trabalho",
 	"terminal.sessionLoader.worker": "Conectando ao worker",
 	"terminal.sessionLoader.repositoryAgent": "Preparando seu repositório e agente",
+	"terminal.sessionLoader.chat": "Conectando ao chat",
 	"terminal.sessionLoader.terminal": "Conectando seu terminal",
 	"terminal.sessionLoader.label": "Atividade de configuração da sessão",
 	"terminal.sessionLoader.openCoderWorkspace": "Abrir o espaço de trabalho no Coder",

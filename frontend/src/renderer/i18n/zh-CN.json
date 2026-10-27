@@ -688,6 +688,7 @@
 	"terminal.sessionLoader.workspace": "正在创建工作区",
 	"terminal.sessionLoader.worker": "正在连接工作节点",
 	"terminal.sessionLoader.repositoryAgent": "正在准备您的代码仓库和代理",
+	"terminal.sessionLoader.chat": "正在连接聊天",
 	"terminal.sessionLoader.terminal": "正在连接您的终端",
 	"terminal.sessionLoader.label": "会话设置活动",
 	"terminal.sessionLoader.openCoderWorkspace": "在 Coder 中打开工作区",
