@@ -332,7 +332,7 @@ func (c *Client) BootstrapWorker(
 	// Repair issues a new one-time ticket, so pass this bootstrap's environment
 	// rather than anything stored at creation. Freestyle restores a paused VM's
 	// memory, so the agent is kept alive across the worker restart a wake does.
-	environment := make(map[string]string, len(bootstrap.Environment)+2)
+	environment := make(map[string]string, len(bootstrap.Environment)+3)
 	for key, value := range bootstrap.Environment {
 		environment[key] = value
 	}
@@ -341,6 +341,9 @@ func (c *Client) BootstrapWorker(
 	// snapshot clones the same way. Only Freestyle opts in; every other
 	// provider keeps full clones (worker.PartialCloneEnv).
 	environment["AO_WORKER_PARTIAL_CLONE"] = "1"
+	// Freestyle Chat starts its Claude agent ahead of each turn
+	// (workerexec.Supervisor.WarmTurn); other providers start it per turn.
+	environment["AO_WORKER_PREWARM_AGENT"] = "1"
 	command := launchEnvironment(environment) + shellQuote(destination)
 	if user := strings.TrimSpace(bootstrap.User); user != "" {
 		quotedUser := shellQuote(user)

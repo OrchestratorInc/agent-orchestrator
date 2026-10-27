@@ -414,15 +414,21 @@ func run(logger *slog.Logger) error {
 		if bootstrap.Launch.RepositoryURL != "" && !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 			gitRefReporter = func(ctx context.Context) error { return client.reportGitRefs(ctx, workspace) }
 		}
-		chatRunner = &workerexec.Supervisor{
-			Control: client, Builder: b, Runner: workerexec.OSRunner{},
-			// The first Chat turn's agent starts while the workspace is
-			// prepared; its session opens once the checkout is ready.
-			WarmTurn: &worker.Turn{
+		// The first Chat turn's agent starts while the workspace is prepared
+		// (its session opens once the checkout is ready), and each turn starts
+		// the next one's. Only providers that opt in (Freestyle) prewarm: it
+		// keeps an idle agent in the sandbox between turns.
+		var warmTurn *worker.Turn
+		if os.Getenv("AO_WORKER_PREWARM_AGENT") == "1" {
+			warmTurn = &worker.Turn{
 				Harness: bootstrap.Launch.Harness, Model: bootstrap.Launch.Model,
 				ReasoningEffort: bootstrap.Launch.ReasoningEffort, Mode: bootstrap.Launch.Mode,
 				DeniedCommands: bootstrap.Launch.DeniedCommands, AgentSessionID: bootstrap.Launch.AgentSessionID,
-			},
+			}
+		}
+		chatRunner = &workerexec.Supervisor{
+			Control: client, Builder: b, Runner: workerexec.OSRunner{},
+			WarmTurn:           warmTurn,
 			SessionGate:        agentCheckoutReady,
 			PullRequestClaimer: client.claimPullRequest,
 			GitRefReporter:     gitRefReporter,
