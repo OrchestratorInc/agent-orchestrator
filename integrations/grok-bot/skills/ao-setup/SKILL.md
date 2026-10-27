@@ -1,7 +1,7 @@
 ---
 name: ao-setup
 description: >-
-  First run of the AO bot: find every computer that runs AO, save them as AO
+  First run of Orchestrator Bot: find every computer that runs AO, save them as AO
   hosts, add a remote AO host that has no Grok Bot desktop app, and turn on
   optional routines. Use on the first chat, when memory has no "AO hosts" note,
   or when the user says "set up AO", "add a host", "add remote host" or

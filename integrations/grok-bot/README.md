@@ -1,4 +1,4 @@
-# AO bot for Grok Bot
+# Orchestrator Bot for Grok Bot
 
 Seven skills that let a Grok Bot run AO from chat: see what every session is doing, answer agents' questions, talk to each project's orchestrator, act on sessions and PRs, and update itself. There is nothing to install on the user's computers. The skills use the `ao` CLI and AO's local API, which every AO install already has. macOS and Linux only; Windows isn't supported yet.
 

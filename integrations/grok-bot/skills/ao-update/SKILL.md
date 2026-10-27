@@ -4,7 +4,8 @@ description: >-
   Update this bot's ao-* skills to the latest published version: check what
   changed, show it, and after the user's yes download each changed skill,
   verify its sha256 against the published manifest, and rewrite it. Use for
-  "update the AO bot", "update my AO skills", "what's new in the AO bot".
+  "update Orchestrator Bot", "update the AO bot", "update my AO skills",
+  "what's new in Orchestrator Bot".
 ---
 Follow the ao-rules skill. This runs on the bot's own cloud computer (the box), not on the user's computers. It changes only this bot's ao-* skills, and only after the user's yes.
 
@@ -72,4 +73,4 @@ One short message: installed and latest version, which skills changed, and any r
 2. Go through `PLAN.json` `apply` in order (ao-rules first, ao-update last). For each, call UpdateSkill with that json's `name`, `description` and `body`: rewrite the existing skill of that name, or create it if it doesn't exist. A subagent can't call UpdateSkill: the main agent does this step.
 3. `python3 /workspace/ao-bot/fetch.py done` records the new version as installed.
 4. For each removed skill, ask "Delete <ids>?" and delete only after a separate yes.
-5. Update "AO bot version" in memory. Finish in one line: the version, and the skills updated, created and kept.
+5. Update "Orchestrator Bot version" in memory. Finish in one line: the version, and the skills updated, created and kept.
