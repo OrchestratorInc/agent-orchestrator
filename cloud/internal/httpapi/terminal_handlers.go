@@ -428,6 +428,8 @@ func (s *Server) readTerminalInput(
 	resizes := newTerminalResizes()
 	go s.deliverTerminalResizes(ctx, terminal, resizes)
 	var clientRepaintAt time.Time
+	gate := s.newComposerInputGate(ctx, terminal)
+	defer gate.close()
 	for {
 		_, data, err := connection.Read(ctx)
 		if err != nil {
@@ -480,6 +482,27 @@ func (s *Server) readTerminalInput(
 			}
 		}
 		if len(data) == 0 {
+			continue
+		}
+		// In a shared session only the composer lease holder talks to the
+		// agent; another participant's keystrokes are dropped, and they are
+		// told why (and which input was dropped) without closing the terminal.
+		if admitted, err := gate.admit(ctx, time.Now()); !admitted {
+			if err != nil && s.logger != nil {
+				s.logger.Warn("admit agent terminal input", "error", err, "terminal_id", terminal.ID)
+			}
+			if !gate.shouldTellRefusal(time.Now()) && message.InputID == "" {
+				continue
+			}
+			writeMu.Lock()
+			err := writeTerminalMessage(ctx, connection, terminalServerMessage{
+				Type: "input_refused", InputID: message.InputID,
+				Message: "Someone else is writing to the agent. Request a turn to type.",
+			})
+			writeMu.Unlock()
+			if err != nil {
+				return err
+			}
 			continue
 		}
 		// Fast path: this single control-plane task holds the worker's terminal

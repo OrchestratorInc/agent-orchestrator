@@ -609,6 +609,7 @@ func run(logger *slog.Logger) error {
 	go notificationProcessor.Run(ctx)
 	feedbackDispatcher := cifeedback.New(store, cifeedback.Config{Logger: logger})
 	go feedbackDispatcher.Run(ctx)
+	go sweepComposerLeases(ctx, store, logger)
 	if cfg.TerminalRelayEnabled {
 		logger.Info("experimental terminal relay enabled",
 			"terminal_stream_enabled", cfg.TerminalStreamEnabled,
@@ -621,6 +622,9 @@ func run(logger *slog.Logger) error {
 		notifyListener := postgres.NewListener(cfg.DatabaseURL, logger)
 		notifyListener.Handle("ao_worker_work", api.HandleWorkerWorkNotify)
 		notifyListener.Handle("ao_notification_event", api.HandleNotificationEventNotify)
+		notifyListener.Handle("ao_session_event", api.HandleSessionEventNotify)
+		notifyListener.Handle("ao_session_live", api.HandleSessionLiveNotify)
+		api.EnableSessionEventNotify()
 		// Any path that asks a sandbox to run again (resume, a message to a
 		// paused session, a restore) starts provisioning now, not at the next tick.
 		notifyListener.Handle("ao_sandbox_wake", func(string) { reconciler.Wake() })
@@ -735,4 +739,22 @@ func posthogHost() string {
 		return host
 	}
 	return "https://us.i.posthog.com"
+}
+
+// sweepComposerLeases hands on shared-session composer leases whose grant
+// expired, so everyone sees the composer free, or passed to the next person
+// in line, within a couple of seconds of a holder going quiet.
+func sweepComposerLeases(ctx context.Context, store *postgres.Store, logger *slog.Logger) {
+	ticker := time.NewTicker(postgres.ComposerSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := store.SweepComposerLeases(ctx); err != nil && ctx.Err() == nil {
+				logger.Warn("sweep composer leases", "error", err)
+			}
+		}
+	}
 }

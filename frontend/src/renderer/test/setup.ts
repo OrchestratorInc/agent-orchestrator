@@ -451,6 +451,8 @@ if (typeof window !== "undefined") {
 				throw new Error("not available in tests");
 			},
 			onSessionChanged: () => () => undefined,
+			onOpenShareLink: () => () => undefined,
+			takePendingShareLink: async () => null,
 		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),

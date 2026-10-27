@@ -2986,7 +2986,8 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 // native resume, a saved-prompt fallback, or a fresh launch. The fallible I/O
 // runs before any durable session write, so a failure never resurrects the row
 // or destroys the worktree (it may hold the agent's prior work).
-func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
+	defer func() { m.logRelaunchFailure("restore", id, err) }()
 	if err := m.beginAgentOperation(ctx, id, agentOperationRestore); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrOperationInProgress
@@ -3289,6 +3290,7 @@ func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) 
 // resumeAgentWithMode preserves strict native-history intent for automatic
 // retries, including update stops that have no stale-binary failure marker.
 func (m *Manager) resumeAgentWithMode(ctx context.Context, id domain.SessionID, requireNativeHistory bool) (result RestoreResult, err error) {
+	defer func() { m.logRelaunchFailure("resume agent", id, err) }()
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}
@@ -3542,11 +3544,11 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
-		return RestoreResult{}, fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness)
+		return RestoreResult{}, relaunchFailed("agent adapter", fmt.Errorf("%s %s: no agent adapter for harness %q", operation, rec.ID, rec.Harness))
 	}
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, false)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("system prompt", fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err))
 	}
 	if !forceFresh {
 		systemPrompt = m.withLegacySwitchHandoff(ctx, rec, systemPrompt)
@@ -3554,7 +3556,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	systemPromptFile, err := m.prepareSystemPromptFile(rec.ID, rec.Harness, systemPrompt)
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: system prompt file: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("system prompt file", fmt.Errorf("%s %s: system prompt file: %w", operation, rec.ID, err))
 	}
 
 	agentConfig := restoredAgentConfig(rec, project.Config)
@@ -3570,12 +3572,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	var env map[string]string
 	rec, env, err = m.prepareWorkerLaunchEnv(ctx, rec, project.Config.Env)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("browser capability", fmt.Errorf("%s %s: browser capability: %w", operation, rec.ID, err))
 	}
 	if rec.Harness == domain.HarnessMemcode && agentConfig.Model != "" {
 		customEndpoint, err := memcode.UsesCustomEndpoint(ctx, ws.Path, env)
 		if err != nil {
-			return RestoreResult{}, fmt.Errorf("%s %s: model configuration: %w", operation, rec.ID, err)
+			return RestoreResult{}, relaunchFailed("model configuration", fmt.Errorf("%s %s: model configuration: %w", operation, rec.ID, err))
 		}
 		if customEndpoint || validateSpawnModel(rec.Harness, agentConfig.Model) != nil {
 			agentConfig.Model = ""
@@ -3593,7 +3595,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		}
 	}
 	if err := m.prepareWorkspace(ctx, agent, rec.ID, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("agent hooks", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	if requireNativeHistory && !forceFresh {
 		if probe, ok := agent.(ports.AgentInterfaceHandoffHistoryProbe); ok {
@@ -3650,7 +3652,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("launch command", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	if requireNativeHistory && !forceFresh && mode != RestoreModeNative {
 		m.cleanupSystemPromptDir(rec.ID)
@@ -3673,12 +3675,12 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 		afterStartPrompt, err = buildAfterStartPrompt(ctx, agent, launchCfg)
 		if err != nil {
 			m.cleanupSystemPromptDir(rec.ID)
-			return RestoreResult{}, fmt.Errorf("%s %s: after-start prompt: %w", operation, rec.ID, err)
+			return RestoreResult{}, relaunchFailed("after-start prompt", fmt.Errorf("%s %s: after-start prompt: %w", operation, rec.ID, err))
 		}
 	}
 	if err := m.validateAgentBinary(argv); err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("agent binary", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	m.augmentRuntimePATHForLaunchBinary(ctx, env, argv)
 	launchID := strings.TrimSpace(reservedGeneration)
@@ -3689,21 +3691,21 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: supervisor: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("supervisor", fmt.Errorf("%s %s: supervisor: %w", operation, rec.ID, err))
 	}
 	if err := m.prepareRuntimeLaunch(ctx, agent, rec.ID, ws.Path, systemPrompt, systemPromptFile, agentConfig, env); err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: runtime preparation: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("runtime preparation", fmt.Errorf("%s %s: runtime preparation: %w", operation, rec.ID, err))
 	}
 	if err := m.lcm.PrepareLaunch(rec.ID, launchID); err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: prepare launch: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("prepare launch", fmt.Errorf("%s %s: prepare launch: %w", operation, rec.ID, err))
 	}
 	defer m.lcm.CancelLaunch(rec.ID, launchID)
 	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, rec.Harness)
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("controller admission", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	defer releaseCodexAdmission()
 	runtimeCfg := ports.RuntimeConfig{
@@ -3720,7 +3722,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	}
 	if err != nil {
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
+		return RestoreResult{}, relaunchFailed("runtime", fmt.Errorf("%s %s: runtime: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env)))
 	}
 	// A runtime accepting Restart only proves that its supervisor was created.
 	// Keep the previous launch (and stale/release references) until the exact
@@ -3748,7 +3750,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 					startErr = errors.Join(startErr, preserveErr)
 				}
 			}
-			return RestoreResult{}, fmt.Errorf("%s %s: resumed agent did not start: %w", operation, rec.ID, startErr)
+			return RestoreResult{}, relaunchFailed("agent start check", fmt.Errorf("%s %s: resumed agent did not start: %w", operation, rec.ID, startErr))
 		}
 	}
 	metadata := domain.SessionMetadata{
@@ -3777,14 +3779,14 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 	if err := m.lcm.MarkSpawned(ctx, rec.ID, metadata); err != nil {
 		m.destroySpawnRuntimeAfterFailure(ctx, handle)
 		m.cleanupSystemPromptDir(rec.ID)
-		return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("record launch", fmt.Errorf("%s %s: completed: %w", operation, rec.ID, err))
 	}
 	if initialization != nil {
 		if err := m.initializeNativeRestore(ctx, rec, handle, launchID, initialization); err != nil {
 			cleanupCtx, cancel := spawnRollbackContext(ctx)
 			cleanupErr := m.rollbackNativeInitialization(cleanupCtx, rec, handle, launchID)
 			cancel()
-			return RestoreResult{}, fmt.Errorf("%s %s: native initialization: %w", operation, rec.ID, errors.Join(err, cleanupErr))
+			return RestoreResult{}, relaunchFailed("native initialization", fmt.Errorf("%s %s: native initialization: %w", operation, rec.ID, errors.Join(err, cleanupErr)))
 		}
 	}
 	if delivery == ports.PromptDeliveryAfterStart || initialization != nil {
@@ -3801,7 +3803,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 				cancel()
 			}
 			m.cleanupSystemPromptDir(rec.ID)
-			return RestoreResult{}, fmt.Errorf("%s %s: deliver prompt: %w", operation, rec.ID, err)
+			return RestoreResult{}, relaunchFailed("deliver prompt", fmt.Errorf("%s %s: deliver prompt: %w", operation, rec.ID, err))
 		}
 	}
 	if savedNote {
@@ -7285,4 +7287,25 @@ func savedCatalogCovers(catalog ports.AgentModelCatalog, modelID, effort string)
 		}
 	}
 	return false
+}
+
+// RelaunchError reports which step of an agent relaunch failed. The wrapped
+// error keeps its own sentinels, so more specific mappings still win.
+type RelaunchError struct {
+	Step string
+	Err  error
+}
+
+func (e *RelaunchError) Error() string { return e.Err.Error() }
+func (e *RelaunchError) Unwrap() error { return e.Err }
+
+func relaunchFailed(step string, err error) error { return &RelaunchError{Step: step, Err: err} }
+
+// logRelaunchFailure keeps the raw error of a failed relaunch in the daemon log.
+// The API answers 409 for it, and the access log records errors only for 5xx.
+func (m *Manager) logRelaunchFailure(operation string, id domain.SessionID, err error) {
+	var relaunchErr *RelaunchError
+	if errors.As(err, &relaunchErr) {
+		m.logger.Warn(operation+": relaunch failed", "sessionID", id, "step", relaunchErr.Step, "error", err)
+	}
 }

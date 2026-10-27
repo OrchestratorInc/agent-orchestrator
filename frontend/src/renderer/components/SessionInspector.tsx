@@ -66,6 +66,7 @@ import {
 } from "../hooks/useSessionScmSummary";
 import { sessionWorkspaceFilesQueryKey, sessionWorkspaceHistoryQueryOptions, useSessionWorkspaceFilesChangedCount } from "../hooks/useSessionWorkspaceFiles";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
 import { prBrowserUrl, prCanMerge, prCardPresentation, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionPRDisplaySummaries } from "../lib/pr-display";
@@ -472,6 +473,8 @@ const SummaryView = memo(function SummaryView({
 									hostId={hostId}
 									sessionId={session.id}
 									cloudOrgId={session.cloud?.orgId}
+									guest={session.cloud?.shared === true}
+									projectId={session.workspaceId}
 								/>
 							))}
 							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
@@ -907,20 +910,29 @@ function updateSessionMergePolicy(
 	}));
 }
 
-function PRSummaryCard({
+export function PRSummaryCard({
 	canOpenReviews,
 	hostId,
 	cloudOrgId,
+	guest = false,
 	onOpenReviews,
 	pr,
+	projectId,
+	liveSessionId,
 	sessionId,
 	showRepository = false,
 }: {
 	canOpenReviews: boolean;
 	hostId?: string;
 	cloudOrgId?: string;
+	/** Reached through a share: this person asks the project's owner to merge. */
+	guest?: boolean;
 	onOpenReviews: () => void;
 	pr: SessionPRSummary;
+	/** The cloud project, for a guest's merge requests. */
+	projectId?: string;
+	/** The session on screen, whose live stream says when merge requests change; the card's own by default. */
+	liveSessionId?: string;
 	sessionId: string;
 	/** Label the card with its repository: the session has PRs on several. */
 	showRepository?: boolean;
@@ -968,7 +980,13 @@ function PRSummaryCard({
 			]);
 		},
 	});
-	const mergeError = mergePr.error instanceof Error ? mergePr.error.message : null;
+	const asksToMerge = guest && Boolean(cloudOrgId);
+	const mergeRequests = useProjectMergeRequests(cloudOrgId, projectId, asksToMerge, liveSessionId ?? sessionId);
+	const mergeRequestActions = useMergeRequestActions(cloudOrgId, projectId);
+	const pendingRequest = pendingMergeRequestFor(mergeRequests.data, pr.url);
+	const requestMerge = mergeRequestActions.request;
+	const mergeFailure = asksToMerge ? requestMerge.error : mergePr.error;
+	const mergeError = mergeFailure instanceof Error ? mergeFailure.message : null;
 	const viewModel: InspectorPullRequest = {
 		...pr,
 		card: presentation,
@@ -987,7 +1005,25 @@ function PRSummaryCard({
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
 			mergeAction={
-				canMerge ? (
+				canMerge && asksToMerge ? (
+					<Button
+						aria-label={t("pr.merge.requestFor", { number: pr.number })}
+						className="gap-1 px-2 text-xs"
+						disabled={requestMerge.isPending || Boolean(pendingRequest)}
+						onClick={() => requestMerge.mutate({ sessionId, number: pr.number, prUrl: pr.url })}
+						size="sm"
+						type="button"
+						variant="secondary"
+						data-request-merge
+					>
+						{requestMerge.isPending ? (
+							<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<GitMerge className="size-icon-sm" aria-hidden="true" />
+						)}
+						{pendingRequest ? t("pr.merge.requested") : t("pr.merge.request")}
+					</Button>
+				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
 						className="gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-success/80"

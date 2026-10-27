@@ -2762,7 +2762,8 @@ html.sidebar-reordering * {
 	.chat-composer-startup-shimmer { animation: none; transition: none; }
 }
 
-.cursor-chat-composer[data-attached-top] {
+/* Join only a notice that actually rendered, after the floating queue. */
+[data-composer-notice] + .cursor-chat-composer {
 	border-top-left-radius: 0;
 	border-top-right-radius: 0;
 }

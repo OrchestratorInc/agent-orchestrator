@@ -291,6 +291,7 @@ func workerSystemPrompt(project promptProject, hasOrchestrator bool) string {
 	repoRules := `## Git and PR/MR Rules
 
 - Work on a feature branch, not the default branch.
+- Claiming a PR changes ownership metadata only; it does not check out its branch. Before implementation on an existing PR, preserve local edits, fetch the PR, and switch the session's registered worktree using the provider's verified full head commit SHA. Never pass FETCH_HEAD as a checkout target: a branch named FETCH_HEAD can make Git fail after replacing the index/worktree. Check git status, branch, and HEAD after every checkout, including failed commands; stop on unexpected changes instead of continuing in another worktree while AO still shows the original.
 - Keep commits focused and use conventional commit messages when committing.
 - Open or update a PR/MR according to the task source rules above when provider-backed work or project workflow makes it viable.
 - Link the provider issue in the PR/MR body when there is one.

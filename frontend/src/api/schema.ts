@@ -995,6 +995,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/browser/chrome": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report Chrome mode: native host registration, extension bundle, and connection */
+        get: operations["getBrowserChrome"];
+        put?: never;
+        /** Enable Chrome mode: install the AO extension bundle and register AO's native host with Chrome */
+        post: operations["setupBrowserChrome"];
+        /** Disable Chrome mode: unregister AO's native host and remove the installed extension bundle */
+        delete: operations["removeBrowserChrome"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/browser/commands": {
         parameters: {
             query?: never;
@@ -4850,11 +4869,16 @@ export interface components {
             sessionId: string;
         };
         BrowserStatusResponse: {
+            client?: string;
+            clientVersion?: string;
             connected: boolean;
             /** Format: date-time */
             connectedAt?: string;
             sessionId: string;
-            transport: string;
+            /** @enum {string} */
+            target: "panel" | "chrome";
+            /** @enum {string} */
+            transport: "electron-webcontents-debugger" | "chrome-extension";
         };
         CancelReviewResponse: {
             reviewerHandleId: string;
@@ -5138,6 +5162,23 @@ export interface components {
         };
         ContainerReapConfig: {
             disabled?: boolean;
+        };
+        ControllersBrowserChromeChannel: {
+            available: boolean;
+            manifestPath: string;
+            name: string;
+            registered: boolean;
+        };
+        ControllersBrowserChromeStatusResponse: {
+            channels: components["schemas"]["ControllersBrowserChromeChannel"][];
+            clientVersion?: string;
+            connected: boolean;
+            enabled: boolean;
+            extensionBundled: boolean;
+            extensionId: string;
+            extensionPath: string;
+            extensionVersion?: string;
+            hostPath: string;
         };
         ControllersKeepAwakeStatus: {
             active: boolean;
@@ -10858,6 +10899,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getBrowserChrome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersBrowserChromeStatusResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setupBrowserChrome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersBrowserChromeStatusResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    removeBrowserChrome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersBrowserChromeStatusResponse"];
                 };
             };
             /** @description Internal Server Error */

@@ -1,12 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Folder, Plus, Smartphone, StickyNote } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
+import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
+import { chatDraftScopeKey, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { openComposerModelPicker } from "../lib/composer-shortcuts";
@@ -70,10 +71,17 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// lost response cannot create a second session.
 	const fallbackRequest = useRef<string | undefined>(undefined);
 	const fallbackInFlight = useRef(false);
+	const [heldAttachments, setHeldAttachments] = useState<FileAttachmentPayload[]>([]);
+	const [attachmentsPreparing, setAttachmentsPreparing] = useState(false);
+	const onHeldAttachmentsChange = useCallback((attachments: FileAttachmentPayload[], preparing: boolean) => {
+		setHeldAttachments(attachments);
+		setAttachmentsPreparing(preparing);
+	}, []);
 	// Bumped when a saved launch is resolved, so the page re-reads it.
 	const [, setLaunchRevision] = useState(0);
 	// "@" files and attachments go through the prepared worktree's session, which
-	// becomes the task's session on send. Scratchpad has none, so it offers neither.
+	// becomes the task's session on send. Until it is ready, and in Scratchpad, which
+	// has none, attachments stay in the composer and are uploaded with the task.
 	const preparedId = task.preparedSessionId || undefined;
 	const workspaceFiles = useQuery({
 		queryKey: ["new-chat-files", hostKey, preparedId ?? ""],
@@ -227,7 +235,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		}, 0);
 	};
 
-	const send = async (text: string, _attachments?: unknown, clientMessageId: string = crypto.randomUUID()) => {
+	const send = async (text: string, attachments?: FileAttachmentPayload[], clientMessageId: string = crypto.randomUUID()) => {
 		const target = { ...targetRef.current };
 		const saved = readPendingLaunch(hostKey, draftScope, clientMessageId);
 		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
@@ -256,7 +264,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
 			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
-			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay });
+			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments });
 			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
@@ -277,7 +285,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const sendFallback = async () => {
 		const text = readChatSessionDraft(draftScope).composer.text.trim();
 		// A second click before the page re-renders must not start it twice.
-		if (!text || fallbackInFlight.current) return;
+		if (!text || fallbackInFlight.current || attachmentsPreparing) return;
 		fallbackInFlight.current = true;
 		const target = { ...targetRef.current };
 		fallbackRequest.current ??= crypto.randomUUID();
@@ -292,9 +300,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		setEcho(brief);
 		setLaunched(settings);
 		try {
-			const sessionId = await task.launchFallback(brief.text, clientMessageId);
+			const sessionId = await task.launchFallback(brief.text, clientMessageId, heldAttachments);
 			fallbackRequest.current = undefined;
 			writeChatComposerText(draftScope, "");
+			writeChatAttachments(draftScope, []);
+			purgeFileAttachments(chatDraftScopeKey(draftScope));
 			await openSession(sessionId, brief, settings, fallback === "tui" ? "tui" : task.effectiveInterface, target);
 		} catch (error) {
 			if (!sendIsUncertain(error)) fallbackRequest.current = undefined;
@@ -312,7 +322,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	pendingRef.current = pending;
 	const notice = pending ? null : task.fallbackAction ? (
 		<div className="flex items-center justify-end">
-			<Button size="sm" variant="secondary" onClick={() => void sendFallback()}>{task.fallbackLabel}</Button>
+			<Button size="sm" variant="secondary" disabled={attachmentsPreparing} onClick={() => void sendFallback()}>{task.fallbackLabel}</Button>
 		</div>
 	) : fallbackFailed && task.error ? (
 		<p role="alert" className="px-1 text-xs text-destructive">{task.error}</p>
@@ -347,7 +357,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				centerInWindow
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
-				attachLater={!workspaceReady}
+				holdAttachments
+				onHeldAttachmentsChange={onHeldAttachmentsChange}
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}
 				filePathsTruncated={workspaceFiles.data?.truncated}

@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
+const { paste } = vi.hoisted(() => ({ paste: { handler: null as null | ((assets: unknown[]) => void) } }));
 vi.mock("react-native", () => ({
 	Platform: { OS: "android" },
 	ActivityIndicator: "ActivityIndicator", Image: "Image", Pressable: "Pressable", ScrollView: "ScrollView", Text: "Text", TextInput: "TextInput", View: "View",
@@ -18,6 +19,7 @@ vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemedStyles: (fac
 vi.mock("../voice/MicKey", () => ({ MicKey: "MicKey" }));
 vi.mock("../voice/useVoiceInput", () => ({ useVoiceInput: () => ({}) }));
 vi.mock("./ChatAttachmentMenu", () => ({ ChatAttachmentMenu: "ChatAttachmentMenu" }));
+vi.mock("./useImagePaste", () => ({ useImagePaste: (handler: typeof paste.handler) => { paste.handler = handler; return () => {}; } }));
 vi.mock("./composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
 
 import { launchImageLibraryAsync } from "expo-image-picker";
@@ -62,4 +64,16 @@ it("clears only what a send submitted, keeping a photo attached in a reopened re
 	await act(async () => finish("send-id"));
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove a.jpg" })).toHaveLength(0);
 	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove b.jpg" })).toHaveLength(1);
+});
+
+it("takes pasted images only while reviewer attachments are enabled", async () => {
+	const image = { uri: "paste-1", fileName: "Pasted image", mimeType: "image/png", fileSize: 5, base64: "aGVsbG8=" };
+	const p = { ...props(), attachmentKey: "reviewer.host.paste", attachmentsEnabled: false };
+	await act(async () => { renderer = create(<ReviewerComposer {...p} />); });
+	expect(paste.handler).toBeNull();
+	await act(async () => renderer.update(<ReviewerComposer {...p} attachmentsEnabled />));
+	act(() => paste.handler?.([image]));
+	expect(renderer.root.findAllByProps({ accessibilityLabel: "Remove Pasted image" })).toHaveLength(1);
+	await act(async () => renderer.root.findByProps({ accessibilityLabel: "Send reply" }).props.onPress());
+	expect(p.onSend).toHaveBeenCalledExactlyOnceWith("", [{ mimeType: "image/png", data: "aGVsbG8=" }], []);
 });

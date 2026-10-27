@@ -135,6 +135,8 @@ export type TaskLaunchOptions = {
 	clientRequestId?: string;
 	/** Send exactly this request instead of the current picks, e.g. a retry of a send whose response was lost. */
 	replay?: LaunchReplay;
+	/** Files to upload with the task, in place of the ones this hook holds. */
+	attachments?: FileAttachmentPayload[];
 };
 
 /** The agent, model and permission parts of a create request, saved so a retry can repeat them exactly. */
@@ -682,7 +684,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	useEffect(() => () => clearAttachments(), [clearAttachments]);
 
 	// Rejects with the create error after recording it (and any fallback) here.
-	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId, replay }: TaskLaunchOptions = {}): Promise<string> => {
+	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId, replay, attachments: files }: TaskLaunchOptions = {}): Promise<string> => {
 		if (!projectId || !canSubmit || isSubmitting) throw new Error(remoteLoadError ?? t("newTask.unableToStart"));
 
 		setIsSubmitting(true);
@@ -702,7 +704,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 					.then((readiness) => cacheAgentReadiness(queryClient, readiness, hostId))
 					.catch(() => {});
 			}
-			const attachmentPayloads = await toSettledPayload();
+			const attachmentPayloads = files ?? await toSettledPayload();
 			// One that resolved while the checks above ran is claimed too.
 			submittedPreparation = heldPreparation || taskPreparationRef.current;
 			launchingPreparationRef.current = submittedPreparation;
@@ -802,10 +804,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	};
 	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
 	const submitMode: TaskLaunchOptions["interfaceMode"] = selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined;
-	const launchFallback = (brief: string, clientRequestId?: string) =>
+	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[]) =>
 		fallbackAction === "bypass-permissions"
-			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId })
-			: launch(brief, { interfaceMode: "tui", clientRequestId });
+			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
+			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files });
 
 	const changeAgent = (value: string) => {
 		if (selectedAgent) {

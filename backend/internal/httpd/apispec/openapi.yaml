@@ -2352,6 +2352,76 @@ paths:
       summary: Manage desktop Stay Awake
       tags:
       - settings
+  /api/v1/browser/chrome:
+    delete:
+      operationId: removeBrowserChrome
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersBrowserChromeStatusResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Disable Chrome mode: unregister AO''s native host and remove the installed
+        extension bundle'
+      tags:
+      - browser
+    get:
+      operationId: getBrowserChrome
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersBrowserChromeStatusResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Report Chrome mode: native host registration, extension bundle, and
+        connection'
+      tags:
+      - browser
+    post:
+      operationId: setupBrowserChrome
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersBrowserChromeStatusResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Enable Chrome mode: install the AO extension bundle and register AO''s
+        native host with Chrome'
+      tags:
+      - browser
   /api/v1/browser/commands:
     post:
       operationId: executeBrowserCommand
@@ -14189,6 +14259,10 @@ components:
       type: object
     BrowserStatusResponse:
       properties:
+        client:
+          type: string
+        clientVersion:
+          type: string
         connected:
           type: boolean
         connectedAt:
@@ -14196,12 +14270,21 @@ components:
           type: string
         sessionId:
           type: string
+        target:
+          enum:
+          - panel
+          - chrome
+          type: string
         transport:
+          enum:
+          - electron-webcontents-debugger
+          - chrome-extension
           type: string
       required:
       - sessionId
       - connected
       - transport
+      - target
       type: object
     CancelReviewResponse:
       properties:
@@ -14981,6 +15064,53 @@ components:
       properties:
         disabled:
           type: boolean
+      type: object
+    ControllersBrowserChromeChannel:
+      properties:
+        available:
+          type: boolean
+        manifestPath:
+          type: string
+        name:
+          type: string
+        registered:
+          type: boolean
+      required:
+      - name
+      - available
+      - registered
+      - manifestPath
+      type: object
+    ControllersBrowserChromeStatusResponse:
+      properties:
+        channels:
+          items:
+            $ref: '#/components/schemas/ControllersBrowserChromeChannel'
+          type: array
+        clientVersion:
+          type: string
+        connected:
+          type: boolean
+        enabled:
+          type: boolean
+        extensionBundled:
+          type: boolean
+        extensionId:
+          type: string
+        extensionPath:
+          type: string
+        extensionVersion:
+          type: string
+        hostPath:
+          type: string
+      required:
+      - enabled
+      - connected
+      - extensionId
+      - extensionPath
+      - extensionBundled
+      - hostPath
+      - channels
       type: object
     ControllersKeepAwakeStatus:
       properties:

@@ -66,6 +66,8 @@ export type ComposerEditorSnapshot = {
 	text: string;
 	hasText: boolean;
 	trigger?: ComposerTrigger;
+	/** The caret's offset into text; undefined without a selection in the editor. */
+	caret?: number;
 };
 
 export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: () => void };
@@ -408,24 +410,58 @@ function $removeImageTokens(remove: (path: string) => boolean): void {
 	}
 }
 
+// The text content of container's descendants before target, in document
+// order, counted as $serializeComposer counts it.
+function $textBefore(container: LexicalNode, target: LexicalNode): number {
+	if (!$isElementNode(container)) return 0;
+	let count = 0;
+	for (const child of container.getChildren()) {
+		if (child.is(target)) return count;
+		if ($isElementNode(child) && child.isParentOf(target)) return count + $textBefore(child, target);
+		count += child.getTextContent().length;
+	}
+	return count;
+}
+
+/** Where the selection's focus sits in $serializeComposer's text. */
+function $caretOffset(): number | undefined {
+	const selection = $getSelection();
+	if (!$isRangeSelection(selection)) return undefined;
+	const point = selection.focus;
+	const node = point.getNode();
+	let offset = 0;
+	for (const paragraph of $getRoot().getChildren()) {
+		if (paragraph.is(node) || ($isElementNode(paragraph) && paragraph.isParentOf(node))) {
+			const within = point.type === "element" && $isElementNode(node)
+				? node.getChildren().slice(0, point.offset).reduce((sum, child) => sum + child.getTextContent().length, 0)
+				: point.offset;
+			return offset + $textBefore(paragraph, node) + within;
+		}
+		offset += paragraph.getTextContent().length + 1;
+	}
+	return undefined;
+}
+
 function editorSnapshot(): ComposerEditorSnapshot {
 	const text = $serializeComposer();
+	const caret = $caretOffset();
 	const selection = $getSelection();
 	if (!$isRangeSelection(selection) || !selection.isCollapsed()) {
-		return { text, hasText: text.trim().length > 0 };
+		return { text, hasText: text.trim().length > 0, caret };
 	}
 
 	const anchor = selection.anchor;
 	const node = anchor.getNode();
 	if (!$isTextNode(node) || anchor.type !== "text") {
-		return { text, hasText: text.trim().length > 0 };
+		return { text, hasText: text.trim().length > 0, caret };
 	}
 
 	const active = findActiveTrigger(node.getTextContent(), anchor.offset);
-	if (!active) return { text, hasText: text.trim().length > 0 };
+	if (!active) return { text, hasText: text.trim().length > 0, caret };
 	return {
 		text,
 		hasText: text.trim().length > 0,
+		caret,
 		trigger: {
 			...active,
 			key: `${node.getKey()}:${active.start}`,

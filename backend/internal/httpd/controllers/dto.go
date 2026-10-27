@@ -1050,7 +1050,36 @@ type BrowserStatusResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	Connected   bool             `json:"connected"`
 	ConnectedAt time.Time        `json:"connectedAt,omitempty"`
-	Transport   string           `json:"transport"`
+	Transport   string           `json:"transport" enum:"electron-webcontents-debugger,chrome-extension"`
+	// Target is the browser this session's commands go to: the AO Browser
+	// panel or the user's own Chrome through the AO extension.
+	Target string `json:"target" enum:"panel,chrome"`
+	// Client and ClientVersion identify the connected Chrome extension.
+	Client        string `json:"client,omitempty"`
+	ClientVersion string `json:"clientVersion,omitempty"`
+}
+
+// BrowserChromeChannel is Chrome-mode registration for one Chrome channel.
+type BrowserChromeChannel struct {
+	Name         string `json:"name"`
+	Available    bool   `json:"available"`
+	Registered   bool   `json:"registered"`
+	ManifestPath string `json:"manifestPath"`
+}
+
+// BrowserChromeStatusResponse describes Chrome mode: whether AO's native host
+// is registered with Chrome, where the unpacked extension is, and whether the
+// extension is connected right now.
+type BrowserChromeStatusResponse struct {
+	Enabled          bool                   `json:"enabled"`
+	Connected        bool                   `json:"connected"`
+	ExtensionID      string                 `json:"extensionId"`
+	ExtensionPath    string                 `json:"extensionPath"`
+	ExtensionBundled bool                   `json:"extensionBundled"`
+	ExtensionVersion string                 `json:"extensionVersion,omitempty"`
+	ClientVersion    string                 `json:"clientVersion,omitempty"`
+	HostPath         string                 `json:"hostPath"`
+	Channels         []BrowserChromeChannel `json:"channels"`
 }
 
 // BrowserCommandRequest is the stable daemon-facing command envelope. Action

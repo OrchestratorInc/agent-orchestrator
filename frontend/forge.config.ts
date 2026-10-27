@@ -65,6 +65,8 @@ async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string
 export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 	return [
 		"daemon",
+		// AO Browser Bridge (Chrome extension); the daemon finds it beside daemon/.
+		"browser-extension",
 		"agent-browser",
 		"resources/acp-runtime",
 		...(platform === "darwin" ? ["update-helper", "wake-helper", "cloudflared"] : []),
