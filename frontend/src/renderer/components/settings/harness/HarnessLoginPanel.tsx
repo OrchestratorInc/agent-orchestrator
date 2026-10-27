@@ -256,7 +256,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		: undefined;
 	const methodKey = (id: string) => id !== "browser" || agentId === "codex" ? id : agentId === "claude-code" ? "claude" : agentId === "cline" ? "cline" : `${agentId}_browser`;
 	const selectedMethodKey = methodKey(selectedMethodId);
-	const methodLabel = t(`settings.harness.loginUi.methods.${selectedMethodKey}`, { defaultValue: method?.label ?? "" });
+	const methodLabel = t(`settings.harness.loginUi.methods.${selectedMethodKey}`, { defaultValue: method?.label ?? selectedMethodId });
 	const nativeOptions = operation?.nativeOptions ?? [];
 
 	return <section ref={panelRef} aria-labelledby={titleId} className="@container min-w-0 space-y-4 p-4" data-settings-inline-edit="">

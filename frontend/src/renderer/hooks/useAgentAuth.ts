@@ -44,11 +44,9 @@ export async function startAgentUILogin(agentId: string, method: string, secret:
 }
 
 export async function getAgentUILogin(agentId: string, operationId: string, hostId?: string): Promise<AgentLoginSnapshot> {
-	let result = await viaMain<AgentLoginSnapshot>(hostId, { action: "get", agentId, operationId });
-	if (result === null) {
-		const { data, error, response } = await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: agentId, operationId } } });
-		result = { data, error, status: response?.status };
-	}
+	const result: LoginResult<AgentLoginSnapshot> = await viaMain<AgentLoginSnapshot>(hostId, { action: "get", agentId, operationId })
+		?? await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: agentId, operationId } } })
+			.then(({ data, error, response }) => ({ data, error, status: response?.status }));
 	const { data, error, status } = result;
 	if (error || !data) throw Object.assign(new Error(apiErrorMessage(error, "Could not check sign-in.")), { code: apiErrorCode(error), status });
 	return data;
