@@ -2,7 +2,7 @@
 
 <img src="../docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="144" height="144" />
 
-<h1><b>Orchestrator.inc</b></h1>
+<p><img src="../docs/assets/readme/wordmark.png" alt="Orchestrator.inc" width="360" /></p>
 
 <h4>Schluss mit dem Babysitten von Agenten. Echte Arbeit mergen.</h4>
 

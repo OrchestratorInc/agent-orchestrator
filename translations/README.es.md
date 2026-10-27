@@ -2,7 +2,7 @@
 
 <img src="../docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="144" height="144" />
 
-<h1><b>Orchestrator.inc</b></h1>
+<p><img src="../docs/assets/readme/wordmark.png" alt="Orchestrator.inc" width="360" /></p>
 
 <h4>Deja de hacer de niñera de tus agentes. Empieza a integrar trabajo real.</h4>
 
