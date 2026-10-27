@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="../docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="144" height="144" />
+<img src="../docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="96" height="96" />
 
-<p><img src="../docs/assets/readme/wordmark.png" alt="Orchestrator.inc" width="360" /></p>
+### Orchestrator.inc
 
 <h4>Pare de vigiar agentes. Comece a fazer merge de trabalho de verdade.</h4>
 

@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="../docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="144" height="144" />
+<img src="../docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="96" height="96" />
 
-<p><img src="../docs/assets/readme/wordmark.png" alt="Orchestrator.inc" width="360" /></p>
+### Orchestrator.inc
 
 <h4>에이전트를 일일이 돌보지 마세요. 실제 작업을 머지하세요.</h4>
 
