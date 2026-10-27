@@ -1,5 +1,6 @@
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { FREESTYLE_PROVIDER } from "../../lib/cloud-offering";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
@@ -1601,6 +1602,11 @@ function ChatWorkspaceContent({
 		startupState === "provisioning" || agentResuming ||
 		(!loadingQuietly && (snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"))
 	);
+	// A Cloud session's messages wait in the control plane's turn queue, so a
+	// starting Freestyle orchestrator takes them as a starting worker does; a
+	// local or other-provider orchestrator opens its composer once it is up.
+	const startupQueues = session?.provisionState === "provisioning" && (sessionRole !== "orchestrator" || session?.cloud?.sandboxProvider === FREESTYLE_PROVIDER);
+	const orchestratorBlocksComposer = orchestratorStarting && !startupQueues;
 	const currentSetupStep = provisionSteps?.find((step) => step.status === "running")?.id;
 	const setupPlaceholder = currentSetupStep === "fetch" ? "Getting the latest code"
 		: currentSetupStep === "worktree" ? "Preparing your workspace"
@@ -2008,14 +2014,14 @@ function ChatWorkspaceContent({
 											/>
 										) : undefined}
 										busy={busy}
-										willQueue={Boolean(turn) || (sessionRole !== "orchestrator" && session?.provisionState === "provisioning")}
+										willQueue={Boolean(turn) || startupQueues}
 										queuePlaceholder={
 											session?.provisionState === "provisioning"
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat}
-										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
@@ -2024,7 +2030,7 @@ function ChatWorkspaceContent({
 												: openingStarting && !session
 												// Same words the session shows once it can queue, so nothing changes on handoff.
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
-												: orchestratorStarting
+												: orchestratorBlocksComposer
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
 												? ""

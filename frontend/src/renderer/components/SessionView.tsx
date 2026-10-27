@@ -69,6 +69,7 @@ import {
 } from "../hooks/useWorkspaceQuery";
 import { subscribeChatReveal } from "../lib/chat-context-bus";
 import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage, isWorkspaceStartupError } from "../lib/cloud-lifecycle";
+import { FREESTYLE_PROVIDER } from "../lib/cloud-offering";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
 import { latestScriptRun } from "../lib/cloud-script-runs";
 import { recordCloudScriptStepEvents, useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
@@ -705,7 +706,19 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// relay drop mid-turn). A terminal re-mint (cloudReconnecting, covers a blank
 	// flash) and a genuine workspace restart still raise the loader.
 	const cloudSessionResolving = cloudLookupEnabled && cloudRouteSession.isLoading;
-	const showLifecycleLoader = !startupFailure && ((!session && cloudSessionResolving) || (hasConnectedOnce
+	// A new Freestyle Chat session opens on its conversation, not the startup
+	// screen: its checklist shows the start and its first messages queue until
+	// the agent is up (cloudStartupChecklist). Latched, so the moment its sandbox
+	// reports running before the worker does never flashes the screen in. Other
+	// providers keep the startup screen: a Coder start shows its steps and its
+	// workspace link there.
+	const chatStartingInPlaceRef = useRef("");
+	const observedState = session?.cloud?.observedState;
+	if (session?.mode === "chat" && session.cloud?.sandboxProvider === FREESTYLE_PROVIDER && (observedState === "requested" || observedState === "provisioning" || observedState === "bootstrapping")) {
+		chatStartingInPlaceRef.current = sessionId;
+	}
+	const chatStartingInPlace = chatStartingInPlaceRef.current === sessionId && !hasConnectedOnce;
+	const showLifecycleLoader = !startupFailure && !chatStartingInPlace && ((!session && cloudSessionResolving) || (hasConnectedOnce
 		? (cloudReconnecting || workspaceRestarting)
 		: (cloudReconnecting || (cloudStage != null && !isCloudPausedStage(cloudStage) && !sessionReady))));
 	const loaderVisibleLongEnoughRef = useRef("");

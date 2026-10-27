@@ -1987,6 +1987,43 @@ describe("SessionView", () => {
 		expect(useTerminalResetStore.getState().reconnecting["sess-2"]).toBe(true);
 	});
 
+	it("opens a new Chat-mode cloud session on its conversation while the worker starts", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "provisioning" };
+
+		const view = render(<SessionView sessionId="sess-2" />);
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+
+		// The sandbox reports running a moment before its worker connects; the
+		// startup screen must not flash in over the conversation then.
+		session.cloud = { ...session.cloud, observedState: "running" };
+		view.rerender(<SessionView sessionId="sess-2" />);
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+	});
+
+	it("keeps the startup screen for a new Coder Chat session", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "provisioning" };
+
+		render(<SessionView sessionId="sess-2" />);
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+	});
+
+	it("keeps the startup screen for a new terminal-mode cloud session", () => {
+		const session = workerSession("sess-2");
+		session.mode = "tui";
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "running", observedState: "provisioning" };
+
+		render(<SessionView sessionId="sess-2" />);
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+	});
+
 	it("keeps the restored Chat-mode session's loader while its workspace comes back", () => {
 		const session = workerSession("sess-2");
 		session.mode = "chat";

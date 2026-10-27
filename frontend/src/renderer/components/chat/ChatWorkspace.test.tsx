@@ -2201,6 +2201,23 @@ describe("ChatWorkspace timeline", () => {
 		expect(await screen.findByText("Ask anything about this project")).toBeInTheDocument();
 	});
 
+	it("lets a starting Freestyle orchestrator queue messages, as a starting worker does", () => {
+		const starting = (cloud?: { orgId: string; sandboxProvider?: string }) => ({
+			...chatSession, kind: "orchestrator" as const, provisionState: "provisioning" as const, cloud,
+			provisionSteps: [{ id: "worktree" as const, status: "running" as const }, { id: "agent" as const, status: "pending" as const }],
+		});
+		const view = render(<ChatWorkspace sessionRole="orchestrator" snapshot={chatFixtureEmpty} session={starting({ orgId: "org-1", sandboxProvider: "freestyle" })} />);
+		const composer = screen.getByRole("combobox", { name: "Message the agent" });
+		expect(composer.closest("form")).toHaveAttribute("data-starting", "true");
+		expect(composer).toHaveAttribute("contenteditable", "true");
+		expect(screen.getByText(/Queue a follow-up while .* gets ready/)).toBeInTheDocument();
+		// A local or Coder orchestrator still opens its composer only once it is up.
+		view.rerender(<ChatWorkspace sessionRole="orchestrator" snapshot={chatFixtureEmpty} session={starting()} />);
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+		view.rerender(<ChatWorkspace sessionRole="orchestrator" snapshot={chatFixtureEmpty} session={starting({ orgId: "org-1", sandboxProvider: "coder" })} />);
+		expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "false");
+	});
+
 	it.each([
 		["fetch", "Getting the latest code"],
 		["worktree", "Preparing your workspace"],

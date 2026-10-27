@@ -9,6 +9,7 @@ import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
 import type { CloudCpClient, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
 import { cloudStartupProblem, isWorkspaceStartupError, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
+import { FREESTYLE_PROVIDER } from "../../lib/cloud-offering";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
@@ -283,6 +284,25 @@ export function cloudSetupStartupSteps(session: WorkspaceSession, events: readon
 	];
 }
 
+/** Sandbox states of a session whose workspace is still being created. */
+const CREATING_SANDBOX_STATES = new Set(["requested", "provisioning", "bootstrapping"]);
+
+/**
+ * A new Freestyle session's checklist before its worker connects: it opens on
+ * its conversation (not the startup screen) and its messages queue meanwhile.
+ * A session that has run a turn is not new, so it shows none. Other providers
+ * start behind the startup screen (SessionView), so they show none either.
+ */
+export function cloudConnectingStartupSteps(session: WorkspaceSession, events: readonly CloudCpClientEvent[]): SessionProvisionStep[] | undefined {
+	if (session.cloud?.sandboxProvider !== FREESTYLE_PROVIDER) return undefined;
+	if (session.runtimeConnected || !CREATING_SANDBOX_STATES.has(session.cloud?.observedState ?? "")) return undefined;
+	if (events.some((event) => event.type === "chat.turn_started")) return undefined;
+	return [
+		{ id: "worktree", status: "running" },
+		{ id: "agent", status: "pending" },
+	];
+}
+
 /** The workspace startup failure a Cloud Chat session shows as a failed local start: a failed checkout, Setup or agent start. */
 function workspaceStartupFailure(session: WorkspaceSession): Extract<CloudStartupProblem, { phase: "failed" }> | undefined {
 	const problem = cloudStartupProblem(session);
@@ -293,7 +313,8 @@ const startupStepOrder = ["worktree", "setup", "agent"] as const;
 
 /**
  * The startup checklist of a Cloud Chat session, the one a local Chat start
- * shows: "Setting up" while the project's Setup runs, and the failed start
+ * shows: "Setting up" while a new session's worker connects and while the
+ * project's Setup runs, and the failed start
  * (the step that failed, the error, Retry) once the checkout, Setup or the
  * agent's start failed. While a retry runs it reads as setting up again, with
  * the failed step running, until the worker reports. Undefined when neither.
@@ -305,7 +326,7 @@ export function cloudStartupChecklist(
 	retrying: boolean,
 ): Pick<WorkspaceSession, "provisionState" | "provisionSteps" | "provisionError"> | undefined {
 	if (!failure) {
-		const steps = cloudSetupStartupSteps(session, events);
+		const steps = cloudSetupStartupSteps(session, events) ?? cloudConnectingStartupSteps(session, events);
 		return steps ? { provisionState: "provisioning", provisionSteps: steps } : undefined;
 	}
 	const failedStep = failure.code === "project_setup_failed" ? "setup" : failure.code === "agent_start_failed" ? "agent" : "worktree";
@@ -974,7 +995,8 @@ export function CloudSessionChatSurface({
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...settings, approvalMode: shownApprovalMode } };
 	}, [eventsQuery.data, me, session, settings, shownApprovalMode, startFailed, startStopped]);
-	// While Setup runs, or once the checkout, Setup or the agent's start failed,
+	// While a new session's worker connects, while Setup runs, or once the
+	// checkout, Setup or the agent's start failed,
 	// the session reads as a local start does: the startup checklist in place of a
 	// working timer, and messages that send in order once the agent starts.
 	const chatSession = useMemo<WorkspaceSession>(() => {
