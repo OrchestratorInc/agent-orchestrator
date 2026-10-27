@@ -12,7 +12,7 @@ import (
 )
 
 // aiderConfigHome is stubbed in tests; production resolves the user's home.
-var aiderConfigHome = func() (string, error) { return os.UserHomeDir() }
+var aiderConfigHome = os.UserHomeDir
 
 // saveAiderAPIKey writes Aider's documented ~/.aider.conf.yml key entries.
 // OpenAI and Anthropic use their dedicated top-level options; every other
