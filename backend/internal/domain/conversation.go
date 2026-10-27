@@ -587,6 +587,7 @@ type ConversationTurn struct {
 // ConversationFailureCode identifies a provider failure with a known recovery path.
 type ConversationFailureCode string
 
+// ConversationFailureProviderKeyMissing means the provider route lacks a configured API key.
 const ConversationFailureProviderKeyMissing ConversationFailureCode = "provider_key_missing"
 
 // ConversationTurnDiff is the turn's changed-file summary.
