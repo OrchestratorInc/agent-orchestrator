@@ -18,9 +18,8 @@ const (
 	DisconnectedRetention = 5 * time.Minute
 	// UnusedRetention is how long a tunnel no connector has ever served
 	// survives. A machine connects within seconds of being linked, or minutes
-	// on a slow download, and one that comes later gets its tunnel made again.
-	// Its DNS record goes with it, so registering machines that never run
-	// holds neither.
+	// on a slow download, and one that comes later gets its tunnel made again
+	// under the record, which stays while the account lists the machine.
 	UnusedRetention = time.Hour
 	// OfflineRetention is how long a registered machine keeps its DNS record,
 	// and with it its row, after AO Cloud last saw it.
@@ -69,11 +68,10 @@ func RunSweeper(ctx context.Context, store SweepStore, cf *Cloudflare, interval 
 	}
 }
 
-// Sweep releases the tunnels of machines that went offline, deletes the
-// tunnels no connector ever served, and deletes the tunnels and DNS records
-// whose account no longer lists the machine, or whose machine AO Cloud has not
-// seen for OfflineRetention. It returns how many tunnels it released or
-// deleted.
+// Sweep releases the tunnels of machines that went offline and of tunnels no
+// connector ever served, and deletes the tunnels and DNS records whose account
+// no longer lists the machine, or whose machine AO Cloud has not seen for
+// OfflineRetention. It returns how many tunnels it released or deleted.
 //
 // Cloudflare's listings name every host tunnel in the account, including other
 // AO Clouds' sharing it, so a listed tunnel is acted on only when this AO
@@ -91,12 +89,12 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 	for _, c := range candidates {
 		// A machine whose daemon cannot reach AO Cloud may still be serving.
 		if c.Registered && !c.Released {
-			status, err := cf.Status(ctx, c.TunnelID)
+			online, err := cf.Online(ctx, c.TunnelID)
 			if err != nil {
 				fail(err)
 				continue
 			}
-			if status.Online {
+			if online {
 				if err := store.TouchRemoteHostTunnel(ctx, c.TunnelID, now); err != nil {
 					fail(err)
 				}
@@ -115,21 +113,27 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 		done++
 	}
 
-	ours := func(tunnelID string) (domain.RemoteHostTunnel, bool) {
-		row, found, err := store.FindRemoteHostTunnel(ctx, tunnelID)
-		if err != nil {
-			fail(err)
-			return row, false
-		}
-		return row, found && !row.Released
-	}
-
+	// Machines asleep, offline or quit, and tunnels no connector ever served,
+	// lose the tunnel and keep the address: the account may still list it,
+	// and a device that looked up a name with no record would cache the miss.
+	// Cloudflare refuses to delete a tunnel a connector serves again, so a
+	// machine back since the listing keeps it, and one that fetched its token
+	// moments ago is about to connect.
 	disconnected, err := cf.Disconnected(ctx, now.Add(-DisconnectedRetention))
 	if err != nil {
 		fail(err)
 	}
-	for _, id := range disconnected {
-		if _, ok := ours(id); !ok {
+	unused, err := cf.NeverConnected(ctx, now.Add(-UnusedRetention))
+	if err != nil {
+		fail(err)
+	}
+	for _, id := range append(disconnected, unused...) {
+		row, found, err := store.FindRemoteHostTunnel(ctx, id)
+		if err != nil {
+			fail(err)
+			continue
+		}
+		if !found || row.Released || now.Sub(row.LastSeenAt) < DisconnectedRetention {
 			continue
 		}
 		released, err := cf.Release(ctx, id)
@@ -137,53 +141,10 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 			fail(err)
 			continue
 		}
-		if !released { // its machine came back since the listing
+		if !released {
 			continue
 		}
 		if err := store.ReleaseRemoteHostTunnel(ctx, id); err != nil {
-			fail(err)
-			continue
-		}
-		done++
-	}
-
-	unused, err := cf.NeverConnected(ctx, now.Add(-UnusedRetention))
-	if err != nil {
-		fail(err)
-	}
-	for _, id := range unused {
-		row, ok := ours(id)
-		if !ok {
-			continue
-		}
-		// Asked again, so a machine that connected since the listing keeps it.
-		if status, err := cf.Status(ctx, id); err != nil || !status.NeverConnected {
-			if err != nil {
-				fail(err)
-			}
-			continue
-		}
-		// A tunnel made under a record kept from an earlier one belongs to a
-		// machine that did run: it loses the tunnel and keeps its address.
-		if row.CreatedAt.Before(row.UpdatedAt) {
-			if released, err := cf.Release(ctx, id); err != nil || !released {
-				if err != nil {
-					fail(err)
-				}
-				continue
-			}
-			if err := store.ReleaseRemoteHostTunnel(ctx, id); err != nil {
-				fail(err)
-				continue
-			}
-			done++
-			continue
-		}
-		if err := cf.Delete(ctx, id, row.Hostname); err != nil {
-			fail(err)
-			continue
-		}
-		if err := store.DeleteRemoteHostTunnel(ctx, id); err != nil {
 			fail(err)
 			continue
 		}

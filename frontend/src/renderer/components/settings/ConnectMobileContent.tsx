@@ -428,8 +428,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/regenerate");
 			if (error) throw new Error(apiErrorMessage(error));
 			// A new password revokes the account link with the old one; link
-			// again so the fixed address survives the next restart.
-			await linkIfSignedIn(data?.password ?? "");
+			// again so the fixed address survives the next restart. Only while
+			// remote access is on: a LAN-only computer is not listed.
+			if (data && !data.noPublicTunnel) await linkIfSignedIn(data.password ?? "");
 			return data;
 		},
 		onSuccess: invalidate,

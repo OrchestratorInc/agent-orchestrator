@@ -362,6 +362,42 @@ func TestAnotherAccountListingTheHostGetsItsOwnTunnel(t *testing.T) {
 	}
 }
 
+// A machine just linked can publish its quick address before it moves to the
+// fixed one its account lists it at; that must not overwrite the listing.
+func TestAStandingTunnelKeepsTheListingAtItsAddress(t *testing.T) {
+	s, store, _ := newTunnelServer(t)
+	hostID := "h_00000000-0000-0000-0000-000000000001"
+	owner := "00000000-0000-0000-0000-000000000002"
+	token := strings.Repeat("a", 64)
+	w := httptest.NewRecorder()
+	s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"Mac","token":"`+token+`"}`, owner))
+	fixed := store.hosts[owner+":"+hostID].URL
+	sum := sha256.Sum256([]byte(token))
+	publish := func(url string) {
+		t.Helper()
+		r := hostRequest(http.MethodPost, hostID, `{"url":"`+url+`"}`, "")
+		r.Header.Set("Authorization", "Bearer "+hex.EncodeToString(sum[:]))
+		w := httptest.NewRecorder()
+		s.updateRemoteHostAddress(w, r)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("publish %s: %d", url, w.Code)
+		}
+	}
+	publish("https://quiet-river.trycloudflare.com:443")
+	if got := store.hosts[owner+":"+hostID].URL; got != fixed {
+		t.Fatalf("a quick address replaced the fixed listing: %q", got)
+	}
+	// Once the tunnel is released the machine may serve elsewhere, so the
+	// listing follows it.
+	released := store.tunnels[owner+":"+hostID]
+	released.Released = true
+	store.tunnels[owner+":"+hostID] = released
+	publish("https://quiet-river.trycloudflare.com:443")
+	if got := store.hosts[owner+":"+hostID].URL; got != "https://quiet-river.trycloudflare.com:443" {
+		t.Fatalf("listing = %q", got)
+	}
+}
+
 func TestRemovingAHostDeletesOnlyThatAccountsTunnel(t *testing.T) {
 	s, store, api := newTunnelServer(t)
 	hostID := "h_00000000-0000-0000-0000-000000000001"

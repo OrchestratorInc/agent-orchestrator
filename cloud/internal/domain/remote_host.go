@@ -44,7 +44,6 @@ type RemoteHostTunnelCandidate struct {
 	HostID     string
 	TunnelID   string
 	Hostname   string
-	LastSeenAt time.Time
 	Registered bool
 	Released   bool
 }

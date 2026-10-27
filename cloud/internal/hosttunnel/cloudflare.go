@@ -81,26 +81,34 @@ func (c *Cloudflare) recordsPath() string {
 func (c *Cloudflare) Ensure(ctx context.Context, userID, hostID string) (Tunnel, error) {
 	out, err := c.ensure(ctx, userID, hostID)
 	if err != nil {
-		c.Discard(ctx, out)
-		return Tunnel{}, err
+		return Tunnel{}, errors.Join(err, c.Discard(ctx, out))
 	}
 	return out, nil
 }
 
 // Discard deletes what the Ensure call that returned t made, for a caller that
-// could not record it. Found parts are left alone.
-func (c *Cloudflare) Discard(ctx context.Context, t Tunnel) {
+// could not record it. Found parts are left alone. An error names what is
+// left over, for the operator: no row names it.
+func (c *Cloudflare) Discard(ctx context.Context, t Tunnel) error {
 	// Undone even after the caller gave up waiting.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
+	var errs []error
 	if t.RecordCreated {
-		if record, err := c.findRecord(ctx, t.Hostname); err == nil && record.ID != "" && record.Content == t.ID+".cfargotunnel.com" {
-			_ = c.do(ctx, http.MethodDelete, c.recordsPath()+"/"+url.PathEscape(record.ID), nil, nil)
+		record, err := c.findRecord(ctx, t.Hostname)
+		if err == nil && record.ID != "" && record.Content == t.ID+".cfargotunnel.com" {
+			err = c.do(ctx, http.MethodDelete, c.recordsPath()+"/"+url.PathEscape(record.ID), nil, nil)
+		}
+		if err != nil && !notFound(err) {
+			errs = append(errs, fmt.Errorf("left dns record %s: %w", t.Hostname, err))
 		}
 	}
 	if t.Created {
-		_ = c.do(ctx, http.MethodDelete, c.tunnelsPath()+"/"+url.PathEscape(t.ID), nil, nil)
+		if err := c.do(ctx, http.MethodDelete, c.tunnelsPath()+"/"+url.PathEscape(t.ID), nil, nil); err != nil && !notFound(err) {
+			errs = append(errs, fmt.Errorf("left tunnel %s: %w", t.ID, err))
+		}
 	}
+	return errors.Join(errs...)
 }
 
 // ensure is Ensure without the undo. On failure it still returns what it made.
@@ -208,43 +216,21 @@ func (c *Cloudflare) Delete(ctx context.Context, tunnelID, hostname string) erro
 	return nil
 }
 
-// Status is whether a tunnel has a connector now, and since when it has had
-// none. Missing is set when Cloudflare no longer has the tunnel, and
-// NeverConnected when no connector has ever served it.
-type Status struct {
-	Online         bool
-	OfflineSince   time.Time
-	Missing        bool
-	NeverConnected bool
-}
-
-// Status reads a tunnel's connection state. Cloudflare reports "healthy" or
-// "degraded" while a connector serves it, "down" after one disconnects and
-// "inactive" before one ever connected.
-func (c *Cloudflare) Status(ctx context.Context, tunnelID string) (Status, error) {
+// Online reports whether a connector serves the tunnel now: Cloudflare says
+// "healthy" or "degraded", rather than "down" after one disconnected or
+// "inactive" before one ever connected. A deleted tunnel is not online.
+func (c *Cloudflare) Online(ctx context.Context, tunnelID string) (bool, error) {
 	var t struct {
-		Status          string     `json:"status"`
-		CreatedAt       time.Time  `json:"created_at"`
-		DeletedAt       *time.Time `json:"deleted_at"`
-		ConnsInactiveAt *time.Time `json:"conns_inactive_at"`
+		Status    string     `json:"status"`
+		DeletedAt *time.Time `json:"deleted_at"`
 	}
 	if err := c.do(ctx, http.MethodGet, c.tunnelsPath()+"/"+url.PathEscape(tunnelID), nil, &t); err != nil {
 		if notFound(err) {
-			return Status{Missing: true}, nil
+			return false, nil
 		}
-		return Status{}, err
+		return false, err
 	}
-	if t.DeletedAt != nil {
-		return Status{Missing: true}, nil
-	}
-	if t.Status == "healthy" || t.Status == "degraded" {
-		return Status{Online: true}, nil
-	}
-	since := t.CreatedAt
-	if t.ConnsInactiveAt != nil {
-		since = *t.ConnsInactiveAt
-	}
-	return Status{OfflineSince: since, NeverConnected: t.Status == "inactive"}, nil
+	return t.DeletedAt == nil && (t.Status == "healthy" || t.Status == "degraded"), nil
 }
 
 // NeverConnected lists the host tunnels made before createdBefore that no

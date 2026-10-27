@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/hosttunnel"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -231,7 +232,21 @@ func (s *Server) updateRemoteHostAddress(w http.ResponseWriter, r *http.Request)
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The tunnel address is invalid.")
 		return
 	}
+	tunnels := s.tunnelStore()
 	for _, host := range hosts {
+		// While the account's tunnel for the host stands, the listing stays at
+		// its fixed address. A quick address published meanwhile is one the
+		// machine is about to leave, or one its account can do without.
+		if tunnels != nil {
+			tunnel, found, err := tunnels.GetRemoteHostTunnel(r.Context(), host.UserID, hostID)
+			if err != nil {
+				s.writeStoreError(w, r, err)
+				return
+			}
+			if found && !tunnel.Released && input.URL != "https://"+tunnel.Hostname+":443" {
+				continue
+			}
+		}
 		if err := store.UpdateRemoteHostAddress(r.Context(), host.UserID, hostID, input.URL); err != nil {
 			s.writeStoreError(w, r, err)
 			return
@@ -376,7 +391,7 @@ func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remo
 	}
 	encrypted, nonce, err := s.secretCipher.Encrypt([]byte(tunnel.RunToken), aad)
 	if err != nil {
-		s.hostTunnels.Discard(ctx, tunnel)
+		s.discardTunnel(ctx, hostID, tunnel)
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The tunnel credential could not be stored.")
 		return hostTunnelResponse{}, false
 	}
@@ -384,9 +399,15 @@ func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remo
 		UserID: userID, HostID: hostID, TunnelID: tunnel.ID, Hostname: tunnel.Hostname, EncryptedRunToken: encrypted, RunTokenNonce: nonce,
 	}, tunnel.RecordCreated)
 	if err != nil {
-		s.hostTunnels.Discard(ctx, tunnel)
+		s.discardTunnel(ctx, hostID, tunnel)
 		s.writeStoreError(w, r, err)
 		return hostTunnelResponse{}, false
 	}
 	return hostTunnelResponse{Hostname: tunnel.Hostname, RunToken: tunnel.RunToken, Since: since}, true
+}
+
+func (s *Server) discardTunnel(ctx context.Context, hostID string, tunnel hosttunnel.Tunnel) {
+	if err := s.hostTunnels.Discard(ctx, tunnel); err != nil {
+		s.logger.Error("unrecorded host tunnel left in Cloudflare", "host_id", hostID, "error", err)
+	}
 }

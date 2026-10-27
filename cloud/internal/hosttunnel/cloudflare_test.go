@@ -382,6 +382,10 @@ func TestSweepReleasesTheTunnelsOfMachinesThatLeft(t *testing.T) {
 	cf.tunnels["back"] = fakeTunnel{name: "ao-h_back", status: "down", inactive: &gone, connected: true}
 	cf.tunnels["foreign"] = fakeTunnel{name: "ao-h_foreign", status: "down", inactive: &gone}
 	cf.tunnels["replaced"] = fakeTunnel{name: "ao-h_replaced", status: "down", inactive: &gone}
+	// Down for 10 minutes, but its machine fetched its token a minute ago:
+	// it is about to connect.
+	cf.tunnels["waking"] = fakeTunnel{name: "ao-h_waking", status: "down", inactive: &gone}
+	rows["waking"] = domain.RemoteHostTunnel{HostID: "h_waking", TunnelID: "waking", Hostname: "h-waking.example.dev", LastSeenAt: now.Add(-time.Minute)}
 	cf.records["h-asleep.example.dev"] = fakeRecord{id: "rec-asleep", content: "asleep.cfargotunnel.com", proxied: true}
 	store := &fakeSweepStore{rows: rows}
 
@@ -398,16 +402,17 @@ func TestSweepReleasesTheTunnelsOfMachinesThatLeft(t *testing.T) {
 	if cf.records["h-asleep.example.dev"].content != "asleep.cfargotunnel.com" {
 		t.Fatal("releasing a tunnel removed its address")
 	}
-	for _, kept := range []string{"brief", "back", "foreign", "replaced"} {
+	for _, kept := range []string{"brief", "back", "foreign", "replaced", "waking"} {
 		if _, ok := cf.tunnels[kept]; !ok {
 			t.Errorf("tunnel %s was released", kept)
 		}
 	}
 }
 
-// A machine linked and never run, or a registration made only to hold a
-// tunnel, loses it after an hour; nothing else does.
-func TestSweepDeletesTunnelsNoConnectorEverServed(t *testing.T) {
+// A machine linked and never run loses its tunnel after an hour and keeps its
+// address: its account may still list it, and a device that looked the name
+// up without a record would cache the miss.
+func TestSweepReleasesTunnelsNoConnectorEverServed(t *testing.T) {
 	cf, c := newFakeCloudflare(t)
 	now := time.Now()
 	old, young := now.Add(-2*time.Hour), now.Add(-10*time.Minute)
@@ -430,30 +435,21 @@ func TestSweepDeletesTunnelsNoConnectorEverServed(t *testing.T) {
 	}
 	rows["newer"] = domain.RemoteHostTunnel{HostID: "h_replaced", TunnelID: "newer", Hostname: "h-replaced.example.dev"}
 	cf.records["h-unused.example.dev"] = fakeRecord{id: "rec-unused", content: "unused.cfargotunnel.com", proxied: true}
-	// Made under a record kept from the machine's earlier tunnel: the machine
-	// ran before, so only the tunnel goes.
-	cf.tunnels["remade"] = fakeTunnel{name: "ao-h_remade", status: "inactive", created: old}
-	rows["remade"] = domain.RemoteHostTunnel{HostID: "h_remade", TunnelID: "remade", Hostname: "h-remade.example.dev",
-		CreatedAt: now.Add(-30 * 24 * time.Hour), UpdatedAt: old}
-	cf.records["h-remade.example.dev"] = fakeRecord{id: "rec-remade", content: "remade.cfargotunnel.com", proxied: true}
 	store := &fakeSweepStore{rows: rows}
 
-	deleted, err := Sweep(context.Background(), store, c, now)
+	done, err := Sweep(context.Background(), store, c, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleted != 107 || len(store.deleted) != 106 || !slices.Equal(store.released, []string{"remade"}) {
-		t.Fatalf("done %d, deleted %v, released %v", deleted, store.deleted, store.released)
-	}
-	if _, ok := cf.tunnels["remade"]; ok || cf.records["h-remade.example.dev"].id == "" {
-		t.Fatal("a remade tunnel was kept, or its address was not")
+	if done != 106 || len(store.released) != 106 || len(store.deleted) != 0 {
+		t.Fatalf("done %d, released %d, deleted %v", done, len(store.released), store.deleted)
 	}
 	for _, kept := range []string{"young", "foreign", "replaced", "ran", "other"} {
 		if _, ok := cf.tunnels[kept]; !ok {
-			t.Errorf("tunnel %s was deleted", kept)
+			t.Errorf("tunnel %s was released", kept)
 		}
 	}
-	if _, ok := cf.tunnels["unused"]; ok || cf.records["h-unused.example.dev"].id != "" {
-		t.Fatal("the unused tunnel or its DNS record survived")
+	if _, ok := cf.tunnels["unused"]; ok || cf.records["h-unused.example.dev"].id == "" {
+		t.Fatal("the unused tunnel survived, or its address did not")
 	}
 }

@@ -197,7 +197,7 @@ func (s *Store) DeleteRemoteHostTunnel(ctx context.Context, tunnelID string) err
 func (s *Store) ListRemoteHostTunnelSweepCandidates(ctx context.Context, cutoff, unregisteredBefore time.Time) ([]domain.RemoteHostTunnelCandidate, error) {
 	items := []domain.RemoteHostTunnelCandidate{}
 	err := s.withService(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT host_id, tunnel_id, hostname, last_seen_at, registered, released FROM (
+		rows, err := tx.Query(ctx, `SELECT host_id, tunnel_id, hostname, registered, released FROM (
 				SELECT t.host_id, t.tunnel_id, t.hostname, t.last_seen_at, t.updated_at, t.released_at IS NOT NULL AS released,
 					EXISTS (SELECT 1 FROM ao_remote_hosts h WHERE h.user_id = t.user_id AND h.host_id = t.host_id) AS registered
 				FROM ao_remote_host_tunnels t) c
@@ -209,7 +209,7 @@ func (s *Store) ListRemoteHostTunnelSweepCandidates(ctx context.Context, cutoff,
 		defer rows.Close()
 		for rows.Next() {
 			var c domain.RemoteHostTunnelCandidate
-			if err := rows.Scan(&c.HostID, &c.TunnelID, &c.Hostname, &c.LastSeenAt, &c.Registered, &c.Released); err != nil {
+			if err := rows.Scan(&c.HostID, &c.TunnelID, &c.Hostname, &c.Registered, &c.Released); err != nil {
 				return err
 			}
 			items = append(items, c)

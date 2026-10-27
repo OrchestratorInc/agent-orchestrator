@@ -474,9 +474,6 @@ func (b *BridgeService) tunnelEndpoint() *mobilebridge.TunnelEndpoint {
 	return t.Endpoint()
 }
 
-// TunnelStatus is the connector's status, as Status reports it.
-func (b *BridgeService) TunnelStatus() mobilebridge.TunnelStatus { return b.tunnelStatus() }
-
 func (b *BridgeService) tunnelStatus() mobilebridge.TunnelStatus {
 	b.awaitBootTunnel()
 	t := b.tunnel()
@@ -1027,13 +1024,13 @@ func (b *BridgeService) StartRemoteAccess() (MobileStatusResponse, error) {
 		}
 	}
 	if t := b.ensureTunnel(); t != nil {
-		t.Start(b.LAN.BoundPort())
 		// The desktop links this machine just before it asks for remote
-		// access; a quick tunnel already running can move to the fixed
-		// address now.
+		// access; a connector already running can move to the address the
+		// link gave it now. Sent first: a connector Start begins asks anyway.
 		if n, ok := t.(interface{ Nudge() }); ok {
 			n.Nudge()
 		}
+		t.Start(b.LAN.BoundPort())
 	}
 	return b.Status(), nil
 }

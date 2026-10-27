@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "../../hooks/useSettings";
-import { deleteAccountRemoteHost, listAccountRemoteHosts } from "../../lib/account-remote-hosts";
+import { deleteAccountRemoteHost, listAccountRemoteHosts, RemoteHostLimitError } from "../../lib/account-remote-hosts";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { useCloudSession } from "../../lib/cloud-session";
 import { linkThisComputer } from "../../lib/link-this-computer";
@@ -120,7 +120,11 @@ export function ThisComputerAccess() {
 				password = started.data.password ?? "";
 			}
 			// Linked before the tunnel starts, so the tunnel is this computer's fixed address.
-			hostId = await linkThisComputer(cloudBaseUrl, accountId, password).catch(() => "");
+			// A full account refuses the quick tunnel's address too, so it stops here.
+			hostId = await linkThisComputer(cloudBaseUrl, accountId, password).catch((cause: unknown) => {
+				if (cause instanceof RemoteHostLimitError) throw cause;
+				return "";
+			});
 			const access = await apiClient.POST("/api/v1/mobile/remote-access");
 			if (access.error) throw new Error(apiErrorMessage(access.error));
 			const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));

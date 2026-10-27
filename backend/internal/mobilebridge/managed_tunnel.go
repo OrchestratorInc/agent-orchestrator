@@ -34,7 +34,7 @@ type ManagedTunnel struct {
 	cancel  context.CancelFunc
 	port    int
 	done    chan struct{}
-	// nudge asks a quick tunnel to ask AO Cloud for the fixed address now.
+	// nudge asks a running connector to ask AO Cloud for its address now.
 	nudge chan struct{}
 }
 
@@ -67,6 +67,11 @@ func (m *ManagedTunnel) Start(localPort int) {
 		return
 	}
 	m.stopLocked()
+	// A new run asks AO Cloud first, so an earlier nudge tells it nothing.
+	select {
+	case <-m.nudge:
+	default:
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rt := &TunnelRuntime{}

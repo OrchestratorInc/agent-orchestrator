@@ -175,6 +175,14 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 	if t.Hostname == "" || t.RunToken == "" {
 		return NamedTunnel{}, errors.New("AO Cloud returned a fixed address without a hostname or run token")
 	}
+	// since is on AO Cloud's clock; moved onto this machine's, so a clock
+	// running fast cannot skip the settle delay of a record made just now.
+	// Date has a one-second resolution, so a smaller difference is noise.
+	if served, err := http.ParseTime(resp.Header.Get("Date")); err == nil && !t.Since.IsZero() {
+		if skew := time.Since(served); skew > 2*time.Second || skew < -2*time.Second {
+			t.Since = t.Since.Add(skew)
+		}
+	}
 	return t, nil
 }
 

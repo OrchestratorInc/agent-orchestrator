@@ -118,6 +118,19 @@ test("a new password links the computer again, so its fixed address survives", a
 	expect(posted()).toEqual(["/api/v1/mobile/regenerate"]);
 });
 
+test("a LAN-only computer gets a new password without being listed", async () => {
+	fake.signedIn = true;
+	Object.assign(fake.status, {
+		enabled: true, noPublicTunnel: true, password: "pw-1",
+		endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
+	});
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
+
+	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/regenerate"]));
+	expect(linkThisComputer).not.toHaveBeenCalled();
+});
+
 test("a signed-out computer gets a new password without linking", async () => {
 	fake.signedIn = false;
 	Object.assign(fake.status, {

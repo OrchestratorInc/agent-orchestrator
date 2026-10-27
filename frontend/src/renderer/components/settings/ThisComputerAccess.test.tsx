@@ -371,6 +371,8 @@ it("says when the account lists as many machines as it can", async () => {
 	expect(await screen.findByRole("alert")).toHaveTextContent("An account can list up to 10 machines. Remove one to add another.");
 	expect(toggle).toHaveAttribute("aria-checked", "false");
 	expect(fake.daemon.enabled).toBe(false);
+	// Known before any tunnel started, so none did.
+	expect(fake.log).not.toContain("/api/v1/mobile/remote-access");
 });
 
 it("keeps this computer in the account when it was listed before a failed turn-on", async () => {

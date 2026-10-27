@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -20,25 +21,25 @@ import (
 // through AO Cloud. A failed publish is retried on the next tick.
 func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.BridgeService, controlPlaneURL string, log *slog.Logger) {
 	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	lastSent, lastHash, waited := "", "", ""
+	lastSent, sentAt := "", time.Time{}
 	publish := func() {
-		address, hash, fixed := accountTunnelAddress(bridge)
+		address, hash := accountTunnelAddress(bridge)
 		key := address + "\x00" + hash
-		if address == "" || hash == "" || key == lastSent {
+		// Sent again now and then: the desktop also writes the listing, so the
+		// last address sent is not always the one listed.
+		if address == "" || hash == "" || (key == lastSent && time.Since(sentAt) < republishEvery) {
 			return
 		}
-		// Just linked, a machine on a quick tunnel is about to move to the
-		// fixed address the link listed it at; publishing the quick one first
-		// would overwrite that. It waits a tick to see whether it stays.
-		if !fixed && hash != lastHash && key != waited {
-			waited = key
-			return
-		}
-		if err := publishRemoteHostAddress(ctx, client, controlPlaneURL, bridge.HostID, address, hash); err != nil {
+		err := publishRemoteHostAddress(ctx, client, controlPlaneURL, bridge.HostID, address, hash)
+		switch {
+		case errors.Is(err, errAddressRefused):
+			// No account lists this link, as on an AO Cloud the machine could
+			// not be listed on. Asked again only later, not every tick.
+		case err != nil:
 			log.Warn("remote host address publish failed", "err", err)
 			return
 		}
-		lastSent, lastHash = key, hash
+		lastSent, sentAt = key, time.Now()
 	}
 	publish()
 	ticker := time.NewTicker(30 * time.Second)
@@ -53,20 +54,23 @@ func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.Brid
 	}
 }
 
-// accountTunnelAddress is the tunnel address to publish, the account token
-// digest to publish it with, and whether the address is this machine's fixed
-// one.
-func accountTunnelAddress(bridge *controllers.BridgeService) (address, hash string, fixed bool) {
+// republishEvery spaces publishes of an unchanged address.
+const republishEvery = 10 * time.Minute
+
+// errAddressRefused is AO Cloud refusing the digest: no account lists it.
+var errAddressRefused = errors.New("no account lists this machine under its link")
+
+func accountTunnelAddress(bridge *controllers.BridgeService) (string, string) {
 	state, err := mobilebridge.Load(bridge.ConfigPath)
 	if err != nil || !state.Enabled || state.AccountTokenHash == "" || !bridge.LAN.Running() {
-		return "", "", false
+		return "", ""
 	}
 	for _, endpoint := range bridge.AdvertisedEndpoints() {
 		if endpoint.Kind == mobilebridge.KindTunnel && endpoint.Secure {
-			return "https://" + net.JoinHostPort(endpoint.Host, fmt.Sprint(endpoint.Port)), state.AccountTokenHash, bridge.TunnelStatus().Fixed
+			return "https://" + net.JoinHostPort(endpoint.Host, fmt.Sprint(endpoint.Port)), state.AccountTokenHash
 		}
 	}
-	return "", "", false
+	return "", ""
 }
 
 func publishRemoteHostAddress(ctx context.Context, client *http.Client, controlPlaneURL, hostID, address, hash string) error {
@@ -86,7 +90,11 @@ func publishRemoteHostAddress(ctx context.Context, client *http.Client, controlP
 		return err
 	}
 	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusNoContent {
+	switch response.StatusCode {
+	case http.StatusNoContent:
+	case http.StatusUnauthorized:
+		return errAddressRefused
+	default:
 		return fmt.Errorf("control plane returned %d", response.StatusCode)
 	}
 	return nil

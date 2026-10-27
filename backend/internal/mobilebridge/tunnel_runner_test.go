@@ -130,6 +130,25 @@ func TestTunnelRunnerRepairsATunnelThatLostEveryConnection(t *testing.T) {
 	}
 }
 
+// On a network that blocks Cloudflare's edge, every start dies the same way.
+// A repair that did not help is not asked for again within the half hour.
+func TestTunnelRunnerSpacesRepairsOut(t *testing.T) {
+	_, src := newFixedSource(t)
+	bin, _ := fakeCloudflared(t, registeredLine+"\n"+droppedLines)
+	r := namedRunner(t, bin, src)
+	r.deadAfter = 100 * time.Millisecond
+	r.repairedAt = time.Now().Add(-time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := r.runOnce(ctx); err == nil || !strings.Contains(err.Error(), "no live connection") || r.repair {
+		t.Fatalf("runOnce = %v, repair %v", err, r.repair)
+	}
+	r.repairedAt = time.Now().Add(-time.Hour)
+	if err := r.runOnce(ctx); err == nil || !r.repair {
+		t.Fatalf("runOnce = %v, repair %v; want a repair half an hour on", err, r.repair)
+	}
+}
+
 func TestTunnelRunnerRepairsARefusedTunnel(t *testing.T) {
 	refusals := strings.Repeat(refusedLine+"\n", connectorRefusals)
 	// Only the refusals can stop it inside the test's time.

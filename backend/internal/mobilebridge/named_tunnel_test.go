@@ -24,6 +24,8 @@ type fakeAOCloud struct {
 	tokens []string
 	// since is when the DNS record was made; zero means just now.
 	since time.Time
+	// skew sets AO Cloud's clock this far behind the machine's.
+	skew time.Duration
 }
 
 func (f *fakeAOCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +52,10 @@ func (f *fakeAOCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	since := f.since
 	if since.IsZero() {
-		since = time.Now()
+		since = time.Now().Add(-f.skew)
+	}
+	if f.skew != 0 {
+		w.Header().Set("Date", time.Now().Add(-f.skew).UTC().Format(http.TimeFormat))
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"hostname": "h-test.example.dev", "runToken": token, "since": since})
 }
@@ -167,6 +172,20 @@ func TestFixedTunnelFallsBackToTheCacheOnlyWhileAOCloudIsDown(t *testing.T) {
 	cloud.set(http.StatusBadGateway)
 	if got, _ := src.TunnelFor(ctx, "host-uuid", false); got.RunToken != "" {
 		t.Fatalf("cache survived a refusal: %+v", got)
+	}
+}
+
+// A machine whose clock runs fast must still wait out a record AO Cloud made
+// just now: since is moved onto the machine's clock.
+func TestFixedTunnelSinceFollowsTheMachinesClock(t *testing.T) {
+	cloud, src := newFixedSource(t)
+	cloud.skew = 30 * time.Second
+	got, err := src.TunnelFor(context.Background(), "host-uuid", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if age := time.Since(got.Since); age < -2*time.Second || age > 2*time.Second {
+		t.Fatalf("a record made just now reads %v old", age)
 	}
 }
 

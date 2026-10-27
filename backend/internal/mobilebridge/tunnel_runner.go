@@ -41,11 +41,12 @@ type TunnelRunner struct {
 	HostID string
 
 	// repair asks AO Cloud to remake the tunnel on the next start, after the
-	// fixed address stopped being served, until AO Cloud has answered. next is
-	// a tunnel AO Cloud already handed out for the next start. Run is the only
-	// goroutine using either.
-	repair bool
-	next   *NamedTunnel
+	// fixed address stopped being served, until AO Cloud has answered;
+	// repairedAt is when it last did. next is a tunnel AO Cloud already handed
+	// out for the next start. Run is the only goroutine using them.
+	repair     bool
+	repairedAt time.Time
+	next       *NamedTunnel
 	// nudge makes a quick tunnel ask AO Cloud for the fixed address now.
 	nudge <-chan struct{}
 
@@ -121,6 +122,9 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		cancel()
 		// A repair AO Cloud never heard is asked for again at the next start.
 		if err == nil || errors.Is(err, errHostRefused) || errors.Is(err, errNotLinked) {
+			if t.repair && err == nil {
+				t.repairedAt = time.Now()
+			}
 			t.repair = false
 		}
 		switch {
@@ -234,7 +238,10 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	switch {
 	case unserved.Load() != nil:
 		waitErr = errors.New(*unserved.Load())
-		t.repair = true
+		// A repair that did not bring connections back is not asked for again
+		// soon: on a network that blocks Cloudflare's edge, every one would
+		// cost AO Cloud's Cloudflare calls and the account's write budget.
+		t.repair = t.repairedAt.IsZero() || time.Since(t.repairedAt) >= repairSpacing
 	case upgraded.Load():
 		waitErr = errFixedTunnelReady
 	case withdrawn.Load():
@@ -346,10 +353,12 @@ func (h *connectorHealth) deadSince() (time.Time, bool) {
 }
 
 // A fixed connector is restarted, and its tunnel repaired, after three minutes
-// with no live connection or four refusals in a row.
+// with no live connection or four refusals in a row; repaired at most every
+// half hour.
 const (
 	connectorDeadAfter = 3 * time.Minute
 	connectorRefusals  = 4
+	repairSpacing      = 30 * time.Minute
 )
 
 // awaitFixedTunnel calls ready once AO Cloud hands out this host's tunnel,
