@@ -653,7 +653,17 @@ function isWorkerOperationFailed(error: unknown): boolean {
 	return error instanceof CloudCpError && error.code === "WORKER_OPERATION_FAILED";
 }
 const MODELS_FAILED_RETRIES = 6;
+// The worker says it is still setting up the coding agent or its Chat adapter
+// (a template installing its tools in the background, or the worker's own
+// install of a pinned release). That clears within a minute or two, so it is
+// asked again quietly, every few seconds, for longer.
+function isAgentSettingUp(error: unknown): boolean {
+	return error instanceof CloudCpError && (error.code === "CHAT_AGENT_INSTALLING" || error.code === "CHAT_ADAPTER_INSTALLING");
+}
+const AGENT_SETUP_RETRIES = 36;
+const AGENT_SETUP_RETRY_DELAY = 5_000;
 function modelsRetryDelay(failures: number, error: unknown): number {
+	if (isAgentSettingUp(error)) return AGENT_SETUP_RETRY_DELAY;
 	return isWorkerOperationFailed(error) ? Math.min(2_000 * 2 ** failures, 15_000) : Math.min(1_000 * 2 ** failures, 30_000);
 }
 
@@ -831,7 +841,8 @@ export function CloudSessionChatSurface({
 		// a timed-out request is asked again a few times before it shows.
 		retry: (failures, error) => liveRef.current.connected && !liveRef.current.terminated &&
 			(isWorkerUnavailable(error) || (isTransportTimeout(error) && failures < 3) ||
-				(isWorkerOperationFailed(error) && failures < MODELS_FAILED_RETRIES)),
+				(isWorkerOperationFailed(error) && failures < MODELS_FAILED_RETRIES) ||
+				(isAgentSettingUp(error) && failures < AGENT_SETUP_RETRIES)),
 		retryDelay: modelsRetryDelay,
 		queryFn: async ({ signal }) => {
 			const selectionVersionAtFetch = catalogSyncRef.current.version;

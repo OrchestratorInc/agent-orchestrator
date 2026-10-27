@@ -703,6 +703,32 @@ describe("CloudSessionChatSurface", () => {
 		}
 	});
 
+	it("keeps asking quietly while the worker is still setting up the coding agent", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		try {
+			cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+			cloudMocks.listChatModels.mockReset()
+				.mockRejectedValueOnce(new CloudCpError("Setting up the coding agent on this workspace. Try again in a minute.", { status: 422, code: "CHAT_AGENT_INSTALLING" }))
+				.mockRejectedValueOnce(new CloudCpError("Setting up Chat UI on this workspace. Try again in a minute.", { status: 422, code: "CHAT_ADAPTER_INSTALLING" }))
+				.mockResolvedValue({ models: [{ id: "codex-test", displayName: "Codex Test", default: true }] });
+			render(
+				<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+					<CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} />
+				</QueryClientProvider>,
+			);
+			await waitFor(() => expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(1));
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
+			await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
+			await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].models).toHaveLength(1));
+			expect(cloudMocks.listChatModels).toHaveBeenCalledTimes(3);
+			expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("does not show a model error kept from a worker that is gone", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		try {
