@@ -11,11 +11,14 @@ import (
 )
 
 var (
-	ErrNotFound      = errors.New("not found")
-	ErrForbidden     = errors.New("forbidden")
-	ErrConflict      = errors.New("conflict")
-	ErrInvalid       = errors.New("invalid")
-	ErrInvalidBranch = errors.New("invalid session branch")
+	ErrNotFound  = errors.New("not found")
+	ErrForbidden = errors.New("forbidden")
+	// ErrMergeNeedsApproval refuses a merge by someone a project or session
+	// was shared with: they ask its owner to merge instead.
+	ErrMergeNeedsApproval = errors.New("merge needs the owner's approval")
+	ErrConflict           = errors.New("conflict")
+	ErrInvalid            = errors.New("invalid")
+	ErrInvalidBranch      = errors.New("invalid session branch")
 	// ErrBranchInUse refuses a requested session branch a live session of the
 	// project already works on (BranchRefusedError carries which one).
 	ErrBranchInUse          = errors.New("session branch in use")
@@ -33,6 +36,13 @@ var (
 	ErrTerminalSessionExited = errors.New("terminal session exited")
 	ErrTransportExpired      = errors.New("worker request expired")
 	ErrWorkspaceReadOnly     = errors.New("workspace is read-only")
+	// ErrTerminalClosed means output arrived for a terminal that is no longer
+	// open at the worker's epoch (closed, failed, or never opened there).
+	ErrTerminalClosed = errors.New("terminal is closed")
+	// ErrTerminalExpired means output arrived for an open terminal whose lease
+	// has passed. Its state is left alone: the lease holder decides whether
+	// the terminal is reopened or retired.
+	ErrTerminalExpired = errors.New("terminal lease expired")
 	// ErrProviderConnectionInUse refuses deleting a provider connection that a
 	// sandbox not yet fully deleted still runs on. It is a conflict.
 	ErrProviderConnectionInUse = fmt.Errorf("provider connection in use: %w", ErrConflict)

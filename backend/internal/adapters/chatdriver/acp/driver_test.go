@@ -2711,6 +2711,57 @@ func TestValidateInputResponseRejectsValuesOutsideTheProviderSchema(t *testing.T
 	}
 }
 
+func TestValidateInputResponseAcceptsAMarkedOtherAnswerForARequiredQuestion(t *testing.T) {
+	question := map[string]any{"type": "string", "oneOf": []any{
+		map[string]any{"const": "Native"}, map[string]any{"const": "Bridge"},
+	}}
+	// The field shape claude-agent-acp's askUserQuestionsToCreateRequest sends.
+	other := map[string]any{"type": "string", "title": "Other", "_meta": map[string]any{
+		askUserQuestionCustomAnswerMetaKey: map[string]any{"questionId": "question_0", "isCustomAnswer": true},
+	}}
+	request := ports.ChatInputRequest{Mode: "form", Schema: map[string]any{
+		"required":   []any{"question_0"},
+		"properties": map[string]any{"question_0": question, "question_0_custom": other},
+	}}
+	for name, content := range map[string]map[string]any{
+		"choice":       {"question_0": "Native"},
+		"other answer": {"question_0_custom": "Hybrid"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateInputResponse(request, ports.ChatInputResponse{Action: "accept", Content: content}); err != nil {
+				t.Fatalf("error = %v, want nil", err)
+			}
+		})
+	}
+	if err := validateInputResponse(request, ports.ChatInputResponse{
+		Action: "accept", Content: map[string]any{"question_0_custom": "  "},
+	}); !errors.Is(err, ports.ErrChatDecisionNotOffered) {
+		t.Fatalf("blank other answer: error = %v, want ErrChatDecisionNotOffered", err)
+	}
+}
+
+func TestValidateInputResponseKeepsUnmarkedCustomFieldsIndependent(t *testing.T) {
+	// A generic MCP form may have a "name_custom" (or even "question_0_custom")
+	// field of its own; without the marker it never answers the required field.
+	for _, field := range []string{"name", "question_0"} {
+		t.Run(field, func(t *testing.T) {
+			request := ports.ChatInputRequest{Mode: "form", Schema: map[string]any{
+				"required": []any{field},
+				"properties": map[string]any{
+					field:             map[string]any{"type": "string"},
+					field + "_custom": map[string]any{"type": "string"},
+				},
+			}}
+			err := validateInputResponse(request, ports.ChatInputResponse{
+				Action: "accept", Content: map[string]any{field + "_custom": "Alias"},
+			})
+			if !errors.Is(err, ports.ErrChatDecisionNotOffered) {
+				t.Fatalf("error = %v, want ErrChatDecisionNotOffered", err)
+			}
+		})
+	}
+}
+
 func TestACPDriverPreservesNestedToolAndTerminalMetadata(t *testing.T) {
 	agent := &fakeAgent{}
 	driver := New(Config{
@@ -2773,6 +2824,57 @@ func TestACPDriverPreservesNestedToolAndTerminalMetadata(t *testing.T) {
 	}
 	if detail["parentProviderItemId"] != "agent-tool" || detail["terminalId"] != "child-tool" || detail["output"] != "ok\n" {
 		t.Fatalf("tool detail = %#v", detail)
+	}
+}
+
+// Only a binding whose agent keeps one list for the session marks its plan as
+// spanning turns; every other ACP plan stays a plan for the turn it arrived in.
+func TestACPDriverMarksPlansThatSpanTurns(t *testing.T) {
+	for _, spans := range []bool{false, true} {
+		t.Run(fmt.Sprintf("PlansSpanTurns=%v", spans), func(t *testing.T) {
+			agent := &fakeAgent{}
+			driver := New(Config{
+				Harness:        domain.HarnessClaudeCode,
+				Capabilities:   ports.ChatCapabilities{ports.ChatCapabilityPlans: true},
+				Probe:          func(context.Context) error { return nil },
+				Launch:         func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				PlansSpanTurns: spans,
+			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			driver.useTestProcess(fakeSpawn(agent))
+			opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			defer opened.Close()
+			_ = nextEvent(t, opened.Events())
+			conv := opened.(*conversation)
+			conv.mu.Lock()
+			conv.activeTurn = "turn-1"
+			conv.mu.Unlock()
+
+			if err := agent.conn.SessionUpdate(context.Background(), acpsdk.SessionNotification{
+				SessionId: acpsdk.SessionId(opened.ProviderConversationID()),
+				Update: acpsdk.SessionUpdate{Plan: &acpsdk.SessionUpdatePlan{
+					SessionUpdate: "plan",
+					Entries: []acpsdk.PlanEntry{
+						{Content: "one", Status: acpsdk.PlanEntryStatusCompleted},
+						{Content: "two", Status: acpsdk.PlanEntryStatusPending},
+					},
+				}},
+			}); err != nil {
+				t.Fatalf("plan update: %v", err)
+			}
+			event := nextEvent(t, opened.Events())
+			if event.Kind != ports.ChatEventPlanUpdated || event.Plan == nil {
+				t.Fatalf("plan event = %#v", event)
+			}
+			if event.Plan.SpansTurns != spans {
+				t.Fatalf("plan SpansTurns = %v, want %v", event.Plan.SpansTurns, spans)
+			}
+			if len(event.Plan.Steps) != 2 || event.Plan.Steps[1].Status != domain.PlanStepPending {
+				t.Fatalf("plan steps = %#v", event.Plan.Steps)
+			}
+		})
 	}
 }
 
@@ -4904,6 +5006,31 @@ func TestACPDriverAppliesLaunchSessionOptionsOnStartAndResume(t *testing.T) {
 	defer agent.mu.Unlock()
 	if agent.options["agent"] != "ao-sess1" {
 		t.Errorf("after Resume: agent option = %q, want ao-sess1", agent.options["agent"])
+	}
+}
+
+func TestACPDriverFailsStartWhenRequiredLaunchOptionIsRejected(t *testing.T) {
+	catalog := []acpsdk.SessionConfigOption{selectConfigOption("required_option", "Required option", "", "accepted", "accepted", "rejected")}
+	agent := &fakeAgent{
+		newConfig: catalog,
+		configErr: acpsdk.NewInvalidParams(map[string]any{"error": "required option is unsupported"}),
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessFake,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		LaunchSessionOptions: func(LaunchConfig) []SessionOption {
+			return []SessionOption{{ID: "required_option", Value: "rejected"}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	_, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		SessionID: domain.SessionID("sess1"), WorkspacePath: t.TempDir(),
+	})
+	if err == nil || !strings.Contains(err.Error(), `required option is unsupported`) {
+		t.Fatalf("Start error = %v, want required launch option rejection", err)
 	}
 }
 

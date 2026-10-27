@@ -6,24 +6,18 @@
  * appeared as literal hashes, a table as a wall of pipes, a code block bracketed by
  * visible backticks.
  *
- * Two deliberate choices about what this does NOT do:
- *
- *   - Raw HTML is escaped, not rendered. Agent output is only as trustworthy as the
+ * Raw HTML is escaped, not rendered. Agent output is only as trustworthy as the
  *     files it just read, so `rehype-raw` is deliberately absent; markdown-only is
- *     the whole sanitization story and there is no schema to get wrong, with one
- *     exception: ```mermaid fences render as diagrams through `MermaidBlock`,
+ *     the whole sanitization story and there is no schema to get wrong, with two
+ *     exceptions: ```mermaid fences render as diagrams through `MermaidBlock`,
  *     whose SVG passes through mermaid's strict mode plus DOMPurify with
- *     active-content tags forbidden. Syntax
+ *     active-content tags forbidden; and formulas render through `MathFormula`,
+ *     whose KaTeX markup is typeset with `trust: false`. Syntax
  *     highlighting keeps that property — it renders a token tree as elements
  *     rather than injecting the highlighter's HTML string.
- *   - Nothing here re-parses or re-orders content. It renders exactly the text the
- *     daemon stored, so the rendered form and the record cannot disagree. That is
- *     also why "copy as markdown" copies the stored text and not a re-serialized
- *     version of the DOM.
  *
- * Streaming is fine unstyled-first: an unclosed fence renders as a plain code
- * block with partial content, and gains its colours when the closing fence
- * arrives. See `lib/code-highlight.ts` for why it is not tokenized before then.
+ * Streaming reuses completed blocks and repairs incomplete inline formatting
+ * for display only. Copy actions continue to use the stored source.
  */
 
 import {
@@ -39,12 +33,16 @@ import {
 } from "react";
 import Markdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remend from "remend";
+import { splitStreamingMarkdown } from "../../lib/streaming-markdown";
 import { WrapText } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
 import { fenceOf } from "../../lib/markdown-fence";
 import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
+import { isInlineMath, remarkMath } from "../../lib/remark-math";
+import { useUiStore } from "../../stores/ui-store";
 import { artifactLinkForPath, findSessionLinks, isAoLink, isSessionLink, remarkSessionLinks } from "../../lib/session-links";
 import { useSessionLinkSource } from "../../lib/use-session-link-navigation";
 import {
@@ -63,6 +61,7 @@ import {
 } from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
+import { MathFormula } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
@@ -84,6 +83,7 @@ export const ActivityTitle = memo(function ActivityTitle({ text }: { text: strin
 
 /** GitHub-flavoured markdown: tables, strikethrough, task lists, autolinks. */
 const PLUGINS = [remarkGfm, remarkSessionLinks];
+const MATH_PLUGINS = [...PLUGINS, remarkMath];
 // Reduced motion gets plain text, not a span per character that never animates.
 const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 // How long a settled reply keeps its fade spans, so the last characters (and the final
@@ -159,6 +159,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	muted = false,
 	className,
 	safeOrigin = false,
+	remarkPlugins,
 }: {
 	text: string;
 	streaming?: boolean;
@@ -170,6 +171,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	muted?: boolean;
 	className?: string;
 	safeOrigin?: boolean;
+	/** Run after the built-in plugins; keep the array stable, a new one re-parses the text. */
+	remarkPlugins?: Options["remarkPlugins"];
 }) {
 	// Replies opened from history mount settled and never wrap; live ones keep the fade a
 	// beat past the end of the stream.
@@ -180,7 +183,24 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	// reply that arrives later fades from its first character.
 	const chatOpening = useContext(ChatOpeningRef);
 	const [settledOffset] = useState(() => (chatOpening.current ? text.length : 0));
-	const streamingRehype = useMemo<Options["rehypePlugins"]>(() => [[rehypeStreamFade, { settledOffset }]], [settledOffset]);
+	const renderMath = useUiStore((state) => state.renderMath);
+	const plugins = useMemo(() => {
+		const base = renderMath ? MATH_PLUGINS : PLUGINS;
+		return remarkPlugins ? [...base, ...remarkPlugins] : base;
+	}, [renderMath, remarkPlugins]);
+	// History stays on the single-parser path. Replies that streamed retain
+	// their chunks on completion, preserving code controls and diagram state.
+	const [parsed, setParsed] = useState(() => streaming ? splitStreamingMarkdown(text, undefined, renderMath) : {
+		source: text, math: renderMath, blocks: [{ source: text, start: 0, repairInline: false }], stableCount: 0,
+	});
+	// Chunks are cut, and their prose repair decided, in the math dialect they
+	// render in, so turning math on or off re-cuts them. A settled single block
+	// is exempt: it is a whole document in either dialect, and repair only runs
+	// while streaming.
+	const current = parsed.source === text && (parsed.math === renderMath || (!streaming && parsed.blocks.length === 1));
+	const blocks = current ? parsed : splitStreamingMarkdown(text, parsed, renderMath);
+	if (blocks !== parsed) setParsed(blocks);
+	const animate = fading && !prefersReducedMotion();
 	useEffect(() => {
 		if (streaming) return;
 		const timer = setTimeout(() => setFading(false), FADE_SHED_MS);
@@ -188,8 +208,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	}, [streaming]);
 
 	return (
-		<StreamingProse.Provider value={streaming}>
-			<SafeOriginContent.Provider value={safeOrigin}>
+		<SafeOriginContent.Provider value={safeOrigin}>
 			<div
 				className={cn(
 					"chat-md leading-[1.58]",
@@ -197,18 +216,43 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 					className,
 				)}
 			>
-				<Markdown
-					remarkPlugins={PLUGINS}
-					rehypePlugins={fading && !prefersReducedMotion() ? streamingRehype : undefined}
-					components={COMPONENTS}
-					urlTransform={chatUrlTransform}
-				>
-					{text}
-				</Markdown>
+				{blocks.blocks.map((block, index) => (
+					<MarkdownChunk
+						key={index}
+						source={block.source}
+						repairInline={block.repairInline}
+						streaming={streaming && index === blocks.blocks.length - 1}
+						fading={animate && index === blocks.blocks.length - 1}
+						settledOffset={Math.max(0, settledOffset - block.start)}
+						remarkPlugins={plugins}
+					/>
+				))}
 			</div>
-			</SafeOriginContent.Provider>
-		</StreamingProse.Provider>
+		</SafeOriginContent.Provider>
 	);
+});
+
+// No wrapper DOM: list/table layout, image galleries and prose spacing keep
+// their existing parent. Only the changing chunk enters react-markdown again.
+const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, streaming, fading, settledOffset, remarkPlugins }: {
+	source: string;
+	repairInline: boolean;
+	streaming: boolean;
+	fading: boolean;
+	settledOffset: number;
+	remarkPlugins: Options["remarkPlugins"];
+}) {
+	const repaired = useMemo(() => streaming && repairInline ? remend(source, {
+		linkMode: "text-only", images: false, htmlTags: false,
+		katex: false, setextHeadings: false, comparisonOperators: false,
+	}) : source, [source, streaming, repairInline]);
+	const plugins = useMemo<Options["rehypePlugins"]>(() =>
+		fading ? [[rehypeStreamFade, { settledOffset }]] : undefined, [fading, settledOffset]);
+	return <StreamingProse.Provider value={streaming}>
+		<Markdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
+			{repaired}
+		</Markdown>
+	</StreamingProse.Provider>;
 });
 
 /**
@@ -444,6 +488,29 @@ function MermaidFence({ code }: { code: string }) {
 		: diagram;
 }
 
+/** A path this chat can open in Files, and how to open it (at a line when given); undefined when it cannot. */
+function useWorkspaceFile(path: string | undefined) {
+	const { openFile, workspacePaths } = useContext(OpenChatLink);
+	const filePath = path && openFile ? findWorkspaceFilePath(path, workspacePaths) : undefined;
+	if (!path || !filePath || !openFile) return undefined;
+	const target = workspaceFileOpenTarget(path, filePath);
+	return { filePath, open: (line?: number) => (line == null ? openFile(target) : openFile(target, line)) };
+}
+
+/**
+ * A workspace file named outside markdown: opens in Files at the line when this
+ * chat can find it, as an inline code path does; otherwise plain text.
+ */
+export function FileReference({ path, line, className, children }: { path: string; line?: number; className?: string; children: ReactNode }) {
+	const file = useWorkspaceFile(path);
+	if (!file) return <span className={className} title={path}>{children}</span>;
+	return (
+		<button type="button" className={className} title={path} onClick={() => file.open(line)}>
+			{children}
+		</button>
+	);
+}
+
 /** The workspaces this chat's session links resolve against: the local daemon's, a remote host's, or Cloud's. */
 export function useChatLinkWorkspaces() {
 	const { sessionLinkHostId, sessionLinkSourceKind } = useContext(OpenChatLink);
@@ -457,28 +524,24 @@ export function ArtifactPathCode({ text, children }: { text: string; children: R
 	return href ? <MarkdownLink href={href}>{children}</MarkdownLink> : <>{children}</>;
 }
 
-function InlineCode({ children }: { children?: ReactNode }) {
-	const { openFile: onFileOpen, openSession, workspacePaths } = useContext(OpenChatLink);
+function InlineCode({ children, className }: { children?: ReactNode; className?: string }) {
+	const { openSession } = useContext(OpenChatLink);
 	const insideLink = useContext(InsideMarkdownLink);
 	const text = typeof children === "string" ? children : undefined;
-	const filePath = text && onFileOpen ? findWorkspaceFilePath(text, workspacePaths) : undefined;
+	const file = useWorkspaceFile(text);
+	if (isInlineMath(className)) return <MathFormula tex={text ?? ""} />;
 	const code = (
 		<code className="rounded bg-surface px-[5px] py-[2px] font-mono text-xs text-markdown-code">
 			{children}
 		</code>
 	);
 	if (insideLink) return code;
-	if (!filePath || !onFileOpen) return text?.includes("/") && openSession ? <ArtifactPathCode text={text}>{code}</ArtifactPathCode> : code;
+	if (!file) return text?.includes("/") && openSession ? <ArtifactPathCode text={text}>{code}</ArtifactPathCode> : code;
 	return (
 		<button
 			type="button"
-			onClick={() => {
-				const line = workspaceFileReferenceLine(text ?? "");
-				const target = workspaceFileOpenTarget(text ?? "", filePath);
-				if (line == null) onFileOpen(target);
-				else onFileOpen(target, line);
-			}}
-			aria-label={`Open ${filePath} in Files`}
+			onClick={() => file.open(workspaceFileReferenceLine(text ?? ""))}
+			aria-label={`Open ${file.filePath} in Files`}
 			className="inline rounded text-left transition-colors hover:bg-interactive-hover"
 		>
 			{code}
@@ -552,9 +615,12 @@ const COMPONENTS: Components = {
 		// Mermaid is a diagram, not source: it renders through the sandboxed SVG
 		// path rather than the highlighter. See `MermaidBlock.tsx`.
 		if (fence.language?.toLowerCase() === "mermaid") return <MermaidFence code={fence.code} />;
+		// Display formulas (`$$…$$`, `\[…\]`) arrive as `language-math` fences too,
+		// so one check covers them and explicit ```math fences.
+		if (fence.language?.toLowerCase() === "math") return <MathFormula tex={fence.code} display />;
 		return <CodeBlock code={fence.code} language={fence.language} />;
 	},
-	// Only inline code reaches here; `pre` above takes every fence.
+	// Only inline code and inline formulas reach here; `pre` above takes every fence.
 	code: InlineCode,
 
 	// Wide tables scroll inside their own container so the conversation column

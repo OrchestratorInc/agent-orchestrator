@@ -11,7 +11,9 @@ import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import {
+	buildChatSearchCommands,
 	buildCommands,
+	buildContentSearchCommands,
 	buildFileSessionCommands,
 	buildSessionActions,
 	buildWorkspaceFileCommands,
@@ -26,14 +28,18 @@ import {
 } from "../lib/command-palette";
 import {
 	type CommandPaletteFileSearchResponse,
+	commandPaletteChatSearchQueryOptions,
+	commandPaletteContentSearchQueryOptions,
 	commandPaletteFileSearchAvailable,
 	commandPaletteFileSearchQueryOptions,
 } from "../lib/command-palette-file-search";
 import { iconForCommand } from "../lib/command-palette-icons";
+import { buildSettingsCommands, buildShortcutCommands } from "../lib/palette-registry";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { useShell } from "../lib/shell-context";
+import { cn } from "../lib/utils";
 import {
 	findProjectOrchestrator,
 	hasConfiguredOrchestratorAgent,
@@ -42,10 +48,9 @@ import {
 	workerSessions,
 } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
-import { useAppShortcut } from "../hooks/useAppShortcut";
-import { Button } from "./ui/button";
+import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
-import { TaskComposer } from "./TaskComposer";
+import { requestOpenShareLink } from "./OpenShareLinkDialog";
 import { CommandDialog, CommandEmpty, CommandFooter, CommandGroup, CommandInput, CommandItem, CommandList } from "./ui/command";
 
 const PALETTE_REVIEW_STALE_TIME_MS = 60_000;
@@ -56,7 +61,6 @@ const EMPTY_REVIEW_STATES: Readonly<Record<string, PRReviewState[]>> = {};
 type PaletteView =
 	| { mode: "root" }
 	| { mode: "session-actions"; sessionId: string }
-	| { mode: "new-task"; projectId: string }
 	| { mode: "file-session-picker"; projectId: string }
 	| { mode: "file-search"; target: WorkspaceFileSearchTarget; parent: "root" | "picker" };
 
@@ -66,6 +70,7 @@ export function CommandPalette() {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const cloud = useCloudCp();
+	const cloudReady = cloud.ready;
 	const restoreSessionById = useRestoreSession();
 	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
 	const { cloneProject, createProject, initializeProjectRepository } = useShell();
@@ -74,6 +79,8 @@ export function CommandPalette() {
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
 	const setOpen = useUiStore((s) => s.setCommandPaletteOpen);
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
+	const developerMode = useUiStore((s) => s.developerMode);
+	const diagnostics = useUiStore((s) => s.developerMode && s.diagnostics);
 	// The palette stays mounted to preserve its close animation and global
 	// shortcut. While closed, commands are invisible, so retain the cached
 	// snapshot without subscribing this hidden surface to streamed updates.
@@ -90,20 +97,8 @@ export function CommandPalette() {
 	const [createProjectFlowMounted, setCreateProjectFlowMounted] = useState(false);
 	const [createProjectFlowOpenSignal, setCreateProjectFlowOpenSignal] = useState(0);
 	const [createProjectFlowPendingOpen, setCreateProjectFlowPendingOpen] = useState(false);
-	const [pendingDismiss, setPendingDismiss] = useState<null | "pop" | "close">(null);
 	const pendingRef = useRef(false);
-	const composerWrapRef = useRef<HTMLDivElement>(null);
-	const keepEditingRef = useRef<HTMLButtonElement>(null);
-	const hadPendingDismissRef = useRef(false);
-	useEffect(() => {
-		const had = hadPendingDismissRef.current;
-		hadPendingDismissRef.current = pendingDismiss !== null;
-		if (pendingDismiss !== null) keepEditingRef.current?.focus();
-		else if (had) composerWrapRef.current?.querySelector<HTMLElement>("input, textarea, [contenteditable='true']")?.focus();
-	}, [pendingDismiss]);
 	const runGenerationRef = useRef(0);
-	const composerDirtyRef = useRef(false);
-	const composerBusyRef = useRef(false);
 	const viewRef = useRef(view);
 	viewRef.current = view;
 	const closeResetTimerRef = useRef<number | null>(null);
@@ -129,7 +124,7 @@ export function CommandPalette() {
 		: undefined;
 
 	useEffect(() => {
-		if (!isOpen || view.mode === "new-task") {
+		if (!isOpen) {
 			setDebouncedQuery("");
 			return;
 		}
@@ -153,6 +148,20 @@ export function CommandPalette() {
 		cloud,
 	});
 	const fileSearchQuery = useQuery<CommandPaletteFileSearchResponse>({ ...fileSearchOptions, enabled: fileSearchEnabled });
+	// File contents (this session's daemon) and chats (this machine) are searched
+	// beside file names; Cloud sessions have no daemon to search their contents.
+	const searchQueryReady = isOpen && normalizedFileQuery.length >= PALETTE_FILE_SEARCH_MIN_CHARS;
+	const contentTarget = activeFileTarget && !activeFileTarget.cloudOrgId ? activeFileTarget : undefined;
+	const contentSearchEnabled = searchQueryReady && (view.mode === "root" || view.mode === "file-search") && Boolean(contentTarget);
+	const contentSearchQuery = useQuery({
+		...commandPaletteContentSearchQueryOptions(contentTarget ?? { projectId: "", sessionId: "" }, normalizedFileQuery, t("command.searchContentError")),
+		enabled: contentSearchEnabled,
+	});
+	const chatSearchEnabled = searchQueryReady && view.mode === "root";
+	const chatSearchQuery = useQuery({
+		...commandPaletteChatSearchQueryOptions(normalizedFileQuery, t("command.searchChatsError")),
+		enabled: chatSearchEnabled,
+	});
 
 	const sessionsWithOpenPRs = useMemo(
 		() =>
@@ -217,16 +226,20 @@ export function CommandPalette() {
 	const reviewStatesForCommands = isOpen && reviewActionsReady ? reviewStatesSnapshot : EMPTY_REVIEW_STATES;
 
 	const rootItems = useMemo(
-		() =>
-			buildCommands({
+		() => [
+			...buildCommands({
 				workspaces,
 				currentProjectId,
 				currentSessionId: params.sessionId,
 				currentHostId: params.hostId,
 				restartingProjectIds,
 				reviewStatesBySessionId: reviewStatesForCommands,
+				cloudReady,
 			}, t),
-		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, t, i18n.resolvedLanguage],
+			...buildShortcutCommands(t),
+			...buildSettingsCommands(t, { developerMode, diagnostics }),
+		],
+		[workspaces, currentProjectId, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),
@@ -249,6 +262,24 @@ export function CommandPalette() {
 			: [],
 		[activeFileTarget, fileSearchQuery.data],
 	);
+	const contentItems = useMemo(
+		() => contentTarget && contentSearchEnabled && contentSearchQuery.data
+			? buildContentSearchCommands(contentTarget, contentSearchQuery.data.results)
+			: [],
+		[contentTarget, contentSearchEnabled, contentSearchQuery.data],
+	);
+	const findLocalChatWorkspace = useCallback(
+		(sessionId: string | undefined) => workspaces.find((workspace) =>
+			!workspace.hostId && workspace.kind !== "cloud"
+			&& workspace.sessions.some((session) => session.id === sessionId && !session.hostId && !session.cloud)),
+		[workspaces],
+	);
+	const chatItems = useMemo(
+		() => chatSearchEnabled && chatSearchQuery.data
+			? buildChatSearchCommands(chatSearchQuery.data.results.filter((hit) => findLocalChatWorkspace(hit.sessionId)), t)
+			: [],
+		[chatSearchEnabled, chatSearchQuery.data, findLocalChatWorkspace, t],
+	);
 
 	const groups = useMemo(() => {
 		if (view.mode === "session-actions") {
@@ -258,11 +289,11 @@ export function CommandPalette() {
 			return [{ id: "file-sessions", label: "", items: filterCommands(fileSessionItems, query) }];
 		}
 		if (view.mode === "file-search") {
-			return displayGroups(fileItems, normalizedFileQuery, t);
+			return displayGroups([...fileItems, ...contentItems], normalizedFileQuery, t);
 		}
-		const settledFileItems = normalizedFileQuery === query.trim() ? fileItems : [];
-		return displayGroups([...rootItems, ...settledFileItems], query, t);
-	}, [view.mode, rootItems, sessionActionItems, fileSessionItems, fileItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
+		const settledSearchItems = normalizedFileQuery === query.trim() ? [...fileItems, ...contentItems, ...chatItems] : [];
+		return displayGroups([...rootItems, ...settledSearchItems], query, t);
+	}, [view.mode, rootItems, sessionActionItems, fileSessionItems, fileItems, contentItems, chatItems, query, normalizedFileQuery, t, i18n.resolvedLanguage]);
 
 	const visibleItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
 	const value =
@@ -285,7 +316,6 @@ export function CommandPalette() {
 		runGenerationRef.current += 1;
 		setOpen(false);
 		setView({ mode: "root" });
-		setPendingDismiss(null);
 		if (closeResetTimerRef.current !== null) window.clearTimeout(closeResetTimerRef.current);
 		// Reduced-motion mode disables the closing animation, so keep a fallback
 		// reset for environments where no animationend event will arrive.
@@ -348,14 +378,12 @@ export function CommandPalette() {
 		} else {
 			setView({ mode: "root" });
 		}
-		setPendingDismiss(null);
 		resetTransient();
 	}, [resetTransient]);
 
 	const pushView = useCallback(
 		(next: PaletteView) => {
 			setView(next);
-			setPendingDismiss(null);
 			resetTransient();
 		},
 		[resetTransient],
@@ -363,13 +391,7 @@ export function CommandPalette() {
 
 	const requestDismiss = useCallback(
 		(target: "pop" | "close") => {
-			const current = viewRef.current;
-			if (composerBusyRef.current) return;
-			if (current.mode === "new-task" && composerDirtyRef.current) {
-				setPendingDismiss(target);
-				return;
-			}
-			if (target === "close" || current.mode === "root") {
+			if (target === "close" || viewRef.current.mode === "root") {
 				closePalette();
 			} else {
 				popView();
@@ -377,24 +399,6 @@ export function CommandPalette() {
 		},
 		[closePalette, popView],
 	);
-
-	const onComposerDirtyChange = useCallback((dirty: boolean) => {
-		composerDirtyRef.current = dirty;
-	}, []);
-
-	const onComposerSubmittingChange = useCallback((submitting: boolean) => {
-		composerBusyRef.current = submitting;
-		if (submitting) setPendingDismiss(null);
-	}, []);
-
-	const confirmDiscard = useCallback(() => {
-		if (composerBusyRef.current) return;
-		const target = pendingDismiss;
-		composerDirtyRef.current = false;
-		setPendingDismiss(null);
-		if (target === "close") closePalette();
-		else popView();
-	}, [pendingDismiss, closePalette, popView]);
 
 	useEffect(() => {
 		if (view.mode === "session-actions" && !scoped) {
@@ -533,6 +537,10 @@ export function CommandPalette() {
 						await aoBridge.clipboard.writeText(action.branch);
 						closePalette();
 						break;
+					case "open-shared-link":
+						closePalette();
+						requestOpenShareLink();
+						break;
 				case "open-pr":
 					await aoBridge.app.openExternal(action.url);
 					closePalette();
@@ -570,11 +578,36 @@ export function CommandPalette() {
 						action.target.sessionId,
 						action.path,
 						action.target.hostId,
+						undefined,
+						action.line,
 					);
 					const alreadyOpen = params.sessionId === action.target.sessionId
 						&& (params.hostId ?? "") === (action.target.hostId ?? "");
 					if (!alreadyOpen) navigateToTarget(fileSessionRoute(action.target));
 					closePalette();
+					break;
+				}
+				case "open-chat-message": {
+					const workspace = findLocalChatWorkspace(action.sessionId);
+					if (!workspace || !action.sessionId) {
+						setError(t("command.chatSessionUnavailable"));
+						break;
+					}
+					navigateToTarget(sessionRoute(workspace.id, action.sessionId));
+					useUiStore.getState().requestChatMessageFocus(action.sessionId, action.messageId, action.text, action.reviewId);
+					closePalette();
+					break;
+				}
+				case "open-settings-section":
+					closePalette();
+					useUiStore.getState().openGlobalSettings(action.section, action.focus ? { focusSetting: action.focus } : undefined);
+					break;
+				case "run-shortcut": {
+					closePalette();
+					// After the palette has closed, so the action sees the screen
+					// it was asked about, not the palette.
+					const shortcut = action.shortcut;
+					window.setTimeout(() => runAppShortcut({ id: shortcut }), 0);
 					break;
 				}
 				case "resume-session": {
@@ -590,7 +623,8 @@ export function CommandPalette() {
 					}
 					case "open-new-task":
 						if (blockedByRestart(action.projectId)) break;
-						pushView({ mode: "new-task", projectId: action.projectId });
+						closePalette();
+						useUiStore.getState().requestNewTask(action.projectId);
 						break;
 					case "open-new-project":
 						openNewProject();
@@ -606,7 +640,7 @@ export function CommandPalette() {
 				setPendingId(null);
 			}
 		},
-		[navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute],
+		[findLocalChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -616,15 +650,6 @@ export function CommandPalette() {
 			void runAction(item);
 		},
 		[runAction],
-	);
-
-	const handleTaskCreated = useCallback(
-		async (projectId: string, sessionId: string) => {
-			closePalette();
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
-			void navigateToTarget(sessionRoute(projectId, sessionId));
-		},
-		[queryClient, closePalette, navigateToTarget, sessionRoute],
 	);
 
 	// ⌘K / ⌘⇧P and ⌘P arrive from the main process (it also yields plain Ctrl+K and
@@ -683,19 +708,28 @@ export function CommandPalette() {
 	const contextLabel =
 		view.mode === "session-actions"
 			? (scoped?.session.title ?? t("command.sessionFallback"))
-			: view.mode === "new-task"
-				? t("command.newTask")
-				: view.mode === "file-session-picker"
-					? t("command.chooseFileSession")
-					: view.mode === "file-search"
-						? (fileSearchSession?.title ?? t("command.sessionFallback"))
-						: "";
+			: view.mode === "file-session-picker"
+				? t("command.chooseFileSession")
+				: view.mode === "file-search"
+					? (fileSearchSession?.title ?? t("command.sessionFallback"))
+					: "";
 	const fileSearchActive = view.mode === "file-search"
 		|| (view.mode === "root" && Boolean(activeFileTarget) && query.trim().length >= PALETTE_FILE_SEARCH_MIN_CHARS);
 	const fileSearchSettled = normalizedFileQuery === query.trim();
 	const fileSearchError = fileSearchActive && fileSearchSettled && fileSearchQuery.error
 		? (fileSearchQuery.error instanceof Error ? fileSearchQuery.error.message : t("command.searchFilesError"))
 		: null;
+	const contentSearchError = contentSearchEnabled && fileSearchSettled && contentSearchQuery.error
+		? (contentSearchQuery.error instanceof Error ? contentSearchQuery.error.message : t("command.searchContentError"))
+		: null;
+	const chatSearchError = chatSearchEnabled && fileSearchSettled && chatSearchQuery.error
+		? (chatSearchQuery.error instanceof Error ? chatSearchQuery.error.message : t("command.searchChatsError"))
+		: null;
+	const searchErrors = [
+		{ id: "files", message: fileSearchError },
+		{ id: "content", message: contentSearchError },
+		{ id: "chats", message: chatSearchError },
+	].filter((searchError) => searchError.message);
 
 	return (
 		<>
@@ -711,10 +745,6 @@ export function CommandPalette() {
 					onEscapeKeyDown: (event) => {
 						event.preventDefault();
 						if (event.isComposing) return;
-						if (pendingDismiss !== null) {
-							setPendingDismiss(null);
-							return;
-						}
 						requestDismiss(viewRef.current.mode === "root" ? "close" : "pop");
 					},
 				}}
@@ -742,133 +772,111 @@ export function CommandPalette() {
 					</div>
 				)}
 
-				{view.mode === "new-task" ? (
-					<div
-						ref={composerWrapRef}
-						// cmdk must not see composer keystrokes, but Tab has to reach the dialog's focus trap.
-						onKeyDown={(event) => { if (event.key !== "Tab") event.stopPropagation(); }}
-					>
-						{pendingDismiss !== null && (
-							<div role="alert" className="mx-3 mt-3 rounded-md border border-border bg-surface px-3 py-2 text-xs text-foreground">
-								<p className="text-muted-foreground">{t("command.discardDraft")}</p>
-								<div className="mt-2 flex justify-end gap-3">
-									<Button ref={keepEditingRef} type="button" variant="footer" onClick={() => setPendingDismiss(null)}>
-										{t("command.keepEditing")}
-									</Button>
-									<Button type="button" variant="footer" className="text-destructive" onClick={confirmDiscard}>
-										{t("command.discard")}
-									</Button>
-								</div>
+				<>
+					<CommandInput
+						value={query}
+							onValueChange={(next) => {
+								setQuery(next);
+								setError(null);
+							}}
+						placeholder={
+							view.mode === "session-actions"
+								? t("command.searchActionsPlaceholder")
+								: view.mode === "file-session-picker"
+									? t("command.chooseFileSession")
+									: view.mode === "file-search"
+										? t("command.searchFilesPlaceholder", { session: fileSearchSession?.title ?? t("command.sessionFallback") })
+										: t("command.searchPlaceholder")
+						}
+						onKeyDown={(event) => {
+							if (
+								event.key === "Backspace" &&
+								query === "" &&
+								!event.nativeEvent.isComposing &&
+								viewRef.current.mode !== "root"
+							) {
+								event.preventDefault();
+								requestDismiss("pop");
+							}
+						}}
+					/>
+					<CommandList>
+						<CommandEmpty>
+							{view.mode === "file-search"
+								? query.trim().length < PALETTE_FILE_SEARCH_MIN_CHARS
+									? t("command.searchFilesHint")
+									: fileSearchQuery.isFetching || !fileSearchSettled
+										? t("command.searchFilesLoading")
+										: t("command.searchFilesEmpty")
+								: t("command.noResults")}
+						</CommandEmpty>
+						{error && (
+							<div
+								role="alert"
+								className="mx-1 mb-1 overflow-hidden rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs wrap-break-word text-destructive"
+							>
+								{error}
 							</div>
 						)}
-						<TaskComposer
-							projectId={view.projectId}
-							autoFocusTitle
-							onDirtyChange={onComposerDirtyChange}
-							onSubmittingChange={onComposerSubmittingChange}
-							onCreated={(sessionId) => void handleTaskCreated(view.projectId, sessionId)}
-						/>
-					</div>
-				) : (
-					<>
-						<CommandInput
-							value={query}
-								onValueChange={(next) => {
-									setQuery(next);
-									setError(null);
-								}}
-							placeholder={
-								view.mode === "session-actions"
-									? t("command.searchActionsPlaceholder")
-									: view.mode === "file-session-picker"
-										? t("command.chooseFileSession")
-										: view.mode === "file-search"
-											? t("command.searchFilesPlaceholder", { session: fileSearchSession?.title ?? t("command.sessionFallback") })
-											: t("command.searchPlaceholder")
-							}
-							onKeyDown={(event) => {
-								if (
-									event.key === "Backspace" &&
-									query === "" &&
-									!event.nativeEvent.isComposing &&
-									viewRef.current.mode !== "root"
-								) {
-									event.preventDefault();
-									requestDismiss("pop");
-								}
-							}}
-						/>
-						<CommandList>
-							<CommandEmpty>
-								{view.mode === "file-search"
-									? query.trim().length < PALETTE_FILE_SEARCH_MIN_CHARS
-										? t("command.searchFilesHint")
-										: fileSearchQuery.isFetching || !fileSearchSettled
-											? t("command.searchFilesLoading")
-											: t("command.searchFilesEmpty")
-									: t("command.noResults")}
-							</CommandEmpty>
-							{error && (
-								<div
-									role="alert"
-									className="mx-1 mb-1 overflow-hidden rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs wrap-break-word text-destructive"
-								>
-									{error}
-								</div>
-							)}
-							{fileSearchError && (
-								<div role="alert" className="mx-1 mb-1 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-									{fileSearchError}
-								</div>
-							)}
-							{view.mode === "file-search" && fileSearchQuery.isFetching && fileItems.length > 0 && (
-								<div role="status" className="px-3 py-1 text-xs text-muted-foreground">{t("command.searchFilesLoading")}</div>
-							)}
-							{groups.map((group) => (
-								<CommandGroup key={group.id} heading={group.label || undefined}>
-									{group.items.map((item) => {
-										const Icon = iconForCommand(item);
-										return (
-										<CommandItem
-											key={item.id}
-											value={item.id}
-											disabled={item.disabled || (pendingId !== null && pendingId !== item.id)}
-											onSelect={() => onSelectItem(item)}
-										>
-											{Icon ? <Icon strokeWidth={1.75} aria-hidden="true" /> : null}
+						{searchErrors.map((searchError) => (
+							<div key={searchError.id} role="alert" className="mx-1 mb-1 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+								{searchError.message}
+							</div>
+						))}
+						{view.mode === "file-search" && fileSearchQuery.isFetching && fileItems.length > 0 && (
+							<div role="status" className="px-3 py-1 text-xs text-muted-foreground">{t("command.searchFilesLoading")}</div>
+						)}
+						{groups.map((group) => (
+							<CommandGroup key={group.id} heading={group.label || undefined}>
+								{group.items.map((item) => {
+									const Icon = iconForCommand(item);
+									return (
+									<CommandItem
+										key={item.id}
+										value={item.id}
+										disabled={item.disabled || (pendingId !== null && pendingId !== item.id)}
+										onSelect={() => onSelectItem(item)}
+									>
+										{Icon ? <Icon strokeWidth={1.75} aria-hidden="true" /> : null}
+										{item.snippet ? (
+											<span className="flex min-w-0 flex-1 flex-col">
+												<span className="truncate">{item.title}</span>
+												<HighlightedSnippet snippet={item.snippet} />
+											</span>
+										) : (
 											<span className="min-w-0 flex-1 truncate">{item.title}</span>
-											{pendingId === item.id ? (
-												<Loader2 className="ml-auto size-3.5 animate-spin text-[var(--color-text-command-muted)]" aria-hidden="true" />
-											) : item.disabled && item.disabledReason ? (
-												<span className="ml-auto text-control text-[var(--color-text-command-muted)]">
-													{item.disabledReason}
-												</span>
-											) : item.subtitle ? (
-												<span className="ml-auto max-w-command-subtitle truncate text-control text-[var(--color-text-command-muted)]">
-													{item.subtitle}
-												</span>
-											) : null}
-										</CommandItem>
-										);
-									})}
-								</CommandGroup>
-							))}
-							{fileSearchActive && fileSearchSettled && fileSearchQuery.data?.truncated && (
-								<div role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("command.searchFilesTruncated")}</div>
-							)}
-						</CommandList>
-						<CommandFooter aria-hidden="true">
-							<span className="inline-flex items-center gap-1.5">
-								<span>↑↓</span>
-								<span>{t("command.select")}</span>
-							</span>
-							<span className="inline-flex items-center gap-1.5">
-								<span>↵</span>
-								<span>{t("command.open")}</span>
-							</span>
-						</CommandFooter>
-					</>
-				)}
+										)}
+										{pendingId === item.id ? (
+											<Loader2 className="ml-auto size-3.5 animate-spin text-[var(--color-text-command-muted)]" aria-hidden="true" />
+										) : item.disabled && item.disabledReason ? (
+											<span className="ml-auto text-control text-[var(--color-text-command-muted)]">
+												{item.disabledReason}
+											</span>
+										) : item.subtitle ? (
+											<span className="ml-auto max-w-command-subtitle truncate text-control text-[var(--color-text-command-muted)]">
+												{item.subtitle}
+											</span>
+										) : null}
+									</CommandItem>
+									);
+								})}
+							</CommandGroup>
+						))}
+						{fileSearchActive && fileSearchSettled && fileSearchQuery.data?.truncated && (
+							<div role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("command.searchFilesTruncated")}</div>
+						)}
+					</CommandList>
+					<CommandFooter aria-hidden="true">
+						<span className="inline-flex items-center gap-1.5">
+							<span>↑↓</span>
+							<span>{t("command.select")}</span>
+						</span>
+						<span className="inline-flex items-center gap-1.5">
+							<span>↵</span>
+							<span>{t("command.open")}</span>
+						</span>
+					</CommandFooter>
+				</>
 			</CommandDialog>
 
 			{createProjectFlowMounted ? (
@@ -885,5 +893,35 @@ export function CommandPalette() {
 				/>
 			) : null}
 		</>
+	);
+}
+
+/** Characters of context kept before the first match when the line is cut. */
+const SNIPPET_LEAD = 16;
+
+/**
+ * One matched line with the matched spans in the foreground. A line whose
+ * first match sits deep in it starts just before that match, so the reason
+ * for the hit is not lost to truncation.
+ */
+function HighlightedSnippet({ snippet }: { snippet: NonNullable<CommandItemModel["snippet"]> }) {
+	const parts: { text: string; hit: boolean }[] = [];
+	const firstMatch = snippet.highlights[0]?.start ?? 0;
+	const offset = firstMatch > SNIPPET_LEAD * 2 ? firstMatch - SNIPPET_LEAD : 0;
+	if (offset > 0) parts.push({ text: "…", hit: false });
+	let cursor = offset;
+	for (const { start, end } of snippet.highlights) {
+		if (start < cursor || end > snippet.text.length || start >= end) continue;
+		if (start > cursor) parts.push({ text: snippet.text.slice(cursor, start), hit: false });
+		parts.push({ text: snippet.text.slice(start, end), hit: true });
+		cursor = end;
+	}
+	if (cursor < snippet.text.length) parts.push({ text: snippet.text.slice(cursor), hit: false });
+	return (
+		<span className={cn("truncate text-control text-[var(--color-text-command-muted)]", snippet.code && "font-mono")}>
+			{parts.map((part, index) => part.hit
+				? <span key={index} className="font-medium text-foreground">{part.text}</span>
+				: <span key={index}>{part.text}</span>)}
+		</span>
 	);
 }

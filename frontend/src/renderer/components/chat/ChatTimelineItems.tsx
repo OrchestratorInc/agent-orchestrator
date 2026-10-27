@@ -44,7 +44,6 @@ import {
 	Keyboard,
 	ListChecks,
 	Loader2,
-	MousePointer2,
 	Pencil,
 	Plug,
 	RotateCw,
@@ -120,10 +119,6 @@ import {
 	type TurnDiff,
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
-import {
-	parseBrowserAnnotationMessage,
-	type ParsedBrowserAnnotationMessage,
-} from "../../../shared/browser-annotations";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
 	hour: "2-digit",
@@ -791,6 +786,30 @@ function formatMessageTimestamp(iso: string, now = new Date()): string {
 /* messages                                                                    */
 /* -------------------------------------------------------------------------- */
 
+/** The user's bubble. A queued one reads as not-yet-sent rather than as sent-and-ignored. */
+export function humanBubbleClass(queued?: boolean): string {
+	return cn(
+		"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[10px] px-3 py-2.5 text-sm leading-[1.55]",
+		queued ? "border border-dashed border-border-strong bg-transparent text-muted-foreground" : "bg-raised text-foreground",
+	);
+}
+
+export function MessageTimestamp({ createdAt }: { createdAt: string }) {
+	return (
+		<span className="shrink-0 px-0.5 text-caption tabular-nums text-muted-foreground/75" aria-label={`Sent ${formatMessageTimestamp(createdAt)}`}>
+			{formatMessageTimestamp(createdAt)}
+		</span>
+	);
+}
+
+export function QueuedNote() {
+	return (
+		<div className="flex items-center gap-2 text-xs text-muted-foreground">
+			<span>Queued · sends when the agent finishes</span>
+		</div>
+	);
+}
+
 /** What the user typed. Right-aligned and enclosed so it reads as theirs. */
 const WORKER_REPORT_OPEN = "<ao-worker-reports>";
 const WORKER_REPORT_CLOSE = "</ao-worker-reports>";
@@ -867,6 +886,11 @@ export function HumanMessage({
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
 		>
+			{message.authorName && !editing ? (
+				<span className="max-w-full truncate px-1 text-xs text-muted-foreground" data-chat-message-author>
+					{message.authorName}
+				</span>
+			) : null}
 			{/* A queued message reads as not-yet-sent rather than as sent-and-ignored:
 			    the agent has not seen it, and the timeline should not imply it has. */}
 			{editing ? (
@@ -893,13 +917,7 @@ export function HumanMessage({
 					/* Themes draw sent and queued differently; light theme needs to tell them
 					   apart in CSS because it paints an enclosure only around a sent one. */
 					data-queued={queued ? "" : undefined}
-					className={cn(
-						"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[10px] px-3 py-2.5 text-sm leading-[1.55]",
-						animateIn && "chat-human-message-enter",
-						queued
-							? "border border-dashed border-border-strong bg-transparent text-muted-foreground"
-							: "bg-raised text-foreground",
-					)}
+					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 				>
 					{excerptReferences.length > 0 ? (
 						<ChatAnnotationSummary
@@ -936,12 +954,7 @@ export function HumanMessage({
 			{editing ? null : (
 				<div className="mt-1 flex h-7 items-center gap-1">
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
-						<span
-							className="shrink-0 px-0.5 text-caption tabular-nums text-muted-foreground/75"
-							aria-label={`Sent ${formatMessageTimestamp(message.createdAt)}`}
-						>
-							{formatMessageTimestamp(message.createdAt)}
-						</span>
+						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
 							<Tooltip>
 								<TooltipTrigger asChild>
@@ -974,11 +987,7 @@ export function HumanMessage({
 					) : null}
 				</div>
 			)}
-			{queued ? (
-				<div className="flex items-center gap-2 text-xs text-muted-foreground">
-					<span>Queued · sends when the agent finishes</span>
-				</div>
-			) : null}
+			{queued ? <QueuedNote /> : null}
 			{message.delivery && message.delivery !== "accepted" && message.delivery !== "sending" ? (
 				<DeliveryNote state={message.delivery} />
 			) : null}
@@ -992,11 +1001,6 @@ export function HumanMessage({
  */
 export function OriginMessage({ message }: { message: ConversationMessage }) {
 	const [expanded, setExpanded] = useState(false);
-	const browserAnnotations = parseBrowserAnnotationMessage(message.text);
-	if (browserAnnotations) {
-		return <BrowserAnnotationOrigin message={message} annotations={browserAnnotations} />;
-	}
-
 	const senderSessionId = message.senderSessionId?.trim();
 	const senderProjectId = message.senderProjectId?.trim();
 	const senderLabel = message.senderDisplayName?.trim() || senderSessionId;
@@ -1058,52 +1062,6 @@ function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onCl
 			<ChevronRight aria-hidden="true" className={cn("size-3 transition-transform", expanded && "rotate-90")} />
 			{expanded ? "Hide report" : "Show full report"}
 		</button>
-	);
-}
-
-function BrowserAnnotationOrigin({
-	message,
-	annotations,
-}: {
-	message: ConversationMessage;
-	annotations: ParsedBrowserAnnotationMessage;
-}) {
-	const count = annotations.items.length;
-	return (
-		<div className="cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5">
-			<div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-				<MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
-				<span>Browser feedback</span>
-				<span className="ml-auto shrink-0 font-normal tabular-nums">{formatTime(message.createdAt)}</span>
-			</div>
-			<p className="text-sm text-foreground">
-				{count} annotation{count === 1 ? "" : "s"} on {annotations.pageTitle}
-			</p>
-			<div className="mt-2 space-y-1.5">
-				{annotations.items.map((item) => (
-					<div key={item.number} className="flex min-w-0 items-start gap-2 text-xs text-muted-foreground">
-						<span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-logo-accent text-micro font-semibold text-white">
-							{item.number}
-						</span>
-						<div className="min-w-0">
-							<p className="truncate text-foreground">
-								{item.comment ||
-									(item.kind === "adjustment"
-										? `${item.changes.length} visual change${item.changes.length === 1 ? "" : "s"}`
-										: "Comment")}
-							</p>
-							{item.target ? <p className="truncate text-foreground">{item.target}</p> : null}
-							{item.text ? <p className="truncate">{item.text}</p> : null}
-						</div>
-					</div>
-				))}
-			</div>
-			{annotations.screenshotCount > 0 ? (
-				<p className="mt-2 text-xs text-muted-foreground">
-					{annotations.screenshotCount} reference screenshot{annotations.screenshotCount === 1 ? "" : "s"}
-				</p>
-			) : null}
-		</div>
 	);
 }
 

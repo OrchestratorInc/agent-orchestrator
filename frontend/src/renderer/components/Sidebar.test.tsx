@@ -31,6 +31,7 @@ import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import { useUiStore } from "../stores/ui-store";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 
@@ -393,6 +394,31 @@ it("keeps new projects at the top across refreshes and restores the order after 
 	expect(rows().map((row) => row.getAttribute("data-project-id"))).toEqual(["zulu", "alpha", "beta"]);
 });
 
+it("shows the creation order before the new project snapshot arrives and preserves it through refreshes", () => {
+	const alpha = { ...workspace, id: "alpha", name: "Alpha", sessions: [] };
+	const beta = { ...workspace, id: "beta", name: "Beta", sessions: [] };
+	const newest = { ...workspace, id: "zulu", name: "Zulu", sessions: [] };
+	const olderCloud = { ...workspace, id: "older-cloud", name: "Older cloud", kind: "cloud" as const, sessions: [] };
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const noop = vi.fn().mockResolvedValue(undefined);
+	const tree = (workspaces: WorkspaceSummary[]) => (
+		<QueryClientProvider client={client}><TooltipProvider><SidebarProvider>
+			<Sidebar workspaces={workspaces} onCloneProject={noop} onCreateProject={noop} onInitializeProject={noop} onRemoveProject={noop} onCreateRemoteProject={noop} onInitializeRemoteProject={noop} />
+		</SidebarProvider></TooltipProvider></QueryClientProvider>
+	);
+	window.localStorage.setItem("ao.sidebar.project-order", JSON.stringify(["beta", "alpha", "zulu"]));
+	useSidebarOrderStore.getState().setProjectOrder(["beta", "alpha", "zulu"]);
+	const view = render(tree([alpha, beta]));
+	act(() => useSidebarOrderStore.getState().moveProjectToTop("zulu"));
+	view.rerender(tree([alpha, beta, olderCloud, newest]));
+	const ids = () => Array.from(document.querySelectorAll("[data-project-drop-target][data-project-id]"), (row) => row.getAttribute("data-project-id"));
+	expect(ids()).toEqual(["zulu", "older-cloud", "beta", "alpha"]);
+	view.rerender(tree([]));
+	view.rerender(tree([alpha, beta, olderCloud, newest]));
+	expect(ids()).toEqual(["zulu", "older-cloud", "beta", "alpha"]);
+	expect(JSON.parse(window.localStorage.getItem("ao.sidebar.project-order") ?? "null")).toEqual(["zulu", "older-cloud", "beta", "alpha"]);
+});
+
 it.each(["invalid JSON", '{"unexpected":true}', '[4,null]'])("ignores invalid saved project order: %s", (saved) => {
 	window.localStorage.setItem("ao.sidebar.project-order", saved);
 	renderSidebar();
@@ -474,6 +500,7 @@ function fireDrag(
 
 beforeEach(() => {
 	window.localStorage.clear();
+	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	dragEnds.clear();
 	dragOvers.clear();
 	dragStarts.clear();
@@ -616,7 +643,7 @@ describe("Sidebar", () => {
 		cloudSessionState.configured = true;
 		renderSidebar();
 
-		const signInControls = screen.getAllByLabelText("Sign in to AO Cloud");
+		const signInControls = screen.getAllByLabelText("Sign in to cloud");
 		expect(signInControls).toHaveLength(2);
 		const activeControl = signInControls.find((control) => control.tabIndex === 0);
 		expect(activeControl).toBeDefined();
@@ -633,23 +660,22 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
 	});
 
-	it("hides cloud account controls when the daemon reports the cloud offering off", () => {
+	it("keeps AO account controls visible for remote hosts when Cloud execution is off", () => {
 		cloudGateState.cloudEnabled = false;
 		cloudSessionState.configured = true;
 		cloudSessionState.status = "authenticated";
 		cloudSessionState.session = { user: { email: "user@example.com" } };
 		renderSidebar();
 
-		expect(screen.queryByLabelText("Signed in as user@example.com")).not.toBeInTheDocument();
+		expect(screen.getAllByLabelText("Signed in as user@example.com")).toHaveLength(2);
 	});
 
-	it("shows AO sign-in for developer-mode remote hosts when Cloud execution is off", () => {
+	it("shows AO sign-in for remote hosts when Cloud execution is off", () => {
 		cloudGateState.cloudEnabled = false;
 		cloudSessionState.configured = true;
-		useUiStore.setState({ developerMode: true });
 		renderSidebar();
 
-		expect(screen.getAllByLabelText("Sign in to AO Cloud")).toHaveLength(2);
+		expect(screen.getAllByLabelText("Sign in to cloud")).toHaveLength(2);
 	});
 
 	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
@@ -1419,6 +1445,33 @@ describe("Sidebar", () => {
 			params: { projectId: "proj-1", sessionId: orchestrator.id },
 		}));
 		expect(spawnMock).toHaveBeenCalledTimes(existing ? 0 : 1);
+	});
+
+	it("lists a shared project's orchestrator for its guest and offers none of the owner's actions", async () => {
+		const orchestrator: WorkspaceSession = { ...session, id: "shared-orc", workspaceId: "proj-1", kind: "orchestrator", title: "Orchestrator" };
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: { byName: "Alice" }, sessions: [orchestrator] };
+		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
+		await userEvent.click(await screen.findByText("Orchestrator"));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "shared-orc" },
+		});
+		expect(screen.queryByRole("button", { name: "Project actions for Project One" })).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
+		expect(spawnMock).not.toHaveBeenCalled();
+	});
+
+	it("never offers a guest to start an orchestrator in a shared project", () => {
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: {}, sessions: [session] };
+		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
+		expect(screen.queryByRole("button", { name: "Spawn Project One orchestrator" })).toBeNull();
+		expect(screen.getByText("fix login")).toBeTruthy();
+	});
+
+	it("keeps the owner's project actions on a project of their own", () => {
+		renderSidebar({ workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [session] }], expandedProjectIds: ["proj-1"] });
+		expect(screen.getByRole("button", { name: "Project actions for Project One" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Spawn Project One orchestrator" })).toBeTruthy();
 	});
 
 	it("returns to the project board from an orchestrator session without collapsing", async () => {
@@ -2615,6 +2668,36 @@ describe("Sidebar", () => {
 		fireEvent.pointerUp(window);
 		expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe(`${SIDEBAR_MIN_WIDTH + 5}px`);
 		expect(window.localStorage.getItem("ao-sidebar-w")).toBe(String(SIDEBAR_MIN_WIDTH + 5));
+	});
+
+	it("never drops the floor below SIDEBAR_MIN_WIDTH and grows when the brand moves right", async () => {
+		// Titlebar brand as in native fullscreen: no traffic-light reserve, so the
+		// label alone would fit a sidebar narrower than the footer needs.
+		const brand = document.createElement("span");
+		brand.setAttribute("data-sidebar-brand", "");
+		const label = document.createElement("span");
+		label.setAttribute("data-brand-label", "");
+		brand.append(label);
+		document.body.append(brand);
+		brand.getBoundingClientRect = () => ({ width: 130 }) as DOMRect;
+		label.getBoundingClientRect = () => ({ left: 60 }) as DOMRect;
+		Object.defineProperty(label, "scrollWidth", { value: 100 });
+		try {
+			renderSidebar();
+			const gap = document.querySelector<HTMLElement>('[data-slot="sidebar-gap"]')!;
+			fireEvent.pointerDown(screen.getByTestId("resize-handle"), { clientX: SIDEBAR_DEFAULT_WIDTH });
+			fireEvent.pointerMove(window, { clientX: 0 });
+			fireEvent.pointerUp(window);
+			expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe(`${SIDEBAR_MIN_WIDTH}px`);
+
+			// Leaving fullscreen moves the label right; TitlebarNav's resize nudge
+			// must grow the sidebar to fit it (60 → 140, + 100 label + 13 gap).
+			label.getBoundingClientRect = () => ({ left: 140 }) as DOMRect;
+			window.dispatchEvent(new Event("resize"));
+			await waitFor(() => expect(gap.style.getPropertyValue("--ao-sidebar-w")).toBe("253px"));
+		} finally {
+			brand.remove();
+		}
 	});
 
 	it("paints the dot from its board section while activity drives the pulse", () => {

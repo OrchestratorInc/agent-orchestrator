@@ -1029,6 +1029,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conversations/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search visible chat messages across conversations */
+        get: operations["searchConversations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/cues/{cueId}": {
         parameters: {
             query?: never;
@@ -3851,6 +3868,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/workspace/search/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search the contents of visible workspace files */
+        get: operations["searchSessionWorkspaceContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/workspace/tree": {
         parameters: {
             query?: never;
@@ -4635,6 +4669,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             displayName: string;
+            effort?: string;
             enabled: boolean;
             harness?: string;
             id: string;
@@ -4643,6 +4678,8 @@ export interface components {
             /** Format: date-time */
             lastRunAt?: null | string;
             latestRun?: components["schemas"]["AutomationRunSummaryResponse"];
+            mode?: string;
+            model?: string;
             /** Format: date-time */
             nextRunAt: string;
             projectId: string;
@@ -5383,6 +5420,7 @@ export interface components {
         };
         ConversationPlanResponse: {
             explanation?: string;
+            spansTurns?: boolean;
             steps: components["schemas"]["ConversationPlanStepResponse"][];
         };
         ConversationPlanStepResponse: {
@@ -5414,6 +5452,18 @@ export interface components {
             name: string;
             text?: null | string;
             uri: string;
+        };
+        ConversationSearchHitResponse: {
+            messageId: string;
+            projectId: string;
+            reviewId?: string;
+            sessionId: string;
+            /** @description A passage of the message, with each match wrapped in U+0002 and U+0003. */
+            text: string;
+            title: string;
+        };
+        ConversationSearchResponse: {
+            results: components["schemas"]["ConversationSearchHitResponse"][];
         };
         ConversationSkillResponse: {
             description?: string;
@@ -5522,10 +5572,13 @@ export interface components {
         CreateAutomationRequest: {
             cron?: string;
             displayName: string;
+            effort?: string;
             enabled?: null | boolean;
             harness?: string;
             /** @enum {string} */
             kind: "worker" | "orchestrator";
+            mode?: string;
+            model?: string;
             projectId: string;
             prompt: string;
             rrule?: string;
@@ -5971,6 +6024,8 @@ export interface components {
             sessionId: string;
         };
         ListSessionsResponse: {
+            archived?: components["schemas"]["SessionArchiveSummary"];
+            nextCursor?: string;
             sessions: components["schemas"]["ControllersSessionView"][];
         };
         ListShellTerminalsResponse: {
@@ -6534,6 +6589,12 @@ export interface components {
         SessionAgentAccountsResponse: {
             claude?: string;
             codex?: string;
+        };
+        SessionArchiveSummary: {
+            byProject: {
+                [key: string]: number;
+            } | null;
+            total: number;
         };
         SessionArtifact: {
             inlineUrl?: string;
@@ -7406,10 +7467,13 @@ export interface components {
         UpdateAutomationRequest: {
             cron?: null | string;
             displayName?: null | string;
+            effort?: null | string;
             enabled?: null | boolean;
             harness?: null | string;
             /** @enum {null|string} */
             kind?: "worker" | "orchestrator" | null;
+            mode?: null | string;
+            model?: null | string;
             prompt?: null | string;
             rrule?: null | string;
             timezone?: null | string;
@@ -7553,6 +7617,15 @@ export interface components {
             subject: string;
             /** Format: date-time */
             timestamp: string;
+        };
+        WorkspaceContentSearchHitResponse: {
+            line: number;
+            path: string;
+            /** @description The line, with each match wrapped in U+0002 and U+0003. */
+            text: string;
+        };
+        WorkspaceContentSearchResponse: {
+            results: components["schemas"]["WorkspaceContentSearchHitResponse"][];
         };
         WorkspaceDiffDeferredResponse: {
             path: string;
@@ -10977,6 +11050,56 @@ export interface operations {
             };
         };
     };
+    searchConversations: {
+        parameters: {
+            query: {
+                /** @description Words to find in chat messages, matched by word form. */
+                query: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationSearchResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getCue: {
         parameters: {
             query?: never;
@@ -14160,7 +14283,7 @@ export interface operations {
             query?: {
                 /** @description Read items older than this conversation sequence. Omit for the newest page. */
                 beforeSequence?: null | number;
-                /** @description Maximum combined messages and activities to return. Defaults to 200. */
+                /** @description Maximum messages to return; tool activity between them comes along without counting. Defaults to 200. */
                 limit?: null | number;
             };
             header?: never;
@@ -14706,6 +14829,12 @@ export interface operations {
                 orchestratorOnly?: null | boolean;
                 /** @description When true, return only fresh non-terminated sessions. */
                 fresh?: null | boolean;
+                /** @description Session kind filter. worker keeps every session that is not an orchestrator. */
+                kind?: "worker" | "orchestrator";
+                /** @description Page size. When set, sessions are ordered pinned first, then most recently updated, and nextCursor resumes the list. When omitted, every match is returned. */
+                limit?: number;
+                /** @description Opaque cursor returned by the previous page. Requires limit. */
+                cursor?: string;
             };
             header?: never;
             path?: never;
@@ -15897,7 +16026,7 @@ export interface operations {
             query?: {
                 /** @description Read items older than this conversation sequence. Omit for the newest page. */
                 beforeSequence?: null | number;
-                /** @description Maximum combined messages and activities to return. Defaults to 200. */
+                /** @description Maximum messages to return; tool activity between them comes along without counting. Defaults to 200. */
                 limit?: null | number;
             };
             header?: never;
@@ -21927,6 +22056,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkspaceFileSearchResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    searchSessionWorkspaceContent: {
+        parameters: {
+            query: {
+                /** @description Words to find in file contents, case-insensitive and in any order. */
+                query: string;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceContentSearchResponse"];
                 };
             };
             /** @description Bad Request */

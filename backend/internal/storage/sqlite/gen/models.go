@@ -187,6 +187,9 @@ type Automation struct {
 	LastRunAt   sql.NullTime
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	Model       string
+	Mode        string
+	Effort      string
 }
 
 type AutomationRun struct {
@@ -353,6 +356,10 @@ type ConversationMessage struct {
 	SenderProjectID     string
 	SenderDisplayName   string
 	Continuation        int64
+}
+
+type ConversationMessagesFt struct {
+	Text string
 }
 
 type ConversationProviderEvent struct {

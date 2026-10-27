@@ -100,6 +100,8 @@ export interface PlanStep {
 export interface ConversationPlan {
 	explanation?: string;
 	steps: PlanStep[];
+	/** The agent keeps this list across turns (Claude's task list), so later turns carry copies of it. */
+	spansTurns?: boolean;
 }
 
 export interface ConversationUsageLimit {
@@ -198,6 +200,8 @@ export interface ConversationMessage {
 	/** True while more deltas are expected. */
 	streaming: boolean;
 	delivery?: DeliveryState;
+	/** Set on a human message another participant in a shared session sent. */
+	authorName?: string;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
 	senderSessionId?: string;
@@ -472,7 +476,9 @@ export interface SystemEventDetail {
 		| "artifact"
 		| "workspace.setup"
 		| "workspace.script.run"
-		| "account.switched";
+		| "account.switched"
+		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
+		| "approval_mode.substituted";
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */

@@ -155,13 +155,13 @@ beforeEach(() => {
 });
 
 describe("SessionsBoard", () => {
-	it("shows the Cloud loader instead of Chat while a cloud orchestrator is starting", () => {
+	it("shows the Chat startup view while a cloud orchestrator is starting", () => {
 		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
 		useUiStore.getState().setProjectProvisioning("p1", true);
 		try {
 			renderBoard("p1");
-			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
-			expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			expect(screen.getByLabelText("Message the agent").closest("form")).toHaveAttribute("data-starting", "true");
 		} finally {
 			useUiStore.getState().setProjectProvisioning("p1", false);
 		}

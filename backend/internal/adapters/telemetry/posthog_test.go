@@ -82,6 +82,45 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 	}
 }
 
+func TestPostHogSinkExportsForeignEventNames(t *testing.T) {
+	var names []string
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body struct {
+			Event string `json:"event"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		names = append(names, body.Event)
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"to.open", "ddragon.event", "maestro.event", "tools.call", "ao.session.spawned"} {
+		sink.Emit(context.Background(), ports.TelemetryEvent{Name: name, OccurredAt: time.Now()})
+	}
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 5 {
+		t.Fatalf("exported names = %v", names)
+	}
+}
+
+func TestSampleRateIsNotARemoteProperty(t *testing.T) {
+	for _, name := range []string{"ao.http.5xx"} {
+		got := sanitizeRemotePayload(name, map[string]any{"sample_rate": 0.01, "count": 3, "raw_error": "/private/path"})
+		if _, kept := got["sample_rate"]; kept || got["count"] != int64(3) {
+			t.Fatalf("%s payload = %#v, want count without sample_rate", name, got)
+		}
+		if _, leaked := got["raw_error"]; leaked {
+			t.Fatalf("%s leaked raw error", name)
+		}
+	}
+}
+
 func TestPostHogSinkSanitizesPayloads(t *testing.T) {
 	requests := make(chan map[string]any, 1)
 	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
@@ -285,7 +324,7 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 // failure, and nothing ties the emit sites to this map at compile time.
 func TestReviewPayloadAllowlistCoversTheReviewFunnel(t *testing.T) {
 	want := map[string][]string{
-		"ao.review.triggered":      {"harness", "created_runs", "reused", "trigger", "rerun"},
+		"ao.review.triggered":      {"harness", "created_runs", "trigger", "rerun"},
 		"ao.review.trigger_failed": {"error_kind", "trigger"},
 		"ao.review.submitted":      {"harness", "verdict", "duration_ms", "posted_to_provider", "trigger", "body_bytes", "auto_inject"},
 		"ao.review.cancelled":      {"cancelled_runs"},

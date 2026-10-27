@@ -93,6 +93,8 @@ export interface AgentSwitchProps {
 	ultracode?: { on: boolean; onChange: (on: boolean) => void };
 	/** When Claude Code compacts on its own. Applies the next time it starts. */
 	autoCompact?: AutoCompactControl;
+	/** The agents to offer in place of the chat switch targets, for choosing one before a session exists. */
+	agents?: Array<{ id: string; label: string }>;
 }
 
 export interface PickerModel {
@@ -211,6 +213,8 @@ export function AgentModelPicker({
 }) {
 	const { t } = useTranslation();
 	const { pending, onPendingChange, projectId, hostId } = agentSwitch;
+	// The agents to offer before a session exists, in place of the chat switch targets.
+	const choices = agentSwitch.agents;
 	const readiness = useAgentReadinessQuery(true, hostId).data?.agents;
 	// An agent can be ready in a terminal and still miss the adapter its chat
 	// needs (Pi's pi-acp). The daemon checks that without starting anything.
@@ -228,7 +232,10 @@ export function AgentModelPicker({
 	}).data;
 	// Only runnable agents are offered, as in New Task; unknown readiness stays selectable
 	// since the daemon checks the target first. A terminal's own agent is left out (/model there).
-	const agents = useMemo(() => [
+	const agents = useMemo(() => choices ? [
+		{ id: currentHarness, label: agentLabel(currentHarness) },
+		...choices.filter((agent) => agent.id !== currentHarness),
+	] : [
 		...(terminal ? [] : [{ id: currentHarness, label: agentLabel(currentHarness) }]),
 		...(terminal ? TERMINAL_SWITCH_TARGETS : CHAT_SWITCH_TARGETS).flatMap((id) => {
 			if (id === currentHarness) return [];
@@ -237,7 +244,7 @@ export function AgentModelPicker({
 			if (!terminal && chatUnavailable?.has(id)) return [];
 			return agent && !isLaunchableAgent(agent) ? [] : [{ id: id as string, label }];
 		}),
-	], [chatUnavailable, currentHarness, readiness, terminal]);
+	], [chatUnavailable, choices, currentHarness, readiness, terminal]);
 	const management = useAgentManagementMenu(undefined, hostId);
 	const [open, setOpen] = useState(false);
 	const favorites = useModelFavorites();
@@ -366,7 +373,7 @@ export function AgentModelPicker({
 				aria-label={terminal ? t("agentSwitch.terminalAgent") : t("agentSwitch.pickerLabel")}
 				title={title ?? (terminal ? t("agentSwitch.switchAnother") : t("agentSwitch.pickerLabel"))}
 				className={cn(TRIGGER_CLASS, terminal ? "w-full justify-start" : undefined)}
-				showCaret={!terminal}
+				showCaret={false}
 				data-shortcut-target={terminal ? undefined : "model-picker"}
 			>
 				<ProviderMark provider={terminal ? currentHarness : shownHarness} className="size-3.5" />
@@ -658,7 +665,7 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 				return (
 					<Fragment key={key}>
 						{model.group && model.group !== matches[index - 1]?.group ? (
-							<OptionMenuLabel className="px-3 pt-2.5 pb-0.5 text-[10px]! text-muted-foreground/70">{model.group}</OptionMenuLabel>
+							<OptionMenuLabel>{model.group}</OptionMenuLabel>
 						) : null}
 						<OptionMenuItem
 							id={optionID?.(key)}
@@ -748,7 +755,8 @@ export function ComposerErrorNotice(
 	return (
 		<div
 			role="alert"
-			className="-mb-2 flex min-w-0 items-start gap-2 rounded-t-(--radius-chat-composer) border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs"
+			data-composer-notice
+			className="flex min-w-0 items-start gap-2 rounded-t-(--radius-chat-composer) border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs"
 		>
 			<TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-destructive" />
 			<div className="min-w-0 flex-1">

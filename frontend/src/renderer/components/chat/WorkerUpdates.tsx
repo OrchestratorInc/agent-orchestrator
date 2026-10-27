@@ -12,6 +12,8 @@
 import { Bot, ChevronDown, ChevronRight, CornerDownRight, FileText, GitPullRequest, LoaderCircle, Split, Tag, Undo2 } from "lucide-react";
 import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import type { Options } from "react-markdown";
+import { remarkPlainReferences } from "../../lib/session-links";
 import { cn } from "../../lib/utils";
 import { isSteer, type ConversationItem, type ConversationMessage } from "../../types/conversation";
 import type { PullRequestFacts, WorkspaceSession } from "../../types/workspace";
@@ -77,7 +79,7 @@ function parseReports(text: string, createdAt: string, keyPrefix: string): Worke
 }
 
 /** Items never change in place, so each is parsed once however often the timeline renders. */
-function cachedBy<T>(read: (item: ConversationItem) => T): (item: ConversationItem) => T {
+export function cachedBy<T>(read: (item: ConversationItem) => T): (item: ConversationItem) => T {
 	const cache = new WeakMap<ConversationItem, T>();
 	return (item) => {
 		if (!cache.has(item)) cache.set(item, read(item));
@@ -257,6 +259,38 @@ function useWorkerSession(sessionId: string | undefined, projectId?: string): Wo
 	return undefined;
 }
 
+// Keyed on which sessions exist, not on the workspace list: that list changes with every session
+// event, and a new plugin list re-parses every message that renders it.
+// ponytail: one cached session set; chats on two hosts at once rebuild in turn, key the cache by set if that shows up.
+type References = { sessions: string; plugins: Options["remarkPlugins"] };
+const referencesByWorkspaces = new WeakMap<object, References>();
+let latestReferences: References | undefined;
+
+/**
+ * Agents message each other in plain prose; their paths read as code and the
+ * sessions they name link to them. Built once per workspace list and shared by
+ * every message, and the same list until a session is added or removed.
+ */
+export function usePlainReferences(): Options["remarkPlugins"] {
+	const workspaces = useChatLinkWorkspaces();
+	let references = referencesByWorkspaces.get(workspaces);
+	if (!references) {
+		const sessions = JSON.stringify(workspaces.flatMap((workspace) => workspace.sessions.map((entry) => [entry.id, workspace.id])));
+		references = latestReferences?.sessions === sessions
+			? latestReferences
+			: { sessions, plugins: [[remarkPlainReferences, new Map(JSON.parse(sessions) as [string, string][])]] };
+		referencesByWorkspaces.set(workspaces, references);
+	}
+	latestReferences = references;
+	return references.plugins;
+}
+
+/** Prose one agent sent another, with its plain references highlighted. Its own component, so only drawn prose reads them. */
+function AgentProse({ text, muted, className }: { text: string; muted?: boolean; className?: string }) {
+	const references = usePlainReferences();
+	return <ChatMarkdown text={text} muted={muted} safeOrigin remarkPlugins={references} className={className} />;
+}
+
 function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 	const [open, setOpen] = useState(false);
 	const session = useWorkerSession(update.sessionId, update.projectId);
@@ -315,7 +349,7 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 			))}
 			{open ? (
 				<div className="mb-2 ml-6 mt-1 min-w-0">
-					<ChatMarkdown text={detail} muted safeOrigin className="whitespace-pre-wrap text-xs leading-relaxed" />
+					<AgentProse text={detail} muted className="whitespace-pre-wrap text-xs leading-relaxed" />
 				</div>
 			) : null}
 		</div>
@@ -339,24 +373,51 @@ export function WorkerUpdateRows({ updates }: { updates: readonly WorkerUpdate[]
 }
 
 /**
- * In a worker's chat, a message from its orchestrator, drawn the way the
- * orchestrator chat draws a worker: avatar, linked name and time, with what it
- * sent open beneath at the row's indent. Any other message draws as `children`.
+ * In a worker's chat, a message another agent sent it (its orchestrator, or a
+ * sibling worker), drawn the way the orchestrator chat draws a worker: avatar,
+ * linked name and time, with what it sent open beneath at the row's indent.
+ * Any other message draws as `children`.
  */
-export function FromOrchestrator({ item, children }: { item: ConversationItem; children: ReactNode }) {
+export function FromAgent({ item, children }: { item: ConversationItem; children: ReactNode }) {
+	const { t } = useTranslation();
 	const updates = workerUpdatesOf(item);
 	const update = updates.length === 1 && !updates[0]!.state ? updates[0] : undefined;
 	const session = useWorkerSession(update?.sessionId, update?.projectId);
-	if (!update || session?.kind !== "orchestrator") return <>{children}</>;
-	return <OrchestratorMessage update={update} session={session} />;
+	if (!update || !session) return <>{children}</>;
+	const name = session.kind === "orchestrator" ? t("shell.orchestrator") : session.title || update.name;
+	const href = sessionHref({ sessionId: update.sessionId, projectId: update.projectId ?? session.workspaceId });
+	return (
+		<div className="relative min-w-0 pl-6" data-testid="agent-message">
+			<AgentAvatar provider={session.provider} decorative className="absolute left-0 top-[3px] size-4" />
+			<Folded watch={update.body}>
+				{/* The name and time float into the message's first line; the rest wraps under the name. */}
+				<span className="float-right ml-3 text-xs leading-[calc(var(--chat-readable-font-size)*1.58)] tabular-nums text-muted-foreground">
+					{formatTime(update.createdAt)}
+				</span>
+				{href ? (
+					<SessionLabelLink
+						href={href}
+						className="float-left mr-2 text-[length:var(--chat-readable-font-size)] font-medium leading-[1.58] text-foreground decoration-foreground/40 underline-offset-2 hover:underline"
+					>
+						{name}
+					</SessionLabelLink>
+				) : null}
+				<AgentProse text={update.body} />
+			</Folded>
+		</div>
+	);
 }
 
-function OrchestratorMessage({ update, session }: { update: WorkerUpdate; session: WorkspaceSession }) {
+/**
+ * Content folded after five lines, with "Show more" whenever the fold hides
+ * something. Re-measured as the chat resizes, so hidden text always comes with a
+ * way to open it.
+ */
+export function Folded({ watch, children }: { watch: unknown; children: ReactNode }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const [folds, setFolds] = useState(false);
 	const body = useRef<HTMLDivElement>(null);
-	// Re-measured as the chat resizes, so text the fold hides always comes with a way to open it.
 	useLayoutEffect(() => {
 		const element = body.current;
 		if (!element || open) return;
@@ -365,27 +426,11 @@ function OrchestratorMessage({ update, session }: { update: WorkerUpdate; sessio
 		const observer = new ResizeObserver(measure);
 		observer.observe(element);
 		return () => observer.disconnect();
-	}, [open, update.body]);
-	const href = sessionHref({ sessionId: update.sessionId, projectId: update.projectId ?? session.workspaceId });
+	}, [open, watch]);
 	return (
-		<div className="relative min-w-0 pl-6" data-testid="orchestrator-message">
-			<AgentAvatar provider={session.provider} decorative className="absolute left-0 top-[3px] size-4" />
-			{/* The name and time float into the message's first line; the rest wraps under the name. */}
+		<>
 			<div ref={body} className={cn("min-w-0", !open && "line-clamp-5")}>
-				<div>
-					<span className="float-right ml-3 text-xs leading-[calc(var(--chat-readable-font-size)*1.58)] tabular-nums text-muted-foreground">
-						{formatTime(update.createdAt)}
-					</span>
-					{href ? (
-						<SessionLabelLink
-							href={href}
-							className="float-left mr-2 text-[length:var(--chat-readable-font-size)] font-medium leading-[1.58] text-foreground decoration-foreground/40 underline-offset-2 hover:underline"
-						>
-							{t("shell.orchestrator")}
-						</SessionLabelLink>
-					) : null}
-					<ChatMarkdown text={update.body} safeOrigin />
-				</div>
+				<div>{children}</div>
 			</div>
 			{folds || open ? (
 				<button
@@ -398,7 +443,7 @@ function OrchestratorMessage({ update, session }: { update: WorkerUpdate; sessio
 					<ChevronDown aria-hidden="true" className={cn("size-3 transition-transform motion-reduce:transition-none", open && "rotate-180")} />
 				</button>
 			) : null}
-		</div>
+		</>
 	);
 }
 

@@ -166,13 +166,22 @@ func (s *Store) ClaimWorkerTurn(
 }
 
 // RequestTurnCancellation records user intent exactly once. Repeated requests
-// are idempotent and do not create duplicate chat events.
+// are idempotent and do not create duplicate chat events. Only someone who
+// may direct the turn (see mayDirectTurnTx) may stop it.
 func (s *Store) RequestTurnCancellation(
 	ctx context.Context,
 	principal domain.Principal,
 	orgID, sessionID, turnID string,
 ) error {
-	return s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+	return s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		if access.Role == "viewer" {
+			return ErrForbidden
+		}
+		if allowed, err := mayDirectTurnTx(ctx, tx, orgID, sessionID, turnID, principal.UserID); err != nil {
+			return err
+		} else if !allowed {
+			return ErrForbidden
+		}
 		var state string
 		err := tx.QueryRow(
 			ctx,
@@ -214,11 +223,14 @@ func (s *Store) RequestTurnCancellation(
 }
 
 // SteerTurn queues guidance for the active worker. Delivery is recorded only
-// after its live provider connection acknowledges the injection.
+// after its live provider connection acknowledges the injection. Like a
+// message, steering needs the composer lease (composerEpoch, 0 for none) and
+// releases it to the next person in line.
 func (s *Store) SteerTurn(
 	ctx context.Context,
 	principal domain.Principal,
 	orgID, sessionID, turnID, idempotencyKey, text string,
+	composerEpoch int64,
 ) (domain.ClientEvent, error) {
 	var event domain.ClientEvent
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
@@ -242,6 +254,9 @@ func (s *Store) SteerTurn(
 		}
 		if err != nil {
 			return normalizeConstraintError(err)
+		}
+		if err := claimComposerForSendTx(ctx, tx, orgID, sessionID, principal.UserID, composerEpoch); err != nil {
+			return err
 		}
 		var state string
 		if err := tx.QueryRow(ctx, `SELECT state FROM ao_turns

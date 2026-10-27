@@ -107,7 +107,7 @@ describe("ChatAnnotationSummary", () => {
 		const item = screen.getByRole("button", { name: /A long annotation excerpt/ });
 		expect(item.querySelector("span")).toHaveClass("truncate");
 		expect(item).not.toHaveAttribute("title");
-		expect(screen.getByRole("dialog")).toHaveClass("border-0");
+		expect(screen.getByRole("dialog")).toHaveClass("border-(--color-border-overlay)");
 		await user.hover(item);
 		expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 		await user.unhover(item);

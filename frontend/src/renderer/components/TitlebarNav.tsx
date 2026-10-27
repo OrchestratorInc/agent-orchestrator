@@ -46,9 +46,11 @@ export function useCanGoForward(): boolean {
 export function TitlebarNav({
   historyLocked = false,
   isFullScreen = false,
+  zoomFactor = 1,
 }: {
   historyLocked?: boolean;
   isFullScreen?: boolean;
+  zoomFactor?: number;
 }) {
   const { t } = useTranslation();
   const toggleSidebar = useUiStore((state) => state.toggleSidebar);
@@ -60,10 +62,12 @@ export function TitlebarNav({
   const showBrand = isSidebarOpen;
   // The sidebar's minimum width is measured from the brand label, which only
   // exists once this mounts it. Nudge the sidebar's resize re-clamp so a stored
-  // or default width narrower than the label grows to fit it.
+  // or default width narrower than the label grows to fit it. Fullscreen and
+  // zoom move the label with the traffic-light reserve, and the window's own
+  // resize fires before that lands, so nudge again once the label has moved.
   useEffect(() => {
     if (showBrand) window.dispatchEvent(new Event("resize"));
-  }, [showBrand]);
+  }, [showBrand, isFullScreen, zoomFactor]);
 
   if (!isMac && !isLinux) return null;
   // Native fullscreen changes only the horizontal traffic-light reserve.

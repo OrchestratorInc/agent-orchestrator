@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
@@ -50,7 +51,7 @@ func (s *Server) getWorkspaceRepositories(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) getChatModels(w http.ResponseWriter, r *http.Request) {
-	s.dispatchWorkspaceReview(w, r, "chat.models", struct{}{}, &worker.ChatModelsResponse{})
+	s.dispatchWorkspaceReviewWithin(w, r, "chat.models", struct{}{}, &worker.ChatModelsResponse{}, s.chatModelsRequestTimeout())
 }
 
 func (s *Server) getWorkspaceReviewTree(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +170,20 @@ func (s *Server) putWorkspaceReviewFile(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) dispatchWorkspaceReview(w http.ResponseWriter, r *http.Request, kind string, input any, response any) bool {
+	return s.dispatchWorkspaceReviewWithin(w, r, kind, input, response, s.workerRequestTimeout)
+}
+
+// chatModelsRequestTimeout is how long a model catalog request waits for the
+// worker. The worker gives discovery up to 20 s (starting the Claude ACP
+// adapter and probing each model's approval modes on a cold worker), longer
+// than the default request wait, so the wait covers that plus delivery.
+func (s *Server) chatModelsRequestTimeout() time.Duration {
+	return max(s.workerRequestTimeout, minChatModelsRequestTimeout)
+}
+
+const minChatModelsRequestTimeout = 25 * time.Second
+
+func (s *Server) dispatchWorkspaceReviewWithin(w http.ResponseWriter, r *http.Request, kind string, input any, response any, timeout time.Duration) bool {
 	orgID, sessionID, ok := workspaceRoute(w, r)
 	if !ok {
 		return false
@@ -178,7 +193,7 @@ func (s *Server) dispatchWorkspaceReview(w http.ResponseWriter, r *http.Request,
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The workspace request could not be encoded.")
 		return false
 	}
-	result, ok := s.runWorkspaceRequest(w, r, orgID, sessionID, kind, payload)
+	result, ok := s.runWorkspaceRequestWithin(w, r, orgID, sessionID, kind, payload, timeout)
 	if !ok {
 		return false
 	}

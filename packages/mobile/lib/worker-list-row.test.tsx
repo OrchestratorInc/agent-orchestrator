@@ -5,7 +5,23 @@ import { createContext, createElement, useContext, useImperativeHandle, Fragment
 
 const appContext = createContext({ currentHostId: "host-1", notificationsUnread: 0 });
 const counters = vi.hoisted(() => ({ renders: 0, scrollToOffset: vi.fn(), foreground: (_state: string) => {}, focus: () => {} }));
-const boardStore = vi.hoisted(() => ({ projects: [], allProjects: [], connection: "open", hostStates: [] as { hostId: string; connection: string }[], kill: vi.fn(), renameWorker: vi.fn(), setWorkerPinned: vi.fn(), restore: vi.fn(), resumeAgent: vi.fn() }));
+const boardStore = vi.hoisted(() => ({
+	projects: [], allProjects: [], connection: "open", hostStates: [] as { hostId: string; connection: string }[],
+	kill: vi.fn(), renameWorker: vi.fn(), setWorkerPinned: vi.fn(), restore: vi.fn(), resumeAgent: vi.fn(),
+	configForHost: (hostId: string) => ({ host: `${hostId}.test`, httpPort: "3011", muxPort: "3011", password: "secret", hostId }),
+}));
+// Each archive page request waits here until the test answers it.
+const archivePages = vi.hoisted(() => ({
+	requests: [] as { hostId?: string; cursor?: string | null; resolve(page: { sessions: unknown[]; nextCursor: string | null }): void; reject(cause: unknown): void }[],
+}));
+vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() } }));
+vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
+vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
+vi.mock("./api", async (importOriginal) => ({
+	...await importOriginal<typeof import("./api")>(),
+	getArchivedSessions: (cfg: { hostId?: string }, options: { cursor?: string | null } = {}) =>
+		new Promise((resolve, reject) => { archivePages.requests.push({ hostId: cfg.hostId, cursor: options.cursor, resolve, reject }); }),
+}));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
 
@@ -13,6 +29,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("expo-router", () => ({ useRouter: () => router, useFocusEffect: (callback: () => void) => { counters.focus = callback; } }));
 vi.mock("react-native", () => ({
+	ActivityIndicator: "ActivityIndicator",
 	Alert: { alert: vi.fn() }, AppState: { addEventListener: (_event: string, callback: (state: string) => void) => { counters.foreground = callback; return { remove: vi.fn() }; } }, RefreshControl: "RefreshControl",
 	Keyboard: { dismiss: vi.fn() },
 	Platform: { OS: "ios" },
@@ -196,8 +213,9 @@ describe("WorkerListRow", () => {
 
 describe("archived workers", () => {
 	const live = { ...session, id: "live", hostId: "mac" };
-	const archivedA = { ...session, id: "old-a", hostId: "mac", hostName: "Mac", isTerminated: true, status: "terminated" };
-	const archivedB = { ...session, id: "old-b", hostId: "mac", hostName: "Mac", isTerminated: true, status: "terminated" };
+	// The archive is ordered by updatedAt, newest first, as the daemon pages it.
+	const archivedA = { ...session, id: "old-a", hostId: "mac", hostName: "Mac", isTerminated: true, status: "terminated", updatedAt: "2026-10-08T02:00:00Z" };
+	const archivedB = { ...session, id: "old-b", hostId: "mac", hostName: "Mac", isTerminated: true, status: "terminated", updatedAt: "2026-10-08T01:00:00Z" };
 	const board = (sessions: DashboardSession[], query = "") => (
 		<WorkerBoardList sessions={sessions} query={query} initialArchiveOpen contentBottomInset={0} refreshing={false} onRefresh={vi.fn()} />
 	);
@@ -323,6 +341,219 @@ describe("archived workers", () => {
 		expect(boardStore.restore).toHaveBeenCalledTimes(1);
 		await act(async () => { finish(); await Promise.resolve(); });
 		expect(restoreButtons(renderer).map((button) => button.props.disabled)).toEqual([false, false]);
+		act(() => renderer.unmount());
+	});
+});
+
+describe("a machine that pages its archive", () => {
+	const live = { ...session, id: "live", hostId: "mac", hostName: "Mac" };
+	const arch = (id: string, day: number) => ({ ...session, id, displayName: `Archived ${id}`, isTerminated: true, status: "terminated", updatedAt: `2026-10-0${day}T00:00:00Z` });
+	const source = (total: number) => [{ hostId: "mac", host: { name: "Mac", appearance: { symbol: "server" as const } }, summary: { total, byProject: { "project-1": total } } }];
+	const board = (sessions: DashboardSession[], sources = source(3), query = "") => (
+		<WorkerBoardList sessions={sessions} archiveSources={sources} query={query} contentBottomInset={0} refreshing={false} onRefresh={vi.fn()} />
+	);
+	const list = (renderer: ReactTestRenderer) => renderer.root.findByType("virtual-list" as never);
+	const rows = (renderer: ReactTestRenderer) => list(renderer).props.data as { kind: string; session?: DashboardSession }[];
+	const archivedIds = (renderer: ReactTestRenderer) => rows(renderer).filter((row) => row.kind === "archived").map((row) => row.session!.id);
+	const archiveHeader = (renderer: ReactTestRenderer) =>
+		renderer.root.findAllByType("Pressable" as never).find((node) => node.props.accessibilityLabel?.startsWith("Archive,"))!;
+	const answer = async (page: { sessions: unknown[]; nextCursor: string | null }) => {
+		await act(async () => { archivePages.requests.shift()!.resolve(page); });
+	};
+
+	// The poll no longer carries the archive, only its size; the rows are
+	// fetched a page at a time, and only once someone opens it.
+	it("counts the archive from the poll and fetches pages only once Archive opens", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live])); });
+		expect(archiveHeader(renderer).props.accessibilityLabel).toBe("Archive, 3 sessions");
+		expect(archivePages.requests).toHaveLength(0);
+
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ hostId: "mac", cursor: null })]);
+		await answer({ sessions: [arch("a3", 3), arch("a2", 2)], nextCursor: "after-a2" });
+		expect(archivedIds(renderer)).toEqual(["a3", "a2"]);
+		expect(rows(renderer).at(-1)?.kind).toBe("archive-status");
+		// Archived rows carry their machine, like the live rows around them.
+		expect(rows(renderer).find((row) => row.kind === "archived")?.session).toMatchObject({ hostId: "mac", hostName: "Mac" });
+
+		act(() => { list(renderer).props.onEndReached(); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: "after-a2" })]);
+		await answer({ sessions: [arch("a1", 1)], nextCursor: null });
+		expect(archivedIds(renderer)).toEqual(["a3", "a2", "a1"]);
+		expect(rows(renderer).some((row) => row.kind === "archive-status")).toBe(false);
+		act(() => renderer.unmount());
+	});
+
+	// The 1,000-row cap bounds a search, which reads the archive by itself.
+	// Browsing pages only as far as the user scrolls, so it must never stop there.
+	it("keeps paging past 1,000 rows while browsing", async () => {
+		archivePages.requests.length = 0;
+		const base = Date.parse("2026-10-01T00:00:00Z");
+		const page = (index: number) => Array.from({ length: 50 }, (_, row) => {
+			const n = index * 50 + row;
+			return { ...session, id: `old-${String(n).padStart(4, "0")}`, isTerminated: true, status: "terminated", updatedAt: new Date(base - n * 60_000).toISOString() };
+		});
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(1200))); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		for (let index = 0; index < 20; index++) {
+			if (index > 0) act(() => { list(renderer).props.onEndReached(); });
+			expect(archivePages.requests).toHaveLength(1);
+			await answer({ sessions: page(index), nextCursor: `after-${index}` });
+		}
+		expect(archivedIds(renderer)).toHaveLength(1000);
+		act(() => { list(renderer).props.onEndReached(); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: "after-19" })]);
+		expect(rows(renderer).at(-1)?.kind).toBe("archive-status");
+		act(() => renderer.unmount());
+	});
+
+	// A count change that lands while a page is in flight cannot refresh then;
+	// it must when that request settles, or a newly archived session stays
+	// missing until the count moves again.
+	it("refreshes the archive once an in-flight page settles after the count moved", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(3))); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		await answer({ sessions: [arch("a3", 3), arch("a2", 2)], nextCursor: "after-a2" });
+		act(() => { list(renderer).props.onEndReached(); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: "after-a2" })]);
+		const nextPage = archivePages.requests.shift()!;
+		act(() => { renderer.update(board([live], source(4))); });
+		expect(archivePages.requests).toHaveLength(0);
+		await act(async () => { nextPage.resolve({ sessions: [arch("a1", 1)], nextCursor: null }); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: null })]);
+		await answer({ sessions: [arch("a4", 4), arch("a3", 3), arch("a2", 2), arch("a1", 1)], nextCursor: null });
+		expect(archivedIds(renderer)).toEqual(["a4", "a3", "a2", "a1"]);
+		act(() => renderer.unmount());
+	});
+
+	// Sessions deleted on desktop never come back as live rows, so only the
+	// archive's own refresh can drop them from pages kept from before.
+	const numbered = (from: number, count: number) => Array.from({ length: count }, (_, index) => {
+		const n = from + index;
+		return { ...session, id: `old-${String(n).padStart(4, "0")}`, isTerminated: true, status: "terminated", updatedAt: new Date(Date.parse("2026-10-01T00:00:00Z") - n * 60_000).toISOString() };
+	});
+	it("drops a session deleted on desktop when the refreshed first page is the whole archive", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(51))); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		await answer({ sessions: numbered(0, 50), nextCursor: "after-49" });
+		act(() => { list(renderer).props.onEndReached(); });
+		await answer({ sessions: numbered(50, 1), nextCursor: null });
+		expect(archivedIds(renderer)).toHaveLength(51);
+		// The oldest is deleted on desktop; the poll reports 50.
+		act(() => { renderer.update(board([live], source(50))); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: null })]);
+		await answer({ sessions: numbered(0, 50), nextCursor: null });
+		expect(archivedIds(renderer)).toHaveLength(50);
+		expect(archivedIds(renderer)).not.toContain("old-0050");
+		act(() => renderer.unmount());
+	});
+
+	it("reloads pages below the first when the archive shrank, instead of keeping stale rows", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(120))); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		await answer({ sessions: numbered(0, 50), nextCursor: "after-49" });
+		act(() => { list(renderer).props.onEndReached(); });
+		await answer({ sessions: numbered(50, 50), nextCursor: "after-99" });
+		act(() => { list(renderer).props.onEndReached(); });
+		await answer({ sessions: numbered(100, 20), nextCursor: null });
+		expect(archivedIds(renderer)).toHaveLength(120);
+		// old-0075 is deleted on desktop: the count drops to 119.
+		act(() => { renderer.update(board([live], source(119))); });
+		await answer({ sessions: numbered(0, 50), nextCursor: "after-49" });
+		expect(archivedIds(renderer)).toHaveLength(50);
+		expect(rows(renderer).at(-1)?.kind).toBe("archive-status");
+		act(() => { list(renderer).props.onEndReached(); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: "after-49" })]);
+		await answer({ sessions: [...numbered(50, 25), ...numbered(76, 25)], nextCursor: "after-100" });
+		expect(archivedIds(renderer)).not.toContain("old-0075");
+		act(() => renderer.unmount());
+	});
+
+	// More than a page archived since the last refresh: page one no longer
+	// reaches the rows loaded before, so keeping them with the old end state
+	// would leave sessions in between that nothing ever loads.
+	it("follows the refreshed cursor when the new first page does not reach the loaded rows", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(1))); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		await answer({ sessions: numbered(1000, 1), nextCursor: null });
+		expect(archivedIds(renderer)).toEqual(["old-1000"]);
+		// 51 newer sessions are archived while the phone is in the background.
+		act(() => { renderer.update(board([live], source(52))); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: null })]);
+		await answer({ sessions: numbered(0, 50), nextCursor: "after-0049" });
+		expect(archivedIds(renderer)).toHaveLength(50);
+		expect(rows(renderer).at(-1)?.kind).toBe("archive-status");
+		act(() => { list(renderer).props.onEndReached(); });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: "after-0049" })]);
+		await answer({ sessions: [...numbered(50, 1), ...numbered(1000, 1)], nextCursor: null });
+		expect(archivedIds(renderer)).toHaveLength(52);
+		expect(archivedIds(renderer).slice(-2)).toEqual(["old-0050", "old-1000"]);
+		act(() => renderer.unmount());
+	});
+
+	it("drops a restored session from the archive as soon as it is live again", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live])); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		await answer({ sessions: [arch("a2", 2), arch("a1", 1)], nextCursor: null });
+		const restored = { ...arch("a2", 2), hostId: "mac", hostName: "Mac", isTerminated: false, status: "idle" };
+		act(() => { renderer.update(board([live, restored])); });
+		expect(archivedIds(renderer)).toEqual(["a1"]);
+		act(() => renderer.unmount());
+	});
+
+	it("reads every page while searching so an archived match can be found", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(3), "archived")); });
+		expect(archivePages.requests).toHaveLength(1);
+		await answer({ sessions: [arch("a3", 3), arch("a2", 2)], nextCursor: "after-a2" });
+		expect(archivePages.requests).toEqual([expect.objectContaining({ cursor: "after-a2" })]);
+		await answer({ sessions: [arch("a1", 1)], nextCursor: null });
+		expect(archivedIds(renderer)).toEqual(["a3", "a2", "a1"]);
+		act(() => renderer.unmount());
+	});
+
+	// A search with no match yet must not read as "no results" when the archive
+	// could not be read: the error and Retry stay until it succeeds.
+	it("keeps a failed archive search's Retry when nothing matched", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live], source(3), "only-in-the-archive")); });
+		expect(archivePages.requests).toHaveLength(1);
+		await act(async () => { archivePages.requests.shift()!.reject(new Error("socket hang up")); });
+		const retry = renderer.root.findAllByType("Pressable" as never).find((node) => node.props.accessibilityLabel === "Retry loading archived sessions");
+		expect(retry).toBeTruthy();
+		expect(rows(renderer).map((row) => row.kind)).toEqual(["header", "archive-status"]);
+		act(() => { retry!.props.onPress(); });
+		expect(archivePages.requests).toHaveLength(1);
+		act(() => renderer.unmount());
+	});
+
+	it("offers a retry when a page fails", async () => {
+		archivePages.requests.length = 0;
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live])); });
+		act(() => { archiveHeader(renderer).props.onPress(); });
+		await act(async () => { archivePages.requests.shift()!.reject(new Error("socket hang up")); });
+		const retry = renderer.root.findAllByType("Pressable" as never).find((node) => node.props.accessibilityLabel === "Retry loading archived sessions");
+		expect(retry).toBeTruthy();
+		act(() => { retry!.props.onPress(); });
+		expect(archivePages.requests).toHaveLength(1);
+		await answer({ sessions: [arch("a1", 1)], nextCursor: null });
+		expect(archivedIds(renderer)).toEqual(["a1"]);
 		act(() => renderer.unmount());
 	});
 });

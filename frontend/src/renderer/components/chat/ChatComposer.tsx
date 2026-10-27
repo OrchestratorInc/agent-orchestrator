@@ -1,4 +1,5 @@
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { useTranslation } from "react-i18next";
 /**
  * The Chat composer.
  *
@@ -113,6 +114,8 @@ import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 export const AGENT_SWITCH_FAILED = "AGENT_SWITCH_FAILED";
 const DEFINITIVE_SEND_REJECTIONS = new Set([
 	AGENT_SWITCH_FAILED,
+	// The new chat page could not create the session this brief would start.
+	"TASK_CREATE_FAILED",
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
 	"INVALID_BODY",
@@ -128,6 +131,10 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"CHAT_CONTROLLER_NOT_READY",
 	"CHAT_RESUME_FAILED",
 	"CHAT_INTERFACE_TRANSITION",
+	// A shared session refused the send because someone else holds its
+	// composer; nothing was accepted, so the text goes back to the draft.
+	"COMPOSER_LOCKED",
+	"COMPOSER_LEASE_LOST",
 	// Excerpts are verified before AppendUserMessage, so retrying the same
 	// references can only fail again; return them to the draft for removal.
 	"CHAT_EXCERPT_INVALID",
@@ -189,6 +196,7 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled,
 	disabledPlaceholder,
 	starting,
+	attachLater,
 	settings,
 	addMenuItems,
 	approval,
@@ -211,13 +219,14 @@ export const ChatComposer = memo(function ChatComposer({
 	onCancelQueuedEdit,
 	onQueuedDraftChange,
 	onDraftEmptyChange,
+	onDraftInput,
 	queuedDraftScope,
 	onQueuedAttachmentsChange,
 	onQueuedRetainedAttachmentsChange,
 	savingQueuedEditPending,
 	queuedEditRecovery,
 	commandError,
-	attachedTop = false,
+	notice,
 	queuedDock,
 	onCompact,
 	compacting,
@@ -267,6 +276,8 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
 	starting?: boolean;
+	/** Draw the attach control disabled, for a chat whose workspace does not exist yet. */
+	attachLater?: boolean;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
 	/** A proposed next message, kept out of the draft until accepted with Tab. */
@@ -315,6 +326,8 @@ export const ChatComposer = memo(function ChatComposer({
 	onQueuedDraftChange?: (text: string) => void;
 	/** Called when the draft turns empty or non-empty, including after a restore. */
 	onDraftEmptyChange?: (empty: boolean) => void;
+	/** Every edit of the draft text or move of its caret, with the text and caret after it. */
+	onDraftInput?: (text: string, caret?: number) => void;
 	queuedDraftScope?: ChatDraftScope;
 	onQueuedAttachmentsChange?: (attachments: ChatDraftAttachment[]) => void;
 	onQueuedRetainedAttachmentsChange?: (attachments: ChatDraftRetainedAttachment[]) => void;
@@ -324,8 +337,8 @@ export const ChatComposer = memo(function ChatComposer({
 	queuedEditRecovery?: boolean;
 	/** A failed send, approval, interrupt, or settings mutation. */
 	commandError?: string;
-	/** A queued-message dock owns the shared rounded top edge. */
-	attachedTop?: boolean;
+	/** A notice attached to the form, below queued messages and input requests. */
+	notice?: ReactNode;
 	/** Queued messages rendered above the composer. */
 	queuedDock?: ReactNode;
 	/** Run AO's built-in `/compact` command instead of sending it to the agent. */
@@ -354,6 +367,7 @@ export const ChatComposer = memo(function ChatComposer({
 	acceptedClientMessageIds?: ReadonlySet<string>;
 }) {
 	const translateDraft = useChatDraftTranslation();
+	const { t } = useTranslation();
 	const draftScope = useMemo<ChatDraftScope | undefined>(
 		() =>
 			draftSessionId
@@ -371,8 +385,11 @@ export const ChatComposer = memo(function ChatComposer({
 	const boundarySessionId = draftSessionId ?? queuedDraftScope?.sessionId;
 	const [retainedAttachments, setRetainedAttachments] = useState<StoredComposerAttachment[]>(draftSeed?.attachments ?? []);
 	const visibleRetainedAttachments = editingQueuedTurnId ? retainedAttachments : [];
-	const [hasText, setHasText] = useState(false);
-	const hasTextRef = useRef(false);
+	// Seeded from the saved draft, so a remounted composer is not reported empty
+	// for the moment before its editor loads that text.
+	const [hasText, setHasText] = useState(() =>
+		Boolean(draftScope && !queuedDraftScope && readChatSessionDraft(draftScope).composer.text.trim()));
+	const hasTextRef = useRef(hasText);
 	const [trigger, setTrigger] = useState<ComposerTrigger>();
 	/**
 	 * The trigger position the user dismissed with Escape. Held so the menu stays
@@ -1074,6 +1091,7 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}, [draftScope]);
 
+	const draftCaretRef = useRef<number | undefined>(undefined);
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
 		// Changing Lexical's editability can publish the optimistic visual clear.
 		if (optimisticSend && !snapshot.text && !textRef.current) return;
@@ -1083,6 +1101,10 @@ export const ChatComposer = memo(function ChatComposer({
 		textRef.current = snapshot.text;
 		onQueuedDraftChange?.(snapshot.text);
 		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
+		if (snapshot.text !== previousText || snapshot.caret !== draftCaretRef.current) {
+			draftCaretRef.current = snapshot.caret;
+			onDraftInput?.(snapshot.text, snapshot.caret);
+		}
 		if (hasTextRef.current !== snapshot.hasText) {
 			hasTextRef.current = snapshot.hasText;
 			setHasText(snapshot.hasText);
@@ -1106,7 +1128,7 @@ export const ChatComposer = memo(function ChatComposer({
 			dismissedKeyRef.current = null;
 			setDismissedKey(null);
 		}
-	}, [onQueuedDraftChange, optimisticSend, persistComposerText]);
+	}, [onDraftInput, onQueuedDraftChange, optimisticSend, persistComposerText]);
 	// A walk holds one branch's prompts. Once another branch or conversation is
 	// active they are abandoned history, so put the user's own draft back.
 	const walkedScope = useRef(sentMessagesScope);
@@ -1753,6 +1775,7 @@ export const ChatComposer = memo(function ChatComposer({
 						{elicitation}
 					</div>
 				) : null}
+				{notice}
 				{form}
 			</div>
 		);
@@ -1761,7 +1784,6 @@ export const ChatComposer = memo(function ChatComposer({
 		return withQueueStack(
 			<form
 				onSubmit={(event) => event.preventDefault()}
-				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 				className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 py-3"
 			>
 				{approval}
@@ -1791,7 +1813,6 @@ export const ChatComposer = memo(function ChatComposer({
 				data-dragging={dragging || undefined}
 				data-starting={starting || undefined}
 				aria-busy={starting || undefined}
-				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 			onClick={(e) => {
 					if (controlsDisabled) return;
 					// Portal menus still bubble clicks here; focusing the editor would close them.
@@ -2009,7 +2030,7 @@ export const ChatComposer = memo(function ChatComposer({
 											style={addMenuBox ? { width: addMenuBox.width } : undefined}
 											className="chat-settings-menu max-w-none text-[12px]!"
 										>
-											<OptionMenuLabel className="px-3 pt-1.5 pb-1 text-[11px]!">Add</OptionMenuLabel>
+											<OptionMenuLabel>Add</OptionMenuLabel>
 											<ComposerMenuRow
 												icon={Paperclip}
 												title="Files"
@@ -2041,6 +2062,26 @@ export const ChatComposer = memo(function ChatComposer({
 								</Tooltip>
 								)}
 							</>
+						) : attachLater ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									{/* Focusable so keyboard users reach the explanation the disabled button cannot. */}
+									<span className="inline-flex rounded-full focus-visible:outline-2 focus-visible:outline-ring" tabIndex={0} aria-label={t("chat.composer.attachLater")}>
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon-sm"
+											disabled
+											aria-hidden="true"
+											tabIndex={-1}
+											className="size-7 shrink-0 rounded-full p-0 text-muted-foreground"
+										>
+											<Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">{t("chat.composer.attachLater")}</TooltipContent>
+							</Tooltip>
 						) : null}
 						{settings}
 					</div>
@@ -2072,7 +2113,7 @@ export const ChatComposer = memo(function ChatComposer({
 											<Square aria-hidden="true" className="size-2.5 fill-current" />
 										) : canContinueTurn && !continuing ? (
 											<Play aria-hidden="true" className="size-3 translate-x-px fill-current" />
-										) : continuing || submitting || steerPending || savingQueuedEditPending || sendPending ? (
+										) : continuing || (!starting && (submitting || steerPending || savingQueuedEditPending || sendPending)) ? (
 											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
 										) : showsSteer ? (
 											<CornerUpRight aria-hidden="true" className="size-3.5" />
