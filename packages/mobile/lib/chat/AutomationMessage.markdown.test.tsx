@@ -32,7 +32,7 @@ vi.mock("../openGitHub", () => ({ openGitHub: vi.fn() }));
 vi.mock("../files/navigation", () => ({ useFilesNavigation: () => null }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (factory: (theme: object) => unknown) => factory(fixtures.theme) }));
 
-import { OriginMessageView } from "./AutomationMessage";
+import { OriginMessageView, WorkerSessionsProvider } from "./AutomationMessage";
 import type { ConversationMessage } from "./types";
 
 const UNSAFE = [
@@ -74,7 +74,7 @@ afterEach(() => {
 const textOf = (node: { children: unknown[] }): string => node.children.map((child) => typeof child === "string" ? child : textOf(child as { children: unknown[] })).join("");
 
 function draw(item: ConversationMessage) {
-	act(() => { renderer = create(<OriginMessageView message={item} fallback={null} />); });
+	act(() => { renderer = create(<WorkerSessionsProvider><OriginMessageView message={item} fallback={null} /></WorkerSessionsProvider>); });
 	return {
 		// ChatMarkdown draws through UITextView as well as Text; a link is whatever claims the role.
 		links: renderer!.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link").map(textOf),

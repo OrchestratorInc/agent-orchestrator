@@ -15,10 +15,11 @@
  */
 
 import { router } from "expo-router";
-import { createContext, memo, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View, type StyleProp, type TextStyle } from "react-native";
 import { AgentLogo } from "../AgentLogo";
-import { getSession, type DashboardSession } from "../api";
+import type { DashboardSession } from "../api";
+import type { ServerConfig } from "../config";
 import { haptics } from "../haptics";
 import { sessionHostId } from "../hostedRows";
 import { Feather, type FeatherIconName } from "../icons";
@@ -30,6 +31,7 @@ import { font, prose, radius, space, type } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userMessageSurfaceStyle } from "./chatChrome";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { readSession, sessionReadKey } from "./sessionLookup";
 import {
 	artifactEntry,
 	automationOf,
@@ -95,14 +97,37 @@ const STATES: Record<string, { label: string; attention?: boolean }> = {
 	done: { label: "done" },
 };
 
+type WorkerDirectory = { sessions: ReadonlyMap<string, DashboardSession>; config: ServerConfig | null };
+const WorkerSessions = createContext<WorkerDirectory | null>(null);
+
+// What a row reads from a session; a poll that changes nothing here changes no row.
+const directoryEntry = (session: DashboardSession) =>
+	[session.id, session.projectId, session.harness ?? "", session.displayName ?? "", session.kind ?? "", sessionHostId(session) ?? ""].join("\u0000");
+
+/**
+ * The sessions and pairing the worker rows read, taken from the store once for
+ * the whole timeline. The store changes on every poll, notification and
+ * connection tick; reading it here, and handing rows a value that only changes
+ * when something they show changes, keeps settled rows from redrawing.
+ */
+export function WorkerSessionsProvider({ children }: { children: ReactNode }) {
+	const { sessions, config } = useApp();
+	const signature = sessions.map(directoryEntry).join("\n");
+	// Keyed on the signature, not the array: a poll returns a new array with the same sessions.
+	const directory = useMemo(() => new Map(sessions.map((session) => [session.id, session])), [signature]);
+	const value = useMemo(() => ({ sessions: directory, config }), [directory, config]);
+	return <WorkerSessions.Provider value={value}>{children}</WorkerSessions.Provider>;
+}
+
+function useWorkerDirectory(): WorkerDirectory {
+	const directory = useContext(WorkerSessions);
+	if (!directory) throw new Error("Worker rows render inside a WorkerSessionsProvider");
+	return directory;
+}
+
 /** The agent this chat runs, the logo a worker gets when its own session cannot be read. */
 export const ConversationHarness = createContext<string | undefined>(undefined);
 
-// One request per worker however many of its reports render. A failed read leaves
-// the cache so the next row to draw that worker asks again, and the oldest read
-// goes first once the cache holds a long history's worth of workers.
-const fetchedSessions = new Map<string, Promise<DashboardSession | null>>();
-const FETCHED_SESSIONS_LIMIT = 200;
 
 /**
  * The worker's session: from the live board, or read once from the daemon when the
@@ -110,23 +135,14 @@ const FETCHED_SESSIONS_LIMIT = 200;
  * and those are most of the workers that report).
  */
 function useSession(sessionId: string | undefined): DashboardSession | undefined {
-	const { sessions, config } = useApp();
-	const live = sessionId ? sessions.find((session) => session.id === sessionId) : undefined;
-	const key = config && sessionId && !live ? `${config.hostId ?? config.host}:${sessionId}` : undefined;
+	const { sessions, config } = useWorkerDirectory();
+	const live = sessionId ? sessions.get(sessionId) : undefined;
+	const key = config && sessionId && !live ? sessionReadKey(config, sessionId) : undefined;
 	const [read, setRead] = useState<{ key: string; session: DashboardSession | null }>();
 	useEffect(() => {
 		if (!key || !config || !sessionId) return;
-		let request = fetchedSessions.get(key);
-		if (!request) {
-			request = getSession(config, sessionId).catch(() => {
-				fetchedSessions.delete(key);
-				return null;
-			});
-			if (fetchedSessions.size >= FETCHED_SESSIONS_LIMIT) fetchedSessions.delete(fetchedSessions.keys().next().value!);
-			fetchedSessions.set(key, request);
-		}
 		let current = true;
-		void request.then((session) => { if (current) setRead({ key, session }); });
+		void readSession(config, sessionId).then((session) => { if (current) setRead({ key, session }); });
 		return () => { current = false; };
 	}, [config, key, sessionId]);
 	return live ?? (read && read.key === key ? read.session ?? undefined : undefined);
@@ -139,7 +155,7 @@ function WorkerLogo({ session }: { session: DashboardSession | undefined }) {
 }
 
 function useOpenSession(update: Pick<WorkerUpdate, "sessionId" | "projectId">) {
-	const { config } = useApp();
+	const { config } = useWorkerDirectory();
 	const session = useSession(update.sessionId);
 	const projectId = update.projectId ?? session?.projectId;
 	if (!update.sessionId || !projectId) return undefined;
@@ -155,7 +171,7 @@ function useOpenSession(update: Pick<WorkerUpdate, "sessionId" | "projectId">) {
  * session's chat for `ao://sessions/…`, the in-app browser for a forge page.
  */
 function useOpenSafeLink() {
-	const { config, sessions } = useApp();
+	const { config, sessions } = useWorkerDirectory();
 	return (href: string) => {
 		const target = safeLink(href);
 		if (!target) return;
@@ -164,7 +180,7 @@ function useOpenSafeLink() {
 			void openGitHub(target.href);
 			return;
 		}
-		const session = sessions.find((candidate) => candidate.id === target.sessionId);
+		const session = sessions.get(target.sessionId);
 		router.push({ pathname: "/session/[id]", params: { id: target.sessionId, projectId: target.projectId, hostId: (session && sessionHostId(session)) ?? config?.hostId } });
 	};
 }
@@ -288,7 +304,7 @@ const WorkerUpdateRow = memo(function WorkerUpdateRow({ update }: { update: Work
 function ArtifactLine({ path, update, hostId }: { path: string; update: WorkerUpdate; hostId?: string }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { config } = useApp();
+	const { config } = useWorkerDirectory();
 	const entry = artifactEntry(path, update.sessionId);
 	const name = path.split("/").at(-1);
 	const content = (

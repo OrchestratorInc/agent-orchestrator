@@ -23,7 +23,8 @@ vi.mock("../files/navigation", () => ({ useFilesNavigation: () => null }));
 vi.mock("./ChatMarkdown", () => ({ ChatMarkdown: "ChatMarkdown", ChatLinkProvider: ({ children }: { children: unknown }) => children }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme) }));
 
-import { ConversationHarness, WorkerUpdateRows } from "./AutomationMessage";
+import { useState } from "react";
+import { ConversationHarness, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
 import type { WorkerUpdate } from "./automationMessages";
 
 const update = (key: string, sessionId: string): WorkerUpdate => ({ key, state: "done", name: sessionId, sessionId, projectId: "p", body: "Done.", createdAt: "2026-10-27T10:00:00Z" });
@@ -51,7 +52,7 @@ const logos = () => renderer!.root.findAll((node) => (node.type as unknown) === 
 
 async function draw(updates: WorkerUpdate[]) {
 	await act(async () => {
-		renderer = create(<ConversationHarness.Provider value="claude-code"><WorkerUpdateRows updates={updates} /></ConversationHarness.Provider>);
+		renderer = create(<WorkerSessionsProvider><ConversationHarness.Provider value="claude-code"><WorkerUpdateRows updates={updates} /></ConversationHarness.Provider></WorkerSessionsProvider>);
 	});
 }
 
@@ -123,4 +124,30 @@ it("asks again for a worker whose read failed, instead of caching the failure", 
 	await draw([update("b", "w-retry")]);
 	expect(logos()).toEqual(["goose"]);
 	expect(fixtures.getSession).toHaveBeenCalledTimes(2);
+});
+
+it("leaves settled rows alone when the store changes nothing they show", async () => {
+	fixtures.app.sessions = [{ id: "w-1", projectId: "p", harness: "codex" }];
+	let storeTick!: () => void;
+	// Stands in for the store: re-renders the provider, as every poll does, while the rows' element stays the same.
+	const rows = <ConversationHarness.Provider value="claude-code"><WorkerUpdateRows updates={[update("a", "w-1"), update("b", "w-1")]} /></ConversationHarness.Provider>;
+	function Store() {
+		const [, setTick] = useState(0);
+		storeTick = () => setTick((tick) => tick + 1);
+		return <WorkerSessionsProvider>{rows}</WorkerSessionsProvider>;
+	}
+	await act(async () => { renderer = create(<Store />); });
+	const drawn = () => renderer!.root.findAll((node) => (node.type as unknown) === "AgentLogo");
+	const first = drawn().map((node) => node.props);
+
+	// A poll: a new array holding the same sessions.
+	fixtures.app.sessions = [{ id: "w-1", projectId: "p", harness: "codex" }];
+	await act(async () => storeTick());
+	expect(drawn().map((node) => node.props)).toEqual(first);
+	expect(drawn().every((node, index) => node.props === first[index])).toBe(true);
+
+	// Something a row shows changed: the rows draw it.
+	fixtures.app.sessions = [{ id: "w-1", projectId: "p", harness: "opencode" }];
+	await act(async () => storeTick());
+	expect(logos()).toEqual(["opencode", "opencode"]);
 });

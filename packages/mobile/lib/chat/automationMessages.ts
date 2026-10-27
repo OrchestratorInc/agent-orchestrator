@@ -561,23 +561,22 @@ export function reportBlocks(text: string): ReportBlock[] {
 	return blocks;
 }
 
-// Inline code first, so nothing inside a code span is touched; then images,
-// links, autolinks and the bare URLs ChatMarkdown would otherwise link.
-const SAFE_MARKDOWN = /(`[^`\n]*`)|!\[([^\]\n]*)\]\(([^)\s]+)\)|\[([^\]\n]+)\]\(([^)\s]+)\)|<(https?:\/\/[^\s>]+)>|(https?:\/\/[^\s<]+)/g;
+const CODE_SPAN = /`[^`\n]*`/g;
+// Innermost first: `[![a](x)](y)` loses its image before its link is read.
+const IMAGE = /!\[([^\[\]\n]*)\]\(([^()\s]*)\)/g;
+// Links, autolinks, and the bare web URLs ChatMarkdown would otherwise link.
+const LINK = /\[([^\]\n]+)\]\(([^)\s]+)\)|<((?:https?|ao):\/\/[^\s>]+)>|(https?:\/\/[^\s<]+)/g;
 
-/**
- * Markdown an agent or a reviewer wrote, made safe to hand to `ChatMarkdown`, as
- * the desktop's `safeOrigin` does: a link stays a link only where `safeLink`
- * allows, and then names its host when its label is something else; any other
- * link keeps its words, a bare URL becomes code so it cannot be linked, and an
- * image becomes its alt text so nothing loads from where the text points.
- * Code fences are left as written.
- */
-export function safeMarkdown(text: string): string {
-	// A fence runs to its closing fence, or to the end of the text when it has none.
-	return text.split(/(^ {0,3}(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n {0,3}(?:`{3,}|~{3,})[ \t]*(?=\n|(?![\s\S]))|(?![\s\S])))/m).map((part, index) => index % 2 === 1 ? part : part.replace(SAFE_MARKDOWN, (match, code: string | undefined, alt: string | undefined, _src, label: string | undefined, href: string | undefined, auto: string | undefined, bare: string | undefined) => {
-		if (code !== undefined) return match;
-		if (alt !== undefined) return alt;
+/** One stretch of Markdown outside code fences, made safe. */
+function safeInline(text: string): string {
+	// Code spans are set aside, not split on, so a link whose label holds code stays one link.
+	const spans: string[] = [];
+	let out = text.replace(/\u0000/g, "").replace(CODE_SPAN, (span) => `\u0000${spans.push(span) - 1}\u0000`);
+	for (let previous = ""; previous !== out;) {
+		previous = out;
+		out = out.replace(IMAGE, (_image, alt: string) => alt);
+	}
+	out = out.replace(LINK, (match, label: string | undefined, href: string | undefined, auto: string | undefined, bare: string | undefined) => {
 		if (label !== undefined && href !== undefined) {
 			const target = safeLink(href);
 			if (!target) return label;
@@ -586,5 +585,21 @@ export function safeMarkdown(text: string): string {
 		const url = auto ?? bare!;
 		if (safeLink(url.replace(/[.,;:!?'")\]]+$/, ""))) return match;
 		return url.includes("`") ? `\`\` ${url} \`\`` : `\`${url}\``;
-	})).join("");
+	});
+	return out.replace(/\u0000(\d+)\u0000/g, (_token, index: string) => spans[Number(index)]!);
+}
+
+/**
+ * Markdown an agent or a reviewer wrote, made safe to hand to `ChatMarkdown`, as
+ * the desktop's `safeOrigin` does: a link stays a link only where `safeLink`
+ * allows, and then names its host when its label is something else; any other
+ * link keeps its words, a bare URL becomes code so it cannot be linked, and an
+ * image, even one inside a link, becomes its alt text so nothing loads from
+ * where the text points. Code is left as written.
+ */
+export function safeMarkdown(text: string): string {
+	// A fence runs to its closing fence, or to the end of the text when it has none.
+	return text.split(/(^ {0,3}(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n {0,3}(?:`{3,}|~{3,})[ \t]*(?=\n|(?![\s\S]))|(?![\s\S])))/m)
+		.map((part, index) => index % 2 === 1 ? part : safeInline(part))
+		.join("");
 }

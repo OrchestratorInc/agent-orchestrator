@@ -62,6 +62,8 @@ import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { useChangeSummary } from "../files/useChangeSummary";
+import { sessionLink } from "./automationMessages";
+import { readSession } from "./sessionLookup";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -97,7 +99,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		),
 		[navigation],
 	);
-	const { config, currentHostId, connection, unreachable, linkHealth, projects, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
+	const { config, currentHostId, connection, unreachable, linkHealth, projects, sessions, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, session.id);
@@ -387,9 +389,25 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// localhost is never the dev server the agent named); openGitHub then applies
 	// the package's rule for a web page - GitHub app when it has a screen for it,
 	// the in-app browser otherwise.
+	// An `ao://sessions/…` link opens that session's chat on this conversation's machine.
 	const openLink = useCallback((url: string) => {
+		const target = sessionLink(url);
+		if (target) {
+			router.push({ pathname: "/session/[id]", params: { id: target.sessionId, projectId: target.projectId, hostId: currentHostId } });
+			return;
+		}
 		void openGitHub(mobileReachablePreviewURL(url, config?.host ?? "")?.href ?? url);
-	}, [config?.host]);
+	}, [config?.host, currentHostId, router]);
+	// A session the board leaves out (archived, say) is read once for its name.
+	const [readSessionNames, setReadSessionNames] = useState<Readonly<Record<string, string>>>({});
+	const nameOfSession = useCallback((sessionId: string) => sessions.find((candidate) => candidate.id === sessionId)?.displayName || readSessionNames[sessionId] || undefined, [readSessionNames, sessions]);
+	const wantSessionName = useCallback((sessionId: string) => {
+		if (!config) return;
+		void readSession(config, sessionId).then((read) => {
+			const name = read?.displayName;
+			if (name) setReadSessionNames((current) => current[sessionId] === name ? current : { ...current, [sessionId]: name });
+		});
+	}, [config]);
 
 	const resume = useCallback(async (quiet = false) => {
 		if (resuming) return;
@@ -684,7 +702,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			{conversation.actionError && conversation.actionError !== conversation.error ? <DismissibleBanner copy={errorBanner("action", conversation.actionError)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="danger" icon="alert-circle" /> : null}
 			{rolledBack ? <DismissibleBanner copy={rolledBackBanner(rolledBack)} dismissed={dismissedBanners} onDismiss={dismissBanner} tone="muted" icon="rotate-ccw" /> : null}
 			{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <InlineBanner key={pendingSend.id} tone="danger" icon="send" title="Message delivery uncertain" body={pendingSend.error || "Delivery failed"} action="Retry" secondary="Discard" onPress={() => void conversation.retrySend(pendingSend.id).catch(() => {})} onSecondary={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /> : null)}
-			<ChatLinkProvider onLinkOpen={openLink} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
+			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
 				<ChatTimeline
 					snapshot={snapshot}

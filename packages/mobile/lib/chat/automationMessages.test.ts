@@ -279,6 +279,16 @@ describe("making agent and reviewer Markdown safe to draw", () => {
 		expect(safeMarkdown("![build badge](https://evil.example/pixel.png)")).toBe("build badge");
 	});
 
+	it("reads an image inside a link as its alt text, then the link as any other", () => {
+		expect(safeMarkdown("[![badge](https://evil.example/a.png)](https://evil.example/b)")).toBe("badge");
+		expect(safeMarkdown("[![CI](https://evil.example/a.png)](https://github.com/o/r/actions)")).toBe("[CI](https://github.com/o/r/actions) (github.com)");
+		expect(safeMarkdown("![a ![b](x)](y)")).toBe("a b");
+	});
+
+	it("keeps a link whose label holds code as one link", () => {
+		expect(safeMarkdown("[`fix`](https://evil.example/x) and [`ok`](https://github.com/o/r)")).toBe("`fix` and [`ok`](https://github.com/o/r) (github.com)");
+	});
+
 	it("leaves code as written", () => {
 		const fenced = "Before\n```\ncurl https://evil.example/x\n[a](https://evil.example)\n```\nAfter https://evil.example/z";
 		expect(safeMarkdown(fenced)).toBe("Before\n```\ncurl https://evil.example/x\n[a](https://evil.example)\n```\nAfter `https://evil.example/z`");
