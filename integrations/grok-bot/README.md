@@ -26,7 +26,9 @@ A remote host needs AO's network access turned on (AO remote access settings, or
 
 ## Install
 
-**Grok Bot:** create a bot and save each `skills/<id>/SKILL.md` as a skill (ask the bot to use UpdateSkill with the frontmatter name and description and the rest of the file as the body). Share it as a template so others get the skills built in. Install the Grok Bot desktop app on the computers it should reach. Then say "set up AO".
+**Grok Bot:** open the [Orchestrator Bot template](https://x.ai/bot/1WTqU5Ql7Ysftsg4KpWjW) and choose **Add to Grok Bot**. Install the Grok Bot desktop app on the computers that run AO, then say "set up AO". Say "update Orchestrator Bot" later to get skill updates.
+
+To build the bot yourself instead, create a bot and save each `skills/<id>/SKILL.md` as a skill (ask the bot to use UpdateSkill with the frontmatter name and description and the rest of the file as the body).
 
 **Claude Code, Codex, Cursor:** copy the folders under `skills/` into the agent's skills folder (`~/.claude/skills`, `~/.agents/skills`, `~/.cursor/skills`). These agents run on one computer, so they see that computer's AO as a local host only.
 
