@@ -4758,6 +4758,8 @@ const TurnGroup = memo(function TurnGroup({
 			{windowRuns.length > 0 ? (
 				<motion.div
 					key="live-activity-window"
+					initial={{ height: 0, opacity: 0 }}
+					animate={{ height: "auto", opacity: 1 }}
 					exit={{ height: 0, opacity: 0 }}
 					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
 					className="overflow-hidden"
@@ -4769,7 +4771,26 @@ const TurnGroup = memo(function TurnGroup({
 	);
 	if (!outcome) {
 		if (!windowed) body.push(...workedRuns.flatMap(renderWorkerRun));
-		else if (tailIsReply) body.push(renderRun(tail));
+		else {
+			// The first chunks of a reply open a row where there was none. Growing it
+			// from zero keeps the live row under it (and the transcript's end) gliding
+			// down instead of jumping by a line. Clipped only while it opens; a reply
+			// already streaming when the chat opens mounts at full height.
+			body.push(
+				<AnimatePresence key="live-reply" initial={false}>
+					{tailIsReply ? (
+						<motion.div
+							key={tail.key}
+							initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+							animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+							transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
+						>
+							{renderRun(tail)}
+						</motion.div>
+					) : null}
+				</AnimatePresence>,
+			);
+		}
 	}
 	if (outcome) body.push(...noticeRuns.map(renderRun));
 	if (quietReply && finalRun) {
