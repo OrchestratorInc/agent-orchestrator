@@ -4,8 +4,9 @@ description: >-
   First run of Orchestrator Bot: find every computer that runs AO, save them as AO
   hosts, add a remote AO host that has no Grok Bot desktop app, and turn on
   optional routines. Use on the first chat, when memory has no "AO hosts" note,
-  or when the user says "set up AO", "add a host", "add remote host" or
-  "check my AO setup".
+  or when the user says "set up AO", "add a host", "add remote host",
+  "check my AO setup" or "install Orchestrator". Helps install and open
+  Orchestrator.inc on a computer that doesn't have it yet.
 ---
 Follow the ao-rules skill. Detection is read-only. Nothing is written until the user says yes.
 
@@ -14,18 +15,47 @@ Open with one line: "Give me a few seconds to look for AO on your computers."
 ## 1. Detect
 1. ListMachines. Use desktops only. If none is connected, say: "Install the Grok Bot desktop app on the computer that runs AO, sign in, and tell me when it shows up," then stop.
 2. On each connected desktop, in parallel, run this read-only probe with the `aoapi` helper from ao-rules: run "Probe" below.
-3. Each desktop where this prints projects is a **local** AO host. On a Windows desktop, don't run the probe: say once "These skills need macOS or Linux; Windows isn't supported yet," and skip it.
+3. Each desktop where this prints projects is a **local** AO host. For any other result, see "Missing pieces". On a Windows desktop, don't run the probe: say once "These skills need macOS or Linux; Windows isn't supported yet," and skip it.
 
 ### Probe
 ```sh
 f(){ <aoapi helper>; echo "ao=$(command -v ao >/dev/null && ao version 2>/dev/null | head -1 || echo missing)"
   echo "python=$(command -v python3 >/dev/null && python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' || echo missing)"
-  aoapi GET projects | python3 -c 'import json,sys; d=json.load(sys.stdin); p=d.get("projects",d) if isinstance(d,dict) else d; print("projects=" + ", ".join(x.get("id","?") for x in p))'
-  aoapi GET 'sessions?active=true' | python3 -c 'import json,sys; print("live_sessions=%d" % len(json.load(sys.stdin)["sessions"]))'; }; f
+  [ "$(uname -s)" = Darwin ] && echo "app=$([ -d '/Applications/Agent Orchestrator.app' ] && echo installed || echo missing)"
+  if P=$(aoapi GET projects 2>/dev/null); then
+    echo "$P" | python3 -c 'import json,sys; d=json.load(sys.stdin); p=d.get("projects",d) if isinstance(d,dict) else d; print("projects=" + ", ".join(x.get("id","?") for x in p))'
+    aoapi GET 'sessions?active=true' | python3 -c 'import json,sys; print("live_sessions=%d" % len(json.load(sys.stdin)["sessions"]))'
+  else echo "daemon=not running"; fi; }; f
 ```
 
+## Missing pieces
+Use the probe result for each computer. Install or open anything only after the user's yes.
+
+| Probe shows | Next step |
+|---|---|
+| `app=missing` (macOS) | Say: "Orchestrator.inc isn't installed on <computer>. Want me to install it?" On yes, run "Install on a Mac" |
+| `app=installed` and `daemon=not running` | Open it with `open -a "Agent Orchestrator"`, wait 15 seconds, and run the probe again |
+| `daemon=not running` on Linux | Give the download for the user's distribution: [AppImage](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.AppImage), [.deb](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb) or [.rpm](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm). The user installs and opens it, then says **check again** |
+| `projects=` with nothing after it | Say: "Orchestrator.inc is running on <computer> but has no projects yet. Open it, add the repository you want it to manage, then say **check again**." |
+| `python=missing` | macOS: `xcode-select --install` (the user confirms the system dialog). Linux: give the package manager line for python3 |
+| `ao=missing` but projects listed | Everything works except starting a review, screenshots and automations, which use the `ao` CLI. Say so once |
+
+"check again" runs the probe on that computer again and continues from section 2.
+
+### Install on a Mac
+After a yes, on that computer. It downloads the latest signed release for the Mac's chip, copies the app to Applications and opens it:
+```sh
+f(){ a=$([ "$(uname -m)" = arm64 ] && echo arm64 || echo x64); d=$(mktemp -d)
+  curl -fsSL -o "$d/o.dmg" "https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-$a.dmg" || { echo DOWNLOAD_FAILED; rm -rf "$d"; return 1; }
+  m=$(hdiutil attach -nobrowse -readonly "$d/o.dmg" | awk -F'\t' '/\/Volumes\//{print $NF}' | tail -1)
+  cp -R "$m/Agent Orchestrator.app" /Applications/; r=$?
+  hdiutil detach -quiet "$m"; rm -rf "$d"
+  [ $r -eq 0 ] && open -a "Agent Orchestrator" && echo INSTALLED || echo INSTALL_FAILED; }; f
+```
+The download is about 300 MB. Tell the user before you start. On `INSTALLED`: "Orchestrator.inc is open on <computer>. Follow its first-run steps (sign in to your coding agent and add the repository you want it to manage), then say **check again**." On a failure, give the user the [download page](https://orchestrator.inc/download/) instead.
+
 ## 2. Report and ask once
-One message, at most 6 lines: per computer, AO found or not, its projects, and how many sessions are live. Then:
+One message, at most 6 lines: per computer, AO found or not, its projects, and how many sessions are live. For a computer without a working AO, add the one next step from "Missing pieces". Then:
 "Reply **yes** and I'll save these as your AO hosts. Is AO also running on a computer without the Grok Bot desktop app? Say **add remote host** and I'll connect to it from one of these."
 
 On yes, save the **AO hosts** note (ao-rules "AO hosts") with `reach: local` and `via` = the same computer. Name each host with its short name (ao-rules `name`) and say the names in one line: "I'll call them Pro and Air. Say if you want other names."
