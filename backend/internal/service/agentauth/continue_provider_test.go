@@ -32,7 +32,7 @@ func TestContinueProviderLoginWritesNativeConfigAndGlobalEnv(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte("name: My Config\nversion: 1.0.0\nschema: v1\n# preserve this\nmodels:\n  - name: Existing\n    provider: openai\n    model: gpt-old\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("EXISTING_KEY=keep\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("EXISTING_KEY=keep\nexport ANTHROPIC_API_KEY = old\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	svc := NewWithAgentResolver(foundExecutable("cn"), nil, nil, t.TempDir())
