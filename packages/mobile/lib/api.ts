@@ -684,6 +684,18 @@ export function artifactFileUrl(cfg: ServerConfig, sessionId: string, path: stri
 	return route ? `${httpBase(cfg)}${route}` : undefined;
 }
 
+/**
+ * An authenticated image source for one artifact file. `version` (its modified
+ * time) busts the image cache when the agent rewrites the file. Pass it through
+ * `imageSourceForPlatform` (lib/imageSource.ts): React Native's Android Image
+ * forwards headers only for an array source.
+ */
+export function artifactImageSource(cfg: ServerConfig, sessionId: string, path: string, version?: string): { uri: string; headers: Record<string, string> } | undefined {
+	const url = artifactFileUrl(cfg, sessionId, path);
+	if (!url) return undefined;
+	return { uri: version ? `${url}?v=${encodeURIComponent(version)}` : url, headers: authHeaders(cfg) };
+}
+
 /** One artifact's contents as text. The caller decides whether it is really text. */
 export async function getArtifactText(cfg: ServerConfig, sessionId: string, path: string, init?: Pick<RequestInit, "signal">): Promise<string> {
 	const route = artifactFilePath(sessionId, path, { raw: true });

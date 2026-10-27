@@ -8,6 +8,7 @@ import { openGitHub } from "../openGitHub";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
+import { imageSourceForPlatform } from "../imageSource";
 import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
@@ -63,7 +64,7 @@ export function ChatLinkProvider({ onLinkOpen, onAddToChat, sessionName, onSessi
  * readable text; the renderer never hides content because a provider used
  * syntax it does not know.
  */
-export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource, onAddSelection }: {
+export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource, onAddSelection, resolveImage, imagesInPlace = false }: {
 	text: string;
 	streaming?: boolean;
 	continuousSelection?: boolean;
@@ -73,21 +74,31 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 	 * artifact), handing it the selected text. Needs `continuousSelection`.
 	 */
 	onAddSelection?: (text: string) => void;
+	/**
+	 * Turns an image reference into what to load: a relative path in a
+	 * document resolves against its folder, with the connection's headers.
+	 * Undefined means the image cannot be loaded.
+	 */
+	resolveImage?: (url: string) => MarkdownImageSource | undefined;
+	/** Draws each image where the document places it, rather than after the text. */
+	imagesInPlace?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = textSelectionColors(t).selectionColor;
-	const blocks = parseBlocks(text);
+	const blocks = parseBlocks(text, { relativeImages: Boolean(resolveImage) });
 	if (continuousSelection) {
 		// Native selection cannot cross sibling views. Keep each run of response text
 		// in one text surface; only a table breaks the run, because a grid cannot
 		// live inside text. Image previews follow without repeating captions.
-		const images = blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
+		const images = imagesInPlace ? [] : blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
 		return <View style={styles.root}>
-			{splitAtTables(blocks).map((run, index) => Array.isArray(run)
+			{splitRuns(blocks, imagesInPlace).map((run, index) => Array.isArray(run)
 				? <SelectableResponseText key={index} blocks={run} source={selectionSource} onSelect={onAddSelection} />
-				: <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} />)}
-			{images.map((image, index) => <MarkdownImage key={`${image.url}-${index}`} alt={image.alt} url={image.url} selectionColor={selectionColor} showCaption={false} />)}
+				: run.kind === "image"
+					? <MarkdownImage key={index} alt={run.alt} url={run.url} selectionColor={selectionColor} resolve={resolveImage} />
+					: <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} />)}
+			{images.map((image, index) => <MarkdownImage key={`${image.url}-${index}`} alt={image.alt} url={image.url} selectionColor={selectionColor} showCaption={false} resolve={resolveImage} />)}
 		</View>;
 	}
 	const content: ReactNode[] = [];
@@ -122,12 +133,20 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 });
 
 type TableBlock = Extract<MarkdownBlock, { kind: "table" }>;
+type ImageBlock = Extract<MarkdownBlock, { kind: "image" }>;
 
-function splitAtTables(blocks: MarkdownBlock[]): Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock> {
-	const runs: Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock> = [];
+/** What a markdown image loads: its URL, with headers when it needs the connection's credential. */
+export type MarkdownImageSource = { uri: string; headers?: Record<string, string> };
+
+/**
+ * Runs of text one selection can span, broken by a table (a grid cannot live
+ * inside text) and, for a document, by each image so it sits in place.
+ */
+function splitRuns(blocks: MarkdownBlock[], splitImages: boolean): Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock> {
+	const runs: Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock> = [];
 	for (const block of blocks) {
 		const last = runs[runs.length - 1];
-		if (block.kind === "table") runs.push(block);
+		if (block.kind === "table" || (splitImages && block.kind === "image")) runs.push(block);
 		else if (Array.isArray(last)) last.push(block);
 		else runs.push([block]);
 	}
@@ -180,11 +199,12 @@ function SelectableInlineText({ value, selectionColor, style, styles, codeStyle 
 
 let preferredCodeWrap = false;
 
-function MarkdownImage({ alt, url, selectionColor, showCaption = true }: { alt: string; url: string; selectionColor: string; showCaption?: boolean }) {
+function MarkdownImage({ alt, url, selectionColor, showCaption = true, resolve }: { alt: string; url: string; selectionColor: string; showCaption?: boolean; resolve?: (url: string) => MarkdownImageSource | undefined }) {
 	const styles = useThemedStyles(makeStyles);
 	const [failed, setFailed] = useState(false);
-	if (failed) return <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageFallback}>Image unavailable: {alt || url}</Text>;
-	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={{ uri: url }} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt && showCaption ? <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageCaption}>{alt}</Text> : null}</View>;
+	const source = resolve ? resolve(url) : { uri: url };
+	if (failed || !source) return <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageFallback}>Image unavailable: {alt || url}</Text>;
+	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={source.headers ? imageSourceForPlatform(source) : source} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt && showCaption ? <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageCaption}>{alt}</Text> : null}</View>;
 }
 
 // React Native has no grid layout, so a column's width is estimated from its

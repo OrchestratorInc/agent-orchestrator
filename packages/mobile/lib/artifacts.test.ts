@@ -6,6 +6,7 @@ import {
 	artifactFilePath,
 	artifactMenuActions,
 	artifactViewKind,
+	resolveArtifactAssetPath,
 	canCopyArtifact,
 	formatArtifactSize,
 	looksBinary,
@@ -129,5 +130,21 @@ describe("artifactCommentTarget", () => {
 		const target = artifactCommentTarget({ path: "report.html", name: "report.html" });
 		expect(target).toEqual({ source: "report.html", path: "report.html", side: "file" });
 		expect(formatFileAnnotationMessage(target, "Add a summary.")).toContain("- Location: Entire file");
+	});
+});
+
+describe("resolveArtifactAssetPath", () => {
+	it("resolves a document's relative links inside the artifact folder", () => {
+		expect(resolveArtifactAssetPath("plan.md", "shots/01.png")).toBe("shots/01.png");
+		expect(resolveArtifactAssetPath("docs/plan.md", "./img/a%20b.png?raw=1#top")).toBe("docs/img/a b.png");
+		expect(resolveArtifactAssetPath("docs/plan.md", "../shots/a.png")).toBe("shots/a.png");
+	});
+
+	it("leaves URLs and rooted paths alone, and refuses to leave the folder", () => {
+		expect(resolveArtifactAssetPath("plan.md", "https://example.com/a.png")).toBeUndefined();
+		expect(resolveArtifactAssetPath("plan.md", "data:image/png;base64,AAAA")).toBeUndefined();
+		expect(resolveArtifactAssetPath("plan.md", "/etc/a.png")).toBeUndefined();
+		expect(resolveArtifactAssetPath("plan.md", "../a.png")).toBeUndefined();
+		expect(resolveArtifactAssetPath("plan.md", "#section")).toBeUndefined();
 	});
 });

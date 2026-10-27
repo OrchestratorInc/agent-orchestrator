@@ -3,12 +3,12 @@ import * as Clipboard from "expo-clipboard";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AccessibilityInfo, ActivityIndicator, Image, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
-import { artifactFileUrl, getArtifactText } from "../../lib/api";
+import { artifactFileUrl, artifactImageSource, getArtifactText } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { artifactCommentTarget, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, type SessionArtifact } from "../../lib/artifacts";
+import { artifactCommentTarget, resolveArtifactAssetPath, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
-import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
+import { ChatMarkdown, type MarkdownImageSource } from "../../lib/chat/ChatMarkdown";
 import { authHeaders, type ServerConfig } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
 import { sendFileFeedback } from "../../lib/files/api";
@@ -19,11 +19,13 @@ import { haptics } from "../../lib/haptics";
 import { headerActionStyle, headerGlyphStyle } from "../../lib/headerAction";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
+import { imageSourceForPlatform } from "../../lib/imageSource";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { font, iconSize, radius, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
+import { useInlinedArtifactPage, INLINE_ARTIFACT_PAGES } from "../../lib/useInlinedArtifactPage";
 import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
 
 // Above this, a text file shows as plain text: a full grammar pass over it
@@ -146,7 +148,7 @@ function ArtifactViewerContent() {
 	if (!config || (!artifacts && loading)) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	if (!artifact) {
 		const url = artifactFileUrl(config, sessionId, path);
-		return url ? <ArtifactWeb config={config} url={url} version="" /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
+		return url ? <ArtifactWeb config={config} url={url} version="" page={/\.html?$/i.test(path) ? { sessionId, path } : undefined} /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
 	}
 	return (
 		<View style={styles.screen}>
@@ -177,25 +179,38 @@ function ArtifactBody({ config, sessionId, artifact, onAsk }: { config: ServerCo
 	// A text file too large to load into the app still shows, as the page the
 	// daemon serves.
 	const tooLargeForText = artifact.size > MAX_ARTIFACT_TEXT_BYTES;
-	if (kind === "html" || kind === "web-media" || ((kind === "markdown" || kind === "text") && tooLargeForText)) {
+	if (kind === "html") return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} page={{ sessionId, path: artifact.path }} />;
+	if (kind === "web-media" || ((kind === "markdown" || kind === "text") && tooLargeForText)) {
 		return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} />;
 	}
-	if (kind === "image") return <ArtifactImage config={config} url={url} version={artifact.updatedAt} name={artifact.name} />;
+	const image = kind === "image" ? artifactImageSource(config, sessionId, artifact.path, artifact.updatedAt) : undefined;
+	if (image) return <ArtifactImage source={image} name={artifact.name} />;
 	return <ArtifactText config={config} sessionId={sessionId} artifact={artifact} markdown={kind === "markdown"} onAsk={onAsk} />;
 }
 
-function ArtifactWeb({ config, url, version }: { config: ServerConfig; url: string; version: string }) {
+function ArtifactWeb({ config, url, version, page }: {
+	config: ServerConfig;
+	url: string;
+	version: string;
+	/** An HTML page, loaded with its own files inlined where the platform needs it. */
+	page?: { sessionId: string; path: string };
+}) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const web = useRef<WebView>(null);
 	const [error, setError] = useState<string>();
+	const inlined = useInlinedArtifactPage({ enabled: Boolean(page), config, sessionId: page?.sessionId ?? "", path: page?.path ?? "", version });
+	// Inlining failed: the page still opens from its URL, as on iOS.
+	if (page && INLINE_ARTIFACT_PAGES && !inlined.html && !inlined.failed) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	return (
 		<View style={styles.screen}>
 			<WebView
 				// A new version of the file reloads the page.
-				key={version}
+				key={`${version}|${inlined.html ? "inline" : "url"}`}
 				ref={web}
-				source={{ uri: url, headers: authHeaders(config) }}
+				// Inlined, the page loads from memory with no origin: it needs no
+				// cookie, and it cannot reach the daemon.
+				source={inlined.html ? { html: inlined.html } : { uri: url, headers: authHeaders(config) }}
 				style={styles.web}
 				startInLoadingState
 				renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
@@ -214,22 +229,22 @@ function ArtifactWeb({ config, url, version }: { config: ServerConfig; url: stri
 	);
 }
 
-function ArtifactImage({ config, url, version, name }: { config: ServerConfig; url: string; version: string; name: string }) {
+function ArtifactImage({ source, name }: { source: { uri: string; headers: Record<string, string> }; name: string }) {
 	const styles = useThemedStyles(makeStyles);
 	const [failed, setFailed] = useState(false);
 	const [ratio, setRatio] = useState(1);
-	// The version busts the image cache when the agent rewrites the file.
-	const uri = `${url}?v=${encodeURIComponent(version)}`;
 	useEffect(() => {
 		let live = true;
-		Image.getSizeWithHeaders(uri, authHeaders(config)).then(({ width, height }) => { if (live && width > 0 && height > 0) setRatio(width / height); }).catch(() => {});
+		Image.getSizeWithHeaders(source.uri, source.headers).then(({ width, height }) => { if (live && width > 0 && height > 0) setRatio(width / height); }).catch(() => {});
 		return () => { live = false; };
-	}, [config, uri]);
+		// The source is rebuilt on each render; its URI (with the file's version) is what changes.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [source.uri]);
 	if (failed) return <Unavailable title="This image didn't load" message="The phone may not support its format. Open it on the machine instead." />;
 	return (
 		<ScrollView style={styles.screen} contentContainerStyle={styles.imageContent} maximumZoomScale={4} minimumZoomScale={1} centerContent>
 			<Image
-				source={{ uri, headers: authHeaders(config) }}
+				source={imageSourceForPlatform(source)}
 				accessibilityLabel={name}
 				accessibilityIgnoresInvertColors
 				resizeMode="contain"
@@ -249,6 +264,13 @@ function ArtifactText({ config, sessionId, artifact, markdown, onAsk }: { config
 	const key = `${sessionId}|${artifact.path}|${artifact.updatedAt}`;
 	const [state, setState] = useState<TextState | null>(null);
 	const [attempt, setAttempt] = useState(0);
+	// A document's own images live beside it in the artifact folder and need the
+	// connection's credential; a web image loads as it is, with no credential.
+	const resolveImage = useCallback((url: string): MarkdownImageSource | undefined => {
+		if (/^(https?:|data:)/i.test(url.trim())) return { uri: url.trim() };
+		const path = resolveArtifactAssetPath(artifact.path, url);
+		return path ? artifactImageSource(config, sessionId, path) : undefined;
+	}, [artifact.path, config, sessionId]);
 	useEffect(() => {
 		const controller = new AbortController();
 		getArtifactText(config, sessionId, artifact.path, { signal: controller.signal })
@@ -267,7 +289,7 @@ function ArtifactText({ config, sessionId, artifact, markdown, onAsk }: { config
 		return (
 			<ScrollView style={styles.screen} contentContainerStyle={styles.document}>
 				{/* One selectable surface per run, as chat responses are, so a selection can span paragraphs. */}
-				<ChatMarkdown text={text} continuousSelection onAddSelection={onAsk} />
+				<ChatMarkdown text={text} continuousSelection onAddSelection={onAsk} resolveImage={resolveImage} imagesInPlace />
 			</ScrollView>
 		);
 	}

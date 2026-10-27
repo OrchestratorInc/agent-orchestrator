@@ -1,12 +1,14 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useLayoutEffect, useState } from "react";
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { artifactImageSource } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
 import { artifactExtensionLabel, artifactViewKind, formatArtifactSize, type SessionArtifact } from "../../lib/artifacts";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather, type FeatherIconName } from "../../lib/icons";
 import { relativeTime } from "../../lib/notificationView";
+import { imageSourceForPlatform } from "../../lib/imageSource";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -87,7 +89,7 @@ function SessionArtifactsContent() {
 				ListEmptyComponent={<EmptyState icon="layers" title="No artifacts yet" message="Pages and documents the agent writes for this session show up here." />}
 				renderItem={({ item }) => (
 					<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
-						<ArtifactCard artifact={item} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
+						<ArtifactCard artifact={item} thumbnail={config && artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
 					</View>
 				)}
 			/>
@@ -96,9 +98,18 @@ function SessionArtifactsContent() {
 	);
 }
 
-function ArtifactCard({ artifact, onOpen, onMenu }: { artifact: SessionArtifact; onOpen(): void; onMenu(): void }) {
+function ArtifactCard({ artifact, thumbnail, onOpen, onMenu }: {
+	artifact: SessionArtifact;
+	/** An image artifact's own picture, drawn over its icon tile. */
+	thumbnail?: { uri: string; headers: Record<string, string> };
+	onOpen(): void;
+	onMenu(): void;
+}) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	// The URI carries the file's modified time, so a rewrite loads afresh.
+	const [failedUri, setFailedUri] = useState<string>();
+	const picture = thumbnail && failedUri !== thumbnail.uri ? thumbnail : undefined;
 	const visual = cardVisual(artifact, t);
 	const age = relativeTime(artifact.updatedAt);
 	const meta = [age, formatArtifactSize(artifact.size)].filter(Boolean).join(" · ");
@@ -117,6 +128,16 @@ function ArtifactCard({ artifact, onOpen, onMenu }: { artifact: SessionArtifact;
 			<View style={[styles.poster, { backgroundColor: visual.tint }]}>
 				<Feather name={visual.icon} size={28} color={visual.color} />
 				<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.extension, { color: visual.color }]}>{artifactExtensionLabel(artifact.path)}</Text>
+				{/* Over the tile, so the icon shows while it loads and if it cannot. */}
+				{picture ? (
+					<Image
+						accessibilityIgnoresInvertColors
+						source={imageSourceForPlatform(picture)}
+						resizeMode="cover"
+						onError={() => setFailedUri(picture.uri)}
+						style={StyleSheet.absoluteFill}
+					/>
+				) : null}
 			</View>
 			<View style={styles.label}>
 				<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.name}>{artifact.name}</Text>
@@ -145,7 +166,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	caption: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, paddingHorizontal: space.xs, marginBottom: space.md },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	card: { overflow: "hidden", borderRadius: radius.lg, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-	poster: { aspectRatio: 4 / 3, alignItems: "center", justifyContent: "center", gap: space.xs },
+	poster: { aspectRatio: 4 / 3, alignItems: "center", justifyContent: "center", gap: space.xs, overflow: "hidden" },
 	extension: { fontFamily: t.fontMono, fontSize: type.caption2.fontSize, fontWeight: "600", letterSpacing: 0.4 },
 	label: { paddingHorizontal: space.md, paddingVertical: space.sm, gap: space.hair },
 	name: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "500" },

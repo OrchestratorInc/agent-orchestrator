@@ -128,6 +128,33 @@ export function artifactCommentTarget(artifact: Pick<SessionArtifact, "path" | "
 	return { source: artifact.name, path: artifact.path, side: "file", ...(selected ? { quote: selected } : {}) };
 }
 
+/**
+ * A path a document links to (an image, a stylesheet), resolved against the
+ * document's own folder in the artifact directory. Undefined for a URL, a
+ * rooted path, or one that climbs out of the artifact directory.
+ */
+export function resolveArtifactAssetPath(fromPath: string, ref: string): string | undefined {
+	const trimmed = ref.trim();
+	if (!trimmed || /^[a-z][a-z0-9+.-]*:/i.test(trimmed) || trimmed.startsWith("/") || trimmed.startsWith("#")) return undefined;
+	const bare = trimmed.split(/[?#]/)[0] ?? "";
+	let decoded = bare;
+	try {
+		decoded = decodeURIComponent(bare);
+	} catch {
+		// A stray % keeps the reference as written.
+	}
+	const parts = fromPath.split("/").slice(0, -1);
+	for (const segment of decoded.split("/")) {
+		if (segment === "" || segment === ".") continue;
+		if (segment === "..") {
+			if (!parts.length) return undefined;
+			parts.pop();
+		} else parts.push(segment);
+	}
+	const resolved = parts.join("/");
+	return isSafeArtifactPath(resolved) ? resolved : undefined;
+}
+
 /** Decoded text that is really a binary file: a NUL, or mostly undecodable bytes. */
 export function looksBinary(text: string): boolean {
 	if (text.includes("\u0000")) return true;
