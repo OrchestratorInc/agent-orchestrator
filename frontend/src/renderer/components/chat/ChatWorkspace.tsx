@@ -355,6 +355,8 @@ export interface ChatWorkspaceProps {
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	/** Called once the chat applied annotationNavigationRequest, so its owner drops it rather than have a later mount replay it. */
 	onAnnotationNavigationHandled?: (id: string) => void;
+	/** Floats over the top of the transcript, such as the in-session find bar. */
+	timelineOverlay?: ReactNode;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
@@ -711,6 +713,7 @@ function ChatWorkspaceContent({
 	checkingSideChatAvailability,
 	annotationNavigationRequest,
 	onAnnotationNavigationHandled,
+	timelineOverlay,
 	snapshot,
 	promptSuggestion,
 	sessionTitle,
@@ -1948,6 +1951,7 @@ function ChatWorkspaceContent({
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
 									checkingSideChatAvailability={checkingSideChatAvailability}
+									overlay={timelineOverlay}
 									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
@@ -2751,6 +2755,7 @@ export function Timeline({
 	workerUpdates = false,
 	openingStartedAt,
 	openingStartupLabel,
+	overlay,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	checkingSideChatAvailability?: boolean;
@@ -2796,6 +2801,8 @@ export function Timeline({
 	openingStartedAt?: string;
 	/** Names the opening start in place of its timer while the sandbox comes up. */
 	openingStartupLabel?: string;
+	/** Floats over the top of the transcript (the in-session find bar). */
+	overlay?: ReactNode;
 }) {
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -4533,6 +4540,7 @@ export function Timeline({
 			// cannot invalidate the complete mounted conversation history or shell.
 			style={{ contain: "layout paint" }}
 		>
+			{overlay}
 			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
 				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat}
 				onSide={onAddToSideChat} checkingSide={checkingSideChatAvailability} /> : null}
