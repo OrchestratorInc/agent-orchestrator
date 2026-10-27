@@ -404,9 +404,10 @@ func TestSessionArtifactNeedsAnActiveMember(t *testing.T) {
 func TestSessionArtifactConcurrentCommitsRespectTheCap(t *testing.T) {
 	_, admin, fixture := openNotificationTestStore(t)
 	store := openRLSStore(t, admin)
+	// Each batch fits the cap alone; together they exceed it.
 	batches := make([][]domain.SessionArtifact, 2)
 	for batch := range batches {
-		for index := range 150 {
+		for index := range domain.MaxSessionArtifactFiles/2 + 1 {
 			artifact := testArtifact(fmt.Sprintf("b%d/f%03d.txt", batch, index), 1)
 			if err := store.RecordArtifactUpload(context.Background(), fixture.orgID, fixture.sessionID, artifact.S3Key, artifact.VersionID, 1); err != nil {
 				t.Fatal(err)

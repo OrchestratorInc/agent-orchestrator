@@ -44,7 +44,7 @@ func TestArtifactSummaryNamesUpToTwoFiles(t *testing.T) {
 // response limit.
 func TestListChildrenDecodesAFullPageOfArtifactFiles(t *testing.T) {
 	longest := strings.Repeat("p", 1024-len("orgs/00000000-0000-0000-0000-000000000000/sessions/00000000-0000-0000-0000-000000000000/")-len("/000.md")) + "/"
-	count := 200
+	count := 50
 	page := struct {
 		Items []session `json:"items"`
 	}{}
@@ -52,7 +52,7 @@ func TestListChildrenDecodesAFullPageOfArtifactFiles(t *testing.T) {
 	for index := range 100 {
 		child := session{ID: fmt.Sprintf("child-%03d", index), Kind: "worker", Status: "working", ArtifactCount: &count, ArtifactsUpdatedAt: &now, ArtifactFilesTruncated: true}
 		for file := range 10 {
-			child.ArtifactFiles = append(child.ArtifactFiles, artifactFile{Path: fmt.Sprintf("%s%03d.md", longest, file), Kind: "markdown", Size: 25 << 20, UpdatedAt: now})
+			child.ArtifactFiles = append(child.ArtifactFiles, artifactFile{Path: fmt.Sprintf("%s%03d.md", longest, file), Kind: "markdown", Size: 50 << 20, UpdatedAt: now})
 		}
 		page.Items = append(page.Items, child)
 	}
@@ -70,7 +70,7 @@ func TestListChildrenDecodesAFullPageOfArtifactFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listChildren: %v", err)
 	}
-	if len(items) != 100 || *items[99].ArtifactCount != 200 || !items[99].ArtifactFilesTruncated || len(items[99].ArtifactFiles) != 10 {
+	if len(items) != 100 || *items[99].ArtifactCount != 50 || !items[99].ArtifactFilesTruncated || len(items[99].ArtifactFiles) != 10 {
 		t.Fatalf("decoded %d children, last = %+v", len(items), items[len(items)-1].ArtifactCount)
 	}
 }
@@ -84,7 +84,7 @@ func TestListChildrenDecodesAFullPageOfEscapedArtifactPaths(t *testing.T) {
 		name := fmt.Sprintf("/%03d.md", file)
 		return head + strings.Repeat("&", 1024-len("orgs/00000000-0000-0000-0000-000000000000/sessions/00000000-0000-0000-0000-000000000000/")-len(head)-len(name)) + name
 	}
-	count := 200
+	count := 50
 	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
 	page := struct {
 		Items []session `json:"items"`
@@ -92,7 +92,7 @@ func TestListChildrenDecodesAFullPageOfEscapedArtifactPaths(t *testing.T) {
 	for index := range 100 {
 		child := session{ID: fmt.Sprintf("child-%03d", index), Kind: "worker", Status: "working", ArtifactCount: &count, ArtifactsUpdatedAt: &now, ArtifactFilesTruncated: true}
 		for file := range 2 {
-			child.ArtifactFiles = append(child.ArtifactFiles, artifactFile{Path: escaped(file), Kind: "markdown", Size: 25 << 20, UpdatedAt: now})
+			child.ArtifactFiles = append(child.ArtifactFiles, artifactFile{Path: escaped(file), Kind: "markdown", Size: 50 << 20, UpdatedAt: now})
 		}
 		page.Items = append(page.Items, child)
 	}
