@@ -4,6 +4,8 @@
  * Artifacts inspector (frontend SessionArtifactsView) for the phone.
  */
 
+import type { FileAnnotationTarget } from "../../shared/files/file-annotations";
+
 /** The daemon's classification of an artifact file. */
 export type ArtifactKind = "html" | "markdown" | "file";
 
@@ -88,7 +90,7 @@ export function canShowArtifactHistory(artifact: Pick<SessionArtifact, "path" | 
 }
 
 /** One entry in an artifact's long-press or header menu. */
-export type ArtifactMenuAction = "open" | "copy" | "history" | "delete";
+export type ArtifactMenuAction = "open" | "ask" | "copy" | "history" | "delete";
 
 /**
  * What an artifact's menu offers, in order. The viewer already shows the file,
@@ -97,6 +99,8 @@ export type ArtifactMenuAction = "open" | "copy" | "history" | "delete";
 export function artifactMenuActions(artifact: Pick<SessionArtifact, "path" | "kind" | "size">, { inViewer = false }: { inViewer?: boolean } = {}): ArtifactMenuAction[] {
 	return [
 		...(inViewer ? [] : ["open" as const]),
+		// Any file can be asked about as a whole; text can also be quoted from the viewer.
+		"ask",
 		...(canCopyArtifact(artifact) && artifact.size <= MAX_ARTIFACT_TEXT_BYTES ? ["copy" as const] : []),
 		...(canShowArtifactHistory(artifact) ? ["history" as const] : []),
 		"delete",
@@ -112,6 +116,16 @@ export function artifactFilePath(sessionId: string, path: string, { raw = false 
 	if (!isSafeArtifactPath(path)) return undefined;
 	const escaped = [ARTIFACT_ENTRY_PREFIX, ...path.split("/")].map(encodeURIComponent).join("/");
 	return `/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${escaped}${raw ? "?raw=true" : ""}`;
+}
+
+/**
+ * What a comment on an artifact is about, as the desktop's artifact viewer
+ * sends it: the file by name and path, and the selected text when there is
+ * one. Without a quote the comment is about the whole file.
+ */
+export function artifactCommentTarget(artifact: Pick<SessionArtifact, "path" | "name">, quote?: string): FileAnnotationTarget {
+	const selected = quote?.trim();
+	return { source: artifact.name, path: artifact.path, side: "file", ...(selected ? { quote: selected } : {}) };
 }
 
 /** Decoded text that is really a binary file: a NUL, or mostly undecodable bytes. */

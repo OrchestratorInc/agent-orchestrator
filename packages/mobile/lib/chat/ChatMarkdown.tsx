@@ -63,7 +63,17 @@ export function ChatLinkProvider({ onLinkOpen, onAddToChat, sessionName, onSessi
  * readable text; the renderer never hides content because a provider used
  * syntax it does not know.
  */
-export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource }: { text: string; streaming?: boolean; continuousSelection?: boolean; selectionSource?: Omit<ChatExcerpt, "text"> }) {
+export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource, onAddSelection }: {
+	text: string;
+	streaming?: boolean;
+	continuousSelection?: boolean;
+	selectionSource?: Omit<ChatExcerpt, "text">;
+	/**
+	 * Offers the text-selection menu's "Add to chat" outside a conversation (an
+	 * artifact), handing it the selected text. Needs `continuousSelection`.
+	 */
+	onAddSelection?: (text: string) => void;
+}) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = textSelectionColors(t).selectionColor;
@@ -75,7 +85,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		const images = blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
 		return <View style={styles.root}>
 			{splitAtTables(blocks).map((run, index) => Array.isArray(run)
-				? <SelectableResponseText key={index} blocks={run} source={selectionSource} />
+				? <SelectableResponseText key={index} blocks={run} source={selectionSource} onSelect={onAddSelection} />
 				: <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} />)}
 			{images.map((image, index) => <MarkdownImage key={`${image.url}-${index}`} alt={image.alt} url={image.url} selectionColor={selectionColor} showCaption={false} />)}
 		</View>;
@@ -137,14 +147,16 @@ function SelectableProseGroup({ blocks, selectionColor, styles }: { blocks: Arra
 }
 
 /** One native text surface for selecting across a run of response blocks. */
-export function SelectableResponseText({ blocks, source }: { blocks: Array<Exclude<MarkdownBlock, TableBlock>>; source?: Omit<ChatExcerpt, "text"> }) {
+export function SelectableResponseText({ blocks, source, onSelect }: { blocks: Array<Exclude<MarkdownBlock, TableBlock>>; source?: Omit<ChatExcerpt, "text">; onSelect?: (text: string) => void }) {
 	const t = useTheme();
 	const addToChat = useContext(AddResponseToChat);
-	const select = useCallback((selected: string) => source ? addToChat?.(selected, source) : addToChat?.(selected), [addToChat, source]);
-	const onLayout = useAndroidResponseSelection(addToChat && source ? select : null);
+	// In a conversation, only a finished message (one with a source) can be quoted.
+	const enabled = Boolean(onSelect || (addToChat && source));
+	const select = useCallback((selected: string) => onSelect ? onSelect(selected) : source ? addToChat?.(selected, source) : addToChat?.(selected), [addToChat, onSelect, source]);
+	const onLayout = useAndroidResponseSelection(enabled ? select : null);
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = textSelectionColors(t).selectionColor;
-	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={Boolean(addToChat && source)} onAddToChat={(event) => select(event.nativeEvent.text)}>
+	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={enabled} onAddToChat={(event) => select(event.nativeEvent.text)}>
 		{blocks.map((block, index) => {
 			const separator = index > 0 ? "\n\n" : "";
 			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles)}</Text>;

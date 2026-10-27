@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { formatFileAnnotationMessage } from "../../shared/files/file-annotations";
 import {
+	artifactCommentTarget,
 	artifactExtensionLabel,
 	artifactFilePath,
 	artifactMenuActions,
@@ -102,13 +104,30 @@ describe("labels", () => {
 });
 
 describe("artifactMenuActions", () => {
-	it("offers Open, Copy and History for text, and Delete last", () => {
-		expect(artifactMenuActions({ path: "notes.md", kind: "markdown", size: 10 })).toEqual(["open", "copy", "history", "delete"]);
-		expect(artifactMenuActions({ path: "chart.png", kind: "file", size: 10 })).toEqual(["open", "delete"]);
+	it("offers Open, Ask, Copy and History for text, and Delete last", () => {
+		expect(artifactMenuActions({ path: "notes.md", kind: "markdown", size: 10 })).toEqual(["open", "ask", "copy", "history", "delete"]);
+		expect(artifactMenuActions({ path: "chart.png", kind: "file", size: 10 })).toEqual(["open", "ask", "delete"]);
 	});
 
-	it("leaves out Open in the viewer and Copy for text too large to load, but keeps its History", () => {
-		expect(artifactMenuActions({ path: "notes.md", kind: "markdown", size: 10 }, { inViewer: true })).toEqual(["copy", "history", "delete"]);
-		expect(artifactMenuActions({ path: "dump.txt", kind: "file", size: 5 << 20 })).toEqual(["open", "history", "delete"]);
+	it("leaves out Open in the viewer and Copy for text too large to load, but keeps Ask and History", () => {
+		expect(artifactMenuActions({ path: "notes.md", kind: "markdown", size: 10 }, { inViewer: true })).toEqual(["ask", "copy", "history", "delete"]);
+		expect(artifactMenuActions({ path: "dump.txt", kind: "file", size: 5 << 20 })).toEqual(["open", "ask", "history", "delete"]);
+	});
+});
+
+describe("artifactCommentTarget", () => {
+	it("tells the agent which artifact, and quotes the selected text", () => {
+		const target = artifactCommentTarget({ path: "plans/plan.md", name: "plan.md" }, "  Leases are kept in memory  ");
+		expect(target).toEqual({ source: "plan.md", path: "plans/plan.md", side: "file", quote: "Leases are kept in memory" });
+		const message = formatFileAnnotationMessage(target, "Persist them instead.");
+		expect(message).toContain("- Source: plan.md");
+		expect(message).toContain("- Location: Selected text");
+		expect(message).toContain("- Selected text: Leases are kept in memory");
+	});
+
+	it("is about the whole file without a selection", () => {
+		const target = artifactCommentTarget({ path: "report.html", name: "report.html" });
+		expect(target).toEqual({ source: "report.html", path: "report.html", side: "file" });
+		expect(formatFileAnnotationMessage(target, "Add a summary.")).toContain("- Location: Entire file");
 	});
 });

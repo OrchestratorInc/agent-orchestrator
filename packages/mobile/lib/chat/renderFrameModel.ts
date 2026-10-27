@@ -2,6 +2,7 @@
 // each as a `system` activity whose detail is `{ event: "render", render }`, and
 // serves the page, images inlined, from the session's render route.
 // Mirrors frontend/src/renderer/lib/render-frame.ts.
+import { artifactFilePath, isSafeArtifactPath } from "../artifacts";
 import type { Theme } from "../theme";
 import type { ActivityDetail } from "./types";
 
@@ -34,6 +35,34 @@ export function readRenderRef(detail: ActivityDetail | undefined): RenderRef | u
 	// A malformed measurement costs only the measured first height, not the page.
 	if (isMeasuredHeights(render.heights)) ref.heights = render.heights;
 	return ref;
+}
+
+/** An HTML page a chat agent reported with `ao report --artifact`, as its turn shows it. */
+export type ArtifactRef = { path: string; name: string };
+
+// An artifact is an ordinary document, not written to the render rules. Most
+// have no mobile viewport, so the WebView lays them out at desktop width and
+// scales them down; their reported height then overshoots what is drawn. The
+// frame keeps the desktop's opening height instead, and a tap opens the file.
+export const ARTIFACT_FRAME_HEIGHT = 400;
+
+/**
+ * The page an `artifact` activity points at, or undefined for anything
+ * malformed. The daemon records it as `{ event: "artifact", artifact: { path,
+ * name, url } }`; the phone builds its own URL from the path, so `url` (on the
+ * daemon's own host) is not read.
+ */
+export function readArtifactRef(detail: ActivityDetail | undefined): ArtifactRef | undefined {
+	const artifact = detail?.event === "artifact" ? detail.artifact as Record<string, unknown> | undefined : undefined;
+	if (!artifact || typeof artifact.path !== "string" || !isSafeArtifactPath(artifact.path)) return undefined;
+	const name = typeof artifact.name === "string" && artifact.name ? artifact.name : artifact.path.split("/").pop() ?? artifact.path;
+	return { path: artifact.path, name };
+}
+
+/** An artifact as the render frame shows it: its page on the artifact route, at the desktop's opening height. */
+export function artifactRenderRef(sessionId: string, artifact: ArtifactRef): RenderRef | undefined {
+	const path = artifactFilePath(sessionId, artifact.path);
+	return path ? { id: `artifact:${artifact.path}`, title: artifact.name, height: ARTIFACT_FRAME_HEIGHT, path } : undefined;
 }
 
 const isPositiveInteger = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value > 0;

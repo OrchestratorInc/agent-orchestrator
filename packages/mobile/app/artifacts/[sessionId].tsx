@@ -48,6 +48,11 @@ function SessionArtifactsContent() {
 		router.push({ pathname: "/artifact/[sessionId]", params: { sessionId, path: artifact.path, hostId: routeHostId } });
 	}, [routeHostId, router, sessionId]);
 
+	// Ask the agent opens the file with a comment on all of it already open.
+	const ask = useCallback((artifact: SessionArtifact) => {
+		router.push({ pathname: "/artifact/[sessionId]", params: { sessionId, path: artifact.path, hostId: routeHostId, ask: "1" } });
+	}, [routeHostId, router, sessionId]);
+
 	const openHistory = useCallback((artifact: SessionArtifact) => {
 		router.push({ pathname: "/sheets/artifact-history", params: { sessionId, path: artifact.path, name: artifact.name, hostId: routeHostId, origin: "gallery" } });
 	}, [routeHostId, router, sessionId]);
@@ -82,7 +87,7 @@ function SessionArtifactsContent() {
 				ListEmptyComponent={<EmptyState icon="layers" title="No artifacts yet" message="Pages and documents the agent writes for this session show up here." />}
 				renderItem={({ item }) => (
 					<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
-						<ArtifactCard artifact={item} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onHistory: () => openHistory(item) })} />
+						<ArtifactCard artifact={item} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
 					</View>
 				)}
 			/>

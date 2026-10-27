@@ -1,15 +1,20 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import * as Clipboard from "expo-clipboard";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { AccessibilityInfo, ActivityIndicator, Image, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { artifactFileUrl, getArtifactText } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, type SessionArtifact } from "../../lib/artifacts";
+import { artifactCommentTarget, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { authHeaders, type ServerConfig } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
+import { sendFileFeedback } from "../../lib/files/api";
+import { ReviewTray, SelectionComposer, type ComposerAction } from "../../lib/files/components";
+import { addReviewComment, reviewKey } from "../../lib/files/reviewStore";
+import { useReviewSender } from "../../lib/files/useReviewSender";
 import { haptics } from "../../lib/haptics";
 import { headerActionStyle, headerGlyphStyle } from "../../lib/headerAction";
 import { hostRouteMatches } from "../../lib/hostRoute";
@@ -17,7 +22,7 @@ import { Feather } from "../../lib/icons";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
-import { iconSize, space, type } from "../../lib/tokens";
+import { font, iconSize, radius, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
 
@@ -27,9 +32,14 @@ const MAX_HIGHLIGHTED_BYTES = 100 * 1024;
 
 /**
  * One artifact, full screen: the phone's counterpart of the desktop's artifact
- * viewer. Opened from the gallery, or from a worker report's file link. A file
- * the session does not list (the list is capped) still opens, as the page the
- * daemon renders, without the actions menu.
+ * viewer. Opened from the gallery, a chat's inline artifact, or a worker
+ * report's file link. A file the session does not list (the list is capped)
+ * still opens, as the page the daemon renders, without the actions menu.
+ *
+ * Asking the agent works as on desktop: text selected in a markdown or text
+ * artifact ("Add to chat" in the selection menu) opens a comment on that text,
+ * and Ask the agent comments on the whole file. A comment is sent now or added
+ * to the session's review, the same one the Files screen keeps.
  */
 export default function ArtifactViewerScreen() {
 	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
@@ -37,7 +47,8 @@ export default function ArtifactViewerScreen() {
 }
 
 function ArtifactViewerContent() {
-	const { sessionId: rawId, path: rawPath, hostId: routeHostId } = useLocalSearchParams<{ sessionId: string; path?: string; hostId?: string }>();
+	// `ask` opens a comment on the whole file, from the gallery's Ask the agent.
+	const { sessionId: rawId, path: rawPath, hostId: routeHostId, ask: askParam } = useLocalSearchParams<{ sessionId: string; path?: string; hostId?: string; ask?: string }>();
 	const sessionId = String(rawId ?? "");
 	const path = String(rawPath ?? "");
 	const navigation = useNavigation();
@@ -54,6 +65,62 @@ function ArtifactViewerContent() {
 		router.push({ pathname: "/sheets/artifact-history", params: { sessionId, path: target.path, name: target.name, hostId: routeHostId } });
 	}, [routeHostId, router, sessionId]);
 
+	// The open comment: on selected text (`quote`), or on the whole file. `key`
+	// remounts the composer for a new selection, which clears what was typed.
+	const [ask, setAsk] = useState<{ quote?: string; key: number } | null>(null);
+	// A selection of only whitespace (the gap between paragraphs) quotes nothing.
+	const askAbout = useCallback((quote?: string) => setAsk((current) => ({ quote: quote?.trim() || undefined, key: (current?.key ?? 0) + 1 })), []);
+	// Android keeps the keyboard up after its input unmounts, over the review tray.
+	const closeAsk = useCallback(() => {
+		Keyboard.dismiss();
+		setAsk(null);
+	}, []);
+	const askedOnOpen = useRef(false);
+	useEffect(() => {
+		if (askParam !== "1" || askedOnOpen.current || !artifact) return;
+		askedOnOpen.current = true;
+		askAbout();
+	}, [artifact, askAbout, askParam]);
+	const reviewSessionKey = reviewKey(currentHostId ?? undefined, sessionId);
+	const review = useReviewSender(config, reviewSessionKey, sessionId);
+	const [busy, setBusy] = useState(false);
+	const [actionError, setActionError] = useState<string>();
+	const [notice, setNotice] = useState<string>();
+	useEffect(() => {
+		if (!notice) return;
+		AccessibilityInfo.announceForAccessibility(notice);
+		const timer = setTimeout(() => setNotice(undefined), 3_000);
+		return () => clearTimeout(timer);
+	}, [notice]);
+
+	const act = useCallback(async (action: ComposerAction, text: string) => {
+		if (!config || !artifact || !ask) return;
+		const feedback = text.trim();
+		const target = artifactCommentTarget(artifact, ask.quote);
+		const label = `${artifact.name} · ${ask.quote ? "Selected text" : "Whole file"}`;
+		if (action === "comment") {
+			addReviewComment(reviewSessionKey, { label, feedback, target });
+			haptics.success();
+			closeAsk();
+			setNotice("Comment added to the review.");
+			return;
+		}
+		setBusy(true);
+		setActionError(undefined);
+		try {
+			await sendFileFeedback(config, sessionId, [{ target, feedback }]);
+			addReviewComment(reviewSessionKey, { label, feedback, target, status: "sent" });
+			haptics.success();
+			closeAsk();
+			setNotice("Sent. The agent's reply appears in the session.");
+		} catch (cause) {
+			haptics.error();
+			setActionError(userFacingError(cause, "Couldn't send that to the agent."));
+		} finally {
+			setBusy(false);
+		}
+	}, [artifact, ask, closeAsk, config, reviewSessionKey, sessionId]);
+
 	useLayoutEffect(() => {
 		navigation.setOptions({
 			title: artifact?.name ?? path.split("/").pop() ?? "Artifact",
@@ -65,14 +132,14 @@ function ArtifactViewerContent() {
 								<Feather name="clock" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} />
 							</Pressable>
 						) : null}
-						<Pressable accessibilityRole="button" accessibilityLabel="Artifact actions" hitSlop={10} onPress={() => openMenu(artifact, { inViewer: true, onHistory: () => openHistory(artifact) })} style={headerActionStyle}>
+						<Pressable accessibilityRole="button" accessibilityLabel="Artifact actions" hitSlop={10} onPress={() => openMenu(artifact, { inViewer: true, onAsk: () => askAbout(), onHistory: () => openHistory(artifact) })} style={headerActionStyle}>
 							<Feather name="more-horizontal" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} />
 						</Pressable>
 					</View>
 				)
 				: undefined,
 		});
-	}, [artifact, navigation, openHistory, openMenu, path, styles.headerActions, t.textSecondary]);
+	}, [artifact, askAbout, navigation, openHistory, openMenu, path, styles.headerActions, t.textSecondary]);
 
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="layers" title="This artifact belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
@@ -81,10 +148,29 @@ function ArtifactViewerContent() {
 		const url = artifactFileUrl(config, sessionId, path);
 		return url ? <ArtifactWeb config={config} url={url} version="" /> : <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
 	}
-	return <><ArtifactBody config={config} sessionId={sessionId} artifact={artifact} />{menu}</>;
+	return (
+		<View style={styles.screen}>
+			<ArtifactBody config={config} sessionId={sessionId} artifact={artifact} onAsk={askAbout} />
+			{notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
+			{ask ? (
+				<SelectionComposer
+					key={ask.key}
+					label={`${artifact.name} · ${ask.quote ? "Selected text" : "Whole file"}`}
+					busy={busy}
+					error={actionError}
+					onAction={(action, text) => void act(action, text)}
+					onCopy={ask.quote ? () => void Clipboard.setStringAsync(ask.quote ?? "") : undefined}
+					onClose={() => { closeAsk(); setActionError(undefined); }}
+				/>
+			) : (
+				<ReviewTray comments={review.comments} sending={review.sending} error={review.error} onSend={() => void review.send()} onRemove={review.remove} />
+			)}
+			{menu}
+		</View>
+	);
 }
 
-function ArtifactBody({ config, sessionId, artifact }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact }) {
+function ArtifactBody({ config, sessionId, artifact, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; onAsk: (quote?: string) => void }) {
 	const kind = artifactViewKind(artifact);
 	const url = artifactFileUrl(config, sessionId, artifact.path);
 	if (!url) return <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
@@ -95,7 +181,7 @@ function ArtifactBody({ config, sessionId, artifact }: { config: ServerConfig; s
 		return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} />;
 	}
 	if (kind === "image") return <ArtifactImage config={config} url={url} version={artifact.updatedAt} name={artifact.name} />;
-	return <ArtifactText config={config} sessionId={sessionId} artifact={artifact} markdown={kind === "markdown"} />;
+	return <ArtifactText config={config} sessionId={sessionId} artifact={artifact} markdown={kind === "markdown"} onAsk={onAsk} />;
 }
 
 function ArtifactWeb({ config, url, version }: { config: ServerConfig; url: string; version: string }) {
@@ -156,7 +242,7 @@ function ArtifactImage({ config, url, version, name }: { config: ServerConfig; u
 
 type TextState = { key: string; text?: string; error?: string };
 
-function ArtifactText({ config, sessionId, artifact, markdown }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; markdown: boolean }) {
+function ArtifactText({ config, sessionId, artifact, markdown, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; markdown: boolean; onAsk: (quote: string) => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	// Re-read whenever the poll reports a newer version of the file.
@@ -180,7 +266,8 @@ function ArtifactText({ config, sessionId, artifact, markdown }: { config: Serve
 	if (markdown) {
 		return (
 			<ScrollView style={styles.screen} contentContainerStyle={styles.document}>
-				<ChatMarkdown text={text} />
+				{/* One selectable surface per run, as chat responses are, so a selection can span paragraphs. */}
+				<ChatMarkdown text={text} continuousSelection onAddSelection={onAsk} />
 			</ScrollView>
 		);
 	}
@@ -192,6 +279,7 @@ function ArtifactText({ config, sessionId, artifact, markdown }: { config: Serve
 				// Plain text past the cap: highlighting is skipped the same way it is for streaming code.
 				streaming={artifact.size > MAX_HIGHLIGHTED_BYTES}
 				style={styles.codeText}
+				onAddSelection={onAsk}
 			/>
 		</ScrollView>
 	);
@@ -216,6 +304,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	document: { paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.xxxl },
 	code: { padding: space.lg, paddingBottom: space.xxxl },
 	codeText: { fontFamily: t.fontMono, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	notice: { position: "absolute", top: space.md, alignSelf: "center", backgroundColor: t.bgElevated, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, paddingHorizontal: space.lg, paddingVertical: space.sm },
+	noticeText: { fontFamily: font.medium, fontSize: type.footnote.fontSize, color: t.textPrimary },
 });
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";

@@ -13,6 +13,7 @@ import { space, type } from "./tokens";
 
 const LABELS: Record<ArtifactMenuAction, string> = {
 	open: "Open",
+	ask: "Ask the agent",
 	copy: "Copy contents",
 	history: "Version history",
 	delete: "Delete artifact",
@@ -20,6 +21,7 @@ const LABELS: Record<ArtifactMenuAction, string> = {
 
 const GLYPHS: Record<ArtifactMenuAction, FeatherIconName> = {
 	open: "eye",
+	ask: "message-square-plus",
 	copy: "copy",
 	history: "clock",
 	delete: "trash-2",
@@ -78,13 +80,14 @@ export function useArtifactActions(sessionId: string, onDeleted?: (artifact: Ses
 		]);
 	}, [config, onDeleted, refresh, sessionId]);
 
-	/** Opens the menu for `artifact`; Open runs `onOpen`, Version history `onHistory`. */
-	const openMenu = useCallback((artifact: SessionArtifact, { inViewer = false, onOpen, onHistory }: { inViewer?: boolean; onOpen?: () => void; onHistory?: () => void } = {}) => {
+	/** Opens the menu for `artifact`; Open runs `onOpen`, Ask the agent `onAsk`, Version history `onHistory`. */
+	const openMenu = useCallback((artifact: SessionArtifact, { inViewer = false, onOpen, onAsk, onHistory }: { inViewer?: boolean; onOpen?: () => void; onAsk?: () => void; onHistory?: () => void } = {}) => {
 		const actions = artifactMenuActions(artifact, { inViewer });
 		if (!actions.length) return;
 		haptics.select();
 		const run = (action: ArtifactMenuAction) => {
 			if (action === "open") onOpen?.();
+			else if (action === "ask") onAsk?.();
 			else if (action === "copy") void copy(artifact);
 			else if (action === "history") onHistory?.();
 			else confirmDelete(artifact);

@@ -2,6 +2,7 @@ import * as Linking from "expo-linking";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRouter } from "expo-router";
 import { useIsFocused } from "expo-router/react-navigation";
 import { WebView } from "react-native-webview";
 import { authHeaders, httpBase } from "../config";
@@ -12,6 +13,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { space, type } from "../tokens";
 import {
+	ARTIFACT_FRAME_HEIGHT,
 	RENDER_BRIDGE_SCRIPT,
 	RENDER_ZOOM_SCRIPT,
 	REPORT_SETTLE_LIMIT_MS,
@@ -194,10 +196,20 @@ function RenderViewer({ render, visible, onClose }: { render: RenderRef; visible
  * of inlined images, and a thread can carry many. Out of range, a placeholder
  * keeps the page's last height so the thread does not jump when it returns.
  */
-export const RenderFrame = memo(function RenderFrame({ render }: { render: RenderRef }) {
+export const RenderFrame = memo(function RenderFrame({ render, artifact }: {
+	render: RenderRef;
+	/**
+	 * Set for an HTML artifact the agent reported: the frame keeps
+	 * ARTIFACT_FRAME_HEIGHT rather than the page's measured height, and a tap
+	 * opens the artifact viewer (with its menu, history and comments) rather
+	 * than the page on its own.
+	 */
+	artifact?: { sessionId: string; path: string };
+}) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const { config } = useApp();
+	const { config, currentHostId } = useApp();
+	const router = useRouter();
 	const frame = useRef<View>(null);
 	const { height: viewportHeight } = useWindowDimensions();
 	const [width, setWidth] = useState<number>();
@@ -274,7 +286,7 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 		</Pressable>;
 	}
 
-	const height = clampRenderHeight(contentHeight ?? rememberedRenderHeight(render.path, width) ?? initialRenderHeight(render, width));
+	const height = artifact ? ARTIFACT_FRAME_HEIGHT : clampRenderHeight(contentHeight ?? rememberedRenderHeight(render.path, width) ?? initialRenderHeight(render, width));
 	return <View ref={frame} onLayout={(event) => { setWidth(Math.round(event.nativeEvent.layout.width)); measure(); }} style={[styles.frame, { height }]}>
 		{width && live ? <RenderDocument key={page.mount} path={render.path} displayMode="inline" onHeight={onHeight} onReady={onLoaded} onGone={() => page.gone(() => setFailed(true))} onFailed={() => setFailed(true)} /> : null}
 		{/* Over the frame until the page has loaded, and in its place while it is out of range. */}
@@ -282,15 +294,19 @@ export const RenderFrame = memo(function RenderFrame({ render }: { render: Rende
 		{/* Inline, a tap means "show me this larger"; links and zoom live in the expanded view. */}
 		<Pressable
 			accessibilityRole="button"
-			accessibilityLabel={`Expand ${render.title}`}
-			onPress={() => { haptics.tap(); setExpanded(true); }}
+			accessibilityLabel={artifact ? `Open ${render.title}` : `Expand ${render.title}`}
+			onPress={() => {
+				haptics.tap();
+				if (artifact) router.push({ pathname: "/artifact/[sessionId]", params: { sessionId: artifact.sessionId, path: artifact.path, hostId: currentHostId ?? undefined } });
+				else setExpanded(true);
+			}}
 			style={StyleSheet.absoluteFill}
 		>
 			<View style={styles.expandChip}><Feather name="maximize" size={13} color={t.textSecondary} /></View>
 		</Pressable>
-		<RenderViewer render={render} visible={expanded} onClose={() => setExpanded(false)} />
+		{artifact ? null : <RenderViewer render={render} visible={expanded} onClose={() => setExpanded(false)} />}
 	</View>;
-}, (previous, next) => sameRender(previous.render, next.render));
+}, (previous, next) => sameRender(previous.render, next.render) && previous.artifact?.sessionId === next.artifact?.sessionId && previous.artifact?.path === next.artifact?.path);
 
 /** The timeline re-reads each row on every update; the same page must not re-render. */
 function sameRender(a: RenderRef, b: RenderRef): boolean {
