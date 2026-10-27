@@ -471,6 +471,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			setError(cause.message);
 			setErrorStatus(426);
 			setConnection("closed");
+			// The machine answered, so the link is fine. Without this a link left
+			// "reconnecting" by an earlier failure would keep saying so over the
+			// upgrade guidance, since no poll runs again while the config is null.
+			recordLink("answered-error");
 			return null;
 		} finally {
 			if (resolution === configResolution.current) {

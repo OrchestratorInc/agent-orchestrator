@@ -33,6 +33,7 @@ vi.mock("./chat/conversationEvents", () => ({ useConversationEventTransport: () 
 vi.mock("./otherHosts", () => ({ useOtherHosts: () => ({ snapshots: {}, refreshHost: vi.fn() }) }));
 
 import { UnreachableError } from "./connectionError";
+import { IncompatibleHostVersionError } from "./race";
 import { AppProvider, useApp } from "./store";
 let current!: ReturnType<typeof useApp>;
 let renderer: ReactTestRenderer | undefined;
@@ -177,4 +178,20 @@ it("replaces a request stuck on the old link when the network returns", async ()
 	// The poll loop was waiting on the stuck load; it must carry on, not stop.
 	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
 	expect(state.sessions).toHaveBeenCalledTimes(3);
+});
+
+// The machine answered, just with a version this phone can't use. A link that
+// was "reconnecting" must not keep saying so (and that it clears on its own)
+// over the upgrade guidance the 426 deserves.
+it("lets an incompatible-version race override reconnecting", async () => {
+	state.sessions.mockRejectedValueOnce(new UnreachableError("offline"));
+	await mount();
+	expect(current.linkHealth).toBe("reconnecting");
+	// The network comes back and the race now meets a machine this phone can't use.
+	state.resolve.mockRejectedValueOnce(new IncompatibleHostVersionError("Update Orchestrator"));
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	await act(async () => { state.onNetwork!({ isConnected: true, isInternetReachable: true, type: "WIFI" }); });
+	expect(current.errorStatus).toBe(426);
+	expect(current.config).toBeNull();
+	expect(current.linkHealth).toBe("ok");
 });
