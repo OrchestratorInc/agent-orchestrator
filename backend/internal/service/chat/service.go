@@ -401,8 +401,10 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	return s.startLocked(ctx, cfg)
 }
 
-// startLocked is the launch implementation shared by ordinary starts and the
-// provider-switch saga. Callers must hold the typed controller gate.
+// startLocked is the launch implementation shared by ordinary starts, the
+// provider-switch saga, and provider-host recovery. Callers must hold the typed
+// controller gate: keeping restart under the same gate prevents Stop or another
+// Start from publishing across the seam.
 func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller, error) {
 	owner := conversationOwner(cfg)
 	if owner.Kind == domain.ConversationOwnerReview {
@@ -668,6 +670,11 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if err != nil {
 		return nil, fmt.Errorf("open conversation: %w", err)
 	}
+	hostTerminationPending, err := s.store.ProviderHostTerminationPending(
+		ctx, conversation.ID, cfg.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("read pending provider host termination: %w", err)
+	}
 	var repairedBranch domain.ConversationBranch
 	var restoredProviderOwner bool
 	if cfg.ProviderHandoff == nil && cfg.ProviderSwitch == nil && owner.Kind != domain.ConversationOwnerReview {
@@ -811,6 +818,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	providerSystemPrompt := withHandoffNote(cfg.SystemPrompt, handoffNote)
 
 	var conv ports.ChatConversation
+	var resumeConfig ports.ChatResumeConfig
 	hostID := providerHostID(cfg)
 	freshIfMissing := cfg.FreshIfProviderConversationMissing
 	if cfg.ProviderConversationID != "" {
@@ -818,7 +826,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		// the source's turns come before it.
 		unanswered := s.branchUnanswered(ctx, cfg.SessionID, conversation.ID, activeBranch)
 		freshIfMissing = freshIfMissing || unanswered
-		conv, err = resume(ctx, ports.ChatResumeConfig{
+		resumeConfig = ports.ChatResumeConfig{
 			SessionID:              hostID,
 			ProviderConversationID: cfg.ProviderConversationID,
 			FreshIfMissing:         freshIfMissing,
@@ -836,7 +844,8 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			ProviderIDsScoped:      providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
 			AdditionalDirectories:  cfg.AdditionalDirectories,
 			MCPServers:             cfg.MCPServers,
-		})
+		}
+		conv, err = resume(ctx, resumeConfig)
 	} else {
 		conv, err = driver.Start(ctx, ports.ChatStartConfig{
 			ProviderIDsScoped:     providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
@@ -882,7 +891,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			cfg.ControllerReady = s.rebindBranchOnReady(ctx, cfg.ControllerReady, conversation.ID, activeBranch.ID, cfg.ProviderConversationID)
 		}
 	}
-	if (cfg.HistoryMode == ports.ChatHistoryRequired) && liveReconnect {
+	if (cfg.HistoryMode == ports.ChatHistoryRequired) && liveReconnect && !hostTerminationPending {
 		// A TUI handoff needs a fresh, verified native-history admission. A host
 		// left alive by an unpublished target is not an established Chat owner,
 		// and adopting it must not take the ordinary live-reconnect fast path.
@@ -904,16 +913,18 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			}
 			caps[ports.ChatCapabilityResume] = true
 		}
-		if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
-			_ = cleanupUnpublishedConversation(conv, false)
-			return nil, err
+		if !hostTerminationPending {
+			if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
+				_ = cleanupUnpublishedConversation(conv, false)
+				return nil, err
+			}
 		}
 	}
 	if freshReplacement {
 		// No native history exists to import; continue as a fresh start.
 		cfg.ProviderConversationID = ""
 	}
-	if !liveReconnect && isOpenCodeHarness(cfg.Harness) && conversation.Settings.OpenCodeMode != "" {
+	if !hostTerminationPending && !liveReconnect && isOpenCodeHarness(cfg.Harness) && conversation.Settings.OpenCodeMode != "" {
 		if err := restoreOpenCodeMode(ctx, conv, conversation.Settings.OpenCodeMode); err != nil {
 			_ = cleanupUnpublishedConversation(conv, cfg.ProviderConversationID == "")
 			return nil, err
@@ -926,7 +937,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		}
 	}
 	var liveRows ConversationRows
-	if liveReconnect {
+	if liveReconnect && !hostTerminationPending {
 		if s.reader == nil {
 			_ = cleanupUnpublishedConversation(conv, false)
 			return nil, fmt.Errorf("%w: durable conversation snapshot is unavailable", ports.ErrChatRecoveryInconclusive)
@@ -1027,7 +1038,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	// no orphaned work — only the intake an asynchronous spawn queued ahead of
 	// it. Settling that would fail the user's opening prompt the moment the agent
 	// it was waiting for finally arrived.
-	if !liveReconnect && cfg.ProviderHandoff == nil &&
+	if !liveReconnect && !hostTerminationPending && cfg.ProviderHandoff == nil &&
 		owner.Kind != domain.ConversationOwnerReview &&
 		!queuedBeforeFirstController && !preserveUndispatchedQueue {
 		s.settleOrphanedWork(ctx, cfg.SessionID, conversation.ID)
@@ -1037,8 +1048,75 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
-	if liveReconnect {
-		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
+	providerTurnID := ""
+	restartProviderHost := hostTerminationPending
+	if liveReconnect && !restartProviderHost {
+		var staleTurnSettled bool
+		var restoreErr error
+		providerTurnID, staleTurnSettled, restoreErr = controller.restoreLiveTurnOwnership(ctx, liveRows.Turns)
+		if restoreErr != nil {
+			_ = cleanupUnpublishedConversation(conv, false)
+			return nil, fmt.Errorf("restore live turn ownership: %w", restoreErr)
+		}
+		restartProviderHost = staleTurnSettled
+	}
+	if restartProviderHost {
+		if settleErr := controller.failOtherRunningTurnsForHostRestart(ctx); settleErr != nil {
+			_ = cleanupUnpublishedConversation(conv, false)
+			return nil, fmt.Errorf("settle turns before stale live provider termination: %w", settleErr)
+		}
+		// The host still owns the prompt RPC whose missing terminal frame caused
+		// the wedge. It cannot be activated without a durable running turn, and
+		// merely clearing its ActivePrompt flag could allow two provider prompts
+		// to overlap. Retire that ownership boundary and resume the same native
+		// conversation in a fresh provider process.
+		terminator, ok := conv.(ports.ChatProviderTerminator)
+		if !ok {
+			_ = cleanupUnpublishedConversation(conv, false)
+			return nil, fmt.Errorf("%w: stale live provider cannot be terminated", ports.ErrChatRecoveryInconclusive)
+		}
+		if err := terminator.Terminate(); err != nil {
+			return nil, fmt.Errorf("terminate stale live provider: %w", err)
+		}
+		if err := s.store.ClearProviderHostTerminationPending(ctx, conversation.ID, cfg.SessionID); err != nil {
+			return nil, fmt.Errorf("clear pending provider host termination: %w", err)
+		}
+		if cfg.ReconnectOnly {
+			// Startup observation never creates a provider. The stale host is gone
+			// and its turns are settled, so the next ordinary resume starts fresh.
+			return nil, fmt.Errorf("retire stale live provider: %w", ports.ErrChatHostNotRunning)
+		}
+		conv, err = driver.Resume(ctx, resumeConfig)
+		if err != nil {
+			return nil, fmt.Errorf("resume provider after stale live turn: %w", err)
+		}
+		if conv.ProviderConversationID() != cfg.ProviderConversationID {
+			returned := conv.ProviderConversationID()
+			_ = cleanupUnpublishedConversation(conv, false)
+			return nil, fmt.Errorf(
+				"resumed provider conversation handle %q does not match requested handle %q",
+				returned, cfg.ProviderConversationID,
+			)
+		}
+		if reconnected, ok := conv.(ports.ChatLiveReconnector); ok && reconnected.ReconnectedLive() {
+			_ = cleanupUnpublishedConversation(conv, false)
+			return nil, fmt.Errorf("%w: stale provider host remained live after termination", ports.ErrChatRecoveryInconclusive)
+		}
+		caps = maps.Clone(conv.Capabilities())
+		if err := capabilityAdmissionError(cfg.Harness, caps, cfg.Permissions); err != nil {
+			_ = cleanupUnpublishedConversation(conv, false)
+			return nil, err
+		}
+		if isOpenCodeHarness(cfg.Harness) && conversation.Settings.OpenCodeMode != "" {
+			if err := restoreOpenCodeMode(ctx, conv, conversation.Settings.OpenCodeMode); err != nil {
+				_ = cleanupUnpublishedConversation(conv, false)
+				return nil, err
+			}
+		}
+		liveReconnect = false
+		controller = newController(
+			cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
+	} else if liveReconnect {
 		if activator, ok := conv.(ports.ChatLiveReconnectActivator); ok {
 			if err := activator.ActivateLiveReconnect(ctx, providerTurnID); err != nil {
 				_ = cleanupUnpublishedConversation(conv, false)
@@ -1242,6 +1320,98 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	}()
 
 	return controller, nil
+}
+
+// RecoverStaleProviderFailure is the reaper's Chat-specific watchdog hook. A
+// missing controller is an ordinary startup/shutdown race; live-provider startup
+// runs the same check while restoring durable turn ownership. A stale ACP prompt
+// owns a live host RPC even after its durable turn is failed, so periodic recovery
+// must replace that host before exposing a ready controller.
+func (s *Service) RecoverStaleProviderFailure(
+	ctx context.Context,
+	sessionID domain.SessionID,
+	observedAt time.Time,
+) error {
+	owner := domain.SessionConversationOwner(sessionID)
+	gate := s.controllerGate(owner)
+	if err := gate.lock(ctx); err != nil {
+		return err
+	}
+	defer gate.unlock()
+
+	controller, err := s.Controller(sessionID)
+	if errors.Is(err, ErrNoController) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	pending, err := s.store.ProviderHostTerminationPending(
+		ctx, controller.ConversationID(), sessionID)
+	if err != nil {
+		return fmt.Errorf("read pending provider host termination: %w", err)
+	}
+	if !pending {
+		var settled bool
+		settled, err = controller.recoverStaleProviderFailure(ctx, observedAt, true)
+		if err != nil || !settled {
+			return err
+		}
+	} else if !controller.armProviderRecovery() {
+		return nil
+	}
+
+	if err := controller.failOtherRunningTurnsForHostRestart(ctx); err != nil {
+		return fmt.Errorf("settle turns before stale provider host restart: %w", err)
+	}
+
+	s.mu.RLock()
+	cfg, configured := s.startConfigs[owner]
+	s.mu.RUnlock()
+	if !configured {
+		return errors.New("restart stale provider host: controller start configuration is unavailable")
+	}
+	providerConversationID := controller.ProviderConversationID()
+	if providerConversationID == "" {
+		return errors.New("restart stale provider host: provider conversation id is unavailable")
+	}
+
+	terminator, ok := controller.conv.(ports.ChatProviderTerminator)
+	if !ok {
+		return fmt.Errorf("%w: stale provider host cannot be terminated", ports.ErrChatRecoveryInconclusive)
+	}
+	if err := terminator.Terminate(); err != nil {
+		return fmt.Errorf("terminate stale provider host: %w", err)
+	}
+	select {
+	case <-controller.stopped:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := s.store.ClearProviderHostTerminationPending(
+		ctx, controller.ConversationID(), sessionID,
+	); err != nil {
+		return fmt.Errorf("clear pending provider host termination: %w", err)
+	}
+
+	// The original ControllerReady callback belongs to the request that launched
+	// this controller and may retain a cancelled context. The conversation and
+	// session ownership are unchanged here; Start's generation claim is the
+	// durable publication boundary for this internal replacement.
+	cfg.ProviderConversationID = providerConversationID
+	cfg.FreshIfProviderConversationMissing = false
+	// The stale host was just retired; a fresh provider process must replace it
+	// even when this controller was first adopted by startup reconnection.
+	cfg.ReconnectOnly = false
+	cfg.ProviderHandoff = nil
+	cfg.ProviderScopeID = ""
+	cfg.ControllerGeneration = ""
+	cfg.ControllerReady = nil
+	cfg.HistoryMode = ports.ChatHistoryImport
+	if _, err := s.startLocked(ctx, cfg); err != nil {
+		return fmt.Errorf("resume provider after stale host termination: %w", err)
+	}
+	return nil
 }
 
 // cleanupUnpublishedConversation rolls back a provider opened before its AO

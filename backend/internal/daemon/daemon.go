@@ -446,6 +446,7 @@ func Run(buildVersion string) error {
 	})
 	chatSvc.SetRenderCheck(renderViaDesktop(browserBroker, "__render-check"))
 	chatSvc.SetRenderMeasure(renderViaDesktop(browserBroker, "__render-measure"))
+	lcStack.runtimeReaper.SetChatTurnRecovery(chatSvc)
 
 	if err := chatSvc.InitializeSideChats(ctx); err != nil {
 		log.Warn("side chat initialization failed", "error", err)
