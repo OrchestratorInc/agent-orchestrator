@@ -4,6 +4,7 @@ import type { SessionsResponse } from "./api";
 
 const state = vi.hoisted(() => ({
 	onState: undefined as ((value: string) => void) | undefined,
+	onNetwork: undefined as ((value: { isConnected?: boolean; isInternetReachable?: boolean; type?: string }) => void) | undefined,
 	resolve: vi.fn(), sessions: vi.fn(), notifications: vi.fn(), selected: "a",
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => {} } }));
@@ -11,6 +12,10 @@ vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn
 vi.mock("react-native", () => ({ AppState: { currentState: "active", addEventListener: (_: string, callback: (value: string) => void) => {
 	state.onState = callback; return { remove: () => {} };
 } } }));
+vi.mock("expo-network", () => ({
+	getNetworkStateAsync: async () => ({ isConnected: true, isInternetReachable: true, type: "WIFI" }),
+	addNetworkStateListener: (callback: NonNullable<typeof state.onNetwork>) => { state.onNetwork = callback; return { remove: () => {} }; },
+}));
 vi.mock("./api", () => ({ ApiError: class extends Error {}, getSessions: state.sessions, getNotifications: state.notifications }));
 vi.mock("./resolveConfig", () => ({ resolveActiveConfig: state.resolve, runtimeResolveDeps: () => ({}) }));
 vi.mock("./race", () => ({ IncompatibleHostVersionError: class extends Error {} }));
@@ -27,6 +32,7 @@ vi.mock("./telemetry/runtime", () => ({ mobileTelemetry: () => null, trackFeatur
 vi.mock("./chat/conversationEvents", () => ({ useConversationEventTransport: () => {} }));
 vi.mock("./otherHosts", () => ({ useOtherHosts: () => ({ snapshots: {}, refreshHost: vi.fn() }) }));
 
+import { UnreachableError } from "./connectionError";
 import { AppProvider, useApp } from "./store";
 let current!: ReturnType<typeof useApp>;
 let renderer: ReactTestRenderer | undefined;
@@ -108,4 +114,46 @@ it("does not start a retained refresh after the provider unmounts", async () => 
 	await act(async () => { renderer!.unmount(); }); renderer = undefined;
 	await refresh();
 	expect(state.sessions).toHaveBeenCalledTimes(calls);
+});
+
+// One poll that gets no answer used to put "Your machine is offline" on screen,
+// and the next successful one quietly took it back.
+it("reports a single unanswered poll as reconnecting, not as an offline machine", async () => {
+	state.sessions.mockRejectedValueOnce(new UnreachableError("offline"));
+	await mount();
+	expect(current.connection).toBe("closed");
+	expect(current.linkHealth).toBe("reconnecting");
+	expect(current.unreachable).toBe(false);
+	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+	expect(current.linkHealth).toBe("ok");
+	expect(current.connection).toBe("open");
+});
+
+it("calls the machine unreachable once it has stopped answering for a while", async () => {
+	state.sessions.mockRejectedValue(new UnreachableError("offline"));
+	await mount();
+	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+	expect(current.unreachable).toBe(false);
+	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+	expect(current.linkHealth).toBe("unreachable");
+	expect(current.unreachable).toBe(true);
+});
+
+it("blames the phone's network, then races and polls as soon as it returns", async () => {
+	state.sessions.mockRejectedValue(new UnreachableError("offline"));
+	await mount();
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+	expect(current.phoneOffline).toBe(true);
+	expect(current.linkHealth).toBe("phone-offline");
+	expect(current.unreachable).toBe(false);
+
+	state.sessions.mockResolvedValue(board("Back"));
+	const races = state.resolve.mock.calls.length;
+	await act(async () => { state.onNetwork!({ isConnected: true, isInternetReachable: true, type: "WIFI" }); });
+	expect(state.resolve.mock.calls.length).toBe(races + 1);
+	expect(current.phoneOffline).toBe(false);
+	expect(current.connection).toBe("open");
+	expect(current.linkHealth).toBe("ok");
+	expect(current.sessions[0].displayName).toBe("Back");
 });

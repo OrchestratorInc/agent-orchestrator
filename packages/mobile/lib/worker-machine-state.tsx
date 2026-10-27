@@ -8,30 +8,34 @@ import { space, type } from "./tokens";
 import { Button } from "./ui";
 import type { WorkerEnvironment } from "./worker-controls";
 
-export function WorkerMachineState({ host, environments, onSelectEnvironment, onRetry }: {
+export function WorkerMachineState({ host, environments, onSelectEnvironment, onRetry, phoneOffline = false }: {
 	host: Pick<HostSnapshot, "hostId" | "name" | "appearance" | "connection" | "errorStatus">;
+	/** The phone itself has no network, so the machine is not the one to blame. */
+	phoneOffline?: boolean;
 	environments: readonly WorkerEnvironment[];
 	onSelectEnvironment: (environmentId: string) => void;
 	onRetry: () => void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const connecting = host.connection === "connecting";
+	const connecting = host.connection === "connecting" && !phoneOffline;
+	const status = connecting ? "Connecting…" : phoneOffline ? "You're offline" : "Can't reach this machine";
 	return (
 		<View style={styles.container}>
 			<MachineAvatar appearance={host.appearance} size={space.huge * 2} />
 			<Text style={styles.name}>{host.name}</Text>
-			<View testID="worker-machine-status" accessibilityLabel={connecting ? `Connecting to ${host.name}` : `Can't reach ${host.name}`} accessibilityLiveRegion="polite" accessibilityState={{ busy: connecting }} style={styles.status}>
+			<View testID="worker-machine-status" accessibilityLabel={connecting ? `Connecting to ${host.name}` : phoneOffline ? "This phone is offline" : `Can't reach ${host.name}`} accessibilityLiveRegion="polite" accessibilityState={{ busy: connecting }} style={styles.status}>
 				{connecting ? <ActivityIndicator size="small" color={t.textSecondary} /> : null}
-				<Text style={styles.statusText}>{connecting ? "Connecting…" : "Can't reach this machine"}</Text>
+				<Text style={styles.statusText}>{status}</Text>
 			</View>
 			<Text testID="worker-machine-hint" style={styles.hint}>
 				{connecting ? "Workers will appear once this machine connects."
+					: phoneOffline ? "Workers load once this phone is back online."
 					: host.errorStatus === 426 ? "Update Orchestrator on this phone and the machine to load its workers."
 						: "Check that Orchestrator is running and this machine is reachable to load its workers."}
 			</Text>
 			<View style={styles.actions}>
-				{!connecting ? <Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRetry} /> : null}
+				{!connecting && !phoneOffline ? <Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRetry} /> : null}
 				<EnvironmentPicker environments={environments} selectedEnvironmentId={host.hostId} onSelectEnvironment={onSelectEnvironment} />
 			</View>
 		</View>

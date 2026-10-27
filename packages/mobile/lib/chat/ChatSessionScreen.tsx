@@ -97,7 +97,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		),
 		[navigation],
 	);
-	const { config, currentHostId, connection, unreachable, projects, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
+	const { config, currentHostId, connection, unreachable, linkHealth, projects, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, session.id);
@@ -605,6 +605,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	if (conversation.unavailable) return <Unavailable message={conversation.unavailable.message} onShell={() => void openShell()} openingShell={openingShell} />;
 	// The board's poll is the app's view of the link: when it is down, say so in
 	// the board's words instead of echoing whatever this request failed with.
+	if (!conversation.snapshot && linkHealth === "phone-offline") return <Centered icon="wifi-off" title="You're offline" message="This conversation loads once this phone is back online." />;
+	if (!conversation.snapshot && connection !== "open" && linkHealth === "reconnecting") return <Centered icon="refresh-cw" title="Reconnecting…" message="This conversation loads once the app reconnects." spinning />;
 	if (!conversation.snapshot && unreachable) return <Centered icon="wifi-off" title="This machine is offline" message="This conversation loads once the app reconnects." action="Retry" onAction={() => void conversation.refresh()} />;
 	if (!conversation.snapshot) return <Centered icon="alert-triangle" title="Couldn't load the conversation" message={conversation.error || "The machine didn't return this conversation. Try again."} action="Retry" onAction={() => void conversation.refresh()} />;
 

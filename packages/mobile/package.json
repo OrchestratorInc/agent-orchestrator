@@ -40,6 +40,7 @@
     "expo-in-app-updates": "^0.12.0",
     "expo-linking": "~57.0.7",
     "expo-navigation-bar": "~57.0.2",
+    "expo-network": "~57.0.3",
     "expo-notifications": "~57.0.13",
     "expo-router": "~57.0.15",
     "expo-secure-store": "~57.0.1",

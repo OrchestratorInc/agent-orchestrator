@@ -65,7 +65,7 @@ export default function SettingsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { config, configured, selectedHostName, switchHost, connection, error, errorStatus, activeEndpoints, loading: appLoading, reloadConfig } = useApp();
+	const { config, configured, selectedHostName, switchHost, connection, error, errorStatus, activeEndpoints, linkHealth, loading: appLoading, reloadConfig } = useApp();
 	const scrollRef = useRef<ScrollView>(null);
 	const [pairedHosts, setPairedHosts] = useState<PairedHost[]>([]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
@@ -119,7 +119,7 @@ export default function SettingsScreen() {
 		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open")
 			? "tunnel-rotated"
 			: classified ?? (paired && !config && !appLoading ? "unreachable" : null);
-	const machineStatus = describeDesktopStatus({ configured: paired, connection, failure });
+	const machineStatus = describeDesktopStatus({ configured: paired, connection, failure, link: linkHealth });
 	const machineStatusColor = machineStatus.tone === "ok" ? t.green : machineStatus.tone === "error" ? t.red : undefined;
 	return (
 		<View style={styles.screen} collapsable={false}>
