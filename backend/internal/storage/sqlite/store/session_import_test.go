@@ -69,8 +69,9 @@ func TestImportedWorkspacePublicationKeepsConcurrentSessionEdits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// UpdateSession leaves the title to its narrow writers, so edit a field it writes.
 	renamed := created
-	renamed.DisplayName = "renamed during copy"
+	renamed.Metadata.LatestUserPrompt = "sent during copy"
 	if err := s.UpdateSession(ctx, renamed); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestImportedWorkspacePublicationKeepsConcurrentSessionEdits(t *testing.T) {
 		t.Fatalf("publish: %v %v", ok, err)
 	}
 	got, _, _ := s.GetSession(ctx, created.ID)
-	if got.DisplayName != renamed.DisplayName || !got.Metadata.ImportSource.Prepared {
+	if got.Metadata.LatestUserPrompt != renamed.Metadata.LatestUserPrompt || !got.Metadata.ImportSource.Prepared {
 		t.Fatal("publication reverted concurrent session edits")
 	}
 	if got.Metadata.WorkspacePath != "/workspace" || got.Metadata.DiffBaseSHA != "0123abcd" || got.Metadata.DiffBaseRef != "HEAD" {
@@ -181,7 +182,7 @@ func TestImportFactsSurviveOlderSessionWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	older := created
-	older.DisplayName = "written from an older snapshot"
+	older.Metadata.LatestUserPrompt = "written from an older snapshot"
 	transferred := *created.Metadata.ImportSource
 	transferred.Transferred = true
 	if ok, err := s.SetSessionImportWorkspace(ctx, created.ID, created.Metadata.ImportSource, &transferred, importWorkspace, time.Now()); err != nil || !ok {
@@ -191,7 +192,7 @@ func TestImportFactsSurviveOlderSessionWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _, _ := s.GetSession(ctx, created.ID)
-	if got.DisplayName != older.DisplayName || !got.Metadata.ImportSource.Transferred {
+	if got.Metadata.LatestUserPrompt != older.Metadata.LatestUserPrompt || !got.Metadata.ImportSource.Transferred {
 		t.Fatalf("older snapshot undid the transfer: %+v", got.Metadata.ImportSource)
 	}
 	adopted := got
