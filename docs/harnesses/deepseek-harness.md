@@ -54,11 +54,23 @@ never supplies, so AO rejects that exact task text instead of blocking.
 ## Credentials
 
 DeepSeek Harness owns its credentials, which live in its own store
-(`~/.dsh/.credentials.yaml`, or `$DSH_HOME`). It exposes no authentication
-surface: the ACP server advertises no auth methods and its `authenticate` call
-always succeeds. AO therefore documents setup rather than driving a login, and
-reads the store only to report whether a DeepSeek credential is present — the
-value is never copied, logged, or forwarded.
+(`~/.dsh/.credentials.yaml`, or `$DSH_HOME`). In Settings → Agent Harnesses,
+**Login** / **Log in again** and **Log out** open `dsh --profile web` using the
+same executable AO launches for sessions. In DeepSeek's web UI, use
+**Settings → Account** to sign in through your browser, or choose **Sign out**
+from the sidebar account menu to sign out. To switch accounts, sign out there
+before signing in again. Leave the authentication terminal running until the
+native flow finishes, then close it so AO can check authentication again.
+
+API keys remain separate, under DeepSeek's **Settings → Models**. Signing out
+of an account does not remove an API key, so AO may still observe configured
+credentials afterward. Missing credentials stay unknown because private
+profiles may configure other providers; AO does not assume sign-out succeeded.
+
+The ACP server itself advertises no auth methods and its `authenticate` call
+always succeeds. AO reads the store only to report whether a DeepSeek API key
+or production browser-account grant is present — values are never copied,
+logged, or forwarded. Device records alone do not count as a signed-in account.
 
 ## Permissions
 
