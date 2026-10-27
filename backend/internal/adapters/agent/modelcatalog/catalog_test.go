@@ -263,7 +263,9 @@ func TestDiscoverExplainsPipeHoldingDescendant(t *testing.T) {
 			_ = child.Kill()
 		}
 	})
-	_, err := Discover(context.Background(), "agy", binary, dir, nil)
+	_, err := (Discoverer{}).Discover(context.Background(), ports.AgentModelDiscoveryRequest{
+		AgentID: "agy", Binary: binary, WorkingDir: dir,
+	})
 	if !errors.Is(err, exec.ErrWaitDelay) {
 		t.Fatalf("Discover error = %v, want preserved WaitDelay diagnostic", err)
 	}
