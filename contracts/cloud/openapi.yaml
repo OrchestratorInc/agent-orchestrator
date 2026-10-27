@@ -681,6 +681,12 @@ paths:
     delete:
       operationId: deleteSession
       tags: [Sessions]
+      parameters:
+        - name: deleteArtifacts
+          in: query
+          description: Also delete the session's artifact files. A restored session comes back without them.
+          schema:
+            type: boolean
       responses:
         "202":
           description: Session sandbox deletion was requested; durable history is retained.
@@ -5583,6 +5589,9 @@ components:
             desiredState:
               type: string
               const: deleted
+        artifactsDeleted:
+          type: boolean
+          description: Whether the session's artifact files were deleted.
     SessionResponse:
       type: object
       additionalProperties: false

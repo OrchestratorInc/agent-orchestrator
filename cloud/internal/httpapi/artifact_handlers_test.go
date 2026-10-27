@@ -260,6 +260,13 @@ type artifactRouterStore struct {
 	Store
 	*memoryArtifactRows
 	resumeCalls int
+	// terminated records the deleteArtifacts flag of each TerminateSession call.
+	terminated []bool
+}
+
+func (s *artifactRouterStore) TerminateSession(_ context.Context, _ domain.Principal, _, _ string, deleteArtifacts bool) error {
+	s.terminated = append(s.terminated, deleteArtifacts)
+	return nil
 }
 
 func (s *artifactRouterStore) PrincipalFromLocalToken(_ context.Context, hash []byte) (domain.Principal, error) {
@@ -1025,6 +1032,34 @@ func TestDeleteArtifactRouteNeedsArtifactsOn(t *testing.T) {
 	route := "/api/cloud/v1/orgs/" + artifactOrgA + "/sessions/" + artifactSessionA + "/artifacts?path=report.html"
 	if rec := h.do(http.MethodDelete, route, "Bearer "+artifactTokenA, nil, nil); rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("delete with artifacts off: %d", rec.Code)
+	}
+}
+
+func TestDeletingASessionCanDeleteItsArtifacts(t *testing.T) {
+	route := "/api/cloud/v1/orgs/" + artifactOrgA + "/sessions/" + artifactSessionA
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		query   string
+		want    bool
+	}{
+		{name: "kept by default", enabled: true, query: "", want: false},
+		{name: "deleted on request", enabled: true, query: "?deleteArtifacts=true", want: true},
+		{name: "kept with artifacts off", enabled: false, query: "?deleteArtifacts=true", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newArtifactHarness(t, tc.enabled)
+			rec := h.do(http.MethodDelete, route+tc.query, "Bearer "+artifactTokenA, nil, nil)
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+			}
+			body := decodeBody[struct {
+				ArtifactsDeleted bool `json:"artifactsDeleted"`
+			}](t, rec)
+			if body.ArtifactsDeleted != tc.want || len(h.store.terminated) != 1 || h.store.terminated[0] != tc.want {
+				t.Fatalf("artifactsDeleted = %v, store calls = %v; want %v", body.ArtifactsDeleted, h.store.terminated, tc.want)
+			}
+		})
 	}
 }
 

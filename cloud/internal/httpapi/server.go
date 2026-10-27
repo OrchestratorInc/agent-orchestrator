@@ -74,7 +74,7 @@ type Store interface {
 	// only of the given types when any are given.
 	ListClientEvents(ctx context.Context, principal domain.Principal, orgID, sessionID string, after int64, limit int, types []string) ([]domain.ClientEvent, bool, error)
 	SetSandboxDesiredState(ctx context.Context, principal domain.Principal, orgID, sessionID, desiredState string) error
-	TerminateSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
+	TerminateSession(ctx context.Context, principal domain.Principal, orgID, sessionID string, deleteArtifacts bool) error
 	RestoreSession(ctx context.Context, principal domain.Principal, orgID, sessionID string) error
 	ResumeSession(context.Context, domain.Principal, string, string) (domain.SandboxLifecycle, error)
 	WakePausedSessions(context.Context, domain.Principal, string) (int64, error)

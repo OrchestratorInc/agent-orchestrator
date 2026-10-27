@@ -85,11 +85,14 @@ func (s *Store) GetSessionTranscript(
 // a session by is_terminated, and the idle scanner can otherwise race a
 // sandbox-only delete by resetting desired_state back to 'paused', which left
 // the session active and the card re-appearing on the next poll. This is the
-// exact inverse of RestoreSession, so delete and restore are symmetric.
+// exact inverse of RestoreSession, so delete and restore are symmetric. With
+// deleteArtifacts it also deletes the session's artifact files in the same
+// transaction, so a restored session comes back without them.
 func (s *Store) TerminateSession(
 	ctx context.Context,
 	principal domain.Principal,
 	orgID, sessionID string,
+	deleteArtifacts bool,
 ) error {
 	return s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(
@@ -123,6 +126,9 @@ func (s *Store) TerminateSession(
 			sessionID, orgID,
 		); err != nil {
 			return fmt.Errorf("request sandbox deletion: %w", err)
+		}
+		if deleteArtifacts {
+			return deleteSessionArtifactsTx(ctx, tx, orgID, sessionID)
 		}
 		return nil
 	})

@@ -389,6 +389,59 @@ func (s *Store) DeleteSessionArtifact(
 	return version, err
 }
 
+// deleteSessionArtifactsTx removes a session's committed artifacts, queues all
+// of its object versions, committed, replaced or still uploading, for the
+// sweeper to delete now, and appends an artifact.changed event naming the
+// removed paths. A session with no artifacts is left unchanged.
+func deleteSessionArtifactsTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string) error {
+	if _, err := tx.Exec(
+		ctx,
+		`INSERT INTO ao_artifact_object_versions (
+			org_id, session_id, s3_key, version_id, reason, size, collect_after
+		)
+		SELECT org_id, session_id, s3_key, version_id, 'replaced', size, now()
+		FROM ao_session_artifacts
+		WHERE org_id = $1 AND session_id = $2
+		ON CONFLICT (s3_key, version_id) DO UPDATE SET collect_after = now()`,
+		orgID, sessionID,
+	); err != nil {
+		return fmt.Errorf("queue session artifact versions: %w", err)
+	}
+	if _, err := tx.Exec(
+		ctx,
+		`UPDATE ao_artifact_object_versions
+		SET collect_after = now()
+		WHERE org_id = $1 AND session_id = $2
+		  AND collect_after > now()
+		  AND collecting_until IS NULL`,
+		orgID, sessionID,
+	); err != nil {
+		return fmt.Errorf("collect session artifact versions now: %w", err)
+	}
+	rows, err := tx.Query(
+		ctx,
+		`DELETE FROM ao_session_artifacts
+		WHERE org_id = $1 AND session_id = $2
+		RETURNING path`,
+		orgID, sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete session artifacts: %w", err)
+	}
+	deleted, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return fmt.Errorf("delete session artifacts: %w", err)
+	}
+	if len(deleted) == 0 {
+		return nil
+	}
+	totals, err := sessionArtifactTotalsTx(ctx, tx, orgID, sessionID)
+	if err != nil {
+		return err
+	}
+	return recordArtifactChangeTx(ctx, tx, orgID, sessionID, totals, []string{}, deleted)
+}
+
 // deleteProjectArtifactsTx removes the committed artifacts of every session in
 // a project and queues all of their object versions, committed, replaced or
 // still uploading, for the sweeper to delete now. The project's sessions keep

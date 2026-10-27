@@ -596,3 +596,65 @@ func TestDeletingAProjectDeletesItsArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDeletingASessionCanDeleteItsArtifacts(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+
+	draft := testArtifact("archived/draft.md", 3)
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{testArtifact("archived/report.html", 10), testArtifact("archived/notes.md", 5)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordArtifactUpload(ctx, fixture.orgID, fixture.sessionID, draft.S3Key, draft.VersionID, draft.Size); err != nil {
+		t.Fatal(err)
+	}
+	events := artifactEventCount(t, admin, fixture.sessionID)
+
+	if err := store.TerminateSession(ctx, principal, fixture.orgID, fixture.sessionID, true); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := store.ListSessionArtifacts(ctx, principal, fixture.orgID, fixture.sessionID)
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("artifacts after the session was deleted = %+v, %v", listed, err)
+	}
+	var queued, notDue int
+	if err := admin.QueryRow(ctx,
+		`SELECT count(*), count(*) FILTER (WHERE collect_after > now())
+		FROM ao_artifact_object_versions WHERE session_id = $1`,
+		fixture.sessionID).Scan(&queued, &notDue); err != nil {
+		t.Fatal(err)
+	}
+	// report.html, notes.md, and the open draft upload.
+	if queued != 3 || notDue != 0 {
+		t.Fatalf("queued versions = %d, %d not due now; want 3, all due", queued, notDue)
+	}
+	if got := sessionOutputType(t, admin, fixture.sessionID); got != domain.SessionOutputNone {
+		t.Fatalf("output type = %q, want none", got)
+	}
+	if got := artifactEventCount(t, admin, fixture.sessionID); got != events+1 {
+		t.Fatalf("artifact events = %d, want %d", got, events+1)
+	}
+	if err := store.CommitSessionArtifacts(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, fixture.epoch, []domain.SessionArtifact{draft}, nil); !errors.Is(err, ErrArtifactVersionUnknown) {
+		t.Fatalf("committing the open upload after the delete = %v, want ErrArtifactVersionUnknown", err)
+	}
+}
+
+func TestDeletingASessionKeepsItsArtifactsByDefault(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{testArtifact("kept/report.html", 10)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.TerminateSession(ctx, principal, fixture.orgID, fixture.sessionID, false); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := store.ListSessionArtifacts(ctx, principal, fixture.orgID, fixture.sessionID)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("artifacts after the session was deleted = %+v, %v", listed, err)
+	}
+}
