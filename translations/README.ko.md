@@ -2,7 +2,7 @@
 
 <img src="../frontend/assets/icon.png" alt="Orchestrator.inc logo" width="144" height="144" />
 
-<h3>Orchestrator.inc</h3>
+<h1><b>Orchestrator.inc</b></h1>
 
 <h4>에이전트를 일일이 돌보지 마세요. 실제 작업을 머지하세요.</h4>
 

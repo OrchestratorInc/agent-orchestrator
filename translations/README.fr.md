@@ -2,7 +2,7 @@
 
 <img src="../frontend/assets/icon.png" alt="Orchestrator.inc logo" width="144" height="144" />
 
-<h3>Orchestrator.inc</h3>
+<h1><b>Orchestrator.inc</b></h1>
 
 <h4>Arrêtez de surveiller vos agents. Commencez à fusionner du vrai travail.</h4>
 

@@ -2,7 +2,7 @@
 
 <img src="../frontend/assets/icon.png" alt="Orchestrator.inc logo" width="144" height="144" />
 
-<h3>Orchestrator.inc</h3>
+<h1><b>Orchestrator.inc</b></h1>
 
 <h4>别再照看智能体，开始合并真正的成果。</h4>
 
