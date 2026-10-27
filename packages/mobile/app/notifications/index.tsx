@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	ActivityIndicator,
 	Alert,
+	Platform,
 	Pressable,
 	RefreshControl,
 	SectionList,
@@ -22,6 +23,7 @@ import {
 	type NotificationRecord,
 } from "../../lib/api";
 import { AppSymbol } from "../../lib/AppSymbol";
+import { backOr } from "../../lib/backNavigation";
 import { rowDividerWidth } from "../../lib/divider";
 import { haptics } from "../../lib/haptics";
 import { NotificationTypeIcon } from "../../lib/notification-type-icon";
@@ -436,17 +438,33 @@ function NotificationsContent() {
 	const confirmClearAllRef = useRef(confirmClearAll);
 	confirmClearAllRef.current = confirmClearAll;
 	const clearable = items.length > 0;
-	const headerItems = useMemo(() => clearable ? (
-		<Stack.Toolbar placement="right">
-			<Stack.Toolbar.Button icon={toolbarIcon("delete")} accessibilityLabel="Clear all" onPress={() => confirmClearAllRef.current()} />
-		</Stack.Toolbar>
-	) : null, [clearable]);
+	// iOS presents Notifications as a sheet, which closes from its bar as
+	// Settings does; Clear all moves to the bar's other end. Android's page has
+	// the system back, and Clear all keeps the trailing end.
+	const closeSheet = Platform.OS === "ios";
+	const headerItems = useMemo(() => (
+		<>
+			{clearable ? (
+				<Stack.Toolbar placement={closeSheet ? "left" : "right"}>
+					<Stack.Toolbar.Button icon={toolbarIcon("delete")} accessibilityLabel="Clear all" onPress={() => confirmClearAllRef.current()} />
+				</Stack.Toolbar>
+			) : null}
+			{closeSheet ? (
+				<Stack.Toolbar placement="right">
+					<Stack.Toolbar.Button icon={toolbarIcon("close")} accessibilityLabel="Close notifications" onPress={() => backOr(router)} />
+				</Stack.Toolbar>
+			) : null}
+		</>
+	), [clearable, closeSheet, router]);
 
 	return (
-		<View style={styles.screen}>
+		// Not collapsable, as in Settings: flattened away, it leaves the list a
+		// direct child of the sheet, which react-native-screens then resizes
+		// wrongly and the page shows blank under its bar.
+		<View style={styles.screen} collapsable={false}>
 			{headerItems}
 			{/* The list, or the scroll view standing in for it, is the page's first
-			    view: on iOS the large title collapses with it. */}
+			    view: on iOS 26 the clear bar blurs it as it scrolls under. */}
 			{loading ? (
 				<TabPageScroll>
 					<View style={styles.center}>

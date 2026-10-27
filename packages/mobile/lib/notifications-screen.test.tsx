@@ -180,11 +180,19 @@ afterEach(async () => {
 	vi.unstubAllGlobals();
 });
 
+// The bar group a toolbar button sits in.
+const toolbarOf = (node: { type: unknown; parent: unknown }) => {
+	let current = node as { type: unknown; parent: unknown; props?: Record<string, unknown> } | null;
+	while (current && current.type !== "StackToolbar") current = current.parent as typeof current;
+	return current!;
+};
+
 describe("NotificationsScreen", () => {
 	it("clears every connected machine's history from the header after confirming", async () => {
 		await act(async () => { renderer = create(<NotificationsScreen />); });
-		const clearAll = () => renderer!.root.findByType("StackToolbarButton" as never);
-		expect(renderer!.root.findByType("StackToolbar" as never).props.placement).toBe("right");
+		const clearAll = () => renderer!.root.find((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all");
+		// The sheet's close takes the trailing end, so Clear all leads.
+		expect(toolbarOf(clearAll()).props!.placement).toBe("left");
 		expect(clearAll().props).toEqual(expect.objectContaining({ icon: "trash", accessibilityLabel: "Clear all" }));
 
 		act(() => { clearAll().props.onPress(); });
@@ -211,7 +219,7 @@ describe("NotificationsScreen", () => {
 		const base = fixtures.getNotifications.getMockImplementation()!;
 		fixtures.getNotifications.mockImplementation(async () => { throw new Error("connection lost"); });
 		try {
-			const clearAll = renderer!.root.findByType("StackToolbarButton" as never);
+			const clearAll = renderer!.root.find((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all");
 			act(() => { clearAll.props.onPress(); });
 			const [, , buttons] = fixtures.alert.mock.calls[0] as [string, string, { text: string; onPress?: () => void }[]];
 			await act(async () => { buttons.find((button) => button.text === "Clear all")!.onPress!(); });
@@ -227,7 +235,7 @@ describe("NotificationsScreen", () => {
 	it("leaves an offline machine's rows alone and says so", async () => {
 		await act(async () => { renderer = create(<NotificationsScreen />); });
 		fixtures.offline.add("mac");
-		const clearAll = renderer!.root.findByType("StackToolbarButton" as never);
+		const clearAll = renderer!.root.find((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all");
 		act(() => { clearAll.props.onPress(); });
 		const [, , buttons] = fixtures.alert.mock.calls[0] as [string, string, { text: string; onPress?: () => void }[]];
 		await act(async () => { buttons.find((button) => button.text === "Clear all")!.onPress!(); });
@@ -385,10 +393,17 @@ describe("NotificationsScreen", () => {
 		expect(fixtures.getNotifications).toHaveBeenCalledWith(fixtures.configs.dev, expect.objectContaining({ cursor: "cursor-1" }));
 	});
 
+	it("closes the sheet from the bar's trailing end", async () => {
+		await act(async () => { renderer = create(<NotificationsScreen />); });
+		const close = renderer!.root.find((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Close notifications");
+		expect(toolbarOf(close).props!.placement).toBe("right");
+		expect(close.props.icon).toBe("xmark");
+	});
+
 	it("hides Clear all when there is nothing to clear", async () => {
 		fixtures.getNotifications.mockImplementation(async () => ({ notifications: [], nextCursor: undefined, unreadCount: 0 }));
 		await act(async () => { renderer = create(<NotificationsScreen />); });
-		expect(renderer!.root.findAllByType("StackToolbar" as never)).toHaveLength(0);
+		expect(renderer!.root.findAll((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all")).toHaveLength(0);
 	});
 
 	it("returns to the board's PRs tab for a PR outcome instead of stacking a second board", async () => {

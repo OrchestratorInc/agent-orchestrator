@@ -13,29 +13,41 @@ describe("notifications host routing", () => {
 	});
 });
 
-// The title, back button and Clear all are the native header's: a large title
-// on iOS, a top app bar on Android, the system back on both.
+// The title, back button and Clear all are the native header's: Settings'
+// sheet bar on iOS, a top app bar on Android, the system back on both.
 describe("notifications header", () => {
 	const page = source("../app/notifications/index.tsx");
 
-	it("takes a large title from its own stack instead of drawing a header row", () => {
-		expect(source("../app/notifications/_layout.tsx")).toContain('<Stack screenOptions={{ ...stackScreenOptions(t), ...largeTitleScreenOptions() }}>');
+	// A large title in the sheet left the page blank beneath it.
+	it("takes an inline title from its own stack instead of drawing a header row", () => {
+		expect(source("../app/notifications/_layout.tsx")).toContain('<Stack screenOptions={{ ...stackScreenOptions(t), ...(SYSTEM_GLASS_HEADER ? { headerTransparent: true, headerStyle: undefined } : null) }}>');
+		expect(source("../app/notifications/_layout.tsx")).not.toContain("largeTitleScreenOptions");
 		expect(source("../app/notifications/_layout.tsx")).toContain('<Stack.Screen name="index" options={{ title: "Notifications" }} />');
 		expect(page).not.toContain("ScreenHeader");
 		expect(page).not.toContain("HeaderIconButton");
 		expect(page).not.toContain("insets.top");
-		expect(page).not.toContain("backOr(");
 	});
 
-	// The large title collapses with the page's first view.
+	// Flattened away, the root leaves the list a direct child of the sheet, which
+	// react-native-screens resizes wrongly: the page showed blank under its bar.
+	it("keeps its root view so the sheet lays the list out", () => {
+		expect(page).toContain("<View style={styles.screen} collapsable={false}>");
+	});
+
+	// The clear bar blurs whatever scrolls under it, so the page's first view is
+	// the one inset for it.
 	it("keeps the list, or a scroll view in its place, first under the bar", () => {
 		expect(page).toContain('contentInsetAdjustmentBehavior="automatic"');
 		expect(page).toMatch(/\{headerItems\}[\s\S]*?\{loading \? \(\s*<TabPageScroll>/);
 	});
 
-	it("clears all from a trailing header item", () => {
+	// On iOS the sheet closes from its bar, as Settings does, and Clear all
+	// takes the leading end; Android's page keeps it trailing beside the back.
+	it("closes the sheet from the bar and clears all from the other end", () => {
+		expect(page).toContain('<Stack.Toolbar.Button icon={toolbarIcon("close")} accessibilityLabel="Close notifications" onPress={() => backOr(router)} />');
+		expect(page).toContain('<Stack.Toolbar placement={closeSheet ? "left" : "right"}>');
 		expect(page).toContain('<Stack.Toolbar.Button icon={toolbarIcon("delete")} accessibilityLabel="Clear all" onPress={() => confirmClearAllRef.current()} />');
-		expect(page).toContain("[clearable]);");
+		expect(page).toContain("[clearable, closeSheet, router]);");
 	});
 });
 
