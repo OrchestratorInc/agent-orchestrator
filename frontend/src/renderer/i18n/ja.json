@@ -3633,7 +3633,7 @@
 	"settings.harness.loginUi.nativeStart": "ネイティブサインインを開始",
 	"settings.harness.loginUi.nativeCheck": "サインインを確認",
 	"settings.harness.loginUi.nativeHint": "AOはハーネスのログインをバックグラウンドで実行し、認識されたステップをここに表示します。",
-	"settings.harness.loginUi.envHint": "このデバイスに保存され、新しいAOセッションで使用されます。キーはハーネス実行時にプロバイダーが確認します。",
+	"settings.harness.loginUi.envHint": "このデバイスのユーザー環境に保存され、新しく起動するアプリとAOセッションで使用されます。起動中のアプリは再起動してください。キーは使用時にプロバイダーが確認します。",
 	"settings.harness.loginUi.nativeChoose": "プロバイダーを選択：",
 	"settings.harness.loginUi.nativeInteractive": "このハーネスは、ネイティブのログインまたはプロバイダー設定で対話的な入力が必要です。続行するにはターミナルフローを開いてください。",
 	"settings.harness.loginUi.methods.cline": "ブラウザでClineアカウント",

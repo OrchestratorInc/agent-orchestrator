@@ -3633,7 +3633,7 @@
 	"settings.harness.loginUi.nativeStart": "Native Anmeldung starten",
 	"settings.harness.loginUi.nativeCheck": "Anmeldung prüfen",
 	"settings.harness.loginUi.nativeHint": "AO führt die Harness-Anmeldung im Hintergrund aus und zeigt erkannte Schritte hier an.",
-	"settings.harness.loginUi.envHint": "Auf diesem Gerät für neue, von AO gestartete Sitzungen gespeichert. Der Anbieter prüft den Schlüssel beim Start.",
+	"settings.harness.loginUi.envHint": "In der Benutzerumgebung dieses Geräts für neu gestartete Apps und AO-Sitzungen gespeichert. Offene Apps neu starten; der Anbieter prüft den Schlüssel bei Verwendung.",
 	"settings.harness.loginUi.nativeChoose": "Wähle einen Anbieter:",
 	"settings.harness.loginUi.nativeInteractive": "Dieser Harness benötigt interaktive Eingaben in seinem nativen Login oder Provider-Setup. Öffne den Terminal-Flow, um fortzufahren.",
 	"settings.harness.loginUi.methods.cline": "Cline-Konto im Browser",

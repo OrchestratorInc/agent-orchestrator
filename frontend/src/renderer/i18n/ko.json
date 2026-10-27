@@ -3633,7 +3633,7 @@
 	"settings.harness.loginUi.nativeStart": "네이티브 로그인 시작",
 	"settings.harness.loginUi.nativeCheck": "로그인 확인",
 	"settings.harness.loginUi.nativeHint": "AO는 백그라운드에서 하네스 로그인을 실행하고 인식된 단계를 여기에 표시합니다.",
-	"settings.harness.loginUi.envHint": "이 장치에 저장되어 새 AO 세션에 사용됩니다. 공급자는 하네스 실행 시 키를 확인합니다.",
+	"settings.harness.loginUi.envHint": "이 장치의 사용자 환경에 저장되어 새 앱과 AO 세션에 사용됩니다. 열려 있는 앱을 다시 시작하세요. 공급자는 키 사용 시 유효성을 확인합니다.",
 	"settings.harness.loginUi.nativeChoose": "공급자를 선택하세요:",
 	"settings.harness.loginUi.nativeInteractive": "이 하네스는 네이티브 로그인 또는 공급자 설정에 대화형 입력이 필요합니다. 계속하려면 터미널 흐름을 여세요.",
 	"settings.harness.loginUi.methods.cline": "브라우저에서 Cline 계정",

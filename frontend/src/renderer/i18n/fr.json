@@ -3702,7 +3702,7 @@
 	"settings.harness.loginUi.nativeStart": "Démarrer la connexion native",
 	"settings.harness.loginUi.nativeCheck": "Vérifier la connexion",
 	"settings.harness.loginUi.nativeHint": "AO exécute la connexion du harness en arrière-plan et affiche ici les étapes reconnues.",
-	"settings.harness.loginUi.envHint": "Enregistrée sur cet appareil pour les nouvelles sessions lancées par AO. Le fournisseur vérifie la clé au lancement du harness.",
+	"settings.harness.loginUi.envHint": "Enregistrée dans l’environnement utilisateur de cet appareil pour les nouvelles apps et sessions AO. Redémarrez les apps ouvertes ; le fournisseur vérifie la clé à l’utilisation.",
 	"settings.harness.loginUi.nativeChoose": "Choisissez un fournisseur :",
 	"settings.harness.loginUi.nativeInteractive": "Ce harness nécessite une saisie interactive dans sa connexion native ou sa configuration de fournisseur. Ouvrez son flux terminal pour continuer.",
 	"settings.harness.loginUi.methods.cline": "Compte Cline dans le navigateur",

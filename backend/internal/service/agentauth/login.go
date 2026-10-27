@@ -99,6 +99,16 @@ type loginOperation struct {
 // StartLogin runs a fixed native login in the background. Secrets travel only
 // through stdin; they never enter command arguments, terminal replay, or logs.
 func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string) (LoginSnapshot, error) {
+	return s.StartLoginWithModel(ctx, agentID, method, secret, "")
+}
+
+// StartLoginWithModel supplies the model identifier required by Qwen,
+// Continue, and OpenHands provider-key setup. Other methods reject it.
+func (s *Service) StartLoginWithModel(ctx context.Context, agentID, method, secret, model string) (LoginSnapshot, error) {
+	needsModel := (agentID == "qwen" || agentID == "openhands" || agentID == "continue" && method != "env_CONTINUE_API_KEY") && strings.HasPrefix(method, "env_")
+	if model != "" && !needsModel {
+		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "This login method does not accept a model.", nil)
+	}
 	if method == "native" {
 		if secret != "" {
 			return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_SECRET_INVALID", "Native sign-in does not accept a credential when starting.", nil)
@@ -150,6 +160,33 @@ func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string
 		return complete.snapshot, nil
 	}
 	if name, ok := environmentMethod(agentID, method); ok {
+		if agentID == "openhands" {
+			model = strings.TrimSpace(model)
+			if !providerModelID.MatchString(model) {
+				return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "Enter a LiteLLM model ID for OpenHands.", nil)
+			}
+			if err := publishProviderKey(ctx, "LLM_MODEL", model); err != nil {
+				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_DEVICE_ENV_UNAVAILABLE", "The model could not be added to this device's user environment.")
+			}
+			if err := providerkeys.Save(ctx, s.dataDir, "LLM_MODEL", model); err != nil {
+				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be saved.")
+			}
+			if err := os.Setenv("LLM_MODEL", model); err != nil {
+				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be activated.")
+			}
+		}
+		if agentID == "qwen" {
+			if err := saveQwenProvider(ctx, name, model); err != nil {
+				return LoginSnapshot{}, err
+			}
+		} else if agentID == "continue" && name != "CONTINUE_API_KEY" {
+			if err := saveContinueProvider(ctx, name, model, secret); err != nil {
+				return LoginSnapshot{}, err
+			}
+		}
+		if err := publishProviderKey(ctx, name, secret); err != nil {
+			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_DEVICE_ENV_UNAVAILABLE", "The provider key could not be added to this device's user environment.")
+		}
 		if err := providerkeys.Save(ctx, s.dataDir, name, secret); err != nil {
 			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The provider key could not be saved in AO's device credential store.")
 		}

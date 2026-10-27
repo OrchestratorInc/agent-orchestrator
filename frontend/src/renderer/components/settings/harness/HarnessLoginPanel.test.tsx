@@ -37,7 +37,7 @@ describe("HarnessLoginPanel", () => {
 		const onVerify = vi.fn().mockResolvedValue("configured");
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId: "goose", method: "env_OPENAI_API_KEY", status: "succeeded", loginUrl: undefined, deviceCode: undefined });
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("radio", { name: "OpenAI API key" })).toHaveAccessibleDescription(/new AO-launched sessions/);
+		expect(screen.getByRole("radio", { name: "OpenAI API key" })).toHaveAccessibleDescription(/device's user environment/);
 		const input = screen.getByLabelText("API key");
 		expect(input).toHaveAttribute("type", "password");
 		await user.type(input, "test-secret");
@@ -45,6 +45,17 @@ describe("HarnessLoginPanel", () => {
 		expect(startAgentUILogin).toHaveBeenCalledWith("goose", "env_OPENAI_API_KEY", "test-secret", undefined);
 		await waitFor(() => expect(onVerify).toHaveBeenCalledWith("env_OPENAI_API_KEY"));
 		expect(screen.getByRole("button", { name: "Done" })).toBeVisible();
+	});
+	it.each(["qwen", "continue", "openhands"] as const)("requires a model for %s provider keys", async (agentId) => {
+		const user = userEvent.setup();
+		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId, method: "env_OPENAI_API_KEY", status: "succeeded" });
+		render(<HarnessLoginPanel agentId={agentId} methods={[{ id: agentId === "openhands" ? "env_LLM_API_KEY" : "env_OPENAI_API_KEY", label: "Provider API key", secret: true }]} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		await user.type(screen.getByLabelText("API key"), "test-secret");
+		const save = screen.getByRole("button", { name: "Save and verify" });
+		expect(save).toBeDisabled();
+		await user.type(screen.getByLabelText("Enter model ID…"), "provider/model-1");
+		await user.click(save);
+		expect(startAgentUILogin).toHaveBeenCalledWith(agentId, agentId === "openhands" ? "env_LLM_API_KEY" : "env_OPENAI_API_KEY", "test-secret", undefined, "provider/model-1");
 	});
 	it("runs a native login invisibly and presents reviewed menu controls", async () => {
 		const user = userEvent.setup();

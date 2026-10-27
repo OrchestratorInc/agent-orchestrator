@@ -3702,7 +3702,7 @@
 	"settings.harness.loginUi.nativeStart": "Iniciar login nativo",
 	"settings.harness.loginUi.nativeCheck": "Verificar login",
 	"settings.harness.loginUi.nativeHint": "O AO executa o login do harness em segundo plano e mostra aqui as etapas reconhecidas.",
-	"settings.harness.loginUi.envHint": "Salva neste dispositivo para novas sessões iniciadas pelo AO. O provedor verifica a chave quando o harness é executado.",
+	"settings.harness.loginUi.envHint": "Salva no ambiente do usuário deste dispositivo para novos apps e sessões do AO. Reinicie os apps abertos; o provedor verifica a chave quando ela é usada.",
 	"settings.harness.loginUi.nativeChoose": "Escolha um provedor:",
 	"settings.harness.loginUi.nativeInteractive": "Este harness precisa de entrada interativa no login nativo ou na configuração do provedor. Abra o fluxo do terminal para continuar.",
 	"settings.harness.loginUi.methods.cline": "Conta Cline no navegador",
