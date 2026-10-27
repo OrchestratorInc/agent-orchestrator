@@ -1,0 +1,53 @@
+name: Cloud contract compatibility
+
+# contracts/cloud/openapi.yaml is the only interface between this repository
+# (desktop, mobile, @aoagents/cloud-client) and the AO Cloud control plane,
+# which is developed and deployed separately. An older desktop must keep
+# working against a newer control plane and the other way round, so contract
+# changes must be additive. This fails a PR that removes or narrows anything
+# in the contract. If a breaking change is intended and coordinated with the
+# control plane, add the "contract-breaking-change" label.
+
+on:
+  pull_request:
+    paths:
+      - "contracts/cloud/openapi.yaml"
+      - ".github/workflows/cloud-contract-compat.yml"
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  breaking-changes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+
+      - name: Install oasdiff
+        run: GOBIN="${RUNNER_TEMP}/bin" go install github.com/oasdiff/oasdiff@v1.34.1
+
+      - name: Compare with the base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'contract-breaking-change') }}
+        run: |
+          git show "origin/${BASE_REF}:contracts/cloud/openapi.yaml" > "${RUNNER_TEMP}/base-openapi.yaml"
+          if "${RUNNER_TEMP}/bin/oasdiff" breaking \
+            "${RUNNER_TEMP}/base-openapi.yaml" contracts/cloud/openapi.yaml \
+            --fail-on ERR; then
+            exit 0
+          fi
+          if [[ "$APPROVED" == "true" ]]; then
+            echo "::warning::Breaking contract change approved by the contract-breaking-change label."
+            exit 0
+          fi
+          echo "::error::This PR makes a breaking change to contracts/cloud/openapi.yaml. Make it additive, or add the contract-breaking-change label once the control plane change is coordinated."
+          exit 1
