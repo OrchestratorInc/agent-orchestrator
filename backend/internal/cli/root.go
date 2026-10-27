@@ -96,10 +96,14 @@ type Deps struct {
 	// httptest without mutating package-global state.
 	DoctorGitHubRESTBase string
 	// DoctorGitLabRESTBase lets tests point the doctor GitLab token probe at
-	// httptest without mutating package-global state.
+	// httptest without mutating package-global state. It is the base for the
+	// default instance (gitlab.com) only.
 	DoctorGitLabRESTBase string
-	Now                  func() time.Time
-	Sleep                func(time.Duration)
+	// DoctorGitLabHostRESTBase derives the REST base for a self-managed GitLab
+	// host from AO_GITLAB_ALLOWED_HOSTS. Tests replace it to point at httptest.
+	DoctorGitLabHostRESTBase func(host string) string
+	Now                      func() time.Time
+	Sleep                    func(time.Duration)
 }
 
 // DefaultDeps returns production dependencies.
@@ -119,8 +123,11 @@ func DefaultDeps() Deps {
 		ReadSecret:            readSecret,
 		DoctorGitHubRESTBase:  defaultDoctorGitHubRESTBase,
 		DoctorGitLabRESTBase:  defaultDoctorGitLabRESTBase,
-		Now:                   time.Now,
-		Sleep:                 time.Sleep,
+		DoctorGitLabHostRESTBase: func(host string) string {
+			return "https://" + host + "/api/v4"
+		},
+		Now:   time.Now,
+		Sleep: time.Sleep,
 	}
 }
 
@@ -177,6 +184,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.DoctorGitLabRESTBase == "" {
 		d.DoctorGitLabRESTBase = def.DoctorGitLabRESTBase
+	}
+	if d.DoctorGitLabHostRESTBase == nil {
+		d.DoctorGitLabHostRESTBase = def.DoctorGitLabHostRESTBase
 	}
 	if d.Now == nil {
 		d.Now = def.Now
