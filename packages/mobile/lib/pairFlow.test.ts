@@ -121,6 +121,20 @@ describe("pairFromCode", () => {
 		expect(got).not.toHaveProperty("instead");
 	});
 
+	// An id-less legacy pairing and an id-less code are both "", but the machine
+	// is saved under the id it reported. Calling that a reconnect would claim
+	// the legacy entry was fixed while it stays behind, offline (#7346).
+	it("does not report an id-less legacy repair as reconnected", async () => {
+		const idless = encodePairingCode({ v: 2, hostId: "", name: "prasad-mbp", platform: "darwin", endpoints: [lan], token: "pw" });
+		const d = deps();
+
+		const got = await pairFromCode(`aomobile://pair#${idless}`, d, { repairHost: { id: "", name: "Legacy" } });
+
+		expect(d.race).toHaveBeenCalledWith([lan], "");
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ id: "h_paired" }));
+		expect(got).toMatchObject({ ok: true, kind: "added", instead: { id: "", name: "Legacy" } });
+	});
+
 	it("reports a machine this phone had not saved as added", async () => {
 		const got = await pairFromCode(`aomobile://pair#${code}`, deps());
 
@@ -286,8 +300,8 @@ describe("pairedNotice", () => {
 		expect(pairedNotice(success({ kind: "reconnected" }))).toEqual({ title: "Reconnected Studio" });
 	});
 
-	it("says an already-paired machine was switched to rather than added", () => {
-		expect(pairedNotice(success({ kind: "existing" }))).toEqual({ title: "Already paired", message: "Switched to Studio." });
+	it("says an already-paired machine was refreshed rather than added", () => {
+		expect(pairedNotice(success({ kind: "existing" }))).toEqual({ title: "Studio is already paired", message: "Connection details refreshed." });
 	});
 
 	it("names both machines when a repair scan connected a different one", () => {

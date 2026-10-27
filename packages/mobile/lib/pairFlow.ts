@@ -94,8 +94,11 @@ export async function pairFromCode(raw: string, deps: PairDeps, options: PairOpt
 	// by where the scan started: a code for another machine pointed at the
 	// reconnect screen is still what the user wants connected now, and saving
 	// it under the machine they started from would hand that entry B's token.
+	// Compared with the id being saved, not the code's own field: an id-less
+	// legacy pairing and an id-less code would otherwise "match" on "" while
+	// the machine is saved under the id it reported (#7346).
 	const repair = options.repairHost;
-	const repairing = repair !== undefined && (repair.id === offer.hostId || repair.id === hostId);
+	const repairing = repair !== undefined && repair.id === hostId;
 	const saved = repairing ? repair : hostId ? await deps.findHost(hostId) : null;
 	let name = saved?.name.trim() ?? "";
 	let appearance = saved?.appearance;
@@ -145,6 +148,7 @@ export function pairedNotice(result: PairSuccess): PairedNotice | null {
 		return { title: `Connected to ${name}`, message: `That code was for ${name}. ${result.instead.name} still needs a new code.` };
 	}
 	if (result.kind === "reconnected") return { title: `Reconnected ${name}` };
-	if (result.kind === "existing") return { title: "Already paired", message: `Switched to ${name}.` };
+	// Not "switched": the machine may already have been the active one.
+	if (result.kind === "existing") return { title: `${name} is already paired`, message: "Connection details refreshed." };
 	return null;
 }

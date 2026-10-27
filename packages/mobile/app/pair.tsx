@@ -138,15 +138,18 @@ export default function PairScreen() {
 		if (notice) {
 			setPaired(notice);
 			// The notice closes with the screen, before VoiceOver would reach it.
-			AccessibilityInfo.announceForAccessibility([notice.title, notice.message].filter(Boolean).join(". "));
+			// Android already reads it through accessibilityLiveRegion.
+			if (Platform.OS === "ios") AccessibilityInfo.announceForAccessibility([notice.title, notice.message].filter(Boolean).join(". "));
 		}
 		await Promise.all([
 			clearOnboardingSkipped().then(() => reloadConfig()), // reconnect with the new credentials
 			// Held long enough to read; the reconnect runs meanwhile.
 			notice ? new Promise((resolve) => setTimeout(resolve, PAIRED_NOTICE_MS)) : null,
 		]);
-		// Leaving early must not make this pop whatever screen is now in front.
-		if (!mounted.current) return;
+		// The machine is saved either way, so onboarding still completes. Going
+		// back is only for this screen: after leaving early it would pop
+		// whatever screen is now in front.
+		if (!fromOnboarding && !mounted.current) return;
 		if (fromOnboarding) completeOnboarding(navigation);
 		else backOr(router);
 	}
@@ -186,6 +189,9 @@ export default function PairScreen() {
 			// ended. Without this the scanner would stay claimed and ignore scans,
 			// and the spinner would just stop with nothing to act on.
 			console.warn("[pair] attempt failed", e);
+			// A throw after pairing (the reconnect, navigation) must not leave the
+			// success notice claiming a finished pair on a screen that stays open.
+			setPaired(null);
 			setAwaitingLocalNetwork(false);
 			setBusy(false);
 			if (gate.release()) {
