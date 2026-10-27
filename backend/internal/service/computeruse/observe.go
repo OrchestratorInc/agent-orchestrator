@@ -149,8 +149,9 @@ func (s *Service) observeAfter(ctx context.Context, binary string, saved *savedI
 // prepareObserve has run_steps read the window after its last step with a
 // screenshot, saved to a file of AO's choosing. A caller's observe is kept,
 // with the screenshot turned on unless it opted out. When no step names a
-// window the driver can find, the window of the batch's last token is filled
-// in; a batch AO cannot place gets no observe, which the driver would refuse.
+// window the driver can find, the window of the batch's last step that AO can
+// place (a nested window target or an element token) is filled in; a batch AO
+// cannot place gets no observe, which the driver would refuse.
 // It returns the screenshot path to adopt, or "".
 func (s *Service) prepareObserve(saved *savedImages, arguments map[string]any) string {
 	observe := map[string]any{}
@@ -166,7 +167,7 @@ func (s *Service) prepareObserve(saved *savedImages, arguments map[string]any) s
 	}
 	if !has(observe, "pid") || !has(observe, "window_id") {
 		if !s.batchNamesWindow(arguments) {
-			target, found := s.lastTokenWindow(arguments)
+			target, found := s.lastStepWindow(arguments)
 			if !found {
 				return ""
 			}
@@ -185,7 +186,8 @@ func (s *Service) prepareObserve(saved *savedImages, arguments map[string]any) s
 
 // batchNamesWindow reports whether run_steps can work out its observe window
 // itself: from its own pid and window_id, or a step naming both, or a step
-// that names its app or window by title.
+// that names its app or window by title. The driver does not look inside a
+// step's target:{kind:"window"}, so that form does not count.
 func (s *Service) batchNamesWindow(arguments map[string]any) bool {
 	if (has(arguments, "pid") && has(arguments, "window_id")) || hasAny(arguments, "app", "window") {
 		return true
@@ -197,19 +199,18 @@ func (s *Service) batchNamesWindow(arguments map[string]any) bool {
 		if (has(stepArguments, "pid") && has(stepArguments, "window_id")) || hasAny(stepArguments, "app", "window") {
 			return true
 		}
-		if targetKind(stepArguments) == "window" {
-			return true
-		}
 	}
 	return false
 }
 
-func (s *Service) lastTokenWindow(arguments map[string]any) (window, bool) {
+// lastStepWindow is the window of the batch's last step that names one AO
+// can place: a nested window target, or an element token from a known read.
+func (s *Service) lastStepWindow(arguments map[string]any) (window, bool) {
 	steps, _ := arguments["steps"].([]any)
 	for index := len(steps) - 1; index >= 0; index-- {
 		step, _ := steps[index].(map[string]any)
 		_, stepArguments := stepAction(step)
-		if target, found := s.tokenWindow(arguments["session"], stepArguments); found {
+		if target, found := s.actionWindow(arguments["session"], stepArguments); found {
 			return target, true
 		}
 	}

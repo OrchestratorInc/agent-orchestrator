@@ -756,6 +756,12 @@ func TestRunStepsObservesWithAScreenshot(t *testing.T) {
 			return ok && o["pid"] == float64(7) && o["window_id"] == float64(9) && o["include_screenshot"] == true && o["screenshot_out_file"] != nil
 		}},
 		"unknown window gets no observe": {map[string]any{"steps": tokenStep}, "worker-2", func(_ map[string]any, ok bool) bool { return !ok }},
+		"nested window target gets its window": {map[string]any{"steps": []any{map[string]any{"click": map[string]any{"target": map[string]any{"kind": "window", "pid": 18439, "window_id": 4372}, "element_token": "s00000020:2"}}}}, "worker-2", func(o map[string]any, ok bool) bool {
+			return ok && o["pid"] == float64(18439) && o["window_id"] == float64(4372) && o["include_screenshot"] == true
+		}},
+		"last step's window wins": {map[string]any{"steps": append(append([]any{}, tokenStep...), map[string]any{"tool": "click", "args": map[string]any{"target": map[string]any{"kind": "window", "pid": 8, "window_id": 10}, "element_index": 2}})}, "worker-1", func(o map[string]any, ok bool) bool {
+			return ok && o["pid"] == float64(8) && o["window_id"] == float64(10)
+		}},
 		"named app is left to the driver": {map[string]any{"steps": []any{map[string]any{"click": map[string]any{"app": "Calculator", "role": "button", "name": "Clear"}}}}, "worker-1", func(o map[string]any, ok bool) bool {
 			return ok && o["pid"] == nil && o["include_screenshot"] == true
 		}},
