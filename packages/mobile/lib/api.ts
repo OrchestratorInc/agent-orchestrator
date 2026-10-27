@@ -1,4 +1,5 @@
 import { artifactFilePath, parseArtifacts, sortArtifacts, type SessionArtifact } from "./artifacts";
+import { parseVersion, parseVersionSummaries, type ArtifactVersion, type ArtifactVersionSummary } from "./artifactVersions";
 import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
 import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
@@ -696,6 +697,44 @@ export async function deleteArtifact(cfg: ServerConfig, sessionId: string, path:
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/artifact-files?path=${encodeURIComponent(path)}`, { method: "DELETE" });
 	const data = await res.json();
 	return mapSession(data?.session ?? data);
+}
+
+function artifactVersionsPath(sessionId: string): string {
+	return `${API}/sessions/${encodeURIComponent(sessionId)}/artifact-versions`;
+}
+
+/** One file's kept versions, newest first; the first is current. Only reads. */
+export async function listArtifactVersions(cfg: ServerConfig, sessionId: string, path: string, init?: Pick<RequestInit, "signal">): Promise<ArtifactVersionSummary[]> {
+	const res = await req(cfg, `${artifactVersionsPath(sessionId)}?path=${encodeURIComponent(path)}`, init);
+	const data = await res.json();
+	return parseVersionSummaries(data?.versions);
+}
+
+/**
+ * Records an edit of the file the daemon has not picked up yet, then lists the
+ * file's versions like listArtifactVersions. The daemon waits for the file to
+ * settle first, so this can take a couple of seconds.
+ */
+export async function syncArtifactVersions(cfg: ServerConfig, sessionId: string, path: string, init?: Pick<RequestInit, "signal">): Promise<ArtifactVersionSummary[]> {
+	const res = await req(cfg, `${artifactVersionsPath(sessionId)}/sync`, { ...init, method: "POST", body: JSON.stringify({ path }) });
+	const data = await res.json();
+	return parseVersionSummaries(data?.versions);
+}
+
+/** One version's text. A saved version never changes. */
+export async function getArtifactVersion(cfg: ServerConfig, sessionId: string, path: string, version: number, init?: Pick<RequestInit, "signal">): Promise<ArtifactVersion> {
+	const res = await req(cfg, `${artifactVersionsPath(sessionId)}/${version}?path=${encodeURIComponent(path)}`, init);
+	const parsed = parseVersion(await res.json());
+	if (!parsed) throw new Error("This version couldn't be read.");
+	return parsed;
+}
+
+/**
+ * Rewrites the file with an earlier version. The content it replaces is kept
+ * as a version first, so the restore itself can be undone.
+ */
+export async function restoreArtifactVersion(cfg: ServerConfig, sessionId: string, path: string, version: number): Promise<void> {
+	await req(cfg, `${artifactVersionsPath(sessionId)}/restore`, { method: "POST", body: JSON.stringify({ path, version }) });
 }
 
 /** Rewrite host-loopback previews for the phone without ever forwarding AO auth. */

@@ -4,12 +4,13 @@ import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, View
 import { WebView } from "react-native-webview";
 import { artifactFileUrl, getArtifactText } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { artifactLanguage, artifactViewKind, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, type SessionArtifact } from "../../lib/artifacts";
+import { artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { authHeaders, type ServerConfig } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
+import { haptics } from "../../lib/haptics";
 import { headerActionStyle, headerGlyphStyle } from "../../lib/headerAction";
 import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather } from "../../lib/icons";
@@ -49,19 +50,29 @@ function ArtifactViewerContent() {
 	const artifact = artifacts?.find((candidate) => candidate.path === path);
 	const leave = useCallback(() => backOr(router), [router]);
 	const { openMenu, menu } = useArtifactActions(sessionId, leave);
+	const openHistory = useCallback((target: SessionArtifact) => {
+		router.push({ pathname: "/sheets/artifact-history", params: { sessionId, path: target.path, name: target.name, hostId: routeHostId } });
+	}, [routeHostId, router, sessionId]);
 
 	useLayoutEffect(() => {
 		navigation.setOptions({
 			title: artifact?.name ?? path.split("/").pop() ?? "Artifact",
 			headerRight: artifact
 				? () => (
-					<Pressable accessibilityRole="button" accessibilityLabel="Artifact actions" hitSlop={10} onPress={() => openMenu(artifact, { inViewer: true })} style={headerActionStyle}>
-						<Feather name="more-horizontal" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} />
-					</Pressable>
+					<View style={styles.headerActions}>
+						{canShowArtifactHistory(artifact) ? (
+							<Pressable accessibilityRole="button" accessibilityLabel="Version history" hitSlop={10} onPress={() => { haptics.tap(); openHistory(artifact); }} style={headerActionStyle}>
+								<Feather name="clock" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} />
+							</Pressable>
+						) : null}
+						<Pressable accessibilityRole="button" accessibilityLabel="Artifact actions" hitSlop={10} onPress={() => openMenu(artifact, { inViewer: true, onHistory: () => openHistory(artifact) })} style={headerActionStyle}>
+							<Feather name="more-horizontal" size={iconSize.md} color={t.textSecondary} style={headerGlyphStyle} />
+						</Pressable>
+					</View>
 				)
 				: undefined,
 		});
-	}, [artifact, navigation, openMenu, path, t.textSecondary]);
+	}, [artifact, navigation, openHistory, openMenu, path, styles.headerActions, t.textSecondary]);
 
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="layers" title="This artifact belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="activity" onPress={() => router.navigate("/")} />} /></View>;
 	if (!config && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="The artifact loads once the app reconnects." /></View>;
@@ -193,6 +204,7 @@ function Unavailable({ title, message, action }: { title: string; message?: stri
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
+	headerActions: { flexDirection: "row", alignItems: "center", gap: space.xs },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	web: { flex: 1, backgroundColor: t.bgBase },
 	webLoading: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },

@@ -14,12 +14,14 @@ import { space, type } from "./tokens";
 const LABELS: Record<ArtifactMenuAction, string> = {
 	open: "Open",
 	copy: "Copy contents",
+	history: "Version history",
 	delete: "Delete artifact",
 };
 
 const GLYPHS: Record<ArtifactMenuAction, FeatherIconName> = {
 	open: "eye",
 	copy: "copy",
+	history: "clock",
 	delete: "trash-2",
 };
 
@@ -29,7 +31,7 @@ const AFTER_CLOSE_MS = 180;
 type OpenMenu = { artifact: SessionArtifact; actions: ArtifactMenuAction[]; run: (action: ArtifactMenuAction) => void };
 
 /**
- * Open, Copy and Delete for one session's artifacts, shared by the gallery's
+ * Open, Copy, History and Delete for one session's artifacts, shared by the gallery's
  * long-press menu and the viewer's header menu. iOS shows a native action
  * sheet. Android shows `menu`, an in-app list like the worker row's options:
  * an Android alert holds at most three buttons. Callers render `menu`.
@@ -76,14 +78,15 @@ export function useArtifactActions(sessionId: string, onDeleted?: (artifact: Ses
 		]);
 	}, [config, onDeleted, refresh, sessionId]);
 
-	/** Opens the menu for `artifact`; Open runs `onOpen`. */
-	const openMenu = useCallback((artifact: SessionArtifact, { inViewer = false, onOpen }: { inViewer?: boolean; onOpen?: () => void } = {}) => {
+	/** Opens the menu for `artifact`; Open runs `onOpen`, Version history `onHistory`. */
+	const openMenu = useCallback((artifact: SessionArtifact, { inViewer = false, onOpen, onHistory }: { inViewer?: boolean; onOpen?: () => void; onHistory?: () => void } = {}) => {
 		const actions = artifactMenuActions(artifact, { inViewer });
 		if (!actions.length) return;
 		haptics.select();
 		const run = (action: ArtifactMenuAction) => {
 			if (action === "open") onOpen?.();
 			else if (action === "copy") void copy(artifact);
+			else if (action === "history") onHistory?.();
 			else confirmDelete(artifact);
 		};
 		if (Platform.OS === "ios") {
