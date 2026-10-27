@@ -33,8 +33,9 @@ func (s *Store) ListRemoteHosts(ctx context.Context, principal domain.Principal)
 
 // UpsertRemoteHost saves principal's registration of host. A host the account
 // does not list yet is refused with ErrRemoteHostLimit once it lists limit
-// hosts. A per-user advisory lock makes the count and the insert one step, so
-// concurrent registrations cannot pass the limit.
+// hosts; a limit of 0 lists any number. A per-user advisory lock makes the
+// count and the insert one step, so concurrent registrations cannot pass the
+// limit.
 func (s *Store) UpsertRemoteHost(ctx context.Context, principal domain.Principal, host domain.RemoteHost, limit int) error {
 	return s.withUser(ctx, principal.UserID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
@@ -50,7 +51,7 @@ func (s *Store) UpsertRemoteHost(ctx context.Context, principal domain.Principal
 		).Scan(&listed, &total); err != nil {
 			return err
 		}
-		if !listed && total >= limit {
+		if limit > 0 && !listed && total >= limit {
 			return ErrRemoteHostLimit
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO ao_remote_hosts
@@ -191,14 +192,24 @@ func (s *Store) DeleteRemoteHostTunnel(ctx context.Context, tunnelID string) err
 	})
 }
 
+// RemoteHostListed reports whether userID's account lists hostID now.
+func (s *Store) RemoteHostListed(ctx context.Context, userID, hostID string) (bool, error) {
+	var listed bool
+	err := s.withService(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM ao_remote_hosts WHERE user_id = $1 AND host_id = $2)`,
+			userID, hostID).Scan(&listed)
+	})
+	return listed, err
+}
+
 // ListRemoteHostTunnelSweepCandidates returns tunnels whose account no longer
 // lists their host, once unwritten since unregisteredBefore, and tunnels whose
 // machine has not fetched its token since cutoff, released or not.
 func (s *Store) ListRemoteHostTunnelSweepCandidates(ctx context.Context, cutoff, unregisteredBefore time.Time) ([]domain.RemoteHostTunnelCandidate, error) {
 	items := []domain.RemoteHostTunnelCandidate{}
 	err := s.withService(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT host_id, tunnel_id, hostname, registered, released FROM (
-				SELECT t.host_id, t.tunnel_id, t.hostname, t.last_seen_at, t.updated_at, t.released_at IS NOT NULL AS released,
+		rows, err := tx.Query(ctx, `SELECT user_id, host_id, tunnel_id, hostname, registered, released FROM (
+				SELECT t.user_id, t.host_id, t.tunnel_id, t.hostname, t.last_seen_at, t.updated_at, t.released_at IS NOT NULL AS released,
 					EXISTS (SELECT 1 FROM ao_remote_hosts h WHERE h.user_id = t.user_id AND h.host_id = t.host_id) AS registered
 				FROM ao_remote_host_tunnels t) c
 			WHERE c.last_seen_at < $1 OR (NOT c.registered AND c.updated_at < $2)
@@ -209,7 +220,7 @@ func (s *Store) ListRemoteHostTunnelSweepCandidates(ctx context.Context, cutoff,
 		defer rows.Close()
 		for rows.Next() {
 			var c domain.RemoteHostTunnelCandidate
-			if err := rows.Scan(&c.HostID, &c.TunnelID, &c.Hostname, &c.Registered, &c.Released); err != nil {
+			if err := rows.Scan(&c.UserID, &c.HostID, &c.TunnelID, &c.Hostname, &c.Registered, &c.Released); err != nil {
 				return err
 			}
 			items = append(items, c)

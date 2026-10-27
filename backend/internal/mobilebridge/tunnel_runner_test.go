@@ -153,7 +153,61 @@ func TestTunnelRunnerRepairsARefusedTunnel(t *testing.T) {
 	refusals := strings.Repeat(refusedLine+"\n", connectorRefusals)
 	// Only the refusals can stop it inside the test's time.
 	r, _, err := runUntilStopped(t, registeredLine+"\n"+refusals, time.Hour)
-	if err == nil || !strings.Contains(err.Error(), "refusing") || !r.repair {
+	if err == nil || !strings.Contains(err.Error(), "refusing") || !r.repair || r.refused != "run-token-tun-1" {
+		t.Fatalf("runOnce = %v, repair %v, refused %q", err, r.repair, r.refused)
+	}
+}
+
+// A token the edge refused is dead. While AO Cloud cannot hand out another,
+// the machine serves a quick tunnel rather than restarting the dead one, and
+// the quick tunnel's check asks for the repair.
+func TestTunnelRunnerDoesNotRestartARefusedTokenFromTheCache(t *testing.T) {
+	cloud, src := newFixedSource(t)
+	knownTunnel(t, cloud, src)
+	cloud.set(http.StatusTooManyRequests)
+	bin, argsFile := fakeCloudflared(t, registeredLine)
+	r := namedRunner(t, bin, src)
+	r.repair, r.refused = true, "run-token-tun-1"
+	r.upgradeEvery = 20 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.runOnce(ctx) }()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(argsFile); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no connector started")
+		}
+	}
+	if argv, token := readArgs(t, argsFile); strings.HasSuffix(argv, " run") || token != "" {
+		t.Fatalf("restarted the refused tunnel: argv %q, token %q", argv, token)
+	}
+	// AO Cloud answers again with a new tunnel: the quick one moves to it.
+	cloud.mu.Lock()
+	cloud.tokens = []string{"run-token-tun-2"}
+	cloud.mu.Unlock()
+	cloud.set(0)
+	if err := <-done; !errors.Is(err, errFixedTunnelReady) || r.next == nil || r.next.RunToken != "run-token-tun-2" || r.repair {
+		t.Fatalf("runOnce = %v, next %+v, repair %v", err, r.next, r.repair)
+	}
+	if last := cloud.repairs[len(cloud.repairs)-1]; !last {
+		t.Fatal("the quick tunnel's check did not ask for the repair")
+	}
+}
+
+// Refusals are repaired however recently the last repair was.
+func TestTunnelRunnerRepairsRefusalsAtOnce(t *testing.T) {
+	_, src := newFixedSource(t)
+	refusals := strings.Repeat(refusedLine+"\n", connectorRefusals)
+	bin, _ := fakeCloudflared(t, registeredLine+"\n"+refusals)
+	r := namedRunner(t, bin, src)
+	r.deadAfter, r.repairedAt = time.Hour, time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := r.runOnce(ctx); err == nil || !r.repair {
 		t.Fatalf("runOnce = %v, repair %v", err, r.repair)
 	}
 }

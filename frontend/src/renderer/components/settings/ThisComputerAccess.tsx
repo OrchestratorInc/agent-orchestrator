@@ -25,12 +25,6 @@ function tunnelUrl(status: MobileStatus): string | null {
 	return tunnel ? `https://${tunnel.host}:${tunnel.port}` : null;
 }
 
-/** The daemon is downloading its own cloudflared, after which the tunnel starts by itself. */
-async function connectorDownloading(): Promise<boolean> {
-	const { data } = await apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "cloudflared" } } });
-	return data?.status === "running";
-}
-
 /** Polls until the tunnel has a public address; null when no connector is installed or on its way. */
 async function waitForTunnel(timeoutMessage: string): Promise<{ status: MobileStatus; url: string } | null> {
 	let deadline = Date.now() + TUNNEL_WAIT_MS;
@@ -39,7 +33,8 @@ async function waitForTunnel(timeoutMessage: string): Promise<{ status: MobileSt
 		const url = tunnelUrl(status);
 		if (url) return { status, url };
 		if (status.tunnel?.supported === false) {
-			if (!(await connectorDownloading())) return null;
+			// No connector, and none on its way; one that is starts the tunnel by itself when it lands.
+			if (!status.tunnel.installing) return null;
 			// The download, tens of MB on a slow link, does not count against the tunnel's start.
 			deadline = Date.now() + TUNNEL_WAIT_MS;
 		}

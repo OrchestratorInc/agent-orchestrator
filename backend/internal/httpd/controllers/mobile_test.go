@@ -1139,3 +1139,17 @@ func TestMobileRestoreOnBootRollsBackHashWhenStartFails(t *testing.T) {
 		t.Fatalf("account token hash after failed restore = %q, want previous-account-hash", got)
 	}
 }
+
+// A bridge with no connector says when one is being installed, so a client
+// waits for it rather than offering to install one.
+func TestTunnelStatusSaysWhenAConnectorIsOnItsWay(t *testing.T) {
+	installing := true
+	b := &BridgeService{LAN: &fakeLAN{}, ConfigPath: filepath.Join(t.TempDir(), "mobile", "config.json"), ConnectorInstalling: func() bool { return installing }}
+	if st := b.tunnelStatus(); st.Supported || !st.Installing {
+		t.Fatalf("installing: %+v", st)
+	}
+	installing = false
+	if st := b.tunnelStatus(); st.Installing {
+		t.Fatalf("not installing: %+v", st)
+	}
+}

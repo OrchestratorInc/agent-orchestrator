@@ -271,6 +271,10 @@ type BridgeService struct {
 	// until AO was restarted. Nil in tests that set Tunnel directly.
 	ResolveTunnel func() TunnelController
 
+	// ConnectorInstalling reports a cloudflared install in progress, for the
+	// status of a bridge that has no connector yet. Nil in tests.
+	ConnectorInstalling func() bool
+
 	// KeepAwake holds the machine awake while the bridge is on and the user has
 	// opted in. Nil where the platform has no way to do it (everything but
 	// macOS), which Status reports as unsupported.
@@ -478,7 +482,8 @@ func (b *BridgeService) tunnelStatus() mobilebridge.TunnelStatus {
 	b.awaitBootTunnel()
 	t := b.tunnel()
 	if t == nil {
-		return mobilebridge.TunnelStatus{} // Supported stays false: nothing to run.
+		// Supported stays false: nothing to run yet.
+		return mobilebridge.TunnelStatus{Installing: b.ConnectorInstalling != nil && b.ConnectorInstalling()}
 	}
 	st := t.Status()
 	st.Supported = true

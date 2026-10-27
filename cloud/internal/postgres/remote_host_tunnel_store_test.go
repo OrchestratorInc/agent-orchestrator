@@ -69,6 +69,11 @@ func TestRemoteHostTunnelsAreServiceOwnedAndSwept(t *testing.T) {
 	if _, found, err := store.GetRemoteHostTunnel(ctx, fixture.userID, "h_"+uuid.NewString()); err != nil || found {
 		t.Fatalf("unknown host = %v, %v", found, err)
 	}
+	for hostID, want := range map[string]bool{registered: true, orphan: false} {
+		if listed, err := store.RemoteHostListed(ctx, fixture.userID, hostID); err != nil || listed != want {
+			t.Fatalf("listed %s = %v, %v; want %v", hostID, listed, err, want)
+		}
+	}
 	// The DNS record's age survives a repair that kept the record.
 	if since := save(fixture.userID, registered, current, false); !since.Equal(made) {
 		t.Fatalf("repair moved the record's age from %v to %v", made, since)

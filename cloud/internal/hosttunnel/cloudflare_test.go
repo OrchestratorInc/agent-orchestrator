@@ -256,13 +256,18 @@ func TestVerifyRejectsAnotherZone(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Zone = "other.dev"
-	if err := c.Verify(context.Background()); !errors.Is(err, ErrWrongZone) {
-		t.Fatalf("wrong zone name = %v, want ErrWrongZone", err)
+	if err := c.Verify(context.Background()); !errors.Is(err, ErrBadSettings) {
+		t.Fatalf("wrong zone name = %v, want ErrBadSettings", err)
 	}
-	// Cloudflare not answering is not a wrong zone.
+	// A zone ID Cloudflare does not have cannot work either.
 	c.Zone, c.ZoneID = "example.dev", "missing"
-	if err := c.Verify(context.Background()); err == nil || errors.Is(err, ErrWrongZone) {
-		t.Fatalf("unreadable zone = %v", err)
+	if err := c.Verify(context.Background()); !errors.Is(err, ErrBadSettings) {
+		t.Fatalf("unknown zone ID = %v, want ErrBadSettings", err)
+	}
+	// Cloudflare not answering is not wrong settings.
+	c.BaseURL = "http://127.0.0.1:1"
+	if err := c.Verify(context.Background()); err == nil || errors.Is(err, ErrBadSettings) {
+		t.Fatalf("unreachable Cloudflare = %v", err)
 	}
 }
 
@@ -291,6 +296,16 @@ func TestEnsureUndoesWhatAFailedCallMade(t *testing.T) {
 	if _, ok := cf.tunnels[kept.ID]; !ok || cf.records[kept.Hostname].content != kept.ID+".cfargotunnel.com" {
 		t.Fatalf("a failed call removed a found tunnel or record: %v %v", cf.tunnels, cf.records)
 	}
+	// A kept record it moved onto its new tunnel goes back to the tunnel the
+	// row names, so deleting that row later still finds it.
+	other := c.Hostname(userID, "h_other")
+	cf.records[other] = fakeRecord{id: "rec-" + other, content: "tun-old.cfargotunnel.com", proxied: true}
+	if _, err := c.Ensure(ctx, userID, "h_other"); err == nil {
+		t.Fatal("ensure without a run token succeeded")
+	}
+	if cf.records[other].content != "tun-old.cfargotunnel.com" || len(cf.tunnels) != 1 {
+		t.Fatalf("record %+v, tunnels %v", cf.records[other], cf.tunnels)
+	}
 }
 
 type fakeSweepStore struct {
@@ -300,6 +315,7 @@ type fakeSweepStore struct {
 	seen       map[string]time.Time
 	released   []string
 	deleted    []string
+	relisted   map[string]bool // by host, listed again since the candidates were read
 }
 
 func (s *fakeSweepStore) ReleaseRemoteHostTunnel(_ context.Context, tunnelID string) error {
@@ -309,6 +325,10 @@ func (s *fakeSweepStore) ReleaseRemoteHostTunnel(_ context.Context, tunnelID str
 		s.released = append(s.released, tunnelID)
 	}
 	return nil
+}
+
+func (s *fakeSweepStore) RemoteHostListed(_ context.Context, _, hostID string) (bool, error) {
+	return s.relisted[hostID], nil
 }
 
 func (s *fakeSweepStore) FindRemoteHostTunnel(_ context.Context, tunnelID string) (domain.RemoteHostTunnel, bool, error) {
@@ -347,11 +367,16 @@ func TestSweepDeletesOnlyWhatIsGone(t *testing.T) {
 		{HostID: "stale", TunnelID: "stale", Hostname: "h-stale.example.dev", Registered: true},
 		{HostID: "missing", TunnelID: "missing", Hostname: "h-missing.example.dev", Registered: true},
 		{HostID: "orphan", TunnelID: "orphan", Hostname: "h-orphan.example.dev"},
+		{HostID: "relisted", TunnelID: "relisted", Hostname: "h-relisted.example.dev"},
 		{HostID: "released", TunnelID: "released", Hostname: "h-released.example.dev", Registered: true, Released: true},
-	}}
+	}, relisted: map[string]bool{"relisted": true}}
+	cf.tunnels["relisted"] = fakeTunnel{name: "ao-relisted", status: "healthy"}
 	done, err := Sweep(context.Background(), store, c, now)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, ok := cf.tunnels["relisted"]; !ok {
+		t.Fatal("a host listed again during the sweep lost its tunnel")
 	}
 	if done != 4 || strings.Join(store.deleted, ",") != "stale,missing,orphan,released" || strings.Join(store.touched, ",") != "online" {
 		t.Fatalf("done %d, deleted %v, touched %v", done, store.deleted, store.touched)

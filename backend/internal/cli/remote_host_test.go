@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -175,24 +176,20 @@ func TestRemoteHostCLITunnelRefusesLoopbackOnlyListener(t *testing.T) {
 
 func TestRemoteHostCLITunnelExistingListenerKeepsPassword(t *testing.T) {
 	// The connector line follows the daemon's own cloudflared download: only
-	// a running one is reported as on its way.
-	for install, want := range map[string]string{
-		"running": "Tunnel: downloading cloudflared",
-		"failed":  "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable --tunnel`",
+	// one in progress is reported as on its way.
+	for installing, want := range map[bool]string{
+		true:  "Tunnel: downloading cloudflared",
+		false: "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable --tunnel`",
 	} {
-		t.Run(install, func(t *testing.T) {
+		t.Run(fmt.Sprint(installing), func(t *testing.T) {
 			cfg := setConfigEnv(t)
 			var requests []string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				if r.URL.Path == "/api/v1/system/install/cloudflared" {
-					_, _ = io.WriteString(w, `{"target":"cloudflared","status":"`+install+`"}`)
-					return
-				}
 				if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
 					requests = append(requests, r.Method+" "+r.URL.Path)
 				}
-				_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"existing-secret","tunnel":{"supported":false}}`)
+				_, _ = fmt.Fprintf(w, `{"enabled":true,"hostId":"host-a","password":"existing-secret","tunnel":{"supported":false,"installing":%v}}`, installing)
 			}))
 			t.Cleanup(srv.Close)
 			writeRunFileFor(t, cfg, srv)

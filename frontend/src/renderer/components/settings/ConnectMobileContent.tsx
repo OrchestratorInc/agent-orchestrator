@@ -8,7 +8,7 @@ import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
-import { RemoteHostLimitError } from "../../lib/account-remote-hosts";
+import { AccountHostSyncError } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -237,6 +237,8 @@ interface MobileStatus {
 		/** False when this machine has no connector at all — cloudflared is
 		 * absent. Distinct from "not started yet", which is running:false. */
 		supported?: boolean;
+		/** Set while no connector is installed but one is being installed. */
+		installing?: boolean;
 		running: boolean;
 		ready: boolean;
 		hostname: string;
@@ -344,16 +346,18 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
 	const accountId = session?.user.id ?? "";
 	const signedIn = Boolean(cloudBaseUrl && accountId);
-	// Why the last link left this computer out of the account, when the user can act on it.
+	// Why the last link left this computer out of the account.
 	const [linkError, setLinkError] = useState("");
 	const linkIfSignedIn = async (password: string) => {
 		setLinkError("");
 		if (!signedIn || !password) return;
 		// Not fatal: an unlinked computer still gets a quick tunnel, whose
-		// address changes on restart. A full account is said, since removing
-		// a machine fixes it.
+		// address changes on restart. Said, though: after a new password the
+		// account's devices hold the old one until a link lands. An AO Cloud
+		// without fixed addresses (422) never lists it here, as before.
 		await linkThisComputer(cloudBaseUrl, accountId, password).catch((cause: unknown) => {
-			if (cause instanceof RemoteHostLimitError) setLinkError(cause.message);
+			if (cause instanceof AccountHostSyncError && cause.status === 422) return;
+			setLinkError(cause instanceof Error && cause.message ? cause.message : t("remote.shareThisComputerFailed"));
 		});
 	};
 

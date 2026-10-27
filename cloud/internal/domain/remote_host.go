@@ -41,6 +41,7 @@ type RemoteHostTunnel struct {
 // RemoteHostTunnelCandidate is a tunnel the sweep may delete: Registered is
 // false when its account no longer lists its host.
 type RemoteHostTunnelCandidate struct {
+	UserID     string
 	HostID     string
 	TunnelID   string
 	Hostname   string

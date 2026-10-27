@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { TooltipProvider } from "../ui/tooltip";
 import { apiClient } from "../../lib/api-client";
-import { RemoteHostLimitError } from "../../lib/account-remote-hosts";
+import { AccountHostSyncError, RemoteHostLimitError } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 
 // Remote access away from home needs sign-in. The daemon fake is just enough
@@ -97,7 +97,7 @@ test("a signed-in computer is linked before its tunnel starts", async () => {
 
 test("a full account is said, and remote access still starts", async () => {
 	fake.signedIn = true;
-	vi.mocked(linkThisComputer).mockRejectedValueOnce(new RemoteHostLimitError("An account can list up to 10 machines. Remove one to add another."));
+	vi.mocked(linkThisComputer).mockRejectedValueOnce(new RemoteHostLimitError("An account can list up to 10 machines. Remove one to add another.", 409));
 	renderContent();
 	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
 
@@ -116,6 +116,29 @@ test("a new password links the computer again, so its fixed address survives", a
 
 	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "pw-2"));
 	expect(posted()).toEqual(["/api/v1/mobile/regenerate"]);
+});
+
+test("a new password that could not be linked says so", async () => {
+	fake.signedIn = true;
+	Object.assign(fake.status, {
+		enabled: true, noPublicTunnel: false, password: "pw-1",
+		endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
+	});
+	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("AO Cloud host sync failed (502).", 502));
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
+
+	expect(await screen.findByText("AO Cloud host sync failed (502).")).toBeVisible();
+});
+
+test("an AO Cloud without fixed addresses is not an error", async () => {
+	fake.signedIn = true;
+	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("AO Cloud host sync failed (422).", 422));
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
+
+	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/enable-lan-only", "/api/v1/mobile/remote-access"]));
+	expect(screen.queryByText("AO Cloud host sync failed (422).")).toBeNull();
 });
 
 test("a LAN-only computer gets a new password without being listed", async () => {

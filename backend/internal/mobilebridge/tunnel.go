@@ -287,8 +287,11 @@ type TunnelStatus struct {
 	// and the user had no way to learn that reaching this machine from outside
 	// the network is simply not available here.
 	Supported bool `json:"supported"`
-	Running   bool `json:"running"`
-	Ready     bool `json:"ready"`
+	// Installing is set while no connector is installed but one is being
+	// installed; it starts by itself when it lands.
+	Installing bool `json:"installing"`
+	Running    bool `json:"running"`
+	Ready      bool `json:"ready"`
 	// Fixed is set while the connector serves this machine's fixed address,
 	// whose hostname stays the same across restarts, rather than a quick
 	// tunnel's.

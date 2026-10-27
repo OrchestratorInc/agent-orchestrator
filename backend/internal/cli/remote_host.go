@@ -17,10 +17,11 @@ type remoteHostStatus struct {
 	HostID       string `json:"hostId"`
 	Password     string `json:"password"`
 	Tunnel       struct {
-		Supported bool   `json:"supported"`
-		Running   bool   `json:"running"`
-		Fixed     bool   `json:"fixed"`
-		LastError string `json:"lastError"`
+		Supported  bool   `json:"supported"`
+		Installing bool   `json:"installing"`
+		Running    bool   `json:"running"`
+		Fixed      bool   `json:"fixed"`
+		LastError  string `json:"lastError"`
 	} `json:"tunnel"`
 	Endpoints []struct {
 		Kind   string `json:"kind"`
@@ -110,10 +111,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 						message = "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable " + flag + "`"
 						// AO downloads its own cloudflared where it has a pinned
 						// build; the tunnel starts by itself when it lands.
-						var install struct {
-							Status string `json:"status"`
-						}
-						if ctx.doJSON(cmd.Context(), "GET", "system/install/cloudflared", nil, &install) == nil && install.Status == "running" {
+						if status.Tunnel.Installing {
 							message = "Tunnel: downloading cloudflared; run `ao remote-host status` for the HTTPS address"
 						}
 					} else if status.Tunnel.LastError != "" && !status.Tunnel.Running {

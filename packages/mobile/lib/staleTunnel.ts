@@ -28,7 +28,9 @@ export function tunnelMayHaveRotated(
 	// A tunnel elsewhere in the saved candidate list says nothing about why the
 	// active LAN or tailnet address failed. This distinction matters when the
 	// phone simply leaves Wi-Fi: the LAN endpoint becomes unreachable, but its
-	// address did not rotate. Nor does a named tunnel's.
+	// address did not rotate. Nor does a named tunnel's: one that fails is a
+	// machine asleep or offline far more often than one linked to another
+	// account, and telling every sleeping machine's phone to rescan is worse.
 	return active.kind === "tunnel" && isQuickTunnelHost(active.host ?? "") && known.some((e) => e.kind === "tunnel");
 }
 

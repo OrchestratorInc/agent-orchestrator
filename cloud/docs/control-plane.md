@@ -268,9 +268,9 @@ With the four `AO_CLOUD_HOST_TUNNEL_*` settings, a machine that a signed-in
 device links to an account gets its own Cloudflare tunnel, so its address stays
 the same across restarts. The control plane holds the Cloudflare API token;
 only a holder of the machine's account token, which already controls the
-machine, receives its tunnel's run token. A zone that is not
-the named zone of the tunnel account turns fixed addresses off at startup;
-an unreachable Cloudflare does not.
+machine, receives its tunnel's run token. Settings Cloudflare refuses at startup (the
+token, the zone ID, or a zone that is not the named zone of the tunnel
+account) turn fixed addresses off; an unreachable Cloudflare does not.
 
 - The address is `h-<hash of the account and host IDs>.<zone>`, one level
   under the zone apex because Universal SSL covers one level only. Each account
@@ -297,7 +297,9 @@ an unreachable Cloudflare does not.
   asks for one at most every 30 minutes. Calls that
   write tunnels are limited to 30 an hour per account (429
   `tunnel_rate_limited`), since every account shares the API token's rate
-  limit; the window is kept per replica.
+  limit; the window is kept per replica. Writes for one account and host run
+  one at a time, so the desktop's registration and the machine's request never
+  make two tunnels of one name.
 - `ao_remote_host_tunnels` keeps one row per account and host, with the run
   token encrypted like host tokens. While an account's tunnel for a host
   stands, the address publish cannot move that account's listing off the
@@ -327,8 +329,8 @@ an unreachable Cloudflare does not.
   Platforms sells more at $4.50 a month each. Records track machines seen in
   the last 90 days; tunnels track machines online now. A refused record or
   tunnel leaves the machine on a quick tunnel.
-- One account lists at most 10 machines (`domain.MaxRemoteHostsPerAccount`),
-  so one account cannot fill the zone. A new machine past that is refused with
+- With fixed addresses on, one account lists at most 10 machines
+  (`domain.MaxRemoteHostsPerAccount`), so one account cannot fill the zone. A new machine past that is refused with
   409 `remote_host_limit_reached` before any Cloudflare call; machines already
   listed can register again. Many accounts together still can fill the zone.
 

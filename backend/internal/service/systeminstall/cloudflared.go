@@ -76,6 +76,15 @@ func (s *Service) DownloadCloudflaredInBackground(onInstalled func()) {
 	}
 }
 
+// CloudflaredInstalling reports whether an install of cloudflared is running,
+// started by remote access or by the user; the connector starts when it lands.
+func (s *Service) CloudflaredInstalling() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[TargetCloudflared]
+	return ok && job.Status == StatusRunning
+}
+
 // cloudflaredDownloadPlan is the pinned download for this platform, when AO
 // has one and a downloader.
 func (s *Service) cloudflaredDownloadPlan() (Plan, bool) {
@@ -139,6 +148,8 @@ func (s *Service) runCloudflaredDownload(parent context.Context, download ports.
 		return
 	}
 	job.Status = StatusSucceeded
+	// The download works again, so it is what the user's next Start offers.
+	s.cloudflaredDownloadFailed.Store(false)
 	job.ExpectedDestination = path
 	job.Output = fmt.Sprintf("cloudflared %s installed at %s (sha256 %s verified)", cloudflaredVersion, path, download.SHA256)
 	onSucceeded := s.onSucceeded

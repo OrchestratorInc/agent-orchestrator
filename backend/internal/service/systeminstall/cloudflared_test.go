@@ -157,15 +157,26 @@ func TestCloudflaredDownloadRecoversFromATransientFailure(t *testing.T) {
 // A download that failed every try is started again the next time remote
 // access looks for a connector, not only after a daemon restart.
 func TestDownloadCloudflaredInBackgroundTriesAgainAfterAFailure(t *testing.T) {
+	var tries atomic.Int32
 	s, calls := newDownloadService("darwin", "arm64", func(ports.ManagedBinaryDownload) (string, error) {
-		return "", errors.New("connection reset")
+		if tries.Add(1) == 1 {
+			return "", errors.New("connection reset")
+		}
+		return "/Users/test/.ao/bin/cloudflared", nil
 	})
 	s.DownloadCloudflaredInBackground(func() {})
 	waitForStatus(t, s, TargetCloudflared, StatusFailed)
+	if s.planFor(TargetCloudflared).download != nil {
+		t.Fatal("after a failed download the user is still offered it")
+	}
 	s.DownloadCloudflaredInBackground(func() {})
-	waitForStatus(t, s, TargetCloudflared, StatusFailed)
+	waitForStatus(t, s, TargetCloudflared, StatusSucceeded)
 	if calls.Load() != 2 {
 		t.Fatalf("downloads = %d, want one per trigger", calls.Load())
+	}
+	// It works again, so it is what the user is offered again.
+	if s.planFor(TargetCloudflared).download == nil || s.CloudflaredInstalling() {
+		t.Fatal("a download that worked is not offered again")
 	}
 }
 

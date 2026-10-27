@@ -17829,6 +17829,8 @@ components:
           type: boolean
         hostname:
           type: string
+        installing:
+          type: boolean
         lastError:
           type: string
         location:
@@ -17841,6 +17843,7 @@ components:
           type: boolean
       required:
       - supported
+      - installing
       - running
       - ready
       - fixed

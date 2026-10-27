@@ -6181,6 +6181,7 @@ export interface components {
         MobileTunnelStatus: {
             fixed: boolean;
             hostname: string;
+            installing: boolean;
             lastError: string;
             location: string;
             ready: boolean;

@@ -941,6 +941,7 @@ func Run(buildVersion string) error {
 	// Looked up again whenever the bridge is enabled, so a cloudflared installed
 	// since boot is picked up without restarting AO. Finding none starts AO's
 	// own pinned download; the connector starts once it lands.
+	bs.ConnectorInstalling = systemInstall.CloudflaredInstalling
 	bs.ResolveTunnel = func() controllers.TunnelController {
 		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
 		if res.NeedsInstall {

@@ -91,6 +91,17 @@ it("classifies directory addresses: named tunnels as tunnels, LAN names as LAN",
 	expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "tailscale", host: "100.72.46.7", port: 443, secure: true }, quick]);
 });
 
+it("does not take a paired machine into an account that is already full", async () => {
+	const full = Array.from({ length: 10 }, (_, i) => host(`h_00000000-0000-0000-0000-${String(i).padStart(12, "0")}`));
+	const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ hosts: full }) }));
+	vi.stubGlobal("fetch", fetch);
+	saved.hosts = [{ id: "h_00000000-0000-0000-0000-0000000000aa", name: "Studio", platform: "macos", token: "original-password", lastConnected: 0,
+		endpoints: [{ kind: "lan", host: "192.168.1.20", port: 3011, secure: false }] }];
+	await syncAccountHosts(account);
+	// Only the directory read: no identity probe, and no token claim.
+	expect(fetch).toHaveBeenCalledTimes(1);
+});
+
 it("keeps a forgotten account machine hidden until explicitly re-paired", async () => {
 	const item = host("h_00000000-0000-0000-0000-000000000004");
 	vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hosts: [item] }) })));

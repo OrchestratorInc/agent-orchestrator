@@ -37,6 +37,7 @@ const (
 type SweepStore interface {
 	ListRemoteHostTunnelSweepCandidates(ctx context.Context, cutoff, unregisteredBefore time.Time) ([]domain.RemoteHostTunnelCandidate, error)
 	FindRemoteHostTunnel(ctx context.Context, tunnelID string) (domain.RemoteHostTunnel, bool, error)
+	RemoteHostListed(ctx context.Context, userID, hostID string) (bool, error)
 	TouchRemoteHostTunnel(ctx context.Context, tunnelID string, seenAt time.Time) error
 	ReleaseRemoteHostTunnel(ctx context.Context, tunnelID string) error
 	DeleteRemoteHostTunnel(ctx context.Context, tunnelID string) error
@@ -96,6 +97,15 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 			}
 			if online {
 				if err := store.TouchRemoteHostTunnel(ctx, c.TunnelID, now); err != nil {
+					fail(err)
+				}
+				continue
+			}
+		}
+		// Asked again: the account may have listed the host again since.
+		if !c.Registered {
+			if listed, err := store.RemoteHostListed(ctx, c.UserID, c.HostID); err != nil || listed {
+				if err != nil {
 					fail(err)
 				}
 				continue

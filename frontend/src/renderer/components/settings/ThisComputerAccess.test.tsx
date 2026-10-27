@@ -52,6 +52,7 @@ const fake = vi.hoisted(() => {
 			hostId: HOST_ID,
 			tunnel: {
 				supported: daemon.connector,
+				installing: !daemon.connector && daemon.downloadReads > 0,
 				running: daemon.enabled && daemon.connector && !daemon.noPublicTunnel,
 				ready,
 				hostname: ready ? daemon.tunnelHost : "",

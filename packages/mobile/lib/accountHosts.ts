@@ -10,6 +10,9 @@ export { ignoreAccountHost, unignoreAccountHost } from "./accountHostPreferences
 const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.aoagents.dev").replace(/\/$/, "");
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 
+/** How many machines AO Cloud lists per account (domain.MaxRemoteHostsPerAccount). */
+const ACCOUNT_HOST_LIMIT = 10;
+
 function endpoint(raw: string): Endpoint | null {
 	try {
 		const url = new URL(raw);
@@ -76,6 +79,9 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 	if (!await current()) return;
 	const paired = await loadHosts();
 	for (const manual of paired.filter((host) => !host.accountUserId && host.id && !hosts.some((item) => item.hostId === host.id))) {
+		// A full account refuses the listing only after the machine has moved
+		// its account token here, cutting off the account that had it.
+		if (hosts.length >= ACCOUNT_HOST_LIMIT) break;
 		for (const address of manual.endpoints) {
 			if (!await current()) return;
 			if ((await ignoredAccountHosts(account.id)).has(manual.id)) break;

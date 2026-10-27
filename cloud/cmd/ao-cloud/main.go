@@ -523,12 +523,13 @@ func run(logger *slog.Logger) error {
 			AccountID: cfg.HostTunnelAccountID, ZoneID: cfg.HostTunnelZoneID,
 			Zone: cfg.HostTunnelZone, APIToken: cfg.HostTunnelAPIToken,
 		}
-		// A wrong zone turns fixed addresses off: its tunnels would register and
-		// look healthy while the edge refuses every request. An unreachable
-		// Cloudflare is not fatal; machines fall back to quick tunnels meanwhile.
+		// Wrong settings turn fixed addresses off: every link would fail, or a
+		// wrong zone's tunnels would look healthy while the edge refuses every
+		// request. An unreachable Cloudflare is not fatal; machines fall back to
+		// quick tunnels meanwhile.
 		switch err := hostTunnels.Verify(ctx); {
-		case errors.Is(err, hosttunnel.ErrWrongZone):
-			logger.Error("fixed machine addresses disabled: wrong zone", "zone", cfg.HostTunnelZone, "error", err)
+		case errors.Is(err, hosttunnel.ErrBadSettings):
+			logger.Error("fixed machine addresses disabled: wrong settings", "zone", cfg.HostTunnelZone, "error", err)
 			hostTunnels = nil
 		case err != nil:
 			logger.Warn("host tunnel zone check failed", "zone", cfg.HostTunnelZone, "error", err)

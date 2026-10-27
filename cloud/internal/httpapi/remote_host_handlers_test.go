@@ -42,7 +42,7 @@ func (s *remoteHostFakeStore) ListRemoteHosts(_ context.Context, principal domai
 }
 func (s *remoteHostFakeStore) UpsertRemoteHost(ctx context.Context, principal domain.Principal, host domain.RemoteHost, limit int) error {
 	listed, _ := s.ListRemoteHosts(ctx, principal)
-	if _, known := s.hosts[principal.UserID+":"+host.HostID]; !known && (len(listed) >= limit || s.filledMeanwhile) {
+	if _, known := s.hosts[principal.UserID+":"+host.HostID]; !known && limit > 0 && (len(listed) >= limit || s.filledMeanwhile) {
 		return postgres.ErrRemoteHostLimit
 	}
 	host.UserID = principal.UserID
@@ -448,6 +448,23 @@ func TestTunnelWritesAreLimitedPerAccount(t *testing.T) {
 	}
 	if code := register("00000000-0000-0000-0000-000000000003", "h_00000000-0000-0000-0000-000000000002"); code != http.StatusNoContent {
 		t.Fatalf("another account: %d", code)
+	}
+}
+
+// The cap guards the zone and the tunnel account, so an AO Cloud without fixed
+// addresses lists any number of machines.
+func TestTheMachineCapNeedsFixedAddresses(t *testing.T) {
+	cipher, _ := secrets.New(make([]byte, 32))
+	store := &remoteHostFakeStore{hosts: map[string]domain.RemoteHost{}}
+	s := New(Options{Store: store, SecretCipher: cipher, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	owner := "00000000-0000-0000-0000-000000000002"
+	for i := range domain.MaxRemoteHostsPerAccount + 1 {
+		hostID := fmt.Sprintf("h_00000000-0000-0000-0000-%012d", i)
+		w := httptest.NewRecorder()
+		s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"VM","url":"https://vm.example.com","token":"`+strings.Repeat("a", 64)+`"}`, owner))
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("machine %d: %d", i+1, w.Code)
+		}
 	}
 }
 

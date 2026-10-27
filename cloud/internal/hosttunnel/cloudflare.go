@@ -41,6 +41,8 @@ type Tunnel struct {
 	// DNS record, rather than finding them.
 	Created       bool
 	RecordCreated bool
+	// repointed is the record Ensure moved onto this tunnel, as it was.
+	repointed *dnsRecord
 }
 
 // Hostname is the fixed address userID's account gives hostID. Derived from
@@ -94,6 +96,14 @@ func (c *Cloudflare) Discard(ctx context.Context, t Tunnel) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	var errs []error
+	if t.repointed != nil {
+		// Back onto the tunnel its row still names, so deleting that row
+		// later finds its record.
+		previous := map[string]any{"type": "CNAME", "name": t.Hostname, "content": t.repointed.Content, "proxied": t.repointed.Proxied, "ttl": 1}
+		if err := c.do(ctx, http.MethodPut, c.recordsPath()+"/"+url.PathEscape(t.repointed.ID), previous, nil); err != nil {
+			errs = append(errs, fmt.Errorf("left dns record %s on tunnel %s: %w", t.Hostname, t.ID, err))
+		}
+	}
 	if t.RecordCreated {
 		record, err := c.findRecord(ctx, t.Hostname)
 		if err == nil && record.ID != "" && record.Content == t.ID+".cfargotunnel.com" {
@@ -162,6 +172,9 @@ func (c *Cloudflare) ensure(ctx context.Context, userID, hostID string) (Tunnel,
 		// Recreated tunnel, or proxying switched off by hand: an unproxied
 		// cfargotunnel.com CNAME serves nothing. Keep the address, repair it.
 		err = c.do(ctx, http.MethodPut, c.recordsPath()+"/"+url.PathEscape(existing.ID), record, nil)
+		if err == nil {
+			out.repointed = &existing
+		}
 	}
 	if err != nil {
 		return out, fmt.Errorf("write dns record: %w", err)
@@ -370,14 +383,15 @@ func (c *Cloudflare) do(ctx context.Context, method, path string, body, result a
 	return json.Unmarshal(env.Result, result)
 }
 
-// ErrWrongZone means the configured zone is not the named zone of the tunnel
+// ErrBadSettings means the tunnel settings cannot work: Cloudflare refuses the
+// token or the zone ID, or the zone is not the named zone of the tunnel
 // account. Unlike an unreachable Cloudflare, it does not pass.
-var ErrWrongZone = errors.New("host tunnel zone does not match")
+var ErrBadSettings = errors.New("host tunnel settings are wrong")
 
-// Verify reads the zone once, so a zone outside the tunnel account fails at
-// boot with ErrWrongZone: the edge refuses a CNAME to another account's
-// tunnel (error 1014) while the connector still registers, so it would look
-// healthy.
+// Verify reads the zone once, so wrong settings fail at boot with
+// ErrBadSettings. A zone outside the tunnel account would otherwise look
+// healthy: the edge refuses a CNAME to another account's tunnel (error 1014)
+// while the connector still registers.
 func (c *Cloudflare) Verify(ctx context.Context) error {
 	var z struct {
 		Name    string `json:"name"`
@@ -386,13 +400,17 @@ func (c *Cloudflare) Verify(ctx context.Context) error {
 		} `json:"account"`
 	}
 	if err := c.do(ctx, http.MethodGet, "/zones/"+url.PathEscape(c.ZoneID), nil, &z); err != nil {
+		var apiErr *apiError
+		if errors.As(err, &apiErr) && apiErr.HTTPStatus >= 400 && apiErr.HTTPStatus < 500 && apiErr.HTTPStatus != http.StatusTooManyRequests {
+			return fmt.Errorf("%w: read zone: %w", ErrBadSettings, err)
+		}
 		return fmt.Errorf("read zone: %w", err)
 	}
 	if z.Name != c.Zone {
-		return fmt.Errorf("%w: zone %s is %q, not %q", ErrWrongZone, c.ZoneID, z.Name, c.Zone)
+		return fmt.Errorf("%w: zone %s is %q, not %q", ErrBadSettings, c.ZoneID, z.Name, c.Zone)
 	}
 	if z.Account.ID != c.AccountID {
-		return fmt.Errorf("%w: zone %s belongs to account %s, not %s", ErrWrongZone, z.Name, z.Account.ID, c.AccountID)
+		return fmt.Errorf("%w: zone %s belongs to account %s, not %s", ErrBadSettings, z.Name, z.Account.ID, c.AccountID)
 	}
 	return nil
 }
