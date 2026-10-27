@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 type fixedBrowserCapability string
@@ -75,6 +76,26 @@ func TestSpawnEnvWindowsRemovesCaseVariantsOfProtectedVariables(t *testing.T) {
 	}
 	if env[EnvSessionID] != "mer-1" || env["buildMode"] != "production" {
 		t.Fatalf("environment = %v, want protected ID and untouched project variable spelling", env)
+	}
+}
+
+func TestRuntimeEnvIncludesSavedProviderKeysAndProjectOverride(t *testing.T) {
+	dir := t.TempDir()
+	if err := providerkeys.Save(t.Context(), dir, "OPENAI_API_KEY", "device-secret"); err != nil {
+		t.Fatal(err)
+	}
+	manager := &Manager{
+		dataDir:    dir,
+		executable: func() (string, error) { return filepath.Join(dir, "ao"), nil },
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	base := manager.runtimeEnv("session", "project", "", nil)
+	if base["OPENAI_API_KEY"] != "device-secret" {
+		t.Fatal("saved device provider key was not passed to the harness")
+	}
+	project := manager.runtimeEnv("session", "project", "", map[string]string{"OPENAI_API_KEY": "project-secret"})
+	if project["OPENAI_API_KEY"] != "project-secret" {
+		t.Fatal("project-specific provider key did not override the device default")
 	}
 }
 

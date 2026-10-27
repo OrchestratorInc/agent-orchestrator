@@ -28,10 +28,10 @@ async function viaMain<T>(hostId: string | undefined, request: AgentLoginRequest
 }
 
 // Credentials stay out of React Query's mutation cache and terminal replay.
-export async function startAgentUILogin(agentId: string, method: string, secret: string, hostId?: string): Promise<AgentLoginSnapshot> {
-	const { data, error } = await viaMain<AgentLoginSnapshot>(hostId, { action: "start", agentId, method, ...(secret ? { secret } : {}) })
+export async function startAgentUILogin(agentId: string, method: string, secret: string, hostId?: string, model?: string): Promise<AgentLoginSnapshot> {
+	const { data, error } = await viaMain<AgentLoginSnapshot>(hostId, { action: "start", agentId, method, ...(secret ? { secret } : {}), ...(model ? { model } : {}) })
 		?? await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations", {
-			params: { path: { agent: agentId } }, body: { method, ...(secret ? { secret } : {}) },
+			params: { path: { agent: agentId } }, body: { method, ...(secret ? { secret } : {}), ...(model ? { model } : {}) },
 		});
 	// Recover a login whose dialog was lost on reload without starting a second
 	// native process against the same credential store.
@@ -44,10 +44,21 @@ export async function startAgentUILogin(agentId: string, method: string, secret:
 }
 
 export async function getAgentUILogin(agentId: string, operationId: string, hostId?: string): Promise<AgentLoginSnapshot> {
-	const { data, error, status } = await viaMain<AgentLoginSnapshot>(hostId, { action: "get", agentId, operationId })
+	const result: LoginResult<AgentLoginSnapshot> = await viaMain<AgentLoginSnapshot>(hostId, { action: "get", agentId, operationId })
 		?? await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/auth/operations/{operationId}", { params: { path: { agent: agentId, operationId } } })
 			.then(({ data, error, response }) => ({ data, error, status: response?.status }));
+	const { data, error, status } = result;
 	if (error || !data) throw Object.assign(new Error(apiErrorMessage(error, "Could not check sign-in.")), { code: apiErrorCode(error), status });
+	return data;
+}
+
+export type AgentLoginMenuAction = "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+
+export async function actOnAgentUILogin(agentId: string, operationId: string, action: AgentLoginMenuAction, hostId?: string): Promise<AgentLoginSnapshot> {
+	const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations/{operationId}/actions", {
+		params: { path: { agent: agentId, operationId } }, body: { action },
+	});
+	if (error || !data) throw new Error(apiErrorMessage(error, "Could not control sign-in."));
 	return data;
 }
 
