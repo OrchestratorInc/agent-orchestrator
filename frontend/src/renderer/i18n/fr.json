@@ -3789,8 +3789,6 @@
 	"settings.harness.loginUi.hints.device_code": "Validez la connexion avec un code à usage unique.",
 	"settings.harness.loginUi.hints.api_key": "Connectez-vous avec votre clé API OpenAI.",
 	"settings.harness.loginUi.hints.access_token": "Utilisez un jeton d’accès existant.",
-	"settings.harness.loginUi.continueBrowser": "Continuer dans le navigateur",
-	"settings.harness.loginUi.createDeviceCode": "Obtenir un code de connexion",
 	"settings.harness.loginUi.otherOptions": "Autres options",
 	"settings.harness.loginUi.connectedDescription": "Votre compte est prêt à être utilisé avec ce harness.",
 	"settings.harness.loginUi.waitingForCode": "Saisissez ce code sur la page de connexion. En attente de validation…",

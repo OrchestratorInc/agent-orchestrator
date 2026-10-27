@@ -3701,8 +3701,6 @@
 	"settings.harness.loginUi.hints.device_code": "Approve sign-in using a one-time code.",
 	"settings.harness.loginUi.hints.api_key": "Connect with your OpenAI API key.",
 	"settings.harness.loginUi.hints.access_token": "Use an existing access token.",
-	"settings.harness.loginUi.continueBrowser": "Continue in browser",
-	"settings.harness.loginUi.createDeviceCode": "Get sign-in code",
 	"settings.harness.loginUi.otherOptions": "Other options",
 	"settings.harness.loginUi.connectedDescription": "Your account is ready to use with this harness.",
 	"settings.harness.loginUi.waitingForCode": "Enter this code on the sign-in page. Waiting for approval…",

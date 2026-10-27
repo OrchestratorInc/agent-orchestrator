@@ -3720,8 +3720,6 @@
 	"settings.harness.loginUi.hints.device_code": "Anmeldung mit einem Einmalcode bestätigen.",
 	"settings.harness.loginUi.hints.api_key": "Mit deinem OpenAI-API-Schlüssel verbinden.",
 	"settings.harness.loginUi.hints.access_token": "Ein vorhandenes Zugriffstoken verwenden.",
-	"settings.harness.loginUi.continueBrowser": "Im Browser fortfahren",
-	"settings.harness.loginUi.createDeviceCode": "Anmeldecode abrufen",
 	"settings.harness.loginUi.otherOptions": "Weitere Optionen",
 	"settings.harness.loginUi.connectedDescription": "Dein Konto ist für diesen Harness bereit.",
 	"settings.harness.loginUi.waitingForCode": "Diesen Code auf der Anmeldeseite eingeben. Warte auf Bestätigung…",

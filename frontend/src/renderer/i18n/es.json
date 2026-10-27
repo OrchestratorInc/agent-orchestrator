@@ -3789,8 +3789,6 @@
 	"settings.harness.loginUi.hints.device_code": "Aprueba el acceso con un código de un solo uso.",
 	"settings.harness.loginUi.hints.api_key": "Conecta con tu clave de API de OpenAI.",
 	"settings.harness.loginUi.hints.access_token": "Usa un token de acceso existente.",
-	"settings.harness.loginUi.continueBrowser": "Continuar en el navegador",
-	"settings.harness.loginUi.createDeviceCode": "Obtener código de acceso",
 	"settings.harness.loginUi.otherOptions": "Otras opciones",
 	"settings.harness.loginUi.connectedDescription": "Tu cuenta está lista para usar con este harness.",
 	"settings.harness.loginUi.waitingForCode": "Introduce este código en la página de acceso. Esperando aprobación…",

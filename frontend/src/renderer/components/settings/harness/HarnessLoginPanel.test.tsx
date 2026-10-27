@@ -32,8 +32,9 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks(); });
 describe("HarnessLoginPanel", () => {
 	it.each([undefined, "local"])("explains local sign-in methods and keeps terminal login under other options (%s)", async (hostId) => {
 		const { user } = setup(hostId);
-		expect(screen.getByRole("radio", { name: "ChatGPT in browser" })).toHaveAccessibleDescription("Use your ChatGPT account.");
-		expect(screen.getByRole("button", { name: "Continue in browser" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "ChatGPT in browser" })).toHaveAccessibleDescription("Use your ChatGPT account.");
+		expect(screen.getByRole("button", { name: "ChatGPT in browser" })).toBeEnabled();
+		expect(screen.queryByRole("button", { name: "Continue in browser" })).toBeNull();
 		expect(screen.getByRole("button", { name: "Open terminal login" })).not.toBeVisible();
 		await user.click(screen.getByText("Other options"));
 		expect(screen.getByRole("button", { name: "Open terminal login" })).toBeVisible();
@@ -41,9 +42,8 @@ describe("HarnessLoginPanel", () => {
 
 	it("uses device-code or credentials on a remote host instead of a localhost browser callback", async () => {
 		const { user } = setup("remote-1");
-		expect(screen.queryByRole("radio", { name: "ChatGPT in browser" })).toBeNull();
-		expect(screen.getByRole("radio", { name: "Device code" })).toBeChecked();
-		await user.click(screen.getByRole("button", { name: "Get sign-in code" }));
+		expect(screen.queryByRole("button", { name: "ChatGPT in browser" })).toBeNull();
+		await user.click(screen.getByRole("button", { name: "Device code" }));
 		expect(startAgentUILogin).toHaveBeenCalledWith("codex", "device_code", "", "remote-1");
 	});
 
@@ -52,11 +52,14 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(startAgentUILogin).mockResolvedValue(claude);
 		vi.mocked(getAgentUILogin).mockResolvedValue(claude);
 		vi.mocked(submitAgentUILoginCode).mockResolvedValue({ ...claude, acceptsCode: false, loginUrl: undefined });
+		const open = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		const onVerify = vi.fn().mockResolvedValue(true);
 		render(<HarnessLoginPanel agentId="claude-code" methods={[{ id: "console", label: "Anthropic Console", secret: false }]} hostId="remote-1" onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		const user = userEvent.setup();
-		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
+		await user.click(screen.getByRole("button", { name: "Anthropic Console" }));
 		const codeInput = await screen.findByLabelText("Sign-in code");
+		expect(open).toHaveBeenCalledOnce();
+		expect(open).toHaveBeenCalledWith(claude.loginUrl);
 		expect(codeInput).toHaveAttribute("type", "password");
 		await user.type(codeInput, "one-time-code#state");
 		await user.click(screen.getByRole("button", { name: "Submit code" }));
@@ -68,18 +71,19 @@ describe("HarnessLoginPanel", () => {
 		expect(onVerify).toHaveBeenCalledTimes(1);
 	});
 
-	it("shows device prompts with browser and copy controls without a terminal", async () => {
+	it("starts device-code sign-in on selection and opens the sign-in page without a terminal", async () => {
 		const open = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
 		const { user } = setup();
-		await user.click(screen.getByRole("radio", { name: "Device code" }));
-		await user.click(screen.getByRole("button", { name: "Get sign-in code" }));
+		await user.click(screen.getByRole("button", { name: "Device code" }));
 		expect(startAgentUILogin).toHaveBeenCalledWith("codex", "device_code", "", undefined);
 		expect(await screen.findByText("ABCD-EFGHI")).toBeVisible();
-		expect(screen.queryByRole("radio")).toBeNull();
+		expect(screen.queryByRole("button", { name: "Device code" })).toBeNull();
 		expect(screen.getByRole("status")).toHaveTextContent("Enter this code on the sign-in page.");
-		await user.click(screen.getByRole("button", { name: "Open sign-in page" }));
+		await waitFor(() => expect(open).toHaveBeenCalledOnce());
 		expect(open).toHaveBeenCalledWith(snapshot.loginUrl);
+		await user.click(screen.getByRole("button", { name: "Open sign-in page" }));
+		expect(open).toHaveBeenCalledTimes(2);
 		await user.click(screen.getByRole("button", { name: "Copy code" }));
 		expect(copy).toHaveBeenCalledWith("ABCD-EFGHI");
 		expect(screen.queryByTestId("harness-auth-terminal")).toBeNull();
@@ -90,7 +94,8 @@ describe("HarnessLoginPanel", () => {
 	it("masks the API key, clears it on submit, and verifies native completion", async () => {
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, method: "api_key", loginUrl: undefined, deviceCode: undefined, status: "succeeded" });
 		const { user, onVerify } = setup();
-		await user.click(screen.getByRole("radio", { name: "OpenAI API key" }));
+		await user.click(screen.getByRole("button", { name: "OpenAI API key" }));
+		expect(startAgentUILogin).not.toHaveBeenCalled();
 		const input = screen.getByLabelText("API key");
 		expect(input).toHaveAttribute("type", "password");
 		await user.type(input, "test-secret");
@@ -101,11 +106,24 @@ describe("HarnessLoginPanel", () => {
 		expect(document.body).not.toHaveTextContent("test-secret");
 	});
 
+	it("starts browser sign-in on selection and leaves opening the browser to the CLI", async () => {
+		const open = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		const browser = { ...snapshot, method: "browser", loginUrl: "https://auth.openai.com/oauth/authorize", deviceCode: undefined };
+		vi.mocked(startAgentUILogin).mockResolvedValue(browser);
+		vi.mocked(getAgentUILogin).mockResolvedValue(browser);
+		const { user } = setup();
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
+		expect(startAgentUILogin).toHaveBeenCalledOnce();
+		expect(startAgentUILogin).toHaveBeenCalledWith("codex", "browser", "", undefined);
+		expect(await screen.findByRole("button", { name: "Open sign-in page" })).toBeVisible();
+		expect(open).not.toHaveBeenCalled();
+	});
+
 	it("does not claim connection when verification fails", async () => {
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, status: "succeeded" });
 		const { user, onVerify } = setup();
 		onVerify.mockResolvedValue(false);
-		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("could not confirm sign-in");
 		expect(screen.queryByText("Connected")).toBeNull();
 	});
@@ -114,7 +132,7 @@ describe("HarnessLoginPanel", () => {
 		let finish!: () => void;
 		vi.mocked(cancelAgentUILogin).mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
 		const { user, onTerminal } = setup();
-		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		await screen.findByText("ABCD-EFGHI");
 		await user.click(screen.getByText("Other options"));
 		await user.click(screen.getByRole("button", { name: "Open terminal login" }));
@@ -127,7 +145,7 @@ describe("HarnessLoginPanel", () => {
 	it("keeps the inline panel open when cancellation fails", async () => {
 		vi.mocked(cancelAgentUILogin).mockRejectedValue(new Error("Login is still stopping"));
 		const { user, onClose, onTerminal } = setup();
-		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		await screen.findByText("ABCD-EFGHI");
 		await user.click(screen.getByText("Other options"));
 		await user.click(screen.getByRole("button", { name: "Open terminal login" }));
@@ -138,7 +156,7 @@ describe("HarnessLoginPanel", () => {
 
 	it("cancels the background login when Settings unmounts", async () => {
 		const { user, unmount } = setup();
-		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		await screen.findByText("ABCD-EFGHI");
 		unmount();
 		expect(cancelAgentUILogin).toHaveBeenCalledWith("codex", "login-1", undefined);
@@ -147,7 +165,7 @@ describe("HarnessLoginPanel", () => {
 	it("polls the selected host and verifies when the process finishes", async () => {
 		vi.mocked(getAgentUILogin).mockResolvedValue({ ...snapshot, status: "succeeded" });
 		const { user, onVerify } = setup("remote-1");
-		await user.click(screen.getByRole("button", { name: "Get sign-in code" }));
+		await user.click(screen.getByRole("button", { name: "Device code" }));
 		expect(await screen.findByText("Connected", {}, { timeout: 3000 })).toBeVisible();
 		expect(getAgentUILogin).toHaveBeenCalledWith("codex", "login-1", "remote-1");
 		expect(onVerify).toHaveBeenCalledTimes(1);
@@ -157,7 +175,7 @@ describe("HarnessLoginPanel", () => {
 		let finish!: (value: AgentLoginSnapshot) => void;
 		vi.mocked(startAgentUILogin).mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
 		const { user, unmount } = setup();
-		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		unmount();
 		await act(async () => finish(snapshot));
 		expect(cancelAgentUILogin).toHaveBeenCalledWith("codex", "login-1", undefined);
@@ -167,9 +185,9 @@ describe("HarnessLoginPanel", () => {
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, method: "browser", deviceCode: undefined });
 		vi.mocked(getAgentUILogin).mockRejectedValue(Object.assign(new Error("Login no longer exists"), { code: "AGENT_AUTH_OPERATION_NOT_FOUND" }));
 		const { user } = setup();
-		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		expect(await screen.findByText("Sign-in expired. Start again to get a fresh sign-in link or code.")).toBeVisible();
-		expect(screen.getByRole("button", { name: "Continue in browser" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "ChatGPT in browser" })).toBeEnabled();
 		expect(screen.queryByRole("button", { name: "Open sign-in page" })).toBeNull();
 		await new Promise((resolve) => setTimeout(resolve, 1_100));
 		expect(getAgentUILogin).toHaveBeenCalledTimes(1);
@@ -178,7 +196,7 @@ describe("HarnessLoginPanel", () => {
 	it("retries a transient polling failure and still verifies completion", async () => {
 		vi.mocked(getAgentUILogin).mockRejectedValueOnce(new Error("Temporarily unavailable")).mockResolvedValue({ ...snapshot, status: "succeeded" });
 		const { user, onVerify } = setup();
-		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		expect(await screen.findByText("Connected", {}, { timeout: 4_000 })).toBeVisible();
 		expect(onVerify).toHaveBeenCalledTimes(1);
 	});

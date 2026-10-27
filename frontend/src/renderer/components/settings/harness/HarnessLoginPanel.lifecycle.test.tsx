@@ -25,10 +25,10 @@ it.each(["old-login", "recovered-login"])("finishes stale startup and disposal b
 	const user = userEvent.setup();
 	try {
 		const first = render(<HarnessLoginPanel {...props} />);
-		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		first.unmount();
 		render(<HarnessLoginPanel {...props} hostId="local" />);
-		await user.click(screen.getByRole("button", { name: "Continue in browser" }));
+		await user.click(screen.getByRole("button", { name: "ChatGPT in browser" }));
 		expect(post).toHaveBeenCalledTimes(1);
 		await act(async () => finishStart({ data: old }));
 		await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));

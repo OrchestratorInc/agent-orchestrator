@@ -3720,8 +3720,6 @@
 	"settings.harness.loginUi.hints.device_code": "ワンタイムコードでサインインを承認します。",
 	"settings.harness.loginUi.hints.api_key": "OpenAI API キーで接続します。",
 	"settings.harness.loginUi.hints.access_token": "既存のアクセストークンを使用します。",
-	"settings.harness.loginUi.continueBrowser": "ブラウザーで続ける",
-	"settings.harness.loginUi.createDeviceCode": "サインインコードを取得",
 	"settings.harness.loginUi.otherOptions": "その他のオプション",
 	"settings.harness.loginUi.connectedDescription": "このハーネスでアカウントを使用できます。",
 	"settings.harness.loginUi.waitingForCode": "サインインページにこのコードを入力してください。承認を待っています…",

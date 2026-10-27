@@ -280,7 +280,7 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(page).findByRole("region", { name: "Sign in to Codex" })).toBeVisible();
 		expect(screen.getByRole("tabpanel", { name: "Account" })).toContainElement(screen.getByRole("region", { name: "Sign in to Codex" }));
 		expect(screen.queryByRole("dialog")).toBeNull();
-		expect(screen.getByRole("radio", { name: "ChatGPT in browser" })).toBeChecked();
+		expect(screen.getByRole("button", { name: "ChatGPT in browser" })).toBeEnabled();
 		expect(screen.queryByTestId("inline-terminal-body")).toBeNull();
 		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
 		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
@@ -318,7 +318,7 @@ describe("HarnessSettingsSection", () => {
 				fireEvent.click(update);
 			});
 			const panel = await within(page).findByRole("region", { name: "Sign in to Codex" });
-			await userEvent.click(within(panel).getByRole("button", { name: "Continue in browser" }));
+			await userEvent.click(within(panel).getByRole("button", { name: "ChatGPT in browser" }));
 			expect(await within(panel).findByRole("button", { name: "Open sign-in page" })).toBeVisible();
 			expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
 			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
@@ -867,7 +867,7 @@ describe("HarnessSettingsSection", () => {
 			expect(await within(page).findByRole("button", { name: "Update" })).toBeEnabled();
 			await userEvent.click(within(page).getByRole("button", { name: "Log in again" }));
 			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
-			await userEvent.click(within(page).getByRole("button", { name: "Continue in browser" }));
+			await userEvent.click(within(page).getByRole("button", { name: "ChatGPT in browser" }));
 			await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth/operations", expect.anything()));
 			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
 			expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());

@@ -3702,8 +3702,6 @@
 	"settings.harness.loginUi.hints.device_code": "使用一次性验证码批准登录。",
 	"settings.harness.loginUi.hints.api_key": "使用 OpenAI API 密钥连接。",
 	"settings.harness.loginUi.hints.access_token": "使用现有的访问令牌。",
-	"settings.harness.loginUi.continueBrowser": "在浏览器中继续",
-	"settings.harness.loginUi.createDeviceCode": "获取登录验证码",
 	"settings.harness.loginUi.otherOptions": "其他选项",
 	"settings.harness.loginUi.connectedDescription": "你的账户已准备就绪，可用于此工具。",
 	"settings.harness.loginUi.waitingForCode": "请在登录页面输入此验证码。正在等待批准…",
