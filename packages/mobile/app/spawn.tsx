@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
@@ -12,6 +12,7 @@ import {
 	View,
 } from "react-native";
 import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
+import { useHeaderOverlap } from "../lib/useHeaderOverlap";
 import { agentErrorCopy } from "../lib/agentError";
 import { AppSymbol } from "../lib/AppSymbol";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
@@ -34,7 +35,6 @@ import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button } from "../lib/ui";
 import { iconSize, radius, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
-import { useHeaderOverlap } from "../lib/useHeaderOverlap";
 import { approvalOptions, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
 import { modelSheetRoute } from "../lib/sheetResult";
 
@@ -49,7 +49,6 @@ function SpawnModalContent() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const navigation = useNavigation();
-	const headerOverlap = useHeaderOverlap();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
 	const { hostStates, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
 	const connectedHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
@@ -116,6 +115,7 @@ function SpawnModalContent() {
 	// the attachments and messages makes that entire region reflow instead.
 	const [promptRoom, setPromptRoom] = useState<number>();
 	const keyboardHeight = useKeyboardState((state) => state.height);
+	const headerOverlap = useHeaderOverlap();
 
 
 
@@ -478,16 +478,9 @@ function SpawnModalContent() {
 		}
 	};
 
-	// iOS: Cancel leads the sheet's bar, across from its title. Start stays with
-	// the selectors above the keyboard, where it shows its own progress.
-	// A started request can't be called back, so while it runs Cancel is
-	// disabled and the sheet can't be swiped away; it closes itself on success
-	// or stays to show the error.
-	const headerItems = useMemo(() => Platform.OS === "ios" ? (
-		<Stack.Toolbar placement="left">
-			<Stack.Toolbar.Button disabled={busy} onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>
-		</Stack.Toolbar>
-	) : null, [busy, router]);
+	// The sheet's bar is empty: a swipe down closes it. A started request can't be
+	// called back, so while it runs the sheet can't be swiped away; it closes
+	// itself on success or stays to show the error.
 	useEffect(() => {
 		if (!busy) return;
 		navigation.setOptions({ gestureEnabled: false });
@@ -497,8 +490,8 @@ function SpawnModalContent() {
 	const content = (
 		<View style={[
 			styles.content,
-			// The sheet's header is the system's transparent bar, laid over the top
-			// of the page, so the prompt starts below it rather than under it.
+			// The sheet's empty bar is laid over the top of the page, so the
+			// prompt starts below it rather than under it.
 			Platform.OS === "ios" && { paddingTop: headerOverlap },
 			Platform.OS === "android" && styles.androidContent,
 		]}>
@@ -596,7 +589,7 @@ function SpawnModalContent() {
 		);
 	}
 
-	return <View style={styles.screen}>{headerItems}{content}</View>;
+	return <View style={styles.screen}>{content}</View>;
 }
 
 // Human copy for a failed spawn, matching every other screen. Never the wire

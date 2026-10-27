@@ -7,23 +7,23 @@ const attachmentRow = readFileSync(fileURLToPath(new URL("./spawn-attachment-row
 const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts", import.meta.url)), "utf8");
 const layout = readFileSync(fileURLToPath(new URL("../app/_layout.tsx", import.meta.url)), "utf8");
 
-// The iOS sheet says what it is and how to leave it without a drag: a native
-// bar titled "New task" with Cancel across from the title. Android keeps its
-// Material bottom sheet, which has neither bar nor title.
+// iOS keeps an empty native bar (no title text, no Cancel): the grabber and a
+// swipe down close the sheet, and the keyboard-riding controls are placed
+// against the bar. Android's Material sheet has neither bar nor title.
 describe("spawn sheet header", () => {
-	it("shows the iOS bar from the first frame, titled New task", () => {
+	it("keeps an empty transparent bar on iOS, titled for VoiceOver", () => {
 		const options = layout.slice(layout.indexOf('name="spawn"'), layout.indexOf("/>", layout.indexOf('name="spawn"')));
 		expect(options).toContain('headerShown: Platform.OS === "ios",');
+		expect(options).toContain('{ headerTransparent: true, headerStyle: undefined, headerTitle: "" }');
 		expect(options).toContain('title: "New task",');
 		expect(options).toContain('presentation: Platform.OS === "ios" ? "formSheet" : "transparentModal",');
 	});
 
-	it("cancels from the leading bar item on iOS only", () => {
-		expect(spawn).toContain('const headerItems = useMemo(() => Platform.OS === "ios" ? (\n\t\t<Stack.Toolbar placement="left">\n\t\t\t<Stack.Toolbar.Button disabled={busy} onPress={() => backOr(router)}>Cancel</Stack.Toolbar.Button>');
-		expect(spawn).toContain(") : null, [busy, router]);");
-		// Dictation is beside the model, as the hold-to-talk key; the header has only Cancel.
-		expect(spawn).not.toContain('<Stack.Toolbar placement="right">');
-		expect(spawn).toContain("return <View style={styles.screen}>{headerItems}{content}</View>;");
+	it("has no Cancel, and starts the prompt below the empty bar", () => {
+		expect(spawn).not.toContain("Stack.Toolbar");
+		expect(spawn).not.toContain(">Cancel<");
+		expect(spawn).toContain('Platform.OS === "ios" && { paddingTop: headerOverlap },');
+		expect(spawn).toContain("return <View style={styles.screen}>{content}</View>;");
 		// Start keeps its place with the selectors, riding the keyboard.
 		expect(spawn).toContain("onSpawn={() => { void onSpawn(); }}");
 	});
