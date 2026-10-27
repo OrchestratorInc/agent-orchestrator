@@ -127,7 +127,7 @@ const fake = vi.hoisted(() => {
 			const input = JSON.parse(body ?? "{}") as { label: string; url?: string; token: string };
 			if (cloud.failPut) return reply(503);
 			if (cloud.full && !cloud.hosts.has(hostId)) {
-				return reply(409, { code: "remote_host_limit_reached", message: "An account can list up to 20 machines. Remove one to add another." });
+				return reply(409, { code: "remote_host_limit_reached", message: "An account can list up to 10 machines. Remove one to add another." });
 			}
 			if (input.url === undefined && !cloud.fixedAddresses) return reply(422);
 			input.url ??= `https://${FIXED}:443`;
@@ -368,7 +368,7 @@ it("says when the account lists as many machines as it can", async () => {
 	const toggle = await readySwitch();
 	fireEvent.click(toggle);
 
-	expect(await screen.findByRole("alert")).toHaveTextContent("An account can list up to 20 machines. Remove one to add another.");
+	expect(await screen.findByRole("alert")).toHaveTextContent("An account can list up to 10 machines. Remove one to add another.");
 	expect(toggle).toHaveAttribute("aria-checked", "false");
 	expect(fake.daemon.enabled).toBe(false);
 });
