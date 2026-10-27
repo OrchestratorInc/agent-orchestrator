@@ -19,6 +19,9 @@ type fakeAOCloud struct {
 	repairs []bool
 	digests []string
 	status  int // 0 answers 200
+	// tokens are handed out in turn, the last one from then on; empty means
+	// run-token-tun-1 every time.
+	tokens []string
 }
 
 func (f *fakeAOCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +39,11 @@ func (f *fakeAOCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(f.status)
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]string{"hostname": "h-test.example.dev", "runToken": "run-token-tun-1"})
+	token := "run-token-tun-1"
+	if len(f.tokens) > 0 {
+		token = f.tokens[min(len(f.repairs), len(f.tokens))-1]
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"hostname": "h-test.example.dev", "runToken": token})
 }
 
 func (f *fakeAOCloud) set(status int) {

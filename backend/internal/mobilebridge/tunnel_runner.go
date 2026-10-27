@@ -47,6 +47,7 @@ type TunnelRunner struct {
 	nudge <-chan struct{}
 
 	deadAfter    time.Duration // zero uses connectorDeadAfter
+	lostGrace    time.Duration // zero uses connectionLostGrace
 	upgradeEvery time.Duration // zero uses fixedUpgradeInterval
 	recheckEvery time.Duration // zero uses fixedRecheckInterval
 }
@@ -185,7 +186,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	case fixed:
 		health = newConnectorHealth(time.Now())
 		go t.watchConnector(runCtx, health, markUnserved)
-		go t.watchFixedTunnel(runCtx, named, func() { withdrawn.Store(true); stopRun() })
+		go t.watchFixedTunnel(runCtx, named, health, func() { withdrawn.Store(true); stopRun() })
 	case t.Fixed != nil:
 		go t.awaitFixedTunnel(runCtx, func() { upgraded.Store(true); stopRun() })
 	}
@@ -253,10 +254,12 @@ type connectorHealth struct {
 	live    map[string]bool // by connIndex
 	downAt  time.Time       // zero while a connection is live
 	refused int             // refusals in a row
+	// lost is signalled when the last live connection drops.
+	lost chan struct{}
 }
 
 func newConnectorHealth(start time.Time) *connectorHealth {
-	return &connectorHealth{live: map[string]bool{}, downAt: start}
+	return &connectorHealth{live: map[string]bool{}, downAt: start, lost: make(chan struct{}, 1)}
 }
 
 var (
@@ -292,6 +295,10 @@ func (h *connectorHealth) feed(line string, now time.Time) (refused bool) {
 		delete(h.live, m[1])
 		if len(h.live) == 0 && h.downAt.IsZero() {
 			h.downAt = now
+			select {
+			case h.lost <- struct{}{}:
+			default:
+			}
 		}
 	}
 	return false
@@ -357,16 +364,34 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func()) {
 // revoked by a new pairing password, or the tunnel was remade with a new
 // token. Removal deletes the tunnel while it is connected, and AO Cloud is
 // what says so. An unreachable AO Cloud is not a withdrawal.
-func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel, withdrawn func()) {
-	every := t.recheckEvery
+//
+// It also asks as soon as every connection has been down for lostGrace. A
+// machine offline for more than AO Cloud's five minutes has had its tunnel
+// released, and asking is what makes AO Cloud give it a new one, so a laptop
+// that wakes is back once Cloudflare routes the address to that tunnel. An
+// edge restart reconnects within seconds and asks nothing.
+func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel, health *connectorHealth, withdrawn func()) {
+	every, grace := t.recheckEvery, t.lostGrace
 	if every == 0 {
 		every = fixedRecheckInterval
+	}
+	if grace == 0 {
+		grace = connectionLostGrace
 	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(every):
+		case <-health.lost:
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(grace):
+			}
+			if _, dead := health.deadSince(); !dead {
+				continue
+			}
 		}
 		requestCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
 		named, err := t.Fixed.TunnelFor(requestCtx, t.HostID, false)
@@ -380,8 +405,12 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 }
 
 // fixedRecheckInterval spaces those checks: one AO Cloud call per machine
-// every 30 minutes.
-const fixedRecheckInterval = 30 * time.Minute
+// every 30 minutes, and one more each time its connections all stay down for
+// connectionLostGrace.
+const (
+	fixedRecheckInterval = 30 * time.Minute
+	connectionLostGrace  = 10 * time.Second
+)
 
 // Asking for the fixed address while a quick tunnel serves: every 30s, backing
 // off to 30 minutes while AO Cloud cannot answer.

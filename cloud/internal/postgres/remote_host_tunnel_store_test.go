@@ -70,6 +70,33 @@ func TestRemoteHostTunnelsAreServiceOwnedAndSwept(t *testing.T) {
 		t.Fatalf("stale candidates = %+v", c)
 	}
 
+	// Released while its machine is offline: only a release naming the
+	// current tunnel counts, and saving a new tunnel clears it.
+	if err := store.ReleaseRemoteHostTunnel(ctx, registered, "tun-older"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := store.GetRemoteHostTunnel(ctx, registered); got.Released {
+		t.Fatal("a release naming an older tunnel released the current one")
+	}
+	if err := store.ReleaseRemoteHostTunnel(ctx, registered, "tun-"+registered); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := store.GetRemoteHostTunnel(ctx, registered); !got.Released {
+		t.Fatal("release did not stick")
+	}
+	if candidates, err := store.ListRemoteHostTunnelSweepCandidates(ctx, time.Now().Add(time.Hour)); err != nil || len(pick(candidates, registered)) != 1 || !pick(candidates, registered)[0].Released {
+		t.Fatalf("released candidate = %+v, %v", pick(candidates, registered), err)
+	}
+	if err := store.SaveRemoteHostTunnel(ctx, domain.RemoteHostTunnel{
+		HostID: registered, TunnelID: "tun-" + registered, Hostname: "h-" + registered + ".example.dev",
+		EncryptedRunToken: []byte("sealed"), RunTokenNonce: []byte("nonce"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := store.GetRemoteHostTunnel(ctx, registered); got.Released {
+		t.Fatal("a new tunnel stayed released")
+	}
+
 	// A delete naming an older tunnel keeps the row.
 	if err := store.DeleteRemoteHostTunnel(ctx, registered, "tun-older"); err != nil {
 		t.Fatal(err)

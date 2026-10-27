@@ -322,8 +322,9 @@ func (s *Server) tunnelStore() remoteHostTunnelStore {
 }
 
 // hostTunnel returns hostID's tunnel, making it and its DNS record on first
-// use. repair remakes a stored tunnel, at most once a minute. It writes the
-// error response itself when it fails.
+// use, and making a new tunnel under the same record once the sweep released
+// the old one while the host was offline. repair remakes a stored tunnel, at
+// most once a minute. It writes the error response itself when it fails.
 func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remoteHostTunnelStore, hostID string, repair bool) (hostname, runToken string, ok bool) {
 	stored, found, err := tunnels.GetRemoteHostTunnel(r.Context(), hostID)
 	if err != nil {
@@ -331,7 +332,7 @@ func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remo
 		return "", "", false
 	}
 	aad := "remote-host-tunnel:" + hostID
-	if found && (!repair || time.Since(stored.UpdatedAt) < minTunnelRepairInterval) {
+	if found && !stored.Released && (!repair || time.Since(stored.UpdatedAt) < minTunnelRepairInterval) {
 		token, err := s.secretCipher.Decrypt(stored.EncryptedRunToken, stored.RunTokenNonce, aad)
 		if err == nil {
 			_ = tunnels.TouchRemoteHostTunnel(r.Context(), hostID, time.Now())

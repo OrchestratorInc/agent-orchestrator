@@ -183,6 +183,7 @@ func (s *remoteHostTunnelFakeStore) DeleteRemoteHostTunnel(_ context.Context, ho
 type fakeTunnelAPI struct {
 	mu      sync.Mutex
 	calls   int
+	made    int
 	tunnel  string
 	deleted bool
 	down    bool
@@ -200,7 +201,8 @@ func (f *fakeTunnelAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var result any = []any{}
 	switch {
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cfd_tunnel"):
-		f.tunnel = "tun-1"
+		f.made++
+		f.tunnel = fmt.Sprintf("tun-%d", f.made)
 		result = map[string]string{"id": f.tunnel}
 	case strings.HasSuffix(r.URL.Path, "/token"):
 		result = "run-token-" + f.tunnel
@@ -295,6 +297,20 @@ func TestLinkedHostGetsOneFixedTunnel(t *testing.T) {
 	}
 	if after, _ := api.snapshot(); after == calls {
 		t.Fatal("repair did not ask Cloudflare")
+	}
+
+	// Released while the machine was offline: its next request gets a new
+	// tunnel at the same address, never the deleted tunnel's token.
+	before := store.tunnels[hostID]
+	released := before
+	released.Released = true
+	store.tunnels[hostID] = released
+	w = requestTunnel(s, hostID, digest, `{}`)
+	got = struct{ Hostname, RunToken string }{}
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if w.Code != http.StatusOK || "https://"+got.Hostname+":443" != fixed || store.tunnels[hostID].TunnelID == before.TunnelID ||
+		got.RunToken != "run-token-"+store.tunnels[hostID].TunnelID || store.tunnels[hostID].Released {
+		t.Fatalf("after release: %d %s, row %+v", w.Code, w.Body.String(), store.tunnels[hostID])
 	}
 }
 

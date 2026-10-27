@@ -20,7 +20,9 @@ type RemoteHost struct {
 }
 
 // RemoteHostTunnel is the Cloudflare tunnel that gives one host its fixed
-// address. It belongs to the host, not to an account.
+// address. It belongs to the host, not to an account. Released means the
+// tunnel was deleted while the host was offline: its DNS record still names
+// TunnelID, and the host gets a new tunnel under it when it asks again.
 type RemoteHostTunnel struct {
 	HostID            string
 	TunnelID          string
@@ -29,6 +31,7 @@ type RemoteHostTunnel struct {
 	RunTokenNonce     []byte
 	UpdatedAt         time.Time
 	LastSeenAt        time.Time
+	Released          bool
 }
 
 // RemoteHostTunnelCandidate is a tunnel the sweep may delete: Registered is
@@ -39,4 +42,5 @@ type RemoteHostTunnelCandidate struct {
 	Hostname   string
 	LastSeenAt time.Time
 	Registered bool
+	Released   bool
 }

@@ -139,6 +139,49 @@ func TestTunnelRunnerRepairsARefusedTunnel(t *testing.T) {
 	}
 }
 
+// A laptop that slept past AO Cloud's five minutes finds its tunnel released:
+// once its connections stay down it asks AO Cloud, gets the new tunnel and
+// restarts on it, without waiting for the three-minute rule.
+func TestTunnelRunnerAsksForItsTunnelOnceEveryConnectionStaysDown(t *testing.T) {
+	cloud, src := newFixedSource(t)
+	cloud.tokens = []string{"run-token-tun-1", "run-token-tun-2"}
+	bin, _ := fakeCloudflared(t, registeredLine+"\n"+droppedLines)
+	r := namedRunner(t, bin, src)
+	r.deadAfter, r.recheckEvery, r.lostGrace = time.Hour, time.Hour, 20*time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := r.runOnce(ctx); !errors.Is(err, errFixedTunnelChanged) || r.repair {
+		t.Fatalf("runOnce = %v, repair %v; want a restart on the new tunnel", err, r.repair)
+	}
+	if n := cloud.requests(); n != 2 {
+		t.Fatalf("asked AO Cloud %d times, want once at start and once after the drop", n)
+	}
+}
+
+// An edge restart drops a connection and registers it again within seconds.
+func TestTunnelRunnerDoesNotAskWhenAConnectionComesBack(t *testing.T) {
+	cloud, src := newFixedSource(t)
+	knownTunnel(t, src)
+	bin, _ := fakeCloudflared(t, registeredLine+"\n"+droppedLines+"\n"+registeredLine)
+	r := namedRunner(t, bin, src)
+	r.deadAfter, r.recheckEvery, r.lostGrace = time.Hour, time.Hour, 50*time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.runOnce(ctx) }()
+	defer func() { cancel(); <-done }()
+	for deadline := time.Now().Add(10 * time.Second); r.Runtime.Endpoint() == nil; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("never advertised")
+		}
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := cloud.requests(); n != 1 {
+		t.Fatalf("asked AO Cloud %d times after a connection came back", n)
+	}
+}
+
 func TestConnectorHealthIgnoresWhatAWorkingTunnelPrints(t *testing.T) {
 	start := time.Now()
 	h := newConnectorHealth(start)

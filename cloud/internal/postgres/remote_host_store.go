@@ -109,9 +109,10 @@ func (s *Store) UpdateRemoteHostAddress(ctx context.Context, userID, hostID, add
 func (s *Store) GetRemoteHostTunnel(ctx context.Context, hostID string) (domain.RemoteHostTunnel, bool, error) {
 	var t domain.RemoteHostTunnel
 	err := s.withService(ctx, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `SELECT host_id, tunnel_id, hostname, encrypted_run_token, run_token_nonce, updated_at, last_seen_at
+		return tx.QueryRow(ctx, `SELECT host_id, tunnel_id, hostname, encrypted_run_token, run_token_nonce, updated_at, last_seen_at,
+				released_at IS NOT NULL
 			FROM ao_remote_host_tunnels WHERE host_id = $1`, hostID).
-			Scan(&t.HostID, &t.TunnelID, &t.Hostname, &t.EncryptedRunToken, &t.RunTokenNonce, &t.UpdatedAt, &t.LastSeenAt)
+			Scan(&t.HostID, &t.TunnelID, &t.Hostname, &t.EncryptedRunToken, &t.RunTokenNonce, &t.UpdatedAt, &t.LastSeenAt, &t.Released)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RemoteHostTunnel{}, false, nil
@@ -126,7 +127,8 @@ func (s *Store) SaveRemoteHostTunnel(ctx context.Context, t domain.RemoteHostTun
 			VALUES ($1, $2, $3, $4, $5)
 			ON CONFLICT (host_id) DO UPDATE SET tunnel_id = EXCLUDED.tunnel_id,
 			hostname = EXCLUDED.hostname, encrypted_run_token = EXCLUDED.encrypted_run_token,
-			run_token_nonce = EXCLUDED.run_token_nonce, updated_at = now(), last_seen_at = now()`,
+			run_token_nonce = EXCLUDED.run_token_nonce, updated_at = now(), last_seen_at = now(),
+			released_at = NULL`,
 			t.HostID, t.TunnelID, t.Hostname, t.EncryptedRunToken, t.RunTokenNonce)
 		return err
 	})
@@ -135,6 +137,17 @@ func (s *Store) SaveRemoteHostTunnel(ctx context.Context, t domain.RemoteHostTun
 func (s *Store) TouchRemoteHostTunnel(ctx context.Context, hostID string, seenAt time.Time) error {
 	return s.withService(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET last_seen_at = $2 WHERE host_id = $1`, hostID, seenAt)
+		return err
+	})
+}
+
+// ReleaseRemoteHostTunnel records that tunnelID was deleted while its host was
+// offline, only while the row still names it: a host that got a new tunnel in
+// the meantime keeps it.
+func (s *Store) ReleaseRemoteHostTunnel(ctx context.Context, hostID, tunnelID string) error {
+	return s.withService(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET released_at = now()
+			WHERE host_id = $1 AND tunnel_id = $2 AND released_at IS NULL`, hostID, tunnelID)
 		return err
 	})
 }
@@ -149,12 +162,13 @@ func (s *Store) DeleteRemoteHostTunnel(ctx context.Context, hostID, tunnelID str
 }
 
 // ListRemoteHostTunnelSweepCandidates returns tunnels no account registers any
-// more, and tunnels whose machine has not fetched its token since cutoff.
+// more, and tunnels whose machine has not fetched its token since cutoff,
+// released or not.
 func (s *Store) ListRemoteHostTunnelSweepCandidates(ctx context.Context, cutoff time.Time) ([]domain.RemoteHostTunnelCandidate, error) {
 	items := []domain.RemoteHostTunnelCandidate{}
 	err := s.withService(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT t.host_id, t.tunnel_id, t.hostname, t.last_seen_at,
-				EXISTS (SELECT 1 FROM ao_remote_hosts h WHERE h.host_id = t.host_id)
+				EXISTS (SELECT 1 FROM ao_remote_hosts h WHERE h.host_id = t.host_id), t.released_at IS NOT NULL
 			FROM ao_remote_host_tunnels t
 			WHERE t.last_seen_at < $1
 				OR NOT EXISTS (SELECT 1 FROM ao_remote_hosts h WHERE h.host_id = t.host_id)
@@ -165,7 +179,7 @@ func (s *Store) ListRemoteHostTunnelSweepCandidates(ctx context.Context, cutoff 
 		defer rows.Close()
 		for rows.Next() {
 			var c domain.RemoteHostTunnelCandidate
-			if err := rows.Scan(&c.HostID, &c.TunnelID, &c.Hostname, &c.LastSeenAt, &c.Registered); err != nil {
+			if err := rows.Scan(&c.HostID, &c.TunnelID, &c.Hostname, &c.LastSeenAt, &c.Registered, &c.Released); err != nil {
 				return err
 			}
 			items = append(items, c)

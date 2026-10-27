@@ -216,24 +216,42 @@ type ListedTunnel struct {
 // other tunnels, and other AO Clouds' host tunnels: the caller checks each
 // against its own records before deleting it.
 func (c *Cloudflare) NeverConnected(ctx context.Context, createdBefore time.Time) ([]ListedTunnel, error) {
+	return c.listHostTunnels(ctx, "inactive", url.Values{"existed_at": {createdBefore.UTC().Format(time.RFC3339)}}, nil)
+}
+
+// Disconnected lists the host tunnels whose last connector left before
+// downBefore, Cloudflare's "down". The caller checks them like NeverConnected's.
+func (c *Cloudflare) Disconnected(ctx context.Context, downBefore time.Time) ([]ListedTunnel, error) {
+	return c.listHostTunnels(ctx, "down", nil, func(inactiveAt *time.Time) bool {
+		return inactiveAt != nil && !inactiveAt.After(downBefore)
+	})
+}
+
+// listHostTunnels pages through the account's host tunnels in one state. keep,
+// when set, filters on when each tunnel's connections went.
+func (c *Cloudflare) listHostTunnels(ctx context.Context, status string, filter url.Values, keep func(*time.Time) bool) ([]ListedTunnel, error) {
 	const perPage = 100
 	var out []ListedTunnel
 	// The account holds at most 1,000 tunnels, so ten pages cover it.
 	for page := 1; page <= 10; page++ {
 		q := url.Values{
-			"is_deleted": {"false"}, "status": {"inactive"}, "include_prefix": {tunnelName("")},
-			"existed_at": {createdBefore.UTC().Format(time.RFC3339)},
-			"per_page":   {strconv.Itoa(perPage)}, "page": {strconv.Itoa(page)},
+			"is_deleted": {"false"}, "status": {status}, "include_prefix": {tunnelName("")},
+			"per_page": {strconv.Itoa(perPage)}, "page": {strconv.Itoa(page)},
+		}
+		for k, v := range filter {
+			q[k] = v
 		}
 		var found []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID              string     `json:"id"`
+			Name            string     `json:"name"`
+			ConnsInactiveAt *time.Time `json:"conns_inactive_at"`
 		}
 		if err := c.do(ctx, http.MethodGet, c.tunnelsPath()+"?"+q.Encode(), nil, &found); err != nil {
-			return out, fmt.Errorf("list unused tunnels: %w", err)
+			return out, fmt.Errorf("list %s tunnels: %w", status, err)
 		}
 		for _, t := range found {
-			if hostID, ok := strings.CutPrefix(t.Name, tunnelName("")); ok && t.ID != "" {
+			hostID, ok := strings.CutPrefix(t.Name, tunnelName(""))
+			if ok && t.ID != "" && (keep == nil || keep(t.ConnsInactiveAt)) {
 				out = append(out, ListedTunnel{ID: t.ID, HostID: hostID})
 			}
 		}
@@ -242,6 +260,22 @@ func (c *Cloudflare) NeverConnected(ctx context.Context, createdBefore time.Time
 		}
 	}
 	return out, nil
+}
+
+// Release deletes an idle tunnel and leaves its DNS record, so the address
+// survives until the machine gets a new tunnel under it. It reports false,
+// and deletes nothing, when a connector is serving the tunnel again: Cloudflare
+// refuses to delete a tunnel with live connections (code 1022).
+func (c *Cloudflare) Release(ctx context.Context, tunnelID string) (bool, error) {
+	err := c.do(ctx, http.MethodDelete, c.tunnelsPath()+"/"+url.PathEscape(tunnelID), nil, nil)
+	var apiErr *apiError
+	switch {
+	case err == nil || notFound(err):
+		return true, nil
+	case errors.As(err, &apiErr) && apiErr.Code == 1022:
+		return false, nil
+	}
+	return false, fmt.Errorf("release tunnel: %w", err)
 }
 
 // apiError is a failed Cloudflare call.

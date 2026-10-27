@@ -3,8 +3,10 @@
 -- ao_remote_host_tunnels holds each linked machine's Cloudflare tunnel: one per
 -- host, however many accounts registered it, so the machine keeps one fixed
 -- address. The run token is encrypted like the host tokens in ao_remote_hosts.
--- last_seen_at moves when the machine fetches its token; the sweep asks
--- Cloudflare before deleting a tunnel that has not fetched it for 90 days.
+-- released_at is set once the sweep deleted the tunnel of a machine that went
+-- offline; the DNS record stays, still naming tunnel_id, and the machine gets a
+-- new tunnel under it when it comes back. last_seen_at moves when the machine
+-- fetches its token; a machine not seen for 90 days loses the record too.
 CREATE TABLE ao_remote_host_tunnels (
     host_id TEXT PRIMARY KEY,
     tunnel_id TEXT NOT NULL CHECK (tunnel_id <> ''),
@@ -13,7 +15,8 @@ CREATE TABLE ao_remote_host_tunnels (
     run_token_nonce BYTEA NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    released_at TIMESTAMPTZ
 );
 
 ALTER TABLE ao_remote_host_tunnels ENABLE ROW LEVEL SECURITY;
