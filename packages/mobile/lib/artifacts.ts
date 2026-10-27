@@ -79,8 +79,16 @@ export function canCopyArtifact(artifact: Pick<SessionArtifact, "path" | "kind">
 	return kind === "html" || kind === "markdown" || kind === "text";
 }
 
+/**
+ * Whether a file keeps a version history the phone can show. The daemon reads
+ * versions back as text, so images and other media have none (as on desktop).
+ */
+export function canShowArtifactHistory(artifact: Pick<SessionArtifact, "path" | "kind">): boolean {
+	return canCopyArtifact(artifact);
+}
+
 /** One entry in an artifact's long-press or header menu. */
-export type ArtifactMenuAction = "open" | "copy" | "delete";
+export type ArtifactMenuAction = "open" | "copy" | "history" | "delete";
 
 /**
  * What an artifact's menu offers, in order. The viewer already shows the file,
@@ -90,6 +98,7 @@ export function artifactMenuActions(artifact: Pick<SessionArtifact, "path" | "ki
 	return [
 		...(inViewer ? [] : ["open" as const]),
 		...(canCopyArtifact(artifact) && artifact.size <= MAX_ARTIFACT_TEXT_BYTES ? ["copy" as const] : []),
+		...(canShowArtifactHistory(artifact) ? ["history" as const] : []),
 		"delete",
 	];
 }

@@ -102,13 +102,13 @@ describe("labels", () => {
 });
 
 describe("artifactMenuActions", () => {
-	it("offers Open, Copy for text, and Delete last", () => {
-		expect(artifactMenuActions({ path: "notes.md", kind: "markdown", size: 10 })).toEqual(["open", "copy", "delete"]);
+	it("offers Open, Copy and History for text, and Delete last", () => {
+		expect(artifactMenuActions({ path: "notes.md", kind: "markdown", size: 10 })).toEqual(["open", "copy", "history", "delete"]);
 		expect(artifactMenuActions({ path: "chart.png", kind: "file", size: 10 })).toEqual(["open", "delete"]);
 	});
 
-	it("leaves out Open in the viewer and Copy for text too large to load", () => {
-		expect(artifactMenuActions({ path: "notes.md", kind: "markdown", size: 10 }, { inViewer: true })).toEqual(["copy", "delete"]);
-		expect(artifactMenuActions({ path: "dump.txt", kind: "file", size: 5 << 20 })).toEqual(["open", "delete"]);
+	it("leaves out Open in the viewer and Copy for text too large to load, but keeps its History", () => {
+		expect(artifactMenuActions({ path: "notes.md", kind: "markdown", size: 10 }, { inViewer: true })).toEqual(["copy", "history", "delete"]);
+		expect(artifactMenuActions({ path: "dump.txt", kind: "file", size: 5 << 20 })).toEqual(["open", "history", "delete"]);
 	});
 });
