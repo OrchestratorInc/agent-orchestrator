@@ -644,6 +644,19 @@ function isTransportTimeout(error: unknown): boolean {
 	return error instanceof CloudCpError && (error.code === "TRANSPORT_TIMEOUT" || error.code === "WORKER_TIMEOUT");
 }
 
+// A worker that has just connected can fail its first catalog reads while it
+// still prepares the agent (a Coder workspace finishing its tool installs,
+// Claude Code upgrading). The control plane reports those as
+// WORKER_OPERATION_FAILED; they are asked again for about a minute, with a
+// growing wait, before the error shows.
+function isWorkerOperationFailed(error: unknown): boolean {
+	return error instanceof CloudCpError && error.code === "WORKER_OPERATION_FAILED";
+}
+const MODELS_FAILED_RETRIES = 6;
+function modelsRetryDelay(failures: number, error: unknown): number {
+	return isWorkerOperationFailed(error) ? Math.min(2_000 * 2 ** failures, 15_000) : Math.min(1_000 * 2 ** failures, 30_000);
+}
+
 export function CloudSessionChatSurface({
 	session,
 	headerActions,
@@ -817,7 +830,9 @@ export function CloudSessionChatSurface({
 		// read can outlast one request (it prepares the agent's tools first), so
 		// a timed-out request is asked again a few times before it shows.
 		retry: (failures, error) => liveRef.current.connected && !liveRef.current.terminated &&
-			(isWorkerUnavailable(error) || (isTransportTimeout(error) && failures < 3)),
+			(isWorkerUnavailable(error) || (isTransportTimeout(error) && failures < 3) ||
+				(isWorkerOperationFailed(error) && failures < MODELS_FAILED_RETRIES)),
+		retryDelay: modelsRetryDelay,
 		queryFn: async ({ signal }) => {
 			const selectionVersionAtFetch = catalogSyncRef.current.version;
 			const catalog = await client.listChatModels(cloud!.orgId, session.id, { signal });
