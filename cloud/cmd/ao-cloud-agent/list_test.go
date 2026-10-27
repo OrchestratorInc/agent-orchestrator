@@ -52,7 +52,7 @@ func TestListChildrenDecodesAFullPageOfArtifactFiles(t *testing.T) {
 	for index := range 100 {
 		child := session{ID: fmt.Sprintf("child-%03d", index), Kind: "worker", Status: "working", ArtifactCount: &count, ArtifactsUpdatedAt: &now, ArtifactFilesTruncated: true}
 		for file := range 10 {
-			child.ArtifactFiles = append(child.ArtifactFiles, artifactFile{Path: fmt.Sprintf("%s%03d.md", longest, file), Kind: "markdown", Size: 50 << 20, UpdatedAt: now})
+			child.ArtifactFiles = append(child.ArtifactFiles, artifactFile{Path: fmt.Sprintf("%s%03d.md", longest, file), Kind: "markdown", Size: 100 << 20, UpdatedAt: now})
 		}
 		page.Items = append(page.Items, child)
 	}
@@ -92,7 +92,7 @@ func TestListChildrenDecodesAFullPageOfEscapedArtifactPaths(t *testing.T) {
 	for index := range 100 {
 		child := session{ID: fmt.Sprintf("child-%03d", index), Kind: "worker", Status: "working", ArtifactCount: &count, ArtifactsUpdatedAt: &now, ArtifactFilesTruncated: true}
 		for file := range 2 {
-			child.ArtifactFiles = append(child.ArtifactFiles, artifactFile{Path: escaped(file), Kind: "markdown", Size: 50 << 20, UpdatedAt: now})
+			child.ArtifactFiles = append(child.ArtifactFiles, artifactFile{Path: escaped(file), Kind: "markdown", Size: 100 << 20, UpdatedAt: now})
 		}
 		page.Items = append(page.Items, child)
 	}

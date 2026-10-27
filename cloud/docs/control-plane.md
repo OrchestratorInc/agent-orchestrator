@@ -196,7 +196,7 @@ and no S3 client is built.
   upserts and deletes `ao_session_artifacts` rows, recomputes the session's
   `output_type`, queues the versions it replaced or deleted, and appends an
   `artifact.changed` event. A commit over 50 files or 500 MiB per session
-  (50 MiB per file) changes nothing, and a commit that changes nothing appends
+  (100 MiB per file) changes nothing, and a commit that changes nothing appends
   no event.
 - **Cleanup.** A sweeper in the control plane deletes, by version, every
   upload not committed within 24 hours and every replaced or deleted version

@@ -5943,7 +5943,7 @@ components:
           type: integer
           format: int64
           minimum: 0
-          maximum: 52428800
+          maximum: 104857600
         sha256:
           type: string
           pattern: "^[0-9a-f]{64}$"
@@ -5991,7 +5991,7 @@ components:
           type: integer
           format: int64
           minimum: 0
-          maximum: 52428800
+          maximum: 104857600
         sha256:
           type: string
           pattern: "^[0-9a-f]{64}$"
