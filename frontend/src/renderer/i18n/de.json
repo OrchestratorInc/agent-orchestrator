@@ -1012,6 +1012,7 @@
 	"mobile.remoteAccessOn": "Fernzugriff an",
 	"mobile.remoteAccessEnabling": "Fernzugriff wird aktiviert",
 	"mobile.remoteAccessEnablingHint": "Bis dahin nur in diesem Netzwerk nutzbar",
+	"mobile.remoteAccessEnablingHintTailscale": "Bis dahin von unterwegs nur über Tailscale erreichbar",
 	"mobile.hideQR": "App-Store-QR-Code ausblenden",
 	"mobile.ios": "iOS",
 	"mobile.iosHint": "Agent Orchestrator im App Store herunterladen",

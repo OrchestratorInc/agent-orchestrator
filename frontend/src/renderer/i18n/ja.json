@@ -1012,6 +1012,7 @@
 	"mobile.remoteAccessOn": "リモートアクセス有効",
 	"mobile.remoteAccessEnabling": "リモートアクセスを有効化中",
 	"mobile.remoteAccessEnablingHint": "それまではこのネットワーク内でのみ利用できます",
+	"mobile.remoteAccessEnablingHintTailscale": "それまでは外部からは Tailscale 経由でのみ接続できます",
 	"mobile.hideQR": "App Store の QR コードを隠す",
 	"mobile.ios": "iOS",
 	"mobile.iosHint": "App Store で Agent Orchestrator を入手",

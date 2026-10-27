@@ -651,10 +651,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 								? t("mobile.remoteAccessOn", "Remote access on")
 								: t("mobile.remoteAccessEnabling", "Enabling remote access")}
 						</p>
-						{/* Until the tunnel is up the code carries only nearby addresses. */}
+						{/* Until the tunnel is up the code carries no public address. A
+						    tailnet address still reaches this machine from elsewhere once
+						    both devices are on the tailnet, so only without one is the code
+						    limited to this network. */}
 						{!remoteAccessOn && (
 							<p className="text-caption leading-4">
-								{t("mobile.remoteAccessEnablingHint", "Until then, works on this network only")}
+								{viaTailscale
+									? t("mobile.remoteAccessEnablingHintTailscale", "Until then, reachable from elsewhere only over Tailscale")
+									: t("mobile.remoteAccessEnablingHint", "Until then, works on this network only")}
 							</p>
 						)}
 					</div>

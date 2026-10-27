@@ -1012,6 +1012,7 @@
 	"mobile.remoteAccessOn": "远程访问已开启",
 	"mobile.remoteAccessEnabling": "正在开启远程访问",
 	"mobile.remoteAccessEnablingHint": "在此之前，仅限当前网络使用",
+	"mobile.remoteAccessEnablingHintTailscale": "在此之前，仅能通过 Tailscale 从外部访问",
 	"mobile.hideQR": "隐藏 App Store 二维码",
 	"mobile.ios": "iOS",
 	"mobile.iosHint": "在 App Store 获取 Agent Orchestrator",

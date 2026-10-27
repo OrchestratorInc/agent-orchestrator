@@ -668,6 +668,25 @@ test("says remote access is enabling while the tunnel starts", async () => {
 	expect(screen.queryByTestId("mobile-local-only")).not.toBeInTheDocument();
 });
 
+// Tailscale reaches this machine from another network once both devices are
+// on the tailnet, so a code carrying one must not be called "this network only".
+test("keeps Tailscale as the remote path while the public tunnel is missing", async () => {
+	mobileStatus.endpoints = [
+		{ kind: "lan", host: "192.168.88.7", port: 3011, secure: false },
+		{ kind: "tailscale", host: "100.72.46.7", port: 3011, secure: false },
+	];
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	const note = screen.getByTestId("mobile-remote-access-starting");
+	expect(note).toHaveTextContent("Enabling remote access");
+	expect(note).toHaveTextContent(/only over Tailscale/);
+	expect(note).not.toHaveTextContent(/this network only/i);
+});
+
 // The note under the code comes and goes with the tunnel, but the code itself
 // must stay the same element: a remount would drop PairingQr's crossfade and
 // pop the next code in (or the last one out) with no transition.

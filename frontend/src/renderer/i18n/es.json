@@ -1021,6 +1021,7 @@
 	"mobile.remoteAccessOn": "Acceso remoto activado",
 	"mobile.remoteAccessEnabling": "Activando el acceso remoto",
 	"mobile.remoteAccessEnablingHint": "Hasta entonces, solo funciona en esta red",
+	"mobile.remoteAccessEnablingHintTailscale": "Hasta entonces, desde fuera solo es accesible por Tailscale",
 	"mobile.hideQR": "Ocultar código QR del App Store",
 	"mobile.ios": "iOS",
 	"mobile.iosHint": "Obtén Agent Orchestrator en el App Store",
