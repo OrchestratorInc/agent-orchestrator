@@ -1,0 +1,31 @@
+name: Codex recovery validation
+
+on:
+  push:
+    branches: [ao/investigate-https-github/codex-managed-recovery]
+
+permissions:
+  contents: read
+
+jobs:
+  regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Format changed Go sources in Actions
+        run: git diff --name-only origin/main...HEAD -- '*.go' | xargs -r gofmt -w
+      - name: Codex recovery regressions
+        working-directory: backend
+        run: go test -count=1 -run '^TestCodex(UpdateRefusesInstallationChangedBeforeExecution|UnknownInstallationIsManualOnly|FailedUpdaterInvalidatesEffectiveProvider)$' -v ./internal/service/systeminstall
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codex-recovery-sources
+          path: backend/internal/service/systeminstall/codex_recovery_test.go
