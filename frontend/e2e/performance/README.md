@@ -53,6 +53,48 @@ The source hash is **not** a whole-bundle hash. Changing HEAD or a listed source
 file during capture fails the run. Record launch flags, cache/GC/warm-up policy,
 and any local instrumentation diff alongside each real experiment too.
 
+## Compare before and after
+
+Save at least three runs per revision (same machine, browser, viewport, launch
+flags and cache/warm-up policy). From `frontend/`, for example:
+
+```sh
+AO_PERF_BENCH=1 AO_E2E_PORT=5199 AO_PERF_LABEL=before \
+  AO_PERF_DIR="$HOME/.ao/dev/chat-perf/before" NODE_OPTIONS=--max-old-space-size=1536 \
+  npm run test:e2e -- --grep 'largeTurn' --workers=1 --retries=0 --repeat-each=3
+# Apply your rendering change, then repeat with label/directory changed to after.
+node e2e/performance/compare-results.mjs \
+  "$HOME/.ao/dev/chat-perf/before" "$HOME/.ao/dev/chat-perf/after"
+```
+
+Use fresh directories for each comparison. The command reads top-level saved
+measurement JSON files; disclosure-check records are ignored. It prints median
+visibility, longest/total long-task time, long-task count, React render work and
+heap, their percentage changes (negative is better), and visibility sample ranges.
+It does not run the app, install packages, modify results or read chat data.
+
+- **HELPED IN THESE SAMPLES:** visibility median decreased by more than 5%, with
+  no supporting metric increasing by more than 5% (zero-to-positive is worse).
+- **REGRESSION OBSERVED:** at least one metric worsened beyond that rule.
+- **NO CLEAR IMPROVEMENT:** enough complete samples, but neither rule applies.
+- **INCONCLUSIVE:** fewer than three samples on either side or missing metrics.
+
+The 5% rule is a reporting convention, not a measured noise floor or statistical
+significance test. Inspect the ranges and repeat on a quiet host. Environment,
+fixture/compact flags and measurement scope must match; mixed revisions within a
+side, copied duplicate samples, dirty or diagnostic captures are rejected. Source
+revisions may differ between before and after. Launch flags/cache policy and host
+load are not fully captured: keep them matched manually. A valid report exits 0
+regardless of verdict; invalid inputs exit 1. This is not a CI performance gate or
+proof of real-chat targets. React render work is not commit wall time; heap is not
+GC-normalized.
+
+Dependency-free comparator tests:
+
+```sh
+node --test --test-concurrency=1 e2e/performance/compare-results.node-test.mjs
+```
+
 ## Stage capture recipe for an owned lab
 
 `measureChatOpen` is test-only. The application never installs probes. Its
