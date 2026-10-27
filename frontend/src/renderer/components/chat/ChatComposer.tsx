@@ -48,7 +48,7 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { ArrowUp, CornerUpRight, Loader2, Paperclip, Play, Plus, Square } from "lucide-react";
 import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
 import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
@@ -75,7 +75,6 @@ import {
 	MAX_ATTACHMENTS,
 	type FileAttachmentPayload,
 } from "../../hooks/useFileAttachments";
-import { File } from "lucide-react";
 import type { ChatSkill, ChatSteerOutcome } from "../../types/conversation";
 import {
 	acknowledgeChatComposerMutation,
@@ -105,6 +104,8 @@ import {
 	type ChatDraftRetainedAttachment,
 	type DraftClearResult,
 } from "../../lib/chat-drafts";
+import { AttachmentFileCard, AttachmentList, AttachmentPendingTile, AttachmentTile } from "./AttachmentTile";
+import { ChatImage } from "./ChatImage";
 import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideImages, removeInlineImagePath } from "./messageAttachments";
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
@@ -1899,74 +1900,39 @@ export const ChatComposer = memo(function ChatComposer({
 					</div>
 				) : null}
 				{staged || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
-					<div className="flex flex-wrap items-center gap-1.5" data-testid="composer-attachments-and-annotations">
+					<div className="-ml-0.5 flex flex-wrap items-center gap-2 pb-0.5 pl-0.5 pr-1.5 pt-1.5" data-testid="composer-attachments-and-annotations">
 						{staged || pendingAttachments.length > 0 ? (
-							<ul className="contents" aria-label="Attached files">
-								{stripAttachments.map(({ file, path, preview }) => {
-									return (
-									<li
+							<AttachmentList ariaLabel="Attached files" className="contents">
+								{stripAttachments.map(({ file, path, preview }) => (
+									<AttachmentTile
 										key={file.id}
-										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1"
-									>
-										{preview ? (
-											<img src={preview} alt="" className="size-6 rounded-sm object-cover" />
-										) : (
-											<div className="flex size-6 items-center justify-center rounded-sm bg-surface">
-												<File aria-hidden="true" className="size-3.5 text-muted-foreground" />
-											</div>
-										)}
-										<span
-											className="max-w-[120px] truncate text-xs text-muted-foreground"
-											title={file.name}
-										>
-											{file.name}
-										</span>
-										<button
-											type="button"
-											onMouseDown={(event) => {
-												if (event.button === 0) event.preventDefault();
-											}}
-											onClick={() => {
+										removeLabel={`Remove ${file.name}`}
+										removeDisabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
+										onRemove={() => {
 											if (submitInFlight.current) return;
 											if (path) {
-											editor.current?.removeImage(path);
-											removeImageFromSavedDraft(path);
-										}
+												editor.current?.removeImage(path);
+												removeImageFromSavedDraft(path);
+											}
 											if (visibleRetainedAttachments.some((attachment) => attachment.id === file.id)) {
 												const next = retainedAttachments.filter((attachment) => attachment.id !== file.id);
 												setRetainedAttachments(next);
 												onQueuedRetainedAttachmentsChange?.(next);
 											} else fileAttachments.remove(file.id);
 											editor.current?.focus();
-											}}
-											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
-											aria-label={`Remove ${file.name}`}
-											className="text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-										>
-											<X aria-hidden="true" className="size-3" />
-										</button>
-									</li>
-									);
-								})}
-								{pendingAttachments.map((file) => (
-									<li
-										key={file.id}
-										role="status"
-										aria-label={`Attaching ${file.name}`}
-										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1 motion-safe:animate-pulse"
+										}}
 									>
-										<div aria-hidden="true" className="size-6 rounded-sm bg-surface" />
-										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs">
-											<span className="invisible">{file.name}</span>
-											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
-										</span>
-										<span aria-hidden="true" className="size-3 rounded-sm bg-surface" />
-									</li>
+										{preview ? <ChatImage tile src={preview} alt={file.name} /> : <AttachmentFileCard name={file.name} />}
+									</AttachmentTile>
 								))}
-							</ul>
+								{pendingAttachments.map((file) => (
+									<AttachmentPendingTile key={file.id} name={file.name} previewUrl={file.previewUrl} />
+								))}
+							</AttachmentList>
 						) : null}
 						{contextReferences.length > 0 ? (
 							<ChatAnnotationSummary
+								tile
 								annotations={contextReferences}
 								onSelect={onSelectAnnotation}
 								disabled={controlsDisabled || draftMutationPending}

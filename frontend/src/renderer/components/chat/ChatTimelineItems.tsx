@@ -85,6 +85,7 @@ import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
 import { ConversationBranchNavigator } from "./ConversationBranchNavigator";
+import { AttachmentFileCard, AttachmentList, AttachmentTile } from "./AttachmentTile";
 import { ConversationContentItems } from "./ConversationContentItems";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
@@ -694,28 +695,21 @@ function StagedAttachmentItems({
 	if (paths.length === 0) return null;
 	const images = paths.filter((path) => IMAGE_ATTACHMENT_PATH.test(path));
 	return (
-		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-2", className)}>
-			{paths.map((path) => {
-				const name = attachmentName(path);
-				return IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
-					<li key={path} className="max-w-full">
+		<AttachmentList ariaLabel={ariaLabel} className={className}>
+			{paths.map((path) => (
+				<AttachmentTile key={path}>
+					{IMAGE_ATTACHMENT_PATH.test(path) && apiBaseUrl !== null ? (
 						<ChatImage
+							tile
 							src={attachmentURL(apiBaseUrl, sessionId, path)}
 							alt={t("chat.image.numbered", { index: images.indexOf(path) + 1 })}
 						/>
-					</li>
-				) : (
-					<li
-						key={path}
-						title={path}
-						className="flex max-w-full items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-muted-foreground"
-					>
-						<FileIcon aria-hidden="true" className="size-3.5 shrink-0" />
-						<span className="truncate">{name}</span>
-					</li>
-				);
-			})}
-		</ul>
+					) : (
+						<AttachmentFileCard name={attachmentName(path)} title={path} />
+					)}
+				</AttachmentTile>
+			))}
+		</AttachmentList>
 	);
 }
 
@@ -914,6 +908,15 @@ export function HumanMessage({
 					}}
 				/>
 			) : (
+				<>
+					<StagedAttachmentItems
+						paths={attachments}
+						sessionId={sessionId}
+						apiBaseUrl={apiBaseUrl}
+						ariaLabel="Attached files"
+						className={cn("justify-end", animateIn && "chat-human-message-enter")}
+					/>
+					{body || excerptReferences.length > 0 ? (
 				<div
 					/* Themes draw sent and queued differently; light theme needs to tell them
 					   apart in CSS because it paints an enclosure only around a sent one. */
@@ -944,14 +947,9 @@ export function HumanMessage({
 							/>
 						</p>
 					) : null}
-					<StagedAttachmentItems
-						paths={attachments}
-						sessionId={sessionId}
-						apiBaseUrl={apiBaseUrl}
-						ariaLabel="Attached files"
-						className={cn(body && "mt-2")}
-					/>
 				</div>
+					) : null}
+				</>
 			)}
 			{editing ? null : (
 				<div className="mt-1 flex h-7 items-center gap-1">
@@ -2852,33 +2850,35 @@ export function SteerMessage({
 					{automationBody}
 				</AutomationMessageFrame>
 			) : (
-				<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
-					{body ? (
-						<p>
-							<ProseWithInlineImages
-								text={body}
-								attachments={attachments}
-								sessionId={sessionId}
-								apiBaseUrl={apiBaseUrl}
-								renderText={(text) => text}
-							/>
-						</p>
-					) : null}
+				<>
 					<StagedAttachmentItems
 						paths={attachments}
 						sessionId={sessionId}
 						apiBaseUrl={apiBaseUrl}
 						ariaLabel="Steered attachments"
-						className={cn(body && "mt-2")}
+						className="justify-end"
 					/>
 					<ConversationContentItems
 						content={remainingContent}
 						ariaLabel={attachments.length > 0 ? "Steered content" : "Steered attachments"}
 						imageLabel="Image"
 						imageAlt={(position) => `Steered attachment ${position}`}
-						className={cn((body || attachments.length > 0) && "mt-2")}
+						className="justify-end"
 					/>
-				</div>
+					{body ? (
+						<div className="break-words whitespace-pre-wrap text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground">
+							<p>
+								<ProseWithInlineImages
+									text={body}
+									attachments={attachments}
+									sessionId={sessionId}
+									apiBaseUrl={apiBaseUrl}
+									renderText={(text) => text}
+								/>
+							</p>
+						</div>
+					) : null}
+				</>
 			)}
 			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />

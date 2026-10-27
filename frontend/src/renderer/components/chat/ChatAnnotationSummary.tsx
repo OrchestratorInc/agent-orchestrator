@@ -5,6 +5,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { ATTACHMENT_CARD, ATTACHMENT_REMOVE_BUTTON, AttachmentCardBody } from "./AttachmentTile";
 
 export interface ChatAnnotationSummaryItem {
 	kind?: "chat" | "file";
@@ -24,6 +25,8 @@ interface ChatAnnotationSummaryProps {
 	onRemoveAll?: () => void;
 	disabled?: boolean;
 	className?: string;
+	/** A 40px card that sits in the attachment row beside the attachment tiles. */
+	tile?: boolean;
 }
 
 /** Compact, keyboard-accessible annotation count with an interactive list. */
@@ -34,6 +37,7 @@ export function ChatAnnotationSummary({
 	onRemoveAll,
 	disabled = false,
 	className,
+	tile = false,
 }: ChatAnnotationSummaryProps) {
 	const [open, setOpen] = useState(false);
 	annotations = [...annotations].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -54,8 +58,39 @@ export function ChatAnnotationSummary({
 	const label = `${annotations.length} annotation${annotations.length === 1 ? "" : "s"}`;
 	const removeClass = "absolute right-1 top-1/2 -translate-y-1/2 inline-flex size-5 items-center justify-center text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 
+	const removeAll = onRemoveAll ? (
+		<button
+			type="button"
+			disabled={disabled}
+			aria-label={t("chat.removeAllAnnotations")}
+			className={tile ? ATTACHMENT_REMOVE_BUTTON : removeClass}
+			onClick={() => {
+				setOpen(false);
+				onRemoveAll();
+			}}
+		>
+			<X aria-hidden="true" className="size-3" />
+		</button>
+	) : null;
+
 	return (
 		<Popover open={open} onOpenChange={setOpen}>
+			{tile ? (
+				<div className={cn("group/attachment relative w-40 max-w-full shrink-0", className)}>
+					<PopoverTrigger asChild>
+						<button
+							ref={triggerRef}
+							type="button"
+							disabled={disabled}
+							aria-label={label}
+							className={cn(ATTACHMENT_CARD, "select-none transition-colors active:transform-none! focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50", !disabled && "hover:bg-interactive-active")}
+						>
+							<AttachmentCardBody icon={<MessageSquareQuote aria-hidden="true" className="size-3.5" />} title={label} subtitle={annotations[0]?.text} />
+						</button>
+					</PopoverTrigger>
+					{removeAll}
+				</div>
+			) : (
 			<div className={cn("relative inline-flex w-fit max-w-full min-w-0 self-start rounded bg-interactive-hover transition-colors", !disabled && "hover:bg-interactive-active", className)}>
 				<PopoverTrigger asChild>
 					<button
@@ -69,21 +104,9 @@ export function ChatAnnotationSummary({
 						<span className="truncate">{label}</span>
 					</button>
 				</PopoverTrigger>
-				{onRemoveAll ? (
-					<button
-						type="button"
-						disabled={disabled}
-						aria-label={t("chat.removeAllAnnotations")}
-						className={removeClass}
-						onClick={() => {
-							setOpen(false);
-							onRemoveAll();
-						}}
-					>
-						<X aria-hidden="true" className="size-3" />
-					</button>
-				) : null}
+				{removeAll}
 			</div>
+			)}
 			<PopoverContent
 				onClick={(event) => event.stopPropagation()}
 				align="start"
