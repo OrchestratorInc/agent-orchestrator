@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
@@ -95,6 +96,7 @@ type Plan struct {
 	prepareWorkspace func(context.Context, string) error
 	launcher         string
 	launcherArgs     []string
+	hiddenTerminal   bool
 }
 
 // TerminalOpener opens the daemon-trusted terminal used for a native
@@ -141,6 +143,13 @@ func New(executables ExecutableFinder, terminals TerminalOpener) *Service {
 // NewWithAgentResolver creates a service that uses AO's adapter-aware binary
 // resolver as the authoritative validation and discovery boundary.
 func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolver, terminals TerminalOpener, dataDir string) *Service {
+	// Restore AO-managed provider variables before adapter authentication probes
+	// and model discovery run after a daemon restart.
+	if keys, err := providerkeys.Load(dataDir); err == nil {
+		for name, value := range keys {
+			_ = os.Setenv(name, value)
+		}
+	}
 	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), commandContext: process.CommandContext, loginTimeout: loginLifetime}
 }
 
@@ -211,6 +220,10 @@ func (s *Service) reserveLogin(ctx context.Context, agentID string) (func(), err
 		if op.snapshot.AgentID != agentID {
 			continue
 		}
+		if op.cleanupFailed {
+			s.mu.Unlock()
+			return nil, apierr.Conflict("AGENT_AUTH_CLEANUP_PENDING", "The previous native login terminal could not be stopped. Restart AO before retrying.", nil)
+		}
 		select {
 		case <-op.done:
 		default:
@@ -257,6 +270,11 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 		return StartResult{}, err
 	}
 	defer release()
+	return s.startReserved(ctx, plan)
+}
+
+// startReserved launches only after reserveLogin excludes other login flows.
+func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, error) {
 	plan = s.resolve(ctx, plan)
 	if !plan.Available {
 		return StartResult{}, apierr.Invalid("AGENT_AUTH_UNAVAILABLE", plan.Reason, nil)
@@ -281,6 +299,7 @@ func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 	input := shellterm.OpenCommandTerminalInput{
 		Owner:                          "agentauth:" + plan.AgentID,
 		Argv:                           argv,
+		HideFromList:                   plan.hiddenTerminal,
 		Title:                          plan.title,
 		InitialInput:                   plan.initialInput,
 		InitialInputReadyStates:        plan.initialInputReadyStates,

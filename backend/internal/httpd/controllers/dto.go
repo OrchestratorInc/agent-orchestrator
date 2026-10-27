@@ -158,6 +158,13 @@ type StartAgentUILoginRequest struct {
 	Secret string `json:"secret,omitempty"`
 }
 
+// AgentLoginActionRequest selects a fixed navigation action, or a digit 1-9
+// for a recognized numbered native login menu. It never carries terminal
+// bytes or credentials.
+type AgentLoginActionRequest struct {
+	Action string `json:"action" enum:"previous,next,select,1,2,3,4,5,6,7,8,9"`
+}
+
 // SubmitAgentUILoginCodeRequest supplies a one-time native fallback code.
 type SubmitAgentUILoginCodeRequest struct {
 	Code string `json:"code"`

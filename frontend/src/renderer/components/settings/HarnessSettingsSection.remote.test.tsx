@@ -112,6 +112,8 @@ it("routes installer, login, readiness, terminal, and cleanup to the selected ho
 	await userEvent.click(screen.getByRole("button", { name: "All harnesses" }));
 	const claude = await openHarness("claude-code");
 	await userEvent.click(await within(claude).findByRole("button", { name: "Login" }));
+	expect(await within(claude).findByRole("heading", { name: /Sign in to/ })).toBeInTheDocument();
+	await userEvent.click(within(claude).getByRole("button", { name: "Open terminal login" }));
 	await within(claude).findByTestId("remote-auth-terminal");
 	expect(terminal.target).toMatchObject({ kind: "shell", handleId: "auth-a", generation: "2026-09-29T00:00:00Z" });
 	expect(terminal.createMux).toBeTypeOf("function");
@@ -171,6 +173,8 @@ it("closes a remote login terminal returned after switching away from its host",
 	await userEvent.click(screen.getByRole("menuitem", { name: "Box A" }));
 	const claude = await openHarness("claude-code");
 	await userEvent.click(await within(claude).findByRole("button", { name: "Login" }));
+	expect(await within(claude).findByRole("heading", { name: /Sign in to/ })).toBeInTheDocument();
+	await userEvent.click(within(claude).getByRole("button", { name: "Open terminal login" }));
 	await waitFor(() => expect(calls).toContain("POST /token-a/api/v1/agents/claude-code/auth"));
 	// Host selection lives on the harness list.
 	await userEvent.click(screen.getByRole("button", { name: "All harnesses" }));
