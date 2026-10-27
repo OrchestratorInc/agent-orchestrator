@@ -141,6 +141,8 @@ type AppState = {
 	linkHealth: LinkHealth;
 	/** The phone's OS reports no network at all. Independent of any machine. */
 	phoneOffline: boolean;
+	/** The phone's own network, for classifying a machine's link (see HostScope). */
+	phoneNetwork: PhoneNetwork;
 	/**
 	 * When the last successful poll landed, in epoch milliseconds. 0 if none has.
 	 *
@@ -191,6 +193,7 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 		if (isSelected) return app;
 		const config = host?.config ?? null;
 		const projects = host?.projects ?? [];
+		const linkHealth = classifyLink(host?.linkTracker ?? EMPTY_LINK_TRACKER, app.phoneNetwork, Date.now());
 		return {
 			...app,
 			config,
@@ -211,11 +214,10 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 			loading: host?.loading ?? false,
 			error: host?.error ?? null,
 			errorStatus: host?.errorStatus ?? null,
-			// Other machines are polled without a link tracker, so only the phone's
-			// own network can soften their failure.
-			unreachable: !app.phoneOffline && isDesktopUnreachable({ connection: host?.connection ?? "closed", error: host?.error ?? null, errorStatus: host?.errorStatus ?? null }),
-			linkHealth: app.phoneOffline ? "phone-offline"
-				: isDesktopUnreachable({ connection: host?.connection ?? "closed", error: host?.error ?? null, errorStatus: host?.errorStatus ?? null }) ? "unreachable" : "ok",
+			// Classified from this machine's own poll and race outcomes, so its
+			// chat and project views get the same grace period as the selected one.
+			unreachable: linkHealth === "unreachable" && isDesktopUnreachable({ connection: host?.connection ?? "closed", error: host?.error ?? null, errorStatus: host?.errorStatus ?? null }),
+			linkHealth,
 			getLastSyncAt: () => host?.lastSyncAt ?? 0,
 			refresh: () => app.refreshHost(hostId),
 			spawn: (opts) => app.spawn({ ...opts, hostId }),
@@ -327,7 +329,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const linkTrackerRef = useRef(EMPTY_LINK_TRACKER);
 	const phoneNetworkRef = useRef<PhoneNetwork & { type?: string }>(UNKNOWN_PHONE_NETWORK);
 	const [linkHealth, setLinkHealth] = useState<LinkHealth>("ok");
-	const [phoneOffline, setPhoneOffline] = useState(false);
+	const [phoneNetwork, setPhoneNetwork] = useState<PhoneNetwork>(UNKNOWN_PHONE_NETWORK);
+	const phoneOffline = isPhoneOffline(phoneNetwork);
 	const publishLink = useCallback(() => {
 		setLinkHealth(classifyLink(linkTrackerRef.current, phoneNetworkRef.current, Date.now()));
 	}, []);
@@ -890,7 +893,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			const next = { connected: state.isConnected, internet: state.isInternetReachable, type: state.type };
 			const previous = phoneNetworkRef.current;
 			phoneNetworkRef.current = next;
-			setPhoneOffline(isPhoneOffline(next));
+			setPhoneNetwork((current) => current.connected === next.connected && current.internet === next.internet
+				? current : { connected: next.connected, internet: next.internet });
 			publishLink();
 			if (!networkChangeNeedsRace(previous, next) || !pollActiveRef.current) return;
 			// reloadConfig keeps the same config object when the winning endpoint
@@ -961,8 +965,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			stats,
 			notificationsUnread,
 			lastSyncAt: lastSyncAtRef.current,
+			// Travels with the snapshot when this machine stops being the selected one.
+			linkTracker: linkTrackerRef.current,
 		};
-	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, projects, projectsKnown, visibleSessions, visibleArchive, visibleOrchestrators, orchestratorId, stats, notificationsUnread]);
+		// linkHealth is listed so the tracker (a ref) is re-read when it changes.
+	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, projects, projectsKnown, visibleSessions, visibleArchive, visibleOrchestrators, orchestratorId, stats, notificationsUnread, linkHealth]);
 	// Published after commit, never during render: an interrupted or replayed
 	// render must not hand switchHost a snapshot that never reached the screen.
 	// A layout effect runs before any user event can call switchHost.
@@ -1146,6 +1153,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			unreachable: linkHealth === "unreachable" && isDesktopUnreachable({ connection, error, errorStatus }),
 			linkHealth,
 			phoneOffline,
+			phoneNetwork,
 			getLastSyncAt,
 			reloadConfig,
 			switchHost,
@@ -1191,6 +1199,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			errorStatus,
 			linkHealth,
 			phoneOffline,
+			phoneNetwork,
 			getLastSyncAt,
 			reloadConfig,
 			switchHost,

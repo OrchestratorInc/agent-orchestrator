@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
 	onNetwork: undefined as ((value: { isConnected?: boolean; isInternetReachable?: boolean; type?: string }) => void) | undefined,
 	resolve: vi.fn(), sessions: vi.fn(), notifications: vi.fn(), selected: "a",
 	endpoints: [] as unknown[],
+	paired: [] as unknown[], others: {} as Record<string, unknown>,
 }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => {} } }));
 vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
@@ -23,7 +24,7 @@ vi.mock("./race", () => ({ IncompatibleHostVersionError: class extends Error {} 
 vi.mock("./connectRuntime", () => ({ rejectedEndpointNeedsRace: () => false }));
 vi.mock("./hosts", () => ({
 	activeHost: async () => ({ id: state.selected, name: state.selected, endpoints: state.endpoints, token: "secret" }),
-	loadHosts: async () => [], sameHostConnections: () => true,
+	loadHosts: async () => state.paired, sameHostConnections: (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b),
 	setActiveHost: async (id: string) => { state.selected = id; },
 }));
 vi.mock("./account", () => ({ loadAccount: async () => null }));
@@ -31,11 +32,12 @@ vi.mock("./accountHosts", () => ({ syncAccountHosts: vi.fn(), cancelAccountHostS
 vi.mock("./installId", () => ({ primeInstallId: vi.fn() }));
 vi.mock("./telemetry/runtime", () => ({ mobileTelemetry: () => null, trackFeature: vi.fn() }));
 vi.mock("./chat/conversationEvents", () => ({ useConversationEventTransport: () => {} }));
-vi.mock("./otherHosts", () => ({ useOtherHosts: () => ({ snapshots: {}, refreshHost: vi.fn() }) }));
+vi.mock("./otherHosts", async (importOriginal) => ({ ...(await importOriginal<typeof import("./otherHosts")>()), useOtherHosts: () => ({ snapshots: state.others, refreshHost: vi.fn() }) }));
 
 import { UnreachableError } from "./connectionError";
 import { IncompatibleHostVersionError } from "./race";
-import { AppProvider, useApp } from "./store";
+import { AppProvider, HostScope, useApp } from "./store";
+import { EMPTY_LINK_TRACKER, recordPoll } from "./linkHealth";
 let current!: ReturnType<typeof useApp>;
 let renderer: ReactTestRenderer | undefined;
 function Harness() { current = useApp(); return null; }
@@ -54,7 +56,7 @@ function deferred() {
 async function mount() { await act(async () => { renderer = create(<AppProvider><Harness /></AppProvider>); }); }
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-	vi.useFakeTimers(); vi.clearAllMocks(); state.selected = "a"; state.endpoints = [];
+	vi.useFakeTimers(); vi.clearAllMocks(); state.selected = "a"; state.endpoints = []; state.paired = []; state.others = {};
 	state.resolve.mockImplementation(async () => ({ hostId: state.selected, host: `${state.selected}.test`, httpPort: "3011", muxPort: "3011", password: "secret" }));
 	state.sessions.mockResolvedValue(board("Fresh"));
 	state.notifications.mockResolvedValue({ notifications: [], unreadCount: 0 });
@@ -214,4 +216,24 @@ it("does not race for a better endpoint while the phone is offline", async () =>
 	expect(current.config).not.toBeNull();
 	expect(current.sessions[0].displayName).toBe("Fresh");
 	expect(current.linkHealth).toBe("phone-offline");
+});
+
+// Another paired machine's chat and project views go through HostScope. One
+// unanswered poll there must read as reconnecting, as it does for the selected
+// machine, not as "This machine is offline".
+it("gives another machine the same reconnecting grace period", async () => {
+	const hostB = { id: "b", name: "b", endpoints: [], token: "secret", lastConnected: 0 };
+	state.paired = [{ id: "a", name: "a", endpoints: [], token: "secret", lastConnected: 0 }, hostB];
+	const failedOnce = recordPoll(EMPTY_LINK_TRACKER, "no-answer", Date.now());
+	state.others = { b: {
+		hostId: "b", name: "b", appearance: {}, endpoints: [], config: null, connection: "closed", loading: false,
+		error: "Couldn't reach your machine.", errorStatus: null, projects: [], projectsKnown: false, sessions: [], archive: null,
+		orchestrators: [], orchestratorId: null, stats: {}, notificationsUnread: 0, lastSyncAt: 0, linkTracker: failedOnce,
+	} };
+	let scoped!: ReturnType<typeof useApp>;
+	function ScopedHarness() { scoped = useApp(); return null; }
+	await act(async () => { renderer = create(<AppProvider><HostScope hostId="b"><ScopedHarness /></HostScope></AppProvider>); });
+	expect(scoped.currentHostId).toBe("b");
+	expect(scoped.linkHealth).toBe("reconnecting");
+	expect(scoped.unreachable).toBe(false);
 });
