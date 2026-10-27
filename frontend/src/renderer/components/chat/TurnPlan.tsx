@@ -119,13 +119,9 @@ export const TurnPlan = memo(function TurnPlan({
 				<span className="min-w-0 flex-1 truncate text-sm text-muted-foreground" title={currentStep}>
 					{currentStep}
 				</span>
-				{/* Tabular so the count does not jitter the header as it climbs. */}
-				<span
-					className={cn(
-						"shrink-0 text-xs font-medium tabular-nums transition-colors duration-300 motion-reduce:transition-none",
-						allDone ? "text-success" : "text-muted-foreground",
-					)}
-				>
+				{/* Tabular so the count does not jitter the header as it climbs. The tick
+				    already says the plan is done, so the count stays neutral. */}
+				<span className="shrink-0 text-xs font-medium tabular-nums text-muted-foreground">
 					{done}/{total}
 				</span>
 				<ChevronDown
@@ -207,7 +203,9 @@ function PlanMark({ done }: { done: boolean }) {
 			<svg
 				viewBox="0 0 18 18"
 				className={cn(
-					"absolute size-[18px] text-success transition-[opacity,scale] duration-200 motion-reduce:transition-none",
+					// A finished plan is completed work, not an actionable success, so the
+					// tick takes the success hue at reduced strength rather than full ready green.
+					"absolute size-[18px] text-success/70 transition-[opacity,scale] duration-200 motion-reduce:transition-none",
 					done ? "scale-100 opacity-100" : "scale-75 opacity-0",
 				)}
 			>
