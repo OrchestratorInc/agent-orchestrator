@@ -63,7 +63,7 @@ describe("live activity window follow", () => {
 	});
 
 	/** The window with a step to focus, its geometry stated, and a way to report growth. */
-	function mountWindow() {
+	function mountWindow(scrollTop = 500) {
 		const callbacks: ResizeObserverCallback[] = [];
 		window.ResizeObserver = class {
 			constructor(callback: ResizeObserverCallback) { callbacks.push(callback); }
@@ -80,7 +80,7 @@ describe("live activity window follow", () => {
 		let height = 1000;
 		Object.defineProperty(viewport, "scrollHeight", { configurable: true, get: () => height });
 		Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 240 });
-		viewport.scrollTop = 500;
+		viewport.scrollTop = scrollTop;
 		const grow = (to: number) => {
 			height = to;
 			act(() => callbacks.forEach((callback) => callback([], {} as ResizeObserver)));
@@ -97,6 +97,22 @@ describe("live activity window follow", () => {
 	it("stops following once a step inside takes keyboard focus", () => {
 		const { viewport, step, grow } = mountWindow();
 		act(() => step.focus());
+		grow(1200);
+		expect(viewport.scrollTop).toBe(500);
+	});
+
+	it("follows again once the pointer leaves a window the reader clicked in while at the bottom", () => {
+		const { viewport, step, grow } = mountWindow(760);
+		fireEvent.pointerDown(step);
+		fireEvent.mouseLeave(viewport);
+		grow(1200);
+		expect(viewport.scrollTop).toBe(1200);
+	});
+
+	it("stays put after the pointer leaves a window the reader scrolled up in", () => {
+		const { viewport, step, grow } = mountWindow(500);
+		fireEvent.pointerDown(step);
+		fireEvent.mouseLeave(viewport);
 		grow(1200);
 		expect(viewport.scrollTop).toBe(500);
 	});

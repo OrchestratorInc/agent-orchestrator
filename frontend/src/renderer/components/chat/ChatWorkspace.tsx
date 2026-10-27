@@ -2607,6 +2607,8 @@ const READER_INTENT_HOLD_MS = 250;
  * still within `relatchBand` of the end, the follow resumes from where they are.
  */
 const RELATCH_AFTER_MS = 1800;
+/** A scroll this soon after the reader's own input counts as theirs. */
+const RELATCH_INTENT_MS = 400;
 /** How far above the end still counts as a pause rather than reading back. */
 const relatchBand = (node: HTMLElement) => Math.min(320, Math.round(node.clientHeight * 0.4));
 const CHAT_ESTIMATED_TURN_HEIGHT = 600;
@@ -3936,6 +3938,12 @@ export function Timeline({
 	// open something to read. Only the reader's own scrolling arms it, so streamed
 	// growth while unpinned (which moves nothing) never does.
 	const relatchTimer = useRef<number | undefined>(undefined);
+	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
+	// marker or a prompt moves the view without it, and must not be pulled back.
+	const readerIntentAt = useRef(0);
+	const noteReaderIntent = useCallback(() => {
+		readerIntentAt.current = performance.now();
+	}, []);
 	const liveTurnRef = useRef(false);
 	liveTurnRef.current = turn?.state === "running";
 	const clearRelatch = useCallback(() => {
@@ -3972,7 +3980,10 @@ export function Timeline({
 			// Ours: no change.
 		} else if (distance >= 64 || (movedUp && distance > 2)) {
 			if (pinnedRef.current) releaseFollow();
-			if (distance <= relatchBand(node)) scheduleRelatch();
+			// Armed by the reader's input, then kept alive by each further scroll (touch
+			// momentum scrolls after the finger lifts).
+			const reading = relatchTimer.current !== undefined || performance.now() - readerIntentAt.current < RELATCH_INTENT_MS;
+			if (reading && distance <= relatchBand(node)) scheduleRelatch();
 			else clearRelatch();
 		} else if (!pinnedRef.current && !movedUp) {
 			// The reader is already here: the follow layout this re-pin triggers must not
@@ -3993,13 +4004,17 @@ export function Timeline({
 		// concurrent stream commit cannot pull the reader back, and let the scroll
 		// itself decide: a wheel consumed by a nested scroller (a code block) never
 		// moves the log, so it must not unpin it.
-		if (event.deltaY < 0) holdScrollFollow(READER_INTENT_HOLD_MS);
+		if (event.deltaY < 0) {
+			noteReaderIntent();
+			holdScrollFollow(READER_INTENT_HOLD_MS);
+		}
 	}
 
 	function onViewportKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
 		const target = event.target as HTMLElement;
 		if (event.defaultPrevented || target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='menu'], [role='listbox'], [role='textbox']")) return;
 		if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)) {
+			noteReaderIntent();
 			holdScrollFollow(READER_INTENT_HOLD_MS);
 		}
 	}
@@ -4043,6 +4058,7 @@ export function Timeline({
 			onScroll();
 			return;
 		}
+		noteReaderIntent();
 		setScrollFromTrack(event.clientY);
 		drag.current = {
 			pointerId: event.pointerId,
@@ -4073,6 +4089,7 @@ export function Timeline({
 			return;
 		}
 		if (active.pointerId !== event.pointerId) return;
+		noteReaderIntent();
 		const travel = Math.max(1, track.clientHeight - scrollbar.height);
 		const maxScroll = Math.max(0, node.scrollHeight - node.clientHeight);
 		node.scrollTop = active.startScrollTop + ((event.clientY - active.startY) / travel) * maxScroll;
@@ -4152,7 +4169,10 @@ export function Timeline({
 				onScroll={onScroll}
 				onScrollEnd={endFlight}
 				onWheel={onViewportWheel}
-				onTouchMove={() => holdScrollFollow(READER_INTENT_HOLD_MS)}
+				onTouchMove={() => {
+					noteReaderIntent();
+					holdScrollFollow(READER_INTENT_HOLD_MS);
+				}}
 				onKeyDown={onViewportKeyDown}
 				onPointerDown={onViewportPointerDown}
 				className="chat-scroll-viewport cursor-chat-timeline h-full min-w-0 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"

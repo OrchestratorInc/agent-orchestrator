@@ -5,8 +5,9 @@
  * reads them, and left to grow they push everything else down the screen. Here they
  * scroll inside a fixed-height window that keeps the newest step in view, with older
  * steps fading out at the top edge. Scrolling up, clicking inside, or moving focus or
- * pressing a key inside takes over until the reader scrolls back to the bottom. When the turn finishes the window gives way
- * to "Worked for", which keeps the whole record.
+ * pressing a key inside takes over until the reader is back at the bottom: by scrolling
+ * there, or by leaving the window while already there. When the turn finishes the
+ * window gives way to "Worked for", which keeps the whole record.
  */
 
 import { useCallback, useLayoutEffect, useRef, type ReactNode } from "react";
@@ -49,6 +50,13 @@ export function LiveActivityWindow({ children }: { children: ReactNode }) {
 		following.current = false;
 		cancel();
 	};
+	// Done reading: the pointer or focus has left. A click that moved nothing fires no
+	// scroll event, so a reader already at the bottom would otherwise stay stranded.
+	const resumeIfAtEnd = () => {
+		const viewport = viewportRef.current;
+		if (!viewport) return;
+		if (viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 2) following.current = true;
+	};
 
 	return (
 		<div
@@ -62,6 +70,10 @@ export function LiveActivityWindow({ children }: { children: ReactNode }) {
 			// that opens or scrolls one, means the reader is working inside the window.
 			onFocus={takeOver}
 			onKeyDown={takeOver}
+			onMouseLeave={resumeIfAtEnd}
+			onBlur={(event) => {
+				if (!event.currentTarget.contains(event.relatedTarget)) resumeIfAtEnd();
+			}}
 			data-live-activity=""
 			className="edge-fade-viewport scrollbar-none max-h-60 min-w-0 overflow-y-auto"
 		>

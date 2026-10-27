@@ -569,7 +569,8 @@ export function TurnActions({
 	timestamp,
 	className,
 }: TurnActionsProps & { className?: string }) {
-	if (!retry && copyText === undefined && !onRollback) return null;
+	const showDuration = durationMs !== undefined && durationMs > 0;
+	if (!retry && copyText === undefined && !onRollback && !showDuration) return null;
 	const time = timestamp ? formatMessageTimestamp(timestamp) : "";
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
@@ -1140,7 +1141,9 @@ export function liveTaskLabel(activity: ConversationActivity): string {
 export function reconnectCopy(activity: ConversationActivity): { label: string; detail?: string } {
 	const summary = activity.summary.trim();
 	const text = activity.detail?.text?.trim() || undefined;
-	const match = /(\d+)\s*(?:\/|of)\s*(\d+)/.exec(summary);
+	// Only a summary that is about reconnecting carries the attempt count; a count
+	// elsewhere in some other error text is not one.
+	const match = /^\W*(?:re-?connect|retry)/i.test(summary) ? /(\d+)\s*(?:\/|of)\s*(\d+)/.exec(summary) : null;
 	if (!match) return { label: summary || "Reconnecting…", detail: text };
 	const rest = summary.slice(match.index + match[0].length).replace(/^[\s.:,;—–-]+/, "").trim();
 	return { label: `Reconnecting… ${match[1]}/${match[2]}`, detail: text ?? (rest || undefined) };

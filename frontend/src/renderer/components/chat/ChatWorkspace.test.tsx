@@ -2814,6 +2814,7 @@ describe("ChatWorkspace timeline", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
 		const log = screen.getByRole("log");
 		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		fireEvent.wheel(log, { deltaY: -150 });
 		log.scrollTop = 3200 - 150;
 		fireEvent.scroll(log);
 		expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
@@ -2821,6 +2822,19 @@ describe("ChatWorkspace timeline", () => {
 		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
 		expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
 		expect(log.scrollTop).toBeGreaterThanOrEqual(3200);
+	});
+
+	it("does not pull back a view that moved without the reader's own input", async () => {
+		render(<ChatWorkspace snapshot={chatFixture} />);
+		const log = screen.getByRole("log");
+		stubGeometry(log, { scrollHeight: 4000, clientHeight: 800, scrollTop: 3200 });
+		log.scrollTop = 3200 - 150;
+		fireEvent.scroll(log);
+		expect(await screen.findByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 2100)); });
+		expect(screen.getByRole("button", { name: "Jump to latest" })).toBeInTheDocument();
+		expect(log.scrollTop).toBe(3050);
 	});
 
 	it("stays put when the reader scrolled well above the end", async () => {
