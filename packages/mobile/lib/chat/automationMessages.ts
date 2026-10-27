@@ -560,3 +560,31 @@ export function reportBlocks(text: string): ReportBlock[] {
 	flush();
 	return blocks;
 }
+
+// Inline code first, so nothing inside a code span is touched; then images,
+// links, autolinks and the bare URLs ChatMarkdown would otherwise link.
+const SAFE_MARKDOWN = /(`[^`\n]*`)|!\[([^\]\n]*)\]\(([^)\s]+)\)|\[([^\]\n]+)\]\(([^)\s]+)\)|<(https?:\/\/[^\s>]+)>|(https?:\/\/[^\s<]+)/g;
+
+/**
+ * Markdown an agent or a reviewer wrote, made safe to hand to `ChatMarkdown`, as
+ * the desktop's `safeOrigin` does: a link stays a link only where `safeLink`
+ * allows, and then names its host when its label is something else; any other
+ * link keeps its words, a bare URL becomes code so it cannot be linked, and an
+ * image becomes its alt text so nothing loads from where the text points.
+ * Code fences are left as written.
+ */
+export function safeMarkdown(text: string): string {
+	// A fence runs to its closing fence, or to the end of the text when it has none.
+	return text.split(/(^ {0,3}(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n {0,3}(?:`{3,}|~{3,})[ \t]*(?=\n|(?![\s\S]))|(?![\s\S])))/m).map((part, index) => index % 2 === 1 ? part : part.replace(SAFE_MARKDOWN, (match, code: string | undefined, alt: string | undefined, _src, label: string | undefined, href: string | undefined, auto: string | undefined, bare: string | undefined) => {
+		if (code !== undefined) return match;
+		if (alt !== undefined) return alt;
+		if (label !== undefined && href !== undefined) {
+			const target = safeLink(href);
+			if (!target) return label;
+			return target.kind === "web" && label !== href ? `${match} (${target.host})` : match;
+		}
+		const url = auto ?? bare!;
+		if (safeLink(url.replace(/[.,;:!?'")\]]+$/, ""))) return match;
+		return url.includes("`") ? `\`\` ${url} \`\`` : `\`${url}\``;
+	})).join("");
+}

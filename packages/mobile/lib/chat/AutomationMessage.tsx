@@ -29,7 +29,7 @@ import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { font, prose, radius, space, type } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userMessageSurfaceStyle } from "./chatChrome";
-import { ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
+import { ChatMarkdown } from "./ChatMarkdown";
 import {
 	artifactEntry,
 	automationOf,
@@ -39,6 +39,7 @@ import {
 	NOTICE_LABELS,
 	reportBlocks,
 	safeLink,
+	safeMarkdown,
 	splitArtifacts,
 	splitHeadline,
 	workerUpdatesOf,
@@ -168,12 +169,6 @@ function useOpenSafeLink() {
 	};
 }
 
-/** Markdown an agent or a reviewer wrote, its links held to `safeLink` as the desktop's `safeOrigin` holds them. */
-function SafeLinks({ children }: { children: ReactNode }) {
-	const openSafeLink = useOpenSafeLink();
-	return <ChatLinkProvider onLinkOpen={openSafeLink}>{children}</ChatLinkProvider>;
-}
-
 /** One line of a report: its links, code and emphasis drawn, only safe links live. */
 function ReportInline({ text, style }: { text: string; style: StyleProp<TextStyle> }) {
 	const styles = useThemedStyles(makeStyles);
@@ -276,7 +271,7 @@ const WorkerUpdateRow = memo(function WorkerUpdateRow({ update }: { update: Work
 			{open ? (
 				<View style={styles.opened}>
 					{/* Muted and small, as the desktop opens it: the row stays a quiet aside. */}
-					{more ? <SafeLinks><ReportText text={more} style={styles.updateDetail} /></SafeLinks> : null}
+					{more ? <ReportText text={more} style={styles.updateDetail} /> : null}
 					{openSession ? (
 						<Pressable accessibilityRole="button" hitSlop={8} onPress={openSession} style={({ pressed }) => [styles.openChat, pressed && styles.pressed]}>
 							<Text style={styles.openChatText}>Open chat</Text>
@@ -330,7 +325,7 @@ function FromAgent({ update }: { update: WorkerUpdate }) {
 					<Text numberOfLines={1} onPress={openSession} suppressHighlighting style={[styles.headingText, styles.strong]}>{name}</Text>
 					<Text style={styles.time}>{clockTime(update.createdAt)}</Text>
 				</View>
-				<Folded><SafeLinks><ChatMarkdown text={update.body} /></SafeLinks></Folded>
+				<Folded><ChatMarkdown text={safeMarkdown(update.body)} /></Folded>
 			</View>
 		</View>
 	);
@@ -374,14 +369,14 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 							{comment.path ? <FileChip path={comment.path} line={comment.line} /> : null}
 						</View>
 					) : null}
-					<Folded><SafeLinks><ChatMarkdown text={comment.body} /></SafeLinks></Folded>
+					<Folded><ChatMarkdown text={safeMarkdown(comment.body)} /></Folded>
 				</View>
 			));
 			break;
 		}
 		case "changesRequested":
 			heading = <><Text style={styles.strong}>{automation.author ? `@${automation.author}` : "AO reviewer"}</Text> requested changes on {prLink}</>;
-			detail = automation.body ? <Folded><SafeLinks><ChatMarkdown text={automation.body} /></SafeLinks></Folded> : null;
+			detail = automation.body ? <Folded><ChatMarkdown text={safeMarkdown(automation.body)} /></Folded> : null;
 			break;
 		case "mergeConflict":
 			// The PR cannot merge until the agent rebases: a failure, like failing CI.

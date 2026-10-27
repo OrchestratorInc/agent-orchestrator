@@ -153,13 +153,10 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const items = useMemo(() => readableConversationItems(snapshot, openingTurnId), [openingTurnId, snapshot]);
 	// Each worker's newest report, read once per item list and kept as the same set
 	// until some worker reports again, so settled rows stay idle while a reply streams.
-	const latestUpdatesRef = useRef<ReadonlySet<string>>(new Set());
-	const latestUpdates = useMemo(() => {
-		const next = latestWorkerUpdateKeys(items);
-		const previous = latestUpdatesRef.current;
-		if (previous.size !== next.size || [...next].some((key) => !previous.has(key))) latestUpdatesRef.current = next;
-		return latestUpdatesRef.current;
-	}, [items]);
+	const latestKeys = useMemo(() => latestWorkerUpdateKeys(items), [items]);
+	const latestSignature = useMemo(() => [...latestKeys].sort().join("\n"), [latestKeys]);
+	// Keyed on the signature, not the set: a new set with the same keys keeps the old one.
+	const latestUpdates = useMemo(() => latestKeys, [latestSignature]);
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
 	const inverted = plan.inverted;

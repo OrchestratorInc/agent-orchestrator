@@ -9,6 +9,7 @@ import {
 	artifactEntry,
 	reportBlocks,
 	safeLink,
+	safeMarkdown,
 	automationOf,
 	forgeURL,
 	humanVisibleText,
@@ -259,5 +260,28 @@ describe("text agents and reviewers write", () => {
 		const steer = { kind: "activity", id: "s1", sequence: 3, revision: 1, activityKind: "system", status: "completed", summary: "", createdAt: "2026-10-27T10:00:00Z", detail: { event: "steer", text: '[from w-7 "Tile"] Rebase first.', senderSessionId: "w-7", senderProjectId: "p", senderDisplayName: "Tile" } } as unknown as ConversationItem;
 		expect(workerUpdatesOf(steer)).toMatchObject([{ name: "Tile", sessionId: "w-7", projectId: "p", body: "Rebase first." }]);
 		expect(workerUpdatesOf({ ...steer, id: "s2", detail: { event: "steer", text: "my own steer" } } as unknown as ConversationItem)).toEqual([]);
+	});
+});
+
+describe("making agent and reviewer Markdown safe to draw", () => {
+	it("keeps forge and session links, naming the host behind a label", () => {
+		expect(safeMarkdown("See [#12](https://github.com/o/r/pull/12) and https://github.com/o/r/pull/12.")).toBe("See [#12](https://github.com/o/r/pull/12) (github.com) and https://github.com/o/r/pull/12.");
+		expect(safeMarkdown("[https://gitlab.com/o/r](https://gitlab.com/o/r)")).toBe("[https://gitlab.com/o/r](https://gitlab.com/o/r)");
+	});
+
+	it("draws any other link as its words and any other URL as code", () => {
+		expect(safeMarkdown("Fix [github.com/o/r/pull/9](https://evil.example/x) now")).toBe("Fix github.com/o/r/pull/9 now");
+		expect(safeMarkdown("go to https://evil.example/x or <https://evil.example/y>")).toBe("go to `https://evil.example/x` or `https://evil.example/y`");
+		expect(safeMarkdown("http://github.com/o/r")).toBe("`http://github.com/o/r`");
+	});
+
+	it("loads nothing an image points at", () => {
+		expect(safeMarkdown("![build badge](https://evil.example/pixel.png)")).toBe("build badge");
+	});
+
+	it("leaves code as written", () => {
+		const fenced = "Before\n```\ncurl https://evil.example/x\n[a](https://evil.example)\n```\nAfter https://evil.example/z";
+		expect(safeMarkdown(fenced)).toBe("Before\n```\ncurl https://evil.example/x\n[a](https://evil.example)\n```\nAfter `https://evil.example/z`");
+		expect(safeMarkdown("run `curl https://evil.example/x`")).toBe("run `curl https://evil.example/x`");
 	});
 });
