@@ -8,12 +8,15 @@ import android.content.pm.ProviderInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
 import android.util.Base64;
 import android.util.Pair;
 import android.view.ActionMode;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.inputmethod.InputContentInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import androidx.core.view.ContentInfoCompat;
@@ -118,7 +121,13 @@ public final class ImagePasteModule extends ReactContextBaseJavaModule {
         if (split.first != null) {
           List<Uri> uris = new ArrayList<>();
           for (int i = 0; i < split.first.getClip().getItemCount(); i++) uris.add(split.first.getClip().getItemAt(i).getUri());
-          reader.execute(() -> emit(tag, resolver, uris));
+          // The job holds the payload itself, not just its URIs: for a keyboard
+          // insertion it owns the IME's temporary read grant, which ends when the
+          // grant's InputContentInfo is collected. Released once the reads are done.
+          reader.execute(() -> {
+            try { emit(tag, resolver, uris); }
+            finally { releaseImeGrant(payload); }
+          });
           view.post(binding::finishToolbars);
         }
         return split.second;
@@ -143,6 +152,18 @@ public final class ImagePasteModule extends ReactContextBaseJavaModule {
     old.restore(field);
     ViewCompat.setOnReceiveContentListener(field, null, null);
     restartInput(field);
+  }
+
+  // Where AndroidX's InputConnectionCompat keeps the IME's InputContentInfo
+  // after requesting its read permission.
+  private static final String IME_CONTENT_INFO = "androidx.core.view.extra.INPUT_CONTENT_INFO";
+
+  @SuppressWarnings("deprecation")
+  private static void releaseImeGrant(ContentInfoCompat payload) {
+    Bundle extras = payload.getExtras();
+    if (extras == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.N_MR1) return;
+    Object info = extras.get(IME_CONTENT_INFO);
+    if (info instanceof InputContentInfo) ((InputContentInfo) info).releasePermission();
   }
 
   // The keyboard reads the accepted MIME types when its connection opens, so an
