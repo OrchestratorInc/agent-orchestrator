@@ -119,8 +119,7 @@ func saveContinueProvider(ctx context.Context, envName, modelID, secret string) 
 		if line == "" && len(envData) == 0 {
 			continue
 		}
-		trimmed := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "export "))
-		if strings.HasPrefix(trimmed, envName+"=") {
+		if isContinueKeyLine(line, envName) {
 			if !replaced {
 				lines = append(lines, envName+"="+secret)
 				replaced = true
@@ -136,6 +135,14 @@ func saveContinueProvider(ctx context.Context, envName, modelID, secret string) 
 		return err
 	}
 	return atomicConfigWrite(ctx, dir, configPath, encoded)
+}
+
+func isContinueKeyLine(line, name string) bool {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "export ") {
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "export "))
+	}
+	return strings.HasPrefix(trimmed, name+"=") || strings.HasPrefix(trimmed, name+" =")
 }
 
 func readContinueFile(path string) ([]byte, error) {
