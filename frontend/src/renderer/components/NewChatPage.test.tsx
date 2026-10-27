@@ -182,6 +182,22 @@ describe("NewChatPage", () => {
 		expect(h.launchFallback).toHaveBeenCalledTimes(1);
 	});
 
+	it.each(["tui", "bypass-permissions"])("passes the current held files to the %s fallback and waits for preparation", async (fallback) => {
+		h.fallbackAction = fallback;
+		h.launchFallback.mockResolvedValue("fallback-session");
+		writeChatComposerText(draftScope, "Read the attached file");
+		renderPage();
+		const files = [{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" }];
+		const removedFile = { mimeType: "image/png", data: "iVBORw==", name: "removed.png" };
+		act(() => h.workspace?.onHeldAttachmentsChange?.([...files, removedFile], true));
+		const button = screen.getByRole("button", { name: "Create as Terminal UI" });
+		expect(button).toBeDisabled();
+
+		act(() => h.workspace?.onHeldAttachmentsChange?.(files, false));
+		await act(async () => fireEvent.click(button));
+		expect(h.launchFallback).toHaveBeenCalledWith("Read the attached file", expect.any(String), files);
+	});
+
 	it("keeps a refused retry on its project and shows why", async () => {
 		prepareChatComposerDelivery(draftScope, { kind: "send", clientMessageId: "cid-1", requestText: "Fix the build", composerText: "Fix the build", attachments: [] });
 		h.launch.mockRejectedValueOnce(new TypeError("Failed to fetch"));

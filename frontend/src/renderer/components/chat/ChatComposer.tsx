@@ -439,8 +439,6 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const editor = useRef<ComposerEditorHandle>(null);
 	const filePicker = useRef<HTMLInputElement>(null);
-	const [pendingAttachments, setPendingAttachments] = useState<{ id: string; name: string }[]>([]);
-	useEffect(() => setPendingAttachments([]), [attachmentScopeKey]);
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
 	const submitInFlight = useRef<Promise<void> | null>(null);
@@ -572,6 +570,7 @@ export const ChatComposer = memo(function ChatComposer({
 		prepareAttachments: onStageAttachments ? prepareAttachments : undefined,
 		onAttachmentsChange: persistAttachments,
 	});
+	const { pendingAttachments } = fileAttachments;
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
 	useEffect(() => {
 		if (!holdAttachments || !onHeldAttachmentsChange) return;
@@ -1714,8 +1713,6 @@ export const ChatComposer = memo(function ChatComposer({
 	// Images get an inline chip only beside prose that can refer to them.
 	// Image-only drafts already show every image in the attachment strip.
 	function attachFiles(files: File[]) {
-		const pending = files.map((file) => ({ id: crypto.randomUUID(), name: file.name }));
-		setPendingAttachments((current) => [...current, ...pending]);
 		// Reserve the spot now: staging can take a while, and the user keeps typing.
 		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
 			files.some((file) => file.type.startsWith("image/"))
@@ -1725,8 +1722,6 @@ export const ChatComposer = memo(function ChatComposer({
 			if (!reservation) return;
 			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
 				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
-		}).finally(() => {
-			setPendingAttachments((current) => current.filter((file) => !pending.some((item) => item.id === file.id)));
 		});
 	}
 

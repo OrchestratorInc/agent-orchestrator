@@ -4410,15 +4410,16 @@ describe("ChatWorkspace message actions", () => {
 			},
 		});
 		await waitFor(() => expect(onStageAttachments).toHaveBeenCalledTimes(1));
-		expect(screen.getByRole("status")).toHaveTextContent("Saving attachments");
+		expect(screen.getByRole("status", { name: "Attaching pending.txt" })).toBeInTheDocument();
+		expect(screen.queryByText(/Saving attachments/)).toBeNull();
 		firstView.unmount();
 
 		render(<ChatWorkspace {...common} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Saving attachments");
+		expect(screen.getByRole("status", { name: "Attaching pending.txt" })).toBeInTheDocument();
 		await act(async () => finishStaging([".ao/attachments/attachment-pending.txt"]));
 
 		expect(await screen.findByLabelText("Remove pending.txt")).toBeInTheDocument();
-		await waitFor(() => expect(screen.queryByText("Saving attachments… Wait before leaving this chat.")).toBeNull());
+		await waitFor(() => expect(screen.queryByRole("status", { name: "Attaching pending.txt" })).toBeNull());
 		expect(readChatSessionDraft(snapshot.sessionId).composer.attachments).toEqual([
 			expect.objectContaining({
 				name: "pending.txt",

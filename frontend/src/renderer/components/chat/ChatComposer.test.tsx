@@ -2075,6 +2075,26 @@ describe("attachments", () => {
 		]);
 	});
 
+	it("keeps held file bytes available after a definitive send rejection", async () => {
+		const onSend = vi.fn()
+			.mockRejectedValueOnce(Object.assign(new Error("Agent not installed"), { code: "TASK_CREATE_FAILED" }))
+			.mockResolvedValue(undefined);
+		const { field } = renderComposer({ draftSessionId: "composer-held-retry", holdAttachments: true, onSend });
+		await typeInComposer(field, "read this file");
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile()]) });
+		await screen.findByLabelText("Remove notes.txt");
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+		await screen.findByText("Agent not installed");
+
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+		expect(onSend.mock.calls[1]?.[1]).toEqual([
+			{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" },
+		]);
+	});
+
 	it("shows a removable chip per pasted image", async () => {
 		const { field } = renderComposer({
 			onStageAttachments: vi.fn().mockResolvedValue([
