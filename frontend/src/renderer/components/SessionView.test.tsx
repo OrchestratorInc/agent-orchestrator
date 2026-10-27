@@ -775,6 +775,8 @@ vi.mock("../lib/shell-context", () => ({
 	useShell: () => ({ daemonStatus: { state: "ready" } }),
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({
+	beginWorkspaceRead: vi.fn(() => 0),
+	patchWorkspaceSession: vi.fn(),
 	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 	toCloudWorkspaceSession: vi.fn(),
 	refetchCloudProjectsForUnknownSessions: vi.fn(),
@@ -1480,19 +1482,19 @@ describe("SessionView", () => {
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => !input.body.active)).toHaveLength(2));
 	});
 
-	it("reloads Chat history on open only while the cached chat is not ready", async () => {
+	it("does not reload cached Chat history or the workspace list after registration", async () => {
 		workerSession("sess-1").mode = "chat";
-		for (const [state, reloads] of [["ready", 0], ["hibernated", 1]] as const) {
+		for (const state of ["ready", "hibernated", "stopped", "connecting"] as const) {
 			let finishView!: (result: { error: undefined }) => void;
 			chatViewPostMock.mockImplementationOnce(() => new Promise((resolve) => { finishView = resolve; }));
 			const view = render(<SessionView sessionId="sess-1" />);
 			view.client.setQueryData(conversationQueryKey("sess-1"), { pages: [{ controller: { state } }], pageParams: [undefined] });
 			const invalidate = vi.spyOn(view.client, "invalidateQueries");
+			reviewGetMock.mockClear();
 			await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledTimes(1));
 			await act(async () => { finishView({ error: undefined }); });
-			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["workspaces"] }));
-			const conversationReloads = invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]');
-			expect(conversationReloads, state).toHaveLength(reloads);
+			await waitFor(() => expect(reviewGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", { params: { path: { sessionId: "sess-1" } } }));
+			expect(invalidate.mock.calls.filter(([filters]) => ["conversation", "workspaces"].includes(String(filters?.queryKey?.[0]))), state).toHaveLength(0);
 			view.unmount();
 			chatViewPostMock.mockClear();
 		}
