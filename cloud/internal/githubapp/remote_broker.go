@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 )
 
@@ -176,29 +177,42 @@ func (b *RemoteCheckoutBroker) IssueCheckoutGrant(
 	return grant, nil
 }
 
-// errRemotePushNotSupported is returned by IssuePushGrant and
-// RaisePullRequest: pushing and raising pull requests remotely would need a
-// production-side capability-redemption endpoint of their own (mirroring
-// /control/github/capabilities/redeem), which does not exist yet. This
-// environment can still check out and read a repository through the
-// existing redeem endpoint above — only writing back to GitHub is
-// unsupported here for now.
+// errRemotePushNotSupported is returned by every write: pushing and raising
+// pull requests remotely would need a production-side capability-redemption
+// endpoint of their own (mirroring /control/github/capabilities/redeem), which
+// does not exist yet. This environment can still check out and read a
+// repository through the existing redeem endpoint above — only writing back to
+// GitHub is unsupported here for now.
 var errRemotePushNotSupported = errors.New(
 	"raising a pull request is not supported for a repository authorized through the remote capability broker yet",
 )
 
-func (b *RemoteCheckoutBroker) IssuePushGrant(
+func (b *RemoteCheckoutBroker) IssueCLIGrant(
 	context.Context,
 	string, string,
 ) (CheckoutGrant, error) {
 	return CheckoutGrant{}, errRemotePushNotSupported
 }
 
-func (b *RemoteCheckoutBroker) IssuePushGrantForRepo(
-	context.Context,
-	string, string, string,
+// IssueGitProxyGrant serves the git proxy's fetches of the session's primary
+// repository with the capability's read token. The capability covers only that
+// repository, and pushes are not supported remotely.
+func (b *RemoteCheckoutBroker) IssueGitProxyGrant(
+	ctx context.Context,
+	orgID, sessionID, repoFullName string,
+	push bool,
 ) (CheckoutGrant, error) {
-	return CheckoutGrant{}, errRemotePushNotSupported
+	if push {
+		return CheckoutGrant{}, errRemotePushNotSupported
+	}
+	grant, err := b.IssueCheckoutGrant(ctx, orgID, sessionID)
+	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	if !validGitHubCloneIdentity(grant.CloneURL, repoFullName) {
+		return CheckoutGrant{}, postgres.ErrForbidden
+	}
+	return grant, nil
 }
 
 func (b *RemoteCheckoutBroker) RaisePullRequest(

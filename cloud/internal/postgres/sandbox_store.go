@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1260,6 +1261,14 @@ func (s *Store) RegisterWorkerBootstrap(
 		); err != nil {
 			return err
 		}
+		// Recorded here only, never by a heartbeat (see the git_proxy column).
+		if _, err := tx.Exec(ctx,
+			`UPDATE ao_worker_connections SET git_proxy = $3
+			WHERE session_id = $1 AND epoch = $2`,
+			sessionID, epoch, slices.Contains(capabilities, worker.CapabilityGitProxy),
+		); err != nil {
+			return fmt.Errorf("record worker git proxy capability: %w", err)
+		}
 		tag, err := tx.Exec(ctx,
 			`UPDATE ao_sessions
 			SET activity_state = 'idle',
@@ -1278,6 +1287,32 @@ func (s *Store) RegisterWorkerBootstrap(
 		}
 		return nil
 	})
+}
+
+// WorkerUsesGitProxy reports whether the worker binary that bootstrapped this
+// connection sends git through the control plane's git proxy. A connection
+// bootstrapped before the proxy existed answers false: its running worker
+// still asks for a push token. Unknown connections answer true, so nothing
+// falls back to handing out a token by mistake.
+func (s *Store) WorkerUsesGitProxy(
+	ctx context.Context,
+	orgID, sessionID, workerID string,
+	epoch int64,
+) (bool, error) {
+	gitProxy := true
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx,
+			`SELECT git_proxy FROM ao_worker_connections
+			WHERE org_id = $1 AND session_id = $2 AND worker_id = $3 AND epoch = $4`,
+			orgID, sessionID, workerID, epoch,
+		).Scan(&gitProxy)
+		if errors.Is(err, pgx.ErrNoRows) {
+			gitProxy = true
+			return nil
+		}
+		return err
+	})
+	return gitProxy, err
 }
 
 // WorkerConnectionCurrent reports whether a worker still owns the live epoch.

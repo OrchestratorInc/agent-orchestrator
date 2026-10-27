@@ -20,7 +20,23 @@ type stagingRecorderRunner struct {
 	cloneArgs  []string
 }
 
+// gitCommand is a git command line without its leading -c configuration
+// arguments (the git proxy's, see withGitProxy).
+func gitCommand(args []string) []string {
+	for len(args) >= 2 && args[0] == "-c" {
+		args = args[2:]
+	}
+	return args
+}
+
+// isOriginLookup reports a read of the checkout's origin URL (OriginURL).
+func isOriginLookup(args []string) bool {
+	args = gitCommand(args)
+	return len(args) >= 3 && args[0] == "config" && args[1] == "--get" && args[2] == "remote.origin.url"
+}
+
 func (r *stagingRecorderRunner) Run(_ context.Context, dir string, _ map[string]string, args ...string) (string, error) {
+	args = gitCommand(args)
 	if len(args) > 0 && args[0] == "clone" {
 		r.stagingDir = dir
 		r.cloneArgs = append([]string(nil), args...)
@@ -33,7 +49,7 @@ func (r *stagingRecorderRunner) Run(_ context.Context, dir string, _ map[string]
 		}
 		return "", nil
 	}
-	// validateOrigin: `remote get-url origin`
+	// validateOrigin: OriginURL
 	return r.cloneURL, nil
 }
 
@@ -92,14 +108,11 @@ func (noopGitRunner) Run(context.Context, string, map[string]string, ...string) 
 	return "", nil
 }
 
-// The sandbox git credential helper must scope the brokered token to the exact
-// repository git is asking about. git supplies host+path (useHttpPath=true); the
-// helper turns those into a ?repo=owner/repo query so a push to a declared extra
-// dev-kit repository gets a correctly scoped token — while a malformed or
-// non-GitHub request falls back to the broad grant (no ?repo=). This drives the
-// actually-rendered shell (the fmt.Sprintf %-escaping is easy to get wrong)
-// through stubbed curl/jq and asserts the URL the helper would call.
-func TestConfigureWorkerGitCredentialHelperScopesRepo(t *testing.T) {
+// The sandbox git credential helper holds no GitHub credential: it answers
+// only the control plane's git proxy, for this session, with the worker token,
+// and nothing else (github.com included). This drives the actually-rendered
+// shell (the fmt.Sprintf %-escaping is easy to get wrong).
+func TestConfigureWorkerGitCredentialHelperAnswersOnlyTheGitProxy(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
 	}
@@ -108,75 +121,59 @@ func TestConfigureWorkerGitCredentialHelperScopesRepo(t *testing.T) {
 	if err := ConfigureWorkerGit(
 		context.Background(), noopGitRunner{},
 		workspace, dataDir, "https://cp.example.com", "sess-xyz", "ao/branch",
+		GitIdentity{},
 	); err != nil {
 		t.Fatalf("ConfigureWorkerGit: %v", err)
 	}
 	helperPath := GitCredentialHelperPath(dataDir)
-
-	// Syntax-check the rendered shell.
 	if out, err := exec.Command("sh", "-n", helperPath).CombinedOutput(); err != nil {
 		t.Fatalf("rendered helper is not valid shell: %v\n%s", err, out)
 	}
-
+	helper, err := os.ReadFile(helperPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(helper), "github-token") || strings.Contains(string(helper), "curl") {
+		t.Fatalf("the credential helper still fetches a GitHub token:\n%s", helper)
+	}
 	// The helper reads the rotating worker token from this file.
 	if err := os.WriteFile(filepath.Join(dataDir, "worker-token"), []byte("WT\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	// Stub curl (records the URL it is asked to fetch) and jq (returns a token),
-	// so the helper never touches the network and we can inspect the URL.
-	stubBin := t.TempDir()
-	urlFile := filepath.Join(dataDir, "captured-url")
-	writeStub(t, filepath.Join(stubBin, "curl"),
-		"#!/bin/sh\nfor a in \"$@\"; do url=\"$a\"; done\nprintf '%s' \"$url\" > \""+urlFile+"\"\nprintf '{\"token\":\"x\"}'\n")
-	writeStub(t, filepath.Join(stubBin, "jq"),
-		"#!/bin/sh\ncat >/dev/null 2>&1\nprintf 'x'\n")
-	env := append(os.Environ(), "PATH="+stubBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-
-	base := "https://cp.example.com/api/cloud/v1/worker/github-token"
+	proxyPath := "api/cloud/v1/worker/git/sess-xyz/"
 	cases := []struct {
-		name      string
-		stdin     string
-		wantURL   string // expected token-endpoint URL when a credential is issued
-		wantToken bool   // false = helper must NOT contact the token endpoint (host gate)
+		name  string
+		stdin string
+		want  string
 	}{
-		{"primary", "protocol=https\nhost=github.com\npath=octo/app.git\n\n", base + "?repo=octo/app", true},
-		{"extra", "protocol=https\nhost=github.com\npath=octo/extra.git\n\n", base + "?repo=octo/extra", true},
-		{"no path", "protocol=https\nhost=github.com\n\n", base, true},
-		// A single-segment path is not a real owner/repo → broad grant, not a bogus scoped request.
-		{"single segment", "protocol=https\nhost=github.com\npath=octoonly\n\n", base, true},
-		// Host gate: a non-github remote (which the agent can add) must never be handed the token.
-		{"non-github host", "protocol=https\nhost=example.com\npath=octo/app.git\n\n", "", false},
-		{"gitlab host", "protocol=https\nhost=gitlab.com\npath=octo/app.git\n\n", "", false},
+		{"the session's git proxy", "protocol=https\nhost=cp.example.com\npath=" + proxyPath + "octo/app.git/info/refs\n\n",
+			"username=ao-worker\npassword=WT\n"},
+		{"github.com", "protocol=https\nhost=github.com\npath=octo/app.git\n\n", ""},
+		{"another host", "protocol=https\nhost=example.com\npath=" + proxyPath + "octo/app.git\n\n", ""},
+		{"plain http to the control plane", "protocol=http\nhost=cp.example.com\npath=" + proxyPath + "octo/app.git\n\n", ""},
+		{"another session's proxy", "protocol=https\nhost=cp.example.com\npath=api/cloud/v1/worker/git/sess-other/octo/app.git\n\n", ""},
+		{"another control plane path", "protocol=https\nhost=cp.example.com\npath=api/cloud/v1/me\n\n", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_ = os.Remove(urlFile)
 			cmd := exec.Command("sh", helperPath, "get")
 			cmd.Stdin = strings.NewReader(tc.stdin)
-			cmd.Env = env
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("helper get: %v\n%s", err, out)
 			}
-			if !tc.wantToken {
-				// The gate must short-circuit before curl and emit no credential.
-				if u, statErr := os.ReadFile(urlFile); statErr == nil {
-					t.Fatalf("host %q must not fetch a token, but curl was called with %q", tc.name, u)
-				}
-				if strings.Contains(string(out), "password=") {
-					t.Fatalf("host %q must not emit a credential; got %q", tc.name, out)
-				}
-				return
-			}
-			got, err := os.ReadFile(urlFile)
-			if err != nil {
-				t.Fatalf("read captured URL: %v", err)
-			}
-			if string(got) != tc.wantURL {
-				t.Fatalf("helper called %q, want %q", got, tc.wantURL)
+			if string(out) != tc.want {
+				t.Fatalf("helper answered %q, want %q", out, tc.want)
 			}
 		})
+	}
+	// git calls store and erase too; the helper ignores them.
+	for _, action := range []string{"store", "erase"} {
+		cmd := exec.Command("sh", helperPath, action)
+		cmd.Stdin = strings.NewReader("protocol=https\nhost=cp.example.com\npassword=x\n\n")
+		if out, err := cmd.CombinedOutput(); err != nil || len(out) != 0 {
+			t.Fatalf("helper %s = %q, %v; want silence", action, out, err)
+		}
 	}
 }
 
@@ -265,7 +262,7 @@ func TestConfigureWorkerGitContinuesRemoteBranch(t *testing.T) {
 	configure := func() {
 		t.Helper()
 		if err := ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
-			filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "feature/x"); err != nil {
+			filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "feature/x", GitIdentity{}); err != nil {
 			t.Fatalf("ConfigureWorkerGit: %v", err)
 		}
 	}
@@ -312,7 +309,7 @@ func TestConfigureWorkerGitFailsWhenLocalChangesBlockRemoteBranch(t *testing.T) 
 		t.Fatal(err)
 	}
 	err := ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
-		filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "feature/x")
+		filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "feature/x", GitIdentity{})
 	if !errors.Is(err, ErrSessionBranchSwitch) {
 		t.Fatalf("ConfigureWorkerGit = %v, want ErrSessionBranchSwitch", err)
 	}
@@ -350,7 +347,7 @@ func TestConfigureWorkerGitFallsBackForTheGeneratedBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
-		filepath.Join(home, ".ao"), "https://cp.example.com", "1234abcd-0000-4000-8000-000000000000", "ao/1234abcd")
+		filepath.Join(home, ".ao"), "https://cp.example.com", "1234abcd-0000-4000-8000-000000000000", "ao/1234abcd", GitIdentity{})
 	if !errors.Is(err, ErrSessionBranchFellBack) || errors.Is(err, ErrSessionBranchSwitch) {
 		t.Fatalf("ConfigureWorkerGit = %v, want ErrSessionBranchFellBack", err)
 	}
@@ -389,7 +386,7 @@ func TestConfigureWorkerGitRestartKeepsSessionBranchCommits(t *testing.T) {
 	templateCheckout(t, upstream, workspace, upstream)
 	configure := func() error {
 		return ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
-			filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "ao/session-1")
+			filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "ao/session-1", GitIdentity{})
 	}
 	if err := configure(); err != nil {
 		t.Fatal(err)
@@ -424,7 +421,7 @@ func TestConfigureWorkerGitRestartStashesChangesThatBlockTheSessionBranch(t *tes
 	templateCheckout(t, upstream, workspace, upstream)
 	configure := func() error {
 		return ConfigureWorkerGit(context.Background(), ExecGitRunner{}, workspace,
-			filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "ao/session-1")
+			filepath.Join(home, ".ao"), "https://cp.example.com", "session-1", "ao/session-1", GitIdentity{})
 	}
 	if err := configure(); err != nil {
 		t.Fatal(err)
@@ -525,10 +522,10 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(output))
 }
 
-// TestCloneExtraRepoDoesNotPersistToken locks the security invariant behind the
-// multi-repo dev kit: the checkout token must never be baked into the extra
-// repo's origin URL / .git/config, where the coding agent could read it back.
-func TestCloneExtraRepoDoesNotPersistToken(t *testing.T) {
+// An additional repository's clone holds no GitHub credential, and its
+// configuration sends the agent's own git through the session's git proxy with
+// the session's commit identity, like the main checkout.
+func TestCloneExtraRepoConfiguresTheGitProxyWithoutACredential(t *testing.T) {
 	src := t.TempDir()
 	gitRun(t, src, "init", "--initial-branch=main")
 	gitRun(t, src, "config", "user.name", "AO Test")
@@ -541,22 +538,31 @@ func TestCloneExtraRepoDoesNotPersistToken(t *testing.T) {
 
 	parent := t.TempDir()
 	dataDir := t.TempDir()
+	if err := WriteWorkerGitTooling(dataDir, "https://cp.example.com", "sess-1"); err != nil {
+		t.Fatal(err)
+	}
 	dest := filepath.Join(parent, "extra")
-	const token = "gho_SUPERSECRETTOKENVALUE000000000000"
+	proxy := GitProxy{PublicURL: "https://cp.example.com", SessionID: "sess-1", DataDir: dataDir}
+	identity := GitHubUserIdentity("octocat", 42)
 
-	if err := CloneExtraRepo(context.Background(), ExecGitRunner{}, parent, dest, "file://"+src, "", token, dataDir); err != nil {
+	if err := CloneExtraRepo(context.Background(), ExecGitRunner{}, parent, dest, "file://"+src, "", proxy, identity); err != nil {
 		t.Fatalf("CloneExtraRepo: %v", err)
 	}
 	cfg, err := os.ReadFile(filepath.Join(dest, ".git", "config"))
 	if err != nil {
 		t.Fatalf("read .git/config: %v", err)
 	}
-	if strings.Contains(string(cfg), token) || strings.Contains(string(cfg), "x-access-token") {
-		t.Fatalf("token/credential leaked into .git/config:\n%s", cfg)
+	if strings.Contains(string(cfg), "x-access-token") || strings.Contains(string(cfg), "password") {
+		t.Fatalf("a credential leaked into .git/config:\n%s", cfg)
 	}
-	origin := gitOutput(t, dest, "remote", "get-url", "origin")
-	if strings.Contains(origin, token) || strings.Contains(origin, "x-access-token") {
-		t.Fatalf("origin url is credentialed: %s", origin)
+	if got := gitOutput(t, dest, "config", "--get", "url.https://cp.example.com/api/cloud/v1/worker/git/sess-1/.insteadOf"); got != "https://github.com/" {
+		t.Fatalf("GitHub rewrite = %q, want the session's git proxy", got)
+	}
+	if got := gitOutput(t, dest, "config", "--get-all", "credential.helper"); got != GitCredentialHelperPath(dataDir) {
+		t.Fatalf("credential helpers = %q, want only the session helper", got)
+	}
+	if got := gitOutput(t, dest, "config", "--get", "user.email"); got != "42+octocat@users.noreply.github.com" {
+		t.Fatalf("commit email = %q, want the owner's noreply address", got)
 	}
 }
 
@@ -613,7 +619,7 @@ func TestCheckoutPartialCloneOnlyWhenOptedIn(t *testing.T) {
 		runner := &stagingRecorderRunner{cloneURL: grant.CloneURL}
 		parent := t.TempDir()
 		if err := CloneExtraRepo(context.Background(), runner, parent, filepath.Join(parent, "extra"),
-			grant.CloneURL, "main", "", t.TempDir()); err != nil {
+			grant.CloneURL, "main", GitProxy{DataDir: t.TempDir()}, GitIdentity{}); err != nil {
 			t.Fatalf("CloneExtraRepo: %v", err)
 		}
 		if len(runner.cloneArgs) == 0 || hasFilter(runner.cloneArgs) {
@@ -633,7 +639,7 @@ type commandRecorderRunner struct {
 
 func (r *commandRecorderRunner) Run(_ context.Context, _ string, _ map[string]string, args ...string) (string, error) {
 	r.commands = append(r.commands, append([]string(nil), args...))
-	if len(args) >= 2 && args[0] == "remote" && args[1] == "get-url" {
+	if isOriginLookup(args) {
 		return r.cloneURL, nil
 	}
 	if r.emptyRemote && len(args) > 0 && args[0] == "rev-parse" {
@@ -661,7 +667,7 @@ func existingCheckout(t *testing.T, withMarker bool) string {
 
 func hasCommand(commands [][]string, want ...string) bool {
 	for _, command := range commands {
-		if strings.Join(command, " ") == strings.Join(want, " ") {
+		if strings.Join(gitCommand(command), " ") == strings.Join(want, " ") {
 			return true
 		}
 	}
@@ -700,7 +706,7 @@ func TestCheckoutNeverResetsASessionsOwnWorkspace(t *testing.T) {
 		t.Fatalf("PrepareCheckout: %v", err)
 	}
 	for _, command := range runner.commands {
-		if len(command) > 0 && command[0] == "reset" {
+		if command = gitCommand(command); len(command) > 0 && command[0] == "reset" {
 			t.Fatalf("reset ran on a session's own workspace: %q", command)
 		}
 	}
@@ -717,7 +723,7 @@ func TestCheckoutKeepsAnEmptyRepositorySnapshot(t *testing.T) {
 		t.Fatalf("PrepareCheckout failed on an empty repository snapshot: %v", err)
 	}
 	for _, command := range runner.commands {
-		if len(command) > 0 && command[0] == "reset" {
+		if command = gitCommand(command); len(command) > 0 && command[0] == "reset" {
 			t.Fatalf("reset ran with no origin/HEAD: %q", command)
 		}
 	}

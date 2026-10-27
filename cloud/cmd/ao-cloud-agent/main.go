@@ -99,6 +99,11 @@ func run(args []string) error {
 	if args[0] == "browser" {
 		return runBrowser(args[1:])
 	}
+	// pr-create goes through the worker's pull request bridge, which pushes
+	// and has the control plane open the pull request.
+	if args[0] == "pr-create" {
+		return runPullRequestCreate(context.Background(), args[1:], os.Stdin, os.Stdout, os.Stderr)
+	}
 	apiURL := strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_API_URL")), "/")
 	tokenFile := strings.TrimSpace(os.Getenv("AO_CLOUD_WORKER_TOKEN_FILE"))
 	if apiURL == "" {
@@ -548,7 +553,9 @@ func pullRequestReference(ctx context.Context, reference string) string {
 	if _, err := strconv.Atoi(number); err != nil {
 		return reference
 	}
-	output, err := exec.CommandContext(ctx, "git", "remote", "get-url", "origin").Output()
+	// origin's configured URL: the session rewrites GitHub URLs to the git
+	// proxy, so `git remote get-url` would name the proxy instead.
+	output, err := exec.CommandContext(ctx, "git", "config", "--get", "remote.origin.url").Output()
 	if err != nil {
 		return reference
 	}
@@ -691,6 +698,9 @@ func printUsage(out io.Writer) {
   ao report MESSAGE
   ao kill SESSION_ID
   ao claim-pr NUMBER_OR_URL
+  ao pr-create --title TITLE [--body TEXT | --body-file FILE] [--base BRANCH] [--draft] [--fill]
+    (what gh pr create runs: pushes the current branch and opens its pull
+    request as the session's owner)
   ao review trigger
   ao browser COMMAND [ARGS...]
     (agent-browser commands: open, snapshot, click, fill, screenshot, ...; the

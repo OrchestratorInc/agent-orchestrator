@@ -103,8 +103,13 @@ type CheckoutGrant struct {
 	ExpiresAt time.Time `json:"expiresAt"`
 }
 
-// MergePullRequest uses the installation's repository-scoped write token.
-func (s *Service) MergePullRequest(ctx context.Context, orgID, repository string, number int, expectedHeadSHA string) error {
+// MergePullRequest merges a session's pull request as the session's owner,
+// with their GitHub App user token, like the pull request was opened. When the
+// owner has not authorized the App, or GitHub refuses their authorization for
+// this repository (401/403/404), it merges with the installation's
+// repository-scoped write token, as before. Any other refusal (the pull
+// request is not mergeable, its head moved) is returned as it is.
+func (s *Service) MergePullRequest(ctx context.Context, orgID, sessionID, repository string, number int, expectedHeadSHA string) error {
 	installationID, repositoryID, err := s.store.GitHubInstallationForRepository(ctx, orgID, repository)
 	if err != nil {
 		return err
@@ -115,6 +120,14 @@ func (s *Service) MergePullRequest(ctx context.Context, orgID, repository string
 	}
 	if err := s.requireUserScopedPush(ctx, orgID, repository, repositoryID); err != nil {
 		return err
+	}
+	if token := s.sessionOwnerGitHubToken(ctx, orgID, sessionID); token != "" {
+		err := s.client.MergePullRequest(ctx, token, owner, repo, number, expectedHeadSHA)
+		if !userTokenRefused(err) {
+			return err
+		}
+		s.logger.Info("GitHub refused the session owner's authorization for a merge; merging as the App",
+			"org_id", orgID, "session_id", sessionID, "repository", repository, "number", number)
 	}
 	access, err := s.client.repositoryWriteToken(ctx, installationID, repositoryID)
 	if err != nil {
@@ -663,16 +676,15 @@ func gitHubRepositoryFullName(repoURL string) (string, bool) {
 	return owner + "/" + repo, true
 }
 
-// IssuePushGrant is IssueCheckoutGrant's write-scoped counterpart: the token
-// it mints carries contents:write and pull_requests:write, scoped to the
-// project's primary repository plus any declared extra repositories that
-// resolve within the same installation — the write-side mirror of
-// IssueCheckoutGrant's multi-repository scope. One broad token backs a worker's
-// push and gh-CLI pull-request creation across every repository the session
-// checked out, so a push to an extra dev-kit repository is no longer scoped
-// out. Only ever handed to a worker immediately before a git operation, never
-// cached — see repositoryWriteTokenForRepos.
-func (s *Service) IssuePushGrant(
+// IssueCLIGrant mints the token the sandbox's GitHub CLI wrapper runs gh with:
+// contents:read and pull_requests:write, scoped to the project's primary
+// repository plus any declared extra repositories that resolve within the same
+// installation. It deliberately cannot write repository contents, so it can
+// never push around the control plane's git proxy, which is the only path a
+// session's commits reach GitHub through. Pull requests a session raises are
+// opened server-side (RaisePullRequest) as the session's owner; this token only
+// backs the gh commands that read or comment on them.
+func (s *Service) IssueCLIGrant(
 	ctx context.Context,
 	orgID, sessionID string,
 ) (CheckoutGrant, error) {
@@ -685,7 +697,7 @@ func (s *Service) IssuePushGrant(
 	}
 	repositoryIDs := s.filterUserScopedRepositoryIDs(ctx, authorization,
 		s.checkoutRepositoryIDs(ctx, orgID, sessionID, authorization), true)
-	access, err := s.client.repositoryWriteTokenForRepos(
+	access, err := s.client.repositoryCLIToken(
 		ctx,
 		authorization.GitHubInstallationID,
 		repositoryIDs,
@@ -703,19 +715,21 @@ func (s *Service) IssuePushGrant(
 	}, nil
 }
 
-// IssuePushGrantForRepo is IssuePushGrant scoped to one specific repository —
-// the session's primary repository or one of its declared extra repositories.
-// It mints a write token for exactly that repository when the App installation
-// can access it, and returns postgres.ErrForbidden when it cannot (the name is
-// not declared for the session, or the App is not installed on it) so the
-// caller falls back to a stored PAT. This is the per-repository, App-first half
-// of the worker credential helper's App-first/PAT-fallback precedence: the
-// helper forwards the repository git is asking about, and an App-uninstalled
-// extra can still push through a PAT that covers it.
-func (s *Service) IssuePushGrantForRepo(
+// IssueGitProxyGrant returns the installation token the control plane's git
+// proxy attaches to one fetch (push false) or push of repoFullName, the
+// session's primary repository or one of its declared extra repositories the
+// installation can access. The token never leaves the control plane: the proxy
+// adds it to the request it forwards to GitHub. Both kinds are reused across a
+// session's git operations while they have lifetime left, so a push (two HTTP
+// requests) or a fetch does not mint a token each time.
+func (s *Service) IssueGitProxyGrant(
 	ctx context.Context,
 	orgID, sessionID, repoFullName string,
+	push bool,
 ) (CheckoutGrant, error) {
+	if strings.Trim(strings.TrimSpace(repoFullName), "/") == "" {
+		return CheckoutGrant{}, postgres.ErrForbidden
+	}
 	authorization, err := s.resolveWorkerCheckoutAuthorization(ctx, orgID, sessionID)
 	if err != nil {
 		return CheckoutGrant{}, err
@@ -724,10 +738,15 @@ func (s *Service) IssuePushGrantForRepo(
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
-	if err := s.requireUserScopedAccess(ctx, authorization, repositoryID, true); err != nil {
+	if err := s.requireUserScopedAccess(ctx, authorization, repositoryID, push); err != nil {
 		return CheckoutGrant{}, err
 	}
-	access, err := s.client.repositoryWriteToken(ctx, authorization.GitHubInstallationID, repositoryID)
+	var access installationAccessToken
+	if push {
+		access, err = s.client.proxyWriteToken(ctx, authorization.GitHubInstallationID, repositoryID)
+	} else {
+		access, err = s.client.readToken(ctx, authorization.GitHubInstallationID, []int64{repositoryID})
+	}
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
@@ -943,13 +962,20 @@ func (s *Service) RaisePullRequest(
 	if err := s.requireUserScopedAccess(ctx, authorization, repositoryID, true); err != nil {
 		return domain.PullRequest{}, err
 	}
-	access, err := s.client.repositoryWriteToken(
-		ctx,
-		authorization.GitHubInstallationID,
-		repositoryID,
-	)
-	if err != nil {
-		return domain.PullRequest{}, err
+	// The installation token is minted only when it is needed: to look up an
+	// additional repository's base branch, or to open the pull request as the
+	// App when the session owner's own authorization cannot.
+	var installationToken string
+	installationWriteToken := func() (string, error) {
+		if installationToken != "" {
+			return installationToken, nil
+		}
+		access, err := s.client.repositoryWriteToken(ctx, authorization.GitHubInstallationID, repositoryID)
+		if err != nil {
+			return "", err
+		}
+		installationToken = access.Token
+		return installationToken, nil
 	}
 	base := strings.TrimSpace(input.BaseBranch)
 	if base == "" && repositoryID == authorization.GitHubRepositoryID {
@@ -957,8 +983,12 @@ func (s *Service) RaisePullRequest(
 	}
 	if base == "" && repositoryID != authorization.GitHubRepositoryID {
 		// An additional repository's default branch is not on record, so ask
-		// GitHub, with the token just minted for that repository.
-		repository, err := s.client.GetRepositoryAsUser(ctx, access.Token, owner, repo)
+		// GitHub, with a token minted for that repository.
+		token, err := installationWriteToken()
+		if err != nil {
+			return domain.PullRequest{}, err
+		}
+		repository, err := s.client.GetRepositoryAsUser(ctx, token, owner, repo)
 		if err != nil {
 			return domain.PullRequest{}, err
 		}
@@ -970,12 +1000,22 @@ func (s *Service) RaisePullRequest(
 			postgres.ErrInvalid,
 		)
 	}
-	pr, err := s.client.CreatePullRequest(ctx, access.Token, owner, repo, CreatePullRequestInput{
+	create := CreatePullRequestInput{
 		Title: title,
 		Body:  input.Body,
 		Head:  head,
 		Base:  base,
-	})
+		Draft: input.Draft,
+	}
+	pr, err := s.createPullRequestAsSessionOwner(ctx, orgID, sessionID, owner, repo, create)
+	if errors.Is(err, errSessionOwnerCannotAuthor) {
+		// The owner has not authorized the GitHub App, or GitHub refused their
+		// authorization for this repository: open it as the App, as before.
+		var token string
+		if token, err = installationWriteToken(); err == nil {
+			pr, err = s.client.CreatePullRequest(ctx, token, owner, repo, create)
+		}
+	}
 	if err != nil {
 		return domain.PullRequest{}, err
 	}

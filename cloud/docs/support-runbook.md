@@ -341,8 +341,10 @@ Other BYO signals on the trail:
 * `session.create_refused code=coder_template_required`: the project has no
   Coder template picked and the org has no default. Pick one on the project.
 * `worker.git_grant_failed code=CHECKOUT_NOT_AUTHORIZED`: the GitHub App is not
-  installed on the repository (or a stored PAT was revoked); the checkout and
-  git credential helper fail until it is.
+  installed on the repository; the checkout, and every fetch and push through
+  the control plane's git proxy, fail until it is. The proxy logs each request
+  as `git proxy request complete` (repository, endpoint, status, bytes,
+  duration) and a refused one as `git proxy refused a push` or a 403 to git.
 
 Reconciler log lines for a BYO session all carry `connection_id`, so
 

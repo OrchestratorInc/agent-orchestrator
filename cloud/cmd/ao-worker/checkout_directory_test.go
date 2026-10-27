@@ -103,7 +103,7 @@ func TestExtraReposAreClonedBesideTheWorkingFolder(t *testing.T) {
 		RepositoryURL: "https://github.com/acme/alice", Branch: "ao/sess-1",
 		ExtraRepos: []worker.RepoRef{{URL: origin}},
 	}}
-	cloneExtraRepos(ctx, discardLogger(), "", bootstrap, workspace, filepath.Join(home, ".ao", "worker"), false)
+	cloneExtraRepos(ctx, discardLogger(), worker.GitProxy{}, bootstrap, workspace, filepath.Join(home, ".ao", "worker"), false)
 	if _, err := os.Stat(filepath.Join(home, "work", "billing", "README.md")); err != nil {
 		t.Fatalf("billing was not cloned beside the working folder: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestAWorkingFoldersRepositoryFolderTheTemplateMadeIsSkipped(t *testing.T) {
 		t.Fatalf("logs = %s, marked = %v", logs.String(), worker.OwnedRepoFoldersOnly(dataDir))
 	}
 	logs.Reset()
-	cloneExtraRepos(context.Background(), logger, "", bootstrap, workspace, dataDir, false)
+	cloneExtraRepos(context.Background(), logger, worker.GitProxy{}, bootstrap, workspace, dataDir, false)
 	if strings.Contains(logs.String(), "unavailable") {
 		t.Fatalf("the worker tried to check billing out in the template's folder: %s", logs.String())
 	}

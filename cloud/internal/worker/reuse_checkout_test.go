@@ -5,9 +5,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestNormalizeRemoteURL(t *testing.T) {
@@ -283,22 +283,28 @@ func TestResolveReusedCheckoutWithoutMatchKeepsDefault(t *testing.T) {
 	}
 }
 
-// The refresh fetches from the authorized URL with every other credential
-// helper cleared, after checking the checkout's origin is that repository.
-func TestPrepareReusedCheckoutFetchesWithGrantOnly(t *testing.T) {
+// The refresh fetches from the authorized URL through the git proxy (whose
+// configuration replaces every other credential helper), after checking the
+// checkout's origin is that repository. No GitHub credential is involved.
+func TestPrepareReusedCheckoutFetchesThroughTheGitProxy(t *testing.T) {
 	t.Parallel()
 	runner := &reuseRecorderRunner{origin: "git@github.com:Acme/App.git\n"}
-	grant := CheckoutGrantResponse{CloneURL: "https://github.com/acme/app", Token: "ghs_token", ExpiresAt: time.Now().Add(time.Hour)}
+	proxy := GitProxy{PublicURL: "https://cp.example.com", SessionID: "sess-1", DataDir: "/home/ubuntu/.ao"}
+	grant := CheckoutGrantResponse{CloneURL: "https://github.com/acme/app", Proxy: proxy}
 	if err := PrepareReusedCheckout(context.Background(), runner, "/home/ubuntu/work/app", grant); err != nil {
 		t.Fatal(err)
 	}
 	fetch := runner.commands[len(runner.commands)-1]
-	want := []string{"-c", "credential.helper=", "fetch", "--prune", "--", "https://github.com/acme/app", "+refs/heads/*:refs/remotes/origin/*"}
+	want := append(proxy.configArgs(), "fetch", "--prune", "--", "https://github.com/acme/app", "+refs/heads/*:refs/remotes/origin/*")
 	if strings.Join(fetch, " ") != strings.Join(want, " ") {
-		t.Fatalf("fetch = %v", fetch)
+		t.Fatalf("fetch = %v, want %v", fetch, want)
 	}
-	if runner.env["AO_GIT_TOKEN"] != "ghs_token" || runner.env["GIT_TERMINAL_PROMPT"] != "0" {
-		t.Fatalf("fetch environment = %v", runner.env)
+	if !slices.Contains(fetch, "credential.helper=") ||
+		!slices.Contains(fetch, "url.https://cp.example.com/api/cloud/v1/worker/git/sess-1/.insteadOf=https://github.com/") {
+		t.Fatalf("fetch %v does not go through the session's git proxy", fetch)
+	}
+	if runner.env["GIT_TERMINAL_PROMPT"] != "0" || len(runner.env) != 1 {
+		t.Fatalf("fetch environment = %v, want no credential in it", runner.env)
 	}
 	mismatch := &reuseRecorderRunner{origin: "https://github.com/acme/other\n"}
 	if err := PrepareReusedCheckout(context.Background(), mismatch, "/home/ubuntu/work/app", grant); err == nil {
@@ -314,7 +320,7 @@ type reuseRecorderRunner struct {
 
 func (r *reuseRecorderRunner) Run(_ context.Context, _ string, env map[string]string, args ...string) (string, error) {
 	r.commands = append(r.commands, args)
-	if len(args) >= 2 && args[0] == "remote" && args[1] == "get-url" {
+	if isOriginLookup(args) {
 		return r.origin, nil
 	}
 	if env != nil {
@@ -434,7 +440,7 @@ func TestReusedCheckoutGitEnvironmentScopesHelper(t *testing.T) {
 	command := exec.Command("git", "config", "--get-all", "credential.helper")
 	command.Dir = repo
 	command.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
-	for key, value := range ReusedCheckoutGitEnvironment(dataDir) {
+	for key, value := range ReusedCheckoutGitEnvironment("https://cp.example.com", "sess-1", dataDir, GitIdentity{}) {
 		command.Env = append(command.Env, key+"="+value)
 	}
 	output, err := command.Output()
@@ -448,10 +454,16 @@ func TestReusedCheckoutGitEnvironmentScopesHelper(t *testing.T) {
 	if len(helpers) < 2 || helpers[len(helpers)-2] != "" {
 		t.Fatalf("helpers = %q, want an empty reset before the session helper", helpers)
 	}
-	environment := ReusedCheckoutGitEnvironment(dataDir)
-	if environment["GIT_CONFIG_COUNT"] != "5" || environment["GIT_CONFIG_KEY_3"] != "user.name" ||
-		environment["GIT_CONFIG_VALUE_4"] != cloudGitAuthorEmail {
+	environment := ReusedCheckoutGitEnvironment("https://cp.example.com", "sess-1", dataDir, GitIdentity{})
+	if environment["GIT_CONFIG_COUNT"] != "6" ||
+		environment["GIT_CONFIG_KEY_0"] != "url.https://cp.example.com/api/cloud/v1/worker/git/sess-1/.insteadOf" ||
+		environment["GIT_CONFIG_VALUE_0"] != "https://github.com/" ||
+		environment["GIT_CONFIG_KEY_4"] != "user.name" || environment["GIT_CONFIG_VALUE_5"] != cloudGitAuthorEmail {
 		t.Fatalf("environment = %v", environment)
+	}
+	owner := ReusedCheckoutGitEnvironment("https://cp.example.com", "sess-1", dataDir, GitHubUserIdentity("octocat", 42))
+	if owner["GIT_CONFIG_VALUE_4"] != "octocat" || owner["GIT_CONFIG_VALUE_5"] != "42+octocat@users.noreply.github.com" {
+		t.Fatalf("owner environment = %v, want the owner's GitHub identity", owner)
 	}
 }
 

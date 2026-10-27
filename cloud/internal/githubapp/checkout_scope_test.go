@@ -384,11 +384,11 @@ func TestIssueCheckoutGrantFallsBackToPrimaryOnExtrasError(t *testing.T) {
 	}
 }
 
-// IssuePushGrant is the write-side mirror of IssueCheckoutGrant: one broad token
-// scoped to the primary repository plus the declared extras the App can access,
-// so a worker's push to an extra dev-kit repository is correctly scoped. The
-// permissions must be write, not read.
-func TestIssuePushGrantBroadensToExtraRepos(t *testing.T) {
+// IssueCLIGrant is the sandbox gh CLI's token: one token scoped to the primary
+// repository plus the declared extras the App can access, able to write pull
+// requests but never repository contents, so it cannot push around the git
+// proxy.
+func TestIssueCLIGrantBroadensToExtraReposWithoutContentsWrite(t *testing.T) {
 	backend := &installationRepositoryServer{repos: []Repository{
 		{ID: 1, FullName: "octo/app"},
 		{ID: 2, FullName: "octo/lib"},
@@ -402,26 +402,27 @@ func TestIssuePushGrantBroadensToExtraRepos(t *testing.T) {
 	}
 	svc := newCheckoutTestService(t, store, client)
 
-	grant, err := svc.IssuePushGrant(context.Background(), "org-1", "sess-1")
+	grant, err := svc.IssueCLIGrant(context.Background(), "org-1", "sess-1")
 	if err != nil {
-		t.Fatalf("IssuePushGrant: %v", err)
+		t.Fatalf("IssueCLIGrant: %v", err)
 	}
 	if grant.Token == "" {
-		t.Fatal("expected a push token")
+		t.Fatal("expected a CLI token")
 	}
 	got := append([]int64(nil), backend.mintedRepoIDs...)
 	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
 	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
 		t.Fatalf("minted repository_ids = %v, want [1 2] (primary + octo/lib)", backend.mintedRepoIDs)
 	}
-	if backend.mintedPermissions["contents"] != "write" || backend.mintedPermissions["pull_requests"] != "write" {
-		t.Fatalf("minted permissions = %v, want contents:write + pull_requests:write", backend.mintedPermissions)
+	if backend.mintedPermissions["contents"] != "read" || backend.mintedPermissions["pull_requests"] != "write" {
+		t.Fatalf("minted permissions = %v, want contents:read + pull_requests:write", backend.mintedPermissions)
 	}
 }
 
-// IssuePushGrantForRepo scopes the token to exactly one repository. An empty or
-// primary name resolves to the primary repository alone, with write permissions.
-func TestIssuePushGrantForRepoScopesToPrimary(t *testing.T) {
+// IssueGitProxyGrant scopes a push token to exactly one repository. The
+// primary's name resolves to the primary repository alone, with write
+// permissions; an empty name is refused, since the proxy always names one.
+func TestIssueGitProxyGrantPushScopesToPrimary(t *testing.T) {
 	backend := &installationRepositoryServer{repos: []Repository{{ID: 1, FullName: "octo/app"}}}
 	server := httptest.NewServer(backend.handler(t))
 	defer server.Close()
@@ -429,8 +430,11 @@ func TestIssuePushGrantForRepoScopesToPrimary(t *testing.T) {
 	store := &checkoutStubStore{primary: primaryContext()}
 	svc := newCheckoutTestService(t, store, client)
 
-	if _, err := svc.IssuePushGrantForRepo(context.Background(), "org-1", "sess-1", ""); err != nil {
-		t.Fatalf("IssuePushGrantForRepo(primary): %v", err)
+	if _, err := svc.IssueGitProxyGrant(context.Background(), "org-1", "sess-1", "", true); !errors.Is(err, postgres.ErrForbidden) {
+		t.Fatalf("IssueGitProxyGrant(no repository) err = %v, want ErrForbidden", err)
+	}
+	if _, err := svc.IssueGitProxyGrant(context.Background(), "org-1", "sess-1", "octo/app", true); err != nil {
+		t.Fatalf("IssueGitProxyGrant(primary): %v", err)
 	}
 	if len(backend.mintedRepoIDs) != 1 || backend.mintedRepoIDs[0] != 1 {
 		t.Fatalf("minted repository_ids = %v, want [1] (primary only)", backend.mintedRepoIDs)
@@ -446,7 +450,7 @@ func TestIssuePushGrantForRepoScopesToPrimary(t *testing.T) {
 
 // A declared extra the App is installed on resolves to its own repository ID and
 // mints a token scoped only to it.
-func TestIssuePushGrantForRepoResolvesDeclaredExtra(t *testing.T) {
+func TestIssueGitProxyGrantResolvesDeclaredExtra(t *testing.T) {
 	backend := &installationRepositoryServer{repos: []Repository{
 		{ID: 1, FullName: "octo/app"},
 		{ID: 2, FullName: "octo/lib"},
@@ -460,17 +464,17 @@ func TestIssuePushGrantForRepoResolvesDeclaredExtra(t *testing.T) {
 	}
 	svc := newCheckoutTestService(t, store, client)
 
-	if _, err := svc.IssuePushGrantForRepo(context.Background(), "org-1", "sess-1", "octo/lib"); err != nil {
-		t.Fatalf("IssuePushGrantForRepo(extra): %v", err)
+	if _, err := svc.IssueGitProxyGrant(context.Background(), "org-1", "sess-1", "octo/lib", true); err != nil {
+		t.Fatalf("IssueGitProxyGrant(extra): %v", err)
 	}
 	if len(backend.mintedRepoIDs) != 1 || backend.mintedRepoIDs[0] != 2 {
 		t.Fatalf("minted repository_ids = %v, want [2] (octo/lib only)", backend.mintedRepoIDs)
 	}
 }
 
-// A repository that is not the primary and not a declared extra is forbidden —
-// the App grant must not be issued, so the caller falls back to a PAT.
-func TestIssuePushGrantForRepoForbidsUndeclared(t *testing.T) {
+// A repository that is not the primary and not a declared extra is forbidden:
+// the proxy never forwards git traffic for it, read or write.
+func TestIssueGitProxyGrantForbidsUndeclared(t *testing.T) {
 	backend := &installationRepositoryServer{repos: []Repository{
 		{ID: 1, FullName: "octo/app"},
 		{ID: 2, FullName: "octo/lib"},
@@ -484,18 +488,20 @@ func TestIssuePushGrantForRepoForbidsUndeclared(t *testing.T) {
 	}
 	svc := newCheckoutTestService(t, store, client)
 
-	_, err := svc.IssuePushGrantForRepo(context.Background(), "org-1", "sess-1", "octo/secret")
-	if !errors.Is(err, postgres.ErrForbidden) {
-		t.Fatalf("IssuePushGrantForRepo(undeclared) err = %v, want ErrForbidden", err)
+	for _, push := range []bool{false, true} {
+		_, err := svc.IssueGitProxyGrant(context.Background(), "org-1", "sess-1", "octo/secret", push)
+		if !errors.Is(err, postgres.ErrForbidden) {
+			t.Fatalf("IssueGitProxyGrant(undeclared, push=%v) err = %v, want ErrForbidden", push, err)
+		}
 	}
 	if len(backend.mintedRepoIDs) != 0 {
 		t.Fatalf("minted a token for an undeclared repo: %v", backend.mintedRepoIDs)
 	}
 }
 
-// A declared extra the App is NOT installed on (404, unresolved) is forbidden so
-// the credential helper falls back to a PAT that may still cover it.
-func TestIssuePushGrantForRepoForbidsAppUninstalledExtra(t *testing.T) {
+// A declared extra the App is NOT installed on (404, unresolved) is forbidden:
+// the control plane holds no credential that reaches it.
+func TestIssueGitProxyGrantForbidsAppUninstalledExtra(t *testing.T) {
 	backend := &installationRepositoryServer{repos: []Repository{{ID: 1, FullName: "octo/app"}}}
 	server := httptest.NewServer(backend.handler(t))
 	defer server.Close()
@@ -506,9 +512,36 @@ func TestIssuePushGrantForRepoForbidsAppUninstalledExtra(t *testing.T) {
 	}
 	svc := newCheckoutTestService(t, store, client)
 
-	_, err := svc.IssuePushGrantForRepo(context.Background(), "org-1", "sess-1", "octo/ghost")
+	_, err := svc.IssueGitProxyGrant(context.Background(), "org-1", "sess-1", "octo/ghost", true)
 	if !errors.Is(err, postgres.ErrForbidden) {
-		t.Fatalf("IssuePushGrantForRepo(app-uninstalled extra) err = %v, want ErrForbidden", err)
+		t.Fatalf("IssueGitProxyGrant(app-uninstalled extra) err = %v, want ErrForbidden", err)
+	}
+}
+
+// A fetch through the proxy uses a read-only token for exactly the named
+// repository, reused across the session's git operations.
+func TestIssueGitProxyGrantFetchIsReadOnlyAndReused(t *testing.T) {
+	backend := &installationRepositoryServer{repos: []Repository{{ID: 1, FullName: "octo/app"}}}
+	server := httptest.NewServer(backend.handler(t))
+	defer server.Close()
+	client := newAppTestClient(t, server.URL, server.Client())
+	store := &checkoutStubStore{primary: primaryContext()}
+	svc := newCheckoutTestService(t, store, client)
+
+	for range 2 {
+		grant, err := svc.IssueGitProxyGrant(context.Background(), "org-1", "sess-1", "octo/app", false)
+		if err != nil {
+			t.Fatalf("IssueGitProxyGrant(fetch): %v", err)
+		}
+		if grant.Token == "" {
+			t.Fatal("expected a fetch token")
+		}
+	}
+	if backend.tokenCalls != 1 || len(backend.mintedRepoIDs) != 1 || backend.mintedRepoIDs[0] != 1 {
+		t.Fatalf("mints = %d of repository_ids %v, want one mint of [1]", backend.tokenCalls, backend.mintedRepoIDs)
+	}
+	if backend.mintedPermissions["contents"] != "read" || backend.mintedPermissions["pull_requests"] != "" {
+		t.Fatalf("minted permissions = %v, want contents:read only", backend.mintedPermissions)
 	}
 }
 

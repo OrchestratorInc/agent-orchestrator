@@ -216,7 +216,7 @@ func ResolveWorkingDirectory(
 		return ReuseDecision{}, fmt.Errorf("%w: %s exists but is not a git checkout", ErrWorkingDirectoryUnusable, dir)
 	}
 	want := NormalizeRemoteURL(repositoryURL)
-	origin, err := runner.Run(ctx, dir, nil, "remote", "get-url", "origin")
+	origin, err := OriginURL(ctx, runner, dir)
 	if err != nil || want == "" || NormalizeRemoteURL(strings.TrimSpace(origin)) != want {
 		return ReuseDecision{}, fmt.Errorf("%w: %s is a checkout of a different repository", ErrWorkingDirectoryUnusable, dir)
 	}

@@ -74,6 +74,7 @@ var workerCapabilities = []string{
 	worker.CapabilityMultiRepo,
 	worker.CapabilityArtifacts,
 	worker.CapabilityChatStart,
+	worker.CapabilityGitProxy,
 }
 
 func main() {
@@ -200,7 +201,7 @@ func run(logger *slog.Logger) error {
 	ownedCheckouts := false
 	switch {
 	case workingDirectory != "" && hasRepository:
-		reuse, workingDirectoryErr = resolveConfiguredWorkspace(ctx, logger, bootstrap, workingDirectory, workspace, dataDir)
+		reuse, workingDirectoryErr = resolveConfiguredWorkspace(ctx, logger, bootstrap, workingDirectory, workspace, dataDir, publicURL)
 		workspace = reuse.Workspace
 	case workingDirectory != "" && worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL):
 		// A standalone project (no repository) on a workspace with a
@@ -221,7 +222,7 @@ func run(logger *slog.Logger) error {
 		checkoutRefused = workingDirectoryErr != nil
 		ownedCheckouts = true
 	case os.Getenv(worker.ReuseExistingCheckoutEnv) == "1" && hasRepository:
-		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir)
+		reuse = resolveReusedWorkspace(ctx, logger, bootstrap, workspace, dataDir, publicURL)
 		workspace = reuse.Workspace
 	}
 	// The session works in the user's own workspace (a reused template
@@ -561,7 +562,8 @@ func run(logger *slog.Logger) error {
 	go func() { results <- client.heartbeatLoop(runCtx, logger) }()
 	go func() { results <- transportSupervisor.Run(runCtx) }()
 	go func() {
-		results <- runPullRequestBridge(runCtx, pullRequestSocketPath, client, workspace, dataDir, bootstrap.Launch, logger)
+		results <- runPullRequestBridge(runCtx, pullRequestSocketPath, client, workspace, dataDir,
+			gitProxy(publicURL, bootstrap, dataDir), bootstrap.Launch, logger)
 	}()
 	go func() {
 		results <- runReviewBridge(runCtx, reviewSocketPath, client, logger)
@@ -879,7 +881,14 @@ func prepareWorkspace(
 			return err
 		}
 	} else {
+		// The session's git tooling comes first: the clone already
+		// authenticates to the git proxy through its credential helper.
+		if err := worker.WriteWorkerGitTooling(dataDir, publicURL, bootstrap.SessionID); err != nil {
+			return fmt.Errorf("configure repository tooling: %w", err)
+		}
+		proxy := gitProxy(publicURL, bootstrap, dataDir)
 		checkoutGrant, err := client.checkoutGrant(ctx)
+		checkoutGrant.Proxy = proxy
 		if err != nil {
 			if !anonymousCheckoutEnabled() {
 				if errors.Is(err, errCheckoutForbidden) {
@@ -891,6 +900,8 @@ func prepareWorkspace(
 				}
 				return fmt.Errorf("request checkout grant: %w", err)
 			}
+			// Straight to GitHub without a credential; later fetches still go
+			// through the proxy, which reads a public repository anonymously.
 			checkoutGrant = worker.CheckoutGrantResponse{CloneURL: bootstrap.Launch.RepositoryURL}
 			logger.Info("using anonymous public GitHub checkout")
 		}
@@ -900,7 +911,7 @@ func prepareWorkspace(
 		}
 		if err := worker.ConfigureWorkerGit(
 			ctx, worker.ExecGitRunner{}, workspace, dataDir, publicURL,
-			bootstrap.SessionID, bootstrap.Launch.Branch,
+			bootstrap.SessionID, bootstrap.Launch.Branch, bootstrap.Launch.GitIdentity(),
 		); errors.Is(err, worker.ErrSessionBranchFellBack) || errors.Is(err, worker.ErrSessionBranchStashed) {
 			logger.Warn("session branch checkout needed a fallback", "branch", bootstrap.Launch.Branch, "error", err)
 		} else if err != nil {
@@ -910,10 +921,10 @@ func prepareWorkspace(
 		// primary checkout. Non-fatal by design — an extra repo that cannot be
 		// cloned (e.g. it is outside the session credential's GitHub App
 		// installation) must never stop the session from starting on its primary
-		// repo. Extra repos reuse the session's checkout-grant token, so they work
-		// for repositories the installation can access; arbitrary private
+		// repo. Extra repos go through the same git proxy, so they work for
+		// repositories the installation can access; arbitrary private
 		// third-party repos need per-repo grants (a follow-up).
-		cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap, workspace, dataDir, userWorkspace)
+		cloneExtraRepos(ctx, logger, proxy, bootstrap, workspace, dataDir, userWorkspace)
 	}
 	if err := worker.EnsureWorkspaceReviewBase(
 		ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.DefaultBranch,
@@ -931,7 +942,7 @@ func resolveReusedWorkspace(
 	ctx context.Context,
 	logger *slog.Logger,
 	bootstrap worker.BootstrapResponse,
-	workspace, dataDir string,
+	workspace, dataDir, publicURL string,
 ) worker.ReuseDecision {
 	home := strings.TrimSpace(os.Getenv("HOME"))
 	decision := worker.ResolveReusedCheckout(
@@ -946,11 +957,18 @@ func resolveReusedWorkspace(
 	}
 	logger.Info("checkout reuse: working in the template's existing checkout",
 		"workspace", decision.Workspace, "adopted_now", decision.AdoptedNow, "stash", decision.Stash)
-	for key, value := range worker.ReusedCheckoutGitEnvironment(dataDir) {
+	for key, value := range worker.ReusedCheckoutGitEnvironment(publicURL, bootstrap.SessionID, dataDir,
+		bootstrap.Launch.GitIdentity()) {
 		_ = os.Setenv(key, value)
 	}
 	_ = os.Setenv("AO_WORKSPACE_DIR", decision.Workspace)
 	return decision
+}
+
+// gitProxy is how the worker's own git commands reach GitHub: the session's
+// git proxy on the control plane.
+func gitProxy(publicURL string, bootstrap worker.BootstrapResponse, dataDir string) worker.GitProxy {
+	return worker.GitProxy{PublicURL: publicURL, SessionID: bootstrap.SessionID, DataDir: dataDir}
 }
 
 // prepareReusedWorkspace refreshes an adopted checkout: it writes the session
@@ -967,15 +985,17 @@ func prepareReusedWorkspace(
 	workspace, dataDir, publicURL string,
 	reuse *worker.ReuseDecision,
 ) error {
+	if err := worker.ConfigureReusedCheckoutGit(dataDir, publicURL, bootstrap.SessionID); err != nil {
+		return fmt.Errorf("configure repository tooling: %w", err)
+	}
+	proxy := gitProxy(publicURL, bootstrap, dataDir)
 	checkoutGrant, err := client.checkoutGrant(ctx)
+	checkoutGrant.Proxy = proxy
 	if err != nil {
 		if !anonymousCheckoutEnabled() {
 			return fmt.Errorf("request checkout grant: %w", err)
 		}
 		checkoutGrant = worker.CheckoutGrantResponse{CloneURL: bootstrap.Launch.RepositoryURL}
-	}
-	if err := worker.ConfigureReusedCheckoutGit(dataDir, publicURL, bootstrap.SessionID); err != nil {
-		return fmt.Errorf("configure repository tooling: %w", err)
 	}
 	if err := worker.PrepareReusedCheckout(ctx, worker.ExecGitRunner{}, workspace, checkoutGrant); err != nil {
 		return fmt.Errorf("refresh the reused repository checkout: %w", err)
@@ -996,7 +1016,7 @@ func prepareReusedWorkspace(
 			return err
 		}
 	}
-	cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap, workspace, dataDir, true)
+	cloneExtraRepos(ctx, logger, proxy, bootstrap, workspace, dataDir, true)
 	return nil
 }
 
@@ -1024,7 +1044,7 @@ func sessionRepositories(launch worker.LaunchContext, workspace, dataDir string)
 func cloneExtraRepos(
 	ctx context.Context,
 	logger *slog.Logger,
-	token string,
+	proxy worker.GitProxy,
 	bootstrap worker.BootstrapResponse,
 	workspace, dataDir string,
 	userWorkspace bool,
@@ -1040,10 +1060,9 @@ func cloneExtraRepos(
 	adoptedAny := false
 	ownedOnly := worker.OwnedRepoFoldersOnly(dataDir)
 	for _, checkout := range worker.SessionRepoCheckouts(workspace, launch.RepositoryURL, launch.ExtraRepos)[1:] {
-		// A clone uses the main checkout's askpass mechanism: the token stays in
-		// the command's environment and never enters the URL, argv, or the
-		// repo's .git/config. In the user's own workspace an existing checkout
-		// is adopted without writing AO's git configuration into it.
+		// A clone goes through the git proxy like the main checkout; no GitHub
+		// credential is involved. In the user's own workspace an existing
+		// checkout is adopted without writing AO's git configuration into it.
 		repo := worker.RepoRef{URL: checkout.URL, Branch: checkout.Branch}
 		if ownedOnly && worker.ForeignRepoFolder(checkout.Path) {
 			// Reported when the worker started (recordOwnedRepoFolders).
@@ -1061,7 +1080,7 @@ func cloneExtraRepos(
 		}
 		adopted, err := worker.PrepareExtraRepo(ctx, worker.ExecGitRunner{}, checkout.Path, repo, worker.ExtraRepoOptions{
 			SessionID: bootstrap.SessionID, SessionBranch: launch.Branch,
-			Token: token, DataDir: dataDir, Adopt: userWorkspace,
+			DataDir: dataDir, Proxy: proxy, Identity: launch.GitIdentity(), Adopt: userWorkspace,
 		})
 		if errors.Is(err, worker.ErrSessionBranchIsBase) {
 			// The repository is ready at its base branch; the session works
@@ -1082,7 +1101,8 @@ func cloneExtraRepos(
 		// An adopted checkout carries none of AO's git configuration; scope the
 		// session credential helper and identity to the worker's process tree,
 		// as a reused main checkout does.
-		for key, value := range worker.ReusedCheckoutGitEnvironment(dataDir) {
+		for key, value := range worker.ReusedCheckoutGitEnvironment(proxy.PublicURL, proxy.SessionID, dataDir,
+			launch.GitIdentity()) {
 			_ = os.Setenv(key, value)
 		}
 	}
@@ -1516,13 +1536,8 @@ func (c *client) agentCredential(ctx context.Context, query string) (worker.Cred
 	return response, nil
 }
 
-// grantReuseMargin is how long a prefetched checkout token must stay valid to
-// be used; a shorter-lived one is replaced so the fetch cannot outlive it.
-const grantReuseMargin = 2 * time.Minute
-
 func (c *client) checkoutGrant(ctx context.Context) (worker.CheckoutGrantResponse, error) {
-	if grant, ok := c.grantPrefetch.take(ctx); ok &&
-		(grant.Token == "" || time.Until(grant.ExpiresAt) > grantReuseMargin) {
+	if grant, ok := c.grantPrefetch.take(ctx); ok {
 		return grant, nil
 	}
 	return c.fetchCheckoutGrant(ctx)
@@ -1533,20 +1548,8 @@ func (c *client) fetchCheckoutGrant(ctx context.Context) (worker.CheckoutGrantRe
 	if err := c.do(ctx, "/worker/checkout-grant", struct{}{}, &response); err != nil {
 		return worker.CheckoutGrantResponse{}, err
 	}
-	if response.CloneURL == "" ||
-		(response.Token != "" && !response.ExpiresAt.After(time.Now())) {
+	if response.CloneURL == "" {
 		return worker.CheckoutGrantResponse{}, errors.New("control plane returned an invalid checkout grant")
-	}
-	return response, nil
-}
-
-func (c *client) pushGrant(ctx context.Context) (worker.CheckoutGrantResponse, error) {
-	var response worker.CheckoutGrantResponse
-	if err := c.do(ctx, "/worker/push-grant", struct{}{}, &response); err != nil {
-		return worker.CheckoutGrantResponse{}, err
-	}
-	if response.CloneURL == "" || response.Token == "" || !response.ExpiresAt.After(time.Now()) {
-		return worker.CheckoutGrantResponse{}, errors.New("control plane returned an invalid push grant")
 	}
 	return response, nil
 }

@@ -784,10 +784,12 @@ func Load() (Config, error) {
 	if cfg.GitHub.Enabled() && cfg.GitHub.PublicURL == "" {
 		return Config{}, errors.New("AO_CLOUD_PUBLIC_URL is required when the GitHub App is configured")
 	}
-	githubAllowed := cfg.Environment == "production" ||
+	// Staging runs its own GitHub App (a separate App registered for staging),
+	// so it holds its users' GitHub authorizations itself.
+	githubAllowed := cfg.Environment == "production" || cfg.Environment == "staging" ||
 		(cfg.Environment == "development" && githubLocalTest)
 	if cfg.GitHub.Enabled() && !githubAllowed {
-		return Config{}, errors.New("GitHub App credentials may only be configured in production")
+		return Config{}, errors.New("GitHub App credentials may only be configured in production and staging")
 	}
 	if cfg.GitHub.Enabled() {
 		publicURL, err := url.Parse(cfg.GitHub.PublicURL)

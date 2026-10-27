@@ -79,6 +79,18 @@ type LaunchContext struct {
 	// every step the kind's default.
 	PostCreateTimeoutMinutes []int `json:"postCreateTimeoutMinutes,omitempty"`
 	PreRemoveTimeoutMinutes  []int `json:"preRemoveTimeoutMinutes,omitempty"`
+	// GitAuthorName and GitAuthorEmail are the session owner's GitHub identity
+	// (GitHubUserIdentity), which the session's commits are authored as.
+	// Empty when the owner has not authorized the GitHub App: commits then
+	// carry AO's own identity.
+	GitAuthorName  string `json:"gitAuthorName,omitempty"`
+	GitAuthorEmail string `json:"gitAuthorEmail,omitempty"`
+}
+
+// GitIdentity is the commit identity the session's checkouts are configured
+// with.
+func (launch LaunchContext) GitIdentity() GitIdentity {
+	return GitIdentity{Name: launch.GitAuthorName, Email: launch.GitAuthorEmail}.orDefault()
 }
 
 // ProjectScripts are the launch's Setup and Cleanup commands, each led by its
@@ -160,16 +172,18 @@ type HeartbeatResponse struct {
 	Features []string `json:"features,omitempty"`
 }
 
-// CheckoutGrantResponse carries a repository-scoped, short-lived GitHub App
-// credential. Callers must never persist or log Token.
+// CheckoutGrantResponse names the repository a worker clones. It carries no
+// GitHub credential: the clone goes through the control plane's git proxy
+// (Proxy, which the worker fills in itself; see GitProxy).
 type CheckoutGrantResponse struct {
-	CloneURL  string    `json:"cloneUrl"`
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expiresAt"`
+	CloneURL string `json:"cloneUrl"`
+	// Proxy is how the worker's git reaches GitHub; never sent on the wire.
+	Proxy GitProxy `json:"-"`
 }
 
-// GitHubTokenResponse carries a fresh repository-scoped GitHub App token for
-// worker-side tooling such as git's credential helper and the gh wrapper.
+// GitHubTokenResponse carries the sandbox GitHub CLI wrapper's short-lived
+// installation token: it reads the session's repositories and their pull
+// requests but cannot push.
 type GitHubTokenResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expiresAt"`
@@ -187,6 +201,8 @@ type RaisePullRequestRequest struct {
 	// pushed to; empty means the main repository. Any other value must be one
 	// of the project's additional repositories.
 	Repository string `json:"repository,omitempty"`
+	// Draft opens the pull request as a draft.
+	Draft bool `json:"draft,omitempty"`
 }
 
 // RaisePullRequestResponse describes the pull request the control plane

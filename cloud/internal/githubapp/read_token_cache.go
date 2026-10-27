@@ -20,8 +20,9 @@ const readTokenReuseMargin = 10 * time.Minute
 // (checkout) and every git operation a worker's credential helper makes;
 // within a token's lifetime the same scope yields an interchangeable token.
 //
-// Only read tokens are cached. Write tokens are minted just before a push or a
-// pull-request call and never kept, as before. Authorization is unaffected:
+// The same cache type also keeps the git proxy's write tokens
+// (Client.proxyWriteToken), which never leave the control plane. Other write
+// tokens are minted just before a pull-request call and never kept. Authorization is unaffected:
 // every caller still resolves and checks the session's repository authority
 // before asking for a token, so the cache only ever answers a request that was
 // already allowed to mint the same scope.
