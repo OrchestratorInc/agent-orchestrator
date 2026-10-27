@@ -30,6 +30,7 @@ function initialModeFor(path: string): FileViewMode {
 export function ArtifactFileView({
 	artifactName,
 	feedbackRequestKey,
+	initialEditing = false,
 	hostId,
 	onFeedbackRequestConsumed,
 	path,
@@ -44,6 +45,7 @@ export function ArtifactFileView({
 }: {
 	artifactName: string;
 	feedbackRequestKey?: number;
+	initialEditing?: boolean;
 	hostId?: string;
 	onFeedbackRequestConsumed?: (key: number) => void;
 	path: string;
@@ -82,7 +84,7 @@ export function ArtifactFileView({
 		<div className="flex h-full min-h-0 flex-col bg-background">
 			{/* The app shell is unselectable; an artifact's text is meant to be selected. */}
 			<div className="board-scrollbar min-h-0 flex-1 select-text overflow-x-hidden overflow-y-auto overscroll-contain" ref={scrollRef}>
-				<FileContentPane annotation={annotation} initialMode={initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} />
+				<FileContentPane annotation={annotation} initialEditing={initialEditing && !readOnly} initialMode={initialEditing && !readOnly ? "file" : initialModeFor(path)} hostId={hostId} path={path} sessionId={sessionId} source={source} split={false} toolbarHost={toolbarHost} />
 			</div>
 			<ArtifactSelectionAsk annotation={annotation} containerRef={scrollRef} path={path} />
 		</div>

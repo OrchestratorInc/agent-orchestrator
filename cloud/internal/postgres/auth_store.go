@@ -20,17 +20,19 @@ func (s *Store) UpsertWorkOSUser(
 	err := s.pool.QueryRow(
 		ctx,
 		`INSERT INTO ao_users (
-			auth_provider, external_user_id, email, display_name
-		) VALUES ('workos', $1, $2, $3)
+			auth_provider, external_user_id, email, display_name, avatar_url
+		) VALUES ('workos', $1, $2, $3, $4)
 		ON CONFLICT (auth_provider, external_user_id)
 		DO UPDATE SET
 			email = EXCLUDED.email,
 			display_name = EXCLUDED.display_name,
+			avatar_url = EXCLUDED.avatar_url,
 			updated_at = now()
 		RETURNING id`,
 		principal.ExternalID,
 		principal.Email,
 		principal.DisplayName,
+		principal.AvatarURL,
 	).Scan(&principal.UserID)
 	if err != nil {
 		return domain.Principal{}, err

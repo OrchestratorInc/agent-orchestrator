@@ -5304,6 +5304,15 @@ describe("durable queued edits", () => {
 		};
 	}
 
+	it("keeps the sharing notice directly above the locked form and below the queue", () => {
+		render(<ChatWorkspace snapshot={queuedSnapshot()} onSend={vi.fn()} composerLockedPlaceholder="" composerNotice={<div data-composer-notice>Live draft stays visible</div>} />);
+		const notice = screen.getByText("Live draft stays visible");
+		expect(notice.previousElementSibling).toHaveAttribute("data-testid", "queued-composer-dock");
+		expect(notice.nextElementSibling?.tagName).toBe("FORM");
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "false");
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-placeholder", "");
+	});
+
 	it("restores the queue target across remount and keeps the independent composer after accepted save", async () => {
 		const snapshot = queuedSnapshot();
 		const save = vi.fn().mockResolvedValue(undefined);

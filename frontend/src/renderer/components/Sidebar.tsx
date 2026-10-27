@@ -67,6 +67,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 	sortedWorkerSessions,
+	isOrchestratorSession,
 	resolveNextNavigationAfterSessionKill,
 	workerSessions,
 	CLOUD_PROJECT_KIND,
@@ -1462,9 +1463,15 @@ const ProjectItem = memo(function ProjectItem({
 	// Keep completed PR sessions reachable while their runtime still exists.
 	// Only termination removes a worker from the sidebar; archived sessions stay
 	// reachable through SessionsBoard.
+	// A project shared from another organization lists every session shared
+	// with this person, its orchestrator included: a guest has no orchestrator
+	// of their own to reach it through.
 	const visibleSessions = useMemo(
-		() => sortedWorkerSessions(workspace.sessions).filter((session) => session.isTerminated !== true),
-		[workspace.sessions],
+		() => (workspace.shared
+			? [...workspace.sessions].sort((a, b) => Number(isOrchestratorSession(b)) - Number(isOrchestratorSession(a)))
+			: sortedWorkerSessions(workspace.sessions)
+		).filter((session) => session.isTerminated !== true),
+		[workspace.sessions, workspace.shared],
 	);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
@@ -1581,6 +1588,8 @@ const ProjectItem = memo(function ProjectItem({
 			selection.goSession(workspace.id, orchestrator.id);
 			return;
 		}
+		// A guest cannot start an orchestrator in someone else's project.
+		if (workspace.shared) return;
 		// A cloud project has no local orchestrator-agent config, so the settings
 		// fallback below would dead-end it. Spawn the orchestrator as a cloud
 		// session in its own sandbox instead.
@@ -1807,70 +1816,80 @@ const ProjectItem = memo(function ProjectItem({
 								onClick={(event) => event.stopPropagation()}
 								onPointerDown={(event) => event.stopPropagation()}
 							>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<span className="inline-flex">
-											<button
-												aria-current={orchestratorActive ? "page" : undefined}
-												aria-label={
-													orchestrator
-														? t("shell.openProjectOrchestrator", {
-														name: nameWithHost,
-															})
-														: t("shell.spawnProjectOrchestrator", {
-														name: nameWithHost,
-															})
-												}
-													className={cn(HOVER_ACTION_CLASS, orchestratorActive && "text-foreground")}
-													disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
-												onClick={() => void openOrchestrator()}
-												type="button"
-											>
-												<OrchestratorIcon aria-hidden="true" strokeWidth={orchestratorActive ? 2.5 : 2} />
-											</button>
-										</span>
-									</TooltipTrigger>
-										<TooltipContent>
-											{isProjectProvisioning || isProjectRestarting
-												? t("shell.restarting")
-												: isSpawning
-												? t("shell.spawning")
-												: orchestrator
-													? t("shell.orchestrator")
-													: t("shell.spawnOrchestratorLower")}
-									</TooltipContent>
-								</Tooltip>
-								<DropdownMenu>
-									<DropdownMenuTrigger asChild>
-										<button
-											aria-label={t("shell.projectActions", {
-														name: nameWithHost,
-											})}
-											className={HOVER_ACTION_CLASS}
-											type="button"
-										>
-											<MoreVertical aria-hidden="true" />
-										</button>
-									</DropdownMenuTrigger>
-									<DropdownMenuContent side="right" align="start" className="min-w-44">
-										<DropdownMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
-											<Plus aria-hidden="true" />
-											{t("shell.newTask")}
-										</DropdownMenuItem>
-						<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
-											<Settings aria-hidden="true" />
-											{t("shell.projectSettings")}
-										</DropdownMenuItem>
-										<DropdownMenuItem
-											className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
-											disabled={isRemoving}
-											onSelect={() => void removeProject()}
-										>
-											<Trash2 aria-hidden="true" />
-											{t("shell.removeProjectTitle")}
-										</DropdownMenuItem>
-									</DropdownMenuContent>
-								</DropdownMenu>
+								{/* A guest may open a shared orchestrator but never start one, and the
+								    project's own actions belong to its organization. */}
+								{!workspace.shared || orchestrator ? (
+									<>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<span className="inline-flex">
+													<button
+														aria-current={orchestratorActive ? "page" : undefined}
+														aria-label={
+															orchestrator
+																? t("shell.openProjectOrchestrator", {
+																name: nameWithHost,
+																	})
+																: t("shell.spawnProjectOrchestrator", {
+																name: nameWithHost,
+																	})
+														}
+															className={cn(HOVER_ACTION_CLASS, orchestratorActive && "text-foreground")}
+															disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
+														onClick={() => void openOrchestrator()}
+														type="button"
+													>
+														<OrchestratorIcon aria-hidden="true" strokeWidth={orchestratorActive ? 2.5 : 2} />
+													</button>
+												</span>
+											</TooltipTrigger>
+												<TooltipContent>
+													{isProjectProvisioning || isProjectRestarting
+														? t("shell.restarting")
+														: isSpawning
+														? t("shell.spawning")
+														: orchestrator
+															? t("shell.orchestrator")
+															: t("shell.spawnOrchestratorLower")}
+											</TooltipContent>
+										</Tooltip>
+									</>
+								) : null}
+								{workspace.shared ? null : (
+									<>
+										<DropdownMenu>
+											<DropdownMenuTrigger asChild>
+												<button
+													aria-label={t("shell.projectActions", {
+																name: nameWithHost,
+													})}
+													className={HOVER_ACTION_CLASS}
+													type="button"
+												>
+													<MoreVertical aria-hidden="true" />
+												</button>
+											</DropdownMenuTrigger>
+											<DropdownMenuContent side="right" align="start" className="min-w-44">
+												<DropdownMenuItem disabled={isProjectRestarting} onSelect={() => requestNewTask(workspace.id, workspace.hostId)}>
+													<Plus aria-hidden="true" />
+													{t("shell.newTask")}
+												</DropdownMenuItem>
+								<DropdownMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
+													<Settings aria-hidden="true" />
+													{t("shell.projectSettings")}
+												</DropdownMenuItem>
+												<DropdownMenuItem
+													className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
+													disabled={isRemoving}
+													onSelect={() => void removeProject()}
+												>
+													<Trash2 aria-hidden="true" />
+													{t("shell.removeProjectTitle")}
+												</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenu>
+									</>
+								)}
 							</div>}
 						</div>
 						{/* end outer relative */}

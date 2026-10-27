@@ -463,6 +463,19 @@ export interface ChatWorkspaceProps {
 	agentSwitch?: AgentSwitchProps;
 	/** A line above the chat box, such as a switch waiting for the next message. */
 	composerNotice?: ReactNode;
+	/**
+	 * Locks the chat box with this placeholder, as while someone else in a
+	 * shared session is writing to the agent. Decisions the current turn needs
+	 * stay available.
+	 */
+	composerLockedPlaceholder?: string;
+	/** Every edit of the chat box's draft text or move of its caret. */
+	onComposerInput?: (text: string, caret?: number) => void;
+	/**
+	 * Shows the turn settings (model, effort, mode) read-only, as for someone
+	 * in a shared session whose owner sets them.
+	 */
+	settingsLocked?: boolean;
 	/** The AO session this surface renders for. Used to attach the reviewer pane. */
 	session?: WorkspaceSession;
 	/** Refresh the owning workspace cache after the shared primary tab is renamed. */
@@ -743,6 +756,9 @@ function ChatWorkspaceContent({
 	models,
 	agentSwitch,
 	composerNotice,
+	composerLockedPlaceholder,
+	settingsLocked = false,
+	onComposerInput,
 	onChooseSettings,
 	onRememberPermissions,
 	showApprovalMode,
@@ -1460,9 +1476,9 @@ function ChatWorkspaceContent({
 					approvalModes={approvalModes}
 					approvalModeLimits={approvalModeLimits}
 					reroute={stableModelReroute}
-					onChange={newWorkDisabled ? undefined : onChooseSettings}
+					onChange={newWorkDisabled || settingsLocked ? undefined : onChooseSettings}
 					configOptions={configOptions ?? []}
-					onChangeConfigOption={newWorkDisabled ? undefined : onChooseConfigOption}
+					onChangeConfigOption={newWorkDisabled || settingsLocked ? undefined : onChooseConfigOption}
 					configPending={configOptionPending}
 					autoSelectEffortOnOpen={snapshot.items.length === 0 && !turn}
 					error={configOptionError}
@@ -1475,12 +1491,13 @@ function ChatWorkspaceContent({
 							)) ||
 							settingsLoading ||
 							session?.provisionState === "provisioning" ||
-							controllerTransitioning || configOptionPending || newWorkDisabled
+							controllerTransitioning || configOptionPending || newWorkDisabled || settingsLocked
 						}
 				/>
 			) : null,
 		[
 			settingsReady,
+			settingsLocked,
 			settingsLoading,
 			lastModel,
 			configOptionError,
@@ -1939,9 +1956,8 @@ function ChatWorkspaceContent({
 										placement={conversationEmpty ? "below" : "above"}
 										active={!workspaceActiveTabKey && !reviewerActive && !shellActive}
 									/>
-									{composerNotice}
 									<ChatComposer
-										attachedTop={Boolean(composerNotice)}
+										notice={composerNotice}
 										onSelectAnnotation={navigateToAnnotation}
 										focusRef={composerFocusRef}
 										key={`${draftScopeKey}:${draftPersistenceAvailable ? "saved" : "memory"}:${queueEdit ? `${queueEdit.turnId}:${queueEdit.ownerId ?? queueEdit.expectedRevision ?? "legacy"}` : "composer"}`}
@@ -1966,6 +1982,7 @@ function ChatWorkspaceContent({
 										onCancelQueuedEdit={cancelQueuedEdit}
 										onQueuedDraftChange={queueEdit ? changeQueuedDraft : undefined}
 										onDraftEmptyChange={setComposerEmpty}
+										onDraftInput={onComposerInput}
 										queuedDraftScope={queueEdit ? draftScope : undefined}
 										onQueuedAttachmentsChange={changeQueuedStagedAttachments}
 										onQueuedRetainedAttachmentsChange={changeQueuedRetainedAttachments}
@@ -1995,9 +2012,11 @@ function ChatWorkspaceContent({
 												: undefined
 										}
 										starting={orchestratorStarting || arrivingInChat}
-										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled) && !queueEdit?.clientMessageId}
+										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
-											arrivingInChat
+											composerLockedPlaceholder !== undefined
+												? composerLockedPlaceholder
+												: arrivingInChat
 												? arrivingPlaceholder
 												: openingStarting && !session
 												// Same words the session shows once it can queue, so nothing changes on handoff.

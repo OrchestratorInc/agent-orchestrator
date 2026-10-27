@@ -37,6 +37,9 @@ import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiv
 import { ArtifactPreviewCard } from "./SessionLinkPreviewCard";
 import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
+import { SessionPeopleStack } from "./SessionPeople";
+import { SessionOwnerTag } from "./SessionOwnerTag";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
@@ -84,6 +87,8 @@ export function sessionsBoardLabels(t: TFunction): BoardColumnLabels {
 }
 
 export function BoardSessionCardAdapter({
+	me,
+	participants,
 	memory,
 	memoryTone,
 	onOpen,
@@ -102,9 +107,15 @@ export function BoardSessionCardAdapter({
 	onOpenArtifacts?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
+	/** The people in this session when it is shared. */
+	participants?: readonly SessionPerson[];
+	/** The signed-in cloud user, to tell their own work from someone else's. */
+	me?: string;
 }) {
 	return (
 		<DesktopSessionCard
+			me={me}
+			participants={participants}
 			memory={memory}
 			memoryTone={memoryTone}
 			onOpen={onOpen}
@@ -161,6 +172,8 @@ export function ArchivedSessionCardAdapter({
 }
 
 function DesktopSessionCard({
+	me,
+	participants,
 	action,
 	branchAction,
 	footer,
@@ -186,6 +199,8 @@ function DesktopSessionCard({
 	onOpenArtifacts?: () => void;
 	onTerminate?: (choice: SessionArchiveChoice) => void;
 	session: WorkspaceSession;
+	participants?: readonly SessionPerson[];
+	me?: string;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -278,7 +293,12 @@ function DesktopSessionCard({
 			}}
 			onOpen={onOpen}
 			resource={resourcePresentation}
-			overlay={terminationOverlay}
+			overlay={participants && participants.length > 0 ? (
+				<span className="inline-flex items-center gap-1">
+					<SessionPeopleStack people={participants} me={me} />
+					{terminationOverlay}
+				</span>
+			) : terminationOverlay}
 			prs={summaries.map((pr) => ({
 				commentCount: pr.review.unresolvedBy.reduce((count, reviewer) => count + reviewer.count, 0),
 				number: pr.number,
@@ -294,10 +314,11 @@ function DesktopSessionCard({
 				url: prBrowserUrl(pr),
 			}))}
 			renderAvatar={(provider) => <AgentAvatar provider={provider} />}
+			tag={session.cloud?.requestedBy ? <SessionOwnerTag session={session} /> : undefined}
 			session={
 				hideTerminatedStatus
 					? hideTerminatedCardStatus(toBoardSessionPresentation(session))
-					: toBoardSessionPresentation(session)
+					: withSharedWorkStatus(toBoardSessionPresentation(session), participants, me, t)
 			}
 			translate={translate}
 		/>
@@ -443,6 +464,29 @@ function BoardArtifactLinks({
 			) : null}
 		</div>
 	);
+}
+
+/**
+ * While someone else in a shared session is writing to the agent, the card's
+ * one status line says so, in the working color. A provisioning or failed
+ * start keeps its own line.
+ */
+export function withSharedWorkStatus(
+	session: BoardSessionPresentation,
+	participants: readonly SessionPerson[] | undefined,
+	me: string | undefined,
+	t: TFunction,
+): BoardSessionPresentation {
+	const working = participants ? someoneElseWorking(participants, me) : undefined;
+	if (!working || session.statusPresentation) return session;
+	return {
+		...session,
+		statusPresentation: {
+			className: "text-status-working",
+			indicatorClassName: "bg-status-working",
+			label: t("board.shared.working", { name: working.name || t("chat.shared.someone") }),
+		},
+	};
 }
 
 function hideTerminatedCardStatus(session: BoardSessionPresentation): BoardSessionPresentation {

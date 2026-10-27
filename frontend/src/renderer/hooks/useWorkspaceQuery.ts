@@ -3,7 +3,7 @@ import type { TraySessionEntry } from "../../shared/tray";
 import { useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
-import { CloudCpError, type CloudCpProject, type CloudCpSession, type CloudCpSessionArtifact } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
 import { cloudArtifactFilesQueryKey } from "./useCloudArtifacts";
 import { useCloudOrg } from "./useCloudOrg";
@@ -411,6 +411,7 @@ export function useWorkspacePolling(enabled = true) {
 // items. Invalidated by the cloud create flow (CreateProjectFlow).
 export const cloudProjectsQueryKey = ["cloud-projects"] as const;
 export const cloudSessionsQueryKey = ["cloud-sessions"] as const;
+export const sharedCloudWorkspacesQueryKey = ["cloud-shared-workspaces"] as const;
 
 // Maps one control-plane session onto the board's session shape. Cloud sessions
 // carry the same status/activity/harness vocabulary as local ones, so the same
@@ -475,6 +476,7 @@ export function toCloudWorkspaceSession(
 			runtimeError: session.runtimeError,
 			startupError: session.startupError,
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
+			...(session.requestedBy ? { requestedBy: session.requestedBy } : {}),
 		},
 		outputType: session.outputType,
 		requestedOutput: session.requestedOutput,
@@ -664,6 +666,39 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 	return { ...list, data };
 }
 
+/**
+ * Cloud projects and sessions people in other organizations shared with this
+ * person, as workspaces beside their own. A project shared both whole and
+ * one session at a time shows once.
+ */
+export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOptions = {}) {
+	const { client, ready, baseUrl } = useCloudCp();
+	return useQuery({
+		queryKey: [...sharedCloudWorkspacesQueryKey, baseUrl],
+		enabled: options.enabled !== false && ready,
+		subscribed: options.subscribed,
+		retry: 1,
+		refetchInterval: 15_000,
+		queryFn: async (): Promise<WorkspaceSummary[]> => {
+			const { shared } = await client.listSharedProjects();
+			const byProject = new Map<string, CloudCpSharedProject>();
+			for (const item of shared) {
+				const key = `${item.project.orgId}/${item.project.id}`;
+				if (!byProject.has(key)) byProject.set(key, item);
+			}
+			return Promise.all([...byProject.values()].map(async (item) => {
+				const { sessions } = await client.listSharedProjectSessions(item.project.orgId, item.project.id);
+				const workspace = toCloudWorkspace(item.project, sessions, item.project.orgId);
+				return {
+					...workspace,
+					sessions: workspace.sessions.map((session) => session.cloud ? { ...session, cloud: { ...session.cloud, shared: true } } : session),
+					shared: { byName: item.sharedByName || undefined },
+				};
+			}));
+		},
+	});
+}
+
 export function useRemoteWorkspaces(options: WorkspaceSubscriptionOptions = {}) {
 	const connected = useConnectedHosts();
 	const projects = useQueries({
@@ -763,11 +798,13 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const cloudOptions = { ...options, enabled: includeCloud && options.enabled !== false };
 	const cloud = useCloudProjectsQuery(cloudOptions);
 	const cloudSessions = useCloudSessionsQuery(cloudOptions);
+	const sharedWorkspaces = useSharedCloudWorkspacesQuery(cloudOptions);
 	const { org, ready } = useCloudOrg();
 	const orgId = org?.id;
 	const localData = local.data;
 	const cloudData = cloud.data;
 	const cloudSessionData = cloudSessions.data;
+	const sharedData = sharedWorkspaces.data;
 	const queryClient = useQueryClient();
 	const { baseUrl: cloudBaseUrl } = useCloudCp();
 	// Checked where both lists meet, so it runs whichever arrives last: the
@@ -781,17 +818,17 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 		// Local stays authoritative for loading/error semantics: cloud items only
 		// render once the local list exists, and never replace it.
 		if (localData === undefined) return localData;
-		if (cloudData === undefined || cloudData.length === 0) return localData;
 		// Signing out (or turning the offering off) disables the cloud queries,
 		// but react-query keeps their last data; without this gate the stale
 		// cloud projects would keep rendering for a signed-out user.
 		if (!ready || orgId === undefined) return localData;
 		const sessions = cloudSessionData ?? [];
-		return placeStandaloneWorkspaceLast([
-			...localData,
-			...cloudData.map((project) => toCloudWorkspace(project, sessions, orgId)),
-		]);
-	}, [localData, cloudData, cloudSessionData, includeCloud, orgId, ready]);
+		const own = (cloudData ?? []).map((project) => toCloudWorkspace(project, sessions, orgId));
+		// A project shared from the person's own organization is already listed.
+		const shared = (sharedData ?? []).filter((workspace) => !own.some((ownWorkspace) => ownWorkspace.id === workspace.id));
+		if (own.length === 0 && shared.length === 0) return localData;
+		return placeStandaloneWorkspaceLast([...localData, ...own, ...shared]);
+	}, [localData, cloudData, cloudSessionData, sharedData, includeCloud, orgId, ready]);
 	return { ...local, data };
 }
 

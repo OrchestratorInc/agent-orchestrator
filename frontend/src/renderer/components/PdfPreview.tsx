@@ -34,7 +34,7 @@ function loadPdfjs(): Promise<Pdfjs> {
  * its text can be selected. Pages draw as they near the viewport and release
  * their drawing once they are far from it. A file over MAX_PDF_BYTES is not read.
  */
-export function PdfPreview({ onError, path, src }: { onError: () => void; path: string; src: string }) {
+export function PdfPreview({ firstPageOnly = false, onError, path, src }: { firstPageOnly?: boolean; onError: () => void; path: string; src: string }) {
 	const { t } = useTranslation();
 	const [loaded, setLoaded] = useState<{ pdf: PDFDocumentProxy; pdfjs: Pdfjs; sizes: PageSize[] } | null>(null);
 	const [width, setWidth] = useState(0);
@@ -62,7 +62,7 @@ export function PdfPreview({ onError, path, src }: { onError: () => void; path: 
 			if (cancelled) return;
 			loadingTask = pdfjs.getDocument({ data });
 			const pdf = await loadingTask.promise;
-			const sizes = await Promise.all(Array.from({ length: pdf.numPages }, async (_, index) => {
+			const sizes = await Promise.all(Array.from({ length: firstPageOnly ? Math.min(pdf.numPages, 1) : pdf.numPages }, async (_, index) => {
 				const { width, height } = (await pdf.getPage(index + 1)).getViewport({ scale: 1 });
 				return { width, height };
 			}));
@@ -76,7 +76,7 @@ export function PdfPreview({ onError, path, src }: { onError: () => void; path: 
 			cancelled = true;
 			void loadingTask?.destroy();
 		};
-	}, [src]);
+	}, [firstPageOnly, src]);
 
 	useEffect(() => {
 		const element = scrollRef.current;
