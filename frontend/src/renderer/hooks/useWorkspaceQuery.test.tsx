@@ -75,6 +75,29 @@ beforeEach(() => {
 });
 
 describe("useWorkspaceQuery", () => {
+	it("requests live rows and retains archive-only project and standalone counts", async () => {
+		respondWith({ projects: { data: { projects: [{ id: "p", name: "Project", path: "/p" }] } }, sessions: { data: {
+			sessions: [], archived: { total: 10, byProject: { p: 7, "": 3 }, workerByProject: { p: 6, "": 3 } },
+		} } });
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions", { params: { query: { active: true } } });
+		expect(result.current.data?.map((w) => [w.archivedCount, w.sessions.length])).toEqual([[6, 0], [3, 0]]);
+		expect(getMock.mock.calls.filter(([url]) => url === "/api/v1/sessions")).toHaveLength(1);
+	});
+
+	it("falls back to the compatible full list when the daemon lacks worker counts", async () => {
+		getMock.mockImplementation(async (url, options) => url === "/api/v1/projects"
+			? { data: { projects: [] } }
+			: options ? { data: { sessions: [], archived: { total: 1, byProject: { "": 1 } } } }
+			: { data: { sessions: [{ id: "ended", isTerminated: true, status: "terminated", harness: "codex", activity: { state: "idle", lastActivityAt: "2026-01-01T00:00:00Z" }, updatedAt: "2026-01-01" }] } });
+		const { result } = renderHook(() => useWorkspaceQuery(), { wrapper });
+		await waitFor(() => expect(result.current.isSuccess).toBe(true));
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions");
+		expect(result.current.data?.[0].sessions[0].id).toBe("ended");
+		expect(result.current.data?.[0].archivedCount).toBeUndefined();
+	});
+
 	it.each(["pending", "failed", "removed"])("keeps local workspace cleanup state %s", async (workspaceCleanup) => {
 		respondWith({
 			projects: { data: { projects: [{ id: "p1", name: "Project", path: "/tmp/project" }] } },

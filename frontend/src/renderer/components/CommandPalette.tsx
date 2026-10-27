@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useRestoreSession } from "../hooks/useRestoreSession";
+import { useArchivedWorkspaces } from "../hooks/useArchivedSessions";
 import { cloudSessionsQueryKey, useWorkspaceQuery, workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
@@ -111,11 +112,13 @@ export function CommandPalette() {
 	// The palette stays mounted to preserve its close animation and global
 	// shortcut. While closed, commands are invisible, so retain the cached
 	// snapshot without subscribing this hidden surface to streamed updates.
-	const workspaces = useWorkspaceQuery({ subscribed: isOpen }).data ?? [];
+	const liveWorkspaces = useWorkspaceQuery({ subscribed: isOpen }).data ?? [];
 
 	const [view, setView] = useState<PaletteView>({ mode: "root" });
 	const [query, setQuery] = useState("");
 	const [debouncedQuery, setDebouncedQuery] = useState("");
+	const archive = useArchivedWorkspaces(liveWorkspaces, isOpen && debouncedQuery.trim().length > 0);
+	const workspaces = archive.workspaces;
 	const [selectedValue, setSelectedValue] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [pendingId, setPendingId] = useState<string | null>(null);

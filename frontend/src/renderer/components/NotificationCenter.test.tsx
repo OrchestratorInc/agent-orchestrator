@@ -142,6 +142,15 @@ function cloudNotificationsResult(items: CloudCpNotification[]) {
 
 const emptyCloudResult = cloudNotificationsResult([]);
 
+const archiveQueryMock = vi.hoisted(() => vi.fn());
+vi.mock("../hooks/useArchivedSessions", () => ({
+	archivedSessionsQueryKey: ["archived-sessions"],
+	useArchivedWorkspaces: (workspaces: unknown) => {
+		const state = archiveQueryMock();
+		return { ...state, workspaces: state.workspaces ?? workspaces };
+	},
+}));
+
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => navigateMock, useParams: () => paramsMock() }));
 
 vi.mock("../hooks/useNotificationsQuery", () => ({
@@ -230,6 +239,7 @@ const stableUnreadQuery = notificationQueryResult("unread");
 const stableAllQuery = notificationQueryResult("all");
 
 beforeEach(() => {
+	archiveQueryMock.mockReset().mockReturnValue({ isFetching: false, isError: false, data: undefined, refetch: vi.fn() });
 	clearAllMock
 		.mockReset()
 		.mockResolvedValue({ clearId: "clear-1", clearEpoch: "epoch-1", clearSequence: 1, clearedCount: 4 });
@@ -784,6 +794,22 @@ describe("NotificationCenter", () => {
 		});
 	});
 
+	it("keeps cached local navigation available during archive refresh", async () => {
+		archiveQueryMock.mockReturnValue({ data: [], isFetching: true, isError: false, refetch: vi.fn() });
+		renderNotificationCenter();
+		await clickOpen();
+		await userEvent.click(screen.getByText("The agent is waiting for your response."));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "proj-1", sessionId: "sess-1" } });
+	});
+
+	it("keeps cached restore available during archive refresh", async () => {
+		archiveQueryMock.mockReturnValue({ data: [], isFetching: true, isError: false, refetch: vi.fn() });
+		renderNotificationCenter();
+		await clickOpen();
+		await userEvent.click(screen.getByRole("button", { name: "This session was archived. Restore it?" }));
+		await waitFor(() => expect(restoreSessionMock).toHaveBeenCalledWith("sess-dead"));
+	});
+
 	it("does not open terminated sessions from the row and restores them instead", async () => {
 		renderNotificationCenter();
 		await clickOpen();
@@ -958,6 +984,14 @@ describe("NotificationCenter cloud rows", () => {
 			isSuccess: true,
 			refetch: vi.fn(),
 		});
+	});
+
+	it("keeps a cached Cloud target usable while the local archive initially loads", async () => {
+		archiveQueryMock.mockReturnValue({ data: undefined, isFetching: true, isError: false, refetch: vi.fn() });
+		renderNotificationCenter();
+		await clickOpen();
+		await userEvent.click(screen.getByText("acme/cloud#8 is ready to merge."));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "cproj-1", sessionId: "csess-1" } });
 	});
 
 	it("interleaves cloud rows by time with a Cloud tag, meta line, and clear action", async () => {

@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { Archive, Plus } from "lucide-react";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspace";
+import { useArchivedWorkspaces } from "../hooks/useArchivedSessions";
 import { archivedStandaloneSessions } from "../lib/standalone-archive";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import {
@@ -42,13 +43,15 @@ export function StandaloneArchiveView() {
 		WorkspaceSession | undefined
 	>();
 	const restoreGenerationRef = useRef(0);
-	const workspaces = workspaceQuery.data ?? [];
+	const archive = useArchivedWorkspaces(workspaceQuery.data ?? [], true, STANDALONE_WORKSPACE_ID);
+	const workspaces = archive.workspaces;
 	const archivedSessions = useMemo(
 		() => archivedStandaloneSessions(workspaces),
 		[workspaces],
 	);
+	const archivedCount = workspaces.find((workspace) => workspace.id === STANDALONE_WORKSPACE_ID)?.archivedCount ?? archivedSessions.length;
 	const headerInPanel = usesBoardActionsInPanel();
-	const showStartup = !workspaceQuery.isSuccess && !workspaceQuery.isError;
+	const showStartup = (!workspaceQuery.isSuccess && !workspaceQuery.isError) || (archive.isFetching && archive.data === undefined);
 
 	useEffect(() => {
 		return () => {
@@ -107,7 +110,7 @@ export function StandaloneArchiveView() {
 						className={topbarProjectLabelClass}
 						data-testid="standalone-archive-title"
 					>
-						{t("standalone.archive.heading", { count: archivedSessions.length })}
+						{t("standalone.archive.heading", { count: archivedCount })}
 					</span>
 					<div className="min-w-0 flex-1" />
 					<div className="workspace-topbar-actions flex shrink-0 items-center" style={noDragStyle}>
@@ -124,11 +127,11 @@ export function StandaloneArchiveView() {
 				</div>
 			) : null}
 
-			{workspaceQuery.isError ? (
+			{workspaceQuery.isError || (archive.isError && archive.data === undefined) ? (
 				<p className="py-10 text-center text-xs text-passive">
-					{t("shell.couldNotLoadSessions")}
+					<button type="button" onClick={() => void archive.refetch()}>{t("shell.couldNotLoadSessions")}</button>
 				</p>
-			) : archivedSessions.length === 0 && workspaceQuery.isSuccess ? (
+			) : archivedSessions.length === 0 && workspaceQuery.isSuccess && (!archive.isFetching || archive.data !== undefined) ? (
 				<StandaloneArchiveEmpty />
 			) : (
 				<div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">

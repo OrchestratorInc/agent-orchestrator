@@ -456,6 +456,9 @@ export type WorkspaceSummary = {
 		additions: number;
 		deletions: number;
 	};
+	/** Ended rows are loaded separately when history is opened. Undefined for older daemons. */
+	archivedCount?: number;
+	archiveSummary?: { total: number; byProject: Record<string, number> | null };
 	sessions: WorkspaceSession[];
 };
 

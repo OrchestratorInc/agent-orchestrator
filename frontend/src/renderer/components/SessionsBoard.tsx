@@ -15,6 +15,7 @@ import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
 	CLOUD_PROJECT_KIND,
 	type WorkspaceSession,
+	type WorkspaceSummary,
 	isOrchestratorSession,
 	newestActiveOrchestrator,
 	orchestratorHealth,
@@ -26,6 +27,7 @@ import {
 	getKanbanColumnView,
 	type KanbanColumnView,
 } from "../lib/session-presentation";
+import { useArchivedWorkspaces } from "../hooks/useArchivedSessions";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useCloudCp } from "../hooks/useCloudCp";
@@ -125,9 +127,16 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const health = workspace ? orchestratorHealth(workspace, isProjectRestarting) : { state: "ok" as const };
+	const archiveSummaryCount = workspaces.reduce((count, workspace) => {
+		const rows = workerSessions(workspace.sessions).filter(isArchivedSession);
+		return count + (workspace.archivedCount === undefined
+			? rows.length
+			: workspace.archivedCount + rows.filter((session) => !session.isTerminated).length);
+	}, 0);
 	const archived = sessions
 		.filter(isArchivedSession)
 		.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+	const archivedCount = Math.max(archiveSummaryCount, archived.length);
 	const activeSessions = sessions.filter((candidate) => !isArchivedSession(candidate));
 	// Who is in each shared cloud session, read without joining any of them.
 	const participantsBySession = useSessionParticipants(activeSessions, !hostId);
@@ -143,7 +152,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		isSuccess: localWorkspaceQuery.isSuccess,
 		isError: localWorkspaceQuery.isError,
 		hasProjects: workspaces.length > 0,
-		hasWorkerSessions: liveSessions.length > 0,
+		hasWorkerSessions: liveSessions.length > 0 || archivedCount > 0,
 	});
 	const showStartup = !hostId && presentation.showStartup;
 	const showWelcome = !hostId && presentation.showWelcome;
@@ -171,7 +180,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			chipTone(pressure ?? "fine", facts.find((f) => f.id === session.id) ?? toSessionFacts(session, memoryBySession?.get(session.id), now), largest);
 	}, [sessions, memoryBySession, pressure]);
 	// The bar hosts the memory indicator too, so it stays up with an empty archive.
-	const hasArchive = archived.length > 0 || hasMemory;
+	const hasArchive = archivedCount > 0 || hasMemory;
 	const terminateSession = useTerminateSession();
 	const activeScopeRef = useRef(scopeKey);
 	activeScopeRef.current = scopeKey;
@@ -353,6 +362,9 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					scopeKey={scopeKey}
 					connected={!hostId || connected}
 					sessions={archived}
+					workspaces={workspaces}
+					projectId={projectId}
+					count={archivedCount}
 				/>
 			) : null}
 			{showStartup ? <DaemonStartupLoader /> : null}
@@ -371,16 +383,25 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 	scopeKey,
 	connected,
 	sessions,
+	workspaces,
+	projectId,
+	count,
 }: {
 	activeScopeRef: React.MutableRefObject<string>;
 	hostId?: string;
 	scopeKey: string;
 	connected: boolean;
 	sessions: WorkspaceSession[];
+	workspaces: WorkspaceSummary[];
+	projectId?: string;
+	count: number;
 }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
+	const [archiveOpen, setArchiveOpen] = useState(false);
+	const archive = useArchivedWorkspaces(workspaces, archiveOpen && !hostId, projectId);
+	const archiveSessions = archive.workspaces.flatMap((workspace) => workerSessions(workspace.sessions)).filter(isArchivedSession).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 	const diagnostics = useDiagnosticsEnabled();
 	const restoreSessionById = useRestoreSession();
 	const [restoringSessionId, setRestoringSessionId] = useState<string | undefined>();
@@ -389,6 +410,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 	const restoreGenerationRef = useRef(0);
 
 	useEffect(() => {
+		setArchiveOpen(false);
 		setRestoringSessionId(undefined);
 		setRestoreErrors({});
 		setRestoreUnavailableSession(undefined);
@@ -444,7 +466,7 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 			<SessionsArchiveView
 				labels={{
 					archive: t("shell.archive"),
-					archiveAria: t("shell.archiveSessionsAria", { count: sessions.length }),
+					archiveAria: t("shell.archiveSessionsAria", { count }),
 					archivedSessions: t("shell.archivedSessions"),
 				}}
 				trailing={diagnostics && !hostId ? <AppMemoryIndicator /> : undefined}
@@ -458,7 +480,10 @@ const BoardArchivePanel = memo(function BoardArchivePanel({
 					/>
 				)}
 				resetKey={scopeKey}
-				sessions={sessions}
+				status={archive.isError ? <button type="button" onClick={() => void archive.refetch()}>{t("shell.couldNotLoadSessions")}</button> : archive.isFetching ? <span role="status">{t("common.loading")}</span> : undefined}
+				count={count}
+				onExpandedChange={setArchiveOpen}
+				sessions={archiveSessions.length ? archiveSessions : sessions}
 			/>
 			{restoreUnavailableSession ? (
 				<RestoreUnavailableDialog

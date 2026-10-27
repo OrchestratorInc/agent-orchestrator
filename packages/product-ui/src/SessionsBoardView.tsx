@@ -628,6 +628,9 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 	resetKey,
 	sessions,
 	trailing,
+	count = sessions.length,
+	onExpandedChange,
+	status,
 }: {
 	labels: {
 		archive: string;
@@ -640,6 +643,9 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 	sessions: TSession[];
 	/** Right-aligned status in the bar, outside the toggle (e.g. memory pressure). */
 	trailing?: ReactNode;
+	count?: number;
+	status?: ReactNode;
+	onExpandedChange?: (expanded: boolean) => void;
 }) {
 	const prefersReducedMotion = useReducedMotion();
 	const [expanded, setExpanded] = useState(false);
@@ -662,7 +668,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 			observer?.disconnect();
 			board.style.removeProperty("--sessions-archive-height");
 		};
-	}, [sessions.length > 0 || Boolean(trailing)]);
+	}, [count > 0 || Boolean(trailing)]);
 
 	useEffect(() => {
 		setExpanded(false);
@@ -683,7 +689,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 		};
 	}, [expanded, cardsReady]);
 
-	if (sessions.length === 0 && !trailing) return null;
+	if (count === 0 && !trailing) return null;
 
 	return (
 		<div ref={archiveRef} className="absolute inset-x-0 bottom-0 z-20 border-t border-border-strong bg-background px-3">
@@ -691,7 +697,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 				{/* Full-row hit target: the control stretches edge-to-edge so empty
 				    space beside the label toggles archive too. Height must match
 				    archiveToggleOffsetClassName on the board. */}
-				{sessions.length > 0 ? (
+				{count > 0 ? (
 					<button
 						aria-expanded={expanded}
 						aria-label={labels.archiveAria}
@@ -699,7 +705,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 							"group flex h-full min-w-0 flex-1 items-center gap-2 py-0 text-muted-foreground transition-colors hover:text-foreground",
 							expanded ? "min-h-11" : "min-h-row-md",
 						)}
-						onClick={() => setExpanded((open) => !open)}
+						onClick={() => { setExpanded(!expanded); onExpandedChange?.(!expanded); }}
 						type="button"
 					>
 						<ChevronIcon
@@ -711,7 +717,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 							direction="right"
 						/>
 						<span className="text-2xs font-medium tracking-wide-sm">{labels.archive}</span>
-						<span className="ml-1.5 font-sans text-micro text-passive">{sessions.length}</span>
+						<span className="ml-1.5 font-sans text-micro text-passive">{count}</span>
 					</button>
 				) : (
 					<div className="min-w-0 flex-1" />
@@ -740,6 +746,7 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 						inert={!expanded ? true : undefined}
 						role="list"
 					>
+						{status}
 						{sessions.map((session) => (
 							<Fragment key={session.id}>{renderSessionCard(session)}</Fragment>
 						))}
@@ -758,6 +765,9 @@ export const SessionsArchiveView = memo(function SessionsArchiveView<
 	resetKey?: string;
 	sessions: TSession[];
 	trailing?: ReactNode;
+	count?: number;
+	status?: ReactNode;
+	onExpandedChange?: (expanded: boolean) => void;
 }) => ReactElement | null;
 
 function sameLabel(a: string, b: string): boolean {

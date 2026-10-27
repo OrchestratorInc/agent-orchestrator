@@ -202,7 +202,7 @@ export function SessionLinkPreviewCard({
 	sourceKind?: "cloud";
 }) {
 	const target = parseSessionLink(href);
-	const source = useSessionLinkSource(sourceHostId, sourceKind);
+	const source = useSessionLinkSource(sourceHostId, sourceKind, href);
 	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
 	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
 	const restoreHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
@@ -427,7 +427,7 @@ export function ArtifactLinkPreviewCard({
 }) {
 	const { t } = useTranslation();
 	const target = parseArtifactLink(href);
-	const source = useSessionLinkSource(sourceHostId, sourceKind);
+	const source = useSessionLinkSource(sourceHostId, sourceKind, href);
 	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
 	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
 	const artifact = session?.artifactFiles?.find((candidate) => candidate.path === target?.path);

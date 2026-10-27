@@ -29,8 +29,9 @@ type ListPage struct {
 // ArchiveSummary is the size of the archive behind an active-only list, under
 // the same project and kind filters.
 type ArchiveSummary struct {
-	Total     int
-	ByProject map[domain.ProjectID]int
+	Total           int
+	ByProject       map[domain.ProjectID]int
+	WorkerByProject map[domain.ProjectID]int
 }
 
 // selectSessionRecords keeps the rows matching filter and, for an active-only
@@ -41,7 +42,7 @@ func selectSessionRecords(recs []domain.SessionRecord, filter ListFilter) ([]dom
 	var archive *ArchiveSummary
 	var anyState ListFilter
 	if filter.Active != nil && *filter.Active {
-		archive = &ArchiveSummary{ByProject: map[domain.ProjectID]int{}}
+		archive = &ArchiveSummary{ByProject: map[domain.ProjectID]int{}, WorkerByProject: map[domain.ProjectID]int{}}
 		anyState = filter
 		anyState.Active = nil
 	}
@@ -53,6 +54,9 @@ func selectSessionRecords(recs []domain.SessionRecord, filter ListFilter) ([]dom
 		if archive != nil && rec.IsTerminated && matchesSessionFilter(rec, anyState) {
 			archive.Total++
 			archive.ByProject[rec.ProjectID]++
+			if rec.Kind != domain.KindOrchestrator {
+				archive.WorkerByProject[rec.ProjectID]++
+			}
 		}
 	}
 	return matched, archive

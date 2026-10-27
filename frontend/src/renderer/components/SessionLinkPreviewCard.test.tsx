@@ -85,7 +85,7 @@ describe("SessionLinkPreviewCard", () => {
 
 		render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" sourceHostId="box-a" />);
 
-		expect(mocks.source).toHaveBeenCalledWith("box-a", undefined);
+		expect(mocks.source).toHaveBeenCalledWith("box-a", undefined, expect.any(String));
 		expect(screen.getByText("Remote worker")).toBeInTheDocument();
 	});
 
@@ -217,7 +217,7 @@ describe("ArtifactLinkPreviewCard", () => {
 
 		renderWithQuery(<ArtifactLinkPreviewCard href="ao://sessions/project-a/worker-367/artifacts/plans/plan.md" sourceHostId="box-a" />);
 
-		expect(mocks.source).toHaveBeenCalledWith("box-a", undefined);
+		expect(mocks.source).toHaveBeenCalledWith("box-a", undefined, expect.any(String));
 		expect(screen.getByText("plan.md")).toBeInTheDocument();
 		expect(screen.getByText("Implement worker link previews")).toHaveTextContent("Implement worker link previews · worker-367");
 		expect(await screen.findByText(/Ship artifact links\./)).toBeInTheDocument();

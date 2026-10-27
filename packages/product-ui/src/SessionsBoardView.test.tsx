@@ -735,6 +735,16 @@ describe("SessionsBoardView", () => {
 		expect(archiveToggleOffsetClassName).toBe(`pb-[${ARCHIVE_TOGGLE_HEIGHT_PX}px]`);
 	});
 
+	it("opens an unloaded archive using the server count", () => {
+		const open = vi.fn();
+		render(<SessionsArchiveView labels={{ archive: "Archive", archiveAria: "Archive, 6 sessions", archivedSessions: "Archived sessions" }} sessions={[]} count={6} onExpandedChange={open} renderSessionCard={() => null} />);
+		const toggle = screen.getByRole("button", { name: "Archive, 6 sessions" });
+		expect(toggle).toHaveTextContent("6");
+		fireEvent.click(toggle);
+		expect(open).toHaveBeenCalledWith(true);
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+	});
+
 	it("overlays the archive, keeps cards mounted after collapse, and resets on resetKey", async () => {
 		const { rerender } = render(
 			<SessionsArchiveView

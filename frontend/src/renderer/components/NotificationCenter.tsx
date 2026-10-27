@@ -25,6 +25,7 @@ import {
 	useNotificationsQuery,
 } from "../hooks/useNotificationsQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
+import { useArchivedWorkspaces } from "../hooks/useArchivedSessions";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import type { WorkspaceSummary } from "../types/workspace";
 import { aoBridge } from "../lib/bridge";
@@ -141,20 +142,22 @@ function NotificationWorkspaceState({
 	}) => ReactNode;
 }) {
 	const workspaceQuery = useWorkspaceQuery();
+	const archive = useArchivedWorkspaces(workspaceQuery.data ?? [], true);
 	const remoteWorkspaces = useRemoteWorkspaces();
 	const retryWorkspace = useCallback(() => {
 		void workspaceQuery.refetch();
+		void archive.refetch();
 		void remoteWorkspaces.refetch();
-	}, [remoteWorkspaces.refetch, workspaceQuery.refetch]);
+	}, [remoteWorkspaces.refetch, workspaceQuery.refetch, archive.refetch]);
 	const { sessionsReady, terminatedIds, workspaceError } = useSessionTerminationLookup(
-		[...(workspaceQuery.data ?? []), ...remoteWorkspaces.data],
-		workspaceQuery.isError,
-		workspaceQuery.isSuccess,
+		[...(archive.workspaces), ...remoteWorkspaces.data],
+		workspaceQuery.isError || (archive.isError && archive.data === undefined),
+		workspaceQuery.isSuccess && (archive.data !== undefined || (!archive.isFetching && !archive.isError)),
 		retryWorkspace,
 	);
 	const sessionMeta = useMemo(() => {
 		const map = new Map<string, SessionMeta>();
-		for (const workspace of workspaceQuery.data ?? []) {
+		for (const workspace of archive.workspaces) {
 			for (const session of workspace.sessions) {
 				map.set(sessionUiKey(session.id, workspace.hostId), { projectId: workspace.id, projectName: workspace.name, sessionName: session.title });
 			}
@@ -165,7 +168,7 @@ function NotificationWorkspaceState({
 			}
 		}
 		return map;
-	}, [remoteWorkspaces.data, workspaceQuery.data]);
+	}, [remoteWorkspaces.data, archive.workspaces]);
 	const loadedRemoteSessionIds = useMemo(() => {
 		const ids = new Set<string>();
 		for (const workspace of remoteWorkspaces.data) {
@@ -813,7 +816,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 										projectId={cloudMeta?.projectId}
 										projectName={cloudMeta?.projectName}
 										sessionName={cloudMeta?.sessionName}
-										sessionsReady={sessionsReady}
+										sessionsReady={sessionsReady || Boolean(cloudMeta)}
 										terminated={cloudTerminated}
 										offerRestore={cloudOfferRestore}
 									/>
@@ -822,7 +825,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 							const { hostId, label, notification } = row;
 							const sessionId = notification.target.sessionId || notification.sessionId;
 							const sessionKey = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
-							const sessionReady = hostId === LOCAL_HOST ? sessionsReady : Boolean(sessionKey && loadedRemoteSessionIds.has(sessionKey));
+							const sessionReady = hostId === LOCAL_HOST ? sessionsReady || Boolean(sessionKey && sessionMeta.has(sessionKey)) : Boolean(sessionKey && loadedRemoteSessionIds.has(sessionKey));
 							const meta = sessionKey ? sessionMeta.get(sessionKey) : undefined;
 							const terminated = Boolean(sessionKey) && terminatedIds.has(sessionKey ?? "");
 							const key = notificationKey(hostId, notification.id);

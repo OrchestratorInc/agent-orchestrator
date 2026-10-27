@@ -393,7 +393,8 @@ export function ShellTopbar({
 
 function StandaloneArchiveTopbarLabel() {
 	const { t } = useTranslation();
-	const count = archivedStandaloneSessions(useWorkspaceQuery().data ?? []).length;
+	const workspaces = useWorkspaceQuery().data ?? [];
+	const count = workspaces.find((workspace) => workspace.id === STANDALONE_WORKSPACE_ID)?.archivedCount ?? archivedStandaloneSessions(workspaces).length;
 	return (
 		<span className={topbarProjectLabelClass} data-testid="standalone-archive-title">
 			{t("standalone.archive.heading", { count })}

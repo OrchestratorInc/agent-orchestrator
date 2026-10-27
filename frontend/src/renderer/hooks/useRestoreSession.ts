@@ -5,6 +5,7 @@ import { clientForHost } from "../lib/host-clients";
 import { aoBridge } from "../lib/bridge";
 import type { CloudCpSession } from "../lib/cloud-cp";
 import { createRendererCloudCpClient } from "./useCloudCp";
+import { archivedSessionsQueryKey } from "./useArchivedSessions";
 import { settingsQueryKey, type Settings } from "./useSettings";
 import { cloudSessionsQueryKey, workspaceQueryKey, workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
@@ -96,6 +97,7 @@ export function useRestoreSession(): (sessionId: string, hostId?: string) => Pro
 					return { status: "error", message };
 				}
 				await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) });
+				if (!hostId) await queryClient.invalidateQueries({ queryKey: archivedSessionsQueryKey });
 				if (data?.restoreMode === "saved_prompt") {
 					void aoBridge.notifications
 						.show({

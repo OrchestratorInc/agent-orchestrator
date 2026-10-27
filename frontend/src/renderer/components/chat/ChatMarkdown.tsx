@@ -43,8 +43,8 @@ import { fenceOf } from "../../lib/markdown-fence";
 import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
 import { isInlineMath, remarkMath } from "../../lib/remark-math";
 import { useUiStore } from "../../stores/ui-store";
-import { artifactLinkForPath, findSessionLinks, isAoLink, isSessionLink, remarkSessionLinks } from "../../lib/session-links";
-import { useSessionLinkSource } from "../../lib/use-session-link-navigation";
+import { findSessionLinks, isAoLink, isSessionLink, remarkSessionLinks } from "../../lib/session-links";
+import { useArtifactPathLink, useSessionLinkSource } from "../../lib/use-session-link-navigation";
 import {
 	isPotentialWorkspaceFileLink,
 	isWebLink,
@@ -520,7 +520,8 @@ export function useChatLinkWorkspaces() {
 /** Inline code naming a listed session artifact, linked to that artifact. */
 export function ArtifactPathCode({ text, children }: { text: string; children: ReactNode }) {
 	const workspaces = useChatLinkWorkspaces();
-	const href = artifactLinkForPath(text, workspaces);
+	const { sessionLinkHostId, sessionLinkSourceKind } = useContext(OpenChatLink);
+	const href = useArtifactPathLink(text, workspaces, sessionLinkHostId, sessionLinkSourceKind);
 	return href ? <MarkdownLink href={href}>{children}</MarkdownLink> : <>{children}</>;
 }
 
