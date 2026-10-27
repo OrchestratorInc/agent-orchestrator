@@ -3615,8 +3615,6 @@
 	"settings.harness.loginUi.hints.device_code": "일회용 코드로 로그인을 승인합니다.",
 	"settings.harness.loginUi.hints.api_key": "OpenAI API 키로 연결합니다.",
 	"settings.harness.loginUi.hints.access_token": "기존 액세스 토큰을 사용합니다.",
-	"settings.harness.loginUi.continueBrowser": "브라우저에서 계속",
-	"settings.harness.loginUi.createDeviceCode": "로그인 코드 받기",
 	"settings.harness.loginUi.otherOptions": "기타 옵션",
 	"settings.harness.loginUi.connectedDescription": "이 하네스에서 계정을 사용할 준비가 되었습니다.",
 	"settings.harness.loginUi.waitingForCode": "로그인 페이지에 이 코드를 입력하세요. 승인 대기 중…",

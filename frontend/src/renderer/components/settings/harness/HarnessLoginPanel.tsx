@@ -36,6 +36,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 	const operationRef = useRef<AgentLoginSnapshot | undefined>(undefined);
 	const mounted = useRef(true);
 	const pending = useRef(false);
+	const openedOperation = useRef<string | undefined>(undefined);
 	const verifyRef = useRef(onVerify);
 	verifyRef.current = onVerify;
 	const method = availableMethods.find((item) => item.id === methodId) ?? availableMethods[0];
@@ -49,7 +50,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 
 	useEffect(() => {
 		mounted.current = true;
-		panelRef.current?.querySelector<HTMLInputElement>("input:checked")?.focus({ preventScroll: true });
+		panelRef.current?.querySelector<HTMLButtonElement>("[data-login-method]")?.focus({ preventScroll: true });
 		return () => {
 			mounted.current = false;
 			const current = operationRef.current;
@@ -98,8 +99,19 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		return () => { active = false; };
 	}, [operation?.id, operation?.status, t]);
 
-	const start = async () => {
-		if (pending.current || locked || !method || (method.secret && !secret.trim())) return;
+	// The CLI opens the browser itself for local browser logins. Device-code
+	// and remote logins cannot reach this machine's browser, so open the link.
+	useEffect(() => {
+		const url = operation?.loginUrl;
+		if (!url || operation.status !== "running" || openedOperation.current === operation.id) return;
+		if (!remote && operation.method !== "device_code") return;
+		if (agentId === "claude-code" && !operation.acceptsCode) return;
+		openedOperation.current = operation.id;
+		void aoBridge.app.openExternal(url).catch(() => undefined);
+	}, [agentId, remote, operation?.id, operation?.status, operation?.loginUrl, operation?.method, operation?.acceptsCode]);
+
+	const start = async (target = method) => {
+		if (pending.current || locked || !target || (target.secret && !secret.trim())) return;
 		pending.current = true;
 		setBusy(true);
 		setError("");
@@ -110,7 +122,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		try {
 			await runAgentLoginTask(agentId, hostId, async () => {
 				if (!mounted.current) return;
-				const next = await startAgentUILogin(agentId, selectedMethodId, credential, hostId);
+				const next = await startAgentUILogin(agentId, target.id, credential, hostId);
 				if (!mounted.current) {
 					await cancelAgentUILogin(agentId, next.id, hostId);
 					return;
@@ -164,6 +176,15 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 			if (mounted.current) setBusy(false);
 		}
 	};
+	const choose = (item: components["schemas"]["AgentLoginMethod"]) => {
+		if (locked) return;
+		setMethodId(item.id);
+		setSecret("");
+		setLoginCode("");
+		setError("");
+		updateOperation(undefined);
+		if (!item.secret) void start(item);
+	};
 	const act = (action: () => Promise<unknown>) => void action().catch(() => setError(t("settings.harness.authFailed")));
 	const status = verifying ? t("settings.harness.checkingLogin")
 		: connected ? t("settings.harness.loginUi.connected")
@@ -188,15 +209,17 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 					const key = agentId === "claude-code" && item.id === "browser" ? "claude" : item.id;
 					const label = t(`settings.harness.loginUi.methods.${key}`, { defaultValue: item.label });
 					const MethodIcon = item.secret ? KeyRound : item.id === "device_code" ? Smartphone : item.id === "sso" || item.id === "console" ? Building2 : UserRound;
-					return <label key={item.id} className="relative flex cursor-pointer items-start gap-3 px-4 py-2.5 transition-colors hover:bg-(--color-interactive-hover) has-[:checked]:bg-(--color-interactive-active) has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-inset has-[:focus-visible]:ring-ring has-[:disabled]:cursor-default has-[:disabled]:opacity-60">
-						<input type="radio" className="peer sr-only" name={titleId} aria-label={label} aria-describedby={titleId + "-" + item.id} value={item.id} checked={selectedMethodId === item.id} onChange={() => { setMethodId(item.id); setSecret(""); setLoginCode(""); setError(""); updateOperation(undefined); }} />
-						<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted peer-checked:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>
+					const selected = selectedMethodId === item.id;
+					return <button key={item.id} type="button" data-login-method="" aria-label={label} aria-pressed={item.secret ? selected : undefined} aria-describedby={titleId + "-" + item.id} onClick={() => choose(item)} className="group/method relative flex w-full cursor-pointer items-start gap-3 px-4 py-2.5 text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-pressed:bg-(--color-interactive-active) focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
+						<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted group-aria-pressed/method:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>
 						<span className="min-w-0 flex-1 space-y-1">
 							<span className="block text-sm font-medium text-settings-label">{label}</span>
 							<span id={titleId + "-" + item.id} className="block text-xs leading-4 text-settings-muted">{t(`settings.harness.loginUi.hints.${key}`, { defaultValue: item.label })}</span>
 						</span>
-						<Check className="mt-1 size-3.5 shrink-0 text-settings-label opacity-0 peer-checked:opacity-100" aria-hidden="true" />
-					</label>;
+						{busy && selected ? <LoaderCircle className="mt-1 size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
+							: item.secret ? <Check className="mt-1 size-3.5 shrink-0 text-settings-label opacity-0 group-aria-pressed/method:opacity-100" aria-hidden="true" />
+							: <ExternalLink className="mt-1 size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />}
+					</button>;
 				})}
 			</fieldset>
 			{method?.secret && <label className="block space-y-2 text-sm">
@@ -227,9 +250,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		{status && !running && !verifying && !connected && <p role="status" className="text-sm text-settings-muted">{status}</p>}
 		{error && <p role="alert" className="text-sm text-error">{error}</p>}
 		<div className="flex flex-wrap items-center gap-2">
-			{!connected && !running && !verifying && <Button type="submit" form={titleId + "-form"} size="sm" disabled={busy || !method || (method?.secret && !secret.trim())}>
-				{busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : !method?.secret && <ExternalLink aria-hidden="true" />}
-				{t(method?.secret ? "settings.harness.loginUi.save" : selectedMethodId === "device_code" ? "settings.harness.loginUi.createDeviceCode" : "settings.harness.loginUi.continueBrowser")}
+			{!connected && !running && !verifying && method?.secret && <Button type="submit" form={titleId + "-form"} size="sm" disabled={busy || !secret.trim()}>
+				{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
+				{t("settings.harness.loginUi.save")}
 			</Button>}
 			{operation?.loginUrl && running && (agentId !== "claude-code" || operation.acceptsCode) && !(remote && agentId === "codex" && operation.method === "browser") && <Button size="sm" onClick={() => act(() => aoBridge.app.openExternal(operation.loginUrl!))}><ExternalLink aria-hidden="true" />{t("settings.harness.loginUi.openBrowser")}</Button>}
 			<Button variant={connected ? "primary" : "ghost"} size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "settings.harness.loginUi.done" : "settings.harness.loginUi.cancel")}</Button>
