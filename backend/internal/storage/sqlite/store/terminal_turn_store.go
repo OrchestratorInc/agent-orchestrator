@@ -20,7 +20,9 @@ func (s *Store) RecordTerminalTurnRequest(ctx context.Context, turn domain.Termi
 	if text == "" {
 		return nil
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "record terminal turn request", func(q *gen.Queries) error {
 		joined, err := q.AppendTerminalTurnRequest(ctx, gen.AppendTerminalTurnRequestParams{
@@ -45,7 +47,9 @@ func (s *Store) RecordTerminalTurnRequest(ctx context.Context, turn domain.Termi
 // RecordTerminalTurnResponse closes the session's newest turn with the agent's
 // final message. A stop with no open turn has nothing to answer and is ignored.
 func (s *Store) RecordTerminalTurnResponse(ctx context.Context, id domain.SessionID, response string, at time.Time) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.CloseTerminalTurn(ctx, gen.CloseTerminalTurnParams{
 		AgentResponse: strings.TrimSpace(response), RespondedAt: sql.NullTime{Time: at, Valid: true}, SessionID: string(id),
@@ -73,7 +77,9 @@ func (s *Store) ListTerminalTurns(ctx context.Context, id domain.SessionID) ([]d
 // in both stores. Rows recorded before the hook reported a thread id match on
 // the provider alone. Other providers' turns were not imported and stay.
 func (s *Store) DeleteTerminalTurnsForThread(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, nativeSessionID string) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.DeleteTerminalTurnsForThread(ctx, gen.DeleteTerminalTurnsForThreadParams{
 		SessionID: string(id), Harness: string(harness), NativeSessionID: nativeSessionID,

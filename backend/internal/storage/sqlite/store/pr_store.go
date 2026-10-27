@@ -53,7 +53,9 @@ func (s *Store) WriteSCMObservation(ctx context.Context, pr domain.PullRequest, 
 // merge endpoint without replacing concurrently refreshed CI or review facts.
 // The pr_cdc_update trigger emits the corresponding pr_updated event.
 func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, mergedAt time.Time) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qr.MarkPRMerged(ctx, gen.MarkPRMergedParams{
 		MergeCommitSha: mergeCommitSHA,
@@ -75,7 +77,9 @@ func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, 
 // observation in the same transaction. The session_id update is what fires the
 // pr_session_changed CDC trigger added in migration 0005.
 func (s *Store) ClaimPR(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode, allowActiveTakeover bool) (ports.ClaimOutcome, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return ports.ClaimOutcome{}, err
+	}
 	defer s.writeMu.Unlock()
 	pr = normalizedPRIdentity(pr)
 	var outcome ports.ClaimOutcome
@@ -119,7 +123,9 @@ func (s *Store) ClaimPR(ctx context.Context, pr domain.PullRequest, checks []dom
 }
 
 func (s *Store) writePR(ctx context.Context, pr domain.PullRequest, checks []domain.PullRequestCheck, reviews []domain.PullRequestReview, threads []domain.PullRequestReviewThread, comments []domain.PullRequestComment, reviewMode ports.ReviewWriteMode, replaceLegacyComments bool) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "write pr observation", func(q *gen.Queries) error {
 		return writePRRows(ctx, q, pr, checks, reviews, threads, comments, reviewMode, replaceLegacyComments, true)
@@ -456,7 +462,9 @@ func (s *Store) GetPRLastNudgeSignature(ctx context.Context, url string) (string
 // UpdatePRLastNudgeSignature overwrites the persisted nudge-dedup JSON payload
 // for a PR. A no-op when the URL has no pr row yet.
 func (s *Store) UpdatePRLastNudgeSignature(ctx context.Context, url, payload string) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.UpdatePRLastNudgeSignature(ctx, gen.UpdatePRLastNudgeSignatureParams{LastNudgeSignature: payload, URL: url}); err != nil {
 		return fmt.Errorf("update pr nudge signature %s: %w", url, err)
@@ -547,7 +555,9 @@ func (s *Store) ListPRComments(ctx context.Context, prURL string) ([]domain.Pull
 
 // MarkPRCommentResolved records a provider-resolved review comment locally.
 func (s *Store) MarkPRCommentResolved(ctx context.Context, prURL, commentID string) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	affected, err := s.qw.MarkPRCommentResolved(ctx, gen.MarkPRCommentResolvedParams{PRURL: prURL, CommentID: commentID})
 	if err != nil {
@@ -560,7 +570,9 @@ func (s *Store) MarkPRCommentResolved(ctx context.Context, prURL, commentID stri
 // all of its comments locally. The two updates share the writer lock so a
 // concurrent observation cannot interleave with the targeted state change.
 func (s *Store) MarkPRReviewThreadResolved(ctx context.Context, prURL, threadID string) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "mark pr review thread resolved", func(q *gen.Queries) error {
 		if _, err := q.MarkPRReviewThreadResolved(ctx, gen.MarkPRReviewThreadResolvedParams{PRURL: prURL, ThreadID: threadID}); err != nil {

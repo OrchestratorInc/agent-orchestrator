@@ -15,7 +15,9 @@ var _ shelltermsvc.Store = (*Store)(nil)
 
 // InsertShellTerminal records a standalone shell terminal against an app run.
 func (s *Store) InsertShellTerminal(ctx context.Context, rec shelltermsvc.ShellTerminalRecord) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	_, err := s.qw.InsertShellTerminal(ctx, gen.InsertShellTerminalParams{
 		HandleID:                  rec.HandleID,
@@ -84,7 +86,9 @@ func (s *Store) SelectShellTerminalsFromPreviousAppRuns(ctx context.Context, app
 // UpdateShellTerminalTitle renames one shell terminal, returning the updated row
 // and whether a row existed so the caller can answer 404 for an unknown handle.
 func (s *Store) UpdateShellTerminalTitle(ctx context.Context, handleID, title string) (shelltermsvc.ShellTerminalRecord, bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return shelltermsvc.ShellTerminalRecord{}, false, err
+	}
 	defer s.writeMu.Unlock()
 	row, err := s.qw.UpdateShellTerminalTitle(ctx, gen.UpdateShellTerminalTitleParams{Title: title, HandleID: handleID})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -99,7 +103,9 @@ func (s *Store) UpdateShellTerminalTitle(ctx context.Context, handleID, title st
 // DeleteShellTerminalByHandleID forgets one shell terminal, reporting whether a
 // row actually existed so the caller can answer 404 for an unknown handle.
 func (s *Store) DeleteShellTerminalByHandleID(ctx context.Context, handleID string) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	affected, err := s.qw.DeleteShellTerminalByHandleID(ctx, handleID)
 	if err != nil {
@@ -111,7 +117,9 @@ func (s *Store) DeleteShellTerminalByHandleID(ctx context.Context, handleID stri
 // DeleteShellTerminalsFromPreviousAppRuns clears every orphaned row in one
 // statement and returns how many were removed.
 func (s *Store) DeleteShellTerminalsFromPreviousAppRuns(ctx context.Context, appRunID string) (int64, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
 	defer s.writeMu.Unlock()
 	affected, err := s.qw.DeleteShellTerminalsFromPreviousAppRuns(ctx, appRunID)
 	if err != nil {

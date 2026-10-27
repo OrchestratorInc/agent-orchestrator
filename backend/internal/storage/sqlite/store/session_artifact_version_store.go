@@ -35,7 +35,9 @@ func (s *Store) ListSessionArtifactVersions(ctx context.Context, id domain.Sessi
 // most keep remain (keep <= 0 keeps all). It returns the inserted version and
 // the hashes of the removed rows.
 func (s *Store) AppendSessionArtifactVersion(ctx context.Context, v domain.SessionArtifactVersion, keep int) (domain.SessionArtifactVersion, []string, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.SessionArtifactVersion{}, nil, err
+	}
 	defer s.writeMu.Unlock()
 	var (
 		row    gen.SessionArtifactVersion
@@ -71,7 +73,9 @@ func (s *Store) AppendSessionArtifactVersion(ctx context.Context, v domain.Sessi
 // DeleteSessionArtifactVersions removes every version row of a session, for
 // when the user deletes the session's artifacts.
 func (s *Store) DeleteSessionArtifactVersions(ctx context.Context, id domain.SessionID) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.DeleteSessionArtifactVersions(ctx, id); err != nil {
 		return fmt.Errorf("delete artifact versions for %s: %w", id, err)
@@ -83,7 +87,9 @@ func (s *Store) DeleteSessionArtifactVersions(ctx context.Context, id domain.Ses
 // path, for when the user deletes that file, and returns the removed rows'
 // hashes.
 func (s *Store) DeleteSessionArtifactPathVersions(ctx context.Context, id domain.SessionID, path string) ([]string, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return nil, err
+	}
 	defer s.writeMu.Unlock()
 	sums, err := s.qw.DeleteSessionArtifactPathVersions(ctx, gen.DeleteSessionArtifactPathVersionsParams{SessionID: id, Path: path})
 	if err != nil {

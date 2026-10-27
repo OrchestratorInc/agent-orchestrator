@@ -14,7 +14,9 @@ import (
 // SetManagedHarnessRelease records the AO-managed release new launches of
 // harness start from. Every later launch records it as the release it runs.
 func (s *Store) SetManagedHarnessRelease(ctx context.Context, harness domain.AgentHarness, release string, at time.Time) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.SetManagedHarnessRelease(ctx, gen.SetManagedHarnessReleaseParams{
 		Harness: string(harness), Release: release, UpdatedAt: at,
@@ -36,7 +38,9 @@ func (s *Store) ListHarnessReleasesInUse(ctx context.Context, harness domain.Age
 
 // PruneSessionHarnessReleases forgets launches that are no longer current.
 func (s *Store) PruneSessionHarnessReleases(ctx context.Context) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	if err := s.qw.PruneSessionHarnessReleases(ctx); err != nil {
 		return fmt.Errorf("prune session harness releases: %w", err)
@@ -50,7 +54,9 @@ func (s *Store) PruneSessionHarnessReleases(ctx context.Context) error {
 // mark, to the new one: the provider process is the same, and no cleanup can
 // prune the old generation's row between the claim and the carry.
 func (s *Store) ClaimLiveChatControllerGeneration(ctx context.Context, id domain.SessionID, generation string) error {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, fmt.Sprintf("claim live chat controller generation for %s", id), func(q *gen.Queries) error {
 		previous, err := q.GetChatControllerGeneration(ctx, id)

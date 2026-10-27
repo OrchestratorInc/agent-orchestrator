@@ -17,7 +17,9 @@ import (
 // UpsertUsageBinding records or refreshes the association between an AO
 // session and a native root session/thread.
 func (s *Store) UpsertUsageBinding(ctx context.Context, rec domain.UsageBindingRecord) (domain.UsageBindingRecord, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.UsageBindingRecord{}, err
+	}
 	defer s.writeMu.Unlock()
 	row, err := s.qw.UpsertUsageBinding(ctx, gen.UpsertUsageBindingParams{
 		SessionID:      rec.SessionID,
@@ -74,7 +76,9 @@ func (s *Store) FinalizeUsageBindingsForSessionLaunch(
 	expectedSessionRevision int64,
 	at time.Time,
 ) ([]domain.UsageBindingRecord, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return nil, err
+	}
 	defer s.writeMu.Unlock()
 	rows, err := s.qw.FinalizeUsageBindingsForSessionLaunch(ctx, gen.FinalizeUsageBindingsForSessionLaunchParams{
 		SessionID:               sessionID,
@@ -94,7 +98,9 @@ func (s *Store) FinalizeUsageBindingsForSessionLaunch(
 
 // UpdateUsageBindingState updates only the binding lifecycle/error state.
 func (s *Store) UpdateUsageBindingState(ctx context.Context, id int64, state domain.UsageBindingState, lastErrorCode string, at time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.UpdateUsageBinding(ctx, gen.UpdateUsageBindingParams{
 		ID:            id,
@@ -111,7 +117,9 @@ func (s *Store) UpdateUsageBindingState(ctx context.Context, id int64, state dom
 // UpdateUsageBindingErrorCode refreshes binding diagnostics without changing
 // lifecycle state chosen by a concurrent finalization or ingestion pass.
 func (s *Store) UpdateUsageBindingErrorCode(ctx context.Context, id int64, lastErrorCode string, at time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.UpdateUsageBinding(ctx, gen.UpdateUsageBindingParams{
 		ID:            id,
@@ -128,7 +136,9 @@ func (s *Store) UpdateUsageBindingErrorCode(ctx context.Context, id int64, lastE
 // CompleteUsageBindingIfSettled atomically completes a finalizing binding only
 // when every registered source generation is complete.
 func (s *Store) CompleteUsageBindingIfSettled(ctx context.Context, bindingID int64, at time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.CompleteUsageBindingIfSettled(ctx, gen.CompleteUsageBindingIfSettledParams{
 		UsageBindingID: bindingID,
@@ -146,7 +156,9 @@ func (s *Store) InsertUsageSource(ctx context.Context, rec domain.UsageSourceRec
 	if err := validateParserStateObject(rec.ParserStateJSON); err != nil {
 		return domain.UsageSourceRecord{}, err
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.UsageSourceRecord{}, err
+	}
 	defer s.writeMu.Unlock()
 	row, err := s.qw.InsertUsageSource(ctx, usageSourceInsertParams(rec))
 	if err != nil {
@@ -167,7 +179,9 @@ func (s *Store) ReplaceUsageSource(
 	if err := validateParserStateObject(rec.ParserStateJSON); err != nil {
 		return domain.UsageSourceRecord{}, err
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.UsageSourceRecord{}, err
+	}
 	defer s.writeMu.Unlock()
 	var replaced domain.UsageSourceRecord
 	err := s.inTx(ctx, "replace usage source", func(q *gen.Queries) error {
@@ -310,7 +324,9 @@ func (s *Store) GetUsageSourceForIngestion(ctx context.Context, id int64) (domai
 
 // MarkUsageSourceState updates only the source lifecycle/error state.
 func (s *Store) MarkUsageSourceState(ctx context.Context, id int64, state domain.UsageSourceState, lastErrorCode string, nextRetryAt *time.Time, updatedAt time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.UpdateUsageSourceLifecycle(ctx, gen.UpdateUsageSourceLifecycleParams{
 		ID:            id,
@@ -329,7 +345,9 @@ func (s *Store) MarkUsageSourceState(ctx context.Context, id int64, state domain
 // ReactivateUsageSource makes a completed or failed source eligible for
 // immediate resumed-session ingestion and clears transient retry state.
 func (s *Store) ReactivateUsageSource(ctx context.Context, id int64, updatedAt time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.UpdateUsageSourceLifecycle(ctx, gen.UpdateUsageSourceLifecycleParams{
 		ID:            id,
@@ -348,7 +366,9 @@ func (s *Store) ReactivateUsageSource(ctx context.Context, id int64, updatedAt t
 // MarkUsageSourceFailure records a failed ingestion attempt and its bounded
 // retry schedule.
 func (s *Store) MarkUsageSourceFailure(ctx context.Context, id, failureCount int64, lastErrorCode string, nextRetryAt, updatedAt time.Time) (bool, error) {
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.UpdateUsageSourceLifecycle(ctx, gen.UpdateUsageSourceLifecycleParams{
 		ID:            id,
@@ -378,7 +398,9 @@ func (s *Store) ApplyUsageChunk(
 			return err
 		}
 	}
-	s.writeMu.Lock()
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.writeMu.Unlock()
 
 	err := s.inTx(ctx, "apply usage chunk", func(q *gen.Queries) error {
