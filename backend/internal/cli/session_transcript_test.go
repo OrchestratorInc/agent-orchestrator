@@ -567,6 +567,71 @@ func TestTranscriptCapsStreamedActivityFields(t *testing.T) {
 	}
 }
 
+func TestSessionGet_TranscriptCapsACPFileSnapshots(t *testing.T) {
+	const fieldLength = 12000
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/conversation") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"conversationId": "cnv", "latestSequence": 2, "oldestSequence": 2,
+				"activities": []any{map[string]any{
+					"kind": "activity", "sequence": 2, "activityKind": "file_change",
+					"summary": "Edit /repo/main.go", "detail": map[string]any{
+						"protocol": "acp", "files": []any{map[string]any{
+							"path": "/repo/main.go", "status": "modified",
+							"patch":   strings.Repeat("p", fieldLength),
+							"oldText": strings.Repeat("o", fieldLength),
+							"newText": strings.Repeat("n", fieldLength),
+						}},
+					},
+				}},
+			})
+			return
+		}
+		_, _ = io.WriteString(w, `{"session":`+sessionJSONWithMode("demo-1", "demo", "chat")+`}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"session", "get", "demo-1", "--transcript", "1", "--json", "--cap", "1000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Transcript struct {
+			TruncatedFields int `json:"truncatedFields"`
+			Entries         []struct {
+				Detail struct {
+					Files []map[string]string `json:"files"`
+				} `json:"detail"`
+				Truncations []fieldTruncation `json:"truncations"`
+			} `json:"entries"`
+		} `json:"transcript"`
+	}
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	entry := decoded.Transcript.Entries[0]
+	if decoded.Transcript.TruncatedFields != 3 || len(entry.Truncations) != 3 {
+		t.Fatalf("ACP file truncation counts = %d, %#v", decoded.Transcript.TruncatedFields, entry.Truncations)
+	}
+	for _, key := range []string{"patch", "oldText", "newText"} {
+		value := entry.Detail.Files[0][key]
+		if utf8.RuneCountInString(value) != 1000 || !strings.Contains(value, "chars omitted") {
+			t.Errorf("%s was not capped: length %d", key, utf8.RuneCountInString(value))
+		}
+		found := false
+		for _, trunc := range entry.Truncations {
+			if trunc.Field == "detail.files.0."+key && trunc.OriginalChars == fieldLength && trunc.KeptChars == 1000 {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s truncation receipt missing: %#v", key, entry.Truncations)
+		}
+	}
+}
+
 func TestTranscriptCapsNestedToolArrays(t *testing.T) {
 	const fieldLength = 10000
 	activity, err := json.Marshal(map[string]any{
