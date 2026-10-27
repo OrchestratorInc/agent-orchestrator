@@ -107,6 +107,7 @@ export const aoBridge: AoBridge =
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
+		agentLogin: { request: async () => null },
 		sideChats: { capture: async () => undefined },
 		editorHandoff: {
 			getState: async () => ({

@@ -172,6 +172,7 @@ import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
+import { registerAgentLoginIpc } from "./main/agent-login-ipc";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
@@ -3031,6 +3032,11 @@ registerChatImageIpc({
 	downloadsDirectory: () => app.getPath("downloads"),
 });
 registerCloudArtifactIpc({ ipcMain });
+registerAgentLoginIpc({
+	ipcMain,
+	daemonPort: () => (daemonStatus.state === "ready" ? daemonStatus.port : undefined),
+	trustedSender: (sender) => sender === getShellWebContents(),
+});
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile
