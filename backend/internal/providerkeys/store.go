@@ -75,7 +75,7 @@ func Save(ctx context.Context, dataDir, name, value string) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return err

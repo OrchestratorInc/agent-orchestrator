@@ -294,7 +294,8 @@ func (s *Service) startNativeLogin(ctx context.Context, agentID string) (LoginSn
 		}
 	}
 	expires := time.Now().Add(s.loginTimeout)
-	loginCtx, cancel := context.WithDeadline(context.Background(), expires)
+	// The native login outlives the HTTP request but keeps its trace values.
+	loginCtx, cancel := context.WithDeadline(context.WithoutCancel(ctx), expires)
 	op := &loginOperation{
 		snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: "native", Status: "running", NativePrompt: "waiting", ExpiresAt: expires},
 		cancel:   cancel, done: make(chan struct{}), terminalID: result.Terminal.HandleID,
@@ -413,6 +414,7 @@ func nativePrompt(output string) (kind, selected string, options []string) {
 	return "waiting", "", nil
 }
 
+// ActOnLogin sends a reviewed menu choice to a running native login.
 func (s *Service) ActOnLogin(ctx context.Context, agentID, id, action string) (LoginSnapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -432,7 +434,10 @@ func (s *Service) ActOnLogin(ctx context.Context, agentID, id, action string) (L
 	} else if action != "previous" && action != "next" && action != "select" {
 		return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_ACTION_UNAVAILABLE", "Choose a supported login menu action.", nil)
 	}
-	terminal := s.terminals.(guidedAuthTerminal)
+	terminal, ok := s.terminals.(guidedAuthTerminal)
+	if !ok {
+		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_TERMINAL_UNAVAILABLE", "Guided native sign-in is unavailable.")
+	}
 	if err := terminal.SendAuthTerminalKey(ctx, op.terminalID, action); err != nil {
 		return LoginSnapshot{}, err
 	}

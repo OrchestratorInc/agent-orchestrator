@@ -75,7 +75,7 @@ func saveOpenCodeAPIKey(ctx context.Context, method, key string) error {
 	if err != nil {
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "OpenCode's credential file could not be prepared.")
 	}
-	defer os.Remove(tmp.Name())
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "OpenCode's credential file could not be secured.")
