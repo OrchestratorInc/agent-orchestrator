@@ -283,6 +283,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		controller: AbortController;
 		promise: Promise<boolean>;
 		queued?: Promise<boolean>;
+		/** Set by restartLoad: callers of this load get the replacement's result. */
+		replacedBy?: Promise<boolean>;
 	} | null>(null);
 	const promotedConfigRef = useRef<ServerConfig | null>(null);
 	const primarySnapshotRef = useRef<HostSnapshot | null>(null);
@@ -771,13 +773,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}
 		existing?.controller.abort();
 		const controller = new AbortController();
-		const load = { config: c, controller, promise: Promise.resolve(false) };
+		const load: NonNullable<typeof primaryLoadRef.current> = { config: c, controller, promise: Promise.resolve(false) };
 		primaryLoadRef.current = load;
-		load.promise = loadAll(c, controller).finally(() => {
-			if (primaryLoadRef.current === load) primaryLoadRef.current = null;
-		});
+		load.promise = loadAll(c, controller)
+			.finally(() => {
+				if (primaryLoadRef.current === load) primaryLoadRef.current = null;
+			})
+			.then((keepGoing) => load.replacedBy ?? keepGoing);
 		return load.promise;
 	}, [loadAll]);
+
+	// Replaces a load that may be stuck on a link that is gone. fetchAll would
+	// join it instead, leaving recovery to wait out the old request's timeout
+	// even after a race found a working endpoint. Whoever is still waiting on the
+	// old load (the poll loop) gets the replacement's result rather than the
+	// abort's false, which would otherwise stop the poll for good.
+	const restartLoad = useCallback((): Promise<boolean> => {
+		const existing = primaryLoadRef.current;
+		if (!existing || existing.controller.signal.aborted) return fetchAll();
+		existing.controller.abort();
+		primaryLoadRef.current = null;
+		const replacement = fetchAll();
+		existing.replacedBy = replacement;
+		return replacement;
+	}, [fetchAll]);
 
 	// (Re)start the REST poll whenever the config changes. Stops polling on an
 	// auth failure so the phone can't lock itself out by hammering a bad password.
@@ -867,9 +886,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			publishLink();
 			if (!networkChangeNeedsRace(previous, next) || !pollActiveRef.current) return;
 			// reloadConfig keeps the same config object when the winning endpoint
-			// is unchanged, which would leave the poll waiting out its interval, so
-			// poll explicitly once the race settles.
-			void reloadConfig().then(() => fetchAll()).catch(() => {});
+			// is unchanged, which would leave the poll waiting out its interval, or
+			// on a request still hanging on the network the phone left. Start a
+			// fresh load once the race settles.
+			void reloadConfig().then(() => restartLoad()).catch(() => {});
 		};
 		void getNetworkStateAsync().then(apply).catch(() => {});
 		const sub = addNetworkStateListener(apply);
@@ -877,7 +897,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			live = false;
 			sub.remove();
 		};
-	}, [publishLink, reloadConfig, fetchAll]);
+	}, [publishLink, reloadConfig, restartLoad]);
 
 	// Another machine's failures say nothing about this one.
 	useEffect(() => {

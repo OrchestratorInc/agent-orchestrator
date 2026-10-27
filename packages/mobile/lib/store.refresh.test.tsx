@@ -157,3 +157,24 @@ it("blames the phone's network, then races and polls as soon as it returns", asy
 	expect(current.linkHealth).toBe("ok");
 	expect(current.sessions[0].displayName).toBe("Back");
 });
+
+// A board request still hanging on the link the phone just left must not hold
+// recovery hostage: the race found a working endpoint (here the same URL), so a
+// fresh request goes out at once, and the poll loop keeps running afterwards.
+it("replaces a request stuck on the old link when the network returns", async () => {
+	state.sessions.mockImplementationOnce((_config: unknown, _scope: unknown, options?: { signal?: AbortSignal }) =>
+		new Promise((_, reject) => options?.signal?.addEventListener("abort", () => reject(new Error("aborted")))));
+	await mount();
+	expect(state.sessions).toHaveBeenCalledTimes(1);
+	const stuck = state.sessions.mock.calls[0][2]?.signal as AbortSignal;
+	await act(async () => { state.onNetwork!({ isConnected: false, isInternetReachable: false, type: "NONE" }); });
+	state.sessions.mockResolvedValue(board("Recovered"));
+	await act(async () => { state.onNetwork!({ isConnected: true, isInternetReachable: true, type: "WIFI" }); });
+	expect(stuck.aborted).toBe(true);
+	expect(state.sessions).toHaveBeenCalledTimes(2);
+	expect(current.sessions[0].displayName).toBe("Recovered");
+	expect(current.connection).toBe("open");
+	// The poll loop was waiting on the stuck load; it must carry on, not stop.
+	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+	expect(state.sessions).toHaveBeenCalledTimes(3);
+});
