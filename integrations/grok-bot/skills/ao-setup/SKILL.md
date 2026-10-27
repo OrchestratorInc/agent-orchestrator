@@ -36,11 +36,11 @@ Use the probe result for each computer. Install or open anything only after the 
 | `app=missing` (macOS) | Say: "Orchestrator.inc isn't installed on <computer>. Want me to install it?" On yes, run "Install on a Mac" |
 | `app=installed` and `daemon=not running` | Open it with `open -a "Agent Orchestrator"`, wait 15 seconds, and run the probe again |
 | `daemon=not running` on Linux | Give the download for the user's distribution: [AppImage](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.AppImage), [.deb](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb) or [.rpm](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm). The user installs and opens it, then says **check again** |
-| `projects=` with nothing after it | Say: "Orchestrator.inc is running on <computer> but has no projects yet. Open it, add the repository you want it to manage, then say **check again**." |
+| `projects=` with nothing after it | Run "First run" below |
 | `python=missing` | macOS: `xcode-select --install` (the user confirms the system dialog). Linux: give the package manager line for python3 |
 | `ao=missing` but projects listed | Everything works except starting a review, screenshots and automations, which use the `ao` CLI. Say so once |
 
-"check again" runs the probe on that computer again and continues from section 2.
+"check again" runs the probe on that computer again and continues from section 2. When the probe lists projects, also run "First run" step 1 once, so the user has a coding agent that is ready.
 
 ### Install on a Mac
 After a yes, on that computer. It downloads the latest signed release for the Mac's chip, copies the app to Applications and opens it:
@@ -52,7 +52,44 @@ f(){ a=$([ "$(uname -m)" = arm64 ] && echo arm64 || echo x64); d=$(mktemp -d)
   hdiutil detach -quiet "$m"; rm -rf "$d"
   [ $r -eq 0 ] && open -a "Agent Orchestrator" && echo INSTALLED || echo INSTALL_FAILED; }; f
 ```
-The download is about 300 MB. Tell the user before you start. On `INSTALLED`: "Orchestrator.inc is open on <computer>. Follow its first-run steps (sign in to your coding agent and add the repository you want it to manage), then say **check again**." On a failure, give the user the [download page](https://orchestrator.inc/download/) instead.
+The download is about 300 MB. Tell the user before you start. On `INSTALLED`, say "Orchestrator.inc is open on <computer>. I'll get it ready: a coding agent and your first project," wait 15 seconds, and run "First run". On a failure, give the user the [download page](https://orchestrator.inc/download/) instead.
+
+## First run
+Gets a computer ready for work once Orchestrator.inc is running there: a coding agent, a project, and the first orchestrator. Every change needs the user's yes. If Orchestrator.inc shows its own welcome steps and the user prefers them, let them finish there and say **check again**.
+
+### 1. A coding agent
+```sh
+f(){ <aoapi helper>; aoapi POST agents/refresh '{}' >/dev/null; aoapi GET agents/readiness | python3 -c '
+import json,sys
+for a in json.load(sys.stdin)["agents"]:
+    if a["installation"]["state"]!="not_installed" or a["id"] in ("claude-code","codex"):
+        print("\t".join([a["id"], a.get("label",""), a.get("effectiveReadiness",""), a["installation"]["state"], a["authentication"]["state"]]))'; }; f
+```
+Columns: id, name, readiness, installed, signed in.
+- **Some agent is `ready`:** use it. If more than one is ready, ask which one should do the work. Don't pick for the user.
+- **Installed but not signed in:** on yes, `aoapi POST "agents/<id>/auth" '{}'` and relay its `guidance`. A sign-in window opens in Orchestrator.inc and the user finishes there (it may open their browser). When they say done, `aoapi POST "agents/<id>/verify" '{}'` and list again.
+- **None installed:** ask "Which coding agent do you want to use: Claude Code or Codex?" On the pick and a yes, `aoapi POST "agents/<id>/install" '{}'`, then check `aoapi GET "agents/<id>/install"` every 15 seconds. `status` `succeeded`: sign in as above. `failed`, `unsupported` or `interrupted`: relay it, and point the user to the agent settings in Orchestrator.inc.
+
+### 2. A project
+Suggest the user's most recently changed git clones (read-only; worktrees are left out):
+```sh
+python3 -c '
+import glob,os
+home=os.path.expanduser("~"); found=set()
+for r in ("Development","Projects","projects","code","Code","src","dev","GitHub","Documents/GitHub"):
+    for pat in ("*/.git","*/*/.git","*/*/*/.git"): found.update(os.path.dirname(g) for g in glob.glob(os.path.join(home,r,pat)) if os.path.isdir(g))
+for p in sorted(found,key=lambda p:-os.path.getmtime(p))[:10]: print(p.replace(home,"~",1))'
+```
+Show them as one card, plus a typed option for another folder. On the pick, register it with the agent from step 1:
+```sh
+f(){ <aoapi helper>; aoapi POST projects "$(python3 -c 'import json,os,sys; print(json.dumps({"path":os.path.expanduser(sys.argv[1]),"config":{"worker":{"agent":sys.argv[2]},"orchestrator":{"agent":sys.argv[2]}}}))' '<repo path>' '<agent id>')" | python3 -c 'import json,sys; d=json.load(sys.stdin); d=d.get("project",d); print("added", d.get("id"))'; }; f
+```
+An error that the path is not a git repository: ask for another folder.
+
+### 3. The first orchestrator
+Ask: "Want me to start the orchestrator for <project>? Tell me what you'd like done first, or I'll ask it to look around the repo and suggest a first task." On yes, run ao-orchestrator "Start an orchestrator" with that request.
+
+Then continue with section 2.
 
 ## 2. Report and ask once
 One message, at most 6 lines: per computer, AO found or not, its projects, and how many sessions are live. For a computer without a working AO, add the one next step from "Missing pieces". Then:
