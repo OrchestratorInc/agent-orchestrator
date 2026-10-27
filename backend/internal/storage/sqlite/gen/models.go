@@ -416,6 +416,8 @@ type ConversationTurn struct {
 	UsageLimitResetsAt    sql.NullTime
 	UsageLimitAutoResume  int64
 	UsageLimitResumeError string
+	BatchedInput          int64
+	ProviderInputText     string
 }
 
 type Cue struct {

@@ -1038,6 +1038,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
+		if err := s.store.FailReservedQueuedBatch(ctx, conversation.ID, s.now()); err != nil {
+			_ = cleanupUnpublishedConversation(conv, false)
+			return nil, fmt.Errorf("settle uncertain queued batch: %w", err)
+		}
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
 		if activator, ok := conv.(ports.ChatLiveReconnectActivator); ok {
 			if err := activator.ActivateLiveReconnect(ctx, providerTurnID); err != nil {

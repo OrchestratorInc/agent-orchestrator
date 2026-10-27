@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import * as Clipboard from "expo-clipboard";
-import { createContext, isValidElement, memo, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, isValidElement, memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
@@ -14,12 +14,17 @@ import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
 import { parseBlocks, type MarkdownBlock, type TableAlign } from "./markdownBlocks";
 import { iconSize, microLabel, prose, radius, space, type } from "../tokens";
 import type { ChatExcerpt } from "./types";
+import { sessionLink } from "./automationMessages";
 
 // The conversation screen decides how a tapped link opens (it knows the AO host
 // that the agent's localhost links map onto); the renderer only reports the tap.
 
 const AddResponseToChat = createContext<((text: string, source?: Omit<ChatExcerpt, "text">) => void) | null>(null);
 const OpenChatLink = createContext<((url: string) => void) | null>(null);
+// The name to show for a session a bare `ao://sessions/…` link names, and a way
+// to ask for one the surface does not know yet.
+type SessionNames = { name?: (sessionId: string) => string | undefined; want?: (sessionId: string) => void };
+const SessionNameOf = createContext<SessionNames | null>(null);
 
 /**
  * What a tapped link does when the renderer is used outside a provider.
@@ -39,8 +44,15 @@ function defaultOpenChatLink(url: string): void {
 	void openGitHub(url);
 }
 
-export function ChatLinkProvider({ onLinkOpen, onAddToChat, children }: { onLinkOpen: (url: string) => void; onAddToChat?: (text: string, source?: Omit<ChatExcerpt, "text">) => void; children: ReactNode }) {
-	return <OpenChatLink.Provider value={onLinkOpen}><AddResponseToChat.Provider value={onAddToChat ?? null}>{children}</AddResponseToChat.Provider></OpenChatLink.Provider>;
+/**
+ * How links in this chat open. `onLinkOpen` also receives `ao://sessions/…`
+ * links: only the surface knows which machine the conversation is on, so a
+ * session link is a link only under a provider, and `sessionName` lets a bare
+ * one read as the session's name rather than its URL.
+ */
+export function ChatLinkProvider({ onLinkOpen, onAddToChat, sessionName, onSessionNameNeeded, children }: { onLinkOpen: (url: string) => void; onAddToChat?: (text: string, source?: Omit<ChatExcerpt, "text">) => void; sessionName?: (sessionId: string) => string | undefined; onSessionNameNeeded?: (sessionId: string) => void; children: ReactNode }) {
+	const names = useMemo<SessionNames>(() => ({ name: sessionName, want: onSessionNameNeeded }), [onSessionNameNeeded, sessionName]);
+	return <OpenChatLink.Provider value={onLinkOpen}><AddResponseToChat.Provider value={onAddToChat ?? null}><SessionNameOf.Provider value={names}>{children}</SessionNameOf.Provider></AddResponseToChat.Provider></OpenChatLink.Provider>;
 }
 
 /**
@@ -225,12 +237,28 @@ function CodeBlock({ text, language, streaming }: { text: string; language?: str
 }
 
 function MarkdownLink({ url, label, style }: { url: string; label: string; style: StyleProp<TextStyle> }) {
-	const open = useContext(OpenChatLink) ?? defaultOpenChatLink;
+	const provided = useContext(OpenChatLink);
+	const names = useContext(SessionNameOf);
+	const session = sessionLink(url);
+	// A bare link reads as the session it names, asked for once when the surface does not know it; an authored label is kept.
+	const bareSessionId = session && label === url ? session.sessionId : undefined;
+	const known = bareSessionId ? names?.name?.(bareSessionId) : undefined;
+	useEffect(() => {
+		if (bareSessionId && !known) names?.want?.(bareSessionId);
+	}, [bareSessionId, known, names]);
+	if (session) {
+		const text = bareSessionId ? known || bareSessionId : label;
+		// Without a provider nothing knows which machine the session is on, so it stays words.
+		if (!provided) return <Text>{text}</Text>;
+		return <Text accessibilityRole="link" accessibilityHint="Opens this session's chat" style={style} onPress={() => { haptics.tap(); provided(url); }}>{text}</Text>;
+	}
+	const open = provided ?? defaultOpenChatLink;
 	return <Text accessibilityRole="link" style={style} onPress={() => { haptics.tap(); open(url); }}>{label}</Text>;
 }
 
 function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>): ReactNode[] {
-	const pattern = /(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|<(https?:\/\/[^\s>]+)>|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+))/g;
+	// Web links, and AO's own `ao://` links; a bare session link stops before prose punctuation.
+	const pattern = /(\[([^\]]+)\]\(((?:https?|ao):\/\/[^\s)]+)\)|<((?:https?|ao):\/\/[^\s>]+)>|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+)|(ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"]))/g;
 	const nodes: ReactNode[] = [];
 	let at = 0;
 	let match: RegExpExecArray | null;
@@ -238,8 +266,8 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 		if (match.index > at) nodes.push(text.slice(at, match.index));
 		if ((match[7] || match[10]) && !allowsUnderscoreEmphasis(text, match.index, pattern.lastIndex)) {
 			nodes.push(match[0]);
-		} else if ((match[2] && match[3]) || match[4] || match[11]) {
-			const url = match[3] ?? match[4] ?? match[11];
+		} else if ((match[2] && match[3]) || match[4] || match[11] || match[12]) {
+			const url = match[3] ?? match[4] ?? match[11] ?? match[12];
 			const label = match[2] ?? url;
 			nodes.push(linksPressable ? <MarkdownLink key={`${match.index}-link`} url={url} label={label} style={styles.link} /> : <Text key={`${match.index}-link`} style={styles.link}>{label}</Text>);
 		} else if (match[5]) {

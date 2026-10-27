@@ -47,6 +47,7 @@ export function buildShortcutCommands(t: TFunction): CommandItem[] {
 		title: t(shortcutLabelKeys[id]),
 		keywords,
 		searchOnly: true,
+		shortcut: id,
 		action: { kind: "run-shortcut", shortcut: id },
 	}));
 }

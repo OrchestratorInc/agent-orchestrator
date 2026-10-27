@@ -1,6 +1,6 @@
-# AO bot for Grok Bot
+# Orchestrator Bot for Grok Bot
 
-Seven skills that let a Grok Bot run AO from chat: see what every session is doing, answer agents' questions, talk to each project's orchestrator, act on sessions and PRs, and update itself. There is nothing to install on the user's computers. The skills use the `ao` CLI and AO's local API, which every AO install already has. macOS and Linux only; Windows isn't supported yet.
+Seven skills that let a Grok Bot run Orchestrator from chat: see what every session is doing, answer agents' questions, talk to each project's orchestrator, act on sessions and PRs, and update itself. There is nothing to install on the user's computers. The skills use the `ao` CLI and AO's local API, which every AO install already has. macOS and Linux only; Windows isn't supported yet.
 
 | Skill | What it does |
 |---|---|
@@ -26,7 +26,9 @@ A remote host needs AO's network access turned on (AO remote access settings, or
 
 ## Install
 
-**Grok Bot:** create a bot and save each `skills/<id>/SKILL.md` as a skill (ask the bot to use UpdateSkill with the frontmatter name and description and the rest of the file as the body). Share it as a template so others get the skills built in. Install the Grok Bot desktop app on the computers it should reach. Then say "set up AO".
+**Grok Bot:** open the [Orchestrator Bot template](https://x.ai/bot/1WTqU5Ql7Ysftsg4KpWjW) and choose **Add to Grok Bot**. Install the Grok Bot desktop app on the computers that run AO, then say "set up AO". No Orchestrator.inc yet? Setup offers to install it on a Mac and walks you through your first project. Say "update Orchestrator Bot" later to get skill updates.
+
+To build the bot yourself instead, create a bot and save each `skills/<id>/SKILL.md` as a skill (ask the bot to use UpdateSkill with the frontmatter name and description and the rest of the file as the body).
 
 **Claude Code, Codex, Cursor:** copy the folders under `skills/` into the agent's skills folder (`~/.claude/skills`, `~/.agents/skills`, `~/.cursor/skills`). These agents run on one computer, so they see that computer's AO as a local host only.
 

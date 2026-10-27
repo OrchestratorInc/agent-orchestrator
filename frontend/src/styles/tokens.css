@@ -372,14 +372,20 @@
 	--size-dialog-orchestrator: 460px;
 	--size-dialog-xl: 560px;
 
+	/* Glass overlay: Cmd+K and the New task modal show the app through a
+	 * blurred, see-through modal surface. The see-through share is low enough
+	 * that body text keeps its contrast over any content. */
+	--color-bg-overlay-glass: color-mix(in oklch, var(--popover) 60%, transparent);
+	--blur-overlay-glass: 28px;
+
 	/* Command palette */
-	--color-bg-command-palette: var(--popover);
+	--color-bg-command-palette: var(--color-bg-overlay-glass);
 	--color-border-command-palette: var(--color-border-overlay);
-	--color-bg-command-item-active: color-mix(in oklch, var(--popover) 88%, var(--foreground) 12%);
+	--color-bg-command-item-active: color-mix(in oklch, var(--foreground) 10%, transparent);
 	--color-text-command-item: var(--foreground);
 	--color-text-command-placeholder: var(--muted-foreground);
 	--color-text-command-muted: var(--muted-foreground);
-	--radius-command-palette: 12px;
+	--radius-command-palette: var(--radius-panel);
 	--radius-command-item: 6px;
 	--shadow-command-palette: var(--shadow-popover);
 	/* Overlay edge: a faint edge so a transient layer (menu, popover, dialog,
@@ -393,8 +399,8 @@
 	--size-command-palette-list-max: 420px;
 	--size-command-palette-list-vh: 50vh;
 	--size-command-subtitle-max: 45%;
-	--size-command-pad-x: 20px;
-	--size-command-item-inset: 8px;
+	--size-command-pad-x: 16px;
+	--size-command-item-inset: 6px;
 	--size-command-item-pad-l: 14px;
 	--font-size-command-input: 16px;
 	--leading-command-item: 22px;
@@ -771,10 +777,12 @@
 		0 1px 0 color-mix(in oklch, var(--foreground) 3%, transparent),
 		0 20px 50px color-mix(in oklch, var(--foreground) 14%, transparent);
 
+	--color-bg-overlay-glass: color-mix(in oklch, var(--popover) 68%, transparent);
+
 	/* Command palette */
-	--color-bg-command-palette: var(--popover);
+	--color-bg-command-palette: var(--color-bg-overlay-glass);
 	--color-border-command-palette: var(--color-border-overlay);
-	--color-bg-command-item-active: color-mix(in oklch, var(--popover) 88%, var(--foreground) 12%);
+	--color-bg-command-item-active: color-mix(in oklch, var(--foreground) 9%, transparent);
 	--color-text-command-item: var(--foreground);
 	--color-text-command-placeholder: var(--muted-foreground);
 	--color-text-command-muted: var(--muted-foreground);

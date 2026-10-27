@@ -1,8 +1,8 @@
 ---
 name: ao-rules
 description: >-
-  Shared rules and the connection helper for every ao-* skill (run AO, the
-  Agent Orchestrator, from chat). Read before running any ao-* skill.
+  Shared rules and the connection helper for every ao-* skill (run
+  Orchestrator from chat). Read before running any ao-* skill.
 ---
 # AO rules
 

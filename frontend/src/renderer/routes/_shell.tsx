@@ -1306,6 +1306,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 
 	// ⌘/ toggles: a second press closes the sheet.
 	useEffect(() => aoBridge.app.onKeyboardShortcutsHelp(() => setIsKeyboardShortcutsOpen((open) => !open)), []);
+	// The command palette runs the help shortcut through the app shortcut bus.
+	useAppShortcut("keyboard-shortcuts", () => setIsKeyboardShortcutsOpen((open) => !open));
 
 	// macOS ⌘Q asks before quitting; the main process quits once confirmed.
 	const [isQuitConfirmOpen, setIsQuitConfirmOpen] = useState(false);

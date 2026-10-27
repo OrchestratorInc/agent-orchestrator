@@ -1,6 +1,6 @@
 {
  "name": "ao-grok-bot",
- "version": "2026.10.27.1",
+ "version": "2026.10.28.1",
  "skills": [
   {
    "id": "ao-actions",
@@ -23,14 +23,14 @@
   {
    "id": "ao-rules",
    "path": "skills/ao-rules/SKILL.md",
-   "bytes": 8920,
-   "sha256": "25cfa4c15e45e01d9a868f625cb6ec850902815a8d1a65880144fa5baf783e1d"
+   "bytes": 8905,
+   "sha256": "4354893fa60c998f48ff1fe6edd98f035d52e62ca38d45e8d9cbf2db66762332"
   },
   {
    "id": "ao-setup",
    "path": "skills/ao-setup/SKILL.md",
-   "bytes": 5820,
-   "sha256": "79b62d3627ca4166a3bead6da8d9309e3193c67f6b608807825bc28983fa6d14"
+   "bytes": 14134,
+   "sha256": "b77aa44ed6675448ac279ce8796ae55608f1ba84338aee7d27f2fd5c66621504"
   },
   {
    "id": "ao-status",
@@ -41,8 +41,8 @@
   {
    "id": "ao-update",
    "path": "skills/ao-update/SKILL.md",
-   "bytes": 5304,
-   "sha256": "5dbab3468e4f21238fe53e33a8bd06e8c60953e99c4cbe1d9402a536359a6c29"
+   "bytes": 5349,
+   "sha256": "44420b8ca465a2e6321fdcdbcdd42454418964019e3711f9af32c436d0cf3de4"
   }
  ]
 }
