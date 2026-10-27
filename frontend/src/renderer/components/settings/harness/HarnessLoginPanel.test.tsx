@@ -106,6 +106,19 @@ describe("HarnessLoginPanel", () => {
 		expect(document.body).not.toHaveTextContent("test-secret");
 	});
 
+	it.each([
+		["browser", "ChatGPT in browser"],
+		["device_code", "Device code"],
+	])("discards an unsaved API key when starting %s sign-in", async (method, label) => {
+		const { user } = setup();
+		await user.click(screen.getByRole("button", { name: "OpenAI API key" }));
+		await user.type(screen.getByLabelText("API key"), "unsaved-test-secret");
+		await user.click(screen.getByRole("button", { name: label }));
+		expect(startAgentUILogin).toHaveBeenCalledOnce();
+		expect(startAgentUILogin).toHaveBeenCalledWith("codex", method, "", undefined);
+		expect(screen.queryByLabelText("API key")).toBeNull();
+	});
+
 	it("starts browser sign-in on selection and leaves opening the browser to the CLI", async () => {
 		const open = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		const browser = { ...snapshot, method: "browser", loginUrl: "https://auth.openai.com/oauth/authorize", deviceCode: undefined };

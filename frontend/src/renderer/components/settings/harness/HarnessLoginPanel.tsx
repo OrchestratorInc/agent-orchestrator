@@ -116,7 +116,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		setBusy(true);
 		setError("");
 		setCopied(false);
-		const credential = secret.trim();
+		const credential = target.secret ? secret.trim() : "";
 		setSecret("");
 		setLoginCode("");
 		try {
