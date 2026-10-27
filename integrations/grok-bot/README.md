@@ -26,7 +26,7 @@ A remote host needs AO's network access turned on (AO remote access settings, or
 
 ## Install
 
-**Grok Bot:** open the [Orchestrator Bot template](https://x.ai/bot/1WTqU5Ql7Ysftsg4KpWjW) and choose **Add to Grok Bot**. Install the Grok Bot desktop app on the computers that run AO, then say "set up AO". Say "update Orchestrator Bot" later to get skill updates.
+**Grok Bot:** open the [Orchestrator Bot template](https://x.ai/bot/1WTqU5Ql7Ysftsg4KpWjW) and choose **Add to Grok Bot**. Install the Grok Bot desktop app on the computers that run AO, then say "set up AO". No Orchestrator.inc yet? Setup offers to install it on a Mac and walks you through your first project. Say "update Orchestrator Bot" later to get skill updates.
 
 To build the bot yourself instead, create a bot and save each `skills/<id>/SKILL.md` as a skill (ask the bot to use UpdateSkill with the frontmatter name and description and the rest of the file as the body).
 
