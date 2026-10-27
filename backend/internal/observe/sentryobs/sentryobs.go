@@ -52,11 +52,14 @@ var (
 var operationLabels = map[string]string{
 	"http_request":       "HTTP server error",
 	"http_request_panic": "http handler panic",
+	"resume_agent":       "Agent resume failed",
+	"restore_session":    "Session restore failed",
 }
 
-// Only literal codes used for reportable 5xx API errors belong here. A new
+// Only literal codes used for reportable daemon errors belong here. A new
 // error code stays out of Sentry until it is deliberately added to this list.
 var safeErrorCodes = map[string]struct{}{
+	"AGENT_RESUME_FAILED":                       {},
 	"AGENT_AUTH_DATA_HOME_UNAVAILABLE":          {},
 	"AGENT_AUTH_TERMINAL_UNAVAILABLE":           {},
 	"AGENT_AUTH_WORKSPACE_UNAVAILABLE":          {},
@@ -314,7 +317,7 @@ func safeSentryTag(key, value string) bool {
 	case "platform":
 		return value == "daemon"
 	case "component":
-		return value == "httpd"
+		return value == "httpd" || value == "session_service"
 	case "operation":
 		_, ok := operationLabels[value]
 		return ok
@@ -360,7 +363,7 @@ func ShouldCaptureStatus(status int) bool {
 	return status >= http.StatusInternalServerError && status != http.StatusServiceUnavailable
 }
 
-// CaptureHTTPError captures a server-fault error with safe tags and a stable
+// CaptureHTTPError captures a reportable daemon error with safe tags and a stable
 // AO failure-site fingerprint when available. No-op when disabled or canceled.
 func CaptureHTTPError(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site ...telemetrymeta.FailureSite) {
 	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil || !enterCapture() {

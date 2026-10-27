@@ -242,6 +242,31 @@ func TestCaptureBoundaryKeepsRegisteredRouteTemplate(t *testing.T) {
 	}
 }
 
+func TestCaptureBoundaryScrubsAgentRelaunchFailure(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+	const secret = "PrivateProjectOrSession_Z9"
+	CaptureHTTPError(context.Background(), fmt.Errorf("resume session %s: %s", secret, secret), map[string]string{
+		"component": "session_service", "operation": "resume_agent", "area": "agent",
+		"error_code": "AGENT_RESUME_FAILED", "request_id": secret, "cause_type": secret,
+	}, "0123456789abcdef", telemetrymeta.RoutePattern(nil))
+	event := <-transport.events
+	if event.Message != "Agent resume failed (AGENT_RESUME_FAILED)" || event.Exception[0].Value != "" ||
+		event.Tags["component"] != "session_service" || event.Tags["operation"] != "resume_agent" ||
+		event.Tags["error_code"] != "AGENT_RESUME_FAILED" || event.Tags["area"] != "agent" ||
+		len(event.Fingerprint) != 1 || event.Fingerprint[0] != "0123456789abcdef" {
+		t.Fatalf("agent relaunch diagnostics = %+v", event)
+	}
+	encoded, err := event.MarshalJSON()
+	if err != nil || strings.Contains(string(encoded), secret) {
+		t.Fatalf("agent relaunch leaked sensitive context: %s, marshal error: %v", encoded, err)
+	}
+}
+
 func TestCaptureBoundaryUsesFailureSiteAndFixedAreaLabel(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
 	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "nightly", Transport: transport}); err != nil {
