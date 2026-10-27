@@ -1,4 +1,5 @@
 import { sniffImageMimeType } from "../imageMime";
+import { updateComposerAttachments } from "./composerAttachments";
 import type { ChatImage } from "./types";
 
 export const MAX_ATTACHMENTS = 8;
@@ -45,4 +46,19 @@ export function acceptImageAssets(current: readonly { kind: string; bytes?: numb
 		imageBytes += item.bytes;
 	}
 	return { added, error: errors.size ? [...errors].join(" ") : undefined };
+}
+
+/**
+ * Adds picked or pasted images to a session's stored attachments and records why
+ * any were left out. Reads and writes the store, never a render's copy, so a pick
+ * that outlives its composer still lands. Returns whether any image was added.
+ */
+export function attachComposerImages(key: string, assets: readonly ComposerImageAsset[]): boolean {
+	let added = 0;
+	updateComposerAttachments(key, (current) => {
+		const accepted = acceptImageAssets(current.items, assets);
+		added = accepted.added.length;
+		return { items: [...current.items, ...accepted.added], notice: accepted.error };
+	});
+	return added > 0;
 }

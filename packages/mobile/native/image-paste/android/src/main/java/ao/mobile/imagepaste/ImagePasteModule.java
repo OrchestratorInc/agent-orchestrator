@@ -2,6 +2,9 @@ package ao.mobile.imagepaste;
 
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.ProviderInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
@@ -159,13 +162,44 @@ public final class ImagePasteModule extends ReactContextBaseJavaModule {
 
   private void emit(int tag, ContentResolver resolver, List<Uri> uris) {
     WritableArray images = Arguments.createArray();
-    for (Uri uri : uris) images.pushMap(read(resolver, uri));
+    Set<String> own = ownAuthorities();
+    for (Uri uri : uris) images.pushMap(isForeignContent(uri, own) ? read(resolver, uri) : unreadable(null));
     ReactApplicationContext context = getReactApplicationContext();
     if (!context.hasActiveReactInstance()) return;
     WritableMap event = Arguments.createMap();
     event.putInt("tag", tag);
     event.putArray("images", images);
     context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class).emit("AOImagePaste", event);
+  }
+
+  /**
+   * Reads run with this app's own permissions, so a clip may only point at another
+   * app's content provider: never a file path, and never one of our own providers,
+   * which could otherwise hand a crafted clip our private files.
+   */
+  private static boolean isForeignContent(Uri uri, Set<String> own) {
+    return ContentResolver.SCHEME_CONTENT.equals(uri.getScheme()) && uri.getAuthority() != null && !own.contains(uri.getAuthority());
+  }
+
+  private Set<String> ownAuthorities() {
+    Set<String> authorities = new HashSet<>();
+    Context context = getReactApplicationContext();
+    try {
+      PackageInfo info = context.getPackageManager().getPackageInfo(context.getPackageName(), PackageManager.GET_PROVIDERS);
+      if (info.providers != null) {
+        for (ProviderInfo provider : info.providers) {
+          if (provider.authority != null) authorities.addAll(Arrays.asList(provider.authority.split(";")));
+        }
+      }
+    } catch (PackageManager.NameNotFoundException ignored) {}
+    return authorities;
+  }
+
+  private static WritableMap unreadable(String type) {
+    WritableMap image = Arguments.createMap();
+    image.putString("mimeType", type == null ? "image/png" : type);
+    image.putDouble("bytes", 0);
+    return image;
   }
 
   /** `{ mimeType, bytes, data? }`; no data means the image was too large or unreadable. */
@@ -188,19 +222,13 @@ public final class ImagePasteModule extends ReactContextBaseJavaModule {
         }
       }
       bytes = output.toByteArray();
-    } catch (Exception unreadable) {
-      image.putString("mimeType", type == null ? "image/png" : type);
-      image.putDouble("bytes", 0);
-      return image;
+    } catch (Exception failed) {
+      return unreadable(type);
     }
     // HEIC and other formats the agents can't take are re-encoded as JPEG.
     if (type == null || !PASSTHROUGH_TYPES.contains(type)) {
       Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-      if (bitmap == null) {
-        image.putString("mimeType", type == null ? "image/png" : type);
-        image.putDouble("bytes", 0);
-        return image;
-      }
+      if (bitmap == null) return unreadable(type);
       ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
       bitmap.compress(Bitmap.CompressFormat.JPEG, 90, jpeg);
       bitmap.recycle();

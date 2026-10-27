@@ -41,7 +41,7 @@ import { PRReviewPrompt } from "./PRReviewPrompt";
 import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
 import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
-import { acceptImageAssets, MAX_ATTACHMENTS, type ComposerImageAsset } from "./composerImages";
+import { attachComposerImages, MAX_ATTACHMENTS } from "./composerImages";
 import { useImagePaste } from "./useImagePaste";
 
 const MAX_EMBEDDED_FILE_BYTES = 500_000;
@@ -390,19 +390,9 @@ export function ChatComposer({
 		} finally { setSubmitting(false); }
 	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled, attachmentKey, dismissAttachmentNotice]);
 
-	// Reads and writes the stored list, so a pick that outlives this composer still lands.
-	const attachImages = (key: string, assets: ComposerImageAsset[]) => {
-		let added = 0;
-		updateComposerAttachments(key, (current) => {
-			const accepted = acceptImageAssets(current.items, assets);
-			added = accepted.added.length;
-			return { items: [...current.items, ...accepted.added], notice: accepted.error };
-		});
-		return added > 0;
-	};
 	const pasteLayout = useImagePaste(stopped || submitting ? null : (assets) => {
 		setLocalError(undefined);
-		if (attachImages(attachmentKey, assets)) haptics.tap();
+		if (attachComposerImages(attachmentKey, assets)) haptics.tap();
 	});
 	const addImage = async () => {
 		// Captured now: the pick can outlive this composer, and the stored list may
@@ -413,7 +403,7 @@ export function ChatComposer({
 		try {
 			const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.82, allowsMultipleSelection: true, selectionLimit: 4 });
 			if (result.canceled) return;
-			attachImages(key, result.assets);
+			attachComposerImages(key, result.assets);
 		} catch (cause) {
 			const notice = userFacingError(cause, "Couldn't open your photo library.");
 			updateComposerAttachments(key, (current) => ({ items: current.items, notice }));

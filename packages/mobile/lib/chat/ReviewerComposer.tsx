@@ -17,7 +17,7 @@ import { ComposerGlass } from "./composer-glass";
 import { COMPOSER_FIELD_HEIGHT, COMPOSER_FIELD_MAX_HEIGHT, COMPOSER_RADIUS, composerStyleRules } from "./composerStyles";
 import type { ChatImage, ChatResource } from "./types";
 import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
-import { acceptImageAssets, MAX_ATTACHMENTS, type ComposerImageAsset } from "./composerImages";
+import { attachComposerImages, MAX_ATTACHMENTS } from "./composerImages";
 import { useImagePaste } from "./useImagePaste";
 
 const MAX_FILE_BYTES = 500_000;
@@ -55,19 +55,9 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 		void onAcknowledgeSend(completedRetry.id).catch((cause) => setError(cause instanceof Error ? cause.message : "Could not clear the sent reply."));
 	}, [completedRetry, onAcknowledgeSend, text, clearAttachments]);
 
-	// Reads and writes the stored list, so a pick that outlives this composer still lands.
-	const attachImages = (key: string, assets: ComposerImageAsset[]) => {
-		let added = 0;
-		updateComposerAttachments(key, (current) => {
-			const accepted = acceptImageAssets(current.items, assets);
-			added = accepted.added.length;
-			return { items: [...current.items, ...accepted.added], notice: accepted.error };
-		});
-		return added > 0;
-	};
 	const pasteLayout = useImagePaste(stopped || submitting || !attachmentsEnabled ? null : (assets) => {
 		setError("");
-		if (attachImages(attachmentKey, assets)) haptics.tap();
+		if (attachComposerImages(attachmentKey, assets)) haptics.tap();
 	});
 	const addPhoto = async () => {
 		// Captured now: the pick can outlive this composer (see ChatComposer).
@@ -77,7 +67,7 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 		try {
 			const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.82, allowsMultipleSelection: true, selectionLimit: 4 });
 			if (result.canceled) return;
-			attachImages(key, result.assets);
+			attachComposerImages(key, result.assets);
 		} catch (cause) {
 			const notice = cause instanceof Error ? cause.message : "Could not attach this photo.";
 			updateComposerAttachments(key, (current) => ({ items: current.items, notice }));
