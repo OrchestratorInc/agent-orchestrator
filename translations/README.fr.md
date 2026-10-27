@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../frontend/assets/icon.png" alt="Orchestrator.inc logo" width="144" height="144" />
+<img src="../docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="144" height="144" />
 
 <h1><b>Orchestrator.inc</b></h1>
 
