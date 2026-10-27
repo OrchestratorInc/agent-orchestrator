@@ -121,3 +121,4 @@ These steps need tools only Grok Bot has. Any other agent (Claude Code, Codex, C
 | Cards | Plain text with numbered options |
 | Memory | Ask, or use the notes file the user names |
 | SendToUser, CopyToBox | Give the file path |
+| UpdateAvatar | Skip |

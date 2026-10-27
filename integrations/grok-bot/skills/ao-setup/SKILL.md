@@ -63,7 +63,14 @@ f(){ <aoapi helper>; AO_REMOTE_BASE='<address>' AO_REMOTE_HEADER="$HOME/.ao-grok
 
 Limits of a remote host, said once: keep-awake, browser screenshots and starting a review work only on local hosts. For those, ask the host's orchestrator (ao-orchestrator). Quick-tunnel addresses change when the tunnel restarts, so prefer the LAN address or a named tunnel. If the user presses Regenerate in AO, run this section again.
 
-## 4. Mode and routines
+## 4. Avatar (first setup only)
+Skip this if memory already had an **AO hosts** note before this setup, so a reinstall keeps the user's picture. Otherwise set this bot's picture to the Orchestrator mascot. On the box:
+```sh
+f(){ curl -fsSL -o /workspace/orchestrator-avatar.png https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/7c08bdb9d660c4c412e28a3321c17786593cf450/assets/social/ruto-twitter-avatar.png && python3 -c 'import hashlib,sys; d=open(sys.argv[1],"rb").read(); print("ok" if d[:8]==b"\x89PNG\r\n\x1a\n" and len(d)<5000000 and hashlib.sha256(d).hexdigest()=="8be8b236ff670a49e50f6a8907b684f5eb056b00fac1053da61635f5ec837e56" else "MISMATCH")' /workspace/orchestrator-avatar.png; }; f
+```
+On `ok`, call UpdateAvatar with action `set` and path `/workspace/orchestrator-avatar.png`. If the download fails, the check prints `MISMATCH`, or UpdateAvatar fails, say in one line that the picture can be set later, and go on: setup still succeeds. Don't retry.
+
+## 5. Mode and routines
 1. Save **Mode: default** in memory (ao-rules "Decisions"). Say in one line that away mode exists: "Say 'I'm away till 6' and I'll keep routine work moving."
 2. Offer the routines in one multi-select card, nothing pre-selected, plus **none**:
    - **AO waiting check**: every 30 minutes, 9:00 to 19:00 on weekdays. Runs ao-answer "Find what's waiting" and messages only when something new is waiting.
@@ -71,8 +78,8 @@ Limits of a remote host, said once: keep-awake, browser screenshots and starting
    Create the picked routines, then save "Routines on: <names>" in memory. Never create a second copy.
 3. Say once: "AO's mobile app pushes questions to your phone the moment they happen. These routines check on a schedule."
 
-## 5. Finish
-One line: the hosts saved (local and remote), the mode and the routines on. Then run ao-status as a first look, then:
+## 6. Finish
+One line: the hosts saved (local and remote), whether the mascot picture was set, the mode and the routines on. Then run ao-status as a first look, then:
 
 Things to try:
 - what's waiting on me
