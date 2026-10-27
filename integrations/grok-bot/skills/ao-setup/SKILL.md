@@ -66,9 +66,9 @@ Limits of a remote host, said once: keep-awake, browser screenshots and starting
 ## 4. Avatar (first setup only)
 Skip this if memory already had an **AO hosts** note before this setup, so a reinstall keeps the user's picture. Otherwise set this bot's picture to the Orchestrator mascot. On the box:
 ```sh
-f(){ curl -fsSL -o /workspace/orchestrator-avatar.png https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/7c08bdb9d660c4c412e28a3321c17786593cf450/assets/social/ruto-twitter-avatar.png && python3 -c 'import hashlib,sys; d=open(sys.argv[1],"rb").read(); print("ok" if d[:8]==b"\x89PNG\r\n\x1a\n" and len(d)<5000000 and hashlib.sha256(d).hexdigest()=="8be8b236ff670a49e50f6a8907b684f5eb056b00fac1053da61635f5ec837e56" else "MISMATCH")' /workspace/orchestrator-avatar.png; }; f
+f(){ curl -fsSL -o /workspace/orchestrator-avatar.png https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/7c08bdb9d660c4c412e28a3321c17786593cf450/assets/social/ruto-twitter-avatar.png && echo "8be8b236ff670a49e50f6a8907b684f5eb056b00fac1053da61635f5ec837e56  /workspace/orchestrator-avatar.png" | sha256sum -c -; }; f
 ```
-On `ok`, call UpdateAvatar with action `set` and path `/workspace/orchestrator-avatar.png`. If the download fails, the check prints `MISMATCH`, or UpdateAvatar fails, say in one line that the picture can be set later, and go on: setup still succeeds. Don't retry.
+The pinned commit and sha256 make sure it is exactly the published mascot. On `OK`, call UpdateAvatar with action `set` and path `/workspace/orchestrator-avatar.png`. If the download fails, the check prints `FAILED`, or UpdateAvatar fails, say in one line that the picture can be set later, and go on: setup still succeeds. Don't retry.
 
 ## 5. Mode and routines
 1. Save **Mode: default** in memory (ao-rules "Decisions"). Say in one line that away mode exists: "Say 'I'm away till 6' and I'll keep routine work moving."

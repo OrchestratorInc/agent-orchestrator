@@ -29,8 +29,8 @@
   {
    "id": "ao-setup",
    "path": "skills/ao-setup/SKILL.md",
-   "bytes": 6847,
-   "sha256": "c1b8aa3f94723b4a7f3881b85e574c676d6b5b1c4175e23d46e4c0cc05c77f5e"
+   "bytes": 6764,
+   "sha256": "aefcb1745fb2c9b7a14d15875399e473f6901d1579b28ea439cab9bad866f540"
   },
   {
    "id": "ao-status",
