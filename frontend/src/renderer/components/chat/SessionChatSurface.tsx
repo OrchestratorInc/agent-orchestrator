@@ -50,7 +50,7 @@ import type { Theme } from "../../stores/ui-store";
 import { can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import type { WorkspaceSession } from "../../types/workspace";
+import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
@@ -797,7 +797,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				draftSettings={launchSettings && (!settingsReady || settingsLoading) ? <LaunchSettingsBar {...launchSettings} /> : undefined}
 				models={models}
 				onChooseSettings={hasProviderMode ? undefined : commands.chooseSettings}
-				onRememberPermissions={can(renderSnapshot, "config_options") && !configOptions.loaded
+				// A Scratchpad session has no project to remember a mode for.
+				onRememberPermissions={session.workspaceId === STANDALONE_WORKSPACE_ID || (can(renderSnapshot, "config_options") && !configOptions.loaded)
 					? undefined : projectPermissions.remember}
 				rememberPermissionsPending={projectPermissions.pending}
 				rememberPermissionsError={projectPermissions.error}
