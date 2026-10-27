@@ -1,6 +1,6 @@
 // Package agentauth owns the fixed, daemon-trusted authentication plans for
 // supported harnesses. Clients select an agent and a reviewed login method;
-// commands stay private, and optional credentials travel only through stdin.
+// commands stay private, and optional credentials never appear in API results.
 package agentauth
 
 import (
@@ -152,7 +152,9 @@ func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolv
 			// launchd and systemd user environments are session-scoped. Restore
 			// them when AO starts again after a login or daemon restart.
 			if runtime.GOOS != "windows" {
-				_ = publishProviderKey(context.Background(), name, value)
+				refreshCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = publishProviderKey(refreshCtx, name, value)
+				cancel()
 			}
 		}
 	}
