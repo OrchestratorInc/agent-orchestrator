@@ -260,6 +260,42 @@ func TestOpencodeOneNeverPinsAnOpencodeTwoRelease(t *testing.T) {
 	}
 }
 
+// Qwen's repository also publishes SDK and desktop releases, and GitHub's
+// Latest can be one of them: sdk-typescript-v0.1.23 while the CLI is at
+// v0.26.1. Read as the CLI's release, it hid the update as ahead of latest.
+func TestQwenAdvisoryReadsTheCLIRelease(t *testing.T) {
+	for _, tt := range []struct {
+		name, npmLatest string
+		wantStatus      UpdateStatus
+		wantLatest      string
+	}{
+		{name: "cli release", npmLatest: "0.26.1", wantStatus: UpdateStatusBehindLatest, wantLatest: "0.26.1"},
+		{name: "preview is never offered", npmLatest: "0.26.2-preview.0", wantStatus: UpdateStatusUnknown},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &http.Client{Transport: managerRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Host != "registry.npmjs.org" {
+					response := managerHTTPResponse(http.StatusFound, "")
+					response.Header.Set("Location", "https://github.com/QwenLM/qwen-code/releases/tag/sdk-typescript-v0.1.23")
+					return response, nil
+				}
+				return managerHTTPResponse(http.StatusOK, `{"latest":"`+tt.npmLatest+`","preview":"0.26.2-preview.0"}`), nil
+			})}
+			s := newTestService("linux", "bash")
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				return VerifyResult{ResolvedPath: "/Users/me/.local/bin/qwen", Output: "0.26.0"}, nil
+			})
+			s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return false, nil }
+			s.managedVersion = fixedManagedVersion("9.9.9", nil)
+			s.officialVersion = officialReleaseVersionWith(client, "linux", "amd64")
+			advisory, err := s.UpdateAdvisory(context.Background(), TargetQwen, false)
+			if err != nil || advisory.Status != tt.wantStatus || advisory.LatestVersion != tt.wantLatest {
+				t.Fatalf("advisory = %+v, %v; want %s at %q", advisory, err, tt.wantStatus, tt.wantLatest)
+			}
+		})
+	}
+}
+
 func TestOfficialRegistrySourcesShareThePackageLookups(t *testing.T) {
 	for _, tt := range []struct {
 		target Target

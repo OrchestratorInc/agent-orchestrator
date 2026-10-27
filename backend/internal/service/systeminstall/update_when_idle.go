@@ -193,11 +193,9 @@ func (s *Service) runIdleBatch(ctx context.Context, coordinator IdleUpdateCoordi
 	stopped, err := coordinator.StopHarnessSessions(ctx, domain.AgentHarness(target))
 	if err == nil {
 		// Nothing may still run the binary the installer is about to replace.
-		// A stopped terminal keeps its idle, unhibernated row (only its
-		// process was stopped, conclusively), so it is not counted again.
-		sessions, reviewers, inUseErr := s.harnessInUse(ctx, target)
-		sessions = slices.DeleteFunc(sessions, func(id domain.SessionID) bool { return slices.Contains(stopped, id) })
-		if inUseErr != nil || len(sessions)+len(reviewers) != 0 {
+		// A stopped session is recorded as such (a Chat hibernated, a terminal
+		// exited), so only one still running is counted.
+		if sessions, reviewers, inUseErr := s.harnessInUse(ctx, target); inUseErr != nil || len(sessions)+len(reviewers) != 0 {
 			err = errors.Join(inUseErr, errors.New("sessions are still running"))
 		}
 	}

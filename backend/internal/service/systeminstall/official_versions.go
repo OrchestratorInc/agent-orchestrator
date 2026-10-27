@@ -55,6 +55,9 @@ var cursorDownloadVersion = regexp.MustCompile(`downloads\.cursor\.com/lab/(\d[0
 // opencode.ai/install installs: it exits for any 2.x.
 var opencodeV1Release = regexp.MustCompile(`^1\.`)
 
+// stableRelease matches a plain release, without a prerelease or build suffix.
+var stableRelease = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
+
 func officialSourceFor(target Target, goos, goarch string) (officialSource, bool) {
 	switch target {
 	case TargetClaudeCode:
@@ -96,9 +99,12 @@ func officialSourceFor(target Target, goos, goarch string) (officialSource, bool
 		// redirects to this repository's latest release.
 		return officialSource{kind: officialGitHub, ref: "memcode-ai/memcode"}, true
 	case TargetQwen:
-		// The standalone installer's latest is this repository's latest
-		// release, mirrored under the same tag on Aliyun.
-		return officialSource{kind: officialGitHub, ref: "QwenLM/qwen-code"}, true
+		// The standalone installer installs the CLI's vN tags. GitHub's Latest
+		// release of the repository can be another product's (an SDK, the
+		// desktop app), and the Aliyun VERSION pointer the installer reads is
+		// unreachable from some networks. The CLI's npm package is published
+		// minutes after each release's standalone assets, at the same version.
+		return officialSource{kind: officialNPM, ref: "@qwen-code/qwen-code", match: stableRelease}, true
 	case TargetGoose:
 		return officialSource{kind: officialGitHub, ref: "aaif-goose/goose"}, true
 	case TargetKimchi:

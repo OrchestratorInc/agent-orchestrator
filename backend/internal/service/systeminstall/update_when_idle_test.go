@@ -14,8 +14,8 @@ import (
 
 // idleCoordinatorStub stands in for Session Manager. Stopping a session puts
 // it to sleep, so the installer no longer sees it as live. With terminals set
-// it stops them the way Session Manager stops a terminal: the process ends,
-// but the row stays idle and unhibernated.
+// it stops them the way Session Manager stops a terminal: the agent exits,
+// unhibernated.
 type idleCoordinatorStub struct {
 	mu        sync.Mutex
 	sessions  *[]domain.SessionRecord
@@ -48,7 +48,9 @@ func (c *idleCoordinatorStub) StopHarnessSessions(context.Context, domain.AgentH
 		if (*c.sessions)[i].ID == c.unstopped {
 			continue
 		}
-		if !c.terminals {
+		if c.terminals {
+			(*c.sessions)[i].Activity.State = domain.ActivityExited
+		} else {
 			(*c.sessions)[i].HibernatedAt = &now
 		}
 		stopped = append(stopped, (*c.sessions)[i].ID)
@@ -216,9 +218,8 @@ func TestIdleUpdateNeverRunsNPMWhileASessionStillRuns(t *testing.T) {
 	s.workers.Wait()
 }
 
-// A stopped terminal's row stays idle and unhibernated: only its process
-// ended. The update must still run instead of resuming the old release and
-// trying again every poll.
+// A stopped terminal is never hibernated: its agent exits. The update must
+// still run instead of resuming the old release and trying again every poll.
 func TestIdleUpdateRunsAfterStoppingTerminalSessions(t *testing.T) {
 	s, coordinator, ran := windowsIdleService(t, false)
 	coordinator.terminals = true
