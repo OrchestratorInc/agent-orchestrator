@@ -2,6 +2,11 @@ package domain
 
 import "time"
 
+// MaxRemoteHostsPerAccount caps the machines one account can list. Each
+// listed machine can hold a tunnel and a DNS record in the shared zone, so
+// the cap keeps one account from filling it.
+const MaxRemoteHostsPerAccount = 20
+
 // RemoteHost is an account-owned self-hosted machine. The separate host token
 // grants access only to this machine; the pairing password stays on the host.
 type RemoteHost struct {

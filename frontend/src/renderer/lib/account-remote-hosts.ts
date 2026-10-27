@@ -10,7 +10,12 @@ async function request(baseUrl: string, method: string, path: string, body?: unk
 		cache: "no-store",
 		signal: AbortSignal.timeout(10_000),
 	});
-	if (!response.ok) throw new Error(`AO Cloud host sync failed (${response.status}).`);
+	if (!response.ok) {
+		// A full account is the one refusal the user can act on, so its message is shown.
+		const refusal = (await response.json().catch(() => null)) as { code?: string; message?: string } | null;
+		if (refusal?.code === "remote_host_limit_reached" && refusal.message) throw new Error(refusal.message);
+		throw new Error(`AO Cloud host sync failed (${response.status}).`);
+	}
 	return response;
 }
 

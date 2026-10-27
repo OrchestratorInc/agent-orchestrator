@@ -31,8 +31,28 @@ func (s *Store) ListRemoteHosts(ctx context.Context, principal domain.Principal)
 	return hosts, err
 }
 
-func (s *Store) UpsertRemoteHost(ctx context.Context, principal domain.Principal, host domain.RemoteHost) error {
+// UpsertRemoteHost saves principal's registration of host. A host the account
+// does not list yet is refused with ErrRemoteHostLimit once it lists limit
+// hosts. A per-user advisory lock makes the count and the insert one step, so
+// concurrent registrations cannot pass the limit.
+func (s *Store) UpsertRemoteHost(ctx context.Context, principal domain.Principal, host domain.RemoteHost, limit int) error {
 	return s.withUser(ctx, principal.UserID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`SELECT pg_advisory_xact_lock(hashtextextended('ao_remote_hosts:' || $1, 0))`, principal.UserID,
+		); err != nil {
+			return err
+		}
+		var listed bool
+		var total int
+		if err := tx.QueryRow(ctx,
+			`SELECT coalesce(bool_or(host_id = $2), false), count(*) FROM ao_remote_hosts WHERE user_id = $1`,
+			principal.UserID, host.HostID,
+		).Scan(&listed, &total); err != nil {
+			return err
+		}
+		if !listed && total >= limit {
+			return ErrRemoteHostLimit
+		}
 		_, err := tx.Exec(ctx, `INSERT INTO ao_remote_hosts
 			(user_id, host_id, label, url, encrypted_token, token_nonce)
 			VALUES ($1, $2, $3, $4, $5, $6)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/hosttunnel"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/secrets"
 	"github.com/go-chi/chi/v5"
 )
@@ -23,6 +25,9 @@ import (
 type remoteHostFakeStore struct {
 	Store
 	hosts map[string]domain.RemoteHost
+	// filledMeanwhile refuses a new host as a full account would after a
+	// concurrent registration.
+	filledMeanwhile bool
 }
 
 func (s *remoteHostFakeStore) ListRemoteHosts(_ context.Context, principal domain.Principal) ([]domain.RemoteHost, error) {
@@ -34,7 +39,11 @@ func (s *remoteHostFakeStore) ListRemoteHosts(_ context.Context, principal domai
 	}
 	return items, nil
 }
-func (s *remoteHostFakeStore) UpsertRemoteHost(_ context.Context, principal domain.Principal, host domain.RemoteHost) error {
+func (s *remoteHostFakeStore) UpsertRemoteHost(ctx context.Context, principal domain.Principal, host domain.RemoteHost, limit int) error {
+	listed, _ := s.ListRemoteHosts(ctx, principal)
+	if _, known := s.hosts[principal.UserID+":"+host.HostID]; !known && (len(listed) >= limit || s.filledMeanwhile) {
+		return postgres.ErrRemoteHostLimit
+	}
 	host.UserID = principal.UserID
 	s.hosts[principal.UserID+":"+host.HostID] = host
 	return nil
@@ -335,5 +344,44 @@ func TestFixedAddressesNeedCloudflare(t *testing.T) {
 	s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"Mac","token":"`+strings.Repeat("a", 64)+`"}`, "00000000-0000-0000-0000-000000000002"))
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("registration without an address: %d", w.Code)
+	}
+}
+
+func TestAFullAccountListsNoMoreMachines(t *testing.T) {
+	s, store, api := newTunnelServer(t)
+	owner := "00000000-0000-0000-0000-000000000002"
+	hostID := func(i int) string { return fmt.Sprintf("h_00000000-0000-0000-0000-%012d", i) }
+	register := func(id string) int {
+		w := httptest.NewRecorder()
+		s.putRemoteHost(w, hostRequest(http.MethodPut, id, `{"label":"Mac","token":"`+strings.Repeat("a", 64)+`"}`, owner))
+		return w.Code
+	}
+	for i := range domain.MaxRemoteHostsPerAccount {
+		store.hosts[owner+":"+hostID(i)] = domain.RemoteHost{HostID: hostID(i), UserID: owner}
+	}
+	calls, _ := api.snapshot()
+	if code := register(hostID(domain.MaxRemoteHostsPerAccount)); code != http.StatusConflict {
+		t.Fatalf("new machine on a full account: %d", code)
+	}
+	if after, _ := api.snapshot(); after != calls || len(store.tunnels) != 0 {
+		t.Fatalf("a refused machine cost %d Cloudflare calls and %d tunnels", after-calls, len(store.tunnels))
+	}
+	// A machine the account lists can still register again.
+	if code := register(hostID(0)); code != http.StatusNoContent {
+		t.Fatalf("listed machine on a full account: %d", code)
+	}
+
+	// Filled by a concurrent registration after the check: the tunnel made
+	// for the refused machine is deleted again.
+	delete(store.hosts, owner+":"+hostID(1))
+	store.filledMeanwhile = true
+	if code := register(hostID(domain.MaxRemoteHostsPerAccount)); code != http.StatusConflict {
+		t.Fatalf("machine refused after its tunnel was made: %d", code)
+	}
+	if _, deleted := api.snapshot(); !deleted {
+		t.Fatal("refused machine's tunnel was not deleted in Cloudflare")
+	}
+	if _, kept := store.tunnels[hostID(domain.MaxRemoteHostsPerAccount)]; kept {
+		t.Fatal("refused machine kept its tunnel row")
 	}
 }

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -18,8 +19,19 @@ func TestRemoteHostTunnelsAreServiceOwnedAndSwept(t *testing.T) {
 	orphan := "h_" + uuid.NewString()
 	if err := store.UpsertRemoteHost(ctx, domain.Principal{UserID: fixture.userID}, domain.RemoteHost{
 		HostID: registered, Label: "Mac", URL: "https://h-x.example.dev", EncryptedToken: []byte{1}, TokenNonce: []byte{2},
-	}); err != nil {
+	}, 1); err != nil {
 		t.Fatalf("register host: %v", err)
+	}
+	// A full account still updates the machines it lists, and lists no more.
+	if err := store.UpsertRemoteHost(ctx, domain.Principal{UserID: fixture.userID}, domain.RemoteHost{
+		HostID: registered, Label: "Mac 2", URL: "https://h-x.example.dev", EncryptedToken: []byte{1}, TokenNonce: []byte{2},
+	}, 1); err != nil {
+		t.Fatalf("update a listed host on a full account: %v", err)
+	}
+	if err := store.UpsertRemoteHost(ctx, domain.Principal{UserID: fixture.userID}, domain.RemoteHost{
+		HostID: orphan, Label: "Other", URL: "https://h-y.example.dev", EncryptedToken: []byte{1}, TokenNonce: []byte{2},
+	}, 1); !errors.Is(err, ErrRemoteHostLimit) {
+		t.Fatalf("new host on a full account = %v, want ErrRemoteHostLimit", err)
 	}
 	t.Cleanup(func() {
 		_, _ = admin.Exec(context.Background(), `DELETE FROM ao_remote_hosts WHERE host_id = $1`, registered)

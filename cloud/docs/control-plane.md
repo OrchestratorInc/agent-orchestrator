@@ -292,6 +292,10 @@ machine only ever receives its own tunnel's run token.
   A deleted machine that comes back gets a new tunnel at the same address.
 - Zone records are the limit: a Free zone holds 200, Pro 3,500. A refused record
   leaves the machine on a quick tunnel.
+- One account lists at most 20 machines (`domain.MaxRemoteHostsPerAccount`),
+  so one account cannot fill the zone. A new machine past that is refused with
+  409 `remote_host_limit_reached` before any Cloudflare call; machines already
+  listed can register again. Many accounts together still can fill the zone.
 
 ## Replica lifecycle
 

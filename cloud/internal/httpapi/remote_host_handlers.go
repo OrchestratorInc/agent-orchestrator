@@ -5,19 +5,23 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
 type remoteHostStore interface {
 	ListRemoteHosts(context.Context, domain.Principal) ([]domain.RemoteHost, error)
-	UpsertRemoteHost(context.Context, domain.Principal, domain.RemoteHost) error
+	UpsertRemoteHost(context.Context, domain.Principal, domain.RemoteHost, int) error
 	DeleteRemoteHost(context.Context, domain.Principal, string) error
 }
 
@@ -111,6 +115,17 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer clear(secret)
+	principal := principalFrom(r)
+	// Checked before any tunnel is made, so a full account costs no Cloudflare call.
+	listed, err := store.ListRemoteHosts(r.Context(), principal)
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if len(listed) >= domain.MaxRemoteHostsPerAccount && !slices.ContainsFunc(listed, func(host domain.RemoteHost) bool { return host.HostID == hostID }) {
+		writeRemoteHostLimit(w, r)
+		return
+	}
 	// A machine on this AO Cloud registers before its tunnel exists, so it can
 	// leave the address out. The tunnel and its DNS record are made here,
 	// before any device is told the address, so no device looks the name up
@@ -124,7 +139,6 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 		}
 		input.URL = "https://" + hostname + ":443"
 	}
-	principal := principalFrom(r)
 	encrypted, nonce, err := s.secretCipher.Encrypt([]byte(input.Token), "remote-host:"+principal.UserID+":"+hostID)
 	if err != nil {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The remote host credential could not be stored.")
@@ -132,11 +146,23 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := store.UpsertRemoteHost(r.Context(), principal, domain.RemoteHost{
 		HostID: hostID, Label: input.Label, URL: input.URL, EncryptedToken: encrypted, TokenNonce: nonce,
-	}); err != nil {
+	}, domain.MaxRemoteHostsPerAccount); err != nil {
+		if errors.Is(err, postgres.ErrRemoteHostLimit) {
+			// A concurrent registration filled the account after the check
+			// above: drop the tunnel made for this one.
+			s.releaseUnregisteredTunnel(r.Context(), hostID)
+			writeRemoteHostLimit(w, r)
+			return
+		}
 		s.writeStoreError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeRemoteHostLimit(w http.ResponseWriter, r *http.Request) {
+	writeError(w, r, http.StatusConflict, "remote_host_limit_reached",
+		"An account can list up to "+strconv.Itoa(domain.MaxRemoteHostsPerAccount)+" machines. Remove one to add another.")
 }
 
 func (s *Server) deleteRemoteHost(w http.ResponseWriter, r *http.Request) {

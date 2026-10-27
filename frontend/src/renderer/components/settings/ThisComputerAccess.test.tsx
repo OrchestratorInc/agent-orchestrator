@@ -33,6 +33,7 @@ const fake = vi.hoisted(() => {
 		failPut: false,
 		failDelete: false,
 		fixedAddresses: true,
+		full: false,
 	};
 	const log: string[] = [];
 	const tokenRequests: Array<{ authorization: string; account: string }> = [];
@@ -125,6 +126,9 @@ const fake = vi.hoisted(() => {
 		if (method === "PUT") {
 			const input = JSON.parse(body ?? "{}") as { label: string; url?: string; token: string };
 			if (cloud.failPut) return reply(503);
+			if (cloud.full && !cloud.hosts.has(hostId)) {
+				return reply(409, { code: "remote_host_limit_reached", message: "An account can list up to 20 machines. Remove one to add another." });
+			}
 			if (input.url === undefined && !cloud.fixedAddresses) return reply(422);
 			input.url ??= `https://${FIXED}:443`;
 			const labelBytes = new TextEncoder().encode(input.label).length;
@@ -191,6 +195,7 @@ afterEach(() => {
 	fake.cloud.failPut = false;
 	fake.cloud.failDelete = false;
 	fake.cloud.fixedAddresses = true;
+	fake.cloud.full = false;
 	fake.log.length = 0;
 	fake.tokenRequests.length = 0;
 	fake.computerName = "Dhruv’s Mac mini";
@@ -354,6 +359,17 @@ it("reports a failed link and stays off", async () => {
 	expect(await screen.findByRole("alert")).toBeVisible();
 	expect(toggle).toHaveAttribute("aria-checked", "false");
 	expect(fake.cloud.hosts.size).toBe(0);
+	expect(fake.daemon.enabled).toBe(false);
+});
+
+it("says when the account lists as many machines as it can", async () => {
+	fake.cloud.full = true;
+	renderAccess();
+	const toggle = await readySwitch();
+	fireEvent.click(toggle);
+
+	expect(await screen.findByRole("alert")).toHaveTextContent("An account can list up to 20 machines. Remove one to add another.");
+	expect(toggle).toHaveAttribute("aria-checked", "false");
 	expect(fake.daemon.enabled).toBe(false);
 });
 

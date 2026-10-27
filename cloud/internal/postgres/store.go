@@ -53,6 +53,9 @@ var (
 	// ErrArtifactShareLimit means the user already holds their maximum number
 	// of active artifact share links.
 	ErrArtifactShareLimit = errors.New("artifact share limit reached")
+	// ErrRemoteHostLimit means the account already lists its maximum number
+	// of machines.
+	ErrRemoteHostLimit = errors.New("remote host limit reached")
 	// ErrArtifactShareNameChanged refuses replacing a link's file with one of
 	// another name: the name is part of the document a link belongs to.
 	ErrArtifactShareNameChanged = errors.New("artifact share file name changed")
