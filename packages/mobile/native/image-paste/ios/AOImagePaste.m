@@ -26,7 +26,10 @@ static BOOL AOAcceptsImagePaste(UITextView *view)
 {
   if (!objc_getAssociatedObject(view, &AOImagePasteTagKey) || !view.isEditable) return NO;
   if ([[view valueForKey:@"contextMenuHidden"] boolValue]) return NO;
-  return UIPasteboard.generalPasteboard.hasImages;
+  // Only an image-only clipboard. Spreadsheet cells and rich copies carry an
+  // image rendering beside their text, and those must still paste as text.
+  UIPasteboard *pasteboard = UIPasteboard.generalPasteboard;
+  return pasteboard.hasImages && !pasteboard.hasStrings;
 }
 
 // RCTUITextView's own `paste:`. Images go to JS as attachments; text pastes as usual.
