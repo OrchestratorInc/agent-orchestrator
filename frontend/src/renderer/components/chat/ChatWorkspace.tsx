@@ -133,6 +133,7 @@ import {
 	OrchestratorReply,
 	piggybackedUpdates,
 	quietWorkerReply,
+	relayedVia,
 	renamedTitle,
 	SpawnedAgents,
 	spawnedSessionIds,
@@ -4833,8 +4834,9 @@ function TimelineItem({
 		// not write it: mark where the turn picked back up instead of a bubble.
 		if (item.origin === "human" && item.continuation) return <ContinuedMarker />;
 		// A user-role message that did not come from this human is an automation or
-		// worker relay, and is attributed differently.
-		if (item.origin === "human") {
+		// worker relay, and is attributed differently. So is one an outside tool
+		// sent through the API, which AO can store as the human's.
+		if (item.origin === "human" && !relayedVia(item)) {
 			const editAvailable = Boolean(
 				item.editAvailable && item.turnId && editableTurns.has(item.turnId) && onEditHumanMessage,
 			);
@@ -4868,7 +4870,7 @@ function TimelineItem({
 			);
 		}
 		return (
-			<FromAgent item={item}>
+			<FromAgent item={item} queued={queued}>
 				<AutomationMessage message={item} queued={queued} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
 		);
