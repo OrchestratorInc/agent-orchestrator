@@ -79,13 +79,14 @@ export type PendingFileAttachmentCapture = {
 	readonly [pendingFileAttachmentCaptureEntries]: readonly CapturedPendingFileAttachmentEntry[];
 };
 
-function sharedAttachmentDescriptors(attachments: FileAttachment[]): FileAttachment[] {
-	return attachments.map(({ id, mimeType, bytes, name, stagedPath }) => ({
+function sharedAttachmentSnapshot(attachments: FileAttachment[]): FileAttachment[] {
+	return attachments.map(({ id, mimeType, bytes, name, stagedPath, data, dataUrl }) => ({
 		id,
 		mimeType,
 		bytes,
 		name,
-		...(stagedPath ? { stagedPath } : {}),
+		// Unstaged files have no durable copy. Keep their bytes in memory for retry.
+		...(stagedPath ? { stagedPath } : { data, dataUrl }),
 	}));
 }
 
@@ -458,7 +459,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 			if (initialKey) {
 				notifySharedAttachmentEntry(
 					initialKey,
-					{ attachments: sharedAttachmentDescriptors(next) },
+					{ attachments: sharedAttachmentSnapshot(next) },
 					listenerTokenRef.current,
 				);
 			}
@@ -510,7 +511,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		if (initialKey) {
 			notifySharedAttachmentEntry(
 				initialKey,
-				{ attachments: sharedAttachmentDescriptors(next), error: null },
+				{ attachments: sharedAttachmentSnapshot(next), error: null },
 				listenerTokenRef.current,
 			);
 		}

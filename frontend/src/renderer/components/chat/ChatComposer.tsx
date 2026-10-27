@@ -196,6 +196,7 @@ export const ChatComposer = memo(function ChatComposer({
 	disabledPlaceholder,
 	starting,
 	holdAttachments,
+	onHeldAttachmentsChange,
 	settings,
 	addMenuItems,
 	approval,
@@ -281,6 +282,7 @@ export const ChatComposer = memo(function ChatComposer({
 	 * whose session is created by that send.
 	 */
 	holdAttachments?: boolean;
+	onHeldAttachmentsChange?: (attachments: FileAttachmentPayload[], preparing: boolean) => void;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
 	/** A proposed next message, kept out of the draft until accepted with Tab. */
@@ -571,6 +573,11 @@ export const ChatComposer = memo(function ChatComposer({
 		onAttachmentsChange: persistAttachments,
 	});
 	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
+	useEffect(() => {
+		if (!holdAttachments || !onHeldAttachmentsChange) return;
+		onHeldAttachmentsChange(fileAttachments.attachments.flatMap(({ stagedPath, mimeType, data, name }) =>
+			!stagedPath && data ? [{ mimeType, data, name }] : []), fileAttachments.preparing);
+	}, [fileAttachments.attachments, fileAttachments.preparing, holdAttachments, onHeldAttachmentsChange]);
 
 	const slashCommands = useMemo<ChatSkill[]>(() => {
 		if (!onCompact || compactUnavailable === "This agent cannot compact its history") return skills;

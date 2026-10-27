@@ -606,6 +606,7 @@ export interface ChatWorkspaceProps {
 	showSetupStep?: boolean;
 	/** Keep files the workspace cannot take yet in the composer, sent with the message. */
 	holdAttachments?: boolean;
+	onHeldAttachmentsChange?: ComponentProps<typeof ChatComposer>["onHeldAttachmentsChange"];
 }
 
 type ChatWorkspaceActivation =
@@ -811,6 +812,7 @@ function ChatWorkspaceContent({
 	centerInWindow = false,
 	showSetupStep = true,
 	holdAttachments,
+	onHeldAttachmentsChange,
 	draftScope,
 	draftPersistenceAvailable,
 	onRetryDraftPersistence,
@@ -2041,6 +2043,7 @@ function ChatWorkspaceContent({
 										filePathsTruncated={filePathsTruncated}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
 										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
+										onHeldAttachmentsChange={onHeldAttachmentsChange}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}
