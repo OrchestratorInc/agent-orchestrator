@@ -340,6 +340,7 @@ func (s *Service) startNativeLogin(ctx context.Context, agentID string) (LoginSn
 	}
 	s.operations[op.snapshot.ID] = op
 	s.mu.Unlock()
+	// #nosec G118 -- The bounded native login must continue after its HTTP request returns.
 	go s.watchNativeLogin(loginCtx, terminal, op)
 	return op.snapshot, nil
 }
