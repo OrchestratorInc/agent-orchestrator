@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { TooltipProvider } from "./ui/tooltip";
@@ -666,6 +666,47 @@ test("says remote access is enabling while the tunnel starts", async () => {
 	expect(screen.getByTestId("mobile-remote-access-starting")).toHaveTextContent("Until then, works on this network only");
 	expect(screen.queryByTestId("mobile-remote-access-on")).not.toBeInTheDocument();
 	expect(screen.queryByTestId("mobile-local-only")).not.toBeInTheDocument();
+});
+
+// The note under the code comes and goes with the tunnel, but the code itself
+// must stay the same element: a remount would drop PairingQr's crossfade and
+// pop the next code in (or the last one out) with no transition.
+test("keeps the same code element as the remote access note changes", async () => {
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
+	};
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	renderMobileSettings(client);
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+	expect(screen.getByTestId("mobile-remote-access-starting")).toBeInTheDocument();
+	const square = screen.getByTestId("mobile-pairing-panel").firstElementChild;
+	const canvas = document.querySelector("[data-qr-value]");
+
+	// starting -> failed: the note goes, the code is unchanged.
+	act(() => {
+		client.setQueryData(mobileStatusQueryKey, {
+			...structuredClone(mobileStatus),
+			tunnel: { supported: true, running: false, ready: false, hostname: "", location: "", lastError: "connector exited" },
+		});
+	});
+	await waitFor(() => expect(screen.queryByTestId("mobile-remote-access-starting")).not.toBeInTheDocument());
+	expect(screen.getByTestId("mobile-local-only")).toBeInTheDocument();
+	expect(screen.getByTestId("mobile-pairing-panel").firstElementChild).toBe(square);
+	expect(document.querySelector("[data-qr-value]")).toBe(canvas);
+
+	// -> on: the code gains the tunnel and crossfades inside the same square.
+	act(() => {
+		client.setQueryData(mobileStatusQueryKey, {
+			...structuredClone(mobileStatus),
+			endpoints: [
+				{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
+				{ kind: "tunnel", host: "abc.trycloudflare.com", port: 443, secure: true },
+			],
+			tunnel: { supported: true, running: true, ready: true, hostname: "abc.trycloudflare.com", location: "", lastError: "" },
+		});
+	});
+	await waitFor(() => expect(screen.getByTestId("mobile-remote-access-on")).toBeInTheDocument());
+	expect(screen.getByTestId("mobile-pairing-panel").firstElementChild).toBe(square);
 });
 
 test("keeps Tailscale as the remote path when remote access failed", async () => {

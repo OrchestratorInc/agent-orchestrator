@@ -557,7 +557,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		const lastKeepAwake = readLastKeepAwake();
 		return (
 			<>
-				<PairingLayout panel={<QrPlaceholder value={placeholderQrValue()} />}>
+				<PairingLayout panel={<PairingPanel code={<QrPlaceholder value={placeholderQrValue()} />} />}>
 					<ScanIntro />
 					<p className="sr-only" role="status">
 						{t("mobile.checkingStatus")}
@@ -631,36 +631,37 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	// while the tunnel is still starting (the code refreshes itself when it is
 	// up). A tunnel that failed is a warning, stated in the details column.
 	const remoteAccessStarting = qrValue !== null && !remoteAccessOn && localOnly === "starting";
-	const panel =
-		remoteAccessOn || remoteAccessStarting ? (
-			<div className="flex w-60 shrink-0 flex-col gap-1.5 self-start">
-				{code}
-				<div
-					className="flex flex-col items-center text-center text-xs leading-5 text-settings-muted"
-					data-testid={remoteAccessOn ? "mobile-remote-access-on" : "mobile-remote-access-starting"}
-					role="status"
-				>
-					<p className="flex items-center gap-1.5">
-						{remoteAccessOn ? (
-							<Globe className="size-3.5 shrink-0" aria-hidden="true" />
-						) : (
-							<Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
-						)}
-						{remoteAccessOn
-							? t("mobile.remoteAccessOn", "Remote access on")
-							: t("mobile.remoteAccessEnabling", "Enabling remote access")}
-					</p>
-					{/* Until the tunnel is up the code carries only nearby addresses. */}
-					{!remoteAccessOn && (
-						<p className="text-caption leading-4">
-							{t("mobile.remoteAccessEnablingHint", "Until then, works on this network only")}
+	const panel = (
+		<PairingPanel
+			code={code}
+			note={
+				remoteAccessOn || remoteAccessStarting ? (
+					<div
+						className="flex flex-col items-center text-center text-xs leading-5 text-settings-muted"
+						data-testid={remoteAccessOn ? "mobile-remote-access-on" : "mobile-remote-access-starting"}
+						role="status"
+					>
+						<p className="flex items-center gap-1.5">
+							{remoteAccessOn ? (
+								<Globe className="size-3.5 shrink-0" aria-hidden="true" />
+							) : (
+								<Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+							)}
+							{remoteAccessOn
+								? t("mobile.remoteAccessOn", "Remote access on")
+								: t("mobile.remoteAccessEnabling", "Enabling remote access")}
 						</p>
-					)}
-				</div>
-			</div>
-		) : (
-			code
-		);
+						{/* Until the tunnel is up the code carries only nearby addresses. */}
+						{!remoteAccessOn && (
+							<p className="text-caption leading-4">
+								{t("mobile.remoteAccessEnablingHint", "Until then, works on this network only")}
+							</p>
+						)}
+					</div>
+				) : null
+			}
+		/>
+	);
 
 	return (
 		<>
@@ -984,6 +985,21 @@ function ScanIntro() {
 				</div>
 			</div>
 		</>
+	);
+}
+
+/**
+ * The code column: the pairing square and an optional note beneath it. Every
+ * state, loading included, renders this same element with the code first, so
+ * the note coming and going never changes the code's place in the tree. A
+ * different wrapper would remount the code and drop PairingQr's crossfade.
+ */
+function PairingPanel({ code, note }: { code: ReactNode; note?: ReactNode }) {
+	return (
+		<div className="flex w-60 shrink-0 flex-col gap-1.5 self-start" data-testid="mobile-pairing-panel">
+			{code}
+			{note}
+		</div>
 	);
 }
 
