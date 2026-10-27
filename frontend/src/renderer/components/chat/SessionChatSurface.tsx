@@ -41,6 +41,9 @@ import { useConversationPromptSuggestion } from "../../hooks/useConversationProm
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
 import { useLatestCallback } from "../../hooks/useStable";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
+import { sessionSearchMatchText, subscribeSessionSearchReveal, takeSessionSearchReveal } from "../../lib/session-search-reveal";
+import { SessionFindBar } from "./SessionFindBar";
+import { useSessionSearchMatches } from "../../hooks/usePaletteSessionSearch";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
 import { sessionUiKey } from "../../lib/hosts";
 import { readChatLastModel, rememberChatLastModel } from "../../lib/chat-last-model";
@@ -433,6 +436,102 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
 	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), setAnnotationNavigationRequest);
+	// The in-session find bar. A search result opens it with the search typed in
+	// and positioned on the opened match, so Enter/Shift+Enter walk the session's
+	// other matches; editing the query searches again from the first match.
+	const [find, setFind] = useState<{
+		query: string;
+		matches: Array<{ messageId: string; text: string }>;
+		index: number;
+		/** The message the bar opened on; the first match list keeps it current. */
+		anchor?: string;
+	} | null>(null);
+	const [findQuery, setFindQuery] = useState("");
+	useEffect(() => {
+		const next = find?.query.trim() ?? "";
+		// Typing refines the query; one request per pause, not per keystroke.
+		const timer = window.setTimeout(() => setFindQuery(next), next === findQuery ? 0 : 200);
+		return () => window.clearTimeout(timer);
+	}, [find?.query, findQuery]);
+	const goToMatch = useCallback((match: { messageId: string; text: string }) => {
+		setAnnotationNavigationRequest({ id: crypto.randomUUID(), text: match.text, messageId: match.messageId });
+	}, []);
+
+	// A search result hands its matched message over out-of-band (see
+	// session-search-reveal): the search view navigates, this surface picks the
+	// target up once the conversation is readable, and the existing annotation
+	// navigation scrolls to and highlights it.
+	const applyReveal = useCallback((reveal: { messageId: string; text: string; query?: string }) => {
+		onSelectChat?.();
+		setAnnotationNavigationRequest({ id: crypto.randomUUID(), text: reveal.text, messageId: reveal.messageId });
+		const query = reveal.query?.trim();
+		if (query) {
+			setFind({ query, matches: [], index: 0, anchor: reveal.messageId });
+			setFindQuery(query);
+		}
+	}, [onSelectChat]);
+	useEffect(() => {
+		const reveal = takeSessionSearchReveal(session.id);
+		if (reveal) {
+			applyReveal(reveal);
+			return;
+		}
+		return subscribeSessionSearchReveal(session.id, () => {
+			const next = takeSessionSearchReveal(session.id);
+			if (next) applyReveal(next);
+		});
+	}, [applyReveal, session.id]);
+
+	const findOpen = Boolean(find);
+	const searchMatches = useSessionSearchMatches(
+		session.id,
+		findQuery,
+		hostId,
+		findOpen && findQuery.length >= 2 && Boolean(snapshot),
+	);
+	useEffect(() => {
+		if (!findOpen || !searchMatches.data) return;
+		// One stop per message, in transcript order; only matches with a message
+		// to scroll to (the daemon already folds tool output into its message).
+		const seen = new Set<string>();
+		const matches: Array<{ messageId: string; text: string }> = [];
+		for (const match of searchMatches.data) {
+			if (!match.messageId || seen.has(match.messageId)) continue;
+			seen.add(match.messageId);
+			matches.push({ messageId: match.messageId, text: sessionSearchMatchText(match.snippet, match.highlights) });
+		}
+		setFind((current) => {
+			if (!current || current.query.trim() !== findQuery) return current;
+			if (current.anchor !== undefined) {
+				// Arrived from a search: stay on the opened match, so Enter moves to
+				// the NEXT one rather than jumping back to the first.
+				const index = Math.max(matches.findIndex((match) => match.messageId === current.anchor), 0);
+				return { ...current, matches, index, anchor: undefined };
+			}
+			if (matches[0]) goToMatch(matches[0]);
+			return { ...current, matches, index: 0 };
+		});
+	}, [findOpen, findQuery, goToMatch, searchMatches.data]);
+	const stepFind = useCallback((delta: number) => {
+		setFind((current) => {
+			if (!current || current.matches.length === 0) return current;
+			const index = (current.index + delta + current.matches.length) % current.matches.length;
+			goToMatch(current.matches[index]!);
+			return { ...current, index };
+		});
+	}, [goToMatch]);
+	const findBar = find ? (
+		<SessionFindBar
+			query={find.query}
+			onQueryChange={(query) => setFind((current) => current ? { ...current, query, matches: [], index: 0, anchor: undefined } : current)}
+			total={find.matches.length}
+			index={find.index}
+			loading={find.query.trim().length >= 2 && (find.query.trim() !== findQuery || searchMatches.isFetching)}
+			onNext={() => stepFind(1)}
+			onPrevious={() => stepFind(-1)}
+			onClose={() => setFind(null)}
+		/>
+	) : undefined;
 	const sideEnabled = useSideChatsAvailable(session, hostId) && !unavailable;
 	const sideCreationEnabled = sideEnabled && Boolean(snapshot && can(snapshot, "resume"));
 	const openSideInspector = () => {
@@ -643,6 +742,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
 				annotationNavigationRequest={annotationNavigationRequest}
+				timelineOverlay={findBar}
 				key={uiSessionId}
 				uiSessionId={uiSessionId}
 				assetBaseUrl={assetBaseUrl}

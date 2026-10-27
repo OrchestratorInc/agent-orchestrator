@@ -28,7 +28,19 @@ import type { GlobalSettingsSection } from "../stores/ui-store";
 import { renderedSnippetText } from "./chat-annotation-navigation";
 import { getSessionStatusDotView } from "./session-presentation";
 
-export type CommandGroupId = "current" | "attention" | "files" | "content" | "messages" | "projects" | "sessions" | "prs" | "settings" | "global";
+export type CommandGroupId =
+	| "current"
+	| "attention"
+	| "files"
+	| "content"
+	| "messages"
+	| "projects"
+	| "sessions"
+	| "prs"
+	| "settings"
+	| "global"
+	/** Session-text matches from the local search index. */
+	| "search";
 
 export type NavigateTarget =
 	| { to: "/" }
@@ -70,7 +82,25 @@ export type CommandAction =
 	| { kind: "copy-pr-url"; url: string }
 	| { kind: "trigger-review"; sessionId: string }
 	| { kind: "toggle-theme" }
-	| { kind: "open-shared-link" };
+	| { kind: "open-shared-link" }
+	/**
+	 * Opens a past session at the message a search matched, with the match
+	 * carried out-of-band so the Chat timeline can scroll to it.
+	 */
+	| {
+			kind: "open-search-result";
+			projectId: string;
+			sessionId: string;
+			messageId: string;
+			snippet: string;
+			query: string;
+			/** Set when the match is in one of the session's reviewer chats. */
+			reviewId?: string;
+			/** Matched spans in the snippet; the first is what the message highlights. */
+			highlights?: ReadonlyArray<{ start: number; end: number }>;
+	  }
+	/** Copies the command that reopens a session from a terminal. */
+	| { kind: "copy-resume-command"; command: string };
 
 export type CommandItem = {
 	id: string;
@@ -117,9 +147,11 @@ export type CommandPaletteContext = {
 	cloudReady?: boolean;
 };
 
-export const commandGroupOrder: CommandGroupId[] = ["current", "attention", "files", "content", "messages", "projects", "sessions", "prs", "settings", "global"];
+// Search comes first: a palette query is a search, so transcript matches lead.
+export const commandGroupOrder: CommandGroupId[] = ["search", "current", "attention", "files", "content", "messages", "projects", "sessions", "prs", "settings", "global"];
 
 const commandGroupLabelKeys: Record<CommandGroupId, MessageKey> = {
+	search: "command.sessionText",
 	current: "command.group.current",
 	attention: "command.group.attention",
 	files: "command.group.files",
@@ -827,3 +859,120 @@ function mergeSpans(spans: { start: number; end: number }[]): { start: number; e
 	}
 	return merged;
 }
+
+/**
+ * One session-text search hit as the palette renders it.
+ *
+ * The palette owns presentation (title, subtitle, snippet segments); the search
+ * hook owns transport. Keeping the mapping here means the palette's command
+ * model stays testable without a query layer.
+ */
+export type SessionSearchCommandHit = {
+	sessionId: string;
+	projectId: string;
+	messageId?: string;
+	kind: string;
+	title?: string;
+	snippet: string;
+	highlights?: ReadonlyArray<{ start: number; end: number }>;
+	sessionName?: string;
+	projectName?: string;
+	harness?: string;
+	sessionState?: string;
+	createdAt: string;
+	/** How many messages in the session matched; the row is the best of them. */
+	sessionMatches?: number;
+	/** Set when the best match is in one of the session's reviewer chats. */
+	reviewId?: string;
+};
+
+/**
+ * buildSessionSearchCommands maps ranked hits onto palette rows.
+ *
+ * A hit with a message id opens that message; a hit without one (tool output,
+ * a native transcript record, a path) opens the session. The distinction is
+ * carried in the row rather than guessed later.
+ */
+export function buildSessionSearchCommands(
+	hits: readonly SessionSearchCommandHit[],
+	query: string,
+	t: TFunction = appI18n.t,
+): CommandItem[] {
+	return hits.map((hit, index) => {
+		const sessionName = hit.sessionName || hit.sessionId;
+		// A recency browse has no query, so it has no match kind to report: the
+		// row is the session itself, and claiming "session" as a match kind would
+		// suggest a name match that did not happen. A reviewer-chat match says so,
+		// with the same label the chat search gives it, because Enter opens the
+		// reviewer chat rather than the session's own transcript.
+		const kindLabel = query.trim() === ""
+			? ""
+			: hit.reviewId ? t("terminal.reviewer") : (SEARCH_KIND_LABELS[hit.kind] ?? hit.kind);
+		// One row per session, shown at its best-matching message; the count is
+		// how many of its messages matched, which the opened session's find bar
+		// steps through. A row found only by its name or metadata has none.
+		const matches = (hit.sessionMatches ?? 0) > 0 ? t("command.sessionMatches", { count: hit.sessionMatches ?? 0 }) : "";
+		return {
+			id: `search:${hit.sessionId}:${hit.messageId || hit.kind}:${index}`,
+			group: "search" as CommandGroupId,
+			title: sessionName,
+			subtitle: [kindLabel, matches, hit.projectName || hit.projectId, hit.harness].filter(Boolean).join(" · "),
+			// The snippet is what the query matched, so it must also be searchable
+			// text for cmdk's own filtering and for a keyword hit.
+			keywords: [hit.snippet, hit.title ?? "", hit.projectName ?? "", hit.harness ?? ""],
+			// The best-matching message, its matched words marked by the palette's
+			// own snippet line. A recent session with nothing matched has none.
+			...(hit.snippet
+				? { snippet: { text: hit.snippet, highlights: [...(hit.highlights ?? [])].sort((left, right) => left.start - right.start) } }
+				: {}),
+			// ⌘↵ copies the command that reopens the session from a terminal.
+			secondaryAction: { kind: "copy-resume-command", command: `ao session resume-agent ${hit.sessionId}` },
+			action: {
+				kind: "open-search-result",
+				projectId: hit.projectId,
+				sessionId: hit.sessionId,
+				messageId: hit.messageId ?? "",
+				snippet: hit.snippet,
+				query,
+				...(hit.reviewId ? { reviewId: hit.reviewId } : {}),
+				...(hit.highlights?.length ? { highlights: hit.highlights } : {}),
+			},
+		};
+	});
+}
+
+/**
+ * Keeps the palette at one row per session.
+ *
+ * Both searches can find the same session: the session index covers every
+ * transcript of a session (its own chat, its reviewer chats, terminal
+ * transcripts, tool output) as one row with a match count, while the chat index
+ * lists AO chat messages one by one. A chat row whose session the session-text
+ * group already lists is dropped, reviewer chats included: that row's count
+ * already includes them, and the opened session's find bar steps through them.
+ * Chat rows for sessions the session-text group does not list are kept.
+ */
+export function withoutChatHitsCoveredBySessionSearch(
+	chatItems: readonly CommandItem[],
+	sessionSearchItems: readonly CommandItem[],
+): CommandItem[] {
+	const covered = new Set<string>();
+	for (const item of sessionSearchItems) {
+		if (item.action?.kind === "open-search-result") covered.add(item.action.sessionId);
+	}
+	if (covered.size === 0) return [...chatItems];
+	return chatItems.filter((item) => {
+		const action = item.action;
+		if (action?.kind !== "open-chat-message" || !action.sessionId) return true;
+		return !covered.has(action.sessionId);
+	});
+}
+
+const SEARCH_KIND_LABELS: Record<string, string> = {
+	title: "session",
+	user: "you",
+	assistant: "agent",
+	tool: "tool",
+	command: "command",
+	path: "file",
+};
