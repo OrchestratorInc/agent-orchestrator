@@ -14,8 +14,9 @@ type StackRoute = { key: string; name: string };
  * Android opened turn settings, and the chat hibernated behind the open sheet.
  */
 export function coveredOnlyBySheets(routes: readonly StackRoute[] | undefined, key: string): boolean {
-	const index = routes?.findIndex((route) => route.key === key) ?? -1;
-	return index >= 0 && routes!.slice(index + 1).every((route) => route.name.startsWith("sheets/"));
+	if (!routes) return false;
+	const index = routes.findIndex((route) => route.key === key);
+	return index >= 0 && routes.slice(index + 1).every((route) => route.name.startsWith("sheets/"));
 }
 
 /**
@@ -30,14 +31,18 @@ export function useChatViewLease(config: ServerConfig | null, sessionId: string,
 	const focused = useIsFocused();
 	const navigation = useNavigation();
 	const { key } = useRoute();
-	const [underSheet, setUnderSheet] = useState(false);
+	// Read from the stack while rendering, not kept in state: the render that
+	// first sees the chat blurred must also see the sheet that blurred it, or the
+	// lease is released and taken again as the sheet opens. The listeners below
+	// only re-render for stack changes that leave focus alone.
+	const [, setStackVersion] = useState(0);
+	const underSheet = coveredOnlyBySheets(navigation.getState()?.routes, key);
 	const viewing = focused || underSheet;
 	const onViewingRef = useRef(onViewing);
 	useEffect(() => { onViewingRef.current = onViewing; }, [onViewing]);
 
 	useEffect(() => {
-		const update = () => setUnderSheet(coveredOnlyBySheets(navigation.getState()?.routes, key));
-		update();
+		const update = () => setStackVersion((version) => version + 1);
 		const unsubscribe = [
 			navigation.addListener("state", update),
 			navigation.addListener("focus", update),
@@ -86,7 +91,12 @@ export function useChatViewLease(config: ServerConfig | null, sessionId: string,
 		return () => {
 			subscription.remove();
 			clearInterval(timer);
-			if (active) send(false);
+			// Inactive first, so a registration still in flight cannot report a
+			// chat that is no longer viewed.
+			if (active) {
+				active = false;
+				send(false);
+			}
 		};
 	}, [config, sessionId, viewing]);
 }

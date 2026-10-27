@@ -78,6 +78,26 @@ it("keeps the lease while a chat sheet covers the chat, without registering it a
 	expect(requests().every((request) => request.active && request.viewId === viewId)).toBe(true);
 });
 
+it("keeps the lease when the chat renders blurred before the stack listeners run", async () => {
+	await act(async () => { renderer = create(<Harness />); });
+	fixture.routes = [{ key: "chat", name: "session/[id]" }, { key: "sheet", name: "sheets/chat-settings" }];
+	fixture.focused = false;
+	await act(async () => { renderer!.update(<Harness />); });
+	expect(requests().map((request) => request.active)).toEqual([true]);
+});
+
+it("does not report a registration answered after the chat stopped being viewed", async () => {
+	const onViewing = vi.fn();
+	let answer!: () => void;
+	fixture.request.mockImplementationOnce(() => new Promise((resolve) => { answer = () => resolve({ status: 204 }); }));
+	await act(async () => { renderer = create(<Harness onViewing={onViewing} />); });
+	await act(async () => renderer!.unmount());
+	renderer = undefined;
+	await act(async () => { answer(); });
+	expect(requests().map((request) => request.active)).toEqual([true, false]);
+	expect(onViewing).not.toHaveBeenCalled();
+});
+
 it("releases the lease when a screen opens from a sheet over the chat", async () => {
 	await act(async () => { renderer = create(<Harness />); });
 	await navigate([{ key: "chat", name: "session/[id]" }, { key: "sheet", name: "sheets/conversation-actions" }], false);

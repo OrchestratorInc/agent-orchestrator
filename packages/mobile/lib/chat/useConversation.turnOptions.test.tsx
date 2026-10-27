@@ -93,3 +93,31 @@ it("keeps the last catalog on a reopened chat whose provider is not up yet", asy
 	expect(catalog?.configOptions.map((option) => option.id)).toEqual(["model"]);
 	expect(conversation.configOptions.map((option) => option.id)).toEqual(["model"]);
 });
+
+it("retries a catalog that failed while the chat woke, and only then", async () => {
+	fixture.options = new Error("CHAT_CONTROLLER_NOT_READY");
+	await open("stale-ready");
+	await act(async () => { await expect(conversation.loadTurnOptions()).rejects.toThrow("CHAT_CONTROLLER_NOT_READY"); });
+	fixture.options = [modelOption];
+	await act(async () => { await conversation.loadTurnOptions({ refresh: true, ifMissing: true }); });
+	expect(conversation.configOptions.map((option) => option.id)).toEqual(["model"]);
+	fixture.request.mockClear();
+	await act(async () => { await conversation.loadTurnOptions({ refresh: true, ifMissing: true }); });
+	expect(paths()).toEqual([]);
+});
+
+it("shows the remembered catalog on a screen that mounted before it was remembered", async () => {
+	const screens: Record<string, MobileConversation> = {};
+	function Pair() {
+		screens.first = useMobileConversation(config, "pair");
+		screens.second = useMobileConversation(config, "pair");
+		return null;
+	}
+	await act(async () => { renderer = create(<Pair />); });
+	expect(screens.first.configOptions).toEqual([]);
+	fixture.options = [modelOption];
+	await act(async () => { await screens.second.loadTurnOptions(); });
+	fixture.options = [];
+	await act(async () => { await screens.first.loadTurnOptions({ refresh: true }); });
+	expect(screens.first.configOptions.map((option) => option.id)).toEqual(["model"]);
+});

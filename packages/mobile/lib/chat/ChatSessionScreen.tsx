@@ -103,7 +103,14 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, session.id);
 	// Opening a hibernated chat wakes it, and only the lease request says when.
-	useChatViewLease(config, session.id, conversation.refresh);
+	// The catalog is asked for again too if it has none of its own yet: a page
+	// cached as ready loads it before the wake, and that load can fail unseen.
+	const { refresh: refreshOnView, loadTurnOptions: loadTurnOptionsOnView } = conversation;
+	const onViewing = useCallback(() => {
+		void refreshOnView();
+		void loadTurnOptionsOnView({ refresh: true, ifMissing: true }).catch(() => {});
+	}, [loadTurnOptionsOnView, refreshOnView]);
+	useChatViewLease(config, session.id, onViewing);
 	// A load that failed while the desktop was unreachable retries as soon as the
 	// board's poll reconnects, which is what the offline state promises.
 	// Keyed on a failed load, not a missing one, so the first mount doesn't send a

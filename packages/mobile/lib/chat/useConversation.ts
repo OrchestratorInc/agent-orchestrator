@@ -50,6 +50,8 @@ const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
 // The last catalog each chat offered, kept past the cache's 30 seconds. A chat
 // opened while hibernated has no catalog until its provider is back, and showing
 // the previous one keeps the model in the composer instead of dropping it.
+// Twice the 30-second caches' 16: they only need chats opened in the last half
+// minute, this needs every chat someone moves between, and entries are small.
 const LAST_TURN_OPTIONS_LIMIT = 32;
 const lastTurnOptions = new Map<string, TurnOptions>();
 function rememberTurnOptions(key: string, catalog: TurnOptions) {
@@ -110,7 +112,11 @@ export type MobileConversation = {
 	actionCodes: Partial<Record<ConversationAction, string>>;
 	refresh(): Promise<void>;
 	loadOlder(): Promise<void>;
-	loadTurnOptions(options?: { refresh?: boolean }): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }>;
+	/**
+	 * `ifMissing` loads only when this chat has no catalog of its own yet: the
+	 * last load failed or came back empty, so what shows is remembered or nothing.
+	 */
+	loadTurnOptions(options?: { refresh?: boolean; ifMissing?: boolean }): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }>;
 	loadSkills(): Promise<ChatSkill[]>;
 	send(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]): Promise<string>;
 	retrySend(id: string): Promise<void>;
@@ -158,6 +164,8 @@ export function useMobileConversation(
 	const [actionErrors, setActionErrors] = useState<Partial<Record<ConversationAction, string>>>({});
 	const [actionCodes, setActionCodes] = useState<Partial<Record<ConversationAction, string>>>({});
 	const mounted = useRef(true);
+	// Whether the catalog shown came from a load of this chat, not from memory.
+	const turnOptionsLoaded = useRef(false);
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const refreshGate = useRef(createRequestGate()).current;
 
@@ -245,8 +253,9 @@ export function useMobileConversation(
 		return () => { active = false; };
 	}, [pendingKey, options?.reviewId]);
 
-	const loadTurnOptions = useCallback(async (options?: { refresh?: boolean }) => {
+	const loadTurnOptions = useCallback(async (options?: { refresh?: boolean; ifMissing?: boolean }) => {
 		if (!cfg || unavailable || !hasConversation) return { models, configOptions };
+		if (options?.ifMissing && turnOptionsLoaded.current) return { models, configOptions };
 		if (options?.refresh) turnOptionsCache.delete(cacheKey);
 		// An empty catalog is usually a provider that is not up yet: it is not
 		// cached, so the next load asks again, and what it offered before stays.
@@ -255,18 +264,19 @@ export function useMobileConversation(
 				loadModels: () => getConversationModels(cfg, sessionId),
 				loadConfigOptions: () => getConversationConfigOptions(cfg, sessionId),
 			});
-		}, (loaded) => !isEmptyTurnOptionCatalog(loaded));
-		if (isEmptyTurnOptionCatalog(catalog)) {
-			const known = lastTurnOptions.get(cacheKey);
-			if (known) return known;
-		} else {
-			rememberTurnOptions(cacheKey, catalog);
-		}
+		}, (loaded) => !isEmptyTurnOptionCatalog(loaded)).catch((cause: unknown) => {
+			turnOptionsLoaded.current = false;
+			throw cause;
+		});
+		const empty = isEmptyTurnOptionCatalog(catalog);
+		turnOptionsLoaded.current = !empty;
+		if (!empty) rememberTurnOptions(cacheKey, catalog);
+		const shown = empty ? lastTurnOptions.get(cacheKey) ?? catalog : catalog;
 		if (mounted.current) {
-			setModels(catalog.models);
-			setConfigOptions(catalog.configOptions);
+			setModels(shown.models);
+			setConfigOptions(shown.configOptions);
 		}
-		return catalog;
+		return shown;
 	}, [cacheKey, cfg, configOptions, hasConversation, models, sessionId, unavailable]);
 
 	const loadSkills = useCallback(async () => {
@@ -473,6 +483,7 @@ export function useMobileConversation(
 				setConfigOptions(options);
 				turnOptionsCache.set(cacheKey, { models, configOptions: options });
 				rememberTurnOptions(cacheKey, { models, configOptions: options });
+				if (options.length) turnOptionsLoaded.current = true;
 				return options;
 			}),
 		[cacheKey, cfg, models, runAction, sessionId],
