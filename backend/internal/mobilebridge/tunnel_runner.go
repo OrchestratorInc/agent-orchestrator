@@ -179,8 +179,15 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 
 	// Hold the endpoint back until its hostname has had time to propagate: DNS
 	// for a brand-new quick tunnel, or a named tunnel's just-published record,
-	// lags the connector's own "registered" signal. A named record this
-	// machine has known for longer than that has nothing left to wait for.
+	// lags the connector's own "registered" signal. An older named record has
+	// nothing left to wait for, including one AO Cloud just repointed at a new
+	// tunnel: it never answered NXDOMAIN, devices already hold the address,
+	// and the edge's brief lag in following it is a 530 they retry.
+	//
+	// Once advertised, a fixed address stays so while its connections are
+	// down: it is still this machine's address, and the connector reconnects
+	// or watchConnector restarts it. Withdrawing it would flap the QR code and
+	// the account listing on every edge reconnect.
 	settleCtx, stopSettle := context.WithCancel(ctx)
 	defer stopSettle()
 	if fixed {
