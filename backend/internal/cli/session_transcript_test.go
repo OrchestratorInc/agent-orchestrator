@@ -212,6 +212,73 @@ func TestSessionGet_TranscriptHumanAndJSON(t *testing.T) {
 	}
 }
 
+func TestSessionGet_TranscriptACPToolResult(t *testing.T) {
+	fileText := "package main\n" + strings.Repeat("read content line\n", 100)
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/conversation") {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"conversationId": "cnv", "latestSequence": 2, "oldestSequence": 2,
+				"activities": []any{map[string]any{
+					"kind": "activity", "sequence": 2, "activityKind": "mcp_tool", "status": "completed",
+					"summary": "Read /repo/main.go", "detail": map[string]any{
+						"protocol": "acp", "input": map[string]any{"file_path": "/repo/main.go"},
+						"output": "read complete", "content": []any{map[string]any{
+							"type": "content", "content": map[string]any{"type": "text", "text": fileText},
+						}},
+					},
+				}},
+			})
+			return
+		}
+		_, _ = io.WriteString(w, `{"session":`+sessionJSONWithMode("demo-1", "demo", "chat")+`}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "get", "demo-1", "--transcript", "1", "--cap", "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Read /repo/main.go", `input: {"file_path":"/repo/main.go"}`, "output: read complete", "content: package main"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("ACP transcript missing %q:\n%s", want, out)
+		}
+	}
+	if got := strings.Count(out, "  read content line\n"); got != 100 {
+		t.Fatalf("ACP transcript retained %d of 100 read lines", got)
+	}
+
+	capped, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "get", "demo-1", "--transcript", "1", "--cap", "1000", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Transcript struct {
+			Entries []struct {
+				Detail struct {
+					Content []struct {
+						Content struct {
+							Text string `json:"text"`
+						} `json:"content"`
+					} `json:"content"`
+				} `json:"detail"`
+				Truncations []fieldTruncation `json:"truncations"`
+			} `json:"entries"`
+		} `json:"transcript"`
+	}
+	if err := json.Unmarshal([]byte(capped), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	entry := decoded.Transcript.Entries[0]
+	if got := utf8.RuneCountInString(entry.Detail.Content[0].Content.Text); got != 1000 {
+		t.Fatalf("ACP content length = %d, want 1000", got)
+	}
+	if len(entry.Truncations) != 1 || entry.Truncations[0].Field != "detail.content.0.content.text" {
+		t.Fatalf("ACP truncation records = %#v", entry.Truncations)
+	}
+}
+
 func TestSessionGet_TranscriptEdges(t *testing.T) {
 	t.Run("tui skips conversation", func(t *testing.T) {
 		cfg := setConfigEnv(t)

@@ -435,7 +435,8 @@ func walkCap(v any, path string, maxChars int, fullCmd string, force bool, sink 
 		if path != "" {
 			childPath = path + "." + key
 		}
-		childForce := force || key == "arguments" || key == "result"
+		childForce := force || key == "arguments" || key == "result" ||
+			(path == "detail" && (key == "input" || key == "content"))
 		switch typed := child.(type) {
 		case string:
 			if !force && !cappedKeys[key] && key != "arguments" && key != "result" {
@@ -904,6 +905,11 @@ func writeActivityBody(b *strings.Builder, entry map[string]any) {
 		if detail != nil {
 			writePayloadLine(b, "arguments", detail["arguments"])
 			writePayloadLine(b, "result", detail["result"])
+			if stringField(detail, "protocol") == "acp" {
+				writePayloadLine(b, "input", detail["input"])
+				writePayloadLine(b, "output", detail["output"])
+				writeACPContent(b, detail["content"])
+			}
 			if errText := stringField(detail, "error"); errText != "" {
 				writeIndentedLines(b, errText)
 			}
@@ -958,6 +964,25 @@ func writePayloadLine(b *strings.Builder, label string, value any) {
 			return
 		}
 		writeIndentedLines(b, label+": "+string(encoded))
+	}
+}
+
+func writeACPContent(b *strings.Builder, value any) {
+	items, ok := value.([]any)
+	if !ok {
+		writePayloadLine(b, "content", value)
+		return
+	}
+	for _, item := range items {
+		if block, ok := item.(map[string]any); ok && block["type"] == "content" {
+			if content, ok := block["content"].(map[string]any); ok && content["type"] == "text" {
+				if text := stringField(content, "text"); text != "" {
+					writeIndentedLines(b, "content: "+text)
+					continue
+				}
+			}
+		}
+		writePayloadLine(b, "content", item)
 	}
 }
 
