@@ -3,7 +3,8 @@ package providerkeys
 import (
 	"context"
 	"errors"
-	"os/exec"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // Publish updates the current user's launchd environment for future children.
@@ -14,5 +15,5 @@ func Publish(ctx context.Context, name, value string) error {
 	if !validName(name) || !validValue(value) || value == "" {
 		return errors.New("invalid provider credential")
 	}
-	return exec.CommandContext(ctx, "launchctl", "setenv", name, value).Run()
+	return process.CommandContext(ctx, "launchctl", "setenv", name, value).Run()
 }
