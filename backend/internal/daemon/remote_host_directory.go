@@ -21,7 +21,7 @@ import (
 // through AO Cloud. A failed publish is retried on the next tick.
 func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.BridgeService, controlPlaneURL string, log *slog.Logger) {
 	client := &http.Client{Timeout: 8 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	lastSent, nextAt := "", time.Time{}
+	lastSent, nextAt, refusedWait := "", time.Time{}, refusedRetry
 	publish := func() {
 		address, hash := accountTunnelAddress(bridge)
 		key := address + "\x00" + hash
@@ -34,13 +34,17 @@ func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.Brid
 		switch {
 		case errors.Is(err, errAddressRefused):
 			// No account lists this link yet: a device that just took the
-			// machine has not listed it, or this AO Cloud could not. Asked
-			// again soon, without a warning every tick.
-			lastSent, nextAt = key, time.Now().Add(refusedRetry)
+			// machine has not listed it, or never could. Asked again soon,
+			// then less often, without a warning every tick.
+			if key != lastSent {
+				refusedWait = refusedRetry
+			}
+			lastSent, nextAt = key, time.Now().Add(refusedWait)
+			refusedWait = min(2*refusedWait, maxRefusedRetry)
 		case err != nil:
 			log.Warn("remote host address publish failed", "err", err)
 		default:
-			lastSent, nextAt = key, time.Now().Add(republishEvery)
+			lastSent, nextAt, refusedWait = key, time.Now().Add(republishEvery), refusedRetry
 		}
 	}
 	publish()
@@ -56,11 +60,12 @@ func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.Brid
 	}
 }
 
-// republishEvery spaces publishes of an unchanged address, and refusedRetry
-// those of one AO Cloud refused.
+// republishEvery spaces publishes of an unchanged address. One AO Cloud
+// refused is tried again after refusedRetry, doubling to maxRefusedRetry.
 const (
-	republishEvery = 10 * time.Minute
-	refusedRetry   = time.Minute
+	republishEvery  = 10 * time.Minute
+	refusedRetry    = time.Minute
+	maxRefusedRetry = 30 * time.Minute
 )
 
 // errAddressRefused is AO Cloud refusing the digest: no account lists it.

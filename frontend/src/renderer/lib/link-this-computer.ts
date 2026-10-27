@@ -1,4 +1,4 @@
-import { saveAccountRemoteHost } from "./account-remote-hosts";
+import { assertRoomFor, readAccountHostDirectory, saveAccountRemoteHost } from "./account-remote-hosts";
 import { apiClient, apiErrorMessage } from "./api-client";
 import { aoBridge } from "./bridge";
 
@@ -15,13 +15,26 @@ export function fitLabel(name: string): string {
  * Links this computer to the signed-in AO account, so it appears on the
  * account's devices without a password. Without url it is done before the
  * tunnel starts: AO Cloud makes this computer's fixed address and lists it
- * there, so it never starts a quick tunnel only to replace it. An AO Cloud
- * that has no fixed addresses refuses that. Allow access then links again with
- * the quick tunnel's url once it has one; Connect Mobile leaves the computer
- * unlisted, as it did before fixed addresses.
- * Returns the host id the account now lists.
+ * there, so it never starts a quick tunnel only to replace it.
+ *
+ * Returns the host id the account now lists, or "" when nothing was linked:
+ * without url on an AO Cloud with no fixed addresses (Allow access links again
+ * with the quick tunnel's url once it has one), or with ifListed when the
+ * account does not list this computer. Both are decided, and a full account
+ * refused, before the machine moves its account token here, which cuts off
+ * an account that had it.
  */
-export async function linkThisComputer(cloudBaseUrl: string, accountId: string, password: string, url?: string): Promise<string> {
+export async function linkThisComputer(
+	cloudBaseUrl: string,
+	accountId: string,
+	hostId: string,
+	password: string,
+	options: { url?: string; ifListed?: boolean } = {},
+): Promise<string> {
+	const directory = await readAccountHostDirectory(cloudBaseUrl);
+	if (options.url === undefined && !directory.fixedAddresses) return "";
+	if (options.ifListed && !directory.hosts.some((host) => host.hostId === hostId)) return "";
+	assertRoomFor(directory, hostId);
 	const issued = await apiClient.POST("/api/v1/remote-host/account-token", {
 		headers: { Authorization: `Bearer ${password}`, "X-AO-Account-ID": accountId },
 	});
@@ -29,7 +42,7 @@ export async function linkThisComputer(cloudBaseUrl: string, accountId: string, 
 	await saveAccountRemoteHost(cloudBaseUrl, {
 		hostId: issued.data.hostId,
 		label: fitLabel(await aoBridge.remotes.computerName()),
-		url,
+		url: options.url,
 		token: issued.data.token,
 	});
 	return issued.data.hostId;

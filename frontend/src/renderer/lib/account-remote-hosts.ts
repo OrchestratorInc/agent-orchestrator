@@ -12,13 +12,13 @@ export class AccountHostSyncError extends Error {
 /** AO Cloud refused a new machine because the account lists as many as it can. */
 export class RemoteHostLimitError extends AccountHostSyncError {}
 
-async function request(baseUrl: string, method: string, path: string, body?: unknown): Promise<Response> {
+async function request(baseUrl: string, method: string, path: string, body?: unknown, timeoutMs = 10_000): Promise<Response> {
 	const response = await cloudCpFetch(`${baseUrl.replace(/\/+$/, "")}/api/cloud/v1/me/hosts${path}`, {
 		method,
 		headers: { Authorization: "Bearer delegated-to-main-process", ...(body ? { "Content-Type": "application/json" } : {}) },
 		body: body ? JSON.stringify(body) : undefined,
 		cache: "no-store",
-		signal: AbortSignal.timeout(10_000),
+		signal: AbortSignal.timeout(timeoutMs),
 	});
 	if (!response.ok) {
 		// A full account is the one refusal the user can act on, so its message is shown.
@@ -29,16 +29,41 @@ async function request(baseUrl: string, method: string, path: string, body?: unk
 	return response;
 }
 
+/**
+ * The account's machines, how many it can list (0 for any number), and
+ * whether this AO Cloud gives machines fixed addresses.
+ */
+export type AccountHostDirectory = { hosts: AccountRemoteHost[]; limit: number; fixedAddresses: boolean };
+
+export async function readAccountHostDirectory(baseUrl: string): Promise<AccountHostDirectory> {
+	const body = await (await request(baseUrl, "GET", "")).json() as Partial<AccountHostDirectory>;
+	return { hosts: body.hosts ?? [], limit: body.limit ?? 0, fixedAddresses: body.fixedAddresses === true };
+}
+
 export async function listAccountRemoteHosts(baseUrl: string): Promise<AccountRemoteHost[]> {
-	const body = await (await request(baseUrl, "GET", "")).json() as { hosts?: AccountRemoteHost[] };
-	return body.hosts ?? [];
+	return (await readAccountHostDirectory(baseUrl)).hosts;
+}
+
+/**
+ * Refuses a machine the account has no room for. Checked before the machine
+ * moves its account token here: a listing refused after that leaves it in no
+ * account.
+ */
+export function assertRoomFor(directory: AccountHostDirectory, hostId: string): void {
+	const { hosts, limit } = directory;
+	if (limit > 0 && hosts.length >= limit && !hosts.some((host) => host.hostId === hostId)) {
+		throw new RemoteHostLimitError(`An account can list up to ${limit} machines. Remove one to add another.`, 409);
+	}
 }
 
 /** A host saved without a url is listed at its fixed address: AO Cloud knows it from the host id. */
 export async function saveAccountRemoteHost(baseUrl: string, host: Omit<AccountRemoteHost, "url"> & { url?: string }): Promise<void> {
+	// Without a url AO Cloud makes the tunnel and its DNS record first, which
+	// it may take up to a minute to finish; giving up sooner would leave the
+	// machine listed while the caller thinks it is not.
 	await request(baseUrl, "PUT", `/${encodeURIComponent(host.hostId)}`, {
 		label: host.label, url: host.url, token: host.token,
-	});
+	}, host.url === undefined ? 75_000 : 10_000);
 }
 
 export async function deleteAccountRemoteHost(baseUrl: string, hostId: string): Promise<void> {

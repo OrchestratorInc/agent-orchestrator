@@ -116,7 +116,7 @@ export function ThisComputerAccess() {
 			}
 			// Linked before the tunnel starts, so the tunnel is this computer's fixed address.
 			// A full account refuses the quick tunnel's address too, so it stops here.
-			hostId = await linkThisComputer(cloudBaseUrl, accountId, password).catch((cause: unknown) => {
+			hostId = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password).catch((cause: unknown) => {
 				if (cause instanceof RemoteHostLimitError) throw cause;
 				return "";
 			});
@@ -128,7 +128,7 @@ export function ThisComputerAccess() {
 				return;
 			}
 			// No fixed address from this AO Cloud: listed at the quick tunnel's, as before fixed addresses.
-			if (!hostId) hostId = await linkThisComputer(cloudBaseUrl, accountId, password, ready.url);
+			if (!hostId) hostId = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password, { url: ready.url });
 			shared = true;
 		} finally {
 			// Not shared, the switch shows off; leaving access on, or the account listing this computer, would contradict it.

@@ -180,10 +180,8 @@ type Server struct {
 	localAuthEnabled bool
 	localSessionTTL  time.Duration
 	localAuthLimiter *fixedWindowLimiter
-	// tunnelLimiter spaces the Cloudflare writes each account can cause, and
-	// tunnelLocks serialize them per account and host.
+	// tunnelLimiter spaces the Cloudflare writes each account can cause.
 	tunnelLimiter   *fixedWindowLimiter
-	tunnelLocks     [64]sync.Mutex
 	sandboxProvider string
 	// availableSandboxProviders is every provider a client may select for a
 	// session, always including sandboxProvider (the default). It gates the

@@ -119,8 +119,12 @@ const fake = vi.hoisted(() => {
 		if (!match) return reply(404);
 		const hostId = match[1] ? decodeURIComponent(match[1]) : "";
 		if (method === "GET") {
+			// A full account lists ten other machines.
+			const others = cloud.full ? Array.from({ length: 10 }, (_, i) => [`h_other-${i}`, { label: `Other ${i}`, url: "https://other.example:443", token: TOKEN }] as const) : [];
 			return reply(200, {
-				hosts: [...cloud.hosts].map(([id, host]) => ({ hostId: id, ...host, updatedAt: "2026-10-19T08:00:00Z" })),
+				hosts: [...cloud.hosts, ...others].map(([id, host]) => ({ hostId: id, ...host, updatedAt: "2026-10-19T08:00:00Z" })),
+				limit: cloud.fixedAddresses ? 10 : 0,
+				fixedAddresses: cloud.fixedAddresses,
 			});
 		}
 		log.push(`cloud ${method} ${hostId}`);
@@ -231,10 +235,10 @@ it("links at the quick tunnel's address when AO Cloud has no fixed addresses", a
 	expect(await screen.findByText("Your devices see this computer as Dhruv’s Mac mini.")).toBeVisible();
 	expect(toggle).toHaveAttribute("aria-checked", "true");
 	expect(fake.cloud.hosts.get(fake.HOST_ID)?.url).toBe(`https://${fake.TUNNEL}:443`);
+	// No address-free link is tried first: its token would be issued for a
+	// listing AO Cloud refuses.
 	expect(fake.log).toEqual([
 		"/api/v1/mobile/enable-lan-only",
-		"/api/v1/remote-host/account-token",
-		`cloud PUT ${fake.HOST_ID}`,
 		"/api/v1/mobile/remote-access",
 		"/api/v1/remote-host/account-token",
 		`cloud PUT ${fake.HOST_ID}`,
@@ -372,8 +376,10 @@ it("says when the account lists as many machines as it can", async () => {
 	expect(await screen.findByRole("alert")).toHaveTextContent("An account can list up to 10 machines. Remove one to add another.");
 	expect(toggle).toHaveAttribute("aria-checked", "false");
 	expect(fake.daemon.enabled).toBe(false);
-	// Known before any tunnel started, so none did.
+	// Known before any tunnel started, so none did, and before the machine
+	// moved its account token to this account.
 	expect(fake.log).not.toContain("/api/v1/mobile/remote-access");
+	expect(fake.tokenRequests).toEqual([]);
 });
 
 it("keeps this computer in the account when it was listed before a failed turn-on", async () => {

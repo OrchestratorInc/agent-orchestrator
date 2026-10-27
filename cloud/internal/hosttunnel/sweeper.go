@@ -88,39 +88,9 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 		return 0, err
 	}
 	for _, c := range candidates {
-		// A machine whose daemon cannot reach AO Cloud may still be serving.
-		if c.Registered && !c.Released {
-			online, err := cf.Online(ctx, c.TunnelID)
-			if err != nil {
-				fail(err)
-				continue
-			}
-			if online {
-				if err := store.TouchRemoteHostTunnel(ctx, c.TunnelID, now); err != nil {
-					fail(err)
-				}
-				continue
-			}
+		if sweepCandidate(ctx, store, cf, c, now, fail) {
+			done++
 		}
-		// Asked again: the account may have listed the host again since.
-		if !c.Registered {
-			if listed, err := store.RemoteHostListed(ctx, c.UserID, c.HostID); err != nil || listed {
-				if err != nil {
-					fail(err)
-				}
-				continue
-			}
-		}
-		// Delete also removes the DNS record, when it still names this tunnel.
-		if err := cf.Delete(ctx, c.TunnelID, c.Hostname); err != nil {
-			fail(err)
-			continue
-		}
-		if err := store.DeleteRemoteHostTunnel(ctx, c.TunnelID); err != nil {
-			fail(err)
-			continue
-		}
-		done++
 	}
 
 	// Machines asleep, offline or quit, and tunnels no connector ever served,
@@ -138,27 +108,85 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 		fail(err)
 	}
 	for _, id := range append(disconnected, unused...) {
-		row, found, err := store.FindRemoteHostTunnel(ctx, id)
-		if err != nil {
-			fail(err)
-			continue
+		if releaseIdle(ctx, store, cf, id, now, fail) {
+			done++
 		}
-		if !found || row.Released || now.Sub(row.LastSeenAt) < DisconnectedRetention {
-			continue
-		}
-		released, err := cf.Release(ctx, id)
-		if err != nil {
-			fail(err)
-			continue
-		}
-		if !released {
-			continue
-		}
-		if err := store.ReleaseRemoteHostTunnel(ctx, id); err != nil {
-			fail(err)
-			continue
-		}
-		done++
 	}
 	return done, errors.Join(errs...)
+}
+
+// sweepCandidate deletes one candidate's tunnel and DNS record, unless its
+// machine still serves it or its account lists the host again. It reports
+// whether it deleted them.
+func sweepCandidate(ctx context.Context, store SweepStore, cf *Cloudflare, c domain.RemoteHostTunnelCandidate, now time.Time, fail func(error)) bool {
+	defer cf.Lock(c.UserID, c.HostID)()
+	// A machine whose daemon cannot reach AO Cloud may still be serving.
+	if c.Registered && !c.Released {
+		online, err := cf.Online(ctx, c.TunnelID)
+		if err != nil {
+			fail(err)
+			return false
+		}
+		if online {
+			if err := store.TouchRemoteHostTunnel(ctx, c.TunnelID, now); err != nil {
+				fail(err)
+			}
+			return false
+		}
+	}
+	// Asked again under the lock: the account may have listed the host again
+	// since the candidates were read.
+	if !c.Registered {
+		if listed, err := store.RemoteHostListed(ctx, c.UserID, c.HostID); err != nil || listed {
+			if err != nil {
+				fail(err)
+			}
+			return false
+		}
+	}
+	// Delete also removes the DNS record, when it still names this tunnel.
+	if err := cf.Delete(ctx, c.TunnelID, c.Hostname); err != nil {
+		fail(err)
+		return false
+	}
+	if err := store.DeleteRemoteHostTunnel(ctx, c.TunnelID); err != nil {
+		fail(err)
+		return false
+	}
+	return true
+}
+
+// releaseIdle releases one listed idle tunnel this AO Cloud's row names, and
+// reports whether it did.
+func releaseIdle(ctx context.Context, store SweepStore, cf *Cloudflare, id string, now time.Time, fail func(error)) bool {
+	row, found, err := store.FindRemoteHostTunnel(ctx, id)
+	if err != nil {
+		fail(err)
+		return false
+	}
+	if !found {
+		return false
+	}
+	defer cf.Lock(row.UserID, row.HostID)()
+	// Read again under the lock, which a new tunnel for the host is made under.
+	if row, found, err = store.FindRemoteHostTunnel(ctx, id); err != nil || !found || row.Released ||
+		now.Sub(row.LastSeenAt) < DisconnectedRetention {
+		if err != nil {
+			fail(err)
+		}
+		return false
+	}
+	released, err := cf.Release(ctx, id)
+	if err != nil {
+		fail(err)
+		return false
+	}
+	if !released {
+		return false
+	}
+	if err := store.ReleaseRemoteHostTunnel(ctx, id); err != nil {
+		fail(err)
+		return false
+	}
+	return true
 }

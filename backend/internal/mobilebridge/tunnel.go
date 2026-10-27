@@ -455,7 +455,9 @@ func TunnelBackoff(attempt int) time.Duration {
 // The empty --config keeps a personal ~/.cloudflared/config.yml out: cloudflared
 // prefers its ingress rules over --url, and a catch-all there would publish
 // whatever it points at. Measured: such a rule answered on this address
-// instead of the daemon.
+// instead of the daemon. Network settings still reach the connector through
+// cloudflared's environment variables (TUNNEL_TRANSPORT_PROTOCOL=http2,
+// TUNNEL_EDGE_IP_VERSION, TUNNEL_REGION), which the daemon passes on.
 func CloudflaredArgs(localPort, metricsPort int) []string {
 	return []string{
 		"tunnel",

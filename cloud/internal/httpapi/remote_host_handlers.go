@@ -6,7 +6,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"hash/fnv"
 	"net/http"
 	"net/url"
 	"slices"
@@ -91,7 +90,13 @@ func (s *Server) listRemoteHosts(w http.ResponseWriter, r *http.Request) {
 		items = append(items, remoteHostResponse{HostID: host.HostID, Label: host.Label, URL: host.URL, Token: string(secret), UpdatedAt: host.UpdatedAt})
 		clear(secret)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"hosts": items})
+	// Clients check both before a machine moves its account token here: a
+	// listing refused after that leaves the machine in no account.
+	limit, fixed := 0, s.tunnelStore() != nil
+	if fixed {
+		limit = domain.MaxRemoteHostsPerAccount
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"hosts": items, "limit": limit, "fixedAddresses": fixed})
 }
 
 func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
@@ -142,6 +147,9 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 	// before it exists and caches the miss. Written the way the machine's
 	// address publish writes it, so that publish does not rewrite the record
 	// and reconnect every device.
+	if tunnels != nil {
+		defer s.hostTunnels.Lock(principal.UserID, hostID)()
+	}
 	if input.URL == "" {
 		tunnel, ok := s.hostTunnel(w, r, tunnels, principal.UserID, hostID, false)
 		if !ok {
@@ -187,6 +195,9 @@ func (s *Server) deleteRemoteHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal := principalFrom(r)
+	if s.tunnelStore() != nil {
+		defer s.hostTunnels.Lock(principal.UserID, hostID)()
+	}
 	if err := store.DeleteRemoteHost(r.Context(), principal, hostID); err != nil {
 		s.writeStoreError(w, r, err)
 		return
@@ -198,7 +209,7 @@ func (s *Server) deleteRemoteHost(w http.ResponseWriter, r *http.Request) {
 // deleteAccountTunnel deletes the tunnel userID's account gave hostID, once the
 // account no longer lists the host. It finishes before the removal answers, so
 // a host added back right after gets a new tunnel rather than the one being
-// deleted. A failure is left to the sweep.
+// deleted. A failure is left to the sweep. The caller holds the host's Lock.
 func (s *Server) deleteAccountTunnel(ctx context.Context, userID, hostID string) {
 	tunnels := s.tunnelStore()
 	if tunnels == nil {
@@ -243,18 +254,17 @@ func (s *Server) updateRemoteHostAddress(w http.ResponseWriter, r *http.Request)
 	}
 	tunnels := s.tunnelStore()
 	for _, host := range hosts {
-		// While the account's tunnel for the host stands, the listing stays at
-		// its fixed address. A quick address published meanwhile is one the
-		// machine is about to leave: it serves one only after a failed fetch of
-		// that tunnel, the same database read as this publish, which its next
-		// try a moment later repeats.
+		// Shortly after the account's tunnel was written, the listing stays at
+		// its fixed address: a machine linked just now publishes the quick
+		// address it is about to leave. Later, a quick address means the
+		// machine cannot serve the fixed one, and the listing follows it.
 		if tunnels != nil {
 			tunnel, found, err := tunnels.GetRemoteHostTunnel(r.Context(), host.UserID, hostID)
 			if err != nil {
 				s.writeStoreError(w, r, err)
 				return
 			}
-			if found && !tunnel.Released && input.URL != "https://"+tunnel.Hostname+":443" {
+			if found && !tunnel.Released && time.Since(tunnel.UpdatedAt) < fixedListingHold && input.URL != "https://"+tunnel.Hostname+":443" {
 				continue
 			}
 		}
@@ -303,6 +313,10 @@ func (s *Server) remoteHostsForDigest(w http.ResponseWriter, r *http.Request, st
 // asking for a repair.
 const minTunnelRepairInterval = time.Minute
 
+// fixedListingHold is how long after its tunnel was written a listing ignores
+// quick addresses: a nudged machine moves to the fixed one within seconds.
+const fixedListingHold = 10 * time.Minute
+
 // Tunnel writes per account: linking machines, a machine coming back after its
 // tunnel was released, and repairs. Each costs three to five Cloudflare calls,
 // and the API token's rate limit is shared by every account.
@@ -324,8 +338,9 @@ type hostTunnelResponse struct {
 // account that linked it, so its address stays fixed across restarts. The
 // machine proves the host with the same digest it publishes addresses with.
 // A device of that account could compute the digest from the host token the
-// account lists, but that token already controls the machine, so the run
-// token gives it nothing more.
+// account lists. That token already controls the machine; what the run token
+// adds is a connector that outlives a revoked host token, the accepted
+// replica-connector risk.
 // The tunnel is made on the first call and kept; repair asks Cloudflare to
 // make it exist again, for a machine whose address stopped being served.
 func (s *Server) remoteHostTunnel(w http.ResponseWriter, r *http.Request) {
@@ -351,7 +366,9 @@ func (s *Server) remoteHostTunnel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "The request body is invalid.")
 		return
 	}
+	unlock := s.hostTunnels.Lock(host.UserID, hostID)
 	tunnel, ok := s.hostTunnel(w, r, tunnels, host.UserID, hostID, input.Repair)
+	unlock()
 	if !ok {
 		return
 	}
@@ -372,16 +389,8 @@ func (s *Server) tunnelStore() remoteHostTunnelStore {
 // its DNS record on first use, and making a new tunnel under the same record
 // once the sweep released the old one while the host was offline. repair
 // remakes a stored tunnel, at most once a minute. It writes the error response
-// itself when it fails.
+// itself when it fails. The caller holds the host's Lock.
 func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remoteHostTunnelStore, userID, hostID string, repair bool) (hostTunnelResponse, bool) {
-	// The desktop's registration and the machine's own request can arrive
-	// together. One at a time, each finds what the other saved rather than
-	// making a second tunnel of the same name.
-	// ponytail: per-replica striped lock; a Postgres advisory lock if this
-	// path ever runs on more than one replica.
-	lock := &s.tunnelLocks[tunnelLockIndex(userID, hostID)]
-	lock.Lock()
-	defer lock.Unlock()
 	stored, found, err := tunnels.GetRemoteHostTunnel(r.Context(), userID, hostID)
 	if err != nil {
 		s.writeStoreError(w, r, err)
@@ -426,12 +435,6 @@ func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remo
 		return hostTunnelResponse{}, false
 	}
 	return hostTunnelResponse{Hostname: tunnel.Hostname, RunToken: tunnel.RunToken, Since: since}, true
-}
-
-func tunnelLockIndex(userID, hostID string) int {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(userID + ":" + hostID))
-	return int(h.Sum32() % uint32(len(Server{}.tunnelLocks)))
 }
 
 func (s *Server) discardTunnel(ctx context.Context, hostID string, tunnel hosttunnel.Tunnel) {

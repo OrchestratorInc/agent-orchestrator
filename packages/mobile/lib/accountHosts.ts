@@ -10,9 +10,6 @@ export { ignoreAccountHost, unignoreAccountHost } from "./accountHostPreferences
 const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.aoagents.dev").replace(/\/$/, "");
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 
-/** How many machines AO Cloud lists per account (domain.MaxRemoteHostsPerAccount). */
-const ACCOUNT_HOST_LIMIT = 10;
-
 function endpoint(raw: string): Endpoint | null {
 	try {
 		const url = new URL(raw);
@@ -75,13 +72,14 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 		headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
 	}, 10_000, signal);
 	if (!response.ok) throw new Error(`Orchestrator Cloud host sync failed (${response.status}).`);
-	const { hosts } = response.body as { hosts: AccountHost[] };
+	// limit is how many machines the account can list; 0 or absent for any number.
+	const { hosts, limit } = response.body as { hosts: AccountHost[]; limit?: number };
 	if (!await current()) return;
 	const paired = await loadHosts();
 	for (const manual of paired.filter((host) => !host.accountUserId && host.id && !hosts.some((item) => item.hostId === host.id))) {
 		// A full account refuses the listing only after the machine has moved
 		// its account token here, cutting off the account that had it.
-		if (hosts.length >= ACCOUNT_HOST_LIMIT) break;
+		if (limit && hosts.length >= limit) break;
 		for (const address of manual.endpoints) {
 			if (!await current()) return;
 			if ((await ignoredAccountHosts(account.id)).has(manual.id)) break;

@@ -90,7 +90,7 @@ test("a signed-in computer is linked before its tunnel starts", async () => {
 	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
 
 	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/enable-lan-only", "/api/v1/mobile/remote-access"]));
-	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "pw-1");
+	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-1", undefined);
 	expect(vi.mocked(linkThisComputer).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(apiClient.POST).mock.invocationCallOrder[1]);
 	expect(screen.queryByTestId("mobile-sign-in-for-remote")).toBeNull();
 });
@@ -114,7 +114,8 @@ test("a new password links the computer again, so its fixed address survives", a
 	renderContent();
 	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
 
-	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "pw-2"));
+	// Only while the account still lists it: one removed from the account is not listed again.
+	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true }));
 	expect(posted()).toEqual(["/api/v1/mobile/regenerate"]);
 });
 
@@ -129,16 +130,6 @@ test("a new password that could not be linked says so", async () => {
 	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
 
 	expect(await screen.findByText("AO Cloud host sync failed (502).")).toBeVisible();
-});
-
-test("an AO Cloud without fixed addresses is not an error", async () => {
-	fake.signedIn = true;
-	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("AO Cloud host sync failed (422).", 422));
-	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
-
-	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/enable-lan-only", "/api/v1/mobile/remote-access"]));
-	expect(screen.queryByText("AO Cloud host sync failed (422).")).toBeNull();
 });
 
 test("a LAN-only computer gets a new password without being listed", async () => {

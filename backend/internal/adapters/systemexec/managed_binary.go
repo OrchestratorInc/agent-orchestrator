@@ -53,7 +53,9 @@ func (a Adapter) InstallManagedBinary(ctx context.Context, download ports.Manage
 	}
 	hash := sha256.New()
 	n, err := io.Copy(io.MultiWriter(tmp, hash), io.LimitReader(response.Body, managedBinaryMaxBytes+1))
-	if err = errors.Join(err, response.Body.Close(), tmp.Close()); err != nil {
+	// Synced before the rename: a power loss must not leave a truncated
+	// binary in place, which nothing would download again.
+	if err = errors.Join(err, response.Body.Close(), tmp.Sync(), tmp.Close()); err != nil {
 		return "", fmt.Errorf("download %s: %w", download.Name, err)
 	}
 	if n > managedBinaryMaxBytes {
@@ -111,7 +113,7 @@ func extractTarGzMember(archive, member, dir, name string) (string, error) {
 			return "", fmt.Errorf("create %s: %w", name, err)
 		}
 		_, copyErr := io.Copy(out, io.LimitReader(entries, managedBinaryMaxBytes))
-		if err := errors.Join(copyErr, out.Close()); err != nil {
+		if err := errors.Join(copyErr, out.Sync(), out.Close()); err != nil {
 			_ = os.Remove(out.Name())
 			return "", fmt.Errorf("extract %s: %w", name, err)
 		}

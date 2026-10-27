@@ -478,3 +478,32 @@ func TestSweepReleasesTunnelsNoConnectorEverServed(t *testing.T) {
 		t.Fatal("the unused tunnel survived, or its address did not")
 	}
 }
+
+// One host's tunnel work waits for the last; another host's does not.
+func TestLockHoldsOnlyItsHost(t *testing.T) {
+	c := &Cloudflare{}
+	unlock := c.Lock(userID, hostID)
+	other := make(chan struct{})
+	go func() { c.Lock(userID, "h_other")(); close(other) }()
+	select {
+	case <-other:
+	case <-time.After(time.Second):
+		t.Fatal("another host waited")
+	}
+	same := make(chan struct{})
+	go func() { c.Lock(userID, hostID)(); close(same) }()
+	select {
+	case <-same:
+		t.Fatal("the same host did not wait")
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case <-same:
+	case <-time.After(time.Second):
+		t.Fatal("the same host never got the lock")
+	}
+	if len(c.locks.m) != 0 {
+		t.Fatalf("%d locks left after every holder let go", len(c.locks.m))
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,6 +31,51 @@ type Cloudflare struct {
 	// BaseURL and HTTP are for tests; empty uses the real API.
 	BaseURL string
 	HTTP    *http.Client
+
+	locks keyedLocks
+}
+
+// Lock holds the tunnel userID's account gives hostID until the returned
+// func is called. Registrations, removals, the machine's own requests and the
+// sweep each read and change a tunnel under it, so none acts on what another
+// is replacing. Other hosts are not held up.
+// ponytail: per process; a Postgres advisory lock if this path ever runs on
+// more than one replica.
+func (c *Cloudflare) Lock(userID, hostID string) (unlock func()) {
+	return c.locks.lock(userID + ":" + hostID)
+}
+
+type keyedLocks struct {
+	mu sync.Mutex
+	m  map[string]*keyedLock
+}
+
+type keyedLock struct {
+	sync.Mutex
+	holders int
+}
+
+func (l *keyedLocks) lock(key string) func() {
+	l.mu.Lock()
+	if l.m == nil {
+		l.m = map[string]*keyedLock{}
+	}
+	k := l.m[key]
+	if k == nil {
+		k = &keyedLock{}
+		l.m[key] = k
+	}
+	k.holders++
+	l.mu.Unlock()
+	k.Lock()
+	return func() {
+		k.Unlock()
+		l.mu.Lock()
+		if k.holders--; k.holders == 0 {
+			delete(l.m, key)
+		}
+		l.mu.Unlock()
+	}
 }
 
 // Tunnel is what a machine needs to serve its fixed address.

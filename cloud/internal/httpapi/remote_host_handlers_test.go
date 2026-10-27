@@ -387,14 +387,41 @@ func TestAStandingTunnelKeepsTheListingAtItsAddress(t *testing.T) {
 	if got := store.hosts[owner+":"+hostID].URL; got != fixed {
 		t.Fatalf("a quick address replaced the fixed listing: %q", got)
 	}
-	// Once the tunnel is released the machine may serve elsewhere, so the
-	// listing follows it.
-	released := store.tunnels[owner+":"+hostID]
-	released.Released = true
-	store.tunnels[owner+":"+hostID] = released
+	// Long after, a quick address means the machine cannot serve the fixed
+	// one, and the listing follows it.
+	old := store.tunnels[owner+":"+hostID]
+	old.UpdatedAt = time.Now().Add(-time.Hour)
+	store.tunnels[owner+":"+hostID] = old
 	publish("https://quiet-river.trycloudflare.com:443")
 	if got := store.hosts[owner+":"+hostID].URL; got != "https://quiet-river.trycloudflare.com:443" {
 		t.Fatalf("listing = %q", got)
+	}
+}
+
+// Clients check the cap and fixed addresses before a machine moves its
+// account token to the account.
+func TestTheHostListSaysWhatTheAccountCanList(t *testing.T) {
+	read := func(s *Server) (limit int, fixed bool) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		s.listRemoteHosts(w, hostRequest(http.MethodGet, "", "", "00000000-0000-0000-0000-000000000002"))
+		var body struct {
+			Limit          int  `json:"limit"`
+			FixedAddresses bool `json:"fixedAddresses"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != http.StatusOK {
+			t.Fatalf("list: %d %s", w.Code, w.Body.String())
+		}
+		return body.Limit, body.FixedAddresses
+	}
+	s, _, _ := newTunnelServer(t)
+	if limit, fixed := read(s); limit != domain.MaxRemoteHostsPerAccount || !fixed {
+		t.Fatalf("with fixed addresses: limit %d, fixed %v", limit, fixed)
+	}
+	cipher, _ := secrets.New(make([]byte, 32))
+	plain := New(Options{Store: &remoteHostFakeStore{hosts: map[string]domain.RemoteHost{}}, SecretCipher: cipher, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if limit, fixed := read(plain); limit != 0 || fixed {
+		t.Fatalf("without: limit %d, fixed %v", limit, fixed)
 	}
 }
 

@@ -100,7 +100,7 @@ func (s *Store) FindRemoteHostRegistrations(ctx context.Context, hostID string) 
 func (s *Store) UpdateRemoteHostAddress(ctx context.Context, userID, hostID, address string) error {
 	return s.withUser(ctx, userID, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE ao_remote_hosts SET url = $3, updated_at = now()
-			WHERE user_id = $1 AND host_id = $2`, userID, hostID, address)
+			WHERE user_id = $1 AND host_id = $2 AND url IS DISTINCT FROM $3`, userID, hostID, address)
 		return err
 	})
 }

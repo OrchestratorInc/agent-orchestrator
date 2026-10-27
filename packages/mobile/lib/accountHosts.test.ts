@@ -93,7 +93,7 @@ it("classifies directory addresses: named tunnels as tunnels, LAN names as LAN",
 
 it("does not take a paired machine into an account that is already full", async () => {
 	const full = Array.from({ length: 10 }, (_, i) => host(`h_00000000-0000-0000-0000-${String(i).padStart(12, "0")}`));
-	const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ hosts: full }) }));
+	const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ hosts: full, limit: 10 }) }));
 	vi.stubGlobal("fetch", fetch);
 	saved.hosts = [{ id: "h_00000000-0000-0000-0000-0000000000aa", name: "Studio", platform: "macos", token: "original-password", lastConnected: 0,
 		endpoints: [{ kind: "lan", host: "192.168.1.20", port: 3011, secure: false }] }];

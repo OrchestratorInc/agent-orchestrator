@@ -527,7 +527,10 @@ func run(logger *slog.Logger) error {
 		// wrong zone's tunnels would look healthy while the edge refuses every
 		// request. An unreachable Cloudflare is not fatal; machines fall back to
 		// quick tunnels meanwhile.
-		switch err := hostTunnels.Verify(ctx); {
+		verifyCtx, cancelVerify := context.WithTimeout(ctx, 5*time.Second)
+		err := hostTunnels.Verify(verifyCtx)
+		cancelVerify()
+		switch {
 		case errors.Is(err, hosttunnel.ErrBadSettings):
 			logger.Error("fixed machine addresses disabled: wrong settings", "zone", cfg.HostTunnelZone, "error", err)
 			hostTunnels = nil

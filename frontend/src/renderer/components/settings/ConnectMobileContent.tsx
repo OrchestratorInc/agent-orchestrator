@@ -8,7 +8,6 @@ import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
-import { AccountHostSyncError } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -348,15 +347,14 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const signedIn = Boolean(cloudBaseUrl && accountId);
 	// Why the last link left this computer out of the account.
 	const [linkError, setLinkError] = useState("");
-	const linkIfSignedIn = async (password: string) => {
+	const linkIfSignedIn = async (password: string, hostId: string, options?: { ifListed?: boolean }) => {
 		setLinkError("");
 		if (!signedIn || !password) return;
 		// Not fatal: an unlinked computer still gets a quick tunnel, whose
 		// address changes on restart. Said, though: after a new password the
 		// account's devices hold the old one until a link lands. An AO Cloud
-		// without fixed addresses (422) never lists it here, as before.
-		await linkThisComputer(cloudBaseUrl, accountId, password).catch((cause: unknown) => {
-			if (cause instanceof AccountHostSyncError && cause.status === 422) return;
+		// without fixed addresses is not linked here, as before them.
+		await linkThisComputer(cloudBaseUrl, accountId, hostId, password, options).catch((cause: unknown) => {
 			setLinkError(cause instanceof Error && cause.message ? cause.message : t("remote.shareThisComputerFailed"));
 		});
 	};
@@ -408,7 +406,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			if (!signedIn) return data;
 			// Linked before the tunnel starts, so the code carries this
 			// computer's fixed address and stays valid after restarts.
-			await linkIfSignedIn(data?.password ?? "");
+			await linkIfSignedIn(data?.password ?? "", data?.hostId ?? "");
 			const started = await apiClient.POST("/api/v1/mobile/remote-access");
 			if (started.error) throw new Error(apiErrorMessage(started.error));
 			return started.data;
@@ -433,10 +431,12 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			if (error) throw new Error(apiErrorMessage(error));
 			// A new password revokes the account link with the old one; link
 			// again so the fixed address survives the next restart. Only while
-			// remote access is on: a LAN-only computer is not listed. A lost
-			// device signed in to the account is cut off by signing it out of
-			// the account; a new password is for password-paired devices.
-			if (data && !data.noPublicTunnel) await linkIfSignedIn(data.password ?? "");
+			// remote access is on and the account still lists this computer:
+			// a LAN-only computer, or one removed from the account, is not
+			// listed again. A lost device signed in to the account is cut off
+			// by signing it out of the account; a new password is for
+			// password-paired devices.
+			if (data && !data.noPublicTunnel) await linkIfSignedIn(data.password ?? "", data.hostId ?? "", { ifListed: true });
 			return data;
 		},
 		onSuccess: invalidate,
