@@ -63,8 +63,8 @@ type UpdateAdvisory struct {
 	Reason            UpdateUnknownReason `json:"reason,omitempty" enum:"ownership_unconfirmed,unsupported_source,version_unparseable,channel_unconfirmed,lookup_failed,disabled,build_unordered"`
 	CheckedAt         time.Time           `json:"checkedAt"`
 	InstallationID    string              `json:"installationId,omitempty" description:"Opaque identity of the selected installation; send as expectedInstallation when updating."`
-	Managed           bool                `json:"managed" description:"The effective executable belongs to an AO-managed release."`
-	ManagedUpdate     bool                `json:"managedUpdate" description:"The selected update recipe installs an AO-managed release, leaving the user's external CLI unchanged."`
+	Managed           bool                `json:"managed,omitempty" description:"The effective executable belongs to an AO-managed release."`
+	ManagedUpdate     bool                `json:"managedUpdate,omitempty" description:"The selected update recipe installs an AO-managed release, leaving the user's external CLI unchanged."`
 	// InUse is computed on every read, so it reflects sessions opened or ended
 	// since the release check ran.
 	InUse *UpdateInUse `json:"inUse,omitempty"`

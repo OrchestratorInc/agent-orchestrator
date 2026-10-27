@@ -20,6 +20,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  codex-recovery:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Test Codex recovery without real installer mutations
+        working-directory: backend
+        run: go test -race -count=1 -run '^Test(Codex|InstallerScope)' ./internal/service/systeminstall
+
   backend-core:
     runs-on: ubuntu-latest
     strategy:

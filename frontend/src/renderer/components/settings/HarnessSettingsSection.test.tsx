@@ -989,6 +989,18 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
+	it("explains managed Codex adoption before an update is started", async () => {
+		mockInstalledOperations("npm");
+		const { client } = renderSection();
+		const row = await findAgentRow("codex");
+		await within(row).findByRole("button", { name: "Update" });
+		act(() => { client.setQueryData(["agent-update-advisory", "local", "codex"], {
+			agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0", maintenanceMethod: "npm", managedUpdate: true,
+		}); });
+		expect(await within(row).findByText(/Your terminal's Codex installation stays unchanged/)).toBeInTheDocument();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+	});
+
 	it("binds a Codex update to the installation verified at click time", async () => {
 		mockInstalledOperations("npm");
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;

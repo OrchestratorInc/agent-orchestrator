@@ -103,6 +103,57 @@ func TestCodexUpdateRejectsApprovalForAnotherInstallation(t *testing.T) {
 	}
 }
 
+func TestCodexManagedAdvisoryExplainsAdoption(t *testing.T) {
+	f := newManagedCodexFixture(t, nil)
+	t.Cleanup(func() { _ = f.s.Close(context.Background()) })
+	f.s.managedVersion = fixedManagedVersion("1.3.0", nil)
+	before, err := f.s.UpdateAdvisory(t.Context(), TargetCodex, true)
+	if err != nil || before.Managed || !before.ManagedUpdate || before.InstallationID == "" {
+		t.Fatalf("adoption advisory=%+v err=%v", before, err)
+	}
+	if _, err := f.s.StartAgentUpdate(t.Context(), TargetCodex, "npm", "1.3.0", before.InstallationID); err != nil {
+		t.Fatal(err)
+	}
+	f.s.workers.Wait()
+	after, err := f.s.UpdateAdvisory(t.Context(), TargetCodex, true)
+	if err != nil || !after.Managed || after.Status != UpdateStatusCurrent || after.InstallationID == before.InstallationID {
+		t.Fatalf("managed advisory=%+v err=%v", after, err)
+	}
+}
+
+func TestCodexUpdateRejectsRetargetedSymlinkAtSameVersion(t *testing.T) {
+	root := t.TempDir()
+	first, second, link := filepath.Join(root, "first"), filepath.Join(root, "second"), filepath.Join(root, "codex")
+	for _, path := range []string{first, second} {
+		if err := os.WriteFile(path, []byte("same version"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(first, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	s := newTestService("darwin", "npm")
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: link, Output: "codex 1.2.3"}, nil
+	})
+	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
+	s.managedVersion = fixedManagedVersion("1.3.0", nil)
+	advisory, err := s.UpdateAdvisory(t.Context(), TargetCodex, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(second, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StartAgentUpdate(t.Context(), TargetCodex, "npm", "1.3.0", advisory.InstallationID); !errors.Is(err, ErrInstallationChanged) {
+		t.Fatalf("retargeted symlink was accepted: %v", err)
+	}
+}
+
 func TestCodexNativeUpdateRequiresCapabilityAndUsesInstallationHome(t *testing.T) {
 	for _, supportsUpdate := range []bool{false, true} {
 		t.Run(fmt.Sprint(supportsUpdate), func(t *testing.T) {
@@ -151,7 +202,11 @@ func TestCodexNativeUpdateRequiresCapabilityAndUsesInstallationHome(t *testing.T
 			}
 			s.workers.Wait()
 			job, _ := s.Status(t.Context(), TargetCodex)
-			if job.Status != StatusSucceeded || len(mutations) != 1 || strings.Join(mutations[0].Argv, " ") != binary+" update" || !slices.Contains(mutations[0].Env, "CODEX_HOME="+home) {
+			realHome, err := filepath.EvalSymlinks(home)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if job.Status != StatusSucceeded || len(mutations) != 1 || strings.Join(mutations[0].Argv, " ") != binary+" update" || !slices.Contains(mutations[0].Env, "CODEX_HOME="+realHome) {
 				t.Fatalf("job=%+v commands=%+v", job, mutations)
 			}
 		})

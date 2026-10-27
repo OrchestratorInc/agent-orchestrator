@@ -4573,8 +4573,14 @@ export interface components {
             checkedAt: string;
             currentVersion?: string;
             inUse?: components["schemas"]["AgentUpdateInUse"];
+            /** @description Opaque identity of the selected installation; send as expectedInstallation when updating. */
+            installationId?: string;
             latestVersion?: string;
             maintenanceMethod?: string;
+            /** @description The effective executable belongs to an AO-managed release. */
+            managed: boolean;
+            /** @description The selected update recipe installs an AO-managed release, leaving the user's external CLI unchanged. */
+            managedUpdate: boolean;
             /** @enum {string} */
             reason?: "ownership_unconfirmed" | "unsupported_source" | "version_unparseable" | "channel_unconfirmed" | "lookup_failed" | "disabled" | "build_unordered";
             source?: string;
@@ -7264,6 +7270,8 @@ export interface components {
             terminalInput?: string;
         };
         StartAgentInstallRequest: {
+            /** @description For updates, the opaque installationId returned by the advisory. A changed installation is rejected before mutation. */
+            expectedInstallation?: string;
             /** @description For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION. */
             expectedVersion?: string;
             /** @description Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update. */

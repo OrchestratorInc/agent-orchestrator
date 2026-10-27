@@ -18,25 +18,25 @@ import (
 )
 
 type fakeInstaller struct {
-	startJob        systeminstall.Job
-	startErr        error
-	statusJob       systeminstall.Job
-	statusErr       error
-	plans           []systeminstall.AgentPlan
-	plansErr        error
-	startCalls      int
-	lastTarget      systeminstall.Target
-	lastMethod      string
-	lastOperation   systeminstall.AgentOperation
-	agentJobs       []systeminstall.Job
-	verifyJob       systeminstall.Job
-	verifyErr       error
-	advisory        systeminstall.UpdateAdvisory
-	refreshAdvisory bool
-	expectedVersion string
+	startJob             systeminstall.Job
+	startErr             error
+	statusJob            systeminstall.Job
+	statusErr            error
+	plans                []systeminstall.AgentPlan
+	plansErr             error
+	startCalls           int
+	lastTarget           systeminstall.Target
+	lastMethod           string
+	lastOperation        systeminstall.AgentOperation
+	agentJobs            []systeminstall.Job
+	verifyJob            systeminstall.Job
+	verifyErr            error
+	advisory             systeminstall.UpdateAdvisory
+	refreshAdvisory      bool
+	expectedVersion      string
 	expectedInstallation string
-	cancelJob       systeminstall.Job
-	cancelErr       error
+	cancelJob            systeminstall.Job
+	cancelErr            error
 }
 
 func (f *fakeInstaller) Start(_ context.Context, target systeminstall.Target) (systeminstall.Job, error) {

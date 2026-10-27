@@ -13469,10 +13469,21 @@ components:
           type: string
         inUse:
           $ref: '#/components/schemas/AgentUpdateInUse'
+        installationId:
+          description: Opaque identity of the selected installation; send as expectedInstallation
+            when updating.
+          type: string
         latestVersion:
           type: string
         maintenanceMethod:
           type: string
+        managed:
+          description: The effective executable belongs to an AO-managed release.
+          type: boolean
+        managedUpdate:
+          description: The selected update recipe installs an AO-managed release,
+            leaving the user's external CLI unchanged.
+          type: boolean
         reason:
           enum:
           - ownership_unconfirmed
@@ -13496,6 +13507,8 @@ components:
       - agentId
       - status
       - checkedAt
+      - managed
+      - managedUpdate
       type: object
     AgentUpdateInUse:
       properties:
@@ -20534,6 +20547,10 @@ components:
       type: object
     StartAgentInstallRequest:
       properties:
+        expectedInstallation:
+          description: For updates, the opaque installationId returned by the advisory.
+            A changed installation is rejected before mutation.
+          type: string
         expectedVersion:
           description: For updates, the available version explicitly approved by the
             user. The update must reach it. It is installed only when it lies between

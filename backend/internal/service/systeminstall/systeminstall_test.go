@@ -718,7 +718,7 @@ func TestAutohandStartupFailureExplainsRecoveryWithoutClaimingSuccess(t *testing
 		{name: "other method", method: "homebrew", output: startupFailure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := newTestService("darwin", "sh")
+			s := newTestService("darwin", "sh", "brew")
 			t.Cleanup(s.stop)
 			s.commands = commandRunnerFunc(func(_ context.Context, _ []string, stdout, _ io.Writer) error {
 				_, _ = io.WriteString(stdout, tc.output)
@@ -1325,12 +1325,14 @@ func TestHarnessMaintenanceSeesSessionCreatedBeforeLaunchGateRelease(t *testing.
 func TestUpdatePinsRequestedVersionEvenWithoutCachedAdvisory(t *testing.T) {
 	s := newTestService("darwin", "npm")
 	s.ownsInstallation = func(context.Context, string, string, string, bool) (bool, error) { return true, nil }
-	s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error { return nil })
-	probes := 0
+	updated := false
+	s.commands = commandRunnerFunc(func(context.Context, []string, io.Writer, io.Writer) error {
+		updated = true
+		return nil
+	})
 	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
-		probes++
 		version := "1.2.3"
-		if probes > 1 {
+		if updated {
 			version = "1.2.4"
 		}
 		return VerifyResult{ResolvedPath: "/verified/codex", Output: "codex " + version}, nil
