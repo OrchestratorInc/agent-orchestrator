@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	catchupLimit      = 3
 	dueScanLimit      = 100
 	dispatchScanLimit = 100
 	spawnLease        = 2 * time.Minute
@@ -31,6 +30,7 @@ type SessionSpawner interface {
 type schedulerStore interface {
 	ListDueAutomations(context.Context, time.Time, int64) ([]domain.Automation, error)
 	MaterializeAutomationRuns(context.Context, domain.AutomationID, time.Time, []domain.AutomationRun, time.Time, time.Time, time.Time) (bool, error)
+	AutomationSessionReadyToComplete(context.Context, domain.SessionID, time.Time) (bool, error)
 	ClaimNextAutomationRun(context.Context, time.Time, time.Time) (domain.AutomationRun, bool, error)
 	ListActiveAutomationRuns(context.Context) ([]domain.AutomationRun, error)
 	GetSessionByAutomationRunID(context.Context, domain.AutomationRunID) (domain.SessionRecord, bool, error)
@@ -102,33 +102,25 @@ func (s *Service) materializeDefinition(ctx context.Context, store schedulerStor
 	if !definition.Enabled || definition.NextRunAt.After(now) {
 		return nil
 	}
-	occurrence := definition.NextRunAt.UTC()
-	runs := make([]domain.AutomationRun, 0, catchupLimit)
-	var last time.Time
-	for !occurrence.After(now) && len(runs) < catchupLimit {
-		runs = append(runs, domain.AutomationRun{
-			ID: domain.AutomationRunID("automation-run-" + s.newID()), AutomationID: definition.ID,
-			ScheduledFor: occurrence, Status: domain.AutomationRunPending,
-			CreatedAt: now, UpdatedAt: now,
-		})
-		last = occurrence
-		next, err := NextOccurrence(definition.RRuleText, definition.Timezone, occurrence)
-		if err != nil {
-			return err
-		}
-		occurrence = next
+	// A schedule is a request for current work, not a replay of every missed
+	// interval. Materialize only the newest due occurrence after downtime.
+	last, err := latestOccurrence(definition.RRuleText, definition.Timezone, now)
+	if err != nil {
+		return err
 	}
-	if !occurrence.After(now) {
-		var err error
-		occurrence, err = NextOccurrence(definition.RRuleText, definition.Timezone, now)
-		if err != nil {
-			return err
-		}
+	if last.Before(definition.NextRunAt) {
+		return fmt.Errorf("latest occurrence precedes schedule cursor")
 	}
-	if len(runs) == 0 {
-		return nil
+	occurrence, err := NextOccurrence(definition.RRuleText, definition.Timezone, last)
+	if err != nil {
+		return err
 	}
-	_, err := store.MaterializeAutomationRuns(ctx, definition.ID, definition.NextRunAt, runs, last, occurrence, now)
+	runs := []domain.AutomationRun{{
+		ID: domain.AutomationRunID("automation-run-" + s.newID()), AutomationID: definition.ID,
+		ScheduledFor: last, Status: domain.AutomationRunPending,
+		CreatedAt: now, UpdatedAt: now,
+	}}
+	_, err = store.MaterializeAutomationRuns(ctx, definition.ID, definition.NextRunAt, runs, last, occurrence, now)
 	return err
 }
 
@@ -261,6 +253,22 @@ func (s *Service) completeAndAdoptActive(ctx context.Context, store schedulerSto
 		if run.SessionID == nil {
 			if _, err := store.MarkAutomationRunRunning(ctx, run.ID, session.ID, now); err != nil {
 				problems = append(problems, err)
+			}
+		}
+		if !session.IsTerminated && session.Kind == domain.KindWorker && session.Activity.State == domain.ActivityIdle {
+			ready, readyErr := store.AutomationSessionReadyToComplete(ctx, session.ID, now)
+			if readyErr != nil {
+				problems = append(problems, readyErr)
+				continue
+			}
+			if ready && s.spawner != nil {
+				// Keep the active run's non-overlap fence until its controller
+				// is closed. A failed kill must never release the next run.
+				if _, err := s.spawner.Kill(ctx, session.ID); err != nil {
+					problems = append(problems, fmt.Errorf("close finished automation session %s: %w", session.ID, err))
+					continue
+				}
+				session.IsTerminated = true
 			}
 		}
 		if session.IsTerminated {
