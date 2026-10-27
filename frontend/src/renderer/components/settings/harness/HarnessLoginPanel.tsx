@@ -37,9 +37,10 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 	const mounted = useRef(true);
 	const pending = useRef(false);
 	const openedOperation = useRef<string | undefined>(undefined);
+	const secretRowRef = useRef<HTMLDivElement>(null);
 	const verifyRef = useRef(onVerify);
 	verifyRef.current = onVerify;
-	const method = availableMethods.find((item) => item.id === methodId) ?? availableMethods[0];
+	const method = availableMethods.find((item) => item.id === methodId) ?? (methodId ? availableMethods[0] : undefined);
 	const selectedMethodId = method?.id ?? methodId;
 	const running = operation?.status === "running";
 	const locked = busy || running || verifying;
@@ -57,6 +58,16 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 			if (current) void runAgentLoginTask(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId)).catch(() => undefined);
 		};
 	}, [agentId, hostId]);
+
+	// Bring the inline credential field into view and focus it without the
+	// browser's instant focus jump.
+	useEffect(() => {
+		const row = secretRowRef.current;
+		if (!row) return;
+		row.querySelector("input")?.focus({ preventScroll: true });
+		const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+		row.scrollIntoView?.({ block: "nearest", behavior: reduceMotion ? "auto" : "smooth" });
+	}, [selectedMethodId, method?.secret]);
 
 	useEffect(() => {
 		if (!operation || operation.status !== "running" || busy) return;
@@ -178,7 +189,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 	};
 	const choose = (item: components["schemas"]["AgentLoginMethod"]) => {
 		if (locked) return;
-		setMethodId(item.id);
+		// Clicking an open credential row again collapses it.
+		setMethodId(item.secret && selectedMethodId === item.id ? "" : item.id);
 		setSecret("");
 		setLoginCode("");
 		setError("");
@@ -198,62 +210,65 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 
 	return <section ref={panelRef} aria-labelledby={titleId} className="@container min-w-0 space-y-4 p-4" data-settings-inline-edit="">
 		<div className="space-y-1">
-			<h4 id={titleId} className="text-sm font-medium text-settings-label">{t("settings.harness.loginUi.title", { agent: agentLabel(agentId) })}</h4>
-			{!connected && !locked && <p className="text-xs text-settings-muted">{t("settings.harness.loginUi.method")}</p>}
-			{remote && !connected && <p className="text-xs text-settings-muted">{t(agentId === "codex" ? "settings.harness.loginUi.remoteCodex" : "settings.harness.loginUi.remoteClaude")}</p>}
+			<h4 id={titleId} className="text-[15px] leading-5 font-semibold tracking-tight text-settings-label">{t("settings.harness.loginUi.title", { agent: agentLabel(agentId) })}</h4>
+			{!connected && !locked && <p className="text-xs leading-4 text-settings-muted">{t("settings.harness.loginUi.method")}</p>}
+			{remote && !connected && <p className="max-w-prose text-xs leading-4 text-settings-muted">{t(agentId === "codex" ? "settings.harness.loginUi.remoteCodex" : "settings.harness.loginUi.remoteClaude")}</p>}
 		</div>
 		{!connected && !running && !verifying && <form id={titleId + "-form"} className="space-y-4" onSubmit={(event) => { event.preventDefault(); void start(); }}>
-			<fieldset disabled={locked} className="grid auto-rows-fr divide-y divide-border overflow-hidden rounded-lg bg-(--color-bg-primary)">
+			<fieldset disabled={locked} className="flex flex-col divide-y divide-border overflow-hidden rounded-lg bg-(--color-bg-primary)">
 				<legend className="sr-only">{t("settings.harness.loginUi.method")}</legend>
 				{availableMethods.map((item) => {
 					const key = agentId === "claude-code" && item.id === "browser" ? "claude" : item.id;
 					const label = t(`settings.harness.loginUi.methods.${key}`, { defaultValue: item.label });
 					const MethodIcon = item.secret ? KeyRound : item.id === "device_code" ? Smartphone : item.id === "sso" || item.id === "console" ? Building2 : UserRound;
 					const selected = selectedMethodId === item.id;
-					return <button key={item.id} type="button" data-login-method="" aria-label={label} aria-pressed={item.secret ? selected : undefined} aria-describedby={titleId + "-" + item.id} onClick={() => choose(item)} className="group/method relative flex w-full cursor-pointer items-start gap-3 px-4 py-2.5 text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-pressed:bg-(--color-interactive-active) focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
-						<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted group-aria-pressed/method:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>
-						<span className="min-w-0 flex-1 space-y-1">
-							<span className="block text-sm font-medium text-settings-label">{label}</span>
+					const open = item.secret && selected;
+					return <div key={item.id} className={open ? "bg-(--color-interactive-active)" : undefined}><button type="button" data-login-method="" aria-label={label} aria-expanded={item.secret ? selected : undefined} aria-describedby={titleId + "-" + item.id} onClick={() => choose(item)} className="group/method relative flex w-full cursor-pointer items-center gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-(--color-interactive-hover) aria-expanded:hover:bg-transparent focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-default disabled:opacity-60">
+						<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted group-aria-expanded/method:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>
+						<span className="min-w-0 flex-1 space-y-0.5">
+							<span className="block text-[13px] leading-5 font-medium text-settings-label">{label}</span>
 							<span id={titleId + "-" + item.id} className="block text-xs leading-4 text-settings-muted">{t(`settings.harness.loginUi.hints.${key}`, { defaultValue: item.label })}</span>
 						</span>
-						{busy && selected ? <LoaderCircle className="mt-1 size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
-							: item.secret ? <Check className="mt-1 size-3.5 shrink-0 text-settings-label opacity-0 group-aria-pressed/method:opacity-100" aria-hidden="true" />
-							: <ExternalLink className="mt-1 size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />}
-					</button>;
+						{busy && selected ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
+							: item.secret ? <ChevronDown className="size-4 shrink-0 text-settings-muted transition-transform group-aria-expanded/method:rotate-180" aria-hidden="true" />
+							: <ExternalLink className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />}
+					</button>
+					{open && <div ref={secretRowRef} className="flex scroll-mb-4 flex-wrap items-center gap-2 pr-4 pb-4 pl-15" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); choose(item); } }}>
+						<Input placeholder={item.id === "api_key" ? (agentId === "claude-code" ? "sk-ant-…" : "sk-…") : undefined} aria-label={t(item.id === "api_key" ? "settings.harness.loginUi.apiKey" : "settings.harness.loginUi.accessToken")} className="min-w-48 flex-1 border-border bg-(--color-bg-primary) font-mono text-[13px] placeholder:font-sans focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} onChange={(event) => setSecret(event.target.value)} />
+						<Button type="submit" disabled={busy || !secret.trim()}>
+							{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
+							{t("settings.harness.loginUi.save")}
+						</Button>
+					</div>}
+					</div>;
 				})}
 			</fieldset>
-			{method?.secret && <label className="block space-y-2 text-sm">
-				<span className="font-medium text-settings-label">{t(methodId === "api_key" ? "settings.harness.loginUi.apiKey" : "settings.harness.loginUi.accessToken")}</span>
-				<Input className="max-w-lg font-mono" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} onChange={(event) => setSecret(event.target.value)} />
-			</label>}
 		</form>}
-		{(running || verifying || connected) && <div className="space-y-3 rounded-lg border border-border bg-(--color-bg-primary) p-4">
-			<p className="text-xs font-medium text-settings-muted">{methodLabel}</p>
-			<p role="status" aria-live="polite" className="flex items-center gap-2 text-sm text-settings-label">
-				{connected ? <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-success/10 text-success"><Check className="size-4" aria-hidden="true" /></span> : <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />}
-				{status}
-			</p>
-			{connected && <p className="text-xs text-settings-muted">{t("settings.harness.loginUi.connectedDescription")}</p>}
-			{operation?.deviceCode && running && <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-(--color-bg-secondary) p-3">
-				<code className="break-all text-lg tracking-widest" aria-label={t("settings.harness.loginUi.deviceCode")}>{operation.deviceCode}</code>
+		{(running || verifying || connected) && <div className="space-y-3">
+			{!operation?.deviceCode && <p className="text-xs leading-4 text-settings-muted">{methodLabel}</p>}
+			<div className="space-y-1">
+				<p role="status" aria-live="polite" className={connected ? "flex items-center gap-2.5 text-[15px] leading-5 font-medium text-settings-label" : "flex items-center gap-2 text-[13px] leading-5 text-settings-label"}>
+					{connected ? <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-success/10 text-success"><Check className="size-4" aria-hidden="true" /></span> : <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />}
+					{status}
+				</p>
+				{connected && <p className="pl-8.5 text-xs leading-4 text-settings-muted">{t("settings.harness.loginUi.connectedDescription")}</p>}
+			</div>
+			{operation?.deviceCode && running && <div className="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-(--color-bg-secondary) py-1 pr-1 pl-3">
+				<code className="break-all font-mono text-[15px] leading-6 font-medium tracking-wide text-settings-label" aria-label={t("settings.harness.loginUi.deviceCode")}>{operation.deviceCode}</code>
 				<Button size="sm" variant="ghost" onClick={() => act(async () => { await aoBridge.clipboard.writeText(operation.deviceCode!); setCopied(true); })}>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{t(copied ? "settings.harness.loginUi.copied" : "settings.harness.loginUi.copyCode")}</Button>
 			</div>}
 		</div>}
 		{running && operation.acceptsCode && <form className="max-w-lg space-y-2" onSubmit={(event) => { event.preventDefault(); void submitCode(); }}>
-			<label className="block space-y-2 text-sm">
-				<span className="font-medium text-settings-label">{t("settings.harness.loginUi.signInCode")}</span>
+			<label className="block space-y-1.5">
+				<span className="block text-xs leading-4 font-medium text-settings-label">{t("settings.harness.loginUi.signInCode")}</span>
 				<Input type="password" value={loginCode} disabled={busy} autoComplete="off" spellCheck={false} maxLength={4096} onChange={(event) => setLoginCode(event.target.value)} />
 			</label>
-			<p className="text-xs text-settings-muted">{t("settings.harness.loginUi.codeHint")}</p>
+			<p className="text-xs leading-4 text-settings-muted">{t("settings.harness.loginUi.codeHint")}</p>
 			<Button type="submit" size="sm" disabled={busy || !loginCode.trim()}>{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}{t("settings.harness.loginUi.submitCode")}</Button>
 		</form>}
-		{status && !running && !verifying && !connected && <p role="status" className="text-sm text-settings-muted">{status}</p>}
-		{error && <p role="alert" className="text-sm text-error">{error}</p>}
+		{status && !running && !verifying && !connected && <p role="status" className="text-[13px] leading-5 text-settings-muted">{status}</p>}
+		{error && <p role="alert" className="text-[13px] leading-5 text-error">{error}</p>}
 		<div className="flex flex-wrap items-center gap-2">
-			{!connected && !running && !verifying && method?.secret && <Button type="submit" form={titleId + "-form"} size="sm" disabled={busy || !secret.trim()}>
-				{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
-				{t("settings.harness.loginUi.save")}
-			</Button>}
 			{operation?.loginUrl && running && (agentId !== "claude-code" || operation.acceptsCode) && !(remote && agentId === "codex" && operation.method === "browser") && <Button size="sm" onClick={() => act(() => aoBridge.app.openExternal(operation.loginUrl!))}><ExternalLink aria-hidden="true" />{t("settings.harness.loginUi.openBrowser")}</Button>}
 			<Button variant={connected ? "primary" : "ghost"} size="sm" disabled={busy || verifying} onClick={() => void leave()}>{t(connected ? "settings.harness.loginUi.done" : "settings.harness.loginUi.cancel")}</Button>
 		</div>
