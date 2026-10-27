@@ -11,7 +11,7 @@ Intake needs two opt-ins, and both default to off: enable it on the daemon and c
 
 For the desktop app, add `AO_TRACKER_INTAKE=on` to the environment your login shell exports, such as `~/.zshrc`, then relaunch Orchestrator. The app passes that environment to its daemon. For a standalone daemon, set the variable in its launch environment and restart it.
 
-Then configure the project. `ao project set-config` replaces the full project config, so read the [full-config warning](/configuration/projects#update-from-the-cli) before using it.
+Then configure the project. These flags change only the intake settings and keep the rest of the project config.
 
 ```bash
 ao project set-config my-app \
@@ -22,7 +22,7 @@ ao project set-config my-app \
 
 When `trackerIntake.provider` is omitted, Orchestrator infers the provider from the project's Git remote. GitHub hosts select `github`; other remote hosts select `gitlab`. An empty or unparseable remote falls back to `github`. When the repository is omitted, Orchestrator can also derive it from that remote.
 
-For an explicit GitLab intake configuration, set `trackerIntake.provider` to `gitlab` in the full configuration object through the daemon API. The CLI has no `--tracker-provider` flag on `project set-config`; that flag belongs to `spawn`. If you use `--config-json`, preserve all other project settings and heed the effort-loss warning above. The intake portion of the object is:
+For an explicit GitLab intake configuration, set `trackerIntake.provider` to `gitlab` in the full configuration object through the daemon API. The CLI has no `--tracker-provider` flag on `project set-config`; that flag belongs to `spawn`. If you use `--config-json`, it replaces the full project config, so preserve all other project settings; see the [full-config warning](/configuration/projects#update-from-the-cli). The intake portion of the object is:
 
 ```json
 {

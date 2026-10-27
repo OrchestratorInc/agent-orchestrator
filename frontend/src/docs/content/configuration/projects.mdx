@@ -7,7 +7,7 @@ A project groups work in one repository, a multi-repository workspace, or an Orc
 
 To start, choose **Add project** in the desktop sidebar, select a repository, choose a worker agent in Project Settings, and create a small task. A worker implements the task in its own workspace. An orchestrator supervises workers. A reviewer is a separate agent run that checks a worker's pull request.
 
-Use Project Settings for interactive edits. The CLI's `set-config` command replaces the full configuration, and its project-config mirror has limits described in [Update from the CLI](#update-from-the-cli).
+Use Project Settings for interactive edits. The CLI's `set-config` command has the limits described in [Update from the CLI](#update-from-the-cli).
 
 ## Project kinds
 
@@ -152,7 +152,7 @@ ao review ls <worker-session-id>
 
 ## Update from the CLI
 
-`ao project set-config` replaces the entire project configuration. Focused flags also build a replacement; they do not patch one field. Before using the CLI, inspect the current settings and preserve every field you need:
+Focused `ao project set-config` flags change only the fields they name; the rest of the saved configuration, including settings without a flag such as `effort` and `preRemove`, is kept. A repeatable flag such as `--env` or `--reviewer` replaces that whole map or list. `--config-json` replaces the entire project configuration. Before using it, inspect the current settings and preserve every field you need:
 
 ```bash
 ao project get <project-id> --json
@@ -160,7 +160,7 @@ ao project get <project-id> --json
 
 The `--config-json` flag takes a JSON string, not a filename. The CLI silently ignores unknown keys, so a typo can replace the configuration with an empty object. The daemon API rejects unknown fields.
 
-The CLI's project-config mirror also has an `effort` limitation: `ao project get --json` cannot show the configured effort, and `set-config` drops existing effort values. Use Project Settings in the desktop app or the daemon API to view or change effort. For other full-config CLI updates, include every field you want to keep and inspect the result afterward.
+For full-config CLI updates, include every field you want to keep and inspect the result afterward.
 
 For example, this command replaces the entire configuration with one worker choice; it does not keep setup, rules, reviewers, or effort:
 
