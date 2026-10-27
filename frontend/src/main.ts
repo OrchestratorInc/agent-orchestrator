@@ -170,6 +170,7 @@ import {
 import { createBrowserCloseDiagnostics } from "./main/browser-close-diagnostics";
 import { createBrowserProfileStore } from "./main/browser-profile-store";
 import { BrowserHistoryStore } from "./main/browser-history-store";
+import { createAwakeTrayMonitor } from "./main/awake-tray";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
@@ -3649,6 +3650,14 @@ app.whenReady().then(async () => {
 			quitCompletely: desktopQuit.quitCompletely,
 			locale: initialUiSettings.locale,
 		});
+	}
+	if (trayController) {
+		const awakeTray = createAwakeTrayMonitor({
+			baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
+			request: (url, init) => fetch(url, init),
+			setState: (active) => trayController?.setAwakeState(active),
+		});
+		app.once("will-quit", () => awakeTray.dispose());
 	}
 	if (process.platform === "darwin") {
 		powerMonitor.on("shutdown", () => desktopQuit.quitCompletely());
