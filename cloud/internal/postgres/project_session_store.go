@@ -894,7 +894,7 @@ func createSessionTx(
 	}
 	if input.Prompt != "" {
 		event, err := appendUserMessageEvent(
-			ctx, tx, orgID, session.ID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
+			ctx, tx, orgID, session.ID, actorUserID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
 		)
 		if err != nil {
 			return domain.Session{}, err
@@ -1250,7 +1250,9 @@ const sessionSelect = `
 			WHEN session.output_type IN ('artifact', 'pr_artifact') THEN 'pr_artifact'
 			ELSE 'pr'
 		END,
-		session.created_at, session.updated_at
+		session.created_at, session.updated_at,
+		COALESCE(session.requested_by_user_id::text, ''),
+		COALESCE((SELECT requester.display_name FROM ao_users requester WHERE requester.id = session.requested_by_user_id), '')
 	FROM ao_sessions session
 	LEFT JOIN ao_sandboxes sandbox
 		ON sandbox.org_id = session.org_id AND sandbox.session_id = session.id
@@ -1265,7 +1267,7 @@ const sessionInsertReturning = `id, org_id, project_id, kind, harness,
 	activity_state, is_terminated, auto_inject_ci, auto_inject_review,
 	terminate_on_pr_merge, false, NULL::timestamptz, 0,
 	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', '', 0,
-	requested_output, output_type, created_at, updated_at`
+	requested_output, output_type, created_at, updated_at, '', ''`
 
 func getSession(
 	ctx context.Context,
@@ -1353,6 +1355,8 @@ func scanSession(row scanner, session *domain.Session) error {
 		&session.OutputType,
 		&session.CreatedAt,
 		&session.UpdatedAt,
+		&session.RequestedByUserID,
+		&session.RequestedByName,
 	)
 	session.BYOCoderWorkspace = nil
 	if coderWorkspace.BaseURL != "" && coderWorkspace.Owner != "" {

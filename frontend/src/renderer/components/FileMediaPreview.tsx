@@ -5,6 +5,7 @@ import { snapshotBlobUrl, type FilesSource } from "../hooks/useSessionWorkspaceF
 import { getApiBaseUrl } from "../lib/api-client";
 import { artifactContentUrl } from "../lib/artifact-content-url";
 import { mediaCrossOrigin, type FileMediaKind } from "../lib/file-media";
+import { PdfPreview } from "./PdfPreview";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
 
 export function FileMediaPreview({ hostId, kind, path, sessionId, source, version, side = "after" }: {
@@ -47,6 +48,7 @@ export function FileMediaPreview({ hostId, kind, path, sessionId, source, versio
 			refreshLink();
 		}
 	};
+	if (kind === "pdf") return <PdfPreview key={src} onError={onError} path={path} src={src} />;
 	return (
 		<div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] place-items-center overflow-hidden p-3">
 			{kind === "image" ? (

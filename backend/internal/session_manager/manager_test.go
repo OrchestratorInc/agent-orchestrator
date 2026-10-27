@@ -12137,3 +12137,16 @@ func TestAOSkillPointerDesktopHostKeepsDesktopGuide(t *testing.T) {
 		t.Fatalf("desktop pointer names the remote guide:\n%s", pointer)
 	}
 }
+
+func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
+	baseRuntime := &fakeRuntime{aliveByHandle: map[string]bool{"tmux-mer-1": true}}
+	runtime := &fakeRestartRuntime{fakeRuntime: baseRuntime, restartErr: errors.New("respawn failed")}
+	agent := supervisedLaunchAgent{launchArgvAgent{argv: []string{"codex", "resume", "agent-x"}}}
+	m, _, _ := newExitedResumeManager(t, runtime, agent)
+
+	_, err := m.ResumeAgentWithMode(ctx, "mer-1")
+	var relaunchErr *RelaunchError
+	if !errors.As(err, &relaunchErr) || relaunchErr.Step != "runtime" {
+		t.Fatalf("resume error = %v, want RelaunchError step runtime", err)
+	}
+}

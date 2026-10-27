@@ -159,6 +159,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	muted = false,
 	className,
 	safeOrigin = false,
+	remarkPlugins,
 }: {
 	text: string;
 	streaming?: boolean;
@@ -170,6 +171,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	muted?: boolean;
 	className?: string;
 	safeOrigin?: boolean;
+	/** Run after the built-in plugins; keep the array stable, a new one re-parses the text. */
+	remarkPlugins?: Options["remarkPlugins"];
 }) {
 	// Replies opened from history mount settled and never wrap; live ones keep the fade a
 	// beat past the end of the stream.
@@ -181,6 +184,10 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	const chatOpening = useContext(ChatOpeningRef);
 	const [settledOffset] = useState(() => (chatOpening.current ? text.length : 0));
 	const renderMath = useUiStore((state) => state.renderMath);
+	const plugins = useMemo(() => {
+		const base = renderMath ? MATH_PLUGINS : PLUGINS;
+		return remarkPlugins ? [...base, ...remarkPlugins] : base;
+	}, [renderMath, remarkPlugins]);
 	// History stays on the single-parser path. Replies that streamed retain
 	// their chunks on completion, preserving code controls and diagram state.
 	const [parsed, setParsed] = useState(() => streaming ? splitStreamingMarkdown(text, undefined, renderMath) : {
@@ -217,7 +224,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 						streaming={streaming && index === blocks.blocks.length - 1}
 						fading={animate && index === blocks.blocks.length - 1}
 						settledOffset={Math.max(0, settledOffset - block.start)}
-						math={renderMath}
+						remarkPlugins={plugins}
 					/>
 				))}
 			</div>
@@ -227,13 +234,13 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 
 // No wrapper DOM: list/table layout, image galleries and prose spacing keep
 // their existing parent. Only the changing chunk enters react-markdown again.
-const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, streaming, fading, settledOffset, math }: {
+const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, streaming, fading, settledOffset, remarkPlugins }: {
 	source: string;
 	repairInline: boolean;
 	streaming: boolean;
 	fading: boolean;
 	settledOffset: number;
-	math: boolean;
+	remarkPlugins: Options["remarkPlugins"];
 }) {
 	const repaired = useMemo(() => streaming && repairInline ? remend(source, {
 		linkMode: "text-only", images: false, htmlTags: false,
@@ -242,7 +249,7 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, repairInline, stream
 	const plugins = useMemo<Options["rehypePlugins"]>(() =>
 		fading ? [[rehypeStreamFade, { settledOffset }]] : undefined, [fading, settledOffset]);
 	return <StreamingProse.Provider value={streaming}>
-		<Markdown remarkPlugins={math ? MATH_PLUGINS : PLUGINS} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
+		<Markdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
 			{repaired}
 		</Markdown>
 	</StreamingProse.Provider>;

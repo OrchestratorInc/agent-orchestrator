@@ -72,6 +72,25 @@ func TestIsWorkspaceWriteKind(t *testing.T) {
 	}
 }
 
+// A viewer may look at a workspace but not change it: no file writes, and no
+// Retry, which reruns the project's Setup scripts. Read-only mode still lets
+// the session's own people retry.
+func TestIsWorkspaceOperateKind(t *testing.T) {
+	for _, kind := range []string{"workspace.write", "workspace.review.write", "workspace.checkout"} {
+		if !isWorkspaceOperateKind(kind) {
+			t.Errorf("isWorkspaceOperateKind(%q) = false, want true (a viewer must not make it)", kind)
+		}
+	}
+	for _, kind := range []string{"workspace.read", "workspace.list", "workspace.diff", "workspace.review.file", "workspace.repositories"} {
+		if isWorkspaceOperateKind(kind) {
+			t.Errorf("isWorkspaceOperateKind(%q) = true, want false", kind)
+		}
+	}
+	if isWorkspaceWriteKind("workspace.checkout") {
+		t.Error("isWorkspaceWriteKind(workspace.checkout) = true; read-only mode would block the owner's Retry")
+	}
+}
+
 func TestAgentTerminalInputMarksSessionActive(t *testing.T) {
 	for _, tc := range []struct {
 		name         string

@@ -732,6 +732,11 @@ export function HumanMessage({
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
 		>
+			{message.authorName && !editing ? (
+				<span className="max-w-full truncate px-1 text-xs text-muted-foreground" data-chat-message-author>
+					{message.authorName}
+				</span>
+			) : null}
 			{/* A queued message reads as not-yet-sent rather than as sent-and-ignored:
 			    the agent has not seen it, and the timeline should not imply it has. */}
 			{editing ? (

@@ -62,7 +62,8 @@ followed by a space:
 4. Keep legacy `ao.app.active` where `channel = 'renderer'` so old desktop-only
    installs still contribute to DAU until they update.
 5. Keep low-volume reliability events such as `ao.session.spawned`,
-   `ao.session.spawn_failed`, `ao.session.waiting_input_entered`,
+   `ao.session.spawn_failed`, `ao.session.relaunch_failed`,
+   `ao.session.waiting_input_entered`,
    `ao.session.waiting_input_exited`, `ao.http.5xx`, and `ao.daemon.panic`,
    and the harness-update rollout events `ao.harness.update`,
    `ao.harness.update_idle_wait`, `ao.harness.version_switch` and

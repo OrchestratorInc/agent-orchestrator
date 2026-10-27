@@ -4410,15 +4410,16 @@ describe("ChatWorkspace message actions", () => {
 			},
 		});
 		await waitFor(() => expect(onStageAttachments).toHaveBeenCalledTimes(1));
-		expect(screen.getByRole("status")).toHaveTextContent("Saving attachments");
+		expect(screen.getByRole("status", { name: "Attaching pending.txt" })).toBeInTheDocument();
+		expect(screen.queryByText(/Saving attachments/)).toBeNull();
 		firstView.unmount();
 
 		render(<ChatWorkspace {...common} />);
-		expect(screen.getByRole("status")).toHaveTextContent("Saving attachments");
+		expect(screen.getByRole("status", { name: "Attaching pending.txt" })).toBeInTheDocument();
 		await act(async () => finishStaging([".ao/attachments/attachment-pending.txt"]));
 
 		expect(await screen.findByLabelText("Remove pending.txt")).toBeInTheDocument();
-		await waitFor(() => expect(screen.queryByText("Saving attachments… Wait before leaving this chat.")).toBeNull());
+		await waitFor(() => expect(screen.queryByRole("status", { name: "Attaching pending.txt" })).toBeNull());
 		expect(readChatSessionDraft(snapshot.sessionId).composer.attachments).toEqual([
 			expect.objectContaining({
 				name: "pending.txt",
@@ -5303,6 +5304,15 @@ describe("durable queued edits", () => {
 			items: [{ kind: "message", id: "queued-message", turnId: "queued", role: "user", origin: "human", streaming: false, text: "queued text", sequence: 1, revision: 0, createdAt: "2026-09-07T00:00:00Z" }],
 		};
 	}
+
+	it("keeps the sharing notice directly above the locked form and below the queue", () => {
+		render(<ChatWorkspace snapshot={queuedSnapshot()} onSend={vi.fn()} composerLockedPlaceholder="" composerNotice={<div data-composer-notice>Live draft stays visible</div>} />);
+		const notice = screen.getByText("Live draft stays visible");
+		expect(notice.previousElementSibling).toHaveAttribute("data-testid", "queued-composer-dock");
+		expect(notice.nextElementSibling?.tagName).toBe("FORM");
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("contenteditable", "false");
+		expect(screen.getByLabelText("Message the agent")).toHaveAttribute("aria-placeholder", "");
+	});
 
 	it("restores the queue target across remount and keeps the independent composer after accepted save", async () => {
 		const snapshot = queuedSnapshot();

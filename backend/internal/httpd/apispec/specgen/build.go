@@ -942,6 +942,32 @@ func browserOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/browser/chrome", id: "getBrowserChrome", tag: "browser",
+			summary: "Report Chrome mode: native host registration, extension bundle, and connection",
+			resps: []respUnit{
+				{http.StatusOK, controllers.BrowserChromeStatusResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/browser/chrome", id: "setupBrowserChrome", tag: "browser",
+			summary: "Enable Chrome mode: install the AO extension bundle and register AO's native host with Chrome",
+			resps: []respUnit{
+				{http.StatusOK, controllers.BrowserChromeStatusResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/browser/chrome", id: "removeBrowserChrome", tag: "browser",
+			summary: "Disable Chrome mode: unregister AO's native host and remove the installed extension bundle",
+			resps: []respUnit{
+				{http.StatusOK, controllers.BrowserChromeStatusResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/browser/commands", id: "executeBrowserCommand", tag: "browser",
 			summary:    "Execute a target-scoped command in a session's desktop browser",
 			pathParams: []any{controllers.BrowserCapabilityHeader{}},

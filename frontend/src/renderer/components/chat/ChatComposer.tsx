@@ -1,5 +1,4 @@
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
-import { useTranslation } from "react-i18next";
 /**
  * The Chat composer.
  *
@@ -131,6 +130,10 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	"CHAT_CONTROLLER_NOT_READY",
 	"CHAT_RESUME_FAILED",
 	"CHAT_INTERFACE_TRANSITION",
+	// A shared session refused the send because someone else holds its
+	// composer; nothing was accepted, so the text goes back to the draft.
+	"COMPOSER_LOCKED",
+	"COMPOSER_LEASE_LOST",
 	// Excerpts are verified before AppendUserMessage, so retrying the same
 	// references can only fail again; return them to the draft for removal.
 	"CHAT_EXCERPT_INVALID",
@@ -192,7 +195,8 @@ export const ChatComposer = memo(function ChatComposer({
 	disabled,
 	disabledPlaceholder,
 	starting,
-	attachLater,
+	holdAttachments,
+	onHeldAttachmentsChange,
 	settings,
 	addMenuItems,
 	approval,
@@ -215,13 +219,14 @@ export const ChatComposer = memo(function ChatComposer({
 	onCancelQueuedEdit,
 	onQueuedDraftChange,
 	onDraftEmptyChange,
+	onDraftInput,
 	queuedDraftScope,
 	onQueuedAttachmentsChange,
 	onQueuedRetainedAttachmentsChange,
 	savingQueuedEditPending,
 	queuedEditRecovery,
 	commandError,
-	attachedTop = false,
+	notice,
 	queuedDock,
 	onCompact,
 	compacting,
@@ -271,8 +276,13 @@ export const ChatComposer = memo(function ChatComposer({
 	/** Explains why message entry is temporarily blocked. */
 	disabledPlaceholder?: string;
 	starting?: boolean;
-	/** Draw the attach control disabled, for a chat whose workspace does not exist yet. */
-	attachLater?: boolean;
+	/**
+	 * Files that cannot be staged yet (no workspace to write into) stay in the
+	 * composer with their bytes and go to `onSend` with the message, for a chat
+	 * whose session is created by that send.
+	 */
+	holdAttachments?: boolean;
+	onHeldAttachmentsChange?: (attachments: FileAttachmentPayload[], preparing: boolean) => void;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
 	/** A proposed next message, kept out of the draft until accepted with Tab. */
@@ -321,6 +331,8 @@ export const ChatComposer = memo(function ChatComposer({
 	onQueuedDraftChange?: (text: string) => void;
 	/** Called when the draft turns empty or non-empty, including after a restore. */
 	onDraftEmptyChange?: (empty: boolean) => void;
+	/** Every edit of the draft text or move of its caret, with the text and caret after it. */
+	onDraftInput?: (text: string, caret?: number) => void;
 	queuedDraftScope?: ChatDraftScope;
 	onQueuedAttachmentsChange?: (attachments: ChatDraftAttachment[]) => void;
 	onQueuedRetainedAttachmentsChange?: (attachments: ChatDraftRetainedAttachment[]) => void;
@@ -330,8 +342,8 @@ export const ChatComposer = memo(function ChatComposer({
 	queuedEditRecovery?: boolean;
 	/** A failed send, approval, interrupt, or settings mutation. */
 	commandError?: string;
-	/** A queued-message dock owns the shared rounded top edge. */
-	attachedTop?: boolean;
+	/** A notice attached to the form, below queued messages and input requests. */
+	notice?: ReactNode;
 	/** Queued messages rendered above the composer. */
 	queuedDock?: ReactNode;
 	/** Run AO's built-in `/compact` command instead of sending it to the agent. */
@@ -360,7 +372,6 @@ export const ChatComposer = memo(function ChatComposer({
 	acceptedClientMessageIds?: ReadonlySet<string>;
 }) {
 	const translateDraft = useChatDraftTranslation();
-	const { t } = useTranslation();
 	const draftScope = useMemo<ChatDraftScope | undefined>(
 		() =>
 			draftSessionId
@@ -559,7 +570,13 @@ export const ChatComposer = memo(function ChatComposer({
 		prepareAttachments: onStageAttachments ? prepareAttachments : undefined,
 		onAttachmentsChange: persistAttachments,
 	});
-	const canAttach = Boolean(onStageAttachments) && !queuedEditRecovery;
+	const { pendingAttachments } = fileAttachments;
+	const canAttach = (Boolean(onStageAttachments) || Boolean(holdAttachments)) && !queuedEditRecovery;
+	useEffect(() => {
+		if (!holdAttachments || !onHeldAttachmentsChange) return;
+		onHeldAttachmentsChange(fileAttachments.attachments.flatMap(({ stagedPath, mimeType, data, name }) =>
+			!stagedPath && data ? [{ mimeType, data, name }] : []), fileAttachments.preparing);
+	}, [fileAttachments.attachments, fileAttachments.preparing, holdAttachments, onHeldAttachmentsChange]);
 
 	const slashCommands = useMemo<ChatSkill[]>(() => {
 		if (!onCompact || compactUnavailable === "This agent cannot compact its history") return skills;
@@ -1084,6 +1101,7 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 	}, [draftScope]);
 
+	const draftCaretRef = useRef<number | undefined>(undefined);
 	const onEditorChange = useCallback((snapshot: ComposerEditorSnapshot) => {
 		// Changing Lexical's editability can publish the optimistic visual clear.
 		if (optimisticSend && !snapshot.text && !textRef.current) return;
@@ -1093,6 +1111,10 @@ export const ChatComposer = memo(function ChatComposer({
 		textRef.current = snapshot.text;
 		onQueuedDraftChange?.(snapshot.text);
 		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
+		if (snapshot.text !== previousText || snapshot.caret !== draftCaretRef.current) {
+			draftCaretRef.current = snapshot.caret;
+			onDraftInput?.(snapshot.text, snapshot.caret);
+		}
 		if (hasTextRef.current !== snapshot.hasText) {
 			hasTextRef.current = snapshot.hasText;
 			setHasText(snapshot.hasText);
@@ -1116,7 +1138,7 @@ export const ChatComposer = memo(function ChatComposer({
 			dismissedKeyRef.current = null;
 			setDismissedKey(null);
 		}
-	}, [onQueuedDraftChange, optimisticSend, persistComposerText]);
+	}, [onDraftInput, onQueuedDraftChange, optimisticSend, persistComposerText]);
 	// A walk holds one branch's prompts. Once another branch or conversation is
 	// active they are abandoned history, so put the user's own draft back.
 	const walkedScope = useRef(sentMessagesScope);
@@ -1317,10 +1339,18 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return;
 		}
-		if (hasAttachments && settledPaths.length !== settledAttachments.length) {
+		// Held files carry their bytes to the send instead of a staged path.
+		const heldPayloads = holdAttachments
+			? settledAttachments.flatMap(({ stagedPath, mimeType, data, name }) => !stagedPath && data ? [{ mimeType, data, name }] : [])
+			: [];
+		if (hasAttachments && settledPaths.length + heldPayloads.length !== settledAttachments.length) {
 			setSendError("chat.draft.filesUnavailable");
 			return;
 		}
+		const sendPayloads = (native: FileAttachmentPayload[]) => {
+			const all = [...native, ...heldPayloads];
+			return all.length > 0 ? all : undefined;
+		};
 		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit && contextReferences.length === 0);
 		const message = withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} chat excerpt(s) as context` : "");
 		// Ordinary delivery reserves its exact draft before these staged reads await.
@@ -1400,8 +1430,8 @@ export const ChatComposer = memo(function ChatComposer({
 						visibleRetainedAttachments.flatMap((item) => item.contentIndex === undefined ? [] : [item.contentIndex]));
 					// The parent leaves this editor only after proving durable cleanup.
 					return;
-				} else if (nativePayloads.length > 0) {
-					await onSend(message, nativePayloads);
+				} else if (nativePayloads.length > 0 || heldPayloads.length > 0) {
+					await onSend(message, sendPayloads(nativePayloads));
 				} else {
 					await onSend(message);
 				}
@@ -1505,8 +1535,7 @@ export const ChatComposer = memo(function ChatComposer({
 					return;
 				}
 			} else {
-				const deliveryAttachments =
-					sendNativeImages && nativePayloads.length > 0 ? nativePayloads : undefined;
+				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
 				if (delivery.excerpts?.length) {
 					await onSend(
 						delivery.requestText,
@@ -1763,6 +1792,7 @@ export const ChatComposer = memo(function ChatComposer({
 						{elicitation}
 					</div>
 				) : null}
+				{notice}
 				{form}
 			</div>
 		);
@@ -1771,7 +1801,6 @@ export const ChatComposer = memo(function ChatComposer({
 		return withQueueStack(
 			<form
 				onSubmit={(event) => event.preventDefault()}
-				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 				className="cursor-chat-composer relative flex flex-col gap-1.5 px-3 py-3"
 			>
 				{approval}
@@ -1801,7 +1830,6 @@ export const ChatComposer = memo(function ChatComposer({
 				data-dragging={dragging || undefined}
 				data-starting={starting || undefined}
 				aria-busy={starting || undefined}
-				data-attached-top={attachedTop && !queuedDock && !elicitation ? true : undefined}
 			onClick={(e) => {
 					if (controlsDisabled) return;
 					// Portal menus still bubble clicks here; focusing the editor would close them.
@@ -1842,9 +1870,9 @@ export const ChatComposer = memo(function ChatComposer({
 						</button>
 					</div>
 				) : null}
-				{staged || contextReferences.length > 0 ? (
+				{staged || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
 					<div className="flex flex-wrap items-center gap-1.5" data-testid="composer-attachments-and-annotations">
-						{staged ? (
+						{staged || pendingAttachments.length > 0 ? (
 							<ul className="contents" aria-label="Attached files">
 								{stripAttachments.map(({ file, path, preview }) => {
 									return (
@@ -1867,6 +1895,9 @@ export const ChatComposer = memo(function ChatComposer({
 										</span>
 										<button
 											type="button"
+											onMouseDown={(event) => {
+												if (event.button === 0) event.preventDefault();
+											}}
 											onClick={() => {
 											if (submitInFlight.current) return;
 											if (path) {
@@ -1878,6 +1909,7 @@ export const ChatComposer = memo(function ChatComposer({
 												setRetainedAttachments(next);
 												onQueuedRetainedAttachmentsChange?.(next);
 											} else fileAttachments.remove(file.id);
+											editor.current?.focus();
 											}}
 											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
 											aria-label={`Remove ${file.name}`}
@@ -1888,6 +1920,21 @@ export const ChatComposer = memo(function ChatComposer({
 									</li>
 									);
 								})}
+								{pendingAttachments.map((file) => (
+									<li
+										key={file.id}
+										role="status"
+										aria-label={`Attaching ${file.name}`}
+										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1 motion-safe:animate-pulse"
+									>
+										<div aria-hidden="true" className="size-6 rounded-sm bg-surface" />
+										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs">
+											<span className="invisible">{file.name}</span>
+											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
+										</span>
+										<span aria-hidden="true" className="size-3 rounded-sm bg-surface" />
+									</li>
+								))}
 							</ul>
 						) : null}
 						{contextReferences.length > 0 ? (
@@ -1956,11 +2003,6 @@ export const ChatComposer = memo(function ChatComposer({
 							{translateDraft("chat.draft.abandon")}
 						</Button>
 					</div>
-				) : null}
-				{fileAttachments.preparing ? (
-					<p role="status" className="px-1.5 text-xs leading-snug text-muted-foreground">
-						Saving attachments… Wait before leaving this chat.
-					</p>
 				) : null}
 
 				{/* A refused steer is an ordinary outcome, not a failure: the text is still
@@ -2051,26 +2093,6 @@ export const ChatComposer = memo(function ChatComposer({
 								</Tooltip>
 								)}
 							</>
-						) : attachLater ? (
-							<Tooltip>
-								<TooltipTrigger asChild>
-									{/* Focusable so keyboard users reach the explanation the disabled button cannot. */}
-									<span className="inline-flex rounded-full focus-visible:outline-2 focus-visible:outline-ring" tabIndex={0} aria-label={t("chat.composer.attachLater")}>
-										<Button
-											type="button"
-											variant="ghost"
-											size="icon-sm"
-											disabled
-											aria-hidden="true"
-											tabIndex={-1}
-											className="size-7 shrink-0 rounded-full p-0 text-muted-foreground"
-										>
-											<Plus aria-hidden="true" className="size-3.5 text-muted-foreground" />
-										</Button>
-									</span>
-								</TooltipTrigger>
-								<TooltipContent side="bottom">{t("chat.composer.attachLater")}</TooltipContent>
-							</Tooltip>
 						) : null}
 						{settings}
 					</div>

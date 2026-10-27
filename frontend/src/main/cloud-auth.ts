@@ -153,6 +153,23 @@ export async function withAuthMutation<T>(
   }
 }
 
+/**
+ * Where the Cloud sign-in is kept. An AO_DATA_DIR override gives that data
+ * dir its own sign-in, as it gives it its own daemon data, so two instances
+ * with different data dirs never share an account. Otherwise ~/.ao, or
+ * ~/.ao/dev for a development build.
+ */
+export function resolveCloudAuthDir(
+  env: Record<string, string | undefined>,
+  homeDir: string,
+  launchWorkingDirectory: string,
+  isPackaged: boolean,
+): string {
+  const configured = env.AO_DATA_DIR?.trim();
+  if (configured) return path.resolve(launchWorkingDirectory, configured);
+  return isPackaged ? path.join(homeDir, ".ao") : path.join(homeDir, ".ao", "dev");
+}
+
 function storePath(dataDir: string): string {
   return path.join(dataDir, AUTH_STORE_FILE);
 }

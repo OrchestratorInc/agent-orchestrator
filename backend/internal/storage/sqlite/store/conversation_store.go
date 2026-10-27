@@ -1656,6 +1656,11 @@ func (s *Store) SettleTurn(
 	if err != nil {
 		return fmt.Errorf("select turn %s: %w", providerTurnID, err)
 	}
+	// A history replay re-settles a turn without its error, which is not
+	// portable. Keep the live reason: a usage limit is classified from it.
+	if errMessage == "" && turn.State == state {
+		errMessage = turn.ErrorMessage
+	}
 
 	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,

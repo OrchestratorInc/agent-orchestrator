@@ -115,6 +115,17 @@ describe("NewChatPage", () => {
 		}));
 	});
 
+	it("takes attachments before a workspace exists and uploads them with the task", async () => {
+		h.launch.mockResolvedValue("sess-1");
+		renderPage();
+		expect(h.workspace?.holdAttachments).toBe(true);
+		const files = [{ mimeType: "image/png", data: "iVBORw==", name: "shot.png" }];
+
+		await act(async () => { await h.workspace?.onSend?.("What is this?", files, "cid-1"); });
+
+		expect(h.launch).toHaveBeenCalledWith("What is this?", expect.objectContaining({ clientRequestId: "cid-1", attachments: files }));
+	});
+
 	it("returns a refused brief to the composer and restores the selectors", async () => {
 		h.launch.mockRejectedValue(Object.assign(new Error("Agent is not installed"), { name: "TaskCreateError", code: "AGENT_NOT_INSTALLED" }));
 		renderPage();
@@ -169,6 +180,22 @@ describe("NewChatPage", () => {
 			fireEvent.click(button);
 		});
 		expect(h.launchFallback).toHaveBeenCalledTimes(1);
+	});
+
+	it.each(["tui", "bypass-permissions"])("passes the current held files to the %s fallback and waits for preparation", async (fallback) => {
+		h.fallbackAction = fallback;
+		h.launchFallback.mockResolvedValue("fallback-session");
+		writeChatComposerText(draftScope, "Read the attached file");
+		renderPage();
+		const files = [{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" }];
+		const removedFile = { mimeType: "image/png", data: "iVBORw==", name: "removed.png" };
+		act(() => h.workspace?.onHeldAttachmentsChange?.([...files, removedFile], true));
+		const button = screen.getByRole("button", { name: "Create as Terminal UI" });
+		expect(button).toBeDisabled();
+
+		act(() => h.workspace?.onHeldAttachmentsChange?.(files, false));
+		await act(async () => fireEvent.click(button));
+		expect(h.launchFallback).toHaveBeenCalledWith("Read the attached file", expect.any(String), files);
 	});
 
 	it("keeps a refused retry on its project and shows why", async () => {

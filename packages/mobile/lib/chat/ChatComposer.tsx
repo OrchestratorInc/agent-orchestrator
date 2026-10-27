@@ -41,14 +41,10 @@ import { PRReviewPrompt } from "./PRReviewPrompt";
 import { decodeResponseDraft, encodeResponseDraft, responseReplyText, responseExcerpts, excerptDraftText, isChatExcerpt, type ResponseQuote, type ResponseQuoteRequest } from "./responseQuotes";
 import { afterDraftWrites } from "./pendingSend";
 import { forgetComposerAttachments, readComposerAttachments, updateComposerAttachments, useComposerAttachments, type ComposerAttachment as Attachment } from "./composerAttachments";
-import { sniffImageMimeType } from "../imageMime";
+import { attachComposerImages, MAX_ATTACHMENTS } from "./composerImages";
+import { useImagePaste } from "./useImagePaste";
 
 const MAX_EMBEDDED_FILE_BYTES = 500_000;
-
-const MAX_ATTACHMENTS = 8;
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-const MAX_IMAGE_BYTES_TOTAL = 25 * 1024 * 1024;
-const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp"]);
 
 export function ChatComposer({
 	quoteRequest,
@@ -394,6 +390,10 @@ export function ChatComposer({
 		} finally { setSubmitting(false); }
 	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled, attachmentKey, dismissAttachmentNotice]);
 
+	const pasteLayout = useImagePaste(stopped || submitting ? null : (assets, overflow) => {
+		setLocalError(undefined);
+		if (attachComposerImages(attachmentKey, assets, overflow)) haptics.tap();
+	});
 	const addImage = async () => {
 		// Captured now: the pick can outlive this composer, and the stored list may
 		// have changed while the picker was open.
@@ -403,27 +403,7 @@ export function ChatComposer({
 		try {
 			const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], base64: true, quality: 0.82, allowsMultipleSelection: true, selectionLimit: 4 });
 			if (result.canceled) return;
-			const errors = new Set<string>();
-			const next = result.assets.flatMap((asset): Attachment[] => {
-				if (!asset.base64) { errors.add("Some images couldn't be read and were skipped."); return []; }
-				// The picker reports the original file's type, but the base64 is
-				// re-encoded (JPEG on both platforms at quality < 1). Agents reject an
-				// image whose bytes don't match its declared type.
-				const mimeType = (sniffImageMimeType(asset.base64) ?? (asset.mimeType || "image/jpeg")).toLowerCase();
-				if (!SUPPORTED_IMAGE_TYPES.has(mimeType)) { errors.add("Only PNG, JPEG, GIF, WebP, and BMP images are supported."); return []; }
-				const bytes = asset.fileSize ?? Math.floor(asset.base64.length * 0.75);
-				if (bytes > MAX_IMAGE_BYTES) { errors.add("Each image must be under 10 MB."); return []; }
-				return [{ id: `${asset.assetId ?? asset.uri}-${Date.now()}`, kind: "image", name: asset.fileName || "Image", bytes, image: { mimeType, data: asset.base64 } }];
-			});
-			const accepted = [...readComposerAttachments(key).items];
-			let imageBytes = accepted.filter((item) => item.kind === "image").reduce((sum, item) => sum + item.bytes, 0);
-			for (const item of next) {
-				if (accepted.length >= MAX_ATTACHMENTS) { errors.add(`You can attach up to ${MAX_ATTACHMENTS} items.`); break; }
-				if (imageBytes + item.bytes > MAX_IMAGE_BYTES_TOTAL) { errors.add("Images must total under 25 MB."); break; }
-				accepted.push(item);
-				imageBytes += item.bytes;
-			}
-			updateComposerAttachments(key, () => ({ items: accepted, notice: errors.size ? [...errors].join(" ") : undefined }));
+			attachComposerImages(key, result.assets);
 		} catch (cause) {
 			const notice = userFacingError(cause, "Couldn't open your photo library.");
 			updateComposerAttachments(key, (current) => ({ items: current.items, notice }));
@@ -614,6 +594,7 @@ export function ChatComposer({
 					<ChatAttachmentMenu disabled={stopped || submitting} canAttachFile={Boolean(canEmbedFiles)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />
 					<TextInput
 						ref={inputRef}
+						onLayout={pasteLayout}
 						accessibilityLabel="Message the agent"
 						editable={!stopped && !submitting}
 						value={text}
