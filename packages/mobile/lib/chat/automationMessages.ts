@@ -84,7 +84,20 @@ function cachedBy<T>(read: (item: ConversationItem) => T): (item: ConversationIt
 
 /** What a worker sent, when this message is one: a direct `ao send` or a batch of reports. */
 export const workerUpdatesOf = cachedBy((item): WorkerUpdate[] => {
-	if (item.kind !== "message" || item.role !== "user" || item.origin === "human") return [];
+	// Another agent's message that arrived mid-turn is a steer; the daemon names its sender.
+	if (item.kind === "activity") {
+		const sender = item.detail?.event === "steer" ? item.detail.senderSessionId?.trim() : undefined;
+		if (!sender) return [];
+		return [{
+			key: item.id,
+			name: item.detail?.senderDisplayName?.trim() || sender,
+			sessionId: sender,
+			projectId: item.detail?.senderProjectId,
+			body: stripSenderPrefix(item.detail?.text ?? item.summary, sender).trim(),
+			createdAt: item.createdAt,
+		}];
+	}
+	if (item.role !== "user" || item.origin === "human") return [];
 	const prefix = SENDER_PREFIX.exec(item.text);
 	const sender = item.senderSessionId?.trim() || prefix?.[1];
 	if (sender) {
@@ -449,13 +462,19 @@ export const NOTICE_LABELS: Record<AutomationNotice, string> = {
  * it has no entry and is not opened.
  */
 export function artifactEntry(path: string, sessionId: string | undefined): string | undefined {
-	const trimmed = path.trim();
+	const trimmed = path.trim().replace(/\\/g, "/");
 	if (!trimmed || !sessionId) return undefined;
-	if (!trimmed.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(trimmed)) return trimmed.replace(/^\.\//, "") || undefined;
-	const marker = `/artifacts/${sessionId}/`;
-	const at = trimmed.replace(/\\/g, "/").lastIndexOf(marker);
-	const entry = at < 0 ? "" : trimmed.replace(/\\/g, "/").slice(at + marker.length);
-	return entry && !entry.split("/").includes("..") ? entry : undefined;
+	let entry = trimmed;
+	if (trimmed.startsWith("/") || /^[A-Za-z]:\//.test(trimmed)) {
+		const marker = `/artifacts/${sessionId}/`;
+		const at = trimmed.lastIndexOf(marker);
+		if (at < 0) return undefined;
+		entry = trimmed.slice(at + marker.length);
+	}
+	// The entry is joined into an authenticated daemon URL, so it may only name
+	// something inside the folder: no parent steps, whichever form the path took.
+	const segments = entry.split("/").filter((segment) => segment !== "" && segment !== ".");
+	return segments.length > 0 && !segments.includes("..") ? segments.join("/") : undefined;
 }
 
 export type InlineRun = { text: string; href?: string; code?: boolean; strong?: boolean };
@@ -489,4 +508,55 @@ export function sessionLink(href: string): { projectId: string; sessionId: strin
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Where a link in text an agent or a reviewer wrote may go. That text can repeat
+ * whatever the agent read, so a link opens only a session's chat or a page on
+ * the forges AO reads PRs from; any other link is drawn as its words.
+ */
+export function safeLink(href: string): { kind: "session"; projectId: string; sessionId: string } | { kind: "web"; href: string; host: string } | undefined {
+	const session = sessionLink(href);
+	if (session) return { kind: "session", ...session };
+	const web = forgeURL(href);
+	return web ? { kind: "web", href: web, host: new URL(web).hostname } : undefined;
+}
+
+export type ReportBlock = { kind: "heading" | "paragraph" | "item" | "code"; text: string; marker?: string };
+
+/** A report's blocks: the headings, list items and code fences workers write, and the paragraphs between. */
+export function reportBlocks(text: string): ReportBlock[] {
+	const blocks: ReportBlock[] = [];
+	const lines = text.split("\n");
+	let paragraph: string[] = [];
+	const flush = () => {
+		if (paragraph.length > 0) blocks.push({ kind: "paragraph", text: paragraph.join("\n") });
+		paragraph = [];
+	};
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index]!;
+		const fence = /^\s*(`{3,}|~{3,})/.exec(line);
+		if (fence) {
+			flush();
+			const code: string[] = [];
+			for (index += 1; index < lines.length && !lines[index]!.trimStart().startsWith(fence[1]!); index += 1) code.push(lines[index]!);
+			blocks.push({ kind: "code", text: code.join("\n") });
+			continue;
+		}
+		const heading = /^#{1,6}\s+(.+)$/.exec(line);
+		const item = /^\s*([-*+]|\d+[.)])\s+(.*)$/.exec(line);
+		if (heading) {
+			flush();
+			blocks.push({ kind: "heading", text: heading[1]!.trim() });
+		} else if (item) {
+			flush();
+			blocks.push({ kind: "item", marker: /\d/.test(item[1]!) ? item[1]! : "•", text: item[2]! });
+		} else if (line.trim() === "") {
+			flush();
+		} else {
+			paragraph.push(line);
+		}
+	}
+	flush();
+	return blocks;
 }

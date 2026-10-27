@@ -29,7 +29,7 @@ import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { font, prose, radius, space, type } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userMessageSurfaceStyle } from "./chatChrome";
-import { ChatMarkdown } from "./ChatMarkdown";
+import { ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
 import {
 	artifactEntry,
 	automationOf,
@@ -37,7 +37,8 @@ import {
 	GIT_ACTION_LABELS,
 	inlineRuns,
 	NOTICE_LABELS,
-	sessionLink,
+	reportBlocks,
+	safeLink,
 	splitArtifacts,
 	splitHeadline,
 	workerUpdatesOf,
@@ -49,7 +50,7 @@ import {
 	type PullRequestRef,
 	type WorkerUpdate,
 } from "./automationMessages";
-import type { ConversationMessage } from "./types";
+import type { ConversationItem } from "./types";
 
 /** `HH:MM` in the device's zone, written by hand: Hermes' Intl is partial. */
 export function clockTime(iso: string): string {
@@ -69,7 +70,7 @@ export const LatestWorkerUpdates = createContext<ReadonlySet<string> | null>(nul
  * A non-human user message: a worker's report or message, an automation drawn
  * as what it is, or `fallback` when AO cannot tell what it is.
  */
-export function OriginMessageView({ message, fallback }: { message: ConversationMessage; fallback: ReactNode }) {
+export function OriginMessageView({ message, fallback }: { message: ConversationItem; fallback: ReactNode }) {
 	const updates = workerUpdatesOf(message);
 	if (updates.length > 0) {
 		// A direct message (no state) reads as prose from that agent; reports are quiet rows.
@@ -96,8 +97,11 @@ const STATES: Record<string, { label: string; attention?: boolean }> = {
 /** The agent this chat runs, the logo a worker gets when its own session cannot be read. */
 export const ConversationHarness = createContext<string | undefined>(undefined);
 
-// One request per worker however many of its reports render; a failed read stays failed until the app restarts.
+// One request per worker however many of its reports render. A failed read leaves
+// the cache so the next row to draw that worker asks again, and the oldest read
+// goes first once the cache holds a long history's worth of workers.
 const fetchedSessions = new Map<string, Promise<DashboardSession | null>>();
+const FETCHED_SESSIONS_LIMIT = 200;
 
 /**
  * The worker's session: from the live board, or read once from the daemon when the
@@ -113,7 +117,11 @@ function useSession(sessionId: string | undefined): DashboardSession | undefined
 		if (!key || !config || !sessionId) return;
 		let request = fetchedSessions.get(key);
 		if (!request) {
-			request = getSession(config, sessionId).catch(() => null);
+			request = getSession(config, sessionId).catch(() => {
+				fetchedSessions.delete(key);
+				return null;
+			});
+			if (fetchedSessions.size >= FETCHED_SESSIONS_LIMIT) fetchedSessions.delete(fetchedSessions.keys().next().value!);
 			fetchedSessions.set(key, request);
 		}
 		let current = true;
@@ -141,33 +149,79 @@ function useOpenSession(update: Pick<WorkerUpdate, "sessionId" | "projectId">) {
 	};
 }
 
-/** Opens what a link in a report names: a session's chat for `ao://sessions/…`, the in-app browser for a web page. */
-function useOpenLink() {
+/**
+ * Opens a link in text an agent or a reviewer wrote, when `safeLink` allows it: a
+ * session's chat for `ao://sessions/…`, the in-app browser for a forge page.
+ */
+function useOpenSafeLink() {
 	const { config, sessions } = useApp();
 	return (href: string) => {
+		const target = safeLink(href);
+		if (!target) return;
 		haptics.tap();
-		const target = sessionLink(href);
-		if (target) {
-			const session = sessions.find((candidate) => candidate.id === target.sessionId);
-			router.push({ pathname: "/session/[id]", params: { id: target.sessionId, projectId: target.projectId, hostId: (session && sessionHostId(session)) ?? config?.hostId } });
-		} else if (/^https?:\/\//.test(href)) {
-			void openGitHub(href);
+		if (target.kind === "web") {
+			void openGitHub(target.href);
+			return;
 		}
+		const session = sessions.find((candidate) => candidate.id === target.sessionId);
+		router.push({ pathname: "/session/[id]", params: { id: target.sessionId, projectId: target.projectId, hostId: (session && sessionHostId(session)) ?? config?.hostId } });
 	};
 }
 
-/** A report's prose with its links, code and emphasis drawn, and its links tappable. */
-function ReportText({ text, style }: { text: string; style: StyleProp<TextStyle> }) {
+/** Markdown an agent or a reviewer wrote, its links held to `safeLink` as the desktop's `safeOrigin` holds them. */
+function SafeLinks({ children }: { children: ReactNode }) {
+	const openSafeLink = useOpenSafeLink();
+	return <ChatLinkProvider onLinkOpen={openSafeLink}>{children}</ChatLinkProvider>;
+}
+
+/** One line of a report: its links, code and emphasis drawn, only safe links live. */
+function ReportInline({ text, style }: { text: string; style: StyleProp<TextStyle> }) {
 	const styles = useThemedStyles(makeStyles);
-	const openLink = useOpenLink();
+	const openSafeLink = useOpenSafeLink();
 	return (
 		<Text style={style}>
-			{inlineRuns(text).map((run, index) => run.href && (sessionLink(run.href) || /^https?:\/\//.test(run.href))
-				? <Text key={index} accessibilityRole="link" onPress={() => openLink(run.href!)} suppressHighlighting style={styles.link}>{run.text}</Text>
-				: run.code ? <Text key={index} style={styles.inlineCode}>{run.text}</Text>
-				: run.strong ? <Text key={index} style={styles.strong}>{run.text}</Text>
-				: run.text)}
+			{inlineRuns(text).map((run, index) => {
+				const target = run.href ? safeLink(run.href) : undefined;
+				if (target) {
+					// A label that is not its own URL could name any page; the host says where it goes.
+					const host = target.kind === "web" && run.text !== run.href ? <Text style={styles.linkHost}>{` (${target.host})`}</Text> : null;
+					return <Text key={index}><Text accessibilityRole="link" onPress={() => openSafeLink(run.href!)} suppressHighlighting style={styles.link}>{run.text}</Text>{host}</Text>;
+				}
+				if (run.code) return <Text key={index} style={styles.inlineCode}>{run.text}</Text>;
+				if (run.strong) return <Text key={index} style={styles.strong}>{run.text}</Text>;
+				return run.text;
+			})}
 		</Text>
+	);
+}
+
+/** A report's prose at the row's quiet size: headings, list items and code fences drawn as blocks. */
+function ReportText({ text, style }: { text: string; style: StyleProp<TextStyle> }) {
+	const styles = useThemedStyles(makeStyles);
+	return (
+		<View style={styles.reportBlocks}>
+			{reportBlocks(text).map((block, index) => {
+				switch (block.kind) {
+					case "heading":
+						return <ReportInline key={index} text={block.text} style={[style, styles.strong]} />;
+					case "item":
+						return (
+							<View key={index} style={styles.reportItem}>
+								<Text style={[style, styles.reportMarker]}>{block.marker}</Text>
+								<View style={styles.shrink}><ReportInline text={block.text} style={style} /></View>
+							</View>
+						);
+					case "code":
+						return (
+							<ScrollView key={index} horizontal style={styles.reportCode}>
+								<Text selectable style={styles.logText}>{block.text}</Text>
+							</ScrollView>
+						);
+					default:
+						return <ReportInline key={index} text={block.text} style={style} />;
+				}
+			})}
+		</View>
 	);
 }
 
@@ -194,7 +248,10 @@ const WorkerUpdateRow = memo(function WorkerUpdateRow({ update }: { update: Work
 	const attention = state?.attention && (!latest || latest.has(update.key));
 	// An older report names its sender only by session id; the session supplies its title.
 	const name = update.name === update.sessionId ? session?.displayName || update.name : update.name;
-	// The headline is a cut of the report; opened, the rest of it follows.
+	// The headline is a cut of the report. A short first line is cut off whole, so
+	// opened, the rest follows it; a first sentence is not, so opened, the report
+	// replaces it rather than repeating it.
+	const sentence = detail === text;
 	const more = detail && detail !== headline ? detail : "";
 	return (
 		<View testID="worker-update">
@@ -213,13 +270,13 @@ const WorkerUpdateRow = memo(function WorkerUpdateRow({ update }: { update: Work
 					<Text style={styles.time}>{clockTime(update.createdAt)}</Text>
 					<Feather name={open ? "chevron-down" : "chevron-right"} size={12} color={t.textFaint} />
 				</View>
-				{headline ? <Text numberOfLines={open ? undefined : 2} style={styles.updateHeadline}>{headline}</Text> : null}
+				{headline && !(open && sentence && more) ? <Text numberOfLines={open ? undefined : 2} style={styles.updateHeadline}>{headline}</Text> : null}
 			</Pressable>
 			{artifacts.map((path) => <ArtifactLine key={path} path={path} update={update} hostId={session ? sessionHostId(session) : undefined} />)}
 			{open ? (
 				<View style={styles.opened}>
 					{/* Muted and small, as the desktop opens it: the row stays a quiet aside. */}
-					{more ? <ReportText text={more} style={styles.updateDetail} /> : null}
+					{more ? <SafeLinks><ReportText text={more} style={styles.updateDetail} /></SafeLinks> : null}
 					{openSession ? (
 						<Pressable accessibilityRole="button" hitSlop={8} onPress={openSession} style={({ pressed }) => [styles.openChat, pressed && styles.pressed]}>
 							<Text style={styles.openChatText}>Open chat</Text>
@@ -273,7 +330,7 @@ function FromAgent({ update }: { update: WorkerUpdate }) {
 					<Text numberOfLines={1} onPress={openSession} suppressHighlighting style={[styles.headingText, styles.strong]}>{name}</Text>
 					<Text style={styles.time}>{clockTime(update.createdAt)}</Text>
 				</View>
-				<Folded><ChatMarkdown text={update.body} /></Folded>
+				<Folded><SafeLinks><ChatMarkdown text={update.body} /></SafeLinks></Folded>
 			</View>
 		</View>
 	);
@@ -296,7 +353,7 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { pr } = automation;
-	const prLink = <Text onPress={openForge(pr.url)} suppressHighlighting style={styles.strong}>#{pr.number}</Text>;
+	const prLink = <Text accessibilityRole={forgeURL(pr.url) ? "link" : undefined} onPress={openForge(pr.url)} suppressHighlighting style={styles.strong}>#{pr.number}</Text>;
 	let tone = t.amber;
 	let heading: ReactNode;
 	let detail: ReactNode = null;
@@ -317,14 +374,14 @@ function PullRequestEvent({ automation, createdAt }: { automation: PullRequestAu
 							{comment.path ? <FileChip path={comment.path} line={comment.line} /> : null}
 						</View>
 					) : null}
-					<Folded><ChatMarkdown text={comment.body} /></Folded>
+					<Folded><SafeLinks><ChatMarkdown text={comment.body} /></SafeLinks></Folded>
 				</View>
 			));
 			break;
 		}
 		case "changesRequested":
 			heading = <><Text style={styles.strong}>{automation.author ? `@${automation.author}` : "AO reviewer"}</Text> requested changes on {prLink}</>;
-			detail = automation.body ? <Folded><ChatMarkdown text={automation.body} /></Folded> : null;
+			detail = automation.body ? <Folded><SafeLinks><ChatMarkdown text={automation.body} /></SafeLinks></Folded> : null;
 			break;
 		case "mergeConflict":
 			// The PR cannot merge until the agent rebases: a failure, like failing CI.
@@ -357,7 +414,10 @@ function FailedCheckLine({ check }: { check: FailedCheck }) {
 		<View>
 			<View style={styles.chipRow}>
 				<Feather name="x-circle" size={12} color={t.red} />
-				<Text numberOfLines={1} onPress={openForge(check.url)} suppressHighlighting style={[styles.headingText, styles.strong, styles.shrink]}>{check.name}</Text>
+				{/* A Pressable, not a pressable Text, so the check name gets a finger-sized target. */}
+				<Pressable accessibilityRole={forgeURL(check.url) ? "link" : undefined} disabled={!forgeURL(check.url)} hitSlop={10} onPress={openForge(check.url)} style={({ pressed }) => [styles.shrink, pressed && styles.pressed]}>
+					<Text numberOfLines={1} style={[styles.headingText, styles.strong]}>{check.name}</Text>
+				</Pressable>
 				{check.log ? (
 					<Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} hitSlop={8} onPress={() => { haptics.tap(); setOpen((value) => !value); }}>
 						<Text style={styles.toggle}>{open ? "Hide log" : "Show log"}</Text>
@@ -520,14 +580,25 @@ function Folded({ children }: { children: ReactNode }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [open, setOpen] = useState(false);
-	const [height, setHeight] = useState(0);
-	const folds = height > FOLD_HEIGHT + 4;
+	const [measure, setMeasure] = useState({ width: 0, height: 0 });
+	const folds = measure.height > FOLD_HEIGHT + 4;
 	const clipped = !open && folds;
 	return (
 		<View>
-			<View style={clipped ? styles.folded : undefined}>
+			{/* A new width (rotation, split view) can change the natural height; unclip once to measure it again. */}
+			<View
+				style={clipped ? styles.folded : undefined}
+				onLayout={(event) => {
+					const { width } = event.nativeEvent.layout;
+					// The first width is the one the height was measured at (children lay out first); only a later change re-measures.
+					setMeasure((current) => current.width === width ? current : { width, height: current.width === 0 ? current.height : 0 });
+				}}
+			>
 				{/* Yoga lays the content out at the clip's height while clipped, so only an unclipped layout is its natural height. */}
-				<View onLayout={(event) => { if (!clipped) setHeight(event.nativeEvent.layout.height); }}>{children}</View>
+				<View onLayout={(event) => {
+					const { height } = event.nativeEvent.layout;
+					if (!clipped) setMeasure((current) => current.height === height ? current : { ...current, height });
+				}}>{children}</View>
 			</View>
 			{folds ? (
 				<Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} hitSlop={8} onPress={() => { haptics.tap(); setOpen((value) => !value); }} style={styles.more}>
@@ -569,6 +640,11 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	openChatText: { fontFamily: font.medium, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	artifactLink: { color: t.textPrimary, textDecorationLine: "underline", textDecorationColor: t.borderStrong },
 	link: { color: t.textPrimary, textDecorationLine: "underline" },
+	linkHost: { color: t.textTertiary },
+	reportBlocks: { gap: space.xs },
+	reportItem: { flexDirection: "row", gap: space.xs },
+	reportMarker: { minWidth: 12, color: t.textTertiary },
+	reportCode: { borderRadius: radius.sm, backgroundColor: t.bgSubtle, padding: space.sm },
 	inlineCode: { fontFamily: font.mono, color: t.textPrimary },
 	updateDetail: { fontFamily: font.regular, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 

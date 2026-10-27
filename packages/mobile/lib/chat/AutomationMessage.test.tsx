@@ -20,7 +20,7 @@ vi.mock("../haptics", () => ({ haptics: { tap: vi.fn() } }));
 vi.mock("../icons", () => ({ Feather: "Feather" }));
 vi.mock("../openGitHub", () => ({ openGitHub: fixtures.openGitHub }));
 vi.mock("../files/navigation", () => ({ useFilesNavigation: () => null }));
-vi.mock("./ChatMarkdown", () => ({ ChatMarkdown: "ChatMarkdown" }));
+vi.mock("./ChatMarkdown", () => ({ ChatMarkdown: "ChatMarkdown", ChatLinkProvider: ({ children }: { children: unknown }) => children }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme) }));
 
 import { ConversationHarness, WorkerUpdateRows } from "./AutomationMessage";
@@ -81,12 +81,16 @@ const pressables = () => renderer!.root.findAll((node) => (node.type as unknown)
 
 it("opens a report anywhere on its row, with its links live and a way into the worker's chat", async () => {
 	fixtures.app.sessions = [{ id: "w-1", projectId: "p", harness: "codex" }];
-	const report = { ...update("a", "w-1"), body: "PR #7291 open\nAll CI checks pass: https://github.com/o/r/pull/7291" };
+	const report = { ...update("a", "w-1"), body: "PR #7291 open\nAll CI checks pass: https://github.com/o/r/pull/7291\nSee [github.com/o/r/pull/9](https://evil.example/x) and [the PR](https://github.com/o/r/pull/7291)." };
 	await draw([report]);
 	expect(renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.accessibilityRole === "link")).toEqual([]);
 	await act(async () => pressables()[0]!.props.onPress());
-	const link = renderer!.root.find((node) => (node.type as unknown) === "Text" && node.props.accessibilityRole === "link");
-	expect(textOf(link)).toBe("https://github.com/o/r/pull/7291");
+	// Only forge pages are live; a label is shown with the host it really goes to.
+	const links = renderer!.root.findAll((node) => (node.type as unknown) === "Text" && node.props.accessibilityRole === "link");
+	expect(links.map(textOf)).toEqual(["https://github.com/o/r/pull/7291", "the PR"]);
+	expect(textOf(renderer!.root)).toContain("the PR (github.com)");
+	expect(textOf(renderer!.root)).toContain("See github.com/o/r/pull/9 and");
+	const link = links[0]!;
 	await act(async () => link.props.onPress());
 	expect(fixtures.openGitHub).toHaveBeenCalledWith("https://github.com/o/r/pull/7291");
 	const openChat = pressables().find((node) => textOf(node).includes("Open chat"))!;
@@ -101,4 +105,22 @@ it("opens an artifact from the worker's artifact folder in the viewer", async ()
 	expect(links.map((node) => node.props.accessibilityLabel)).toEqual(["Open audit.md"]);
 	await act(async () => links[0]!.props.onPress());
 	expect(fixtures.push).toHaveBeenCalledWith({ pathname: "/artifact/[sessionId]", params: { sessionId: "w-1", entry: "audit.md", hostId: "h1" } });
+});
+
+it("shows a report headed by its first sentence once when opened, not twice", async () => {
+	fixtures.app.sessions = [{ id: "w-1", projectId: "p" }];
+	await draw([{ ...update("a", "w-1"), body: "Fixed the flaky test. All 29 checks pass now." }]);
+	await act(async () => pressables()[0]!.props.onPress());
+	expect(textOf(renderer!.root).split("Fixed the flaky test").length - 1).toBe(1);
+	expect(textOf(renderer!.root)).toContain("All 29 checks pass now.");
+});
+
+it("asks again for a worker whose read failed, instead of caching the failure", async () => {
+	fixtures.getSession.mockRejectedValueOnce(new Error("offline")).mockResolvedValue({ id: "w-retry", projectId: "p", harness: "goose" });
+	await draw([update("a", "w-retry")]);
+	expect(logos()).toEqual(["claude-code"]);
+	act(() => renderer!.unmount());
+	await draw([update("b", "w-retry")]);
+	expect(logos()).toEqual(["goose"]);
+	expect(fixtures.getSession).toHaveBeenCalledTimes(2);
 });

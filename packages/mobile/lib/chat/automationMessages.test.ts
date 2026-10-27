@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import { formatFileAnnotationMessage, formatFileAnnotationMessages } from "../../../shared/files/file-annotations";
 import {
 	artifactEntry,
+	reportBlocks,
+	safeLink,
 	automationOf,
 	forgeURL,
 	humanVisibleText,
@@ -19,7 +21,7 @@ import {
 	splitHeadline,
 	workerUpdatesOf,
 } from "./automationMessages";
-import type { ConversationMessage } from "./types";
+import type { ConversationItem, ConversationMessage } from "./types";
 
 const PR = 'PR #6974 "feat: link this computer" (ao/remote/this-computer → main)';
 const URL = "https://github.com/o/r/pull/6974";
@@ -201,6 +203,12 @@ describe("opening a report's links and artifacts", () => {
 		expect(artifactEntry("/tmp/audit.md", "ao-230")).toBeUndefined();
 		expect(artifactEntry("/a/artifacts/ao-230/../secrets", "ao-230")).toBeUndefined();
 		expect(artifactEntry("audit.md", undefined)).toBeUndefined();
+		// A relative path may not climb out of the folder either, however it is spelled.
+		expect(artifactEntry("../../etc/passwd", "ao-230")).toBeUndefined();
+		expect(artifactEntry("shots/../../x", "ao-230")).toBeUndefined();
+		expect(artifactEntry("..\\..\\x", "ao-230")).toBeUndefined();
+		expect(artifactEntry("shots//a.png", "ao-230")).toBe("shots/a.png");
+		expect(artifactEntry("C:\\Users\\x\\.ao\\data\\artifacts\\ao-230\\a.md", "ao-230")).toBe("a.md");
 	});
 
 	it("keeps a report's links, code and emphasis as runs", () => {
@@ -223,5 +231,33 @@ describe("opening a report's links and artifacts", () => {
 		expect(sessionLink("ao://sessions/agent-orchestrator-mo/agent-orchestrator-mo-259")).toEqual({ projectId: "agent-orchestrator-mo", sessionId: "agent-orchestrator-mo-259" });
 		expect(sessionLink("ao://sessions/p")).toBeUndefined();
 		expect(sessionLink("https://github.com")).toBeUndefined();
+	});
+});
+
+describe("text agents and reviewers write", () => {
+	it("opens only session links and forge pages", () => {
+		expect(safeLink("ao://sessions/p/w-1")).toEqual({ kind: "session", projectId: "p", sessionId: "w-1" });
+		expect(safeLink("https://github.com/o/r/pull/12")).toEqual({ kind: "web", href: "https://github.com/o/r/pull/12", host: "github.com" });
+		expect(safeLink("https://gitlab.com/o/r/-/merge_requests/3")).toMatchObject({ kind: "web", host: "gitlab.com" });
+		expect(safeLink("https://evil.example/github.com/o/r/pull/12")).toBeUndefined();
+		expect(safeLink("http://github.com/o/r")).toBeUndefined();
+		expect(safeLink("javascript:alert(1)")).toBeUndefined();
+	});
+
+	it("reads a report's headings, list items and code fences as blocks", () => {
+		expect(reportBlocks("### Done\nFixed it.\nAll green.\n\n- one\n2. two\n```\nnpm test\n```\nAfter.")).toEqual([
+			{ kind: "heading", text: "Done" },
+			{ kind: "paragraph", text: "Fixed it.\nAll green." },
+			{ kind: "item", marker: "•", text: "one" },
+			{ kind: "item", marker: "2.", text: "two" },
+			{ kind: "code", text: "npm test" },
+			{ kind: "paragraph", text: "After." },
+		]);
+	});
+
+	it("reads another agent's steer as a message from it", () => {
+		const steer = { kind: "activity", id: "s1", sequence: 3, revision: 1, activityKind: "system", status: "completed", summary: "", createdAt: "2026-10-27T10:00:00Z", detail: { event: "steer", text: '[from w-7 "Tile"] Rebase first.', senderSessionId: "w-7", senderProjectId: "p", senderDisplayName: "Tile" } } as unknown as ConversationItem;
+		expect(workerUpdatesOf(steer)).toMatchObject([{ name: "Tile", sessionId: "w-7", projectId: "p", body: "Rebase first." }]);
+		expect(workerUpdatesOf({ ...steer, id: "s2", detail: { event: "steer", text: "my own steer" } } as unknown as ConversationItem)).toEqual([]);
 	});
 });
