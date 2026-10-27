@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { compareRecords } from "./compare-results.mjs";
 
 function samples(open = [100, 110, 120], overrides = {}) {
@@ -90,7 +91,7 @@ test("CLI reads saved samples, skips disclosure checks, prints changes and rejec
 			await Promise.all(records.map((r, i) => writeFile(path.join(dir, `${i}.json`), JSON.stringify(r))));
 			await writeFile(path.join(dir, "disclosure.json"), JSON.stringify({ workload: "largeTurnDisclosure" }));
 		}
-		const run = () => spawnSync(process.execPath, [new URL("./compare-results.mjs", import.meta.url).pathname, before, after], { encoding: "utf8" });
+		const run = () => spawnSync(process.execPath, [fileURLToPath(new URL("./compare-results.mjs", import.meta.url)), before, after], { encoding: "utf8" });
 		let result = run(); assert.equal(result.status, 0, result.stderr);
 		assert.match(result.stdout, /HELPED IN THESE SAMPLES/);
 		assert.match(result.stdout, /Last message visible/);
