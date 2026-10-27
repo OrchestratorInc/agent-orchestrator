@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
+<img src="../assets/ao-logo.svg" alt="Orchestrator.inc logo" width="144" height="144" />
 
-<h3>에이전트를 일일이 돌보지 마세요. 실제 작업을 머지하세요.</h3>
+<h3>Orchestrator.inc</h3>
+
+<h4>에이전트를 일일이 돌보지 마세요. 실제 작업을 머지하세요.</h4>
 
 <p>
   브랜치, 리뷰, CI 실패를 관리 가능한 상태로 유지하면서 여러 코딩 에이전트를 함께 실행하세요.

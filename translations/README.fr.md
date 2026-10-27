@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
+<img src="../assets/ao-logo.svg" alt="Orchestrator.inc logo" width="144" height="144" />
 
-<h3>Arrêtez de surveiller vos agents. Commencez à fusionner du vrai travail.</h3>
+<h3>Orchestrator.inc</h3>
+
+<h4>Arrêtez de surveiller vos agents. Commencez à fusionner du vrai travail.</h4>
 
 <p>
   Pilotez une flotte d'agents de développement tout en gardant la maîtrise des branches, des revues et des échecs de CI.

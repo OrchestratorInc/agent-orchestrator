@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
+<img src="../assets/ao-logo.svg" alt="Orchestrator.inc logo" width="144" height="144" />
 
-<h3>别再照看智能体，开始合并真正的成果。</h3>
+<h3>Orchestrator.inc</h3>
+
+<h4>别再照看智能体，开始合并真正的成果。</h4>
 
 <p>
   运行一整支编程智能体队伍，同时让分支、评审和 CI 失败始终可控。

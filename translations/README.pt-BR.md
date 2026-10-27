@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
+<img src="../assets/ao-logo.svg" alt="Orchestrator.inc logo" width="144" height="144" />
 
-<h3>Pare de vigiar agentes. Comece a fazer merge de trabalho de verdade.</h3>
+<h3>Orchestrator.inc</h3>
+
+<h4>Pare de vigiar agentes. Comece a fazer merge de trabalho de verdade.</h4>
 
 <p>
   Execute uma frota de agentes de programação mantendo branches, revisões e falhas de CI sob controle.

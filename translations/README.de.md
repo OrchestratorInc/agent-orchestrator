@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
+<img src="../assets/ao-logo.svg" alt="Orchestrator.inc logo" width="144" height="144" />
 
-<h3>Schluss mit dem Babysitten von Agenten. Echte Arbeit mergen.</h3>
+<h3>Orchestrator.inc</h3>
+
+<h4>Schluss mit dem Babysitten von Agenten. Echte Arbeit mergen.</h4>
 
 <p>
   Betreibe eine ganze Flotte von Coding-Agenten und behalte Branches, Reviews und CI-Fehler trotzdem im Griff.
