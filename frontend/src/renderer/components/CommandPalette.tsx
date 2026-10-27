@@ -363,7 +363,7 @@ export function CommandPalette() {
 	const visibleItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
 	// Rows a search found for an earlier query stay visible while the next one
 	// answers, but are never picked for Enter on their own.
-	const searchStale = (normalizedFileQuery !== query.trim() && query.trim().length >= PALETTE_FILE_SEARCH_MIN_CHARS)
+	const searchStale = normalizedFileQuery !== query.trim()
 		|| fileSearchQuery.isPlaceholderData
 		|| contentSearchQuery.isPlaceholderData
 		|| chatSearchQuery.isPlaceholderData;
@@ -891,8 +891,10 @@ export function CommandPalette() {
 					onKeyDownCapture: (event) => {
 						if (isRowNavigationKey(event)) userPickRef.current = true;
 					},
-					onPointerMoveCapture: () => {
-						userPickRef.current = true;
+						onPointerMoveCapture: (event) => {
+							if (event.target instanceof Element && event.target.closest("[cmdk-item]:not([aria-disabled='true'])")) {
+								userPickRef.current = true;
+							}
 					},
 					loop: true,
 					label: contextLabel || t("command.palette"),

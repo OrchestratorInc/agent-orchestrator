@@ -322,7 +322,7 @@ describe("CommandPalette workspace file search", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("does not open an earlier query's file when Enter lands before the next answer", async () => {
+	it.each(["none", "input", "footer", "heading", "row"])("only opens an earlier query's file after deliberately selecting its row (pointer: %s)", async (pointerTarget) => {
 		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
 		getMock.mockImplementation(async (path: string, init: { params: { query: { query: string } } }) => {
 			if (path.endsWith("/workspace/search")) {
@@ -347,6 +347,32 @@ describe("CommandPalette workspace file search", () => {
 			expect.objectContaining({ params: expect.objectContaining({ query: { query: "zqx2", limit: 20 } }) }),
 		));
 		expect(screen.getByText(rowTitle("zqx1.ts"))).toBeInTheDocument();
+		const targets: Record<string, Element | null> = {
+			input,
+			footer: document.querySelector("[data-slot='command-footer']"),
+			heading: document.querySelector("[cmdk-group-heading]"),
+			row: screen.getByText(rowTitle("zqx1.ts")),
+		};
+		if (pointerTarget !== "none") fireEvent.pointerMove(targets[pointerTarget]!);
+		fireEvent.keyDown(input, { key: "Enter" });
+
+		if (pointerTarget === "row") {
+			expect(useUiStore.getState().workspaceFileOpenRequest).toMatchObject({ sessionId: "w-fix", path: "src/zqx1.ts" });
+		} else {
+			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
+		}
+	});
+
+	it.each(["7", ""])("does not open an earlier query's file after shortening the query to %j", async (query) => {
+		ctx.params = { projectId: "proj-1", sessionId: "w-fix" };
+		mockSearch([{ path: "src/77.ts" }]);
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "77" } });
+		await screen.findByText(rowTitle("77.ts"), {}, { timeout: 2_000 });
+
+		fireEvent.change(input, { target: { value: query } });
 		fireEvent.keyDown(input, { key: "Enter" });
 
 		expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
