@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // Publish updates the systemd user manager now and its environment.d source
@@ -16,7 +17,7 @@ func Publish(ctx context.Context, name, value string) error {
 	if !validName(name) || !validValue(value) || value == "" {
 		return errors.New("invalid provider credential")
 	}
-	cmd := exec.CommandContext(ctx, "systemctl", "--user", "import-environment", name)
+	cmd := process.CommandContext(ctx, "systemctl", "--user", "import-environment", name)
 	cmd.Env = append(os.Environ(), name+"="+value)
 	if err := cmd.Run(); err != nil {
 		return err
