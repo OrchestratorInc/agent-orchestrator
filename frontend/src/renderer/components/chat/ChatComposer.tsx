@@ -437,6 +437,8 @@ export const ChatComposer = memo(function ChatComposer({
 
 	const editor = useRef<ComposerEditorHandle>(null);
 	const filePicker = useRef<HTMLInputElement>(null);
+	const [pendingAttachments, setPendingAttachments] = useState<{ id: string; name: string }[]>([]);
+	useEffect(() => setPendingAttachments([]), [attachmentScopeKey]);
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
 	const submitInFlight = useRef<Promise<void> | null>(null);
@@ -1705,6 +1707,8 @@ export const ChatComposer = memo(function ChatComposer({
 	// Images get an inline chip only beside prose that can refer to them.
 	// Image-only drafts already show every image in the attachment strip.
 	function attachFiles(files: File[]) {
+		const pending = files.map((file) => ({ id: crypto.randomUUID(), name: file.name }));
+		setPendingAttachments((current) => [...current, ...pending]);
 		// Reserve the spot now: staging can take a while, and the user keeps typing.
 		const reservation = proseBesideImages(textRef.current.trim(), composerImages.map((image) => image.path)) &&
 			files.some((file) => file.type.startsWith("image/"))
@@ -1714,6 +1718,8 @@ export const ChatComposer = memo(function ChatComposer({
 			if (!reservation) return;
 			editor.current?.fillImages(reservation, added.flatMap((attachment) =>
 				attachment.stagedPath && isInlineImagePath(attachment.stagedPath) ? [attachment.stagedPath] : []));
+		}).finally(() => {
+			setPendingAttachments((current) => current.filter((file) => !pending.some((item) => item.id === file.id)));
 		});
 	}
 
@@ -1862,9 +1868,9 @@ export const ChatComposer = memo(function ChatComposer({
 						</button>
 					</div>
 				) : null}
-				{staged || contextReferences.length > 0 ? (
+				{staged || pendingAttachments.length > 0 || contextReferences.length > 0 ? (
 					<div className="flex flex-wrap items-center gap-1.5" data-testid="composer-attachments-and-annotations">
-						{staged ? (
+						{staged || pendingAttachments.length > 0 ? (
 							<ul className="contents" aria-label="Attached files">
 								{stripAttachments.map(({ file, path, preview }) => {
 									return (
@@ -1887,6 +1893,9 @@ export const ChatComposer = memo(function ChatComposer({
 										</span>
 										<button
 											type="button"
+											onMouseDown={(event) => {
+												if (event.button === 0) event.preventDefault();
+											}}
 											onClick={() => {
 											if (submitInFlight.current) return;
 											if (path) {
@@ -1898,6 +1907,7 @@ export const ChatComposer = memo(function ChatComposer({
 												setRetainedAttachments(next);
 												onQueuedRetainedAttachmentsChange?.(next);
 											} else fileAttachments.remove(file.id);
+											editor.current?.focus();
 											}}
 											disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
 											aria-label={`Remove ${file.name}`}
@@ -1908,6 +1918,21 @@ export const ChatComposer = memo(function ChatComposer({
 									</li>
 									);
 								})}
+								{pendingAttachments.map((file) => (
+									<li
+										key={file.id}
+										role="status"
+										aria-label={`Attaching ${file.name}`}
+										className="flex items-center gap-1.5 rounded bg-interactive-hover py-0.5 pl-0.5 pr-1 motion-safe:animate-pulse"
+									>
+										<div aria-hidden="true" className="size-6 rounded-sm bg-surface" />
+										<span aria-hidden="true" className="relative max-w-[120px] truncate text-xs">
+											<span className="invisible">{file.name}</span>
+											<span className="absolute inset-x-0 top-1/2 h-2 -translate-y-1/2 rounded-sm bg-surface" />
+										</span>
+										<span aria-hidden="true" className="size-3 rounded-sm bg-surface" />
+									</li>
+								))}
 							</ul>
 						) : null}
 						{contextReferences.length > 0 ? (
@@ -1976,11 +2001,6 @@ export const ChatComposer = memo(function ChatComposer({
 							{translateDraft("chat.draft.abandon")}
 						</Button>
 					</div>
-				) : null}
-				{fileAttachments.preparing ? (
-					<p role="status" className="px-1.5 text-xs leading-snug text-muted-foreground">
-						Saving attachments… Wait before leaving this chat.
-					</p>
 				) : null}
 
 				{/* A refused steer is an ordinary outcome, not a failure: the text is still
