@@ -62,6 +62,9 @@ type UpdateAdvisory struct {
 	MaintenanceMethod string              `json:"maintenanceMethod,omitempty"`
 	Reason            UpdateUnknownReason `json:"reason,omitempty" enum:"ownership_unconfirmed,unsupported_source,version_unparseable,channel_unconfirmed,lookup_failed,disabled,build_unordered"`
 	CheckedAt         time.Time           `json:"checkedAt"`
+	InstallationID    string              `json:"installationId,omitempty" description:"Opaque identity of the selected installation; send as expectedInstallation when updating."`
+	Managed           bool                `json:"managed" description:"The effective executable belongs to an AO-managed release."`
+	ManagedUpdate     bool                `json:"managedUpdate" description:"The selected update recipe installs an AO-managed release, leaving the user's external CLI unchanged."`
 	// InUse is computed on every read, so it reflects sessions opened or ended
 	// since the release check ran.
 	InUse *UpdateInUse `json:"inUse,omitempty"`
@@ -273,11 +276,20 @@ func (s *Service) computeUpdateAdvisory(ctx context.Context, target Target) (Upd
 		return advisory, nil
 	}
 	advisory.CurrentVersion = current.display
+	advisory.InstallationID = installationIdentity(ctx, target, verified, source)
+	advisory.Managed = managedCopy
+	if plannerReady && source.Package != "" {
+		advisory.ManagedUpdate = planner.planForOperation(source, AgentOperationUpdate).managed
+	}
 	if source.Package != "" {
 		advisory.MaintenanceMethod = source.Method
 		advisory.maintenanceCask = source.PackageCask
-	} else if home, _ := os.UserHomeDir(); vendorMaintainable(s.goos, target, verified.ResolvedPath, home) {
+	} else if home, _ := os.UserHomeDir(); s.vendorMaintenanceSupported(ctx, target, verified.ResolvedPath, home) {
 		advisory.MaintenanceMethod = "official-installer"
+	}
+	// Vendor identity includes the method that the update request will select.
+	if source.Package == "" && advisory.MaintenanceMethod != "" {
+		advisory.InstallationID = installationIdentity(ctx, target, verified, Plan{Method: advisory.MaintenanceMethod})
 	}
 	var latest string
 	if source.Package != "" {

@@ -19,6 +19,7 @@ import (
 type Installer interface {
 	Start(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
 	StartAgentOperation(ctx context.Context, target systeminstall.Target, method string, operation systeminstall.AgentOperation, expectedVersion string) (systeminstall.Job, error)
+	StartAgentUpdate(ctx context.Context, target systeminstall.Target, method, expectedVersion, expectedInstallation string) (systeminstall.Job, error)
 	Status(ctx context.Context, target systeminstall.Target) (systeminstall.Job, error)
 	AgentPlans(ctx context.Context) ([]systeminstall.AgentPlan, error)
 	AgentJobs(ctx context.Context) ([]systeminstall.Job, error)
@@ -106,7 +107,17 @@ func (c *SystemInstallController) startAgent(w http.ResponseWriter, r *http.Requ
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_INSTALL_OPERATION", "operation must be install, reinstall, or update", nil)
 		return
 	}
-	job, err := c.Installer.StartAgentOperation(r.Context(), target, request.Method, operation, request.ExpectedVersion)
+	if request.ExpectedInstallation != "" && operation != systeminstall.AgentOperationUpdate {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_INSTALL_REQUEST", "expectedInstallation is only accepted for updates", nil)
+		return
+	}
+	var job systeminstall.Job
+	var err error
+	if operation == systeminstall.AgentOperationUpdate {
+		job, err = c.Installer.StartAgentUpdate(r.Context(), target, request.Method, request.ExpectedVersion, request.ExpectedInstallation)
+	} else {
+		job, err = c.Installer.StartAgentOperation(r.Context(), target, request.Method, operation, request.ExpectedVersion)
+	}
 	if err != nil {
 		if writeAgentInstallError(w, r, err) {
 			return
@@ -183,6 +194,9 @@ func writeAgentInstallError(w http.ResponseWriter, r *http.Request, err error) b
 		return true
 	}
 	switch {
+	case errors.Is(err, systeminstall.ErrInstallationChanged):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "INSTALLATION_CHANGED", "The harness installation changed. Refresh and try again.", nil)
+		return true
 	case errors.Is(err, systeminstall.ErrUpdateVersion):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_UPDATE_VERSION", "expectedVersion is only accepted for updates and must be a version newer than the installed one", nil)
 		return true

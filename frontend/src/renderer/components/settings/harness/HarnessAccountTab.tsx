@@ -14,6 +14,7 @@ import { SettingsOptionMenu } from "../SettingsOptionMenu";
 import type { HarnessDetails } from "./describe-harness";
 import { HarnessAuthTerminalPanel } from "./HarnessAuthTerminalPanel";
 import { HarnessDetailGroup, HarnessDetailRow, HarnessTimestamp } from "./harness-ui";
+import { CodexUpdateCatalogStatus } from "./CodexUpdateCatalogStatus";
 
 const ACTION_CLASS = "h-8 min-w-20 px-3 focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -109,6 +110,9 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 			</HarnessDetailRow> : null}
 		</HarnessDetailGroup>
 		{job && isWaitingForIdleJob(job) ? <div className="-mt-3"><IdleUpdateStatus agentId={details.agentId} job={job} hostId={hostId} onViewSessions={(waiting) => onViewSessions?.(waiting)} /></div> : null}
+		{details.agentId === "codex" && details.advisory?.managedUpdate && !details.advisory.managed ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.codexManagedUpdate")}</p> : null}
+		{details.agentId === "codex" && details.advisory?.managed ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.codexManagedRuntime")}</p> : null}
+		{details.agentId === "codex" && job?.status === "succeeded" && details.currentOperation === "update" ? <CodexUpdateCatalogStatus startedAt={job.startedAt} hostId={hostId} /> : null}
 		{isInstalled && details.showUpdate && !details.canUpdate ? <p className="-mt-3 text-xs text-settings-muted">{details.updateReason}</p> : null}
 		{isInstalled && details.updateUnknown && !details.advisoryQuery?.isPending && !details.manualOnly ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
 		{/* A harness with no installable method explains how it is maintained instead. */}

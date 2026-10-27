@@ -19,13 +19,29 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install generation dependencies
+        run: npm ci
       - name: Format changed Go sources in Actions
         run: git diff --name-only origin/main...HEAD -- '*.go' | xargs -r gofmt -w
+      - name: Regenerate API in Actions
+        run: npm run api
       - name: Codex recovery regressions
         working-directory: backend
-        run: go test -count=1 -run '^TestCodex(UpdateRefusesInstallationChangedBeforeExecution|UnknownInstallationIsManualOnly|FailedUpdaterInvalidatesEffectiveProvider)$' -v ./internal/service/systeminstall
+        run: go test -count=1 -run '^Test(Codex|InstallerScope)' -v ./internal/service/systeminstall
+      - name: Complete affected backend suites
+        working-directory: backend
+        run: go test -race -count=1 ./internal/service/systeminstall ./internal/httpd/...
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: codex-recovery-sources
-          path: backend/internal/service/systeminstall/codex_recovery_test.go
+          path: |
+            backend/internal/service/systeminstall/
+            backend/internal/httpd/controllers/dto.go
+            backend/internal/httpd/controllers/systeminstall.go
+            backend/internal/httpd/controllers/systeminstall_test.go
+            backend/internal/httpd/apispec/openapi.yaml
+            frontend/src/api/schema.ts

@@ -208,6 +208,9 @@ type Plan struct {
 	managed bool
 	// managedPin is the release a managed reinstall installs again.
 	managedPin string
+	// Env binds native updater state to the verified installation, rather than
+	// an authentication-only home inherited from the daemon.
+	Env []string
 
 	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
 	// only for the daemon's own Node/npm or global prefix. An install runs
@@ -389,6 +392,7 @@ type Service struct {
 	workers           sync.WaitGroup
 	harnessGatesMu    sync.Mutex
 	harnessGates      map[domain.AgentHarness]*sync.RWMutex
+	installerGates    map[string]chan struct{}
 
 	executables         ports.ExecutableFinder
 	commands            ports.CommandRunner
@@ -709,6 +713,10 @@ func (s *Service) StartAgent(ctx context.Context, target Target, method string) 
 // An update runs alongside live sessions, which restart on the new release
 // once idle; see gateRunningSessions.
 func (s *Service) StartAgentOperation(ctx context.Context, target Target, method string, operation AgentOperation, expected string) (Job, error) {
+	return s.startAgentOperation(ctx, target, method, operation, expected, "")
+}
+
+func (s *Service) startAgentOperation(ctx context.Context, target Target, method string, operation AgentOperation, expected, expectedInstallation string) (Job, error) {
 	if err := ctx.Err(); err != nil {
 		return Job{}, err
 	}
@@ -779,6 +787,16 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 	if operation == AgentOperationUpdate {
 		if baseline, err = s.confirmInstalledOwner(ctx, target, plan); err != nil {
 			return Job{}, err
+		}
+		if expectedInstallation != "" && (baseline == nil || baseline.identity != expectedInstallation) {
+			return Job{}, ErrInstallationChanged
+		}
+		if target == TargetCodex && plan.Method == "official-installer" && baseline != nil && !plan.Unsupported {
+			home, ok := s.nativeCodexUpdateHome(ctx, baseline.path)
+			if !ok {
+				return Job{}, ErrInstallOwner
+			}
+			plan.Env = append(plan.Env, "CODEX_HOME="+home)
 		}
 		if !plan.managed {
 			// A managed update installs into AO's own directory, so the
@@ -1244,6 +1262,18 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation AgentOperation, job *Job, baseline *installedBaseline) {
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
+	releaseInstaller, err := s.lockInstaller(ctx, plan, job)
+	if err != nil {
+		s.finishAgentJob(job, StatusFailed, "", fmt.Sprintf("wait for installer: %v", err), "")
+		return
+	}
+	defer releaseInstaller()
+	if operation == AgentOperationUpdate {
+		if err := s.recheckUpdateInstallation(ctx, plan, baseline); err != nil {
+			s.finishAgentJob(job, StatusFailed, "", err.Error(), "")
+			return
+		}
+	}
 	out := &capturedOutput{max: maxOutputBytes}
 	outputWriter := io.Writer(out)
 	var devinOutput *devinInstallOutput
@@ -1255,6 +1285,7 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		"CI=1", "NONINTERACTIVE=1", "HOMEBREW_NO_AUTO_UPDATE=1",
 		"NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
 	}
+	env = append(env, plan.Env...)
 	if plan.keepPreviousRelease && plan.Method == "homebrew" && !plan.PackageCask {
 		// Live sessions still run the old keg; it is cleaned up after they move.
 		env = append(env, "HOMEBREW_NO_INSTALL_CLEANUP=1")
@@ -1293,6 +1324,14 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		if ctx.Err() == nil {
 			runErr = runCommand(plan.Command)
 		}
+	}
+	// Any installer can replace files and then fail. Invalidate every provider
+	// and catalog cache before verification or reporting the command's failure.
+	s.mu.Lock()
+	invalidate := s.invalidateBinary
+	s.mu.Unlock()
+	if invalidate != nil {
+		invalidate(plan.Target)
 	}
 	if ctx.Err() == context.DeadlineExceeded {
 		s.finishAgentJob(job, StatusFailed, out.String(), fmt.Sprintf("%s timed out after %s", operation, s.installTimeout), "")

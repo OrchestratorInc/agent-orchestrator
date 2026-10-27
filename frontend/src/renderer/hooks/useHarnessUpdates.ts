@@ -196,15 +196,17 @@ export function useStartHarnessUpdate(hostId?: string) {
 	}): Promise<HarnessUpdateStart> => {
 		try {
 			const key = updateAdvisoryQueryKey(agentId, hostId);
+			const approved = queryClient.getQueryData<AgentUpdateAdvisory>(key);
 			await queryClient.cancelQueries({ queryKey: key });
 			const fresh = syncInstallerMethods(queryClient, await fetchUpdateAdvisory(agentId, hostId, true), hostId);
 			queryClient.setQueryData(key, fresh);
 			// No longer behind: the refreshed advisory already shows why.
 			if (!hasConfirmedHarnessUpdate(fresh) || canStart?.() === false) return {};
+			if (approved?.installationId && fresh.installationId !== approved.installationId) return { error: t("settings.harness.updateMethodChanged", { agent: agentLabel(agentId) }) };
 			if (maintenanceMethodId(fresh) !== methodId) return { error: t("settings.harness.updateMethodChanged", { agent: agentLabel(agentId) }) };
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/install", {
 				params: { path: { agent: agentId } },
-				body: { method: methodId, operation: "update", expectedVersion: fresh.latestVersion },
+				body: { method: methodId, operation: "update", expectedVersion: fresh.latestVersion, ...(fresh.installationId ? { expectedInstallation: fresh.installationId } : {}) },
 			});
 			const inUse = harnessInUseFromError(error);
 			if (inUse) return { inUse };

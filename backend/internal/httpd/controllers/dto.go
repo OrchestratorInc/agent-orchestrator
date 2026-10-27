@@ -2253,6 +2253,7 @@ type StartAgentInstallRequest struct {
 	Method          string                       `json:"method,omitempty" description:"Server-issued installation method id. Omit to use the recommended viable method for an install or reinstall, and the method that owns the installed copy for an update."`
 	Operation       systeminstall.AgentOperation `json:"operation,omitempty" enum:"install,reinstall,update" description:"Requested operation. Defaults to install for older clients."`
 	ExpectedVersion string                       `json:"expectedVersion,omitempty" description:"For updates, the available version explicitly approved by the user. The update must reach it. It is installed only when it lies between the installed version and the latest release AO found; otherwise that latest release is installed. A version at or below the installed one, or one sent with another operation, is rejected with INVALID_UPDATE_VERSION."`
+	ExpectedInstallation string                  `json:"expectedInstallation,omitempty" description:"For updates, the opaque installationId returned by the advisory. A changed installation is rejected before mutation."`
 }
 
 // AgentInstallJobsResponse hydrates Settings with the latest durable job for

@@ -34,6 +34,7 @@ type fakeInstaller struct {
 	advisory        systeminstall.UpdateAdvisory
 	refreshAdvisory bool
 	expectedVersion string
+	expectedInstallation string
 	cancelJob       systeminstall.Job
 	cancelErr       error
 }
@@ -60,6 +61,11 @@ func (f *fakeInstaller) StartAgentOperation(_ context.Context, target systeminst
 	f.lastOperation = operation
 	f.expectedVersion = expectedVersion
 	return f.startJob, f.startErr
+}
+
+func (f *fakeInstaller) StartAgentUpdate(ctx context.Context, target systeminstall.Target, method, expectedVersion, expectedInstallation string) (systeminstall.Job, error) {
+	f.expectedInstallation = expectedInstallation
+	return f.StartAgentOperation(ctx, target, method, systeminstall.AgentOperationUpdate, expectedVersion)
 }
 
 func (f *fakeInstaller) CancelAgentOperation(_ context.Context, target systeminstall.Target) (systeminstall.Job, error) {
@@ -107,8 +113,8 @@ func TestAgentInstallRoutes(t *testing.T) {
 	if status != http.StatusOK || !strings.Contains(string(body), `"status":"interrupted"`) {
 		t.Fatalf("GET /agents/install-jobs = %d, body=%s", status, body)
 	}
-	_, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/agents/codex/install", `{"method":"npm","operation":"update","expectedVersion":"1.3.0"}`)
-	if status != http.StatusAccepted || installer.expectedVersion != "1.3.0" {
+	_, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/agents/codex/install", `{"method":"npm","operation":"update","expectedVersion":"1.3.0","expectedInstallation":"installation-from-advisory"}`)
+	if status != http.StatusAccepted || installer.expectedVersion != "1.3.0" || installer.expectedInstallation != "installation-from-advisory" {
 		t.Fatalf("expected version not forwarded: status=%d version=%q", status, installer.expectedVersion)
 	}
 	body, status, _ = doRequest(t, srv, http.MethodPost, "/api/v1/agents/codex/verify", "")
@@ -186,6 +192,7 @@ func TestAgentInstallMapsMethodAndActiveHarnessErrors(t *testing.T) {
 		{name: "install active", err: systeminstall.ErrInstallActive, wantStatus: http.StatusConflict, wantCode: "INSTALL_ACTIVE"},
 		{name: "owner unconfirmed", err: fmt.Errorf("%w: installed with Homebrew", systeminstall.ErrInstallOwner), wantStatus: http.StatusConflict, wantCode: "INSTALL_OWNER_UNCONFIRMED"},
 		{name: "invalid update version", err: systeminstall.ErrUpdateVersion, wantStatus: http.StatusBadRequest, wantCode: "INVALID_UPDATE_VERSION"},
+		{name: "installation changed", err: systeminstall.ErrInstallationChanged, wantStatus: http.StatusConflict, wantCode: "INSTALLATION_CHANGED"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			installer := &fakeInstaller{startErr: tt.err}

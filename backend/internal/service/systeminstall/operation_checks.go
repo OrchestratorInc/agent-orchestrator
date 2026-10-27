@@ -176,6 +176,7 @@ func officialChannelFits(kind officialSourceKind, layout string) bool {
 // installedBaseline is the harness binary as it was before an update, used to
 // confirm the update changed the copy sessions actually run.
 type installedBaseline struct {
+	identity string
 	target   Target
 	path     string
 	version  string
@@ -224,6 +225,7 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 		baseline.latest = advisory.LatestVersion
 	}
 	s.mu.Unlock()
+	baseline.identity = installationIdentity(ctx, target, verified, plan)
 	return baseline, nil
 }
 
@@ -241,6 +243,10 @@ func (s *Service) methodOwnsBinary(ctx context.Context, plan Plan, path string) 
 		owned, err := s.ownsInstallation(ctx, path, plan.Method, packageWithoutLatest(plan.Package), plan.PackageCask)
 		return err == nil && owned
 	default:
+		if plan.Target == TargetCodex {
+			_, ok := s.nativeCodexUpdateHome(ctx, path)
+			return ok
+		}
 		// Vendor installers write their own locations; any package tool's
 		// layout means another installer owns this binary.
 		return vendorLayout(plan.Target, packageLayout(path))

@@ -365,7 +365,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				continue;
 			}
 			const completedWhileMounted = activeInstallJobs.current.delete(agentId);
-			if (job.status !== "succeeded" || !completedWhileMounted) continue;
+			if (!completedWhileMounted) continue;
 			refreshInstalledAgent(agentId);
 		}
 	}, [jobs.data, refreshInstalledAgent]);

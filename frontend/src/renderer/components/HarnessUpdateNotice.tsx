@@ -302,6 +302,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				: <Button size="sm" variant="outline" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
 			</div>
 			{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
+			{agentId === "codex" && advisory.managedUpdate && !advisory.managed ? <p className="mt-2 text-caption text-muted-foreground">{t("settings.harness.codexManagedUpdate")}</p> : null}
 			{error && !busy ? <div className="mt-2 flex flex-col items-start gap-1.5">
 				<p role="alert" className="line-clamp-3 break-words text-caption text-error">{error}</p>
 				<Button type="button" size="sm" variant="outline" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
@@ -340,7 +341,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			</span>}
 			title={stackTitle}
 			// The Update all summary takes the help line's place while it is shown.
-			help={updateAllSummary && !startingAll ? updateAllSummary : help}
+			help={updateAllSummary && !startingAll ? updateAllSummary : updates.some(({ agentId, advisory }) => agentId === "codex" && advisory.managedUpdate && !advisory.managed) ? `${help} ${t("settings.harness.codexManagedUpdate")}` : help}
 			footer={<>
 				{/* The list toggle keeps one place, opposite Update all, whichever way it points. */}
 				<Button type="button" size="sm" variant="outline" className="shrink-0" aria-expanded={isExpanded} aria-controls={stackId}

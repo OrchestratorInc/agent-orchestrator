@@ -989,6 +989,23 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 
+	it("binds a Codex update to the installation verified at click time", async () => {
+		mockInstalledOperations("npm");
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/{agent}/update-advisory" && (options as { params?: { query?: { refresh?: boolean } } })?.params?.query?.refresh) return { data: {
+				agentId: "codex", status: "behind_latest", currentVersion: "1.2.3", latestVersion: "1.3.0", maintenanceMethod: "npm", installationId: "verified-prefix-and-binary",
+			} } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		renderSection();
+		await userEvent.click(await within(await findAgentRow("codex")).findByRole("button", { name: "Update" }));
+		expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", {
+			params: { path: { agent: "codex" } },
+			body: { method: "npm", operation: "update", expectedVersion: "1.3.0", expectedInstallation: "verified-prefix-and-binary" },
+		});
+	});
+
 	it.each(["already-current", "different-owner", "unknown"])("does not run an update when the click-time probe reports %s", async (state) => {
 		mockInstalledOperations("npm");
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;

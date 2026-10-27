@@ -53,6 +53,11 @@ func (v *Verifier) Resolve(ctx context.Context, target Target) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("systeminstall: adapter for %s cannot resolve its binary", target)
 	}
+	// Verification must observe PATH and wrapper changes, even when a plugin
+	// instance previously cached another installation.
+	if invalidator, ok := agent.(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
 	path, err := resolver.ResolveBinary(ctx)
 	if err != nil {
 		return "", fmt.Errorf("resolve installed %s binary: %w", target, err)

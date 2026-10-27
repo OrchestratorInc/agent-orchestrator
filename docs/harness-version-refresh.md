@@ -1,5 +1,22 @@
 # Terminal harness version refresh
 
+Codex model availability comes from the effective CLI's live `model/list`,
+not from Codex desktop or an AO model allowlist. Settings and update notices
+explain when an update will adopt an AO-managed release: the user's separate
+terminal installation stays unchanged. A verified CLI update and a successful
+account model-catalog refresh are separate outcomes; cached choices remain
+available with stale/error state when discovery fails. Updating never grants
+model entitlement.
+
+Codex's supported maintenance routes are npm (managed when enabled), verified
+Homebrew ownership on macOS, and a verified standalone installation whose help
+advertises `update`. Native updates use that installation's `CODEX_HOME`.
+Custom wrappers, unverified ownership, and unsupported pnpm/Bun/Vite+ installs
+require manual maintenance. No updater uses Codex desktop's private layout.
+The daemon rechecks the approved installation identity before mutation,
+including after an idle wait or shared-installer queue. Failed commands also
+invalidate provider caches because they may already have replaced files.
+
 AO installs managed npm/Bun/uv/pipx releases side by side, switches `current`,
 and retains releases referenced by live launches. An idle terminal can move to
 the new executable only if its adapter explicitly implements
