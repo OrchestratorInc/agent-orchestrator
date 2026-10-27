@@ -430,29 +430,47 @@ func TestTerminalStartupDoesNotBlockLoginPolling(t *testing.T) {
 
 func TestTerminalLoginExcludesBackgroundUntilConfirmedExit(t *testing.T) {
 	svc := loginTestService(t, "wait")
+	launches := 0
+	commandContext := svc.commandContext
+	svc.commandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		launches++
+		return commandContext(ctx, name, args...)
+	}
 	opener := &recordingTerminalOpener{terminal: shellterm.ShellTerminal{HandleID: "retained-terminal"}, alive: true}
 	svc.terminals = opener
 	if _, err := svc.Start(t.Context(), "codex"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.StartLogin(t.Context(), "codex", "device_code", ""); err == nil {
-		t.Fatal("background login overlapped a live terminal command")
+	_, err := svc.StartLogin(t.Context(), "codex", "device_code", "")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_IN_PROGRESS" || apiErr.Kind != apierr.KindConflict {
+		t.Fatalf("background login over live terminal = %v, want AGENT_AUTH_IN_PROGRESS conflict", err)
+	}
+	if launches != 0 {
+		t.Fatalf("launched %d background commands while terminal login was live", launches)
 	}
 	if _, err := svc.Logout(t.Context(), "codex"); err == nil || opener.calls != 1 {
 		t.Fatalf("logout overlapped terminal login: calls=%d err=%v", opener.calls, err)
 	}
 	opener.alive, opener.probeErr = false, errors.New("runtime probe unavailable")
-	if _, err := svc.StartLogin(t.Context(), "codex", "device_code", ""); err == nil {
-		t.Fatal("an inconclusive probe released terminal exclusion")
+	_, err = svc.StartLogin(t.Context(), "codex", "device_code", "")
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_TERMINAL_UNKNOWN" {
+		t.Fatalf("inconclusive terminal probe = %v, want AGENT_AUTH_TERMINAL_UNKNOWN", err)
 	}
 	opener.alive, opener.probeErr = true, nil
 	if _, err := svc.StartLogin(t.Context(), "codex", "device_code", ""); err == nil {
 		t.Fatal("failed probe forgot the still-live terminal")
+	}
+	if launches != 0 {
+		t.Fatalf("launched %d background commands before confirmed terminal exit", launches)
 	}
 	// A retained terminal/scrollback handle does not block a new login after
 	// the runtime confirms that its child, rather than its host, has exited.
 	opener.alive = false
 	if _, err := svc.StartLogin(t.Context(), "codex", "device_code", ""); err != nil {
 		t.Fatalf("confirmed terminal child exit did not release exclusion: %v", err)
+	}
+	if launches != 1 {
+		t.Fatalf("background launches after confirmed terminal exit = %d, want 1", launches)
 	}
 }
