@@ -1,5 +1,5 @@
 import path from "node:path";
-import { _electron as electron, expect, test as base, type Locator, type Page } from "@playwright/test";
+import { _electron as electron, expect, test as base, type ElectronApplication, type Locator, type Page } from "@playwright/test";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeAgent, installFakeBridge } from "./support/fake-bridge";
 import { openInspector } from "./support/open-inspector";
@@ -7,15 +7,17 @@ import { openInspector } from "./support/open-inspector";
 // AO_E2E_ELECTRON=1 runs these specs inside AO's own Electron (its Chromium can
 // differ from Playwright's: Electron 33 reports a shadow-root selection as
 // collapsed while it holds text, which only showed up there).
+let activeElectron: ElectronApplication | undefined;
 const test = process.env.AO_E2E_ELECTRON
 	? base.extend({
 		page: async ({}, use) => {
 			const app = await electron.launch({
-				executablePath: path.join(process.cwd(), "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"),
+				executablePath: path.join(process.cwd(), "node_modules/electron/dist", process.platform === "win32" ? "electron.exe" : process.platform === "darwin" ? "Electron.app/Contents/MacOS/Electron" : "electron"),
 				args: [path.join(process.cwd(), "e2e/support/electron-shell.cjs")],
 			});
-			await use(await app.firstWindow());
-			await app.close();
+			activeElectron = app;
+			try { await use(await app.firstWindow()); }
+			finally { activeElectron = undefined; await app.close(); }
 		},
 	})
 	: base;
@@ -86,7 +88,7 @@ async function stubWorkspace(page: Page, id: string): Promise<string[]> {
 }
 
 /** A Chat-mode worker with one changed file, opened on its Files tab. */
-async function openChatSession(page: Page) {
+async function openChatSession(page: Page, text = "", checkingSide = false) {
 	await installFakeAgent(page, { projectId, projectName: projectId, workers: [{ id: chatSession, provider: "codex", title: "Ask in chat", mode: "chat" }] });
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
 		if (route.request().headers().accept?.includes("text/event-stream")) return quietEventStream(route);
@@ -94,7 +96,7 @@ async function openChatSession(page: Page) {
 		if (pathname === "/api/v1/agents/readiness" || pathname === "/api/v1/agents/readiness/ensure") return route.fulfill({ json: { agents: [agentReadiness("codex", "Codex")] } });
 		if (pathname === `/api/v1/projects/${projectId}`) return route.fulfill({ json: { status: "ok", project: { id: projectId, agent: "codex", config: { worker: { agent: "codex" } } } } });
 		if (pathname === `/api/v1/sessions/${chatSession}/conversation`) {
-			return route.fulfill({ json: { conversationId: "conversation-ask-in-chat", sessionId: chatSession, harness: "codex", mode: "chat", controller: "ready", latestSequence: 0, oldestSequence: 0, hasMoreBefore: false, turns: [], messages: [], activities: [], settings: {} } });
+			return route.fulfill({ json: { conversationId: "conversation-ask-in-chat", sessionId: chatSession, harness: "codex", mode: "chat", controller: "ready", latestSequence: 0, oldestSequence: 0, hasMoreBefore: false, turns: text ? [{ id: "parent-turn", state: "completed", requestedAt: "2026-10-27T00:00:00Z", completedAt: "2026-10-27T00:00:01Z" }] : [], messages: text ? [{ id: "parent-message", turnId: "parent-turn", sequence: 1, revision: 0, role: "assistant", text, streaming: false, createdAt: "2026-10-27T00:00:01Z" }] : [], activities: [], settings: {} } });
 		}
 		if (pathname === `/api/v1/sessions/${chatSession}/conversation/models`) return route.fulfill({ json: { models: [], selected: {} } });
 		if (pathname === `/api/v1/sessions/${chatSession}/conversation/skills`) return route.fulfill({ json: { skills: [] } });
@@ -103,6 +105,11 @@ async function openChatSession(page: Page) {
 	});
 	const sentToChat = await stubWorkspace(page, chatSession);
 	const inspector = await openFilesTab(page, chatSession, projectId);
+	if (checkingSide) await page.evaluate(async () => {
+		const modulePath = "/src/renderer/stores/ui-store.ts";
+		const { useUiStore } = await import(/* @vite-ignore */ modulePath);
+		useUiStore.setState({ developerMode: true, sideChats: true });
+	});
 	const composer = page.getByRole("combobox", { name: "Message the agent" });
 	await expect(composer).toBeVisible();
 	return { inspector, composer, sentToChat };
@@ -154,18 +161,19 @@ async function selectText(page: Page, from: Locator, to: Locator, { release = tr
 	if (release) await page.mouse.up();
 }
 
-/** The button sits inside the window and on or just under the given row. */
-async function expectButtonBy(page: Page, target: Locator) {
+/** The entire toolbar remains inside the visible window. */
+async function expectButtonInView(page: Page) {
 	const button = (await askButton(page).boundingBox())!;
-	const line = (await target.boundingBox())!;
-	const width = await page.evaluate(() => window.innerWidth);
+	const view = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
 	expect(button.x).toBeGreaterThanOrEqual(0);
-	expect(button.x + button.width).toBeLessThanOrEqual(width);
-	expect(button.y).toBeGreaterThanOrEqual(line.y - button.height);
-	expect(button.y).toBeLessThanOrEqual(line.y + line.height + 16);
+	expect(button.x + button.width).toBeLessThanOrEqual(view.width);
+	expect(button.y).toBeGreaterThanOrEqual(0);
+	expect(button.y + button.height).toBeLessThanOrEqual(view.height);
 }
 
 test.beforeEach(async ({ page }) => {
+	page.setDefaultNavigationTimeout(120_000);
+	await page.emulateMedia({ reducedMotion: "reduce" });
 	page.on("pageerror", (error) => { throw error; });
 });
 
@@ -175,8 +183,8 @@ test.describe("Ask in chat from highlighted code", () => {
 		// The review header is slotted from the selected surface's light DOM,
 		// so the file lookup must succeed on that same host (review regression).
 		await expect.poll(() => row(page, REVIEW, 2).evaluate((element) => {
-			const host = (element.getRootNode() as ShadowRoot).host;
-			return host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id");
+			const root = element.getRootNode();
+			return root instanceof ShadowRoot ? root.host.querySelector("[data-review-item-id]")?.getAttribute("data-review-item-id") : undefined;
 		})).toContain(filePath);
 		await selectText(page, row(page, REVIEW, 2), row(page, REVIEW, 4), { release: false });
 		// Shown while the selection is still being dragged, letting the drag through.
@@ -184,7 +192,7 @@ test.describe("Ask in chat from highlighted code", () => {
 		await expect(askButton(page)).toHaveCSS("pointer-events", "none");
 		await page.mouse.up();
 		await expect(askButton(page)).not.toHaveCSS("pointer-events", "none");
-		await expectButtonBy(page, row(page, REVIEW, 4));
+		await expectButtonInView(page);
 
 		await askButton(page).getByRole("button", { name: "Ask in chat" }).click();
 		await expect(composer).toContainText("retry.ts#L2-L4");
@@ -196,6 +204,82 @@ test.describe("Ask in chat from highlighted code", () => {
 		expect(sentToChat[0]).toContain("why three steps?");
 		expect(sentToChat[0]).toContain("[src/retry.ts#L2-L4]");
 		expect(sentToChat[0]).toContain("```diff\n   step(2);\n   step(3);\n const value4 = 4;\n```");
+	});
+
+	test("a tall chat selection sticks to the pane top and shows checking immediately", async ({ page }) => {
+		const text = Array.from({ length: 80 }, (_, i) => `Selected parent context line ${i + 1}.`).join("\n\n");
+		await openChatSession(page, text, true);
+		const log = page.getByRole("log", { name: "Conversation" });
+		await expect(log.locator("[data-chat-message-body]")).toBeVisible();
+		const timing = await log.evaluate(async (pane) => {
+			const body = pane.querySelector("[data-chat-message-body]")!;
+			pane.scrollTop = 0;
+			const range = document.createRange(); range.selectNodeContents(body);
+			const selection = getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+			const start = performance.now();
+			document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+			await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+			return { elapsed: performance.now() - start, visible: !!document.querySelector("[data-chat-selection-actions]") };
+		});
+		expect(timing.visible).toBe(true);
+		console.log("selection release to two-frame visibility", timing.elapsed, "ms");
+		const toolbar = page.locator("[data-chat-selection-actions]");
+		await expect(toolbar).toBeVisible();
+		await expect(toolbar.getByRole("button", { name: "Checking side chat…" })).toBeDisabled();
+		await expect(toolbar.locator("svg")).toHaveCount(0);
+		const check = async () => {
+			const pane = (await log.boundingBox())!;
+			const box = (await toolbar.boundingBox())!;
+			expect(Math.abs(box.y - pane.y - 8)).toBeLessThan(2);
+			expect(box.x).toBeGreaterThanOrEqual(pane.x);
+			expect(box.x + box.width).toBeLessThanOrEqual(pane.x + pane.width);
+		};
+		await check();
+		await log.evaluate((pane) => { pane.scrollTop += 300; });
+		await check();
+		const beforeGrowth = await log.evaluate((pane) => pane.scrollTop);
+		await log.evaluate((pane) => {
+			const line = document.createElement("p"); line.textContent = "Later streamed text outside the frozen selection.";
+			pane.querySelector("[data-chat-message-body]")!.append(line);
+		});
+		await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+		expect(await log.evaluate((pane) => pane.scrollTop)).toBe(beforeGrowth);
+		await check();
+		if (activeElectron) {
+			await activeElectron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1.25));
+			await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+			await check();
+			await activeElectron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1));
+			await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+		}
+		await page.screenshot({ path: test.info().outputPath("chat-selection.png") });
+		await toolbar.getByRole("button", { name: "Add to chat" }).click();
+		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+	});
+
+	test("a tall file selection stays actionable while scrolling without recapturing rows", async ({ page }) => {
+		const { inspector, composer } = await openChatSession(page);
+		await inspector.getByRole("button", { name: "Open full file" }).click();
+		await expect(row(page, CENTER, 80)).toBeAttached();
+		await row(page, CENTER, 80).evaluate((element) => {
+			const root = element.getRootNode() as ShadowRoot & { getSelection(): Selection };
+			const first = root.querySelector('[data-line="1"][data-line-type="context"]')!;
+			const range = document.createRange(); range.setStart(first, 0); range.setEndAfter(element);
+			const selection = root.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+			document.dispatchEvent(new Event("selectionchange"));
+		});
+		await expect(askButton(page)).toBeVisible();
+		const viewportTop = await row(page, CENTER, 80).evaluate((element) => {
+			let node: Element | null = (element.getRootNode() as ShadowRoot).host;
+			while (node && !/(auto|scroll)/.test(getComputedStyle(node).overflowY)) node = node.parentElement;
+			node!.scrollTop = 300;
+			return Math.max(0, node!.getBoundingClientRect().top, node!.querySelector("[data-selection-toolbar-header]")?.getBoundingClientRect().bottom ?? 0);
+		});
+		await expect.poll(async () => (await askButton(page).boundingBox())?.y).toBeCloseTo(viewportTop + 8, 0);
+		await expect(askButton(page).locator("svg")).toHaveCount(0);
+		await page.screenshot({ path: test.info().outputPath("file-selection.png") });
+		await askButton(page).getByRole("button", { name: "Ask in chat" }).click();
+		await expect(composer).toContainText("retry.ts#L1-L80");
 	});
 
 	test("Cmd/Ctrl+L asks about the highlighted lines", async ({ page }) => {
@@ -229,7 +313,7 @@ test.describe("Ask in chat from highlighted code", () => {
 		const { inspector, composer, sentToChat } = await openChatSession(page);
 		await inspector.getByRole("button", { name: "Open full file" }).click();
 		await selectText(page, row(page, CENTER, 3), row(page, CENTER, 6));
-		await expectButtonBy(page, row(page, CENTER, 6));
+		await expectButtonInView(page);
 		await askButton(page).getByRole("button", { name: "Ask in chat" }).click();
 		await expect(composer).toBeVisible();
 		await expect(composer).toContainText("retry.ts#L3-L6");

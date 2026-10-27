@@ -1,34 +1,75 @@
-import { useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { MessageSquarePlus } from "lucide-react";
+import { selectionActionClass, selectionToolbarClass, selectionToolbarPosition, selectionViewport } from "../../lib/selection-toolbar";
 import { isMacPlatform } from "../../lib/platform";
-import { Button } from "../ui/button";
-import type { CodeSelectionSource } from "./useCodeSelection";
+import type { CodeSelection, CodeSelectionSource } from "./useCodeSelection";
 
-// "Ask in chat" for highlighted code, like an editor's "add to chat": it sits
-// just past the end of the selection and follows it while it is dragged out,
-// then becomes clickable once the mouse is released. Pressing it keeps the
-// selection, so it asks about the range on screen.
-export function SelectionAskButton({ onAsk, source }: { onAsk: () => void; source: CodeSelectionSource }) {
+// Keep highlighted code actionable in its visible pane, including tall ranges.
+// Dragging passes through the toolbar; activation preserves the captured rows.
+export function SelectionAskButton({ onAsk, source }: { onAsk: () => boolean | void; source: CodeSelectionSource }) {
 	const { t } = useTranslation();
 	const selection = useSyncExternalStore(source.subscribe, source.get, () => null);
 	const buttonRef = useRef<HTMLDivElement>(null);
-	// Past the end of the selected text; without room there, under that line.
+	const submitted = useRef<CodeSelection | null>(null);
+	const [accepted, setAccepted] = useState<CodeSelection | null>(null);
+	const activate = () => {
+		if (!selection || selection.dragging || submitted.current === selection) return;
+		submitted.current = selection;
+		try {
+			if (onAsk() === false) submitted.current = null;
+			else setAccepted(selection);
+		} catch (error) {
+			submitted.current = null;
+			throw error;
+		}
+	};
+	// Geometry is independent of the code capture store and the Pierre surface.
 	useLayoutEffect(() => {
 		const button = buttonRef.current;
 		if (!button || !selection) return;
-		const width = button.offsetWidth;
-		const height = button.offsetHeight;
-		const fits = selection.point.x + 6 + width <= window.innerWidth - 8;
-		button.style.left = `${fits ? selection.point.x + 6 : Math.max(8, window.innerWidth - width - 8)}px`;
-		button.style.top = `${fits ? selection.point.y - height / 2 : selection.point.y + 12}px`;
+		let frame: number | undefined;
+		let disposed = false;
+		const place = () => {
+			if (disposed) return;
+			frame = undefined;
+			const bounds = { ...selectionViewport(selection.viewport) };
+			if (selection.toolbarHeader?.isConnected) bounds.top = Math.max(bounds.top, selection.toolbarHeader.getBoundingClientRect().bottom);
+			const maxWidth = `${Math.max(0, bounds.right - bounds.left - 16)}px`;
+			if (button.style.maxWidth !== maxWidth) button.style.maxWidth = maxWidth;
+			const rect = selection.textRange?.getBoundingClientRect() ?? new DOMRect(selection.point.x, selection.point.y, 1, 1);
+			const position = selectionToolbarPosition(rect, bounds, button.getBoundingClientRect());
+			const connected = !selection.textRange || (selection.host.isConnected && selection.textRange.startContainer.isConnected);
+			button.style.left = `${position.left}px`;
+			button.style.top = `${position.top}px`;
+			button.style.visibility = position.visible && connected ? "visible" : "hidden";
+		};
+		const schedule = () => { if (!disposed) frame ??= requestAnimationFrame(place); };
+		const resize = new ResizeObserver(schedule);
+		resize.observe(button);
+		if (selection.viewport) resize.observe(selection.viewport);
+		if (selection.host) resize.observe(selection.host);
+		if (selection.toolbarHeader) resize.observe(selection.toolbarHeader);
+		document.addEventListener("scroll", schedule, true);
+		window.addEventListener("resize", schedule);
+		window.visualViewport?.addEventListener("resize", schedule);
+		window.visualViewport?.addEventListener("scroll", schedule);
+		place();
+		return () => {
+			disposed = true;
+			if (frame !== undefined) cancelAnimationFrame(frame);
+			resize.disconnect();
+			document.removeEventListener("scroll", schedule, true);
+			window.removeEventListener("resize", schedule);
+			window.visualViewport?.removeEventListener("resize", schedule);
+			window.visualViewport?.removeEventListener("scroll", schedule);
+		};
 	}, [selection]);
 	if (!selection) return null;
 	const label = t("files.askInChat");
 	return createPortal(
 		<div
-			className="z-overlay flex items-center rounded-lg border border-(--color-border-overlay) bg-overlay p-0.5 font-sans shadow-(--shadow-popover)"
+			className={selectionToolbarClass}
 			data-selection-ask=""
 			onMouseDown={(event) => event.preventDefault()}
 			ref={buttonRef}
@@ -41,17 +82,15 @@ export function SelectionAskButton({ onAsk, source }: { onAsk: () => void; sourc
 				top: selection.point.y - 14,
 			}}
 		>
-			<Button
-				className="h-6 gap-1.5 rounded-md px-2 text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground [&_svg]:size-3.5"
-				onClick={onAsk}
-				size={null}
+			<button
+				className={selectionActionClass}
+				onClick={activate}
+				disabled={selection.dragging || accepted === selection}
 				title={`${label} (${isMacPlatform() ? "⌘L" : "Ctrl+L"})`}
 				type="button"
-				variant="ghost"
 			>
-				<MessageSquarePlus aria-hidden="true" />
 				{label}
-			</Button>
+			</button>
 		</div>,
 		document.body,
 	);

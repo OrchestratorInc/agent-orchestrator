@@ -294,8 +294,8 @@ export function FileContentPane({
 			contentTruncated: false, diff: "", diffTruncated: false, status: "unmodified", additions: 0, deletions: 0,
 			fileFingerprint: revision.revision,
 		};
-		return <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-			<div className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1 text-xs" title={path}>
+		return <div data-selection-toolbar-scope="" className="flex min-h-0 flex-1 flex-col overflow-auto">
+			<div data-selection-toolbar-header="" className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1 text-xs" title={path}>
 				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={path.split("/").pop() ?? path} />
 				<span className="truncate">{path}</span>
 			</div>
@@ -465,7 +465,7 @@ export function FileContentPane({
 		</div>
 	);
 	const compactTabs = toolbarHost !== undefined ? (toolbarHost ? createPortal(toolbarActions, toolbarHost) : null) : (
-		<div className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1">
+		<div data-selection-toolbar-header="" className="sticky top-0 z-20 flex min-h-9 items-center gap-2 border-b border-border bg-background px-3 py-1">
 			<nav aria-label={t("files.filePath")} className="flex min-w-0 flex-1 items-center gap-1.5" title={detail.path}>
 				<WorkspaceEntryIcon className="size-icon-base" kind="file" name={fileName} />
 				<span className="flex min-w-0 items-center text-xs">
@@ -518,7 +518,7 @@ export function FileContentPane({
 			/>
 		);
 		return (
-			<div className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
+			<div data-selection-toolbar-scope="" className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 				{toolbarNode}
 				<EditProvider createEditor={createReviewEditor}>
 				{effectiveMode === "diff" ? (
@@ -550,7 +550,7 @@ export function FileContentPane({
 		);
 	}
 	return (
-		<div className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
+		<div data-selection-toolbar-scope="" className={cn("relative min-w-0", mediaPreview && "flex h-full min-h-0 flex-col")}>
 			{toolbarNode}
 			<EditProvider createEditor={createReviewEditor}>
 			{effectiveMode === "rendered" && renderedAvailable ? renderedView : fileView}

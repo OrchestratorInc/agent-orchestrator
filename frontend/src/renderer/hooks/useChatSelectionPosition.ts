@@ -1,6 +1,7 @@
 import { useLayoutEffect, useState, type RefObject } from "react";
+import { selectionRangesEqual, selectionToolbarPosition, selectionViewport } from "../lib/selection-toolbar";
 
-/** Follow the selection's first line without changing the reader's scroll. */
+/** Follow the visible selection without changing the reader's scroll. */
 export function useChatSelectionPosition(
 	range: Range | undefined,
 	viewportRef: RefObject<HTMLDivElement | null>,
@@ -19,47 +20,55 @@ export function useChatSelectionPosition(
 			return;
 		}
 		let frame: number | undefined;
+		let disposed = false;
 		const update = () => {
+			if (disposed) return;
 			frame = undefined;
 			const selection = window.getSelection();
 			const current = selection?.rangeCount ? selection.getRangeAt(0) : undefined;
-			if (!source?.isConnected || !viewport.contains(source) || !current || selection?.isCollapsed ||
-				current.startContainer !== range.startContainer || current.startOffset !== range.startOffset ||
-				current.endContainer !== range.endContainer || current.endOffset !== range.endOffset) {
+			const toolbarFocused = button.contains(document.activeElement);
+			const matches = !selection?.isCollapsed && selectionRangesEqual(current, range);
+			if (!source?.isConnected || !viewport.contains(source) || !range.startContainer.isConnected ||
+				(!matches && !(toolbarFocused && (!current || selection?.isCollapsed)))) {
 				onInvalid();
 				return;
 			}
-			const rect = Array.from(range.getClientRects()).find((line) => line.width > 0 && line.height > 0)
-				?? range.getBoundingClientRect();
-			const bounds = viewport.getBoundingClientRect();
+			const rect = range.getBoundingClientRect();
+			const bounds = selectionViewport(viewport);
 			const parent = button.offsetParent?.getBoundingClientRect() ?? bounds;
+			const maxWidth = `${Math.max(0, bounds.right - bounds.left - 16)}px`;
+			if (button.style.maxWidth !== maxWidth) button.style.maxWidth = maxWidth;
 			const size = button.getBoundingClientRect();
-			const left = Math.max(bounds.left + 8, Math.min(
-				rect.left + rect.width / 2 - size.width / 2, bounds.right - size.width - 8,
-			)) - parent.left;
-			const top = rect.top - parent.top - size.height - 6;
-			const visible = rect.bottom > bounds.top && rect.top < bounds.bottom &&
-				rect.right > bounds.left && rect.left < bounds.right;
+			const placed = selectionToolbarPosition(rect, bounds, size);
+			const left = placed.left - parent.left;
+			const top = placed.top - parent.top;
+			const visible = placed.visible;
 			setPosition((previous) => previous?.left === left && previous.top === top && previous.visible === visible
 				? previous : { left, top, visible });
 		};
-		const schedule = () => { frame ??= window.requestAnimationFrame(update); };
+		const schedule = () => { if (!disposed) frame ??= window.requestAnimationFrame(update); };
 		const resize = new ResizeObserver(schedule);
 		resize.observe(viewport);
 		resize.observe(source);
 		resize.observe(button);
 		const mutation = new MutationObserver(schedule);
-		mutation.observe(viewport, { subtree: true, childList: true, characterData: true, attributes: true });
-		viewport.addEventListener("scroll", schedule, true);
+		mutation.observe(source, { subtree: true, childList: true, characterData: true });
+		mutation.observe(viewport, { subtree: true, childList: true });
+		document.addEventListener("scroll", schedule, true);
 		window.addEventListener("resize", schedule);
+		window.visualViewport?.addEventListener("resize", schedule);
+		window.visualViewport?.addEventListener("scroll", schedule);
 		document.addEventListener("selectionchange", schedule);
 		update();
 		return () => {
+			disposed = true;
 			if (frame !== undefined) window.cancelAnimationFrame(frame);
 			resize.disconnect();
 			mutation.disconnect();
-			viewport.removeEventListener("scroll", schedule, true);
+			document.removeEventListener("scroll", schedule, true);
 			window.removeEventListener("resize", schedule);
+			window.visualViewport?.removeEventListener("resize", schedule);
+			window.visualViewport?.removeEventListener("scroll", schedule);
 			document.removeEventListener("selectionchange", schedule);
 		};
 	}, [range, viewportRef, buttonRef, onInvalid]);

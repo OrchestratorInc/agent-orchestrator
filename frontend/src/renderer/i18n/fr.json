@@ -3402,6 +3402,7 @@
 	"sideChat.decline": "Decline",
 	"sideChat.working": "Working…",
 	"sideChat.retryQuestion": "Retry question",
+	"sideChat.checkingAvailability": "Vérification du chat latéral…",
 	"sideChat.addToSideChat": "Ajouter à la conversation annexe",
 	"sideChat.referenceLimit": "Une question annexe peut inclure jusqu’à huit références. Supprimez-en une pour en ajouter une autre.",
 	"sideChat.defaultLabel": "Conversation annexe",

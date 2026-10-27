@@ -35,11 +35,11 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
-import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, MessageSquarePlus, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
+import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
-import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
-import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
+import { ChatSelectionActions } from "./ChatSelectionActions";
+import { selectionRangesEqual } from "../../lib/selection-toolbar";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
 import {
 	defaultRangeExtractor,
@@ -359,6 +359,7 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 
 export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
+	checkingSideChatAvailability?: boolean;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
@@ -690,6 +691,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 
 function ChatWorkspaceContent({
 	onAddToSideChat,
+	checkingSideChatAvailability,
 	annotationNavigationRequest,
 	snapshot,
 	promptSuggestion,
@@ -1871,6 +1873,7 @@ function ChatWorkspaceContent({
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
+									checkingSideChatAvailability={checkingSideChatAvailability}
 									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
@@ -2608,6 +2611,7 @@ const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
  */
 export function Timeline({
 	onAddToSideChat,
+	checkingSideChatAvailability,
 	onAddToChat,
 	onForeignAnnotation,
 	annotationNavigationRef,
@@ -2643,6 +2647,7 @@ export function Timeline({
 	openingStartedAt,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
+	checkingSideChatAvailability?: boolean;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
 	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void;
 	/** Handles annotations whose source is another conversation. */
@@ -2747,9 +2752,7 @@ export function Timeline({
 		excerpt: ChatDraftExcerptReference;
 		range: Range;
 	} | null>(null);
-	const selectionButton = useRef<HTMLDivElement>(null);
 	const clearSelectionAction = useCallback(() => setSelectionAction(null), []);
-	const selectionPosition = useChatSelectionPosition(selectionAction?.range, scroller, selectionButton, clearSelectionAction);
 	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; messageId?: string; revision?: number }>();
 	const [annotationNavigationError, setAnnotationNavigationError] = useState<string>();
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
@@ -2831,7 +2834,10 @@ export function Timeline({
 	const inlineEditSendBlocked =
 		inlineEditPending || (acceptedEditClearFailed && !durableInlineEditDelivery);
 
-	const captureTranscriptSelection = useCallback(() => {
+	const captureTranscriptSelection = useCallback((event?: Event) => {
+		if ((event?.target as Element | null)?.closest?.("[data-chat-selection-actions]")) return;
+		if (event instanceof KeyboardEvent && !/^(Arrow(Up|Down|Left|Right)|Home|End|PageUp|PageDown|Shift)$/i.test(event.key) &&
+			!((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a")) return;
 		const selection = window.getSelection();
 		if (!excerptsEnabled || !selection || selection.isCollapsed || selection.rangeCount === 0) {
 			setSelectionAction(null);
@@ -2865,18 +2871,35 @@ export function Timeline({
 			setSelectionAction(null);
 			return;
 		}
-		setSelectionAction({
+		const selectedRange = selection.getRangeAt(0).cloneRange();
+		const next = {
 			excerpt: {
 				id: crypto.randomUUID(),
 				conversationId: snapshot.conversationId,
 				messageId,
 				revision,
 				text,
-				role,
+				role: role as "user" | "assistant",
 			},
-			range: selection.getRangeAt(0).cloneRange(),
-		});
+			range: selectedRange,
+		};
+		setSelectionAction((previous) => previous && previous.excerpt.messageId === messageId &&
+			previous.excerpt.revision === revision && previous.excerpt.text === text && selectionRangesEqual(previous.range, selectedRange)
+			? previous : next);
 	}, [excerptsEnabled, snapshot.conversationId]);
+	useEffect(() => {
+		if (!excerptsEnabled) return;
+		const capture = (event: Event) => captureTranscriptSelection(event);
+		const escape = (event: KeyboardEvent) => { if (event.key === "Escape") clearSelectionAction(); };
+		document.addEventListener("pointerup", capture);
+		document.addEventListener("keyup", capture);
+		document.addEventListener("keydown", escape);
+		return () => {
+			document.removeEventListener("pointerup", capture);
+			document.removeEventListener("keyup", capture);
+			document.removeEventListener("keydown", escape);
+		};
+	}, [captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
 
 	const addSelectionToChat = useCallback(async () => {
 		if (!selectionAction) return;
@@ -4076,23 +4099,11 @@ export function Timeline({
 			// cannot invalidate the complete mounted conversation history or shell.
 			style={{ contain: "layout paint" }}
 		>
-			{selectionAction ? (
-				<div
-					ref={selectionButton}
-					style={{ left: selectionPosition?.left ?? 0, top: selectionPosition?.top ?? 0, visibility: selectionPosition?.visible ? "visible" : "hidden" }}
-					onMouseDown={(event) => event.preventDefault()}
-					className={cn(actionMenuContentClass, "absolute flex-row min-w-0 w-max max-w-full")}
-				>
-					<button type="button" onClick={() => void addSelectionToChat()} className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover hover:text-foreground")}>
-						<MessageSquarePlus aria-hidden="true" className="size-3.5" /> Add to chat
-					</button>
-					{onAddToSideChat ? <button type="button" className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover")} onClick={() => { void onAddToSideChat(selectionAction.excerpt); clearSelectionAction(); window.getSelection()?.removeAllRanges(); }}><MessageSquarePlus aria-hidden="true" className="size-3.5" /> {t("sideChat.addToSideChat")}</button> : null}
-				</div>
-			) : null}
+			{selectionAction ? <ChatSelectionActions key={selectionAction.excerpt.id} selection={selectionAction}
+				viewportRef={scroller} onInvalid={clearSelectionAction} onAdd={addSelectionToChat}
+				onSide={onAddToSideChat} checkingSide={checkingSideChatAvailability} /> : null}
 			<div
 				ref={scroller}
-				onMouseUp={captureTranscriptSelection}
-				onKeyUp={captureTranscriptSelection}
 				onScroll={onScroll}
 				onScrollEnd={endFlight}
 				onWheel={onViewportWheel}

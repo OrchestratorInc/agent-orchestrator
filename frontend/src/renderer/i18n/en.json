@@ -3344,6 +3344,7 @@
 	"sideChat.decline": "Decline",
 	"sideChat.working": "Working…",
 	"sideChat.retryQuestion": "Retry question",
+	"sideChat.checkingAvailability": "Checking side chat…",
 	"sideChat.addToSideChat": "Add to side chat",
 	"sideChat.referenceLimit": "A side question can include up to eight references. Remove one to add another.",
 	"sideChat.defaultLabel": "Side chat",

@@ -6,7 +6,9 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-app.setPath("userData", fs.mkdtempSync(path.join(os.tmpdir(), "ao-e2e-electron-")));
+const profileRoot = path.join(os.homedir(), ".ao", "dev", "renderer-fixtures");
+fs.mkdirSync(profileRoot, { recursive: true });
+app.setPath("userData", fs.mkdtempSync(path.join(profileRoot, "electron-")));
 app.whenReady().then(() => {
 	new BrowserWindow({ width: 1280, height: 720 }).loadURL("about:blank");
 });
