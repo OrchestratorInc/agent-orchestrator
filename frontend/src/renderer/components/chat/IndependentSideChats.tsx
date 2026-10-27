@@ -9,6 +9,7 @@ import type { ChatSkill } from "../../types/conversation";
 import type { ChatModel } from "../../types/conversation";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
+import { AttachmentFileCard, AttachmentList, AttachmentTile } from "./AttachmentTile";
 import { ApprovalCard } from "./ChatTimelineItems";
 import { Timeline } from "./ChatWorkspace";
 import { sideConversationActivity, sideConversationSnapshot } from "./sideConversation";
@@ -159,8 +160,9 @@ export function SideComposer({
 						/>
 					) : null}
 					{draft.references.length || draft.attachments.length || files.length ? (
-						<div className="flex flex-wrap items-center gap-1.5" data-testid="side-chat-attachments-and-annotations">
+						<div className="flex flex-wrap items-center gap-2 pt-1.5" data-testid="side-chat-attachments-and-annotations">
 							<ChatAnnotationSummary
+								tile
 								annotations={draft.references}
 								onSelect={onNavigate}
 								onRemove={(ref) => ref.id && onRemoveReference(ref.id)}
@@ -168,44 +170,30 @@ export function SideComposer({
 								disabled={sending || deliveryPending}
 							/>
 							{draft.attachments.length ? (
-								<ul className="contents" aria-label={t("sideChat.stagedFiles")}>
+								<AttachmentList ariaLabel={t("sideChat.stagedFiles")} className="contents">
 									{draft.attachments.map((file, index) => (
-										<li
+										<AttachmentTile
 											key={file.id}
-											className="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px]"
+											removeLabel={t("sideChat.remove", { value1: file.name })}
+											onRemove={() => onRemoveFile(index)}
 										>
-											{file.name}
-											<button
-												type="button"
-												aria-label={t("sideChat.remove", { value1: file.name })}
-												onClick={() => onRemoveFile(index)}
-											>
-												<X className="size-3" />
-											</button>
-										</li>
+											<AttachmentFileCard name={file.name} />
+										</AttachmentTile>
 									))}
-								</ul>
+								</AttachmentList>
 							) : null}
 							{files.length ? (
-								<ul className="contents" aria-label={t("sideChat.attachedFiles")}>
+								<AttachmentList ariaLabel={t("sideChat.attachedFiles")} className="contents">
 									{files.map((file, index) => (
-										<li
+										<AttachmentTile
 											key={`${file.name}-${index}`}
-											className="flex items-center gap-1.5 rounded border border-border bg-background px-2 py-1 text-[11px]"
+											removeLabel={t("sideChat.remove", { value1: file.name })}
+											onRemove={() => onRemoveFile(index + draft.attachments.length)}
 										>
-											<span className="max-w-[120px] truncate" title={file.name}>
-												{file.name}
-											</span>
-											<button
-												type="button"
-												aria-label={t("sideChat.remove", { value1: file.name })}
-												onClick={() => onRemoveFile(index + draft.attachments.length)}
-											>
-												<X className="size-3" />
-											</button>
-										</li>
+											<AttachmentFileCard name={file.name} />
+										</AttachmentTile>
 									))}
-								</ul>
+								</AttachmentList>
 							) : null}
 						</div>
 					) : null}

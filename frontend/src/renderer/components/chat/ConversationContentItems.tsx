@@ -1,5 +1,5 @@
-import { FileText, Image as ImageIcon, Tag } from "lucide-react";
-import { cn } from "../../lib/utils";
+import { Tag } from "lucide-react";
+import { AttachmentFileCard, AttachmentList, AttachmentTile } from "./AttachmentTile";
 import { ChatImage } from "./ChatImage";
 import type { ConversationContentSummary } from "../../types/conversation";
 
@@ -24,7 +24,7 @@ export function ConversationContentItems({
 
 	let imagePosition = 0;
 	return (
-		<ul aria-label={ariaLabel} className={cn("flex max-w-full flex-wrap gap-1.5", className)}>
+		<AttachmentList ariaLabel={ariaLabel} className={className}>
 			{content.map((item, index) => {
 				const previewableImage =
 					item.type === "image" &&
@@ -37,28 +37,35 @@ export function ConversationContentItems({
 				if (previewableImage) {
 					imagePosition += 1;
 					return (
-						<li key={key} className="max-w-full">
+						<AttachmentTile key={key}>
 							<ChatImage
+								tile
 								src={`data:${item.mimeType};base64,${item.data}`}
 								alt={imageAlt?.(imagePosition) ?? `${imageLabel} ${imagePosition}`}
 							/>
-						</li>
+						</AttachmentTile>
 					);
 				}
 
-				const Icon = item.type === "image" ? ImageIcon : item.type === "resource" ? FileText : Tag;
 				const label = item.type === "image" ? item.mimeType || imageLabel : item.name || item.uri || item.type;
+				if (item.type === "image" || item.type === "resource") {
+					return (
+						<AttachmentTile key={key}>
+							<AttachmentFileCard name={label} title={item.uri || label} />
+						</AttachmentTile>
+					);
+				}
 				return (
 					<li
 						key={key}
 						title={item.uri || label}
 						className="flex min-w-0 max-w-full items-center gap-1 rounded-md bg-interactive-hover px-2 py-1 text-xs text-muted-foreground"
 					>
-						<Icon aria-hidden="true" className="size-3 shrink-0" />
+						<Tag aria-hidden="true" className="size-3 shrink-0" />
 						<span className="truncate">{label}</span>
 					</li>
 				);
 			})}
-		</ul>
+		</AttachmentList>
 	);
 }

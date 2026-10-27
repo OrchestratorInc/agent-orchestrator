@@ -50,7 +50,8 @@ export type FileAttachmentOptions = {
 	onAttachmentsChange?: (attachments: FileAttachment[]) => void;
 };
 
-type PendingFileAttachment = Pick<FileAttachment, "id" | "name">;
+/** A file still being read and staged. `previewUrl` shows an image at once, before staging ends. */
+type PendingFileAttachment = Pick<FileAttachment, "id" | "name"> & { previewUrl?: string };
 
 type SharedAttachmentUpdate = {
 	pending: number;
@@ -419,6 +420,17 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 			});
 		}
 
+		// Decode each preview before its tile can mount, so the tile that replaces the
+		// pending placeholder paints at once instead of blinking in.
+		await Promise.all(fresh.flatMap((attachment) => {
+			if (!attachment.dataUrl) return [];
+			const image = new Image();
+			image.src = attachment.dataUrl;
+			return [image.decode?.().catch(() => undefined)];
+		}));
+		if (generationRef.current !== generation) return [];
+		if (initialKey && sharedWork && !sharedAttachmentWorkIsCurrent(initialKey, sharedWork)) return [];
+
 		const accepted = [...attachmentsRef.current];
 		const acceptedFresh: FileAttachment[] = [];
 		let total = accepted.reduce((sum, a) => sum + a.bytes, 0);
@@ -489,7 +501,11 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 		if (batch.length === 0) return Promise.resolve([]);
 		const sharedKey = initialKey;
 		const generation = generationRef.current;
-		const pending = batch.map((file) => ({ id: crypto.randomUUID(), name: file.name }));
+		const pending = batch.map((file) => ({
+			id: crypto.randomUUID(),
+			name: file.name,
+			previewUrl: isSupportedImageAttachment(file.type) ? URL.createObjectURL(file) : undefined,
+		}));
 		const sharedWork = sharedKey ? beginSharedAttachmentWork(sharedKey, pending) : undefined;
 		if (!sharedKey) setPendingAttachments((current) => [...current, ...pending]);
 		queuedAddsRef.current += 1;
@@ -507,6 +523,7 @@ export function useFileAttachments(options: FileAttachmentOptions = {}) {
 				return [];
 			})
 			.finally(() => {
+				for (const item of pending) if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
 				queuedAddsRef.current = Math.max(0, queuedAddsRef.current - 1);
 				if (sharedKey && sharedWork) endSharedAttachmentWork(sharedKey, sharedWork.token);
 				else {

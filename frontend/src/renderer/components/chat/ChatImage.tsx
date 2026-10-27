@@ -16,7 +16,7 @@ import { mediaCrossOrigin } from "../../lib/file-media";
 import { createContext, useContext, useState, type ReactNode } from "react";
 import type { ExtraProps } from "react-markdown";
 import { useTranslation } from "react-i18next";
-import { Copy, Download } from "lucide-react";
+import { Copy, Download, Image as ImageIcon } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
@@ -92,7 +92,19 @@ function ChatImageMenu({ url, label, children }: { url: string; label: string; c
  * A source that fails falls back to its alt text rather than a broken-image box,
  * matching `MarkdownImage` in the file viewer.
  */
-export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: string; /** A chip sized for a line of prose. */ inline?: boolean }) {
+export function ChatImage({
+	src,
+	alt,
+	inline,
+	tile,
+}: {
+	src?: string | Blob;
+	alt?: string;
+	/** A chip sized for a line of prose. */
+	inline?: boolean;
+	/** A 40px square thumbnail, the size of an attachment tile. */
+	tile?: boolean;
+}) {
 	const { t } = useTranslation();
 	const inGallery = useContext(InGallery);
 	const inLink = useContext(InLink);
@@ -102,6 +114,16 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 	const rawUrl = typeof src === "string" ? src : undefined;
 	const url = useChatImageSrc(rawUrl);
 	const label = alt ?? "";
+
+	if ((!url || url === failedSrc) && tile)
+		return (
+			<span
+				title={label || rawUrl}
+				className="flex size-10 items-center justify-center rounded-lg border border-border bg-surface text-muted-foreground"
+			>
+				<ImageIcon aria-hidden="true" className="size-4" />
+			</span>
+		);
 
 	if (!url || url === failedSrc)
 		return (
@@ -139,12 +161,16 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 					aria-label={label ? t("chat.image.open", { name: label }) : t("chat.image.openUnnamed")}
 					className={cn(
 						"max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border bg-background transition-opacity duration-150 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-						inline
+						tile
+							? "block size-10 shrink-0 rounded-lg"
+							: inline
 							? "mx-0.5 inline-flex items-center gap-1 py-0.5 pl-0.5 pr-1.5 align-middle text-[0.9em] leading-none"
 							: "inline-block align-top",
 					)}
 				>
-					{inline ? (
+					{tile ? (
+						<img crossOrigin={mediaCrossOrigin(url)} src={url} alt={label} loading="lazy" onError={onError} className="size-full object-cover" />
+					) : inline ? (
 						<>
 							<img crossOrigin={mediaCrossOrigin(url)} src={url} alt="" onError={onError} className="size-4 shrink-0 rounded-sm object-cover" />
 							<span>{label}</span>
