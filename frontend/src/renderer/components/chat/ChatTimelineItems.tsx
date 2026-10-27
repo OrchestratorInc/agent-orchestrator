@@ -1092,10 +1092,11 @@ export function AssistantMessage({
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
-	// Copy is ready the moment the text has fully arrived: it copies the stored markdown,
-	// so it need not wait for the typewriter to catch up or for the turn to settle.
-	// Rollback acts on the turn, so it waits for both.
-	const copyReady = showCopy && !message.streaming;
+	// Copy copies the stored markdown, so it need not wait for the typewriter to catch
+	// up. Rollback acts on the turn, so it waits for it to settle. While the turn is
+	// live the row below the answer is the live status; both actions take its place
+	// when the turn settles, so nothing moves.
+	const copyReady = showCopy && !message.streaming && !live;
 	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
 	const showActions = copyReady || rollbackReady;
 	return (

@@ -4830,13 +4830,17 @@ const TurnGroup = memo(function TurnGroup({
 			) : null}
 			{/* Once the turn settles the row fades away and "Worked for" takes over at
 			    the top of the turn. */}
-			<AnimatePresence initial={false}>
+			{/* popLayout lifts the leaving row out of the flow at once, so the action row
+			    that takes its place sits where it was instead of waiting for a collapse. */}
+			<AnimatePresence initial={false} mode="popLayout">
 				{workingRow ? (
 					<motion.div
 						key="turn-working"
-						exit={{ height: 0, opacity: 0 }}
+						exit={{ opacity: 0 }}
 						transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
-						className="overflow-hidden"
+						// Under a reply, sit where that reply's action row will (its 4px
+						// gap, not the turn's 10px).
+						className={cn("overflow-hidden", tailIsReply && "-mt-1.5")}
 					>
 						{workingRow}
 					</motion.div>
