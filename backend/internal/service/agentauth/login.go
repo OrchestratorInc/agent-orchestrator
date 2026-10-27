@@ -96,8 +96,9 @@ type loginOperation struct {
 	codeSubmitted bool
 }
 
-// StartLogin runs a fixed native login in the background. Secrets travel only
-// through stdin; they never enter command arguments, terminal replay, or logs.
+// StartLogin runs a fixed native login or saves a reviewed provider key.
+// Native CLI credentials travel through stdin; no credentials enter API
+// snapshots, terminal replay, or application logs.
 func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string) (LoginSnapshot, error) {
 	return s.StartLoginWithModel(ctx, agentID, method, secret, "")
 }
