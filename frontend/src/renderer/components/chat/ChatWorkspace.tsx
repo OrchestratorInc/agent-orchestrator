@@ -4837,7 +4837,7 @@ const TurnGroup = memo(function TurnGroup({
 					<motion.div
 						key="turn-working"
 						exit={{ opacity: 0 }}
-						transition={{ duration: reducedMotion ? 0 : 0.2, ease: [0.22, 1, 0.36, 1] }}
+						transition={{ duration: reducedMotion ? 0 : 0.12, ease: [0.22, 1, 0.36, 1] }}
 						// Under a reply, sit where that reply's action row will (its 4px
 						// gap, not the turn's 10px).
 						className={cn("overflow-hidden", tailIsReply && "-mt-1.5")}
