@@ -39,31 +39,14 @@ import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
 import { withAttachmentReferences } from "./messageAttachments";
 import { isEmptyTurnOptionCatalog, loadTurnOptionCatalog } from "./turnOptionsCatalog";
+import { rememberedTurnOptions, rememberTurnOptions, type TurnOptions } from "./lastTurnOptions";
 import { NOT_PAIRED_ACTION_COPY } from "../connectionError";
 import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
 const REFRESH_DEBOUNCE_MS = 120;
 const conversationPageCache = createMobileConversationPageCache();
-type TurnOptions = { models: ChatModel[]; configOptions: ChatConfigOption[] };
 const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
-// The last catalog each chat offered, kept past the cache's 30 seconds. A chat
-// opened while hibernated has no catalog until its provider is back, and showing
-// the previous one keeps the model in the composer instead of dropping it.
-// Twice the 30-second caches' 16: they only need chats opened in the last half
-// minute, this needs every chat someone moves between, and entries are small.
-const LAST_TURN_OPTIONS_LIMIT = 32;
-const lastTurnOptions = new Map<string, TurnOptions>();
-function rememberTurnOptions(key: string, catalog: TurnOptions) {
-	if (!key || isEmptyTurnOptionCatalog(catalog)) return;
-	lastTurnOptions.delete(key);
-	lastTurnOptions.set(key, catalog);
-	while (lastTurnOptions.size > LAST_TURN_OPTIONS_LIMIT) {
-		const oldest = lastTurnOptions.keys().next().value;
-		if (oldest === undefined) break;
-		lastTurnOptions.delete(oldest);
-	}
-}
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
 
 export type PendingSend = {
@@ -154,8 +137,8 @@ export function useMobileConversation(
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [unavailable, setUnavailable] = useState<{ code?: string; message: string }>();
-	const [models, setModels] = useState<ChatModel[]>(() => lastTurnOptions.get(cacheKey)?.models ?? []);
-	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>(() => lastTurnOptions.get(cacheKey)?.configOptions ?? []);
+	const [models, setModels] = useState<ChatModel[]>(() => rememberedTurnOptions(cacheKey)?.models ?? []);
+	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>(() => rememberedTurnOptions(cacheKey)?.configOptions ?? []);
 	const [skills, setSkills] = useState<ChatSkill[]>([]);
 	const [pendingSends, setPendingSends] = useState<PendingSend[]>([]);
 	const [completedRetry, setCompletedRetry] = useState<{ id: string; draftText: string }>();
@@ -166,6 +149,10 @@ export function useMobileConversation(
 	const mounted = useRef(true);
 	// Whether the catalog shown came from a load of this chat, not from memory.
 	const turnOptionsLoaded = useRef(false);
+	// Only the newest catalog load decides what shows: an older one that fails or
+	// lands late must not undo it. `ifMissing` waits on the one in flight.
+	const turnOptionsRequest = useRef(0);
+	const turnOptionsInFlight = useRef<Promise<unknown> | undefined>(undefined);
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const refreshGate = useRef(createRequestGate()).current;
 
@@ -255,23 +242,35 @@ export function useMobileConversation(
 
 	const loadTurnOptions = useCallback(async (options?: { refresh?: boolean; ifMissing?: boolean }) => {
 		if (!cfg || unavailable || !hasConversation) return { models, configOptions };
-		if (options?.ifMissing && turnOptionsLoaded.current) return { models, configOptions };
+		if (options?.ifMissing) {
+			await turnOptionsInFlight.current?.catch(() => {});
+			if (turnOptionsLoaded.current) return rememberedTurnOptions(cacheKey) ?? { models, configOptions };
+		}
+		const request = ++turnOptionsRequest.current;
 		if (options?.refresh) turnOptionsCache.delete(cacheKey);
 		// An empty catalog is usually a provider that is not up yet: it is not
 		// cached, so the next load asks again, and what it offered before stays.
-		const catalog = await turnOptionsCache.load(cacheKey, async () => {
+		const loading = turnOptionsCache.load(cacheKey, async () => {
 			return loadTurnOptionCatalog({
 				loadModels: () => getConversationModels(cfg, sessionId),
 				loadConfigOptions: () => getConversationConfigOptions(cfg, sessionId),
 			});
-		}, (loaded) => !isEmptyTurnOptionCatalog(loaded)).catch((cause: unknown) => {
-			turnOptionsLoaded.current = false;
+		}, (loaded) => !isEmptyTurnOptionCatalog(loaded));
+		turnOptionsInFlight.current = loading;
+		let catalog: TurnOptions;
+		try {
+			catalog = await loading;
+		} catch (cause) {
+			if (request === turnOptionsRequest.current) turnOptionsLoaded.current = false;
 			throw cause;
-		});
+		} finally {
+			if (turnOptionsInFlight.current === loading) turnOptionsInFlight.current = undefined;
+		}
 		const empty = isEmptyTurnOptionCatalog(catalog);
+		const shown = empty ? rememberedTurnOptions(cacheKey) ?? catalog : catalog;
+		if (request !== turnOptionsRequest.current) return shown;
 		turnOptionsLoaded.current = !empty;
 		if (!empty) rememberTurnOptions(cacheKey, catalog);
-		const shown = empty ? lastTurnOptions.get(cacheKey) ?? catalog : catalog;
 		if (mounted.current) {
 			setModels(shown.models);
 			setConfigOptions(shown.configOptions);
@@ -480,6 +479,8 @@ export function useMobileConversation(
 		(optionId: string, value: { value: string } | { enabled: boolean }) =>
 			runAction("config", async () => {
 				const options = await requireConfig(cfg, (c) => setConversationConfigOption(c, sessionId, optionId, value));
+				// The provider's own post-change catalog: a load still in flight is older.
+				turnOptionsRequest.current++;
 				setConfigOptions(options);
 				turnOptionsCache.set(cacheKey, { models, configOptions: options });
 				rememberTurnOptions(cacheKey, { models, configOptions: options });

@@ -121,3 +121,46 @@ it("shows the remembered catalog on a screen that mounted before it was remember
 	await act(async () => { await screens.first.loadTurnOptions({ refresh: true }); });
 	expect(screens.first.configOptions.map((option) => option.id)).toEqual(["model"]);
 });
+
+/** Holds the next catalog request until the test answers or fails it. */
+function holdNextCatalog() {
+	const held = { answer: (_options: unknown[]) => {}, fail: (_cause: Error) => {} };
+	fixture.request.mockImplementationOnce(() => new Promise((resolve, reject) => {
+		held.answer = (options) => resolve({ json: async () => ({ options }) });
+		held.fail = reject;
+	}));
+	return held;
+}
+
+it("waits for a load in flight instead of asking twice when the lease registers", async () => {
+	await open("overlap");
+	const held = holdNextCatalog();
+	let first!: Promise<unknown>;
+	let second!: Promise<unknown>;
+	await act(async () => {
+		first = conversation.loadTurnOptions();
+		second = conversation.loadTurnOptions({ refresh: true, ifMissing: true });
+	});
+	await act(async () => { held.answer([modelOption]); await first; await second; });
+	expect(paths()).toEqual(["/config-options"]);
+	expect(conversation.configOptions.map((option) => option.id)).toEqual(["model"]);
+});
+
+it("does not let an older load undo a newer one, whether it fails or lands late", async () => {
+	await open("older-fails");
+	const failing = holdNextCatalog();
+	let older!: Promise<unknown>;
+	await act(async () => { older = conversation.loadTurnOptions(); });
+	fixture.options = [modelOption];
+	await act(async () => { await conversation.loadTurnOptions({ refresh: true }); });
+	await act(async () => { failing.fail(new Error("CHAT_CONTROLLER_NOT_READY")); await expect(older).rejects.toThrow(); });
+	fixture.request.mockClear();
+	await act(async () => { await conversation.loadTurnOptions({ refresh: true, ifMissing: true }); });
+	expect(paths()).toEqual([]);
+
+	const late = holdNextCatalog();
+	await act(async () => { older = conversation.loadTurnOptions({ refresh: true }); });
+	await act(async () => { await conversation.loadTurnOptions({ refresh: true }); });
+	await act(async () => { late.answer([{ ...modelOption, currentValue: "sonnet", choices: [{ value: "sonnet", name: "Sonnet" }] }]); await older; });
+	expect(conversation.configOptions[0]?.currentValue).toBe("opus");
+});
