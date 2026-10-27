@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +34,7 @@ type fakeTunnel struct {
 	remote   bool
 	status   string
 	inactive *time.Time
+	created  time.Time
 }
 
 type fakeRecord struct {
@@ -67,20 +71,34 @@ func (f *fakeCloudflare) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "/zones/zone-1":
 		result = map[string]any{"name": "example.dev", "account": map[string]string{"id": "acct"}}
 	case r.Method == http.MethodGet && path == tunnels:
+		q := r.URL.Query()
+		existedAt, _ := time.Parse(time.RFC3339, q.Get("existed_at"))
 		list := []map[string]any{}
-		for id, t := range f.tunnels {
-			if t.name == r.URL.Query().Get("name") {
-				list = append(list, map[string]any{"id": id, "name": t.name, "remote_config": t.remote})
+		for _, id := range slices.Sorted(maps.Keys(f.tunnels)) {
+			t := f.tunnels[id]
+			if (q.Has("name") && t.name != q.Get("name")) || (q.Has("status") && t.status != q.Get("status")) ||
+				!strings.HasPrefix(t.name, q.Get("include_prefix")) || (q.Has("existed_at") && !t.created.Before(existedAt)) {
+				continue
 			}
+			list = append(list, map[string]any{"id": id, "name": t.name, "remote_config": t.remote})
 		}
-		result = list
+		// Cloudflare pages listings; per_page defaults to 20.
+		perPage, page := 20, 1
+		if n, err := strconv.Atoi(q.Get("per_page")); err == nil {
+			perPage = n
+		}
+		if n, err := strconv.Atoi(q.Get("page")); err == nil {
+			page = n
+		}
+		from, to := min((page-1)*perPage, len(list)), min(page*perPage, len(list))
+		result = list[from:to]
 	case r.Method == http.MethodPost && path == tunnels:
 		var in map[string]any
 		_ = json.Unmarshal(body, &in)
 		f.configSrc, _ = in["config_src"].(string)
 		f.created++
 		id := fmt.Sprintf("tun-%d", f.created)
-		f.tunnels[id] = fakeTunnel{name: in["name"].(string), status: "inactive"}
+		f.tunnels[id] = fakeTunnel{name: in["name"].(string), status: "inactive", created: time.Now()}
 		result = map[string]string{"id": id}
 	case r.Method == http.MethodGet && path == records:
 		list := []map[string]any{}
@@ -231,9 +249,15 @@ func TestVerifyRejectsAnotherZone(t *testing.T) {
 
 type fakeSweepStore struct {
 	candidates []domain.RemoteHostTunnelCandidate
+	rows       map[string]domain.RemoteHostTunnel // by host
 	touched    []string
 	seen       map[string]time.Time
 	deleted    []string
+}
+
+func (s *fakeSweepStore) GetRemoteHostTunnel(_ context.Context, hostID string) (domain.RemoteHostTunnel, bool, error) {
+	row, ok := s.rows[hostID]
+	return row, ok, nil
 }
 
 func (s *fakeSweepStore) ListRemoteHostTunnelSweepCandidates(context.Context, time.Time) ([]domain.RemoteHostTunnelCandidate, error) {
@@ -249,6 +273,7 @@ func (s *fakeSweepStore) TouchRemoteHostTunnel(_ context.Context, hostID string,
 }
 func (s *fakeSweepStore) DeleteRemoteHostTunnel(_ context.Context, hostID, _ string) error {
 	s.deleted = append(s.deleted, hostID)
+	delete(s.rows, hostID)
 	return nil
 }
 
@@ -281,5 +306,49 @@ func TestSweepDeletesOnlyWhatIsGone(t *testing.T) {
 	}
 	if _, ok := cf.tunnels["recent"]; !ok {
 		t.Fatal("a tunnel offline for 10 days was deleted")
+	}
+}
+
+// A machine linked and never run, or a registration made only to hold a
+// tunnel, loses it after an hour; nothing else does.
+func TestSweepDeletesTunnelsNoConnectorEverServed(t *testing.T) {
+	cf, c := newFakeCloudflare(t)
+	now := time.Now()
+	old, young := now.Add(-2*time.Hour), now.Add(-10*time.Minute)
+	went := now.Add(-24 * time.Hour)
+	cf.tunnels["unused"] = fakeTunnel{name: "ao-h_unused", status: "inactive", created: old}
+	cf.tunnels["young"] = fakeTunnel{name: "ao-h_young", status: "inactive", created: young}
+	cf.tunnels["foreign"] = fakeTunnel{name: "ao-h_foreign", status: "inactive", created: old}
+	cf.tunnels["replaced"] = fakeTunnel{name: "ao-h_replaced", status: "inactive", created: old}
+	cf.tunnels["ran"] = fakeTunnel{name: "ao-h_ran", status: "down", created: old, inactive: &went}
+	cf.tunnels["other"] = fakeTunnel{name: "coder-poc", status: "inactive", created: old}
+	// Enough unused tunnels for a second page.
+	rows := map[string]domain.RemoteHostTunnel{}
+	for i := range 105 {
+		id := fmt.Sprintf("bulk-%03d", i)
+		cf.tunnels[id] = fakeTunnel{name: "ao-h_" + id, status: "inactive", created: old}
+		rows["h_"+id] = domain.RemoteHostTunnel{HostID: "h_" + id, TunnelID: id, Hostname: "h-" + id + ".example.dev"}
+	}
+	for _, host := range []string{"unused", "young", "ran"} {
+		rows["h_"+host] = domain.RemoteHostTunnel{HostID: "h_" + host, TunnelID: host, Hostname: "h-" + host + ".example.dev"}
+	}
+	rows["h_replaced"] = domain.RemoteHostTunnel{HostID: "h_replaced", TunnelID: "newer", Hostname: "h-replaced.example.dev"}
+	cf.records["h-unused.example.dev"] = fakeRecord{id: "rec-unused", content: "unused.cfargotunnel.com", proxied: true}
+	store := &fakeSweepStore{rows: rows}
+
+	deleted, err := Sweep(context.Background(), store, c, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 106 || len(store.deleted) != 106 {
+		t.Fatalf("deleted %d: %v", deleted, store.deleted)
+	}
+	for _, kept := range []string{"young", "foreign", "replaced", "ran", "other"} {
+		if _, ok := cf.tunnels[kept]; !ok {
+			t.Errorf("tunnel %s was deleted", kept)
+		}
+	}
+	if _, ok := cf.tunnels["unused"]; ok || cf.records["h-unused.example.dev"].id != "" {
+		t.Fatal("the unused tunnel or its DNS record survived")
 	}
 }

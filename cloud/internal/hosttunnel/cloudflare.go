@@ -14,6 +14,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -165,11 +167,13 @@ func (c *Cloudflare) Delete(ctx context.Context, tunnelID, hostname string) erro
 }
 
 // Status is whether a tunnel has a connector now, and since when it has had
-// none. Missing is set when Cloudflare no longer has the tunnel.
+// none. Missing is set when Cloudflare no longer has the tunnel, and
+// NeverConnected when no connector has ever served it.
 type Status struct {
-	Online       bool
-	OfflineSince time.Time
-	Missing      bool
+	Online         bool
+	OfflineSince   time.Time
+	Missing        bool
+	NeverConnected bool
 }
 
 // Status reads a tunnel's connection state. Cloudflare reports "healthy" or
@@ -198,7 +202,46 @@ func (c *Cloudflare) Status(ctx context.Context, tunnelID string) (Status, error
 	if t.ConnsInactiveAt != nil {
 		since = *t.ConnsInactiveAt
 	}
-	return Status{OfflineSince: since}, nil
+	return Status{OfflineSince: since, NeverConnected: t.Status == "inactive"}, nil
+}
+
+// ListedTunnel is a tunnel found by a listing, with the host its name names.
+type ListedTunnel struct {
+	ID     string
+	HostID string
+}
+
+// NeverConnected lists the host tunnels made before createdBefore that no
+// connector has ever served, Cloudflare's "inactive". The account may hold
+// other tunnels, and other AO Clouds' host tunnels: the caller checks each
+// against its own records before deleting it.
+func (c *Cloudflare) NeverConnected(ctx context.Context, createdBefore time.Time) ([]ListedTunnel, error) {
+	const perPage = 100
+	var out []ListedTunnel
+	// The account holds at most 1,000 tunnels, so ten pages cover it.
+	for page := 1; page <= 10; page++ {
+		q := url.Values{
+			"is_deleted": {"false"}, "status": {"inactive"}, "include_prefix": {tunnelName("")},
+			"existed_at": {createdBefore.UTC().Format(time.RFC3339)},
+			"per_page":   {strconv.Itoa(perPage)}, "page": {strconv.Itoa(page)},
+		}
+		var found []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		}
+		if err := c.do(ctx, http.MethodGet, c.tunnelsPath()+"?"+q.Encode(), nil, &found); err != nil {
+			return out, fmt.Errorf("list unused tunnels: %w", err)
+		}
+		for _, t := range found {
+			if hostID, ok := strings.CutPrefix(t.Name, tunnelName("")); ok && t.ID != "" {
+				out = append(out, ListedTunnel{ID: t.ID, HostID: hostID})
+			}
+		}
+		if len(found) < perPage {
+			break
+		}
+	}
+	return out, nil
 }
 
 // apiError is a failed Cloudflare call.

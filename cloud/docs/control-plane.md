@@ -286,12 +286,16 @@ machine only ever receives its own tunnel's run token.
 - `ao_remote_host_tunnels` keeps one row per host, whichever accounts list it,
   with the run token encrypted like host tokens.
 - Removing the last registration deletes the tunnel and its record before the
-  removal answers, so a host added back right after gets a new tunnel. A daily
-  sweep deletes tunnels no account lists, tunnels Cloudflare
-  no longer has, and tunnels whose machine has had no connector for 90 days.
+  removal answers, so a host added back right after gets a new tunnel. An
+  hourly sweep deletes tunnels no account lists, tunnels Cloudflare no longer
+  has, tunnels whose machine has had no connector for 90 days, and tunnels no
+  connector has served an hour after they were made. That last rule keeps
+  registrations made only to hold tunnels from keeping them.
   A deleted machine that comes back gets a new tunnel at the same address.
-- Zone records are the limit: a Free zone holds 200, Pro 3,500. A refused record
-  leaves the machine on a quick tunnel.
+- Zone records and tunnels are the limits. A Free zone holds 200 records and
+  Pro 3,500; a Cloudflare account includes 1,000 tunnels, and Tunnels for
+  Platforms sells more at $4.50 a month each. Tunnels with no connector count.
+  A refused record or tunnel leaves the machine on a quick tunnel.
 - One account lists at most 10 machines (`domain.MaxRemoteHostsPerAccount`),
   so one account cannot fill the zone. A new machine past that is refused with
   409 `remote_host_limit_reached` before any Cloudflare call; machines already

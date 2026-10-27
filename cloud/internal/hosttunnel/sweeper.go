@@ -13,13 +13,21 @@ const (
 	// OfflineRetention is how long a registered machine's tunnel survives
 	// without a connector before the sweep deletes it.
 	OfflineRetention = 90 * 24 * time.Hour
-	// DefaultSweepInterval runs the sweep once a day.
-	DefaultSweepInterval = 24 * time.Hour
+	// UnusedRetention is how long a tunnel no connector has ever served
+	// survives. A machine connects within seconds of being linked, or minutes
+	// on a slow download, and one that comes later gets its tunnel made again.
+	// Without it, registering machines that never run would hold tunnels and
+	// DNS records for OfflineRetention.
+	UnusedRetention = time.Hour
+	// DefaultSweepInterval runs the sweep once an hour, so an unused tunnel
+	// goes within two hours.
+	DefaultSweepInterval = time.Hour
 )
 
 // SweepStore is what the sweep reads and writes.
 type SweepStore interface {
 	ListRemoteHostTunnelSweepCandidates(context.Context, time.Time) ([]domain.RemoteHostTunnelCandidate, error)
+	GetRemoteHostTunnel(context.Context, string) (domain.RemoteHostTunnel, bool, error)
 	TouchRemoteHostTunnel(context.Context, string, time.Time) error
 	DeleteRemoteHostTunnel(context.Context, string, string) error
 }
@@ -51,7 +59,8 @@ func RunSweeper(ctx context.Context, store SweepStore, cf *Cloudflare, interval 
 }
 
 // Sweep deletes the tunnels no account registers any more, the ones Cloudflare
-// no longer has, and the ones offline for OfflineRetention. It asks Cloudflare
+// no longer has, the ones offline for OfflineRetention, and the ones never
+// connected for UnusedRetention. It asks Cloudflare
 // before deleting a registered machine's tunnel, because a machine that runs
 // for months without restarting never fetches its token. A deleted machine
 // that comes back gets a new tunnel at the same address on its next start.
@@ -89,6 +98,38 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 			continue
 		}
 		if err := store.DeleteRemoteHostTunnel(ctx, c.HostID, c.TunnelID); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		deleted++
+	}
+	unused, err := cf.NeverConnected(ctx, now.Add(-UnusedRetention))
+	if err != nil {
+		errs = append(errs, err)
+	}
+	for _, t := range unused {
+		row, found, err := store.GetRemoteHostTunnel(ctx, t.HostID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		// Only tunnels this AO Cloud made and still uses: another one may
+		// share the Cloudflare account.
+		if !found || row.TunnelID != t.ID {
+			continue
+		}
+		// Asked again, so a machine that connected since the listing keeps it.
+		if status, err := cf.Status(ctx, t.ID); err != nil || !status.NeverConnected {
+			if err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		if err := cf.Delete(ctx, t.ID, row.Hostname); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := store.DeleteRemoteHostTunnel(ctx, t.HostID, t.ID); err != nil {
 			errs = append(errs, err)
 			continue
 		}
