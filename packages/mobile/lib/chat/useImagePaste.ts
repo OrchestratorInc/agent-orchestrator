@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { findNodeHandle, NativeEventEmitter, NativeModules, type LayoutChangeEvent } from "react-native";
-import type { ComposerImageAsset } from "./composerImages";
+import type { ComposerImageAsset, PasteOverflow } from "./composerImages";
 
 type PastedImage = { mimeType?: string; bytes?: number; data?: string };
 
@@ -19,7 +19,7 @@ export function pastedImageAssets(tag: number, images: readonly PastedImage[], n
  * Lets the composer's own TextInput take images from Paste (and, on Android, the
  * keyboard's image insertion). Attach the returned handler to the field's onLayout.
  */
-export function useImagePaste(onPaste: ((assets: ComposerImageAsset[]) => void) | null) {
+export function useImagePaste(onPaste: ((assets: ComposerImageAsset[], overflow?: PasteOverflow) => void) | null) {
 	const [tag, setTag] = useState<number>();
 	const callback = useRef(onPaste);
 	callback.current = onPaste;
@@ -27,8 +27,10 @@ export function useImagePaste(onPaste: ((assets: ComposerImageAsset[]) => void) 
 	useEffect(() => {
 		const native = NativeModules.AOImagePaste;
 		if (!native || !tag || !enabled) return;
-		const subscription = new NativeEventEmitter(native).addListener("AOImagePaste", (event: { tag: number; images?: PastedImage[] }) => {
-			if (event.tag === tag && Array.isArray(event.images) && event.images.length) callback.current?.(pastedImageAssets(tag, event.images));
+		const subscription = new NativeEventEmitter(native).addListener("AOImagePaste", (event: { tag: number; images?: PastedImage[]; overflow?: string }) => {
+			// Native stops at the composer's batch limits and says which one it hit.
+			const overflow = event.overflow === "count" || event.overflow === "size" ? event.overflow : undefined;
+			if (event.tag === tag && Array.isArray(event.images) && event.images.length) callback.current?.(pastedImageAssets(tag, event.images), overflow);
 		});
 		native.attach(tag);
 		return () => { subscription.remove(); native.detach(tag); };

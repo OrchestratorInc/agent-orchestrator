@@ -2,7 +2,7 @@ import { act, create } from "react-test-renderer";
 import { expect, it, vi } from "vitest";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST_ENVIRONMENT: true });
-type PasteEvent = { tag: number; images?: { mimeType?: string; bytes?: number; data?: string }[] };
+type PasteEvent = { tag: number; images?: { mimeType?: string; bytes?: number; data?: string }[]; overflow?: string };
 const { native, listeners } = vi.hoisted(() => ({
 	native: { attach: vi.fn(), detach: vi.fn() },
 	listeners: new Set<(event: PasteEvent) => void>(),
@@ -46,6 +46,13 @@ it("attaches to the field's tag, takes only its own pastes, and detaches when pa
 	expect(first).not.toHaveBeenCalled();
 	expect(latest).toHaveBeenCalledOnce();
 	expect(latest.mock.calls[0]![0]).toMatchObject([{ mimeType: "image/png", base64: "aGVsbG8=" }]);
+	expect(latest.mock.calls[0]![1]).toBeUndefined();
+	act(() => { for (const listener of listeners) {
+		listener({ tag: 42, images: [{ mimeType: "image/png", bytes: 5, data: "aGVsbG8=" }], overflow: "size" });
+		listener({ tag: 42, images: [{ mimeType: "image/png", bytes: 5, data: "aGVsbG8=" }], overflow: "bogus" });
+	} });
+	expect(latest.mock.calls[1]![1]).toBe("size");
+	expect(latest.mock.calls[2]![1]).toBeUndefined();
 	act(() => renderer.update(<Composer onPaste={null} />));
 	expect(native.detach).toHaveBeenCalledWith(42);
 	expect(listeners.size).toBe(0);

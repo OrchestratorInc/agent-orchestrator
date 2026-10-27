@@ -6,6 +6,10 @@
 
 // Matches the composer's 10 MB per-image limit; anything larger is reported by size, unsent.
 static const NSUInteger AOMaxImageBytes = 10 * 1024 * 1024;
+// The composer's batch limits (8 attachments, 25 MB of images). Applied here too, so
+// a large multi-photo copy isn't read and encoded only to be discarded in JS.
+static const NSUInteger AOMaxImages = 8;
+static const NSUInteger AOMaxBatchBytes = 25 * 1024 * 1024;
 static char AOImagePasteTagKey;
 static char AOImagePasteModuleKey;
 static IMP AOOriginalPaste;
@@ -97,6 +101,15 @@ static NSString *AOPassthroughMimeType(NSString *identifier)
     };
   });
   return types[identifier];
+}
+
+/** Whether an item holds an image, from its type names alone: nothing is read. */
+static BOOL AOItemHasImage(UIPasteboard *pasteboard, NSInteger index)
+{
+  for (NSString *identifier in [pasteboard pasteboardTypesForItemSet:[NSIndexSet indexSetWithIndex:index]].firstObject ?: @[]) {
+    if ([[UTType typeWithIdentifier:identifier] conformsToType:UTTypeImage]) return YES;
+  }
+  return NO;
 }
 
 /**
@@ -201,18 +214,36 @@ RCT_EXPORT_METHOD(detach:(nonnull NSNumber *)tag)
 {
   UIPasteboard *pasteboard = UIPasteboard.generalPasteboard;
   NSMutableArray<NSDictionary *> *items = [NSMutableArray new];
+  NSUInteger held = 0;
+  __block NSString *overflow = nil;
   for (NSInteger index = 0; index < pasteboard.numberOfItems; index++) {
+    if (!AOItemHasImage(pasteboard, index)) continue;
+    if (items.count >= AOMaxImages) { overflow = @"count"; break; }
     NSDictionary *read = AOReadImageItem(pasteboard, index);
-    if (read) [items addObject:read];
+    if (!read) continue;
+    NSUInteger bytes = ((NSData *)(read[@"data"] ?: read[@"source"])).length;
+    // The first image is kept whatever its size: it is already read, and its JPEG may fit.
+    if (items.count && held + bytes > AOMaxBatchBytes) { overflow = @"size"; break; }
+    held += bytes;
+    [items addObject:read];
   }
   if (!items.count) return;
   // Decoding, re-encoding and base64 can take a moment on a large photo; keep them off the UI.
   __weak AOImagePaste *weakSelf = self;
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
     NSMutableArray<NSDictionary *> *images = [NSMutableArray new];
-    for (NSDictionary *read in items) [images addObject:AOEncodeImage(read)];
+    NSUInteger sent = 0;
+    for (NSDictionary *read in items) {
+      NSDictionary *image = AOEncodeImage(read);
+      NSUInteger bytes = image[@"data"] ? [image[@"bytes"] unsignedIntegerValue] : 0;
+      if (images.count && sent + bytes > AOMaxBatchBytes) { overflow = overflow ?: @"size"; break; }
+      sent += bytes;
+      [images addObject:image];
+    }
+    NSMutableDictionary *body = [@{@"tag" : tag, @"images" : images} mutableCopy];
+    if (overflow) body[@"overflow"] = overflow;
     dispatch_async(dispatch_get_main_queue(), ^{
-      [weakSelf sendEventWithName:@"AOImagePaste" body:@{@"tag" : tag, @"images" : images}];
+      [weakSelf sendEventWithName:@"AOImagePaste" body:body];
     });
   });
 }

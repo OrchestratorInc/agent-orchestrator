@@ -55,9 +55,9 @@ export function ReviewerComposer({ attachmentKey, busy, stopped, attachmentsEnab
 		void onAcknowledgeSend(completedRetry.id).catch((cause) => setError(cause instanceof Error ? cause.message : "Could not clear the sent reply."));
 	}, [completedRetry, onAcknowledgeSend, text, clearAttachments]);
 
-	const pasteLayout = useImagePaste(stopped || submitting || !attachmentsEnabled ? null : (assets) => {
+	const pasteLayout = useImagePaste(stopped || submitting || !attachmentsEnabled ? null : (assets, overflow) => {
 		setError("");
-		if (attachComposerImages(attachmentKey, assets)) haptics.tap();
+		if (attachComposerImages(attachmentKey, assets, overflow)) haptics.tap();
 	});
 	const addPhoto = async () => {
 		// Captured now: the pick can outlive this composer (see ChatComposer).

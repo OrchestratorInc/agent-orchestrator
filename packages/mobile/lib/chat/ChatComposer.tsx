@@ -390,9 +390,9 @@ export function ChatComposer({
 		} finally { setSubmitting(false); }
 	}, [text, quotes, attachments, steerEligible, onSteer, onSend, onAcknowledgeSend, draftKey, draftLoaded, submitting, pending, disabled, attachmentKey, dismissAttachmentNotice]);
 
-	const pasteLayout = useImagePaste(stopped || submitting ? null : (assets) => {
+	const pasteLayout = useImagePaste(stopped || submitting ? null : (assets, overflow) => {
 		setLocalError(undefined);
-		if (attachComposerImages(attachmentKey, assets)) haptics.tap();
+		if (attachComposerImages(attachmentKey, assets, overflow)) haptics.tap();
 	});
 	const addImage = async () => {
 		// Captured now: the pick can outlive this composer, and the stored list may

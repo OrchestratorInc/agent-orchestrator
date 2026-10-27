@@ -53,6 +53,10 @@ public final class ImagePasteModule extends ReactContextBaseJavaModule {
   private static final String[] MIME_TYPES = {"image/*"};
   // Matches the composer's 10 MB per-image limit; anything larger is reported by size, unread.
   private static final int MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+  // The composer's batch limits (8 attachments, 25 MB of images). Applied here too, so
+  // a large multi-image paste isn't read and encoded only to be discarded in JS.
+  private static final int MAX_IMAGES = 8;
+  private static final long MAX_BATCH_BYTES = 25L * 1024 * 1024;
   private static final Set<String> PASSTHROUGH_TYPES = new HashSet<>(Arrays.asList(
       "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp"));
   private final Map<Integer, Binding> bindings = new HashMap<>();
@@ -184,12 +188,24 @@ public final class ImagePasteModule extends ReactContextBaseJavaModule {
   private void emit(int tag, ContentResolver resolver, List<Uri> uris) {
     WritableArray images = Arguments.createArray();
     Set<String> own = ownAuthorities();
-    for (Uri uri : uris) images.pushMap(isForeignContent(uri, own) ? read(resolver, uri) : unreadable(null));
+    String overflow = null;
+    int count = 0;
+    long sent = 0;
+    for (Uri uri : uris) {
+      if (count >= MAX_IMAGES) { overflow = "count"; break; }
+      WritableMap image = isForeignContent(uri, own) ? read(resolver, uri) : unreadable(null);
+      long bytes = image.hasKey("data") ? (long) image.getDouble("bytes") : 0;
+      if (count > 0 && sent + bytes > MAX_BATCH_BYTES) { overflow = "size"; break; }
+      sent += bytes;
+      images.pushMap(image);
+      count++;
+    }
     ReactApplicationContext context = getReactApplicationContext();
     if (!context.hasActiveReactInstance()) return;
     WritableMap event = Arguments.createMap();
     event.putInt("tag", tag);
     event.putArray("images", images);
+    if (overflow != null) event.putString("overflow", overflow);
     context.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class).emit("AOImagePaste", event);
   }
 

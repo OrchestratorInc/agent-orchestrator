@@ -30,3 +30,13 @@ it("adds to the stored attachments, keeping what was there, and records why any 
 	expect(attachComposerImages("images-test", [{ uri: "unreadable", mimeType: "image/png" }])).toBe(false);
 	expect(readComposerAttachments("images-test")).toMatchObject({ items: [{ name: "a" }, { name: "b" }], notice: "Some images couldn't be read and were skipped." });
 });
+
+it("adds the native paste's overflow to the notice once, beside the composer's own reasons", () => {
+	expect(attachComposerImages("overflow-count", [png("a")], "count")).toBe(true);
+	expect(readComposerAttachments("overflow-count")).toMatchObject({ items: [{ name: "a" }], notice: "You can attach up to 8 items." });
+	attachComposerImages("overflow-size", [png("a"), { uri: "big", mimeType: "image/png", fileSize: MAX_IMAGE_BYTES + 1 }], "size");
+	expect(readComposerAttachments("overflow-size").notice).toBe("Each image must be under 10 MB. Images must total under 25 MB.");
+	const nine = 9 * 1024 * 1024;
+	attachComposerImages("overflow-dup", [png("a", nine), png("b", nine), png("c", nine)], "size");
+	expect(readComposerAttachments("overflow-dup")).toMatchObject({ items: [{ name: "a" }, { name: "b" }], notice: "Images must total under 25 MB." });
+});

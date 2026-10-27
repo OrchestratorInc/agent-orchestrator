@@ -7,6 +7,14 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_IMAGE_BYTES_TOTAL = 25 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp", "image/bmp"]);
 
+/** Which batch limit a native paste stopped at before reading the rest. */
+export type PasteOverflow = "count" | "size";
+
+const OVERFLOW_NOTICES: Record<PasteOverflow, string> = {
+	count: `You can attach up to ${MAX_ATTACHMENTS} items.`,
+	size: "Images must total under 25 MB.",
+};
+
 /** The picker's asset shape; pasted images are mapped onto it so both share one gate. */
 export type ComposerImageAsset = {
 	uri: string;
@@ -50,15 +58,18 @@ export function acceptImageAssets(current: readonly { kind: string; bytes?: numb
 
 /**
  * Adds picked or pasted images to a session's stored attachments and records why
- * any were left out. Reads and writes the store, never a render's copy, so a pick
- * that outlives its composer still lands. Returns whether any image was added.
+ * any were left out, including those a native paste stopped before reading
+ * (`overflow`). Reads and writes the store, never a render's copy, so a pick that
+ * outlives its composer still lands. Returns whether any image was added.
  */
-export function attachComposerImages(key: string, assets: readonly ComposerImageAsset[]): boolean {
+export function attachComposerImages(key: string, assets: readonly ComposerImageAsset[], overflow?: PasteOverflow): boolean {
 	let added = 0;
 	updateComposerAttachments(key, (current) => {
 		const accepted = acceptImageAssets(current.items, assets);
 		added = accepted.added.length;
-		return { items: [...current.items, ...accepted.added], notice: accepted.error };
+		const skipped = overflow ? OVERFLOW_NOTICES[overflow] : undefined;
+		const notice = skipped && !accepted.error?.includes(skipped) ? [accepted.error, skipped].filter(Boolean).join(" ") : accepted.error;
+		return { items: [...current.items, ...accepted.added], notice };
 	});
 	return added > 0;
 }
