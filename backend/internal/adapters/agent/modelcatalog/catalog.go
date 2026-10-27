@@ -787,6 +787,19 @@ func mergedEnvironment(base []string, overrides map[string]string) []string {
 	return out
 }
 
+// modelDiscoveryPipeError keeps command diagnostics available through Unwrap
+// while Error supplies the warning shown by model-picker API clients.
+type modelDiscoveryPipeError struct {
+	agentID string
+	cause   error
+}
+
+func (e modelDiscoveryPipeError) Error() string {
+	return fmt.Sprintf("Could not load %s models: a background process kept the agent's output open for more than %s after the command exited. Retry model refresh; if it keeps failing, restart or update the agent CLI.", e.agentID, commandTerminationWait)
+}
+
+func (e modelDiscoveryPipeError) Unwrap() error { return e.cause }
+
 func modelDiscoveryError(runCtx context.Context, agentID string, commandErr error, output []byte) error {
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		return fmt.Errorf("%s model discovery timed out after %s", agentID, commandTimeout)
@@ -798,10 +811,14 @@ func modelDiscoveryError(runCtx context.Context, agentID string, commandErr erro
 	// config, a missing provider, a parse failure). Discarding it turns every
 	// failure into an opaque "exit status 1"; surfacing a bounded tail makes the
 	// cause visible in the cached RefreshError and the logs.
+	diagnostic := fmt.Errorf("%s model discovery: %w", agentID, commandErr)
 	if detail := discoveryErrorDetail(output); detail != "" {
-		return fmt.Errorf("%s model discovery: %w: %s", agentID, commandErr, detail)
+		diagnostic = fmt.Errorf("%w: %s", diagnostic, detail)
 	}
-	return fmt.Errorf("%s model discovery: %w", agentID, commandErr)
+	if errors.Is(commandErr, exec.ErrWaitDelay) {
+		return modelDiscoveryPipeError{agentID: agentID, cause: diagnostic}
+	}
+	return diagnostic
 }
 
 // discoveryErrorDetailMax bounds how much command output a discovery error
