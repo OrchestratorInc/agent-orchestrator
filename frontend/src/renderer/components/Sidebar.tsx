@@ -479,6 +479,30 @@ function readExpandedProjectIds(): ReadonlySet<string> {
 	}
 }
 
+const sectionsStorageKey = "ao.sidebar.sections";
+type SidebarSection = "pinned" | "projects" | "scratchpad";
+
+/** Saved open state per section. A missing entry means open. */
+function readSectionsOpen(): Record<SidebarSection, boolean> {
+	const open = { pinned: true, projects: true, scratchpad: true };
+	if (typeof window === "undefined" || !window.localStorage) return open;
+	try {
+		const saved: unknown = JSON.parse(window.localStorage.getItem(sectionsStorageKey) ?? "null");
+		if (saved && typeof saved === "object") {
+			for (const key of Object.keys(open) as SidebarSection[]) {
+				if ((saved as Record<string, unknown>)[key] === false) open[key] = false;
+			}
+		}
+	} catch {}
+	return open;
+}
+
+function saveSectionOpen(section: SidebarSection, open: boolean) {
+	try {
+		window.localStorage?.setItem(sectionsStorageKey, JSON.stringify({ ...readSectionsOpen(), [section]: open }));
+	} catch {}
+}
+
 type SidebarProps = {
 	underTopbar?: boolean;
 	/** Chrome height to clear when underTopbar is set. Defaults to --size-toolbar. */
@@ -694,9 +718,14 @@ export function Sidebar({
 		});
 	}, [dismissedInitialActiveProjectIds, expandedIds, initialActiveSessionProjectId]);
 	// Section disclosure: every section header collapses its own body.
-	const [pinnedOpen, setPinnedOpen] = useState(true);
-	const [projectsOpen, setProjectsOpen] = useState(true);
-	const [scratchpadOpen, setScratchpadOpen] = useState(true);
+	// Header clicks are saved. Opening a section to reveal the active session is not.
+	const [pinnedOpen, setPinnedOpen] = useState(() => readSectionsOpen().pinned);
+	const [projectsOpen, setProjectsOpen] = useState(() => readSectionsOpen().projects);
+	const [scratchpadOpen, setScratchpadOpen] = useState(() => readSectionsOpen().scratchpad);
+	const toggleSection = (section: SidebarSection, open: boolean, setOpen: (open: boolean) => void) => {
+		setOpen(!open);
+		saveSectionOpen(section, !open);
+	};
 
 	// Keyboard navigation (⌘⇧[ / ⌘⇧], ⌘1-9, attention jumps) can land on a row
 	// that is scrolled out, in a collapsed project or inside a closed section.
@@ -1034,7 +1063,7 @@ export function Sidebar({
 						<SectionDisclosure
 							label={t("shell.pinned")}
 							open={pinnedOpen}
-							onToggle={() => setPinnedOpen((v) => !v)}
+							onToggle={() => toggleSection("pinned", pinnedOpen, setPinnedOpen)}
 							className="mb-1"
 						/>
 						<AnimatedSectionBody open={pinnedOpen}>
@@ -1065,7 +1094,7 @@ export function Sidebar({
 					<SectionDisclosure
 						label={t("shell.projects")}
 						open={projectsOpen}
-						onToggle={() => setProjectsOpen((open) => !open)}
+						onToggle={() => toggleSection("projects", projectsOpen, setProjectsOpen)}
 						trailing={
 							<CreateProjectButton
 								existingProjectPaths={existingProjectPaths}
@@ -1190,7 +1219,7 @@ export function Sidebar({
 								selection={selection}
 								isCollapsed={isIconRail}
 								open={scratchpadOpen}
-								onToggle={() => setScratchpadOpen((open) => !open)}
+								onToggle={() => toggleSection("scratchpad", scratchpadOpen, setScratchpadOpen)}
 							/>
 						) : null}
 					</SidebarGroupContent>

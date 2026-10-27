@@ -11,7 +11,7 @@ vi.mock("motion/react", async (importOriginal) => {
 		AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
 	};
 });
-import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
@@ -1106,6 +1106,30 @@ describe("Sidebar", () => {
 
 		await user.click(screen.getByRole("button", { name: "Scratchpad" }));
 		expect(screen.getByText("baby")).toBeInTheDocument();
+	});
+
+	it("saves the Scratchpad section state and starts closed when it was left closed", async () => {
+		const user = userEvent.setup();
+		const workspaces = [
+			{
+				id: STANDALONE_WORKSPACE_ID,
+				name: "Scratchpad",
+				kind: STANDALONE_PROJECT_KIND,
+				path: "",
+				sessions: [
+					{ ...session, id: "adhoc-1", title: "baby", workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" },
+				],
+			},
+		];
+		renderSidebar({ workspaces });
+		await user.click(screen.getByRole("button", { name: "Scratchpad" }));
+		const saved = window.localStorage.getItem("ao.sidebar.sections");
+		expect(JSON.parse(saved ?? "null")).toMatchObject({ scratchpad: false });
+		cleanup();
+
+		window.localStorage.setItem("ao.sidebar.sections", saved ?? "");
+		renderSidebar({ workspaces });
+		expect(screen.queryByText("baby")).not.toBeInTheDocument();
 	});
 
 	it("caps the ad hoc agent list at 10 and lets the section grow to half the available height", async () => {
