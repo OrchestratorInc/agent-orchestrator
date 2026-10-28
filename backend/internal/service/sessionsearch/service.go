@@ -415,6 +415,7 @@ func (s *Service) toResults(ctx context.Context, hits []domain.SessionSearchHit)
 			ResumeCommand:  domain.SessionSearchResumeCommand(hit.SessionID),
 			SessionMatches: hit.SessionMatches,
 			ReviewID:       hit.ReviewID,
+			NamedForQuery:  hit.NamedForQuery,
 		})
 		sessionIDs = append(sessionIDs, hit.SessionID)
 		projectIDs = append(projectIDs, hit.ProjectID)

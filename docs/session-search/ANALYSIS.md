@@ -1476,3 +1476,98 @@ sessions whose name holds every typed word first, ahead of any bm25 score.
 Each fix has a test that fails without it: the standalone backfill, the
 retry, the palette route, and the name tier. The name-tier test also fails if
 ids count as names.
+
+### 8.9 Search across machines: this machine and every connected remote (28 Oct 2026)
+
+**What it does.** Cmd+K and the Search page ask this machine and every
+connected remote AO machine the same search, and show one merged list. A
+remote row names its machine and opens on `/host/$hostId/…`; its find bar
+asks that machine. Cloud projects are not searched yet (below).
+
+**Where the fan-out lives: the desktop.** A proof of concept first did it in
+the daemon (`machines=all`, reading the desktop's `remotes.json`). Dhruv's
+requirement, to search this machine, remote machines *and* cloud projects
+together, moved it:
+- **Cloud.** Cloud sessions are not on any AO daemon. They live in the
+  control plane's PostgreSQL (`ao_events`, `ao_session_transcripts`), and
+  only the desktop holds the cloud sign-in (Electron `safeStorage`).
+- **Remote machines.** Their credentials already live in the desktop's main
+  process: the remote proxy behind `clientForHost`. Searching through it
+  means no daemon reads another machine's password.
+- **Which machines.** The desktop knows every machine the user works with,
+  including account-synced ones, not only those in `remotes.json`.
+- **No new routes.** A remote daemon's LAN and tunnel listener already
+  serves `/api/v1/search/*` to an authenticated desktop; it blocks only
+  control routes (`lan_listener.go`).
+
+`ao search` and agents keep searching the machine they run on.
+
+**How Orca does it** (`src/main/ipc/ai-vault-search-all-hosts.ts`):
+- one request per host, in parallel, each with its own time limit;
+- each host's outcome reported, results stamped with the host asked;
+- relevance scores never compared ("Independent relevance scores cannot be
+  compared: merge by recency or host round-robin");
+- a merged cursor per host, and indexing opt-in per computer.
+
+**The merge** (`lib/session-search-machines.ts`).
+- **Taking turns.** Every machine's best, then every machine's second, and
+  so on, this machine first. Newest-first merges by time.
+- **Named for the query first.** One rule comes before taking turns: sessions
+  whose name holds every typed word come first, in turns, then the rest.
+  Each machine says so per result (`namedForQuery`, the ranking's name tier,
+  §8.8), so the desktop does not judge words itself. A name match means the
+  same thing on every machine, unlike bm25. An older AO omits the field, and
+  its sessions fall into the second tier.
+- **Paging.** Each machine is asked for everything up to the end of the
+  page, so the merged page is exact. The total adds every machine's count.
+
+**Each machine's outcome** (`useRemoteMachineSearch`):
+
+| Outcome | When |
+| --- | --- |
+| searched | 2xx with results |
+| offline | no connection, a thrown network error, or a gateway answer (502, 504, 520–527, 530: a quick tunnel whose machine is gone answers 530); also a saved machine that is not connected |
+| still connecting | a saved machine whose connection is being made |
+| no answer within 6 s | the 6 s limit passed |
+| update AO there | 404, 405, 501: an AO without session search |
+| saved password refused | 401, 403 |
+| error | anything else (including 503, which AO itself uses) |
+
+- **No failed searches.** A machine that does not answer never fails the
+  search; Cmd+K and the page say "Not searched on Laptop (offline)."
+- **No second connections.** Saved machines that are not connected are
+  reported without being asked. Their status comes from a snapshot
+  `useRemoteHosts` publishes (`lib/saved-remote-hosts.ts`), so nothing
+  connects twice.
+- **Display.** This machine's answer shows at once. The merged list replaces
+  it once every machine has answered, so rows do not jump while being read.
+
+**Rules that keep machines apart:**
+- A remote session with the same id as a local one is a different session.
+  It never hides this machine's chat row, and it has its own row id.
+- The resume command is offered only for this machine's sessions: it talks
+  to the local daemon.
+- A project filter on the Search page keeps the search on this machine,
+  because a project id names a project on one machine.
+
+**Two real Macs (27–28 Oct).** The MacBook Pro and the MacBook Air searched
+each other over Cloudflare quick tunnels, each a fenced copy reached through
+a search-only gate. That test ran the daemon fan-out, but what it checked
+carries over:
+- the per-machine API across a tunnel: 0.4–0.7 s per remote;
+- the merge rules: "morning standup" and "grok-bot approval" led with the
+  sessions named for them;
+- the outcomes: a machine whose tunnel was gone answered 530 and is now
+  "offline".
+
+It also found the standalone-session and name-tier bugs fixed in §8.8.
+
+**Not done here:**
+- **Cloud projects.** They need a search endpoint in the control plane: text
+  extracted from `ao_events` into PostgreSQL full-text search, scoped to the
+  organization. The desktop would then ask it as one more source.
+- **`ao search` and agents** remain single-machine.
+- **Typo repair** is deferred.
+- **The desktop path itself** was not exercised live: this Mac cannot build
+  the Electron dev app. Unit and component tests cover the merge, the
+  outcomes, the timeout, the rows, the routes and the notes.

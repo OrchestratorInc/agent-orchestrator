@@ -4,10 +4,18 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
-const { getMock, navigateMock, workspaceQueryMock } = vi.hoisted(() => ({
+const { getMock, navigateMock, workspaceQueryMock, remoteSearchMock, NO_REMOTES } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	navigateMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
+	remoteSearchMock: vi.fn(),
+	NO_REMOTES: { answers: [], settled: true },
+}));
+
+// Search across machines is its own hook with its own tests; here it says what
+// the other machines answered, and records what the page asked them.
+vi.mock("../hooks/useRemoteMachineSearch", () => ({
+	useRemoteMachineSearch: (...args: unknown[]) => remoteSearchMock(...args),
 }));
 
 // The local daemon's client is mocked, not host resolution: a search on this
@@ -24,7 +32,7 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	useNavigate: () => navigateMock,
 }));
 
-vi.mock("./useWorkspaceQuery", () => ({
+vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceQuery: () => workspaceQueryMock(),
 }));
 
@@ -73,6 +81,8 @@ describe("SessionSearchView", () => {
 		useUiStore.setState({ chatMessageFocusRequest: null });
 		getMock.mockReset();
 		navigateMock.mockReset();
+		remoteSearchMock.mockReset();
+		remoteSearchMock.mockReturnValue(NO_REMOTES);
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				{
@@ -274,6 +284,49 @@ describe("SessionSearchView", () => {
 				params: { query: expect.objectContaining({ sort: "recent" }) },
 			});
 		});
+	});
+
+	it("searches every connected machine and opens a remote session there", async () => {
+		getMock.mockResolvedValue(response());
+		remoteSearchMock.mockReturnValue({ settled: true, answers: [
+			{ hostId: "h_azure", label: "AzureLinux", outcome: "searched", total: 1, results: [{ ...result, messageId: "remote-msg", sessionName: "Fix the login test on azure" }] },
+			{ hostId: "h_desk", label: "Desk", outcome: "offline", total: 0, results: [] },
+		] });
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		await waitFor(() => expect(screen.getByText("Fix the login test on azure")).toBeInTheDocument());
+		expect(screen.getByText("Fix the login test")).toBeInTheDocument();
+		expect(screen.getByTestId("search-result-machine").textContent).toBe("AzureLinux");
+		expect(screen.getByTestId("search-machines-not-searched").textContent).toBe("Not searched on Desk (offline).");
+		// The count is every machine's, not just this one's.
+		expect(screen.getByTestId("session-search-count").textContent).toContain("2");
+
+		await user.click(screen.getByRole("button", { name: /Fix the login test on azure/ }));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/host/$hostId/project/$projectId/session/$sessionId",
+			params: { hostId: "h_azure", projectId: "proj", sessionId: "proj-1" },
+		});
+		expect(peekSessionSearchReveal("proj-1")).toMatchObject({ messageId: "remote-msg" });
+	});
+
+	it("asks the other machines with the same words and dates, and only this one for a project", async () => {
+		getMock.mockResolvedValue(response());
+		const user = userEvent.setup();
+		render(<SessionSearchView />, { wrapper });
+
+		await user.type(screen.getByRole("searchbox", { name: "Search past sessions" }), "flaky");
+		fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-01-01" } });
+		await waitFor(() => expect(remoteSearchMock.mock.calls.at(-1)).toEqual([
+			expect.objectContaining({ query: "flaky", from: "2026-01-01" }),
+			true,
+		]));
+
+		// A project id names a project on this machine.
+		await user.click(screen.getByRole("button", { name: "Filter by project" }));
+		await user.click(await screen.findByRole("menuitem", { name: "proj" }));
+		await waitFor(() => expect(remoteSearchMock.mock.calls.at(-1)?.[1]).toBe(false));
 	});
 
 	it("does not query a single character", async () => {

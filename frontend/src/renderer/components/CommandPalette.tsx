@@ -44,7 +44,9 @@ import { isDialogOrMenuOpen } from "../lib/dom-selectors";
 import { LOCAL_HOST } from "../lib/hosts";
 import { isMacPlatform } from "../lib/platform";
 import { revealSessionSearchMatch } from "../lib/session-search-reveal";
-import { usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
+import { PALETTE_SESSION_SEARCH_LIMIT, usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
+import { useRemoteMachineSearch } from "../hooks/useRemoteMachineSearch";
+import { machinesNotSearched, mergeMachineSearchResults } from "../lib/session-search-machines";
 import { sessionReviewsQueryOptions, type PRReviewState } from "../lib/session-reviews";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { useShell } from "../lib/shell-context";
@@ -244,7 +246,28 @@ export function CommandPalette() {
 			|| normalizedSessionQuery.length >= PALETTE_SESSION_SEARCH_MIN_CHARS);
 	const sessionSearchQuery = usePaletteSessionSearch(normalizedSessionQuery, LOCAL_HOST, sessionSearchEnabled);
 	const sessionSearchIndexStatus = useSessionSearchIndexStatus(LOCAL_HOST, isOpen && sessionSearchEnabled);
-	const sessionSearchHits = sessionSearchQuery.data?.results ?? [];
+	// The same words on every connected remote AO machine. This machine's answer
+	// shows at once; the merged list replaces it once every machine has answered
+	// or timed out, and never while this machine's answer still belongs to an
+	// earlier query. Recents (no words) stay this machine's.
+	const remoteSessionSearch = useRemoteMachineSearch(
+		{ query: normalizedSessionQuery, harness: "", from: "", to: "", limit: PALETTE_SESSION_SEARCH_LIMIT },
+		sessionSearchEnabled,
+	);
+	const localSessionSearch = sessionSearchQuery.isPlaceholderData ? undefined : sessionSearchQuery.data;
+	const sessionSearchHits = useMemo(() => {
+		const local = sessionSearchQuery.data?.results ?? [];
+		const remoteAnswered = remoteSessionSearch.answers.some((answer) => answer.outcome === "searched");
+		if (!localSessionSearch || !remoteSessionSearch.settled || !remoteAnswered) return local;
+		return mergeMachineSearchResults([
+			{ hostId: LOCAL_HOST, label: "", outcome: "searched", results: localSessionSearch.results ?? [], total: localSessionSearch.total ?? 0 },
+			...remoteSessionSearch.answers,
+		], false).slice(0, PALETTE_SESSION_SEARCH_LIMIT);
+	}, [sessionSearchQuery.data, localSessionSearch, remoteSessionSearch]);
+	const sessionSearchMachinesNotSearched = useMemo(
+		() => (remoteSessionSearch.settled ? machinesNotSearched(remoteSessionSearch.answers, t) : []),
+		[remoteSessionSearch, t],
+	);
 
 	const sessionsWithOpenPRs = useMemo(
 		() =>
@@ -588,17 +611,23 @@ export function CommandPalette() {
 		[],
 	);
 
-	const fileSessionRoute = useCallback((target: WorkspaceFileSearchTarget): NavigateTarget => {
-		if (target.hostId) {
-			return target.projectId === STANDALONE_WORKSPACE_ID
-				? { to: "/host/$hostId/session/$sessionId", params: { hostId: target.hostId, sessionId: target.sessionId } }
+	// A session on another machine opens on that machine's route.
+	const hostSessionRoute = useCallback((hostId: string | undefined, projectId: string, sessionId: string): NavigateTarget => {
+		if (hostId) {
+			return !projectId || projectId === STANDALONE_WORKSPACE_ID
+				? { to: "/host/$hostId/session/$sessionId", params: { hostId, sessionId } }
 				: {
 					to: "/host/$hostId/project/$projectId/session/$sessionId",
-					params: { hostId: target.hostId, projectId: target.projectId, sessionId: target.sessionId },
+					params: { hostId, projectId, sessionId },
 				};
 		}
-		return sessionRoute(target.projectId, target.sessionId);
+		return sessionRoute(projectId, sessionId);
 	}, [sessionRoute]);
+
+	const fileSessionRoute = useCallback(
+		(target: WorkspaceFileSearchTarget): NavigateTarget => hostSessionRoute(target.hostId, target.projectId, target.sessionId),
+		[hostSessionRoute],
+	);
 
 	const blockedByRestart = useCallback((projectId: string) => {
 		if (!useUiStore.getState().restartingProjectIds.has(projectId)) return false;
@@ -777,9 +806,10 @@ export function CommandPalette() {
 					case "open-search-result": {
 						// Hand the match to the session before navigating: the Chat
 						// timeline is mounted by the shell, so it picks the target up
-						// when it renders rather than from route state.
+						// when it renders rather than from route state. A session on
+						// another machine opens on that machine's route.
 						revealSessionSearchMatch(action);
-						navigateToTarget(sessionRoute(action.projectId, action.sessionId));
+						navigateToTarget(hostSessionRoute(action.hostId, action.projectId, action.sessionId));
 						closePalette();
 						break;
 					}
@@ -810,7 +840,7 @@ export function CommandPalette() {
 				}
 			}
 		},
-		[findLocalChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, sessionRoute, workspaces],
+		[findLocalChatWorkspace, navigateToTarget, closePalette, toggleTheme, openOrchestrator, resumeSession, pushView, blockedByRestart, openNewProject, queryClient, t, params.hostId, params.sessionId, fileSessionRoute, hostSessionRoute, sessionRoute, workspaces],
 	);
 
 	const onSelectItem = useCallback(
@@ -1063,7 +1093,12 @@ export function CommandPalette() {
 									))}
 								</CommandGroup>
 							))}
-							{sessionSearchEnabled && sessionSearchSettled && sessionSearchQuery.isFetching && sessionSearchItems.length > 0 && (
+							{sessionSearchEnabled && sessionSearchSettled && sessionSearchMachinesNotSearched.length > 0 && (
+								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground" data-testid="palette-machines-not-searched">
+									{t("command.machinesNotSearched", { machines: sessionSearchMachinesNotSearched.join(", ") })}
+								</div>
+							)}
+							{sessionSearchEnabled && sessionSearchSettled && (sessionSearchQuery.isFetching || !remoteSessionSearch.settled) && sessionSearchItems.length > 0 && (
 								<div role="status" className="px-[var(--size-command-pad-x)] py-2 text-caption text-muted-foreground">{t("command.searchingSessions")}</div>
 							)}
 							{/* An empty session-text result over an incomplete index is not the

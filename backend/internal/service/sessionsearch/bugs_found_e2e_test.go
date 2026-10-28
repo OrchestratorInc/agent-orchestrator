@@ -349,9 +349,16 @@ func TestASessionNamedForTheQueryLeadsEvenWithNothingButItsName(t *testing.T) {
 	}
 
 	for _, query := range []string{"amp smoke test", "Amp ChatGPT AO smoke test"} {
-		got := sessionIDs(search(t, f.svc, query).Results)
+		results := search(t, f.svc, query).Results
+		got := sessionIDs(results)
 		if len(got) == 0 || got[0] != string(named.ID) {
 			t.Fatalf("%q = %v, want the session named for the query first", query, got)
+		}
+		// The result says so, so a merge across machines can keep it first.
+		for _, result := range results {
+			if want := result.SessionID == string(named.ID); result.NamedForQuery != want {
+				t.Fatalf("%q: %s namedForQuery = %v, want %v", query, result.SessionID, result.NamedForQuery, want)
+			}
 		}
 	}
 	// Keep the failure visible: without the tier, volume (or the id) wins.

@@ -146,6 +146,14 @@ vi.mock("../lib/api-client", () => ({
 	},
 }));
 
+// Search across machines is its own hook with its own tests; here it says what
+// the other machines answered. By default there are none.
+const remoteSearchMock = vi.hoisted(() => {
+	const none = { answers: [] as unknown[], settled: true };
+	return { none, value: none };
+});
+vi.mock("../hooks/useRemoteMachineSearch", () => ({ useRemoteMachineSearch: () => remoteSearchMock.value }));
+
 vi.mock("../lib/host-clients", () => ({
 	clientForSessionHost: () => ({ GET: getMock, POST: postMock }),
 	clientForHost: () => ({ GET: getMock, POST: postMock }),
@@ -1368,6 +1376,7 @@ describe("CommandPalette New task", () => {
 describe("CommandPalette session-text search", () => {
 	beforeEach(() => {
 		resetSessionSearchReveals();
+		remoteSearchMock.value = remoteSearchMock.none;
 	});
 
 	function searchResponse(results: unknown[], coverage: Record<string, unknown> = { state: "ready" }) {
@@ -1512,6 +1521,61 @@ describe("CommandPalette session-text search", () => {
 		fireEvent.click(await screen.findByText("kettle notes", {}, { timeout: 2_000 }));
 		expect(navigateMock).toHaveBeenCalledWith({ to: "/sessions/$sessionId", params: { sessionId: "standalone-3" } });
 		expect(peekSessionSearchReveal("standalone-3")).toMatchObject({ messageId: "msg-1" });
+	});
+
+	it("searches every connected machine and opens a remote session on its machine", async () => {
+		mockSearch([hit]);
+		remoteSearchMock.value = { settled: true, answers: [
+			{ hostId: "h_azure", label: "AzureLinux", outcome: "searched", total: 1, results: [{ ...hit, messageId: "remote-msg", sessionName: "fix flake on azure" }] },
+			{ hostId: "h_old", label: "Old desk", outcome: "needs_update", total: 0, results: [] },
+		] };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		// The same session id on two machines is two sessions: both rows stay,
+		// and the remote one says where it is.
+		const remoteRow = await screen.findByText("fix flake on azure", {}, { timeout: 2_000 });
+		expect(screen.getByText("fix flake")).toBeInTheDocument();
+		expect(screen.getByText("AzureLinux · you · app · codex")).toBeInTheDocument();
+		expect(screen.getByTestId("palette-machines-not-searched").textContent).toBe("Not searched on Old desk (update AO there to search it).");
+
+		fireEvent.click(remoteRow);
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/host/$hostId/project/$projectId/session/$sessionId",
+			params: { hostId: "h_azure", projectId: "proj-1", sessionId: "w-fix" },
+		});
+		expect(peekSessionSearchReveal("w-fix")).toMatchObject({ messageId: "remote-msg" });
+	});
+
+	it("keeps this machine's answer until every machine has answered", async () => {
+		mockSearch([hit]);
+		remoteSearchMock.value = { settled: false, answers: [
+			{ hostId: "h_azure", label: "AzureLinux", outcome: "searched", total: 1, results: [{ ...hit, sessionName: "fix flake on azure" }] },
+		] };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		expect(await screen.findByText("fix flake", {}, { timeout: 2_000 })).toBeInTheDocument();
+		expect(screen.queryByText("fix flake on azure")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("palette-machines-not-searched")).not.toBeInTheDocument();
+	});
+
+	it("opens a remote standalone session's match on that machine's standalone route", async () => {
+		mockSearch([]);
+		remoteSearchMock.value = { settled: true, answers: [
+			{ hostId: "h_azure", label: "AzureLinux", outcome: "searched", total: 1, results: [{ ...hit, sessionId: "standalone-9", projectId: "", sessionName: "kettle on azure" }] },
+		] };
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		fireEvent.change(await screen.findByPlaceholderText(/search sessions/i), { target: { value: "flaky" } });
+
+		fireEvent.click(await screen.findByText("kettle on azure", {}, { timeout: 2_000 }));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/host/$hostId/session/$sessionId",
+			params: { hostId: "h_azure", sessionId: "standalone-9" },
+		});
 	});
 
 	it("opens a tool-output match without inventing a message anchor", async () => {

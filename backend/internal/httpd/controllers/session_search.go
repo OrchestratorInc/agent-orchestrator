@@ -172,6 +172,9 @@ type SessionSearchResult struct {
 	// ReviewID is set when the match is in one of the session's reviewer chats;
 	// opening the result opens that reviewer chat at the message.
 	ReviewID string `json:"reviewId,omitempty"`
+	// NamedForQuery is set when the session's name holds every typed word.
+	// Such sessions rank first, and a merge across machines keeps them first.
+	NamedForQuery bool `json:"namedForQuery,omitempty"`
 }
 
 // SessionSearchHighlight is one matched span inside a result's snippet.
@@ -325,6 +328,7 @@ func sessionSearchResults(results []domain.SessionSearchResult) []SessionSearchR
 			ResumeCommand:  item.ResumeCommand,
 			SessionMatches: item.SessionMatches,
 			ReviewID:       item.ReviewID,
+			NamedForQuery:  item.NamedForQuery,
 		})
 	}
 	return out
