@@ -621,6 +621,10 @@ func (s *Store) PauseIfIdle(
 				AND org_id = $2
 				AND desired_state = 'running'
 				AND observed_state = 'running'
+				-- A worker startup or repair may still be in flight even when the
+				-- previous worker left the sandbox observed as running. Only the
+				-- worker check-in clears this marker; the reconciler owns failures.
+				AND startup_started_at IS NULL
 				AND (interactive_until IS NULL OR interactive_until <= now())
 				AND EXISTS (
 					SELECT 1 FROM ao_sessions
@@ -1327,15 +1331,24 @@ func (s *Store) MarkWorkerSeen(
 			ctx,
 			`UPDATE ao_sandboxes
 			SET worker_last_seen_at = now(),
+				-- Startup can consume the whole wake lease before the worker's
+				-- first check-in. Give the newly usable terminal a fresh lease once;
+				-- later heartbeats must not keep an idle sandbox awake forever.
+				interactive_until = CASE
+					WHEN startup_started_at IS NOT NULL THEN GREATEST(
+						COALESCE(interactive_until, now()), now() + $3::interval
+					)
+					ELSE interactive_until
+				END,
 				startup_started_at = NULL,
 				startup_attempts = 0,
 				-- A checked-in worker clears the reconciler's startup error, but
 				-- not one it reported itself because it could not prepare the
 				-- workspace (domain.WorkspaceStartupErrorCodes): that one stays
 				-- until the worker reports the workspace ready.
-				startup_error_code = CASE WHEN startup_error_code = ANY($3) THEN startup_error_code ELSE '' END,
-				startup_error_message = CASE WHEN startup_error_code = ANY($3) THEN startup_error_message ELSE '' END,
-				startup_error_at = CASE WHEN startup_error_code = ANY($3) THEN startup_error_at ELSE NULL END,
+			startup_error_code = CASE WHEN startup_error_code = ANY($4) THEN startup_error_code ELSE '' END,
+			startup_error_message = CASE WHEN startup_error_code = ANY($4) THEN startup_error_message ELSE '' END,
+			startup_error_at = CASE WHEN startup_error_code = ANY($4) THEN startup_error_at ELSE NULL END,
 				observed_state = CASE
 					WHEN observed_state IN ('requested', 'provisioning', 'restoring', 'bootstrapping', 'disconnected')
 						THEN 'running'
@@ -1355,6 +1368,7 @@ func (s *Store) MarkWorkerSeen(
 			WHERE session_id = $1 AND org_id = $2`,
 			sessionID,
 			orgID,
+			intervalString(interactiveSessionLease),
 			domain.WorkspaceStartupErrorCodes(),
 		)
 		if err != nil {

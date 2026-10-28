@@ -12,6 +12,17 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
 
+func TestManagedStartupCeilingReportsNeutralCause(t *testing.T) {
+	problem := (&Reconciler{}).startupCeilingError(
+		domain.Sandbox{}, sandbox.Environment{State: sandbox.StateRunning}, 10*time.Minute,
+	)
+	if problem.Code != sandbox.StartupErrorWorkerNeverStarted ||
+		!strings.Contains(problem.Message, "did not connect within 10 minutes") ||
+		strings.Contains(problem.Message, "repository could not be checked out") {
+		t.Fatalf("startup problem = %+v; want an accurate timeout without a guessed checkout cause", problem)
+	}
+}
+
 // launchStore keeps one sandbox row the way Postgres would across reconcile
 // passes: a bootstrap ticket is a launch record, a startup repair counts the
 // attempt and reopens the startup window, and an observation moves the

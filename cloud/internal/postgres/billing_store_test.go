@@ -369,6 +369,54 @@ func TestTerminalInteractionDefersIdlePauseAndPresenceNeverWakes(t *testing.T) {
 	}
 }
 
+func TestWorkerStartupDefersIdlePauseAndRenewsLeaseOnce(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	if _, err := admin.Exec(ctx, `UPDATE ao_sessions SET created_at = now() - interval '2 hours',
+		last_user_message_at = NULL, activity_state = 'idle' WHERE id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET desired_state = 'running', observed_state = 'running',
+		startup_started_at = now() - interval '3 minutes', worker_last_seen_at = NULL,
+		interactive_until = now() - interval '1 minute', last_interaction_at = now() - interval '30 minutes',
+		last_busy_at = NULL WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if paused, err := store.PauseIfIdle(ctx, fixture.orgID, fixture.sessionID, 15*time.Minute); err != nil || paused {
+		t.Fatalf("in-progress startup: paused = %v, err = %v", paused, err)
+	}
+	if err := store.MarkWorkerSeen(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, "test", fixture.epoch, nil); err != nil {
+		t.Fatal(err)
+	}
+	var leaseRenewed, startupCleared bool
+	if err := admin.QueryRow(ctx, `SELECT interactive_until > now() + interval '1 minute',
+		startup_started_at IS NULL FROM ao_sandboxes WHERE session_id = $1`, fixture.sessionID).
+		Scan(&leaseRenewed, &startupCleared); err != nil {
+		t.Fatal(err)
+	}
+	if !leaseRenewed || !startupCleared {
+		t.Fatalf("first check-in: lease renewed = %v, startup cleared = %v", leaseRenewed, startupCleared)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE ao_sandboxes SET interactive_until = now() - interval '1 minute'
+		WHERE session_id = $1`, fixture.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkWorkerSeen(ctx, fixture.orgID, fixture.sessionID, fixture.workerID, "test", fixture.epoch, nil); err != nil {
+		t.Fatal(err)
+	}
+	var leaseExpired bool
+	if err := admin.QueryRow(ctx, `SELECT interactive_until < now() FROM ao_sandboxes WHERE session_id = $1`,
+		fixture.sessionID).Scan(&leaseExpired); err != nil {
+		t.Fatal(err)
+	}
+	if !leaseExpired {
+		t.Fatal("later heartbeat renewed the interaction lease")
+	}
+	if paused, err := store.PauseIfIdle(ctx, fixture.orgID, fixture.sessionID, 15*time.Minute); err != nil || !paused {
+		t.Fatalf("idle after startup: paused = %v, err = %v", paused, err)
+	}
+}
+
 // Concurrent creators racing for the plan's last slot: exactly one wins. The
 // plan check runs under the organization lock session creation already takes.
 func TestConcurrentCreatesCannotBothTakeTheLastSlot(t *testing.T) {
