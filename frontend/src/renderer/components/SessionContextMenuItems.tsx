@@ -13,7 +13,13 @@ import { sessionBranchPresentation } from "../lib/session-branch";
 import { useUiStore } from "../stores/ui-store";
 import { isOrchestratorSession, primaryPR, type WorkspaceSession } from "../types/workspace";
 import { TargetIcon } from "./TopbarOpenEditorButton";
-import { ContextMenuItem, ContextMenuSeparator } from "./ui/context-menu";
+import {
+	ContextMenuItem,
+	ContextMenuSeparator,
+	ContextMenuSub,
+	ContextMenuSubContent,
+	ContextMenuSubTrigger,
+} from "./ui/context-menu";
 
 /** Copy from a menu, which has no inline place to confirm the copy. */
 export function useCopyToClipboard() {
@@ -130,9 +136,10 @@ export function SessionContextMenuItems({
 	);
 }
 
-/** Open in the default editor and copy the worktree path: the same Electron
- *  handoff as the session topbar's editor button. The editor row holds its
- *  place while the lookup runs so the menu does not jump when it resolves. */
+/** Open in the default editor, or any other detected target from its submenu,
+ *  and copy the worktree path: the same Electron handoff as the session topbar's
+ *  editor button. The editor row holds its place while the lookup runs so the
+ *  menu does not jump when it resolves. */
 function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
@@ -141,9 +148,12 @@ function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 		sessionTerminated: session.isTerminated,
 	});
 	const open = useOpenSessionTarget();
-	const editor = state?.workspaceAvailable
-		? state.targets.find((target) => target.kind === "editor" && target.id === state.preferredEditorId)
-		: undefined;
+	const targets = state?.workspaceAvailable ? state.targets : [];
+	const preferred = targets.find((target) => target.kind === "editor" && target.id === state?.preferredEditorId);
+	// The default editor leads the submenu; the file manager and terminals follow.
+	const editors = targets.filter((target) => target.kind === "editor" && target !== preferred);
+	const editorTargets = preferred ? [preferred, ...editors] : editors;
+	const otherTargets = targets.filter((target) => target.kind !== "editor");
 	// The menu unmounts as soon as an item is picked, so report failure from the
 	// promise rather than from mutate callbacks that only run while mounted.
 	const launch = (target: OpenTarget) => {
@@ -158,6 +168,12 @@ function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 				showGlobalToast(t("shortcut.sessionPathCopyFailed"), editorHandoffErrorMessage(error) ?? undefined, "error"),
 		);
 	};
+	const targetItem = (target: OpenTarget) => (
+		<ContextMenuItem key={target.id} onSelect={() => launch(target)}>
+			<TargetIcon target={target} />
+			{target.name}
+		</ContextMenuItem>
+	);
 	return (
 		<>
 			{isPending ? (
@@ -165,11 +181,18 @@ function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 					<Code2 aria-hidden="true" />
 					{t("editor.preparingWorkspace")}
 				</ContextMenuItem>
-			) : editor ? (
-				<ContextMenuItem onSelect={() => launch(editor)}>
-					<TargetIcon target={editor} />
-					{t("editor.openInTarget", { name: editor.name })}
-				</ContextMenuItem>
+			) : targets.length > 0 ? (
+				<ContextMenuSub>
+					<ContextMenuSubTrigger>
+						<TargetIcon target={preferred} />
+						{preferred ? t("editor.openInTarget", { name: preferred.name }) : t("editor.chooseEditor")}
+					</ContextMenuSubTrigger>
+					<ContextMenuSubContent className="min-w-40">
+						{editorTargets.map(targetItem)}
+						{editorTargets.length > 0 && otherTargets.length > 0 ? <ContextMenuSeparator /> : null}
+						{otherTargets.map(targetItem)}
+					</ContextMenuSubContent>
+				</ContextMenuSub>
 			) : null}
 			{state?.workspaceAvailable === false ? null : (
 				<ContextMenuItem onSelect={copyPath}>

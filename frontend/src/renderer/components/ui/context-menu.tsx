@@ -1,3 +1,4 @@
+import { ChevronRight } from "lucide-react";
 import { ContextMenu as ContextMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 import { composeMenuCloseAutoFocus, useMenuReturnTarget } from "./menu-focus";
@@ -82,4 +83,48 @@ export function ContextMenuSeparator({
 	...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Separator>) {
 	return <ContextMenuPrimitive.Separator className={cn(actionMenuSeparatorClass, className)} {...props} />;
+}
+
+export const ContextMenuSub = ContextMenuPrimitive.Sub;
+
+/** A row that opens a side submenu; same row styling as ContextMenuItem. */
+export function ContextMenuSubTrigger({
+	className,
+	children,
+	...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.SubTrigger>) {
+	return (
+		<ContextMenuPrimitive.SubTrigger
+			className={cn(actionMenuItemClass, "data-[state=open]:bg-interactive-hover", className)}
+			{...props}
+		>
+			{children}
+			<ChevronRight aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-passive" />
+		</ContextMenuPrimitive.SubTrigger>
+	);
+}
+
+/** The side panel a ContextMenuSubTrigger opens; same surface as ContextMenuContent. */
+export function ContextMenuSubContent({
+	className,
+	// Matches DropdownMenuSubContent: a 4px gap, first row level with the trigger.
+	sideOffset = 9,
+	alignOffset = -5,
+	...props
+}: React.ComponentProps<typeof ContextMenuPrimitive.SubContent>) {
+	return (
+		<ContextMenuPrimitive.Portal>
+			<ContextMenuPrimitive.SubContent
+				alignOffset={alignOffset}
+				sideOffset={sideOffset}
+				className={cn(
+					actionMenuContentClass,
+					"origin-(--radix-context-menu-content-transform-origin)",
+					"data-[state=open]:animate-popover-in data-[state=closed]:animate-popover-out",
+					className,
+				)}
+				{...props}
+			/>
+		</ContextMenuPrimitive.Portal>
+	);
 }
