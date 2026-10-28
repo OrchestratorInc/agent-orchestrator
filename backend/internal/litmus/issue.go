@@ -155,6 +155,7 @@ type targetReference struct {
 	Repo     string            `json:"repo"`
 	Number   int               `json:"number"`
 	URL      string            `json:"url"`
+	Match    string            `json:"match"` // literal body/comment text; empty means GitHub linked it but the text never names it
 	Title    string            `json:"title,omitempty"`
 	State    string            `json:"state,omitempty"`
 	Body     string            `json:"body,omitempty"`
@@ -185,9 +186,9 @@ func (s *Service) targetReferences(ctx context.Context, repo string, number int,
 		texts = append(texts, c.Body)
 	}
 	refs := []targetReference{}
-	seen := map[issueKey]bool{{repo, number}: true}
+	seen := map[issueKey]int{{repo, number}: -1}
 	var gaps []string
-	for _, text := range texts {
+	for i, text := range texts {
 		for _, m := range targetReferencePattern.FindAllStringSubmatch(htmlComment.ReplaceAllString(text, ""), -1) {
 			r, n := repo, m[5]
 			if m[1] != "" {
@@ -200,11 +201,21 @@ func (s *Service) targetReferences(ctx context.Context, repo string, number int,
 				return nil, nil, fmt.Errorf("read reference number: %w", err)
 			}
 			key := issueKey{strings.ToLower(r), number}
-			if seen[key] {
+			match := ""
+			if i >= len(linked) {
+				match = m[0]
+			}
+			if index, ok := seen[key]; ok {
+				if index >= 0 && refs[index].Match == "" {
+					refs[index].Match = match
+				}
 				continue
 			}
-			seen[key] = true
-			ref := targetReference{Kind: "issue", Repo: key.repo, Number: number}
+			if len(refs) == 20 {
+				continue
+			}
+			seen[key] = len(refs)
+			ref := targetReference{Kind: "issue", Repo: key.repo, Number: number, Match: match}
 			raw, err := s.readGH(ctx, "api", fmt.Sprintf("repos/%s/issues/%d", key.repo, number))
 			if err == nil {
 				var in struct {
@@ -235,9 +246,6 @@ func (s *Service) targetReferences(ctx context.Context, repo string, number int,
 				gaps = append(gaps, "Could not read reference "+ref.URL+": "+ref.Error)
 			}
 			refs = append(refs, ref)
-			if len(refs) == 20 {
-				return refs, gaps, nil
-			}
 		}
 	}
 	return refs, gaps, nil

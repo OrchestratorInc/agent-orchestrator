@@ -34,7 +34,7 @@ type SpawnRequest struct {
 type Spawner func(ctx context.Context, req SpawnRequest) (sessionID string, err error)
 
 // ShellRule is the sentence the spawn prompt and SKILL.md share: what the tester's open toolset is for, and its limits.
-const ShellRule = "You have a normal shell and the usual tools: run any command, read code and logs. Put scratch files in `scratch/`; never edit the files Litmus writes in the run folder. Build, open and drive the app windows only through `ao testing`, leave the checkouts as Litmus made them, and never push or post to GitHub."
+const ShellRule = "You have a normal shell and the usual tools: run any command, read code and logs. Put scratch files in `scratch/`; never edit the files Litmus writes in the run folder. Build, open and drive the app windows only through `ao testing`. The base and head source trees Litmus prepared and built are read-only; repos you clone under `scratch/` are test data, so branch, dirty, commit and add `.ao/` files in them whenever the feature needs that state. Never push or post to GitHub."
 
 // ExploreRule is the sentence that tells the tester it is driving a real app and may reach for settings.
 const ExploreRule = "Explore the app the way a user would: menus, settings, modes. If a feature hides behind a setting, turn the setting on and say so in your note."

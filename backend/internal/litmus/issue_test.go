@@ -183,6 +183,9 @@ func TestIssueIntakeKeepsAllCommentsDirectReferencesAndPinnedTarget(t *testing.T
 	if len(refs) != 3 || refs[0].Title != "Related issue" || refs[0].State != "closed" || !strings.Contains(refs[0].Body, "#999") || refs[1].Repo != "other/repo" || refs[2].Kind != "pr" {
 		t.Fatalf("refs %+v", refs)
 	}
+	if refs[0].Match != "#8" || refs[1].Match != "https://github.com/Other/Repo/issues/10" {
+		t.Fatalf("reference matches lost their literal text: %+v", refs)
+	}
 	if strings.Contains(strings.Join(*calls, "\n"), "/issues/999") || f.count("diff --patch") != 0 || f.count("update-ref refs/litmus/keep/"+base6394+" "+base6394) != 1 {
 		t.Fatalf("gh %v git %v", *calls, f.calls)
 	}
@@ -202,6 +205,51 @@ func TestIssueIntakeKeepsAllCommentsDirectReferencesAndPinnedTarget(t *testing.T
 	}
 	is(t, "TESTING_LEG_INVALID")(svc.Launch(ctx, "s1", "base"))
 	is(t, "TESTING_LEG_INVALID")(svc.Launch(ctx, "s1", "head"))
+}
+
+func TestTargetReferencesMatchUsesLiteralText(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, comment, match string
+		linkedCount                int
+	}{
+		{"body", "Fixes #52", "See acme/widget#52", "#52", 1},
+		{"comment", "", "Fixes #52", "#52", 1},
+		{"linked only", "", "", "", 1},
+		{"body at cap", "Fixes #52 and #99", "", "#52", 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _, _ := issueSvc(t)
+			var calls, wantCalls []string
+			svc.gh = ghFunc(func(_ context.Context, args ...string) ([]byte, error) {
+				calls = append(calls, strings.Join(args, " "))
+				if args[1] == "--paginate" {
+					return []byte(`[{"body":"Nested #999"}]`), nil
+				}
+				return []byte(`{"title":"Linked issue","state":"open"}`), nil
+			})
+			var linked []issueKey
+			for i := 0; i < tc.linkedCount; i++ {
+				linked = append(linked, issueKey{"acme/widget", 52 + i})
+				endpoint := fmt.Sprintf("repos/acme/widget/issues/%d", 52+i)
+				wantCalls = append(wantCalls, "api "+endpoint, "api --paginate "+endpoint+"/comments?per_page=100")
+			}
+			comment, err := json.Marshal(map[string]string{"body": tc.comment})
+			is(t, "")(nil, err)
+			refs, gaps, err := svc.targetReferences(ctx, "acme/widget", 7, tc.body, []json.RawMessage{comment}, linked)
+			if err != nil || len(gaps) != 0 || len(refs) != tc.linkedCount || !slices.Equal(calls, wantCalls) {
+				t.Fatalf("refs %+v gaps %v calls %v err %v", refs, gaps, calls, err)
+			}
+			for i, ref := range refs {
+				wantMatch := ""
+				if i == 0 {
+					wantMatch = tc.match
+				}
+				if ref.Number != 52+i || ref.Match != wantMatch || len(ref.Comments) != 1 {
+					t.Fatalf("reference %d: %+v, want number %d match %q and linked comments", i, ref, 52+i, wantMatch)
+				}
+			}
+		})
+	}
 }
 
 func TestIssueReferencesCapAtTwentyWithoutFollowingFetchedBodies(t *testing.T) {
