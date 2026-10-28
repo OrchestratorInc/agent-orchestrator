@@ -1061,3 +1061,37 @@ func TestTriggerRequestedNamedPRAttachesItAndTargetsIt(t *testing.T) {
 		t.Fatalf("err = %v, want the attach failure for an untracked PR", err)
 	}
 }
+
+type recordingReviewRefresher struct{ prURLs []string }
+
+func (r *recordingReviewRefresher) RequestReviewRefresh(prURL string) {
+	r.prURLs = append(r.prURLs, prURL)
+}
+
+func TestSubmitRequestsReviewRefreshForProviderPostedReview(t *testing.T) {
+	const prURL = "https://github.com/acme/app/pull/42"
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", PRURL: prURL, Status: domain.ReviewRunRunning},
+		prs: []domain.PullRequest{{URL: prURL, Number: 42}},
+	}
+	refresher := &recordingReviewRefresher{}
+	svc := New(nil, st, WithThreadRefresher(refresher))
+
+	for range 2 {
+		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "looks good", "987"); err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+	}
+	if len(refresher.prURLs) != 1 || refresher.prURLs[0] != prURL {
+		t.Fatalf("refresh requests = %v, want one for %s", refresher.prURLs, prURL)
+	}
+
+	st.run = domain.ReviewRun{ID: "run-2", SessionID: "mer-1", PRURL: prURL, Status: domain.ReviewRunRunning}
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictApproved, "looks good", ""); err != nil {
+		t.Fatalf("Submit without provider review: %v", err)
+	}
+	if len(refresher.prURLs) != 1 {
+		t.Fatalf("a review not posted to the provider requested a refresh: %v", refresher.prURLs)
+	}
+}

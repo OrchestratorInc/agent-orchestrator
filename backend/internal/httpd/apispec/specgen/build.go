@@ -193,6 +193,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersExtendAwakeRequest":                        "ExtendAwakeRequest",
 	"ControllersAwakeRulesRequest":                         "AwakeRulesRequest",
 	"ControllersAwakeDownloadsRequest":                     "AwakeDownloadsRequest",
+	"ControllersResolveFileReferenceResponse":              "ResolveFileReferenceResponse",
+	"ControllersConversationFileReferenceRequest":          "ConversationFileReferenceRequest",
+	"PortsChatFileReferenceSource":                         "ChatFileReferenceSource",
+	"PortsChatFileReferenceLine":                           "ChatFileReferenceLine",
 	"DomainHarnessDefault":                                 "HarnessDefault",
 	"ControllersUpdateHarnessDefaultRequest":               "UpdateHarnessDefaultRequest",
 	"ControllersSettingsResponse":                          "SettingsResponse",
@@ -938,6 +942,32 @@ func browserOperations() []operation {
 				{http.StatusForbidden, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/browser/chrome", id: "getBrowserChrome", tag: "browser",
+			summary: "Report Chrome mode: native host registration, extension bundle, and connection",
+			resps: []respUnit{
+				{http.StatusOK, controllers.BrowserChromeStatusResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/browser/chrome", id: "setupBrowserChrome", tag: "browser",
+			summary: "Enable Chrome mode: install the AO extension bundle and register AO's native host with Chrome",
+			resps: []respUnit{
+				{http.StatusOK, controllers.BrowserChromeStatusResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/browser/chrome", id: "removeBrowserChrome", tag: "browser",
+			summary: "Disable Chrome mode: unregister AO's native host and remove the installed extension bundle",
+			resps: []respUnit{
+				{http.StatusOK, controllers.BrowserChromeStatusResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
@@ -3157,6 +3187,13 @@ func sessionOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/file-references/resolve", id: "resolveFileReference", tag: "sessions",
+			summary:    "Resolve the current source of a captured file annotation without modifying it",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.ConversationFileReferenceRequest{},
+			resps:      []respUnit{{http.StatusOK, controllers.ResolveFileReferenceResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/workspace/file", id: "getSessionWorkspaceFile", tag: "sessions",

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -621,7 +622,11 @@ func (s *Server) writeArtifactObject(w http.ResponseWriter, r *http.Request, obj
 		w.WriteHeader(http.StatusOK)
 		return
 	}
-	stored, err := s.artifacts.Get(r.Context(), object.key, object.versionID)
+	stored, err := s.artifacts.GetRange(r.Context(), object.key, object.versionID, requestedByteRange(r, etag))
+	if errors.Is(err, artifactstore.ErrRangeNotSatisfiable) {
+		s.writeRangeNotSatisfiable(w, r, object)
+		return
+	}
 	if !s.artifactObjectReadable(w, r, err) {
 		return
 	}
@@ -629,10 +634,46 @@ func (s *Server) writeArtifactObject(w http.ResponseWriter, r *http.Request, obj
 	setArtifactFileHeaders(w, etag, object.cacheControl)
 	w.Header().Set("Content-Type", object.contentType)
 	w.Header().Set("Content-Length", strconv.FormatInt(stored.Size, 10))
-	w.WriteHeader(http.StatusOK)
+	status := http.StatusOK
+	if stored.ContentRange != "" {
+		w.Header().Set("Content-Range", stored.ContentRange)
+		status = http.StatusPartialContent
+	}
+	w.WriteHeader(status)
 	if _, err := io.Copy(w, stored.Body); err != nil {
 		s.logger.WarnContext(r.Context(), "stream artifact object", "error", err, "request_id", requestID(r))
 	}
+}
+
+// byteRangePattern matches the one-range forms of a Range header that are
+// passed to the object store. Anything else, such as several ranges, is
+// served as the whole file.
+var byteRangePattern = regexp.MustCompile(`^bytes=(\d+-\d*|-\d+)$`)
+
+// requestedByteRange returns the request's Range header when it names one byte
+// range and any If-Range names the served version, so a browser seeking in a
+// video or audio file reads only the bytes it needs. Otherwise it returns "".
+func requestedByteRange(r *http.Request, etag string) string {
+	byteRange := r.Header.Get("Range")
+	if !byteRangePattern.MatchString(byteRange) {
+		return ""
+	}
+	if ifRange := r.Header.Get("If-Range"); ifRange != "" && ifRange != etag {
+		return ""
+	}
+	return byteRange
+}
+
+// writeRangeNotSatisfiable answers a Range that starts past the end of the
+// file, naming the file's size.
+func (s *Server) writeRangeNotSatisfiable(w http.ResponseWriter, r *http.Request, object artifactObject) {
+	head, err := s.artifacts.Head(r.Context(), object.key, object.versionID)
+	if !s.artifactObjectReadable(w, r, err) {
+		return
+	}
+	setArtifactFileHeaders(w, object.etag, object.cacheControl)
+	w.Header().Set("Content-Range", "bytes */"+strconv.FormatInt(head.Size, 10))
+	w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
 }
 
 // artifactObjectReadable writes the error response for a failed object read
@@ -673,6 +714,7 @@ func setArtifactFileHeaders(w http.ResponseWriter, etag, cacheControl string) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", cacheControl)
 	w.Header().Set("ETag", etag)
+	w.Header().Set("Accept-Ranges", "bytes")
 }
 
 // wildcardPath returns the decoded remainder of a route ending in "/*".

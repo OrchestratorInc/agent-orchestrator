@@ -59,8 +59,11 @@ type ShareGrant struct {
 
 // SharedProject is a project or session shared with the calling user.
 type SharedProject struct {
-	Grant         ShareGrant
-	Project       Project
+	Grant   ShareGrant
+	Project Project
+	// Member is set when the person redeeming a link already belongs to its
+	// organization: they need no grant, and Grant is empty.
+	Member        bool
 	SessionID     string
 	SessionName   string
 	SharedByEmail string

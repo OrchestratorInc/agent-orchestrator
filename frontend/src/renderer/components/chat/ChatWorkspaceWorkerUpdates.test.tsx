@@ -219,3 +219,46 @@ describe("agent messages in a worker chat", () => {
 		expect(screen.getByText("Rebased on main.")).toBeInTheDocument();
 	});
 });
+
+describe("messages an outside tool relayed", () => {
+	const ask = "Catch me up on what is done, what is blocked and what is next.";
+
+	it("draws an automation message under the tool's name, without its prefix or tag", () => {
+		renderOrchestrator([automation("t1", 1, `[via Grok Bot #191450] ${ask}`), reply("t1", 2, "Two PRs merged.")]);
+
+		const message = screen.getByTestId("agent-message");
+		expect(message).toHaveTextContent("Grok Bot");
+		expect(message).toHaveTextContent(ask);
+		expect(message).not.toHaveTextContent("[via");
+		expect(message).not.toHaveTextContent("191450");
+		expect(screen.queryByText("automation")).not.toBeInTheDocument();
+		// The orchestrator's answer stays a full reply: the tool asked, not a worker.
+		expect(screen.queryByTestId("orchestrator-reply")).not.toBeInTheDocument();
+	});
+
+	it("draws one AO stored as the human's the same way, instead of as the user's bubble", () => {
+		renderOrchestrator([{ ...automation("t1", 1, `[via Grok Bot] ${ask}`), origin: "human" }, reply("t1", 2, "Two PRs merged.")]);
+
+		expect(screen.getByTestId("agent-message")).toHaveTextContent(`Grok Bot${ask}`);
+	});
+
+	it("draws a steer it sent into a running turn the same way", () => {
+		renderOrchestrator([
+			{ ...automation("t1", 0, "List the open PRs."), origin: "human" },
+			command("t1", 1, "gh pr list"),
+			{
+				kind: "activity", id: "t1-steer", turnId: "t1", sequence: 12, revision: 0, activityKind: "system", status: "completed",
+				summary: "[via Grok Bot #200733] Stop that.", detail: { event: "steer", text: "[via Grok Bot #200733] Stop that." }, createdAt: at(1),
+			},
+			reply("t1", 2, "Stopped."),
+		]);
+
+		expect(screen.getByTestId("agent-message")).toHaveTextContent("Grok BotStop that.");
+	});
+
+	it("keeps a message an AO session sent as that session's, whatever its text says", () => {
+		renderOrchestrator([{ ...automation("t1", 1, `[via Grok Bot] ${ask}`), senderSessionId: "proj-404" }, reply("t1", 2, "Ok.")], vi.fn(), [], "worker");
+
+		expect(screen.queryByTestId("agent-message")).not.toBeInTheDocument();
+	});
+});

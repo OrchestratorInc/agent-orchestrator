@@ -11,7 +11,7 @@ vi.mock("motion/react", async (importOriginal) => {
 		AnimatePresence: ({ children }: { children: React.ReactNode }) => children,
 	};
 });
-import { act, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
@@ -31,6 +31,7 @@ import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "../lib/bridge";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
@@ -1108,6 +1109,30 @@ describe("Sidebar", () => {
 		expect(screen.getByText("baby")).toBeInTheDocument();
 	});
 
+	it("saves the Scratchpad section state and starts closed when it was left closed", async () => {
+		const user = userEvent.setup();
+		const workspaces = [
+			{
+				id: STANDALONE_WORKSPACE_ID,
+				name: "Scratchpad",
+				kind: STANDALONE_PROJECT_KIND,
+				path: "",
+				sessions: [
+					{ ...session, id: "adhoc-1", title: "baby", workspaceId: STANDALONE_WORKSPACE_ID, workspaceName: "Scratchpad" },
+				],
+			},
+		];
+		renderSidebar({ workspaces });
+		await user.click(screen.getByRole("button", { name: "Scratchpad" }));
+		const saved = window.localStorage.getItem("ao.sidebar.sections");
+		expect(JSON.parse(saved ?? "null")).toMatchObject({ scratchpad: false });
+		cleanup();
+
+		window.localStorage.setItem("ao.sidebar.sections", saved ?? "");
+		renderSidebar({ workspaces });
+		expect(screen.queryByText("baby")).not.toBeInTheDocument();
+	});
+
 	it("caps the ad hoc agent list at 10 and lets the section grow to half the available height", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
@@ -1445,6 +1470,33 @@ describe("Sidebar", () => {
 			params: { projectId: "proj-1", sessionId: orchestrator.id },
 		}));
 		expect(spawnMock).toHaveBeenCalledTimes(existing ? 0 : 1);
+	});
+
+	it("lists a shared project's orchestrator for its guest and offers none of the owner's actions", async () => {
+		const orchestrator: WorkspaceSession = { ...session, id: "shared-orc", workspaceId: "proj-1", kind: "orchestrator", title: "Orchestrator" };
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: { byName: "Alice" }, sessions: [orchestrator] };
+		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
+		await userEvent.click(await screen.findByText("Orchestrator"));
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "shared-orc" },
+		});
+		expect(screen.queryByRole("button", { name: "Project actions for Project One" })).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Open Project One orchestrator" }));
+		expect(spawnMock).not.toHaveBeenCalled();
+	});
+
+	it("never offers a guest to start an orchestrator in a shared project", () => {
+		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: {}, sessions: [session] };
+		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
+		expect(screen.queryByRole("button", { name: "Spawn Project One orchestrator" })).toBeNull();
+		expect(screen.getByText("fix login")).toBeTruthy();
+	});
+
+	it("keeps the owner's project actions on a project of their own", () => {
+		renderSidebar({ workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [session] }], expandedProjectIds: ["proj-1"] });
+		expect(screen.getByRole("button", { name: "Project actions for Project One" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Spawn Project One orchestrator" })).toBeTruthy();
 	});
 
 	it("returns to the project board from an orchestrator session without collapsing", async () => {
@@ -2300,13 +2352,66 @@ describe("Sidebar", () => {
 		const renameItem = await screen.findByRole("menuitem", { name: "Rename fix login" });
 		const menu = renameItem.closest('[role="menu"]');
 		if (!menu) throw new Error("Session context menu not found");
-		expect(within(menu as HTMLElement).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Rename"]);
+		await within(menu as HTMLElement).findByRole("menuitem", { name: "Open in" });
+		expect(within(menu as HTMLElement).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+			"Open in",
+			"Copy path",
+			"Rename",
+			"Pin session",
+			"Archive session",
+		]);
 		expect(renameItem).toHaveTextContent(/^Rename$/);
 		expect(renameItem.querySelector("svg")).toBeInTheDocument();
 		await user.click(renameItem);
 
 		expect(screen.getByRole("textbox", { name: "Rename fix login" })).toHaveFocus();
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("lists every open target in the editor row's submenu", async () => {
+		const user = userEvent.setup();
+		const open = vi.spyOn(aoBridge.editorHandoff, "open");
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Open in" }));
+		const finder = await screen.findByRole("menuitem", { name: "Finder" });
+		const submenu = finder.closest('[role="menu"]');
+		if (!submenu) throw new Error("Editor submenu not found");
+		expect(within(submenu as HTMLElement).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+			"Cursor",
+			"Finder",
+			"Terminal",
+		]);
+		// A synthetic pointer path from the trigger to the item can close the submenu
+		// in jsdom (no layout for Radix's pointer-grace area), so select directly.
+		fireEvent.click(finder);
+
+		await waitFor(() => expect(open).toHaveBeenCalledWith({ sessionId: "proj-1-1", targetId: "file-manager" }));
+		open.mockRestore();
+	});
+
+	it("asks before archiving from the session context menu", async () => {
+		const user = userEvent.setup();
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Archive session" }));
+
+		expect(await screen.findByRole("dialog")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Confirm, archive session" })).toBeInTheDocument();
+		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("does not open the project menu when the session menu is right-clicked", async () => {
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		const renameItem = await screen.findByRole("menuitem", { name: "Rename fix login" });
+		fireEvent.contextMenu(renameItem);
+
+		expect(screen.queryByRole("menuitem", { name: "Project settings" })).not.toBeInTheDocument();
+		expect(screen.getAllByRole("menu")).toHaveLength(1);
 	});
 
 	it("caps the inline rename input at 100 characters", async () => {

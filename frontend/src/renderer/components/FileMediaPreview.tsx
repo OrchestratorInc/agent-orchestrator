@@ -49,14 +49,16 @@ export function FileMediaPreview({ hostId, kind, path, sessionId, source, versio
 		}
 	};
 	if (kind === "pdf") return <PdfPreview key={src} onError={onError} path={path} src={src} />;
+	// Only the daemon needs the renderer Origin; the control plane sends no CORS headers, so a cross-origin request to it would fail on a localhost control plane.
+	const crossOrigin = source.kind === "artifact" && source.cloud ? undefined : mediaCrossOrigin(src);
 	return (
 		<div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] place-items-center overflow-hidden p-3">
 			{kind === "image" ? (
-				<img crossOrigin={mediaCrossOrigin(src)} alt={path} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" key={src} onError={onError} src={src} />
+				<img crossOrigin={crossOrigin} alt={path} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" key={src} onError={onError} src={src} />
 			) : kind === "video" ? (
-				<video crossOrigin={mediaCrossOrigin(src)} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" controls key={src} onError={onError} playsInline preload="metadata" src={src} />
+				<video crossOrigin={crossOrigin} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" controls key={src} onError={onError} playsInline preload="metadata" src={src} />
 			) : (
-				<audio crossOrigin={mediaCrossOrigin(src)} aria-label={path} className="w-full max-w-lg" controls key={src} onError={onError} preload="metadata" src={src} />
+				<audio crossOrigin={crossOrigin} aria-label={path} className="w-full max-w-lg" controls key={src} onError={onError} preload="metadata" src={src} />
 			)}
 		</div>
 	);

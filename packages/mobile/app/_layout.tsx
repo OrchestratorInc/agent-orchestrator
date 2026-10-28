@@ -220,6 +220,7 @@ function Shell() {
 				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
+				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File", headerBackButtonDisplayMode: "minimal", ...glassHeaderControl("left", <MinimalBackButton />) }} />
 				<Stack.Screen

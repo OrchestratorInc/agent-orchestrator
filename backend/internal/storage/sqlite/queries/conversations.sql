@@ -1010,8 +1010,17 @@ UPDATE conversation_turns
 SET rolled_back_at = ?
 WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.rolled_back_at IS NULL
-  AND conversation_turns.rowid >= (
-      SELECT anchor.rowid FROM conversation_turns AS anchor WHERE anchor.id = ?
+  AND (
+      conversation_turns.rowid >= (
+          SELECT anchor.rowid FROM conversation_turns AS anchor WHERE anchor.id = sqlc.arg(anchor_turn_id)
+      )
+      OR conversation_turns.promoted_to_turn_id IN (
+          SELECT target.id FROM conversation_turns AS target
+          WHERE target.conversation_id = conversation_turns.conversation_id
+            AND target.rowid >= (
+                SELECT anchor.rowid FROM conversation_turns AS anchor WHERE anchor.id = sqlc.arg(anchor_turn_id)
+            )
+      )
   );
 
 -- A discarded turn that never reached the provider settles as interrupted rather
@@ -1090,7 +1099,10 @@ SELECT conversation_turns.id,
        conversation_messages.text,
        conversation_messages.client_message_id,
        conversation_messages.origin,
-       conversation_messages.delivery_content_json
+       conversation_messages.delivery_content_json,
+       conversation_messages.sender_session_id,
+       conversation_messages.sender_project_id,
+       conversation_messages.sender_display_name
 FROM conversation_turns
 JOIN conversation_messages
     ON conversation_messages.turn_id = conversation_turns.id
@@ -1100,6 +1112,24 @@ WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.promotion_started_at IS NULL
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid
 LIMIT 1;
+
+-- name: SelectQueuedConversationBatch :many
+SELECT conversation_turns.id,
+       conversation_messages.text,
+       conversation_messages.client_message_id,
+       conversation_messages.origin,
+       conversation_messages.delivery_content_json,
+       conversation_messages.sender_session_id,
+       conversation_messages.sender_project_id,
+       conversation_messages.sender_display_name
+FROM conversation_turns
+JOIN conversation_messages
+    ON conversation_messages.turn_id = conversation_turns.id
+    AND conversation_messages.role = 'user'
+WHERE conversation_turns.conversation_id = ?
+  AND conversation_turns.state = 'queued'
+  AND conversation_turns.promotion_started_at IS NULL
+ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
 
 -- Claim one selected queue item before contacting the provider. execrows is the
 -- compare-and-set result: zero means the turn is absent, settled, or already being
@@ -1140,6 +1170,17 @@ WHERE id = sqlc.arg(id)
   AND state = 'queued'
   AND promotion_started_at IS NOT NULL;
 
+-- A detached controller may have crossed the provider boundary before its
+-- batch receipt was recorded. Keep the source visible and fail closed on resume.
+-- name: FailReservedQueuedConversationTurns :exec
+UPDATE conversation_turns
+SET state = 'failed',
+    error_message = 'queued delivery outcome is uncertain after controller reconnect',
+    completed_at = ?
+WHERE conversation_id = ?
+  AND state = 'queued'
+  AND promotion_started_at IS NOT NULL;
+
 -- The provider has accepted the guidance. Link the durable source to the AO turn
 -- that absorbed it and take it out of the queue in the same transaction that
 -- inserts the visible steer activity.
@@ -1153,6 +1194,26 @@ WHERE id = sqlc.arg(id)
   AND conversation_id = sqlc.arg(conversation_id)
   AND state = 'queued'
   AND promotion_started_at IS NOT NULL;
+
+-- A batched source joins one provider input but remains its own visible message.
+-- name: CompleteQueuedConversationBatchMember :execrows
+UPDATE conversation_turns
+SET state = 'completed',
+    completed_at = sqlc.arg(completed_at),
+    promotion_started_at = NULL,
+    promoted_to_turn_id = sqlc.arg(promoted_to_turn_id),
+    batched_input = 1
+WHERE id = sqlc.arg(id)
+  AND conversation_id = sqlc.arg(conversation_id)
+  AND state = 'queued'
+  AND promotion_started_at IS NOT NULL;
+
+-- Remember the exact combined input so native history replay can identify it
+-- without replacing the separate AO transcript messages.
+-- name: SetConversationProviderInputText :execrows
+UPDATE conversation_turns
+SET provider_input_text = ?
+WHERE id = ? AND state IN ('queued', 'running', 'completed') AND provider_input_text = '';
 
 -- Stopping the agent stops the queue with it: a brake that starts new work
 -- instead of ending it would be the wrong shape for the button the user pressed.
@@ -1316,7 +1377,7 @@ WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
       WHERE discarded.conversation_id = sqlc.arg(conversation_id)
         AND (
           discarded.rolled_back_at IS NOT NULL
-          OR discarded.promoted_to_turn_id IS NOT NULL
+          OR (discarded.promoted_to_turn_id IS NOT NULL AND discarded.batched_input = 0)
           OR discarded.state = 'cancelled'
         )
   ))
@@ -1348,7 +1409,7 @@ WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
       WHERE discarded.conversation_id = sqlc.arg(conversation_id)
         AND (
           discarded.rolled_back_at IS NOT NULL
-          OR discarded.promoted_to_turn_id IS NOT NULL
+          OR (discarded.promoted_to_turn_id IS NOT NULL AND discarded.batched_input = 0)
           OR discarded.state = 'cancelled'
         )
   ))
@@ -1677,6 +1738,7 @@ SELECT conversation_messages.text,
        conversation_messages.origin,
        conversation_messages.continuation,
        conversation_messages.delivery_content_json,
+       conversation_turns.provider_input_text,
        EXISTS (
            SELECT 1
            FROM active_path AS path
@@ -1691,6 +1753,29 @@ WHERE conversation_turns.id = sqlc.arg(id)
   AND conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND conversation_turns.state = 'failed'
 LIMIT 1;
+
+-- Content blocks for every message absorbed by a failed provider turn.
+-- Row order matches the original batch, including steer fallback batches.
+-- name: SelectConversationProviderInputContent :many
+SELECT conversation_turns.id AS source_turn_id, conversation_messages.delivery_content_json
+FROM conversation_turns
+JOIN conversation_messages ON conversation_messages.turn_id = conversation_turns.id
+    AND conversation_messages.role = 'user'
+WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+  AND (conversation_turns.id = sqlc.arg(turn_id)
+       OR conversation_turns.promoted_to_turn_id = sqlc.arg(turn_id))
+ORDER BY conversation_turns.rowid;
+
+-- Accepted steering inputs are separate provider inputs on the same turn.
+-- Their detail rows retain the exact content sent to the provider.
+-- name: SelectConversationSteerRetryInputs :many
+SELECT detail_json FROM conversation_activities
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND turn_id = sqlc.arg(turn_id)
+  AND kind = 'system'
+  AND status = 'completed'
+  AND json_extract(detail_json, '$.event') = 'steer'
+ORDER BY sequence;
 
 -- A replayed retry request returns the attempt already linked to its source.
 -- The relation is daemon-owned rather than inferred from caller-controlled text.
