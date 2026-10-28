@@ -225,8 +225,10 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - Delegate implementation, fixes, tests, and PR ownership to worker sessions.
 - Before spawning new work, inspect current state so you do not duplicate active sessions.
 - For complex planning, research, or large coordination tasks, write a short plan first.
-- Do not use the agent runtime's built-in subagent or task-delegation tools for implementation work.
-- You may coordinate multiple workers, but AO workers only. If parallel help is needed, spawn or redirect additional AO worker sessions.
+- Choose how to get help by the work. If the human explicitly asks for native subagents or for AO worker sessions, do that within these orchestrator rules.
+- Native subagents (the agent runtime's built-in subagent or task-delegation tools), if available, may only assist read-only investigation that helps you coordinate, such as triage or finding the right files for a worker's brief; otherwise do that investigation directly. Implementation, fixes, and tests always go to AO worker sessions.
+- You may coordinate multiple AO workers. For parallel editing, or work that needs its own branch or PR, should outlive the current task, or should be visible on the board, spawn or redirect AO worker sessions.
+- A native subagent is not an AO worker session; never report one as a started worker.
 - If a worker is stuck, clarify the task with `+"`ao send`"+`, or spawn/redirect another worker when appropriate.
 - Never claim a PR into the orchestrator session. If a PR needs continuation, assign or spawn a worker.
 - Use `+"`ao send`"+` for session communication. Do not bypass AO by writing directly to tmux, PTY, pipes, or runtime internals.
@@ -306,9 +308,9 @@ func workerSystemPrompt(project promptProject, hasOrchestrator bool) string {
 - Do not invent issue, PR, or MR requirements when no remote or SCM provider is available.
 - Clearly report what changed, what was verified, and any remaining risks.`
 	}
-	parallelHelpRules := "- If parallel help is needed for CI or review follow-up and an orchestrator is attached to this project, ask it to spawn additional AO worker sessions instead of delegating inside the runtime.\n- If no orchestrator is attached, continue serially and report the need for additional AO workers to the human."
+	separateWorkerRule := "- For work that edits files alongside your task, needs its own branch or PR, should outlive this task, or should be visible on the board, a separate AO worker session is needed. No orchestrator is attached, so tell the human and continue what you can in this session."
 	if hasOrchestrator {
-		parallelHelpRules = "- If parallel help is needed for CI or review follow-up, ask the orchestrator to spawn additional AO worker sessions instead of using the agent runtime's built-in subagent or task-delegation tools."
+		separateWorkerRule = "- For work that edits files alongside your task, needs its own branch or PR, should outlive this task, or should be visible on the board, ask the orchestrator to spawn a separate AO worker session."
 	}
 	return fmt.Sprintf(`## AO Worker Role
 
@@ -349,13 +351,16 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 
 - When you address PR/MR review comments, address each relevant thread, push the fix, and mark every thread you fixed as resolved when the platform supports it.
 - If this session owns multiple PRs/MRs with CI failures or review comments, inspect all actionable items first, decide the order based on blockers, stack order, failing scope, and user priority, then work through them in that order.
-- Do not use the agent runtime's built-in subagent or task-delegation tools. Complete the assigned task in this AO session only.
+- Choose how to get help by the work. If the user explicitly asks for native subagents or for AO worker sessions, do that within these worker rules.
+- Handle small or step-by-step work directly in this session.
+- For a bounded side task that only reads and reports back, such as searching code, investigating logs, summarizing, or a second look at a diff, use native subagents (the agent runtime's built-in subagent or task-delegation tools) if available; otherwise do it directly.
+- Native subagents share this workspace: never let one edit files while you or another subagent are editing. A native subagent is not an AO worker session; never report one as a started worker.
 %s
 - For complex tasks, write a short implementation plan before editing. Keep the plan focused, then implement and update the plan if the work changes materially.
 
 %s
 
-%s`, taskSourceRules, parallelHelpRules, repoRules, projectContextSection(project))
+%s`, taskSourceRules, separateWorkerRule, repoRules, projectContextSection(project))
 }
 
 // workerNativeReviewPrompt teaches a worker AO's native reviewer. The project

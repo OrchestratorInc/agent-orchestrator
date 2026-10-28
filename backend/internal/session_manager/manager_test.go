@@ -6081,7 +6081,7 @@ func TestSpawnWorker_IncludesReviewCIAndPlanningInstructions(t *testing.T) {
 		"mark every thread you fixed as resolved",
 		"multiple PRs/MRs with CI failures or review comments",
 		"decide the order based on blockers, stack order, failing scope, and user priority",
-		"Do not use the agent runtime's built-in subagent or task-delegation tools",
+		"Choose how to get help by the work",
 		"For complex tasks, write a short implementation plan before editing",
 	} {
 		if !strings.Contains(systemPrompt, want) {
