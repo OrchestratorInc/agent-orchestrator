@@ -284,6 +284,13 @@ func TestWorkerReadyMeasuresTimeToReady(t *testing.T) {
 			SessionCreatedAt:     time.Now().Add(-48 * time.Hour),
 			PreviousWorkerSeenAt: ptr(time.Now().Add(-time.Hour)),
 			StartupStartedAt:     ptr(time.Now().Add(-3 * time.Second))}, "resume", 3000},
+		// A wake clears the last-seen time; the activity trail still knows.
+		"wake": {postgres.SandboxReadiness{Provider: "freestyle", SessionKind: "worker",
+			SessionCreatedAt:      time.Now().Add(-48 * time.Hour),
+			WorkerConnectedBefore: true,
+			StartupStartedAt:      ptr(time.Now().Add(-2 * time.Second))}, "resume", 2000},
+		"resume without a start time": {postgres.SandboxReadiness{Provider: "freestyle", SessionKind: "worker",
+			SessionCreatedAt: time.Now().Add(-48 * time.Hour), WorkerConnectedBefore: true}, "resume", -1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			captured := &capturedActivity{}
@@ -297,7 +304,13 @@ func TestWorkerReadyMeasuresTimeToReady(t *testing.T) {
 				if event.Kind != domain.ActivitySandboxReady {
 					continue
 				}
-				ttr, _ := event.Attrs["ttr_ms"].(int64)
+				ttr, hasTTR := event.Attrs["ttr_ms"].(int64)
+				if tc.minTTR < 0 {
+					if hasTTR || event.Attrs["phase"] != tc.phase {
+						t.Fatalf("sandbox.ready = %+v, want %s without ttr_ms", event, tc.phase)
+					}
+					continue
+				}
 				if event.Attrs["phase"] != tc.phase || ttr < tc.minTTR || ttr > tc.minTTR+5000 ||
 					event.Provider != tc.readiness.Provider {
 					t.Fatalf("sandbox.ready = %+v", event)

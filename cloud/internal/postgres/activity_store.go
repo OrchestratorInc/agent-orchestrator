@@ -480,11 +480,15 @@ type SandboxReadiness struct {
 	ConnectionID     string
 	SessionKind      string
 	StartupStartedAt *time.Time
-	// PreviousWorkerSeenAt is non-nil when a worker checked in before, which
-	// makes this registration a resume rather than a first start.
+	// PreviousWorkerSeenAt is non-nil when a worker checked in before and the
+	// sandbox has not restarted since: a restart (a wake, a reprovision) clears it.
 	PreviousWorkerSeenAt *time.Time
-	StartupAttempts      int
-	SessionCreatedAt     time.Time
+	// WorkerConnectedBefore is true when a worker of this session registered
+	// before, from the activity trail, so a wake reads as a resume even though
+	// the restart cleared PreviousWorkerSeenAt.
+	WorkerConnectedBefore bool
+	StartupAttempts       int
+	SessionCreatedAt      time.Time
 }
 
 // SandboxReadiness reads the startup timing of one session's sandbox.
@@ -494,7 +498,12 @@ func (s *Store) SandboxReadiness(ctx context.Context, orgID, sessionID string) (
 		return tx.QueryRow(ctx,
 			`SELECT sandbox.provider, COALESCE(sandbox.provider_connection_id::text, ''), session.kind,
 				sandbox.startup_started_at, sandbox.worker_last_seen_at, sandbox.startup_attempts,
-				session.created_at
+				session.created_at,
+				EXISTS (
+					SELECT 1 FROM ao_activity_events activity
+					WHERE activity.session_id = sandbox.session_id AND activity.org_id = sandbox.org_id
+						AND activity.kind = 'worker.connected'
+				)
 			FROM ao_sandboxes sandbox
 			JOIN ao_sessions session ON session.id = sandbox.session_id AND session.org_id = sandbox.org_id
 			WHERE sandbox.session_id = $1 AND sandbox.org_id = $2`,
@@ -502,7 +511,7 @@ func (s *Store) SandboxReadiness(ctx context.Context, orgID, sessionID string) (
 		).Scan(
 			&readiness.Provider, &readiness.ConnectionID, &readiness.SessionKind,
 			&readiness.StartupStartedAt, &readiness.PreviousWorkerSeenAt, &readiness.StartupAttempts,
-			&readiness.SessionCreatedAt,
+			&readiness.SessionCreatedAt, &readiness.WorkerConnectedBefore,
 		)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {

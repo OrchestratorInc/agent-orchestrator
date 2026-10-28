@@ -67,21 +67,21 @@ func (s *Server) recordWorkerReady(
 		}
 		return
 	}
-	now := time.Now()
-	phase := "create"
-	since := readiness.SessionCreatedAt
-	if readiness.PreviousWorkerSeenAt != nil {
-		phase = "resume"
-		if readiness.StartupStartedAt != nil {
-			since = *readiness.StartupStartedAt
-		}
-	}
 	ready := map[string]any{
-		"phase":            phase,
-		"ttr_ms":           now.Sub(since).Milliseconds(),
+		"phase":            "create",
 		"startup_attempts": readiness.StartupAttempts,
 		"session_kind":     readiness.SessionKind,
 		"epoch":            epoch,
+	}
+	// A resume is timed from its own start, never from the session's creation
+	// (days for a session woken from an idle pause); without one it has no ttr.
+	if readiness.PreviousWorkerSeenAt != nil || readiness.WorkerConnectedBefore {
+		ready["phase"] = "resume"
+		if readiness.StartupStartedAt != nil {
+			ready["ttr_ms"] = time.Since(*readiness.StartupStartedAt).Milliseconds()
+		}
+	} else {
+		ready["ttr_ms"] = time.Since(readiness.SessionCreatedAt).Milliseconds()
 	}
 	if readiness.ConnectionID != "" {
 		ready["connection_id"] = readiness.ConnectionID
