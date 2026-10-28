@@ -143,10 +143,11 @@ export function SessionContextMenuItems({
 function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const { data: state, isPending } = useEditorHandoffState(session.id, {
+	const handoff = useEditorHandoffState(session.id, {
 		sessionCreatedAt: session.createdAt,
 		sessionTerminated: session.isTerminated,
 	});
+	const { data: state, isPending } = handoff;
 	const open = useOpenSessionTarget();
 	const targets = state?.workspaceAvailable ? state.targets : [];
 	const preferred = targets.find((target) => target.kind === "editor" && target.id === state?.preferredEditorId);
@@ -182,10 +183,15 @@ function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 					{t("editor.preparingWorkspace")}
 				</ContextMenuItem>
 			) : targets.length > 0 ? (
-				<ContextMenuSub>
+				<ContextMenuSub
+					onOpenChange={(isOpen) => {
+						// Like the topbar menu, look for newly installed terminals on open.
+						if (isOpen) void handoff.refreshTargets().catch(() => undefined);
+					}}
+				>
 					<ContextMenuSubTrigger>
 						<TargetIcon target={preferred} />
-						{preferred ? t("editor.openInTarget", { name: preferred.name }) : t("editor.chooseEditor")}
+						{preferred ? t("editor.openInTarget", { name: preferred.name }) : t("editor.open")}
 					</ContextMenuSubTrigger>
 					<ContextMenuSubContent className="min-w-40">
 						{editorTargets.map(targetItem)}
