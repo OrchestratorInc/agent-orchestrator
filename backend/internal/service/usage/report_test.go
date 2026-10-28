@@ -93,7 +93,7 @@ func TestReportBucketsSplitsAndFilters(t *testing.T) {
 	reader := NewReportReader(store, snapshotStub{snapshot})
 	reader.now = func() time.Time { return now }
 
-	report, err := reader.Report(context.Background(), 7, "Asia/Kolkata", "app")
+	report, err := reader.Report(context.Background(), 7, 0, "Asia/Kolkata", "app")
 	if err != nil {
 		t.Fatalf("Report: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestReportBucketsSplitsAndFilters(t *testing.T) {
 		t.Fatalf("sessions = %+v", report.Sessions)
 	}
 
-	hourly, err := reader.Report(context.Background(), 1, "Asia/Kolkata", "")
+	hourly, err := reader.Report(context.Background(), 1, 0, "Asia/Kolkata", "")
 	if err != nil {
 		t.Fatalf("hourly Report: %v", err)
 	}
@@ -149,10 +149,24 @@ func TestReportBucketsSplitsAndFilters(t *testing.T) {
 		t.Fatalf("hourly window ends %s, want the end of the current local hour", store.until)
 	}
 
-	if _, err := reader.Report(context.Background(), 7, "Mars/Olympus", ""); err == nil {
+	if _, err := reader.Report(context.Background(), 7, 0, "Mars/Olympus", ""); err == nil {
 		t.Fatal("unknown time zone accepted")
 	}
-	if _, err := reader.Report(context.Background(), 0, "UTC", ""); err == nil {
+	if _, err := reader.Report(context.Background(), 0, 0, "UTC", ""); err == nil {
 		t.Fatal("zero-day window accepted")
+	}
+	if _, err := reader.Report(context.Background(), 7, -1, "UTC", ""); err == nil {
+		t.Fatal("negative offset accepted")
+	}
+
+	previous, err := reader.Report(context.Background(), 7, 1, "Asia/Kolkata", "")
+	if err != nil {
+		t.Fatalf("previous week Report: %v", err)
+	}
+	if previous.Periods[0] != "2026-10-12" || previous.Periods[6] != "2026-10-18" {
+		t.Fatalf("previous week periods = %v, want Oct 12-18", previous.Periods)
+	}
+	if !store.until.Equal(time.Date(2026, 10, 19, 0, 0, 0, 0, kolkata)) {
+		t.Fatalf("previous week ends %s, want the start of this week", store.until)
 	}
 }

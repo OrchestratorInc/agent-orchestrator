@@ -1929,6 +1929,7 @@ type ListUsageSessionsQuery struct {
 // UsageReportQuery selects the usage page's window.
 type UsageReportQuery struct {
 	Days      int              `query:"days,omitempty" minimum:"1" maximum:"90" description:"Days to read, today included. 1 reads the last 24 hours by hour. Defaults to 7."`
+	Offset    int              `query:"offset,omitempty" minimum:"0" description:"Whole windows to step back: 1 with days=7 reads the week before this one. Defaults to 0."`
 	TimeZone  string           `query:"tz,omitempty" description:"IANA time zone that days and hours are bucketed in. Defaults to UTC."`
 	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Read one project only."`
 }

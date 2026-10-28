@@ -23347,6 +23347,8 @@ export interface operations {
             query?: {
                 /** @description Days to read, today included. 1 reads the last 24 hours by hour. Defaults to 7. */
                 days?: number;
+                /** @description Whole windows to step back: 1 with days=7 reads the week before this one. Defaults to 0. */
+                offset?: number;
                 /** @description IANA time zone that days and hours are bucketed in. Defaults to UTC. */
                 tz?: string;
                 /** @description Read one project only. */

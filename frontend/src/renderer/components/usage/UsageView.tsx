@@ -1,4 +1,4 @@
-import { Gauge, RefreshCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, Gauge, RefreshCw } from "lucide-react";
 import { ScrollArea } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -6,8 +6,11 @@ import { useAgentAccountActions, useAgentAccounts } from "../../hooks/useAgentAc
 import { useUsageReport } from "../../hooks/useUsageReport";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { hidesShellTopbar } from "../../lib/platform";
+import { formatRange } from "../../lib/usage-format";
+import type { UsageUnit } from "../../lib/usage-report";
 import { cn } from "../../lib/utils";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../../types/workspace";
+import { HARNESS_TAB_CLASS, HARNESS_TABS_CLASS } from "../settings/harness/harness-ui";
 import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
 import { topbarProjectLabelClass } from "../TopbarButton";
 import { Button } from "../ui/button";
@@ -16,7 +19,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { UsageLimits } from "./UsageLimits";
 import { UsageSpend } from "./UsageSpend";
 
-type UsageTab = "cost" | "tokens" | "limits";
+type UsageTab = "spend" | "limits";
 const ALL_PROJECTS = "all";
 const PERIODS = [
 	{ days: 1, label: "usage.period.day" },
@@ -37,10 +40,13 @@ function useNow(intervalMs: number): Date {
 
 /** Estimated cost, token use and subscription limits for AO's agent sessions. */
 export function UsageView() {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const showPageTitle = hidesShellTopbar();
-	const [tab, setTab] = useState<UsageTab>("cost");
+	const [tab, setTab] = useState<UsageTab>("spend");
+	const [unit, setUnit] = useState<UsageUnit>("cost");
 	const [days, setDays] = useState(7);
+	// Whole periods stepped back from now; 0 is the current one.
+	const [offset, setOffset] = useState(0);
 	const [projectFilter, setProjectFilter] = useState(ALL_PROJECTS);
 	const [refreshingLimits, setRefreshingLimits] = useState(false);
 	const now = useNow(30_000);
@@ -54,7 +60,7 @@ export function UsageView() {
 		() => new Map(projects.map((project) => [project.id, project.id === STANDALONE_WORKSPACE_ID ? t("standalone.workspaceName") : project.name])),
 		[projects, t],
 	);
-	const report = useUsageReport(days, projectFilter === ALL_PROJECTS ? undefined : projectFilter);
+	const report = useUsageReport(days, offset, projectFilter === ALL_PROJECTS ? undefined : projectFilter);
 	const accounts = useAgentAccounts(tab === "limits");
 	const accountActions = useAgentAccountActions();
 	const isLimits = tab === "limits";
@@ -72,6 +78,7 @@ export function UsageView() {
 		}
 	};
 	const refreshing = isLimits ? refreshingLimits || accounts.isFetching : report.isFetching;
+	const range = report.data ? formatRange(report.data.since, report.data.until, i18n.language) : null;
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col bg-background">
@@ -92,21 +99,33 @@ export function UsageView() {
 							triggerClassName="h-(--size-control-md)! text-xs!"
 						/>
 					) : null}
-					<Tabs value={tab} onValueChange={(value) => setTab(value as UsageTab)}>
-						<TabsList aria-label={t("usage.views")} className="h-8">
-							<TabsTrigger value="cost" className="px-2.5 text-xs">{t("usage.view.cost")}</TabsTrigger>
-							<TabsTrigger value="tokens" className="px-2.5 text-xs">{t("usage.view.tokens")}</TabsTrigger>
-							<TabsTrigger value="limits" className="px-2.5 text-xs">{t("usage.view.limits")}</TabsTrigger>
-						</TabsList>
-					</Tabs>
 					{!isLimits ? (
-						<Tabs value={String(days)} onValueChange={(value) => setDays(Number(value))}>
-							<TabsList aria-label={t("usage.period")} className="h-8">
-								{PERIODS.map((period) => (
-									<TabsTrigger key={period.days} value={String(period.days)} className="px-2.5 text-xs">{t(period.label)}</TabsTrigger>
-								))}
-							</TabsList>
-						</Tabs>
+						<div className="flex items-center gap-0.5">
+							<Button variant="ghost" size="icon" aria-label={t("usage.period.previous")} onClick={() => setOffset((value) => value + 1)} className="size-8">
+								<ChevronLeft aria-hidden="true" className="size-icon-sm" />
+							</Button>
+							<SettingsOptionMenu
+								aria-label={t("usage.period")}
+								value={String(days)}
+								options={PERIODS.map((period) => ({ value: String(period.days), label: t(period.label) }))}
+								onChange={(value) => {
+									setDays(Number(value));
+									setOffset(0);
+								}}
+								menuAlign="end"
+								triggerClassName="h-(--size-control-md)! text-xs!"
+								renderTrigger={(selected) => (
+									<span className="min-w-0 truncate">
+										{/* An earlier period is named by its dates alone: "Last 7 days" would no longer be true. */}
+										{offset === 0 || !range ? selected?.label : null}
+										{range ? <span className="text-muted-foreground">{offset === 0 ? ` · ${range}` : range}</span> : null}
+									</span>
+								)}
+							/>
+							<Button variant="ghost" size="icon" aria-label={t("usage.period.next")} disabled={offset === 0} onClick={() => setOffset((value) => Math.max(0, value - 1))} className="size-8">
+								<ChevronRight aria-hidden="true" className="size-icon-sm" />
+							</Button>
+						</div>
 					) : null}
 					<Tooltip>
 						<TooltipTrigger asChild>
@@ -121,7 +140,13 @@ export function UsageView() {
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
 					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
-						<div className="mx-auto w-full max-w-6xl px-6 py-6">
+						<div className="mx-auto w-full max-w-6xl px-6 pb-6">
+							<Tabs value={tab} onValueChange={(value) => setTab(value as UsageTab)} className="mb-6">
+								<TabsList aria-label={t("usage.views")} className={HARNESS_TABS_CLASS}>
+									<TabsTrigger value="spend" className={HARNESS_TAB_CLASS}>{t("usage.view.spend")}</TabsTrigger>
+									<TabsTrigger value="limits" className={HARNESS_TAB_CLASS}>{t("usage.view.limits")}</TabsTrigger>
+								</TabsList>
+							</Tabs>
 							{isLimits ? (
 								accounts.isLoading ? (
 									<p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>
@@ -141,7 +166,7 @@ export function UsageView() {
 								</div>
 							) : (
 								<div className={cn("transition-opacity", report.isPlaceholderData && "opacity-60")}>
-									<UsageSpend report={report.data} unit={tab === "tokens" ? "tokens" : "cost"} projectNames={projectNames} />
+									<UsageSpend report={report.data} unit={unit} onUnitChange={setUnit} projectNames={projectNames} />
 								</div>
 							)}
 						</div>

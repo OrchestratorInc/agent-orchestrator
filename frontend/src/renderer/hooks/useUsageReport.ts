@@ -9,14 +9,17 @@ export function localTimeZone(): string {
 	return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
-/** Usage over the last `days` days (1 reads the last 24 hours by hour), optionally for one project. */
-export function useUsageReport(days: number, projectId: string | undefined) {
+/**
+ * Usage over the last `days` days (1 reads the last 24 hours by hour), stepped
+ * back `offset` whole windows, optionally for one project.
+ */
+export function useUsageReport(days: number, offset: number, projectId: string | undefined) {
 	const timeZone = localTimeZone();
 	return useQuery({
-		queryKey: [...usageReportQueryKey, days, timeZone, projectId ?? ""],
+		queryKey: [...usageReportQueryKey, days, offset, timeZone, projectId ?? ""],
 		queryFn: async (): Promise<UsageReport> => {
 			const { data, error } = await apiClient.GET("/api/v1/usage/report", {
-				params: { query: { days, tz: timeZone, ...(projectId ? { projectId } : {}) } },
+				params: { query: { days, offset, tz: timeZone, ...(projectId ? { projectId } : {}) } },
 			});
 			if (error) throw new Error(apiErrorMessage(error));
 			return data as UsageReport;

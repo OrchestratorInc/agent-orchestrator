@@ -28,6 +28,11 @@ export function formatTokens(value: number, locale: string): string {
 	return new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }
 
+/** "Oct 20 – 26": the days a report covers. until is exclusive. */
+export function formatRange(since: string, until: string, locale: string): string {
+	return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }).formatRange(new Date(since), new Date(new Date(until).getTime() - 1));
+}
+
 /** "53.0%" from 0.53. */
 export function formatShare(fraction: number, locale: string): string {
 	return new Intl.NumberFormat(locale, { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(
@@ -57,7 +62,9 @@ export function formatPeriod(period: string, locale: string, style: "short" | "l
 
 /** "5 minutes ago", "now": how old a reading is, in the reader's language. */
 export function formatRelativeTime(iso: string, now: Date, locale: string): string {
-	const seconds = (new Date(iso).getTime() - now.getTime()) / 1000;
+	// now ticks on an interval, so a reading fetched since the last tick would
+	// otherwise read as "in 13 seconds".
+	const seconds = Math.min(0, (new Date(iso).getTime() - now.getTime()) / 1000);
 	if (!Number.isFinite(seconds)) return "";
 	const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
 	const abs = Math.abs(seconds);

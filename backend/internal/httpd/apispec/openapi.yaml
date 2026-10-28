@@ -12632,6 +12632,15 @@ paths:
           maximum: 90
           minimum: 1
           type: integer
+      - description: 'Whole windows to step back: 1 with days=7 reads the week before
+          this one. Defaults to 0.'
+        in: query
+        name: offset
+        schema:
+          description: 'Whole windows to step back: 1 with days=7 reads the week before
+            this one. Defaults to 0.'
+          minimum: 0
+          type: integer
       - description: IANA time zone that days and hours are bucketed in. Defaults
           to UTC.
         in: query

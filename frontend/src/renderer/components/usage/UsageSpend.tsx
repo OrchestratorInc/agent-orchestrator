@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
+import { agentTone } from "../../lib/agent-tone";
 import { formatPeriod, formatShare, formatTokens, formatUsd, formatUsdCompact } from "../../lib/usage-format";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import {
@@ -18,7 +19,7 @@ import {
 } from "../../lib/usage-report";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
-import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
+import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
 import { seriesTone, UsageBarChart } from "./UsageChart";
 
 type Breakdown = "model" | "day" | "project" | "session";
@@ -38,7 +39,17 @@ const SPEED_LABELS = {
 const SESSION_ROWS = 50;
 
 /** The Cost and Tokens views: one layout, measured in dollars or in tokens. */
-export function UsageSpend({ report, unit, projectNames }: { report: UsageReport; unit: UsageUnit; projectNames: ReadonlyMap<string, string> }) {
+export function UsageSpend({
+	report,
+	unit,
+	onUnitChange,
+	projectNames,
+}: {
+	report: UsageReport;
+	unit: UsageUnit;
+	onUnitChange: (unit: UsageUnit) => void;
+	projectNames: ReadonlyMap<string, string>;
+}) {
 	const { t, i18n } = useTranslation();
 	const locale = i18n.language;
 	const totals = useMemo(() => totalsOf(report.rows), [report.rows]);
@@ -55,6 +66,15 @@ export function UsageSpend({ report, unit, projectNames }: { report: UsageReport
 			<section className="grid gap-8 lg:grid-cols-[minmax(0,19rem)_minmax(0,1fr)]">
 				<div className="flex min-w-0 flex-col gap-5">
 					<div className="flex flex-col gap-1">
+						<SettingsOptionMenu
+							aria-label={t("usage.unit")}
+							value={unit}
+							options={[{ value: "cost", label: t("usage.view.cost") }, { value: "tokens", label: t("usage.view.tokens") }]}
+							onChange={onUnitChange}
+							menuAlign="start"
+							triggerClassName="h-6! w-fit gap-1! self-start bg-transparent! px-1.5! -ms-1.5 text-xs! text-muted-foreground! hover:text-foreground! data-[state=open]:text-foreground!"
+							renderTrigger={() => <span>{t(unit === "cost" ? "usage.total.cost" : "usage.total.tokens")}</span>}
+						/>
 						<p className="text-heading-lg font-semibold tabular-nums text-foreground">{format(total)}</p>
 						<p className="text-xs text-muted-foreground">
 							{t("usage.sessionCount", { count: report.sessions.length })}
@@ -65,12 +85,12 @@ export function UsageSpend({ report, unit, projectNames }: { report: UsageReport
 						) : null}
 					</div>
 					<ul className="flex flex-col gap-3" aria-label={t("usage.byAgent")}>
-						{harnesses.map((harness, index) => {
+						{harnesses.map((harness) => {
 							const value = unit === "cost" ? harness.costNanos : harness.tokens;
 							const share = total > 0 ? value / total : 0;
 							return (
 								<li key={harness.harness} className="flex min-w-0 items-start gap-2.5">
-									<span aria-hidden="true" className={cn("mt-1.5 size-2 shrink-0 rounded-full", seriesTone(index))} />
+									<span aria-hidden="true" className="mt-1.5 size-2 shrink-0 rounded-full" style={{ backgroundColor: agentTone(harness.harness) }} />
 									<AgentAvatar provider={harness.harness} decorative className="mt-0.5 size-4 shrink-0" />
 									<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 										<div className="flex items-baseline justify-between gap-3">
@@ -80,6 +100,7 @@ export function UsageSpend({ report, unit, projectNames }: { report: UsageReport
 											</span>
 											<span className="shrink-0 text-control tabular-nums text-foreground">{format(value)}</span>
 										</div>
+										<ShareBar fraction={share} tone={agentTone(harness.harness)} className="my-1" />
 										<span className="text-xs tabular-nums text-muted-foreground">
 											{unit === "cost"
 												? t("usage.harnessCostLine", { share: formatShare(share, locale), tokens: formatTokens(harness.tokens, locale) })
@@ -138,6 +159,15 @@ export function UsageSpend({ report, unit, projectNames }: { report: UsageReport
 	);
 }
 
+/** A thin share-of-total bar, in an agent's colour or neutral. */
+function ShareBar({ fraction, tone, className }: { fraction: number; tone?: string; className?: string }) {
+	return (
+		<span aria-hidden="true" className={cn("block h-1 overflow-hidden rounded-full bg-muted", className)}>
+			<span className={cn("block h-full rounded-full", !tone && "bg-foreground/45")} style={{ width: `${Math.min(1, Math.max(0, fraction)) * 100}%`, backgroundColor: tone }} />
+		</span>
+	);
+}
+
 function Stat({ label, value }: { label: string; value: string }) {
 	return (
 		<div className="flex min-w-0 flex-col gap-1">
@@ -190,21 +220,38 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 	const locale = i18n.language;
 	const [breakdown, setBreakdown] = useState<Breakdown>("model");
 	const navigateToSession = useNavigateToSession();
-	const share = (cost: number, tokens: number) => formatShare(total > 0 ? (unit === "cost" ? cost : tokens) / total : 0, locale);
+	const fraction = (cost: number, tokens: number) => (total > 0 ? (unit === "cost" ? cost : tokens) / total : 0);
+	// A bar in the agent's colour where the row belongs to one agent, neutral where it mixes them.
+	const share = (cost: number, tokens: number, harness?: string) => (
+		<span className="flex items-center justify-end gap-2">
+			<ShareBar fraction={fraction(cost, tokens)} tone={harness ? agentTone(harness) : undefined} className="w-14" />
+			<span className="w-12 text-end">{formatShare(fraction(cost, tokens), locale)}</span>
+		</span>
+	);
 	const projectName = (projectId: string | undefined) => (projectId ? projectNames.get(projectId) ?? projectId : t("usage.noProject"));
 
 	return (
 		<section aria-labelledby="usage-breakdown" className="flex flex-col gap-3">
 			<div className="flex items-center justify-between gap-3">
 				<h2 id="usage-breakdown" className="text-control font-medium text-foreground">{t("usage.breakdown")}</h2>
-				<Tabs value={breakdown} onValueChange={(value) => setBreakdown(value as Breakdown)}>
-					<TabsList aria-label={t("usage.breakdown")} className="h-8">
-						<TabsTrigger value="model" className="px-2.5 text-xs">{t("usage.breakdown.model")}</TabsTrigger>
-						<TabsTrigger value="day" className="px-2.5 text-xs">{report.resolution === "hour" ? t("usage.breakdown.hour") : t("usage.breakdown.day")}</TabsTrigger>
-						<TabsTrigger value="project" className="px-2.5 text-xs">{t("usage.breakdown.project")}</TabsTrigger>
-						<TabsTrigger value="session" className="px-2.5 text-xs">{t("usage.breakdown.session")}</TabsTrigger>
-					</TabsList>
-				</Tabs>
+				<SettingsOptionMenu
+					aria-label={t("usage.groupBy")}
+					value={breakdown}
+					options={[
+						{ value: "model", label: t("usage.breakdown.model") },
+						{ value: "day", label: report.resolution === "hour" ? t("usage.breakdown.hour") : t("usage.breakdown.day") },
+						{ value: "project", label: t("usage.breakdown.project") },
+						{ value: "session", label: t("usage.breakdown.session") },
+					]}
+					onChange={setBreakdown}
+					menuAlign="end"
+					triggerClassName="h-(--size-control-md)! text-xs!"
+					renderTrigger={(selected) => (
+						<span className="min-w-0 truncate">
+							<span className="text-muted-foreground">{t("usage.groupBy")}</span> {selected?.label}
+						</span>
+					)}
+				/>
 			</div>
 			<table className="w-full table-fixed border-collapse text-control">
 				<thead>
@@ -217,7 +264,7 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 						{breakdown === "model" ? <th scope="col" className="w-28 py-2 text-end font-normal">{t("usage.column.perMillion")}</th> : null}
 						{breakdown === "project" ? <th scope="col" className="w-24 py-2 text-end font-normal">{t("usage.column.sessions")}</th> : null}
 						<th scope="col" className="w-28 py-2 text-end font-normal">{t("usage.column.cost")}</th>
-						<th scope="col" className="w-20 py-2 text-end font-normal">{t("usage.column.share")}</th>
+						<th scope="col" className="w-36 py-2 ps-6 text-end font-normal">{t("usage.column.share")}</th>
 						<th scope="col" className="w-24 py-2 text-end font-normal">{t("usage.column.tokens")}</th>
 					</tr>
 				</thead>
@@ -234,7 +281,7 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 							<td className="py-2.5 text-end text-muted-foreground">{formatShare(model.cacheHitRate, locale)}</td>
 							<td className="py-2.5 text-end text-muted-foreground">{model.costPerMillionNanos === null ? "—" : formatUsd(model.costPerMillionNanos, locale)}</td>
 							<td className="py-2.5 text-end text-foreground">{model.pricedEvents === 0 ? <span className="text-muted-foreground">{t("usage.notPriced")}</span> : formatUsd(model.costNanos, locale)}</td>
-							<td className="py-2.5 text-end text-muted-foreground">{share(model.costNanos, model.tokens)}</td>
+							<td className="py-2.5 ps-6 text-muted-foreground">{share(model.costNanos, model.tokens, model.harness)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatTokens(model.tokens, locale)}</td>
 						</tr>
 					)) : null}
@@ -243,7 +290,7 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 							<td className="py-2.5 text-xs text-muted-foreground">{index + 1}</td>
 							<td className="py-2.5 text-foreground">{formatPeriod(period.period, locale, "long")}</td>
 							<td className="py-2.5 text-end text-foreground">{formatUsd(period.costNanos, locale)}</td>
-							<td className="py-2.5 text-end text-muted-foreground">{share(period.costNanos, period.tokens)}</td>
+							<td className="py-2.5 ps-6 text-muted-foreground">{share(period.costNanos, period.tokens)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatTokens(period.tokens, locale)}</td>
 						</tr>
 					)) : null}
@@ -253,7 +300,7 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 							<td className="truncate py-2.5 text-foreground">{projectName(project.projectId)}</td>
 							<td className="py-2.5 text-end text-muted-foreground">{project.sessions.toLocaleString(locale)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatUsd(project.costNanos, locale)}</td>
-							<td className="py-2.5 text-end text-muted-foreground">{share(project.costNanos, project.tokens)}</td>
+							<td className="py-2.5 ps-6 text-muted-foreground">{share(project.costNanos, project.tokens)}</td>
 							<td className="py-2.5 text-end text-foreground">{formatTokens(project.tokens, locale)}</td>
 						</tr>
 					)) : null}
@@ -277,7 +324,7 @@ function UsageBreakdown({ report, unit, projectNames, total }: { report: UsageRe
 									</button>
 								</td>
 								<td className="py-2.5 text-end text-foreground">{formatUsd(session.costNanos, locale)}</td>
-								<td className="py-2.5 text-end text-muted-foreground">{share(session.costNanos, session.tokens)}</td>
+								<td className="py-2.5 ps-6 text-muted-foreground">{share(session.costNanos, session.tokens, session.harness)}</td>
 								<td className="py-2.5 text-end text-foreground">{formatTokens(session.tokens, locale)}</td>
 							</tr>
 						)) : null}

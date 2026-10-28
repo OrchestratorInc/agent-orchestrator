@@ -2,6 +2,7 @@ import { TriangleAlert } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountName, agentAccountProviderNames, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentTone } from "../../lib/agent-tone";
 import { formatCountdown, groupAccounts, remainingPercent } from "../../lib/usage-limits";
 import { formatRelativeTime } from "../../lib/usage-format";
 import { cn } from "../../lib/utils";
@@ -12,9 +13,9 @@ import { Button } from "../ui/button";
 
 const PROVIDER_HARNESS: Record<AgentAccountProvider, string> = { codex: "codex", claude: "claude-code" };
 
-/** What is left reads in the same tones as the account settings: low is a warning, none is an error. */
-function remainingTone(remaining: number): string {
-	return remaining <= 0 ? "bg-error" : remaining <= 25 ? "bg-warning" : "bg-foreground/80";
+/** Low reads as a warning and none as an error, as in the account settings; otherwise the agent's colour. */
+function remainingTone(remaining: number): string | null {
+	return remaining <= 0 ? "bg-error" : remaining <= 25 ? "bg-warning" : null;
 }
 
 /** Subscription windows for every signed-in account, one block per account under its provider. */
@@ -50,7 +51,7 @@ export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount
 					{/* One grid for every account, so bars and figures line up down the provider. */}
 					<div className="grid grid-cols-[minmax(7rem,auto)_5.5rem_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3">
 						{entry.accounts.map((account, index) => (
-							<AccountLimitRows key={account.id} account={account} first={index === 0} now={now} />
+							<AccountLimitRows key={account.id} account={account} harness={PROVIDER_HARNESS[entry.provider]} first={index === 0} now={now} />
 						))}
 					</div>
 				</section>
@@ -59,7 +60,7 @@ export function UsageLimits({ accounts, now }: { accounts: readonly AgentAccount
 	);
 }
 
-function AccountLimitRows({ account, first, now }: { account: AgentAccount; first: boolean; now: Date }) {
+function AccountLimitRows({ account, harness, first, now }: { account: AgentAccount; harness: string; first: boolean; now: Date }) {
 	const { t } = useTranslation();
 	const windows = account.limits?.windows ?? [];
 	const plan = formatPlanName(account.plan);
@@ -82,15 +83,16 @@ function AccountLimitRows({ account, first, now }: { account: AgentAccount; firs
 					</span>
 				) : null}
 			</div>
-			{windows.map((window) => <LimitWindowRow key={window.id} window={window} now={now} />)}
+			{windows.map((window) => <LimitWindowRow key={window.id} window={window} harness={harness} now={now} />)}
 			{windows.length === 0 && !issue ? <p className="col-span-full text-xs text-muted-foreground">{t("usage.limits.noWindows")}</p> : null}
 		</>
 	);
 }
 
-function LimitWindowRow({ window, now }: { window: AgentAccountLimitWindow; now: Date }) {
+function LimitWindowRow({ window, harness, now }: { window: AgentAccountLimitWindow; harness: string; now: Date }) {
 	const { t, i18n } = useTranslation();
 	const remaining = Math.round(remainingPercent(window.usedPercent));
+	const tone = remainingTone(remaining);
 	const countdown = formatCountdown(window.resetsAt, now);
 	const percent = new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format(remaining / 100);
 	return (
@@ -108,7 +110,7 @@ function LimitWindowRow({ window, now }: { window: AgentAccountLimitWindow; now:
 				aria-valuenow={remaining}
 				className="h-2.5 min-w-0 overflow-hidden rounded-full bg-muted"
 			>
-				<div className={cn("h-full rounded-full", remainingTone(remaining))} style={{ width: `${remaining}%` }} />
+				<div className={cn("h-full rounded-full", tone)} style={{ width: `${remaining}%`, backgroundColor: tone ? undefined : agentTone(harness) }} />
 			</div>
 			<span className="whitespace-nowrap text-end text-xs tabular-nums text-muted-foreground">
 				{countdown ? t("usage.limits.resetsIn", { value: countdown }) : ""}

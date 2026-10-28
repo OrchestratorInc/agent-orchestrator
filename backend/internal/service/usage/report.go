@@ -43,13 +43,18 @@ const (
 )
 
 // Report reads the last days of usage. One day reads the last 24 hours by hour;
-// more read whole days, today included. An empty projectID reads every project.
-func (r *ReportReader) Report(ctx context.Context, days int, timeZone string, projectID domain.ProjectID) (domain.UsageReport, error) {
+// more read whole days, today included. offset steps back that many whole
+// windows, so offset 1 with 7 days is the week before this one. An empty
+// projectID reads every project.
+func (r *ReportReader) Report(ctx context.Context, days, offset int, timeZone string, projectID domain.ProjectID) (domain.UsageReport, error) {
 	if r == nil || r.store == nil {
 		return domain.UsageReport{}, fmt.Errorf("usage report store is unavailable")
 	}
 	if days < 1 || days > 90 {
 		return domain.UsageReport{}, apierr.Invalid("INVALID_USAGE_WINDOW", "days must be between 1 and 90", nil)
+	}
+	if offset < 0 {
+		return domain.UsageReport{}, apierr.Invalid("INVALID_USAGE_WINDOW", "offset must not be negative", nil)
 	}
 	zone := strings.TrimSpace(timeZone)
 	if zone == "" {
@@ -61,6 +66,11 @@ func (r *ReportReader) Report(ctx context.Context, days int, timeZone string, pr
 	}
 	report := domain.UsageReport{Days: days, TimeZone: zone}
 	now := r.now().In(loc)
+	if days == 1 {
+		now = now.Add(-24 * time.Hour * time.Duration(offset))
+	} else {
+		now = now.AddDate(0, 0, -days*offset)
+	}
 	var periodOf func(time.Time) string
 	if days == 1 {
 		report.Resolution = "hour"

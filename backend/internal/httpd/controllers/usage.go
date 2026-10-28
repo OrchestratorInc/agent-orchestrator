@@ -24,7 +24,7 @@ type UsageSummaryService interface {
 
 // UsageReportService builds the usage page's report.
 type UsageReportService interface {
-	Report(ctx context.Context, days int, timeZone string, projectID domain.ProjectID) (domain.UsageReport, error)
+	Report(ctx context.Context, days, offset int, timeZone string, projectID domain.ProjectID) (domain.UsageReport, error)
 }
 
 // SessionMemoryService samples resident memory per live session.
@@ -77,16 +77,18 @@ func (c *UsageController) getReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	query := r.URL.Query()
-	days := 7
-	if raw := query.Get("days"); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil {
-			envelope.WriteError(w, r, apierr.Invalid("INVALID_USAGE_WINDOW", "days must be a whole number", nil))
-			return
+	days, offset := 7, 0
+	for name, target := range map[string]*int{"days": &days, "offset": &offset} {
+		if raw := query.Get(name); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil {
+				envelope.WriteError(w, r, apierr.Invalid("INVALID_USAGE_WINDOW", name+" must be a whole number", nil))
+				return
+			}
+			*target = parsed
 		}
-		days = parsed
 	}
-	report, err := c.Report.Report(r.Context(), days, query.Get("tz"), domain.ProjectID(query.Get("projectId")))
+	report, err := c.Report.Report(r.Context(), days, offset, query.Get("tz"), domain.ProjectID(query.Get("projectId")))
 	if err != nil {
 		c.Log.WarnContext(r.Context(), "failed to read usage report", "error", err)
 		envelope.WriteError(w, r, err)

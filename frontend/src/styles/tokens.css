@@ -130,6 +130,10 @@
 	--color-danger: var(--destructive);
 	--color-purple: var(--chart-4);
 
+	/* Agent tones: each agent's hue (lib/agent-tone.ts) at one shared lightness and chroma. */
+	--agent-tone-lightness: 0.65;
+	--agent-tone-chroma: 0.15;
+
 	/* Interactive overlays */
 	--color-interactive-hover: color-mix(in oklch, var(--foreground) 4%, transparent);
 	--color-interactive-active: color-mix(in oklch, var(--foreground) 7%, transparent);
@@ -740,6 +744,10 @@
 	--color-status-in-review: #d97706;
 	--color-status-ready: #16a34a;
 	--color-status-merged: #9333ea;
+
+	/* Agent tones, deepened to hold contrast on a light canvas. */
+	--agent-tone-lightness: 0.6;
+	--agent-tone-chroma: 0.15;
 	--color-status-idle: var(--muted-foreground);
 	--color-status-exited: var(--destructive);
 	--color-status-terminated: var(--color-text-passive);

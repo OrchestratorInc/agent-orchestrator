@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
+import { agentTone } from "../../lib/agent-tone";
 import { niceScale, type UsageSeries } from "../../lib/usage-report";
-import { cn } from "../../lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 /** Neutral series tones, strongest first: colour stays rare and semantic. */
@@ -66,8 +66,7 @@ export function UsageBarChart({
 													value > 0 ? (
 														<div
 															key={series.harnesses[harnessIndex]}
-															className={seriesTone(harnessIndex)}
-															style={{ height: `${(value / total) * 100}%` }}
+															style={{ height: `${(value / total) * 100}%`, backgroundColor: agentTone(series.harnesses[harnessIndex]) }}
 														/>
 													) : null
 												))}
@@ -79,7 +78,7 @@ export function UsageBarChart({
 										{series.harnesses.map((harness, harnessIndex) => (
 											<span key={harness} className="flex items-center justify-between gap-4">
 												<span className="inline-flex items-center gap-1.5">
-													<span aria-hidden="true" className={cn("size-2 rounded-full", seriesTone(harnessIndex))} />
+													<span aria-hidden="true" className="size-2 rounded-full" style={{ backgroundColor: agentTone(harness) }} />
 													{agentLabel(harness)}
 												</span>
 												<span>{formatValue(series.values[periodIndex][harnessIndex])}</span>
@@ -108,6 +107,16 @@ export function UsageBarChart({
 					))}
 				</div>
 			</div>
+			{series.harnesses.length > 1 ? (
+				<ul className="flex flex-wrap gap-x-4 gap-y-1 ps-[4.25rem] text-xs text-muted-foreground">
+					{series.harnesses.map((harness) => (
+						<li key={harness} className="inline-flex items-center gap-1.5">
+							<span aria-hidden="true" className="size-2 rounded-xs" style={{ backgroundColor: agentTone(harness) }} />
+							{agentLabel(harness)}
+						</li>
+					))}
+				</ul>
+			) : null}
 		</figure>
 	);
 }
