@@ -40,6 +40,7 @@ vi.mock("./store", () => ({ useApp: () => ({
 	refreshAll: fixtures.refreshAll, refreshHost: fixtures.refreshHost,
 	allSessions: fixtures.hostStates.flatMap((host) => host.sessions.map((session) => ({ ...session, hostId: host.hostId }))), allProjects: [],
 	hostStates: fixtures.hostStates, notificationsUnread: 0,
+	phoneNetwork: { connected: true, internet: true },
 }) }));
 vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
 vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({ icon: "wifi-off", title: "Can't connect", hint: "Try again" }) }));
@@ -221,6 +222,16 @@ describe("Workers selected-machine reachability", () => {
 		expect(renderer.root.findByType("MenuView" as never).findAllByType("ActivityIndicator" as never)).toHaveLength(0);
 		expect(renderer.root.findAllByType("Feather" as never).some((node) => node.props.name === "laptop")).toBe(true);
 		expect(renderer.root.findByType("MenuView" as never).props.actions[2].image).toBe("laptopcomputer");
+	});
+	// One unanswered poll on the selected machine is a blip, not a machine that is down.
+	it("says reconnecting, not can't reach, after a single unanswered poll", async () => {
+		const { EMPTY_LINK_TRACKER, recordPoll } = await import("./linkHealth");
+		Object.assign(fixtures.hostStates[1], { connection: "closed", loading: false, linkTracker: recordPoll(EMPTY_LINK_TRACKER, "no-answer", Date.now()) });
+		selectWindows();
+		const status = renderer.root.findByProps({ testID: "worker-machine-status" });
+		expect(status.findByType("Text" as never).props.children).toBe("Reconnecting…");
+		expect(status.props.accessibilityLabel).toBe("Reconnecting to Windows");
+		expect(renderer.root.findByProps({ testID: "worker-machine-hint" }).props.children).toMatch(/^Still trying to reach/);
 	});
 	it("uses the no-workers state only once the selected machine is connected", () => {
 		Object.assign(fixtures.hostStates[1], { connection: "open", error: null });

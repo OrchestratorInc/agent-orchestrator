@@ -1378,7 +1378,7 @@ describe("sent message recall", () => {
 		expect(composerWireText(field)).toBe(`compare ${path} `);
 	});
 
-	it("recalls with Up while a Tab suggestion is offered, which dismisses it like any text", async () => {
+	it("recalls with Up while a Tab suggestion is offered, which temporarily hides it", async () => {
 		const onDismiss = vi.fn();
 		const { field, onSend } = renderComposer({
 			sentMessages: SENT,
@@ -1387,7 +1387,7 @@ describe("sent message recall", () => {
 		await typeInComposer(field, "");
 		expect(press(field, "ArrowUp")).toBe(true);
 		expect(composerWireText(field)).toBe("latest question");
-		expect(onDismiss).toHaveBeenCalled();
+		expect(onDismiss).not.toHaveBeenCalled();
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
@@ -2083,6 +2083,46 @@ describe("attachments", () => {
 		expect(screen.getByLabelText("Attach a file")).toBeTruthy();
 	});
 
+	it("holds pasted files without a workspace and sends their bytes with the message", async () => {
+		const { onSend, field } = renderComposer({ draftSessionId: "composer-held-attachments", holdAttachments: true });
+		expect(screen.getByLabelText("Attach a file")).toBeTruthy();
+		await typeInComposer(field, "what is this");
+		fireEvent.paste(field, { clipboardData: clipboardData([png("a.png"), textFile()]) });
+		await screen.findByLabelText("Remove notes.txt");
+		expect(screen.getByLabelText("Remove a.png")).toBeTruthy();
+
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		const [text, files] = onSend.mock.calls[0] ?? [];
+		expect(text).toBe("what is this");
+		expect(files).toEqual([
+			{ mimeType: "image/png", data: expect.any(String), name: "a.png" },
+			{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" },
+		]);
+	});
+
+	it("keeps held file bytes available after a definitive send rejection", async () => {
+		const onSend = vi.fn()
+			.mockRejectedValueOnce(Object.assign(new Error("Agent not installed"), { code: "TASK_CREATE_FAILED" }))
+			.mockResolvedValue(undefined);
+		const { field } = renderComposer({ draftSessionId: "composer-held-retry", holdAttachments: true, onSend });
+		await typeInComposer(field, "read this file");
+		fireEvent.paste(field, { clipboardData: clipboardData([textFile()]) });
+		await screen.findByLabelText("Remove notes.txt");
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+		await screen.findByText("Agent not installed");
+
+		await userEvent.click(field);
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+		expect(onSend.mock.calls[1]?.[1]).toEqual([
+			{ mimeType: "text/plain", data: btoa("hello"), name: "notes.txt" },
+		]);
+	});
+
 	it("shows a removable chip per pasted image", async () => {
 		const { field } = renderComposer({
 			onStageAttachments: vi.fn().mockResolvedValue([
@@ -2708,6 +2748,16 @@ describe("attachments", () => {
 /* ---- disabled and busy states ------------------------------------------- */
 
 describe("unavailable states", () => {
+	it("keeps approval actions available below an attached notice and queue", async () => {
+		const approve = vi.fn();
+		render(<ChatComposer onSend={vi.fn()} disabled notice={<div data-composer-notice>Another writer</div>} queuedDock={<div>Queued message</div>} approval={<button onClick={approve}>Approve command</button>} />);
+		const notice = screen.getByText("Another writer");
+		expect(notice.previousElementSibling).toHaveAttribute("data-testid", "queued-composer-dock");
+		expect(notice.nextElementSibling?.tagName).toBe("FORM");
+		await userEvent.click(screen.getByRole("button", { name: "Approve command" }));
+		expect(approve).toHaveBeenCalledOnce();
+	});
+
 	it("explains a stopped controller and refuses to send", async () => {
 		const { onSend, field } = renderComposer({ disabled: true, skills: SKILLS });
 		expect(field).toHaveAttribute("aria-placeholder", expect.stringContaining("not connected"));

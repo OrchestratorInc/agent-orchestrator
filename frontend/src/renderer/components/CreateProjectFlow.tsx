@@ -1168,7 +1168,9 @@ function CreateProjectFlowBackdrop({ open }: { open: boolean }) {
 				<motion.div
 					aria-hidden="true"
 					className="dialog-overlay z-[calc(var(--z-overlay)-1)]"
-					initial={{ opacity: 0 }}
+					// Arriving from another modal (lib/modal-handoff.ts), it shows at
+					// full strength so the dim never dips.
+					initial={document.documentElement.dataset.modalHandoff ? false : { opacity: 0 }}
 					animate={{ opacity: 1, transition: { duration: 0.08 } }}
 					exit={{ opacity: 0, transition: { duration: 0.06 } }}
 				/>

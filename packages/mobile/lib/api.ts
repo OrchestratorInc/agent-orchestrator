@@ -651,14 +651,17 @@ export function previewFilePath(sessionId: string, path: string): string {
 	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/** The daemon's route for a file in a session's artifact folder, each segment escaped. */
+export function previewArtifactPath(sessionId: string, entry: string): string {
+	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/artifacts/${entry.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 export async function getPreview(cfg: ServerConfig, id: string): Promise<{ entry: string; url: string; authenticated: boolean } | null> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/preview`);
 	const data = await res.json();
 	const entry = typeof data?.entry === "string" ? data.entry.trim() : "";
 	if (entry) {
-		const path = data?.source === "artifact"
-			? `${API}/sessions/${encodeURIComponent(id)}/preview/artifacts/${entry.split("/").map(encodeURIComponent).join("/")}`
-			: previewFilePath(id, entry);
+		const path = data?.source === "artifact" ? previewArtifactPath(id, entry) : previewFilePath(id, entry);
 		const url = `${httpBase(cfg)}${path}`;
 		return { entry, url, authenticated: true };
 	}

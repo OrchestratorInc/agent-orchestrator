@@ -2445,3 +2445,64 @@ func TestHooksSessionDeliveryPreservesCoordinationOrigin(t *testing.T) {
 		t.Fatalf("hook facts=%+v", req)
 	}
 }
+
+func TestClaudeHookDeniesFirstArtifactUseOnly(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_DATA_DIR", t.TempDir())
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	run := func(agent, event, tool string) string {
+		t.Helper()
+		stdout, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native","tool_name":"` + tool + `","tool_use_id":"tu-1"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", agent, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stdout
+	}
+
+	if out := run("claude-code", "pre-tool-use", "Bash"); out != "" {
+		t.Fatalf("non-Artifact tool produced output: %q", out)
+	}
+	if out := run("codex", "pre-tool-use", "Artifact"); out != "" {
+		t.Fatalf("non-Claude harness produced output: %q", out)
+	}
+	if out := run("claude-code", "post-tool-use", "Artifact"); out != "" {
+		t.Fatalf("post-tool-use produced output: %q", out)
+	}
+
+	hits := capture.hits
+	var got claudePreToolUseDenyOutput
+	if err := json.Unmarshal([]byte(run("claude-code", "pre-tool-use", "Artifact")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.HookSpecificOutput.HookEventName != "PreToolUse" ||
+		got.HookSpecificOutput.PermissionDecision != "deny" ||
+		!strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "html_render") ||
+		strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "ao report") {
+		t.Fatalf("unexpected decision: %+v", got)
+	}
+	if capture.hits != hits+1 {
+		t.Fatalf("activity still reports on a denied Artifact: %d hits", capture.hits-hits)
+	}
+	if out := run("claude-code", "pre-tool-use", "Artifact"); out != "" {
+		t.Fatalf("second Artifact use was blocked: %q", out)
+	}
+}
+
+func TestClaudeHookArtifactNudgeFailsOpen(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	setConfigEnv(t)
+	t.Setenv("AO_DATA_DIR", "")
+	// No daemon run file and no data dir: the hook must still exit cleanly with no decision.
+	stdout, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"tool_name":"Artifact"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "pre-tool-use")
+	if err != nil || stdout != "" {
+		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+}

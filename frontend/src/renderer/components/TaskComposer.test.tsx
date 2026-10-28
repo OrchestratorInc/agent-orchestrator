@@ -529,6 +529,26 @@ describe("TaskComposer", () => {
 		expect(screen.getByLabelText("Model")).toHaveAttribute("aria-disabled", "true");
 	});
 
+	it("does not show another view's failed lookup of the standalone sentinel as a Scratchpad error", async () => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// A Scratchpad chat elsewhere asked the daemon for the sentinel as a project.
+		await queryClient.prefetchQuery({
+			queryKey: ["project", "__standalone__"],
+			queryFn: async () => { throw new Error("Project id failed storage-path validation"); },
+		});
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+
+		render(
+			<Wrap queryClient={queryClient}>
+				<TaskComposer projectId="__standalone__" onCreated={vi.fn()} />
+			</Wrap>,
+		);
+
+		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "codex"));
+		expect(screen.queryByText("Project id failed storage-path validation")).not.toBeInTheDocument();
+		expect(screen.getByText("Start task")).toBeEnabled();
+	});
+
 	it("starts a standalone worker without loading or sending a project", async () => {
 		const onCreated = vi.fn();
 		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };

@@ -36,6 +36,18 @@ func TestSystemPromptArtifactSections(t *testing.T) {
 			if got := strings.Contains(prompt, "## Artifact Output"); got != tc.wantDeliver {
 				t.Fatalf("artifact output section present = %v, want %v", got, tc.wantDeliver)
 			}
+			if !tc.wantSection {
+				return
+			}
+			for _, want := range []string{
+				"Everything produced along the way is working material and goes in the system temp directory",
+				"If a file is neither opened on its own nor needed by a deliverable, it is working material.",
+				"if a deliverable exceeds a limit, say so instead of splitting it into many files",
+			} {
+				if !strings.Contains(prompt, want) {
+					t.Fatalf("artifacts section missing %q:\n%s", want, prompt)
+				}
+			}
 		})
 	}
 }

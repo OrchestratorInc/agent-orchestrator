@@ -100,7 +100,7 @@ describe("groupArtifactsByProject", () => {
 		]);
 
 		expect(group).toMatchObject({ id: "cloud", isScratchpad: false });
-		expect(group.rows[0]).toMatchObject({ name: "cloud.md", sessionId: "c-1", projectId: "cloud" });
+		expect(group.rows[0]).toMatchObject({ name: "cloud.md", sessionId: "c-1", projectId: "cloud", cloud: { orgId: "org-1" } });
 	});
 
 	it("marks rows from a working session as generating", () => {

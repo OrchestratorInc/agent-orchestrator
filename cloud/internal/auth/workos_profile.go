@@ -90,6 +90,7 @@ func newWorkOSProfileResolver(
 			FirstName  string `json:"first_name"`
 			LastName   string `json:"last_name"`
 			ExternalID string `json:"external_id"`
+			AvatarURL  string `json:"profile_picture_url"`
 		}
 		if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&user); err != nil {
 			return WorkOSProfile{}, err
@@ -111,6 +112,7 @@ func newWorkOSProfileResolver(
 		profile := WorkOSProfile{
 			Email:       email,
 			DisplayName: displayName,
+			AvatarURL:   strings.TrimSpace(user.AvatarURL),
 			LegacyID:    legacyWorkOSID(user.ExternalID, "user_", userID),
 		}
 		mutex.Lock()

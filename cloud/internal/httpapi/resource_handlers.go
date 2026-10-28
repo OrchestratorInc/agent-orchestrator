@@ -176,6 +176,9 @@ type sessionResponse struct {
 	WorkerEpoch int64 `json:"workerEpoch,omitempty"`
 	// RequestedOutput is the deliverable the session was created for.
 	RequestedOutput string `json:"requestedOutput,omitempty"`
+	// RequestedBy is the guest the session was started for, when someone the
+	// project was shared with asked its orchestrator for it.
+	RequestedBy *sessionRequesterResponse `json:"requestedBy,omitempty"`
 	// OutputType is what the session owns: none, pr, artifact or pr_artifact.
 	OutputType string `json:"outputType"`
 	// ArtifactCount is the number of the session's committed artifact files,
@@ -1518,6 +1521,7 @@ func toSessionResponse(session domain.Session, prs []contract.PRFacts) sessionRe
 		TerminateOnPRMerge: session.TerminateOnPRMerge,
 		WorkerEpoch:        session.WorkerEpoch,
 		RequestedOutput:    session.RequestedOutput,
+		RequestedBy:        sessionRequester(session),
 		OutputType:         sessionOutputType(session, prs),
 		CreatedAt:          session.CreatedAt,
 		UpdatedAt:          session.UpdatedAt,
@@ -1568,4 +1572,16 @@ func nonNilStrings(values []string) []string {
 		return []string{}
 	}
 	return values
+}
+
+type sessionRequesterResponse struct {
+	UserID string `json:"userId"`
+	Name   string `json:"name"`
+}
+
+func sessionRequester(session domain.Session) *sessionRequesterResponse {
+	if session.RequestedByUserID == "" {
+		return nil
+	}
+	return &sessionRequesterResponse{UserID: session.RequestedByUserID, Name: session.RequestedByName}
 }

@@ -3,7 +3,7 @@
 // own workspace canvas for the visible file and diff surfaces.
 export const AO_PIERRE_SURFACE_CSS = `
 :host {
-	--diffs-bg: var(--color-bg-primary);
+	--diffs-bg: var(--ao-file-canvas, var(--color-bg-primary));
 }
 
 /* Split diff with an inline composer open: the opposite side's annotation cell
