@@ -118,8 +118,7 @@ export function ArtifactActionsMenu({
 		setCopyError("");
 		try {
 			if (!cloudFileUrl) throw new Error(t("artifacts.accessError"));
-			const bytes = await aoBridge.cloudArtifact.fetch(cloudFileUrl);
-			await aoBridge.chatImage.save({ name: artifact.name, bytes });
+			await aoBridge.cloudArtifact.save({ url: cloudFileUrl, name: artifact.name });
 		} catch (error) {
 			setCopyError(error instanceof Error ? error.message : String(error));
 		}

@@ -90,10 +90,12 @@ export const aoBridge: AoBridge =
 			},
 		},
 		cloudArtifact: {
-			fetch: async (url: string) => {
-				const response = await fetch(url);
-				if (!response.ok) throw new Error(`Artifact request failed (${response.status})`);
-				return new Uint8Array(await response.arrayBuffer());
+			save: async ({ url, name }: { url: string; name: string }) => {
+				const link = document.createElement("a");
+				link.href = url;
+				link.download = name;
+				link.click();
+				return true;
 			},
 			onFrameNavigated: () => () => undefined,
 		},
