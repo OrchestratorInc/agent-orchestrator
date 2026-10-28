@@ -20,7 +20,14 @@ import {
 	Archive,
 	CalendarClock,
 	ChevronRight,
+	ChevronsDownUp,
+	ChevronsUpDown,
+	Copy,
 	Download,
+	ExternalLink,
+	GitBranch,
+	Hash,
+	LayoutGrid,
 	File,
 	Folder,
 	FolderOpen,
@@ -31,6 +38,7 @@ import {
 	Pencil,
 	Pin,
 	PinOff,
+	Play,
 	Plus,
 	RefreshCw,
 	Search,
@@ -64,6 +72,7 @@ import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
 	openPRs,
+	primaryPR,
 	type WorkspaceSession,
 	type WorkspaceSummary,
 	sortedWorkerSessions,
@@ -75,6 +84,10 @@ import {
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
 import { getSessionStatusDotView } from "../lib/session-presentation";
+import { sessionBranchPresentation } from "../lib/session-branch";
+import { editorHandoffErrorMessage, useEditorHandoffState, useOpenSessionTarget } from "../hooks/useEditorHandoff";
+import { TargetIcon } from "./TopbarOpenEditorButton";
+import type { OpenTarget } from "../../shared/editor-handoff";
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
@@ -100,6 +113,7 @@ import {
 	ContextMenu,
 	ContextMenuContent,
 	ContextMenuItem,
+	ContextMenuSeparator,
 	ContextMenuTrigger,
 } from "./ui/context-menu";
 import {
@@ -1685,6 +1699,7 @@ const ProjectItem = memo(function ProjectItem({
 		setRemoveError(null);
 		setConfirmOpen(true);
 	};
+	const copyToClipboard = useCopyToClipboard();
 	const openPullRequestCount = new Set(
 		workspace.sessions.flatMap((session) => openPRs(session).map((pr) => pr.url)),
 	).size;
@@ -2024,6 +2039,33 @@ const ProjectItem = memo(function ProjectItem({
 					<Plus aria-hidden="true" />
 					{t("shell.newTask")}
 				</ContextMenuItem>
+				{!isStandalone && (!workspace.shared || orchestrator) ? (
+					<ContextMenuItem
+						disabled={isSpawning || isProjectProvisioning || isProjectRestarting}
+						onSelect={() => void openOrchestrator()}
+					>
+						<OrchestratorIcon aria-hidden="true" />
+						{t("shell.openOrchestrator")}
+					</ContextMenuItem>
+				) : null}
+				{!isStandalone ? (
+					<ContextMenuItem onSelect={() => selection.goProject(workspace.id)}>
+						<LayoutGrid aria-hidden="true" />
+						{t("shell.openDashboard")}
+					</ContextMenuItem>
+				) : null}
+				<ContextMenuSeparator />
+				<ContextMenuItem onSelect={toggleDisclosure}>
+					{expanded ? <ChevronsDownUp aria-hidden="true" /> : <ChevronsUpDown aria-hidden="true" />}
+					{expanded ? t("shell.collapse") : t("shell.expand")}
+				</ContextMenuItem>
+				{workspace.path ? (
+					<ContextMenuItem onSelect={() => copyToClipboard(workspace.path)}>
+						<Copy aria-hidden="true" />
+						{t("editor.copyPath")}
+					</ContextMenuItem>
+				) : null}
+				{!isStandalone ? <ContextMenuSeparator /> : null}
 				{!isStandalone && <ContextMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
 					<Settings aria-hidden="true" />
 					{t("shell.projectSettings")}
@@ -2115,59 +2157,80 @@ function ScratchpadSection({
 			className="sidebar-expanded-chrome mb-2 flex min-h-0 flex-col overflow-hidden group-data-[collapsible=icon]:hidden"
 			data-scratchpad-section=""
 		>
-			<SectionDisclosure
-				label={workspace.name}
-				open={open}
-				onToggle={onToggle}
-				className="group/scratchpad mt-1"
-				trailing={
-					<div className="relative inline-flex items-center">
-						<span
-							className={cn(
-								"pointer-events-none absolute right-full top-0 flex h-full origin-center pr-1.5 scale-[0.8] items-center opacity-0",
-								"transition-[scale] duration-normal ease-[var(--ease-out)]",
-								"motion-reduce:transition-none",
-								"group-has-[:focus-visible]/scratchpad:pointer-events-auto group-has-[:focus-visible]/scratchpad:scale-100 group-has-[:focus-visible]/scratchpad:opacity-100",
-							)}
-							data-scratchpad-archive-action=""
-						>
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<span className="inline-flex">
-										<button
-											aria-label={t("shell.archivedSessions")}
-											className={ROW_ACTION_BUTTON_CLASS}
-											onClick={(event) => {
-												event.stopPropagation();
-												selection.goStandaloneBoard();
-											}}
-											type="button"
-										>
-											<Archive aria-hidden="true" />
-										</button>
-									</span>
-								</TooltipTrigger>
-								<TooltipContent>{t("shell.archivedSessions")}</TooltipContent>
-							</Tooltip>
-						</span>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<span className="inline-flex">
-									<button
-										aria-label={t("shell.openNewAgent")}
-										className={ROW_ACTION_BUTTON_CLASS}
-										onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-										type="button"
+			<ContextMenu>
+				<ContextMenuTrigger asChild>
+					<div className="shrink-0">
+						<SectionDisclosure
+							label={workspace.name}
+							open={open}
+							onToggle={onToggle}
+							className="group/scratchpad mt-1"
+							trailing={
+								<div className="relative inline-flex items-center">
+									<span
+										className={cn(
+											"pointer-events-none absolute right-full top-0 flex h-full origin-center pr-1.5 scale-[0.8] items-center opacity-0",
+											"transition-[scale] duration-normal ease-[var(--ease-out)]",
+											"motion-reduce:transition-none",
+											"group-has-[:focus-visible]/scratchpad:pointer-events-auto group-has-[:focus-visible]/scratchpad:scale-100 group-has-[:focus-visible]/scratchpad:opacity-100",
+										)}
+										data-scratchpad-archive-action=""
 									>
-										<Plus aria-hidden="true" />
-									</button>
-								</span>
-							</TooltipTrigger>
-							<TooltipContent>{t("shell.openNewAgent")}</TooltipContent>
-						</Tooltip>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<span className="inline-flex">
+													<button
+														aria-label={t("shell.archivedSessions")}
+														className={ROW_ACTION_BUTTON_CLASS}
+														onClick={(event) => {
+															event.stopPropagation();
+															selection.goStandaloneBoard();
+														}}
+														type="button"
+													>
+														<Archive aria-hidden="true" />
+													</button>
+												</span>
+											</TooltipTrigger>
+											<TooltipContent>{t("shell.archivedSessions")}</TooltipContent>
+										</Tooltip>
+									</span>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<span className="inline-flex">
+												<button
+													aria-label={t("shell.openNewAgent")}
+													className={ROW_ACTION_BUTTON_CLASS}
+													onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+													type="button"
+												>
+													<Plus aria-hidden="true" />
+												</button>
+											</span>
+										</TooltipTrigger>
+										<TooltipContent>{t("shell.openNewAgent")}</TooltipContent>
+									</Tooltip>
+								</div>
+							}
+						/>
 					</div>
-				}
-			/>
+				</ContextMenuTrigger>
+				<ContextMenuContent className="min-w-44">
+					<ContextMenuItem onSelect={() => requestNewTask(STANDALONE_WORKSPACE_ID)}>
+						<Plus aria-hidden="true" />
+						{t("shell.openNewAgent")}
+					</ContextMenuItem>
+					<ContextMenuItem onSelect={selection.goStandaloneBoard}>
+						<Archive aria-hidden="true" />
+						{t("shell.archivedSessions")}
+					</ContextMenuItem>
+					<ContextMenuSeparator />
+					<ContextMenuItem onSelect={onToggle}>
+						{open ? <ChevronsDownUp aria-hidden="true" /> : <ChevronsUpDown aria-hidden="true" />}
+						{open ? t("shell.collapse") : t("shell.expand")}
+					</ContextMenuItem>
+				</ContextMenuContent>
+			</ContextMenu>
 			<AnimatedSectionBody open={open && listedSessions.length > 0} className="min-h-0 flex-1">
 				<SidebarSectionScroller
 					className={`${SECTION_SCROLLER_CLASS} min-h-0 flex-1`}
@@ -2452,6 +2515,8 @@ const SessionRow = memo(function SessionRow({
 	const beginRename = useCallback(() => {
 		rename.begin();
 	}, [rename.begin]);
+	// Owned here so both the hover Archive button and the context menu open the same confirm.
+	const [archiveOpen, setArchiveOpen] = useState(false);
 
 	if (rename.isEditing) {
 		return (
@@ -2592,7 +2657,9 @@ const SessionRow = memo(function SessionRow({
 					{/* The timestamp is stable at the right edge. Pin and kill use label
 					    space while idle, then reveal without changing the row footprint. */}
 					<SessionActions
+						archiveOpen={archiveOpen}
 						isDragging={Boolean(reorder?.isDragging)}
+						onArchiveOpenChange={setArchiveOpen}
 						onKilled={onKilled}
 						session={session}
 					/>
@@ -2601,14 +2668,163 @@ const SessionRow = memo(function SessionRow({
 				</SidebarMenuSubItem>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
-				<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={beginRename}>
-					<Pencil aria-hidden="true" />
-					{t("shell.rename")}
-				</ContextMenuItem>
+				<SessionRowMenuItems onArchive={() => setArchiveOpen(true)} onRename={beginRename} session={session} />
 			</ContextMenuContent>
 		</ContextMenu>
 	);
 });
+
+/** Copy from a menu, which has no inline place to confirm the copy. */
+function useCopyToClipboard() {
+	const { t } = useTranslation();
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	return useCallback(
+		(text: string) => {
+			void aoBridge.clipboard.writeText(text).then(
+				() => showGlobalToast(t("shell.copied")),
+				() => showGlobalToast(t("shell.copyFailed"), undefined, "error"),
+			);
+		},
+		[showGlobalToast, t],
+	);
+}
+
+/** Radix mounts menu content only while open, so these lookups run on demand
+ *  rather than once per sidebar row. */
+function SessionRowMenuItems({
+	session,
+	onArchive,
+	onRename,
+}: {
+	session: WorkspaceSession;
+	onArchive: () => void;
+	onRename: () => void;
+}) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const copyToClipboard = useCopyToClipboard();
+	const { mutate: pinSession } = usePinSession();
+	const { mutate: unpinSession } = useUnpinSession();
+	const branch = sessionBranchPresentation(session).branch;
+	const showBranch = Boolean(branch) && !isOrchestratorSession(session) && branch !== `session/${session.id}`;
+	const pr = primaryPR(session);
+	// Same eligibility as the hover warm-up: a local worker whose agent exited.
+	const canResume = canResumeAgent(session) && !session.hostId && !isOrchestratorSession(session);
+	// Remote and Cloud sessions have no local workspace for Electron to hand off.
+	const hasLocalWorkspace = !session.hostId && !session.cloud;
+
+	const resume = () => {
+		void resumeAgentOnOpen(session.id)
+			.catch((error: unknown) => {
+				showGlobalToast(t("inspector.resumeAgent"), error instanceof Error ? error.message : undefined, "error");
+			})
+			.finally(() => {
+				void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+			});
+	};
+
+	return (
+		<>
+			{hasLocalWorkspace ? <SessionWorkspaceMenuItems session={session} /> : null}
+			<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={onRename}>
+				<Pencil aria-hidden="true" />
+				{t("shell.rename")}
+			</ContextMenuItem>
+			<ContextMenuItem onSelect={() => (session.isPinned ? unpinSession(session) : pinSession(session))}>
+				{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+				{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
+			</ContextMenuItem>
+			{canResume ? (
+				<ContextMenuItem onSelect={resume}>
+					<Play aria-hidden="true" />
+					{t("command.resumeAgent")}
+				</ContextMenuItem>
+			) : null}
+			<ContextMenuSeparator />
+			{pr ? (
+				<>
+					<ContextMenuItem onSelect={() => void aoBridge.app.openExternal(pr.url)}>
+						<ExternalLink aria-hidden="true" />
+						{t("command.openPr", { number: pr.number })}
+					</ContextMenuItem>
+					<ContextMenuItem onSelect={() => copyToClipboard(pr.url)}>
+						<Copy aria-hidden="true" />
+						{t("command.copyPrUrl", { number: pr.number })}
+					</ContextMenuItem>
+				</>
+			) : null}
+			{showBranch && branch ? (
+				<ContextMenuItem onSelect={() => copyToClipboard(branch)}>
+					<GitBranch aria-hidden="true" />
+					{t("command.copyBranch")}
+				</ContextMenuItem>
+			) : null}
+			<ContextMenuItem onSelect={() => copyToClipboard(session.id)}>
+				<Hash aria-hidden="true" />
+				{t("shell.copySessionId")}
+			</ContextMenuItem>
+			<ContextMenuSeparator />
+			<ContextMenuItem onSelect={onArchive}>
+				<Archive aria-hidden="true" />
+				{t("shell.archiveSession")}
+			</ContextMenuItem>
+		</>
+	);
+}
+
+/** Open in the preferred editor or file manager, and copy the worktree path:
+ *  the same Electron handoff as the session topbar's editor button. */
+function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
+	const { t } = useTranslation();
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const { data: state } = useEditorHandoffState(session.id, {
+		sessionCreatedAt: session.createdAt,
+		sessionTerminated: session.isTerminated,
+	});
+	const open = useOpenSessionTarget();
+	if (!state?.workspaceAvailable) return null;
+	const editors = state.targets.filter((target) => target.kind === "editor");
+	const editor = editors.find((target) => target.id === state.preferredEditorId) ?? editors[0];
+	const fileManager = state.targets.find((target) => target.kind === "file_manager");
+	const launch = (target: OpenTarget) => {
+		open.mutate(
+			{ sessionId: session.id, projectId: session.workspaceId, targetId: target.id },
+			{
+				onError: (error) =>
+					showGlobalToast(t("editor.openInTarget", { name: target.name }), error.message, "error"),
+			},
+		);
+	};
+	const copyPath = () => {
+		aoBridge.editorHandoff.copyWorkspacePath(session.id).then(
+			() => showGlobalToast(t("shortcut.sessionPathCopied")),
+			(error: unknown) =>
+				showGlobalToast(t("shortcut.sessionPathCopyFailed"), editorHandoffErrorMessage(error) ?? undefined, "error"),
+		);
+	};
+	return (
+		<>
+			{editor ? (
+				<ContextMenuItem onSelect={() => launch(editor)}>
+					<TargetIcon target={editor} />
+					{t("editor.openInTarget", { name: editor.name })}
+				</ContextMenuItem>
+			) : null}
+			{fileManager ? (
+				<ContextMenuItem onSelect={() => launch(fileManager)}>
+					<TargetIcon target={fileManager} />
+					{t("editor.openInTarget", { name: fileManager.name })}
+				</ContextMenuItem>
+			) : null}
+			<ContextMenuItem onSelect={copyPath}>
+				<Copy aria-hidden="true" />
+				{t("editor.copyPath")}
+			</ContextMenuItem>
+			<ContextMenuSeparator />
+		</>
+	);
+}
 
 const SessionMessageAge = memo(function SessionMessageAge({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
@@ -2630,16 +2846,19 @@ const SessionMessageAge = memo(function SessionMessageAge({ session }: { session
 const SessionActions = memo(function SessionActions({
 	session,
 	isDragging,
+	archiveOpen,
+	onArchiveOpenChange,
 	onKilled,
 }: {
 	session: WorkspaceSession;
 	isDragging: boolean;
+	archiveOpen: boolean;
+	onArchiveOpenChange: (open: boolean) => void;
 	onKilled?: (session: WorkspaceSession) => void;
 }) {
 	const { t } = useTranslation();
 	const { mutate: pinSession } = usePinSession();
 	const { mutate: unpinSession } = useUnpinSession();
-	const [confirmOpen, setConfirmOpen] = useState(false);
 	// Optimistic: navigate + drop the row as soon as kill starts (onMutate),
 	// not after the daemon round-trip.
 	const onKilledRef = useRef(onKilled);
@@ -2654,11 +2873,11 @@ const SessionActions = memo(function SessionActions({
 	// first; both surfaces now open the same confirm before anything moves.
 	const handleArchive = (event: React.MouseEvent) => {
 		event.stopPropagation();
-		setConfirmOpen(true);
+		onArchiveOpenChange(true);
 	};
 
 	const confirmArchive = ({ deleteArtifacts }: SessionArchiveChoice) => {
-		setConfirmOpen(false);
+		onArchiveOpenChange(false);
 		terminateSession({ ...session, deleteArtifacts });
 	};
 
@@ -2707,8 +2926,8 @@ const SessionActions = memo(function SessionActions({
 						<span className="inline-flex">
 							<SessionArchiveDialog
 								onConfirm={confirmArchive}
-								onOpenChange={setConfirmOpen}
-								open={confirmOpen}
+								onOpenChange={onArchiveOpenChange}
+								open={archiveOpen}
 								session={session}
 								trigger={
 									<button
