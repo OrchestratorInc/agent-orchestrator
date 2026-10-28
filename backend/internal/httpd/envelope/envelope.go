@@ -97,6 +97,11 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 
 // WriteAPIError emits the locked envelope for any non-2xx response.
 func WriteAPIError(w http.ResponseWriter, r *http.Request, status int, kind, code, message string, details map[string]any) {
+	if status >= http.StatusInternalServerError {
+		if c, ok := r.Context().Value(errCaptureKey{}).(*errCapture); ok && c.captured.FailureSite.String() == "" {
+			c.captured.FailureSite = telemetrymeta.CurrentFailureSite()
+		}
+	}
 	writeAPIError(w, r, status, kind, code, message, details, "")
 }
 

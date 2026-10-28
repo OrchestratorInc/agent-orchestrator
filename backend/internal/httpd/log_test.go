@@ -165,7 +165,7 @@ func TestRequestLoggerSkipsOnlyExpectedLinkPreviewBadGateway(t *testing.T) {
 	router := chi.NewRouter()
 	router.Use(requestLoggerWithCapture(log, nil, func(_ context.Context, _ error, _ map[string]string, _ string, _ telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
 		captures++
-		if (captures == 1 && site.String() != "") || (captures == 2 && (site.String() == "" || strings.Contains(site.String(), "sentryobs"))) {
+		if !strings.Contains(site.String(), "TestRequestLoggerSkipsOnlyExpectedLinkPreviewBadGateway") {
 			t.Fatalf("failure site = %q", site.String())
 		}
 	}))
