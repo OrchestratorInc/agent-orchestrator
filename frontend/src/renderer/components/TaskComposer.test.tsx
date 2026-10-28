@@ -85,6 +85,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	cloudProjectsQueryKey: ["cloud-projects"] as const,
 	useCloudSessionsQuery: () => ({ data: [] }),
 	cloudSessionsQueryKey: ["cloud-sessions"] as const,
+	seedCreatedFreestyleSession: vi.fn(),
 }));
 
 vi.mock("../hooks/useCloudOrg", () => ({
