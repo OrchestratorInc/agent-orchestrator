@@ -899,9 +899,11 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 		return RemoteHostAccountTokenResponse{}, err
 	}
 	setter.SetAccountTokenHash(state.AccountTokenHash)
-	// Not nudged here: the device that asked lists the new token at AO Cloud
-	// only after this returns, and asking first would read as a refusal.
-	// Remote access nudges once the device has linked.
+	// The connector asks AO Cloud now, so a machine another account took
+	// leaves the old account's tunnel. The device that asked lists the new
+	// token only after this returns; until then the connector reads AO
+	// Cloud's refusal as a link on its way and keeps serving.
+	b.nudgeTunnel()
 	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token}, nil
 }
 

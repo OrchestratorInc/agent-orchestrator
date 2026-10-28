@@ -52,6 +52,14 @@ func (l *fixedWindowLimiter) allow(key string, now time.Time) bool {
 	return true
 }
 
+// available reports whether allow would pass now, without counting.
+func (l *fixedWindowLimiter) available(key string, now time.Time) bool {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+	attempt := l.attempts[key]
+	return attempt.start.IsZero() || now.Sub(attempt.start) >= l.window || attempt.count < l.limit
+}
+
 func (l *fixedWindowLimiter) evict(now time.Time) {
 	for key, attempt := range l.attempts {
 		if now.Sub(attempt.start) >= l.window {

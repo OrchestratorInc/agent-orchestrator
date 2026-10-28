@@ -152,6 +152,19 @@ test("a computer AO Cloud could not give a fixed address is listed at its quick 
 	await waitFor(() => expect(screen.queryByText("The fixed address could not be prepared.")).toBeNull());
 });
 
+test("a computer turned off while its quick address was pending is not listed", async () => {
+	fake.signedIn = true;
+	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("The fixed address could not be prepared.", 502));
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Turn off mobile connection" }));
+	// The quick tunnel comes up after the turn-off.
+	fake.status.endpoints.push({ kind: "tunnel", host: "late.trycloudflare.com", port: 443, secure: true });
+	await new Promise((resolve) => setTimeout(resolve, 2_500));
+
+	expect(linkThisComputer).toHaveBeenCalledTimes(1);
+});
+
 test("a new password links the computer again, so its fixed address survives", async () => {
 	fake.signedIn = true;
 	Object.assign(fake.status, {

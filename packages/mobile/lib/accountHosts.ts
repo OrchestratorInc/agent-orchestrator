@@ -4,6 +4,7 @@ import { isTailscaleHost } from "./connectionError";
 import { forgetPairedHost } from "./disconnect";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
 import { loadHosts, saveHost, type Host } from "./hosts";
+import { isQuickTunnelHost } from "./staleTunnel";
 
 export { ignoreAccountHost, unignoreAccountHost } from "./accountHostPreferences";
 
@@ -15,7 +16,7 @@ type AccountHost = { hostId: string; label: string; url: string; token: string }
 // kept beside the pairing's tunnel rather than in its place.
 function isTunnelAddress(url: URL): boolean {
 	const name = url.hostname.toLowerCase();
-	return url.protocol === "https:" && (name.endsWith(".trycloudflare.com") || /^h-[0-9a-f]{20}\.[^.]+\.[^.]+/.test(name));
+	return url.protocol === "https:" && (isQuickTunnelHost(name) || /^h-[0-9a-f]{20}\.[^.]+\.[^.]+/.test(name));
 }
 
 function endpoint(raw: string): Endpoint | null {

@@ -406,12 +406,20 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			},
 		);
 	};
+	// Moves on each turn-off, so a link still waiting for its tunnel then lists
+	// nothing and reports nothing.
+	const accessGeneration = useRef(0);
 	/** After AO Cloud could not give this computer its fixed address, lists it at the quick tunnel's once it has one, as Allow access does. */
 	const linkAtTunnelAddress = async (password: string, hostId: string, options?: { ifListed?: boolean }) => {
-		const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
-		if (!ready) return;
-		await linkThisComputer(cloudBaseUrl, accountId, hostId, password, { ...options, url: ready.url });
-		setLinkError("");
+		const generation = accessGeneration.current;
+		try {
+			const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
+			if (!ready || generation !== accessGeneration.current) return;
+			await linkThisComputer(cloudBaseUrl, accountId, hostId, password, { ...options, url: ready.url });
+			setLinkError("");
+		} catch (cause) {
+			if (generation === accessGeneration.current) reportLinkError(cause);
+		}
 	};
 	/** Links this computer when signed in, before its tunnel starts, so the code carries its fixed address and stays valid after restarts. */
 	const linkAndStartRemoteAccess = async (password: string, hostId: string) => {
@@ -423,7 +431,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			throw new Error(apiErrorMessage(started.error));
 		}
 		// The code shows while the tunnel starts; the account lists it once it has an address.
-		if (failed) void linkAtTunnelAddress(password, hostId).catch(reportLinkError);
+		if (failed) void linkAtTunnelAddress(password, hostId);
 		return started.data;
 	};
 
@@ -508,7 +516,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				// Not linked without a url, the account still lists the old token: an AO
 				// Cloud without fixed addresses lists the tunnel's address instead.
 				if (signedIn && (failed || !linked)) {
-					void linkAtTunnelAddress(data.password ?? "", data.hostId ?? "", { ifListed: true }).catch(reportLinkError);
+					void linkAtTunnelAddress(data.password ?? "", data.hostId ?? "", { ifListed: true });
 				}
 			}
 			return data;
@@ -663,6 +671,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		null;
 
 	const turnOff = () => {
+		accessGeneration.current++;
 		clearActionErrors();
 		setOptimisticEnabled(false);
 		disable.mutate();

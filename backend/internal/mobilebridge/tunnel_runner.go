@@ -51,6 +51,9 @@ type TunnelRunner struct {
 	repairedAt time.Time
 	refused    string
 	next       *NamedTunnel
+	// earlyExits counts fixed connectors in a row that exited before they
+	// ever served.
+	earlyExits int
 	// nudge makes a quick tunnel ask AO Cloud for the fixed address now.
 	nudge <-chan struct{}
 
@@ -269,7 +272,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	// A tunnel that served is neither owed the repair asked for before nor
 	// dead.
 	if health != nil && health.servedOnce() {
-		t.repair, t.refused = false, ""
+		t.repair, t.refused, t.earlyExits = false, "", 0
 	}
 	switch {
 	case unserved.Load() != nil:
@@ -282,11 +285,19 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		}
 	case withdrawn.Load():
 		waitErr = errFixedTunnelChanged
-	case fixed && ctx.Err() == nil && (health.wasRefused() || !health.servedOnce()):
-		// Exited by itself on a refusal, or before it ever served, as one
-		// whose token cloudflared rejects does: that token is no use as it
-		// stands. A crash after serving says nothing about the tunnel.
+	case fixed && ctx.Err() == nil && health.wasRefused():
+		// Exited by itself on a refusal, before the watchers judged it.
 		markUnservedTunnel(true)
+	case fixed && ctx.Err() == nil && !health.servedOnce():
+		// Exited before it ever served. Twice in a row, as for a token
+		// cloudflared rejects, the token is no use as it stands; once can be
+		// a metrics port another process took. A crash after serving says
+		// nothing about the tunnel.
+		t.earlyExits++
+		if t.earlyExits >= 2 {
+			t.earlyExits = 0
+			markUnservedTunnel(true)
+		}
 	}
 	if ctx.Err() == nil && (errors.Is(waitErr, errFixedTunnelReady) || errors.Is(waitErr, errFixedTunnelChanged) || refusedNow) {
 		// A planned restart reads as starting, not failed: the next connector

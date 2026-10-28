@@ -524,6 +524,14 @@ func TestANewHostTokenGetsANewTunnel(t *testing.T) {
 	if row := store.tunnels[key]; row.TunnelID == first.TunnelID || row.Hostname != first.Hostname || row.Released || !slices.Equal(deleted, []string{first.TunnelID}) {
 		t.Fatalf("after a new token: row %+v, deleted %v", row, deleted)
 	}
+	// A tunnel Cloudflare would not delete is never handed to the new token.
+	second := store.tunnels[key]
+	api.down = true
+	w := httptest.NewRecorder()
+	s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"Mac","token":"`+strings.Repeat("c", 64)+`"}`, owner))
+	if row := store.tunnels[key]; w.Code != http.StatusBadGateway || row.TunnelID != second.TunnelID || row.Released {
+		t.Fatalf("rotation while Cloudflare is down: %d, row %+v", w.Code, row)
+	}
 }
 
 // A host the sweep released while its machine slept keeps its address for

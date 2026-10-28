@@ -131,6 +131,9 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 	limit := 0
 	var previous *domain.RemoteHost // this account's registration of the host
 	if tunnels != nil {
+		// Held from here, so the registration read below is still the one a
+		// credential change is judged against.
+		defer s.hostTunnels.Lock(principal.UserID, hostID)()
 		limit = domain.MaxRemoteHostsPerAccount
 		listed, err := store.ListRemoteHosts(r.Context(), principal)
 		if err != nil {
@@ -145,25 +148,30 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A new host token is a new credential: a new pairing password, or the
+	// machine linked again. The tunnel goes with the old one, so a run token
+	// anyone fetched with it stops working. The registration below, or the
+	// machine's next fetch, makes a new tunnel at the same address; a write it
+	// could not make is refused before the old tunnel goes, and a tunnel that
+	// could not be deleted is never handed to the new credential.
+	if digest := sha256.Sum256([]byte(input.Token)); tunnels != nil && previous != nil && !s.digestHashes(*previous, hostID, digest[:]) {
+		if !s.tunnelLimiter.available(principal.UserID, time.Now()) {
+			writeError(w, r, http.StatusTooManyRequests, "tunnel_rate_limited", "This account changed fixed addresses too often. Try again later.")
+			return
+		}
+		if err := s.deleteAccountTunnel(r.Context(), principal.UserID, hostID, true); err != nil {
+			writeError(w, r, http.StatusBadGateway, "tunnel_unavailable", "The fixed address could not be prepared.")
+			return
+		}
+	}
 	// A machine on this AO Cloud registers before its tunnel exists, so it can
 	// leave the address out. Any account gets a tunnel for a host ID it names,
 	// as anyone gets a quick tunnel: its name is a hash in AO's tunnel zone,
-	// and the machine cap and the write limit bound how many one account holds. The tunnel and its DNS record are made here,
-	// before any device is told the address, so no device looks the name up
+	// and the machine cap and the write limit bound how many one account holds. The tunnel and its DNS record
+	// are made here, before any device is told the address, so no device looks the name up
 	// before it exists and caches the miss. Written the way the machine's
 	// address publish writes it, so that publish does not rewrite the record
 	// and reconnect every device.
-	if tunnels != nil {
-		defer s.hostTunnels.Lock(principal.UserID, hostID)()
-		// A new host token is a new credential: a new pairing password, or the
-		// machine linked again. The tunnel goes with the old one, so a run
-		// token anyone fetched with it stops working. The registration below,
-		// or the machine's next fetch, makes a new tunnel at the same address.
-		digest := sha256.Sum256([]byte(input.Token))
-		if previous != nil && !s.digestHashes(*previous, hostID, digest[:]) {
-			s.deleteAccountTunnel(r.Context(), principal.UserID, hostID, true)
-		}
-	}
 	ctx := r.Context()
 	if input.URL == "" {
 		tunnel, ok := s.hostTunnel(w, r, tunnels, principal.UserID, hostID, false)
@@ -191,7 +199,7 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 			// A concurrent registration filled the account after the check
 			// above: drop the tunnel made for this one, and its address,
 			// which nothing ever listed.
-			s.deleteAccountTunnel(ctx, principal.UserID, hostID, false)
+			_ = s.deleteAccountTunnel(ctx, principal.UserID, hostID, false)
 			writeRemoteHostLimit(w, r)
 			return
 		}
@@ -225,7 +233,7 @@ func (s *Server) deleteRemoteHost(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	s.deleteAccountTunnel(r.Context(), principal.UserID, hostID, true)
+	_ = s.deleteAccountTunnel(r.Context(), principal.UserID, hostID, true)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -235,40 +243,38 @@ func (s *Server) deleteRemoteHost(w http.ResponseWriter, r *http.Request) {
 // tunnel rather than the one being deleted. With keepAddress the DNS record stays, as a release leaves it, and
 // the sweep deletes it once the host has gone unlisted for 10 minutes: a host
 // added back meanwhile keeps an address no resolver saw vanish, so no phone
-// caches its absence. A failure is left to the sweep. The caller holds the
-// host's Lock.
-func (s *Server) deleteAccountTunnel(ctx context.Context, userID, hostID string, keepAddress bool) {
+// caches its absence. A failure is logged and returned, and otherwise left to
+// the sweep. The caller holds the host's Lock.
+func (s *Server) deleteAccountTunnel(ctx context.Context, userID, hostID string, keepAddress bool) error {
 	tunnels := s.tunnelStore()
 	if tunnels == nil {
-		return
+		return nil
 	}
 	// A client that hangs up mid-release must not leave half a tunnel.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	tunnel, found, err := tunnels.GetRemoteHostTunnel(ctx, userID, hostID)
 	if err != nil || !found {
-		return
+		return err
 	}
 	if !keepAddress {
-		if err := s.hostTunnels.Delete(ctx, tunnel.TunnelID, tunnel.Hostname); err != nil {
-			s.logger.Warn("delete host tunnel", "host_id", hostID, "error", err)
-			return
+		err = s.hostTunnels.Delete(ctx, tunnel.TunnelID, tunnel.Hostname)
+		if err == nil {
+			err = tunnels.DeleteRemoteHostTunnel(ctx, tunnel.TunnelID)
 		}
-		if err := tunnels.DeleteRemoteHostTunnel(ctx, tunnel.TunnelID); err != nil {
-			s.logger.Warn("forget host tunnel", "host_id", hostID, "error", err)
+	} else {
+		// A released tunnel is already deleted; its row still starts the grace.
+		if !tunnel.Released {
+			err = s.hostTunnels.DeleteTunnel(ctx, tunnel.TunnelID)
 		}
-		return
-	}
-	// A released tunnel is already deleted; its row still starts the grace.
-	if !tunnel.Released {
-		if err := s.hostTunnels.DeleteTunnel(ctx, tunnel.TunnelID); err != nil {
-			s.logger.Warn("delete host tunnel", "host_id", hostID, "error", err)
-			return
+		if err == nil {
+			err = tunnels.ReleaseRemoteHostTunnel(ctx, tunnel.TunnelID)
 		}
 	}
-	if err := tunnels.ReleaseRemoteHostTunnel(ctx, tunnel.TunnelID); err != nil {
-		s.logger.Warn("release host tunnel", "host_id", hostID, "error", err)
+	if err != nil {
+		s.logger.Warn("delete host tunnel", "host_id", hostID, "error", err)
 	}
+	return err
 }
 
 // The host publishes a rotated quick-tunnel address using the SHA-256 digest

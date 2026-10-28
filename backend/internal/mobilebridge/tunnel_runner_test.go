@@ -280,11 +280,18 @@ func TestTunnelRunnerServesAQuickTunnelUntilARefusedTunnelIsRemade(t *testing.T)
 // A connector that gives up on a refusal, or exits before it ever served, is
 // judged as one the watchers stopped: the next start serves a quick tunnel.
 func TestTunnelRunnerJudgesAConnectorThatExitsOnARefusal(t *testing.T) {
-	for _, stderr := range []string{refusedLine, `2026-10-28T12:00:00Z ERR Provided Tunnel token is not valid.`} {
-		_, src := newFixedSource(t)
-		r := namedRunner(t, exitingCloudflared(t, stderr), src)
-		if err := r.runOnce(context.Background()); err == nil || !r.repair || r.refused != "run-token-tun-1" {
-			t.Fatalf("%q: runOnce = %v, repair %v, refused %q", stderr, err, r.repair, r.refused)
+	_, src := newFixedSource(t)
+	r := namedRunner(t, exitingCloudflared(t, refusedLine), src)
+	if err := r.runOnce(context.Background()); err == nil || !r.repair || r.refused != "run-token-tun-1" {
+		t.Fatalf("runOnce = %v, repair %v, refused %q", err, r.repair, r.refused)
+	}
+	// One that exits before it ever served, with no refusal: once can be a
+	// metrics port another process took; twice in a row, its token is no use.
+	_, src = newFixedSource(t)
+	r = namedRunner(t, exitingCloudflared(t, `2026-10-28T12:00:00Z ERR Provided Tunnel token is not valid.`), src)
+	for i, want := range []string{"", "run-token-tun-1"} {
+		if err := r.runOnce(context.Background()); err == nil || r.refused != want {
+			t.Fatalf("exit %d: runOnce = %v, refused %q", i+1, err, r.refused)
 		}
 	}
 }

@@ -327,8 +327,9 @@ func (c *Cloudflare) Disconnected(ctx context.Context, downBefore time.Time) ([]
 func (c *Cloudflare) listHostTunnels(ctx context.Context, status string, filter url.Values, keep func(*time.Time) bool) ([]string, error) {
 	const perPage = 100
 	var out []string
-	// The account holds at most 1,000 tunnels, so ten pages cover it.
-	for page := 1; page <= 10; page++ {
+	// An account includes 1,000 tunnels, and Tunnels for Platforms sells more;
+	// a hundred pages cover ten times that.
+	for page := 1; page <= 100; page++ {
 		q := url.Values{
 			"is_deleted": {"false"}, "status": {status}, "include_prefix": {tunnelPrefix},
 			"per_page": {strconv.Itoa(perPage)}, "page": {strconv.Itoa(page)},
