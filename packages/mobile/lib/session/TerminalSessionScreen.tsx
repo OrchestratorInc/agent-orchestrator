@@ -970,7 +970,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		setSending(true);
 		try {
 			if (!activeConfig) throw new Error("No active machine connection");
-			await sendMessage(activeConfig, id, text);
+			await sendMessage(activeConfig, id, text, { userAuthored: true });
 			haptics.success();
 			setMsg("");
 		} catch (e) {
