@@ -11,7 +11,7 @@ vi.mock("expo-secure-store", () => ({
 
 import type { Endpoint } from "./endpoints";
 import { machineAppearance, type MachineAppearance } from "./machineAppearance";
-import { type MachineNameChoice, pairFromCode } from "./pairFlow";
+import { type MachineNameChoice, type PairSuccess, pairedNotice, pairFromCode } from "./pairFlow";
 import { encodePairingCode, parsePairingCode } from "./pairingCode";
 
 const lan: Endpoint = { kind: "lan", host: "192.168.1.42", port: 3011, secure: false };
@@ -30,6 +30,7 @@ const deps = (over: Record<string, unknown> = {}) => ({
 	race: vi.fn(async () => ({ ok: true as const, endpoint: lan, hostId: "h_paired" })),
 	verify: vi.fn(async () => {}),
 	chooseName: vi.fn(async (suggested: string, appearance: MachineAppearance): Promise<MachineNameChoice | null> => ({ name: suggested, appearance })),
+	findHost: vi.fn(async (_id: string): Promise<{ id: string; name: string; appearance?: MachineAppearance } | null> => null),
 	saveHost: vi.fn(async () => {}),
 	setActiveHost: vi.fn(async () => {}),
 	...over,
@@ -71,14 +72,73 @@ describe("pairFromCode", () => {
 		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ appearance }));
 	});
 
-	it("rejects a different machine before probing during repair", async () => {
+	// The user is on "Reconnect Dev" and points the camera at another machine's
+	// code. That is still a machine they want connected, so it pairs as itself.
+	it("pairs a different machine scanned during repair as that machine", async () => {
 		const d = deps();
 
 		const got = await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_other", name: "Dev" } });
 
-		expect(got).toEqual({ ok: false, reason: "wrong-machine" });
-		expect(d.race).not.toHaveBeenCalled();
-		expect(d.saveHost).not.toHaveBeenCalled();
+		expect(d.race).toHaveBeenCalledWith([lan, tunnel], "h_paired");
+		expect(d.chooseName).toHaveBeenCalled();
+		expect(d.saveHost).toHaveBeenCalledTimes(1);
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ id: "h_paired", name: "prasad-mbp", token: "pw" }));
+		expect(d.setActiveHost).toHaveBeenCalledWith("h_paired");
+		expect(got).toMatchObject({ ok: true, kind: "added", instead: { id: "h_other", name: "Dev" } });
+	});
+
+	it("refreshes a saved machine scanned during another machine's repair, keeping its name", async () => {
+		const appearance = { symbol: "laptop" as const };
+		const d = deps({ findHost: vi.fn(async (id: string) => id === "h_paired" ? { id, name: "Studio", appearance } : null) });
+
+		const got = await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_other", name: "Dev" } });
+
+		expect(d.chooseName).not.toHaveBeenCalled();
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ id: "h_paired", name: "Studio", appearance, token: "pw" }));
+		expect(got).toMatchObject({ ok: true, kind: "existing", instead: { id: "h_other", name: "Dev" } });
+	});
+
+	it("refreshes an already-saved machine in place instead of asking for a name", async () => {
+		const d = deps({ findHost: vi.fn(async (id: string) => id === "h_paired" ? { id, name: "Studio" } : null) });
+
+		const got = await pairFromCode(`aomobile://pair#${code}`, d);
+
+		expect(d.findHost).toHaveBeenCalledWith("h_paired");
+		expect(d.chooseName).not.toHaveBeenCalled();
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ id: "h_paired", name: "Studio", token: "pw" }));
+		expect(d.setActiveHost).toHaveBeenCalledWith("h_paired");
+		expect(got).toMatchObject({ ok: true, kind: "existing" });
+		expect(got).not.toHaveProperty("instead");
+	});
+
+	it("reports a matching repair as reconnected", async () => {
+		const d = deps();
+
+		const got = await pairFromCode(`aomobile://pair#${code}`, d, { repairHost: { id: "h_paired", name: "Prod" } });
+
+		expect(d.findHost).not.toHaveBeenCalled();
+		expect(got).toMatchObject({ ok: true, kind: "reconnected" });
+		expect(got).not.toHaveProperty("instead");
+	});
+
+	// An id-less legacy pairing and an id-less code are both "", but the machine
+	// is saved under the id it reported. Calling that a reconnect would claim
+	// the legacy entry was fixed while it stays behind, offline (#7346).
+	it("does not report an id-less legacy repair as reconnected", async () => {
+		const idless = encodePairingCode({ v: 2, hostId: "", name: "prasad-mbp", platform: "darwin", endpoints: [lan], token: "pw" });
+		const d = deps();
+
+		const got = await pairFromCode(`aomobile://pair#${idless}`, d, { repairHost: { id: "", name: "Legacy" } });
+
+		expect(d.race).toHaveBeenCalledWith([lan], "");
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ id: "h_paired" }));
+		expect(got).toMatchObject({ ok: true, kind: "added", instead: { id: "", name: "Legacy" } });
+	});
+
+	it("reports a machine this phone had not saved as added", async () => {
+		const got = await pairFromCode(`aomobile://pair#${code}`, deps());
+
+		expect(got).toMatchObject({ ok: true, kind: "added" });
 	});
 
 	it("stores the machine with every endpoint the code carried", async () => {
@@ -220,5 +280,36 @@ describe("pairFromCode reasons", () => {
 		// The UI extracts the first endpoint for error reporting: host:port
 		expect(parsed?.endpoints[0].host).toBe("192.168.1.42");
 		expect(parsed?.endpoints[0].port).toBe(3011);
+	});
+});
+
+describe("pairedNotice", () => {
+	const success = (over: Partial<PairSuccess>): PairSuccess => ({
+		ok: true,
+		config: { host: "192.168.1.42", httpPort: "3011", muxPort: "3011", password: "pw" },
+		host: { id: "h_paired", name: "Studio", platform: "darwin", endpoints: [lan], token: "pw", lastConnected: 0 },
+		kind: "added",
+		...over,
+	});
+
+	it("says nothing for a machine the user has just named", () => {
+		expect(pairedNotice(success({ kind: "added" }))).toBeNull();
+	});
+
+	it("confirms a reconnect by name", () => {
+		expect(pairedNotice(success({ kind: "reconnected" }))).toEqual({ title: "Reconnected Studio" });
+	});
+
+	it("says an already-paired machine was refreshed rather than added", () => {
+		expect(pairedNotice(success({ kind: "existing" }))).toEqual({ title: "Studio is already paired", message: "Connection details refreshed." });
+	});
+
+	it("names both machines when a repair scan connected a different one", () => {
+		for (const kind of ["added", "existing"] as const) {
+			expect(pairedNotice(success({ kind, instead: { id: "h_other", name: "Dev" } }))).toEqual({
+				title: "Connected to Studio",
+				message: "That code was for Studio. Dev still needs a new code.",
+			});
+		}
 	});
 });

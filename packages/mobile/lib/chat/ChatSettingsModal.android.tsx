@@ -7,8 +7,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { SheetHeader } from "../ui";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
-import { approvalLabel, effortChoiceLabel, effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, followsAgentLabel, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind } from "./turnSettingsModel";
-import { can } from "./types";
+import { approvalLabel, effortChoiceLabel, effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, followsAgentLabel, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, usesProviderControls } from "./turnSettingsModel";
 import { type, space } from "../tokens";
 
 // Labels come from approvalLabel, which names Codex's default differently.
@@ -40,7 +39,7 @@ export function ChatSettingsSheet({ snapshot, models, options, disabled, refresh
 	const styles = useThemedStyles(makeStyles);
 	const [openChoice, setOpenChoice] = useState<OpenChoice>(null);
 	const selected = models.find((model) => model.id === snapshot.settings.model) ?? models.find((model) => model.default);
-	const usesProviderOptions = can(snapshot, "config_options");
+	const usesProviderOptions = usesProviderControls(snapshot, options);
 	const providerControls = useMemo(() => orderedProviderControls([...options]), [options]);
 	const modelOption = providerControls.find((option) => providerTurnControlKind(option) === "model");
 	const effortOption = providerControls.find((option) => providerTurnControlKind(option) === "effort");

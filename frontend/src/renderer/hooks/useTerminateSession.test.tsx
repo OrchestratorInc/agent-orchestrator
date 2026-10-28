@@ -164,6 +164,23 @@ describe("useTerminateSession", () => {
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
+	it.each([
+		[true, []],
+		[false, [expect.objectContaining({ title: "Session archived, artifacts kept", tone: "error" })]],
+	])("asks the control plane to delete a cloud session's artifacts (confirmed=%s)", async (confirmed, toasts) => {
+		useUiStore.setState({ globalToasts: [] });
+		deleteSessionMock.mockResolvedValue({ session: { id: "session-1", desiredState: "deleted" }, artifactsDeleted: confirmed });
+		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+		queryClient.setQueryData(settingsQueryKey, { cloudControlPlaneUrl: "https://cp.example.com" });
+		const cloudSession = { ...localSession, cloud: { orgId: "org-1" }, deleteArtifacts: true };
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+
+		await act(async () => result.current.mutateAsync(cloudSession));
+
+		expect(deleteSessionMock).toHaveBeenCalledWith("org-1", "session-1", { deleteArtifacts: true });
+		expect(useUiStore.getState().globalToasts).toEqual(toasts);
+	});
+
 	it("fails closed when a cloud session has no configured control plane", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
 		const cloudSession: WorkspaceSession = { ...localSession, cloud: { orgId: "org-1" } };

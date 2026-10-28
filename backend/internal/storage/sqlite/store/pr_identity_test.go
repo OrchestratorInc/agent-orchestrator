@@ -243,6 +243,40 @@ func TestLegacyPRWriteResolvesStoredURLAlias(t *testing.T) {
 	}
 }
 
+func TestReportedPRURLResolvesStoredURLAlias(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "repo")
+	session, err := s.CreateSession(ctx, sampleRecord("repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	oldURL := "https://github.com/old-owner/example/pull/31"
+	currentURL := "https://github.com/new-owner/example/pull/31"
+	if err := s.WriteSCMObservation(ctx, domain.PullRequest{
+		URL: currentURL, URLAlias: oldURL, SessionID: session.ID, Number: 31, Provider: "github", Host: "github.com", ProviderID: "PR_stable_31", UpdatedAt: now,
+	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	external := "https://github.com/other/example/pull/31"
+	if _, err := s.CreateReport(ctx, domain.ReportRecord{
+		ID: "rpt_alias", SessionID: session.ID, ProjectID: session.ProjectID,
+		Outputs: []domain.ReportOutput{
+			{Kind: domain.ReportOutputPRCreated, Reference: oldURL},
+			{Kind: domain.ReportOutputPRCreated, Reference: "http://www.github.com/Old-Owner/example/pull/31/"},
+			{Kind: domain.ReportOutputPRCreated, Reference: external},
+		},
+		CreatedAt: now, DeliveryState: domain.ReportPending, AvailableAt: now, RepeatCount: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	urls, err := s.ListReportedPRURLs(ctx, session.ID)
+	if err != nil || len(urls) != 3 || urls[0] != currentURL || urls[1] != currentURL || urls[2] != external {
+		t.Fatalf("reported PR URLs = %v, err=%v; want every old-name spelling resolved to %s", urls, err, currentURL)
+	}
+}
+
 func TestClaimPRResolvesStoredURLAliasBeforeOwnerGuard(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

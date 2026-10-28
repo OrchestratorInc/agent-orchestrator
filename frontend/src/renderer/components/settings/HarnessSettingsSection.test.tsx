@@ -255,6 +255,16 @@ describe("HarnessSettingsSection", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("keeps unknown authentication details on the harness page with a clear label", async () => {
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unknown";
+		mockInstalledOperations("npm", readiness);
+		renderSection();
+
+		const page = await findAgentRow("codex");
+		expect(await within(page).findByText("Login status unavailable")).toBeInTheDocument();
+	});
+
 	it("lists names with a status and update mark, then opens one harness page with its actions", async () => {
 		mockInstalledOperations("npm");
 		renderSection();
@@ -646,6 +656,7 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const page = await findAgentRow("codex");
+		expect(within(page).getByText("Connected")).toBeInTheDocument();
 		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
 		expect(within(page).getByText("Connected · token renews on next run")).toBeInTheDocument();
 		expect(within(page).queryByText("Credentials not verified")).toBeNull();
@@ -937,8 +948,8 @@ describe("HarnessSettingsSection", () => {
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
-		// A configured credential reads as connected; an unknown one claims nothing.
-		if (authentication === "configured") expect(within(row).getByText("Connected")).toBeInTheDocument();
+		// Credential presence alone does not imply a failed provider check.
+		if (authentication === "configured") expect(within(row).getByText("Installed")).toBeInTheDocument();
 		else expect(within(row).queryByText("Connected")).toBeNull();
 	});
 
@@ -1397,8 +1408,10 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
 
-	it("shows configured MiMo Code as connected and offers to log in again", async () => {
+	it("keeps configured MiMo Code unverified and offers to log in again", async () => {
 		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
+		configured.agents[0].authentication.diagnostics = [{ method: "provider_validation", code: "probe_timeout",
+			reason: "Provider check timed out.", checkedAt: "2026-10-10T10:00:00Z", cached: false, durationMs: 0 }];
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
 			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "mimo-code", action: "login", launchMode: "terminal", available: true }] } } as never;
@@ -1408,7 +1421,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = await findAgentRow("mimo-code");
-		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(await within(row).findByText("Credentials not verified")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
@@ -1589,7 +1602,7 @@ describe("HarnessSettingsSection", () => {
 		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
 	});
 
-	it("keeps Unreal documentation available when credentials are configured but unverified", async () => {
+	it("keeps Unreal documentation available with a neutral configured status", async () => {
 		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "configured" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: unrealCatalog } as never;
@@ -1604,8 +1617,11 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = await findAgentRow("unreal-agent");
-		expect(await within(row).findByText("Configured")).toBeInTheDocument();
+		expect(await within(row).findByText("Installed")).toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "View documentation" })).toBeEnabled();
+		await userEvent.click(within(row).getByRole("tab", { name: "Health" }));
+		expect(within(row).getByText("Connection not checked")).toBeInTheDocument();
+		expect(within(row).queryByText("Credentials not verified")).toBeNull();
 	});
 
 	it("shows cached readiness while silently refreshing when the page opens", async () => {
@@ -1867,7 +1883,7 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(await within(row).findByText("Installed")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
@@ -1922,7 +1938,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Authorized" })).toBeNull();
 	});
 
-	it("uses Configured for a completed setup action", async () => {
+	it("uses Connected for a completed setup action", async () => {
 		const authorized = catalogWithInstalled("codex");
 		authorized.agents[1].authentication.state = "authorized";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
@@ -1943,7 +1959,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("codex");
 
-		await within(row).findByText("Configured");
+		await within(row).findByText("Connected");
 	});
 
 	it("does not expose manual readiness controls", async () => {

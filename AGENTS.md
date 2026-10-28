@@ -10,6 +10,7 @@ Follow [CONTRIBUTING.md](CONTRIBUTING.md) before choosing an issue or starting w
 - `frontend/`: Electron + React supervisor wired to the daemon through the generated typed client. Treat it as a thin supervisor/UI surface; do not move daemon logic into it.
 - `docs/`: Current architecture and status notes. Start here before changing lifecycle, CLI, agents, storage, or daemon behavior.
 - `test/`: External smoke/e2e assets, including the CLI fresh-install container check.
+- `contracts/cloud/` and `packages/cloud-client/`: the AO Cloud API contract and its typed client. The AO Cloud control plane is not in this repository: it lives in the private `OrchestratorInc/ao-control-plane`, and code here reaches it only through this contract (`scripts/check-public-boundary.sh` enforces it).
 - `.github/workflows/`: CI definitions. Mirror these commands locally when possible.
 
 ## Commands
@@ -118,7 +119,7 @@ For code entry points:
 - Keep generated OpenAPI/API DTO drift in mind: controller response shapes live in `backend/internal/httpd/controllers/dto.go` and tests may assert CLI/HTTP wire compatibility.
 - Do not add network calls to tests unless the package already has an integration/e2e pattern for them. Prefer `httptest`, fakes, and injected dependencies.
 - Do not commit local run state, daemon data, temporary worktrees, build outputs, or credentials.
-- All AO-owned app state lives under `~/.ao` only. The daemon's data dir, `running.json`, worktrees, and the Electron supervisor's `userData` (Chromium cache, cookies, local/session storage, crash dumps) must resolve under `~/.ao` (overridable via `AO_DATA_DIR`/`AO_RUN_FILE`). Never write to or otherwise use `~/Library/Application Support` or any other OS default app-data location for AO state. The sole read exception is an explicit, user-initiated browser-profile import: it may read only validated, known source-browser profile files, must never write to the source profile, must keep source paths out of the renderer, and must place every snapshot, staging file, and imported result under `~/.ao`. `main.ts` pins Electron's `userData` to `~/.ao/electron`; do not remove that override or rely on Electron's default path.
+- All AO-owned app state lives under `~/.ao` only. The daemon's data dir, `running.json`, worktrees, and the Electron supervisor's `userData` (Chromium cache, cookies, local/session storage, crash dumps) must resolve under `~/.ao` (overridable via `AO_DATA_DIR`/`AO_RUN_FILE`). Never write to or otherwise use `~/Library/Application Support` or any other OS default app-data location for AO state. The sole read exception is an explicit, user-initiated browser-profile import: it may read only validated, known source-browser profile files, must never write to the source profile, must keep source paths out of the renderer, and must place every snapshot, staging file, and imported result under `~/.ao`. The sole write exception is Chrome mode's native-messaging host manifest (`dev.ao.browser_bridge.json`): Chrome only discovers native hosts in its own `NativeMessagingHosts` directory (the registry on Windows), so `ao browser chrome setup` writes that one pointer file there, only on the user's explicit setup, and `remove` deletes it. It must point at a host wrapper under `~/.ao` and hold no AO state; the wrapper, endpoint file, and unpacked extension all live under `~/.ao`. `main.ts` pins Electron's `userData` to `~/.ao/electron`; do not remove that override or rely on Electron's default path.
 
 ## API contract changes
 
@@ -152,7 +153,7 @@ Commit `openapi.yaml` and `frontend/src/api/schema.ts` together with the Go chan
 
 ## PR hygiene
 
-- When creating or updating a PR, follow `.agents/skills/pr-description/SKILL.md` so the published description starts with verified category change counts.
+- When creating or updating a PR, follow `.agents/skills/pr-description/SKILL.md` so the published description starts with verified category change counts and shows before-and-after evidence, with screenshots or recordings for UI changes.
 
 - Before creating or handing over a PR, run all CI validation jobs locally using the workflow commands, pinned runtimes, and CI environment (including complete suites, not only focused tests). Fix failures and rerun the affected full suites before sharing the PR. A local pass is not a guarantee: verify the remote checks too. If a job cannot run locally (for example, an unavailable native OS runner, Docker, or required credentials), explicitly report the exact gap and verify that job in CI; never label it locally passed. Do not execute publishing or production deployment as a validation step.
 

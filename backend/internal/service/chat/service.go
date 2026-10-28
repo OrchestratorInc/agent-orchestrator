@@ -739,8 +739,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if cfg.ProviderConversationID != "" && providerHandleOwnedByActiveBranch {
 		if activeBranch.ProviderConversationID != "" &&
 			activeBranch.ProviderConversationID != cfg.ProviderConversationID {
-			return nil, fmt.Errorf("active conversation branch provider handle %q does not match session handle %q",
-				activeBranch.ProviderConversationID, cfg.ProviderConversationID)
+			// Retrying cannot change either handle, so this is a resume failure
+			// the user must act on, not an internal error.
+			return nil, fmt.Errorf("%w: active conversation branch provider handle %q does not match session handle %q",
+				ports.ErrChatResumeFailed, activeBranch.ProviderConversationID, cfg.ProviderConversationID)
 		}
 	}
 	// A switch to Claude Code sets the window, Auto (empty) included.
@@ -814,7 +816,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if cfg.ProviderConversationID != "" {
 		// A target that has not answered yet still needs its standing context, though
 		// the source's turns come before it.
-		unanswered := s.switchBranchUnanswered(ctx, conversation.ID, activeBranch)
+		unanswered := s.branchUnanswered(ctx, cfg.SessionID, conversation.ID, activeBranch)
 		freshIfMissing = freshIfMissing || unanswered
 		conv, err = resume(ctx, ports.ChatResumeConfig{
 			SessionID:              hostID,
@@ -1036,6 +1038,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
+		if err := s.store.FailReservedQueuedBatch(ctx, conversation.ID, s.now()); err != nil {
+			_ = cleanupUnpublishedConversation(conv, false)
+			return nil, fmt.Errorf("settle uncertain queued batch: %w", err)
+		}
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
 		if activator, ok := conv.(ports.ChatLiveReconnectActivator); ok {
 			if err := activator.ActivateLiveReconnect(ctx, providerTurnID); err != nil {
@@ -1337,6 +1343,9 @@ func (s *Service) Send(
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
+	if err := validateFileReferenceContent(msg, string(id)); err != nil {
+		return domain.ConversationTurn{}, err
+	}
 	if s.switchBeforeSend(ctx, record) {
 		// The provider stopped on its old release. The hibernated path below
 		// queues this message and wakes the session on the installed one.
@@ -1349,6 +1358,9 @@ func (s *Service) Send(
 			if existing, found, lookupErr := controller.store.ConversationMessageByClientID(ctx, controller.conversation.ID, msg.ClientMessageID); lookupErr != nil {
 				return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
 			} else if found {
+				if !fileReferenceContentsMatch(existing.DeliveryContentJSON, msg.Content) {
+					return domain.ConversationTurn{}, domain.ErrClientMessageConflict
+				}
 				msg.ClientPayloadHash = existing.ClientPayloadHash
 				return controller.Send(ctx, msg)
 			}
@@ -1427,6 +1439,11 @@ func (s *Service) Send(
 
 // SendForOwner sends a user message to an owner-specific chat controller.
 func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (domain.ConversationTurn, error) {
+	for _, block := range msg.Content {
+		if block.Type == "file_reference" {
+			return domain.ConversationTurn{}, fmt.Errorf("%w: file annotations require the main chat", ErrExcerptInvalid)
+		}
+	}
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return domain.ConversationTurn{}, err
@@ -1440,6 +1457,9 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 		); lookupErr != nil {
 			return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
 		} else if found {
+			if !fileReferenceContentsMatch(existing.DeliveryContentJSON, msg.Content) {
+				return domain.ConversationTurn{}, domain.ErrClientMessageConflict
+			}
 			msg.ClientPayloadHash = existing.ClientPayloadHash
 			return controller.Send(ctx, msg)
 		}
@@ -2325,11 +2345,15 @@ func withHandoffNote(systemPrompt, note string) string {
 	return strings.TrimSpace(strings.TrimSpace(systemPrompt) + "\n\nAO provider handoff context:\n\n" + note)
 }
 
-// switchBranchUnanswered reports a branch a switch opened whose agent never
-// had a turn, so its provider never saved the conversation. Resuming it would
-// fail forever; it can start fresh, since its handoff note holds the context.
-func (s *Service) switchBranchUnanswered(ctx context.Context, conversationID string, branch domain.ConversationBranch) bool {
-	if s.reader == nil || branch.Strategy != domain.ConversationBranchStrategyApproximateContext || branch.HandoffNote == "" {
+// branchUnanswered reports a branch whose agent never had a turn, so its
+// provider may never have saved the conversation: one a switch opened (its
+// handoff note holds the context), or a provider boundary the session reserved
+// for itself, as a replacement orchestrator's first start does over inherited
+// project history. Resuming it would fail forever; it can start fresh.
+func (s *Service) branchUnanswered(ctx context.Context, session domain.SessionID, conversationID string, branch domain.ConversationBranch) bool {
+	switchBranch := branch.Strategy == domain.ConversationBranchStrategyApproximateContext && branch.HandoffNote != ""
+	ownBoundary := branch.ParentBranchID != "" && branch.SessionID == session
+	if s.reader == nil || !switchBranch && !ownBoundary {
 		return false
 	}
 	rows, err := s.reader.LoadConversationSnapshot(ctx, conversationID)
@@ -2778,21 +2802,53 @@ func (s *Service) relayChatTurn(
 	text, clientMessageID string,
 	options ports.MessageDeliveryOptions,
 ) (string, error) {
-	controller, release, err := s.workingController(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	defer release()
 	msg := s.resolveSteerSender(ctx, ports.ChatUserMessage{
 		Text: text, ClientMessageID: clientMessageID,
 		SenderSessionID: options.SenderSessionID, InteractionAt: options.InteractionAt,
 		Origin: domain.MessageOriginAutomation, AuthoredByUser: options.AuthoredByUser,
 	})
-	turn, err := controller.Send(ctx, msg)
-	if err != nil {
-		return "", err
+	// A relay never wakes a sleeping session inline: it queues and wakes in the
+	// background, as a user's send does. Waking here would hold the caller
+	// through the provider start, and a caller holding the session's input
+	// lease (a lifecycle nudge) deadlocks with the resume, which waits for that
+	// lease to drain.
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		record, err := s.requireChatSession(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if record.HibernatedAt != nil {
+			turn, err := s.queueWithoutController(ctx, record, msg)
+			if err == nil {
+				if turn.ID != "" {
+					s.startBackgroundWake(id)
+				}
+				return turn.ID, nil
+			}
+			if !errors.Is(err, ErrNotProvisioning) {
+				return "", err
+			}
+			// The store refused a stale queue append: the session woke after the
+			// read, so its controller takes the message.
+		}
+		controller, release, err := s.admitController(ctx, id, false)
+		if errors.Is(err, errAsleep) {
+			// Hibernation finished after the read: queue it after all.
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		turn, err := controller.Send(ctx, msg)
+		release()
+		if err != nil {
+			return "", err
+		}
+		return turn.ID, nil
 	}
-	return turn.ID, nil
 }
 
 // RelaySessionChatTurn preserves cooperative sender identity and automation origin.

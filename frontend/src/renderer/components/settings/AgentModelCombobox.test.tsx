@@ -329,7 +329,7 @@ describe("AgentModelCombobox", () => {
 
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		const search = screen.getByRole("searchbox", { name: "Search worker model" });
-		expect(search).toHaveAttribute("placeholder", "Search models…");
+		expect(search).toHaveAttribute("placeholder", "Search models");
 		await userEvent.type(search, "fab");
 		expect(screen.getByRole("menuitem", { name: "Fable" })).toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Luna" })).not.toBeInTheDocument();
@@ -496,7 +496,7 @@ describe("AgentModelCombobox", () => {
 		const { onChange } = renderCombobox(models);
 		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
 		const search = screen.getByRole("searchbox", { name: "Search worker model" });
-		expect(search).toHaveAttribute("placeholder", "Search models or providers…");
+		expect(search).toHaveAttribute("placeholder", "Search models or providers");
 		await userEvent.type(search, "provider-1/model-99");
 
 		expect(screen.getByText("provider-1", { selector: "div" })).toBeInTheDocument();

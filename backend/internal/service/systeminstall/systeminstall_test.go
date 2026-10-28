@@ -2036,3 +2036,32 @@ func TestHomebrewUpdateRefreshesMetadataBeforeUpgrading(t *testing.T) {
 		t.Fatalf("output %q does not note the failed refresh", final.Output)
 	}
 }
+
+// Without the shell AO runs Cua's installer with, Settings must offer Cua's
+// own one-line command to copy, not an Install button that fails again.
+func TestStatus_CuaDriverWithoutShellOffersTheOneLiner(t *testing.T) {
+	for goos, want := range map[string]string{
+		"windows": "irm https://cua.ai/driver/install.ps1 | iex",
+		"darwin":  "curl -fsSL https://cua.ai/driver/install.sh | bash",
+		"linux":   "curl -fsSL https://cua.ai/driver/install.sh | bash",
+	} {
+		t.Run(goos, func(t *testing.T) {
+			job, err := newTestService(goos).Status(context.Background(), TargetCuaDriver)
+			if err != nil {
+				t.Fatalf("Status() error = %v", err)
+			}
+			if job.Status != StatusUnsupported || job.Command != want {
+				t.Fatalf("job = %+v, want unsupported with command %q", job, want)
+			}
+			if !strings.Contains(job.Error, "was not found on PATH") || !strings.Contains(job.Error, cuaDriverDocs) {
+				t.Fatalf("Error = %q, want the missing shell and the install guide", job.Error)
+			}
+		})
+	}
+
+	// With the shell present, AO runs the installer itself.
+	job, err := newTestService("darwin", "bash").Status(context.Background(), TargetCuaDriver)
+	if err != nil || job.Status == StatusUnsupported {
+		t.Fatalf("with bash: job = %+v, err = %v", job, err)
+	}
+}
