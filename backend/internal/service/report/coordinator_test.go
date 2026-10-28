@@ -198,6 +198,35 @@ func TestCoordinatorRetriesTerminalStuckReportWithoutInterrupt(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRefusedSubmitDoesNotBlockOtherProjects(t *testing.T) {
+	now := time.Date(2026, 10, 28, 2, 10, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{
+		{ID: "refusing", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI},
+		{ID: "healthy", ProjectID: "q", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI},
+	}
+	stuck := reportAt("stuck-1", "worker", now, now, "cannot continue")
+	stuck.State = domain.ReportStuck
+	done := reportAt("done-1", "other-worker", now.Add(time.Second), now.Add(time.Second), "finished")
+	done.ProjectID = "q"
+	store.add(stuck, done)
+	delivery := &coordinatorDelivery{submitErrFor: map[domain.SessionID]error{"refusing": errors.New("prompt submission was not observed")}}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	for i := 0; i < 5; i++ {
+		_, _ = c.RunDue(context.Background())
+		now = now.Add(10 * time.Second)
+	}
+	if len(delivery.submissions) != 1 || delivery.submissions[0].target != "healthy" {
+		t.Fatalf("submissions = %#v, want one delivery to the healthy project", delivery.submissions)
+	}
+	if len(delivery.interrupts) != 0 {
+		t.Fatalf("interrupts = %v", delivery.interrupts)
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending || store.reports[0].LastError != "prompt submission was not observed" {
+		t.Fatalf("refused report = %s / %q, want pending with the refusal recorded", store.reports[0].DeliveryState, store.reports[0].LastError)
+	}
+}
+
 func TestReportSessionLinkUsesDisplayName(t *testing.T) {
 	got := reportSessionLink(domain.ReportRecord{
 		SessionID: "worker/1", ProjectID: "proj 1", SessionDisplayName: "Backend [worker]",
@@ -332,13 +361,14 @@ func (s *coordinatorStore) AcknowledgeReportBatch(_ context.Context, project dom
 	s.acked += count
 	return count, nil
 }
-func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.ProjectID, token string, _ time.Time, _ string) (int, error) {
+func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.ProjectID, token string, _ time.Time, reason string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	count := 0
 	for i := range s.reports {
 		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
 			s.reports[i].DeliveryState, s.reports[i].ClaimToken = domain.ReportPending, ""
+			s.reports[i].LastError = reason
 			count++
 		}
 	}

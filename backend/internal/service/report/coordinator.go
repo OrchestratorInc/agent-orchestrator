@@ -197,7 +197,7 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 			_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(OrchestratorBusyRetry), err.Error())
 			return deferErr
 		}
-		return c.release(ctx, batch, err)
+		return c.retryLater(ctx, batch, err)
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
 	return err
@@ -281,6 +281,17 @@ func (c *Coordinator) release(ctx context.Context, batch PreparedBatch, cause er
 	_, releaseErr := c.store.ReleaseReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC(), cause.Error())
 	if releaseErr != nil {
 		return errors.Join(cause, releaseErr)
+	}
+	return cause
+}
+
+// retryLater queues a refused submission behind every report that is already
+// due. Schedule selection takes the earliest pending report across projects,
+// so an orchestrator that keeps refusing must not hold that place.
+func (c *Coordinator) retryLater(ctx context.Context, batch PreparedBatch, cause error) error {
+	_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), cause.Error())
+	if deferErr != nil {
+		return errors.Join(cause, deferErr)
 	}
 	return cause
 }
