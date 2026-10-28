@@ -329,6 +329,7 @@ func TestRuntimeLaunchEnvPreloadsNodeHookWorkaround(t *testing.T) {
 }
 
 func TestNodePreloadHidesSynchronousModuleHooks(t *testing.T) {
+	t.Setenv("AO_STRANDS_NODE_HOOK_WORKAROUND", "1")
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed")

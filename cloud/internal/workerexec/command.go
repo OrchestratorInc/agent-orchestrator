@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentruntime"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/skillassets"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
@@ -28,6 +29,9 @@ type Command struct {
 	Env          map[string]string
 	SystemPrompt string
 	Cleanup      func()
+	// ConversationID is the provider conversation an interactive command
+	// resumes, empty for one that starts a new conversation.
+	ConversationID string
 	// SecretFileGuard is the PreToolUse hook command a Codex Chat turn
 	// registers and trusts in its app-server (see trustCodexSecretFileGuard).
 	SecretFileGuard string
@@ -38,6 +42,11 @@ type Command struct {
 	// WritableRoots are checkouts outside Dir that a Codex Chat turn's
 	// workspace-write sandbox must also let it write (additionalDirectories).
 	WritableRoots []string
+	// CursorMode is the project's Cursor execution mode ("plan" or "ask",
+	// domain.ProjectAgentConfig.Mode) a Cursor Chat turn runs in, empty for
+	// the full agent. Either restricts the agent: the turn then never runs
+	// with --force or --auto-review, and approves nothing automatically.
+	CursorMode string
 }
 
 type CommandBuilder interface {
@@ -104,7 +113,7 @@ func (b HarnessBuilder) BuildInteractive(
 		)
 	}
 	agentDir := agentDirectory(launch, workspace)
-	extraDirs := additionalDirectories(launch, workspace)
+	extraDirs := b.agentDirectories(launch, workspace)
 	if launch.Harness == "cursor" {
 		if err := removeCursorACPStandingRule(agentDir, launch.SessionID); err != nil {
 			return Command{}, err
@@ -196,10 +205,11 @@ func (b HarnessBuilder) BuildInteractive(
 		argv = slices.DeleteFunc(argv, func(arg string) bool { return arg == "--dangerously-bypass-approvals-and-sandbox" })
 	}
 	command := Command{
-		Path: argv[0],
-		Args: argv[1:],
-		Dir:  agentDir,
-		Env:  map[string]string{"AO_CLOUD_SOURCE_INTERFACE": "tui"},
+		Path:           argv[0],
+		Args:           argv[1:],
+		Dir:            agentDir,
+		Env:            map[string]string{"AO_CLOUD_SOURCE_INTERFACE": "tui"},
+		ConversationID: identity,
 	}
 	maps.Copy(command.Env, b.Env)
 	if err := b.configureCredential(&command, launch.Harness, credential); err != nil {
@@ -210,7 +220,7 @@ func (b HarnessBuilder) BuildInteractive(
 	}
 	if launch.Harness == "claude-code" {
 		if launch.Kind != "reviewer" {
-			setClaudeAdditionalDirectoriesInstructions(&command, extraDirs)
+			setClaudeAdditionalDirectoriesInstructions(&command, additionalDirectories(launch, workspace, b.DataDir))
 		}
 		if err := b.prepareClaudeCloudExperience(&command, agentDir, extraDirs, permission); err != nil {
 			if command.Cleanup != nil {
@@ -280,11 +290,17 @@ func (b HarnessBuilder) systemPrompt(launch worker.LaunchContext, workspace stri
 	case "reviewer":
 	case "orchestrator":
 		if agentDirectory(launch, workspace) != workspace {
-			systemPrompt += "\n\n" + repositoriesPromptNote(launch, workspace)
+			systemPrompt += "\n\n" + repositoriesPromptNote(launch, workspace, b.DataDir)
 		}
 	default:
-		if note := repositoriesPromptNote(launch, workspace); note != "" {
+		if note := repositoriesPromptNote(launch, workspace, b.DataDir); note != "" {
 			systemPrompt += "\n\n" + note
+		}
+	}
+	if launch.Artifacts && launch.Kind != "reviewer" {
+		systemPrompt += "\n\n" + artifactsPrompt(worker.ArtifactsDir(b.DataDir, launch.SessionID))
+		if launch.Kind == "worker" && launch.RequestedOutput == domain.RequestedOutputArtifact {
+			systemPrompt += "\n\n" + artifactOutputPrompt
 		}
 	}
 	// Set only when the sandbox has a browser (agentbrowser.Service).
@@ -364,7 +380,7 @@ func (b HarnessBuilder) Build(
 		return Command{}, errors.New("turn harness does not match session role context")
 	}
 	agentDir := agentDirectory(b.Launch, workspace)
-	extraDirs := additionalDirectories(b.Launch, workspace)
+	extraDirs := b.agentDirectories(b.Launch, workspace)
 	command := Command{
 		SystemPrompt: b.systemPrompt(b.Launch, workspace),
 		Path:         b.binary(turn.Harness),
@@ -382,7 +398,7 @@ func (b HarnessBuilder) Build(
 		command.Env["CLAUDE_CONFIG_DIR"] = configDir
 		setClaudeNonEssentialTrafficDisabled(&command)
 		command.AdditionalDirectories = extraDirs
-		setClaudeAdditionalDirectoriesInstructions(&command, extraDirs)
+		setClaudeAdditionalDirectoriesInstructions(&command, additionalDirectories(b.Launch, workspace, b.DataDir))
 		// A session can start in Chat before any terminal wrote the settings;
 		// the ACP adapter and the CLI both load them as user settings.
 		if err := b.writeClaudeChatSettings(configDir, extraDirs); err != nil {
@@ -402,7 +418,8 @@ func (b HarnessBuilder) Build(
 			command.WritableRoots = extraDirs
 		}
 	case "cursor":
-		command.Args, err = cursorArgs(turn)
+		command.CursorMode = b.Launch.AgentConfig.Mode
+		command.Args, err = cursorArgs(turn, command.CursorMode)
 	default:
 		err = fmt.Errorf("unsupported coding-agent harness %q", turn.Harness)
 	}
@@ -468,6 +485,11 @@ func (b HarnessBuilder) binary(harness string) string {
 		// current models; the bare name on PATH until that is ready.
 		return defaultClaudeCode.current()
 	}
+	if harness == "codex" {
+		// The worker's own CodexVersion install when the workspace has another
+		// release (or none yet); the bare name on PATH until that is ready.
+		return defaultCodex.current()
+	}
 	if h, ok := harnessCredentialFor(harness); ok {
 		return h.defaultBinary()
 	}
@@ -502,6 +524,13 @@ func (b HarnessBuilder) prepareClaudeCloudExperience(command *Command, workspace
 	setClaudeNonEssentialTrafficDisabled(command)
 	if err := updateJSONFile(filepath.Join(configDir, ".claude.json"), func(root map[string]any) {
 		root["hasCompletedOnboarding"] = true
+		// Claude Code 2.1.285+ otherwise opens "Make auto mode your default
+		// permission mode?" once the session goes idle, because the settings
+		// below always pin a defaultMode. The dialog takes the keyboard: a
+		// message AO types into the terminal is swallowed and its Enter picks
+		// "Yes", switching the session to auto mode. AO owns this config and
+		// sets the mode on every launch, so the offer never applies here.
+		root["hasSeenAutoDefaultNudge"] = true
 		root["theme"] = "dark"
 		projects, _ := root["projects"].(map[string]any)
 		if projects == nil {
@@ -679,15 +708,21 @@ func codexArgs(turn worker.Turn) ([]string, error) {
 	return append(args, "--", turn.Prompt), nil
 }
 
-func cursorArgs(turn worker.Turn) ([]string, error) {
+func cursorArgs(turn worker.Turn, cursorMode string) ([]string, error) {
 	if len(turn.DeniedCommands) > 0 {
 		return nil, fmt.Errorf("%w: Cursor has no exact denied-command primitive", ErrUnsupportedPolicy)
 	}
 	if turn.Mode == "read-only" {
 		return nil, fmt.Errorf("%w: Cursor has no verified read-only mode", ErrUnsupportedPolicy)
 	}
+	if err := validateCursorMode(cursorMode); err != nil {
+		return nil, err
+	}
 	args := []string{"agent", "--print", "--output-format", "stream-json"}
-	if turn.ApprovalMode == "bypass-permissions" || (turn.ApprovalMode == "" && turn.Mode == "trusted") {
+	if cursorMode != "" {
+		// A restricted mode never runs with --force or --auto-review.
+		args = append(args, "--mode", cursorMode)
+	} else if turn.ApprovalMode == "bypass-permissions" || (turn.ApprovalMode == "" && turn.Mode == "trusted") {
 		args = append(args, "--force")
 	} else if turn.ApprovalMode == "auto" {
 		args = append(args, "--auto-review")
@@ -696,6 +731,17 @@ func cursorArgs(turn worker.Turn) ([]string, error) {
 		args = append(args, "--resume", turn.AgentSessionID)
 	}
 	return append(args, turn.Prompt), nil
+}
+
+// validateCursorMode refuses a Cursor execution mode other than the
+// restricted ones a project may set (domain.ProjectAgentConfig.Mode), so an
+// unknown mode never runs as the full agent.
+func validateCursorMode(mode string) error {
+	switch mode {
+	case "", "plan", "ask":
+		return nil
+	}
+	return fmt.Errorf("%w: unknown Cursor mode %q", ErrUnsupportedPolicy, mode)
 }
 
 func validateApprovalMode(turn worker.Turn) error {
@@ -802,4 +848,18 @@ func loginCodex(binary, home, credentialType, secret string) error {
 		return err
 	}
 	return nil
+}
+
+// agentDirectories is additionalDirectories plus, for a session that keeps
+// artifacts, its artifact directory: it is outside the workspace, so a
+// harness that limits writes to the workspace must be told it may write there.
+// Claude does not load instructions from the artifact directory: a CLAUDE.md
+// written there is a deliverable, so the CLAUDE.md setting uses
+// additionalDirectories alone.
+func (b HarnessBuilder) agentDirectories(launch worker.LaunchContext, workspace string) []string {
+	dirs := additionalDirectories(launch, workspace, b.DataDir)
+	if launch.Artifacts && launch.Kind != "reviewer" {
+		dirs = append(dirs, worker.ArtifactsDir(b.DataDir, launch.SessionID))
+	}
+	return dirs
 }

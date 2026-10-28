@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
@@ -18,6 +19,7 @@ var clientEventTypes = []string{
 	"sandbox.provisioning",
 	"workspace.changed",
 	"workspace.setup",
+	"workspace.script.step",
 	"pull_request.created",
 	"pull_request.claimed",
 	"review.submitted",
@@ -43,6 +45,16 @@ type chatMessagePayload struct {
 	domain.ChatTurnSettings
 }
 
+// userMessageEventPayload is the chat.user_message event body. The author is
+// recorded only on the event, never on the command payload, so idempotent
+// retries still compare the caller's original input. A message with no human
+// author (an orchestrator or automation) leaves both fields empty.
+type userMessageEventPayload struct {
+	chatMessagePayload
+	AuthorUserID string `json:"authorUserId,omitempty"`
+	AuthorName   string `json:"authorName,omitempty"`
+}
+
 func (s *Store) SendMessage(
 	ctx context.Context,
 	principal domain.Principal,
@@ -52,10 +64,47 @@ func (s *Store) SendMessage(
 	text string,
 	settings domain.ChatTurnSettings,
 ) (domain.ClientEvent, error) {
+	return s.SendMessageWithLease(ctx, principal, orgID, sessionID, idempotencyKey, text, settings, 0)
+}
+
+// SendMessageWithLease sends a person's message under the session's composer
+// lease: composerEpoch is the grant the sender holds, or 0 for none. Without
+// the lease the message is refused with ErrComposerLocked unless the lease is
+// free and nobody is waiting for it. Sending releases the lease to the next
+// person in line.
+func (s *Store) SendMessageWithLease(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID string,
+	sessionID string,
+	idempotencyKey string,
+	text string,
+	settings domain.ChatTurnSettings,
+	composerEpoch int64,
+) (domain.ClientEvent, error) {
 	var event domain.ClientEvent
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
 		if access.Role == "viewer" {
 			return ErrForbidden
+		}
+		// A retry of a message already sent returns that message; its send
+		// released the lease, so the retry must not need it again.
+		retry, err := commandExists(ctx, tx, orgID, idempotencyKey)
+		if err != nil {
+			return err
+		}
+		// The command records what the sender asked for, so a retry of the
+		// same request matches it however the owner's settings changed it.
+		requested := settings
+		if !retry {
+			if err := claimComposerForSendTx(ctx, tx, orgID, sessionID, principal.UserID, composerEpoch); err != nil {
+				return err
+			}
+			// The session's owner sets the model and its settings; anyone else's
+			// message runs with theirs.
+			if settings, err = turnSettingsForSenderTx(ctx, tx, orgID, sessionID, principal.UserID, access, settings); err != nil {
+				return err
+			}
 		}
 		// A message wakes a paused session, which a billed session may do
 		// only within its plan: refuse it here so the sender sees why.
@@ -63,13 +112,23 @@ func (s *Store) SendMessage(
 		if err != nil {
 			return err
 		}
-		event, err = sendMessageTx(
+		event, err = sendRequestedMessageTx(
 			ctx, tx, orgID, sessionID, idempotencyKey, text, principal.UserID, "",
-			access.ModeCap, access.DeniedCommands, settings, wake,
+			access.ModeCap, access.DeniedCommands, requested, settings, wake,
 		)
 		return err
 	})
 	return event, err
+}
+
+// commandExists reports whether idempotencyKey already names a command.
+func commandExists(ctx context.Context, tx pgx.Tx, orgID, idempotencyKey string) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM ao_commands WHERE org_id = $1 AND idempotency_key = $2)`,
+		orgID, idempotencyKey,
+	).Scan(&exists)
+	return exists, err
 }
 
 func sendMessageTx(
@@ -85,7 +144,23 @@ func sendMessageTx(
 	// queued until it is woken.
 	wake bool,
 ) (domain.ClientEvent, error) {
-	payload, err := json.Marshal(chatMessagePayload{Text: text, ChatTurnSettings: settings})
+	return sendRequestedMessageTx(ctx, tx, orgID, sessionID, idempotencyKey, text, actorUserID, actorSessionID, modeCap, deniedCommands, settings, settings, wake)
+}
+
+// sendRequestedMessageTx is sendMessageTx for a message whose turn runs with
+// settings other than the ones its sender asked for (a shared session's
+// guest gets the owner's): the idempotent command keeps requested, the
+// message carries settings.
+func sendRequestedMessageTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	orgID, sessionID, idempotencyKey, text, actorUserID, actorSessionID string,
+	modeCap string,
+	deniedCommands []string,
+	requested, settings domain.ChatTurnSettings,
+	wake bool,
+) (domain.ClientEvent, error) {
+	payload, err := json.Marshal(chatMessagePayload{Text: text, ChatTurnSettings: requested})
 	if err != nil {
 		return domain.ClientEvent{}, err
 	}
@@ -109,7 +184,7 @@ func sendMessageTx(
 	if err != nil {
 		return domain.ClientEvent{}, normalizeConstraintError(err)
 	}
-	event, err := appendUserMessage(ctx, tx, orgID, sessionID, idempotencyKey, text, modeCap, deniedCommands, settings)
+	event, err := appendUserMessage(ctx, tx, orgID, sessionID, idempotencyKey, actorUserID, text, modeCap, deniedCommands, settings)
 	if err != nil {
 		return domain.ClientEvent{}, err
 	}
@@ -208,6 +283,33 @@ func loadIdempotentMessage(
 	), event)
 }
 
+// WorkerAgentStarted reports whether the session's worker epoch (workerID)
+// started its coding agent: it reported agent.ready (a terminal agent), or it
+// claimed a turn (a Chat session's agent runs only for a claimed turn, and a
+// session that stays in Chat never sends agent.ready). A worker claims no turn
+// while its Setup runs or after it failed. Its agent.ready is the session's
+// newest one, as a superseded epoch can report nothing, so only the newest is
+// read. One round trip on the session's turn and event indexes.
+func (s *Store) WorkerAgentStarted(ctx context.Context, orgID, sessionID, workerID string, epoch int64) (bool, error) {
+	var started bool
+	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT EXISTS (
+					SELECT 1 FROM ao_turns
+					WHERE org_id = $1 AND session_id = $2 AND worker_epoch = $4 AND attempt_count > 0
+				) OR COALESCE((
+					SELECT payload->>'workerId' = $3 AND payload->>'epoch' = $4::bigint::text
+					FROM ao_events
+					WHERE org_id = $1 AND session_id = $2 AND type = 'agent.ready'
+					ORDER BY sequence DESC
+					LIMIT 1
+				), false)`,
+			orgID, sessionID, workerID, epoch,
+		).Scan(&started)
+	})
+	return started, err
+}
+
 // AppendSessionEvent records a control-plane or worker event on a session
 // stream. Unlike a user message it does not open a turn, and it is allowed on a
 // terminated session so lifecycle history stays complete.
@@ -223,40 +325,57 @@ func (s *Store) AppendSessionEvent(
 	}
 	var event domain.ClientEvent
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		var sequence int64
-		err := tx.QueryRow(
-			ctx,
-			`UPDATE ao_sessions
-			SET next_sequence = next_sequence + 1,
-				updated_at = now()
-			WHERE org_id = $1 AND id = $2
-			RETURNING next_sequence - 1`,
-			orgID,
-			sessionID,
-		).Scan(&sequence)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
+		var err error
+		event, err = appendSessionEventTx(ctx, tx, orgID, sessionID, eventType, payload)
 		if err != nil {
 			return err
 		}
-		return scanClientEvent(tx.QueryRow(
-			ctx,
-			`INSERT INTO ao_events (
-				org_id, session_id, sequence, type, payload
-			) VALUES ($1, $2, $3, $4, $5)
-			RETURNING session_id, sequence, type, payload, created_at`,
-			orgID,
-			sessionID,
-			sequence,
-			eventType,
-			payload,
-		), &event)
+		return dropSupersededScriptUpdatesTx(ctx, tx, orgID, event)
 	})
 	if err != nil {
 		return domain.ClientEvent{}, err
 	}
 	return event, nil
+}
+
+// appendSessionEventTx appends one event to a session stream inside tx.
+func appendSessionEventTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	orgID, sessionID, eventType string,
+	payload json.RawMessage,
+) (domain.ClientEvent, error) {
+	var sequence int64
+	err := tx.QueryRow(
+		ctx,
+		`UPDATE ao_sessions
+		SET next_sequence = next_sequence + 1,
+			updated_at = now()
+		WHERE org_id = $1 AND id = $2
+		RETURNING next_sequence - 1`,
+		orgID,
+		sessionID,
+	).Scan(&sequence)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ClientEvent{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.ClientEvent{}, err
+	}
+	var event domain.ClientEvent
+	err = scanClientEvent(tx.QueryRow(
+		ctx,
+		`INSERT INTO ao_events (
+			org_id, session_id, sequence, type, payload
+		) VALUES ($1, $2, $3, $4, $5)
+		RETURNING session_id, sequence, type, payload, created_at`,
+		orgID,
+		sessionID,
+		sequence,
+		eventType,
+		payload,
+	), &event)
+	return event, err
 }
 
 // AppendInteractiveConversationFacts projects native TUI hooks into the durable
@@ -354,12 +473,13 @@ func appendUserMessage(
 	orgID string,
 	sessionID string,
 	clientMessageID string,
+	authorUserID string,
 	text string,
 	modeCap string,
 	deniedCommands []string,
 	settings domain.ChatTurnSettings,
 ) (domain.ClientEvent, error) {
-	event, err := appendUserMessageEvent(ctx, tx, orgID, sessionID, text, settings)
+	event, err := appendUserMessageEvent(ctx, tx, orgID, sessionID, authorUserID, text, settings)
 	if err != nil {
 		return domain.ClientEvent{}, err
 	}
@@ -375,7 +495,7 @@ func appendUserMessage(
 		if err := tx.QueryRow(ctx, `INSERT INTO ao_interface_transition_messages (
 			org_id, transition_id, client_message_id, message, user_message_sequence,
 			mode_cap, denied_commands
-		) VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), $7)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING turn_id`, orgID, transitionID, clientMessageID, text, event.Sequence,
 			modeCap, nonNilStrings(deniedCommands)).Scan(&turnID); err != nil {
 			return domain.ClientEvent{}, normalizeConstraintError(err)
@@ -486,6 +606,35 @@ func appendUserMessage(
 	return event, nil
 }
 
+// sessionTaskEventKey marks, in its chat.user_message payload, the prompt a
+// session created in Chat queued as its first turn: the session's task, which
+// its terminal launch does not carry. A stop-now switch to the terminal keeps
+// that turn queued for the terminal's forwarder (interruptQueuedChatTurns)
+// while it cancels the messages sent after it.
+const sessionTaskEventKey = "sessionTask"
+
+// queueInitialChatTurnTx queues a new Chat session's prompt (its first
+// chat.user_message event) as the session's first turn, as a message sent to
+// an idle Chat session is, marked as the session's task. No worker exists
+// yet, so nobody is woken.
+func queueInitialChatTurnTx(ctx context.Context, tx pgx.Tx, orgID, sessionID string, event domain.ClientEvent) error {
+	var turnID string
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO ao_turns (org_id, session_id, user_message_sequence)
+		VALUES ($1, $2, $3) RETURNING id`,
+		orgID, sessionID, event.Sequence,
+	).Scan(&turnID); err != nil {
+		return normalizeConstraintError(err)
+	}
+	if err := attachTurnID(ctx, tx, orgID, sessionID, event.Sequence, turnID, &event); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE ao_events SET payload = payload || jsonb_build_object($4::text, true)
+		WHERE org_id = $1 AND session_id = $2 AND sequence = $3 AND type = 'chat.user_message'`,
+		orgID, sessionID, event.Sequence, sessionTaskEventKey)
+	return err
+}
+
 func attachTurnID(ctx context.Context, tx pgx.Tx, orgID, sessionID string, sequence int64, turnID string, event *domain.ClientEvent) error {
 	var payload map[string]any
 	if err := json.Unmarshal(event.Payload, &payload); err != nil {
@@ -510,6 +659,7 @@ func appendUserMessageEvent(
 	tx pgx.Tx,
 	orgID string,
 	sessionID string,
+	authorUserID string,
 	text string,
 	selected ...domain.ChatTurnSettings,
 ) (domain.ClientEvent, error) {
@@ -549,7 +699,20 @@ func appendUserMessageEvent(
 	if len(selected) > 0 {
 		settings = selected[0]
 	}
-	payload, err := json.Marshal(chatMessagePayload{Text: text, ChatTurnSettings: settings})
+	body := userMessageEventPayload{
+		chatMessagePayload: chatMessagePayload{Text: text, ChatTurnSettings: settings},
+		AuthorUserID:       authorUserID,
+	}
+	if authorUserID != "" {
+		// A snapshot of the sender's name, so a share guest sees who wrote each
+		// prompt without being able to read the organization's user records.
+		if err := tx.QueryRow(
+			ctx, `SELECT display_name FROM ao_users WHERE id = $1`, authorUserID,
+		).Scan(&body.AuthorName); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return domain.ClientEvent{}, err
+		}
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return domain.ClientEvent{}, err
 	}
@@ -571,6 +734,10 @@ func appendUserMessageEvent(
 	return event, nil
 }
 
+// ListClientEvents lists up to limit of the session's client events after a
+// sequence, and whether more follow. With types, only those of the client
+// event types it names. A principal outside the session's organization gets
+// Setup and Cleanup events without their output (hideScriptOutput).
 func (s *Store) ListClientEvents(
 	ctx context.Context,
 	principal domain.Principal,
@@ -578,9 +745,25 @@ func (s *Store) ListClientEvents(
 	sessionID string,
 	after int64,
 	limit int,
+	types []string,
 ) ([]domain.ClientEvent, bool, error) {
+	served := clientEventTypes
+	if len(types) > 0 {
+		served = nil
+		for _, eventType := range clientEventTypes {
+			if slices.Contains(types, eventType) {
+				served = append(served, eventType)
+			}
+		}
+		if len(served) == 0 {
+			// Only types not served to clients: nothing matches.
+			served = []string{}
+		}
+	}
 	var events []domain.ClientEvent
-	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, _ sessionAccess) error {
+	member := false
+	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		member = access.Role == "member"
 		var exists bool
 		if err := tx.QueryRow(
 			ctx,
@@ -608,7 +791,7 @@ func (s *Store) ListClientEvents(
 			orgID,
 			sessionID,
 			after,
-			clientEventTypes,
+			served,
 			limit+1,
 		)
 		if err != nil {
@@ -631,7 +814,78 @@ func (s *Store) ListClientEvents(
 	if hasMore {
 		events = events[:limit]
 	}
+	if !member {
+		for index := range events {
+			hideScriptOutput(&events[index])
+		}
+	}
 	return events, hasMore, nil
+}
+
+// dropSupersededScriptUpdatesTx deletes a Setup step's live updates (its
+// running events) once its final event is appended: the final event carries
+// everything they did, and a chatty step sends one every few seconds. Clients
+// keep the newest event per (runId, step), and read by sequence after a
+// cursor, which deleting older rows never moves; sequences come from
+// ao_sessions.next_sequence, so a gap is never reused. The app role may
+// delete ao_events rows of the organization in context (tenant policy, and
+// DELETE is granted on every table). It runs once per finished Setup step,
+// and Setup runs when a session starts or reopens.
+func dropSupersededScriptUpdatesTx(ctx context.Context, tx pgx.Tx, orgID string, event domain.ClientEvent) error {
+	if event.Type != worker.ScriptStepEventType {
+		return nil
+	}
+	var step struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(event.Payload, &step); err != nil || step.Status == worker.ScriptStepRunning {
+		return nil
+	}
+	_, err := tx.Exec(ctx,
+		`DELETE FROM ao_events
+		WHERE org_id = $1
+		  AND session_id = $2
+		  AND sequence < $3
+		  AND type = $4
+		  AND payload->>'status' = $5
+		  AND payload->>'runId' = $6::jsonb->>'runId'
+		  AND payload->'step' = $6::jsonb->'step'`,
+		orgID, event.SessionID, event.Sequence, worker.ScriptStepEventType, worker.ScriptStepRunning, event.Payload)
+	return err
+}
+
+// scriptOutputFields are what a Setup or Cleanup event (workspace.setup,
+// workspace.script.step) tells of the sandbox beyond the step itself: the
+// commands' output, and the user, groups, directory and log file it ran with
+// (and the hint, which names the user). Only the organization's members see
+// them; output is redacted, but a project's scripts can print anything.
+var scriptOutputFields = []string{"output", "user", "groups", "dir", "logPath", "hint"}
+
+// hideScriptOutput strips scriptOutputFields from a Setup or Cleanup event
+// served to someone outside the organization (a share-grant holder) and marks
+// it outputHidden. A workspace.script.step event keeps an empty output, which
+// its contract requires. An event that cannot be read is served without its
+// payload.
+func hideScriptOutput(event *domain.ClientEvent) {
+	if event.Type != worker.ScriptStepEventType && event.Type != worker.SetupEventType {
+		return
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(event.Payload, &payload); err != nil {
+		event.Payload = json.RawMessage(`{"outputHidden":true}`)
+		return
+	}
+	for _, field := range scriptOutputFields {
+		delete(payload, field)
+	}
+	if event.Type == worker.ScriptStepEventType {
+		payload["output"] = json.RawMessage(`""`)
+		payload["outputTruncated"] = json.RawMessage(`false`)
+	}
+	payload["outputHidden"] = json.RawMessage(`true`)
+	if encoded, err := json.Marshal(payload); err == nil {
+		event.Payload = encoded
+	}
 }
 
 func scanClientEvent(row scanner, event *domain.ClientEvent) error {

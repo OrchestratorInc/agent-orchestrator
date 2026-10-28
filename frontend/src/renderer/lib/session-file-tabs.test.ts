@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activateSessionFile, closeAllSessionFiles, closeSessionFile, openSessionFile } from "./session-file-tabs";
+import { EMPTY_SESSION_FILE_TABS, activateSessionFile, closeAllSessionFiles, closeSessionFile, openSessionFile } from "./session-file-tabs";
 
 describe("session file tabs", () => {
 	it("opens each path once and activates it", () => {
@@ -28,4 +28,21 @@ describe("session file tabs", () => {
 		});
 		expect(closeAllSessionFiles()).toEqual({ openPaths: [], activePath: null });
 	});
+});
+
+
+it("keeps the workspace and different revisions of one path in separate tabs", async () => {
+	const { sessionFileTabKey } = await import("./session-file-tabs");
+	const path = "src/App.tsx";
+	const source = { kind: "snapshot" as const, view: { branch: "feature", expectedTipSha: "a".repeat(40) }, label: "feature" };
+	const snapshot = sessionFileTabKey(path, source);
+	const newer = sessionFileTabKey(path, { ...source, view: { ...source.view, expectedTipSha: "b".repeat(40) } });
+	expect(sessionFileTabKey(path)).toBe(path);
+	expect(snapshot).not.toBe(path);
+	expect(newer).not.toBe(snapshot);
+	let tabs = openSessionFile(EMPTY_SESSION_FILE_TABS, path);
+	tabs = openSessionFile(tabs, snapshot);
+	tabs = openSessionFile(tabs, newer);
+	expect(tabs.openPaths).toEqual([path, snapshot, newer]);
+	expect(closeSessionFile(tabs, newer).activePath).toBe(snapshot);
 });

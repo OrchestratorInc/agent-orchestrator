@@ -350,7 +350,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 // AO_BROWSER_CAPABILITY.
 func (m *Manager) aoMCPServers(harness domain.AgentHarness, env map[string]string) []ports.ChatMCPServerConfig {
 	if harness == domain.HarnessUnreal {
-		// Its driver refuses AO-supplied tool servers; the agent uses `ao render`.
+		// Its harness takes no tool servers; the agent uses `ao render`.
 		return nil
 	}
 	executable, err := m.executable()
@@ -427,23 +427,38 @@ type SessionModeDefaults interface {
 	DefaultSessionMode(ctx context.Context) domain.SessionMode
 }
 
-// resolveSessionMode applies the precedence for a spawn:
+// resolveSessionMode applies startSessionMode with the daemon-owned default,
+// read here, at spawn time, so changing the preference affects only sessions
+// created afterwards. An existing session changes only through an explicit,
+// capability-gated interface transition; it is never re-resolved from the
+// default.
+func (m *Manager) resolveSessionMode(ctx context.Context, kind domain.SessionKind, requested domain.SessionMode) domain.SessionMode {
+	var defaultMode domain.SessionMode
+	if m.defaults != nil {
+		defaultMode = m.defaults.DefaultSessionMode(ctx)
+	}
+	return startSessionMode(kind, requested, defaultMode)
+}
+
+// startSessionMode is the precedence for a spawn's controller mode:
 //
 //  1. the mode the caller explicitly requested;
-//  2. the daemon-owned default;
-//  3. the compatibility default, TUI.
+//  2. Chat for an orchestrator;
+//  3. the daemon-owned default;
+//  4. the compatibility default, TUI.
 //
-// The default is read here, at spawn time, so changing the preference affects only
-// sessions created afterwards. An existing session changes only through an explicit,
-// capability-gated interface transition; it is never re-resolved from the default.
-func (m *Manager) resolveSessionMode(ctx context.Context, requested domain.SessionMode) domain.SessionMode {
+// Whether the harness can run the result is checked afterwards. The cloud
+// control plane resolves a cloud session's interface with the same precedence
+// (cloud/internal/domain.StartInterface); both are tested against
+// contracts/session-start-interface.json so they cannot drift.
+func startSessionMode(kind domain.SessionKind, requested, defaultMode domain.SessionMode) domain.SessionMode {
 	if requested.Valid() {
 		return requested
 	}
-	if m.defaults == nil {
-		return domain.DefaultSessionMode
+	if kind == domain.KindOrchestrator {
+		return domain.SessionModeChat
 	}
-	return domain.NormalizeSessionMode(m.defaults.DefaultSessionMode(ctx))
+	return domain.NormalizeSessionMode(defaultMode)
 }
 
 // resumeChatController reattaches a chat session to its provider conversation
@@ -471,7 +486,7 @@ func (m *Manager) resumeChatController(
 	}
 	releaseCodexAdmission, err := m.acquireCodexControllerAdmission(ctx, rec.Harness)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("controller admission", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
 	}
 	defer releaseCodexAdmission()
 
@@ -479,20 +494,12 @@ func (m *Manager) resumeChatController(
 	// session keeps its standing instructions across the relaunch.
 	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("system prompt", fmt.Errorf("%s %s: system prompt: %w", operation, rec.ID, err))
 	}
-	systemPrompt, err = m.systemPromptForNativeRestore(ctx, rec, systemPrompt)
-	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: switched continuation: %w", operation, rec.ID, err)
-	}
-
 	agentConfig := restoredAgentConfig(rec, project.Config)
-	if rec.Metadata.Permissions != "" {
-		agentConfig.Permissions = rec.Metadata.Permissions
-	}
 	additionalDirectories, err := m.restoredWorkspaceProjectDirectories(ctx, rec, project, ws.Path)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: workspace roots: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("workspace roots", fmt.Errorf("%s %s: workspace roots: %w", operation, rec.ID, err))
 	}
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
@@ -507,7 +514,7 @@ func (m *Manager) resumeChatController(
 		providerHandoff, err = m.prepareRecoveredChatProviderHandoff(ctx, rec)
 	}
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err)
+		return RestoreResult{}, relaunchFailed("provider ownership", fmt.Errorf("%s %s: recover provider ownership: %w", operation, rec.ID, err))
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget
@@ -603,9 +610,9 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		if completionErr != nil {
 			m.stopChatBestEffort(ctx, rec.ID)
-			return RestoreResult{}, fmt.Errorf("%s %s: completed: %w", operation, rec.ID, completionErr)
+			return RestoreResult{}, relaunchFailed("record launch", fmt.Errorf("%s %s: completed: %w", operation, rec.ID, completionErr))
 		}
-		return RestoreResult{}, fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env))
+		return RestoreResult{}, relaunchFailed("chat start", fmt.Errorf("%s %s: resume chat: %w", operation, rec.ID, agentlaunch.RedactError(err, project.Config.Env)))
 	}
 
 	restored, err := m.getRecord(ctx, rec.ID)

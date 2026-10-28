@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -49,6 +50,32 @@ func TestExpandWorkingDirectory(t *testing.T) {
 	}
 	if _, err := ExpandWorkingDirectory("~/work/{repo}", "/home/ubuntu", ""); err == nil {
 		t.Error("{repo} resolved without a repository")
+	}
+}
+
+// A session with no repository starts in the folder holding the template's
+// checkouts rather than AO's empty default folder.
+func TestStandaloneWorkingDirectory(t *testing.T) {
+	t.Parallel()
+	for template, want := range map[string]string{
+		"~/work/{repo}":        "/home/ubuntu/work",
+		"$HOME/work/{repo}":    "/home/ubuntu/work",
+		"/srv/{repo}/main":     "/srv",
+		"~/work/{repo}-api":    "/home/ubuntu/work",
+		"~/stacks":             "/home/ubuntu/stacks",
+		" ~/work/{repo}/src/ ": "/home/ubuntu/work",
+	} {
+		got, err := StandaloneWorkingDirectory(template, "/home/ubuntu")
+		if err != nil || got != want {
+			t.Errorf("StandaloneWorkingDirectory(%q) = %q, %v; want %q", template, got, err, want)
+		}
+	}
+	// The home directory spelled out is refused like ~ (the session would write
+	// its agent settings and run Setup in home).
+	for _, template := range []string{"~/{repo}", "$HOME/{repo}", "/home/ubuntu/{repo}", "/home/ubuntu/{repo}/src", "/{repo}", "{repo}", "work/{repo}", ""} {
+		if got, err := StandaloneWorkingDirectory(template, "/home/ubuntu"); err == nil {
+			t.Errorf("StandaloneWorkingDirectory(%q) = %q, want an error", template, got)
+		}
 	}
 }
 
@@ -138,5 +165,92 @@ func TestResolveWorkingDirectoryRefusesUnrelatedDirectory(t *testing.T) {
 		if !errors.Is(err, ErrWorkingDirectoryUnusable) {
 			t.Errorf("%s: err = %v, want ErrWorkingDirectoryUnusable", template, err)
 		}
+	}
+}
+
+// A dedicated-user worker uses a working folder it owns (the one the
+// bootstrap created, or this session's checkout from an earlier start) and
+// creates a missing one. A folder owned by someone else, a symbolic link or a
+// file is occupied: the worker never takes it over or falls back.
+func TestResolveOwnedCheckoutDirectory(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	uid := os.Getuid()
+
+	missing := filepath.Join(home, "work", "alice")
+	if err := resolveOwnedCheckoutDirectory(missing, home, uid); err != nil {
+		t.Fatalf("missing folder: %v", err)
+	}
+	if info, err := os.Stat(missing); err != nil || !info.IsDir() {
+		t.Fatalf("missing folder was not created: %v", err)
+	}
+	// A restart finds the session's own checkout, owned by the worker user.
+	if err := os.MkdirAll(filepath.Join(missing, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolveOwnedCheckoutDirectory(missing, home, uid); err != nil {
+		t.Fatalf("own checkout on restart: %v", err)
+	}
+
+	// The template's checkout belongs to the login user, not the worker.
+	err := resolveOwnedCheckoutDirectory(missing, home, uid+1)
+	if !errors.Is(err, ErrWorkingDirectoryOccupied) || !strings.HasSuffix(err.Error(), ": ~/work/alice") {
+		t.Fatalf("someone else's folder = %v, want occupied ~/work/alice", err)
+	}
+
+	link := filepath.Join(home, "work", "link")
+	if err := os.Symlink(missing, link); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(home, "work", "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{link, file} {
+		if err := resolveOwnedCheckoutDirectory(dir, home, uid); !errors.Is(err, ErrWorkingDirectoryOccupied) {
+			t.Errorf("%s = %v, want occupied", dir, err)
+		}
+	}
+
+	locked := filepath.Join(home, "locked")
+	if err := os.Mkdir(locked, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+	if os.Getuid() != 0 {
+		if err := resolveOwnedCheckoutDirectory(filepath.Join(locked, "alice"), home, uid); !errors.Is(err, ErrCheckoutDirectoryUnusable) ||
+			!strings.Contains(err.Error(), "~/locked/alice does not exist and AO could not create it") {
+			t.Errorf("uncreatable folder = %v, want unusable", err)
+		}
+	}
+	if err := resolveOwnedCheckoutDirectory("work/alice", home, uid); !errors.Is(err, ErrCheckoutDirectoryUnusable) {
+		t.Errorf("relative folder = %v, want unusable", err)
+	}
+}
+
+func TestDisplayPath(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ dir, home, want string }{
+		{"/home/ubuntu/work/alice", "/home/ubuntu", "~/work/alice"},
+		{"/home/ubuntu/work/alice", "/home/ubuntu/", "~/work/alice"},
+		{"/home/ubuntuX/work", "/home/ubuntu", "/home/ubuntuX/work"},
+		{"/srv/work/alice", "", "/srv/work/alice"},
+		{"/srv/work/alice", "/", "/srv/work/alice"},
+	} {
+		if got := DisplayPath(tc.dir, tc.home); got != tc.want {
+			t.Errorf("DisplayPath(%q, %q) = %q, want %q", tc.dir, tc.home, got, tc.want)
+		}
+	}
+}
+
+// The folder above {repo} must not be AO's own worker folder.
+func TestStandaloneWorkingDirectoryRefusesAOWorkerFolder(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".ao"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := StandaloneWorkingDirectory(root+"/{repo}", "/home/ubuntu"); err == nil {
+		t.Fatalf("StandaloneWorkingDirectory(%q) = %q, want an error", root+"/{repo}", got)
 	}
 }

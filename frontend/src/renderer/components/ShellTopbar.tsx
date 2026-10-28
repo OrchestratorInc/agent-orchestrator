@@ -42,12 +42,9 @@ import { TopbarActionError, TopbarButton, topbarHeaderClass, topbarProjectLabelC
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { TopbarOpenEditorButton } from "./TopbarOpenEditorButton";
 import { useSessionShortcut } from "../hooks/useAppShortcut";
-import {
-	agentSwitchStatusVisual,
-	deriveSessionAgentSwitchPresentation,
-} from "../lib/agent-switch-presentation";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { CueRunMenu } from "./chat/CueRunMenu";
+import { SessionOwnerTag } from "./SessionOwnerTag";
 
 const isMac = isMacPlatform();
 export const topbarDragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
@@ -176,6 +173,7 @@ export function ShellTopbar({
 				<div className="flex min-w-0 items-center gap-3">
 				{isSessionRoute && session ? (
 					<div className="flex min-w-0 items-center gap-2.5" data-testid="session-topbar-identity">
+						<SessionOwnerTag session={session} />
 						{isOrchestrator ? (
 							<span className={cn(topbarProjectLabelClass, "inline-flex min-w-0 items-center gap-1.5")}>
 								<Folder aria-hidden="true" className="size-icon-md shrink-0 text-muted-foreground" />
@@ -515,19 +513,6 @@ export function ProjectTerminationFeedback({ projectId, hostId }: { projectId: s
 }
 function SessionStatusPill({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
-	const switchPresentation = deriveSessionAgentSwitchPresentation(session);
-	if (switchPresentation) {
-		const visual = agentSwitchStatusVisual(switchPresentation);
-		return (
-			<StatusPill
-				label={t(switchPresentation.compactLabelKey, switchPresentation.values)}
-				tone={visual.tone}
-				breathe={visual.breathe}
-				leading="none"
-				className="px-2 py-1 text-micro"
-			/>
-		);
-	}
 	const { label, tone, breathe } = getAgentActivityView(session.activity, t);
 	return (
 		<StatusPill label={label} tone={tone} breathe={breathe} leading="none" className="px-2 py-1 text-micro" />

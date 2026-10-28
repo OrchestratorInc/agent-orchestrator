@@ -81,12 +81,26 @@ func (s *Server) writeStoreError(w http.ResponseWriter, r *http.Request, err err
 	case errors.Is(err, postgres.ErrGitHubUserScopeNeedsPersonalOrg):
 		writeError(w, r, http.StatusConflict, "github_user_scope_personal_org_only",
 			"You don't administer this GitHub installation, so it can only be connected to your personal AO account, where you are the only member.")
+	case errors.Is(err, postgres.ErrNotOrchestratorChild):
+		writeError(w, r, http.StatusNotFound, "not_orchestrator_child",
+			"That session is not one this orchestrator started. An orchestrator can only kill or message the sessions it spawned.")
+	case errors.Is(err, postgres.ErrMergeNeedsApproval):
+		writeError(w, r, http.StatusForbidden, "MERGE_NEEDS_APPROVAL",
+			"Only the project's owner can merge this pull request. Ask them to merge it.")
 	case errors.Is(err, postgres.ErrForbidden):
 		writeError(w, r, http.StatusForbidden, "forbidden", "You do not have access to this organization.")
 	case errors.Is(err, postgres.ErrNotFound):
 		writeError(w, r, http.StatusNotFound, "not_found", "The requested resource was not found.")
+	case errors.Is(err, postgres.ErrSessionTerminated):
+		writeError(w, r, http.StatusConflict, "SESSION_TERMINATED", "This session was deleted. Restore it to continue.")
 	case errors.Is(err, postgres.ErrConflict):
 		writeError(w, r, http.StatusConflict, "conflict", "The resource conflicts with an existing record.")
+	case errors.Is(err, postgres.ErrComposerLocked):
+		writeError(w, r, http.StatusConflict, "COMPOSER_LOCKED",
+			"Someone else is writing to the agent right now. Request a turn to go next.")
+	case errors.Is(err, postgres.ErrComposerLeaseLost):
+		writeError(w, r, http.StatusConflict, "COMPOSER_LEASE_LOST",
+			"Your turn to write to the agent ended. Request a turn to write again.")
 	case errors.Is(err, postgres.ErrTurnFinished):
 		writeError(w, r, http.StatusConflict, "TURN_FINISHED", "The turn is already finished.")
 	case errors.Is(err, postgres.ErrStaleTurn):

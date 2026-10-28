@@ -1,4 +1,6 @@
+import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
+import type { DesktopTelemetryIdentity } from "./telemetry/telemetry";
 import { cachedInstallId, getInstallId } from "./installId";
 import { captureMobileApiError, httpCategory } from "./sentry";
 import { UnreachableError } from "./connectionError";
@@ -110,6 +112,12 @@ export type DashboardSession = {
 	provisionError?: string;
 	/** The daemon's start-up stages while a Chat session provisions. Absent from older daemons. */
 	provisionSteps?: SessionProvisionStep[];
+	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
+	branchNaming?: boolean;
+	/** worker or orchestrator. Absent from rows built before the daemon named kinds. */
+	kind?: string;
+	/** When the stored row last changed. The archive is ordered by it, as on desktop. */
+	updatedAt?: string;
 	isPinned?: boolean;
 	pinnedAt?: string | null;
 	/** Automatically review each new pull-request head. */
@@ -173,7 +181,49 @@ export type SessionsResponse = {
 	// as an empty list: the board judges a saved project filter against this, so
 	// folding a failure into [] told it every project was gone (#5058 review).
 	projects: ProjectInfo[] | null;
+	/**
+	 * The archive's size, when the daemon pages it: `sessions` then holds live
+	 * workers only and archived ones are fetched with getArchivedSessions. Null on
+	 * (or absent on) a daemon that predates paging, whose `sessions` still carries
+	 * the archive.
+	 */
+	archive?: ArchiveSummary | null;
 };
+
+
+export type { ArchiveSummary } from "./archive/archiveSummary";
+
+/** One page of a machine's archive, in the daemon's order (pinned, then most recently updated). */
+export type ArchivePage = { sessions: DashboardSession[]; nextCursor: string | null };
+
+/** Archived workers fetched per page when Archive is opened. */
+export const ARCHIVE_PAGE_SIZE = 50;
+
+// Machines whose daemon answered the live-only poll without an archive summary.
+// They predate paging, so they are polled for the full list as before. Checked
+// again now and then, so a daemon upgraded under a running app is picked up.
+const legacyArchiveHosts = new Map<string, number>();
+const LEGACY_ARCHIVE_RECHECK_MS = 15 * 60_000;
+
+/** Forget which machines answered like an older daemon. For tests. */
+export function resetArchivePagingProbes(): void {
+	legacyArchiveHosts.clear();
+}
+
+function archiveHostKey(cfg: ServerConfig): string {
+	return cfg.hostId ?? `${cfg.host}:${cfg.httpPort}`;
+}
+
+function wireArchiveSummary(raw: unknown): ArchiveSummary | null {
+	if (!raw || typeof raw !== "object") return null;
+	const { total, byProject } = raw as { total?: unknown; byProject?: unknown };
+	if (typeof total !== "number") return null;
+	const counts: Record<string, number> = {};
+	if (byProject && typeof byProject === "object") {
+		for (const [project, count] of Object.entries(byProject)) if (typeof count === "number") counts[project] = count;
+	}
+	return { total, byProject: counts };
+}
 
 // ---- Wire types (this repo's Go daemon, /api/v1/*) --------------------------
 //
@@ -211,6 +261,7 @@ type WireSession = {
 	provisionState?: "provisioning" | "ready" | "failed";
 	provisionError?: string;
 	provisionSteps?: SessionProvisionStep[];
+	branchNaming?: boolean;
 	status?: string | null;
 	kanbanColumn?: string | null;
 	displayStatus?: string | null;
@@ -315,8 +366,11 @@ function mapSession(s: WireSession): DashboardSession {
 		provisionState: s.provisionState,
 		provisionError: s.provisionError,
 		provisionSteps: s.provisionSteps?.length ? s.provisionSteps : undefined,
+		branchNaming: !!s.branchNaming,
 		isPinned: !!s.isPinned,
 		pinnedAt: s.pinnedAt ?? null,
+		kind: s.kind || undefined,
+		updatedAt: s.updatedAt || undefined,
 		autoReviewEnabled: !!s.autoReviewEnabled,
 		autoInjectReview: s.autoInjectReview ?? true,
 		autoInjectCI: s.autoInjectCI ?? true,
@@ -498,7 +552,30 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 	// ticks and make the user's next action, typically scanning a fresh pairing
 	// code, fail with 429 before the new password was ever checked. Probing first
 	// caps a bad-credential tick at a single failed attempt.
-	const sessRes = await req(cfg, `${API}/sessions`, init);
+	//
+	// The poll asks for live workers only, with the archive's size: the archive is
+	// most of a long-running machine's sessions, and over a tunnel the poll runs
+	// every two seconds. A daemon that predates paging leaves the summary out;
+	// that machine is then polled for everything, as before.
+	const hostKey = archiveHostKey(cfg);
+	const legacySince = legacyArchiveHosts.get(hostKey);
+	const tryPaged = legacySince === undefined || Date.now() - legacySince > LEGACY_ARCHIVE_RECHECK_MS;
+	let sessRes = await req(cfg, tryPaged ? `${API}/sessions?active=true&kind=worker` : `${API}/sessions`, init);
+	let sessData = await sessRes.json();
+	let archive = tryPaged ? wireArchiveSummary(sessData?.archived) : null;
+	if (tryPaged) {
+		if (archive) legacyArchiveHosts.delete(hostKey);
+		else {
+			legacyArchiveHosts.set(hostKey, Date.now());
+			// A daemon older still ignores `active` and has already sent everything,
+			// archived rows included; only one that filtered must be asked again.
+			const ignoredFilter = Array.isArray(sessData?.sessions) && sessData.sessions.some((s: WireSession) => s.isTerminated);
+			if (!ignoredFilter) {
+				sessRes = await req(cfg, `${API}/sessions`, init);
+				sessData = await sessRes.json();
+			}
+		}
+	}
 	// A failed /projects is reported as null rather than [] so a caller can tell
 	// "this daemon has no projects" from "we could not ask". It stays caught: an
 	// older daemon, or one blip on that one route, must not knock the board
@@ -507,7 +584,6 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 		req(cfg, `${API}/orchestrators`, init),
 		getProjects(cfg, init).catch(() => null),
 	]);
-	const sessData = await sessRes.json();
 	const orchData = await orchRes.json();
 	const nameOf = new Map((projects ?? []).map((p) => [p.id, p.name]));
 
@@ -535,7 +611,31 @@ export async function getSessions(cfg: ServerConfig, _projectId?: string, init?:
 		mapOrchestrator(s, nameOf.get(s.projectId ?? "") ?? s.projectId ?? ""),
 	);
 
-	return { sessions, orchestrators, orchestratorId: null, stats: {}, projects };
+	return { sessions, orchestrators, orchestratorId: null, stats: {}, projects, archive };
+}
+
+/**
+ * One page of a machine's archived workers. Only for a daemon whose poll
+ * reported an archive summary (see getSessions); an older one carries its
+ * archive in the poll itself.
+ */
+export async function getArchivedSessions(
+	cfg: ServerConfig,
+	options: { cursor?: string | null; projectId?: string; limit?: number } = {},
+	init?: Pick<RequestInit, "signal">,
+): Promise<ArchivePage> {
+	const query = new URLSearchParams({ active: "false", kind: "worker", limit: String(options.limit ?? ARCHIVE_PAGE_SIZE) });
+	if (options.cursor) query.set("cursor", options.cursor);
+	if (options.projectId) query.set("project", options.projectId);
+	const res = await req(cfg, `${API}/sessions?${query}`, init);
+	const data = await res.json();
+	const raw: WireSession[] = Array.isArray(data?.sessions) ? data.sessions : [];
+	return {
+		// The daemon has already filtered these; kept defensively so a row that is
+		// live by the time it lands can never be drawn as archived.
+		sessions: raw.filter((s) => s.kind !== "orchestrator" && s.isTerminated).map(mapSession),
+		nextCursor: typeof data?.nextCursor === "string" && data.nextCursor ? data.nextCursor : null,
+	};
 }
 
 // ---- Preview (in-app browser) ----------------------------------------------
@@ -551,14 +651,17 @@ export function previewFilePath(sessionId: string, path: string): string {
 	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/** The daemon's route for a file in a session's artifact folder, each segment escaped. */
+export function previewArtifactPath(sessionId: string, entry: string): string {
+	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/artifacts/${entry.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 export async function getPreview(cfg: ServerConfig, id: string): Promise<{ entry: string; url: string; authenticated: boolean } | null> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/preview`);
 	const data = await res.json();
 	const entry = typeof data?.entry === "string" ? data.entry.trim() : "";
 	if (entry) {
-		const path = data?.source === "artifact"
-			? `${API}/sessions/${encodeURIComponent(id)}/preview/artifacts/${entry.split("/").map(encodeURIComponent).join("/")}`
-			: previewFilePath(id, entry);
+		const path = data?.source === "artifact" ? previewArtifactPath(id, entry) : previewFilePath(id, entry);
 		const url = `${httpBase(cfg)}${path}`;
 		return { entry, url, authenticated: true };
 	}
@@ -608,6 +711,7 @@ export type AgentModelCatalog = {
 	fetchedAt: string;
 	validatedAt?: string;
 	refreshRecommended?: boolean;
+	refreshState?: "idle" | "queued" | "refreshing" | "error";
 	warning?: string;
 };
 
@@ -622,6 +726,24 @@ export async function getSettings(cfg: ServerConfig): Promise<AOSettings> {
 	return {
 		defaultSessionMode: data?.defaultSessionMode === "tui" ? "tui" : "chat",
 		chatHarnesses: Array.isArray(data?.chatHarnesses) ? data.chatHarnesses.filter((value: unknown): value is string => typeof value === "string") : [],
+	};
+}
+
+/**
+ * The paired desktop's telemetry identity and opt-out. Older daemons without the
+ * route answer 404 (ApiError); callers treat any failure as "no identity" and
+ * keep the phone anonymous.
+ */
+export async function getTelemetryIdentity(cfg: ServerConfig): Promise<DesktopTelemetryIdentity> {
+	const res = await req(cfg, `${API}/telemetry/identity`);
+	const data = await res.json();
+	const str = (value: unknown) => (typeof value === "string" && value !== "" ? value : undefined);
+	return {
+		distinctId: str(data?.distinctId),
+		installId: str(data?.installId),
+		cloudUserId: str(data?.cloudUserId),
+		githubLogin: str(data?.githubLogin),
+		optedOut: data?.optedOut === true,
 	};
 }
 
@@ -645,10 +767,41 @@ export async function refreshAgents(cfg: ServerConfig): Promise<AgentCatalog> {
 	};
 }
 
-export async function getAgentModels(cfg: ServerConfig, agent: string, projectId?: string): Promise<AgentModelCatalog> {
+// The daemon answers an agent it has never discovered with an empty catalog
+// marked refreshing while discovery runs in the background, rather than making
+// the picker wait. Re-read until the discovered list arrives.
+const MODEL_CATALOG_REFRESH_POLL_MS = 1_500;
+
+function pollDelay(signal: AbortSignal | undefined): Promise<void> {
+	return new Promise((resolve) => {
+		const finish = () => {
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, MODEL_CATALOG_REFRESH_POLL_MS);
+		signal?.addEventListener("abort", finish, { once: true });
+		if (signal?.aborted) finish();
+	});
+}
+
+/**
+ * Loads an agent's model catalog, re-reading while the daemon is still
+ * discovering it. There is no attempt cap: the daemon bounds discovery (a
+ * readiness wait, then discovery's own timeout) and then saves a result, so a
+ * cold load ends with models or an error. `signal` stops polling when the view
+ * that asked closes.
+ */
+export async function getAgentModels(cfg: ServerConfig, agent: string, projectId?: string, signal?: AbortSignal): Promise<AgentModelCatalog> {
 	const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
-	const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
-	return await res.json() as AgentModelCatalog;
+	for (;;) {
+		const res = await req(cfg, `${API}/agents/${encodeURIComponent(agent)}/models${query}`);
+		const catalog = await res.json() as AgentModelCatalog;
+		const discovering = catalog?.refreshState === "refreshing" && !catalog.models?.length;
+		if (!discovering || signal?.aborted) return catalog;
+		await pollDelay(signal);
+		if (signal?.aborted) return catalog;
+	}
 }
 
 export async function refreshAgentModels(cfg: ServerConfig, agent: string, projectId?: string): Promise<AgentModelCatalog> {
@@ -724,6 +877,11 @@ export async function clearNotification(cfg: ServerConfig, id: string): Promise<
 	}
 }
 
+// Clears the machine's whole history, not just the rows the screen has loaded.
+export async function clearAllNotifications(cfg: ServerConfig): Promise<void> {
+	await req(cfg, `${API}/notifications`, { method: "DELETE" });
+}
+
 // ---- Notification history ---------------------------------------------------
 
 export type NotificationType =
@@ -774,8 +932,13 @@ export async function getNotifications(
 	};
 }
 
-export async function markAllNotificationsRead(cfg: ServerConfig): Promise<void> {
-	await req(cfg, `${API}/notifications/read-all`, { method: "POST" });
+// With ids, only those rows are marked, so unread rows on pages the screen has
+// not loaded yet stay unread. Without ids, every unread row on the machine is.
+export async function markAllNotificationsRead(cfg: ServerConfig, ids?: string[]): Promise<void> {
+	await req(cfg, `${API}/notifications/read-all`, {
+		method: "POST",
+		...(ids && ids.length > 0 ? { body: JSON.stringify({ ids }) } : {}),
+	});
 }
 
 // ---- Pull request detail ----------------------------------------------------

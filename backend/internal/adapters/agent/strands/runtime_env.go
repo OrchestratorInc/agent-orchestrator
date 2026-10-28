@@ -25,6 +25,7 @@ func (p *Plugin) AugmentRuntimeLaunchEnv(env map[string]string, dataDir string, 
 	env["STRANDS_CLI_MCP_DISCOVERY"] = "off"
 	if dataDir != "" {
 		env["NODE_OPTIONS"] = withNodePreload(env["NODE_OPTIONS"], nodePreloadPath(dataDir))
+		env["AO_STRANDS_NODE_HOOK_WORKAROUND"] = "1"
 	}
 }
 

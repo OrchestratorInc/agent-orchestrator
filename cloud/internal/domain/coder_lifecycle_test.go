@@ -65,14 +65,18 @@ func TestOrgCoderConfigLifecycleValidation(t *testing.T) {
 
 func TestValidateCoderWorkingDirectory(t *testing.T) {
 	t.Parallel()
-	for _, value := range []string{"", "~/work/{repo}", "$HOME/work/{repo}", "/srv/app", "/home/ubuntu/work/alice", "~/{repo}-main"} {
+	// A hidden folder is refused only for the ao-worker checkout
+	// (ValidateCoderCheckoutDirectory): a workspace-user session may work in
+	// the template's ~/.config/app.
+	for _, value := range []string{"", "~/work/{repo}", "$HOME/work/{repo}", "/srv/app", "/home/ubuntu/work/alice", "~/{repo}-main",
+		"~/.config/app", "/srv/.cache/{repo}", "~/work/.github"} {
 		if err := ValidateCoderWorkingDirectory(value); err != nil {
 			t.Errorf("%q rejected: %v", value, err)
 		}
 	}
 	for _, value := range []string{
 		"work/{repo}", "~", "~/", "/", "$HOME", "~/../etc", "/srv/./app", "~/work/{name}", "~/work/$USER",
-		"~/work/`id`", "/srv/app\n", strings.Repeat("a", MaxCoderWorkingDirectoryLength+1), "${HOME}/work",
+		"~/work/`id`", "~/.ao/{repo}", "~/work/.ao", "/srv/app\n", strings.Repeat("a", MaxCoderWorkingDirectoryLength+1), "${HOME}/work",
 	} {
 		if err := ValidateCoderWorkingDirectory(value); err == nil {
 			t.Errorf("%q accepted", value)

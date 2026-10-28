@@ -4,16 +4,20 @@ import {
 	automationPromptLengthBucket,
 	buildPostHogConfig,
 	buildTelemetryContext,
+	clearCheckUpdateFailures,
+	clearUpdateFailures,
 	isDeniedEvent,
 	postHogEventName,
 	reserveCapture,
 	reserveDailyActiveCapture,
+	claimUpdateFailure,
 	reserveRouteViewCapture,
 	routeSurface,
 	sanitizePostHogEvent,
 	sanitizeReplayRequestName,
 	sanitizeRendererExceptionProperties,
 	sanitizeRendererProperties,
+
 	startDailyActiveHeartbeat,
 	withTelemetryContext,
 	releaseChannelFrom,
@@ -32,6 +36,58 @@ function memoryStorage(initial: Record<string, string> = {}) {
 }
 
 describe("telemetry sanitizers", () => {
+	it("keeps the v2 aliases for api errors and the session summary", () => {
+		expect(postHogEventName("ao.renderer.api_error")).toBe("ao.v2.renderer.api_error");
+		expect(postHogEventName("ao.renderer.session_management_summary")).toBe("ao.v2.renderer.session_management_summary");
+	});
+
+	it("keeps one updater streak until download and reports the previous UTC day once", () => {
+		const storage = memoryStorage();
+		const failure = { phase: "download", error_category: "network", to_version: "2.0.0" };
+		const day = Date.parse("2026-10-20T00:00:00.000Z");
+		expect(claimUpdateFailure(storage, failure, day).emit).toBe(true);
+		expect(claimUpdateFailure(storage, failure, day + 60_000).emit).toBe(false);
+		expect(claimUpdateFailure(storage, { ...failure, error_category: "signature" }, day + 120_000).emit).toBe(true);
+		clearUpdateFailures(storage, "2.0.0");
+		expect(claimUpdateFailure(storage, failure, day + 180_000).emit).toBe(true);
+		const nextDay = claimUpdateFailure(storage, failure, day + 86_400_000);
+		expect(nextDay.emit).toBe(true);
+		expect(nextDay.daily).toMatchObject({ report: "daily", day: "2026-10-20" });
+		expect(nextDay.dailies).toEqual([expect.objectContaining({ day: "2026-10-20", failure_count: 4 })]);
+		expect(claimUpdateFailure(storage, failure, day + 86_400_000 + 60_000).emit).toBe(false);
+		const check = { phase: "check", error_category: "network" };
+		const later = day + 2 * 86_400_000;
+		expect(claimUpdateFailure(storage, check, later).emit).toBe(true);
+		clearCheckUpdateFailures(storage);
+		expect(claimUpdateFailure(storage, check, later).streak).toBe(true);
+	});
+
+	it("keeps an unsent updater day when the next day also rolls over", () => {
+		const storage = memoryStorage();
+		const failure = { phase: "download", error_category: "network", to_version: "2.0.0" };
+		const monday = Date.parse("2026-10-19T12:00:00.000Z");
+		claimUpdateFailure(storage, failure, monday);
+		const raw = storage.getItem("ao.telemetry.updateFailures.v1");
+		const parked = JSON.parse(raw ?? "{}") as { pendingDays?: unknown };
+		parked.pendingDays = [{ day: "2026-10-19", failure_count: 3 }];
+		storage.setItem("ao.telemetry.updateFailures.v1", JSON.stringify({
+			...JSON.parse(raw ?? "{}"),
+			day: "2026-10-21",
+			dayCount: 0,
+			pendingDays: [
+				{ day: "2026-10-19", failure_count: 3 },
+				{ day: "2026-10-20", failure_count: 2 },
+			],
+		}));
+		const wednesday = claimUpdateFailure(storage, failure, monday + 2 * 86_400_000);
+		expect(wednesday.dailies?.map((day) => day.day)).toEqual(["2026-10-19", "2026-10-20"]);
+		wednesday.ackDaily("2026-10-19");
+		wednesday.rollback();
+		const restored = JSON.parse(storage.getItem("ao.telemetry.updateFailures.v1") ?? "{}") as {
+			pendingDays?: Array<{ day: string }>;
+		};
+		expect(restored.pendingDays?.map((pending) => pending.day)).toEqual(["2026-10-20"]);
+	});
 	it("allows only the fixed session management summary schema", async () => {
 		const safe = await sanitizeRendererProperties("ao.renderer.session_management_summary", {
 			measurement_schema_version: 1,
@@ -50,6 +106,15 @@ describe("telemetry sanitizers", () => {
 		});
 	});
 
+	it("allows only the closed onboarding step vocabulary", async () => {
+		for (const event of ["ao.onboarding.step_viewed", "ao.onboarding.step_completed", "ao.onboarding.step_abandoned"]) {
+			expect(await sanitizeRendererProperties(event, { step: "github_auth", email: "a@b.co", path: "/Users/x" })).toEqual({
+				step: "github_auth",
+			});
+			expect(await sanitizeRendererProperties(event, { step: "/Users/x/secret" })).toEqual({});
+		}
+	});
+
 	it("exports the session management summary under the v2 name", () => {
 		expect(postHogEventName("ao.renderer.session_management_summary")).toBe(
 			"ao.v2.renderer.session_management_summary",
@@ -60,7 +125,7 @@ describe("telemetry sanitizers", () => {
 		const config = buildPostHogConfig("ins_stable-install-id");
 
 		expect(config.persistence).toBe("memory");
-		expect(config.person_profiles).toBe("never");
+		expect(config.person_profiles).toBe("identified_only");
 		expect(config.autocapture).toBe(false);
 		expect(config.capture_performance).toBe(false);
 		expect(config.disable_session_recording).toBe(true);
@@ -235,7 +300,7 @@ describe("telemetry sanitizers", () => {
 			disable_surveys: true,
 		});
 		try {
-			const captured = client.capture("ao.app.active", { channel: "renderer" });
+			const captured = client.capture("ao.app.active", withTelemetryContext({ channel: "renderer" }));
 
 			expect(captured?.properties).toMatchObject({
 				distinct_id: "ins_stable-install-id",
@@ -251,6 +316,39 @@ describe("telemetry sanitizers", () => {
 				queue._clearFlushTimeout();
 			}
 		}
+	});
+
+	it("identify aliases the install id into the WorkOS user and sets email once as a person property", () => {
+		const events: { event: string; properties: Record<string, unknown>; $set?: Record<string, unknown> }[] = [];
+		const client = new PostHog();
+		client.init("phc_test", {
+			...buildPostHogConfig("ins_stable-install-id"),
+			advanced_disable_flags: true,
+			disable_session_recording: true,
+			disable_surveys: true,
+			// Observe what would be sent; nothing leaves the test.
+			before_send: (event) => {
+				if (event) events.push(event as never);
+				return null;
+			},
+		});
+		client.identify("user_01H", { email: "dev@example.com", ao_cloud_user_id: "user_01H", github_login: "octocat" });
+		expect(client.get_distinct_id()).toBe("user_01H");
+		const identify = events.find((e) => e.event === "$identify");
+		expect(identify).toBeTruthy();
+		expect(identify!.properties.$anon_distinct_id).toBe("ins_stable-install-id");
+		expect(identify!.properties.distinct_id ?? client.get_distinct_id()).toBe("user_01H");
+		expect(identify!.$set ?? identify!.properties.$set).toEqual({
+			email: "dev@example.com",
+			ao_cloud_user_id: "user_01H",
+			github_login: "octocat",
+		});
+
+		// After identify, ordinary events carry the user and never the email.
+		client.capture("ao.renderer.support_opened", withTelemetryContext({}));
+		const after = events.find((e) => e.event === "ao.renderer.support_opened");
+		expect(after?.properties).toMatchObject({ distinct_id: "user_01H", $is_identified: true });
+		expect(JSON.stringify(after)).not.toContain("dev@example.com");
 	});
 
 	it("builds stable AO version context for PostHog events", () => {
@@ -275,7 +373,7 @@ describe("telemetry sanitizers", () => {
 		expect(postHogEventName("ao.session.spawned")).toBe("ao.session.spawned");
 	});
 
-	it("forces renderer events to stay anonymous in PostHog", () => {
+	it("forces renderer events to stay anonymous until an AO Cloud sign-in", () => {
 		expect(withTelemetryContext({ $process_person_profile: true })).toMatchObject({
 			$process_person_profile: false,
 		});
@@ -309,7 +407,7 @@ describe("telemetry sanitizers", () => {
 
 	it("drops automation funnel values outside the closed vocabularies", async () => {
 		expect(
-			await sanitizeRendererProperties("ao.renderer.automation_create_requested", {
+			await sanitizeRendererProperties("ao.renderer.automation_create_succeeded", {
 				schedule_preset: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9",
 				prompt_length_bucket: "4096",
 			}),
@@ -450,19 +548,16 @@ describe("telemetry sanitizers", () => {
 		);
 	});
 
-	it("hashes project ids and drops everything else on CTA triads", async () => {
-		const triads = [
-			"ao.renderer.task_create_requested",
+	it("hashes project ids and drops everything else on CTA outcomes", async () => {
+		const outcomes = [
 			"ao.renderer.task_create_succeeded",
 			"ao.renderer.task_create_failed",
-			"ao.renderer.session_kill_requested",
 			"ao.renderer.session_kill_succeeded",
 			"ao.renderer.session_kill_failed",
-			"ao.renderer.settings_save_requested",
 			"ao.renderer.settings_save_succeeded",
 			"ao.renderer.settings_save_failed",
 		];
-		for (const event of triads) {
+		for (const event of outcomes) {
 			const props = await sanitizeRendererProperties(event, {
 				project_id: "demo-project",
 				title: "raw user text",
@@ -470,11 +565,13 @@ describe("telemetry sanitizers", () => {
 			});
 			expect(Object.keys(props)).toEqual(["project_id_hash"]);
 		}
+		expect(await sanitizeRendererProperties("ao.renderer.task_create_failed", { scope: "standalone", title: "raw" })).toEqual({
+			scope: "standalone",
+		});
 	});
 
 	it("keeps only the scope enum on artifact_create events", async () => {
 		for (const event of [
-			"ao.renderer.artifact_create_requested",
 			"ao.renderer.artifact_create_succeeded",
 			"ao.renderer.artifact_create_failed",
 		]) {
@@ -485,7 +582,7 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("keeps only the source enum on orchestrator_spawn events", async () => {
-		const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_requested", {
+		const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_succeeded", {
 			project_id: "demo-project",
 			source: "board",
 		});
@@ -515,9 +612,6 @@ describe("telemetry sanitizers", () => {
 			target: "pr",
 		});
 		expect(await sanitizeRendererProperties("ao.renderer.notification_opened", { target: "http://x" })).toEqual({});
-		expect(await sanitizeRendererProperties("ao.renderer.notification_mark_read_requested", { scope: "all" })).toEqual({
-			scope: "all",
-		});
 		expect(await sanitizeRendererProperties("ao.renderer.notification_mark_read_succeeded", { scope: "all" })).toEqual({
 			scope: "all",
 		});
@@ -525,12 +619,12 @@ describe("telemetry sanitizers", () => {
 			scope: "all",
 		});
 		expect(
-			await sanitizeRendererProperties("ao.renderer.notification_mark_read_requested", { scope: "everything" }),
+			await sanitizeRendererProperties("ao.renderer.notification_mark_read_succeeded", { scope: "everything" }),
 		).toEqual({});
 	});
 
-	it("keeps a hashed project id, shared editor id, and target kind on open_in_editor_requested", async () => {
-		const props = await sanitizeRendererProperties("ao.renderer.open_in_editor_requested", {
+	it("keeps a hashed project id, shared editor id, and target kind on open_in_editor_succeeded", async () => {
+		const props = await sanitizeRendererProperties("ao.renderer.open_in_editor_succeeded", {
 			project_id: "demo-project",
 			editor_id: "vscode",
 			target_kind: "editor",
@@ -539,7 +633,7 @@ describe("telemetry sanitizers", () => {
 		expect(props.editor_id).toBe("vscode");
 		expect(props.target_kind).toBe("editor");
 
-		const bogus = await sanitizeRendererProperties("ao.renderer.open_in_editor_requested", {
+		const bogus = await sanitizeRendererProperties("ao.renderer.open_in_editor_succeeded", {
 			project_id: "demo-project",
 			// Not a real editor id — must not be forwarded as-is.
 			editor_id: "/Users/alice/bin/notepad",

@@ -7,8 +7,12 @@ import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
+import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
+import { openChromeAgentsSettings } from "./BrowserChromeSection";
+import { Button } from "../ui/button";
+import { ArrowRight } from "lucide-react";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
@@ -167,6 +171,10 @@ export function GeneralSettingsSection({
 	const soundNotificationsSaveError = useSoundNotificationsStore((state) => state.saveError);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
+	const navigationGestures = useUiStore((state) => state.navigationGestures);
+	const setNavigationGestures = useUiStore((state) => state.setNavigationGestures);
+	const renderMath = useUiStore((state) => state.renderMath);
+	const setRenderMath = useUiStore((state) => state.setRenderMath);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
 
@@ -235,6 +243,19 @@ export function GeneralSettingsSection({
 						}}
 					/>
 				</SettingsRow>
+				<SettingsRow label={t("settings.renderMath")} description={t("settings.renderMathHint")}>
+					<Switch aria-label={t("settings.renderMath")} checked={renderMath} onCheckedChange={setRenderMath} />
+				</SettingsRow>
+			</SettingsSection>
+
+			<SettingsSection title={t("settings.navigation")} grouped>
+				<SettingsRow label={t("settings.navigationGestures")} description={t("settings.navigationGesturesHint")}>
+					<Switch
+						aria-label={t("settings.navigationGestures")}
+						checked={navigationGestures}
+						onCheckedChange={setNavigationGestures}
+					/>
+				</SettingsRow>
 			</SettingsSection>
 
 			{/* Sessions */}
@@ -268,6 +289,7 @@ export function GeneralSettingsSection({
 
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
+				<AnalyticsRow />
 			</SettingsSection>
 
 			{/* Advanced */}
@@ -283,8 +305,46 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
+				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
 		</>
+	);
+}
+
+/**
+ * PostHog usage analytics opt-out. Independent of the error-event row above: it
+ * switches off the renderer, the daemon and a paired phone together.
+ */
+function AnalyticsRow() {
+	const { t } = useTranslation();
+	const optedOut = useAnalyticsOptOutStore((state) => state.optedOut);
+	const loaded = useAnalyticsOptOutStore((state) => state.loaded);
+	const saving = useAnalyticsOptOutStore((state) => state.saving);
+	const loadError = useAnalyticsOptOutStore((state) => state.loadError);
+	const saveError = useAnalyticsOptOutStore((state) => state.saveError);
+	const load = useAnalyticsOptOutStore((state) => state.load);
+	const setOptedOut = useAnalyticsOptOutStore((state) => state.setOptedOut);
+	useEffect(() => {
+		void load();
+	}, [load]);
+	return (
+		<SettingsRow
+			label={t("settings.analytics.label")}
+			description={
+				<span className={cn((loadError || saveError) && "text-error")} role={loadError || saveError ? "alert" : undefined}>
+					{t(loadError ? "settings.analytics.loadFailed" : saveError ? "settings.analytics.saveFailed" : "settings.analytics.description")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.analytics.label")}
+				checked={!optedOut}
+				disabled={saving || !loaded}
+				onCheckedChange={(share) => {
+					void setOptedOut(!share);
+				}}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -345,6 +405,23 @@ function SideChatsRow() {
 	return (
 		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
 			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * Developer Mode-only entry to Chrome mode. Setup lives with the rest of the
+ * browser settings, so this row only takes the user there.
+ */
+function ChromeAgentsRow() {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	return (
+		<SettingsRow label={t("settings.chromeAgents.label")} description={t("settings.chromeAgents.hint")}>
+			<Button onClick={() => openChromeAgentsSettings(openGlobalSettings)} size="sm" type="button" variant="ghost">
+				{t("settings.chromeAgents.goTo")}
+				<ArrowRight aria-hidden="true" className="size-icon-sm" />
+			</Button>
 		</SettingsRow>
 	);
 }

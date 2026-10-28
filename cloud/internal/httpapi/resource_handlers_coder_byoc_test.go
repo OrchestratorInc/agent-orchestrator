@@ -41,6 +41,8 @@ type stubCoderBYOCStore struct {
 	// projectConfig is the project's stored Config JSON (its coder dev-kit config
 	// lives under the "coder" key). Nil => a bare project with no coder config.
 	projectConfig json.RawMessage
+	// repositoryURL is the project's main repository.
+	repositoryURL string
 }
 
 func (s *stubCoderBYOCStore) UserAgentCredentialAvailable(
@@ -52,7 +54,7 @@ func (s *stubCoderBYOCStore) UserAgentCredentialAvailable(
 func (s *stubCoderBYOCStore) GetProject(
 	_ context.Context, _ domain.Principal, _, projectID string,
 ) (domain.Project, error) {
-	return domain.Project{ID: projectID, Config: s.projectConfig}, nil
+	return domain.Project{ID: projectID, Config: s.projectConfig, RepositoryURL: s.repositoryURL}, nil
 }
 
 func (s *stubCoderBYOCStore) ListProviderConnections(
@@ -144,6 +146,40 @@ func TestCreateSessionBindsOrgCoderConnection(t *testing.T) {
 		profile.TemplateID != byocTemplate || profile.AgentName != byocAgentName ||
 		profile.DurableRoot != byocDurableDir || profile.Parameters["region"] != "eu" {
 		t.Fatalf("stamped profile did not use the org override: %+v", profile)
+	}
+}
+
+// A session on the org's connection (ao-worker by default) is checked out in
+// the project's working folder, with {repo} resolved from the project's
+// repository when the session is created.
+func TestCreateSessionStampsTheWorkingFolderCheckout(t *testing.T) {
+	t.Parallel()
+	for _, enabled := range []bool{true, false} {
+		store := &stubCoderBYOCStore{
+			personalCredentialAvailable: true,
+			projectConfig:               json.RawMessage(`{"workingDirectory":"~/work/{repo}"}`),
+			repositoryURL:               "https://github.com/acme/alice.git",
+		}
+		srv := newBYOCServer(store)
+		srv.provisioning.Coder.WorkerWorkingFolder = enabled
+
+		rec := httptest.NewRecorder()
+		srv.createSession(rec, byocCreateSessionRequest(t))
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+		}
+		profile, err := sandbox.DecodeCoderSessionProfile(store.captured.ResourceProfile)
+		if err != nil {
+			t.Fatalf("decode stamped profile: %v", err)
+		}
+		// With AO_CLOUD_CODER_WORKER_WORKING_FOLDER off (production until
+		// the rollback target honors a stamped folder) the session keeps the
+		// durable root checkout.
+		want := map[bool]string{true: "~/work/alice", false: ""}[enabled]
+		if profile.CheckoutDirectory != want || profile.WorkingDirectory != "" || profile.RunsAsWorkspaceUser() {
+			t.Fatalf("working folder %v: stamped profile = %+v", enabled, profile)
+		}
 	}
 }
 

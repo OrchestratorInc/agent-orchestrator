@@ -11,6 +11,8 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -162,6 +164,11 @@ func (s *Store) ArchiveProject(
 		).Scan(&archived); errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		} else if err != nil {
+			return err
+		}
+		// A deleted project's artifacts go with it; this also finishes the
+		// cleanup for a project deleted before artifacts were removed.
+		if err := deleteProjectArtifactsTx(ctx, tx, orgID, projectID); err != nil {
 			return err
 		}
 		if archived {
@@ -331,6 +338,7 @@ func (s *Store) CreateSession(
 		var err error
 		session, err = createSessionTx(
 			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, s.billing.forPrincipal(principal, orgID), input, input.ParentSessionID, principal.UserID,
+			s.coderReadableNames,
 		)
 		return err
 	})
@@ -574,6 +582,7 @@ func (s *Store) CreateGitHubScratchProject(
 			input.Session,
 			"",
 			principal.UserID,
+			s.coderReadableNames,
 		)
 		if err != nil {
 			return err
@@ -612,6 +621,30 @@ func (s *Store) CreateGitHubScratchProject(
 	return project, session, err
 }
 
+// sessionDefaultInterfaceKey is the key of ao_sessions.agent_config that holds
+// the user's default session interface the session was created with
+// (domain.CreateSession.DefaultInterface). The workers an orchestrator spawns
+// resolve their interface from it (CreateOrchestratorChild); a session created
+// without one has no key, which reads as the TUI default. It lives beside the
+// agent config, outside domain.ProjectAgentConfig, so project settings never
+// accept it and every reader of the agent config ignores it.
+const sessionDefaultInterfaceKey = "defaultInterface"
+
+// sessionAgentConfigJSON is a new session's agent_config: its agent config
+// and, when the client sent one, its default session interface.
+func sessionAgentConfigJSON(agentConfig domain.ProjectAgentConfig, defaultInterface domain.SessionInterface) ([]byte, error) {
+	encoded, err := json.Marshal(agentConfig)
+	if err != nil || !defaultInterface.Valid() {
+		return encoded, err
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return nil, err
+	}
+	fields[sessionDefaultInterfaceKey] = string(defaultInterface)
+	return json.Marshal(fields)
+}
+
 func createSessionTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -620,6 +653,7 @@ func createSessionTx(
 	billing billingPolicy,
 	input domain.CreateSession,
 	parentSessionID, actorUserID string,
+	readableCoderNames bool,
 ) (domain.Session, error) {
 	if input.Mode == "" {
 		input.Mode = "standard"
@@ -627,6 +661,10 @@ func createSessionTx(
 	if input.DeniedCommands == nil {
 		input.DeniedCommands = []string{}
 	}
+	// The idempotency payload keeps its historical shape, an interface that
+	// always reads tui unless one was requested; the interface the session
+	// starts in is resolved below, once the harness is known.
+	requestedInterface := input.Interface
 	if !input.Interface.Valid() {
 		input.Interface = domain.SessionInterfaceTUI
 	}
@@ -685,6 +723,28 @@ func createSessionTx(
 		return domain.Session{}, err
 	}
 
+	var projectConfig json.RawMessage
+	var defaultBranch string
+	if err := tx.QueryRow(ctx, `SELECT config, default_branch FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
+		orgID, input.ProjectID).Scan(&projectConfig, &defaultBranch); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.Session{}, ErrNotFound
+		}
+		return domain.Session{}, err
+	}
+	prefix, err := domain.ProjectSessionPrefix(projectConfig)
+	if err != nil {
+		return domain.Session{}, ErrInvalid
+	}
+	// A requested branch is checked before the sandbox quota and plan limits,
+	// so a branch that can never work is reported as such rather than as a
+	// full organization the caller would wait out for nothing.
+	if input.Branch != "" {
+		if err := checkRequestedBranchTx(ctx, tx, orgID, input.ProjectID, input.Branch, defaultBranch, prefix, projectConfig); err != nil {
+			return domain.Session{}, err
+		}
+	}
+
 	var activeSandboxes int
 	if err := tx.QueryRow(
 		ctx,
@@ -715,21 +775,13 @@ func createSessionTx(
 			return domain.Session{}, err
 		}
 	}
-	var projectConfig json.RawMessage
-	var defaultBranch string
-	if err := tx.QueryRow(ctx, `SELECT config, default_branch FROM ao_projects WHERE org_id = $1 AND id = $2 AND archived_at IS NULL`,
-		orgID, input.ProjectID).Scan(&projectConfig, &defaultBranch); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return domain.Session{}, ErrNotFound
-		}
-		return domain.Session{}, err
-	}
 	harness, agentConfig, err := domain.SessionAgentConfig(projectConfig, input.Kind, input.Harness, input.Model)
 	if err != nil {
 		return domain.Session{}, ErrInvalid
 	}
 	input.Harness, input.Model = harness, agentConfig.Model
-	agentConfigJSON, err := json.Marshal(agentConfig)
+	input.Interface = domain.StartInterface(input.Kind, requestedInterface, input.DefaultInterface, input.Harness)
+	agentConfigJSON, err := sessionAgentConfigJSON(agentConfig, input.DefaultInterface)
 	if err != nil {
 		return domain.Session{}, err
 	}
@@ -741,14 +793,13 @@ func createSessionTx(
 	}
 	autoReview := input.Kind == "worker" && settings.AutoReview != nil && *settings.AutoReview
 
-	prefix, err := domain.ProjectSessionPrefix(projectConfig)
-	if err != nil {
-		return domain.Session{}, ErrInvalid
-	}
-	if input.Branch != "" {
-		if err := checkRequestedBranchTx(ctx, tx, orgID, input.ProjectID, input.Branch, defaultBranch, prefix, projectConfig); err != nil {
-			return domain.Session{}, err
-		}
+	// A Chat session's opening prompt is its first queued turn (below), so its
+	// terminal launch carries no prompt: a later switch to the terminal starts
+	// the agent without it, as a local Chat session's does, and the terminal's
+	// turn forwarder runs the queued turn once if Chat never claimed it.
+	launchPrompt := input.Prompt
+	if input.Interface == domain.SessionInterfaceChat {
+		launchPrompt = ""
 	}
 	err = scanSession(tx.QueryRow(
 		ctx,
@@ -756,10 +807,10 @@ func createSessionTx(
 		INSERT INTO ao_sessions (
 			id, org_id, project_id, kind, harness, display_name, branch,
 			prompt, mode, model, denied_commands, interface, parent_session_id, created_by_user_id, reasoning_effort, agent_config,
-			auto_review_enabled
+			auto_review_enabled, requested_output
 		)
 		SELECT id, $1, $2, $3, $4, $5, COALESCE(NULLIF($17, ''), $15 || '/' || left(id::text, 8)),
-			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16
+			$6, $7, $8, $9, $10, NULLIF($11, '')::uuid, NULLIF($12, '')::uuid, $13, $14, $16, $18
 		FROM generated
 		RETURNING `+sessionInsertReturning,
 		orgID,
@@ -767,7 +818,7 @@ func createSessionTx(
 		input.Kind,
 		input.Harness,
 		input.DisplayName,
-		input.Prompt,
+		launchPrompt,
 		input.Mode,
 		input.Model,
 		input.DeniedCommands,
@@ -779,6 +830,7 @@ func createSessionTx(
 		prefix,
 		autoReview,
 		input.Branch,
+		input.RequestedOutput,
 	), &session)
 	if err != nil {
 		return domain.Session{}, normalizeConstraintError(err)
@@ -809,6 +861,19 @@ func createSessionTx(
 	if err != nil {
 		return domain.Session{}, err
 	}
+	if provider == sandbox.ProviderCoder && readableCoderNames {
+		// The Coder workspace name is chosen here, the only point that knows
+		// the new session id, from the session's kind and its display name
+		// at creation. It is stored on the immutable profile, so a later
+		// rename of the session never changes it. Without readable names
+		// (SetCoderReadableWorkspaceNames) nothing is stored and the session
+		// keeps the <prefix>-<id> name every release computes.
+		if resourceProfile, err = sandbox.StampCoderWorkspaceName(
+			resourceProfile, session.Kind, session.DisplayName, session.ID, time.Now(),
+		); err != nil {
+			return domain.Session{}, ErrInvalid
+		}
+	}
 	bootstrapContext, err := patchSandboxJSON(
 		input.BootstrapContext, provider, orgID, session.ID,
 		input.Release, input.SandboxConnectionID, true,
@@ -828,10 +893,19 @@ func createSessionTx(
 		return domain.Session{}, normalizeConstraintError(err)
 	}
 	if input.Prompt != "" {
-		if _, err := appendUserMessageEvent(
-			ctx, tx, orgID, session.ID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
-		); err != nil {
+		event, err := appendUserMessageEvent(
+			ctx, tx, orgID, session.ID, actorUserID, input.Prompt, domain.ChatTurnSettings{Model: input.Model, ReasoningEffort: input.ReasoningEffort},
+		)
+		if err != nil {
 			return domain.Session{}, err
+		}
+		// A TUI agent gets the prompt on its command line. The Chat controller
+		// takes work only from the turn queue, so a session that starts in Chat
+		// queues its prompt as the first turn (and launches without it, above).
+		if session.Interface == domain.SessionInterfaceChat {
+			if err := queueInitialChatTurnTx(ctx, tx, orgID, session.ID, event); err != nil {
+				return domain.Session{}, err
+			}
 		}
 	}
 
@@ -1086,7 +1160,38 @@ const sessionSelect = `
 				SELECT 1 FROM ao_turns turn
 				WHERE turn.org_id = session.org_id AND turn.session_id = session.id
 					AND turn.state IN ('queued', 'claimed', 'running')
+					-- A task queued behind a failed workspace startup is not
+					-- work in flight (see queuedBehindFailedStartupSQL).
+					AND NOT (turn.state = 'queued' AND COALESCE(sandbox.startup_error_code, '') IN (` + workspaceStartupErrorCodesSQL + `)
+						AND NOT COALESCE(sandbox.last_busy_at > now() - ` + workerBusyRecentSQL + `, false))
 			) THEN 'active'
+			-- The project's Setup is running: the agent has not started, but the
+			-- session is busy, not idle (the worker already reports it busy, which
+			-- holds off idle pause; this is only what the session reads as). Setup
+			-- runs before the agent, so while it runs its step events are the
+			-- session's newest, and only the newest few are read. A step's running
+			-- updates are deleted once its final event lands, so a running step
+			-- event newer than the run's summary (workspace.setup) and the agent's
+			-- start (agent.ready) is a step still in progress; one whose worker is
+			-- gone is not.
+			WHEN EXISTS (
+				SELECT 1 FROM ao_worker_connections live
+				WHERE live.org_id = session.org_id AND live.session_id = session.id AND live.disconnected_at IS NULL
+			) AND COALESCE((
+				SELECT recent.type = '` + worker.ScriptStepEventType + `'
+					AND recent.payload->>'phase' = '` + worker.ScriptPhaseSetup + `'
+					AND recent.payload->>'status' = '` + worker.ScriptStepRunning + `'
+				FROM (
+					SELECT newest.sequence, newest.type, newest.payload
+					FROM ao_events newest
+					WHERE newest.org_id = session.org_id AND newest.session_id = session.id
+					ORDER BY newest.sequence DESC
+					LIMIT 20
+				) recent
+				WHERE recent.type IN ('` + worker.ScriptStepEventType + `', '` + worker.SetupEventType + `', 'agent.ready')
+				ORDER BY recent.sequence DESC
+				LIMIT 1
+			), false) THEN 'active'
 			ELSE session.activity_state
 		END AS activity_state,
 		session.is_terminated,
@@ -1123,6 +1228,8 @@ const sessionSelect = `
 			THEN COALESCE(sandbox.resource_profile->'coder'->>'owner', '') ELSE '' END,
 		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
 			THEN COALESCE(sandbox.resource_profile->'coder'->>'workspaceNamePrefix', '') ELSE '' END,
+		CASE WHEN sandbox.provider_connection_id IS NOT NULL AND sandbox.provider = 'coder'
+			THEN COALESCE(sandbox.resource_profile->'coder'->>'workspaceName', '') ELSE '' END,
 		COALESCE((
 			SELECT MAX(terminal.worker_epoch)
 			FROM ao_terminal_sessions terminal
@@ -1134,7 +1241,18 @@ const sessionSelect = `
 				  AND review_terminal_run.review_terminal_id = terminal.id
 			)
 		), 0),
-		session.created_at, session.updated_at
+		session.requested_output,
+		CASE
+			WHEN NOT EXISTS (
+				SELECT 1 FROM ao_pull_requests session_pr
+				WHERE session_pr.org_id = session.org_id AND session_pr.session_id = session.id
+			) THEN session.output_type
+			WHEN session.output_type IN ('artifact', 'pr_artifact') THEN 'pr_artifact'
+			ELSE 'pr'
+		END,
+		session.created_at, session.updated_at,
+		COALESCE(session.requested_by_user_id::text, ''),
+		COALESCE((SELECT requester.display_name FROM ao_users requester WHERE requester.id = session.requested_by_user_id), '')
 	FROM ao_sessions session
 	LEFT JOIN ao_sandboxes sandbox
 		ON sandbox.org_id = session.org_id AND sandbox.session_id = session.id
@@ -1148,7 +1266,8 @@ const sessionInsertReturning = `id, org_id, project_id, kind, harness,
 	display_name, branch, mode, model, denied_commands, interface,
 	activity_state, is_terminated, auto_inject_ci, auto_inject_review,
 	terminate_on_pr_merge, false, NULL::timestamptz, 0,
-	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', 0, created_at, updated_at`
+	'', '', '', '', '', '', '', NULL::timestamptz, '', '', '', '', '', 0,
+	requested_output, output_type, created_at, updated_at, '', ''`
 
 func getSession(
 	ctx context.Context,
@@ -1230,9 +1349,14 @@ func scanSession(row scanner, session *domain.Session) error {
 		&coderWorkspace.BaseURL,
 		&coderWorkspace.Owner,
 		&coderWorkspace.NamePrefix,
+		&coderWorkspace.Name,
 		&session.WorkerEpoch,
+		&session.RequestedOutput,
+		&session.OutputType,
 		&session.CreatedAt,
 		&session.UpdatedAt,
+		&session.RequestedByUserID,
+		&session.RequestedByName,
 	)
 	session.BYOCoderWorkspace = nil
 	if coderWorkspace.BaseURL != "" && coderWorkspace.Owner != "" {

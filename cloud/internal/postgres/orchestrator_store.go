@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -120,14 +121,16 @@ func (s *Store) CreateOrchestratorChild(
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		var projectID string
 		var createdByUserID *string
+		var parentDefault domain.SessionInterface
 		err := tx.QueryRow(
 			ctx,
-			`SELECT project_id, created_by_user_id::text
+			`SELECT project_id, created_by_user_id::text,
+				COALESCE(agent_config->>'`+sessionDefaultInterfaceKey+`', '')
 			FROM ao_sessions
 			WHERE org_id = $1 AND id = $2
 			  AND kind = 'orchestrator' AND is_terminated = false`,
 			orgID, orchestratorSessionID,
-		).Scan(&projectID, &createdByUserID)
+		).Scan(&projectID, &createdByUserID, &parentDefault)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrForbidden
 		}
@@ -136,17 +139,93 @@ func (s *Store) CreateOrchestratorChild(
 		}
 		input.ProjectID = projectID
 		input.Kind = "worker"
+		// A spawned worker resolves its interface from the default session
+		// interface its orchestrator was created with, as a local spawn
+		// resolves from the daemon's default.
+		if input.DefaultInterface == "" {
+			input.DefaultInterface = parentDefault
+		}
 		creator := ""
 		if createdByUserID != nil {
 			creator = *createdByUserID
 		}
 		child, err = createSessionTx(
 			ctx, tx, orgID, idempotencyKey, maxActiveSandboxes, s.billing,
-			input, orchestratorSessionID, creator,
+			input, orchestratorSessionID, creator, s.coderReadableNames,
 		)
-		return err
+		if err != nil {
+			return err
+		}
+		// A guest the project was shared with who asked the orchestrator for
+		// this session gets it as theirs: they may write in it, and the rest
+		// of the project share only watches.
+		requester, err := orchestratorGuestRequesterTx(ctx, tx, orgID, projectID, orchestratorSessionID)
+		if err != nil || requester == "" {
+			return err
+		}
+		return tx.QueryRow(ctx,
+			`UPDATE ao_sessions session SET requested_by_user_id = $3::uuid
+			WHERE session.org_id = $1 AND session.id = $2
+			RETURNING session.requested_by_user_id::text,
+				COALESCE((SELECT person.display_name FROM ao_users person WHERE person.id = $3::uuid), '')`,
+			orgID, child.ID, requester,
+		).Scan(&child.RequestedByUserID, &child.RequestedByName)
 	})
 	return child, err
+}
+
+// orchestratorGuestRequesterTx names the guest whose request the orchestrator
+// is acting on now, if it is one: the author of its running turn, or else
+// whoever holds its composer (an orchestrator in a terminal has no turns).
+// Only someone with an editor link to the whole project who is not a member
+// of the organization counts; anyone else's sessions stay the owner's.
+func orchestratorGuestRequesterTx(ctx context.Context, tx pgx.Tx, orgID, projectID, orchestratorSessionID string) (string, error) {
+	var candidate string
+	err := tx.QueryRow(ctx,
+		`SELECT COALESCE(message.payload->>'authorUserId', '')
+		FROM ao_turns turn
+		JOIN ao_events message
+		  ON message.org_id = turn.org_id AND message.session_id = turn.session_id
+		 AND message.sequence = turn.user_message_sequence
+		WHERE turn.org_id = $1 AND turn.session_id = $2
+		  AND turn.state IN ('provisioning', 'running', 'cancel_requested')
+		ORDER BY turn.started_at DESC NULLS LAST, turn.created_at DESC
+		LIMIT 1`,
+		orgID, orchestratorSessionID,
+	).Scan(&candidate)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	if candidate == "" {
+		err = tx.QueryRow(ctx,
+			`SELECT COALESCE(holder_user_id::text, '')
+			FROM ao_composer_leases
+			WHERE org_id = $1 AND session_id = $2 AND expires_at > now()`,
+			orgID, orchestratorSessionID,
+		).Scan(&candidate)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+	}
+	if _, parseErr := uuid.Parse(candidate); parseErr != nil {
+		return "", nil
+	}
+	var guest bool
+	err = tx.QueryRow(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM ao_project_share_grants grant_row
+			WHERE grant_row.org_id = $1 AND grant_row.project_id = $2 AND grant_row.user_id = $3::uuid
+			  AND grant_row.status = 'active' AND grant_row.session_id IS NULL AND grant_row.role = 'editor'
+		) AND NOT EXISTS (
+			SELECT 1 FROM ao_org_memberships membership
+			WHERE membership.org_id = $1 AND membership.user_id = $3::uuid AND membership.status = 'active'
+		)`,
+		orgID, projectID, candidate,
+	).Scan(&guest)
+	if err != nil || !guest {
+		return "", err
+	}
+	return candidate, nil
 }
 
 func (s *Store) SendOrchestratorChildMessage(
@@ -174,7 +253,7 @@ func (s *Store) SendOrchestratorChildMessage(
 			return err
 		}
 		if !allowed {
-			return ErrForbidden
+			return ErrNotOrchestratorChild
 		}
 		// Waking a paused billed child is refused beyond the plan, so the
 		// orchestrator learns why its worker did not start.
@@ -297,8 +376,23 @@ func (s *Store) DeleteOrchestratorChild(
 		if err != nil {
 			return normalizeConstraintError(err)
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrForbidden
+		if tag.RowsAffected() > 0 {
+			return nil
+		}
+		// No sandbox moved: either the session is not this orchestrator's
+		// child, or it is and has nothing left to delete.
+		var child bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM ao_sessions
+				WHERE org_id = $1 AND id = $2 AND project_id = $3 AND parent_session_id = $4
+			)`,
+			orgID, childSessionID, projectID, orchestratorSessionID,
+		).Scan(&child); err != nil {
+			return err
+		}
+		if !child {
+			return ErrNotOrchestratorChild
 		}
 		return nil
 	})

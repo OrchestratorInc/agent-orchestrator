@@ -255,6 +255,16 @@ describe("HarnessSettingsSection", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("keeps unknown authentication details on the harness page with a clear label", async () => {
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unknown";
+		mockInstalledOperations("npm", readiness);
+		renderSection();
+
+		const page = await findAgentRow("codex");
+		expect(await within(page).findByText("Login status unavailable")).toBeInTheDocument();
+	});
+
 	it("lists names with a status and update mark, then opens one harness page with its actions", async () => {
 		mockInstalledOperations("npm");
 		renderSection();
@@ -575,15 +585,17 @@ describe("HarnessSettingsSection", () => {
 		expect(screen.queryByRole("menuitem", { name: "empty · 0" })).toBeNull();
 	});
 
-	it("asks for login before loading models", async () => {
+	it("asks for login before refreshing models", async () => {
 		const readiness = readyCatalog();
 		readiness.agents[1].authentication.state = "unauthorized";
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const page = await findAgentRow("codex");
 		await userEvent.click(within(page).getByRole("tab", { name: "Models" }));
+		// No saved list here, so readiness explains the empty panel. The saved list
+		// may be read without readiness; refreshing it waits for login.
 		expect(within(page).getByText("Log in to Codex to load its models.")).toBeInTheDocument();
-		expect((vi.mocked(apiClient.GET).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/models")).toBe(false);
+		expect((vi.mocked(apiClient.POST).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/models/refresh")).toBe(false);
 		await userEvent.click(within(page).getByRole("button", { name: "Account" }));
 		expect(within(page).getByRole("tab", { name: "Account" })).toHaveAttribute("aria-selected", "true");
 	});
@@ -644,6 +656,7 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm", readiness);
 		renderSection();
 		const page = await findAgentRow("codex");
+		expect(within(page).getByText("Connected")).toBeInTheDocument();
 		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
 		expect(within(page).getByText("Connected · token renews on next run")).toBeInTheDocument();
 		expect(within(page).queryByText("Credentials not verified")).toBeNull();
@@ -935,8 +948,8 @@ describe("HarnessSettingsSection", () => {
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByRole("button", { name: "Update" })).toBeEnabled();
 		expect(within(row).queryByRole("button", { name: "Login" })).toBeNull();
-		// A configured credential reads as connected; an unknown one claims nothing.
-		if (authentication === "configured") expect(within(row).getByText("Connected")).toBeInTheDocument();
+		// Credential presence alone does not imply a failed provider check.
+		if (authentication === "configured") expect(within(row).getByText("Installed")).toBeInTheDocument();
 		else expect(within(row).queryByText("Connected")).toBeNull();
 	});
 
@@ -1395,8 +1408,10 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Instructions" })).not.toBeInTheDocument();
 	});
 
-	it("shows configured MiMo Code as connected and offers to log in again", async () => {
+	it("keeps configured MiMo Code unverified and offers to log in again", async () => {
 		const configured = { agents: [agentReadiness("mimo-code", "MiMo Code", { authentication: "configured" })] };
+		configured.agents[0].authentication.diagnostics = [{ method: "provider_validation", code: "probe_timeout",
+			reason: "Provider check timed out.", checkedAt: "2026-10-10T10:00:00Z", cached: false, durationMs: 0 }];
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: configured } as never;
 			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "mimo-code", action: "login", launchMode: "terminal", available: true }] } } as never;
@@ -1406,7 +1421,7 @@ describe("HarnessSettingsSection", () => {
 		});
 		renderSection();
 		const row = await findAgentRow("mimo-code");
-		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(await within(row).findByText("Credentials not verified")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
@@ -1587,7 +1602,7 @@ describe("HarnessSettingsSection", () => {
 		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
 	});
 
-	it("keeps Unreal documentation available when credentials are configured but unverified", async () => {
+	it("keeps Unreal documentation available with a neutral configured status", async () => {
 		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "configured" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: unrealCatalog } as never;
@@ -1602,8 +1617,11 @@ describe("HarnessSettingsSection", () => {
 
 		renderSection();
 		const row = await findAgentRow("unreal-agent");
-		expect(await within(row).findByText("Configured")).toBeInTheDocument();
+		expect(await within(row).findByText("Installed")).toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "View documentation" })).toBeEnabled();
+		await userEvent.click(within(row).getByRole("tab", { name: "Health" }));
+		expect(within(row).getByText("Connection not checked")).toBeInTheDocument();
+		expect(within(row).queryByText("Credentials not verified")).toBeNull();
 	});
 
 	it("shows cached readiness while silently refreshing when the page opens", async () => {
@@ -1865,7 +1883,7 @@ describe("HarnessSettingsSection", () => {
 		await waitFor(() => expect(close).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
 			params: { path: { handleId: "auth-mimo" } },
 		}));
-		expect(await within(row).findByText("Connected")).toBeInTheDocument();
+		expect(await within(row).findByText("Installed")).toBeInTheDocument();
 		expect(within(row).queryByText("Configured")).toBeNull();
 		expect(within(row).queryByRole("button", { name: "Login" })).not.toBeInTheDocument();
 		expect(within(row).getByRole("button", { name: "Log in again" })).toBeEnabled();
@@ -1920,7 +1938,7 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Authorized" })).toBeNull();
 	});
 
-	it("uses Configured for a completed setup action", async () => {
+	it("uses Connected for a completed setup action", async () => {
 		const authorized = catalogWithInstalled("codex");
 		authorized.agents[1].authentication.state = "authorized";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
@@ -1941,7 +1959,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("codex");
 
-		await within(row).findByText("Configured");
+		await within(row).findByText("Connected");
 	});
 
 	it("does not expose manual readiness controls", async () => {
@@ -1963,9 +1981,13 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByRole("button", { name: "Check configuration" })).not.toBeInTheDocument();
 	});
 
-	it("shows a neutral unknown state without install controls before the first observation", async () => {
+	it.each(["not_checked", "install_check_unsupported"])("shows a neutral unknown state without install controls for %s", async (reasonCode) => {
 		const unknown = catalogWithInstalled();
 		unknown.agents[1].installation.state = "unknown";
+		unknown.agents[1].installation.reasonCode = reasonCode;
+		unknown.agents[1].installation.reason = reasonCode === "not_checked"
+			? "Installation has not been checked yet."
+			: "Installation checks are not supported for this harness.";
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: unknown } as never;
 			if (path === "/api/v1/agents/installers") return { data: plans } as never;
@@ -1977,6 +1999,7 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const row = await findAgentRow("codex");
 		expect(await within(row).findByText("Installation status unknown")).toBeInTheDocument();
+		expect(within(row).queryByText("Installation checks are not supported for this harness.")).not.toBeInTheDocument();
 		expect(within(row).queryByRole("button", { name: "Install" })).not.toBeInTheDocument();
 	});
 

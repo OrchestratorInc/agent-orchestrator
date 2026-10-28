@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>Allow AO agent?</title>
+	<link rel="stylesheet" href="pages.css">
+</head>
+<body>
+	<h1>Allow an AO agent to use Chrome?</h1>
+	<p class="muted">An Agent Orchestrator session wants to browse in this Chrome, with your sign-ins.</p>
+	<div class="panel">
+		<div class="muted">Session</div>
+		<div class="mono" id="session"></div>
+	</div>
+	<p>If you allow it, the agent:</p>
+	<ul>
+		<li>works only in its own <strong>AO tab group</strong>, never your other tabs;</li>
+		<li>can read and act on pages it opens there, signed in as you;</li>
+		<li>cannot read your cookies, history, bookmarks, or passwords;</li>
+		<li>stays off sites on the deny list (see Options).</li>
+	</ul>
+	<label class="check">
+		<input type="checkbox" id="trusted" checked>
+		<span>Use real clicks and typing. Chrome shows a “started debugging this browser” bar while the agent acts. Turn off to use simulated input, which some sites ignore.</span>
+	</label>
+	<p class="muted">You can stop every agent any time from the AO Browser Bridge toolbar button.</p>
+	<p class="error" id="error" role="alert"></p>
+	<div class="actions">
+		<button type="button" id="deny">Deny</button>
+		<button type="button" class="primary" id="allow">Allow</button>
+	</div>
+	<script src="consent.js"></script>
+</body>
+</html>

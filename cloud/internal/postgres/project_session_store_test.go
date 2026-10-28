@@ -89,6 +89,23 @@ func TestCreateSessionKeepsRequestedBranch(t *testing.T) {
 	}
 }
 
+// The branch override and the requested output are separate bind parameters
+// of the session insert; each lands in its own column.
+func TestCreateSessionKeepsBranchAndRequestedOutputApart(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	session, err := store.CreateSession(context.Background(), domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID,
+		"create-output-"+uuid.NewString(), 10, domain.CreateSession{
+			ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "Output test",
+			Prompt: "hello", Provider: "docker", Branch: "feature/report", RequestedOutput: domain.RequestedOutputArtifact,
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Branch != "feature/report" || session.RequestedOutput != domain.RequestedOutputArtifact {
+		t.Fatalf("branch = %q, requested output = %q", session.Branch, session.RequestedOutput)
+	}
+}
+
 // A requested branch is one live session's at a time, and never an additional
 // repository's base branch; a terminated session releases its branch, and a
 // session whose branch was taken over while it was deleted is not restored.
@@ -171,6 +188,48 @@ func TestCreateSessionPreservesInitialEffort(t *testing.T) {
 	}
 }
 
+// A Chat session launches in Chat and queues its opening prompt as a turn for
+// the Chat controller, so its terminal launch carries no prompt (a later switch
+// to the terminal does not run it again, as locally); a Terminal session gets
+// the prompt on the agent's command line and queues no turn.
+func TestCreateSessionStartsInTheRequestedInterface(t *testing.T) {
+	store, admin, fixture := openNotificationTestStore(t)
+	// Read as the organization, so forced row-level security shows the turns
+	// under a role that does not bypass it.
+	admin = orgAdminPool(t, admin, fixture.orgID)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		requested    domain.SessionInterface
+		want         domain.SessionInterface
+		turns        int
+		launchPrompt string
+	}{
+		{domain.SessionInterfaceChat, domain.SessionInterfaceChat, 1, ""},
+		{"", domain.SessionInterfaceTUI, 0, "hello"},
+	} {
+		session, err := store.CreateSession(ctx, domain.Principal{UserID: fixture.userID, Provider: "local"}, fixture.orgID,
+			"create-interface-"+uuid.NewString(), 10, domain.CreateSession{
+				ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "Interface test",
+				Prompt: "hello", Provider: "docker", Interface: tc.requested,
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+		launch, err := store.WorkerLaunchSpec(ctx, fixture.orgID, session.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var turns int
+		if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_turns WHERE session_id = $1 AND state = 'queued'`, session.ID).Scan(&turns); err != nil {
+			t.Fatal(err)
+		}
+		if launch.Interface != tc.want || turns != tc.turns || launch.Prompt != tc.launchPrompt {
+			t.Fatalf("requested %q: launch interface = %q, queued turns = %d, launch prompt = %q; want %q, %d, %q",
+				tc.requested, launch.Interface, turns, launch.Prompt, tc.want, tc.turns, tc.launchPrompt)
+		}
+	}
+}
+
 func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 	store, admin, fixture := openNotificationTestStore(t)
 	ctx := context.Background()
@@ -211,16 +270,45 @@ func TestQueuedTurnDoesNotOverrideIdleWorkerActivity(t *testing.T) {
 }
 
 func TestSessionInsertReturningMatchesScannerArity(t *testing.T) {
-	const scanSessionDestinations = 36
+	const scanSessionDestinations = 41
 	if got := strings.Count(sessionInsertReturning, ",") + 1; got != scanSessionDestinations {
 		t.Fatalf("session insert RETURNING fields = %d, want %d", got, scanSessionDestinations)
 	}
 	for _, field := range []string{
 		"reviewer_harness", "auto_review_enabled", "auto_inject_ci",
 		"auto_inject_review", "terminate_on_pr_merge",
+		"requested_output", "output_type",
 	} {
 		if !strings.Contains(sessionInsertReturning, field) {
 			t.Fatalf("session insert RETURNING is missing %s", field)
 		}
+	}
+}
+
+// A full organization still reports a requested branch that can never work,
+// rather than a quota error the caller would wait out for nothing.
+func TestCreateSessionChecksTheBranchBeforeTheSandboxQuota(t *testing.T) {
+	store, _, fixture := openNotificationTestStore(t)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+	create := func(branch string, maxSandboxes int) error {
+		t.Helper()
+		_, err := store.CreateSession(ctx, principal, fixture.orgID, "branch-quota-"+uuid.NewString(), maxSandboxes, domain.CreateSession{
+			ProjectID: fixture.projectID, Kind: "worker", Harness: "claude-code", DisplayName: "Branch quota",
+			Prompt: "hello", Provider: "docker", Branch: branch,
+		})
+		return err
+	}
+	if err := create("feature/held", 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := create("main", 0); !errors.Is(err, ErrInvalidBranch) {
+		t.Fatalf("the default branch in a full organization: err = %v, want ErrInvalidBranch", err)
+	}
+	if err := create("feature/held", 0); !errors.Is(err, ErrBranchInUse) {
+		t.Fatalf("a held branch in a full organization: err = %v, want ErrBranchInUse", err)
+	}
+	if err := create("feature/free", 0); !errors.Is(err, ErrSandboxQuotaExceeded) {
+		t.Fatalf("a usable branch in a full organization: err = %v, want ErrSandboxQuotaExceeded", err)
 	}
 }

@@ -105,6 +105,32 @@ func (c OrgCoderConfig) ValidateDevEnvironment() error {
 	return ValidateCoderWorkingDirectory(c.WorkingDirectory)
 }
 
+// NormalizeCoderWorkingDirectory canonicalizes a working directory as it is
+// saved: surrounding space trimmed and repeated or trailing slashes dropped
+// (/work/{repo}/ becomes /work/{repo}, ~/work//{repo} becomes ~/work/{repo}),
+// keeping its ~/, $HOME/ or / prefix. A value without one, or naming nothing
+// below it, is returned trimmed for ValidateCoderWorkingDirectory to refuse.
+func NormalizeCoderWorkingDirectory(value string) string {
+	value = strings.TrimSpace(value)
+	for _, prefix := range []string{"~/", "$HOME/", "/"} {
+		rest, ok := strings.CutPrefix(value, prefix)
+		if !ok {
+			continue
+		}
+		var segments []string
+		for _, segment := range strings.Split(rest, "/") {
+			if segment != "" {
+				segments = append(segments, segment)
+			}
+		}
+		if len(segments) == 0 {
+			return value
+		}
+		return prefix + strings.Join(segments, "/")
+	}
+	return value
+}
+
 // ValidateCoderWorkingDirectory checks a working directory template: empty,
 // or an absolute path or one under home ("~/" or "$HOME/"), at most
 // MaxCoderWorkingDirectoryLength characters, without control characters,
@@ -132,6 +158,11 @@ func ValidateCoderWorkingDirectory(value string) error {
 	for _, segment := range strings.Split(rest, "/") {
 		if segment == ".." || segment == "." {
 			return errors.New("The working directory must not contain . or .. segments.")
+		}
+		// AO's own state (~/.ao, or the durable root's .ao) holds the
+		// worker's token and hooks; no checkout may live there.
+		if segment == ".ao" {
+			return errors.New("The working directory must not be inside AO's own .ao folder.")
 		}
 	}
 	if strings.ContainsAny(strings.ReplaceAll(rest, CoderWorkingDirectoryRepo, ""), "{}$`\\") {
@@ -182,4 +213,38 @@ func UnknownCoderTemplateParameters(parameters map[string]string, declared []str
 	}
 	sort.Strings(unknown)
 	return unknown
+}
+
+// CoderWorkingFolderNotDurableCode is the startup error, and settings error,
+// code for a working folder outside the Coder connection's durable root.
+const CoderWorkingFolderNotDurableCode = "working_directory_not_durable"
+
+// CoderWorkingFolderNotDurableMessage says a working folder must be inside
+// durableRoot (as shown to the user).
+func CoderWorkingFolderNotDurableMessage(durableRoot string) string {
+	return "The working folder must be inside " + durableRoot + " so the agent's work survives restarts."
+}
+
+// CoderWorkingFolderOutsideDurableRoot reports whether a project's working
+// folder (as saved, {repo} allowed) is outside a Coder connection's durable
+// root (durableRoot: "$HOME", "~" or empty for the home directory, else an
+// absolute folder), where a session that runs as the dedicated ao-worker user
+// would lose uncommitted work when the workspace restarts. With the home
+// directory as the root, a folder must start with ~/ or $HOME/: an absolute
+// folder (for example /workspace/{repo} on a Docker template) is refused,
+// since a workspace's home is known only inside it. With an absolute root, an
+// absolute folder must be below it, and a ~/ folder is left to the session's
+// startup, which knows the home. It returns the root as shown to the user.
+func CoderWorkingFolderOutsideDurableRoot(folder, durableRoot string) (outside bool, shown string) {
+	folder = strings.TrimSpace(folder)
+	durableRoot = strings.TrimRight(strings.TrimSpace(durableRoot), "/")
+	homeRelative := strings.HasPrefix(folder, "~/") || strings.HasPrefix(folder, "$HOME/")
+	switch durableRoot {
+	case "", "~", "$HOME", "${HOME}":
+		return folder != "" && !homeRelative, "your home folder (~)"
+	}
+	if folder == "" || homeRelative {
+		return false, durableRoot
+	}
+	return !strings.HasPrefix(folder, durableRoot+"/"), durableRoot
 }

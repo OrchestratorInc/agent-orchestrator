@@ -104,6 +104,11 @@ func (s *Store) DecideChatApproval(ctx context.Context, principal domain.Princip
 		if err := json.Unmarshal(payload, &request); err != nil {
 			return err
 		}
+		if allowed, err := mayDirectTurnTx(ctx, tx, orgID, sessionID, request.TurnID, principal.UserID); err != nil {
+			return err
+		} else if !allowed {
+			return ErrForbidden
+		}
 		var options []struct {
 			ID string `json:"id"`
 		}

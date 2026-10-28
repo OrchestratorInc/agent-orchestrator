@@ -57,34 +57,34 @@ type AgentModelCatalog struct {
 }
 
 type AgentNativeSession struct {
-	ID               domain.AgentNativeSessionID
-	AoSessionID      domain.SessionID
-	Harness          domain.AgentHarness
+	ID               string
+	AoSessionID      string
+	Harness          string
 	ConfigDir        string
 	NativeSessionID  string
 	TranscriptPath   string
-	LastGenerationID domain.AgentGenerationID
+	LastGenerationID string
 	CreatedAt        time.Time
 	LastUsedAt       time.Time
 }
 
 type AgentSwitch struct {
-	ID                      domain.AgentSwitchID
-	SessionID               domain.SessionID
+	ID                      string
+	SessionID               string
 	IdempotencyKey          string
-	RequestFingerprint      domain.AgentSwitchRequestFingerprint
-	FromHarness             domain.AgentHarness
-	TargetHarness           domain.AgentHarness
-	TargetNativeSessionRef  *domain.AgentNativeSessionID
-	TargetStartMode         domain.AgentSwitchTargetStartMode
-	State                   domain.AgentSwitchState
-	AgentHandoffStatus      domain.AgentHandoffStatus
-	SourceTranscriptStatus  domain.AgentSwitchSourceTranscriptStatus
-	SemanticHandoffIncluded bool
+	RequestFingerprint      string
+	FromHarness             string
+	TargetHarness           string
+	TargetNativeSessionRef  sql.NullString
+	TargetStartMode         string
+	State                   string
+	AgentHandoffStatus      string
+	SourceTranscriptStatus  string
+	SemanticHandoffIncluded int64
 	AgentHandoffPath        string
 	AgentHandoffHash        string
-	SourceGenerationID      domain.AgentGenerationID
-	TargetGenerationID      domain.AgentGenerationID
+	SourceGenerationID      string
+	TargetGenerationID      string
 	TargetRuntimeHandleID   string
 	TargetAcknowledgedAt    sql.NullTime
 	ErrorCode               string
@@ -149,7 +149,7 @@ type AgentSwitchFailureOutbox struct {
 
 type AgentSwitchFailurePolicy struct {
 	Singleton              int64
-	Enabled                bool
+	Enabled                int64
 	ConsentGeneration      string
 	DestinationFingerprint string
 	UpdatedAt              time.Time
@@ -187,6 +187,9 @@ type Automation struct {
 	LastRunAt   sql.NullTime
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	Model       string
+	Mode        string
+	Effort      string
 }
 
 type AutomationRun struct {
@@ -269,6 +272,7 @@ type Conversation struct {
 	UsageCurrency              sql.NullString
 	ActiveBranchID             string
 	OpencodeMode               string
+	AutoCompactWindow          string
 }
 
 type ConversationActivity struct {
@@ -309,6 +313,7 @@ type ConversationBranch struct {
 	ProviderScopeID        string
 	ProviderIdsScoped      int64
 	ReviewID               sql.NullString
+	HandoffNote            string
 }
 
 type ConversationEditDelivery struct {
@@ -353,6 +358,10 @@ type ConversationMessage struct {
 	Continuation        int64
 }
 
+type ConversationMessagesFt struct {
+	Text string
+}
+
 type ConversationProviderEvent struct {
 	ID              int64
 	ConversationID  string
@@ -386,24 +395,29 @@ type ConversationSteerDelivery struct {
 }
 
 type ConversationTurn struct {
-	ID                   string
-	ConversationID       string
-	HandledBySessionID   domain.SessionID
-	ProviderTurnID       string
-	ControllerGeneration string
-	State                domain.TurnState
-	ErrorMessage         string
-	RequestedAt          time.Time
-	StartedAt            sql.NullTime
-	CompletedAt          sql.NullTime
-	DiffJson             string
-	RolledBackAt         sql.NullTime
-	PlanJson             string
-	BranchID             string
-	PromotionStartedAt   sql.NullTime
-	PromotedToTurnID     sql.NullString
-	RetryOfTurnID        sql.NullString
-	HandledByReviewID    sql.NullString
+	ID                    string
+	ConversationID        string
+	HandledBySessionID    domain.SessionID
+	ProviderTurnID        string
+	ControllerGeneration  string
+	State                 domain.TurnState
+	ErrorMessage          string
+	RequestedAt           time.Time
+	StartedAt             sql.NullTime
+	CompletedAt           sql.NullTime
+	DiffJson              string
+	RolledBackAt          sql.NullTime
+	PlanJson              string
+	BranchID              string
+	PromotionStartedAt    sql.NullTime
+	PromotedToTurnID      sql.NullString
+	RetryOfTurnID         sql.NullString
+	HandledByReviewID     sql.NullString
+	UsageLimitResetsAt    sql.NullTime
+	UsageLimitAutoResume  int64
+	UsageLimitResumeError string
+	BatchedInput          int64
+	ProviderInputText     string
 }
 
 type Cue struct {
@@ -723,6 +737,9 @@ type Session struct {
 	StaleBinaryVersion               string
 	StaleBinaryLaunch                string
 	StaleBinarySwitchFailedAt        sql.NullTime
+	LaunchOptions                    string
+	BranchNaming                     bool
+	TemporaryBranch                  string
 }
 
 type SessionAgentAccount struct {
@@ -792,6 +809,17 @@ type SessionInterfaceTransitionMessage struct {
 	ClientMessageID string
 	SenderSessionID string
 	AuthoredByUser  bool
+}
+
+type SessionTerminalTurn struct {
+	ID              int64
+	SessionID       string
+	Harness         string
+	NativeSessionID string
+	UserRequest     string
+	AgentResponse   string
+	RequestedAt     time.Time
+	RespondedAt     sql.NullTime
 }
 
 type SessionWorktree struct {
