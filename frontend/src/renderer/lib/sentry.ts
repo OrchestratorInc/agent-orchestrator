@@ -1,7 +1,12 @@
 // Renderer Sentry intake is deliberately transport-free. Trusted preload adds
 // the latest main-owned generation before forwarding to Electron main.
 import { classifyError, type ClassifyInput, type Triage } from "../../shared/observability";
+import { DEFAULT_ELECTRON_SENTRY_DSN } from "../../shared/sentry-config";
 import { aoBridge } from "./bridge";
+
+export function rendererSentryDsn(): string {
+	return import.meta.env.VITE_AO_SENTRY_DSN ?? DEFAULT_ELECTRON_SENTRY_DSN;
+}
 
 export type ObservabilityContext = { release?: string; channel?: string; platform?: string; distinctId?: string };
 export type CaptureMeta = ClassifyInput & { operation?: string; surface?: string; domain?: string; requestId?: string };

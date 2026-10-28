@@ -3,7 +3,12 @@
 // module constructs no network client. Controller tests inject an in-memory
 // transport; a later release task may add a privacy-approved main transport.
 import type { RendererTelemetryCapture } from "../shared/telemetry-policy";
+import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
+
+export function electronMainSentryDsn(): string {
+	return process.env.AO_SENTRY_DSN ?? DEFAULT_ELECTRON_SENTRY_DSN;
+}
 
 const CAPTURE_KEYS = new Set(["consentGeneration", "kind", "level", "message", "tags"]);
 const TAG_KEYS = new Set([

@@ -1,5 +1,23 @@
-import { describe, expect, it } from "vitest";
-import { sanitizeRendererCapture } from "./sentry-main";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
+import { electronMainSentryDsn, initMainSentry, sanitizeRendererCapture } from "./sentry-main";
+
+afterEach(() => vi.unstubAllEnvs());
+
+describe("Electron main Sentry configuration", () => {
+	it("selects the Electron project unless AO_SENTRY_DSN overrides it", () => {
+		vi.stubEnv("AO_SENTRY_DSN", undefined);
+		expect(electronMainSentryDsn()).toBe(DEFAULT_ELECTRON_SENTRY_DSN);
+		vi.stubEnv("AO_SENTRY_DSN", "https://custom.example/2");
+		expect(electronMainSentryDsn()).toBe("https://custom.example/2");
+		vi.stubEnv("AO_SENTRY_DSN", "");
+		expect(electronMainSentryDsn()).toBe("");
+	});
+
+	it("keeps the Electron sender inactive", async () => {
+		expect(await initMainSentry("1.0.0", "/tmp/ao-test")).toBeNull();
+	});
+});
 
 describe("sanitizeRendererCapture", () => {
 	it("scrubs local paths and loopback URLs at the Electron-main boundary", () => {

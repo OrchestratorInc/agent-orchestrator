@@ -16,6 +16,20 @@ packaged desktop release also enables telemetry for the daemon it starts.
 Development builds and daemons started directly do not send remote telemetry by
 default.
 
+## Sentry projects
+
+The packaged desktop app gives its spawned Go daemon the daemon Sentry project
+DSN through `AO_SENTRY_DSN`. An explicit `AO_SENTRY_DSN` value takes precedence;
+without one, development builds hand the daemon an empty value. Daemon error
+reporting remains subject to the existing Share error events control.
+
+Electron main and the renderer have a separate desktop Sentry project. Their
+default DSN is distinct from the daemon project; Electron main uses
+`AO_SENTRY_DSN` and the renderer uses `VITE_AO_SENTRY_DSN` for explicit overrides.
+The Electron main sender remains inactive. Renderer diagnostics still pass
+through the existing main-owned consent boundary, with no direct Sentry
+transport. The mobile app keeps its own Sentry project and DSN.
+
 ## What Orchestrator.inc sends
 
 Orchestrator.inc sends structured events in a few broad categories:
