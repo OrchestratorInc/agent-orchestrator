@@ -284,7 +284,7 @@ SELECT p.id, d.session_id, d.project_id, d.harness, d.machine, d.kind,
        COALESCE(t.title, ''), d.created_at, p.score, p.session_matches,
        CASE WHEN ? = 1 THEN '' ELSE COALESCE(t.body, '') END,
        p.match_total, p.candidate_count,
-       COALESCE(rv.id, '')
+       COALESCE(rv.id, ''), p.name_tier = 0
 FROM page p
 JOIN session_search_docs d ON d.id = p.id
 LEFT JOIN session_search_text t ON t.id = p.id
@@ -492,7 +492,7 @@ func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.Sessi
 		if err := rows.Scan(
 			&docID, &hit.SessionID, &hit.ProjectID, &hit.Harness, &hit.Machine, &kind, &hit.MessageID, &hit.Seq,
 			&hit.Title, &createdAt, &hit.Rank, &hit.SessionMatches, &body, &hit.MatchTotal, &candidates,
-			&hit.ReviewID,
+			&hit.ReviewID, &hit.NamedForQuery,
 		); err != nil {
 			return nil, false, fmt.Errorf("scan session search hit: %w", err)
 		}
