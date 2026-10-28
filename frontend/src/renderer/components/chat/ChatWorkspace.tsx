@@ -35,6 +35,7 @@ import {
 	type MouseEvent as ReactMouseEvent,
 	type PointerEvent as ReactPointerEvent,
 	type ReactNode,
+	type RefObject,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, MessageSquarePlus, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
@@ -264,15 +265,27 @@ type ChatAuxiliaryTab =
 	| { key: string; kind: "shell"; terminal: ShellTerminal }
 	| { key: string; kind: "workspace"; tab: WorkspaceTab };
 
-function DraggableChatTab({ children, value }: { children: ReactNode; value: string }) {
+function DraggableChatTab({
+	children,
+	constraintsRef,
+	value,
+}: {
+	children: ReactNode;
+	/** The reorderable group: a dragged tab never leaves it for the pinned session tab or the toolbar. */
+	constraintsRef: RefObject<HTMLDivElement | null>;
+	value: string;
+}) {
 	const dragControls = useDragControls();
 	return (
 		<Reorder.Item
 			as="div"
-			className="flex shrink-0 self-stretch touch-pan-y"
+			// The opaque background keeps a dragged tab from showing the tabs it passes over.
+			className="flex shrink-0 self-stretch touch-pan-y bg-background"
 			data-terminal-tab-key={value}
 			drag="x"
+			dragConstraints={constraintsRef}
 			dragControls={dragControls}
+			dragElastic={0}
 			dragListener={false}
 			onPointerDown={(event: ReactPointerEvent<HTMLDivElement>) => {
 				if ((event.target as HTMLElement).closest("[data-terminal-tab-action],input,a")) return;
@@ -292,6 +305,7 @@ function DraggableChatTab({ children, value }: { children: ReactNode; value: str
 // changes with its shell or selection, so it skips the rest; with a dozen
 // tabs this is most of the strip's render work.
 const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
+	constraintsRef,
 	tabKey,
 	shell,
 	isActive,
@@ -299,6 +313,7 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 	onClose,
 	onRename,
 }: {
+	constraintsRef: RefObject<HTMLDivElement | null>;
 	tabKey: string;
 	shell: ShellTerminal;
 	isActive: boolean;
@@ -307,7 +322,7 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 	onRename?: (handleId: string, title: string) => void;
 }) {
 	return (
-		<DraggableChatTab value={tabKey}>
+		<DraggableChatTab constraintsRef={constraintsRef} value={tabKey}>
 			<ShellTerminalTab
 				appearance="connected"
 				isActive={isActive}
@@ -386,7 +401,7 @@ export interface ChatWorkspaceProps {
 	/** Agent-session actions on the primary chat tab (interface switch, handoff). */
 	sessionTabAction?: ReactNode;
 	/** Widen the primary tab action slot only while an interface switch spinner is showing. */
-	sessionTabActionWide?: boolean;
+	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	/** File tabs coordinated by SessionView, appended to the native chat tab strip. */
@@ -711,7 +726,7 @@ function ChatWorkspaceContent({
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
+	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -1770,7 +1785,7 @@ function ChatWorkspaceContent({
 				session={session}
 				onSessionRenamed={onSessionRenamed}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionWide={sessionTabActionWide}
+				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabActions={workspaceTabActions}
 				workspaceActiveTabKey={workspaceActiveTabKey}
@@ -2268,7 +2283,7 @@ function ChatHeader({
 	onTabsKeyDown,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
+	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabActions,
 	workspaceActiveTabKey,
@@ -2296,7 +2311,7 @@ function ChatHeader({
 	onTabsKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionWide?: boolean;
+	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
@@ -2339,6 +2354,7 @@ function ChatHeader({
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
+	const reorderGroupRef = useRef<HTMLDivElement>(null);
 	const header = (
 		<header className={cn("flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar", slideIn && "chat-header-slide-in")}>
 			<div
@@ -2362,50 +2378,41 @@ function ChatHeader({
 						ref={tabListRef}
 						role="tablist"
 					>
-						{session ? (
-							<SessionPaneTab
-								isActive={timelineActive}
-								label={label}
-								onSelect={timelineActive ? undefined : onSelectChat}
-								onRenamed={onSessionRenamed}
-								session={session}
-								tabAction={sessionTabAction}
-								tabActionWide={sessionTabActionWide}
-							/>
-						) : (
-							<button
-								aria-current={timelineActive ? true : undefined}
-								aria-label={`${label} · ${providerLabel}`}
-								aria-selected={timelineActive}
-								data-terminal-role="primary"
-								className={cn(
-									"group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max shrink-0 self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
-									timelineActive
-										? "bg-overlay text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground/80"
-										: "text-muted-foreground hover:bg-raised hover:text-foreground",
-								)}
-								onClick={timelineActive ? undefined : onSelectChat}
-								role="tab"
-								tabIndex={timelineActive || orderedAuxiliaryTabs.length === 0 ? 0 : -1}
-								title={label}
-								type="button"
-							>
-								<AgentAvatar className="size-icon-base" decorative provider={snapshot.harness} />
-								<span className="truncate">{label}</span>
-							</button>
-						)}
 						<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
 							<motion.div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" layoutScroll>
 								<div className="flex w-max items-stretch">
+								<div className="flex shrink-0 self-stretch">
+									{session ? (
+										<SessionPaneTab
+											isActive={timelineActive}
+											label={label}
+											onSelect={timelineActive ? undefined : onSelectChat}
+											onRenamed={onSessionRenamed}
+											session={session}
+											tabAction={sessionTabAction}
+											tabActionPinned={sessionTabActionPinned}
+										/>
+									) : (
+										<SessionPaneTab
+											icon={<AgentAvatar className="size-icon-sm!" decorative provider={snapshot.harness} />}
+											isActive={timelineActive}
+											label={label}
+											onSelect={timelineActive ? undefined : onSelectChat}
+											title={`${label} · ${providerLabel}`}
+										/>
+									)}
+								</div>
 								<Reorder.Group
 									as="div"
 									axis="x"
 									className="flex items-stretch self-stretch"
 									onReorder={onReorderAuxiliaryTabs}
+									ref={reorderGroupRef}
 									values={orderedAuxiliaryTabs.map((tab) => tab.key)}
 								>
 									{orderedAuxiliaryTabs.map((tab) => tab.kind === "shell" ? (
 										<ShellTerminalTabEntry
+											constraintsRef={reorderGroupRef}
 											isActive={tab.terminal.handleId === shellActiveHandleId && !workspaceActiveTabKey}
 											key={tab.key}
 											onClose={closeShellTerminal}
@@ -2415,27 +2422,15 @@ function ChatHeader({
 											tabKey={tab.key}
 										/>
 									) : (
-										<DraggableChatTab key={tab.key} value={tab.key}>
+										<DraggableChatTab constraintsRef={reorderGroupRef} key={tab.key} value={tab.key}>
 											{tab.kind === "reviewer" || tab.kind === "reviewer-chat" ? (
-												<button
-													aria-current={reviewerActive && !workspaceActiveTabKey ? true : undefined}
-													aria-label="Reviewer"
-													aria-selected={Boolean(reviewerActive && !workspaceActiveTabKey)}
-													className={cn(
-														"group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
-														reviewerActive && !workspaceActiveTabKey
-															? "bg-overlay text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground/80"
-															: "text-muted-foreground hover:bg-raised hover:text-foreground",
-													)}
-													onClick={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
-													role="tab"
-													tabIndex={reviewerActive && !workspaceActiveTabKey ? 0 : -1}
+												<SessionPaneTab
+													icon={<AgentAvatar className="size-icon-sm!" decorative provider={tab.terminal.harness} />}
+													isActive={Boolean(reviewerActive && !workspaceActiveTabKey)}
+													label={t("terminal.reviewer")}
+													onSelect={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
 													title={tab.terminal.harness}
-													type="button"
-												>
-													<AgentAvatar className="size-icon-base" decorative provider={tab.terminal.harness} />
-													<span className="truncate">Reviewer</span>
-												</button>
+												/>
 											) : (
 												tab.tab.content
 											)}
@@ -2454,7 +2449,7 @@ function ChatHeader({
 					className="ml-auto flex shrink-0 items-center gap-1 pl-2 pr-3"
 					data-testid="session-action-region"
 				>
-					{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
+					{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
 					{headerActions}
 				</div>
 			</div>

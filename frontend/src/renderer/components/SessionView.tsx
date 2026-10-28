@@ -1517,7 +1517,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<ShellTopbar embedded />
 		</div>
 	);
-	const sessionTabActionWide = false;
+	// While an interface switch runs, its status replaces the tab menu and stays visible.
+	const sessionTabActionPinned = Boolean(interfaceUi.switchControl && !interfaceUi.switchAction);
 
 	// The pane shows one terminal at a time, so selecting a shell or the reviewer
 	// takes the agent's terminal off screen while the route still points here.
@@ -2018,7 +2019,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									headerActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionWide={sessionTabActionWide}
+									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
 									workspaceTabs={centerFileTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
@@ -2083,7 +2084,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									topbarActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionWide={sessionTabActionWide}
+									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
 									workspaceTabs={centerFileTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}

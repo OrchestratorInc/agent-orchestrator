@@ -9,6 +9,7 @@ import {
 	useState,
 	type PointerEvent,
 	type ReactNode,
+	type RefObject,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -62,8 +63,8 @@ type CenterPaneProps = {
 	topbarActions?: ReactNode;
 	/** Agent-session actions (interface switch, handoff) on the primary session tab. */
 	sessionTabAction?: ReactNode;
-	/** Widen the primary tab's action slot while an interface switch spinner is showing. */
-	sessionTabActionWide?: boolean;
+	/** Keep the primary tab's action showing while an interface switch runs. */
+	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	workspaceTabs?: CenterPaneWorkspaceTab[];
@@ -100,7 +101,16 @@ const WHEEL_ZOOM_RESET_MS = 250;
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
-function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value: string }) {
+function DraggableWorkspaceTab({
+	children,
+	constraintsRef,
+	value,
+}: {
+	children: ReactNode;
+	/** The reorderable group: a dragged tab never leaves it for the pinned session tab or the toolbar. */
+	constraintsRef: RefObject<HTMLDivElement | null>;
+	value: string;
+}) {
 	const dragControls = useDragControls();
 	const startDrag = (event: PointerEvent<HTMLDivElement>) => {
 		if ((event.target as HTMLElement).closest("[data-terminal-tab-action],input,a")) return;
@@ -110,10 +120,13 @@ function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value
 	return (
 		<Reorder.Item
 			as="div"
-			className="flex shrink-0 self-stretch touch-pan-y"
+			// The opaque background keeps a dragged tab from showing the tabs it passes over.
+			className="flex shrink-0 self-stretch touch-pan-y bg-background"
 			data-terminal-tab-key={value}
 			drag="x"
+			dragConstraints={constraintsRef}
 			dragControls={dragControls}
+			dragElastic={0}
 			dragListener={false}
 			onPointerDown={startDrag}
 			// Reorder needs layout measurement, but tabs should snap into place
@@ -146,7 +159,7 @@ export function CenterPane({
 	onRenameShellTerminal,
 	topbarActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
+	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -452,6 +465,7 @@ export function CenterPane({
 	);
 
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
+	const reorderGroupRef = useRef<HTMLDivElement>(null);
 	const terminalTopbar = (
 		<div className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
 
@@ -483,35 +497,37 @@ export function CenterPane({
 								>
 								<div className="flex w-max items-stretch">
 									{/* The owning session scrolls with its auxiliary terminals, but remains fixed in order. */}
-									{session ? (
-										<SessionPaneTab
-											isActive={target.kind === "worker" && !workspaceActiveTabKey && !reviewerChatSelected}
-											label={sessionTabLabel}
-											onSelect={onSelectSessionTerminal}
-											onRenamed={refreshWorkspaces}
-											session={session}
-											tabAction={sessionTabAction}
-											tabActionWide={sessionTabActionWide}
-										/>
-									) : (
-										<SessionPaneTab isActive={target.kind === "worker"} label={sessionTabLabel} />
-									)}
+									<div className="flex shrink-0 self-stretch">
+										{session ? (
+											<SessionPaneTab
+												isActive={target.kind === "worker" && !workspaceActiveTabKey && !reviewerChatSelected}
+												label={sessionTabLabel}
+												onSelect={onSelectSessionTerminal}
+												onRenamed={refreshWorkspaces}
+												session={session}
+												tabAction={sessionTabAction}
+												tabActionPinned={sessionTabActionPinned}
+											/>
+										) : (
+											<SessionPaneTab isActive={target.kind === "worker"} label={sessionTabLabel} />
+										)}
+									</div>
 									<Reorder.Group
 										as="div"
 										axis="x"
 										className="flex items-stretch self-stretch"
 										onReorder={reorderAuxiliaryTabs}
+										ref={reorderGroupRef}
 										values={orderedAuxiliaryTabs.map((tab) => tab.key)}
 									>
 										{orderedAuxiliaryTabs.map((tab) => (
-											<DraggableWorkspaceTab key={tab.key} value={tab.key}>
+											<DraggableWorkspaceTab constraintsRef={reorderGroupRef} key={tab.key} value={tab.key}>
 												{tab.kind === "reviewer" || tab.kind === "reviewer-chat" ? (
 													<SessionPaneTab
-														appearance="connected"
 														icon={
 															<AgentAvatar
 																provider={tab.terminal.harness}
-																className="size-terminal-agent-icon"
+																className="size-icon-sm!"
 																decorative
 															/>
 														}
@@ -556,7 +572,7 @@ export function CenterPane({
 						className="ml-auto flex shrink-0 items-center gap-1 pl-2 pr-3"
 			data-testid="session-action-region"
 		>
-			{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
+			{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
 			{topbarActions}
 					</div>
 				)}
@@ -614,40 +630,35 @@ export function CenterPane({
 type SessionPaneTabProps = {
 	label: string;
 	isActive: boolean;
-	appearance?: "primary" | "connected";
 	onSelect?: () => void;
 	onRenamed?: () => void | Promise<void>;
 	session?: WorkspaceSession;
 	icon?: ReactNode;
 	title?: string;
-	/** Session-scoped controls (interface switch, handoff) beside the tab label. */
+	/** Session-scoped controls (interface switch, handoff) in the tab's icon slot. */
 	tabAction?: ReactNode;
-	/** Only while switching: reserve action width so the spinner does not cover the title. */
-	tabActionWide?: boolean;
+	/** Keep the action showing at rest, e.g. while an interface switch runs. */
+	tabActionPinned?: boolean;
 };
 
-// Shared tab chrome: the open tab is highlighted with the same rounded
-// background as the inspector rail tabs (Summary · Reviews · Browser), and
-// the full label only becomes the hover tooltip when the tab strip is
-// crowded enough to truncate it.
+// The session, reviewer and no-session tabs of the strip. The full label only
+// becomes the hover tooltip when the tab strip is crowded enough to truncate it.
 export function SessionPaneTab({
 	label,
 	isActive,
-	appearance = "primary",
 	onSelect,
 	onRenamed,
 	session,
 	icon,
 	title,
 	tabAction,
-	tabActionWide = false,
+	tabActionPinned = false,
 }: SessionPaneTabProps) {
 	const { t } = useTranslation();
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(label);
 	const activityLabel = session ? getAgentActivityView(session.activity, t).label : undefined;
 	const providerLabel = session ? agentLabel(session.provider) : undefined;
-	const tabIcon = session ? <AgentAvatar className="size-terminal-agent-icon" decorative provider={session.provider} /> : icon;
-	const connected = appearance === "connected";
+	const tabIcon = session ? <AgentAvatar className="size-icon-sm!" decorative provider={session.provider} /> : icon;
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
 	// persist a title without updating their query cache. The project
@@ -655,35 +666,30 @@ export function SessionPaneTab({
 	const renameSession = onRenamed && session && !isOrchestratorSession(session) ? session : undefined;
 	const rename = useSessionRename(renameSession, onRenamed);
 	const editingContent = renameSession && rename.isEditing ? (
-		<div className="flex h-full min-w-0 flex-1 items-center gap-2 px-2">
-			{tabIcon}
-			<input
-				aria-label={t("shell.renameSession", { title: renameSession.title })}
-				autoFocus
-				className="min-w-0 flex-1 rounded-xs border border-accent bg-background px-1 text-control text-foreground outline-none ring-1 ring-accent"
-				maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
-				onBlur={() => void rename.commit()}
-				onChange={(event) => rename.setDraft(event.target.value)}
-				onFocus={(event) => event.currentTarget.select()}
-				onKeyDown={(event) => {
-					if (event.key === "Enter") {
-						event.preventDefault();
-						event.currentTarget.blur();
-					} else if (event.key === "Escape") {
-						event.preventDefault();
-						rename.cancel();
-					}
-				}}
-				value={rename.draft}
-			/>
-		</div>
+		<input
+			aria-label={t("shell.renameSession", { title: renameSession.title })}
+			autoFocus
+			className="min-w-0 flex-1 rounded-xs border border-accent bg-background px-1 text-control text-foreground outline-none ring-1 ring-accent"
+			maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
+			onBlur={() => void rename.commit()}
+			onChange={(event) => rename.setDraft(event.target.value)}
+			onFocus={(event) => event.currentTarget.select()}
+			onKeyDown={(event) => {
+				if (event.key === "Enter") {
+					event.preventDefault();
+					event.currentTarget.blur();
+				} else if (event.key === "Escape") {
+					event.preventDefault();
+					rename.cancel();
+				}
+			}}
+			value={rename.draft}
+		/>
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			action={!rename.isEditing && tabAction ? <span data-testid="session-tab-action">{tabAction}</span> : undefined}
-			// Idle tabs keep the overlay ⋮ slot (title looks like before). Only while
-			// switching do we reserve width so the spinner cannot cover the label.
-			actionLayout={tabActionWide ? "inline" : "overlay"}
+			action={!rename.isEditing && tabAction ? <span className="grid place-items-center" data-testid="session-tab-action">{tabAction}</span> : undefined}
+			actionPinned={tabActionPinned}
 			active={isActive}
 			buttonProps={{
 				"aria-current": isActive,
@@ -713,13 +719,10 @@ export function SessionPaneTab({
 				type: "button",
 			}}
 			buttonRef={ref}
-			className="w-shell-tab-connected min-w-shell-tab-min"
-			data-terminal-role={connected ? undefined : "primary"}
 			editingContent={editingContent}
-		>
-			{tabIcon}
-			<span className="truncate">{label}</span>
-		</TerminalTabFrame>
+			icon={tabIcon}
+			label={label}
+		/>
 	);
 	if (!renameSession || rename.isEditing) return tabFrame;
 	return (

@@ -4924,12 +4924,8 @@ describe("ChatWorkspace reviewer tabs", () => {
 		const reviewerTab = screen.getByRole("tab", { name: "Reviewer" });
 		expect(chatTab).toHaveClass("px-2", "cursor-pointer");
 		expect(chatTab.closest("[data-terminal-tab-frame]")).toHaveClass("self-stretch");
-		expect(reviewerTab).toHaveClass(
-			"self-stretch",
-			"px-3",
-			"cursor-pointer",
-			"focus-visible:outline-2",
-		);
+		expect(reviewerTab).toHaveClass("h-full", "px-2", "cursor-pointer");
+		expect(reviewerTab.closest("[data-terminal-tab-frame]")).toHaveClass("self-stretch");
 		expect(reviewerTab.querySelector('img, [style*="mask"]')).toBeInTheDocument();
 
 		fireEvent.click(reviewerTab);
