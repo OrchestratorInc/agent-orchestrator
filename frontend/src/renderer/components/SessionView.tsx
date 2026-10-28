@@ -25,7 +25,6 @@ import type { FileOpenOptions, FileViewMode } from "./FileContentPane";
 import { SessionChatSurface } from "./chat/SessionChatSurface";
 import { CloudSessionChatSurface } from "./chat/CloudSessionChatSurface";
 import { ReviewerChatSurface } from "./chat/ReviewerChatSurface";
-import { NotificationCenter } from "./NotificationCenter";
 import { SessionInspectorRail, initialInspectorSize, inspectorSizing, sizingGeometryEqual, INSPECTOR_SPRING_MS, INSPECTOR_SPRING_EASING, type InspectorSizing } from "./SessionInspectorRail";
 import { SessionFileExplorer } from "./SessionFileExplorer";
 import { FilesTopbarHostContext } from "./files-topbar-host";
@@ -40,7 +39,8 @@ import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
 import type { ArtifactOpenRequest } from "./SessionArtifactsView";
-import { ShellTopbar } from "./ShellTopbar";
+import { SessionTopbarActions } from "./SessionTopbarActions";
+import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
 import { SessionTopbarHost } from "./SessionTopbarPortal";
 import { TopbarButton } from "./TopbarButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -210,9 +210,8 @@ type SessionViewProps = {
 	hostId?: string;
 };
 
-// The session detail screen: terminal + git rail. On Win/Linux the shell owns
-// ShellTopbar above this view; when the platform hides the shell topbar
-// (macOS), the same topbar mounts here so the outer panel stays full-height.
+// The session detail screen: terminal + git rail, with shared tab-strip chrome
+// and session actions inside the center panel on every desktop platform.
 // Rendered by both the project-scoped and cross-project session routes.
 // The persistent shell cache owns terminal lifetime by logical session + handle:
 // route switches retain the xterm instance and latest output, while a replacement
@@ -1515,7 +1514,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					canShare={session.cloud.orgId === cloudOrgId}
 				/>
 			) : null}
-			<ShellTopbar embedded />
+			<SessionTopbarActions />
 		</div>
 	);
 	const sessionTabActionWide = false;
@@ -1908,8 +1907,11 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			: !remoteBase || remoteCode === "UPSTREAM_UNAVAILABLE" || remoteCode === "HOST_IDENTITY_UNVERIFIED"
 				? "remote.hostOffline" : remoteSessionQuery.isError ? "remote.loadSessionFailed" : "session.notFound") : undefined;
 		return (
-			<div className="grid h-full place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
-				{remoteError ?? t("session.notFound")}
+			<div className="flex h-full min-h-0 flex-col bg-background" data-testid="session-missing">
+				<PageTopbar />
+				<div className="grid min-h-0 flex-1 place-items-center p-6 text-center font-mono text-xs text-passive" role={remoteError ? "alert" : undefined}>
+					{remoteError ?? t("session.notFound")}
+				</div>
 			</div>
 		);
 	}
@@ -1945,7 +1947,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				>
 					<div className="relative flex h-full min-h-0 flex-col">
 						<SessionTopbarHost
-							className="relative z-chrome flex h-inspector-tabs w-full shrink-0 overflow-hidden"
+							className="relative h-0 w-full shrink-0"
 							data-testid="session-topbar-host"
 						/>
 						<div className="relative min-h-0 flex-1">
@@ -2207,47 +2209,43 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					</SessionInspectorRail>
 				) : null}
 			</div>
-			{hasInspector ? (
-				<div className="session-pinned-actions" data-testid="session-pinned-actions" style={noDragStyle}>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<TopbarButton
-								aria-label={
-									browserOnly
-										? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-										: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
-								}
-								aria-pressed={isInspectorOpen}
-								onClick={handleToggleInspector}
-								style={noDragStyle}
-								variant="icon"
-							>
-								{browserOnly ? (
-									<span className="relative inline-flex">
-										<BrowserIcon aria-hidden="true" className="size-icon-md" />
-										{!isInspectorOpen && browserUnseen ? (
-											<span
-												aria-hidden="true"
-												className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
-												data-testid="orchestrator-browser-unseen-indicator"
-											/>
-										) : null}
-									</span>
-								) : (
-									<PanelRight className="size-icon-md" aria-hidden="true" />
-								)}
-							</TopbarButton>
-						</TooltipTrigger>
-						<TooltipContent side="bottom">
-							{browserOnly
-								? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
-								: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
-						</TooltipContent>
-					</Tooltip>
-					{/* Keep the global notification action trailing at the window edge. */}
-					<NotificationCenter style={noDragStyle} />
-				</div>
-			) : null}
+			<PageTopbarTrailingAction>
+				{hasInspector ? <Tooltip>
+					<TooltipTrigger asChild>
+						<TopbarButton
+							aria-label={
+								browserOnly
+									? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
+									: isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")
+							}
+							aria-pressed={isInspectorOpen}
+							onClick={handleToggleInspector}
+							style={noDragStyle}
+							variant="icon"
+						>
+							{browserOnly ? (
+								<span className="relative inline-flex">
+									<Globe2 aria-hidden="true" className="size-icon-md" />
+									{!isInspectorOpen && browserUnseen ? (
+										<span
+											aria-hidden="true"
+											className="pointer-events-none absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-primary ring-2 ring-background"
+											data-testid="orchestrator-browser-unseen-indicator"
+										/>
+									) : null}
+								</span>
+							) : (
+								<PanelRight className="size-icon-md" aria-hidden="true" />
+							)}
+						</TopbarButton>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">
+						{browserOnly
+							? `${isInspectorOpen ? t("common.close") : t("inspector.open")} ${t("inspector.browser")}`
+							: isInspectorOpen ? t("shell.closeInspectorTitle") : t("shell.openInspectorTitle")}
+					</TooltipContent>
+				</Tooltip> : null}
+			</PageTopbarTrailingAction>
 			{interfaceUi.cloudLoader
 				? <CloudInterfaceSwitchLoader target={interfaceUi.target} />
 				: showLifecycleLoader || showCompletedLoader

@@ -1,5 +1,5 @@
 import type { SessionProvisionStep } from "../../types/workspace";
-import { ShellTopbar } from "../ShellTopbar";
+import { SessionTopbarActions } from "../SessionTopbarActions";
 import type { ConversationSnapshot } from "../../types/conversation";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { CloudSessionStartupLoader } from "../CloudSessionStartupLoader";
@@ -25,7 +25,7 @@ export function OrchestratorStartingChat({ steps, cloud = false, coderWorkspaceU
 		inlineHeader
 		headerActions={
 			<div className="session-topbar-session-chrome flex shrink-0 items-center" data-compact-session-chrome="false">
-				<ShellTopbar embedded startingOrchestrator />
+				<SessionTopbarActions startingOrchestrator />
 			</div>
 		}
 	/>;

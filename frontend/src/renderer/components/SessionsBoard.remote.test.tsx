@@ -74,7 +74,10 @@ vi.mock("../stores/ui-store", () => {
 		setProjectRestarting: vi.fn(),
 		setOrchestratorStartupError: vi.fn(),
 	};
-	return { useUiStore: Object.assign((selector: (value: typeof state) => unknown) => selector(state), { getState: () => state }) };
+	return {
+		sidebarOccupiesLayout: () => true,
+		useUiStore: Object.assign((selector: (value: typeof state) => unknown) => selector(state), { getState: () => state }),
+	};
 });
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => null }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));

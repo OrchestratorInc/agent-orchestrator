@@ -109,6 +109,7 @@ import { SessionPaneTab } from "../CenterPane";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
+import { SessionTabsTopbar } from "../PageTopbar";
 import { ShellTerminalTab } from "../ShellTerminalTab";
 import { TerminalPane } from "../TerminalPane";
 import {
@@ -1778,6 +1779,7 @@ function ChatWorkspaceContent({
 				onReorderAuxiliaryTabs={reorderAuxiliaryTabs}
 				inline={isFullscreen || inlineHeader}
 				slideIn={headerSlideIn}
+				fullscreen={isFullscreen}
 			/>}
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{reviewerTarget && session ? (
@@ -2276,6 +2278,7 @@ function ChatHeader({
 	onReorderAuxiliaryTabs,
 	inline,
 	slideIn = false,
+	fullscreen,
 	session,
 	onSessionRenamed,
 }: {
@@ -2307,6 +2310,7 @@ function ChatHeader({
 	/** Fullscreen content cannot see the normal topbar portal outside its subtree. */
 	inline?: boolean;
 	slideIn?: boolean;
+	fullscreen?: boolean;
 }) {
 	const { t } = useTranslation();
 	const providerLabel = agentLabel(snapshot.harness);
@@ -2340,21 +2344,16 @@ function ChatHeader({
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
-		<header className={cn("flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar", slideIn && "chat-header-slide-in")}>
-			<div
-				className="session-topbar-surface flex min-w-0 flex-1"
-				data-testid="session-workspace-topbar"
-			>
-				<div
-					className={cn(
-						"flex min-w-0 shrink items-stretch",
-						isMac && "session-topbar-titlebar-clearance-mac",
-						!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
-					)}
-					data-testid="session-terminal-region"
-					ref={clearanceRef}
-					style={{ width: "100%" }}
-				>
+		<SessionTabsTopbar
+			className={slideIn ? "chat-header-slide-in" : undefined}
+			fullscreen={fullscreen}
+			actions={headerActions}
+			clearanceClassName={cn(
+				isMac && "session-topbar-titlebar-clearance-mac",
+				!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
+			)}
+			clearanceRef={clearanceRef}
+			tabs={
 					<div
 						aria-label="Chat tabs"
 						className="flex h-full min-w-0 flex-1 items-stretch"
@@ -2379,9 +2378,9 @@ function ChatHeader({
 								aria-selected={timelineActive}
 								data-terminal-role="primary"
 								className={cn(
-									"group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max shrink-0 self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
+									"session-workspace-tab group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max shrink-0 self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
 									timelineActive
-										? "bg-overlay text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground/80"
+										? "text-foreground"
 										: "text-muted-foreground hover:bg-raised hover:text-foreground",
 								)}
 								onClick={timelineActive ? undefined : onSelectChat}
@@ -2396,11 +2395,11 @@ function ChatHeader({
 						)}
 						<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
 							<motion.div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" layoutScroll>
-								<div className="flex w-max items-stretch">
+								<div className="session-tab-items flex w-max items-stretch">
 								<Reorder.Group
 									as="div"
 									axis="x"
-									className="flex items-stretch self-stretch"
+									className="session-tab-items flex items-stretch self-stretch"
 									onReorder={onReorderAuxiliaryTabs}
 									values={orderedAuxiliaryTabs.map((tab) => tab.key)}
 								>
@@ -2422,9 +2421,9 @@ function ChatHeader({
 													aria-label="Reviewer"
 													aria-selected={Boolean(reviewerActive && !workspaceActiveTabKey)}
 													className={cn(
-														"group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
+														"session-workspace-tab group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
 														reviewerActive && !workspaceActiveTabKey
-															? "bg-overlay text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground/80"
+															? "text-foreground"
 															: "text-muted-foreground hover:bg-raised hover:text-foreground",
 													)}
 													onClick={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
@@ -2442,6 +2441,7 @@ function ChatHeader({
 										</DraggableChatTab>
 									))}
 								</Reorder.Group>
+								{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
 								{workspaceTabActions}
 								</div>
 							</motion.div>
@@ -2449,16 +2449,8 @@ function ChatHeader({
 							{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
 						</div>
 					</div>
-				</div>
-				<div
-					className="ml-auto flex shrink-0 items-center gap-1 pl-2 pr-3"
-					data-testid="session-action-region"
-				>
-					{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
-					{headerActions}
-				</div>
-			</div>
-		</header>
+			}
+		/>
 	);
 	return inline ? header : <SessionTopbarPortal>{header}</SessionTopbarPortal>;
 }

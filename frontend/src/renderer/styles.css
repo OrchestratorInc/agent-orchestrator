@@ -503,7 +503,7 @@ html[data-modal-handoff] .dialog-overlay,
 	min-height: 0;
 	width: 100%;
 	background-color: var(--color-bg-sidebar);
-	padding-top: var(--size-center-panel-bottom-inset);
+	padding-top: 0;
 	padding-right: var(--size-center-panel-inline-inset);
 	padding-bottom: var(--size-center-panel-bottom-inset);
 	padding-left: 0;
@@ -535,7 +535,7 @@ html[data-modal-handoff] .dialog-overlay,
 
 /* macOS: use the same block inset above and below the surface. */
 .center-panel-shell.center-panel-shell--mac {
-	padding-top: var(--size-center-panel-inset-mac);
+	padding-top: 0;
 	padding-right: var(--size-center-panel-inset-mac);
 	padding-bottom: var(--size-center-panel-inset-mac);
 	padding-left: 0;
@@ -543,16 +543,50 @@ html[data-modal-handoff] .dialog-overlay,
 
 /* Keep the center surface closed on all four edges, including macOS where the
  * native titlebar sits above the panel rather than replacing its border. */
-.center-panel-shell--mac > .center-panel-surface {
+.center-panel-shell--mac > .center-panel-workspace > .center-panel-surface {
 	border-top-width: 1px;
 }
 
-/* Keep empty header space draggable while tabs and actions remain interactive.
- * Linux retains its separate strip; macOS uses the actual shared header. */
-html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] {
+/* The header keeps the surface's former inset. Only the content below it owns
+ * a rounded border; flex layout gives that pane the remaining height. */
+.center-panel-topbar {
+	position: relative;
+	display: flex;
+	min-height: var(--size-toolbar);
+	flex: 0 0 auto;
+	align-items: flex-start;
+	margin-inline: 1px;
+	overflow: hidden;
+}
+
+.center-panel-topbar-region {
+	container-name: workspace-topbar;
+	container-type: inline-size;
+	min-width: 0;
+	flex: 0 0 auto;
+}
+
+.center-panel-topbar-region--inspector {
+	container-name: inspector;
+	order: 1;
+	margin-left: auto;
+}
+
+.center-panel-workspace:has([data-slot="inspector-container"][data-state="collapsed"]) .center-panel-topbar-region--inspector {
+	display: none;
+}
+
+.center-panel-topbar :is(header, .session-topbar-surface, .session-inspector__topbar) {
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+}
+
+/* Both native platforms drag from the shared header without an extra strip. */
+html:is([data-ao-platform="darwin"], [data-ao-platform="linux"]) [data-testid="session-topbar-host"] {
 	-webkit-app-region: drag;
 }
-html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, a, input, [role="tab"], [role="menuitem"]) {
+html:is([data-ao-platform="darwin"], [data-ao-platform="linux"]) [data-testid="session-topbar-host"] :is(button, a, input, [role="tab"], [role="menuitem"]) {
 	-webkit-app-region: no-drag;
 }
 
@@ -566,27 +600,15 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	padding: 0;
 }
 
-/* Keep the session card intact: this strip belongs to its slate outer frame,
- * above the complete card (tabs and inspector alike), so it is a native macOS
- * or Linux drag target without introducing a seam inside session content. */
-.center-panel-shell--draggable-session-frame {
-	flex-direction: column;
-}
-
-.center-panel-session-drag-strip {
-	flex: 0 0 var(--space-2);
-	-webkit-app-region: drag;
-}
-
-/* Sidebar closed on mac: content panel expands to fill the full window.
- * Remove all padding and strip the surface border + radius so it's flush. */
+/* Sidebar closed on mac: the workspace fills the window while its content
+ * remains a separate rounded pane beneath the bare header. */
 .sidebar-hidden .center-panel-shell.center-panel-shell--mac {
 	padding: 0;
 }
 
 .sidebar-hidden .center-panel-shell--mac .center-panel-surface {
-	border-color: transparent;
-	border-radius: 0;
+	border-color: var(--color-border-strong);
+	border-radius: var(--radius-center-panel);
 }
 
 /* Session topbar now lives inside .center-panel-surface. When it's rendered
@@ -622,6 +644,14 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	left: 0;
 	right: auto;
 	background: linear-gradient(270deg, transparent 0%, var(--color-bg-primary) 82%);
+}
+
+.center-panel-topbar .session-tab-scroll-fade {
+	background: linear-gradient(90deg, transparent 0%, var(--color-bg-sidebar) 82%);
+}
+
+.center-panel-topbar .session-tab-scroll-fade--left {
+	background: linear-gradient(270deg, transparent 0%, var(--color-bg-sidebar) 82%);
 }
 
 /* Vertical section caps resolve against the actual sidebar space between chrome. */
@@ -674,13 +704,6 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	);
 }
 
-/* Browser pressure keeps a 48px navigation rail in layout. Native macOS
- * traffic lights extend to the 72px titlebar boundary, so reserve only the
- * missing slice instead of applying the full off-canvas navigation clearance. */
-.session-topbar-terminal-region {
-	transition: padding-left 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-
 /* Preserve the established tab chrome while preventing flex pressure from
  * erasing the agent icon. This class controls sizing only. */
 .session-tab-icon-floor {
@@ -697,16 +720,6 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	flex-shrink: 0;
 	width: var(--size-shell-tab-connected);
 	min-width: var(--size-shell-tab-connected);
-}
-
-.session-topbar-traffic-light-clearance-mac {
-	padding-left: calc(var(--size-titlebar-cluster-left) - var(--size-sidebar-icon));
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.session-topbar-terminal-region {
-		transition-duration: 0ms;
-	}
 }
 
 .session-topbar-titlebar-clearance-linux {
@@ -727,7 +740,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 .center-panel-titlebar {
-	padding-left: 1.125rem; /* matches former px-4.5 */
+	padding-left: var(--space-4_5);
 }
 
 .center-panel-shell--mac .center-panel-titlebar {
@@ -3373,20 +3386,41 @@ html.sidebar-reordering * {
  * accessible names remain available. */
 .workspace-topbar-actions {
 	display: flex;
+	height: var(--size-topbar-content);
 	min-width: 0;
 	flex: 0 0 auto;
 	align-items: center;
-	gap: var(--space-1);
+	gap: var(--gap-topbar-control);
 }
 
-.workspace-topbar__identity-separator {
-	width: 1px;
-	flex: 0 0 1px;
-	background: color-mix(in srgb, var(--color-text-topbar) 28%, transparent);
+.session-topbar-actions {
+	gap: var(--gap-topbar-control);
+	padding-inline: var(--space-2) var(--gap-topbar-control);
 }
 
-.workspace-topbar__identity-separator {
-	height: var(--space-4);
+/* One panel-owned trailing group stays fixed as the inspector slides. All
+ * headers clear its measured width, including any session-specific controls. */
+.panel-topbar-controls {
+	position: absolute;
+	top: 0;
+	right: calc(var(--gap-topbar-control) + 1px);
+	z-index: var(--z-index-chrome);
+}
+
+.has-topbar-controls .center-panel-titlebar,
+.has-topbar-controls .session-inspector__trailing,
+.has-topbar-controls .session-topbar-actions:not([data-fullscreen]) {
+	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--gap-topbar-control) + var(--gap-topbar-control));
+}
+
+.has-topbar-controls:has(.center-panel-topbar-region--inspector:not([hidden])):has([data-slot="inspector-container"][data-state="expanded"]) .center-panel-topbar-region--session .session-topbar-actions:not([data-fullscreen]) {
+	padding-right: var(--gap-topbar-control);
+}
+
+.topbar-control > [data-nav-row-highlight],
+.topbar-control-group > [data-nav-row-highlight] {
+	z-index: -1;
+	border-radius: inherit;
 }
 
 .workspace-topbar-actions .topbar-control {
@@ -3406,6 +3440,12 @@ html.sidebar-reordering * {
 		gap var(--duration-normal) ease,
 		padding-inline var(--duration-normal) ease;
 }
+
+/* Override the unlayered form-control font reset for primary topbar actions. */
+.topbar-control--primary {
+	font-weight: 550;
+}
+
 
 .workspace-topbar-actions .topbar-control:active:not(:disabled) {
 	transform: scale(0.96);
@@ -3427,32 +3467,13 @@ html.sidebar-reordering * {
 	transform: scale(0.96);
 }
 
-.workspace-topbar-actions .topbar-control--labeled,
-.workspace-topbar-actions .topbar-control--feature {
+.workspace-topbar-actions .topbar-control--labeled {
 	padding-inline: var(--space-2_5);
 }
 
 .topbar-control--disabled-affordance:disabled {
 	cursor: not-allowed;
 	opacity: var(--opacity-control-disabled);
-}
-
-/* The editor handoff stays one joined split control. All measurements use the
-   shared spacing/control tokens; only gaps between separate controls use the
-   workspace toolbar gap. */
-.workspace-topbar-actions .topbar-control--split-main {
-	padding-inline: var(--space-2_5);
-	gap: var(--space-1_5);
-	border-start-end-radius: 0;
-	border-end-end-radius: 0;
-}
-
-.workspace-topbar-actions .topbar-control--split-trigger {
-	min-width: var(--space-5_5);
-	width: var(--space-5_5);
-	padding-inline: 0;
-	border-start-start-radius: 0;
-	border-end-start-radius: 0;
 }
 
 .workspace-topbar-actions [data-compact-label] {
@@ -3470,71 +3491,11 @@ html.sidebar-reordering * {
 		transform var(--duration-normal) ease;
 }
 
-.workspace-topbar-actions .topbar-control--feature {
-	border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border-topbar));
-	background: color-mix(in srgb, var(--color-accent) 10%, var(--color-bg-topbar-raised));
-	color: color-mix(in srgb, var(--color-accent) 58%, var(--color-text-topbar));
-}
-
-.workspace-topbar-actions .topbar-control--feature:hover:not(:disabled) {
-	border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-border-topbar-strong));
-	background: color-mix(in srgb, var(--color-accent) 18%, var(--color-bg-topbar-raised));
-	color: var(--color-text-topbar);
-}
-
-.session-pinned-actions-reserve {
-	display: flex;
-	width: 0;
-	min-width: 0;
-	flex: 0 0 auto;
-	align-items: center;
-	justify-content: flex-end;
-	margin-left: calc(-1 * var(--space-2));
-	transition:
-		width var(--session-inspector-motion-duration, 400ms)
-			var(--session-inspector-motion-easing, linear(0, 0.333 12.5%, 0.642 25%, 0.813 37.5%, 0.902 50%, 0.949 62.5%, 0.974 75%, 0.986 87.5%, 1)),
-		margin-left var(--session-inspector-motion-duration, 400ms)
-			var(--session-inspector-motion-easing, linear(0, 0.333 12.5%, 0.642 25%, 0.813 37.5%, 0.902 50%, 0.949 62.5%, 0.974 75%, 0.986 87.5%, 1));
-}
-
-.session-pinned-actions-reserve[data-state="expanded"] {
-	width: calc(var(--size-topbar-control) + var(--size-topbar-control) + var(--space-2));
-	margin-left: 0;
-}
-
 /* Session switches restore the destination's topbar in its first frame; these
  * transitions are only for changes inside a session (useSessionSwitchSnap). */
-:root[data-session-switching] .session-pinned-actions-reserve,
 :root[data-session-switching] .workspace-topbar-actions .topbar-control,
 :root[data-session-switching] .workspace-topbar-actions [data-compact-label] {
 	transition: none !important;
-}
-
-.session-pinned-actions {
-	-webkit-app-region: no-drag;
-	position: absolute;
-	top: 0;
-	right: var(--space-1);
-	z-index: var(--z-index-chrome);
-	display: flex;
-	height: var(--size-inspector-tabs);
-	align-items: center;
-	gap: var(--space-1);
-}
-
-.session-inspector-actions-spacer {
-	width: calc(
-		var(--size-topbar-control) + var(--size-topbar-control) + var(--space-2) + var(--space-3)
-	);
-	flex: 0 0 auto;
-}
-
-/* A button the Files view adds here (maximize) joins the pinned pair, so it
-   sits the same 4px from them as they sit from each other. */
-.session-inspector__files-actions:not(:empty) + .session-inspector-actions-spacer {
-	width: calc(
-		var(--size-topbar-control) + var(--size-topbar-control) + var(--space-2) + var(--space-1)
-	);
 }
 
 @container workspace-topbar (max-width: 759px) {
@@ -3615,7 +3576,6 @@ html.sidebar-reordering * {
 @media (prefers-reduced-motion: reduce) {
 	.workspace-topbar-actions .topbar-control,
 	.workspace-topbar-actions [data-compact-label],
-	.session-pinned-actions-reserve,
 	.session-split[data-terminal-live-resize="true"]
 		.workspace-topbar-actions
 		[data-priority="secondary"].topbar-control,
@@ -3625,197 +3585,6 @@ html.sidebar-reordering * {
 		[data-compact-label] {
 		transition: none;
 	}
-}
-
-/* ── Shell topbar (agent-orchestrator .dashboard-app-header) ──────────────
- * One header for every screen (rendered by the shell layout), so one padding:
- * AO's session-topbar values. Upstream splits this into a 14px dashboard
- * header and a 16/14px session override; with the bar hoisted there is a
- * single frame and the crumb never shifts between views. The bar spans the
- * full window width with the sidebar pinned below it (approved divergence
- * 2026-06-12), so its bottom border runs edge-to-edge and the sidebar border
- * stops at the header instead of crossing the traffic-light strip. */
-.dashboard-app-header {
-	display: flex;
-	height: var(--size-shell-topbar);
-	flex-shrink: 0;
-	align-items: center;
-	gap: 13px;
-	padding: 0 16px 0 14px;
-	border-bottom: 1px solid var(--color-border-strong);
-	background: var(--bg);
-	z-index: 10;
-}
-
-.dashboard-app-header__project {
-	font-size: 14.5px;
-	font-weight: 600;
-	letter-spacing: -0.01em;
-	line-height: 1;
-	color: var(--fg);
-	white-space: nowrap;
-}
-
-.topbar-project-line {
-	display: inline-flex;
-	min-width: 0;
-	align-items: center;
-	gap: 6px;
-}
-
-.dashboard-app-header__spacer {
-	flex: 1;
-	min-width: 0;
-}
-
-.dashboard-app-header__actions {
-	display: flex;
-	flex-shrink: 0;
-	align-items: center;
-	gap: 6px;
-}
-
-.dashboard-app-header__icon-btn {
-	display: grid;
-	width: 34px;
-	height: 34px;
-	place-items: center;
-	border-radius: 7px;
-	color: var(--fg-muted);
-	transition:
-		background 0.12s ease,
-		color 0.12s ease;
-}
-
-.dashboard-app-header__icon-btn:hover {
-	background: var(--interactive-hover);
-	color: var(--fg);
-}
-
-.dashboard-app-header__kill-btn {
-	display: inline-flex;
-	height: 30px;
-	align-items: center;
-	gap: 5px;
-	border-radius: 6px;
-	border: 1px solid color-mix(in srgb, var(--red) 58%, transparent);
-	background: color-mix(in srgb, var(--red) 5%, transparent);
-	padding: 0 10px;
-	font-size: 12px;
-	font-weight: 650;
-	line-height: 1;
-	color: var(--red);
-	transition:
-		background 0.12s ease,
-		color 0.12s ease;
-}
-
-.dashboard-app-header__kill-btn:hover {
-	background: color-mix(in srgb, var(--red) 12%, transparent);
-	border-color: color-mix(in srgb, var(--red) 75%, transparent);
-}
-
-.dashboard-app-header__kill-confirm {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-}
-
-.dashboard-app-header__kill-confirm-btn {
-	display: inline-flex;
-	height: 34px;
-	align-items: center;
-	gap: 6px;
-	border-radius: 7px;
-	border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
-	padding: 0 12px;
-	font-size: 13px;
-	font-weight: 600;
-	line-height: 1;
-	color: var(--red);
-	background: color-mix(in srgb, var(--red) 10%, transparent);
-	transition: background 0.12s ease;
-}
-
-.dashboard-app-header__kill-confirm-btn:hover {
-	background: color-mix(in srgb, var(--red) 16%, transparent);
-}
-
-.dashboard-app-header__kill-confirm-btn:disabled {
-	opacity: 0.6;
-}
-
-.dashboard-app-header__kill-cancel-btn {
-	display: inline-flex;
-	height: 34px;
-	align-items: center;
-	border-radius: 7px;
-	padding: 0 10px;
-	font-size: 13px;
-	font-weight: 600;
-	line-height: 1;
-	color: var(--fg-muted);
-	transition: color 0.12s ease;
-}
-
-.dashboard-app-header__kill-cancel-btn:hover {
-	color: var(--fg);
-}
-
-.dashboard-app-header__kill-error {
-	font-size: 11px;
-	color: var(--red);
-}
-
-.dashboard-app-header__primary-btn {
-	display: inline-flex;
-	height: 34px;
-	align-items: center;
-	gap: 6px;
-	border-radius: 7px;
-	padding: 0 15px;
-	font-size: 13px;
-	font-weight: 600;
-	line-height: 1;
-	background: var(--accent);
-	color: var(--accent-fg);
-	transition: filter 0.12s ease;
-}
-
-.dashboard-app-header__primary-btn:hover {
-	filter: brightness(1.08);
-}
-
-.dashboard-app-header__primary-btn:disabled {
-	opacity: 0.6;
-}
-
-.dashboard-app-header__primary-btn--compact {
-	height: 32px;
-	border-radius: 7px;
-	padding: 0 14px;
-	font-size: 13px;
-}
-
-.dashboard-app-header__accent-btn {
-	display: inline-flex;
-	height: 34px;
-	align-items: center;
-	gap: 6px;
-	border-radius: 7px;
-	border: 1px solid var(--border);
-	padding: 0 15px;
-	font-size: 13px;
-	font-weight: 600;
-	line-height: 1;
-	background: var(--raised);
-	color: var(--fg-muted);
-	transition: background 0.12s ease;
-}
-
-.dashboard-app-header__accent-btn:hover {
-	background: var(--surface);
-	color: var(--fg);
 }
 
 .session-topbar__lead {
@@ -5701,17 +5470,55 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 	background: linear-gradient(270deg, transparent 0%, var(--bg) 82%);
 }
 
-.browser-panel__tab {
+.browser-panel__tab,
+.center-panel-topbar-region--session [data-terminal-tab-frame],
+.center-panel-topbar-region--session .session-workspace-tab {
 	position: relative;
 	display: flex;
 	width: 200px;
 	min-width: 150px;
 	max-width: 200px;
-	height: 28px;
+	height: var(--size-topbar-control);
 	flex: 0 1 200px;
 	border-radius: var(--radius-md);
 	color: var(--fg-muted);
 	background: transparent;
+}
+
+.center-panel-topbar-region--session [data-terminal-tab-frame],
+.center-panel-topbar-region--session .session-workspace-tab {
+	align-self: center;
+	border: 0;
+	font-size: 12px;
+	font-weight: 550;
+}
+
+.center-panel-topbar-region--session [data-terminal-tab-frame] > span {
+	height: 100%;
+}
+
+.center-panel-topbar-region--session [data-terminal-tab-frame] [role="tab"] {
+	font-size: 12px;
+}
+
+.center-panel-topbar-region--session [data-terminal-tab-frame] [role="tab"] > span {
+	font-weight: 550;
+}
+
+.center-panel-topbar-region--session [data-terminal-tab-frame] > [data-testid="active-terminal-tab-indicator"] {
+	display: none;
+}
+
+.center-panel-topbar-region--session :is([role="tablist"], .session-tab-items) {
+	column-gap: 2px;
+}
+
+.center-panel-topbar-region--session .session-tab-items:empty {
+	display: none;
+}
+
+.center-panel-topbar-region--session [data-testid="session-tab-strip-action"] {
+	margin-left: 2px;
 }
 
 .browser-panel__tab--drag-placeholder {
@@ -5731,12 +5538,16 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 	pointer-events: none;
 }
 
-.browser-panel__tab:hover {
+.browser-panel__tab:hover,
+.center-panel-topbar-region--session [data-terminal-tab-frame]:hover,
+.center-panel-topbar-region--session .session-workspace-tab:hover {
 	color: var(--fg);
 	background: var(--interactive-hover);
 }
 
-.browser-panel__tab--active {
+.browser-panel__tab--active,
+.center-panel-topbar-region--session [data-terminal-tab-frame]:has([aria-selected="true"]),
+.center-panel-topbar-region--session .session-workspace-tab[aria-selected="true"] {
 	color: var(--fg);
 	background: var(--interactive-active);
 }
@@ -6064,7 +5875,6 @@ html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #
 html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .session-inspector__body,
 html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root [data-slot="sidebar-container"],
 html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root [data-slot="sidebar-inner"],
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .dashboard-app-header,
 html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .session-topbar-surface {
 	background: transparent !important;
 }

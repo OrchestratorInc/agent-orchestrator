@@ -82,6 +82,7 @@ import { getAgentActivityView, getSessionTimelinePillView } from "../lib/session
 import { BrowserPanelView, type BrowserAnnotationQueueModel } from "./BrowserPanel";
 import type { BrowserViewModel } from "../hooks/useBrowserView";
 import { FilesActionsHostContext, FilesTopbarHostContext } from "./files-topbar-host";
+import { PageTopbarPortal } from "./PageTopbarPortal";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -294,6 +295,7 @@ export const SessionInspector = memo(function SessionInspector({
 		// layout/flex entirely — it exists purely as a CSS selector anchor.
 		<div className="session-inspector contents">
 			<SessionInspectorShellView
+				renderHeader={(header) => <PageTopbarPortal region="inspector" active={isInspectorVisible}>{header}</PageTopbarPortal>}
 				sideChatView={sideChatView ?? <p className="p-4 text-xs text-muted-foreground">{t("sideChat.unavailable")}</p>}
 				activeView={view}
 				ariaLabel={t("inspector.aria")}
@@ -334,7 +336,6 @@ export const SessionInspector = memo(function SessionInspector({
 						) : null}
 						<div className="session-inspector__trailing flex shrink-0 items-center">
 							{view === "files" && filesView ? <div className="session-inspector__files-actions flex items-center gap-1" ref={setFilesActionsHost} /> : null}
-							<span aria-hidden="true" className="session-inspector-actions-spacer" />
 						</div>
 					</>
 				}
