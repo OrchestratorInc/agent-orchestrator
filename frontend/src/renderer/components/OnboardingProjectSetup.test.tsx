@@ -81,7 +81,7 @@ it("offers cloud as a project source once the cloud step enabled it", async () =
 	renderStep();
 
 	await userEvent.click(screen.getByRole("button", { name: "Create a cloud project" }));
-	expect(await screen.findByRole("button", { name: "Sign in to AO Cloud" })).toBeInTheDocument();
+	expect(await screen.findByRole("button", { name: "Sign in to cloud" })).toBeInTheDocument();
 });
 
 it("can keep cloud unavailable even when the global gate is enabled", () => {
