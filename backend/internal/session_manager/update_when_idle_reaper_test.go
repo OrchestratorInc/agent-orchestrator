@@ -93,8 +93,10 @@ func TestTerminalStoppedForUpdateSurvivesTheReaperAndResumes(t *testing.T) {
 		t.Fatalf("resume after update: %v", err)
 	}
 	rec, _, err = st.GetSession(ctx, "mer-1")
-	if err != nil || rec.IsTerminated || rec.Metadata.RuntimeLaunchID != "launch-new" || runtime.restarted != 1 {
-		t.Fatalf("resumed session = terminated:%v launch:%q restarts:%d (%v); want the terminal restarted on a new launch",
-			rec.IsTerminated, rec.Metadata.RuntimeLaunchID, runtime.restarted, err)
+	// The stop destroyed the runtime, so resume creates a new one rather than
+	// restarting the old handle.
+	if err != nil || rec.IsTerminated || rec.Metadata.RuntimeLaunchID != "launch-new" || base.created != 1 || runtime.restarted != 0 {
+		t.Fatalf("resumed session = terminated:%v launch:%q created:%d restarts:%d (%v); want the terminal recreated on a new launch",
+			rec.IsTerminated, rec.Metadata.RuntimeLaunchID, base.created, runtime.restarted, err)
 	}
 }
