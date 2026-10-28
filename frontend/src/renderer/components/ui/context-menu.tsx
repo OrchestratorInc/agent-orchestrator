@@ -16,6 +16,7 @@ export const ContextMenuPortal = ContextMenuPrimitive.Portal;
 export function ContextMenuContent({
 	className,
 	onCloseAutoFocus,
+	onContextMenu,
 	...props
 }: React.ComponentProps<typeof ContextMenuPrimitive.Content>) {
 	const rememberReturnTarget = useMenuReturnTarget<HTMLDivElement>();
@@ -24,6 +25,12 @@ export function ContextMenuContent({
 			<ContextMenuPrimitive.Content
 				ref={rememberReturnTarget}
 				onCloseAutoFocus={composeMenuCloseAutoFocus(onCloseAutoFocus)}
+				onContextMenu={(event) => {
+					onContextMenu?.(event);
+					// Portals bubble React events up the component tree, so a right-click on
+					// this menu would otherwise open the menu of a trigger that contains it.
+					event.stopPropagation();
+				}}
 				className={cn(
 					actionMenuContentClass,
 					"origin-(--radix-context-menu-content-transform-origin)",
