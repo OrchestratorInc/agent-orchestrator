@@ -388,6 +388,7 @@ export function BrowserPanel({
 		previewUrl: session.previewUrl,
 		previewRevision: session.previewRevision,
 		terminated: sessionBrowserUnavailable(session),
+		sessionEnded: session.isTerminated,
 	});
 	const annotationQueue = useBrowserAnnotationQueue({
 		sessionId: session.id,

@@ -1281,6 +1281,7 @@ describe("terminal restore", () => {
 			terminalState.value = "exited";
 			const view = renderPane({ ...session, ...exited });
 			try {
+				expect(screen.getByText("Agent exited")).toBeInTheDocument();
 				await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
 				await waitFor(() =>
 					expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
@@ -1374,6 +1375,22 @@ describe("terminal restore", () => {
 		}
 	});
 
+	it("explains a terminated session with a visible recovery action", () => {
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", terminalHandleId: "term-1" });
+		try {
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
+			expect(screen.getByRole("button", { name: "Restore session" })).toHaveTextContent("Restore session");
+		} finally { view.restore(); }
+	});
+
+	it("shows the recorded startup failure rather than guessing an exit reason", () => {
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", provisionState: "failed", provisionError: "Workspace checkout failed", terminalHandleId: "term-1" });
+		try {
+			expect(screen.getByText("Session failed to start")).toBeInTheDocument();
+			expect(screen.getByText("Workspace checkout failed")).toBeInTheDocument();
+		} finally { view.restore(); }
+	});
+
 	it("preserves Restore controls after a cached attachment reports a fatal pane error", async () => {
 		terminalState.value = "error";
 		terminalError.value = "terminal handle missing";
@@ -1386,7 +1403,7 @@ describe("terminal restore", () => {
 		try {
 			expect(await screen.findByRole("button", { name: "Restore session" })).toBeInTheDocument();
 			expect(screen.getByTestId("xterm")).toBeInTheDocument();
-			expect(screen.getByText("Terminal ended")).toBeInTheDocument();
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
 			expect(screen.queryByText("Terminal error: terminal handle missing")).not.toBeInTheDocument();
 		} finally {
 			view.restore();

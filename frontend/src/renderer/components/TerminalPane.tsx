@@ -1141,7 +1141,9 @@ function AttachedTerminal({
 		exitNotice:
 			terminalTarget?.kind === "reviewer"
 				? "\r\n\x1b[2m[reviewer terminal finished]\x1b[0m"
-				: undefined,
+				: terminalTarget?.kind === "shell"
+					? undefined
+					: "",
 		inputDisabled,
 		isVisible,
 		shellTerminalHandleId,
@@ -1531,6 +1533,18 @@ type TerminalEndedStripProps = {
 function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
 	const { t } = useTranslation();
 	const reviewDelivered = variant === "reviewer" && reviewStatus === "delivered";
+	const terminated = variant === "session" && session && !sessionIsActive(session);
+	const agentExited = variant === "session" && sessionAgentExited(session);
+	const startupFailed = variant === "session" && session?.provisionState === "failed";
+	const heading = reviewDelivered
+		? t("terminal.reviewCompleted")
+		: startupFailed
+			? t("terminal.startupFailed")
+			: terminated
+				? t("terminal.sessionTerminated")
+				: agentExited
+					? t("terminal.agentExited")
+					: t("terminal.ended");
 	const message = reviewDelivered
 		? t("terminal.reviewerCompleted")
 		: canRestore
@@ -1543,12 +1557,19 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 
 	return (
 		<div className="shrink-0 border-b border-border bg-surface/80 px-4 py-2">
-			<div className="flex min-h-control-board items-center gap-3">
-				<div className="min-w-0 flex-1">
-					<div className="font-mono text-caption font-medium uppercase tracking-wide-md text-muted-foreground">
-						{reviewDelivered ? t("terminal.reviewCompleted") : t("terminal.ended")}
+			<div className="flex min-h-control-board flex-wrap items-center gap-3">
+				<div className="min-w-0">
+					<div
+						className={cn(
+							"font-mono text-caption font-medium uppercase tracking-wide-md",
+							terminated || startupFailed ? "text-destructive" : "text-muted-foreground",
+						)}
+					>
+						{heading}
 					</div>
-					<div className="mt-0.5 truncate text-xs text-muted-foreground">{message}</div>
+					<div className="mt-0.5 text-xs text-muted-foreground">
+						{startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
+					</div>
 				</div>
 				{error && <div className="max-w-content-max truncate text-xs text-destructive">{error}</div>}
 				{variant === "session" && session ? <ResumeAgentControl session={session} /> : null}
