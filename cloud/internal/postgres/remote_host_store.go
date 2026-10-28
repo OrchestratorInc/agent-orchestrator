@@ -185,7 +185,9 @@ func (s *Store) TouchRemoteHostTunnel(ctx context.Context, tunnelID string, seen
 // the meantime keeps it.
 func (s *Store) ReleaseRemoteHostTunnel(ctx context.Context, tunnelID string) error {
 	return s.withService(ctx, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET released_at = now()
+		// updated_at too: a row whose account no longer lists the host keeps
+		// its record for the sweep's grace from now, time to be listed again.
+		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET released_at = now(), updated_at = now()
 			WHERE tunnel_id = $1 AND released_at IS NULL`, tunnelID)
 		return err
 	})

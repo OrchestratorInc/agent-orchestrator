@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -198,6 +199,76 @@ func TestTunnelRunnerDoesNotRestartARefusedTokenFromTheCache(t *testing.T) {
 	}
 }
 
+// AO Cloud answering with the token the edge refused, because no repair is due
+// yet, starts no fixed connector to be refused again: a quick tunnel serves,
+// and its check asks for the repair once it falls due.
+func TestTunnelRunnerServesAQuickTunnelUntilARefusedTunnelIsRemade(t *testing.T) {
+	for _, due := range []bool{false, true} {
+		cloud, src := newFixedSource(t)
+		bin, argsFile := fakeCloudflared(t, registeredLine)
+		r := namedRunner(t, bin, src)
+		r.refused, r.repairedAt = "run-token-tun-1", time.Now().Add(-time.Minute)
+		if due {
+			r.repairedAt = time.Now().Add(-refusedRepairSpacing - time.Minute)
+		}
+		r.upgradeEvery = 20 * time.Millisecond
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		done := make(chan error, 1)
+		go func() { done <- r.runOnce(ctx) }()
+		// Due, the quick connector can be replaced before it writes its args.
+		for deadline := time.Now().Add(10 * time.Second); !due; time.Sleep(20 * time.Millisecond) {
+			if _, err := os.Stat(argsFile); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("no connector started")
+			}
+		}
+		if _, err := os.Stat(argsFile); err == nil {
+			if argv, token := readArgs(t, argsFile); strings.HasSuffix(argv, " run") || token != "" {
+				t.Fatalf("due %v: restarted the refused tunnel: argv %q, token %q", due, argv, token)
+			}
+		}
+		select {
+		case err := <-done:
+			// The fake remakes the tunnel when asked, under the same token.
+			if !due || !errors.Is(err, errFixedTunnelReady) || r.repair || time.Since(r.repairedAt) > time.Minute {
+				t.Fatalf("due %v: runOnce = %v, repair %v", due, err, r.repair)
+			}
+		case <-time.After(500 * time.Millisecond):
+			if due {
+				t.Fatal("the quick tunnel's check never asked for the repair that fell due")
+			}
+			cloud.mu.Lock()
+			repairs := slices.Contains(cloud.repairs, true)
+			cloud.mu.Unlock()
+			if repairs {
+				t.Fatal("asked for a repair before it was due")
+			}
+			cancel()
+			<-done
+		}
+		cancel()
+	}
+}
+
+// A connector that gives up on a refusal and exits by itself is judged as one
+// the watchers stopped.
+func TestTunnelRunnerJudgesAConnectorThatExitsOnARefusal(t *testing.T) {
+	_, src := newFixedSource(t)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "cloudflared")
+	script := "#!/bin/sh\ncat >&2 <<'EOF'\n" + refusedLine + "\nEOF\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil { //nolint:gosec // G306: the test runs it
+		t.Fatal(err)
+	}
+	r := namedRunner(t, bin, src)
+	if err := r.runOnce(context.Background()); err == nil || !r.repair || r.refused != "run-token-tun-1" {
+		t.Fatalf("runOnce = %v, repair %v, refused %q", err, r.repair, r.refused)
+	}
+}
+
 // Refusals are repaired sooner than a connector that only cannot connect, but
 // not on every restart: each repair spends one of the account's tunnel writes.
 func TestTunnelRunnerSpacesRefusalRepairsOut(t *testing.T) {
@@ -212,7 +283,7 @@ func TestTunnelRunnerSpacesRefusalRepairsOut(t *testing.T) {
 		ago  time.Duration
 		want bool
 	}{{2 * time.Minute, false}, {15 * time.Minute, true}} {
-		r.repair, r.repairedAt = false, time.Now().Add(-tc.ago)
+		r.repair, r.refused, r.repairedAt = false, "", time.Now().Add(-tc.ago)
 		if err := r.runOnce(ctx); err == nil || r.repair != tc.want {
 			t.Fatalf("repaired %s ago: runOnce = %v, repair %v", tc.ago, err, r.repair)
 		}

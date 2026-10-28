@@ -882,12 +882,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					// error. Without it the QR looks entirely normal and the user
 					// discovers the gap only by being away from home.
 					<div className="mt-4">
-						<p className="text-xs text-settings-muted" data-testid="mobile-remote-unavailable">
-							{t(
-								"mobile.remoteAccessUnavailable",
-								"Works on this network only — cloudflared isn't installed, so this machine can't be reached from elsewhere.",
-							)}
-						</p>
+						{/* While the daemon downloads it, the row below says so instead. */}
+						{!status.tunnel?.installing && (
+							<p className="text-xs text-settings-muted" data-testid="mobile-remote-unavailable">
+								{t(
+									"mobile.remoteAccessUnavailable",
+									"Works on this network only — cloudflared isn't installed, so this machine can't be reached from elsewhere.",
+								)}
+							</p>
+						)}
 						{/* Deliberately not enable(): that mints a fresh password, so
 						    installing remote access would invalidate the phone the user
 						    had already paired. This re-checks for the binary and starts

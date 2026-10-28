@@ -298,8 +298,8 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   every 30 minutes, or every 10 while the edge refuses its token. Only this
   call counts as AO Cloud seeing the machine; a desktop's registration does
   not. A machine whose new pairing password revoked its link keeps serving
-  its tunnel for 90 seconds, time for the desktop to link it again, and gives
-  the address up only if no link comes. Calls that
+  its tunnel for up to 2 minutes, until the desktop's new link reaches AO
+  Cloud, and gives the address up only if none does. Calls that
   write tunnels are limited to 30 an hour per account (429
   `tunnel_rate_limited`), since every account shares the API token's rate
   limit; the window is kept per replica. Writes for one account and host run
@@ -311,9 +311,11 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   leave the machine in no account.
 - `ao_remote_host_tunnels` keeps one row per account and host, with the run
   token encrypted like host tokens. While an account's tunnel for a host
-  stands, the address publish cannot move that account's listing off the
-  fixed address: a quick address published meanwhile is one the machine is
-  about to leave.
+  was written in the last 10 minutes, the address publish cannot move that
+  account's listing off the fixed address: a quick address published
+  meanwhile is one the machine is about to leave. AO Cloud answers 202 when
+  it kept every listing, and the machine sends the address again a minute
+  later.
 - A machine's tunnel is released 5 minutes after its last connector left
   (asleep, offline or quit) and AO Cloud last saw the machine, and an hour
   after it was made if no connector ever served it: the sweep deletes the
@@ -325,9 +327,11 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   Cloudflare routes the address to that tunnel, about a minute later. A
   connector that came back first makes Cloudflare refuse the deletion, and it
   keeps its tunnel.
-- Removing a host from an account deletes that account's tunnel and record
-  before the removal answers, so a host added back right after gets a new
-  tunnel. The sweep runs every 5 minutes. Besides releasing tunnels, it deletes
+- Removing a host from an account deletes that account's tunnel before the
+  removal answers, so a host added back right after gets a new tunnel. The DNS
+  record stays, as a release leaves it, until the sweep deletes it: a host
+  added back meanwhile keeps an address no resolver saw vanish. The sweep runs
+  every 5 minutes. Besides releasing tunnels, it deletes
   the tunnel and record of a host its account no longer lists (10 minutes
   after the row was written, since a registration makes its tunnel first), of a
   host whose machine has not fetched its token for 90 days. It acts only on

@@ -37,6 +37,7 @@ type remoteHostTunnelStore interface {
 	MarkRemoteHostTunnelLinked(ctx context.Context, userID, hostID string) error
 	SaveRemoteHostTunnel(ctx context.Context, tunnel domain.RemoteHostTunnel, recordCreated bool) (time.Time, error)
 	TouchRemoteHostTunnel(ctx context.Context, tunnelID string, seenAt time.Time) error
+	ReleaseRemoteHostTunnel(ctx context.Context, tunnelID string) error
 	DeleteRemoteHostTunnel(ctx context.Context, tunnelID string) error
 }
 
@@ -174,8 +175,9 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 	}, limit); err != nil {
 		if errors.Is(err, postgres.ErrRemoteHostLimit) {
 			// A concurrent registration filled the account after the check
-			// above: drop the tunnel made for this one.
-			s.deleteAccountTunnel(r.Context(), principal.UserID, hostID)
+			// above: drop the tunnel made for this one, and its address,
+			// which nothing ever listed.
+			s.deleteAccountTunnel(r.Context(), principal.UserID, hostID, false)
 			writeRemoteHostLimit(w, r)
 			return
 		}
@@ -209,15 +211,19 @@ func (s *Server) deleteRemoteHost(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	s.deleteAccountTunnel(r.Context(), principal.UserID, hostID)
+	s.deleteAccountTunnel(r.Context(), principal.UserID, hostID, true)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // deleteAccountTunnel deletes the tunnel userID's account gave hostID, once the
 // account no longer lists the host. It finishes before the removal answers, so
 // a host added back right after gets a new tunnel rather than the one being
-// deleted. A failure is left to the sweep. The caller holds the host's Lock.
-func (s *Server) deleteAccountTunnel(ctx context.Context, userID, hostID string) {
+// deleted. With keepAddress the DNS record stays, as a release leaves it, and
+// the sweep deletes it once the host has gone unlisted for 10 minutes: a host
+// added back meanwhile keeps an address no resolver saw vanish, so no phone
+// caches its absence. A failure is left to the sweep. The caller holds the
+// host's Lock.
+func (s *Server) deleteAccountTunnel(ctx context.Context, userID, hostID string, keepAddress bool) {
 	tunnels := s.tunnelStore()
 	if tunnels == nil {
 		return
@@ -229,12 +235,25 @@ func (s *Server) deleteAccountTunnel(ctx context.Context, userID, hostID string)
 	if err != nil || !found {
 		return
 	}
-	if err := s.hostTunnels.Delete(ctx, tunnel.TunnelID, tunnel.Hostname); err != nil {
-		s.logger.Warn("release host tunnel", "host_id", hostID, "error", err)
+	if !keepAddress {
+		if err := s.hostTunnels.Delete(ctx, tunnel.TunnelID, tunnel.Hostname); err != nil {
+			s.logger.Warn("delete host tunnel", "host_id", hostID, "error", err)
+			return
+		}
+		if err := tunnels.DeleteRemoteHostTunnel(ctx, tunnel.TunnelID); err != nil {
+			s.logger.Warn("forget host tunnel", "host_id", hostID, "error", err)
+		}
 		return
 	}
-	if err := tunnels.DeleteRemoteHostTunnel(ctx, tunnel.TunnelID); err != nil {
-		s.logger.Warn("forget host tunnel", "host_id", hostID, "error", err)
+	if tunnel.Released {
+		return
+	}
+	if err := s.hostTunnels.DeleteTunnel(ctx, tunnel.TunnelID); err != nil {
+		s.logger.Warn("delete host tunnel", "host_id", hostID, "error", err)
+		return
+	}
+	if err := tunnels.ReleaseRemoteHostTunnel(ctx, tunnel.TunnelID); err != nil {
+		s.logger.Warn("release host tunnel", "host_id", hostID, "error", err)
 	}
 }
 
@@ -260,6 +279,7 @@ func (s *Server) updateRemoteHostAddress(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	tunnels := s.tunnelStore()
+	held := 0
 	for _, host := range hosts {
 		// Shortly after the account's tunnel was written, the listing stays at
 		// its fixed address: a machine linked just now publishes the quick
@@ -272,6 +292,7 @@ func (s *Server) updateRemoteHostAddress(w http.ResponseWriter, r *http.Request)
 				return
 			}
 			if found && !tunnel.Released && time.Since(tunnel.UpdatedAt) < fixedListingHold && input.URL != "https://"+tunnel.Hostname+":443" {
+				held++
 				continue
 			}
 		}
@@ -279,6 +300,11 @@ func (s *Server) updateRemoteHostAddress(w http.ResponseWriter, r *http.Request)
 			s.writeStoreError(w, r, err)
 			return
 		}
+	}
+	if held == len(hosts) {
+		// Nothing written: the machine sends the address again soon.
+		w.WriteHeader(http.StatusAccepted)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

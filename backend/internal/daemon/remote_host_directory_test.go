@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,5 +32,15 @@ func TestPublishRemoteHostAddressUsesScopedDigestWithoutRedirects(t *testing.T) 
 	}
 	if !called {
 		t.Fatal("address was not published")
+	}
+}
+
+// AO Cloud answers 202 when it kept the listing at the fixed address it gave
+// the machine moments ago.
+func TestPublishRemoteHostAddressReportsAHeldListing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) }))
+	defer srv.Close()
+	if err := publishRemoteHostAddress(context.Background(), srv.Client(), srv.URL, "h_test", "https://new.example.com:443", strings.Repeat("a", 64)); !errors.Is(err, errAddressHeld) {
+		t.Fatalf("err = %v, want the held listing", err)
 	}
 }

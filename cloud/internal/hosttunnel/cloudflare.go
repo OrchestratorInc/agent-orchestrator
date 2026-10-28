@@ -257,13 +257,8 @@ func (c *Cloudflare) findRecord(ctx context.Context, hostname string) (dnsRecord
 // under the same address. Already-deleted parts count as deleted: measured,
 // Cloudflare answers both deletes of a deleted tunnel with success.
 func (c *Cloudflare) Delete(ctx context.Context, tunnelID, hostname string) error {
-	tunnel := c.tunnelsPath() + "/" + url.PathEscape(tunnelID)
-	// Cloudflare refuses to delete a tunnel with live connections (code 1022).
-	if err := c.do(ctx, http.MethodDelete, tunnel+"/connections", nil, nil); err != nil && !notFound(err) {
-		return fmt.Errorf("drop tunnel connections: %w", err)
-	}
-	if err := c.do(ctx, http.MethodDelete, tunnel, nil, nil); err != nil && !notFound(err) {
-		return fmt.Errorf("delete tunnel: %w", err)
+	if err := c.DeleteTunnel(ctx, tunnelID); err != nil {
+		return err
 	}
 	record, err := c.findRecord(ctx, hostname)
 	if err != nil || record.ID == "" || record.Content != tunnelID+".cfargotunnel.com" {
@@ -271,6 +266,19 @@ func (c *Cloudflare) Delete(ctx context.Context, tunnelID, hostname string) erro
 	}
 	if err := c.do(ctx, http.MethodDelete, c.recordsPath()+"/"+url.PathEscape(record.ID), nil, nil); err != nil && !notFound(err) {
 		return fmt.Errorf("delete dns record: %w", err)
+	}
+	return nil
+}
+
+// DeleteTunnel removes a tunnel, connected or not, and leaves its DNS record.
+func (c *Cloudflare) DeleteTunnel(ctx context.Context, tunnelID string) error {
+	tunnel := c.tunnelsPath() + "/" + url.PathEscape(tunnelID)
+	// Cloudflare refuses to delete a tunnel with live connections (code 1022).
+	if err := c.do(ctx, http.MethodDelete, tunnel+"/connections", nil, nil); err != nil && !notFound(err) {
+		return fmt.Errorf("drop tunnel connections: %w", err)
+	}
+	if err := c.do(ctx, http.MethodDelete, tunnel, nil, nil); err != nil && !notFound(err) {
+		return fmt.Errorf("delete tunnel: %w", err)
 	}
 	return nil
 }

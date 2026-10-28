@@ -32,6 +32,10 @@ func runRemoteHostAddressPublisher(ctx context.Context, bridge *controllers.Brid
 		}
 		err := publishRemoteHostAddress(ctx, client, controlPlaneURL, bridge.HostID, address, hash)
 		switch {
+		case errors.Is(err, errAddressHeld):
+			// The listing stays at the fixed address the machine was just
+			// linked to; sent again once that may have changed.
+			lastSent, nextAt, refusedWait = key, time.Now().Add(refusedRetry), refusedRetry
 		case errors.Is(err, errAddressRefused):
 			// No account lists this link yet: a device that just took the
 			// machine has not listed it, or never could. Asked again soon,
@@ -68,8 +72,13 @@ const (
 	maxRefusedRetry = 30 * time.Minute
 )
 
-// errAddressRefused is AO Cloud refusing the digest: no account lists it.
-var errAddressRefused = errors.New("no account lists this machine under its link")
+var (
+	// errAddressRefused is AO Cloud refusing the digest: no account lists it.
+	errAddressRefused = errors.New("no account lists this machine under its link")
+	// errAddressHeld is AO Cloud keeping every listing at the fixed address
+	// it gave the machine moments ago.
+	errAddressHeld = errors.New("the account lists this machine at its fixed address for now")
+)
 
 func accountTunnelAddress(bridge *controllers.BridgeService) (string, string) {
 	state, err := mobilebridge.Load(bridge.ConfigPath)
@@ -103,6 +112,8 @@ func publishRemoteHostAddress(ctx context.Context, client *http.Client, controlP
 	defer func() { _ = response.Body.Close() }()
 	switch {
 	case response.StatusCode == http.StatusNoContent:
+	case response.StatusCode == http.StatusAccepted:
+		return errAddressHeld
 	case mobilebridge.IsHostDigestRefusal(response):
 		return errAddressRefused
 	default:

@@ -137,10 +137,10 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 			t.repair = false
 		}
 		switch {
-		case named.RunToken != "" && err != nil && named.RunToken == t.refused:
-			// Dead, and AO Cloud cannot hand out another yet: a quick tunnel
-			// serves until it can.
-			t.logger().Warn("the cached fixed tunnel was refused and AO Cloud cannot replace it; starting a quick tunnel", "error", err)
+		case named.RunToken != "" && named.RunToken == t.refused && !named.Repaired:
+			// Dead, and AO Cloud did not remake it: it cannot be reached, or
+			// no repair is due yet. A quick tunnel serves until it does.
+			t.logger().Warn("the fixed tunnel was refused and AO Cloud has not replaced it; starting a quick tunnel", "error", err)
 			named = NamedTunnel{}
 		case named.RunToken != "" && err != nil:
 			t.logger().Warn("could not reach AO Cloud; starting the cached fixed tunnel", "error", err)
@@ -236,7 +236,8 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		go t.watchConnector(runCtx, health, func(reason string) { markUnserved(reason, false) })
 		go t.watchFixedTunnel(runCtx, named, health, func(n *NamedTunnel) { next.Store(n); withdrawn.Store(true); stopRun() })
 	case t.Fixed != nil:
-		go t.awaitFixedTunnel(runCtx, t.repair, func(n NamedTunnel) { next.Store(&n); upgraded.Store(true); stopRun() })
+		go t.awaitFixedTunnel(runCtx, t.repair, t.refused, t.repairedAt.Add(refusedRepairSpacing),
+			func(n NamedTunnel) { next.Store(&n); upgraded.Store(true); stopRun() })
 	}
 
 	scanner := bufio.NewScanner(stderr)
@@ -252,31 +253,36 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 
 	waitErr := cmd.Wait()
 	t.next = next.Load()
+	// unserved marks the tunnel this run could not serve: refused, the edge
+	// refused its token. Refusals say the tunnel is gone, so they are
+	// repaired sooner, but not on every restart: a tunnel a repair found
+	// standing is refused for another reason, and each repair spends the
+	// account's write budget. A connector that only could not connect may be
+	// on a network that blocks Cloudflare's edge, where a repair every few
+	// minutes would spend AO Cloud's Cloudflare calls and the budget for
+	// nothing.
+	markUnservedTunnel := func(refused bool) {
+		spacing := repairSpacing
+		if refused {
+			t.refused, spacing = named.RunToken, refusedRepairSpacing
+		}
+		t.repair = t.repairedAt.IsZero() || time.Since(t.repairedAt) >= spacing
+	}
 	switch {
 	case unserved.Load() != nil:
 		waitErr = errors.New(*unserved.Load())
-		switch {
-		case refusedRun.Load():
-			// Refusals say the tunnel is gone, so they are repaired sooner,
-			// but not on every restart: a tunnel a repair found standing is
-			// refused for another reason, and each repair spends the
-			// account's write budget.
-			t.refused = named.RunToken
-			t.repair = t.repairedAt.IsZero() || time.Since(t.repairedAt) >= refusedRepairSpacing
-		default:
-			// A connector that only could not connect may be on a network
-			// that blocks Cloudflare's edge, where a repair every few minutes
-			// would spend AO Cloud's Cloudflare calls and the account's write
-			// budget for nothing.
-			t.repair = t.repairedAt.IsZero() || time.Since(t.repairedAt) >= repairSpacing
-		}
+		markUnservedTunnel(refusedRun.Load())
 	case upgraded.Load():
 		waitErr = errFixedTunnelReady
-		if n := next.Load(); t.repair && n != nil && n.Repaired { // the quick run's check asked for it
+		if n := next.Load(); n != nil && n.Repaired { // the quick run's check asked for it
 			t.repair, t.repairedAt = false, time.Now()
 		}
 	case withdrawn.Load():
 		waitErr = errFixedTunnelChanged
+	case fixed && ctx.Err() == nil:
+		// Exited by itself before the watchers judged it, as a connector
+		// that gives up on a refusal does.
+		markUnservedTunnel(health.wasRefused())
 	}
 	if ctx.Err() == nil && (errors.Is(waitErr, errFixedTunnelReady) || errors.Is(waitErr, errFixedTunnelChanged)) {
 		// A planned restart reads as starting, not failed: the next connector
@@ -375,6 +381,14 @@ func (h *connectorHealth) feed(line string, now time.Time) (refused bool) {
 	return false
 }
 
+// wasRefused reports whether the edge refused the connector since its last
+// registration.
+func (h *connectorHealth) wasRefused() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.refused > 0
+}
+
 // deadSince is when the connector last had no live connection, if it has none.
 func (h *connectorHealth) deadSince() (time.Time, bool) {
 	h.mu.Lock()
@@ -400,10 +414,10 @@ const (
 // asking AO Cloud backs off, except that a new link (a new account token)
 // is tried at once.
 //
-// A repair still owed is asked for with it. Any answer is taken, even the run
-// token the edge refused: AO Cloud checked it again, and a token refused while
-// a new tunnel propagated works a moment later.
-func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, repair bool, ready func(NamedTunnel)) {
+// A repair still owed is asked for with it, and so is one that falls due for
+// refused, the run token the edge refused. That token is not taken again
+// unless AO Cloud remade the tunnel: starting it would only be refused again.
+func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, repair bool, refused string, repairDue time.Time, ready func(NamedTunnel)) {
 	every := t.upgradeEvery
 	if every == 0 {
 		every = fixedUpgradeInterval
@@ -422,13 +436,15 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, repair bool, ready 
 			continue
 		}
 		requestCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
-		named, err := t.Fixed.TunnelFor(requestCtx, t.HostID, repair)
+		named, err := t.Fixed.TunnelFor(requestCtx, t.HostID, repair || (refused != "" && !time.Now().Before(repairDue)))
 		cancel()
-		if err == nil && named.RunToken != "" {
+		if err == nil && named.RunToken != "" && (named.RunToken != refused || named.Repaired) {
 			ready(named)
 			return
 		}
-		if digest != tried {
+		// An answer with the refused token is no reason to back off: the
+		// repair falls due on time.
+		if digest != tried || err == nil {
 			wait = every
 		} else if wait = 2 * wait; wait > maxFixedUpgradeWait {
 			wait = maxFixedUpgradeWait
@@ -446,8 +462,8 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, repair bool, ready 
 // It asks at once when nudged: a device just linked the machine, possibly to
 // another account, whose tunnel is another one, or a new password revoked the
 // link. A signed-in desktop links the machine again right after a new
-// password, so an unlinked machine waits relinkGrace for that before it gives
-// up the address.
+// password, so an unlinked machine waits up to relinkGrace for that link to
+// reach AO Cloud before it gives up the address.
 //
 // It also asks as soon as every connection has been down for lostGrace. A
 // machine offline for more than AO Cloud's five minutes has had its tunnel
@@ -480,12 +496,17 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 		}
 		named, err := t.fixedTunnel(ctx)
 		if errors.Is(err, errNotLinked) {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(cmp.Or(t.relinkWait, relinkGrace)):
+			// Until the desktop's new link lands at AO Cloud, AO Cloud
+			// refuses it.
+			grace := cmp.Or(t.relinkWait, relinkGrace)
+			for deadline := time.Now().Add(grace); (errors.Is(err, errNotLinked) || errors.Is(err, errHostRefused)) && time.Now().Before(deadline); {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(grace / 24):
+				}
+				named, err = t.fixedTunnel(ctx)
 			}
-			named, err = t.fixedTunnel(ctx)
 		}
 		if errors.Is(err, errHostRefused) || errors.Is(err, errNotLinked) {
 			withdrawn(nil)
@@ -506,12 +527,12 @@ func (t *TunnelRunner) fixedTunnel(ctx context.Context) (NamedTunnel, error) {
 
 // fixedRecheckInterval spaces those checks: one AO Cloud call per machine
 // every 30 minutes, and one more each time its connections all stay down for
-// connectionLostGrace. relinkGrace outlasts the desktop's 75 seconds for a
-// link.
+// connectionLostGrace. relinkGrace outlasts the desktop's link: a directory
+// read of up to 10 seconds and a registration of up to 75.
 const (
 	fixedRecheckInterval = 30 * time.Minute
 	connectionLostGrace  = 10 * time.Second
-	relinkGrace          = 90 * time.Second
+	relinkGrace          = 2 * time.Minute
 )
 
 // Asking for the fixed address while a quick tunnel serves: every 30s, backing

@@ -872,6 +872,18 @@ test("says so when this machine cannot be reached from elsewhere", async () => {
 	);
 });
 
+// While the daemon downloads its own connector, the download row says so; the
+// caveat would contradict it.
+test("does not claim cloudflared is missing while it downloads", async () => {
+	mobileStatus.tunnel = {
+		supported: false, installing: true, running: false, ready: false, hostname: "", location: "", lastError: "",
+	};
+	renderMobileSettings();
+
+	expect(await screen.findByTestId("mobile-install-cloudflared")).toBeVisible();
+	expect(screen.queryByTestId("mobile-remote-unavailable")).toBeNull();
+});
+
 // A machine that has a connector must not carry the caveat, whether or not the
 // tunnel happens to be up yet.
 test("does not claim unavailability while the connector is merely starting", async () => {

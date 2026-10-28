@@ -198,6 +198,15 @@ func (s *remoteHostTunnelFakeStore) DeleteRemoteHostTunnel(_ context.Context, tu
 	}
 	return nil
 }
+func (s *remoteHostTunnelFakeStore) ReleaseRemoteHostTunnel(_ context.Context, tunnelID string) error {
+	for key, t := range s.tunnels {
+		if t.TunnelID == tunnelID && !t.Released {
+			t.Released, t.UpdatedAt = true, time.Now()
+			s.tunnels[key] = t
+		}
+	}
+	return nil
+}
 
 // fakeTunnelAPI is the smallest Cloudflare that provisions and deletes
 // tunnels; hosttunnel's own tests cover the API in depth.
@@ -401,17 +410,18 @@ func TestAStandingTunnelKeepsTheListingAtItsAddress(t *testing.T) {
 	s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"Mac","token":"`+token+`"}`, owner))
 	fixed := store.hosts[owner+":"+hostID].URL
 	sum := sha256.Sum256([]byte(token))
-	publish := func(url string) {
+	publish := func(url string, want int) {
 		t.Helper()
 		r := hostRequest(http.MethodPost, hostID, `{"url":"`+url+`"}`, "")
 		r.Header.Set("Authorization", "Bearer "+hex.EncodeToString(sum[:]))
 		w := httptest.NewRecorder()
 		s.updateRemoteHostAddress(w, r)
-		if w.Code != http.StatusNoContent {
-			t.Fatalf("publish %s: %d", url, w.Code)
+		if w.Code != want {
+			t.Fatalf("publish %s: %d, want %d", url, w.Code, want)
 		}
 	}
-	publish("https://quiet-river.trycloudflare.com:443")
+	// Held, and said so, so the machine sends it again after the hold.
+	publish("https://quiet-river.trycloudflare.com:443", http.StatusAccepted)
 	if got := store.hosts[owner+":"+hostID].URL; got != fixed {
 		t.Fatalf("a quick address replaced the fixed listing: %q", got)
 	}
@@ -420,7 +430,7 @@ func TestAStandingTunnelKeepsTheListingAtItsAddress(t *testing.T) {
 	old := store.tunnels[owner+":"+hostID]
 	old.UpdatedAt = time.Now().Add(-time.Hour)
 	store.tunnels[owner+":"+hostID] = old
-	publish("https://quiet-river.trycloudflare.com:443")
+	publish("https://quiet-river.trycloudflare.com:443", http.StatusNoContent)
 	if got := store.hosts[owner+":"+hostID].URL; got != "https://quiet-river.trycloudflare.com:443" {
 		t.Fatalf("listing = %q", got)
 	}
@@ -470,13 +480,19 @@ func TestRemovingAHostDeletesOnlyThatAccountsTunnel(t *testing.T) {
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("delete: %d", w.Code)
 	}
-	// Deleted before the removal answers, so a host added back next gets a new tunnel.
+	// Deleted before the removal answers, so a host added back next gets a new
+	// tunnel. The row stays released, keeping the address for the sweep.
 	_, deleted := api.snapshot()
-	if _, kept := store.tunnels[owners[0]+":"+hostID]; kept || !slices.Equal(deleted, []string{first.TunnelID}) {
-		t.Fatalf("after removal: kept %v, deleted %v", kept, deleted)
+	if row := store.tunnels[owners[0]+":"+hostID]; !row.Released || !slices.Equal(deleted, []string{first.TunnelID}) {
+		t.Fatalf("after removal: row %+v, deleted %v", row, deleted)
 	}
 	if store.tunnels[owners[1]+":"+hostID].TunnelID != second.TunnelID {
 		t.Fatal("removing the host from one account touched another account's tunnel")
+	}
+	w = httptest.NewRecorder()
+	s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"Mac","token":"`+strings.Repeat("a", 64)+`"}`, owners[0]))
+	if row := store.tunnels[owners[0]+":"+hostID]; w.Code != http.StatusNoContent || row.Released || row.TunnelID == first.TunnelID || row.Hostname != first.Hostname {
+		t.Fatalf("added back: %d, row %+v", w.Code, row)
 	}
 }
 

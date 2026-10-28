@@ -67,5 +67,7 @@ export async function saveAccountRemoteHost(baseUrl: string, host: Omit<AccountR
 }
 
 export async function deleteAccountRemoteHost(baseUrl: string, hostId: string): Promise<void> {
-	await request(baseUrl, "DELETE", `/${encodeURIComponent(hostId)}`);
+	// The removal deletes the machine's tunnel first, after any write to it
+	// still running, which can take as long as a save without a url.
+	await request(baseUrl, "DELETE", `/${encodeURIComponent(hostId)}`, undefined, 75_000);
 }
