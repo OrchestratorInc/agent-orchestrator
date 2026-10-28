@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { File, FileText, Globe, Image, Table2, Workflow } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
-import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { cloudArtifactFileUrl, useCloudArtifactAccess } from "../hooks/useCloudArtifacts";
+import { CloudArtifactAccessError, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { artifactContentUrl } from "../lib/artifact-content-url";
 import type { ArtifactRow } from "../lib/artifacts";
 import { isMermaidPath, isRasterImagePath, isSvgPath } from "../lib/image-files";
@@ -14,6 +15,7 @@ import { cn } from "../lib/utils";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
 import { PdfPreview } from "./PdfPreview";
 import { TableFileView } from "./TableFileView";
+import { CloudArtifactFrame } from "./CloudArtifactFrame";
 
 const PAGE_WIDTH = 1000;
 const PAGE_HEIGHT = 625;
@@ -27,25 +29,34 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 	const [width, setWidth] = useState(0);
 	const [failed, setFailed] = useState(false);
 	const [pageAvailable, setPageAvailable] = useState<boolean>();
-	const page = previewLive && row.kind === "html" && row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined;
-	const contentUrl = artifactContentUrl(row.sessionId, row.path, row.rawUrl);
-	const image = isRasterImagePath(row.path) || isSvgPath(row.path)
-		? contentUrl : undefined;
+	const cloud = Boolean(row.cloud);
+	const access = useCloudArtifactAccess({ id: row.sessionId, cloud: row.cloud }, cloud && visible && (row.kind !== "html" || previewLive));
+	const rawUrl = cloud && access.data ? cloudArtifactFileUrl(access.data, row.path, row.updatedAt) : row.rawUrl;
+	const contentUrl = artifactContentUrl(row.sessionId, row.path, rawUrl);
+	const page = previewLive && row.kind === "html"
+		? cloud ? contentUrl : row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined
+		: undefined;
+	const image = isRasterImagePath(row.path) || isSvgPath(row.path) ? contentUrl : undefined;
 	const plainText = /\.(?:txt|json|jsonl|yaml|yml|toml|ini|conf|log|xml|css|js|jsx|ts|tsx|sql|sh|py|go|rs|diff|patch)$/i.test(row.path);
 	const table = isDelimitedTextPath(row.path);
 	const mermaid = isMermaidPath(row.path);
 	const isMarkdown = row.kind === "markdown" || isMarkdownPreviewPath(row.path);
 	const pdf = previewLive && !row.cloud && /\.pdf$/i.test(row.path) ? contentUrl : undefined;
 	const textPreview = isMarkdown || plainText || table || mermaid;
-	const fileOptions = sessionArtifactFileQueryOptions(row.sessionId, row.path, row.rawUrl, undefined, Boolean(row.cloud));
+	const fileOptions = sessionArtifactFileQueryOptions(row.sessionId, row.path, rawUrl, undefined, cloud);
 	const file = useQuery({
 		...fileOptions,
 		queryKey: [...fileOptions.queryKey, row.updatedAt],
-		enabled: visible && Boolean(contentUrl) && textPreview,
+		enabled: visible && Boolean(contentUrl) && (textPreview || (cloud && Boolean(image))),
 		staleTime: Infinity,
 		gcTime: 10 * 60_000,
 		retry: false,
 	});
+	const refreshAccess = useCallback(() => { void access.refetch(); }, [access.refetch]);
+	useEffect(() => {
+		if (file.error instanceof CloudArtifactAccessError) refreshAccess();
+	}, [file.error, refreshAccess]);
+	useEffect(() => setFailed(false), [contentUrl]);
 	useLayoutEffect(() => {
 		const element = container.current;
 		if (!element) return;
@@ -64,7 +75,7 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 	}, []);
 	useLayoutEffect(() => {
 		setPageAvailable(undefined);
-		if (!visible || !page || !contentUrl) return;
+		if (cloud || !visible || !page || !contentUrl) return;
 		const controller = new AbortController();
 		// A cross-origin iframe fires load even for a 404 JSON response. Check
 		// the readable artifact route before framing it, without retaining HTML.
@@ -77,7 +88,7 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 				if (!controller.signal.aborted) setPageAvailable(false);
 			});
 		return () => controller.abort();
-	}, [visible, page, contentUrl, row.updatedAt]);
+	}, [cloud, visible, page, contentUrl, row.updatedAt]);
 	useLayoutEffect(() => {
 		const element = container.current;
 		if (!element || (!page && !isMarkdown)) return;
@@ -93,19 +104,24 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 	const preview = isMarkdown ? stripMarkdownFrontmatter(content) : content;
 	const text = plainText && content.trim() ? content.slice(0, 4000) : "";
 	const Icon = image ? Image : row.kind === "html" ? Globe : table ? Table2 : mermaid ? Workflow : isMarkdown || plainText || pdf ? FileText : File;
-	const unavailable = failed || file.isError || pageAvailable === false || (page && !contentUrl) || (textPreview && !contentUrl)
+	const accessPending = cloud && (row.kind !== "html" || previewLive) && !access.data && !access.isError;
+	const unavailable = failed || access.isError || file.isError || pageAvailable === false || (page && !contentUrl) || (textPreview && !contentUrl)
 		|| (!page && !image && !pdf && !textPreview)
 		|| (file.isSuccess && textPreview && !preview.trim());
 	return (
 		<span inert ref={container} className={cn("pointer-events-none absolute inset-0 block overflow-hidden", isMarkdown || plainText ? "ao-document-surface" : "bg-[var(--solid-muted,var(--muted))]")} aria-hidden="true">
-			{unavailable ? (
+			{accessPending ? null : unavailable ? (
 				<span className="absolute inset-0 grid place-items-center text-passive" title={t("artifactLink.noPreview")}>
 					<Icon className="size-7" />
 				</span>
 			) : !visible ? null : image ? (
 				<img src={image} alt="" loading="eager" onError={() => setFailed(true)} className="h-full w-full object-cover object-top" />
 			) : page ? (
-				pageAvailable ? (
+				cloud ? (
+					<span className="absolute left-0 top-0 block origin-top-left" style={{ width: PAGE_WIDTH, height: PAGE_HEIGHT, transform: `scale(${width / PAGE_WIDTH})` }}>
+						<CloudArtifactFrame onAccessRefused={refreshAccess} title={row.name} url={page} />
+					</span>
+				) : pageAvailable ? (
 					<iframe
 						src={page}
 						title={row.name}
@@ -132,7 +148,7 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 					style={{ width: MARKDOWN_PAGE_WIDTH, height: PAGE_HEIGHT, transform: `scale(${width / MARKDOWN_PAGE_WIDTH})` }}
 				>
 					<MarkdownFileView
-						artifactOrigin={contentUrl ? new URL(row.rawUrl ?? contentUrl).origin : undefined}
+						artifactOrigin={contentUrl ? new URL(rawUrl ?? contentUrl).origin : undefined}
 						content={content}
 						filePath={row.path}
 						presentation="thumbnail"
