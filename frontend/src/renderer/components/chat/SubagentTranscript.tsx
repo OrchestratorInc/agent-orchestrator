@@ -2,8 +2,8 @@
  * One subagent's conversation, read-only: the prompt its parent sent, what it said
  * and ran in order, and the report it handed back.
  *
- * It reads like the main chat because it is drawn with the main chat's parts: the
- * Working row, prose, and the same tool-call runs. The reader can watch and open
+ * It reads like the main chat because it is drawn with the main chat's parts: prose,
+ * the same tool-call runs, and the live row at the end. The reader can watch and open
  * anything here but never send to the child: it answers to its parent, not to them.
  */
 
@@ -12,8 +12,8 @@ import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { ActivityRun } from "./ActivityRun";
 import { ChatMarkdown } from "./ChatMarkdown";
-import { LiveResponseStatus } from "./ChatTimelineItems";
-import { stepSections, type Subagent } from "./subagent-team";
+import { LiveResponseStatus, liveTaskLabel } from "./ChatTimelineItems";
+import { isChildMessage, stepSections, type Subagent } from "./subagent-team";
 
 /** A prompt longer than this starts folded, like a long message from another agent. */
 const PROMPT_FOLD_CHARS = 360;
@@ -35,11 +35,14 @@ export function SubagentTranscript({
 	const working = agent.state === "working";
 	const lastRunIndex = sections.findLastIndex((section) => section.kind === "run");
 	const empty = !working && sections.length === 0 && !agent.report && !agent.error;
+	// The live row names the step the child is on, as a turn's does; what it writes is prose, not a step.
+	const currentStep = working
+		? agent.steps.findLast((step) => (step.status === "running" || step.status === "pending") && !isChildMessage(step))
+		: undefined;
 
 	return (
 		<div className="flex min-w-0 flex-col gap-3">
 			{agent.prompt ? <SubagentPrompt prompt={agent.prompt} /> : null}
-			{working ? <LiveResponseStatus startedAt={agent.launch.createdAt} /> : null}
 			{sections.map((section, index) =>
 				section.kind === "said" ? (
 					<ChatMarkdown key={section.key} text={section.text} />
@@ -54,6 +57,10 @@ export function SubagentTranscript({
 					/>
 				),
 			)}
+			{/* At the live edge, after the work, the way a turn's own live row follows its work down. */}
+			{working ? (
+				<LiveResponseStatus startedAt={agent.launch.createdAt} task={currentStep ? liveTaskLabel(currentStep) : undefined} />
+			) : null}
 			{empty ? <p className="text-caption text-muted-foreground/70">{t("chat.subagent.empty")}</p> : null}
 			{agent.error ? (
 				<p className="whitespace-pre-wrap text-sm leading-relaxed text-destructive">{agent.error}</p>

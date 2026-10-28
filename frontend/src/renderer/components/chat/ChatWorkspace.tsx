@@ -4704,7 +4704,8 @@ const TurnGroup = memo(function TurnGroup({
 	// still says how long it took.
 	const unfoldedDurationMs = group.outcome && foldedRuns.length === 0 && !onlyRead ? group.outcome.durationMs : undefined;
 	// What the live row names: the step the agent is on right now. Items the user acts
-	// on (approvals, questions) are not work, and a provider retry has its own slot.
+	// on (approvals, questions) are not work, and a provider retry has its own slot. A
+	// subagent's step is the child's work, named in its own row and panel instead.
 	const currentTask = group.live
 		? [...group.items]
 				.reverse()
@@ -4712,6 +4713,7 @@ const TurnGroup = memo(function TurnGroup({
 					(item): item is ConversationActivity =>
 						item.kind === "activity" &&
 						item.status === "running" &&
+						!group.subagents?.stepIds.has(item.id) &&
 						item.activityKind !== "plan" &&
 						item.activityKind !== "approval" &&
 						item.activityKind !== "user_input" &&

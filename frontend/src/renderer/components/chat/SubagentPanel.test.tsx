@@ -8,6 +8,7 @@ import {
 	subagentLaunch as launch,
 	subagentMessage as message,
 } from "../../test/subagent-fixtures";
+import { liveTaskLabel } from "./ChatTimelineItems";
 import { SubagentPanel } from "./SubagentPanel";
 import type { SubagentRef } from "./subagent-team";
 
@@ -89,9 +90,14 @@ describe("SubagentPanel", () => {
 		expect(onBack).toHaveBeenCalled();
 	});
 
-	it("keeps the Working row on a child that is still at it", () => {
+	it("ends a working child's conversation with the live row naming the step it is on", () => {
 		panel({ openId: "b" });
-		expect(screen.getByTestId("live-working-label")).toHaveTextContent(/^Working for/);
+		// Named the way a turn's live row names the agent's step, with its timer.
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent(liveTaskLabel(working.steps[0]!));
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
+		// At the live edge, after the work.
+		const live = screen.getByTestId("live-working-label");
+		expect(screen.getByTestId("subagent-prompt").compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 		expect(screen.getByLabelText("Working")).toBeInTheDocument();
 		expect(screen.queryByText("Report")).not.toBeInTheDocument();
 	});

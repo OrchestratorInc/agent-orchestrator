@@ -149,7 +149,7 @@ describe("ChatWorkspace subagents", () => {
 		expect(within(screen.getByRole("button", { name: /Audit: info pages/ })).getByText("No report")).toBeInTheDocument();
 	});
 
-	it("keeps the team, and a report the reader opened, mounted when the turn settles", async () => {
+	it("keeps the team in view, and a report the reader opened still open, when the turn settles", async () => {
 		const user = userEvent.setup();
 		const { rerender } = render(<ChatWorkspace snapshot={snapshot("running")} />);
 
@@ -157,14 +157,13 @@ describe("ChatWorkspace subagents", () => {
 		// Open, the report shows in full under the row's one-line preview of it.
 		expect(await screen.findByText("Report")).toBeInTheDocument();
 		expect(screen.getAllByText("Ranked 5 tests to write first.")).toHaveLength(2);
-		const team = screen.getByTestId("subagent-team");
 
 		rerender(<ChatWorkspace snapshot={snapshot("completed")} />);
 
-		// Wait for the Working row to hand over to the settled "Worked for" row.
+		// The live window that held the turn's work folds away under "Worked for"; the
+		// team stays in view outside it, and the reader's disclosure choice comes along.
 		expect(await screen.findByRole("button", { name: /Worked for/ })).toBeInTheDocument();
-		// Same element, not a remount: nothing replays and the open report stays open.
-		expect(screen.getByTestId("subagent-team")).toBe(team);
+		await waitFor(() => expect(screen.getAllByTestId("subagent-team")).toHaveLength(1));
 		expect(screen.getByRole("button", { name: /Audit: testing gaps/ })).toHaveAttribute("aria-expanded", "true");
 		expect(screen.getByText("Report")).toBeInTheDocument();
 		expect(screen.getAllByText("Ranked 5 tests to write first.")).toHaveLength(2);
@@ -255,6 +254,16 @@ describe("ChatWorkspace subagents", () => {
 		unmount();
 		expect(onAvailableChange).toHaveBeenLastCalledWith(false);
 		tabBody.remove();
+	});
+
+	it("does not name a child's running step as the parent's own in the turn's live row", () => {
+		const childStep = { ...child("p3", 10, "tool-pages", "cd /repo; grep -rn returns src/app"), status: "running" as const };
+		render(<ChatWorkspace snapshot={snapshot("running", [childStep])} />);
+
+		// The child's row says what it is running; the parent is only waiting on it.
+		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("grep -rn returns src/app");
+		expect(screen.getByTestId("live-working-label")).toBeInTheDocument();
+		expect(screen.queryByTestId("live-working-task")).not.toBeInTheDocument();
 	});
 
 	it("does not offer the panel when the chat has no subagents", () => {
