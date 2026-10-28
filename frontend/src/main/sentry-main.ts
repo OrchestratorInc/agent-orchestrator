@@ -33,7 +33,7 @@ const SAFE_CODES = new Set(["AGENT_RESUME_FAILED", "INTERNAL_ERROR", "WORKSPACE_
 const PROCESS_REASONS = ["abnormal-exit", "crashed", "oom", "launch-failed", "integrity-failure"] as const;
 const SAFE_FUNCTION = /^[A-Za-z_$][A-Za-z0-9_$.:<>]*$/;
 const DRAIN_TIMEOUT_MS = 2_000;
-let crashHooksInstalled = false;
+let childProcessHookInstalled = false;
 
 function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, version: string, environment: string): Sentry.ErrorEvent {
 	const renderer = event.tags?.["ao.origin"] === "renderer";
@@ -75,10 +75,10 @@ export async function initMainSentry(version: string, dataDir: string, isPackage
 		transport: Sentry.makeElectronTransport,
 		ipcMode: 0 as Sentry.IPCMode,
 		defaultIntegrations: [],
-		integrations: crashHooksInstalled ? [] : [
+		integrations: [
 			Sentry.onUncaughtExceptionIntegration(),
 			Sentry.onUnhandledRejectionIntegration(),
-			Sentry.childProcessIntegration({ breadcrumbs: false, events: [...PROCESS_REASONS] }),
+			...(childProcessHookInstalled ? [] : [Sentry.childProcessIntegration({ breadcrumbs: false, events: [...PROCESS_REASONS] })]),
 		],
 		maxBreadcrumbs: 0,
 		sendDefaultPii: false,
@@ -87,7 +87,7 @@ export async function initMainSentry(version: string, dataDir: string, isPackage
 		beforeBreadcrumb: () => null,
 		beforeSend: (event) => scrubMainSentryEvent(event, installId, version, environment),
 	});
-	crashHooksInstalled = true;
+	childProcessHookInstalled = true;
 	Sentry.setUser({ id: installId });
 	let accepting = true;
 	return {

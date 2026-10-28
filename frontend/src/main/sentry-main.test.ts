@@ -71,7 +71,7 @@ describe("Electron main Sentry configuration", () => {
 		expect(sdk.clearCurrent).toHaveBeenCalledOnce();
 		expect(sdk.clearIsolation).toHaveBeenCalledOnce();
 		await initMainSentry("1.0.0", "/tmp/ao-test", true);
-		expect(sdk.init.mock.calls[1]?.[0].integrations).toEqual([]);
+		expect(Array.isArray(sdk.init.mock.calls[1]?.[0].integrations) ? sdk.init.mock.calls[1]?.[0].integrations.map((item) => item.name) : undefined).toEqual(["OnUncaughtException", "OnUnhandledRejection"]);
 	});
 
 	it("drops dynamic exception text, paths, account fields, and breadcrumbs before send", async () => {
