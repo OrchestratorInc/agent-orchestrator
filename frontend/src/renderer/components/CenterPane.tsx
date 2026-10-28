@@ -4,6 +4,7 @@ import { motion, Reorder, useDragControls, useMotionValue } from "motion/react";
 import {
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -107,20 +108,29 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 	const itemRef = useRef<HTMLDivElement>(null);
 	const x = useMotionValue(0);
 	const [dragging, setDragging] = useState(false);
+	const dragRef = useRef<{ pointerX: number; grabOffset: number; scroller: HTMLElement | null } | null>(null);
 	const startDrag = (event: PointerEvent<HTMLDivElement>) => {
 		if ((event.target as HTMLElement).closest("[data-terminal-tab-action],input,a")) return;
 		dragControls.start(event);
 	};
-	// Clamp from layout offsets inside the group: they ignore the strip's scroll
-	// and stay correct after each reorder, unlike ref-based dragConstraints.
-	const keepInGroup = () => {
+	// While dragging, the tab's x is derived from the pointer and the group's
+	// current box, not from framer's pointer delta: Reorder's edge auto-scroll
+	// and each reorder move the layout, and framer only catches x up a frame
+	// later. Recomputing on every write, scroll and commit keeps the tab under
+	// the pointer and inside the group, so it never covers the session tab.
+	const followPointer = useCallback(() => {
+		const drag = dragRef.current;
 		const item = itemRef.current;
 		const group = item?.parentElement;
-		if (!item || !group) return;
-		const min = group.offsetLeft - item.offsetLeft;
-		const max = group.offsetLeft + group.offsetWidth - item.offsetLeft - item.offsetWidth;
-		x.set(Math.min(max, Math.max(min, x.get())));
-	};
+		if (!drag || !item || !group) return;
+		const offset = item.offsetLeft - group.offsetLeft;
+		const layoutLeft = group.getBoundingClientRect().left + offset;
+		const max = group.offsetWidth - item.offsetWidth - offset;
+		const next = Math.min(max, Math.max(-offset, drag.pointerX - drag.grabOffset - layoutLeft));
+		if (Math.abs(x.get() - next) > 0.01) x.set(next);
+	}, [x]);
+	useEffect(() => x.on("change", followPointer), [x, followPointer]);
+	useLayoutEffect(followPointer);
 
 	return (
 		<Reorder.Item
@@ -132,9 +142,25 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 			drag="x"
 			dragControls={dragControls}
 			dragListener={false}
-			onDrag={keepInGroup}
-			onDragEnd={() => setDragging(false)}
-			onDragStart={() => setDragging(true)}
+			onDrag={(event) => {
+				if (!dragRef.current) return;
+				dragRef.current.pointerX = (event as globalThis.PointerEvent).clientX;
+				followPointer();
+			}}
+			onDragEnd={() => {
+				dragRef.current?.scroller?.removeEventListener("scroll", followPointer);
+				dragRef.current = null;
+				setDragging(false);
+			}}
+			onDragStart={(event) => {
+				const item = itemRef.current;
+				if (!item) return;
+				const pointerX = (event as globalThis.PointerEvent).clientX;
+				const scroller = item.closest<HTMLElement>(".overflow-x-auto");
+				dragRef.current = { pointerX, grabOffset: pointerX - item.getBoundingClientRect().left, scroller };
+				scroller?.addEventListener("scroll", followPointer);
+				setDragging(true);
+			}}
 			onPointerDown={startDrag}
 			ref={itemRef}
 			style={{ x }}

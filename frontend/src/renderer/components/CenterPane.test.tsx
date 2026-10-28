@@ -36,7 +36,7 @@ vi.mock("motion/react", () => ({
 		),
 	},
 	useDragControls: () => ({ start: vi.fn() }),
-	useMotionValue: () => ({ get: () => 0, set: vi.fn() }),
+	useMotionValue: () => ({ get: () => 0, set: vi.fn(), on: () => () => {} }),
 }));
 
 vi.mock("../lib/bridge", () => ({
