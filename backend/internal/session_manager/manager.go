@@ -1020,6 +1020,23 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		}
 		cfg.AgentConfig.Permissions = permissions
 	}
+	// A worker an orchestrator spawns in this project runs the project's
+	// configured Worker agent, even when the orchestrator named a different
+	// --agent: the orchestrator coordinates, but the project owner chooses which
+	// agent its workers run. This only applies when a Worker agent is configured
+	// and the parent really is an orchestrator in this project (same guard as
+	// inheritedSpawnPermissions); otherwise the requested harness stands.
+	if !standalone && cfg.Kind == domain.KindWorker && cfg.ParentSessionID != "" {
+		if configured := roleOverride(domain.KindWorker, project.Config).Harness; configured != "" && cfg.Harness != configured {
+			orchestrated, err := m.spawnParentIsOrchestrator(ctx, cfg.ProjectID, cfg.ParentSessionID)
+			if err != nil {
+				return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+			}
+			if orchestrated {
+				cfg.Harness = configured
+			}
+		}
+	}
 	// A per-project role override picks the harness when the spawn names none,
 	// so a project can default workers to one agent and orchestrators to another.
 	cfg.Harness = effectiveHarness(cfg.Harness, cfg.Kind, project.Config)
@@ -1819,6 +1836,18 @@ func containsString(values []string, value string) bool {
 // inheritedSpawnPermissions derives a worker override from its requesting chat
 // orchestrator. The request supplies identity only: the stored conversation
 // settings remain the authority for the permission policy.
+// spawnParentIsOrchestrator reports whether parentID is an orchestrator session
+// in the same project. AO_SESSION_ID is set in every session, so a worker (or a
+// stale/cross-project value) must not be treated as an orchestrator-driven
+// spawn. Mirrors the guard in inheritedSpawnPermissions.
+func (m *Manager) spawnParentIsOrchestrator(ctx context.Context, projectID domain.ProjectID, parentID domain.SessionID) (bool, error) {
+	parent, ok, err := m.store.GetSession(ctx, parentID)
+	if err != nil {
+		return false, fmt.Errorf("load parent session %s: %w", parentID, err)
+	}
+	return ok && parent.ProjectID == projectID && parent.Kind == domain.KindOrchestrator, nil
+}
+
 func (m *Manager) inheritedSpawnPermissions(ctx context.Context, projectID domain.ProjectID, parentID domain.SessionID) (domain.PermissionMode, error) {
 	parent, ok, err := m.store.GetSession(ctx, parentID)
 	if err != nil {

@@ -19,6 +19,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		action                                               Action
 		argv                                                 []string
 	}{
+		{"strands", "Set up Strands", "strands", "Configure providers and models in native Strands setup. Keys entered there last only for that terminal; configure persistent provider credentials for future AO sessions.", "https://github.com/strands-agents/harness-sdk/tree/e519d67021b9c009e56e9309edcd94ab87e7156e/strands-cli", "", ActionSetup, []string{"strands", "--setup"}},
 		{"claude-code", "Log in to Claude Code", "claude", "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation", "", ActionLogin, []string{"claude", "auth", "login"}},
 		{"codex", "Log in to Codex", "codex", "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex", "", ActionLogin, []string{"codex", "login"}},
 		{"cursor", "Log in to Cursor", "cursor-agent", "Native browser flow", "https://docs.cursor.com/en/cli/installation", "", ActionLogin, []string{"cursor-agent", "login"}},

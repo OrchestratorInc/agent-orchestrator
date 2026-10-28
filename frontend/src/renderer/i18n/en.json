@@ -1734,6 +1734,8 @@
 	"settings.harness.models.empty": "This harness reported no models.",
 	"settings.harness.models.notInstalled": "Install {{agent}} to see its models.",
 	"settings.harness.models.needsLogin": "Log in to {{agent}} to load its models.",
+	"settings.harness.models.manualTitle": "Model selection",
+	"settings.harness.models.manual": "{{agent}} accepts model IDs instead of providing a model list. Configure a provider and default model in its CLI before starting a task.",
 	"settings.harness.models.loadFailed": "Could not load models.",
 	"settings.harness.health.status": "Status",
 	"settings.harness.health.details": "Details",

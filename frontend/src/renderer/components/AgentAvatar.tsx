@@ -62,6 +62,8 @@ import primeAgentDarkLogo from "../assets/agents/prime-agent-dark.svg";
 import primeAgentLightLogo from "../assets/agents/prime-agent-light.svg";
 import qwenDarkLogo from "../assets/agents/qwen-dark.svg";
 import qwenLightLogo from "../assets/agents/qwen-light.svg";
+import strandsDarkLogo from "../assets/agents/strands-dark.svg";
+import strandsLightLogo from "../assets/agents/strands-light.svg";
 import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
 import vibeLogo from "../assets/agents/vibe.svg";
@@ -88,6 +90,7 @@ const LOGOS: AgentLogoSources = {
 	fx: { light: fxLightLogo, dark: fxDarkLogo },
 	crush: crushLogo,
 	qwen: { light: qwenLightLogo, dark: qwenDarkLogo },
+	strands: { light: strandsLightLogo, dark: strandsDarkLogo },
 	goose: { light: gooseLightLogo, dark: gooseDarkLogo },
 	continue: { light: continueLightLogo, dark: continueDarkLogo },
 	devin: { light: devinLightLogo, dark: devinDarkLogo },

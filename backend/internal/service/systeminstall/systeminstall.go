@@ -83,6 +83,7 @@ const (
 	TargetDeepSeek    Target = "deepseek-harness"
 	TargetOpenHands   Target = "openhands"
 	TargetCommandCode Target = "command-code"
+	TargetStrands     Target = "strands"
 	TargetMemcode     Target = "memcode"
 	TargetHermes      Target = "hermes"
 	// TargetCloudflared is the optional connector that makes a paired phone
@@ -98,7 +99,7 @@ var agentTargets = []Target{
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
 	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
-	TargetCommandCode, TargetMemcode, TargetHermes,
+	TargetCommandCode, TargetMemcode, TargetHermes, TargetStrands,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -313,7 +314,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one harness operation for a Target.
 type Job struct {
-	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,cloudflared" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,strands,cloudflared" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status `json:"status" enum:"idle,running,waiting_for_idle,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job. waiting_for_idle: the update runs once every session using the harness is idle (Windows)."`
 	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
@@ -1830,7 +1831,7 @@ func minimumNodeVersionForTarget(target Target) [3]int {
 	switch target {
 	case TargetAuggie, TargetDroid, TargetGemini:
 		return [3]int{20, 0, 0}
-	case TargetClaudeCode, TargetQwen, TargetAutohand:
+	case TargetClaudeCode, TargetQwen, TargetAutohand, TargetStrands:
 		return [3]int{22, 0, 0}
 	case TargetPi:
 		return [3]int{22, 19, 0}

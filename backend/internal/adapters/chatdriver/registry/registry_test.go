@@ -49,6 +49,7 @@ func TestShippedChatDrivers(t *testing.T) {
 	for _, harness := range []domain.AgentHarness{
 		domain.HarnessAider,
 		domain.HarnessHermes, // TUI-only until a chat driver is qualified
+		domain.HarnessStrands,
 		"definitely-not-an-agent",
 	} {
 		if _, err := r.Driver(harness); err == nil {

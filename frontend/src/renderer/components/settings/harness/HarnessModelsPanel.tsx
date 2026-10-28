@@ -91,6 +91,13 @@ export function HarnessModelsPanel({ agentId, hostId, installed, needsLogin, onO
 	const selectedProvider = (providerChoice?.scope === scope ? providers.find((provider) => provider.id === providerChoice.id) : undefined) ?? initialProvider;
 	useEffect(() => { setPage(0); setModelSearch(""); }, [scope, selectedProvider?.id]);
 	const agent = agentLabel(agentId);
+	if (installed && catalog.data?.selectionMode === "text") {
+		return <div className="space-y-3">
+			<h3 className="text-sm font-medium text-settings-label">{t("settings.harness.models.manualTitle")}</h3>
+			<p className="text-sm text-settings-muted">{t("settings.harness.models.manual", { agent })}</p>
+			<Button type="button" size="sm" variant="outline" onClick={onOpenAccount}>{t("settings.harness.tabAccount")}</Button>
+		</div>;
+	}
 	// Readiness explains an empty list; a saved list still shows while it runs.
 	if ((!installed || loginBlocksCatalog) && !catalog.data?.models?.length) {
 		return <div className="space-y-3">

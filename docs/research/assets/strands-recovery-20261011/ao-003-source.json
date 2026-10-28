@@ -1,0 +1,8 @@
+{
+  "source": "98365b809f8378f642f09d711eb727654a86090d",
+  "binarySha256": "7eb497daf80994fd2f710cdb70725f0d754aa64c2c0b9ae489a24d56b5ad3ab1",
+  "runnerSha256": "8887aa2e7101b9e6d3950bfca08ffddf2e1e6c1c3f1d030c8dec2676443aecea",
+  "provider": "Z.ai Coding Plan through private loopback HTTP transport relay",
+  "nativeProvider": "litellm/glm-5.3-flash",
+  "utc": "2026-10-10T20:58:10.073004+00:00"
+}

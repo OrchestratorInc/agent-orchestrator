@@ -1602,6 +1602,31 @@ describe("HarnessSettingsSection", () => {
 		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
 	});
 
+	it.each(["strands", "unreal-agent"] as const)("offers %s setup documentation without claiming unknown authentication is connected", async (agentId) => {
+		const readiness = { agents: [agentReadiness(agentId, agentId, { authentication: "unknown" })] };
+		const documentationUrl = "https://example.test/native-setup";
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
+			if (path === "/api/v1/agents/auth-plans") {
+				return { data: { plans: [{ agentId, action: "setup", launchMode: "documentation", available: true, documentationUrl }] } } as never;
+			}
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: readiness } as never);
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+
+		renderSection();
+		const row = await findAgentRow(agentId);
+		expect(await within(row).findByText("Setup status unavailable")).toBeInTheDocument();
+		await userEvent.click(within(row).getByRole("button", { name: "View documentation" }));
+		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
+		expect(within(row).getByText("Setup status unavailable")).toBeInTheDocument();
+		expect(within(row).queryByText("Connected")).toBeNull();
+		expect(within(row).queryByTestId("inline-terminal-body")).toBeNull();
+	});
+
 	it("keeps Unreal documentation available with a neutral configured status", async () => {
 		const unrealCatalog = { agents: [agentReadiness("unreal-agent", "Unreal Agent", { authentication: "configured" })] };
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
