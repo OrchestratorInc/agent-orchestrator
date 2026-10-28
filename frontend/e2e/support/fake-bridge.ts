@@ -147,7 +147,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						return unsubscribe();
 					},
 				},
-				sideChats: { capture: async () => undefined },
+				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
 					pathAction: async () => undefined,
 					copyWorkspacePath: async () => undefined,
@@ -160,6 +160,11 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						preferredEditorId: "cursor" as const,
 						workspaceAvailable: true,
 					}),
+					getEditors: async () => ({
+						editors: [{ id: "cursor" as const, name: "Cursor", kind: "editor" as const }],
+						preferredEditorId: "cursor" as const,
+					}),
+					setPreferredEditor: async (editorId) => editorId,
 					open: async () => ({ id: "cursor" as const, name: "Cursor", kind: "editor" as const }),
 					openArtifacts: async () => ({ id: "file-manager" as const, name: "File Manager", kind: "file_manager" as const }),
 				},
@@ -379,6 +384,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					cancelProviderAuth: async () => undefined,
 					connectProviderAuth: async () => undefined,
 					localAuthAvailable: async () => false,
+					onOpenShareLink: () => () => undefined,
+					takePendingShareLink: async () => null,
 					localRegister: async () => {
 						throw new Error("local auth is unavailable in e2e");
 					},
@@ -1043,7 +1050,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						return unsubscribe();
 					},
 				},
-				sideChats: { capture: async () => undefined },
+				sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 				editorHandoff: {
 					pathAction: async () => undefined,
 					copyWorkspacePath: async () => undefined,
@@ -1056,6 +1063,11 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						preferredEditorId: "cursor" as const,
 						workspaceAvailable: true,
 					}),
+					getEditors: async () => ({
+						editors: [{ id: "cursor" as const, name: "Cursor", kind: "editor" as const }],
+						preferredEditorId: "cursor" as const,
+					}),
+					setPreferredEditor: async (editorId) => editorId,
 					open: async () => ({ id: "cursor" as const, name: "Cursor", kind: "editor" as const }),
 					openArtifacts: async () => ({ id: "file-manager" as const, name: "File Manager", kind: "file_manager" as const }),
 				},
@@ -1267,6 +1279,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					cancelProviderAuth: async () => undefined,
 					connectProviderAuth: async () => undefined,
 					localAuthAvailable: async () => false,
+					onOpenShareLink: () => () => undefined,
+					takePendingShareLink: async () => null,
 					localRegister: async () => {
 						throw new Error("local auth is unavailable in e2e");
 					},

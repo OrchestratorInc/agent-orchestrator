@@ -201,7 +201,7 @@ if (typeof window !== "undefined") {
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
-		sideChats: { capture: async () => undefined },
+		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 	editorHandoff: {
 			pathAction: async () => undefined,
 			getState: async () => ({
@@ -213,6 +213,8 @@ if (typeof window !== "undefined") {
 				preferredEditorId: "cursor",
 				workspaceAvailable: true,
 			}),
+			getEditors: async () => ({ editors: [{ id: "cursor", name: "Cursor", kind: "editor" }], preferredEditorId: "cursor" }),
+			setPreferredEditor: async (editorId) => editorId,
 			open: async ({ targetId }) => {
 				if (targetId === "file-manager") return { id: "file-manager", name: "Finder", kind: "file_manager" };
 				if (targetId === "terminal") return { id: "terminal", name: "Terminal", kind: "terminal" };
@@ -452,6 +454,8 @@ if (typeof window !== "undefined") {
 				throw new Error("not available in tests");
 			},
 			onSessionChanged: () => () => undefined,
+			onOpenShareLink: () => () => undefined,
+			takePendingShareLink: async () => null,
 		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),

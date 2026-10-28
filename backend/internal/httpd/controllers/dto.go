@@ -1050,7 +1050,36 @@ type BrowserStatusResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	Connected   bool             `json:"connected"`
 	ConnectedAt time.Time        `json:"connectedAt,omitempty"`
-	Transport   string           `json:"transport"`
+	Transport   string           `json:"transport" enum:"electron-webcontents-debugger,chrome-extension"`
+	// Target is the browser this session's commands go to: the AO Browser
+	// panel or the user's own Chrome through the AO extension.
+	Target string `json:"target" enum:"panel,chrome"`
+	// Client and ClientVersion identify the connected Chrome extension.
+	Client        string `json:"client,omitempty"`
+	ClientVersion string `json:"clientVersion,omitempty"`
+}
+
+// BrowserChromeChannel is Chrome-mode registration for one Chrome channel.
+type BrowserChromeChannel struct {
+	Name         string `json:"name"`
+	Available    bool   `json:"available"`
+	Registered   bool   `json:"registered"`
+	ManifestPath string `json:"manifestPath"`
+}
+
+// BrowserChromeStatusResponse describes Chrome mode: whether AO's native host
+// is registered with Chrome, where the unpacked extension is, and whether the
+// extension is connected right now.
+type BrowserChromeStatusResponse struct {
+	Enabled          bool                   `json:"enabled"`
+	Connected        bool                   `json:"connected"`
+	ExtensionID      string                 `json:"extensionId"`
+	ExtensionPath    string                 `json:"extensionPath"`
+	ExtensionBundled bool                   `json:"extensionBundled"`
+	ExtensionVersion string                 `json:"extensionVersion,omitempty"`
+	ClientVersion    string                 `json:"clientVersion,omitempty"`
+	HostPath         string                 `json:"hostPath"`
+	Channels         []BrowserChromeChannel `json:"channels"`
 }
 
 // BrowserCommandRequest is the stable daemon-facing command envelope. Action
@@ -2153,6 +2182,9 @@ type CreateAutomationRequest struct {
 	Cron        string `json:"cron,omitempty"`
 	Timezone    string `json:"timezone"`
 	Enabled     *bool  `json:"enabled,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Mode        string `json:"mode,omitempty"`
+	Effort      string `json:"effort,omitempty"`
 }
 
 // UpdateAutomationRequest is the partial body accepted when updating an automation.
@@ -2165,6 +2197,9 @@ type UpdateAutomationRequest struct {
 	Cron        *string `json:"cron,omitempty"`
 	Timezone    *string `json:"timezone,omitempty"`
 	Enabled     *bool   `json:"enabled,omitempty"`
+	Model       *string `json:"model,omitempty"`
+	Mode        *string `json:"mode,omitempty"`
+	Effort      *string `json:"effort,omitempty"`
 }
 
 // AutomationRunSummaryResponse is the latest-run projection attached to a definition.
@@ -2194,6 +2229,9 @@ type AutomationResponse struct {
 	CreatedAt   time.Time                     `json:"createdAt"`
 	UpdatedAt   time.Time                     `json:"updatedAt"`
 	LatestRun   *AutomationRunSummaryResponse `json:"latestRun,omitempty"`
+	Model       string                        `json:"model,omitempty"`
+	Mode        string                        `json:"mode,omitempty"`
+	Effort      string                        `json:"effort,omitempty"`
 }
 
 // AutomationEnvelope wraps one automation response.
@@ -2729,13 +2767,22 @@ type SendConversationMessageRequest struct {
 	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
 	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
 	Excerpts        []ConversationExcerptReferenceRequest `json:"excerpts,omitempty"`
+	FileReferences  []ConversationFileReferenceRequest    `json:"fileReferences,omitempty"`
 	// Continuation marks the user's request to continue an interrupted task.
 	Continuation bool `json:"continuation,omitempty"`
 }
 
+// ResolveFileReferenceResponse describes the current availability of captured source.
+type ResolveFileReferenceResponse sessionsvc.FileReferenceResolution
+
+// ConversationFileReferenceRequest carries bounded, user-supplied captured code.
+type ConversationFileReferenceRequest ports.ChatFileReference
+
 // ConversationExcerptReferenceRequest attaches verified selected transcript
 // text to the next message.
 type ConversationExcerptReferenceRequest struct {
+	ID             string `json:"id,omitempty"`
+	Order          int64  `json:"order,omitempty"`
 	ConversationID string `json:"conversationId"`
 	MessageID      string `json:"messageId"`
 	Revision       int64  `json:"revision"`
@@ -2872,10 +2919,13 @@ type EditConversationMessageRequest struct {
 // ConversationContentSummaryResponse is a lightweight attachment/resource chip.
 // Image bytes and embedded resource text never leave the durable server record.
 type ConversationContentSummaryResponse struct {
-	Type     string `json:"type"`
-	MIMEType string `json:"mimeType,omitempty"`
-	URI      string `json:"uri,omitempty"`
-	Name     string `json:"name,omitempty"`
+	FileReference   *ConversationFileReferenceRequest `json:"fileReference,omitempty"`
+	AnnotationID    string                            `json:"annotationId,omitempty"`
+	AnnotationOrder int64                             `json:"annotationOrder,omitempty"`
+	Type            string                            `json:"type"`
+	MIMEType        string                            `json:"mimeType,omitempty"`
+	URI             string                            `json:"uri,omitempty"`
+	Name            string                            `json:"name,omitempty"`
 	// Text is exposed only for verified chat excerpts, so the timeline can show
 	// what the user referred to without exposing internal resource URIs.
 	Text string `json:"text,omitempty"`
@@ -3218,6 +3268,7 @@ type ConversationSnapshotResponse struct {
 	// SupportsExcerpts advertises daemon-owned source verification separately from
 	// provider capabilities. Older daemons silently ignore the excerpts input.
 	SupportsExcerpts           bool   `json:"supportsExcerpts,omitempty"`
+	SupportsFileReferences     bool   `json:"supportsFileReferences,omitempty"`
 	ConversationID             string `json:"conversationId"`
 	ActiveBranchID             string `json:"activeBranchId,omitempty"`
 	BranchedFromEarlierMessage bool   `json:"branchedFromEarlierMessage"`

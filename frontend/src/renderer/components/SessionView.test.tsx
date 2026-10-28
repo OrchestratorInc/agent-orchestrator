@@ -10,6 +10,7 @@ import { useFilesTopbarHost } from "./files-topbar-host";
 import { SessionTopbarProvider } from "./SessionTopbarPortal";
 import { TooltipProvider } from "./ui/tooltip";
 import type { SessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
+import { conversationQueryKey } from "../hooks/useConversation";
 import type { BrowserTabsState, BrowserAgentActivityState } from "../../main/browser-view-host";
 import { inspectorIsOpen, rememberedFileDisplayMode, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
@@ -19,6 +20,7 @@ import { chatDraftScopeKey } from "../lib/chat-drafts";
 import { useFileAttachments, type FileAttachment } from "../hooks/useFileAttachments";
 
 const navigateMock = vi.hoisted(() => vi.fn());
+const annotationOpen = vi.hoisted(() => ({ current: undefined as import("../../shared/chat-file-reference").OpenFileAnnotation | undefined }));
 const openShellTerminalMock = vi.hoisted(() => vi.fn());
 const adoptedShellHandles = vi.hoisted(() => new Map<string, string>());
 const closeShellTerminalMock = vi.hoisted(() => vi.fn());
@@ -128,6 +130,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 }));
 vi.mock("../lib/cloud-cp/stream-bridge", () => ({
 	subscribeSessionEventsBridged: subscribeSessionEventsMock,
+	subscribeSessionLiveBridged: vi.fn(async () => undefined),
 }));
 vi.mock("../hooks/useSessionInterfaceTransition", async (importOriginal) => ({
 	...await importOriginal<typeof import("../hooks/useSessionInterfaceTransition")>(),
@@ -286,6 +289,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		session,
 		onOpenShell,
 		onOpenFile,
+		onOpenFileAnnotation,
 		headerActions,
 		sessionTabAction,
 		interfaceSwitch,
@@ -310,6 +314,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		session: WorkspaceSession;
 		onOpenShell?: () => void;
 		onOpenFile?: (path: string, line?: number) => void;
+		onOpenFileAnnotation?: import("../../shared/chat-file-reference").OpenFileAnnotation;
 		headerActions?: ReactNode;
 		sessionTabAction?: ReactNode;
 		interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
@@ -332,6 +337,7 @@ vi.mock("./chat/SessionChatSurface", async () => {
 		onAuxiliaryTabOrderChange?: (keys: string[]) => void;
 	}) => {
 		chatSurfaceRenders.push(session.id);
+		annotationOpen.current=onOpenFileAnnotation;
 		chatSurfaceTransitionRenders.push(Boolean(controllerTransitioning || agentResuming));
 		return (
 		<div
@@ -607,7 +613,7 @@ vi.mock("./SessionFileExplorer", () => ({
 	},
 }));
 vi.mock("./SessionFileWorkspace", () => ({
-	SessionFileWorkspace: ({ annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, scope, split }: {
+	SessionFileWorkspace: ({ annotation, initialEditing, initialLine, initialMode, initialRequestKey, onInitialLineConsumed, path, previousPath, scope, split }: {
 		annotation: {
 			begin: (target: { path: string; scope: string; side: string; surface: string }) => void;
 			draftFor: (target: { path: string }) => string;
@@ -620,11 +626,12 @@ vi.mock("./SessionFileWorkspace", () => ({
 		initialRequestKey?: number;
 		onInitialLineConsumed?: (path: string, requestKey: number) => void;
 		path: string;
+		previousPath?: string;
 		scope?: string;
 		split: boolean;
 	}) => {
 		return (
-			<div data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
+			<div data-previous-path={previousPath} data-editing={String(Boolean(initialEditing))} data-line={initialLine} data-mode={initialMode} data-request-key={initialRequestKey} data-split={String(split)} data-testid="session-file-workspace">
 				{path}
 				{initialLine != null ? <button onClick={() => onInitialLineConsumed?.(path, initialRequestKey ?? 0)} type="button">consume initial line</button> : null}
 				<button onClick={() => annotation.begin({ path, scope: scope ?? "combined", side: "file", surface: "focused" })} type="button">header feedback</button>
@@ -1087,6 +1094,15 @@ describe("SessionView", () => {
 		expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("retains the previous path when opening an old-side renamed PR annotation", async () => {
+		workerSession("sess-1").mode="chat";
+		render(<SessionView sessionId="sess-1"/>);
+		const reference:import("../../shared/chat-file-reference").ChatFileReference={id:"pr-rename",sessionId:"sess-1",order:1,path:"new.ts",previousPath:"old.ts",source:{kind:"pull_request",number:42,url:"https://example.test/repo/pull/42",snapshot:"head"},scope:"committed",side:"old",endSide:"old",line:2,endLine:2,lines:[{kind:"del",side:"old",oldNo:2,newNo:null,text:"old code"}],truncated:false};
+		await act(async()=>{annotationOpen.current!(reference,{state:"unchanged",path:"new.ts",line:2,endLine:2})});
+		expect(await screen.findByTestId("session-file-workspace")).toHaveAttribute("data-previous-path","old.ts");
+		expect(screen.getByTestId("session-file-workspace")).toHaveTextContent("new.ts");
+	});
+
 	it("hides the stopped Chat banner from the first render until automatic resume settles", async () => {
 		const session = workerSession("sess-1");
 		session.mode = "chat";
@@ -1476,6 +1492,24 @@ describe("SessionView", () => {
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => input.body.active)).toHaveLength(2));
 		view.unmount();
 		await waitFor(() => expect(chatViewPostMock.mock.calls.filter(([, input]) => !input.body.active)).toHaveLength(2));
+	});
+
+	it("reloads Chat history on open only while the cached chat is not ready", async () => {
+		workerSession("sess-1").mode = "chat";
+		for (const [state, reloads] of [["ready", 0], ["hibernated", 1]] as const) {
+			let finishView!: (result: { error: undefined }) => void;
+			chatViewPostMock.mockImplementationOnce(() => new Promise((resolve) => { finishView = resolve; }));
+			const view = render(<SessionView sessionId="sess-1" />);
+			view.client.setQueryData(conversationQueryKey("sess-1"), { pages: [{ controller: { state } }], pageParams: [undefined] });
+			const invalidate = vi.spyOn(view.client, "invalidateQueries");
+			await waitFor(() => expect(chatViewPostMock).toHaveBeenCalledTimes(1));
+			await act(async () => { finishView({ error: undefined }); });
+			await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["workspaces"] }));
+			const conversationReloads = invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","sess-1"]');
+			expect(conversationReloads, state).toHaveLength(reloads);
+			view.unmount();
+			chatViewPostMock.mockClear();
+		}
 	});
 
 	it("releases Chat without waiting for a pending wake and cleans up its late response", async () => {
@@ -1983,6 +2017,58 @@ describe("SessionView", () => {
 
 		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 		expect(screen.getByTestId("multi-step-loader-step")).not.toHaveTextContent("Connecting your terminal");
+	});
+
+	it("keeps a restored Coder Chat session's loader while its workspace comes back", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState: "restoring",
+		};
+		useTerminalResetStore.getState().bump("sess-2", 1);
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+		expect(screen.getByTestId("multi-step-loader-step")).not.toHaveTextContent("Connecting your terminal");
+	});
+
+	it.each([
+		["worker", "requested"],
+		["worker", "provisioning"],
+		["orchestrator", "provisioning"],
+		["orchestrator", "bootstrapping"],
+	] as const)("shows the startup loader over Coder Chat %s while its workspace is %s", (kind, observedState) => {
+		const session = workerSession(kind === "orchestrator" ? "sess-orch" : "sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = false;
+		session.cloud = {
+			orgId: "cloud-org",
+			sandboxProvider: "coder",
+			desiredState: "running",
+			observedState,
+			coderWorkspaceUrl: "https://coder.example.com/@me/ws",
+		};
+
+		render(<SessionView sessionId={session.id} />);
+
+		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+	});
+
+	it("drops the Coder Chat startup loader once the workspace is connected", () => {
+		const session = workerSession("sess-2");
+		session.mode = "chat";
+		session.runtimeConnected = true;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "coder", desiredState: "running", observedState: "running" };
+
+		render(<SessionView sessionId="sess-2" />);
+
+		expect(screen.getByTestId("cloud-chat-surface")).toBeInTheDocument();
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
 	});
 
 	it("does not skip agent preparation just because the worker reports running", async () => {
@@ -5536,7 +5622,7 @@ describe("SessionView", () => {
 		}
 	});
 
-	it("opens a requested HTML artifact in the Browser panel", async () => {
+	it("opens a requested HTML artifact in the Artifacts tab", async () => {
 		const worker = workspaces[0].sessions[0];
 		const previewUrl = "http://ao-preview-artifact.abc.localhost:3001/report.html";
 		worker.artifactFiles = [{ kind: "html", name: "report.html", path: "report.html", previewUrl, size: 10, updatedAt: "2026-06-10T00:00:00Z" }];
@@ -5545,13 +5631,9 @@ describe("SessionView", () => {
 
 			render(<SessionView sessionId="sess-1" />);
 
-			await waitFor(() =>
-				expect(chatViewPostMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", {
-					params: { path: { sessionId: "sess-1" } },
-					body: { url: previewUrl },
-				}),
-			);
-			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("browser");
+			expect(screen.getByText("selected report.html")).toBeInTheDocument();
+			expect(useUiStore.getState().inspectorSessions["sess-1"]?.view).toBe("artifacts");
+			expect(chatViewPostMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/preview", expect.anything());
 			expect(inspectorOpen("sess-1")).toBe(true);
 			expect(useUiStore.getState().workspaceFileOpenRequest).toBeNull();
 		} finally {

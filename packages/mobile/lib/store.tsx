@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 // provider's context value, so the React Native app-lifecycle API imports
 // under a different name to avoid colliding with it.
 import { AppState as RNAppState } from "react-native";
+import { addNetworkStateListener, getNetworkStateAsync, type NetworkState } from "expo-network";
 import { shouldPoll } from "./appStatePoll";
 import {
 	ApiError,
@@ -41,6 +42,19 @@ import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
 import { isDesktopUnreachable, shouldKeepPolling, userFacingError } from "./connectionError";
+import {
+	classifyLink,
+	EMPTY_LINK_TRACKER,
+	failedPollOutcome,
+	isPhoneOffline,
+	networkChangeNeedsRace,
+	recordPoll,
+	SLOW_POLL_MS,
+	UNKNOWN_PHONE_NETWORK,
+	type LinkHealth,
+	type PhoneNetwork,
+	type PollOutcome,
+} from "./linkHealth";
 import { IncompatibleHostVersionError } from "./race";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
@@ -120,6 +134,16 @@ type AppState = {
 	 */
 	unreachable: boolean;
 	/**
+	 * How the link to this machine is doing, which tells a phone without
+	 * network and a link still recovering from a blip apart from a machine
+	 * that has stopped answering. Only "unreachable" means the machine is down.
+	 */
+	linkHealth: LinkHealth;
+	/** The phone's OS reports no network at all. Independent of any machine. */
+	phoneOffline: boolean;
+	/** The phone's own network, for classifying a machine's link (see HostScope). */
+	phoneNetwork: PhoneNetwork;
+	/**
 	 * When the last successful poll landed, in epoch milliseconds. 0 if none has.
 	 *
 	 * Deliberately a getter rather than a value: a timestamp that changed on every
@@ -169,6 +193,7 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 		if (isSelected) return app;
 		const config = host?.config ?? null;
 		const projects = host?.projects ?? [];
+		const linkHealth = classifyLink(host?.linkTracker ?? EMPTY_LINK_TRACKER, app.phoneNetwork, Date.now());
 		return {
 			...app,
 			config,
@@ -189,7 +214,10 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 			loading: host?.loading ?? false,
 			error: host?.error ?? null,
 			errorStatus: host?.errorStatus ?? null,
-			unreachable: isDesktopUnreachable({ connection: host?.connection ?? "closed", error: host?.error ?? null, errorStatus: host?.errorStatus ?? null }),
+			// Classified from this machine's own poll and race outcomes, so its
+			// chat and project views get the same grace period as the selected one.
+			unreachable: linkHealth === "unreachable" && isDesktopUnreachable({ connection: host?.connection ?? "closed", error: host?.error ?? null, errorStatus: host?.errorStatus ?? null }),
+			linkHealth,
 			getLastSyncAt: () => host?.lastSyncAt ?? 0,
 			refresh: () => app.refreshHost(hostId),
 			spawn: (opts) => app.spawn({ ...opts, hostId }),
@@ -257,6 +285,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		controller: AbortController;
 		promise: Promise<boolean>;
 		queued?: Promise<boolean>;
+		/** Set by restartLoad: callers of this load get the replacement's result. */
+		replacedBy?: Promise<boolean>;
 	} | null>(null);
 	const promotedConfigRef = useRef<ServerConfig | null>(null);
 	const primarySnapshotRef = useRef<HostSnapshot | null>(null);
@@ -293,6 +323,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Whether the last failure had no HTTP status — nothing answered at all,
 	// which is what leaving a network looks like.
 	const lastFailUnreachableRef = useRef(false);
+	// Recent poll outcomes and the phone's own network, read by classifyLink.
+	// Refs because the poll and the network listener run outside render; the
+	// classified result is the only part screens see.
+	const linkTrackerRef = useRef(EMPTY_LINK_TRACKER);
+	const phoneNetworkRef = useRef<PhoneNetwork & { type?: string }>(UNKNOWN_PHONE_NETWORK);
+	const [linkHealth, setLinkHealth] = useState<LinkHealth>("ok");
+	const [phoneNetwork, setPhoneNetwork] = useState<PhoneNetwork>(UNKNOWN_PHONE_NETWORK);
+	const phoneOffline = isPhoneOffline(phoneNetwork);
+	const publishLink = useCallback(() => {
+		setLinkHealth(classifyLink(linkTrackerRef.current, phoneNetworkRef.current, Date.now()));
+	}, []);
+	const recordLink = useCallback((outcome: PollOutcome) => {
+		linkTrackerRef.current = recordPoll(linkTrackerRef.current, outcome, Date.now());
+		publishLink();
+	}, [publishLink]);
+	const resetLink = useCallback(() => {
+		linkTrackerRef.current = EMPTY_LINK_TRACKER;
+		publishLink();
+	}, [publishLink]);
 	const everConnectedRef = useRef(false);
 	// Mirrors appActive for code that runs mid-flight, where reading the state
 	// value would see a stale closure. fetchAll consults it between requests so a
@@ -387,6 +436,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (hosts) setPairedHosts((previous) => sameHostConnections(previous, hosts) ? previous : hosts);
 			const c = await resolveActiveConfig(runtimeResolveDeps(options));
 			if (resolution !== configResolution.current) return null;
+			// Every endpoint was tried and none answered. The poll stops without a
+			// config, so this race (and the reconnect timer's next ones) is what
+			// moves the link from "reconnecting" to "unreachable".
+			if (selected && !(c && isConfigured(c))) recordLink("no-answer");
 		// Keep the previous object when the endpoint has not actually changed.
 		// Resolution builds a fresh one every time, and the live conversation
 		// stream, the poll loop and the terminal mux all key on this value's
@@ -421,6 +474,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			setError(cause.message);
 			setErrorStatus(426);
 			setConnection("closed");
+			// The machine answered, so the link is fine. Without this a link left
+			// "reconnecting" by an earlier failure would keep saying so over the
+			// upgrade guidance, since no poll runs again while the config is null.
+			recordLink("answered-error");
 			return null;
 		} finally {
 			if (resolution === configResolution.current) {
@@ -432,7 +489,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				}
 			}
 		}
-	}, [releaseHeld]);
+	}, [releaseHeld, recordLink]);
 
 	useEffect(() => {
 		const sub = RNAppState.addEventListener("change", (state) => {
@@ -456,12 +513,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				setConnection("closed");
 			} else {
 				resumedRef.current = true;
+				// Failures from before the app went away say nothing about now.
+				resetLink();
 				void reloadConfig();
 			}
 			setAppActive(active);
 		});
 		return () => sub.remove();
-	}, [reloadConfig]);
+	}, [reloadConfig, resetLink]);
 
 	const switchHost = useCallback(async (id: string) => {
 		const snapshot = otherHosts.snapshots[id];
@@ -564,7 +623,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Without this, a failed initial endpoint race leaves it closed until a tap.
 	useEffect(() => {
 		if (!appActive || !configResolved || selectedHostId === null || config) return;
-		const timer = setInterval(() => void reloadConfig(), 15_000);
+		// Pointless while the phone has no network: the network listener races
+		// the moment it comes back.
+		const timer = setInterval(() => {
+			if (!isPhoneOffline(phoneNetworkRef.current)) void reloadConfig();
+		}, 15_000);
 		return () => clearInterval(timer);
 	}, [appActive, configResolved, selectedHostId, config, reloadConfig]);
 
@@ -577,6 +640,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		let stopped = false;
 		const check = async () => {
 			if (stopped) return;
+			// Offline, the race can only fail, and a failed race clears the config
+			// and with it the rows "You're offline" promises to keep. Checked before
+			// the resume flag is consumed so a resume still counts once back online.
+			if (isPhoneOffline(phoneNetworkRef.current)) return;
 			const resumed = resumedRef.current;
 			resumedRef.current = false;
 			let known: Endpoint[] = [];
@@ -620,6 +687,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		try {
 			// getSessions returns projects, so don't fetch /projects again alongside
 			// it — that duplicate doubled the auth attempts spent per failing tick.
+			const startedAt = Date.now();
 			const sess = await getSessions(c, "all", { signal: controller.signal });
 			// A poll that started against the previous pairing must not publish any
 			// of its board state after the user has moved to another machine.
@@ -638,6 +706,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			setError(null);
 			setErrorStatus(null);
 			setConnection("open");
+			recordLink(Date.now() - startedAt > SLOW_POLL_MS ? "slow" : "ok");
 			lastTickOkRef.current = true;
 			lastSyncAtRef.current = Date.now();
 			if (!openRef.current) {
@@ -672,6 +741,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// like "401 - missing or invalid connection password". Null means the
 			// server was never reached (DNS failure, refused, timeout).
 			const status = e instanceof ApiError ? e.status : undefined;
+			recordLink(failedPollOutcome(e, status));
 			// No status means the server was never reached. That is the signal to
 			// race again immediately rather than ride out another poll.
 			lastFailUnreachableRef.current = status === undefined;
@@ -697,7 +767,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		} finally {
 			if (isCurrent()) setLoading(false);
 		}
-	}, [reloadConfig]);
+	}, [reloadConfig, recordLink]);
 
 	const fetchAll = useCallback((afterCurrent = false): Promise<boolean> => {
 		const c = cfgRef.current;
@@ -714,13 +784,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		}
 		existing?.controller.abort();
 		const controller = new AbortController();
-		const load = { config: c, controller, promise: Promise.resolve(false) };
+		const load: NonNullable<typeof primaryLoadRef.current> = { config: c, controller, promise: Promise.resolve(false) };
 		primaryLoadRef.current = load;
-		load.promise = loadAll(c, controller).finally(() => {
-			if (primaryLoadRef.current === load) primaryLoadRef.current = null;
-		});
+		load.promise = loadAll(c, controller)
+			.finally(() => {
+				if (primaryLoadRef.current === load) primaryLoadRef.current = null;
+			})
+			.then((keepGoing) => load.replacedBy ?? keepGoing);
 		return load.promise;
 	}, [loadAll]);
+
+	// Replaces a load that may be stuck on a link that is gone. fetchAll would
+	// join it instead, leaving recovery to wait out the old request's timeout
+	// even after a race found a working endpoint. Whoever is still waiting on the
+	// old load (the poll loop) gets the replacement's result rather than the
+	// abort's false, which would otherwise stop the poll for good.
+	const restartLoad = useCallback((): Promise<boolean> => {
+		const existing = primaryLoadRef.current;
+		if (!existing || existing.controller.signal.aborted) return fetchAll();
+		existing.controller.abort();
+		primaryLoadRef.current = null;
+		const replacement = fetchAll();
+		existing.replacedBy = replacement;
+		return replacement;
+	}, [fetchAll]);
 
 	// (Re)start the REST poll whenever the config changes. Stops polling on an
 	// auth failure so the phone can't lock itself out by hammering a bad password.
@@ -763,6 +850,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				failStreak.current += 1;
 				const now = Date.now();
 				if (
+					!isPhoneOffline(phoneNetworkRef.current) &&
 					shouldReRace({
 						consecutiveFailures: failStreak.current,
 						lastReRaceAt: lastReRaceAt.current,
@@ -793,6 +881,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			if (primaryLoadRef.current?.config === config) primaryLoadRef.current.controller.abort();
 		};
 	}, [config, fetchAll, appActive, reloadConfig, configResolved]);
+
+	// The phone's own network. Before this the app had no way to tell "this
+	// phone has no signal" from "the machine is down", and blamed the machine
+	// for both. It also had to wait for a poll to fail before noticing that the
+	// phone had moved networks; now a change races the endpoints straight away.
+	useEffect(() => {
+		let live = true;
+		const apply = (state: NetworkState) => {
+			if (!live) return;
+			const next = { connected: state.isConnected, internet: state.isInternetReachable, type: state.type };
+			const previous = phoneNetworkRef.current;
+			phoneNetworkRef.current = next;
+			setPhoneNetwork((current) => current.connected === next.connected && current.internet === next.internet
+				? current : { connected: next.connected, internet: next.internet });
+			publishLink();
+			if (!networkChangeNeedsRace(previous, next) || !pollActiveRef.current) return;
+			// reloadConfig keeps the same config object when the winning endpoint
+			// is unchanged, which would leave the poll waiting out its interval, or
+			// on a request still hanging on the network the phone left. Start a
+			// fresh load once the race settles.
+			void reloadConfig().then(() => restartLoad()).catch(() => {});
+		};
+		void getNetworkStateAsync().then(apply).catch(() => {});
+		const sub = addNetworkStateListener(apply);
+		return () => {
+			live = false;
+			sub.remove();
+		};
+	}, [publishLink, reloadConfig, restartLoad]);
+
+	// Another machine's failures say nothing about this one.
+	useEffect(() => {
+		resetLink();
+	}, [selectedHostId, resetLink]);
 
 	const setActiveProject = useCallback((id: string) => {
 		setChosenProjectId(id);
@@ -843,8 +965,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			stats,
 			notificationsUnread,
 			lastSyncAt: lastSyncAtRef.current,
+			// Travels with the snapshot when this machine stops being the selected one.
+			linkTracker: linkTrackerRef.current,
 		};
-	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, projects, projectsKnown, visibleSessions, visibleArchive, visibleOrchestrators, orchestratorId, stats, notificationsUnread]);
+		// linkHealth is listed so the tracker (a ref) is re-read when it changes.
+	}), [pairedHosts, selectedHostId, otherHosts.snapshots, activeEndpoints, config, connection, loading, error, errorStatus, projects, projectsKnown, visibleSessions, visibleArchive, visibleOrchestrators, orchestratorId, stats, notificationsUnread, linkHealth]);
 	// Published after commit, never during render: an interrupted or replayed
 	// render must not hand switchHost a snapshot that never reached the screen.
 	// A layout effect runs before any user event can call switchHost.
@@ -1023,7 +1148,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			loading,
 			error,
 			errorStatus,
-			unreachable: isDesktopUnreachable({ connection, error, errorStatus }),
+			// A failed poll alone is not enough: the phone may be offline, or the
+			// link may still be recovering from a blip. See classifyLink.
+			unreachable: linkHealth === "unreachable" && isDesktopUnreachable({ connection, error, errorStatus }),
+			linkHealth,
+			phoneOffline,
+			phoneNetwork,
 			getLastSyncAt,
 			reloadConfig,
 			switchHost,
@@ -1067,6 +1197,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			loading,
 			error,
 			errorStatus,
+			linkHealth,
+			phoneOffline,
+			phoneNetwork,
 			getLastSyncAt,
 			reloadConfig,
 			switchHost,

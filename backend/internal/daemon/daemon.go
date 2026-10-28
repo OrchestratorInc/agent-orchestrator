@@ -147,6 +147,11 @@ func Run(buildVersion string) error {
 	}
 	browserAuthority := browsersvc.NewAuthority()
 	browserBroker := browserruntime.New(log, browserRuntimeToken)
+	chrome := newChromeMode(cfg, log)
+	var browserLifecycle sessionmanager.BrowserLifecycle = browserBroker
+	if chrome != nil {
+		browserLifecycle = chrome.lifecycle(browserBroker)
+	}
 	browserStreamBroker := browserstream.New(log, browserRuntimeToken)
 
 	// Fail fast only if a daemon is genuinely still serving the recorded port.
@@ -531,7 +536,10 @@ func Run(buildVersion string) error {
 		}
 		return fmt.Errorf("reviewer resolver: %w", err)
 	}
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, tracker, codexOperationGate, reviewers, log)
+	// The review service starts before the SCM observer it asks for review
+	// refreshes, so it holds a late-bound handle.
+	reviewRefresher := &scmReviewRefresher{}
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserLifecycle, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, tracker, codexOperationGate, reviewers, reviewRefresher, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -630,7 +638,10 @@ func Run(buildVersion string) error {
 	sessMgr.SetTerminalInputGate(termMgr)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
-	lcStack.LCM.SetSessionInputLease(sessMgr)
+	// Lifecycle reactions deliberately do not hold Session Manager's input
+	// lease: they reach the agent through sessMgr.Send, which leases its own
+	// pane writes. Holding it here deadlocked every reaction to a hibernated
+	// Chat session, because waking it waits for admitted input to drain.
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log})
@@ -726,6 +737,11 @@ func Run(buildVersion string) error {
 	// HostID is assigned below, once the identity file has been read.
 	mc := &controllers.MobileController{Bridge: bs}
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
+	var browserChrome controllers.BrowserChromeService
+	if chrome != nil {
+		browserService.UseChrome(chrome.broker, chrome.targets, log)
+		browserChrome = chrome
+	}
 	browserLive := httpd.NewBrowserLiveHub(browserStreamBroker, sessionSvc, func() bool {
 		state, err := mobilebridge.Load(bs.ConfigPath)
 		return err == nil && state.Enabled && state.BrowserRemoteAccess
@@ -819,7 +835,7 @@ func Run(buildVersion string) error {
 		}()
 		lcStack.LCM.SetUsageFinalizer(usageCollector)
 	}
-	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.GitLab, log)
+	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.GitLab, reviewRefresher, log)
 	var prActions prsvc.ActionManager
 	prReader := newMultiSCMProvider(cfg.GitLab, log)
 	prMerger := newMultiSCMMerger(cfg.GitLab, log)
@@ -1026,6 +1042,7 @@ func Run(buildVersion string) error {
 			},
 		}),
 		Browser:                  browserService,
+		BrowserChrome:            browserChrome,
 		LinkPreview:              linkpreviewsvc.New(nil),
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,
@@ -1055,6 +1072,11 @@ func Run(buildVersion string) error {
 				log.Warn("browser runtime: serve stopped with error", "err", err)
 			}
 		}()
+	}
+	if chrome != nil {
+		if err := chrome.serve(ctx, cfg.RunFilePath); err != nil {
+			log.Warn("browser chrome: listener unavailable; Chrome mode disabled", "err", err)
+		}
 	}
 	_ = os.Unsetenv(browserstream.RuntimeAddressEnv)
 	if ln, addr, err := browserstream.Listen(cfg.RunFilePath); err != nil {

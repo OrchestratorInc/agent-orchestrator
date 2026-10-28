@@ -8,6 +8,7 @@ import {
 	type EditorHandoffState,
 	type EditorHandoffStateOptions,
 	type EditorId,
+	type EditorPreferenceState,
 	type OpenSessionArtifactsInput,
 	type OpenSessionTargetInput,
 	type OpenSessionTargetResult,
@@ -110,6 +111,8 @@ export type EditorHandoffDeps = {
 export type EditorHandoff = {
 	getState(sessionId: string, options?: EditorHandoffStateOptions): Promise<EditorHandoffState>;
 	pathAction(input: ChatPathActionInput): Promise<void>;
+	getEditors(): Promise<EditorPreferenceState>;
+	setPreferredEditor(editorId: unknown): Promise<EditorId>;
 	open(input: OpenSessionTargetInput): Promise<OpenSessionTargetResult>;
 	openArtifacts(input: OpenSessionArtifactsInput): Promise<OpenSessionTargetResult>;
 	copyWorkspacePath(sessionId: string): Promise<void>;
@@ -630,6 +633,19 @@ export function createEditorHandoff(deps: EditorHandoffDeps): EditorHandoff {
 					unavailableCode: workspaceUnavailableCode(error),
 				};
 			}
+		},
+
+		async getEditors() {
+			return { editors: resolveEditors().map(({ target }) => target), preferredEditorId: await deps.readPreference() };
+		},
+
+		async setPreferredEditor(editorId) {
+			if (!isEditorId(editorId)) throw new Error("That editor is not supported.");
+			if (!resolveEditors().some(({ target }) => target.id === editorId)) {
+				throw new Error("That editor is not installed. Choose another option.");
+			}
+			await deps.writePreference(editorId);
+			return editorId;
 		},
 
 		async open(input) {

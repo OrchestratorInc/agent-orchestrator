@@ -485,6 +485,11 @@ func (b HarnessBuilder) binary(harness string) string {
 		// current models; the bare name on PATH until that is ready.
 		return defaultClaudeCode.current()
 	}
+	if harness == "codex" {
+		// The worker's own CodexVersion install when the workspace has another
+		// release (or none yet); the bare name on PATH until that is ready.
+		return defaultCodex.current()
+	}
 	if h, ok := harnessCredentialFor(harness); ok {
 		return h.defaultBinary()
 	}

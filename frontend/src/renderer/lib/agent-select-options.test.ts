@@ -122,20 +122,29 @@ describe("buildRankedAgentOptions", () => {
 
 		expect(option).toMatchObject({ disabled: false, status: "" });
 	});
+
+	it.each(["fresh", "stale", "checking"] as const)("omits unknown authentication badges while %s and keeps the agent launchable", (freshness) => {
+		const unchecked = agent("codex", "installed", "unknown");
+		unchecked.authentication.freshness = freshness;
+		const [option] = buildRankedAgentOptions({ agents: [unchecked], priorityRank, fallbackAgents: [] });
+
+		expect(option).toMatchObject({ disabled: false, status: "", statusTone: "muted" });
+		expect(isLaunchableAgent(unchecked)).toBe(true);
+	});
 });
 
 describe("configured but unverified credentials", () => {
 	// The whole point of the "configured" state is that it must not look like
 	// a working credential. Falling through to the known-good branch would
 	// paint an unvalidated — possibly revoked — credential green.
-	it("shows an unverified agent as neutral rather than known-good", () => {
+	it.each(["mimo-code", "hermes", "claude-code"])("omits the verification badge for %s while keeping a neutral tone", (id) => {
 		const [option] = buildRankedAgentOptions({
-			agents: [agent("claude-code", "installed", "configured")],
+			agents: [agent(id, "installed", "configured")],
 			priorityRank,
 			fallbackAgents: [],
 		});
 		expect(option.statusTone).not.toBe("success");
-		expect(option.status).toBe("Unverified");
+		expect(option.status).toBe("");
 	});
 
 	// I1: never block. An unverified credential is not a disproved one.

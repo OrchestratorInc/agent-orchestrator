@@ -15,6 +15,7 @@ import {
 } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { OpenTargetIcon } from "./OpenTargetIcon";
+export { OpenTargetIcon as TargetIcon } from "./OpenTargetIcon";
 
 // Electron main owns the complete handoff: it resolves the loopback-only
 // workspace path, launches the native target, and persists editor preference.

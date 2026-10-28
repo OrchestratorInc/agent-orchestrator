@@ -281,7 +281,7 @@ function SwipePuck({ direction, puckRef }: { direction: Direction; puckRef: RefO
 	return (
 		<div
 			aria-hidden="true"
-			className={`pointer-events-none absolute top-1/2 z-chrome grid size-control-xl place-items-center rounded-full border border-border-strong bg-popover text-muted-foreground opacity-0 shadow-popover data-armed:border-foreground data-armed:bg-foreground data-armed:text-background ${direction === "back" ? "left-0" : "right-0"}`}
+			className={`pointer-events-none absolute top-1/2 z-chrome grid size-control-xl place-items-center rounded-full border border-border-strong bg-popover text-muted-foreground opacity-0 shadow-popover data-armed:border-foreground data-armed:bg-foreground data-armed:text-on-foreground ${direction === "back" ? "left-0" : "right-0"}`}
 			data-swipe-puck={direction}
 			ref={puckRef}
 			style={{ transform: `translate3d(${direction === "back" ? PUCK_HIDDEN_PX : -PUCK_HIDDEN_PX}px, -50%, 0)` }}

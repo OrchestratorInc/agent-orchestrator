@@ -995,6 +995,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/browser/chrome": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report Chrome mode: native host registration, extension bundle, and connection */
+        get: operations["getBrowserChrome"];
+        put?: never;
+        /** Enable Chrome mode: install the AO extension bundle and register AO's native host with Chrome */
+        post: operations["setupBrowserChrome"];
+        /** Disable Chrome mode: unregister AO's native host and remove the installed extension bundle */
+        delete: operations["removeBrowserChrome"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/browser/commands": {
         parameters: {
             query?: never;
@@ -2473,6 +2492,23 @@ export interface paths {
         head?: never;
         /** Choose one provider-advertised session configuration value */
         patch: operations["setSessionConversationConfigOption"];
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/file-references/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve the current source of a captured file annotation without modifying it */
+        post: operations["resolveFileReference"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/sessions/{sessionId}/conversation/inputs/{requestId}/resolve": {
@@ -4669,6 +4705,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             displayName: string;
+            effort?: string;
             enabled: boolean;
             harness?: string;
             id: string;
@@ -4677,6 +4714,8 @@ export interface components {
             /** Format: date-time */
             lastRunAt?: null | string;
             latestRun?: components["schemas"]["AutomationRunSummaryResponse"];
+            mode?: string;
+            model?: string;
             /** Format: date-time */
             nextRunAt: string;
             projectId: string;
@@ -4847,11 +4886,16 @@ export interface components {
             sessionId: string;
         };
         BrowserStatusResponse: {
+            client?: string;
+            clientVersion?: string;
             connected: boolean;
             /** Format: date-time */
             connectedAt?: string;
             sessionId: string;
-            transport: string;
+            /** @enum {string} */
+            target: "panel" | "chrome";
+            /** @enum {string} */
+            transport: "electron-webcontents-debugger" | "chrome-extension";
         };
         CancelReviewResponse: {
             reviewerHandleId: string;
@@ -4864,6 +4908,22 @@ export interface components {
         ChatAgentPermissionModes: {
             agent: string;
             modes: string[];
+        };
+        ChatFileReferenceLine: {
+            /** @enum {string} */
+            kind: "context" | "add" | "del";
+            newNo: null | number;
+            oldNo: null | number;
+            /** @enum {string} */
+            side?: "file" | "old" | "new";
+            text: string;
+        };
+        ChatFileReferenceSource: {
+            /** @enum {string} */
+            kind: "workspace" | "pull_request" | "artifact";
+            number?: number;
+            snapshot?: string;
+            url?: string;
         };
         ChatPermissionModesResponse: {
             agents: components["schemas"]["ChatAgentPermissionModes"][];
@@ -5136,6 +5196,23 @@ export interface components {
         ContainerReapConfig: {
             disabled?: boolean;
         };
+        ControllersBrowserChromeChannel: {
+            available: boolean;
+            manifestPath: string;
+            name: string;
+            registered: boolean;
+        };
+        ControllersBrowserChromeStatusResponse: {
+            channels: components["schemas"]["ControllersBrowserChromeChannel"][];
+            clientVersion?: string;
+            connected: boolean;
+            enabled: boolean;
+            extensionBundled: boolean;
+            extensionId: string;
+            extensionPath: string;
+            extensionVersion?: string;
+            hostPath: string;
+        };
         ControllersKeepAwakeStatus: {
             active: boolean;
             enabled: boolean;
@@ -5335,6 +5412,10 @@ export interface components {
             options: components["schemas"]["ConversationConfigOptionResponse"][];
         };
         ConversationContentSummaryResponse: {
+            annotationId?: string;
+            /** Format: int64 */
+            annotationOrder?: number;
+            fileReference?: components["schemas"]["ConversationFileReferenceRequest"];
             mimeType?: string;
             name?: string;
             sourceConversationId?: string;
@@ -5356,10 +5437,35 @@ export interface components {
         };
         ConversationExcerptReferenceRequest: {
             conversationId: string;
+            id?: string;
             messageId: string;
+            /** Format: int64 */
+            order?: number;
             /** Format: int64 */
             revision: number;
             text: string;
+        };
+        ConversationFileReferenceRequest: {
+            commitSha?: string;
+            endLine: number;
+            /** @enum {string} */
+            endSide?: "file" | "old" | "new";
+            fileFingerprint?: string;
+            hostId?: string;
+            id: string;
+            line: number;
+            lines: components["schemas"]["ChatFileReferenceLine"][];
+            /** Format: int64 */
+            order?: number;
+            path: string;
+            previousPath?: string;
+            scope?: string;
+            sessionId: string;
+            /** @enum {string} */
+            side: "file" | "old" | "new";
+            source: components["schemas"]["ChatFileReferenceSource"];
+            truncated: boolean;
+            workspaceVersion?: string;
         };
         ConversationImageContentRequest: {
             data: string;
@@ -5502,6 +5608,7 @@ export interface components {
             sessionId: string;
             settings: components["schemas"]["ConversationTurnSettingsPayload"];
             supportsExcerpts?: boolean;
+            supportsFileReferences?: boolean;
             threadState?: components["schemas"]["ConversationThreadStatePayload"];
             title?: string;
             turns: components["schemas"]["ConversationTurnResponse"][];
@@ -5569,10 +5676,13 @@ export interface components {
         CreateAutomationRequest: {
             cron?: string;
             displayName: string;
+            effort?: string;
             enabled?: null | boolean;
             harness?: string;
             /** @enum {string} */
             kind: "worker" | "orchestrator";
+            mode?: string;
+            model?: string;
             projectId: string;
             prompt: string;
             rrule?: string;
@@ -6461,6 +6571,17 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        ResolveFileReferenceResponse: {
+            endLine?: number;
+            line?: number;
+            newLineOffset?: number;
+            oldLineOffset?: number;
+            path?: string;
+            reason?: string;
+            side?: string;
+            /** @enum {string} */
+            state: "unchanged" | "changed" | "unavailable" | "moved";
+        };
         RestoreArtifactVersionRequest: {
             /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
             path: string;
@@ -6548,6 +6669,7 @@ export interface components {
             clientMessageId?: string;
             continuation?: boolean;
             excerpts?: components["schemas"]["ConversationExcerptReferenceRequest"][];
+            fileReferences?: components["schemas"]["ConversationFileReferenceRequest"][];
             resources?: components["schemas"]["ConversationResourceContentRequest"][];
             text: string;
         };
@@ -7461,10 +7583,13 @@ export interface components {
         UpdateAutomationRequest: {
             cron?: null | string;
             displayName?: null | string;
+            effort?: null | string;
             enabled?: null | boolean;
             harness?: null | string;
             /** @enum {null|string} */
             kind?: "worker" | "orchestrator" | null;
+            mode?: null | string;
+            model?: null | string;
             prompt?: null | string;
             rrule?: null | string;
             timezone?: null | string;
@@ -10849,6 +10974,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getBrowserChrome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersBrowserChromeStatusResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setupBrowserChrome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersBrowserChromeStatusResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    removeBrowserChrome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersBrowserChromeStatusResponse"];
                 };
             };
             /** @description Internal Server Error */
@@ -14274,7 +14504,7 @@ export interface operations {
             query?: {
                 /** @description Read items older than this conversation sequence. Omit for the newest page. */
                 beforeSequence?: null | number;
-                /** @description Maximum combined messages and activities to return. Defaults to 200. */
+                /** @description Maximum messages to return; tool activity between them comes along without counting. Defaults to 200. */
                 limit?: null | number;
             };
             header?: never;
@@ -16017,7 +16247,7 @@ export interface operations {
             query?: {
                 /** @description Read items older than this conversation sequence. Omit for the newest page. */
                 beforeSequence?: null | number;
-                /** @description Maximum combined messages and activities to return. Defaults to 200. */
+                /** @description Maximum messages to return; tool activity between them comes along without counting. Defaults to 200. */
                 limit?: null | number;
             };
             header?: never;
@@ -16374,6 +16604,60 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    resolveFileReference: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationFileReferenceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResolveFileReferenceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

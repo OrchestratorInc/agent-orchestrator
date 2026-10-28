@@ -217,11 +217,23 @@ func (s *Server) runWorkspaceRequest(
 	orgID, sessionID, kind string,
 	payload json.RawMessage,
 ) (json.RawMessage, bool) {
+	return s.runWorkspaceRequestWithin(w, r, orgID, sessionID, kind, payload, s.workerRequestTimeout)
+}
+
+// runWorkspaceRequestWithin is runWorkspaceRequest with its own wait for the
+// worker.
+func (s *Server) runWorkspaceRequestWithin(
+	w http.ResponseWriter,
+	r *http.Request,
+	orgID, sessionID, kind string,
+	payload json.RawMessage,
+	timeout time.Duration,
+) (json.RawMessage, bool) {
 	payload, ok := withWorkspaceRepository(w, r, kind, payload)
 	if !ok {
 		return nil, false
 	}
-	return s.runWorkerRequest(w, r, orgID, sessionID, kind, payload, s.workerRequestTimeout)
+	return s.runWorkerRequest(w, r, orgID, sessionID, kind, payload, timeout)
 }
 
 // withWorkspaceRepository adds the request's optional "repository" query
