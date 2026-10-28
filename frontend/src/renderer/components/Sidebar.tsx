@@ -22,8 +22,6 @@ import {
 	ChevronRight,
 	Copy,
 	Download,
-	ExternalLink,
-	GitBranch,
 	LayoutGrid,
 	File,
 	Folder,
@@ -32,10 +30,8 @@ import {
 	LogOut,
 	MoreVertical,
 	PanelLeft,
-	Pencil,
 	Pin,
 	PinOff,
-	Play,
 	Plus,
 	RefreshCw,
 	Search,
@@ -69,7 +65,6 @@ import {
 	hasConfiguredOrchestratorAgent,
 	newestActiveOrchestrator,
 	openPRs,
-	primaryPR,
 	type WorkspaceSession,
 	type WorkspaceSummary,
 	sortedWorkerSessions,
@@ -81,10 +76,7 @@ import {
 	STANDALONE_WORKSPACE_ID,
 } from "../types/workspace";
 import { getSessionStatusDotView } from "../lib/session-presentation";
-import { sessionBranchPresentation } from "../lib/session-branch";
-import { editorHandoffErrorMessage, useEditorHandoffState, useOpenSessionTarget } from "../hooks/useEditorHandoff";
-import { TargetIcon } from "./TopbarOpenEditorButton";
-import type { OpenTarget } from "../../shared/editor-handoff";
+import { SessionContextMenuItems, useCopyToClipboard } from "./SessionContextMenuItems";
 import { aoBridge } from "../lib/bridge";
 import { hasTrustedApiBaseUrl } from "../lib/api-client";
 import { useCommandPaletteEnabled } from "../hooks/useCommandPaletteEnabled";
@@ -2658,159 +2650,11 @@ const SessionRow = memo(function SessionRow({
 				</SidebarMenuSubItem>
 			</ContextMenuTrigger>
 			<ContextMenuContent className="min-w-44">
-				<SessionRowMenuItems onArchive={() => setArchiveOpen(true)} onRename={beginRename} session={session} />
+				<SessionContextMenuItems onArchive={() => setArchiveOpen(true)} onRename={beginRename} session={session} />
 			</ContextMenuContent>
 		</ContextMenu>
 	);
 });
-
-/** Copy from a menu, which has no inline place to confirm the copy. */
-function useCopyToClipboard() {
-	const { t } = useTranslation();
-	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	return useCallback(
-		(text: string) => {
-			void aoBridge.clipboard.writeText(text).then(
-				() => showGlobalToast(t("shell.copied")),
-				() => showGlobalToast(t("shell.copyFailed"), undefined, "error"),
-			);
-		},
-		[showGlobalToast, t],
-	);
-}
-
-/** Radix mounts menu content only while open, so these lookups run on demand
- *  rather than once per sidebar row. */
-function SessionRowMenuItems({
-	session,
-	onArchive,
-	onRename,
-}: {
-	session: WorkspaceSession;
-	onArchive: () => void;
-	onRename: () => void;
-}) {
-	const { t } = useTranslation();
-	const queryClient = useQueryClient();
-	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const copyToClipboard = useCopyToClipboard();
-	const { mutate: pinSession } = usePinSession();
-	const { mutate: unpinSession } = useUnpinSession();
-	const branch = sessionBranchPresentation(session).branch;
-	const showBranch = Boolean(branch) && !isOrchestratorSession(session) && branch !== `session/${session.id}`;
-	const pr = primaryPR(session);
-	// Same eligibility as the hover warm-up: a local worker whose agent exited.
-	const canResume = canResumeAgent(session) && !session.hostId && !isOrchestratorSession(session);
-	// Remote and Cloud sessions have no local workspace for Electron to hand off.
-	const hasLocalWorkspace = !session.hostId && !session.cloud;
-
-	const resume = () => {
-		void resumeAgentOnOpen(session.id)
-			.catch((error: unknown) => {
-				showGlobalToast(t("inspector.resumeAgent"), error instanceof Error ? error.message : undefined, "error");
-			})
-			.finally(() => {
-				void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
-			});
-	};
-
-	return (
-		<>
-			{hasLocalWorkspace ? <SessionWorkspaceMenuItems session={session} /> : null}
-			<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={onRename}>
-				<Pencil aria-hidden="true" />
-				{t("shell.rename")}
-			</ContextMenuItem>
-			<ContextMenuItem onSelect={() => (session.isPinned ? unpinSession(session) : pinSession(session))}>
-				{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
-				{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
-			</ContextMenuItem>
-			{canResume ? (
-				<ContextMenuItem onSelect={resume}>
-					<Play aria-hidden="true" />
-					{t("command.resumeAgent")}
-				</ContextMenuItem>
-			) : null}
-			{pr || showBranch ? <ContextMenuSeparator /> : null}
-			{pr ? (
-				<>
-					<ContextMenuItem onSelect={() => void aoBridge.app.openExternal(pr.url)}>
-						<ExternalLink aria-hidden="true" />
-						{t("command.openPr", { number: pr.number })}
-					</ContextMenuItem>
-					<ContextMenuItem onSelect={() => copyToClipboard(pr.url)}>
-						<Copy aria-hidden="true" />
-						{t("command.copyPrUrl", { number: pr.number })}
-					</ContextMenuItem>
-				</>
-			) : null}
-			{showBranch && branch ? (
-				<ContextMenuItem onSelect={() => copyToClipboard(branch)}>
-					<GitBranch aria-hidden="true" />
-					{t("command.copyBranch")}
-				</ContextMenuItem>
-			) : null}
-			<ContextMenuSeparator />
-			<ContextMenuItem onSelect={onArchive}>
-				<Archive aria-hidden="true" />
-				{t("shell.archiveSession")}
-			</ContextMenuItem>
-		</>
-	);
-}
-
-/** Open in the preferred editor or file manager, and copy the worktree path:
- *  the same Electron handoff as the session topbar's editor button. */
-function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
-	const { t } = useTranslation();
-	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const { data: state } = useEditorHandoffState(session.id, {
-		sessionCreatedAt: session.createdAt,
-		sessionTerminated: session.isTerminated,
-	});
-	const open = useOpenSessionTarget();
-	if (!state?.workspaceAvailable) return null;
-	const editors = state.targets.filter((target) => target.kind === "editor");
-	const editor = editors.find((target) => target.id === state.preferredEditorId) ?? editors[0];
-	const fileManager = state.targets.find((target) => target.kind === "file_manager");
-	const launch = (target: OpenTarget) => {
-		open.mutate(
-			{ sessionId: session.id, projectId: session.workspaceId, targetId: target.id },
-			{
-				onError: (error) =>
-					showGlobalToast(t("editor.openInTarget", { name: target.name }), error.message, "error"),
-			},
-		);
-	};
-	const copyPath = () => {
-		aoBridge.editorHandoff.copyWorkspacePath(session.id).then(
-			() => showGlobalToast(t("shortcut.sessionPathCopied")),
-			(error: unknown) =>
-				showGlobalToast(t("shortcut.sessionPathCopyFailed"), editorHandoffErrorMessage(error) ?? undefined, "error"),
-		);
-	};
-	return (
-		<>
-			{editor ? (
-				<ContextMenuItem onSelect={() => launch(editor)}>
-					<TargetIcon target={editor} />
-					{t("editor.openInTarget", { name: editor.name })}
-				</ContextMenuItem>
-			) : null}
-			{fileManager ? (
-				<ContextMenuItem onSelect={() => launch(fileManager)}>
-					<TargetIcon target={fileManager} />
-					{t("editor.openInTarget", { name: fileManager.name })}
-				</ContextMenuItem>
-			) : null}
-			<ContextMenuItem onSelect={copyPath}>
-				<Copy aria-hidden="true" />
-				{t("editor.copyPath")}
-			</ContextMenuItem>
-			<ContextMenuSeparator />
-		</>
-	);
-}
 
 const SessionMessageAge = memo(function SessionMessageAge({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
