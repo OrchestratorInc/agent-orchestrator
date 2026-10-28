@@ -35,11 +35,10 @@ import {
 	type MouseEvent as ReactMouseEvent,
 	type PointerEvent as ReactPointerEvent,
 	type ReactNode,
-	type RefObject,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, MessageSquarePlus, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
-import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
@@ -106,7 +105,7 @@ import {
 	type SessionProvisionStep,
 } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
-import { SessionPaneTab } from "../CenterPane";
+import { DraggableWorkspaceTab, SessionPaneTab } from "../CenterPane";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
@@ -265,47 +264,10 @@ type ChatAuxiliaryTab =
 	| { key: string; kind: "shell"; terminal: ShellTerminal }
 	| { key: string; kind: "workspace"; tab: WorkspaceTab };
 
-function DraggableChatTab({
-	children,
-	constraintsRef,
-	value,
-}: {
-	children: ReactNode;
-	/** The reorderable group: a dragged tab never leaves it for the pinned session tab or the toolbar. */
-	constraintsRef: RefObject<HTMLDivElement | null>;
-	value: string;
-}) {
-	const dragControls = useDragControls();
-	return (
-		<Reorder.Item
-			as="div"
-			// The opaque background keeps a dragged tab from showing the tabs it passes over.
-			className="flex shrink-0 self-stretch touch-pan-y bg-background"
-			data-terminal-tab-key={value}
-			drag="x"
-			dragConstraints={constraintsRef}
-			dragControls={dragControls}
-			dragElastic={0}
-			dragListener={false}
-			onPointerDown={(event: ReactPointerEvent<HTMLDivElement>) => {
-				if ((event.target as HTMLElement).closest("[data-terminal-tab-action],input,a")) return;
-				dragControls.start(event);
-			}}
-			// Reorder needs layout measurement, but tabs should snap into place
-			// when a sibling opens or closes rather than slide.
-			transition={{ layout: { duration: 0 } }}
-			value={value}
-		>
-			{children}
-		</Reorder.Item>
-	);
-}
-
 // The tab strip re-renders with every session view update. A shell tab only
 // changes with its shell or selection, so it skips the rest; with a dozen
 // tabs this is most of the strip's render work.
 const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
-	constraintsRef,
 	tabKey,
 	shell,
 	isActive,
@@ -313,7 +275,6 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 	onClose,
 	onRename,
 }: {
-	constraintsRef: RefObject<HTMLDivElement | null>;
 	tabKey: string;
 	shell: ShellTerminal;
 	isActive: boolean;
@@ -322,7 +283,7 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 	onRename?: (handleId: string, title: string) => void;
 }) {
 	return (
-		<DraggableChatTab constraintsRef={constraintsRef} value={tabKey}>
+		<DraggableWorkspaceTab value={tabKey}>
 			<ShellTerminalTab
 				appearance="connected"
 				isActive={isActive}
@@ -331,7 +292,7 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 				onSelect={() => onSelect(shell.handleId)}
 				shell={shell}
 			/>
-		</DraggableChatTab>
+		</DraggableWorkspaceTab>
 	);
 });
 
@@ -2354,7 +2315,6 @@ function ChatHeader({
 	const isSidebarOpen = useUiStore(sidebarOccupiesLayout);
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
-	const reorderGroupRef = useRef<HTMLDivElement>(null);
 	const header = (
 		<header className={cn("flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar", slideIn && "chat-header-slide-in")}>
 			<div
@@ -2407,12 +2367,10 @@ function ChatHeader({
 									axis="x"
 									className="flex items-stretch self-stretch"
 									onReorder={onReorderAuxiliaryTabs}
-									ref={reorderGroupRef}
 									values={orderedAuxiliaryTabs.map((tab) => tab.key)}
 								>
 									{orderedAuxiliaryTabs.map((tab) => tab.kind === "shell" ? (
 										<ShellTerminalTabEntry
-											constraintsRef={reorderGroupRef}
 											isActive={tab.terminal.handleId === shellActiveHandleId && !workspaceActiveTabKey}
 											key={tab.key}
 											onClose={closeShellTerminal}
@@ -2422,7 +2380,7 @@ function ChatHeader({
 											tabKey={tab.key}
 										/>
 									) : (
-										<DraggableChatTab constraintsRef={reorderGroupRef} key={tab.key} value={tab.key}>
+										<DraggableWorkspaceTab key={tab.key} value={tab.key}>
 											{tab.kind === "reviewer" || tab.kind === "reviewer-chat" ? (
 												<SessionPaneTab
 													icon={<AgentAvatar className="size-icon-sm!" decorative provider={tab.terminal.harness} />}
@@ -2434,7 +2392,7 @@ function ChatHeader({
 											) : (
 												tab.tab.content
 											)}
-										</DraggableChatTab>
+										</DraggableWorkspaceTab>
 									))}
 								</Reorder.Group>
 								{workspaceTabActions}

@@ -1,6 +1,6 @@
 import { Pencil } from "lucide-react";
 import { isSettingsPageOpen } from "../hooks/useAppShortcut";
-import { motion, Reorder, useDragControls } from "motion/react";
+import { motion, Reorder, useDragControls, useMotionValue } from "motion/react";
 import {
 	useCallback,
 	useEffect,
@@ -9,7 +9,6 @@ import {
 	useState,
 	type PointerEvent,
 	type ReactNode,
-	type RefObject,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -101,20 +100,26 @@ const WHEEL_ZOOM_RESET_MS = 250;
 const isMac = isMacPlatform();
 const isLinux = isLinuxPlatform();
 
-function DraggableWorkspaceTab({
-	children,
-	constraintsRef,
-	value,
-}: {
-	children: ReactNode;
-	/** The reorderable group: a dragged tab never leaves it for the pinned session tab or the toolbar. */
-	constraintsRef: RefObject<HTMLDivElement | null>;
-	value: string;
-}) {
+// A reorderable strip tab. It stays inside its group, so it never covers the
+// pinned session tab or the toolbar, and keeps its hover look while dragged.
+export function DraggableWorkspaceTab({ children, value }: { children: ReactNode; value: string }) {
 	const dragControls = useDragControls();
+	const itemRef = useRef<HTMLDivElement>(null);
+	const x = useMotionValue(0);
+	const [dragging, setDragging] = useState(false);
 	const startDrag = (event: PointerEvent<HTMLDivElement>) => {
 		if ((event.target as HTMLElement).closest("[data-terminal-tab-action],input,a")) return;
 		dragControls.start(event);
+	};
+	// Clamp from layout offsets inside the group: they ignore the strip's scroll
+	// and stay correct after each reorder, unlike ref-based dragConstraints.
+	const keepInGroup = () => {
+		const item = itemRef.current;
+		const group = item?.parentElement;
+		if (!item || !group) return;
+		const min = group.offsetLeft - item.offsetLeft;
+		const max = group.offsetLeft + group.offsetWidth - item.offsetLeft - item.offsetWidth;
+		x.set(Math.min(max, Math.max(min, x.get())));
 	};
 
 	return (
@@ -122,13 +127,17 @@ function DraggableWorkspaceTab({
 			as="div"
 			// The opaque background keeps a dragged tab from showing the tabs it passes over.
 			className="flex shrink-0 self-stretch touch-pan-y bg-background"
+			data-dragging={dragging || undefined}
 			data-terminal-tab-key={value}
 			drag="x"
-			dragConstraints={constraintsRef}
 			dragControls={dragControls}
-			dragElastic={0}
 			dragListener={false}
+			onDrag={keepInGroup}
+			onDragEnd={() => setDragging(false)}
+			onDragStart={() => setDragging(true)}
 			onPointerDown={startDrag}
+			ref={itemRef}
+			style={{ x }}
 			// Reorder needs layout measurement, but tabs should snap into place
 			// when a sibling opens or closes rather than slide.
 			transition={{ layout: { duration: 0 } }}
@@ -371,7 +380,8 @@ export function CenterPane({
 				: target.kind === "reviewer"
 					? `reviewer:${target.handleId}`
 					: undefined);
-	const orderedAuxiliaryTabKeys = orderedAuxiliaryTabs.map((tab) => tab.key).join("|");
+	// Sorted, so reordering by drag does not scroll the strip under the pointer.
+	const auxiliaryTabSet = orderedAuxiliaryTabs.map((tab) => tab.key).sort().join("|");
 	// Reveal the active tab only when the selection or tab set changes. Keyed on
 	// strings, not the tab objects, which are rebuilt on every render and would
 	// otherwise yank a manually scrolled strip back to the active tab.
@@ -391,7 +401,7 @@ export function CenterPane({
 		if (tabRect.right > scrollRect.right) nextScrollLeft += tabRect.right - scrollRect.right;
 		if (nextScrollLeft === scrollRegion.scrollLeft) return;
 		scrollRegion.scrollTo({ behavior: "smooth", left: Math.max(0, nextScrollLeft) });
-	}, [activeAuxiliaryTabKey, orderedAuxiliaryTabKeys]);
+	}, [activeAuxiliaryTabKey, auxiliaryTabSet]);
 
 	useEffect(() => {
 		const pane = paneRef.current;
@@ -465,7 +475,6 @@ export function CenterPane({
 	);
 
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
-	const reorderGroupRef = useRef<HTMLDivElement>(null);
 	const terminalTopbar = (
 		<div className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
 
@@ -517,11 +526,10 @@ export function CenterPane({
 										axis="x"
 										className="flex items-stretch self-stretch"
 										onReorder={reorderAuxiliaryTabs}
-										ref={reorderGroupRef}
 										values={orderedAuxiliaryTabs.map((tab) => tab.key)}
 									>
 										{orderedAuxiliaryTabs.map((tab) => (
-											<DraggableWorkspaceTab constraintsRef={reorderGroupRef} key={tab.key} value={tab.key}>
+											<DraggableWorkspaceTab key={tab.key} value={tab.key}>
 												{tab.kind === "reviewer" || tab.kind === "reviewer-chat" ? (
 													<SessionPaneTab
 														icon={

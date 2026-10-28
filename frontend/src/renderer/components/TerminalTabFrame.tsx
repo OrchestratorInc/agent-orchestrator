@@ -39,7 +39,7 @@ export function TerminalTabFrame({
 				// Focus rings are off app-wide, so keyboard focus shows as the hover wash.
 				active
 					? "bg-overlay text-foreground"
-					: "text-passive hover:bg-raised hover:text-foreground has-[:focus-visible]:bg-raised has-[:focus-visible]:text-foreground",
+					: "text-passive hover:bg-raised hover:text-foreground has-[:focus-visible]:bg-raised has-[:focus-visible]:text-foreground in-data-dragging:bg-raised in-data-dragging:text-foreground",
 			)}
 			data-terminal-tab-frame
 			onClick={(event) => {
@@ -55,13 +55,13 @@ export function TerminalTabFrame({
 			) : (
 				<button
 					ref={buttonRef}
-					className="inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-control leading-none"
+					className="inline-flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-control leading-none in-data-dragging:cursor-grabbing!"
 					{...buttonProps}
 				>
 					<span
 						className={cn(
 							"grid size-icon-base shrink-0 place-items-center",
-							action && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-focus-within:opacity-0 group-has-[[data-state=open]]:opacity-0"),
+							action && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-focus-within:opacity-0 group-has-[[data-state=open]]:opacity-0 in-data-dragging:opacity-0"),
 						)}
 					>
 						{icon}
@@ -75,7 +75,7 @@ export function TerminalTabFrame({
 						"absolute left-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center",
 						actionPinned
 							? undefined
-							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100",
+							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 in-data-dragging:opacity-100",
 					)}
 					data-terminal-tab-action
 				>
