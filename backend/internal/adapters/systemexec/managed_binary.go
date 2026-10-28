@@ -56,19 +56,20 @@ func (a Adapter) InstallManagedBinary(ctx context.Context, download ports.Manage
 	defer stalled(nil)
 	stall := time.AfterFunc(stallAfter, func() { stalled(fmt.Errorf("%w: no data for %s", errDownloadStalled, stallAfter)) })
 	defer stall.Stop()
-	response, err := a.getHTTPS(transferCtx, download.URL, download.Name)
-	if cause := context.Cause(transferCtx); err != nil && errors.Is(cause, errDownloadStalled) {
-		err = cause
+	// A request the stall timer cut off fails with the stall, not "canceled".
+	stallCause := func(err error) error {
+		if cause := context.Cause(transferCtx); err != nil && errors.Is(cause, errDownloadStalled) {
+			return cause
+		}
+		return err
 	}
-	if err != nil {
+	response, err := a.getHTTPS(transferCtx, download.URL, download.Name)
+	if err = stallCause(err); err != nil {
 		return "", errors.Join(err, tmp.Close())
 	}
 	hash := sha256.New()
 	n, err := io.Copy(io.MultiWriter(tmp, hash), stallReader{stall, stallAfter, io.LimitReader(response.Body, managedBinaryMaxBytes+1)})
-	stall.Stop()
-	if cause := context.Cause(transferCtx); err != nil && errors.Is(cause, errDownloadStalled) {
-		err = cause
-	}
+	err = stallCause(err)
 	// Synced before the rename: a power loss must not leave a truncated
 	// binary in place, which nothing would download again.
 	if err = errors.Join(err, response.Body.Close(), tmp.Sync(), tmp.Close()); err != nil {

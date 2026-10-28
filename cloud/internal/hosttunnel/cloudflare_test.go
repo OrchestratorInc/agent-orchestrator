@@ -401,7 +401,7 @@ func TestSweepDeletesOnlyWhatIsGone(t *testing.T) {
 	cf.records["h-removed.example.dev"] = fakeRecord{id: "rec-removed", content: "removed.cfargotunnel.com", proxied: true}
 	cf.tunnels["back"] = fakeTunnel{name: "ao-back", status: "down", inactive: &long}
 	cf.tunnels["relisted"] = fakeTunnel{name: "ao-relisted", status: "healthy"}
-	done, err := Sweep(context.Background(), store, c, now)
+	done, _, err := sweep(context.Background(), store, c, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +450,7 @@ func TestSweepReleasesTheTunnelsOfMachinesThatLeft(t *testing.T) {
 	cf.records["h-asleep.example.dev"] = fakeRecord{id: "rec-asleep", content: "asleep.cfargotunnel.com", proxied: true}
 	store := &fakeSweepStore{rows: rows}
 
-	done, err := Sweep(context.Background(), store, c, now)
+	done, _, err := sweep(context.Background(), store, c, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -485,7 +485,7 @@ func TestSweepStopsOnceCloudflareRateLimits(t *testing.T) {
 		rows[id] = domain.RemoteHostTunnel{HostID: "h_" + id, TunnelID: id, Hostname: "h-" + id + ".example.dev"}
 	}
 	cf.limitAt = 3 // the two listings and one release
-	if _, err := Sweep(context.Background(), &fakeSweepStore{rows: rows}, c, now); err == nil {
+	if _, _, err := sweep(context.Background(), &fakeSweepStore{rows: rows}, c, now, 0); err == nil {
 		t.Fatal("a rate-limited sweep reported no error")
 	}
 	cf.mu.Lock()

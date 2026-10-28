@@ -115,12 +115,11 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		// Fetched by the run that stopped to start it.
 		named = *t.next
 	default:
-		// Bounded well under stableTunnelRun, so a failing request never
-		// counts as a stable run that resets the backoff ladder.
-		provisionCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
+		// The client's namedProvisionTimeout is well under stableTunnelRun, so
+		// a failing request never counts as a stable run that resets the
+		// backoff ladder.
 		var err error
-		named, err = t.Fixed.TunnelFor(provisionCtx, t.HostID, t.repair)
-		cancel()
+		named, err = t.Fixed.TunnelFor(ctx, t.HostID, t.repair)
 		// A replacement AO Cloud did not make, unheard or too soon after the
 		// tunnel's last write, is asked for again at the next start.
 		switch {
@@ -197,15 +196,13 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	// down: it is still this machine's address, and the connector reconnects
 	// or watchConnector restarts it. Withdrawing it would flap the QR code and
 	// the account listing on every edge reconnect.
-	settleCtx, stopSettle := context.WithCancel(ctx)
-	defer stopSettle()
 	if fixed {
 		t.Runtime.NamedHostname(named.Hostname)
 	}
 	if fixed && time.Since(named.Since) >= t.settleDelay() {
 		t.Runtime.Settled()
 	} else {
-		go t.awaitSettled(settleCtx)
+		go t.awaitSettled(runCtx)
 	}
 
 	var upgraded, withdrawn atomic.Bool
@@ -286,10 +283,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 // never a refusal, and never registered again. A connector that cannot reach
 // Cloudflare at all looks the same; stopping it then costs a restart.
 func (t *TunnelRunner) watchConnector(ctx context.Context, h *connectorHealth, stop func(string)) {
-	after := t.deadAfter
-	if after == 0 {
-		after = connectorDeadAfter
-	}
+	after := cmp.Or(t.deadAfter, connectorDeadAfter)
 	for {
 		select {
 		case <-ctx.Done():
@@ -392,10 +386,7 @@ const (
 // AO Cloud backs off, except that a new link (a new account token) is tried
 // at once.
 func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func(NamedTunnel)) {
-	every := t.upgradeEvery
-	if every == 0 {
-		every = fixedUpgradeInterval
-	}
+	every := cmp.Or(t.upgradeEvery, fixedUpgradeInterval)
 	wait, tried, triedAt := every, "", time.Time{}
 	for {
 		select {
@@ -409,9 +400,7 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func(NamedTun
 		if digest == "" || (digest == tried && time.Since(triedAt) < wait) {
 			continue
 		}
-		requestCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
-		named, err := t.Fixed.TunnelFor(requestCtx, t.HostID, false)
-		cancel()
+		named, err := t.Fixed.TunnelFor(ctx, t.HostID, false)
 		if err == nil && named.RunToken != "" {
 			ready(named)
 			return
@@ -443,13 +432,7 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func(NamedTun
 // that wakes is back once Cloudflare routes the address to that tunnel. An
 // edge restart reconnects within seconds and asks nothing.
 func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel, health *connectorHealth, withdrawn func(*NamedTunnel)) {
-	every, grace := t.recheckEvery, t.lostGrace
-	if every == 0 {
-		every = fixedRecheckInterval
-	}
-	if grace == 0 {
-		grace = connectionLostGrace
-	}
+	every, grace := cmp.Or(t.recheckEvery, fixedRecheckInterval), cmp.Or(t.lostGrace, connectionLostGrace)
 	for {
 		select {
 		case <-ctx.Done():
@@ -466,19 +449,17 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 				continue
 			}
 		}
-		named, err := t.fixedTunnel(ctx)
-		if errors.Is(err, errNotLinked) || errors.Is(err, errHostRefused) {
-			// A new link is written here before it lands at AO Cloud, which
-			// refuses it until then.
-			grace := cmp.Or(t.relinkWait, relinkGrace)
-			for deadline := time.Now().Add(grace); (errors.Is(err, errNotLinked) || errors.Is(err, errHostRefused)) && time.Now().Before(deadline); {
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(grace / 24):
-				}
-				named, err = t.fixedTunnel(ctx)
+		named, err := t.Fixed.TunnelFor(ctx, t.HostID, false)
+		// A new link is written here before it lands at AO Cloud, which
+		// refuses it until then.
+		relink := cmp.Or(t.relinkWait, relinkGrace)
+		for deadline := time.Now().Add(relink); (errors.Is(err, errNotLinked) || errors.Is(err, errHostRefused)) && time.Now().Before(deadline); {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(relink / 24):
 			}
+			named, err = t.Fixed.TunnelFor(ctx, t.HostID, false)
 		}
 		if unlinked(err) {
 			withdrawn(nil)
@@ -489,12 +470,6 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 			return
 		}
 	}
-}
-
-func (t *TunnelRunner) fixedTunnel(ctx context.Context) (NamedTunnel, error) {
-	requestCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
-	defer cancel()
-	return t.Fixed.TunnelFor(requestCtx, t.HostID, false)
 }
 
 // fixedRecheckInterval spaces those checks: one AO Cloud call per machine

@@ -35,13 +35,11 @@ const (
 	// sweepListPages bounds each of the sweep's two Cloudflare listings, so a
 	// sweep makes at most ten list requests.
 	sweepListPages = 5
-	// sweepDeadline bounds one sweep's time.
-	sweepDeadline = 2 * time.Minute
+	// sweepDeadline bounds one sweep's time, and sweepDeletions how many
+	// tunnels it releases or deletes.
+	sweepDeadline  = 2 * time.Minute
+	sweepDeletions = 100
 )
-
-// sweepDeletions bounds how many tunnels one sweep releases or deletes. A var
-// so tests can lower it.
-var sweepDeletions = 100
 
 // SweepStore is what the sweep reads and writes.
 type SweepStore interface {
@@ -82,7 +80,7 @@ func RunSweeper(ctx context.Context, store SweepStore, cf *Cloudflare, interval 
 	}
 }
 
-// Sweep releases the tunnels of machines that went offline and of tunnels no
+// sweep releases the tunnels of machines that went offline and of tunnels no
 // connector ever served, and deletes the tunnels and DNS records whose account
 // no longer lists the machine, or whose machine AO Cloud has not seen for
 // OfflineRetention. It returns how many tunnels it released or deleted.
@@ -93,15 +91,9 @@ func RunSweeper(ctx context.Context, store SweepStore, cf *Cloudflare, interval 
 //
 // A sweep is bounded: ten list requests, sweepDeletions tunnels, two minutes,
 // and no more calls once Cloudflare rate-limits, since every account shares
-// the API token's limit.
-func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time) (int, error) {
-	done, _, err := sweep(ctx, store, cf, now, 0)
-	return done, err
-}
-
-// sweep is Sweep starting start items along its work, and returns where the
-// next sweep starts: one budget further along, so items that keep failing
-// cannot hold back the ones after them.
+// the API token's limit. It starts start items along its work and returns
+// where the next sweep starts: one budget further along, so items that keep
+// failing cannot hold back the ones after them.
 func sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time, start int) (done, next int, err error) {
 	ctx, cancel := context.WithTimeout(ctx, sweepDeadline)
 	defer cancel()

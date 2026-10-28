@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -344,7 +343,7 @@ func (c *Cloudflare) listHostTunnels(ctx context.Context, status string, filter 
 			return out, fmt.Errorf("list %s tunnels: %w", status, err)
 		}
 		for _, t := range found {
-			if strings.HasPrefix(t.Name, tunnelPrefix) && t.ID != "" && (keep == nil || keep(t.ConnsInactiveAt)) {
+			if t.ID != "" && (keep == nil || keep(t.ConnsInactiveAt)) {
 				out = append(out, t.ID)
 			}
 		}

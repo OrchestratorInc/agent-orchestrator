@@ -405,12 +405,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			},
 		);
 	};
-	/** On an AO Cloud with no fixed addresses, lists this computer at its quick tunnel's address, as Allow access does. */
-	const linkAtTunnelAddress = async (password: string, hostId: string, options?: { ifListed?: boolean }) => {
-		const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
-		if (!ready) return;
-		await linkThisComputer(cloudBaseUrl, accountId, hostId, password, { ...options, url: ready.url });
-	};
 	/** Links this computer when signed in, before its tunnel starts, so the code carries its fixed address and stays valid after restarts. */
 	const linkAndStartRemoteAccess = async (password: string, hostId: string) => {
 		const { added } = await linkIfSignedIn(password, hostId);
@@ -504,7 +498,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				// An AO Cloud without fixed addresses links nothing without a url, and the
 				// account would keep the old token: it lists the tunnel's address instead.
 				if (signedIn && !linked && !failed) {
-					void linkAtTunnelAddress(data.password ?? "", data.hostId ?? "", { ifListed: true }).catch(reportLinkError);
+					void waitForTunnel(t("remote.shareThisComputerTimeout"))
+						.then((ready) => ready && linkThisComputer(cloudBaseUrl, accountId, data.hostId ?? "", data.password ?? "", { ifListed: true, url: ready.url }))
+						.catch(reportLinkError);
 				}
 			}
 			return data;
@@ -718,27 +714,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			<PairingQr value={qrValue} size={QR_CODE_SIZE} animate={animateQr} />
 			{!enabled ? (
 				<div className="absolute inset-0 flex items-center justify-center">
-					{signInRequired ? (
-						<Button
-							type="button"
-							variant="footer-primary"
-							className="rounded-md shadow-lg"
-							onClick={() => (localAuthAvailable ? openLocalSignIn() : signIn())}
-							disabled={sessionStatus === "loading"}
-						>
-							{t("shell.signIn")}
-						</Button>
-					) : (
-						<Button
-							type="button"
-							variant="footer-primary"
-							className="rounded-md shadow-lg"
-							onClick={startBridge}
-							disabled={busy || enabled}
-						>
-							{t("mobile.generate")}
-						</Button>
-					)}
+					<Button
+						type="button"
+						variant="footer-primary"
+						className="rounded-md shadow-lg"
+						onClick={signInRequired ? () => (localAuthAvailable ? openLocalSignIn() : signIn()) : startBridge}
+						disabled={signInRequired ? sessionStatus === "loading" : busy || enabled}
+					>
+						{signInRequired ? t("shell.signIn") : t("mobile.generate")}
+					</Button>
 				</div>
 			) : !qrValue && !unreachable ? (
 				<div

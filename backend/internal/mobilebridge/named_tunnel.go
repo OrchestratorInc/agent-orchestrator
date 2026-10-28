@@ -29,8 +29,6 @@ type FixedTunnelSource struct {
 	// CachePath keeps the last tunnel (~/.ao/mobile/named-tunnel.json), so the
 	// address survives AO Cloud being unreachable.
 	CachePath string
-
-	client *http.Client // tests
 }
 
 // NewFixedTunnelSource reads and caches under the data dir.
@@ -125,9 +123,7 @@ func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair
 		t.Since = time.Now()
 	}
 	// A lost cache only costs the fallback until the next good answer.
-	keep := t
-	keep.Repaired = false
-	if b, err := json.Marshal(cachedNamedTunnel{Key: key, Tunnel: keep}); err == nil && s.CachePath != "" {
+	if b, err := json.Marshal(cachedNamedTunnel{Key: key, Tunnel: t}); err == nil && s.CachePath != "" {
 		_ = writeFileAtomic(s.CachePath, b)
 	}
 	return t, nil
@@ -159,7 +155,7 @@ func loadNamedTunnelCache(path, key string) (tunnel NamedTunnel, stale bool) {
 // fixedTunnelClient follows no redirect, which would carry the host digest
 // elsewhere, as the address publisher's client does.
 var fixedTunnelClient = &http.Client{
-	Timeout:       15 * time.Second,
+	Timeout:       namedProvisionTimeout,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
@@ -175,25 +171,18 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 	}
 	req.Header.Set("Authorization", "Bearer "+digest)
 	req.Header.Set("Content-Type", "application/json")
-	client := s.client
-	if client == nil {
-		client = fixedTunnelClient
-	}
-	resp, err := client.Do(req)
+	resp, err := fixedTunnelClient.Do(req)
 	if err != nil {
 		return NamedTunnel{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		var refusal struct {
-			Code string `json:"code"`
-		}
-		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&refusal)
+		code := errorCode(resp)
 		switch {
-		case resp.StatusCode == http.StatusUnauthorized && refusal.Code == "unauthorized":
+		case resp.StatusCode == http.StatusUnauthorized && code == "unauthorized":
 			return NamedTunnel{}, errHostRefused
 		case resp.StatusCode == http.StatusNotFound,
-			resp.StatusCode == http.StatusServiceUnavailable && refusal.Code == "fixed_addresses_unavailable":
+			resp.StatusCode == http.StatusServiceUnavailable && code == "fixed_addresses_unavailable":
 			return NamedTunnel{}, errNoFixedAddresses
 		}
 		return NamedTunnel{}, fmt.Errorf("AO Cloud returned %d for the fixed address", resp.StatusCode)
@@ -220,11 +209,16 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 // account lists the machine under it. A proxy's or portal's 401 is not one.
 // It reads the body.
 func IsHostDigestRefusal(resp *http.Response) bool {
-	var refusal struct {
+	return resp.StatusCode == http.StatusUnauthorized && errorCode(resp) == "unauthorized"
+}
+
+// errorCode is the code in AO Cloud's error body, or "". It reads the body.
+func errorCode(resp *http.Response) string {
+	var body struct {
 		Code string `json:"code"`
 	}
-	return resp.StatusCode == http.StatusUnauthorized &&
-		json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&refusal) == nil && refusal.Code == "unauthorized"
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body)
+	return body.Code
 }
 
 // ControlPlaneTarget joins path onto AO Cloud's base URL. Only https, or plain

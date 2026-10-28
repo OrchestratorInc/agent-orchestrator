@@ -1046,9 +1046,7 @@ func (b *BridgeService) StartRemoteAccess() (MobileStatusResponse, error) {
 		// The desktop links this machine just before it asks for remote
 		// access; a connector already running can move to the address the
 		// link gave it now. Sent first: a connector Start begins asks anyway.
-		if n, ok := t.(interface{ Nudge() }); ok {
-			n.Nudge()
-		}
+		b.nudgeTunnel()
 		t.Start(b.LAN.BoundPort())
 	}
 	return b.Status(), nil
