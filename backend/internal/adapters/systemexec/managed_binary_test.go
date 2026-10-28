@@ -6,12 +6,15 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -106,6 +109,34 @@ func TestInstallManagedBinaryRefusesAChecksumMismatch(t *testing.T) {
 		t.Fatalf("managed path exists after a mismatch: %v", statErr)
 	}
 	assertOnlyManagedBinary(t, filepath.Join(dataDir, "bin"), "")
+}
+
+// A transfer that stops sending fails within the stall timeout, so the caller
+// can try again inside its install time.
+func TestInstallManagedBinaryGivesUpAStalledTransfer(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		_, _ = w.Write([]byte("partial"))
+		w.(http.Flusher).Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+	adapter := newAdapter(t.TempDir(), server.Client())
+	adapter.downloadStall = 200 * time.Millisecond
+
+	started := time.Now()
+	_, err := adapter.InstallManagedBinary(t.Context(), ports.ManagedBinaryDownload{
+		URL: server.URL + "/asset", SHA256: sha256Hex([]byte("the pinned release")), Name: cloudflaredName(),
+	})
+	if !errors.Is(err, errDownloadStalled) || time.Since(started) > 5*time.Second {
+		t.Fatalf("error = %v after %s, want a stall", err, time.Since(started))
+	}
 }
 
 func TestInstallManagedBinaryRefusesPlainHTTP(t *testing.T) {

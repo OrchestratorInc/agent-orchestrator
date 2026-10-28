@@ -4,6 +4,7 @@ import { queryClient } from "../query-client";
 import { cachedCloudBillingMode, cloudMeQueryKey } from "../cloud-offering";
 import { appI18n } from "../../i18n";
 import { instrumentCloudClient, reportPlanRefusal } from "../cloud-telemetry";
+import { raceAbort } from "./transport";
 
 type CloudCpBridgeRequest = (init: {
 	baseUrl: string;
@@ -29,6 +30,8 @@ export const cloudCpFetch: typeof fetch = async (input, init) => {
 	const url = new URL(input instanceof Request ? input.url : String(input));
 	const prefixIndex = url.pathname.indexOf(API_PREFIX);
 	const mount = prefixIndex > 0 ? url.pathname.slice(0, prefixIndex) : "";
+	// An aborted caller sends nothing, as with fetch.
+	if (init?.signal?.aborted) throw init.signal.reason;
 	const pending = request({
 		baseUrl: url.origin + mount,
 		path: url.pathname.slice(mount.length) + url.search,
@@ -38,22 +41,10 @@ export const cloudCpFetch: typeof fetch = async (input, init) => {
 	});
 	// The main process finishes the request regardless; the caller stops
 	// waiting when its signal fires, as with fetch.
-	const result = init?.signal ? await abortable(pending, init.signal) : await pending;
+	const result = init?.signal ? await raceAbort(pending, init.signal) : await pending;
 	const body = NULL_BODY_STATUSES.has(result.status) || result.body === "" ? null : result.body;
 	return new Response(body, { status: result.status, headers: result.headers });
 };
-
-function abortable<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
-	if (signal.aborted) {
-		pending.catch(() => undefined); // its outcome no longer has a reader
-		return Promise.reject(signal.reason);
-	}
-	return new Promise<T>((resolve, reject) => {
-		const abort = () => reject(signal.reason);
-		signal.addEventListener("abort", abort, { once: true });
-		pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-	});
-}
 
 export function createRendererCloudCpClient(baseUrl: string): CloudCpClient {
 	// Funnel telemetry (cloud-telemetry.ts) wraps the client; it passes results

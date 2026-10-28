@@ -1,6 +1,6 @@
 import { getAccountAccessToken, loadAccount, type Account } from "./account";
 import { ignoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
-import { isLocalNetworkHost, isTailscaleHost } from "./connectionError";
+import { isTailscaleHost } from "./connectionError";
 import { forgetPairedHost } from "./disconnect";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
 import { loadHosts, saveHost, type Host } from "./hosts";
@@ -10,12 +10,12 @@ export { ignoreAccountHost, unignoreAccountHost } from "./accountHostPreferences
 const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.aoagents.dev").replace(/\/$/, "");
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 
-// Tunnels, quick or named, are https on a public DNS name; the LAN listener is
-// plain http. An IP literal or a private name is never a tunnel.
+// Tunnels are a quick tunnel's name or AO Cloud's fixed address,
+// h-<20 hex>.<zone>, over https. Anything else, a custom domain included, is
+// kept beside the pairing's tunnel rather than in its place.
 function isTunnelAddress(url: URL): boolean {
 	const name = url.hostname.toLowerCase();
-	return url.protocol === "https:" && name.includes(".") && !name.startsWith("[") && !/^[\d.]+$/.test(name)
-		&& !isLocalNetworkHost(name) && !/\.(home\.arpa|lan|internal|localdomain)$/.test(name);
+	return url.protocol === "https:" && (name.endsWith(".trycloudflare.com") || /^h-[0-9a-f]{20}\.[^.]+\.[^.]+/.test(name));
 }
 
 function endpoint(raw: string): Endpoint | null {

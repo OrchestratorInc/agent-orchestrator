@@ -153,8 +153,13 @@ func sweepCandidate(ctx context.Context, store SweepStore, cf *Cloudflare, c dom
 			return false
 		}
 	}
-	// Delete also removes the DNS record, when it still names this tunnel.
-	if err := cf.Delete(ctx, c.TunnelID, c.Hostname); err != nil {
+	// Delete also removes the DNS record, when it still names this tunnel. A
+	// released tunnel is already deleted.
+	deleteAll := cf.Delete
+	if row.Released {
+		deleteAll = cf.DeleteRecord
+	}
+	if err := deleteAll(ctx, c.TunnelID, c.Hostname); err != nil {
 		fail(err)
 		return false
 	}

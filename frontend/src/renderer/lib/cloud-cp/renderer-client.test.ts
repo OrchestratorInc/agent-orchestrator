@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../../i18n";
 import { useUiStore } from "../../stores/ui-store";
 import { cloudMeQueryKey } from "../cloud-offering";
@@ -57,6 +57,20 @@ describe("cloudCpFetch", () => {
 			const pending = cloudCpFetch("https://cp.test/api/cloud/v1/me/hosts", { signal: controller.signal });
 			controller.abort(new Error("timed out"));
 			await expect(pending).rejects.toThrow("timed out");
+		} finally {
+			w.ao = before;
+		}
+	});
+
+	it("sends nothing for a caller already aborted", async () => {
+		const w = window as unknown as { ao?: { cloudCp?: { request: () => Promise<never> } } };
+		const before = w.ao;
+		const request = vi.fn(() => new Promise<never>(() => undefined));
+		w.ao = { ...before, cloudCp: { request } };
+		try {
+			const pending = cloudCpFetch("https://cp.test/api/cloud/v1/me/hosts", { method: "DELETE", signal: AbortSignal.abort(new Error("gone")) });
+			await expect(pending).rejects.toThrow("gone");
+			expect(request).not.toHaveBeenCalled();
 		} finally {
 			w.ao = before;
 		}

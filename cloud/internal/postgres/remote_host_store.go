@@ -106,7 +106,7 @@ func (s *Store) UpdateRemoteHostAddress(ctx context.Context, userID, hostID, add
 }
 
 const remoteHostTunnelColumns = `user_id, host_id, tunnel_id, hostname, encrypted_run_token, run_token_nonce,
-	created_at, updated_at, last_seen_at, linked_at, released_at IS NOT NULL`
+	created_at, updated_at, last_seen_at, COALESCE(linked_at, 'epoch'), released_at IS NOT NULL`
 
 func scanRemoteHostTunnel(row pgx.Row) (domain.RemoteHostTunnel, bool, error) {
 	var t domain.RemoteHostTunnel
@@ -185,10 +185,11 @@ func (s *Store) TouchRemoteHostTunnel(ctx context.Context, tunnelID string, seen
 // the meantime keeps it.
 func (s *Store) ReleaseRemoteHostTunnel(ctx context.Context, tunnelID string) error {
 	return s.withService(ctx, func(tx pgx.Tx) error {
-		// updated_at too: a row whose account no longer lists the host keeps
-		// its record for the sweep's grace from now, time to be listed again.
-		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET released_at = now(), updated_at = now()
-			WHERE tunnel_id = $1 AND released_at IS NULL`, tunnelID)
+		// updated_at too, even for a row released before: a row whose account
+		// no longer lists the host keeps its record for the sweep's grace from
+		// now, time to be listed again.
+		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET released_at = COALESCE(released_at, now()), updated_at = now()
+			WHERE tunnel_id = $1`, tunnelID)
 		return err
 	})
 }

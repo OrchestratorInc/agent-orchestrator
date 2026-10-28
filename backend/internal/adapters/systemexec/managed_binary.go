@@ -3,6 +3,7 @@ package systemexec
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -47,12 +49,26 @@ func (a Adapter) InstallManagedBinary(ctx context.Context, download ports.Manage
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
 
-	response, err := a.getHTTPS(ctx, download.URL, download.Name)
+	// A transfer that stops sending is given up, so a retry can run within
+	// the install's time.
+	stallAfter := cmp.Or(a.downloadStall, managedBinaryStallTimeout)
+	transferCtx, stalled := context.WithCancelCause(ctx)
+	defer stalled(nil)
+	stall := time.AfterFunc(stallAfter, func() { stalled(fmt.Errorf("%w: no data for %s", errDownloadStalled, stallAfter)) })
+	defer stall.Stop()
+	response, err := a.getHTTPS(transferCtx, download.URL, download.Name)
+	if cause := context.Cause(transferCtx); err != nil && errors.Is(cause, errDownloadStalled) {
+		err = cause
+	}
 	if err != nil {
 		return "", errors.Join(err, tmp.Close())
 	}
 	hash := sha256.New()
-	n, err := io.Copy(io.MultiWriter(tmp, hash), io.LimitReader(response.Body, managedBinaryMaxBytes+1))
+	n, err := io.Copy(io.MultiWriter(tmp, hash), stallReader{stall, stallAfter, io.LimitReader(response.Body, managedBinaryMaxBytes+1)})
+	stall.Stop()
+	if cause := context.Cause(transferCtx); err != nil && errors.Is(cause, errDownloadStalled) {
+		err = cause
+	}
 	// Synced before the rename: a power loss must not leave a truncated
 	// binary in place, which nothing would download again.
 	if err = errors.Join(err, response.Body.Close(), tmp.Sync(), tmp.Close()); err != nil {
@@ -122,6 +138,26 @@ func extractTarGzMember(ctx context.Context, archive, member, dir, name string) 
 		}
 		return out.Name(), nil
 	}
+}
+
+// managedBinaryStallTimeout is how long a download may go without a byte.
+const managedBinaryStallTimeout = time.Minute
+
+var errDownloadStalled = errors.New("download stalled")
+
+// stallReader pushes the stall timer back on every read that brings data.
+type stallReader struct {
+	timer *time.Timer
+	after time.Duration
+	r     io.Reader
+}
+
+func (s stallReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 {
+		s.timer.Reset(s.after)
+	}
+	return n, err
 }
 
 // contextReader stops a copy once ctx ends: an install timeout or a daemon

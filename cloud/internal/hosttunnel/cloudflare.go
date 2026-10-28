@@ -260,6 +260,12 @@ func (c *Cloudflare) Delete(ctx context.Context, tunnelID, hostname string) erro
 	if err := c.DeleteTunnel(ctx, tunnelID); err != nil {
 		return err
 	}
+	return c.DeleteRecord(ctx, tunnelID, hostname)
+}
+
+// DeleteRecord removes hostname's DNS record while it still points at
+// tunnelID, as for a tunnel already deleted.
+func (c *Cloudflare) DeleteRecord(ctx context.Context, tunnelID, hostname string) error {
 	record, err := c.findRecord(ctx, hostname)
 	if err != nil || record.ID == "" || record.Content != tunnelID+".cfargotunnel.com" {
 		return err

@@ -24,6 +24,9 @@ type Adapter struct {
 	// binDir holds release binaries AO downloads itself (<data dir>/bin).
 	binDir     string
 	httpClient *http.Client
+	// downloadStall overrides how long a managed binary download may go
+	// without a byte. Zero uses managedBinaryStallTimeout.
+	downloadStall time.Duration
 }
 
 var (

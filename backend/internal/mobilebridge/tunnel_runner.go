@@ -259,9 +259,10 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	// Cloudflare's edge, and a tunnel a repair found standing is refused for
 	// another reason, where a repair on every restart would spend AO Cloud's
 	// Cloudflare calls and the account's write budget for nothing.
+	refusedNow := false
 	markUnservedTunnel := func(refused bool) {
 		if refused {
-			t.refused = named.RunToken
+			t.refused, refusedNow = named.RunToken, true
 		}
 		t.repair = t.repairedAt.IsZero() || time.Since(t.repairedAt) >= repairSpacing
 	}
@@ -286,9 +287,12 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		// crash or a kill says nothing about the tunnel.
 		markUnservedTunnel(true)
 	}
-	if ctx.Err() == nil && (errors.Is(waitErr, errFixedTunnelReady) || errors.Is(waitErr, errFixedTunnelChanged)) {
+	if ctx.Err() == nil && (errors.Is(waitErr, errFixedTunnelReady) || errors.Is(waitErr, errFixedTunnelChanged) || refusedNow) {
 		// A planned restart reads as starting, not failed: the next connector
-		// follows at once.
+		// follows at once. So does one off a refused token, whose next run is
+		// a quick tunnel or a repaired one: a new tunnel's token can be refused
+		// while it propagates, and a device waiting on this machine must not
+		// give up then.
 		t.Runtime.Started()
 	} else {
 		t.Runtime.Exited(waitErr)

@@ -169,9 +169,7 @@ func (s *remoteHostTunnelFakeStore) GetRemoteHostTunnel(_ context.Context, userI
 func (s *remoteHostTunnelFakeStore) SaveRemoteHostTunnel(_ context.Context, t domain.RemoteHostTunnel, recordCreated bool) (time.Time, error) {
 	t.UpdatedAt = time.Now()
 	t.CreatedAt = s.tunnels[t.UserID+":"+t.HostID].CreatedAt
-	if t.LinkedAt = s.tunnels[t.UserID+":"+t.HostID].LinkedAt; t.LinkedAt.IsZero() {
-		t.LinkedAt = t.UpdatedAt
-	}
+	t.LinkedAt = s.tunnels[t.UserID+":"+t.HostID].LinkedAt
 	if recordCreated || t.CreatedAt.IsZero() {
 		t.CreatedAt = t.UpdatedAt
 	}
@@ -199,7 +197,7 @@ func (s *remoteHostTunnelFakeStore) DeleteRemoteHostTunnel(_ context.Context, tu
 }
 func (s *remoteHostTunnelFakeStore) ReleaseRemoteHostTunnel(_ context.Context, tunnelID string) error {
 	for key, t := range s.tunnels {
-		if t.TunnelID == tunnelID && !t.Released {
+		if t.TunnelID == tunnelID {
 			t.Released, t.UpdatedAt = true, time.Now()
 			s.tunnels[key] = t
 		}
@@ -496,6 +494,49 @@ func TestRemovingAHostDeletesOnlyThatAccountsTunnel(t *testing.T) {
 	s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"Mac","token":"`+strings.Repeat("a", 64)+`"}`, owners[0]))
 	if row := store.tunnels[owners[0]+":"+hostID]; w.Code != http.StatusNoContent || row.Released || row.TunnelID == first.TunnelID || row.Hostname != first.Hostname {
 		t.Fatalf("added back: %d, row %+v", w.Code, row)
+	}
+}
+
+// A host the sweep released while its machine slept keeps its address for
+// the grace after removal too: nothing left to delete in Cloudflare, but the
+// grace starts now.
+func TestRemovingAReleasedHostStartsTheGrace(t *testing.T) {
+	s, store, api := newTunnelServer(t)
+	hostID := "h_00000000-0000-0000-0000-000000000001"
+	owner := "00000000-0000-0000-0000-000000000002"
+	w := httptest.NewRecorder()
+	s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"Mac","token":"`+strings.Repeat("a", 64)+`"}`, owner))
+	key := owner + ":" + hostID
+	row := store.tunnels[key]
+	row.Released, row.UpdatedAt = true, time.Now().Add(-time.Hour)
+	store.tunnels[key] = row
+	calls, _ := api.snapshot()
+	w = httptest.NewRecorder()
+	s.deleteRemoteHost(w, hostRequest(http.MethodDelete, hostID, "", owner))
+	if after, _ := api.snapshot(); w.Code != http.StatusNoContent || after != calls || time.Since(store.tunnels[key].UpdatedAt) > time.Minute {
+		t.Fatalf("delete: %d, %d Cloudflare calls, row %+v", w.Code, after-calls, store.tunnels[key])
+	}
+}
+
+// A tunnel the machine's own fetch made, for a host listed at a quick
+// address, was linked by no account: no hold keeps that listing.
+func TestATunnelTheMachineMadeHoldsNoListing(t *testing.T) {
+	s, store, _ := newTunnelServer(t)
+	hostID := "h_00000000-0000-0000-0000-000000000001"
+	owner := "00000000-0000-0000-0000-000000000002"
+	token := strings.Repeat("a", 64)
+	sum := sha256.Sum256([]byte(token))
+	w := httptest.NewRecorder()
+	s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"VM","url":"https://old-river.trycloudflare.com:443","token":"`+token+`"}`, owner))
+	if w := requestTunnel(s, hostID, hex.EncodeToString(sum[:]), `{}`); w.Code != http.StatusOK {
+		t.Fatalf("tunnel: %d", w.Code)
+	}
+	r := hostRequest(http.MethodPost, hostID, `{"url":"https://new-river.trycloudflare.com:443"}`, "")
+	r.Header.Set("Authorization", "Bearer "+hex.EncodeToString(sum[:]))
+	w = httptest.NewRecorder()
+	s.updateRemoteHostAddress(w, r)
+	if w.Code != http.StatusNoContent || store.hosts[owner+":"+hostID].URL != "https://new-river.trycloudflare.com:443" {
+		t.Fatalf("publish: %d, listing %q", w.Code, store.hosts[owner+":"+hostID].URL)
 	}
 }
 

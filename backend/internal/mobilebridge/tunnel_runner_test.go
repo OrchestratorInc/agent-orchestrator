@@ -157,6 +157,11 @@ func TestTunnelRunnerRepairsARefusedTunnel(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "refusing") || !r.repair || r.refused != "run-token-tun-1" {
 		t.Fatalf("runOnce = %v, repair %v, refused %q", err, r.repair, r.refused)
 	}
+	// The next run serves a quick tunnel or a repaired one: a device waiting
+	// on the machine does not see a failure.
+	if snap := r.Runtime.Snapshot(); !snap.Running || snap.LastError != "" {
+		t.Fatalf("status after a refusal = %+v", snap)
+	}
 }
 
 // A token the edge refused is dead. While AO Cloud cannot hand out another,

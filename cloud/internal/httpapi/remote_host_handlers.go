@@ -247,12 +247,12 @@ func (s *Server) deleteAccountTunnel(ctx context.Context, userID, hostID string,
 		}
 		return
 	}
-	if tunnel.Released {
-		return
-	}
-	if err := s.hostTunnels.DeleteTunnel(ctx, tunnel.TunnelID); err != nil {
-		s.logger.Warn("delete host tunnel", "host_id", hostID, "error", err)
-		return
+	// A released tunnel is already deleted; its row still starts the grace.
+	if !tunnel.Released {
+		if err := s.hostTunnels.DeleteTunnel(ctx, tunnel.TunnelID); err != nil {
+			s.logger.Warn("delete host tunnel", "host_id", hostID, "error", err)
+			return
+		}
 	}
 	if err := tunnels.ReleaseRemoteHostTunnel(ctx, tunnel.TunnelID); err != nil {
 		s.logger.Warn("release host tunnel", "host_id", hostID, "error", err)
