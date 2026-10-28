@@ -1502,6 +1502,34 @@ func TestHooks_MuseUserPromptReportsActive(t *testing.T) {
 	assertActivityRequest(t, req, want)
 }
 
+// Every mid-turn sub-command Kimi's managed hook config installs must reach
+// the daemon as an active signal: the tool-use trio and PermissionResult,
+// which the config maps onto AO's canonical permission-resolved event.
+func TestHooks_KimiMidTurnEventsReportActive(t *testing.T) {
+	for _, event := range []string{"pre-tool-use", "post-tool-use", "post-tool-use-failure", "permission-resolved"} {
+		t.Run(event, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(`{"session_id":"kimi-native-1"}`),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "kimi", event)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+			}
+			want := setActivityAPIRequest{State: "active", Event: event, AgentSessionID: "kimi-native-1"}
+			assertActivityRequest(t, req, want)
+		})
+	}
+}
+
 func TestHooks_RegisteredHarnessSessionStartReportsAgentSessionID(t *testing.T) {
 	// Command Code is the one harness here whose SessionStart carries metadata
 	// only: it also fires on resume and clear, and a native restore delivers no
