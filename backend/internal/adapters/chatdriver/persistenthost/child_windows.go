@@ -102,7 +102,7 @@ func killProviderProcess(ctx context.Context, cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, providerKillTimeout)
 	defer cancel()
 	kill := aoprocess.CommandContext(ctx, "taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F")
 	if err := kill.Run(); err != nil {
@@ -110,6 +110,19 @@ func killProviderProcess(ctx context.Context, cmd *exec.Cmd) error {
 	}
 	return nil
 }
+
+// The Windows stop sequence is strictly longer than the Unix one:
+// terminateProviderProcess is a no-op, so a provider that misses the stdin
+// close costs the full stdin grace plus the stop deadline, the reap wait,
+// and then an external taskkill with its own timeout — a serialized
+// providerStdinGrace + providerStopDeadline + providerReapWait +
+// providerKillTimeout (8 s) before the descriptor and lock are released. The
+// Unix 10 s budget left almost no margin over that chain, and -race CI load
+// pushed real hibernate shutdowns past it. Raise the budget on Windows only.
+func init() { shutdownWaitBudget = 30 * time.Second }
+
+// providerKillTimeout bounds the taskkill kill of the provider process tree.
+const providerKillTimeout = 3 * time.Second
 
 // terminateProviderProcess has no graceful equivalent on Windows; the stop
 // deadline's kill reaps the job.

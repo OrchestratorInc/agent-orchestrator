@@ -40,7 +40,23 @@ const (
 	providerStdinGrace   = time.Second
 	providerQuickGrace   = 300 * time.Millisecond
 	providerStopDeadline = 3 * time.Second
+	// providerReapWait bounds how long the host waits for the provider's own
+	// exit before the deadline kill reaps it.
+	providerReapWait = time.Second
 )
+
+// shutdownWaitBudget is how long Shutdown waits past the host's shutdown
+// acknowledgement for the host process to run its own bounded stop sequence
+// and release the descriptor and launch lock. The sequence is serialized:
+// stdin grace, the stop deadline, the reap wait, and the platform kill. The
+// Unix default leaves room for a loaded machine; Windows raises it in
+// child_windows.go, where the sequence is strictly longer.
+var shutdownWaitBudget = 10 * time.Second
+
+// WaitBudget reports shutdownWaitBudget so callers that wrap Shutdown in
+// their own deadline do not clamp the wait below the host's bounded stop
+// sequence.
+func WaitBudget() time.Duration { return shutdownWaitBudget }
 
 // Protocol selects the provider-wire behavior owned by the host.
 type Protocol string
@@ -558,10 +574,10 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 	if !response.OK {
 		return errors.New(response.Error)
 	}
-	// The host's own shutdown can take about 6 s: 3 s for the provider to exit
-	// once stdin closes, a 1 s reap, and 2 s for its process group to exit on
-	// SIGTERM before SIGKILL. Wait past that, with room for a loaded machine.
-	waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+	// The host's own stop sequence is bounded: the stdin grace, the stop
+	// deadline, the reap wait, and the platform kill. Wait past the whole
+	// serialized chain, with room for a loaded machine.
+	waitCtx, stop := context.WithTimeout(ctx, shutdownWaitBudget)
 	defer stop()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
@@ -674,7 +690,7 @@ func Run(ctx context.Context, cfg Config) error {
 		go func() { _ = wait(); close(reaped) }()
 		select {
 		case <-reaped:
-		case <-time.After(time.Second):
+		case <-time.After(providerReapWait):
 		}
 	}
 	stopProvider := func() {
