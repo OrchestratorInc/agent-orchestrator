@@ -10,7 +10,8 @@
 -- went offline; the DNS record stays, still naming tunnel_id, and the machine
 -- gets a new tunnel under it when it comes back. last_seen_at moves when the
 -- machine fetches its token; a machine not seen for 90 days loses the record
--- too. No foreign keys: a row outlives its registration until its tunnel is
+-- too. linked_at is when the account last linked the host to the tunnel; for a
+-- while after, the listing keeps the fixed address. No foreign keys: a row outlives its registration until its tunnel is
 -- deleted.
 CREATE TABLE ao_remote_host_tunnels (
     user_id UUID NOT NULL,
@@ -22,6 +23,7 @@ CREATE TABLE ao_remote_host_tunnels (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    linked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     released_at TIMESTAMPTZ,
     PRIMARY KEY (user_id, host_id)
 );

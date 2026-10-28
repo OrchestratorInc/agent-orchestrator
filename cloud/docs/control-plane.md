@@ -295,11 +295,13 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   no live connection for 3 minutes or was refused four times in a row, makes the
   tunnel and record exist again, at most once a minute per host, and the
   answer says `"repaired":true` when it did; the machine asks for one at most
-  every 30 minutes, or every 10 while the edge refuses its token. Only this
+  every 30 minutes, and does not start a refused token again until a repair
+  ran. Only this
   call counts as AO Cloud seeing the machine; a desktop's registration does
-  not. A machine whose new pairing password revoked its link keeps serving
-  its tunnel for up to 2 minutes, until the desktop's new link reaches AO
-  Cloud, and gives the address up only if none does. Calls that
+  not. A machine whose new pairing password revoked its link, or whose new
+  link AO Cloud does not know yet, keeps serving its tunnel for up to 2
+  minutes, until the desktop's link reaches AO Cloud, and gives the address
+  up only if none does. Calls that
   write tunnels are limited to 30 an hour per account (429
   `tunnel_rate_limited`), since every account shares the API token's rate
   limit; the window is kept per replica. Writes for one account and host run
@@ -310,12 +312,12 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   moves its account token to the account: a listing refused after that would
   leave the machine in no account.
 - `ao_remote_host_tunnels` keeps one row per account and host, with the run
-  token encrypted like host tokens. While an account's tunnel for a host
-  was written in the last 10 minutes, the address publish cannot move that
-  account's listing off the fixed address: a quick address published
-  meanwhile is one the machine is about to leave. AO Cloud answers 202 when
-  it kept every listing, and the machine sends the address again a minute
-  later.
+  token encrypted like host tokens. For 10 minutes after an account linked a
+  host to its tunnel (`linked_at`; a repair is no link), the address publish
+  cannot move that account's listing off the fixed address: a quick address
+  published meanwhile is one the machine is about to leave. AO Cloud answers
+  202 when it kept every listing, and the machine sends the address again a
+  minute later.
 - A machine's tunnel is released 5 minutes after its last connector left
   (asleep, offline or quit) and AO Cloud last saw the machine, and an hour
   after it was made if no connector ever served it: the sweep deletes the

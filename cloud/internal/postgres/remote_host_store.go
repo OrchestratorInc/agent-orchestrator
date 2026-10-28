@@ -106,12 +106,12 @@ func (s *Store) UpdateRemoteHostAddress(ctx context.Context, userID, hostID, add
 }
 
 const remoteHostTunnelColumns = `user_id, host_id, tunnel_id, hostname, encrypted_run_token, run_token_nonce,
-	created_at, updated_at, last_seen_at, released_at IS NOT NULL`
+	created_at, updated_at, last_seen_at, linked_at, released_at IS NOT NULL`
 
 func scanRemoteHostTunnel(row pgx.Row) (domain.RemoteHostTunnel, bool, error) {
 	var t domain.RemoteHostTunnel
 	err := row.Scan(&t.UserID, &t.HostID, &t.TunnelID, &t.Hostname, &t.EncryptedRunToken, &t.RunTokenNonce,
-		&t.CreatedAt, &t.UpdatedAt, &t.LastSeenAt, &t.Released)
+		&t.CreatedAt, &t.UpdatedAt, &t.LastSeenAt, &t.LinkedAt, &t.Released)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.RemoteHostTunnel{}, false, nil
 	}
@@ -165,10 +165,10 @@ func (s *Store) SaveRemoteHostTunnel(ctx context.Context, t domain.RemoteHostTun
 }
 
 // MarkRemoteHostTunnelLinked records that the account linked the host to its
-// tunnel again, which starts the hold on quick addresses.
+// tunnel, which starts the hold on quick addresses. A repair is no link.
 func (s *Store) MarkRemoteHostTunnelLinked(ctx context.Context, userID, hostID string) error {
 	return s.withService(ctx, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET updated_at = now() WHERE user_id = $1 AND host_id = $2`, userID, hostID)
+		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET linked_at = now() WHERE user_id = $1 AND host_id = $2`, userID, hostID)
 		return err
 	})
 }

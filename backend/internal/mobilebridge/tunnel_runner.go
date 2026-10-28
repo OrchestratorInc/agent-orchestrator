@@ -236,7 +236,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		go t.watchConnector(runCtx, health, func(reason string) { markUnserved(reason, false) })
 		go t.watchFixedTunnel(runCtx, named, health, func(n *NamedTunnel) { next.Store(n); withdrawn.Store(true); stopRun() })
 	case t.Fixed != nil:
-		go t.awaitFixedTunnel(runCtx, t.repair, t.refused, t.repairedAt.Add(refusedRepairSpacing),
+		go t.awaitFixedTunnel(runCtx, t.repair, t.refused, t.repairedAt.Add(repairSpacing),
 			func(n NamedTunnel) { next.Store(&n); upgraded.Store(true); stopRun() })
 	}
 
@@ -253,20 +253,22 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 
 	waitErr := cmd.Wait()
 	t.next = next.Load()
-	// unserved marks the tunnel this run could not serve: refused, the edge
-	// refused its token. Refusals say the tunnel is gone, so they are
-	// repaired sooner, but not on every restart: a tunnel a repair found
-	// standing is refused for another reason, and each repair spends the
-	// account's write budget. A connector that only could not connect may be
-	// on a network that blocks Cloudflare's edge, where a repair every few
-	// minutes would spend AO Cloud's Cloudflare calls and the budget for
-	// nothing.
+	// markUnservedTunnel records a tunnel this run could not serve; refused,
+	// the edge refused its token. It is repaired at most every repairSpacing:
+	// a connector that only could not connect may be on a network that blocks
+	// Cloudflare's edge, and a tunnel a repair found standing is refused for
+	// another reason, where a repair on every restart would spend AO Cloud's
+	// Cloudflare calls and the account's write budget for nothing.
 	markUnservedTunnel := func(refused bool) {
-		spacing := repairSpacing
 		if refused {
-			t.refused, spacing = named.RunToken, refusedRepairSpacing
+			t.refused = named.RunToken
 		}
-		t.repair = t.repairedAt.IsZero() || time.Since(t.repairedAt) >= spacing
+		t.repair = t.repairedAt.IsZero() || time.Since(t.repairedAt) >= repairSpacing
+	}
+	// A tunnel that served is neither owed the repair asked for before nor
+	// dead.
+	if health != nil && health.servedOnce() {
+		t.repair, t.refused = false, ""
 	}
 	switch {
 	case unserved.Load() != nil:
@@ -279,10 +281,10 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		}
 	case withdrawn.Load():
 		waitErr = errFixedTunnelChanged
-	case fixed && ctx.Err() == nil:
-		// Exited by itself before the watchers judged it, as a connector
-		// that gives up on a refusal does.
-		markUnservedTunnel(health.wasRefused())
+	case fixed && ctx.Err() == nil && health.wasRefused():
+		// Exited by itself on a refusal, before the watchers judged it. A
+		// crash or a kill says nothing about the tunnel.
+		markUnservedTunnel(true)
 	}
 	if ctx.Err() == nil && (errors.Is(waitErr, errFixedTunnelReady) || errors.Is(waitErr, errFixedTunnelChanged)) {
 		// A planned restart reads as starting, not failed: the next connector
@@ -330,6 +332,7 @@ func (t *TunnelRunner) watchConnector(ctx context.Context, h *connectorHealth, s
 type connectorHealth struct {
 	mu      sync.Mutex
 	live    map[string]bool // by connIndex
+	served  bool            // a connection registered
 	downAt  time.Time       // zero while a connection is live
 	refused int             // refusals in a row
 	// lost is signalled when the last live connection drops.
@@ -366,6 +369,7 @@ func (h *connectorHealth) feed(line string, now time.Time) (refused bool) {
 	switch {
 	case registeredRe.MatchString(line):
 		h.live[m[1]] = true
+		h.served = true
 		h.refused = 0
 		h.downAt = time.Time{}
 	case connDownRe.MatchString(line):
@@ -379,6 +383,13 @@ func (h *connectorHealth) feed(line string, now time.Time) (refused bool) {
 		}
 	}
 	return false
+}
+
+// servedOnce reports whether a connection ever registered.
+func (h *connectorHealth) servedOnce() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.served
 }
 
 // wasRefused reports whether the edge refused the connector since its last
@@ -398,12 +409,11 @@ func (h *connectorHealth) deadSince() (time.Time, bool) {
 
 // A fixed connector is restarted, and its tunnel repaired, after three minutes
 // with no live connection or four refusals in a row; repaired at most every
-// half hour, or every ten minutes while refused.
+// half hour. A tunnel the sweep released is remade without one.
 const (
-	connectorDeadAfter   = 3 * time.Minute
-	connectorRefusals    = 4
-	repairSpacing        = 30 * time.Minute
-	refusedRepairSpacing = 10 * time.Minute
+	connectorDeadAfter = 3 * time.Minute
+	connectorRefusals  = 4
+	repairSpacing      = 30 * time.Minute
 )
 
 // awaitFixedTunnel calls ready once AO Cloud hands out this host's tunnel,
@@ -442,12 +452,14 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, repair bool, refuse
 			ready(named)
 			return
 		}
-		// An answer with the refused token is no reason to back off: the
-		// repair falls due on time.
-		if digest != tried || err == nil {
+		switch {
+		case err == nil:
+			// Only the refused token: asked again once its repair falls due.
+			wait = max(every, time.Until(repairDue))
+		case digest != tried:
 			wait = every
-		} else if wait = 2 * wait; wait > maxFixedUpgradeWait {
-			wait = maxFixedUpgradeWait
+		default:
+			wait = min(2*wait, maxFixedUpgradeWait)
 		}
 		tried, triedAt = digest, time.Now()
 	}
@@ -495,9 +507,9 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 			}
 		}
 		named, err := t.fixedTunnel(ctx)
-		if errors.Is(err, errNotLinked) {
-			// Until the desktop's new link lands at AO Cloud, AO Cloud
-			// refuses it.
+		if errors.Is(err, errNotLinked) || errors.Is(err, errHostRefused) {
+			// A new link is written here before it lands at AO Cloud, which
+			// refuses it until then.
 			grace := cmp.Or(t.relinkWait, relinkGrace)
 			for deadline := time.Now().Add(grace); (errors.Is(err, errNotLinked) || errors.Is(err, errHostRefused)) && time.Now().Before(deadline); {
 				select {

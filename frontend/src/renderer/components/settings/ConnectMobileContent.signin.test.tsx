@@ -169,6 +169,24 @@ test("a new password that could not be linked says so", async () => {
 	expect(await screen.findByText("AO Cloud host sync failed (502).")).toBeVisible();
 });
 
+test("a new password that could not be linked is listed at the running tunnel's address", async () => {
+	fake.signedIn = true;
+	Object.assign(fake.status, {
+		enabled: true, noPublicTunnel: false, password: "pw-1",
+		endpoints: [
+			{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
+			{ kind: "tunnel", host: "h-abc.useao.dev", port: 443, secure: true },
+		],
+	});
+	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("AO Cloud host sync failed (502).", 502));
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
+
+	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith(
+		"https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true, url: "https://h-abc.useao.dev:443" },
+	));
+});
+
 test("a LAN-only computer gets a new password without being listed", async () => {
 	fake.signedIn = true;
 	Object.assign(fake.status, {

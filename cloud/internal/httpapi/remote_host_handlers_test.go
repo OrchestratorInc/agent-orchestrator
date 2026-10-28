@@ -62,10 +62,6 @@ func (s *remoteHostFakeStore) FindRemoteHostRegistrations(_ context.Context, hos
 	}
 	return items, nil
 }
-func (s *remoteHostFakeStore) RemoteHostListed(_ context.Context, userID, hostID string) (bool, error) {
-	_, listed := s.hosts[userID+":"+hostID]
-	return listed, nil
-}
 func (s *remoteHostFakeStore) UpdateRemoteHostAddress(_ context.Context, userID, hostID, address string) error {
 	host := s.hosts[userID+":"+hostID]
 	host.URL = address
@@ -173,6 +169,9 @@ func (s *remoteHostTunnelFakeStore) GetRemoteHostTunnel(_ context.Context, userI
 func (s *remoteHostTunnelFakeStore) SaveRemoteHostTunnel(_ context.Context, t domain.RemoteHostTunnel, recordCreated bool) (time.Time, error) {
 	t.UpdatedAt = time.Now()
 	t.CreatedAt = s.tunnels[t.UserID+":"+t.HostID].CreatedAt
+	if t.LinkedAt = s.tunnels[t.UserID+":"+t.HostID].LinkedAt; t.LinkedAt.IsZero() {
+		t.LinkedAt = t.UpdatedAt
+	}
 	if recordCreated || t.CreatedAt.IsZero() {
 		t.CreatedAt = t.UpdatedAt
 	}
@@ -181,7 +180,7 @@ func (s *remoteHostTunnelFakeStore) SaveRemoteHostTunnel(_ context.Context, t do
 }
 func (s *remoteHostTunnelFakeStore) MarkRemoteHostTunnelLinked(_ context.Context, userID, hostID string) error {
 	if t, ok := s.tunnels[userID+":"+hostID]; ok {
-		t.UpdatedAt = time.Now()
+		t.LinkedAt = time.Now()
 		s.tunnels[userID+":"+hostID] = t
 	}
 	return nil
@@ -428,8 +427,12 @@ func TestAStandingTunnelKeepsTheListingAtItsAddress(t *testing.T) {
 	// Long after, a quick address means the machine cannot serve the fixed
 	// one, and the listing follows it.
 	old := store.tunnels[owner+":"+hostID]
-	old.UpdatedAt = time.Now().Add(-time.Hour)
+	old.LinkedAt, old.UpdatedAt = time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)
 	store.tunnels[owner+":"+hostID] = old
+	// A repair writes the tunnel but is no link: it starts no hold.
+	if w := requestTunnel(s, hostID, hex.EncodeToString(sum[:]), `{"repair":true}`); w.Code != http.StatusOK {
+		t.Fatalf("repair: %d", w.Code)
+	}
 	publish("https://quiet-river.trycloudflare.com:443", http.StatusNoContent)
 	if got := store.hosts[owner+":"+hostID].URL; got != "https://quiet-river.trycloudflare.com:443" {
 		t.Fatalf("listing = %q", got)

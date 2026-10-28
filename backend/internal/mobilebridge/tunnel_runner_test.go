@@ -209,7 +209,7 @@ func TestTunnelRunnerServesAQuickTunnelUntilARefusedTunnelIsRemade(t *testing.T)
 		r := namedRunner(t, bin, src)
 		r.refused, r.repairedAt = "run-token-tun-1", time.Now().Add(-time.Minute)
 		if due {
-			r.repairedAt = time.Now().Add(-refusedRepairSpacing - time.Minute)
+			r.repairedAt = time.Now().Add(-repairSpacing - time.Minute)
 		}
 		r.upgradeEvery = 20 * time.Millisecond
 
@@ -241,10 +241,15 @@ func TestTunnelRunnerServesAQuickTunnelUntilARefusedTunnelIsRemade(t *testing.T)
 				t.Fatal("the quick tunnel's check never asked for the repair that fell due")
 			}
 			cloud.mu.Lock()
-			repairs := slices.Contains(cloud.repairs, true)
+			repairs, asked := slices.Contains(cloud.repairs, true), len(cloud.repairs)
 			cloud.mu.Unlock()
 			if repairs {
 				t.Fatal("asked for a repair before it was due")
+			}
+			// Once at the start and once by the check, which then waits for
+			// the repair to fall due rather than asking every tick.
+			if asked > 2 {
+				t.Fatalf("asked AO Cloud %d times for the refused token", asked)
 			}
 			cancel()
 			<-done
@@ -269,8 +274,25 @@ func TestTunnelRunnerJudgesAConnectorThatExitsOnARefusal(t *testing.T) {
 	}
 }
 
-// Refusals are repaired sooner than a connector that only cannot connect, but
-// not on every restart: each repair spends one of the account's tunnel writes.
+// A connector that served and then exited, or crashed, says nothing about its
+// tunnel: no repair, and none still owed.
+func TestTunnelRunnerDoesNotRepairAConnectorThatServedAndExited(t *testing.T) {
+	_, src := newFixedSource(t)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "cloudflared")
+	script := "#!/bin/sh\ncat >&2 <<'EOF'\n" + registeredLine + "\nEOF\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil { //nolint:gosec // G306: the test runs it
+		t.Fatal(err)
+	}
+	r := namedRunner(t, bin, src)
+	r.repair = true // owed from an earlier run, answered from the stored tunnel
+	if err := r.runOnce(context.Background()); err == nil || r.repair || r.refused != "" {
+		t.Fatalf("runOnce = %v, repair %v, refused %q", err, r.repair, r.refused)
+	}
+}
+
+// Refusals are not repaired on every restart either: each repair spends one of
+// the account's tunnel writes.
 func TestTunnelRunnerSpacesRefusalRepairsOut(t *testing.T) {
 	_, src := newFixedSource(t)
 	refusals := strings.Repeat(refusedLine+"\n", connectorRefusals)
@@ -282,7 +304,7 @@ func TestTunnelRunnerSpacesRefusalRepairsOut(t *testing.T) {
 	for _, tc := range []struct {
 		ago  time.Duration
 		want bool
-	}{{2 * time.Minute, false}, {15 * time.Minute, true}} {
+	}{{2 * time.Minute, false}, {45 * time.Minute, true}} {
 		r.repair, r.refused, r.repairedAt = false, "", time.Now().Add(-tc.ago)
 		if err := r.runOnce(ctx); err == nil || r.repair != tc.want {
 			t.Fatalf("repaired %s ago: runOnce = %v, repair %v", tc.ago, err, r.repair)
@@ -319,22 +341,26 @@ func TestTunnelRunnerAsksForItsTunnelOnceEveryConnectionStaysDown(t *testing.T) 
 }
 
 // A repair asked for while AO Cloud cannot be reached is asked for again at
-// the next start, not dropped.
+// the next start while the connector has not served, and not once the cached
+// tunnel serves after all.
 func TestTunnelRunnerKeepsARepairAOCloudNeverHeard(t *testing.T) {
 	cloud, src := newFixedSource(t)
 	knownTunnel(t, cloud, src)
 	cloud.set(http.StatusBadGateway)
-	bin, _ := fakeCloudflared(t, registeredLine)
+	bin, _ := fakeCloudflared(t, "")
 	r := namedRunner(t, bin, src)
 	r.repair = true
-	advertisedHostname(t, r) // the cached tunnel serves meanwhile
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_ = r.runOnce(ctx) // the cached tunnel starts, and never registers
 	if !r.repair {
 		t.Fatal("a repair AO Cloud never heard was dropped")
 	}
-	cloud.set(0)
+	bin, _ = fakeCloudflared(t, registeredLine)
+	r.Binary = bin
 	advertisedHostname(t, r)
-	if r.repair || len(cloud.repairs) != 2 || !cloud.repairs[1] {
-		t.Fatalf("repair %v, requests %v", r.repair, cloud.repairs)
+	if r.repair {
+		t.Fatal("a tunnel that served still owes a repair")
 	}
 }
 
@@ -446,7 +472,7 @@ func TestTunnelRunnerDropsAFixedAddressAOCloudWithdrew(t *testing.T) {
 	cloud, src := newFixedSource(t)
 	bin, _ := fakeCloudflared(t, registeredLine)
 	r := namedRunner(t, bin, src)
-	r.recheckEvery = 20 * time.Millisecond
+	r.recheckEvery, r.relinkWait = 20*time.Millisecond, 100*time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

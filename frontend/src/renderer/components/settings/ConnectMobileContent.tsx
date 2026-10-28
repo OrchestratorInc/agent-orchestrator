@@ -398,11 +398,24 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		);
 	};
 	/** After AO Cloud could not give this computer its fixed address, lists it at the quick tunnel's once it has one, as Allow access does. */
-	const linkAtTunnelAddress = async (password: string, hostId: string) => {
+	const linkAtTunnelAddress = async (password: string, hostId: string, options?: { ifListed?: boolean }) => {
 		const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
 		if (!ready) return;
-		await linkThisComputer(cloudBaseUrl, accountId, hostId, password, { url: ready.url });
+		await linkThisComputer(cloudBaseUrl, accountId, hostId, password, { ...options, url: ready.url });
 		setLinkError("");
+	};
+	/** Links this computer when signed in, before its tunnel starts, so the code carries its fixed address and stays valid after restarts. */
+	const linkAndStartRemoteAccess = async (password: string, hostId: string) => {
+		const { added, failed } = await linkIfSignedIn(password, hostId);
+		const started = await apiClient.POST("/api/v1/mobile/remote-access");
+		if (started.error) {
+			// Not left listed at an address nothing serves.
+			if (added) await deleteAccountRemoteHost(cloudBaseUrl, added).catch(() => undefined);
+			throw new Error(apiErrorMessage(started.error));
+		}
+		// The code shows while the tunnel starts; the account lists it once it has an address.
+		if (failed) void linkAtTunnelAddress(password, hostId).catch(reportLinkError);
+		return started.data;
 	};
 
 	const query = useQuery({
@@ -450,30 +463,17 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/enable-lan-only");
 			if (error) throw new Error(apiErrorMessage(error));
 			if (!signedIn) return data;
-			// Linked before the tunnel starts, so the code carries this
-			// computer's fixed address and stays valid after restarts.
-			const { added, failed } = await linkIfSignedIn(data?.password ?? "", data?.hostId ?? "");
-			const started = await apiClient.POST("/api/v1/mobile/remote-access");
-			if (started.error) {
-				// Not left listed at an address nothing serves.
-				if (added) await deleteAccountRemoteHost(cloudBaseUrl, added).catch(() => undefined);
-				throw new Error(apiErrorMessage(started.error));
-			}
-			// The code shows while the tunnel starts; the account lists it once it has an address.
-			if (failed) void linkAtTunnelAddress(data?.password ?? "", data?.hostId ?? "").catch(reportLinkError);
-			return started.data;
+			return linkAndStartRemoteAccess(data?.password ?? "", data?.hostId ?? "");
 		},
 		// The first call can turn the bridge on before the second fails, so read back what is actually on.
 		onSettled: invalidate,
 		onError: () => setOptimisticEnabled(null),
 	});
 
+	// After cloudflared is installed. Signed in since the bridge started
+	// LAN-only, the computer is linked first, as enable links it.
 	const startRemoteAccess = useMutation({
-		mutationFn: async () => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/remote-access");
-			if (error) throw new Error(apiErrorMessage(error));
-			return data;
-		},
+		mutationFn: () => linkAndStartRemoteAccess(query.data?.password ?? "", query.data?.hostId ?? ""),
 		onSuccess: invalidate,
 	});
 
@@ -488,7 +488,10 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			// listed again. A lost device signed in to the account is cut off
 			// by signing it out of the account; a new password is for
 			// password-paired devices.
-			if (data && !data.noPublicTunnel) await linkIfSignedIn(data.password ?? "", data.hostId ?? "", { ifListed: true });
+			if (data && !data.noPublicTunnel) {
+				const { failed } = await linkIfSignedIn(data.password ?? "", data.hostId ?? "", { ifListed: true });
+				if (failed) void linkAtTunnelAddress(data.password ?? "", data.hostId ?? "", { ifListed: true }).catch(reportLinkError);
+			}
 			return data;
 		},
 		onSuccess: invalidate,

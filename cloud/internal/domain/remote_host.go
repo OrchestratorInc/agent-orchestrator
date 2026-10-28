@@ -35,6 +35,7 @@ type RemoteHostTunnel struct {
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	LastSeenAt        time.Time
+	LinkedAt          time.Time
 	Released          bool
 }
 

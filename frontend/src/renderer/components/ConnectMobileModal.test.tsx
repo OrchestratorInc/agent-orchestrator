@@ -24,6 +24,7 @@ const { mobileStatus } = vi.hoisted(() => ({
 			| undefined
 			| {
 					supported: boolean;
+					installing?: boolean;
 					running: boolean;
 					ready: boolean;
 					hostname: string;

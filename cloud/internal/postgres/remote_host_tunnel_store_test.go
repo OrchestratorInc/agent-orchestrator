@@ -60,6 +60,18 @@ func TestRemoteHostTunnelsAreServiceOwnedAndSwept(t *testing.T) {
 	if err != nil || !found || got.TunnelID != current || string(got.EncryptedRunToken) != "sealed" || !got.CreatedAt.Equal(made) {
 		t.Fatalf("get = %+v, %v, %v", got, found, err)
 	}
+	// A repair rewrites the tunnel but is no link: linked_at stays, and only
+	// a link moves it.
+	save(fixture.userID, registered, current, false)
+	if again, _, _ := store.GetRemoteHostTunnel(ctx, fixture.userID, registered); !again.LinkedAt.Equal(got.LinkedAt) {
+		t.Fatalf("a repair moved linked_at from %v to %v", got.LinkedAt, again.LinkedAt)
+	}
+	if err := store.MarkRemoteHostTunnelLinked(ctx, fixture.userID, registered); err != nil {
+		t.Fatal(err)
+	}
+	if again, _, _ := store.GetRemoteHostTunnel(ctx, fixture.userID, registered); !again.LinkedAt.After(got.LinkedAt) {
+		t.Fatalf("a link left linked_at at %v", again.LinkedAt)
+	}
 	if other, _, _ := store.GetRemoteHostTunnel(ctx, otherUser, registered); other.TunnelID != "tun-other-"+registered {
 		t.Fatalf("other account's tunnel = %+v", other)
 	}

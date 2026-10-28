@@ -28,7 +28,6 @@ type remoteHostStore interface {
 
 type remoteHostAddressStore interface {
 	FindRemoteHostRegistrations(context.Context, string) ([]domain.RemoteHost, error)
-	RemoteHostListed(ctx context.Context, userID, hostID string) (bool, error)
 	UpdateRemoteHostAddress(context.Context, string, string, string) error
 }
 
@@ -153,13 +152,16 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 	if tunnels != nil {
 		defer s.hostTunnels.Lock(principal.UserID, hostID)()
 	}
+	ctx := r.Context()
 	if input.URL == "" {
 		tunnel, ok := s.hostTunnel(w, r, tunnels, principal.UserID, hostID, false)
 		if !ok {
 			return
 		}
+		// Listed even if the client hangs up now: the tunnel is made.
+		ctx = context.WithoutCancel(ctx)
 		// A link, new or again, starts the hold on quick addresses.
-		if err := tunnels.MarkRemoteHostTunnelLinked(r.Context(), principal.UserID, hostID); err != nil {
+		if err := tunnels.MarkRemoteHostTunnelLinked(ctx, principal.UserID, hostID); err != nil {
 			s.writeStoreError(w, r, err)
 			return
 		}
@@ -170,14 +172,14 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "The remote host credential could not be stored.")
 		return
 	}
-	if err := store.UpsertRemoteHost(r.Context(), principal, domain.RemoteHost{
+	if err := store.UpsertRemoteHost(ctx, principal, domain.RemoteHost{
 		HostID: hostID, Label: input.Label, URL: input.URL, EncryptedToken: encrypted, TokenNonce: nonce,
 	}, limit); err != nil {
 		if errors.Is(err, postgres.ErrRemoteHostLimit) {
 			// A concurrent registration filled the account after the check
 			// above: drop the tunnel made for this one, and its address,
 			// which nothing ever listed.
-			s.deleteAccountTunnel(r.Context(), principal.UserID, hostID, false)
+			s.deleteAccountTunnel(ctx, principal.UserID, hostID, false)
 			writeRemoteHostLimit(w, r)
 			return
 		}
@@ -281,9 +283,9 @@ func (s *Server) updateRemoteHostAddress(w http.ResponseWriter, r *http.Request)
 	tunnels := s.tunnelStore()
 	held := 0
 	for _, host := range hosts {
-		// Shortly after the account's tunnel was written, the listing stays at
-		// its fixed address: a machine linked just now publishes the quick
-		// address it is about to leave. Later, a quick address means the
+		// Shortly after the account linked the host to its tunnel, the listing
+		// stays at its fixed address: a machine linked just now publishes the
+		// quick address it is about to leave. A repair starts no hold. Later, a quick address means the
 		// machine cannot serve the fixed one, and the listing follows it.
 		if tunnels != nil {
 			tunnel, found, err := tunnels.GetRemoteHostTunnel(r.Context(), host.UserID, hostID)
@@ -291,7 +293,7 @@ func (s *Server) updateRemoteHostAddress(w http.ResponseWriter, r *http.Request)
 				s.writeStoreError(w, r, err)
 				return
 			}
-			if found && !tunnel.Released && time.Since(tunnel.UpdatedAt) < fixedListingHold && input.URL != "https://"+tunnel.Hostname+":443" {
+			if found && !tunnel.Released && time.Since(tunnel.LinkedAt) < fixedListingHold && input.URL != "https://"+tunnel.Hostname+":443" {
 				held++
 				continue
 			}
@@ -337,17 +339,28 @@ func (s *Server) matchDigest(ctx context.Context, store remoteHostAddressStore, 
 	}
 	var matched []domain.RemoteHost
 	for _, host := range hosts {
-		token, err := s.secretCipher.Decrypt(host.EncryptedToken, host.TokenNonce, "remote-host:"+host.UserID+":"+hostID)
-		if err != nil {
-			continue
-		}
-		actual := sha256.Sum256(token)
-		clear(token)
-		if subtle.ConstantTimeCompare(actual[:], digest) == 1 {
+		if s.digestHashes(host, hostID, digest) {
 			matched = append(matched, host)
 		}
 	}
 	return matched, nil
+}
+
+// digestMatches reports whether host's token hashes to the digest in
+// authorization ("Bearer <hex>").
+func (s *Server) digestMatches(host domain.RemoteHost, hostID, authorization string) bool {
+	digest, err := hex.DecodeString(strings.TrimPrefix(authorization, "Bearer "))
+	return err == nil && len(digest) == sha256.Size && s.digestHashes(host, hostID, digest)
+}
+
+func (s *Server) digestHashes(host domain.RemoteHost, hostID string, digest []byte) bool {
+	token, err := s.secretCipher.Decrypt(host.EncryptedToken, host.TokenNonce, "remote-host:"+host.UserID+":"+hostID)
+	if err != nil {
+		return false
+	}
+	actual := sha256.Sum256(token)
+	clear(token)
+	return subtle.ConstantTimeCompare(actual[:], digest) == 1
 }
 
 // minTunnelRepairInterval spaces the Cloudflare calls one host can cause by
@@ -421,14 +434,16 @@ func (s *Server) remoteHostTunnel(w http.ResponseWriter, r *http.Request) {
 	}
 	unlock := s.hostTunnels.Lock(host.UserID, hostID)
 	defer unlock()
-	// Asked again under the lock: a removal that ran first must not be
-	// followed by a new tunnel for a host the account no longer lists.
-	listed, err := registrations.RemoteHostListed(r.Context(), host.UserID, hostID)
+	// Asked again under the lock: a removal, or a registration with a new
+	// token, that ran first must not be followed by a tunnel for a credential
+	// the account no longer holds. Only that account's row is decrypted.
+	again, err := registrations.FindRemoteHostRegistrations(r.Context(), hostID)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	if !listed {
+	if i := slices.IndexFunc(again, func(h domain.RemoteHost) bool { return h.UserID == host.UserID }); i < 0 ||
+		!s.digestMatches(again[i], hostID, r.Header.Get("Authorization")) {
 		writeError(w, r, http.StatusUnauthorized, "unauthorized", "Invalid host credential.")
 		return
 	}
