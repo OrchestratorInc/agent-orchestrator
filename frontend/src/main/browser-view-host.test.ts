@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { net } from "electron";
 import {
@@ -28,6 +29,7 @@ import type {
 	BrowserAnnotationSubmitPayload,
 } from "../shared/browser-annotations";
 import { parseAgentBrowserJSON } from "./agent-browser-runtime";
+import { createWebAuthnAccountChooser } from "./browser-webauthn";
 
 vi.mock("electron", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("electron")>();
@@ -154,7 +156,12 @@ function submittedAnnotationSession(
 	};
 }
 
-function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").AgentBrowserRuntime) {
+function setupHost(
+	agentBrowserRuntime?: import("./agent-browser-runtime").AgentBrowserRuntime,
+	hostOptions: Partial<Parameters<typeof createBrowserViewHost>[0]> = {},
+	// Electron hands every window the same Session for a persistent partition.
+	tabSession?: object,
+) {
 	let currentURL = "";
 	let browserZoomFactor = 1;
 	const webContentsListeners = new Map<string, (...args: never[]) => void>();
@@ -243,7 +250,7 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 		close: vi.fn(),
 		openDevTools,
 		closeDevTools,
-		session: {
+		session: tabSession ?? {
 			setPermissionCheckHandler,
 			setPermissionRequestHandler,
 		},
@@ -325,6 +332,7 @@ function setupHost(agentBrowserRuntime?: import("./agent-browser-runtime").Agent
 		rendererOrigin: "http://localhost:5173",
 		agentBrowserRuntime: runtime,
 		clipboard: { writeImage },
+		...hostOptions,
 	});
 	const rendererFrame = { processId: 5, routingId: 7 };
 	const invoke = (channel: string, ...args: unknown[]) =>
@@ -3661,6 +3669,43 @@ describe("agent browser runtime", () => {
 			undefined,
 		);
 		expect(result).toMatchObject({ text: "t1" });
+	});
+
+	it("hands each tab session to the passkey account chooser and releases it on dispose", async () => {
+		const chooser = { attach: vi.fn(), dispose: vi.fn() };
+		const { host, webContents } = setupHost(undefined, { webAuthnAccountChooser: chooser });
+		await host.execute("sess-1", "tabs");
+
+		expect(chooser.attach).toHaveBeenCalledWith(webContents.session);
+		await host.dispose();
+		expect(chooser.dispose).toHaveBeenCalledOnce();
+	});
+
+	it("answers a passkey choice once after the window is recreated on a reused profile session", async () => {
+		const tabSession = Object.assign(new EventEmitter(), {
+			setPermissionCheckHandler: vi.fn(),
+			setPermissionRequestHandler: vi.fn(),
+		});
+		const showMessageBox = vi.fn(async (_options: Electron.MessageBoxOptions) => ({ response: 0 }));
+		const first = setupHost(undefined, { webAuthnAccountChooser: createWebAuthnAccountChooser({ showMessageBox }) }, tabSession);
+		await first.host.execute("sess-1", "tabs");
+		await first.host.dispose();
+		const second = setupHost(undefined, { webAuthnAccountChooser: createWebAuthnAccountChooser({ showMessageBox }) }, tabSession);
+		await second.host.execute("sess-1", "tabs");
+
+		const callback = vi.fn();
+		tabSession.emit(
+			"select-webauthn-account",
+			{},
+			{ relyingPartyId: "accounts.google.com", accounts: [{ credentialId: "cred-1" }, { credentialId: "cred-2" }], frame: null },
+			callback,
+		);
+		await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+
+		// Electron requires the callback exactly once; one dialog, one answer.
+		expect(tabSession.listenerCount("select-webauthn-account")).toBe(1);
+		expect(showMessageBox).toHaveBeenCalledOnce();
+		expect(callback).toHaveBeenCalledExactlyOnceWith("cred-1");
 	});
 
 	it("allows browser clipboard writes while denying reads and other permissions", async () => {
