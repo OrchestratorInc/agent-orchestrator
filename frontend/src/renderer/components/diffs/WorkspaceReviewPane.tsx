@@ -30,7 +30,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { useAskInChat } from "../../lib/chat-context-bus";
 import { sessionUiKey } from "../../lib/hosts";
-import { AO_PIERRE_FILES_REVIEW_CSS, AO_PIERRE_SURFACE_CSS } from "./pierreTheme";
+import { AO_PIERRE_FILES_REVIEW_CSS, AO_PIERRE_SURFACE_CSS, PIERRE_HIGHLIGHTER } from "./pierreTheme";
 import { ImageDiffView, isWorkspaceImagePath } from "../ImageDiffView";
 import { REVIEW_CONTEXT_LINES, diffContentVersion, endsAtLastHunk, hydratedCopy, patchIdentity, stableFileDiff } from "./trailingContext";
 import { SelectionAskButton } from "./SelectionAskButton";
@@ -729,6 +729,7 @@ export function WorkspaceReviewPane({
 							maxLineDiffLength: 400,
 							onPostRender: gutterHover.restoreAfterRender,
 							overflow: "wrap",
+							preferredHighlighter: PIERRE_HIGHLIGHTER,
 							stickyHeaders: true,
 							theme: REVIEW_CODE_VIEW_THEME,
 							themeType: resolvedTheme,
@@ -736,7 +737,7 @@ export function WorkspaceReviewPane({
 							tokenizeMaxLineLength: 2_000,
 							unsafeCSS: AO_PIERRE_SURFACE_CSS + AO_PIERRE_FILES_REVIEW_CSS,
 						}}
-						renderAnnotation={(line, item) => {
+						renderAnnotation={(line, _file, item) => {
 							const path = summaryById.get(item.id)?.path;
 							const side = "side" in line ? line.side : undefined;
 							const target = annotation.targets.find((open) => open.surface !== "focused" && open.path === path && open.side !== "file" && open.line === line.lineNumber && (open.side === "old" ? "deletions" : "additions") === side);

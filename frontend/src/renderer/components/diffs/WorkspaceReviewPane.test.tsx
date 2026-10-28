@@ -74,7 +74,7 @@ vi.mock("@pierre/diffs/react", () => ({
 				<div data-collapsed={String(Boolean(item.collapsed))} data-partial={String(item.fileDiff?.isPartial)} key={item.id}>
 					{renderCustomHeader(item)}
 					<pre data-testid="review-patch">{item.fileDiff?.additionLines?.join("\n")}</pre>
-					{item.annotations?.map((entry) => <div data-annotation-line={entry.lineNumber} data-annotation-side={entry.side} key={`${entry.side}:${entry.lineNumber}`}>{renderAnnotation?.(entry, item)}</div>)}
+					{item.annotations?.map((entry) => <div data-annotation-line={entry.lineNumber} data-annotation-side={entry.side} key={`${entry.side}:${entry.lineNumber}`}>{renderAnnotation?.(entry, item.fileDiff, item)}</div>)}
 				</div>
 			))}
 			{renderCodeViewFooter?.()}

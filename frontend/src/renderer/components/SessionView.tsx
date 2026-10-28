@@ -2117,7 +2117,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 												return (
 													<div
 														key={fileKey}
-														className={cn("absolute inset-0", fileTabs.activePath !== fileKey && "invisible pointer-events-none")}
+														className={cn("absolute inset-0", fileTabs.activePath !== fileKey && "invisible pointer-events-none [content-visibility:hidden]")}
 														inert={fileTabs.activePath !== fileKey ? true : undefined}
 													>
 														<SessionFileWorkspace
