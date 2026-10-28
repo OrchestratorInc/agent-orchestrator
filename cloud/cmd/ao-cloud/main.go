@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -592,7 +593,9 @@ func run(logger *slog.Logger) error {
 				}
 				return sandbox.FreestyleSnapshot(plan)
 			},
-			Logger: logger,
+			WarmSnapshots: true,
+			BaseHarnesses: slices.Sorted(maps.Keys(cfg.FreestyleSnapshotByHarness)),
+			Logger:        logger,
 		})
 		apiOptions.ProjectSnapshots = projectSnapshots
 		go projectSnapshots.RunCollector(ctx)

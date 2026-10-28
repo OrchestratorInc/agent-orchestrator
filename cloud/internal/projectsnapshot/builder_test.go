@@ -572,3 +572,87 @@ func TestRefreshRebuildsSnapshotsLeftOnAnOlderHarnessSnapshot(t *testing.T) {
 		t.Fatalf("rebuilt a current snapshot: %+v", vms.created)
 	}
 }
+
+// warmingVMs returns the VMs booted to warm a snapshot, and how many VMs were
+// deleted, once n warming VMs have been booted and deleted.
+func warmingVMs(t *testing.T, vms *fakeVMs, n int) []sandbox.Spec {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		vms.mu.Lock()
+		var warming []sandbox.Spec
+		for _, spec := range vms.created {
+			if spec.Labels["ao.purpose"] == "snapshot-warm" {
+				warming = append(warming, spec)
+			}
+		}
+		deleted := len(vms.deleted)
+		vms.mu.Unlock()
+		if len(warming) >= n && deleted >= len(vms.created) {
+			return warming
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("expected %d warming VMs, booted and deleted", n)
+	return nil
+}
+
+// A freshly built snapshot is booted once and read, then the VM is deleted,
+// so the first real session does not pay the slow first boot.
+func TestABuiltSnapshotIsWarmed(t *testing.T) {
+	vms, store := &fakeVMs{}, &fakeStore{}
+	builder := New(Config{
+		Provider: sandbox.ProviderFreestyle, VMs: vms, Store: store,
+		Grants: fakeGrants{token: "ghs_secret"}, WarmSnapshots: true,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	builder.Ensure(request())
+	waitIdle(t, builder)
+
+	warming := warmingVMs(t, vms, 1)
+	if len(warming) != 1 || warming[0].RootFS != "sh-new" {
+		t.Fatalf("warming VMs = %+v, want one booted from the new snapshot", warming)
+	}
+	vms.mu.Lock()
+	defer vms.mu.Unlock()
+	last := vms.commands[len(vms.commands)-1]
+	if !strings.Contains(last, "/usr/local/bin/ao-worker") || !strings.Contains(last, repositoryDir) {
+		t.Fatalf("warm script %q must read the worker and the repository", last)
+	}
+}
+
+// Each harness snapshot is warmed once per process, whatever the number of
+// refresh passes; without WarmSnapshots nothing is warmed.
+func TestWarmBasesOncePerSnapshot(t *testing.T) {
+	vms := &fakeVMs{}
+	builder := New(Config{
+		Provider: sandbox.ProviderFreestyle, VMs: vms, Store: &fakeStore{}, WarmSnapshots: true,
+		BaseSnapshot:  func(harness string) string { return "sh-" + harness },
+		BaseHarnesses: []string{"claude-code", "codex"},
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	builder.warmBases(context.Background())
+	builder.warmBases(context.Background())
+	if warming := warmingVMs(t, vms, 2); len(warming) != 2 || warming[0].RootFS != "sh-claude-code" || warming[1].RootFS != "sh-codex" {
+		t.Fatalf("warming VMs = %+v, want one per harness snapshot", warming)
+	}
+
+	cold := &fakeVMs{}
+	New(Config{
+		Provider: sandbox.ProviderFreestyle, VMs: cold, Store: &fakeStore{},
+		BaseSnapshot:  func(harness string) string { return "sh-" + harness },
+		BaseHarnesses: []string{"claude-code"},
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}).warmBases(context.Background())
+	if len(cold.created) != 0 {
+		t.Fatalf("warmed without WarmSnapshots: %+v", cold.created)
+	}
+}
+
+// The warm script reads through a pipe: GNU tar skips reading files when its
+// archive is /dev/null, which would warm nothing.
+func TestWarmScriptReadsThroughAPipe(t *testing.T) {
+	if strings.Contains(warmScript, "-f /dev/null") || !strings.Contains(warmScript, "| cat >/dev/null") {
+		t.Fatalf("warm script must stream tar through a pipe:\n%s", warmScript)
+	}
+}

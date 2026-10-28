@@ -46,6 +46,8 @@ const (
 	collectInterval = time.Hour
 	// refreshRetryInterval is how long Refresh waits for a free build slot.
 	refreshRetryInterval = 5 * time.Second
+	// warmTimeout bounds warming one snapshot.
+	warmTimeout = 3 * time.Minute
 	// collectDeleteTimeout bounds one provider snapshot delete. The record
 	// stays locked meanwhile, so a lookup racing it waits at most this long.
 	collectDeleteTimeout = 30 * time.Second
@@ -166,7 +168,11 @@ type Config struct {
 	// from, or "" when there is none. Refresh needs it to tell a snapshot built
 	// on an older base (before a deploy rebaked the harness snapshots).
 	BaseSnapshot func(harness string) string
-	Logger       *slog.Logger
+	// WarmSnapshots warms each repository snapshot once it is built, and
+	// BaseHarnesses' harness snapshots at start (see Warm).
+	WarmSnapshots bool
+	BaseHarnesses []string
+	Logger        *slog.Logger
 }
 
 // Builder looks up and (re)builds project snapshots.
@@ -174,6 +180,7 @@ type Builder struct {
 	config   Config
 	mu       sync.Mutex
 	inflight map[string]bool
+	warmed   map[string]bool
 	now      func() time.Time
 }
 
@@ -188,7 +195,7 @@ func New(config Config) *Builder {
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	return &Builder{config: config, inflight: map[string]bool{}, now: time.Now}
+	return &Builder{config: config, inflight: map[string]bool{}, warmed: map[string]bool{}, now: time.Now}
 }
 
 // Lookup returns the snapshot a new session should boot from, and marks it
@@ -277,6 +284,10 @@ func (b *Builder) start(request Request) bool {
 		b.config.Logger.Info("project snapshot ready",
 			"project_id", request.ProjectID, "harness", request.Harness,
 			"snapshot_id", snapshotID, "duration_ms", b.now().Sub(started).Milliseconds())
+		// Warmed apart from the build, so its slot is free for the next one.
+		if b.config.WarmSnapshots {
+			go b.warm(context.Background(), snapshotID, "project_id", request.ProjectID, "harness", request.Harness)
+		}
 	}()
 	return true
 }
@@ -351,12 +362,89 @@ func (b *Builder) build(ctx context.Context, request Request) (string, error) {
 	return snapshotID, nil
 }
 
+// Warm boots a throwaway VM from snapshotID, reads what a session's first
+// seconds read (the worker, the agent CLIs, the repository), and deletes it.
+// The first boots from a freshly made snapshot are several seconds slower than
+// later ones (on staging: VM 2-3 s and worker start-to-connect 1.3-2.6 s, then
+// 0.5 s and 0.7 s), so a real session should not be the first.
+func (b *Builder) Warm(ctx context.Context, snapshotID string) error {
+	ctx, cancel := context.WithTimeout(ctx, warmTimeout)
+	defer cancel()
+	environment, err := b.config.VMs.Create(ctx, sandbox.Spec{
+		RootFS: snapshotID,
+		Labels: map[string]string{"ao.purpose": "snapshot-warm"},
+	})
+	if err != nil {
+		return fmt.Errorf("create warming VM: %w", err)
+	}
+	defer func() {
+		deleteCtx, cancel := context.WithTimeout(sandbox.WithoutCleanup(context.Background()), time.Minute)
+		defer cancel()
+		if err := b.config.VMs.Delete(deleteCtx, environment.ID); err != nil {
+			b.config.Logger.Warn("delete snapshot warming VM", "provider_id", environment.ID, "error", err)
+		}
+	}()
+	if _, err := b.config.VMs.ExecRoot(ctx, environment.ID, warmScript, nil, warmTimeout); err != nil {
+		return fmt.Errorf("read the snapshot in the warming VM: %w", err)
+	}
+	return nil
+}
+
+// warm runs Warm and logs the outcome; a failed warm only costs the next
+// session the slower first boot.
+func (b *Builder) warm(ctx context.Context, snapshotID string, attrs ...any) {
+	started := b.now()
+	attrs = append(attrs, "snapshot_id", snapshotID)
+	if err := b.Warm(ctx, snapshotID); err != nil {
+		if ctx.Err() == nil {
+			b.config.Logger.Warn("warm snapshot", append(attrs, "error", err)...)
+		}
+		return
+	}
+	b.config.Logger.Info("snapshot warmed", append(attrs, "duration_ms", b.now().Sub(started).Milliseconds())...)
+}
+
+// warmBases warms the harness snapshots sessions now boot from, once each per
+// control-plane process: a deploy bakes new ones, and starts the process.
+func (b *Builder) warmBases(ctx context.Context) {
+	if !b.config.WarmSnapshots || b.config.BaseSnapshot == nil {
+		return
+	}
+	for _, harness := range b.config.BaseHarnesses {
+		base := b.config.BaseSnapshot(harness)
+		b.mu.Lock()
+		seen := base == "" || b.warmed[base]
+		if !seen {
+			b.warmed[base] = true
+		}
+		b.mu.Unlock()
+		if !seen {
+			b.warm(ctx, base, "harness", harness)
+		}
+	}
+}
+
+// warmScript reads, as root and without failing, the files a session's worker
+// start, agent start and checkout read first, so the provider has them paged
+// in. tar writes to a pipe: GNU tar skips reading files when its archive is
+// /dev/null.
+const warmScript = `set +e
+cat /usr/local/bin/ao-worker /usr/local/bin/ao >/dev/null 2>&1
+for tool in node git gh claude claude-agent-acp codex cursor-agent; do
+  path="$(command -v "$tool" 2>/dev/null)" && cat "$(readlink -f "$path")" >/dev/null 2>&1
+done
+root="$(npm root -g 2>/dev/null)"
+[ -n "$root" ] && tar -cf - "$root" 2>/dev/null | cat >/dev/null
+[ -d ` + repositoryDir + ` ] && tar -cf - ` + repositoryDir + ` 2>/dev/null | cat >/dev/null
+true`
+
 // RunRefresher rebuilds snapshots left on an older base: once at start, which
 // follows a deploy that rebaked the harness snapshots, and every
 // collectInterval after that until ctx ends.
 func (b *Builder) RunRefresher(ctx context.Context) {
 	ticker := time.NewTicker(collectInterval)
 	defer ticker.Stop()
+	b.warmBases(ctx)
 	for {
 		b.Refresh(ctx)
 		select {
