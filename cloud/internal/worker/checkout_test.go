@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -593,7 +594,7 @@ func TestCheckoutPartialCloneOnlyWhenOptedIn(t *testing.T) {
 			if err := PrepareCheckout(context.Background(), runner, layout.workspace(t), grant); err != nil {
 				t.Fatalf("PrepareCheckout: %v", err)
 			}
-			if len(runner.cloneArgs) == 0 || hasFilter(runner.cloneArgs) {
+			if len(runner.cloneArgs) == 0 || hasFilter(runner.cloneArgs) || slices.Contains(runner.cloneArgs, "--depth=1") {
 				t.Fatalf("default clone args %q must be a full clone", runner.cloneArgs)
 			}
 		})
@@ -603,8 +604,8 @@ func TestCheckoutPartialCloneOnlyWhenOptedIn(t *testing.T) {
 				CheckoutOptions{PartialClone: true}); err != nil {
 				t.Fatalf("PrepareCheckoutWithOptions: %v", err)
 			}
-			if !hasFilter(runner.cloneArgs) {
-				t.Fatalf("clone args %q lack %s", runner.cloneArgs, partialCloneFilter)
+			if !hasFilter(runner.cloneArgs) || !strings.Contains(strings.Join(runner.cloneArgs, " "), "--depth=1 --no-single-branch") {
+				t.Fatalf("clone args %q lack %s and the shallow first step", runner.cloneArgs, partialCloneFilter)
 			}
 		})
 	}
@@ -752,5 +753,44 @@ func TestCheckoutContinuesRemoteBranch(t *testing.T) {
 	}
 	if err := CheckoutContinuesRemoteBranch(context.Background(), ExecGitRunner{}, workspace, "never-pushed"); err != nil {
 		t.Fatalf("a branch not on the remote = %v", err)
+	}
+}
+
+// A partial clone takes only each branch's tip, so the session starts without
+// the history; CompleteShallowClone then fetches it, and is a no-op after.
+func TestPartialCloneIsShallowUntilCompleted(t *testing.T) {
+	source := t.TempDir()
+	gitRun(t, source, "init", "-q", "-b", "main")
+	gitRun(t, source, "config", "uploadpack.allowFilter", "true")
+	for _, message := range []string{"one", "two", "three"} {
+		gitRun(t, source, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", message)
+	}
+	gitRun(t, source, "branch", "feature")
+	workspace := filepath.Join(t.TempDir(), "repository")
+	runner := ExecGitRunner{}
+	if _, err := runner.Run(context.Background(), filepath.Dir(workspace), nil,
+		cloneArgs(CheckoutOptions{PartialClone: true}, "file://"+source, workspace)...); err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	if got := gitOutput(t, workspace, "rev-parse", "--is-shallow-repository"); got != "true" {
+		t.Fatalf("partial clone shallow = %s, want true", got)
+	}
+	if got := gitOutput(t, workspace, "rev-list", "--count", "HEAD"); got != "1" {
+		t.Fatalf("shallow clone has %s commits, want the tip only", got)
+	}
+	// Every branch keeps its tip, so a session can check out an existing one.
+	gitRun(t, workspace, "rev-parse", "--verify", "refs/remotes/origin/feature")
+
+	if err := CompleteShallowClone(context.Background(), runner, workspace); err != nil {
+		t.Fatalf("CompleteShallowClone: %v", err)
+	}
+	if got := gitOutput(t, workspace, "rev-parse", "--is-shallow-repository"); got != "false" {
+		t.Fatalf("after completing, shallow = %s", got)
+	}
+	if got := gitOutput(t, workspace, "rev-list", "--count", "HEAD"); got != "3" {
+		t.Fatalf("completed clone has %s commits, want 3", got)
+	}
+	if err := CompleteShallowClone(context.Background(), runner, workspace); err != nil {
+		t.Fatalf("CompleteShallowClone on a full checkout: %v", err)
 	}
 }

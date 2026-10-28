@@ -956,6 +956,13 @@ func prepareWorkspace(
 		// for repositories the installation can access; arbitrary private
 		// third-party repos need per-repo grants (a follow-up).
 		cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap, workspace, dataDir, userWorkspace)
+		// A Freestyle checkout without a project snapshot cloned only the
+		// branch tips; its history arrives while the session already runs.
+		go func() {
+			if err := worker.CompleteShallowClone(ctx, worker.ExecGitRunner{}, workspace); err != nil && ctx.Err() == nil {
+				logger.Warn("fetch the repository history after a shallow clone", "error", err)
+			}
+		}()
 	}
 	if err := worker.EnsureWorkspaceReviewBase(
 		ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.DefaultBranch,
