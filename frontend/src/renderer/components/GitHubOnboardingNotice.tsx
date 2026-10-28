@@ -10,6 +10,7 @@ import { useShellMaybe } from "../lib/shell-context";
 import { useResolvedTheme, useUiStore } from "../stores/ui-store";
 import { TerminalPane } from "./TerminalPane";
 import { TopbarButton } from "./TopbarButton";
+import { ManualCommand, useInstallRunner } from "./InstallDependencyDialog";
 
 const GITHUB_CLI_INSTALL_URL = "https://cli.github.com/";
 
@@ -44,6 +45,9 @@ export function GitHubOnboardingNotice() {
 	const [manualCheckPending, setManualCheckPending] = useState(false);
 	const gh = requirements.find((requirement) => requirement.id === "gh");
 	const auth = authQuery.data;
+	const update = useInstallRunner(() => { void refetchAuthRef.current(); }, t("onboarding.installStartFailed"));
+	const updateJob = update.jobFor("gh");
+	const updateFailed = updateJob?.status === "failed" || updateJob?.status === "unsupported" || updateJob?.status === "interrupted";
 
 	terminalRef.current = terminal;
 	refetchAuthRef.current = authQuery.refetch;
@@ -66,6 +70,7 @@ export function GitHubOnboardingNotice() {
 		if (
 			!auth ||
 			auth.satisfied ||
+			auth.updateRequired ||
 			gh?.satisfied !== true ||
 			terminal ||
 			startLogin.isPending ||
@@ -120,20 +125,20 @@ export function GitHubOnboardingNotice() {
 					<div className="min-w-0 flex-1">
 						<p className="text-[14px] font-semibold text-[var(--color-text-import-title)]">{t("startup.githubSetupTitle")}</p>
 						<p className="mt-0.5 text-[12px] leading-5 text-[var(--color-text-import-muted)]">
-							{t(cliMissing ? "startup.githubSetupMissingCli" : "startup.githubSetupSignedOut")}
+							{auth.updateRequired ? t("onboarding.githubUpdateDetail", { version: auth.version }) : t(cliMissing ? "startup.githubSetupMissingCli" : "startup.githubSetupSignedOut")}
 						</p>
 						<div className="mt-2 flex flex-wrap items-center gap-2">
 							<TopbarButton
-								disabled={!cliMissing && (startLogin.isPending || Boolean(terminal && !loginEnded))}
-								onClick={() => cliMissing
+								disabled={auth.updateRequired ? update.running : !cliMissing && (startLogin.isPending || Boolean(terminal && !loginEnded))}
+								onClick={() => auth.updateRequired ? void update.start("gh") : cliMissing
 									? void aoBridge.app.openExternal(GITHUB_CLI_INSTALL_URL)
 									: loginEnded
 										? retryLogin()
 										: openLogin()}
 								variant="primary"
 							>
-								{cliMissing ? null : <TerminalSquare className="size-icon-sm" aria-hidden="true" />}
-								{cliMissing
+								{cliMissing || auth.updateRequired ? null : <TerminalSquare className="size-icon-sm" aria-hidden="true" />}
+								{auth.updateRequired ? t("onboarding.githubUpdate") : cliMissing
 									? t("startup.openGithubCliDocs")
 									: startLogin.isPending
 										? t("startup.githubLoginStarting")
@@ -151,6 +156,10 @@ export function GitHubOnboardingNotice() {
 								</TopbarButton>
 							)}
 						</div>
+						{auth.updateRequired && (update.startError || updateFailed) ? <p className="mt-2 text-xs text-destructive" role="alert">{update.startError ?? t("onboarding.githubUpdateFailed")}</p> : null}
+						{auth.updateRequired && updateJob?.status === "succeeded" ? <p className="mt-2 text-xs text-warning">{t("onboarding.githubUpdateStillOld", { version: auth.version })}</p> : null}
+						{auth.updateRequired && updateJob?.status === "unsupported" && updateJob.command ? <ManualCommand command={updateJob.command} t={t} /> : null}
+						{auth.updateRequired && updateFailed ? <TopbarButton onClick={() => void aoBridge.app.openExternal(GITHUB_CLI_INSTALL_URL)}>{t("onboarding.githubDownload")}</TopbarButton> : null}
 						{startLogin.isError ? <p className="mt-2 text-xs text-destructive" role="alert">{startLogin.error.message}</p> : null}
 						{terminal ? (
 							<div className="mt-3 overflow-hidden rounded-lg border border-[var(--color-border-import-modal)] bg-terminal" data-testid="github-auth-terminal">

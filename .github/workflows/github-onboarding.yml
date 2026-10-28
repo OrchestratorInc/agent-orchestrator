@@ -1,0 +1,56 @@
+name: GitHub onboarding
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "test/onboarding/**"
+      - "frontend/e2e/**"
+      - "frontend/src/renderer/components/Onboarding*.tsx"
+      - "frontend/src/renderer/hooks/useGitHubSetup.ts"
+      - "frontend/src/renderer/hooks/useSystemRequirementsGate.ts"
+      - "frontend/src/renderer/hooks/useDaemonStatus.ts"
+      - "frontend/package*.json"
+      - "packages/product-ui/**"
+      - ".github/workflows/github-onboarding.yml"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-onboarding-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  github-onboarding:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AO_GITHUB_CLI_FIXTURE_DIR: ${{ github.workspace }}/../ao-github-cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Verify GitHub sign-in against released CLI versions
+        run: bash test/onboarding/check-github-cli.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            packages/product-ui/package-lock.json
+      - name: Install renderer test dependencies
+        run: |
+          npm ci --prefix packages/product-ui
+          npm ci --prefix frontend
+          cd frontend && npx playwright install --with-deps chromium
+      - name: Verify connected GitHub onboarding UI
+        env:
+          AO_GITHUB_BROWSER_BINARY: ${{ github.workspace }}/../ao-github-cli/2.100.0/gh_2.100.0_linux_amd64/bin/gh
+        run: bash test/onboarding/check-github-browser.sh
+

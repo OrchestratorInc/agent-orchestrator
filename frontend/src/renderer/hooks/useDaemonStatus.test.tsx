@@ -153,7 +153,9 @@ describe("useDaemonStatus", () => {
 		expect(queryClient.removeQueries).toHaveBeenCalledWith({
 			queryKey: ["system-requirements"],
 		});
-		expect(queryClient.removeQueries).toHaveBeenCalledTimes(9);
+		expect(queryClient.removeQueries).toHaveBeenCalledWith({ queryKey: ["github-auth-requirement"] });
+		expect(queryClient.removeQueries).toHaveBeenCalledWith({ queryKey: ["github-device-login"] });
+		expect(queryClient.removeQueries).toHaveBeenCalledTimes(15);
 	});
 
 	it("ensures display readiness when the window regains focus", async () => {

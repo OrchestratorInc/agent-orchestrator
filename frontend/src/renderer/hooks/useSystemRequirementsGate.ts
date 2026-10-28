@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
@@ -9,9 +9,12 @@ import { shellTerminalsQueryKey, shellTerminalsQueryOptions, type ShellTerminal 
 export type SystemRequirement = components["schemas"]["SystemRequirement"];
 
 export const systemRequirementsQueryKey = ["system-requirements"] as const;
+export type GitHubDeviceLogin = components["schemas"]["SystemcheckGitHubDeviceLogin"];
+export const githubDeviceLoginQueryKey = ["github-device-login"] as const;
 export const githubAuthTerminalQueryKey = ["github-auth-terminal"] as const;
 export const githubAuthAutoLoginOfferedQueryKey = ["github-auth-auto-login-offered"] as const;
-const GITHUB_AUTH_POLL_INTERVAL_MS = 2_500;
+const GITHUB_AUTH_POLL_INTERVAL_MS = 1_000;
+const GITHUB_DEVICE_POLL_INTERVAL_MS = 1_000;
 
 async function fetchSystemRequirements(): Promise<components["schemas"]["SystemRequirementsResponse"]> {
 	const { data, error } = await apiClient.GET("/api/v1/system/requirements");
@@ -45,8 +48,11 @@ export const githubAuthRequirementQueryOptions = {
 /** Advisory authentication probe. Kept separate from the startup gate because
  * credential-store access can be slow or interactive on some machines. */
 export function useGitHubAuthRequirement(loginActive = false) {
+	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
 	return useQuery({
 		...githubAuthRequirementQueryOptions,
+		queryKey: [...githubAuthRequirementQueryOptions.queryKey, baseUrl],
+		enabled: !usesPreviewWorkspaceData && Boolean(baseUrl),
 		// The browser/device flow can finish before its PTY exit reaches the
 		// renderer. Probe only while AO owns an active login terminal so the card
 		// closes promptly after authorization without permanent background polling.
@@ -145,4 +151,62 @@ export function useSystemRequirementsGate() {
 	// rather than wedging the user on the checking state forever.
 	const probeFailed = query.isError;
 	return { query, requirements, blocked, requirementsBlocked, checking, ready, probeFailed };
+}
+
+/** The in-app GitHub sign-in. The daemon runs `gh auth login` without a
+ * terminal and reports the one-time code and its state, so the renderer can
+ * present the flow itself. The status query only polls while an attempt is in
+ * flight. */
+export function useGitHubDeviceLogin() {
+	const queryClient = useQueryClient();
+	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const queryKey = [...githubDeviceLoginQueryKey, baseUrl];
+	const operation = useRef(0);
+	const startRequest = useRef<AbortController | null>(null);
+	const query = useQuery<GitHubDeviceLogin>({
+		queryKey,
+		queryFn: async ({ signal }) => {
+			const { data, error } = await apiClient.GET("/api/v1/system/github-auth/device", { signal });
+			if (error || !data) throw new Error(apiErrorMessage(error, "Could not check GitHub sign-in."));
+			return data;
+		},
+		enabled: !usesPreviewWorkspaceData && Boolean(baseUrl),
+		staleTime: Number.POSITIVE_INFINITY,
+		refetchOnMount: "always",
+		refetchOnWindowFocus: false,
+		retry: 1,
+		refetchInterval: (q) => {
+			const state = q.state.data?.state;
+			return state === "starting" || state === "awaiting_approval" ? GITHUB_DEVICE_POLL_INTERVAL_MS : false;
+		},
+	});
+	const applyResult = (result: { login: GitHubDeviceLogin; generation: number; baseUrl: string }) => {
+		if (result.generation === operation.current && result.baseUrl === getApiBaseUrl()) {
+			queryClient.setQueryData([...githubDeviceLoginQueryKey, result.baseUrl], result.login);
+		}
+	};
+	const start = useMutation({
+		mutationFn: async () => {
+			const generation = ++operation.current;
+			const controller = new AbortController();
+			startRequest.current = controller;
+			await queryClient.cancelQueries({ queryKey });
+			const { data, error } = await apiClient.POST("/api/v1/system/github-auth/device", { signal: controller.signal });
+			if (error || !data) throw new Error(apiErrorMessage(error, "Could not start GitHub sign-in."));
+			return { login: data, generation, baseUrl };
+		},
+		onSuccess: applyResult,
+	});
+	const cancel = useMutation({
+		mutationFn: async () => {
+			const generation = ++operation.current;
+			startRequest.current?.abort();
+			await queryClient.cancelQueries({ queryKey });
+			const { data, error } = await apiClient.DELETE("/api/v1/system/github-auth/device");
+			if (error || !data) throw new Error(apiErrorMessage(error, "Could not cancel GitHub sign-in."));
+			return { login: data, generation, baseUrl };
+		},
+		onSuccess: applyResult,
+	});
+	return { login: query.data ?? { state: "idle" as const }, start, cancel };
 }

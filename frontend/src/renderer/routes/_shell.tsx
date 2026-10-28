@@ -4,7 +4,7 @@ import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { CatchBoundary, createFileRoute, Outlet, useMatch, useMatchRoute, useNavigate, useParams, useRouter, useRouterState } from "@tanstack/react-router";
 import { isCancelledError, useQueryClient } from "@tanstack/react-query";
 import { lazy, memo, Suspense, type ComponentProps, type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FolderPlus } from "lucide-react";
+import { FolderPlus, Loader2 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
@@ -60,6 +60,8 @@ import { applyWindowTranslucency } from "../lib/window-translucency";
 import { aoBridge } from "../lib/bridge";
 import { handleModifierLinkClick } from "../lib/external-link-policy";
 import { recordProjectOpened } from "../lib/project-history";
+import { useQuitConfirmation } from "../hooks/useQuitConfirmation";
+import { runOnboardingFinish } from "../lib/onboarding-finish";
 import { cn } from "../lib/utils";
 import {
 	isLinuxPlatform,
@@ -386,6 +388,10 @@ function ShellLayout() {
 	const requestCreateProjectFromPath = useUiStore((state) => state.requestCreateProjectFromPath);
 	const requestNewShellTerminal = useUiStore((state) => state.requestNewShellTerminal);
 	const newShellTerminalNonce = useUiStore((state) => state.newShellTerminalNonce);
+	const onboardingFinishRequest = useUiStore((state) => state.onboardingFinishRequest);
+	const clearOnboardingFinishRequest = useUiStore((state) => state.clearOnboardingFinishRequest);
+	const setOnboardingFinishError = useUiStore((state) => state.setOnboardingFinishError);
+	const clearOnboardingFinishError = useUiStore((state) => state.clearOnboardingFinishError);
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
 	const openShellTerminal = useOpenShellTerminal();
 	// Single subscription for sidebar clearance + drag strip (macOS no-ops inside the hook).
@@ -417,6 +423,7 @@ function ShellLayout() {
 	}, [isFullScreen]);
 	// Seeded to the current value so a mount never opens a terminal unasked.
 	const handledShellNonceRef = useRef(newShellTerminalNonce);
+	const handledOnboardingFinishNonceRef = useRef(0);
 	const [isKeyboardShortcutsOpen, setIsKeyboardShortcutsOpen] = useState(false);
 	const customizeKeyboardShortcuts = useCallback(() => {
 		setIsKeyboardShortcutsOpen(false);
@@ -1309,21 +1316,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// The command palette runs the help shortcut through the app shortcut bus.
 	useAppShortcut("keyboard-shortcuts", () => setIsKeyboardShortcutsOpen((open) => !open));
 
-	// macOS ⌘Q asks before quitting; the main process quits once confirmed.
-	const [isQuitConfirmOpen, setIsQuitConfirmOpen] = useState(false);
-	const [quitKeepsRunning, setQuitKeepsRunning] = useState(false);
-	useEffect(
-		() =>
-			aoBridge.app.onQuitConfirmRequest(({ keepsRunning }) => {
-				setQuitKeepsRunning(keepsRunning);
-				setIsQuitConfirmOpen(true);
-			}),
-		[],
-	);
-	const resolveQuitConfirm = useCallback((confirmed: boolean) => {
-		setIsQuitConfirmOpen(false);
-		aoBridge.app.resolveQuitConfirm(confirmed);
-	}, []);
+	const quitConfirmation = useQuitConfirmation();
 
 	// A folder was dropped on the app's taskbar icon/shortcut (main process,
 	// cold start or an already-running instance) — feeds the same drop flow as
@@ -1384,6 +1377,54 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		setActiveShellTerminal,
 	]);
 
+	const createOnboardingStandaloneSession = useCallback(
+		async (input: { displayName: string; harness: string }): Promise<string> => {
+			const status = await refreshDaemonStatus();
+			if (status.state !== "ready" || !status.port) {
+				throw new Error(status.message || "AO daemon is not ready.");
+			}
+			const { data, error } = await apiClient.POST("/api/v1/sessions", {
+				body: {
+					clientRequestId: globalThis.crypto?.randomUUID?.() ?? `onboarding-${Date.now()}`,
+					displayName: input.displayName,
+					harness: input.harness as components["schemas"]["SpawnSessionRequest"]["harness"],
+					kind: "worker",
+				},
+			});
+			if (error) throw new Error(apiErrorMessage(error));
+			if (!data?.session.id) throw new Error(t("newTask.noSession"));
+			return data.session.id;
+		},
+		[t],
+	);
+
+	useEffect(() => {
+		if (!onboardingFinishRequest) return;
+		if (handledOnboardingFinishNonceRef.current === onboardingFinishRequest.nonce) return;
+		handledOnboardingFinishNonceRef.current = onboardingFinishRequest.nonce;
+
+		void (async () => {
+			const outcome = await runOnboardingFinish(onboardingFinishRequest, {
+				createProject,
+				createStandaloneSession: createOnboardingStandaloneSession,
+			});
+			if (outcome.ok) {
+				// Open the new session before releasing the loader so the board
+				// never flashes between the two.
+				if (outcome.sessionId) {
+					await navigate({ replace: true, ...sessionNavigateTarget(undefined, outcome.sessionId) });
+				}
+				clearOnboardingFinishError();
+				clearOnboardingFinishRequest(onboardingFinishRequest.nonce);
+				return;
+			}
+			// Hand the failure back to onboarding instead of quitting it: the user
+			// keeps the project and agents they picked and can retry from there.
+			setOnboardingFinishError({ message: outcome.message, nonce: onboardingFinishRequest.nonce });
+			await navigate({ replace: true, to: "/onboarding" });
+		})();
+	}, [clearOnboardingFinishError, clearOnboardingFinishRequest, createOnboardingStandaloneSession, createProject, initializeProjectRepository, navigate, onboardingFinishRequest, setOnboardingFinishError]);
+
 	// ao-app://billing (Stripe's return page) opens Upgrade only for a
 	// self-serve org; any other org has no plans and lands on general settings.
 	useEffect(
@@ -1437,8 +1478,25 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// ⌘Q can arrive at any time, including during startup or a daemon
 	// reconnect, so the quit confirm renders outside the readiness gate.
 	const quitConfirmDialog = (
-		<QuitConfirmDialog open={isQuitConfirmOpen} keepsRunning={quitKeepsRunning} onResolve={resolveQuitConfirm} />
+		<QuitConfirmDialog {...quitConfirmation} />
 	);
+	if (onboardingFinishRequest) {
+		return (
+			<>
+				<main className="grid h-[100dvh] w-screen place-items-center bg-background text-foreground">
+					<div className="flex flex-col items-center gap-4 text-center">
+						<Loader2 className="size-5 animate-spin text-muted-foreground" aria-hidden="true" />
+						<div>
+							<h1 className="text-xl font-medium tracking-[-0.02em]">{t("onboarding.startingOrchestrator")}</h1>
+							<p className="mt-2 text-sm text-muted-foreground">{t("onboarding.preparingProject")}</p>
+						</div>
+					</div>
+				</main>
+				{quitConfirmDialog}
+			</>
+		);
+	}
+
 	if (isStartupLoading) {
 		return (
 			<>

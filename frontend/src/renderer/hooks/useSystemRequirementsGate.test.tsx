@@ -9,7 +9,7 @@ const apiBaseUrlState = vi.hoisted(() => ({
 }));
 
 vi.mock("../lib/api-client", () => ({
-	apiClient: { GET: vi.fn(), POST: vi.fn() },
+	apiClient: { GET: vi.fn(), POST: vi.fn(), DELETE: vi.fn() },
 	apiErrorMessage: (error: unknown) => String(error),
 	getApiBaseUrl: () => apiBaseUrlState.url,
 	subscribeApiBaseUrl: (listener: () => void) => {
@@ -22,7 +22,7 @@ vi.mock("../lib/preview-mode", () => ({ usesPreviewWorkspaceData: false }));
 
 import type { ShellTerminal } from "./useShellTerminals";
 import { apiClient } from "../lib/api-client";
-import { githubAuthAutoLoginOfferedQueryKey, githubAuthTerminalQueryKey, systemRequirementsQueryKey, useGitHubAuthAutoLoginOffered, useGitHubAuthRequirement, useGitHubAuthTerminal, useSystemRequirementsGate } from "./useSystemRequirementsGate";
+import { githubAuthAutoLoginOfferedQueryKey, githubAuthTerminalQueryKey, systemRequirementsQueryKey, useGitHubAuthAutoLoginOffered, useGitHubAuthRequirement, useGitHubAuthTerminal, useGitHubDeviceLogin, useSystemRequirementsGate } from "./useSystemRequirementsGate";
 
 const loginTerminal: ShellTerminal = {
 	createdAt: "2026-09-06T00:00:00Z",
@@ -49,6 +49,8 @@ afterEach(() => {
 	apiBaseUrlState.url = "";
 	apiBaseUrlState.listeners.clear();
 	vi.mocked(apiClient.GET).mockReset();
+	vi.mocked(apiClient.POST).mockReset();
+	vi.mocked(apiClient.DELETE).mockReset();
 });
 
 describe("useSystemRequirementsGate", () => {
@@ -153,6 +155,7 @@ describe("useGitHubAuthAutoLoginOffered", () => {
 
 describe("useGitHubAuthRequirement", () => {
 	it("polls only while a GitHub login terminal is active", async () => {
+		setBaseUrl("http://127.0.0.1:3037");
 		vi.useFakeTimers();
 		const getMock = vi.mocked(apiClient.GET);
 		getMock.mockResolvedValue({
@@ -172,5 +175,65 @@ describe("useGitHubAuthRequirement", () => {
 		const callsAfterStopping = getMock.mock.calls.length;
 		await act(async () => vi.advanceTimersByTimeAsync(5_100));
 		expect(getMock).toHaveBeenCalledTimes(callsAfterStopping);
+	});
+});
+
+describe("useGitHubDeviceLogin", () => {
+	it("waits for the daemon and reconciles an existing attempt on each mount", async () => {
+		const get = vi.mocked(apiClient.GET).mockResolvedValue({ data: { id: "existing", state: "awaiting_approval", userCode: "ABCD-1234" } } as never);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const first = renderHook(useGitHubDeviceLogin, { wrapper: wrapper(client) });
+		expect(get).not.toHaveBeenCalled();
+		setBaseUrl("http://127.0.0.1:3037");
+		await waitFor(() => expect(first.result.current.login.id).toBe("existing"));
+		first.unmount();
+		get.mockResolvedValue({ data: { id: "existing", state: "failed", error: "expired_token" } } as never);
+		const second = renderHook(useGitHubDeviceLogin, { wrapper: wrapper(client) });
+		await waitFor(() => expect(second.result.current.login.state).toBe("failed"));
+	});
+
+	it("does not resurrect a cancelled attempt from a stale status read", async () => {
+		setBaseUrl("http://127.0.0.1:3037");
+		let resolveStatus!: (value: unknown) => void;
+		vi.mocked(apiClient.GET).mockReturnValue(new Promise((resolve) => { resolveStatus = resolve; }) as never);
+		vi.mocked(apiClient.DELETE).mockResolvedValue({ data: { id: "old", state: "cancelled" } } as never);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { result } = renderHook(useGitHubDeviceLogin, { wrapper: wrapper(client) });
+		await waitFor(() => expect(apiClient.GET).toHaveBeenCalled());
+		await act(async () => { await result.current.cancel.mutateAsync(); });
+		await waitFor(() => expect(result.current.login.state).toBe("cancelled"));
+		await act(async () => { resolveStatus({ data: { id: "old", state: "awaiting_approval", userCode: "ABCD-1234" } }); });
+		expect(result.current.login.state).toBe("cancelled");
+	});
+
+	it("can cancel a request while the CLI is still getting its code", async () => {
+		setBaseUrl("http://127.0.0.1:3037");
+		vi.mocked(apiClient.GET).mockResolvedValue({ data: { state: "idle" } } as never);
+		vi.mocked(apiClient.POST).mockImplementation((_path, options?: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+			options?.signal?.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")));
+		}) as never);
+		vi.mocked(apiClient.DELETE).mockResolvedValue({ data: { id: "starting", state: "cancelled" } } as never);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { result } = renderHook(useGitHubDeviceLogin, { wrapper: wrapper(client) });
+		act(() => result.current.start.mutate());
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalled());
+		await act(async () => { await result.current.cancel.mutateAsync(); });
+		await waitFor(() => expect(result.current.start.isPending).toBe(false));
+		expect(result.current.login.state).toBe("cancelled");
+	});
+	it("ignores a start result from a previous daemon", async () => {
+		setBaseUrl("http://127.0.0.1:3037");
+		vi.mocked(apiClient.GET).mockResolvedValue({ data: { state: "idle" } } as never);
+		let finish!: (value: unknown) => void;
+		vi.mocked(apiClient.POST).mockReturnValue(new Promise((resolve) => { finish = resolve; }) as never);
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { result } = renderHook(useGitHubDeviceLogin, { wrapper: wrapper(client) });
+		act(() => result.current.start.mutate());
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalled());
+		setBaseUrl("http://127.0.0.1:4555");
+		await waitFor(() => expect(result.current.login.state).toBe("idle"));
+		await act(async () => finish({ data: { id: "old", state: "awaiting_approval", userCode: "ABCD-1234" } }));
+		await waitFor(() => expect(result.current.start.isPending).toBe(false));
+		expect(result.current.login.state).toBe("idle");
 	});
 });
