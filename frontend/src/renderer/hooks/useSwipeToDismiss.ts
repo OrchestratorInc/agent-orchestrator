@@ -13,6 +13,7 @@ const DISMISS_FRACTION = 0.35;
 // Pixels per wheel event (or per 16ms of pointer travel) that count as a flick.
 const FLICK_SPEED_PX = 12;
 const OUT_MS = 160;
+const FADE_MS = 120;
 const CLOSE_MS = 180;
 const BACK_MS = 200;
 
@@ -20,16 +21,17 @@ function prefersReducedMotion(): boolean {
 	return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-/** Slides the element out to the right, then closes the gap it leaves so the
- * content below moves up instead of jumping, then calls `done`. */
-function leave(element: HTMLElement, from: number, done: () => void): number {
+/** Slides the element out to the right (a swipe) or fades it in place (the ×
+ * button), then closes the gap it leaves so the content below moves up instead
+ * of jumping, then calls `done`. */
+function leave(element: HTMLElement, from: number, done: () => void, style: "slide" | "fade" = "slide"): number {
 	if (prefersReducedMotion()) {
 		done();
 		return 0;
 	}
-	const width = element.offsetWidth || 1;
-	element.style.transition = `transform ${OUT_MS}ms var(--ease-out), opacity ${OUT_MS}ms var(--ease-out)`;
-	element.style.transform = `translate3d(${Math.max(from, 0) + width + 24}px, 0, 0)`;
+	const outMs = style === "slide" ? OUT_MS : FADE_MS;
+	element.style.transition = style === "slide" ? `transform ${outMs}ms var(--ease-out), opacity ${outMs}ms var(--ease-out)` : `opacity ${outMs}ms var(--ease-out)`;
+	if (style === "slide") element.style.transform = `translate3d(${Math.max(from, 0) + (element.offsetWidth || 1) + 24}px, 0, 0)`;
 	element.style.opacity = "0";
 	return window.setTimeout(() => {
 		element.style.height = `${element.offsetHeight}px`;
@@ -43,10 +45,10 @@ function leave(element: HTMLElement, from: number, done: () => void): number {
 		element.style.marginTop = "0px";
 		element.style.borderWidth = "0px";
 		window.setTimeout(done, CLOSE_MS);
-	}, OUT_MS);
+	}, outMs);
 }
 
-/** Wires swipe-to-dismiss on `ref` and returns the same exit for a × button. */
+/** Wires swipe-to-dismiss on `ref` and returns a quick fade-out for a × button. */
 export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss: () => void, enabled = true): () => void {
 	const dismissRef = useRef(onDismiss);
 	dismissRef.current = onDismiss;
@@ -56,7 +58,7 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 		if (leaving.current) return;
 		leaving.current = true;
 		if (!element) dismissRef.current();
-		else leave(element, 0, () => dismissRef.current());
+		else leave(element, 0, () => dismissRef.current(), "fade");
 	}, [ref]);
 
 	useEffect(() => {
@@ -132,7 +134,8 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 		};
 
 		const onPointerDown = (event: PointerEvent) => {
-			if (leaving.current || event.button !== 0 || mode !== "idle") return;
+			// A stale wheel gesture must not block a drag; only a swipe in progress does.
+			if (leaving.current || event.button !== 0 || mode === "tracking") return;
 			if (event.target instanceof Element && event.target.closest("button, a, input, textarea, select")) return;
 			const startX = event.clientX;
 			const startY = event.clientY;
@@ -173,7 +176,11 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 		});
 		element.addEventListener("wheel", onWheel, { passive: true });
 		element.addEventListener("pointerdown", onPointerDown);
+		// A native drag would cancel the pointer stream mid-gesture.
+		const onDragStart = (event: DragEvent) => event.preventDefault();
+		element.addEventListener("dragstart", onDragStart);
 		return () => {
+			element.removeEventListener("dragstart", onDragStart);
 			stopPhases();
 			element.removeEventListener("wheel", onWheel);
 			element.removeEventListener("pointerdown", onPointerDown);
