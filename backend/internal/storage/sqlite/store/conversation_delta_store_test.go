@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -352,5 +353,67 @@ func TestConversationDeltaDoesNotRevivePromotedTurnMetadata(t *testing.T) {
 		if !visible[turn.ID] {
 			t.Fatalf("delta revived turn %s absent from fresh snapshot", turn.ID)
 		}
+	}
+}
+
+// Sequence-only clients do not send a durable cursor, so they cannot rely on
+// promotion reset markers to recover the messages retained by batched dispatch.
+func TestConversationDeltaSequenceOnlyRetainsBatchedPrompts(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		seedToolTurn(t, s, conversation, session, fmt.Sprintf("history-%d", i), 0, histClock.Add(time.Duration(i)*time.Second))
+	}
+	before, err := s.LoadConversationSnapshotPage(ctx, conversation, 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Conversation.LatestSequence != 10 {
+		t.Fatalf("fixture latest sequence = %d, want 10", before.Conversation.LatestSequence)
+	}
+	for i := 0; i < 2; i++ {
+		id := fmt.Sprintf("batch-%d", i)
+		if _, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
+			ID: id + "-message", Text: id, Origin: domain.MessageOriginHuman,
+		}, id, histClock.Add(time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	batch, err := s.ClaimQueuedBatch(ctx, conversation, true, 0, histClock.Add(time.Minute))
+	if err != nil || len(batch) != 2 {
+		t.Fatalf("claim batch: %+v, %v", batch, err)
+	}
+	if err := s.BindTurnToProvider(ctx, batch[0].TurnID, "batch-provider", histClock.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CompleteQueuedBatch(ctx, conversation, []string{batch[1].TurnID}, "batch-provider", histClock.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := s.LoadConversationSnapshot(ctx, conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, afterSequence := range []int64{11, 12} {
+		t.Run(fmt.Sprint(afterSequence), func(t *testing.T) {
+			delta, err := s.LoadConversationSnapshotDelta(ctx, conversation, afterSequence, 0, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if delta.AfterSequence == nil || *delta.AfterSequence != afterSequence {
+				t.Fatalf("expected marked sequence-only delta, got %#v", delta.AfterSequence)
+			}
+			var expected []domain.ConversationMessage
+			for _, message := range fresh.Messages {
+				if message.Sequence >= afterSequence {
+					expected = append(expected, message)
+				}
+			}
+			if len(expected) != int(13-afterSequence) {
+				t.Fatalf("fresh snapshot omitted batch prompts: %+v", expected)
+			}
+			if !reflect.DeepEqual(delta.Messages, expected) {
+				t.Fatalf("delta messages = %+v, want fresh messages %+v", delta.Messages, expected)
+			}
+		})
 	}
 }

@@ -3393,7 +3393,7 @@ WHERE conversation_messages.conversation_id = ?1
       WHERE discarded.conversation_id = ?1
         AND (
           discarded.rolled_back_at IS NOT NULL
-          OR discarded.promoted_to_turn_id IS NOT NULL
+          OR (discarded.promoted_to_turn_id IS NOT NULL AND discarded.batched_input = 0)
           OR discarded.state = 'cancelled'
         )
   ))
@@ -4023,7 +4023,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
 )
-SELECT conversation_turns.id, conversation_turns.conversation_id, conversation_turns.handled_by_session_id, conversation_turns.provider_turn_id, conversation_turns.controller_generation, conversation_turns.state, conversation_turns.error_message, conversation_turns.requested_at, conversation_turns.started_at, conversation_turns.completed_at, conversation_turns.diff_json, conversation_turns.rolled_back_at, conversation_turns.plan_json, conversation_turns.branch_id, conversation_turns.promotion_started_at, conversation_turns.promoted_to_turn_id, conversation_turns.retry_of_turn_id, conversation_turns.handled_by_review_id, conversation_turns.usage_limit_resets_at, conversation_turns.usage_limit_auto_resume, conversation_turns.usage_limit_resume_error FROM conversation_turns
+SELECT conversation_turns.id, conversation_turns.conversation_id, conversation_turns.handled_by_session_id, conversation_turns.provider_turn_id, conversation_turns.controller_generation, conversation_turns.state, conversation_turns.error_message, conversation_turns.requested_at, conversation_turns.started_at, conversation_turns.completed_at, conversation_turns.diff_json, conversation_turns.rolled_back_at, conversation_turns.plan_json, conversation_turns.branch_id, conversation_turns.promotion_started_at, conversation_turns.promoted_to_turn_id, conversation_turns.retry_of_turn_id, conversation_turns.handled_by_review_id, conversation_turns.usage_limit_resets_at, conversation_turns.usage_limit_auto_resume, conversation_turns.usage_limit_resume_error, conversation_turns.batched_input, conversation_turns.provider_input_text FROM conversation_turns
 JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
 WHERE conversation_turns.conversation_id = ?1
   AND conversation_turns.promoted_to_turn_id IS NULL
@@ -4082,6 +4082,8 @@ func (q *Queries) SelectConversationTurnsDelta(ctx context.Context, arg SelectCo
 			&i.UsageLimitResetsAt,
 			&i.UsageLimitAutoResume,
 			&i.UsageLimitResumeError,
+			&i.BatchedInput,
+			&i.ProviderInputText,
 		); err != nil {
 			return nil, err
 		}

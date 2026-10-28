@@ -81,6 +81,7 @@ function fakeQueryClient() {
 	return {
 		invalidateQueries: vi.fn().mockResolvedValue(undefined),
 		isFetching: vi.fn().mockReturnValue(0),
+		isMutating: vi.fn().mockReturnValue(0),
 		refetchQueries: vi.fn().mockResolvedValue(undefined),
 		setQueryData: vi.fn(),
 		getQueryData: vi.fn(),

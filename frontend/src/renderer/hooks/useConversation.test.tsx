@@ -1453,6 +1453,40 @@ describe("local conversation deltas", () => {
 		expect(invalidate).not.toHaveBeenCalled();
 		unsubscribe(); queryClient.clear();
 	});
+	it("keeps optimistic settings when an older delta finishes during a queued picker write", async () => {
+		const { queryClient, live, unsubscribe } = await activeCache();
+		live.settings = { model: "model-a" };
+		const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper: local });
+		const deltaResponse = deferred<{ data: Parameters<typeof toSnapshot>[0]; error: undefined }>();
+		getMock.mockReturnValueOnce(deltaResponse.promise);
+		const firstPatch = deferred<{ data: { model: string }; error: undefined }>();
+		const secondPatch = deferred<{ data: { model: string; reasoningEffort: string }; error: undefined }>();
+		patchMock.mockReturnValueOnce(firstPatch.promise).mockReturnValueOnce(secondPatch.promise);
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+		const refresh = refreshLocalConversation(queryClient, "ao-1");
+		act(() => result.current.chooseSettings({ model: "model-b" }));
+		await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1));
+		await act(async () => {
+			deltaResponse.resolve({ data: { conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0, latestSequence: 3, oldestSequence: 2, hasMoreBefore: true, settings: { model: "model-a" }, turns: [], messages: [], activities: [], changeCursor: 11, afterSequence: 4 }, error: undefined });
+			await refresh;
+			// A new event during the same write must not start another read either.
+			await refreshLocalConversation(queryClient, "ao-1");
+		});
+		const settings = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey("ao-1"))!.pages[0].settings;
+		expect(settings.model).toBe("model-b");
+		expect(invalidate).not.toHaveBeenCalled();
+		expect(getMock).toHaveBeenCalledTimes(1);
+		act(() => result.current.chooseSettings({ ...settings, reasoningEffort: "high" }));
+		await act(async () => { firstPatch.resolve({ data: { model: "model-b" }, error: undefined }); });
+		await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(2));
+		expect(patchMock.mock.calls[1][1].body).toEqual({ model: "model-b", reasoningEffort: "high" });
+		expect(invalidate).not.toHaveBeenCalled();
+		await act(async () => { secondPatch.resolve({ data: { model: "model-b", reasoningEffort: "high" }, error: undefined }); });
+		await waitFor(() => expect(invalidate).toHaveBeenCalledOnce());
+		expect(queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey("ao-1"))!.pages[0].settings).toEqual({ model: "model-b", reasoningEffort: "high" });
+		unsubscribe(); queryClient.clear();
+	});
 	it.each(["delta-first", "older-first"] as const)("retains the final update and older history when pagination resolves %s", async (order) => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		const live = cachedLive();

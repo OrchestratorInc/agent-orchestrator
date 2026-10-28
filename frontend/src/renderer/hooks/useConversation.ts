@@ -389,12 +389,18 @@ async function fetchConversationPage(sessionId: string, hostId?: string, beforeS
 	return toSnapshot(data as WireSnapshot);
 }
 
+const conversationSettingsMutationKey = (sessionId: string, hostId?: string) => ["conversation-settings", hostId ?? "local", sessionId] as const;
+
 /** Refresh an observed local chat without refetching its loaded history pages. */
 export async function refreshLocalConversation(queryClient: QueryClient, sessionId: string): Promise<void> {
 	const queryKey = conversationQueryKey(sessionId);
 	const previous = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(queryKey);
 	const live = previous?.pages[0];
-	const fallback = () => queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+	const settingsPending = () => queryClient.isMutating({ mutationKey: conversationSettingsMutationKey(sessionId), exact: true }) > 0;
+	// The latest settings mutation refreshes after committing (or failing). Until
+	// then neither a delta nor its fallback may undo the optimistic picker state.
+	const fallback = () => settingsPending() ? Promise.resolve() : queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+	if (settingsPending()) return;
 	if (queryClient.isFetching({ queryKey, type: "active" }) > 0) {
 		// Joining a request that predates the event cannot acknowledge that event.
 		// Read its cursor, then catch up after it settles.
@@ -426,6 +432,7 @@ export async function refreshLocalConversation(queryClient: QueryClient, session
 		await pending.promise.catch(() => {});
 		pending = queryClient.getQueryCache().find({ queryKey, exact: true });
 	}
+	if (settingsPending()) return;
 	const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(queryKey);
 	if (!current || delta.afterSequence !== afterSequence || delta.conversationId !== live.conversationId || delta.activeBranchId !== live.activeBranchId || delta.visibleAfterSequence !== live.visibleAfterSequence || current.pages[0] !== live) {
 		await fallback();
@@ -904,6 +911,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			} : current,
 		);
 	const chooseSettings = useMutation({
+		mutationKey: conversationSettingsMutationKey(sessionId ?? "", hostId),
 		// Shown at once, so the next pick builds on this one rather than on the saved settings.
 		onMutate: async ({ targetSessionId, settings }: { targetSessionId: string; settings: TurnSettings }) => {
 			await queryClient.cancelQueries({ queryKey: conversationQueryKey(targetSessionId, hostId) });

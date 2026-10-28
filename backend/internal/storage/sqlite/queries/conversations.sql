@@ -2040,7 +2040,7 @@ WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
       WHERE discarded.conversation_id = sqlc.arg(conversation_id)
         AND (
           discarded.rolled_back_at IS NOT NULL
-          OR discarded.promoted_to_turn_id IS NOT NULL
+          OR (discarded.promoted_to_turn_id IS NOT NULL AND discarded.batched_input = 0)
           OR discarded.state = 'cancelled'
         )
   ))
