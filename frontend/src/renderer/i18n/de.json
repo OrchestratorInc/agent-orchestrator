@@ -1033,6 +1033,7 @@
 	"mobile.noPairingHost": "Keine Netzwerkadresse für diesen Computer gefunden. Stellen Sie eine WLAN- oder Ethernet-Verbindung her oder richten Sie Tailscale ein.",
 	"mobile.remoteAccessUnavailable": "Funktioniert nur in diesem Netzwerk – cloudflared ist nicht installiert, daher ist dieser Rechner von außen nicht erreichbar.",
 	"mobile.signInForRemoteAccess": "Funktioniert nur in diesem Netzwerk. Melde dich bei AO an, um diesen Rechner auch von unterwegs zu erreichen.",
+	"mobile.signInToConnect": "Melde dich bei AO an, um ein Telefon zu verbinden. Der Code funktioniert dann zu Hause und unterwegs.",
 	"mobile.remoteAccessFailed": "Funktioniert nur in diesem Netzwerk – der Fernzugriff konnte nicht starten, daher ist dieser Rechner von außen nicht erreichbar.",
 	"mobile.remoteAccessFailedTailscale": "Kein öffentlicher Tunnel – der Fernzugriff konnte nicht starten, daher funktioniert der Code außerhalb dieses Netzwerks nur über Tailscale.",
 	"mobile.installConnector": "cloudflared installieren",

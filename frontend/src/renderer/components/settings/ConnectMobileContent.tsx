@@ -8,6 +8,8 @@ import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
+import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
+import { useLocalSignInDialogStore } from "../../stores/local-signin-dialog-store";
 import { deleteAccountRemoteHost, RemoteHostLimitError } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 import { captureRendererEvent } from "../../lib/telemetry";
@@ -368,14 +370,17 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		};
 	}, []);
 
-	// Reaching this computer away from home needs an AO account: a signed-in
-	// computer is linked and gets a fixed address, a signed-out one pairs on
-	// this network only.
-	const { session } = useCloudSession();
+	// Pairing needs an AO account: a signed-in computer is linked, and its code
+	// carries a fixed address that works at home and away. Only an app with no
+	// AO sign-in at all pairs signed out, on this network only.
+	const { session, status: sessionStatus, configured: signInConfigured, signIn } = useCloudSession();
+	const { available: localAuthAvailable } = useCloudLocalAuth();
+	const openLocalSignIn = useLocalSignInDialogStore((state) => state.openDialog);
 	const { settings } = useSettings();
 	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
 	const accountId = session?.user.id ?? "";
 	const signedIn = Boolean(cloudBaseUrl && accountId);
+	const signInRequired = signInConfigured && !signedIn;
 	// Why the last link left this computer out of the account.
 	const [linkError, setLinkError] = useState("");
 	const reportLinkError = (cause: unknown) =>
@@ -717,15 +722,27 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			<PairingQr value={qrValue} size={QR_CODE_SIZE} animate={animateQr} />
 			{!enabled ? (
 				<div className="absolute inset-0 flex items-center justify-center">
-					<Button
-						type="button"
-						variant="footer-primary"
-						className="rounded-md shadow-lg"
-						onClick={startBridge}
-						disabled={busy || enabled}
-					>
-						{t("mobile.generate")}
-					</Button>
+					{signInRequired ? (
+						<Button
+							type="button"
+							variant="footer-primary"
+							className="rounded-md shadow-lg"
+							onClick={() => (localAuthAvailable ? openLocalSignIn() : signIn())}
+							disabled={sessionStatus === "loading"}
+						>
+							{t("shell.signIn")}
+						</Button>
+					) : (
+						<Button
+							type="button"
+							variant="footer-primary"
+							className="rounded-md shadow-lg"
+							onClick={startBridge}
+							disabled={busy || enabled}
+						>
+							{t("mobile.generate")}
+						</Button>
+					)}
 				</div>
 			) : !qrValue && !unreachable ? (
 				<div
@@ -881,6 +898,12 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 									"mobile.remoteAccessFailed",
 									"Works on this network only — remote access couldn't start, so this machine can't be reached from elsewhere.",
 								)}
+					</p>
+				)}
+
+				{!enabled && signInRequired && (
+					<p className="mt-4 text-xs leading-5 text-settings-muted" data-testid="mobile-sign-in-required" role="status">
+						{t("mobile.signInToConnect", "Sign in to AO to connect a phone. Its code then works at home and away.")}
 					</p>
 				)}
 

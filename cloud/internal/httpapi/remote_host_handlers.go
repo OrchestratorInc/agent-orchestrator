@@ -129,6 +129,7 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 	// Cloud without fixed addresses has none. Checked before any tunnel is
 	// made, so a full account costs no Cloudflare call.
 	limit := 0
+	var previous *domain.RemoteHost // this account's registration of the host
 	if tunnels != nil {
 		limit = domain.MaxRemoteHostsPerAccount
 		listed, err := store.ListRemoteHosts(r.Context(), principal)
@@ -136,7 +137,10 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 			s.writeStoreError(w, r, err)
 			return
 		}
-		if len(listed) >= limit && !slices.ContainsFunc(listed, func(host domain.RemoteHost) bool { return host.HostID == hostID }) {
+		if i := slices.IndexFunc(listed, func(host domain.RemoteHost) bool { return host.HostID == hostID }); i >= 0 {
+			previous = &listed[i]
+		}
+		if len(listed) >= limit && previous == nil {
 			writeRemoteHostLimit(w, r)
 			return
 		}
@@ -151,6 +155,14 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 	// and reconnect every device.
 	if tunnels != nil {
 		defer s.hostTunnels.Lock(principal.UserID, hostID)()
+		// A new host token is a new credential: a new pairing password, or the
+		// machine linked again. The tunnel goes with the old one, so a run
+		// token anyone fetched with it stops working. The registration below,
+		// or the machine's next fetch, makes a new tunnel at the same address.
+		digest := sha256.Sum256([]byte(input.Token))
+		if previous != nil && !s.digestHashes(*previous, hostID, digest[:]) {
+			s.deleteAccountTunnel(r.Context(), principal.UserID, hostID, true)
+		}
 	}
 	ctx := r.Context()
 	if input.URL == "" {
@@ -218,9 +230,9 @@ func (s *Server) deleteRemoteHost(w http.ResponseWriter, r *http.Request) {
 }
 
 // deleteAccountTunnel deletes the tunnel userID's account gave hostID, once the
-// account no longer lists the host. It finishes before the removal answers, so
-// a host added back right after gets a new tunnel rather than the one being
-// deleted. With keepAddress the DNS record stays, as a release leaves it, and
+// account no longer lists the host or its credential changed. It finishes
+// before the request answers, so a host listed again right after gets a new
+// tunnel rather than the one being deleted. With keepAddress the DNS record stays, as a release leaves it, and
 // the sweep deletes it once the host has gone unlisted for 10 minutes: a host
 // added back meanwhile keeps an address no resolver saw vanish, so no phone
 // caches its absence. A failure is left to the sweep. The caller holds the

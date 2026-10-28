@@ -12,6 +12,7 @@ import { linkThisComputer } from "../../lib/link-this-computer";
 // remote-access asks for one.
 const fake = vi.hoisted(() => ({
 	signedIn: false,
+	signIn: vi.fn(),
 	failRemoteAccess: false,
 	// The quick tunnel's name once remote access starts; "" starts none.
 	tunnelHost: "",
@@ -35,8 +36,14 @@ vi.mock("../../hooks/useAwake", () => ({
 }));
 vi.mock("../../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 vi.mock("../../lib/cloud-session", () => ({
-	useCloudSession: () => ({ session: fake.signedIn ? { user: { id: "user_01JAO" } } : null }),
+	useCloudSession: () => ({
+		session: fake.signedIn ? { user: { id: "user_01JAO" } } : null,
+		status: fake.signedIn ? "authenticated" : "unauthenticated",
+		configured: true,
+		signIn: fake.signIn,
+	}),
 }));
+vi.mock("../../hooks/useCloudLocalAuth", () => ({ useCloudLocalAuth: () => ({ available: false }) }));
 vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "https://cp.example.test" } }) }));
 vi.mock("../../lib/account-remote-hosts", async (original) => ({
 	...(await original<typeof import("../../lib/account-remote-hosts")>()),
@@ -90,14 +97,15 @@ beforeEach(() => {
 
 const posted = () => (vi.mocked(apiClient.POST).mock.calls as unknown[][]).map(([path]) => path);
 
-test("a signed-out computer pairs on this network only and says why", async () => {
+test("a signed-out computer is asked to sign in before it pairs", async () => {
 	fake.signedIn = false;
 	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
 
-	expect(await screen.findByTestId("mobile-sign-in-for-remote")).toHaveTextContent("Sign in to AO");
-	expect(posted()).toEqual(["/api/v1/mobile/enable-lan-only"]);
-	expect(linkThisComputer).not.toHaveBeenCalled();
+	expect(fake.signIn).toHaveBeenCalled();
+	expect(screen.getByTestId("mobile-sign-in-required")).toHaveTextContent("Sign in to AO to connect a phone");
+	expect(screen.queryByRole("button", { name: "Generate" })).toBeNull();
+	expect(posted()).toEqual([]);
 });
 
 test("a signed-in computer is linked before its tunnel starts", async () => {

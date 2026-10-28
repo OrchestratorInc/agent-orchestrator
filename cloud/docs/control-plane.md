@@ -283,6 +283,10 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   registration fails with 502 and anything the call made in Cloudflare is
   deleted again; without the settings it is refused with 422.
   Either way the desktop links the computer at its quick tunnel's address.
+  A registration with a new host token (a new pairing password, or the
+  machine linked again) deletes the account's tunnel first, so a run token
+  fetched with the old credential stops working; a new tunnel is made under
+  the same DNS record.
 - The machine fetches its run token from
   `POST /api/cloud/v1/remote-hosts/{hostId}/tunnel`, proving the host with the
   digest of its account token, as the address publish does, and gets the

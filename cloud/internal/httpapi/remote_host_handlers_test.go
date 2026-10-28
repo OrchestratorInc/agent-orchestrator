@@ -497,6 +497,35 @@ func TestRemovingAHostDeletesOnlyThatAccountsTunnel(t *testing.T) {
 	}
 }
 
+// A new pairing password gives the machine a new account token, and the
+// tunnel goes with the old one: a run token fetched with it stops working,
+// and the address stays.
+func TestANewHostTokenGetsANewTunnel(t *testing.T) {
+	s, store, api := newTunnelServer(t)
+	hostID := "h_00000000-0000-0000-0000-000000000001"
+	owner := "00000000-0000-0000-0000-000000000002"
+	key := owner + ":" + hostID
+	register := func(token string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"Mac","token":"`+token+`"}`, owner))
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("register: %d %s", w.Code, w.Body.String())
+		}
+	}
+	register(strings.Repeat("a", 64))
+	first := store.tunnels[key]
+	register(strings.Repeat("a", 64)) // the same link again
+	if _, deleted := api.snapshot(); store.tunnels[key].TunnelID != first.TunnelID || len(deleted) != 0 {
+		t.Fatalf("the same token remade the tunnel: %+v, deleted %v", store.tunnels[key], deleted)
+	}
+	register(strings.Repeat("b", 64))
+	_, deleted := api.snapshot()
+	if row := store.tunnels[key]; row.TunnelID == first.TunnelID || row.Hostname != first.Hostname || row.Released || !slices.Equal(deleted, []string{first.TunnelID}) {
+		t.Fatalf("after a new token: row %+v, deleted %v", row, deleted)
+	}
+}
+
 // A host the sweep released while its machine slept keeps its address for
 // the grace after removal too: nothing left to delete in Cloudflare, but the
 // grace starts now.
@@ -608,7 +637,11 @@ func TestAFullAccountListsNoMoreMachines(t *testing.T) {
 		return w.Code
 	}
 	for i := range domain.MaxRemoteHostsPerAccount {
-		store.hosts[owner+":"+hostID(i)] = domain.RemoteHost{HostID: hostID(i), UserID: owner}
+		sealed, nonce, err := s.secretCipher.Encrypt([]byte(strings.Repeat("a", 64)), "remote-host:"+owner+":"+hostID(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		store.hosts[owner+":"+hostID(i)] = domain.RemoteHost{HostID: hostID(i), UserID: owner, EncryptedToken: sealed, TokenNonce: nonce}
 	}
 	calls, _ := api.snapshot()
 	if code := register(hostID(domain.MaxRemoteHostsPerAccount)); code != http.StatusConflict {

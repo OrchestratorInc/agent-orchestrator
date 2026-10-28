@@ -1030,6 +1030,7 @@
 	"mobile.noPairingHost": "No network address found for this computer. Connect to Wi-Fi or Ethernet, or set up Tailscale.",
 	"mobile.remoteAccessUnavailable": "Works on this network only — cloudflared isn't installed, so this machine can't be reached from elsewhere.",
 	"mobile.signInForRemoteAccess": "Works on this network only. Sign in to AO to reach this computer away from home.",
+	"mobile.signInToConnect": "Sign in to AO to connect a phone. Its code then works at home and away.",
 	"mobile.remoteAccessFailed": "Works on this network only — remote access couldn't start, so this machine can't be reached from elsewhere.",
 	"mobile.remoteAccessFailedTailscale": "No public tunnel — remote access couldn't start, so away from this network the code works only over Tailscale.",
 	"mobile.installConnector": "Install cloudflared",

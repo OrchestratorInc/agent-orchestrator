@@ -1042,6 +1042,7 @@
 	"mobile.noPairingHost": "Nenhum endereço de rede encontrado para este computador. Conecte-se ao Wi-Fi ou Ethernet, ou configure o Tailscale.",
 	"mobile.remoteAccessUnavailable": "Funciona apenas nesta rede — o cloudflared não está instalado, então este computador não pode ser acessado de fora.",
 	"mobile.signInForRemoteAccess": "Funciona apenas nesta rede. Entre no AO para acessar este computador fora de casa.",
+	"mobile.signInToConnect": "Entre no AO para conectar um celular. O código passa a funcionar em casa e fora dela.",
 	"mobile.remoteAccessFailed": "Funciona só nesta rede — não foi possível iniciar o acesso remoto, então esta máquina não pode ser acessada de fora.",
 	"mobile.remoteAccessFailedTailscale": "Sem túnel público — não foi possível iniciar o acesso remoto, então fora desta rede o código só funciona pelo Tailscale.",
 	"mobile.installConnector": "Instalar o cloudflared",
