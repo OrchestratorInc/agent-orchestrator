@@ -2338,7 +2338,7 @@ function ChatHeader({
 						role="tablist"
 					>
 						<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
-							<motion.div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" layoutScroll>
+							<motion.div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" data-tab-scroll-region layoutScroll>
 								{/* The macOS header is a window drag region outside its controls; the
 								    whole tab row opts out so separators and tab edges still take
 								    wheel scrolling and clicks. */}

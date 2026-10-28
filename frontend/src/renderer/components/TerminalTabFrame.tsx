@@ -73,11 +73,11 @@ export function TerminalTabFrame({
 				<span
 					className={cn(
 						"absolute left-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center",
-						// Hit-testable even while faded: a pointer reveals it on the way in,
-						// so the control, never the icon under it, takes the click.
+						// Clickable only while revealed: a tap or a click on a faded slot
+						// selects the tab (the icon lets it through) instead of closing it.
 						actionPinned
 							? undefined
-							: "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 has-[[data-state=open]]:opacity-100 in-data-dragging:opacity-100",
+							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 in-data-dragging:pointer-events-auto in-data-dragging:opacity-100",
 					)}
 					data-terminal-tab-action
 				>

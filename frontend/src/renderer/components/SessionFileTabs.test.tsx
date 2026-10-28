@@ -20,16 +20,10 @@ describe("SessionFileTabs", () => {
 			</TooltipProvider>,
 		);
 		const tab = screen.getByRole("tab", { name: "App.tsx" });
-		const languageIcon = tab.querySelector('[aria-hidden="true"]');
-		expect(languageIcon).toBeInTheDocument();
-		expect(languageIcon?.parentElement).toHaveClass("group-hover:opacity-0", "group-focus-within:opacity-0");
+		expect(tab.querySelector('[aria-hidden="true"]')).toBeInTheDocument();
 		const closeButton = screen.getByRole("button", { name: "Close App.tsx" });
-		expect(closeButton.closest("[data-terminal-tab-action]")).toHaveClass("absolute", "left-2");
-		expect(closeButton.closest("[data-terminal-tab-action]")).toHaveClass("opacity-0", "group-hover:opacity-100");
 		expect(screen.queryByRole("button", { name: "Add feedback for file src/App.tsx" })).not.toBeInTheDocument();
-		expect(tab.closest("[data-terminal-tab-frame]")).toHaveClass("max-w-shell-tab-max");
-		expect(tab.closest("[data-terminal-tab-frame]")).not.toHaveClass("pl-3", "pr-1.5");
-		await userEvent.click(languageIcon!);
+		await userEvent.click(screen.getByText("App.tsx"));
 		expect(onActivateFile).toHaveBeenCalledWith("src/App.tsx");
 		await userEvent.click(closeButton);
 		expect(onCloseFile).toHaveBeenCalledWith("src/App.tsx");

@@ -130,6 +130,8 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 		if (Math.abs(x.get() - next) > 0.01) x.set(next);
 	}, [x]);
 	useEffect(() => x.on("change", followPointer), [x, followPointer]);
+	// A tab removed mid-drag gets no onDragEnd; drop its scroll listener anyway.
+	useEffect(() => () => dragRef.current?.scroller?.removeEventListener("scroll", followPointer), [followPointer]);
 	useLayoutEffect(followPointer);
 
 	return (
@@ -156,7 +158,7 @@ export function DraggableWorkspaceTab({ children, value }: { children: ReactNode
 				const item = itemRef.current;
 				if (!item) return;
 				const pointerX = (event as globalThis.PointerEvent).clientX;
-				const scroller = item.closest<HTMLElement>(".overflow-x-auto");
+				const scroller = item.closest<HTMLElement>("[data-tab-scroll-region]");
 				dragRef.current = { pointerX, grabOffset: pointerX - item.getBoundingClientRect().left, scroller };
 				scroller?.addEventListener("scroll", followPointer);
 				setDragging(true);
@@ -528,6 +530,7 @@ export function CenterPane({
 								<motion.div
 									ref={tabsOverflowRef}
 									className="session-tab-scroll-region scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
+									data-tab-scroll-region
 									layoutScroll
 								>
 								{/* The macOS header is a window drag region outside its controls; the
@@ -664,6 +667,15 @@ export function CenterPane({
 	);
 }
 
+// The interface switch arrives as a shared topbar control (28px button, or a
+// 28px status with a cancel button). In the tab's icon slot it is resized to
+// match the close and menu controls: a 16px box, 13px glyph, 28px hit area.
+const sessionTabActionClassName = cn(
+	"grid place-items-center [&_svg]:size-icon-sm",
+	"[&_.topbar-control--icon]:relative [&_.topbar-control--icon]:size-icon-base [&_.topbar-control--icon]:rounded-sm [&_.topbar-control--icon]:before:absolute [&_.topbar-control--icon]:before:-inset-1.5 [&_.topbar-control--icon]:before:content-['']",
+	"[&_[role=status]]:size-icon-base [&_[role=status]_button]:rounded-sm [&_[role=status]_button]:before:absolute [&_[role=status]_button]:before:-inset-1.5 [&_[role=status]_button]:before:content-['']",
+);
+
 type SessionPaneTabProps = {
 	label: string;
 	isActive: boolean;
@@ -728,7 +740,7 @@ export function SessionPaneTab({
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			action={!rename.isEditing && tabAction ? <span className="grid place-items-center [&_svg]:size-icon-sm" data-testid="session-tab-action">{tabAction}</span> : undefined}
+			action={!rename.isEditing && tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span> : undefined}
 			actionPinned={tabActionPinned}
 			active={isActive}
 			buttonProps={{
