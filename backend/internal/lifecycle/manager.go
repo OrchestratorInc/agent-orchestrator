@@ -1343,18 +1343,21 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 		// on the user" marker; only an explicit user/turn signal does.
 		return suppressed
 
-	case s.Event == "permission-resolved" && s.ToolUseID != "":
+	case s.Event == "permission-resolved":
 		// A correlated result resolves only its own approval: while another
 		// recorded request is still pending — a concurrent dialog, or a late
 		// result reordered after the next request — the session stays on
 		// waiting_input instead of flipping to Working prematurely. An
-		// id-less or unrecorded result (old CLI, restarted daemon) keeps the
-		// unconditional turn-boundary clear.
-		if fl != nil && fl.permissionPending != nil {
+		// id-less result cannot prove WHICH approval it resolved, so it must
+		// not clear the wait either while tracked approvals remain. The
+		// unconditional turn-boundary clear survives only when no correlated
+		// requests are tracked (old CLI, restarted daemon, id-less adapters
+		// such as cline).
+		if s.ToolUseID != "" && fl != nil {
 			delete(fl.permissionPending, s.ToolUseID)
-			if len(fl.permissionPending) > 0 {
-				return suppressed
-			}
+		}
+		if fl != nil && len(fl.permissionPending) > 0 {
+			return suppressed
 		}
 		delete(m.flights, id)
 		return s
