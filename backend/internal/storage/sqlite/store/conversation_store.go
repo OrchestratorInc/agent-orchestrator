@@ -192,7 +192,7 @@ func (s *Store) createConversation(
 		if existing, err := s.qw.SelectProjectConversation(ctx, optionalProjectID(options.project)); err == nil {
 			if options.preserveOwner {
 				if existing.CurrentSessionID == nil || *existing.CurrentSessionID != options.session {
-					return domain.ConversationRecord{}, fmt.Errorf("project conversation %s is no longer owned by session %s", existing.ID, options.session)
+					return domain.ConversationRecord{}, fmt.Errorf("project conversation %s is no longer owned by session %s: %w", existing.ID, options.session, ports.ErrProjectConversationReplaced)
 				}
 				return conversationToDomain(existing), nil
 			}

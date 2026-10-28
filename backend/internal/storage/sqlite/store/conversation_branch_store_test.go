@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
@@ -1170,6 +1171,30 @@ func TestCommitChatSpawnRollsBackProviderBoundaryWhenOwnerWriteFails(t *testing.
 		t.Fatalf("provider owner after rollback = handle %q generation %q, want %q/%q",
 			gotSession.Metadata.ProviderConversationID, gotSession.Metadata.ControllerGeneration,
 			sourceHandle, sourceGeneration)
+	}
+}
+
+func TestOpenNativeConversationRejectsReplacedOrchestrator(t *testing.T) {
+	ctx := context.Background()
+	s := newTestStore(t)
+	seedProject(t, s, "chat-replaced")
+	old := sampleRecord("chat-replaced")
+	old, err := s.CreateSession(ctx, old)
+	if err != nil {
+		t.Fatalf("Create old session: %v", err)
+	}
+	newer, err := s.CreateSession(ctx, sampleRecord("chat-replaced"))
+	if err != nil {
+		t.Fatalf("Create newer session: %v", err)
+	}
+	if _, err := s.CreateConversation(ctx, "project-conversation",
+		domain.ConversationScopeProject, old.ProjectID, newer.ID, testNow); err != nil {
+		t.Fatalf("CreateConversation newer: %v", err)
+	}
+
+	_, err = s.OpenNativeConversation(ctx, "unused", domain.ConversationScopeProject, old.ProjectID, old.ID, testNow)
+	if !errors.Is(err, ports.ErrProjectConversationReplaced) {
+		t.Fatalf("OpenNativeConversation error = %v, want ErrProjectConversationReplaced", err)
 	}
 }
 
