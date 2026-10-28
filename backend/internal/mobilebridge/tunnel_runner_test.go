@@ -32,6 +32,20 @@ func fakeCloudflared(t *testing.T, stderr string) (bin, argsFile string) {
 	return bin, argsFile
 }
 
+// exitingCloudflared is a connector that prints stderr and exits.
+func exitingCloudflared(t *testing.T, stderr string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake connector is a shell script")
+	}
+	bin := filepath.Join(t.TempDir(), "cloudflared")
+	script := "#!/bin/sh\ncat >&2 <<'EOF'\n" + stderr + "\nEOF\nexit 1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil { //nolint:gosec // G306: the test runs it
+		t.Fatal(err)
+	}
+	return bin
+}
+
 func namedRunner(t *testing.T, bin string, src *FixedTunnelSource) *TunnelRunner {
 	t.Helper()
 	// An hour of settling proves an advertised address did not wait for it.
@@ -267,13 +281,7 @@ func TestTunnelRunnerServesAQuickTunnelUntilARefusedTunnelIsRemade(t *testing.T)
 // the watchers stopped.
 func TestTunnelRunnerJudgesAConnectorThatExitsOnARefusal(t *testing.T) {
 	_, src := newFixedSource(t)
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "cloudflared")
-	script := "#!/bin/sh\ncat >&2 <<'EOF'\n" + refusedLine + "\nEOF\nexit 1\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil { //nolint:gosec // G306: the test runs it
-		t.Fatal(err)
-	}
-	r := namedRunner(t, bin, src)
+	r := namedRunner(t, exitingCloudflared(t, refusedLine), src)
 	if err := r.runOnce(context.Background()); err == nil || !r.repair || r.refused != "run-token-tun-1" {
 		t.Fatalf("runOnce = %v, repair %v, refused %q", err, r.repair, r.refused)
 	}
@@ -283,13 +291,7 @@ func TestTunnelRunnerJudgesAConnectorThatExitsOnARefusal(t *testing.T) {
 // tunnel: no repair, and none still owed.
 func TestTunnelRunnerDoesNotRepairAConnectorThatServedAndExited(t *testing.T) {
 	_, src := newFixedSource(t)
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "cloudflared")
-	script := "#!/bin/sh\ncat >&2 <<'EOF'\n" + registeredLine + "\nEOF\nexit 1\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil { //nolint:gosec // G306: the test runs it
-		t.Fatal(err)
-	}
-	r := namedRunner(t, bin, src)
+	r := namedRunner(t, exitingCloudflared(t, registeredLine), src)
 	r.repair = true // owed from an earlier run, answered from the stored tunnel
 	if err := r.runOnce(context.Background()); err == nil || r.repair || r.refused != "" {
 		t.Fatalf("runOnce = %v, repair %v, refused %q", err, r.repair, r.refused)
