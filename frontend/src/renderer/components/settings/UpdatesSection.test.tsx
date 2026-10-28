@@ -114,6 +114,19 @@ it("links PRs and commits in downloaded notes from the renamed repository", asyn
 	expect(screen.queryByText(/@illegalcall/)).toBeNull();
 });
 
+it("names the newer build when a full disk holds it back (#6607)", async () => {
+	updGetStatus.mockResolvedValue({
+		state: "error",
+		message: "Not enough disk space to install the update. Free up space, then retry.",
+		version: "0.13.8-nightly.202610121355",
+		staged: { version: "0.13.7-nightly.202610101220", stagedAt: 1, escalated: false, ready: false },
+	} satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByText(/Not enough disk space to install the update/)).toBeVisible();
+	expect(screen.getByText("v0.13.8-nightly.202610121355 is available")).toBeVisible();
+});
+
 it.each(["downloaded", "error"] as const)("shows updating feedback immediately until the update reaches %s", async (state) => {
 	let emit: (status: UpdateStatus) => void = () => undefined;
 	updOnStatus.mockImplementation((listener: typeof emit) => {

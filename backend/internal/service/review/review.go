@@ -91,6 +91,7 @@ type Service struct {
 	codexOperationGate ports.CodexOperationGate
 	notifications      reviewNotificationSink
 	prRefresher        PRRefresher
+	reviewRefresher    ThreadRefresher
 	// engineTrigger indirects the engine's source-tagged trigger so the
 	// instrumented path can be exercised without standing up a full engine and
 	// its eighteen-method store. Defaulted in New; only tests replace it.
@@ -142,6 +143,19 @@ type Option func(*Service)
 // requested review, so the pass covers the commit actually on the PR.
 func WithPRRefresher(r PRRefresher) Option {
 	return func(s *Service) { s.prRefresher = r }
+}
+
+// ThreadRefresher asks SCM observation to read one PR's review threads now
+// rather than on its next scheduled poll. It must not block.
+type ThreadRefresher interface {
+	RequestReviewRefresh(prURL string)
+}
+
+// WithThreadRefresher refreshes a PR's review threads as soon as an AO review
+// posted to the provider is submitted, so its comments reach the worker
+// without waiting for the poller to notice them.
+func WithThreadRefresher(r ThreadRefresher) Option {
+	return func(s *Service) { s.reviewRefresher = r }
 }
 
 // WithClock overrides the service clock for tests.
@@ -830,6 +844,9 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		run.Body = body
 		run.GithubReviewID = githubReviewID
 		run.AutoInjectReview = session.AutoInjectReview
+		if githubReviewID != "" && s.reviewRefresher != nil {
+			s.reviewRefresher.RequestReviewRefresh(run.PRURL)
+		}
 		// Only on the real running -> complete transition. Re-submitting an
 		// already-complete run returns early below, so telemetry stays idempotent
 		// the same way the store does.

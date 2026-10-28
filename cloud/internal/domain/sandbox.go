@@ -127,6 +127,8 @@ type AccessTicket struct {
 	Scopes      []string
 	WorkerEpoch int64
 	ExpiresAt   time.Time
+	// UserID is the person the ticket was issued to; empty when unknown.
+	UserID string
 }
 
 // WorkerLaunch is the durable session context a bootstrapped worker needs in

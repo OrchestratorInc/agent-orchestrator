@@ -18,6 +18,12 @@ func writeClaimPRCheckout(w io.Writer, branchChanged bool) error {
 	if branchChanged {
 		checkout = "switched to PR branch"
 	}
-	_, err := fmt.Fprintf(w, "  checkout: %s\n", checkout)
-	return err
+	if _, err := fmt.Fprintf(w, "  checkout: %s\n", checkout); err != nil {
+		return err
+	}
+	if !branchChanged {
+		_, err := fmt.Fprintln(w, "  Before editing: preserve local changes, fetch the PR, then switch using its verified full head SHA. Do not use FETCH_HEAD as a checkout target: a branch with that name can make Git fail after changing the index/worktree. Verify git status, branch and HEAD after switching, even on failure.")
+		return err
+	}
+	return nil
 }

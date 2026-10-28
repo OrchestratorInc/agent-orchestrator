@@ -12,10 +12,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -192,17 +192,13 @@ func (f *Server) get(w http.ResponseWriter, r *http.Request, key, versionID stri
 		writeError(w, r, http.StatusNotFound, code)
 		return
 	}
-	w.Header().Set("Content-Length", strconv.Itoa(len(found.body)))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("x-amz-version-id", found.id)
 	w.Header().Set("ETag", `"`+found.id+`"`)
 	if strings.EqualFold(r.Header.Get("X-Amz-Checksum-Mode"), "ENABLED") {
 		w.Header().Set("x-amz-checksum-sha256", base64.StdEncoding.EncodeToString(found.sum))
 	}
-	w.WriteHeader(http.StatusOK)
-	if r.Method == http.MethodGet {
-		_, _ = w.Write(found.body)
-	}
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(found.body))
 }
 
 func (f *Server) delete(w http.ResponseWriter, key, versionID string) {

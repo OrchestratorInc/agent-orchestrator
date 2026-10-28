@@ -238,6 +238,10 @@ function requiredFreeBytesToStage(archiveBytes: number | undefined): number {
 const STAGE_STALL_MESSAGE = "Couldn't finish preparing the update. AO stayed open, so nothing changed. Retry to try again.";
 const STAGE_DISK_MESSAGE = "Not enough disk space to install the update. Free up space, then retry.";
 let nativePreparationBlocked: Error | undefined;
+// A stage refused by the disk preflight. Unlike a stall nothing reached
+// Squirrel, so this is not sticky: every updater operation re-probes the disk,
+// and checks keep running meanwhile so a newer build stays visible (#6607).
+let stagingDiskShortfall: { requiredBytes: number; error: Error } | undefined;
 let rejectNativeOperation: ((error: Error) => void) | undefined;
 let nativePreparation: { version: string; promise: Promise<void>; finish(error?: Error): void } | undefined;
 
@@ -307,6 +311,16 @@ function blockNativePreparation(message: string): void {
   activeDownloadCancellation?.cancel();
 }
 
+// Clears a disk shortfall once the volume has room again. The refused build was
+// never handed to Squirrel, so it is treated like one remembered from an earlier
+// run: the next check or restart re-downloads it (a cache hit) and re-stages.
+function reprobeStagingDisk(): void {
+  if (stagingDiskShortfall === undefined || stagingDiskIsFull(stagingDiskShortfall.requiredBytes)) return;
+  if (nativePreparationError === stagingDiskShortfall.error) nativePreparationError = undefined;
+  stagingDiskShortfall = undefined;
+  stagedInCurrentProcess = false;
+}
+
 // Test seam: override the filesystem probes to drive the watchdog
 // deterministically. A fresh module import restores the defaults.
 let readStagingBytes: (dir: string | undefined) => number | undefined = shipItStagingBytes;
@@ -327,13 +341,20 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
     return;
   }
   // Catch a full disk before ditto fails partway with a cryptic pkzip error (#5170).
-  if (stagingDiskIsFull(requiredFreeBytesToStage(archiveBytes))) {
-    blockNativePreparation(STAGE_DISK_MESSAGE);
+  const requiredBytes = requiredFreeBytesToStage(archiveBytes);
+  if (stagingDiskIsFull(requiredBytes)) {
+    const error = new Error(STAGE_DISK_MESSAGE);
+    stagingDiskShortfall = { requiredBytes, error };
+    // Runs inside electron-updater's update-downloaded dispatch, before
+    // MacUpdater hands the build to Squirrel, so this keeps it from staging.
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
     nativeReadyVersion = undefined;
-    nativePreparationError = nativePreparationBlocked;
+    nativePreparationError = error;
     broadcast(stagedDownloadedStatus());
     return;
   }
+  stagingDiskShortfall = undefined;
   nativeReadyVersion = undefined;
   nativePreparationError = undefined;
   let resolve!: () => void;
@@ -597,23 +618,12 @@ function broadcast(
     lastCheckedAtMs === undefined || status.checkedAt !== undefined
       ? status
       : { ...status, checkedAt: lastCheckedAtMs };
-  const describesAnOffer =
-    status.state === "available" ||
-    status.state === "downloading" ||
-    status.state === "preparing" ||
-    status.state === "downloaded";
+  const { releaseNotes: _ignored, ...statusWithoutNotes } = statusWithCheckTime;
   const stamped: UpdateStatus = {
-    ...statusWithCheckTime,
+    ...statusWithoutNotes,
     ...stagedStamp(),
+    ...releaseNotesFor(status),
     ...(lastCheckError ? { checkError: lastCheckError } : {}),
-    // Only on statuses that actually describe a build on offer: "not-available"
-    // carrying notes for a build the user already has would read as news.
-    ...(describesAnOffer &&
-      !hasStagedBuild() &&
-      offeredReleaseNotes !== undefined &&
-      status.releaseNotes === undefined
-      ? { releaseNotes: offeredReleaseNotes }
-      : {}),
     ...(consecutiveAutomaticNetFailures >= STALE_CHECK_NUDGE_THRESHOLD
       ? { staleCheckNudge: true }
       : {}),
@@ -653,8 +663,11 @@ function broadcastUpdaterStatus(status: UpdateStatus): void {
   );
 }
 
-function broadcastCompletedCheck(status: UpdateStatus): void {
-  if (status.state !== "error") {
+function broadcastCompletedCheck(
+  status: UpdateStatus,
+  checkSucceeded = status.state !== "error",
+): void {
+  if (checkSucceeded) {
     lastCheckedAtMs = Date.now();
     lastCheckError = undefined;
   }
@@ -881,7 +894,7 @@ async function fetchNightlyImportant(
  * transient checking/available/not-available state cannot make the sidebar's
  * restart row disappear mid-check. Empty when nothing is staged.
  */
-function stagedStamp(): Pick<UpdateStatus, "staged" | "releaseNotes"> {
+function stagedStamp(): Pick<UpdateStatus, "staged"> {
   if (stagedAtMs === undefined) return {};
   return {
     staged: {
@@ -889,9 +902,39 @@ function stagedStamp(): Pick<UpdateStatus, "staged" | "releaseNotes"> {
       stagedAt: stagedAtMs,
       escalated: stagedEscalated,
       ...(isNativeInstallReady() ? {} : { ready: false }),
+      ...(stagedReleaseNotes === undefined ? {} : { releaseNotes: stagedReleaseNotes }),
     },
-    ...(stagedReleaseNotes === undefined ? {} : { releaseNotes: stagedReleaseNotes }),
   };
+}
+
+/**
+ * Notes for the build a status describes. `staged.releaseNotes` always carries
+ * the staged build's own notes; this top-level field follows `status.version`.
+ * A status about a newer build (one downloading over the staged one, or one the
+ * disk preflight is holding back) gets the offer's notes, never the staged
+ * build's changelog under the newer version (#6607). Everything else keeps the
+ * staged build's notes, as the restart flows expect.
+ */
+function releaseNotesFor(status: UpdateStatus): Pick<UpdateStatus, "releaseNotes"> {
+  const describesAnOffer =
+    status.state === "available" ||
+    status.state === "downloading" ||
+    status.state === "preparing" ||
+    status.state === "downloaded" ||
+    (status.state === "error" && status.version !== undefined);
+  const offerSupersedesStaged =
+    describesAnOffer && hasStagedBuild() && status.version !== undefined && status.version !== stagedVersion;
+  let notes = status.releaseNotes;
+  if (offerSupersedesStaged) {
+    notes ??= offeredReleaseNotes;
+  } else if (stagedAtMs !== undefined && stagedReleaseNotes !== undefined) {
+    notes = stagedReleaseNotes;
+  } else if (describesAnOffer && !hasStagedBuild()) {
+    // "not-available" carrying notes for a build the user already has would
+    // read as news, so only offers pick up the offered notes.
+    notes ??= offeredReleaseNotes;
+  }
+  return notes === undefined ? {} : { releaseNotes: notes };
 }
 
 /**
@@ -1194,6 +1237,18 @@ async function checkForUpdatesWithDeadline(): Promise<UpdateCheckOutcome> {
   }
 }
 
+// A check that found a build. While the disk preflight refuses staging the
+// build is not downloaded, so report the reason with the version still named
+// rather than hiding that something newer exists (#6607).
+function broadcastAvailable(version: string | undefined): void {
+  broadcastCompletedCheck(
+    stagingDiskShortfall
+      ? { state: "error", message: stagingDiskShortfall.error.message, version }
+      : { state: "available", version },
+    true,
+  );
+}
+
 /**
  * Land a terminal status when a check resolved without emitting one.
  *
@@ -1209,11 +1264,12 @@ function settleCheckStatus(result: UpdateCheckOutcome): void {
   if (lastStatus.state !== "checking") return;
   const version = result?.updateInfo?.version;
   if (result?.isUpdateAvailable === true && version !== undefined) {
-    broadcastCompletedCheck({ state: "available", version });
+    broadcastAvailable(version);
     return;
   }
   broadcastCompletedCheck(
     hasStagedBuild() ? stagedDownloadedStatus() : unavailableChannelStatus(version),
+    true,
   );
 }
 
@@ -1231,22 +1287,27 @@ function broadcastDiscoveredAvailable(): void {
     lastStatus.state === "available" ||
     lastStatus.state === "downloading" ||
     lastStatus.state === "preparing" ||
-    lastStatus.state === "downloaded"
+    lastStatus.state === "downloaded" ||
+    (stagingDiskShortfall && lastStatus.state === "error" && lastStatus.version === discovered.version)
   ) {
     return;
   }
   if (hasStagedBuild() && !supersedesStagedBuild(discovered.version)) return;
   pendingUpdateVersion = discovered.version;
   offeredReleaseNotes = discovered.notes ?? offeredReleaseNotes;
-  broadcastCompletedCheck({ state: "available", version: discovered.version });
+  // Goes through broadcastAvailable so a disk refusal still names the build
+  // instead of offering a Download the preflight would refuse (#6607).
+  broadcastAvailable(discovered.version);
 }
 
 // stagedDownloadedStatus rebuilds the enriched downloaded status from module
 // state, so transient check states can restore the row without recomputing.
 function stagedDownloadedStatus(): UpdateStatus {
   return {
-    state: nativePreparationBlocked ? "error" : isNativeInstallReady() || !stagedInCurrentProcess ? "downloaded" : "preparing",
-    ...(nativePreparationBlocked ? { message: nativePreparationBlocked.message } : {}),
+    state: nativePreparationBlocked || stagingDiskShortfall ? "error" : isNativeInstallReady() || !stagedInCurrentProcess ? "downloaded" : "preparing",
+    ...(nativePreparationBlocked || stagingDiskShortfall
+      ? { message: (nativePreparationBlocked ?? stagingDiskShortfall!.error).message }
+      : {}),
     version: stagedVersion,
     stagedAt: stagedAtMs,
     escalated: stagedEscalated,
@@ -1267,7 +1328,7 @@ async function runEscalationCheck(): Promise<void> {
   }
   if (escalationStateDir === undefined) return;
   // A newer build is being pulled; let its progress own the status stream.
-  if (lastStatus.state === "downloading" || lastStatus.state === "preparing" || nativePreparationBlocked) return;
+  if (lastStatus.state === "downloading" || lastStatus.state === "preparing" || nativePreparationBlocked || stagingDiskShortfall) return;
   const evaluatedVersion = stagedVersion;
   const evaluatedAt = stagedAtMs;
   try {
@@ -1322,6 +1383,7 @@ async function runSerializedUpdaterOperation(
 ): Promise<void> {
   const run = async () => {
     if (nativePreparationBlocked) throw nativePreparationBlocked;
+    if (operation !== "settings-write") reprobeStagingDisk();
     // A completed proxy transfer is not completed native staging. Holding this
     // gate prevents a late native event for A being attributed to a newer B.
     if (nativePreparation) await nativePreparation.promise;
@@ -1811,7 +1873,8 @@ function wireUpdaterEvents(): void {
     // quit, so keep the richer downloaded status instead of hiding the row.
     refreshStagedReleaseNotes(info?.version, info?.releaseNotes);
     if (stagedAtMs !== undefined && info?.version === stagedVersion) {
-      broadcastCompletedCheck(stagedDownloadedStatus());
+      // The feed answered, so the check succeeded even if staging is refused.
+      broadcastCompletedCheck(stagedDownloadedStatus(), true);
       return;
     }
     // A different build is a different target, so it starts with a full budget
@@ -1825,7 +1888,7 @@ function wireUpdaterEvents(): void {
     pendingUpdateVersion = info?.version;
     emitUpdateOutcome({ event: "ao.renderer.update_check_succeeded", phase: "check", trigger: activeUpdateTrigger() });
     offeredReleaseNotes = normalizeReleaseNotes(info?.releaseNotes) ?? directFeedReleaseNotes;
-    broadcastCompletedCheck({ state: "available", version: info?.version });
+    broadcastAvailable(info?.version);
     if (autoUpdater.autoDownload) {
       activeUpdaterPhase = "download";
       broadcastUpdaterStatus({ state: "downloading", version: info?.version });
@@ -2093,15 +2156,12 @@ export function getUpdateStatus(): UpdateStatus {
   // Derive the nudge at read time: a streak can cross the threshold without
   // any broadcast (no checking-for-update → restore no-ops), and Settings
   // seeds from this getter (#3526).
+  const { releaseNotes: _ignored, ...statusWithoutNotes } = lastStatus;
   return {
-    ...lastStatus,
+    ...statusWithoutNotes,
     ...stagedStamp(),
+    ...releaseNotesFor(lastStatus),
     ...(lastCheckError ? { checkError: lastCheckError } : {}),
-    ...(offeredReleaseNotes !== undefined && lastStatus.releaseNotes === undefined &&
-      !hasStagedBuild() &&
-      (lastStatus.state === "available" || lastStatus.state === "downloading" || lastStatus.state === "downloaded")
-      ? { releaseNotes: offeredReleaseNotes }
-      : {}),
     ...(consecutiveAutomaticNetFailures >= STALE_CHECK_NUDGE_THRESHOLD
       ? { staleCheckNudge: true }
       : {}),
@@ -2197,9 +2257,11 @@ async function runAutomaticUpdateCheck(
       // build that keeps failing verification is fetched and re-prepared on
       // every check, forever. A stale staged build still overrides, because
       // leaving THAT one armed installs a channel the user has left.
-      autoUpdater.autoDownload =
+      // No download while the disk cannot stage it; the check still reports
+      // what is available.
+      autoUpdater.autoDownload = !stagingDiskShortfall && (
         staleStaged || (hasStagedBuild() && !isNativeInstallReady()) ||
-        (settings.enabled && !hasStagedBuild() && !automaticRecoveryExhausted());
+        (settings.enabled && !hasStagedBuild() && !automaticRecoveryExhausted()));
       applyInstallOnQuitPolicy();
       // Only prerelease channels resolve a direct feed. Skipping the await on
       // stable keeps that check's event ordering exactly as it was.
@@ -2211,7 +2273,7 @@ async function runAutomaticUpdateCheck(
         settleCheckStatus(result);
         if (result?.downloadPromise) {
           await awaitStartedDownload(result);
-        } else if (settings.enabled) {
+        } else if (settings.enabled && !stagingDiskShortfall) {
           if (
             result?.isUpdateAvailable === true &&
             supersedesStagedBuild(result.updateInfo?.version)
@@ -2407,7 +2469,7 @@ export async function checkForUpdatesNow(
         // channel's build armed, and only staging the new one over it helps.
         const staleStaged = stagedBuildIsStale(settings);
         if (staleStaged) discardStagedBuild();
-        autoUpdater.autoDownload = staleStaged || (hasStagedBuild() && !isNativeInstallReady());
+        autoUpdater.autoDownload = !stagingDiskShortfall && (staleStaged || (hasStagedBuild() && !isNativeInstallReady()));
         applyInstallOnQuitPolicy();
         broadcastUpdaterStatus({ state: "checking" });
         const restoreFeed = await configureDirectPrereleaseFeed(settings);
@@ -2419,7 +2481,7 @@ export async function checkForUpdatesNow(
           // is still running.
           if (result?.downloadPromise) failed.phase = "download";
           await awaitStartedDownload(result);
-          if (!result?.downloadPromise && settings.enabled && result?.isUpdateAvailable &&
+          if (!result?.downloadPromise && settings.enabled && !stagingDiskShortfall && result?.isUpdateAvailable &&
               (!hasStagedBuild() || supersedesStagedBuild(result.updateInfo?.version))) {
             failed.phase = "download";
             activeUpdaterPhase = "download";
@@ -2510,7 +2572,7 @@ export async function returnToHome(
         // armed and has to be superseded, not merely forgotten.
         const staleStaged = stagedBuildIsStale(settings);
         if (staleStaged) discardStagedBuild();
-        autoUpdater.autoDownload = staleStaged || (hasStagedBuild() && !isNativeInstallReady());
+        autoUpdater.autoDownload = !stagingDiskShortfall && (staleStaged || (hasStagedBuild() && !isNativeInstallReady()));
         applyInstallOnQuitPolicy();
         broadcastUpdaterStatus({ state: "checking" });
         const result = await checkForUpdatesWithDeadline();
@@ -2568,6 +2630,7 @@ export async function downloadUpdateNow(requestId?: string): Promise<void> {
         // watchdog could report a stall but never release the request.
         const token = new CancellationToken();
         if (lastStatus.state === "downloaded" || lastStatus.state === "preparing") return;
+        if (stagingDiskShortfall) throw stagingDiskShortfall.error;
         pendingUpdateVersion = lastStatus.version ?? version;
         broadcastUpdaterStatus({ state: "downloading", version: pendingUpdateVersion });
         activeDownloadCancellation = token;
@@ -2688,7 +2751,7 @@ export function getMacInstallBlocker(): string | undefined {
 // the staged build wait for a location it can actually install from.
 function applyInstallOnQuitPolicy(): void {
   const blocker = getMacInstallBlocker();
-  autoUpdater.autoInstallOnAppQuit = blocker === undefined && !awaitingStagedReplacement && !nativePreparationBlocked;
+  autoUpdater.autoInstallOnAppQuit = blocker === undefined && !awaitingStagedReplacement && !nativePreparationBlocked && !stagingDiskShortfall;
   if (awaitingStagedReplacement) {
     console.info(
       "install-on-quit disabled until the replacement build is staged; the cached one belongs to a channel the user left",

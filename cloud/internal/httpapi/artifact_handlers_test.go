@@ -886,6 +886,61 @@ func TestArtifactFileHeadReadsNoBody(t *testing.T) {
 	}
 }
 
+func TestArtifactFileServesByteRanges(t *testing.T) {
+	h := newArtifactHarness(t, true)
+	body := []byte("0123456789")
+	h.syncArtifacts(map[string][]byte{"clip.mp4": body})
+	prefix := h.accessPrefix(artifactTokenA, artifactOrgA, artifactSessionA)
+
+	whole := h.do(http.MethodGet, prefix+"clip.mp4", "", nil, nil)
+	if whole.Code != http.StatusOK || whole.Header().Get("Accept-Ranges") != "bytes" || whole.Body.String() != string(body) {
+		t.Fatalf("whole file: %d %v %q", whole.Code, whole.Header(), whole.Body.String())
+	}
+	etag := whole.Header().Get("ETag")
+
+	for _, tc := range []struct{ name, header, want, contentRange string }{
+		{"closed", "bytes=2-4", "234", "bytes 2-4/10"},
+		{"open ended", "bytes=7-", "789", "bytes 7-9/10"},
+		{"suffix", "bytes=-3", "789", "bytes 7-9/10"},
+	} {
+		rec := h.do(http.MethodGet, prefix+"clip.mp4", "", nil, map[string]string{"Range": tc.header})
+		if rec.Code != http.StatusPartialContent || rec.Body.String() != tc.want || rec.Header().Get("Content-Range") != tc.contentRange ||
+			rec.Header().Get("Content-Length") != strconv.Itoa(len(tc.want)) || rec.Header().Get("Content-Type") != "video/mp4" {
+			t.Fatalf("%s: %d %v %q", tc.name, rec.Code, rec.Header(), rec.Body.String())
+		}
+	}
+
+	for name, headers := range map[string]map[string]string{
+		"several ranges": {"Range": "bytes=0-1,3-4"},
+		"unit not bytes": {"Range": "items=0-1"},
+		"stale If-Range": {"Range": "bytes=2-4", "If-Range": `"other"`},
+	} {
+		if rec := h.do(http.MethodGet, prefix+"clip.mp4", "", nil, headers); rec.Code != http.StatusOK || rec.Body.String() != string(body) {
+			t.Fatalf("%s: %d %q", name, rec.Code, rec.Body.String())
+		}
+	}
+	if rec := h.do(http.MethodGet, prefix+"clip.mp4", "", nil, map[string]string{"Range": "bytes=2-4", "If-Range": etag}); rec.Code != http.StatusPartialContent {
+		t.Fatalf("matching If-Range: %d", rec.Code)
+	}
+
+	past := h.do(http.MethodGet, prefix+"clip.mp4", "", nil, map[string]string{"Range": "bytes=50-60"})
+	if past.Code != http.StatusRequestedRangeNotSatisfiable || past.Header().Get("Content-Range") != "bytes */10" {
+		t.Fatalf("range past the end: %d %v", past.Code, past.Header())
+	}
+}
+
+func TestArtifactMediaContentTypes(t *testing.T) {
+	for path, want := range map[string]string{
+		"a.mp4": "video/mp4", "a.webm": "video/webm", "a.mov": "video/quicktime", "a.m4v": "video/x-m4v", "a.ogv": "video/ogg",
+		"a.m4a": "audio/mp4", "a.aac": "audio/aac", "a.flac": "audio/flac", "a.ogg": "audio/ogg", "a.opus": "audio/ogg",
+		"a.avif": "image/avif", "a.apng": "image/apng", "a.bmp": "image/bmp", "a.ico": "image/x-icon",
+	} {
+		if got := artifactstore.ContentType(path); got != want {
+			t.Errorf("ContentType(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
 func TestListWorkerChildrenIncludesArtifactFiles(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	store := &stubStore{

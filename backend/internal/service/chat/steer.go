@@ -304,7 +304,9 @@ func (c *Controller) PromoteQueuedTurn(
 		landed = target
 	}
 	activityID := c.newID()
-	activity, err := makeSteerActivity(activityID, msg, turnID)
+	activity, err := makeSteerActivity(activityID, msg, turnID, steerProviderInput{
+		Text: msg.Text, Content: msg.Content, SourceTurnIDs: []string{turnID},
+	})
 	if err != nil {
 		return PromoteQueuedTurnResult{}, settleUncertain(err)
 	}
@@ -432,11 +434,38 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 			return replaySteerDelivery(delivery, requestJSON)
 		}
 	}
+	batch, err := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, false, 0, c.now())
+	if errors.Is(err, domain.ErrNoQueuedTurn) {
+		batch = nil
+	} else if err != nil {
+		return SteerResult{}, fmt.Errorf("%w: claim pending messages: %w", ErrSteerDeliveryUncertain, err)
+	}
+	providerMessage := msg
+	if len(batch) > 0 {
+		providerMessage, err = c.queuedBatchInput(ctx, batch, &msg)
+		if err != nil {
+			if releaseErr := c.store.ReleaseQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch)); releaseErr != nil {
+				return SteerResult{}, errors.Join(err, releaseErr)
+			}
+			if msg.ClientMessageID != "" {
+				if rejectErr := c.store.RejectSteerDelivery(context.WithoutCancel(ctx), c.conversation.ID,
+					msg.ClientMessageID, domain.ConversationSteerRejectedContentUnsupported, err.Error(), c.now()); rejectErr != nil {
+					return SteerResult{}, fmt.Errorf("%w: reject invalid batch: %w", ErrSteerDeliveryUncertain, rejectErr)
+				}
+			}
+			return SteerResult{}, err
+		}
+	}
 
-	ref, err := steerer.Steer(ctx, turn, msg)
+	ref, err := steerer.Steer(ctx, turn, providerMessage)
 	if err != nil {
 		kind, definitive, refused := classifySteerRejection(err)
 		if definitive {
+			if len(batch) > 0 {
+				if releaseErr := c.store.ReleaseQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch)); releaseErr != nil {
+					return SteerResult{}, fmt.Errorf("%w: release refused batch: %w", ErrSteerDeliveryUncertain, releaseErr)
+				}
+			}
 			if msg.ClientMessageID != "" {
 				if rejectErr := c.store.RejectSteerDelivery(
 					context.WithoutCancel(ctx), c.conversation.ID, msg.ClientMessageID,
@@ -448,6 +477,12 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 			return SteerResult{}, refused
 		}
 		wrapped := classify(fmt.Errorf("steer turn %s: %w", turn, err))
+		if len(batch) > 0 {
+			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now()); failErr != nil {
+				c.log.Error("failed to settle uncertain steered batch", "error", failErr)
+			}
+		}
 		if msg.ClientMessageID != "" {
 			return SteerResult{}, fmt.Errorf("%w: %w", ErrSteerDeliveryUncertain, wrapped)
 		}
@@ -458,25 +493,65 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 	if landed == "" {
 		landed = turn
 	}
+	providerInput := steerProviderInput{
+		Text: providerMessage.Text, Content: providerMessage.Content,
+		SourceTurnIDs: queuedBatchIDs(batch),
+	}
+	if len(batch) > 0 {
+		settleCtx := context.WithoutCancel(ctx)
+		target, err := c.store.TurnByProviderID(settleCtx, c.conversation.ID, landed)
+		if err == nil && target.ProviderInputText == "" {
+			err = c.store.RecordProviderInput(settleCtx, target.ID, providerMessage.Text)
+			providerInput.StoredOnTurn = err == nil
+		}
+		if err != nil {
+			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now()); failErr != nil {
+				c.log.Error("failed to settle steered batch with unrecorded provider input", "error", failErr)
+			}
+			return SteerResult{ProviderTurnID: landed}, fmt.Errorf("%w: record steered batch provider input: %w", ErrSteerDeliveryUncertain, err)
+		}
+	}
 	if msg.ClientMessageID == "" {
-		activityID, recordErr := c.recordSteer(ctx, landed, msg)
+		activityID, recordErr := c.recordSteer(ctx, landed, msg, providerInput)
 		if recordErr != nil {
+			if len(batch) > 0 {
+				_ = c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
+					queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now())
+			}
 			// The guidance IS with the agent; only AO's record of it failed. Reporting the
 			// error rather than swallowing it, because a steer the timeline never mentions
 			// is a conversation whose next answer has no visible cause.
 			return SteerResult{ProviderTurnID: landed}, recordErr
 		}
+		if len(batch) > 0 {
+			if err := c.store.CompleteQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch), landed, c.now()); err != nil {
+				_ = c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
+					queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now())
+				return SteerResult{ProviderTurnID: landed, ActivityID: activityID}, fmt.Errorf("%w: complete pending messages: %w", ErrSteerDeliveryUncertain, err)
+			}
+		}
 		return SteerResult{ProviderTurnID: landed, ActivityID: activityID}, nil
 	}
 	activityID := c.newID()
-	activity, err := makeSteerActivity(activityID, msg, "")
+	activity, err := makeSteerActivity(activityID, msg, "", providerInput)
 	if err != nil {
 		return SteerResult{}, fmt.Errorf("%w: %w", ErrSteerDeliveryUncertain, err)
 	}
-	if err := c.store.CompleteSteerDelivery(
-		context.WithoutCancel(ctx), c.conversation.ID, msg.ClientMessageID,
-		landed, activity, c.now()); err != nil {
-		return SteerResult{}, fmt.Errorf("%w: %w", ErrSteerDeliveryUncertain, err)
+	var completeErr error
+	if len(batch) == 0 {
+		completeErr = c.store.CompleteSteerDelivery(context.WithoutCancel(ctx), c.conversation.ID,
+			msg.ClientMessageID, landed, activity, c.now())
+	} else {
+		completeErr = c.store.CompleteSteerBatchDelivery(context.WithoutCancel(ctx), c.conversation.ID,
+			msg.ClientMessageID, landed, activity, queuedBatchIDs(batch), c.now())
+	}
+	if completeErr != nil {
+		if len(batch) > 0 {
+			_ = c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now())
+		}
+		return SteerResult{}, fmt.Errorf("%w: %w", ErrSteerDeliveryUncertain, completeErr)
 	}
 	return SteerResult{ProviderTurnID: landed, ActivityID: activityID}, nil
 }
@@ -551,9 +626,35 @@ func (c *Controller) SteerOrSend(
 		}
 	}
 
-	turn, err := c.sendLocked(ctx, msg, false)
+	batch, batchErr := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, false, 0, c.now())
+	if errors.Is(batchErr, domain.ErrNoQueuedTurn) {
+		batch = nil
+	} else if batchErr != nil {
+		return SteerOrSendResult{}, batchErr
+	}
+	var override *ports.ChatUserMessage
+	if len(batch) > 0 {
+		combined, composeErr := c.queuedBatchInput(ctx, batch, &msg)
+		if composeErr != nil {
+			_ = c.store.ReleaseQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch))
+			return SteerOrSendResult{}, composeErr
+		}
+		override = &combined
+	}
+	turn, err := c.sendLocked(ctx, msg, false, override, queuedBatchIDs(batch))
 	if err != nil {
+		if len(batch) > 0 {
+			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now()); failErr != nil {
+				c.log.Error("failed to settle fallback batch", "error", failErr)
+			}
+		}
 		return SteerOrSendResult{}, err
+	}
+	if turn.ID == "" && len(batch) > 0 {
+		if err := c.store.ReleaseQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch)); err != nil {
+			return SteerOrSendResult{}, fmt.Errorf("release batch after duplicate send: %w", err)
+		}
 	}
 	return SteerOrSendResult{Turn: turn}, nil
 }
@@ -675,9 +776,10 @@ func (c *Controller) recordSteer(
 	ctx context.Context,
 	providerTurnID string,
 	msg ports.ChatUserMessage,
+	providerInput steerProviderInput,
 ) (string, error) {
 	id := c.newID()
-	activity, err := makeSteerActivity(id, msg, "")
+	activity, err := makeSteerActivity(id, msg, "", providerInput)
 	if err != nil {
 		return "", err
 	}
@@ -688,10 +790,18 @@ func (c *Controller) recordSteer(
 	return id, nil
 }
 
+type steerProviderInput struct {
+	Text          string
+	Content       []ports.ChatContent
+	SourceTurnIDs []string
+	StoredOnTurn  bool
+}
+
 func makeSteerActivity(
 	id string,
 	msg ports.ChatUserMessage,
 	sourceTurnID string,
+	providerInputs ...steerProviderInput,
 ) (domain.ConversationActivity, error) {
 	detail := map[string]any{
 		"event":  "steer",
@@ -712,6 +822,13 @@ func makeSteerActivity(
 	}
 	if sourceTurnID != "" {
 		detail["sourceTurnId"] = sourceTurnID
+	}
+	if len(providerInputs) > 0 {
+		detail["providerInputCaptured"] = true
+		detail["providerInputText"] = providerInputs[0].Text
+		detail["providerInputContent"] = providerInputs[0].Content
+		detail["providerInputSourceTurnIds"] = providerInputs[0].SourceTurnIDs
+		detail["providerInputStoredOnTurn"] = providerInputs[0].StoredOnTurn
 	}
 	if len(msg.Content) > 0 {
 		detail["content"] = msg.Content

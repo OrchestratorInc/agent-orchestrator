@@ -53,6 +53,15 @@ func isWorkspaceWriteKind(kind string) bool {
 	return kind == "workspace.write" || kind == "workspace.review.write"
 }
 
+// isWorkspaceOperateKind reports whether a request kind changes the session,
+// so a viewer may not make it: the file writes, and "workspace.checkout",
+// the Retry that checks the workspace out again and reruns its Setup scripts.
+// A read-only session's owner still retries, so read-only mode gates only the
+// writes.
+func isWorkspaceOperateKind(kind string) bool {
+	return isWorkspaceWriteKind(kind) || kind == "workspace.checkout"
+}
+
 func (s *Store) CreateWorkspaceRequest(
 	ctx context.Context,
 	principal domain.Principal,
@@ -62,7 +71,7 @@ func (s *Store) CreateWorkspaceRequest(
 ) (domain.WorkerRequest, error) {
 	var request domain.WorkerRequest
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
-		if access.Role == "viewer" && isWorkspaceWriteKind(kind) {
+		if access.Role == "viewer" && isWorkspaceOperateKind(kind) {
 			return ErrForbidden
 		}
 		var err error
@@ -194,6 +203,12 @@ func (s *Store) CancelWorkspaceRequest(
 	})
 }
 
+// ClaimWorkerRequest claims the session's next worker request for lease. A
+// claim whose lease lapses is claimed again, up to three attempts, so a
+// request that legitimately runs longer gets a lease that covers it: a Chat
+// steer, and a model catalog, whose discovery may take its whole 20 s budget
+// on a cold worker and would otherwise be claimed again (another discovery)
+// and then failed before the control plane stops waiting.
 func (s *Store) ClaimWorkerRequest(
 	ctx context.Context,
 	orgID, sessionID, workerID string,
@@ -236,7 +251,7 @@ func (s *Store) ClaimWorkerRequest(
 			UPDATE ao_worker_requests request
 			SET status = 'claimed',
 				attempt_count = request.attempt_count + 1,
-				lease_until = now() + CASE WHEN request.kind = 'chat.steer' THEN interval '30 seconds' ELSE $4::interval END,
+				lease_until = now() + CASE WHEN request.kind IN ('chat.steer', 'chat.models') THEN interval '30 seconds' ELSE $4::interval END,
 				updated_at = now()
 			FROM candidate
 			WHERE request.id = candidate.id
@@ -698,9 +713,9 @@ func (s *Store) IssueTerminalTicket(
 		}
 		_, err = tx.Exec(ctx,
 			`INSERT INTO ao_access_tickets (
-				org_id, session_id, purpose, scopes, token_hash, worker_epoch, expires_at
-			) VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval)`,
-			orgID, sessionID, terminalTicketPurpose(kind, terminalID), scopes, hash[:], epoch, intervalString(ttl),
+				org_id, session_id, purpose, scopes, token_hash, worker_epoch, expires_at, user_id
+			) VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval, NULLIF($8, '')::uuid)`,
+			orgID, sessionID, terminalTicketPurpose(kind, terminalID), scopes, hash[:], epoch, intervalString(ttl), principal.UserID,
 		)
 		return err
 	})
@@ -906,11 +921,11 @@ func (s *Store) OpenTerminal(
 			WHERE token_hash = $1 AND purpose = $2
 			  AND consumed_at IS NULL AND expires_at > now()
 			RETURNING id, org_id, session_id, purpose, scopes,
-				COALESCE(worker_epoch, 0), expires_at`,
+				COALESCE(worker_epoch, 0), expires_at, COALESCE(user_id::text, '')`,
 			hash[:], terminalTicketPurpose(kind, terminalID),
 		).Scan(
 			&ticket.ID, &ticket.OrgID, &ticket.SessionID, &ticket.Purpose,
-			&ticket.Scopes, &ticket.WorkerEpoch, &ticket.ExpiresAt,
+			&ticket.Scopes, &ticket.WorkerEpoch, &ticket.ExpiresAt, &ticket.UserID,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return classifyInvalidTerminalTicket(ctx, tx, hash[:], terminalTicketPurpose(kind, terminalID))
@@ -924,6 +939,7 @@ func (s *Store) OpenTerminal(
 	terminal := domain.TerminalSession{
 		OrgID: ticket.OrgID, SessionID: ticket.SessionID,
 		WorkerEpoch: ticket.WorkerEpoch, Kind: kind, Scopes: ticket.Scopes,
+		UserID: ticket.UserID,
 	}
 	err = s.withOrg(ctx, ticket.OrgID, func(tx pgx.Tx) error {
 		current, err := workerEpochCurrent(

@@ -378,6 +378,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					cancelProviderAuth: async () => undefined,
 					connectProviderAuth: async () => undefined,
 					localAuthAvailable: async () => false,
+					onOpenShareLink: () => () => undefined,
+					takePendingShareLink: async () => null,
 					localRegister: async () => {
 						throw new Error("local auth is unavailable in e2e");
 					},
@@ -1265,6 +1267,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					cancelProviderAuth: async () => undefined,
 					connectProviderAuth: async () => undefined,
 					localAuthAvailable: async () => false,
+					onOpenShareLink: () => () => undefined,
+					takePendingShareLink: async () => null,
 					localRegister: async () => {
 						throw new Error("local auth is unavailable in e2e");
 					},

@@ -808,6 +808,16 @@ const api = {
 				ipcRenderer.off("cloud:sessionChanged", wrapped);
 			};
 		},
+		// A shared session's link opened while the app runs (ao-app://share/...).
+		onOpenShareLink: (listener: (url: string) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, url: string) => listener(url);
+			ipcRenderer.on("cloud:openShareLink", wrapped);
+			return () => {
+				ipcRenderer.off("cloud:openShareLink", wrapped);
+			};
+		},
+		// One that arrived before the window was ready, taken once.
+		takePendingShareLink: () => ipcRenderer.invoke("cloud:takePendingShareLink") as Promise<string | null>,
 	},
 	// Cloud control-plane transport. The CP has no CORS and the WorkOS bearer
 	// token lives only in the main process, so every CP call is proxied through

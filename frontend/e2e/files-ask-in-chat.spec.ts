@@ -316,7 +316,7 @@ test.describe("Add to chat from highlighted code", () => {
 		expect(box.x + box.width).toBeLessThanOrEqual(code.x);
 		expect(digits.some((digit) => digit.top < box.y + box.height && box.y < digit.bottom && box.x + box.width > digit.left && digit.right > box.x)).toBe(false);
 		await plus.click();
-		await expect(page.getByPlaceholder("Describe what the agent should change...")).toBeVisible();
+		await expect(page.getByPlaceholder("Describe what the agent should change")).toBeVisible();
 	});
 });
 

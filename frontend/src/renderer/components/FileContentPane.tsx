@@ -47,8 +47,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { MarkdownFileView } from "./markdown/MarkdownFileView";
 import { MarkdownEditor } from "./MarkdownEditor";
 import { SvgFileView } from "./SvgFileView";
+import { TableFileView } from "./TableFileView";
+import { MermaidBlock } from "./chat/MermaidBlock";
+import { isDelimitedTextPath } from "../lib/delimited-text";
 import { VscodeGoToFileIcon } from "./icons/VscodeGoToFileIcon";
-import { isSvgPath } from "../lib/image-files";
+import { isMermaidPath, isSvgPath } from "../lib/image-files";
 
 // Edit-mode Cancel/Save sit beside icon-sm toolbar buttons; keep them the same
 // height with small text and icons so they do not dwarf the toolbar.
@@ -68,6 +71,14 @@ function canRenderMarkdown(path: string, detail: WorkspaceFileDetail): boolean {
 
 function canRenderSvg(path: string, detail: WorkspaceFileDetail): boolean {
 	return !detail.deleted && !detail.binary && !detail.contentTruncated && isSvgPath(path);
+}
+
+function canRenderTable(path: string, detail: WorkspaceFileDetail): boolean {
+	return !detail.deleted && !detail.binary && !detail.contentTruncated && isDelimitedTextPath(path);
+}
+
+function canRenderMermaid(path: string, detail: WorkspaceFileDetail): boolean {
+	return !detail.deleted && !detail.binary && !detail.contentTruncated && isMermaidPath(path);
 }
 
 export function FileContentPane({
@@ -313,11 +324,12 @@ export function FileContentPane({
 
 	const detail = query.data;
 	// A historical/staged view must never show the current worktree's media.
-	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || source.kind === "artifact" || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked"))
+	// A cloud PDF's bytes can't be read: the cloud bridge carries text bodies only.
+	const mediaKind = (source.kind === "snapshot" && fileMediaKind(path)==="image") || (source.kind === "artifact" && !(source.cloud && fileMediaKind(path) === "pdf")) || (source.kind === "workspace" && !commitSha && !detail.deleted && detail.binary && (scope === "combined" || scope === "uncommitted" || scope === "unstaged" || scope === "untracked"))
 		? fileMediaKind(path) : undefined;
 	const mediaOnly = Boolean(mediaKind && !detail.imageMediaType);
 	const markdownAvailable = canRenderMarkdown(path, detail);
-	const renderedAvailable = markdownAvailable || canRenderSvg(path, detail);
+	const renderedAvailable = markdownAvailable || canRenderSvg(path, detail) || canRenderTable(path, detail) || canRenderMermaid(path, detail);
 	const hasDisplayModeChoice = !singleView && !mediaOnly && (detail.status !== "unmodified" || renderedAvailable);
 	const fileName = path.split("/").pop() || path;
 	const newerLiveText = canReadLiveText && liveText.data?.exists && !liveText.data.binary && !liveText.data.truncated && liveText.dataUpdatedAt >= query.dataUpdatedAt && liveText.data.content !== detail.content;
@@ -357,6 +369,8 @@ export function FileContentPane({
 
 	const renderedView = markdownAvailable
 		? <MarkdownFileView content={detail.content} filePath={path} hostId={hostId} sessionId={sessionId} artifactOrigin={artifactOriginOf(source)} snapshotSource={source.kind === "snapshot" ? source : undefined} truncated={detail.contentTruncated} version={query.dataUpdatedAt} />
+		: canRenderTable(path, detail) ? <TableFileView content={detail.content} path={path} />
+		: canRenderMermaid(path, detail) ? <div className="p-3"><MermaidBlock code={detail.content} /></div>
 		: <SvgFileView content={detail.content} path={path} />;
 	const beginEditing = () => {
 		setMode("file");

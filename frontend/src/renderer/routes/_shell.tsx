@@ -18,6 +18,7 @@ import { TrayRuntime } from "../components/TrayRuntime";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
+import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { ShellTopbar } from "../components/ShellTopbar";
@@ -164,6 +165,7 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 				{startingChat}
 			</div>
 			<SettingsPane />
+			<ShareLinkHost />
 		</>
 	);
 }
@@ -1304,6 +1306,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 
 	// ⌘/ toggles: a second press closes the sheet.
 	useEffect(() => aoBridge.app.onKeyboardShortcutsHelp(() => setIsKeyboardShortcutsOpen((open) => !open)), []);
+	// The command palette runs the help shortcut through the app shortcut bus.
+	useAppShortcut("keyboard-shortcuts", () => setIsKeyboardShortcutsOpen((open) => !open));
 
 	// macOS ⌘Q asks before quitting; the main process quits once confirmed.
 	const [isQuitConfirmOpen, setIsQuitConfirmOpen] = useState(false);
