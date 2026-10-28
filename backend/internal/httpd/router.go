@@ -5,6 +5,7 @@ package httpd
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -27,7 +28,8 @@ import (
 // ControlDeps carries the daemon-control hooks the router exposes, such as the
 // callback that requests a graceful shutdown.
 type ControlDeps struct {
-	RequestShutdown func()
+	RequestShutdown      func()
+	RequestAgentShutdown func(appRunID string) bool
 }
 
 // NewRouterWithControl builds the root router with the standard middleware
@@ -118,6 +120,25 @@ func mountControl(r chi.Router, deps ControlDeps) {
 				"service": daemonmeta.ServiceName,
 			})
 			return
+		}
+		var in struct {
+			StopAgents bool   `json:"stopAgents"`
+			AppRunID   string `json:"appRunId"`
+		}
+		decoder := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1024))
+		if err := decoder.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+			envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid shutdown request", nil)
+			return
+		}
+		if in.StopAgents {
+			if deps.RequestAgentShutdown == nil {
+				envelope.WriteAPIError(w, req, http.StatusNotImplemented, "not_implemented", "AGENT_SHUTDOWN_UNAVAILABLE", "Agent shutdown is unavailable", nil)
+				return
+			}
+			if !deps.RequestAgentShutdown(in.AppRunID) {
+				envelope.WriteAPIError(w, req, http.StatusConflict, "conflict", "DAEMON_OWNER_CHANGED", "This desktop no longer owns the daemon", nil)
+				return
+			}
 		}
 		envelope.WriteJSON(w, http.StatusAccepted, map[string]any{
 			"status":  "shutting_down",

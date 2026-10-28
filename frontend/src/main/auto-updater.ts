@@ -199,7 +199,7 @@ let stagedReleaseNotes: string | undefined;
 // MacUpdater has no native feed/server after relaunch until it downloads again.
 let stagedInCurrentProcess = false;
 let macRestartPreparation: Promise<UpdateInstallResult> | undefined;
-let macRestartRequested = false;
+let updateRestartRequested = false;
 let restartFailureHandler: (() => void) | undefined;
 let macRestartProgress: Awaited<ReturnType<typeof startMacUpdateProgress>> | undefined;
 let nativeReadyVersion: string | undefined;
@@ -1820,8 +1820,8 @@ function wireUpdaterEvents(): void {
       nativePreparation?.finish(short);
       nativeReadyVersion = undefined;
       nativePreparationError = short;
-      if (macRestartRequested) {
-        macRestartRequested = false;
+      if (updateRestartRequested) {
+        updateRestartRequested = false;
         macRestartPreparation = undefined;
         stagedInCurrentProcess = false;
         void macRestartProgress?.fail(short.message).catch(() => undefined);
@@ -1997,6 +1997,10 @@ function wireUpdaterEvents(): void {
     }
   });
   autoUpdater.on("error", (err) => {
+    if (process.platform !== "darwin" && updateRestartRequested) {
+      clearUpdateRestartRequest();
+      restartFailureHandler?.();
+    }
     clearDownloadStallWatchdog();
     if (handleMacStagingFailure(err)) {
       emitUpdateFailure(err);
@@ -2769,7 +2773,13 @@ function applyInstallOnQuitPolicy(): void {
 // false keeps the installer UI on Windows; isForceRunAfter relaunches the app.
 export function setUpdateRestartFailureHandler(handler: () => void): void { restartFailureHandler = handler; }
 
-export function isUpdateRestartRequested(): boolean { return macRestartRequested; }
+export function isUpdateRestartRequested(): boolean { return updateRestartRequested; }
+
+export function clearUpdateRestartRequest(): void {
+  if (!updateRestartRequested) return;
+  updateRestartRequested = false;
+  macRestartPreparation = undefined;
+}
 
 export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<UpdateInstallResult> {
   if (confirmedVersion !== undefined && (typeof confirmedVersion !== "string" || !confirmedVersion.trim())) {
@@ -2809,7 +2819,13 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
         new Promise<void>((resolve) => setTimeout(resolve, 750)),
       ]);
     }
-    autoUpdater.quitAndInstall(false, true);
+    updateRestartRequested = true;
+    try {
+      autoUpdater.quitAndInstall(false, true);
+    } catch (error) {
+      clearUpdateRestartRequest();
+      throw error;
+    }
     return;
   }
   if (macRestartPreparation) return macRestartPreparation;
@@ -2843,7 +2859,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       });
       progress.assertAlive();
       macRestartProgress = progress;
-      macRestartRequested = true;
+      updateRestartRequested = true;
       // Same cross-platform post-update signal the renderer reads at boot. This
       // is separate from the helper's active.json handshake above and only drives
       // the startup loader copy; failing to write it must not abort the install.
@@ -2856,9 +2872,9 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
         new Promise<void>((resolve) => setTimeout(resolve, 750)),
       ]);
       autoUpdater.quitAndInstall(false, true);
-      if (!macRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart AO.");
+      if (!updateRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart AO.");
     } catch (err) {
-      macRestartRequested = false;
+      updateRestartRequested = false;
       stagedInCurrentProcess = false;
       nativeReadyVersion = undefined;
       console.error("failed to prepare update for restart:", err);
@@ -2866,7 +2882,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       broadcast({ state: "error", message: errorMessage(err) });
       throw err;
     }
-  }).then(() => confirmation).finally(() => { if (!macRestartRequested) macRestartPreparation = undefined; });
+  }).then(() => confirmation).finally(() => { if (!updateRestartRequested) macRestartPreparation = undefined; });
   return macRestartPreparation;
 }
 

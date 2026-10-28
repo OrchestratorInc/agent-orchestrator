@@ -1124,7 +1124,7 @@ func Run(buildVersion string) error {
 		log.Warn("supervisor: listener unavailable; frontend-death auto-stop disabled", "err", err)
 	} else {
 		log.Info("supervisor: listening", "addr", addr)
-		sup := supervisor.New(supervisorGrace, srv.RequestShutdown, log)
+		sup := supervisor.New(supervisorGrace, srv.RequestShutdownAfterDesktopExit, log)
 		go func() {
 			if err := sup.Serve(ctx, ln); err != nil {
 				log.Warn("supervisor: serve stopped with error", "err", err)
@@ -1223,10 +1223,8 @@ func Run(buildVersion string) error {
 	})
 
 	// Both graceful shutdown paths (SIGTERM and POST /shutdown) funnel through
-	// srv.Run returning. We deliberately do NOT tear down sessions here: they
-	// survive the daemon exit and the next boot's Reconcile adopts them,
-	// preserving session IDs. The narrowed sessionLifecycle interface makes
-	// teardown-on-shutdown a compile error.
+	// srv.Run returning. Desktop exit, including loss of its supervisor, requests
+	// agent shutdown; daemon replacement preserves processes for the next boot.
 
 	// Shut the background goroutines down in order: cancel the context FIRST so
 	// their loops exit, then wait for them to drain. Doing this explicitly (not
@@ -1261,13 +1259,23 @@ func Run(buildVersion string) error {
 	codexSwitchCancel()
 	managedPreview.Close()
 	<-previewDone
-	// Detach chat controllers before stopping the lifecycle stack. Persistent
-	// provider hosts deliberately survive this daemon and preserve in-flight
-	// turns; the replacement daemon reconnects to the same initialized stream and
-	// consumes host-replayed output. Explicit session termination, not daemon
-	// shutdown, destroys them.
-	chatStopCtx, chatCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
-	chatSvc.StopAll(chatStopCtx)
+	// Daemon replacement detaches providers. Desktop exit stops processes
+	// while keeping the sessions and worktrees available for resume.
+	chatStopTimeout := cfg.ShutdownTimeout
+	if srv.StopAgentsRequested() {
+		chatStopTimeout = max(chatStopTimeout, 30*time.Second)
+	}
+	chatStopCtx, chatCancel := context.WithTimeout(context.Background(), chatStopTimeout)
+	if srv.StopAgentsRequested() {
+		if err := sessMgr.StopAgentsForQuit(chatStopCtx); err != nil {
+			log.Error("desktop quit agent shutdown", "err", err)
+		}
+		if err := chatSvc.TerminateAll(chatStopCtx); err != nil {
+			log.Error("desktop quit chat shutdown", "err", err)
+		}
+	} else {
+		chatSvc.StopAll(chatStopCtx)
+	}
 	chatCancel()
 	if usageDone != nil {
 		<-usageDone
