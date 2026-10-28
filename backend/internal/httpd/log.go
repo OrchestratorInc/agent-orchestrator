@@ -72,9 +72,14 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 					if errorCode == "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" {
 						return
 					}
-					// PostHog groups by route and error category. Sentry uses the
-					// recorded AO failure site when one is available.
-					fingerprint := telemetrymeta.Fingerprint("httpd", "http_request", r.Method, path, strconv.Itoa(ww.Status()), errorKind, errorCode)
+					// Group the same error code at a registered route together even
+					// when several controller functions can produce it. The caller
+					// frame remains available separately as the Sentry culprit.
+					groupCode := errorCode
+					if groupCode == "" {
+						groupCode = errorKind
+					}
+					fingerprint := telemetrymeta.Fingerprint("httpd", "http_request", r.Method, path, groupCode)
 					if sink != nil {
 						payload := map[string]any{
 							"component":     "httpd",

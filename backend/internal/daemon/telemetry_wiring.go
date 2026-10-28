@@ -8,6 +8,7 @@ import (
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
@@ -106,6 +107,7 @@ func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident port
 		return
 	}
 	go func() {
+		defer sentryobs.RecoverBackground()
 		for _, delay := range gitHubLoginRetryDelays {
 			select {
 			case <-ctx.Done():

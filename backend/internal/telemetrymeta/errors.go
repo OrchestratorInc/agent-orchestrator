@@ -106,6 +106,7 @@ func CurrentFailureSite() FailureSite {
 		name := frame.Function
 		if strings.Contains(name, "github.com/aoagents/agent-orchestrator/backend/internal/") &&
 			!strings.Contains(name, "/telemetrymeta.") &&
+			!strings.Contains(name, "/observe/sentryobs.RecoverBackground") &&
 			!strings.Contains(name, "/httpd/envelope.") &&
 			!strings.Contains(name, "/httpd.recoverTelemetry") {
 			return FailureSite{function: name, line: frame.Line}

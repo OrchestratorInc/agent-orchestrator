@@ -89,6 +89,34 @@ func TestRequestLoggerRecords5xxCause(t *testing.T) {
 	}
 }
 
+func TestRequestLoggerGroupsByRouteAndCodeWithoutProjectName(t *testing.T) {
+	var fingerprints []string
+	router := chi.NewRouter()
+	router.Use(requestLoggerWithCapture(slog.Default(), nil, func(_ context.Context, _ error, _ map[string]string, fingerprint string, route telemetrymeta.SafeRoute, _ telemetrymeta.FailureSite) {
+		if route.String() != "/api/v1/projects/{projectID}/workspace/git" {
+			t.Fatalf("unsafe route = %q", route.String())
+		}
+		fingerprints = append(fingerprints, fingerprint)
+	}))
+	router.Get("/api/v1/projects/{projectID}/workspace/git", func(w http.ResponseWriter, r *http.Request) {
+		code := "WORKSPACE_GIT_READ_FAILED"
+		if r.URL.Query().Get("other") == "1" {
+			code = "PROJECT_LOAD_FAILED"
+		}
+		envelope.WriteError(w, r, apierr.Internal(code, "Unable to read workspace Git state"))
+	})
+	for _, path := range []string{
+		"/api/v1/projects/ai-sports-coach-113/workspace/git",
+		"/api/v1/projects/private-repo/workspace/git",
+		"/api/v1/projects/private-repo/workspace/git?other=1",
+	} {
+		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	if len(fingerprints) != 3 || fingerprints[0] != fingerprints[1] || fingerprints[0] == fingerprints[2] {
+		t.Fatalf("route and code fingerprints = %v", fingerprints)
+	}
+}
+
 func TestRequestLoggerIncludesBrowserFailureMetadata(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))

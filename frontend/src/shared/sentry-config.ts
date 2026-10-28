@@ -1,7 +1,7 @@
 // Separate Sentry projects identify errors from the Go daemon and the desktop
 // Electron surfaces. The daemon sends only when its existing consent gate allows
-// it. Electron main has no active sender; renderer captures still pass through
-// the existing main-owned policy boundary. Mobile has its own project and DSN
+// it. Electron main sends consented desktop errors; renderer captures pass
+// through the existing main-owned policy boundary. Mobile has its own project and DSN
 // in packages/mobile because the Expo bundle cannot reach frontend/src.
 // These client DSNs are write-only ingest endpoints, not secrets.
 export const DEFAULT_DAEMON_SENTRY_DSN =

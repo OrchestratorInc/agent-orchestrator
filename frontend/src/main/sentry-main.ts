@@ -1,9 +1,9 @@
-// Electron main is the only permitted desktop Sentry intake/sender boundary.
-// The production release gate is intentionally closed in Task 6, so this
-// module constructs no network client. Controller tests inject an in-memory
-// transport; a later release task may add a privacy-approved main transport.
+// Electron main is the only desktop Sentry sender. The policy controller owns
+// this transport's lifetime, and the SDK never receives raw renderer text.
+import * as Sentry from "@sentry/electron/main";
 import type { RendererTelemetryCapture } from "../shared/telemetry-policy";
 import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
+import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 
 export function electronMainSentryDsn(): string {
@@ -28,9 +28,96 @@ const CAPTURE_LEVELS = new Set<NonNullable<RendererTelemetryCapture["level"]>>([
 const LOCAL_URL = /(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
 const HOME_PATH = /\/(?:Users|home)\/[^\s"']+/g;
 const WIN_PATH = /[A-Za-z]:\\[^\s"']+|\\\\[^\s"']+/g;
+const SAFE_CATEGORIES = new Set(["agent_runtime", "http_5xx", "integration", "native_crash", "render_crash", "update"]);
+const SAFE_CODES = new Set(["AGENT_RESUME_FAILED", "INTERNAL_ERROR", "WORKSPACE_GIT_READ_FAILED"]);
+const PROCESS_REASONS = ["abnormal-exit", "crashed", "oom", "launch-failed", "integrity-failure"] as const;
+const SAFE_FUNCTION = /^[A-Za-z_$][A-Za-z0-9_$.:<>]*$/;
+const DRAIN_TIMEOUT_MS = 2_000;
+let crashHooksInstalled = false;
 
-export async function initMainSentry(_version: string, _cacheRoot: string): Promise<DesktopTelemetryTransport | null> {
-	return null;
+function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, version: string, environment: string): Sentry.ErrorEvent {
+	const renderer = event.tags?.["ao.origin"] === "renderer";
+	const processReason = typeof event.message === "string"
+		? PROCESS_REASONS.find((reason) => event.message?.endsWith(`process exited with '${reason}'`))
+		: undefined;
+	const title = renderer ? "Renderer error" : processReason ? "Electron process failure" : "Electron main error";
+	const category = event.tags?.["ao.category"];
+	const code = event.tags?.["ao.code"];
+	const safeCategory = typeof category === "string" && SAFE_CATEGORIES.has(category) ? category : "unknown";
+	const safeCode = typeof code === "string" && SAFE_CODES.has(code) ? code : "unknown";
+	const frames = event.exception?.values?.flatMap((value) => value.stacktrace?.frames ?? [])
+		.filter((frame) => typeof frame.function === "string" && SAFE_FUNCTION.test(frame.function))
+		.map((frame) => ({ function: frame.function, lineno: frame.lineno, in_app: true }));
+	return {
+		type: undefined,
+		event_id: event.event_id,
+		timestamp: event.timestamp,
+		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
+		message: title,
+		fingerprint: renderer ? ["electron", "renderer", safeCategory, safeCode] : ["electron", processReason ?? "main", frames?.at(-1)?.function ?? "unknown"],
+		tags: { surface: renderer ? "renderer" : "electron-main", ...(renderer ? { category: safeCategory, code: safeCode } : {}), ...(processReason ? { reason: processReason } : {}) },
+		user: { id: installId },
+		release: version,
+		environment,
+		exception: { values: [{ type: title, value: "", ...(frames?.length ? { stacktrace: { frames } } : {}) }] },
+	};
+}
+
+export async function initMainSentry(version: string, dataDir: string, isPackaged: boolean): Promise<DesktopTelemetryTransport> {
+	const dsn = electronMainSentryDsn();
+	if (!dsn) return { capture: () => undefined, closeAndDrain: async () => undefined, clearCache: async () => undefined };
+	const installId = await loadOrCreateTelemetryInstallId(dataDir);
+	const environment = isPackaged ? "stable" : "development";
+	Sentry.init({
+		dsn,
+		release: version,
+		environment,
+		transport: Sentry.makeElectronTransport,
+		ipcMode: 0 as Sentry.IPCMode,
+		defaultIntegrations: [],
+		integrations: crashHooksInstalled ? [] : [
+			Sentry.onUncaughtExceptionIntegration(),
+			Sentry.onUnhandledRejectionIntegration(),
+			Sentry.childProcessIntegration({ breadcrumbs: false, events: [...PROCESS_REASONS] }),
+		],
+		maxBreadcrumbs: 0,
+		sendDefaultPii: false,
+		tracesSampleRate: 0,
+		skipOpenTelemetrySetup: true,
+		beforeBreadcrumb: () => null,
+		beforeSend: (event) => scrubMainSentryEvent(event, installId, version, environment),
+	});
+	crashHooksInstalled = true;
+	Sentry.setUser({ id: installId });
+	let accepting = true;
+	return {
+		capture(request) {
+			if (!accepting) return;
+			const safe = sanitizeRendererCapture(request);
+			if (!safe || safe.kind === "breadcrumb" || safe.tags?.category === "daemon_unavailable") return;
+			const category = safe.tags?.category;
+			const code = safe.tags?.code;
+			Sentry.captureEvent({
+				message: "Renderer error",
+				level: safe.level ?? "error",
+				tags: {
+					"ao.origin": "renderer",
+					"ao.category": category && SAFE_CATEGORIES.has(category) ? category : "unknown",
+					"ao.code": code && SAFE_CODES.has(code) ? code : "unknown",
+				},
+			});
+		},
+		async closeAndDrain() {
+			accepting = false;
+			if (!(await Sentry.close(DRAIN_TIMEOUT_MS))) throw new Error("Electron Sentry drain timed out");
+		},
+		async clearCache() {
+			// The online transport has no disk queue. Clear both SDK scopes after
+			// the controller has drained and closed its sender.
+			Sentry.getCurrentScope().clear();
+			Sentry.getIsolationScope().clear();
+		},
+	};
 }
 
 export function sanitizeRendererCapture(request: unknown): RendererTelemetryCapture | null {

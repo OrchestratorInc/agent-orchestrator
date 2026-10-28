@@ -26,9 +26,10 @@ reporting remains subject to the existing Share error events control.
 Electron main and the renderer have a separate desktop Sentry project. Their
 default DSN is distinct from the daemon project; Electron main uses
 `AO_SENTRY_DSN` and the renderer uses `VITE_AO_SENTRY_DSN` for explicit overrides.
-The Electron main sender remains inactive. Renderer diagnostics still pass
-through the existing main-owned consent boundary, with no direct Sentry
-transport. The mobile app keeps its own Sentry project and DSN.
+Electron main sends consented error events through its own Sentry transport.
+Renderer diagnostics pass through the existing main-owned consent boundary;
+the renderer has no direct Sentry transport. The mobile app keeps its own
+Sentry project and DSN.
 
 ## What Orchestrator.inc sends
 
@@ -316,14 +317,19 @@ sent to PostHog is not deleted.
 
 The **Share error events** control on the same page covers error diagnostics
 only: the daemon's Sentry capture of reportable 5xx errors, failed agent
-relaunches answered as 409 `AGENT_RESUME_FAILED`, and panics. Sentry
+relaunches answered as 409 `AGENT_RESUME_FAILED`, and handler or background
+goroutine panics; and Electron main capture of process crashes, uncaught
+exceptions, unhandled rejections, and reportable renderer errors. Sentry
 receives fixed failure or panic labels and allowlisted error codes instead of
-raw error messages. It groups HTTP faults by the AO function that recorded the
-failure when available. Agent relaunches group by operation and failure step,
-with a fixed step tag and no HTTP route tag.
+raw error messages. It groups HTTP faults by registered route and error code,
+while retaining the AO function that recorded the failure as the culprit.
+Agent relaunches group by operation and failure step, with a fixed step tag
+and no HTTP route tag.
 An event may include a bounded `git`, `db`, `agent`, or `network` area when the
 error provides evidence. It keeps stack function and line information, but
-removes stack paths, request data, and panic text.
+removes stack paths, request data, project, session, repository and branch
+names, and panic text. Electron events use fixed titles and scrubbed exception
+values with the same installation ID as Sentry `user.id`.
 Canceled requests, transient 503 responses, and expected upstream link-preview
 502 responses do not create Sentry issues. Registered route templates remain
 available for diagnosis. Unmatched URLs are reported as `unmatched` instead of
