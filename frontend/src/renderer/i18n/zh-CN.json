@@ -1837,7 +1837,7 @@
 	"shell.removingNamed": "正在移除 {{name}}…",
 	"shell.renameSession": "重命名{{title}}",
 	"shell.rename": "重命名",
-	"shell.openDashboard": "打开仪表板",
+	"shell.openDashboard": "打开仪表盘",
 	"shell.copied": "已复制到剪贴板",
 	"shell.copyFailed": "无法复制",
 	"shell.restartToUpdate": "重启以更新",

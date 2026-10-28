@@ -2034,7 +2034,7 @@ const ProjectItem = memo(function ProjectItem({
 						onSelect={() => void openOrchestrator()}
 					>
 						<OrchestratorIcon aria-hidden="true" />
-						{t("shell.openOrchestrator")}
+						{orchestrator ? t("shell.openOrchestrator") : t("shell.spawnOrchestratorLower")}
 					</ContextMenuItem>
 				) : null}
 				{!isStandalone ? (
@@ -2043,7 +2043,8 @@ const ProjectItem = memo(function ProjectItem({
 						{t("shell.openDashboard")}
 					</ContextMenuItem>
 				) : null}
-				{workspace.path ? (
+				{/* A remote host's path names a folder on that machine, not this one. */}
+				{workspace.path && !workspace.hostId ? (
 					<>
 						<ContextMenuSeparator />
 						<ContextMenuItem onSelect={() => copyToClipboard(workspace.path)}>

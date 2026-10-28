@@ -3,7 +3,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Archive, Code2, Copy, ExternalLink, GitBranch, Pencil, Pin, PinOff, Play } from "lucide-react";
 import type { OpenTarget } from "../../shared/editor-handoff";
-import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
+import { resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
+import { conversationQueryKey } from "../hooks/useConversation";
 import { editorHandoffErrorMessage, useEditorHandoffState, useOpenSessionTarget } from "../hooks/useEditorHandoff";
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -51,9 +52,11 @@ export function SessionContextMenuItems({
 	const showBranch = Boolean(branch) && !isOrchestratorSession(session) && branch !== `session/${session.id}`;
 	const pr = primaryPR(session);
 	// Same eligibility as the hover warm-up: a local worker whose agent exited.
-	const canResume = canResumeAgent(session) && !session.hostId && !isOrchestratorSession(session);
+	const canResume = useCanResumeAgent(session, session.hostId) && !session.hostId && !isOrchestratorSession(session);
 	// Remote and Cloud sessions have no local workspace for Electron to hand off.
 	const hasLocalWorkspace = !session.hostId && !session.cloud;
+	// Rename and pin go to the daemon that owns the session; a Cloud session has none.
+	const isCloud = Boolean(session.cloud);
 
 	const resume = () => {
 		void resumeAgentOnOpen(session.id)
@@ -62,30 +65,42 @@ export function SessionContextMenuItems({
 			})
 			.finally(() => {
 				void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) });
+				void queryClient.invalidateQueries({ queryKey: conversationQueryKey(session.id) });
 			});
+	};
+	const hasManageItems = !isCloud || canResume;
+	const hasLinkItems = Boolean(pr) || showBranch;
+	const openPullRequest = (url: string, title: string) => {
+		aoBridge.app.openExternal(url).catch((error: unknown) => {
+			showGlobalToast(title, error instanceof Error ? error.message : undefined, "error");
+		});
 	};
 
 	return (
 		<>
 			{hasLocalWorkspace ? <SessionWorkspaceMenuItems session={session} /> : null}
-			<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={onRename}>
-				<Pencil aria-hidden="true" />
-				{t("shell.rename")}
-			</ContextMenuItem>
-			<ContextMenuItem onSelect={() => (session.isPinned ? unpinSession(session) : pinSession(session))}>
-				{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
-				{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
-			</ContextMenuItem>
+			{isCloud ? null : (
+				<>
+					<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={onRename}>
+						<Pencil aria-hidden="true" />
+						{t("shell.rename")}
+					</ContextMenuItem>
+					<ContextMenuItem onSelect={() => (session.isPinned ? unpinSession(session) : pinSession(session))}>
+						{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+						{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
+					</ContextMenuItem>
+				</>
+			)}
 			{canResume ? (
 				<ContextMenuItem onSelect={resume}>
 					<Play aria-hidden="true" />
 					{t("command.resumeAgent")}
 				</ContextMenuItem>
 			) : null}
-			{pr || showBranch ? <ContextMenuSeparator /> : null}
+			{hasManageItems && hasLinkItems ? <ContextMenuSeparator /> : null}
 			{pr ? (
 				<>
-					<ContextMenuItem onSelect={() => void aoBridge.app.openExternal(pr.url)}>
+					<ContextMenuItem onSelect={() => openPullRequest(pr.url, t("command.openPr", { number: pr.number }))}>
 						<ExternalLink aria-hidden="true" />
 						{t("command.openPr", { number: pr.number })}
 					</ContextMenuItem>
@@ -103,7 +118,7 @@ export function SessionContextMenuItems({
 			) : null}
 			{onArchive ? (
 				<>
-					<ContextMenuSeparator />
+					{hasManageItems || hasLinkItems ? <ContextMenuSeparator /> : null}
 					<ContextMenuItem onSelect={onArchive}>
 						<Archive aria-hidden="true" />
 						{t("shell.archiveSession")}
@@ -128,14 +143,12 @@ function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 	const editor = state?.workspaceAvailable
 		? state.targets.find((target) => target.kind === "editor" && target.id === state.preferredEditorId)
 		: undefined;
+	// The menu unmounts as soon as an item is picked, so report failure from the
+	// promise rather than from mutate callbacks that only run while mounted.
 	const launch = (target: OpenTarget) => {
-		open.mutate(
-			{ sessionId: session.id, projectId: session.workspaceId, targetId: target.id },
-			{
-				onError: (error) =>
-					showGlobalToast(t("editor.openInTarget", { name: target.name }), error.message, "error"),
-			},
-		);
+		open.mutateAsync({ sessionId: session.id, projectId: session.workspaceId, targetId: target.id }).catch((error: unknown) => {
+			showGlobalToast(t("editor.openInTarget", { name: target.name }), error instanceof Error ? error.message : undefined, "error");
+		});
 	};
 	const copyPath = () => {
 		aoBridge.editorHandoff.copyWorkspacePath(session.id).then(
@@ -157,11 +170,13 @@ function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 					{t("editor.openInTarget", { name: editor.name })}
 				</ContextMenuItem>
 			) : null}
-			<ContextMenuItem onSelect={copyPath}>
-				<Copy aria-hidden="true" />
-				{t("editor.copyPath")}
-			</ContextMenuItem>
-			<ContextMenuSeparator />
+			{state?.workspaceAvailable === false ? null : (
+				<ContextMenuItem onSelect={copyPath}>
+					<Copy aria-hidden="true" />
+					{t("editor.copyPath")}
+				</ContextMenuItem>
+			)}
+			{state?.workspaceAvailable === false ? null : <ContextMenuSeparator />}
 		</>
 	);
 }

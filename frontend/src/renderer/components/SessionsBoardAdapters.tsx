@@ -370,14 +370,22 @@ function SessionRenameDialog({
 	const [draft, setDraft] = useState(session.title);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// Start each opening from the current title, but keep what is typed if the
+	// title changes while the dialog is open.
+	const [wasOpen, setWasOpen] = useState(open);
+	if (open !== wasOpen) {
+		setWasOpen(open);
+		if (open) {
+			setDraft(session.title);
+			setError(null);
+		}
+	}
 	useEffect(() => {
 		if (!open) return;
-		setDraft(session.title);
-		setError(null);
 		// The confirm dialog focuses its button on open; the name field should win.
 		const frame = requestAnimationFrame(() => inputRef.current?.select());
 		return () => cancelAnimationFrame(frame);
-	}, [open, session.title]);
+	}, [open]);
 	const name = draft.trim();
 	const save = async () => {
 		if (name === session.title) {
@@ -412,7 +420,7 @@ function SessionRenameDialog({
 				maxLength={MAX_SESSION_DISPLAY_NAME_LEN}
 				onChange={(event) => setDraft(event.target.value)}
 				onKeyDown={(event) => {
-					if (event.key !== "Enter" || !name || busy) return;
+					if (event.key !== "Enter" || event.nativeEvent.isComposing || !name || busy) return;
 					event.preventDefault();
 					void save();
 				}}
