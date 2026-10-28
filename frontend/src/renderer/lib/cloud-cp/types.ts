@@ -1651,6 +1651,8 @@ export interface CloudCpShareLink {
 	/** Only in the creation response: the raw token is never stored. */
 	token?: string;
 	url?: string;
+	/** Only in the creation response, from a control plane with short links: the link's short code. */
+	code?: string;
 }
 
 /** A project or session someone shared with the caller. */
