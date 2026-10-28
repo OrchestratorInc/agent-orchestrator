@@ -1939,11 +1939,6 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description The machines the account lists for its devices, with the credential a
-         *     device presents to each, and whether this deployment gives machines
-         *     fixed addresses. Clients link a machine without an address only when
-         *     `fixedAddresses` is true.
-         *      */
         get: operations["listRemoteHosts"];
         put?: never;
         post?: never;
@@ -1964,16 +1959,18 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Lists a machine in the account, or updates its listing. Without `url`,
-         *     the deployment first makes the machine's fixed address and lists it
-         *     there; a client then falls back to listing the machine at its quick
-         *     tunnel's address when that fails. A new `token` for a listed machine
-         *     replaces its fixed tunnel, so a run token fetched with the old
-         *     credential stops working; the address stays.
+        /** @description Lists a machine in the account, or updates its listing. A new `token`
+         *     for a listed machine replaces its fixed tunnel: the address stays, and
+         *     a run token fetched with the old credential stops working. A
+         *     registration that makes or replaces a tunnel can take up to a minute,
+         *     and completes even if the client disconnects first.
          *      */
         put: operations["putRemoteHost"];
         post?: never;
-        /** @description Removes the machine from the account, and its fixed tunnel with it. */
+        /** @description Removes the machine from the account, and its fixed tunnel with it.
+         *     It can take up to a minute, and completes even if the client
+         *     disconnects first.
+         *      */
         delete: operations["deleteRemoteHost"];
         options?: never;
         head?: never;
@@ -1993,8 +1990,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** @description The machine publishes the address it serves now to every account that
-         *     lists it under this credential. A listing with a fixed address keeps
-         *     it: a quick address published for it is ignored.
+         *     lists it under this credential.
          *      */
         post: operations["publishRemoteHostAddress"];
         delete?: never;
@@ -2016,11 +2012,10 @@ export interface paths {
         get?: never;
         put?: never;
         /** @description The machine fetches the run token of its fixed tunnel in the account
-         *     that issued its credential, making the tunnel on first use or after it
-         *     was released. `repair` asks for a replacement tunnel under the same
-         *     address, at most once a minute per machine.
+         *     that issued its credential. The deployment makes the tunnel when the
+         *     machine has none.
          *      */
-        post: operations["getRemoteHostTunnel"];
+        post: operations["ensureRemoteHostTunnel"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2043,21 +2038,25 @@ export interface components {
         };
         RemoteHostList: {
             hosts: components["schemas"]["RemoteHost"][];
-            /** @description Whether this deployment gives machines fixed addresses. Absent from deployments that predate them. */
+            /** @description Whether this deployment gives machines fixed addresses; absent means false. Only then may a registration omit `url`. */
             fixedAddresses?: boolean;
         };
         RemoteHostRegistration: {
             /** @description At most 64 bytes. */
             label: string;
-            /** @description The machine's address. Omit it to list the machine at a fixed address the deployment makes. */
+            /** @description The machine's address, an http or https origin with no path, query, fragment or user info. Omit it, or send it empty, to list the machine at a fixed address the deployment makes. */
             url?: string;
             token: string;
         };
         RemoteHostAddress: {
-            /** @description An https address. */
+            /**
+             * Format: uri
+             * @description An https origin with no path, query, fragment or user info.
+             */
             url: string;
         };
         RemoteHostTunnelRequest: {
+            /** @description Replace the tunnel under the same address. A repair asked too soon returns the current tunnel with `repaired` unset. */
             repair?: boolean;
         };
         RemoteHostTunnel: {
@@ -2067,7 +2066,7 @@ export interface components {
             runToken: string;
             /**
              * Format: date-time
-             * @description When the address's DNS record was made; a machine holds a newer address back from devices for a few seconds.
+             * @description When the address was made; it may not resolve for a short time after.
              */
             since: string;
             /** @description Set when a repair request replaced the tunnel. */
@@ -7389,6 +7388,7 @@ export interface operations {
             /** @description The account's machines. */
             200: {
                 headers: {
+                    "Cache-Control"?: "no-store";
                     [name: string]: unknown;
                 };
                 content: {
@@ -7422,34 +7422,14 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
-            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. A registration with `url` still succeeds. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
+            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. */
+            409: components["responses"]["Error"];
+            /** @description `validation_error`: the label, token or `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses. */
             422: components["responses"]["ValidationError"];
-            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes this hour. */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `tunnel_unavailable`: the fixed address could not be made. Nothing was listed. */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
+            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. Also for a new `token` on a machine with a fixed tunnel, with or without `url`. */
+            429: components["responses"]["Error"];
+            /** @description `tunnel_unavailable`: the fixed address could not be made, or a new `token` could not replace the tunnel, with or without `url`. Nothing was listed. */
+            502: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
@@ -7500,18 +7480,11 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             /** @description `unauthorized`: no account lists the machine under this credential. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
+            401: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
-    getRemoteHostTunnel: {
+    ensureRemoteHostTunnel: {
         parameters: {
             query?: never;
             header?: never;
@@ -7521,7 +7494,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
                 "application/json": components["schemas"]["RemoteHostTunnelRequest"];
             };
@@ -7538,50 +7511,15 @@ export interface operations {
                 };
             };
             /** @description `unauthorized`: no account lists the machine under this credential. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. The machine keeps a quick tunnel. */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes this hour. */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
+            401: components["responses"]["Error"];
+            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. */
+            409: components["responses"]["Error"];
+            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. */
+            429: components["responses"]["Error"];
             /** @description `tunnel_unavailable`: the tunnel could not be made. */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
+            502: components["responses"]["Error"];
             /** @description `fixed_addresses_unavailable`: this deployment gives no fixed addresses. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
+            503: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };
