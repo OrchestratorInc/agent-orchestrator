@@ -7,11 +7,19 @@ name: Cloud contract compatibility
 # changes must be additive. This fails a PR that removes or narrows anything
 # in the contract. If a breaking change is intended and coordinated with the
 # control plane, add the "contract-breaking-change" label.
+#
+# A response that gains a variant (a new enum value or oneOf/anyOf member) or
+# loosens a bound is reported as a warning, not an error
+# (.github/cloud-contract-severity-levels.txt): no client in this repository
+# validates responses at runtime, and the desktop handles only the event types
+# and values it knows, so an older desktop ignores the new ones. Request-side
+# changes keep oasdiff's default levels.
 
 on:
   pull_request:
     paths:
       - "contracts/cloud/openapi.yaml"
+      - ".github/cloud-contract-severity-levels.txt"
       - ".github/workflows/cloud-contract-compat.yml"
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
@@ -40,10 +48,18 @@ jobs:
           APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'contract-breaking-change') }}
         run: |
           git show "origin/${BASE_REF}:contracts/cloud/openapi.yaml" > "${RUNNER_TEMP}/base-openapi.yaml"
-          if "${RUNNER_TEMP}/bin/oasdiff" breaking \
+          status=0
+          "${RUNNER_TEMP}/bin/oasdiff" breaking \
             "${RUNNER_TEMP}/base-openapi.yaml" contracts/cloud/openapi.yaml \
-            --fail-on ERR; then
+            --severity-levels .github/cloud-contract-severity-levels.txt \
+            --fail-on ERR || status=$?
+          if [[ "$status" == 0 ]]; then
             exit 0
+          fi
+          if [[ "$status" != 1 ]]; then
+            # Not a verdict: oasdiff could not load a contract or its config.
+            echo "::error::oasdiff could not compare the contracts (exit ${status}); see its output above."
+            exit "$status"
           fi
           if [[ "$APPROVED" == "true" ]]; then
             echo "::warning::Breaking contract change approved by the contract-breaking-change label."
