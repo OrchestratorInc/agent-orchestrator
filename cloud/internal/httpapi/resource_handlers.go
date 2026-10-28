@@ -494,6 +494,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	)
 	s.recordActivity(r, domain.ActivityEvent{OrgID: orgID, Kind: domain.ActivityProjectCreated,
 		Attrs: map[string]any{"project_id": project.ID}})
+	s.ensureProjectSnapshots(r, orgID, project)
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})
 }
 

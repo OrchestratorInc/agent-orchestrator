@@ -243,3 +243,69 @@ func (s *Store) AcquireRepositorySnapshotBuild(
 		connection.Release()
 	}, true, nil
 }
+
+// RepositorySnapshotRefresh is a recently used repository snapshot and a live
+// project on its repository, whose repository authority a rebuild clones with.
+type RepositorySnapshotRefresh struct {
+	Snapshot domain.RepositorySandboxSnapshot
+	Project  domain.Project
+}
+
+// RecentRepositorySandboxSnapshots lists the snapshots on provider that a
+// session booted from since usedSince, each with a live (unarchived) project
+// on the same GitHub repository, across organizations. A deploy that rebakes
+// the harness snapshots makes every one of them unusable; the builder rebuilds
+// these ahead of their next session. Snapshots keyed by URL (anonymous public
+// clones) are left to their next session.
+func (s *Store) RecentRepositorySandboxSnapshots(
+	ctx context.Context,
+	provider string,
+	usedSince time.Time,
+) ([]RepositorySnapshotRefresh, error) {
+	var refreshes []RepositorySnapshotRefresh
+	err := s.withService(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT snapshot.org_id::text, snapshot.repository_key,
+				snapshot.repository_identity, snapshot.provider, snapshot.harness,
+				snapshot.snapshot_id, snapshot.base_snapshot_id, snapshot.created_at,
+				project.id::text, project.repository_url, project.github_repository_id
+			FROM ao_repository_sandbox_snapshots snapshot
+			JOIN LATERAL (
+				SELECT candidate.id, candidate.repository_url, candidate.github_repository_id
+				FROM ao_projects candidate
+				WHERE candidate.org_id = snapshot.org_id
+				  AND candidate.archived_at IS NULL
+				  AND candidate.github_repository_id IS NOT NULL
+				  AND snapshot.repository_key = 'github:' || candidate.github_repository_id::text
+				ORDER BY candidate.updated_at DESC
+				LIMIT 1
+			) project ON true
+			WHERE snapshot.provider = $1 AND snapshot.last_used_at >= $2
+			ORDER BY snapshot.last_used_at DESC`,
+			provider, usedSince)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var refresh RepositorySnapshotRefresh
+			var repositoryID int64
+			snapshot := &refresh.Snapshot
+			if err := rows.Scan(
+				&snapshot.OrgID, &snapshot.RepositoryKey, &snapshot.RepositoryIdentity,
+				&snapshot.Provider, &snapshot.Harness, &snapshot.SnapshotID,
+				&snapshot.BaseSnapshotID, &snapshot.CreatedAt,
+				&refresh.Project.ID, &refresh.Project.RepositoryURL, &repositoryID,
+			); err != nil {
+				return err
+			}
+			refresh.Project.OrgID = snapshot.OrgID
+			refresh.Project.GitHubRepositoryID = &repositoryID
+			refreshes = append(refreshes, refresh)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list recent repository snapshots: %w", err)
+	}
+	return refreshes, nil
+}

@@ -113,6 +113,42 @@ func (b *RemoteCheckoutBroker) IssueCheckoutGrant(
 	if err != nil {
 		return CheckoutGrant{}, err
 	}
+	return b.redeem(ctx, orgID, sessionID, authorization)
+}
+
+// remoteProjectCapabilityStore resolves a project, rather than one of its
+// sessions, to its remote repository authority (postgres.Store).
+type remoteProjectCapabilityStore interface {
+	ProjectRemoteGitHubCheckoutContext(context.Context, string, string) (domain.RemoteGitHubCheckoutContext, error)
+}
+
+// IssueProjectCheckoutGrant redeems a project's capability for a project
+// snapshot build that no session triggers; see Service.IssueProjectCheckoutGrant.
+func (b *RemoteCheckoutBroker) IssueProjectCheckoutGrant(
+	ctx context.Context,
+	orgID, projectID string,
+) (CheckoutGrant, error) {
+	store, ok := b.store.(remoteProjectCapabilityStore)
+	if !ok {
+		return CheckoutGrant{}, errors.New("project checkout grants are not available from this store")
+	}
+	authorization, err := store.ProjectRemoteGitHubCheckoutContext(ctx, orgID, projectID)
+	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	if authorization.ProjectID != projectID {
+		return CheckoutGrant{}, errors.New("remote repository authority is invalid")
+	}
+	return b.redeem(ctx, orgID, "", authorization)
+}
+
+// redeem exchanges a remote authority (resolved for sessionID, or for its
+// project when empty) for a checkout grant.
+func (b *RemoteCheckoutBroker) redeem(
+	ctx context.Context,
+	orgID, sessionID string,
+	authorization domain.RemoteGitHubCheckoutContext,
+) (CheckoutGrant, error) {
 	if authorization.OrgID != orgID ||
 		authorization.SessionID != sessionID ||
 		authorization.ProjectID == "" ||

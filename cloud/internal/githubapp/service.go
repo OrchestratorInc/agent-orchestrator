@@ -572,6 +572,57 @@ func (s *Service) IssueCheckoutGrant(
 	}, nil
 }
 
+// projectCheckoutStore resolves a project, rather than one of its sessions,
+// to its repository authority (postgres.Store).
+type projectCheckoutStore interface {
+	ProjectGitHubCheckoutContext(context.Context, string, string) (domain.GitHubCheckoutContext, error)
+	ProjectRemoteGitHubCheckoutContext(context.Context, string, string) (domain.RemoteGitHubCheckoutContext, error)
+}
+
+// IssueProjectCheckoutGrant issues a read-only token for a project's primary
+// repository, for a project snapshot build that no session triggers (when
+// the repository is connected, or after a deploy). It applies
+// IssueCheckoutGrant's checks to the project instead of a session; the token
+// only ever reaches the control plane's throwaway builder VM.
+func (s *Service) IssueProjectCheckoutGrant(
+	ctx context.Context,
+	orgID, projectID string,
+) (CheckoutGrant, error) {
+	store, ok := s.store.(projectCheckoutStore)
+	if !ok {
+		return CheckoutGrant{}, errors.New("project checkout grants are not available from this store")
+	}
+	authorization, err := store.ProjectGitHubCheckoutContext(ctx, orgID, projectID)
+	if errors.Is(err, postgres.ErrForbidden) || errors.Is(err, postgres.ErrNotFound) {
+		var remote domain.RemoteGitHubCheckoutContext
+		if remote, err = store.ProjectRemoteGitHubCheckoutContext(ctx, orgID, projectID); err == nil {
+			authorization, err = s.capabilityCheckoutAuthorization(ctx, orgID, "", remote)
+		}
+	}
+	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	if authorization.OrgID != orgID ||
+		authorization.ProjectID != projectID ||
+		authorization.GitHubInstallationID <= 0 ||
+		authorization.GitHubRepositoryID <= 0 ||
+		!validGitHubCloneIdentity(authorization.CloneURL, authorization.FullName) {
+		return CheckoutGrant{}, postgres.ErrForbidden
+	}
+	if err := s.requireUserScopedAccess(ctx, authorization, authorization.GitHubRepositoryID, false); err != nil {
+		return CheckoutGrant{}, err
+	}
+	access, err := s.client.repositoryReadTokenForRepos(ctx, authorization.GitHubInstallationID,
+		[]int64{authorization.GitHubRepositoryID})
+	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	if access.ExpiresAt.After(time.Now().UTC().Add(2 * time.Hour)) {
+		return CheckoutGrant{}, errors.New("GitHub returned an unexpectedly long-lived installation token")
+	}
+	return CheckoutGrant{CloneURL: authorization.CloneURL, Token: access.Token, ExpiresAt: access.ExpiresAt}, nil
+}
+
 // checkoutRepositoryIDs returns the repository IDs a checkout token should be
 // scoped to: always the session's primary repository, plus any of the project's
 // declared extra repositories that resolve within the same installation. It is
@@ -867,6 +918,17 @@ func (s *Service) resolveCapabilityCheckoutAuthorization(
 	if err != nil {
 		return domain.GitHubCheckoutContext{}, err
 	}
+	return s.capabilityCheckoutAuthorization(ctx, orgID, sessionID, remote)
+}
+
+// capabilityCheckoutAuthorization validates a capability-backed project's
+// remote authority (resolved for sessionID, or for the project when empty)
+// and maps it to a repository authorization.
+func (s *Service) capabilityCheckoutAuthorization(
+	ctx context.Context,
+	orgID, sessionID string,
+	remote domain.RemoteGitHubCheckoutContext,
+) (domain.GitHubCheckoutContext, error) {
 	if remote.OrgID != orgID ||
 		remote.SessionID != sessionID ||
 		remote.ProjectID == "" ||

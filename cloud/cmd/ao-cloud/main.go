@@ -585,10 +585,18 @@ func run(logger *slog.Logger) error {
 			Store:          store,
 			Grants:         grants,
 			AllowAnonymous: cfg.AllowAnonymousCheckout,
-			Logger:         logger,
+			BaseSnapshot: func(harness string) string {
+				plan, err := provisioningDefaults(cfg).SessionPlanForProvider(harness, sandbox.ProviderFreestyle)
+				if err != nil {
+					return ""
+				}
+				return sandbox.FreestyleSnapshot(plan)
+			},
+			Logger: logger,
 		})
 		apiOptions.ProjectSnapshots = projectSnapshots
 		go projectSnapshots.RunCollector(ctx)
+		go projectSnapshots.RunRefresher(ctx)
 	}
 	if cfg.BillingEnabled() {
 		store.EnableBilling(cfg.BillingPastDueGrace, cfg.BillingExemptOrgsCreatedBefore)

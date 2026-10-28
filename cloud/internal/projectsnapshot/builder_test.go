@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
@@ -180,6 +181,10 @@ type fakeGrants struct{ token string }
 
 func (f fakeGrants) IssueCheckoutGrant(context.Context, string, string) (githubapp.CheckoutGrant, error) {
 	return githubapp.CheckoutGrant{CloneURL: "https://github.com/acme/repo.git", Token: f.token, ExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+
+func (f fakeGrants) IssueProjectCheckoutGrant(ctx context.Context, orgID, _ string) (githubapp.CheckoutGrant, error) {
+	return f.IssueCheckoutGrant(ctx, orgID, "")
 }
 
 var repositoryID = int64(4242)
@@ -488,5 +493,82 @@ func TestEnsureSkipsABuildAnotherReplicaHolds(t *testing.T) {
 	if len(vms.created) != 1 || store.claims != 1 || store.releases != 1 {
 		t.Fatalf("created=%d claims=%d releases=%d, want one claimed and released build",
 			len(vms.created), store.claims, store.releases)
+	}
+}
+
+// projectGrants issues only project grants, so a session grant fails loudly.
+type projectGrants struct{ projects *[]string }
+
+func (projectGrants) IssueCheckoutGrant(context.Context, string, string) (githubapp.CheckoutGrant, error) {
+	return githubapp.CheckoutGrant{}, errors.New("no session grant")
+}
+
+func (g projectGrants) IssueProjectCheckoutGrant(_ context.Context, _, projectID string) (githubapp.CheckoutGrant, error) {
+	*g.projects = append(*g.projects, projectID)
+	return githubapp.CheckoutGrant{CloneURL: "https://github.com/acme/repo.git", Token: "ghs_project", ExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+
+func TestEnsureWithoutASessionClonesWithTheProjectsGrant(t *testing.T) {
+	vms, store := &fakeVMs{}, &fakeStore{}
+	var projects []string
+	builder := New(Config{
+		Provider: sandbox.ProviderFreestyle, VMs: vms, Store: store,
+		Grants: projectGrants{projects: &projects},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	connect := request()
+	connect.SessionID = ""
+	builder.Ensure(connect)
+	waitIdle(t, builder)
+
+	if len(projects) != 1 || projects[0] != connect.ProjectID || vms.envs[0]["AO_GIT_TOKEN"] != "ghs_project" {
+		t.Fatalf("project grants = %v, env = %v", projects, vms.envs)
+	}
+	if len(store.replaced) != 1 {
+		t.Fatalf("recorded %+v", store.replaced)
+	}
+}
+
+// refreshStore lists recently used snapshots for Refresh.
+type refreshStore struct {
+	*fakeStore
+	recent []postgres.RepositorySnapshotRefresh
+}
+
+func (f *refreshStore) RecentRepositorySandboxSnapshots(context.Context, string, time.Time) ([]postgres.RepositorySnapshotRefresh, error) {
+	return f.recent, nil
+}
+
+func TestRefreshRebuildsSnapshotsLeftOnAnOlderHarnessSnapshot(t *testing.T) {
+	stale := recorded("sh-old", "sh-before-deploy", time.Now())
+	store := &refreshStore{fakeStore: &fakeStore{existing: stale}, recent: []postgres.RepositorySnapshotRefresh{{
+		Snapshot: *stale, Project: project("11111111-2222-3333-4444-555555555555"),
+	}}}
+	store.recent[0].Project.OrgID = "org"
+	vms := &fakeVMs{}
+	var projects []string
+	builder := New(Config{
+		Provider: sandbox.ProviderFreestyle, VMs: vms, Store: store,
+		Grants:       projectGrants{projects: &projects},
+		BaseSnapshot: func(string) string { return "sh-base" },
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	builder.Refresh(context.Background())
+	waitIdle(t, builder)
+
+	if len(vms.created) != 1 || vms.created[0].RootFS != "sh-base" {
+		t.Fatalf("builder VM created from %+v, want the current harness snapshot", vms.created)
+	}
+	if len(store.replaced) != 1 || store.replaced[0].BaseSnapshotID != "sh-base" || len(projects) != 1 {
+		t.Fatalf("recorded %+v with grants for %v", store.replaced, projects)
+	}
+
+	// A snapshot already on the current harness snapshot is left alone.
+	store.fakeStore.existing = &store.replaced[0]
+	store.recent[0].Snapshot = store.replaced[0]
+	builder.Refresh(context.Background())
+	waitIdle(t, builder)
+	if len(vms.created) != 1 {
+		t.Fatalf("rebuilt a current snapshot: %+v", vms.created)
 	}
 }

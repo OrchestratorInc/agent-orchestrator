@@ -24,6 +24,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
@@ -40,8 +41,11 @@ const (
 	// DefaultMaxConcurrentBuilds is how many builder VMs one replica runs at
 	// once by default.
 	DefaultMaxConcurrentBuilds = 2
-	// collectInterval is how often idle snapshots are looked for.
+	// collectInterval is how often idle snapshots are looked for, and stale
+	// ones refreshed.
 	collectInterval = time.Hour
+	// refreshRetryInterval is how long Refresh waits for a free build slot.
+	refreshRetryInterval = 5 * time.Second
 	// collectDeleteTimeout bounds one provider snapshot delete. The record
 	// stays locked meanwhile, so a lookup racing it waits at most this long.
 	collectDeleteTimeout = 30 * time.Second
@@ -88,6 +92,17 @@ type Store interface {
 // Grants issues a short-lived clone token for a session's repository.
 type Grants interface {
 	IssueCheckoutGrant(ctx context.Context, orgID, sessionID string) (githubapp.CheckoutGrant, error)
+}
+
+// ProjectGrants issues a clone token for a project's repository when no
+// session triggered the build (Ensure at connect, Refresh after a deploy).
+type ProjectGrants interface {
+	IssueProjectCheckoutGrant(ctx context.Context, orgID, projectID string) (githubapp.CheckoutGrant, error)
+}
+
+// RefreshStore lists the snapshots Refresh considers (postgres.Store).
+type RefreshStore interface {
+	RecentRepositorySandboxSnapshots(ctx context.Context, provider string, usedSince time.Time) ([]postgres.RepositorySnapshotRefresh, error)
 }
 
 // Request identifies the snapshot one session would use. SessionID is the
@@ -147,7 +162,11 @@ type Config struct {
 	// Builder VMs count against the provider account's VM limit like session
 	// VMs do, so an unbounded burst of builds could starve sessions.
 	MaxConcurrentBuilds int
-	Logger              *slog.Logger
+	// BaseSnapshot returns the harness snapshot new sessions on harness boot
+	// from, or "" when there is none. Refresh needs it to tell a snapshot built
+	// on an older base (before a deploy rebaked the harness snapshots).
+	BaseSnapshot func(harness string) string
+	Logger       *slog.Logger
 }
 
 // Builder looks up and (re)builds project snapshots.
@@ -200,13 +219,19 @@ func usable(snapshot domain.RepositorySandboxSnapshot, request Request) bool {
 // Ensure starts a background build when the project has no usable snapshot or
 // it is older than MaxAge. At most one build runs per project and harness.
 func (b *Builder) Ensure(request Request) {
-	key := request.key()
-	b.mu.Lock()
 	// A build skipped here is not lost: every session create calls Ensure, so
 	// the next one starts it once a slot is free.
+	b.start(request)
+}
+
+// start begins Ensure's background build, reporting false when a build for
+// the same snapshot is running or every build slot is taken.
+func (b *Builder) start(request Request) bool {
+	key := request.key()
+	b.mu.Lock()
 	if b.inflight[key] || len(b.inflight) >= b.config.MaxConcurrentBuilds {
 		b.mu.Unlock()
-		return
+		return false
 	}
 	b.inflight[key] = true
 	b.mu.Unlock()
@@ -253,6 +278,7 @@ func (b *Builder) Ensure(request Request) {
 			"project_id", request.ProjectID, "harness", request.Harness,
 			"snapshot_id", snapshotID, "duration_ms", b.now().Sub(started).Milliseconds())
 	}()
+	return true
 }
 
 func (b *Builder) needsBuild(ctx context.Context, request Request) bool {
@@ -325,6 +351,62 @@ func (b *Builder) build(ctx context.Context, request Request) (string, error) {
 	return snapshotID, nil
 }
 
+// RunRefresher rebuilds snapshots left on an older base: once at start, which
+// follows a deploy that rebaked the harness snapshots, and every
+// collectInterval after that until ctx ends.
+func (b *Builder) RunRefresher(ctx context.Context) {
+	ticker := time.NewTicker(collectInterval)
+	defer ticker.Stop()
+	for {
+		b.Refresh(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// Refresh rebuilds the snapshots a session booted from within IdleRetention
+// that were built on an older harness snapshot than the one sessions now boot
+// from: a deploy rebakes the harness snapshots, which makes every repository
+// snapshot unusable until its next session rebuilds it, so that session clones.
+// It cannot see a deploy directly; a snapshot on a different base is the same
+// fact. Each rebuild clones with its project's authority and waits for a free
+// build slot, most recently used first.
+func (b *Builder) Refresh(ctx context.Context) {
+	store, ok := b.config.Store.(RefreshStore)
+	if !ok || b.config.BaseSnapshot == nil {
+		return
+	}
+	refreshes, err := store.RecentRepositorySandboxSnapshots(ctx, b.config.Provider, b.now().Add(-IdleRetention))
+	if err != nil {
+		if ctx.Err() == nil {
+			b.config.Logger.Warn("list project snapshots to refresh", "error", err)
+		}
+		return
+	}
+	for _, refresh := range refreshes {
+		base := b.config.BaseSnapshot(refresh.Snapshot.Harness)
+		if base == "" || base == refresh.Snapshot.BaseSnapshotID {
+			continue
+		}
+		request, ok := NewRequest(refresh.Snapshot.OrgID, refresh.Project, refresh.Snapshot.Harness, base)
+		if !ok || request.RepositoryKey != refresh.Snapshot.RepositoryKey {
+			continue
+		}
+		for !b.start(request) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(refreshRetryInterval):
+			}
+		}
+		b.config.Logger.Info("refreshing project snapshot onto the current harness snapshot",
+			"project_id", request.ProjectID, "harness", request.Harness)
+	}
+}
+
 // RunCollector deletes idle snapshots every collectInterval until ctx ends.
 func (b *Builder) RunCollector(ctx context.Context) {
 	ticker := time.NewTicker(collectInterval)
@@ -361,10 +443,19 @@ func (b *Builder) Collect(ctx context.Context) {
 }
 
 // cloneSource returns the URL and token to clone with: the triggering
-// session's checkout grant, or an anonymous public clone where allowed.
+// session's checkout grant, the project's when no session triggered the build,
+// or an anonymous public clone where allowed.
 func (b *Builder) cloneSource(ctx context.Context, request Request) (string, string, error) {
 	if b.config.Grants != nil {
-		grant, err := b.config.Grants.IssueCheckoutGrant(ctx, request.OrgID, request.SessionID)
+		var grant githubapp.CheckoutGrant
+		var err error
+		if request.SessionID != "" {
+			grant, err = b.config.Grants.IssueCheckoutGrant(ctx, request.OrgID, request.SessionID)
+		} else if projectGrants, ok := b.config.Grants.(ProjectGrants); ok {
+			grant, err = projectGrants.IssueProjectCheckoutGrant(ctx, request.OrgID, request.ProjectID)
+		} else {
+			err = errors.New("no session to issue a checkout grant for")
+		}
 		if err == nil && grant.CloneURL != "" && grant.Token != "" {
 			return grant.CloneURL, grant.Token, nil
 		}
