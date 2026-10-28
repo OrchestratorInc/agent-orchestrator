@@ -3727,5 +3727,7 @@
 	"settings.harness.loginUi.codeHint": "Falls die Anmeldeseite einen Code anzeigt, füge ihn hier ein.",
 	"settings.harness.loginUi.submitCode": "Code senden",
 	"settings.harness.loginUi.remoteCodex": "Verwende für einen entfernten Host einen Gerätecode oder Zugangsdaten. Browser-Rückrufe laufen auf diesem Host.",
-	"settings.harness.loginUi.remoteClaude": "Öffne die Anmeldeseite und füge ihren Code hier ein, um die Anmeldung auf dem gewählten Host abzuschließen."
+	"settings.harness.loginUi.remoteClaude": "Öffne die Anmeldeseite und füge ihren Code hier ein, um die Anmeldung auf dem gewählten Host abzuschließen.",
+	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
+	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…"
 }

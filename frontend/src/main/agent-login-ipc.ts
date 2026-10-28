@@ -61,7 +61,7 @@ export async function requestAgentLogin(input: unknown, port: number | undefined
 		url = `${operations}/${encodeURIComponent(request.operationId)}`;
 		if (request.action === "get") method = "GET";
 		else if (request.action === "cancel") method = "DELETE";
-		else {
+		else if (request.action === "code") {
 			url += "/code";
 			body = { code: request.code };
 		}

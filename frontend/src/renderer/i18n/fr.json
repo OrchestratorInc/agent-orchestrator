@@ -3796,5 +3796,7 @@
 	"settings.harness.loginUi.codeHint": "Si la page de connexion affiche un code, collez-le ici.",
 	"settings.harness.loginUi.submitCode": "Envoyer le code",
 	"settings.harness.loginUi.remoteCodex": "Sur un hôte distant, utilisez un code d’appareil ou des identifiants. Le retour du navigateur se fait sur cet hôte.",
-	"settings.harness.loginUi.remoteClaude": "Ouvrez la page de connexion et collez son code ici pour terminer sur l’hôte sélectionné."
+	"settings.harness.loginUi.remoteClaude": "Ouvrez la page de connexion et collez son code ici pour terminer sur l’hôte sélectionné.",
+	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
+	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…"
 }

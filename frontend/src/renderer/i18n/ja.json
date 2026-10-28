@@ -3727,5 +3727,7 @@
 	"settings.harness.loginUi.codeHint": "サインインページにコードが表示されたら、ここに貼り付けてください。",
 	"settings.harness.loginUi.submitCode": "コードを送信",
 	"settings.harness.loginUi.remoteCodex": "リモートホストではデバイスコードまたは認証情報を使用してください。ブラウザーのコールバックはそのホストで実行されます。",
-	"settings.harness.loginUi.remoteClaude": "サインインページを開き、表示されたコードをここに貼り付けて、選択したホストで完了してください。"
+	"settings.harness.loginUi.remoteClaude": "サインインページを開き、表示されたコードをここに貼り付けて、選択したホストで完了してください。",
+	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
+	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…"
 }

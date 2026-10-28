@@ -3709,5 +3709,7 @@
 	"settings.harness.loginUi.codeHint": "如果登录页面显示验证码，请粘贴到此处。",
 	"settings.harness.loginUi.submitCode": "提交验证码",
 	"settings.harness.loginUi.remoteCodex": "远程主机请使用设备验证码或凭据。浏览器回调将在该主机上运行。",
-	"settings.harness.loginUi.remoteClaude": "打开登录页面，将验证码粘贴到此处，以在所选主机上完成登录。"
+	"settings.harness.loginUi.remoteClaude": "打开登录页面，将验证码粘贴到此处，以在所选主机上完成登录。",
+	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
+	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…"
 }

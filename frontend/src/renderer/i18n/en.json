@@ -3708,5 +3708,7 @@
 	"settings.harness.loginUi.codeHint": "If the sign-in page gives you a code, paste it here.",
 	"settings.harness.loginUi.submitCode": "Submit code",
 	"settings.harness.loginUi.remoteCodex": "On a remote host, use a device code or credentials. Browser callbacks run on that host.",
-	"settings.harness.loginUi.remoteClaude": "Open the sign-in page and paste its code here to finish on the selected host."
+	"settings.harness.loginUi.remoteClaude": "Open the sign-in page and paste its code here to finish on the selected host.",
+	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
+	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…"
 }

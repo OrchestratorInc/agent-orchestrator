@@ -3796,5 +3796,7 @@
 	"settings.harness.loginUi.codeHint": "Si la página de acceso te da un código, pégalo aquí.",
 	"settings.harness.loginUi.submitCode": "Enviar código",
 	"settings.harness.loginUi.remoteCodex": "En un equipo remoto, usa un código de dispositivo o credenciales. El retorno del navegador se dirige a ese equipo.",
-	"settings.harness.loginUi.remoteClaude": "Abre la página de acceso y pega aquí su código para completar el acceso en el equipo seleccionado."
+	"settings.harness.loginUi.remoteClaude": "Abre la página de acceso y pega aquí su código para completar el acceso en el equipo seleccionado.",
+	"settings.harness.loginUi.claudeKeyPlaceholder": "sk-ant-…",
+	"settings.harness.loginUi.openaiKeyPlaceholder": "sk-…"
 }

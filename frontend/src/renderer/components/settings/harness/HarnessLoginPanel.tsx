@@ -206,7 +206,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		: running ? t(method?.secret ? "settings.harness.loginUi.saving" : operation?.deviceCode ? "settings.harness.loginUi.waitingForCode" : "settings.harness.loginUi.waiting") : "";
 
 	const selectedMethodKey = agentId === "claude-code" && selectedMethodId === "browser" ? "claude" : selectedMethodId;
-	const methodLabel = t(`settings.harness.loginUi.methods.${selectedMethodKey}`, { defaultValue: method?.label });
+	const methodLabel = t(`settings.harness.loginUi.methods.${selectedMethodKey}`, { defaultValue: method?.label ?? "" });
 
 	return <section ref={panelRef} aria-labelledby={titleId} className="@container min-w-0 space-y-4 p-4" data-settings-inline-edit="">
 		<div className="space-y-1">
@@ -234,7 +234,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 							: <ExternalLink className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />}
 					</button>
 					{open && <div ref={secretRowRef} className="flex scroll-mb-4 flex-wrap items-center gap-2 pr-4 pb-4 pl-15" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); choose(item); } }}>
-						<Input placeholder={item.id === "api_key" ? (agentId === "claude-code" ? "sk-ant-…" : "sk-…") : undefined} aria-label={t(item.id === "api_key" ? "settings.harness.loginUi.apiKey" : "settings.harness.loginUi.accessToken")} className="min-w-48 flex-1 border-border bg-(--color-bg-primary) font-mono text-[13px] placeholder:font-sans focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} onChange={(event) => setSecret(event.target.value)} />
+						<Input placeholder={item.id === "api_key" ? t(agentId === "claude-code" ? "settings.harness.loginUi.claudeKeyPlaceholder" : "settings.harness.loginUi.openaiKeyPlaceholder") : undefined} aria-label={t(item.id === "api_key" ? "settings.harness.loginUi.apiKey" : "settings.harness.loginUi.accessToken")} className="min-w-48 flex-1 border-border bg-(--color-bg-primary) font-mono text-[13px] placeholder:font-sans focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} onChange={(event) => setSecret(event.target.value)} />
 						<Button type="submit" disabled={busy || !secret.trim()}>
 							{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
 							{t("settings.harness.loginUi.save")}
