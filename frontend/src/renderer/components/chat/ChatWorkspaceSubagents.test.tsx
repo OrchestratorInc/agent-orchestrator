@@ -10,7 +10,7 @@
 
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixtureEmpty } from "../../lib/chat-fixture";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot } from "../../types/conversation";
@@ -79,7 +79,7 @@ function steer(id: string, sequence: number, body: string): ConversationActivity
 	};
 }
 
-function snapshot(state: "running" | "completed"): ConversationSnapshot {
+function snapshot(state: "running" | "completed", later: ConversationItem[] = []): ConversationSnapshot {
 	const items: ConversationItem[] = [
 		text("prompt", 1, "user", "Audit the storefront with subagents"),
 		text("plan", 2, "assistant", "Launching two read-only agents."),
@@ -90,7 +90,8 @@ function snapshot(state: "running" | "completed"): ConversationSnapshot {
 		text("progress", 7, "assistant", "One agent reported back."),
 		handback("t2", 8, "tool-tests", "Ranked 5 tests to write first."),
 		child("p2", 9, "tool-pages", "cd /repo; cat src/app/faq/page.tsx"),
-		...(state === "completed" ? [text("final", 10, "assistant", "Both audits are summarized above.")] : []),
+		...later,
+		...(state === "completed" ? [text("final", 20, "assistant", "Both audits are summarized above.")] : []),
 	];
 	return {
 		...chatFixtureEmpty,
@@ -209,5 +210,62 @@ describe("ChatWorkspace subagents", () => {
 		expect(within(screen.getByRole("button", { name: /1 subagent/ })).getByText("1 done")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /Audit: info pages/ })).toHaveTextContent("The FAQ never mentions shipping.");
 		expect(screen.queryByText("SubagentHandback")).not.toBeInTheDocument();
+	});
+
+	it("opens a child in the Subagents panel and keeps it current as the child works", async () => {
+		const user = userEvent.setup();
+		const tabBody = document.createElement("div");
+		document.body.append(tabBody);
+		const reveal = vi.fn();
+		const onAvailableChange = vi.fn();
+		const host = (container: HTMLElement | null) => ({ container, reveal, onAvailableChange });
+		const { rerender, unmount } = render(<ChatWorkspace snapshot={snapshot("running")} subagentPanel={host(null)} />);
+
+		// The chat says it has subagents, so the inspector can offer the tab.
+		expect(onAvailableChange).toHaveBeenLastCalledWith(true);
+
+		const row = screen.getByRole("button", { name: /Audit: info pages/ });
+		expect(row).not.toHaveAttribute("aria-expanded");
+		await user.click(row);
+		expect(reveal).toHaveBeenCalledTimes(1);
+		// Nothing opens inline: the conversation belongs to the panel.
+		expect(screen.queryByText("Sent by the parent agent")).not.toBeInTheDocument();
+
+		// The inspector mounts the tab body, and the panel opens on the child clicked.
+		rerender(<ChatWorkspace snapshot={snapshot("running")} subagentPanel={host(tabBody)} />);
+		const panel = within(tabBody);
+		expect(panel.getByRole("heading", { name: "Audit: info pages" })).toBeInTheDocument();
+		expect(panel.getByTestId("subagent-prompt")).toHaveTextContent("Read-only. Audit: info pages.");
+		expect(panel.getByRole("button", { name: /Ran 2 tool calls/ })).toBeInTheDocument();
+		expect(panel.queryByRole("textbox")).not.toBeInTheDocument();
+
+		// A step that lands later, after other rows, shows up in the open conversation.
+		rerender(
+			<ChatWorkspace
+				snapshot={snapshot("running", [child("p3", 10, "tool-pages", "cd /repo; cat src/app/shipping/page.tsx")])}
+				subagentPanel={host(tabBody)}
+			/>,
+		);
+		expect(panel.getByRole("button", { name: /Ran 3 tool calls/ })).toBeInTheDocument();
+
+		await user.click(panel.getByRole("button", { name: "All subagents" }));
+		expect(panel.getByRole("region", { name: "Working" })).toHaveTextContent("Audit: info pages");
+		expect(panel.getByRole("region", { name: "Finished" })).toHaveTextContent("Audit: testing gaps");
+
+		unmount();
+		expect(onAvailableChange).toHaveBeenLastCalledWith(false);
+		tabBody.remove();
+	});
+
+	it("does not offer the panel when the chat has no subagents", () => {
+		const onAvailableChange = vi.fn();
+		const items: ConversationItem[] = [text("prompt", 1, "user", "Hi"), text("reply", 2, "assistant", "Hello.")];
+		render(
+			<ChatWorkspace
+				snapshot={{ ...snapshot("completed"), items, latestSequence: items.length }}
+				subagentPanel={{ container: null, reveal: vi.fn(), onAvailableChange }}
+			/>,
+		);
+		expect(onAvailableChange).toHaveBeenLastCalledWith(false);
 	});
 });

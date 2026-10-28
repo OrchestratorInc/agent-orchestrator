@@ -29,6 +29,13 @@ const DELIVERED_ELSEWHERE = /^This agent's report was delivered/;
 
 export type SubagentState = "working" | "done" | "failed" | "stopped" | "unknown";
 
+/** A launch with what `readSubagent` needs: the steps its turn carries and whether that turn still runs. */
+export type SubagentRef = {
+	launch: ConversationActivity;
+	steps: readonly ConversationActivity[];
+	live: boolean;
+};
+
 export type Subagent = {
 	launch: ConversationActivity;
 	/** The short task name the parent gave the child. */
@@ -203,6 +210,26 @@ export function isChildMessage(step: ConversationActivity): boolean {
 
 export function childMessageText(step: ConversationActivity): string {
 	return (step.detail?.progress ?? step.detail?.text ?? "").trim();
+}
+
+export type StepSection =
+	| { kind: "said"; key: string; text: string }
+	| { kind: "run"; key: string; steps: ConversationActivity[] };
+
+/** What the child wrote breaks its tool calls into runs, as the parent's prose does. */
+export function stepSections(steps: readonly ConversationActivity[]): StepSection[] {
+	const sections: StepSection[] = [];
+	for (const step of steps) {
+		if (isChildMessage(step)) {
+			const text = childMessageText(step);
+			if (text) sections.push({ kind: "said", key: step.id, text });
+			continue;
+		}
+		const last = sections.at(-1);
+		if (last?.kind === "run") last.steps.push(step);
+		else sections.push({ kind: "run", key: `run-${step.id}`, steps: [step] });
+	}
+	return sections;
 }
 
 function isHandback(step: ConversationActivity): boolean {

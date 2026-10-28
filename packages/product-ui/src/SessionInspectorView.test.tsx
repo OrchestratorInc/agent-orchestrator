@@ -81,6 +81,18 @@ describe("SessionInspectorShellView", () => {
     expect(body).toHaveClass("p-0", "overflow-hidden");
     expect(body).not.toHaveClass("p-3", "pb-4", "overflow-y-auto");
   });
+  it("lets the Subagents panel own its scrolling, like side chat", () => {
+    const withSubagents = [...tabs, { id: "subagents" as const, icon: <svg />, label: "Subagents" }];
+    render(<SessionInspectorShellView
+      activeView="subagents" ariaLabel="Session inspector" browserPoppedOut={false}
+      subagentsView={<div data-testid="subagents-slot" />}
+      tabs={withSubagents} onViewChange={vi.fn()}
+    />);
+    const body = screen.getByTestId("subagents-slot").parentElement;
+    expect(body).toHaveClass("p-0", "overflow-hidden");
+    expect(body).not.toHaveClass("overflow-y-auto");
+    expect(screen.getByRole("tab", { name: "Subagents" })).toHaveAttribute("aria-selected", "true");
+  });
   it("renders the artifacts view under its own tab", () => {
     const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
     render(<SessionInspectorShellView

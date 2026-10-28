@@ -35,6 +35,7 @@ import {
 	type ReactNode,
 	type WheelEvent as ReactWheelEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, MessageSquarePlus, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
 import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
@@ -155,8 +156,9 @@ import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
-import { SubagentTeam } from "./SubagentTeam";
-import { isSubagentLaunch, partitionSubagentSteps } from "./subagent-team";
+import { SubagentPanel, type SubagentPanelHost } from "./SubagentPanel";
+import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
+import { isSubagentLaunch, partitionSubagentSteps, type SubagentRef } from "./subagent-team";
 import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
@@ -361,6 +363,8 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 
 export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
+	/** The inspector tab that shows one subagent's conversation. Without it, a subagent opens inline. */
+	subagentPanel?: SubagentPanelHost;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
@@ -679,6 +683,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 
 function ChatWorkspaceContent({
 	onAddToSideChat,
+	subagentPanel,
 	annotationNavigationRequest,
 	snapshot,
 	promptSuggestion,
@@ -1856,6 +1861,7 @@ function ChatWorkspaceContent({
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
+									subagentPanel={subagentPanel}
 									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
@@ -2601,6 +2607,7 @@ const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
  */
 export function Timeline({
 	onAddToSideChat,
+	subagentPanel,
 	onAddToChat,
 	onForeignAnnotation,
 	annotationNavigationRef,
@@ -2636,6 +2643,7 @@ export function Timeline({
 	openingStartedAt,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
+	subagentPanel?: SubagentPanelHost;
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
 	onAddToChat?: (excerpt: ChatDraftExcerptReference) => void;
 	/** Handles annotations whose source is another conversation. */
@@ -3520,6 +3528,32 @@ export function Timeline({
 				: group);
 	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
+	// Read from every group, not the mounted ones: the timeline is virtualized, and the
+	// panel lists a child whose turn has scrolled far out of view.
+	const subagentPanelEnabled = subagentPanel !== undefined;
+	const subagents = useMemo(
+		() => (subagentPanelEnabled ? conversationSubagents(groups) : NO_SUBAGENTS),
+		[groups, subagentPanelEnabled],
+	);
+	const [openSubagentId, setOpenSubagentId] = useState<string>();
+	const closeSubagent = useCallback(() => setOpenSubagentId(undefined), []);
+	const hasSubagents = subagents.length > 0;
+	const reportSubagents = subagentPanel?.onAvailableChange;
+	useEffect(() => {
+		if (!reportSubagents) return;
+		reportSubagents(hasSubagents);
+		return () => reportSubagents(false);
+	}, [hasSubagents, reportSubagents]);
+	const revealSubagents = subagentPanel?.reveal;
+	const openSubagent = useMemo(
+		() => revealSubagents
+			? (launchId: string) => {
+				setOpenSubagentId(launchId);
+				revealSubagents();
+			}
+			: undefined,
+		[revealSubagents],
+	);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	// One slot carries the start-up row from the first frame: the opening turn's
 	// group, or before that turn exists, the brief's own live group. Drawing it
@@ -4061,6 +4095,19 @@ export function Timeline({
 
 	return (
 		<ChatOpeningRef.Provider value={chatOpening}>
+		<OpenSubagentContext.Provider value={openSubagent}>
+		{subagentPanel?.container ? createPortal(
+			<SubagentPanel
+				subagents={subagents}
+				openId={openSubagentId}
+				onOpen={setOpenSubagentId}
+				onBack={closeSubagent}
+				harness={snapshot.harness}
+				disclosureOverrides={activityDisclosureOverrides}
+				onDisclosureChange={onActivityDisclosureChange}
+			/>,
+			subagentPanel.container,
+		) : null}
 		<div
 			className="relative min-h-0 flex-1"
 			data-testid="chat-timeline"
@@ -4362,6 +4409,7 @@ export function Timeline({
 				</Button>
 			) : null}
 		</div>
+		</OpenSubagentContext.Provider>
 		</ChatOpeningRef.Provider>
 	);
 }
@@ -4457,8 +4505,7 @@ const TurnGroup = memo(function TurnGroup({
 	const { t } = useTranslation();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
-	const subagentSteps = group.subagents?.steps ?? NO_SUBAGENT_STEPS;
-	const subagentsLive = group.subagents?.live ?? Boolean(group.live);
+	const { steps: subagentSteps, live: subagentsLive } = groupSubagents(group);
 	const runs = useMemo(
 		() =>
 			runsOf(
@@ -5155,6 +5202,28 @@ type GroupSubagents = {
 };
 
 const NO_SUBAGENT_STEPS: ReadonlyMap<string, ConversationActivity[]> = new Map();
+const NO_STEPS: readonly ConversationActivity[] = [];
+const NO_SUBAGENTS: readonly SubagentRef[] = [];
+
+/** The steps a group's launches read, and whether their AO turn still runs. */
+function groupSubagents(group: TimelineGroup): { steps: ReadonlyMap<string, ConversationActivity[]>; live: boolean } {
+	return { steps: group.subagents?.steps ?? NO_SUBAGENT_STEPS, live: group.subagents?.live ?? Boolean(group.live) };
+}
+
+/**
+ * Every subagent the chat shows, in launch order. A launch nested under another is one
+ * of that child's steps, so only the outermost ones are listed.
+ */
+function conversationSubagents(groups: readonly TimelineGroup[]): SubagentRef[] {
+	return groups.flatMap((group) => {
+		const { steps, live } = groupSubagents(group);
+		return group.items.flatMap((item) =>
+			isSubagentLaunch(item) && !group.subagents?.stepIds.has(item.id)
+				? [{ launch: item, steps: steps.get(item.id) ?? NO_STEPS, live }]
+				: [],
+		);
+	});
+}
 
 type GroupPreview = { title: string; detail?: string };
 

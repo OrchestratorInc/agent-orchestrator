@@ -5216,6 +5216,19 @@ describe("SessionView", () => {
 		expect(useUiStore.getState().inspectorSessions["sess-orch"]?.view).toBe("browser");
 	});
 
+	it("gives the orchestrator the ordinary inspector toggle once its chat has subagents", () => {
+		render(<SessionView sessionId="sess-orch" />);
+		expect(screen.getByRole("button", { name: "Open Browser" })).toBeInTheDocument();
+
+		act(() => useUiStore.getState().setSubagentsAvailable("sess-orch", true));
+
+		// Browser is now one of the inspector's tabs, so the toggle no longer wears its mark.
+		expect(screen.queryByRole("button", { name: "Open Browser" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Open inspector panel" }));
+		expect(inspectorOpen("sess-orch")).toBe(true);
+		expect(screen.getByRole("button", { name: "Close inspector panel" })).toHaveAttribute("aria-pressed", "true");
+	});
+
 	it("opens an absolute chat path at the workspace-relative path the daemon returns", async () => {
 		const defaultGet = reviewGetMock.getMockImplementation()!;
 		reviewGetMock.mockImplementation(async (path: string, ...args: unknown[]) =>

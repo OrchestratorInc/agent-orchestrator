@@ -23,7 +23,7 @@ import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight
 import { cn } from "./utils";
 import { UserAvatar } from "./UserAvatar";
 
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts";
 
 export type InspectorTab = {
 	badge?: boolean;
@@ -47,6 +47,7 @@ export function SessionInspectorShellView({
 	browserPoppedOut,
 	browserView,
 	sideChatView,
+	subagentsView,
 	filesView,
 	headerActions,
 	isVisible = true,
@@ -62,6 +63,7 @@ export function SessionInspectorShellView({
 	browserPoppedOut: boolean;
 	browserView?: ReactNode;
 	sideChatView?: ReactNode;
+	subagentsView?: ReactNode;
 	filesView?: ReactNode;
 	headerActions?: ReactNode;
 	isVisible?: boolean;
@@ -192,8 +194,8 @@ export function SessionInspectorShellView({
 				className={cn(
 					inspectorBodyBaseClass,
 					!isVisible && "invisible pointer-events-none",
-					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "artifacts" && inspectorScrollableBodyClass,
-					(activeView === "sideChat" || activeView === "artifacts") && "p-0 overflow-hidden",
+					activeView !== "browser" && activeView !== "files" && activeView !== "sideChat" && activeView !== "subagents" && activeView !== "artifacts" && inspectorScrollableBodyClass,
+					(activeView === "sideChat" || activeView === "subagents" || activeView === "artifacts") && "p-0 overflow-hidden",
 					activeView === "browser" &&
 						!browserPoppedOut &&
 						"session-inspector__body--browser p-0 overflow-hidden [&>[role=tabpanel]]:border-0 [&>[role=tabpanel]]:rounded-none",
@@ -205,6 +207,7 @@ export function SessionInspectorShellView({
 				{activeView === "reviews" ? reviewsView : null}
 				{activeView === "browser" ? browserView : null}
 				{activeView === "sideChat" ? sideChatView : null}
+				{activeView === "subagents" ? subagentsView : null}
 				{activeView === "files" ? filesView : null}
 				{activeView === "artifacts" ? artifactsView : null}
 			</div>

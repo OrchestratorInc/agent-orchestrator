@@ -4,27 +4,25 @@
  * Each launch used to vanish and leave its child's commands strewn through the
  * parent's turn. Here every child gets one row in a shared list: who it is, what it
  * is doing right now, how long it has been at it, and whether it finished. A row
- * opens onto that child's own timeline and the report it handed back, so the parent's
- * turn reads as message, team, message instead of as a log of other agents' calls.
+ * opens that child's own conversation in the Subagents panel, or inline where the
+ * chat has no panel, so the parent's turn reads as message, team, message instead of
+ * as a log of other agents' calls.
  *
  * Motion only marks a change of state: a new child fades into the list, the status
  * glyph swaps when a child finishes, the live line crossfades when the child moves on.
  * Reduced motion turns all of it into immediate state changes.
  */
 
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, Fragment, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { ChevronRight, Loader2, Square, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
-import { ActivityRun } from "./ActivityRun";
-import { ChatMarkdown } from "./ChatMarkdown";
 import { ActivityTransition } from "./ChatTimelineItems";
+import { SubagentTranscript } from "./SubagentTranscript";
 import { ACTIVITY_SUMMARY_BUTTON_CLASS } from "./activity-command";
 import {
-	childMessageText,
-	isChildMessage,
 	latestSubagentLine,
 	readSubagent,
 	type Subagent,
@@ -41,6 +39,12 @@ const STACKED_AVATARS = 3;
  * only a specialized type, such as `Explore`, `Plan` or a project's own agent.
  */
 const DEFAULT_AGENT_TYPE = "general-purpose";
+
+/**
+ * Opens a child, by its launch id, in the chat's Subagents panel. Unset where the chat
+ * has no panel; rows there open inline instead.
+ */
+export const OpenSubagentContext = createContext<((launchId: string) => void) | undefined>(undefined);
 
 export function SubagentTeam({
 	launches,
@@ -63,6 +67,7 @@ export function SubagentTeam({
 }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
+	const openSubagent = useContext(OpenSubagentContext);
 	const agents = useMemo(
 		() => launches.map((launch) => readSubagent(launch, steps.get(launch.id) ?? [], live)),
 		[launches, steps, live],
@@ -144,16 +149,25 @@ export function SubagentTeam({
 											transition={{ duration: reducedMotion ? 0 : 0.2, ease: EASE_OUT }}
 											className="min-w-0 border-t border-border/60 first:border-t-0"
 										>
-											<SubagentRow
-												agent={agent}
-												harness={harness}
-												now={now}
-												open={isOpen(agentKey, false)}
-												onOpenChange={(next) => setOpen(agentKey, next)}
-												disclosureKey={agentKey}
-												disclosureOverrides={disclosureOverrides}
-												onDisclosureChange={onDisclosureChange}
-											/>
+											{openSubagent ? (
+												<SubagentRowButton
+													agent={agent}
+													harness={harness}
+													now={now}
+													onClick={() => openSubagent(agent.launch.id)}
+												/>
+											) : (
+												<InlineSubagentRow
+													agent={agent}
+													harness={harness}
+													now={now}
+													open={isOpen(agentKey, false)}
+													onOpenChange={(next) => setOpen(agentKey, next)}
+													disclosureKey={agentKey}
+													disclosureOverrides={disclosureOverrides}
+													onDisclosureChange={onDisclosureChange}
+												/>
+											)}
 										</motion.li>
 									);
 								})}
@@ -203,7 +217,61 @@ function TeamSummary({ counts }: { counts: StateCounts }) {
 	);
 }
 
-function SubagentRow({
+/**
+ * One child as a row: who it is, what it is doing now, and how long it has been at
+ * it. It opens the child somewhere else unless `expanded` is given, in which case it
+ * is the disclosure for the child's conversation right under it.
+ */
+export function SubagentRowButton({
+	agent,
+	harness,
+	now,
+	onClick,
+	expanded,
+}: {
+	agent: Subagent;
+	harness?: string;
+	now: number;
+	onClick: () => void;
+	expanded?: boolean;
+}) {
+	const elapsed = elapsedLabel(agent, now);
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			aria-expanded={expanded}
+			// A list row, not a raised button: `activity-summary-button` keeps the chat's
+			// press-scale off it, the same as the other timeline disclosures.
+			className="activity-summary-button group/agent flex w-full min-w-0 select-none items-start gap-2.5 px-3 py-2 text-left outline-none hover:bg-interactive-hover focus-visible:bg-interactive-hover"
+		>
+			<SubagentAvatar harness={harness} state={agent.state} />
+			<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+				<span className="flex min-w-0 items-baseline gap-2">
+					<span className="min-w-0 truncate text-xs font-medium text-foreground/90" title={agent.title}>
+						{agent.title}
+					</span>
+					<SubagentTypeLabel agent={agent} />
+				</span>
+				<SubagentLineText agent={agent} />
+			</span>
+			<span className="flex shrink-0 items-center gap-2 pt-px">
+				<StateGlyph state={agent.state} />
+				{elapsed ? <span className="text-caption tabular-nums text-muted-foreground/70">{elapsed}</span> : null}
+				<ChevronRight
+					aria-hidden="true"
+					className={cn(
+						"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/agent:text-muted-foreground",
+						expanded && "rotate-90",
+					)}
+				/>
+			</span>
+		</button>
+	);
+}
+
+/** Where the chat has no Subagents panel, a row opens the child's conversation under itself. */
+function InlineSubagentRow({
 	agent,
 	harness,
 	now,
@@ -223,48 +291,9 @@ function SubagentRow({
 	onDisclosureChange?: (key: string, open: boolean) => void;
 }) {
 	const reducedMotion = useReducedMotion();
-	const elapsedMs = (agent.endedAt ?? (agent.state === "working" ? now : agent.startedAt)) - agent.startedAt;
-	const showElapsed = agent.state === "working" || elapsedMs >= 1_000;
-
 	return (
 		<div className="flex min-w-0 flex-col">
-			<button
-				type="button"
-				onClick={() => onOpenChange(!open)}
-				aria-expanded={open}
-				// A list row, not a raised button: `activity-summary-button` keeps the chat's
-				// press-scale off it, the same as the other timeline disclosures.
-				className="activity-summary-button group/agent flex w-full min-w-0 select-none items-start gap-2.5 px-3 py-2 text-left outline-none hover:bg-interactive-hover focus-visible:bg-interactive-hover"
-			>
-				<SubagentAvatar harness={harness} state={agent.state} />
-				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-					<span className="flex min-w-0 items-baseline gap-2">
-						<span className="min-w-0 truncate text-xs font-medium text-foreground/90" title={agent.title}>
-							{agent.title}
-						</span>
-						{agent.agentType && agent.agentType !== DEFAULT_AGENT_TYPE ? (
-							<span className="shrink-0 text-caption text-muted-foreground/70">{agent.agentType}</span>
-						) : null}
-					</span>
-					<SubagentLineText agent={agent} />
-				</span>
-				<span className="flex shrink-0 items-center gap-2 pt-px">
-					<StateGlyph state={agent.state} />
-					{showElapsed ? (
-						<span className="text-caption tabular-nums text-muted-foreground/70">
-							{formatElapsed(elapsedMs)}
-						</span>
-					) : null}
-					<ChevronRight
-						aria-hidden="true"
-						className={cn(
-							"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/agent:text-muted-foreground",
-							open && "rotate-90",
-						)}
-					/>
-				</span>
-			</button>
-
+			<SubagentRowButton agent={agent} harness={harness} now={now} onClick={() => onOpenChange(!open)} expanded={open} />
 			<AnimatePresence initial={false}>
 				{open ? (
 					<motion.div
@@ -275,12 +304,14 @@ function SubagentRow({
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: EASE_OUT }}
 						className="overflow-hidden"
 					>
-						<SubagentDetail
-							agent={agent}
-							disclosureKey={disclosureKey}
-							disclosureOverrides={disclosureOverrides}
-							onDisclosureChange={onDisclosureChange}
-						/>
+						<div className="pb-2.5 pl-[38px] pr-3">
+							<SubagentTranscript
+								agent={agent}
+								disclosureKey={disclosureKey}
+								disclosureOverrides={disclosureOverrides}
+								onDisclosureChange={onDisclosureChange}
+							/>
+						</div>
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -288,11 +319,23 @@ function SubagentRow({
 	);
 }
 
+/** The provider's agent type, unless it is the default one that says nothing. */
+export function SubagentTypeLabel({ agent }: { agent: Subagent }) {
+	if (!agent.agentType || agent.agentType === DEFAULT_AGENT_TYPE) return null;
+	return <span className="shrink-0 text-caption text-muted-foreground/70">{agent.agentType}</span>;
+}
+
+/** How long the child has worked, or did: counting while it works, hidden under a second. */
+export function elapsedLabel(agent: Subagent, now: number): string | undefined {
+	const elapsedMs = (agent.endedAt ?? (agent.state === "working" ? now : agent.startedAt)) - agent.startedAt;
+	return agent.state === "working" || elapsedMs >= 1_000 ? formatElapsed(elapsedMs) : undefined;
+}
+
 /**
  * The provider mark, with a dot while the child works or after it failed. The dot
  * holds still: the spinner in the status slot already says the child is live.
  */
-function SubagentAvatar({ harness, state }: { harness?: string; state: SubagentState }) {
+export function SubagentAvatar({ harness, state }: { harness?: string; state: SubagentState }) {
 	const reducedMotion = useReducedMotion();
 	return (
 		<span aria-hidden="true" className="relative mt-px flex shrink-0">
@@ -322,7 +365,7 @@ function SubagentAvatar({ harness, state }: { harness?: string; state: SubagentS
  * nothing: the report under the name and the header's count already say it, so a
  * check on every row is noise. Screen readers still hear it.
  */
-function StateGlyph({ state }: { state: SubagentState }) {
+export function StateGlyph({ state }: { state: SubagentState }) {
 	const { t } = useTranslation();
 	const reducedMotion = useReducedMotion();
 	let glyph: ReactNode;
@@ -432,129 +475,8 @@ function lineKey(line: SubagentLine): string {
 	}
 }
 
-/**
- * One child's own timeline: the prompt it was given, what it said and ran in order,
- * and the report it handed back.
- */
-function SubagentDetail({
-	agent,
-	disclosureKey,
-	disclosureOverrides,
-	onDisclosureChange,
-}: {
-	agent: Subagent;
-	disclosureKey: string;
-	disclosureOverrides?: Readonly<Record<string, boolean>>;
-	onDisclosureChange?: (key: string, open: boolean) => void;
-}) {
-	const { t } = useTranslation();
-	const sections = stepSections(agent.steps);
-	const working = agent.state === "working";
-	const lastRunIndex = sections.findLastIndex((section) => section.kind === "run");
-	const empty = sections.length === 0 && !agent.report && !agent.error;
-
-	return (
-		<div className="flex min-w-0 flex-col gap-1.5 pb-2.5 pl-[38px] pr-3">
-			{agent.prompt ? <PromptDisclosure prompt={agent.prompt} /> : null}
-			{sections.map((section, index) =>
-				section.kind === "said" ? (
-					<div key={section.key} className="min-w-0 text-muted-foreground">
-						<ChatMarkdown text={section.text} muted className="text-xs leading-relaxed" />
-					</div>
-				) : (
-					<ActivityRun
-						key={section.key}
-						activities={section.steps}
-						disclosureKey={`${disclosureKey}:${section.key}`}
-						disclosureOverrides={disclosureOverrides}
-						onDisclosureChange={onDisclosureChange}
-						live={working && index === lastRunIndex}
-					/>
-				),
-			)}
-			{empty ? (
-				<span className="text-caption text-muted-foreground/70">
-					{t(working ? "chat.subagent.line.starting" : "chat.subagent.empty")}
-				</span>
-			) : null}
-			{agent.error ? (
-				<p className="whitespace-pre-wrap text-xs leading-relaxed text-destructive">{agent.error}</p>
-			) : null}
-			{agent.report ? (
-				<div className="mt-1 flex min-w-0 flex-col gap-1 border-t border-border/60 pt-2">
-					<span className="text-caption text-muted-foreground/70">{t("chat.subagent.report")}</span>
-					<ChatMarkdown text={agent.report} className="text-xs leading-relaxed" />
-				</div>
-			) : null}
-		</div>
-	);
-}
-
-function PromptDisclosure({ prompt }: { prompt: string }) {
-	const { t } = useTranslation();
-	const reducedMotion = useReducedMotion();
-	const [open, setOpen] = useState(false);
-	return (
-		<div className="flex min-w-0 flex-col">
-			<button
-				type="button"
-				onClick={() => setOpen(!open)}
-				aria-expanded={open}
-				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle")}
-			>
-				<span className="activity-row-label shrink-0 text-xs text-muted-foreground">
-					{t("chat.subagent.prompt")}
-				</span>
-				<ChevronRight
-					aria-hidden="true"
-					className={cn(
-						"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/run:text-muted-foreground",
-						open && "rotate-90",
-					)}
-				/>
-			</button>
-			<AnimatePresence initial={false}>
-				{open ? (
-					<motion.div
-						key="prompt"
-						initial={{ height: 0, opacity: 0 }}
-						animate={{ height: "auto", opacity: 1 }}
-						exit={{ height: 0, opacity: 0 }}
-						transition={{ duration: reducedMotion ? 0 : 0.18, ease: EASE_OUT }}
-						className="overflow-hidden"
-					>
-						<p className="max-h-48 overflow-auto whitespace-pre-wrap break-words pb-1 text-caption leading-relaxed text-muted-foreground">
-							{prompt}
-						</p>
-					</motion.div>
-				) : null}
-			</AnimatePresence>
-		</div>
-	);
-}
-
-type StepSection =
-	| { kind: "said"; key: string; text: string }
-	| { kind: "run"; key: string; steps: ConversationActivity[] };
-
-/** What the child wrote breaks its tool calls into runs, as the parent's prose does. */
-function stepSections(steps: readonly ConversationActivity[]): StepSection[] {
-	const sections: StepSection[] = [];
-	for (const step of steps) {
-		if (isChildMessage(step)) {
-			const text = childMessageText(step);
-			if (text) sections.push({ kind: "said", key: step.id, text });
-			continue;
-		}
-		const last = sections.at(-1);
-		if (last?.kind === "run") last.steps.push(step);
-		else sections.push({ kind: "run", key: `run-${step.id}`, steps: [step] });
-	}
-	return sections;
-}
-
 /** Ticks once a second while something is counting, and not at all otherwise. */
-function useNow(active: boolean): number {
+export function useNow(active: boolean): number {
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		setNow(Date.now());

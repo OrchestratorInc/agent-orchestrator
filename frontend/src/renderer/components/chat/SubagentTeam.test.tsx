@@ -1,61 +1,13 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
-import { SubagentTeam } from "./SubagentTeam";
-
-const at = (seconds: number) => new Date(Date.UTC(2026, 9, 24, 10, 0, seconds)).toISOString();
-
-function launch(id: string, description: string, status: ConversationActivity["status"] = "completed"): ConversationActivity {
-	return {
-		kind: "activity",
-		id,
-		providerItemId: `tool-${id}`,
-		sequence: 1,
-		revision: 0,
-		activityKind: "reasoning",
-		status,
-		summary: description,
-		detail: {
-			providerToolName: "Agent",
-			input: { description, prompt: `Read-only. ${description}.`, subagent_type: "Explore" },
-			output: status === "failed"
-				? "Concurrent subagent limit reached. You can run 20 subagents at once."
-				: JSON.stringify([{ text: "Async agent launched successfully.\nagentId: a82259 (internal ID - do not mention to user.)", type: "text" }]),
-		} as ConversationActivity["detail"],
-		createdAt: at(0),
-	};
-}
-
-function command(id: string, parent: string, text: string, status: ConversationActivity["status"] = "completed"): ConversationActivity {
-	return {
-		kind: "activity",
-		id,
-		providerItemId: `tool-${id}`,
-		sequence: 2,
-		revision: 0,
-		activityKind: "command",
-		status,
-		summary: text,
-		detail: { parentProviderItemId: parent, command: text },
-		createdAt: at(3),
-	};
-}
-
-function handback(id: string, parent: string, message: string): ConversationActivity {
-	return {
-		kind: "activity",
-		id,
-		providerItemId: `tool-${id}`,
-		sequence: 3,
-		revision: 0,
-		activityKind: "mcp_tool",
-		status: "completed",
-		summary: "SubagentHandback",
-		detail: { parentProviderItemId: parent, providerToolName: "SubagentHandback", input: { message } } as ConversationActivity["detail"],
-		createdAt: at(12),
-	};
-}
+import {
+	subagentCommand as command,
+	subagentHandback as handback,
+	subagentLaunch as launch,
+} from "../../test/subagent-fixtures";
+import { OpenSubagentContext, SubagentTeam } from "./SubagentTeam";
 
 function team(live = true) {
 	const pages = launch("pages", "Audit: info pages");
@@ -116,7 +68,7 @@ describe("SubagentTeam", () => {
 		expect(screen.queryByText(/agentId/)).not.toBeInTheDocument();
 	});
 
-	it("opens a child onto its prompt, its steps and its report", async () => {
+	it("opens a child inline onto its prompt, its steps and its report where the chat has no panel", async () => {
 		const user = userEvent.setup();
 		team();
 
@@ -127,12 +79,28 @@ describe("SubagentTeam", () => {
 
 		expect(await screen.findByText("Report")).toBeInTheDocument();
 		expect(screen.getByText("Checkout totals")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Prompt" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.getByText("Sent by the parent agent")).toBeInTheDocument();
+		expect(screen.getByText("Read-only. Audit: testing gaps.")).toBeInTheDocument();
 		// The child's one command renders as an ordinary activity row.
 		expect(screen.getByText("Ran command")).toBeInTheDocument();
+	});
 
-		await user.click(screen.getByRole("button", { name: "Prompt" }));
-		expect(await screen.findByText("Read-only. Audit: testing gaps.")).toBeInTheDocument();
+	it("opens a child in the chat's Subagents panel instead of inline when there is one", async () => {
+		const user = userEvent.setup();
+		const openSubagent = vi.fn();
+		render(
+			<OpenSubagentContext.Provider value={openSubagent}>
+				<SubagentTeam launches={[launch("tests", "Audit: testing gaps")]} steps={new Map()} live harness="claude-code" />
+			</OpenSubagentContext.Provider>,
+		);
+
+		const row = screen.getByRole("button", { name: /Audit: testing gaps/ });
+		// It goes somewhere else, so it is not a disclosure.
+		expect(row).not.toHaveAttribute("aria-expanded");
+		await user.click(row);
+
+		expect(openSubagent).toHaveBeenCalledWith("tests");
+		expect(screen.queryByText("Sent by the parent agent")).not.toBeInTheDocument();
 	});
 
 	it("folds the list from its header", async () => {

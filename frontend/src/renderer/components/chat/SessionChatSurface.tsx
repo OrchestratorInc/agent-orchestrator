@@ -97,6 +97,7 @@ function firstBrowserLink(text: string, workspacePaths: string[]): string | unde
 
 export const SessionChatSurface = memo(function SessionChatSurface({
 	sideChatContainer,
+	subagentContainer,
 	session,
 	hostId,
 	assetBaseUrl,
@@ -143,6 +144,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** The switch to the terminal view, for states without the tab strip and its menu, and its error. */
 	interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
 	sideChatContainer?: HTMLDivElement | null;
+	/** The inspector's Subagents tab body while that tab shows; null otherwise. */
+	subagentContainer?: HTMLDivElement | null;
 	session: WorkspaceSession;
 	/** Owning daemon for a remote session; omitted for the local daemon. */
 	hostId?: string;
@@ -448,6 +451,21 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
+	const revealSubagents = useCallback(() => {
+		const ui = useUiStore.getState();
+		ui.setInspectorView(uiSessionId, "subagents");
+		ui.setInspectorOpen(uiSessionId, true);
+	}, [uiSessionId]);
+	const reportSubagents = useCallback(
+		(available: boolean) => useUiStore.getState().setSubagentsAvailable(uiSessionId, available),
+		[uiSessionId],
+	);
+	const subagentPanel = useMemo(
+		() => subagentContainer === undefined
+			? undefined
+			: { container: subagentContainer, reveal: revealSubagents, onAvailableChange: reportSubagents },
+		[reportSubagents, revealSubagents, subagentContainer],
+	);
 	const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
 		openSideInspector();
 		if (sideChats.activeId) {
@@ -639,6 +657,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			<ChatWorkspace
 				showSetupStep={showSetupStep}
 				onAddToSideChat={sideEnabled && (sideChats.activeId || sideCreationEnabled) ? attachToSide : undefined}
+				subagentPanel={subagentPanel}
 				annotationNavigationRequest={annotationNavigationRequest}
 				key={uiSessionId}
 				uiSessionId={uiSessionId}

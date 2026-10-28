@@ -5,6 +5,7 @@ import {
 	latestSubagentLine,
 	partitionSubagentSteps,
 	readSubagent,
+	stepSections,
 } from "./subagent-team";
 
 const at = (seconds: number) => new Date(Date.UTC(2026, 9, 24, 10, 0, seconds)).toISOString();
@@ -237,6 +238,22 @@ describe("readSubagent", () => {
 		expect(finished).toMatchObject({ state: "done", report: "Outer report." });
 		// The inner hand-back stays readable among the outer child's steps.
 		expect(finished.steps.map((item) => item.id)).toEqual(["inner", "hi"]);
+	});
+});
+
+describe("stepSections", () => {
+	const said = (id: string, text: string) =>
+		step(id, "tool-a", { activityKind: "mcp_tool", summary: "Subagent response", detail: { nestedAgent: true, progress: text } });
+	const shape = (sections: ReturnType<typeof stepSections>) =>
+		sections.map((section) => (section.kind === "run" ? section.steps.map((item) => item.id) : section.text));
+
+	it("breaks the child's tool calls into runs at what it wrote", () => {
+		const sections = stepSections([step("c1", "tool-a"), step("c2", "tool-a"), said("m1", "Found the FAQ."), step("c3", "tool-a")]);
+		expect(shape(sections)).toEqual([["c1", "c2"], "Found the FAQ.", ["c3"]]);
+	});
+
+	it("does not split a run on a message with nothing in it", () => {
+		expect(shape(stepSections([step("c1", "tool-a"), said("m1", "  "), step("c2", "tool-a")]))).toEqual([["c1", "c2"]]);
 	});
 });
 
