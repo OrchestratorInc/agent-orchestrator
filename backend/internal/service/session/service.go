@@ -613,7 +613,7 @@ func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id d
 	var apiErr *apierr.Error
 	// A canceled context means the client left mid-relaunch; there is no failure to count.
 	if errors.Is(err, context.Canceled) || !errors.As(err, &relaunchErr) ||
-		!errors.As(mapped, &apiErr) || apiErr.Code != "AGENT_RESUME_FAILED" {
+		!errors.As(mapped, &apiErr) || (apiErr.Code != "AGENT_RESUME_FAILED" && apiErr.Code != "ORCHESTRATOR_REPLACED") {
 		return
 	}
 	cause := relaunchErr.Err
@@ -626,7 +626,7 @@ func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id d
 		"operation":   operation,
 		"step":        relaunchErr.Step,
 		"cause_type":  fmt.Sprintf("%T", cause),
-		"error_code":  "AGENT_RESUME_FAILED",
+		"error_code":  apiErr.Code,
 		"fingerprint": fingerprint,
 	}
 	var projectID *domain.ProjectID
@@ -1730,6 +1730,9 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("WORKSPACE_CLEANUP_FAILED", "Workspace cleanup script failed; the worktree was preserved. Fix the script and retry cleanup.", nil)
 	case errors.Is(err, context.DeadlineExceeded):
 		return err
+	case errors.Is(err, ports.ErrProjectConversationReplaced):
+		return apierr.Conflict("ORCHESTRATOR_REPLACED",
+			"This orchestrator was replaced by a newer one for the project. Open the newer orchestrator instead.", nil)
 	case errors.As(err, &relaunchErr):
 		return apierr.Conflict("AGENT_RESUME_FAILED",
 			"AO could not relaunch the agent (step: "+relaunchErr.Step+"). Check the daemon log for details.",

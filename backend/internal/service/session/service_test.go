@@ -6056,6 +6056,29 @@ func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
 	}
 }
 
+func TestRestoreReplacedOrchestratorAnswersTypedConflictAndStaysInTelemetry(t *testing.T) {
+	captured := 0
+	captureRelaunchError = func(context.Context, error, map[string]string, string) { captured++ }
+	t.Cleanup(func() { captureRelaunchError = sentryobs.CaptureHTTPError })
+	cause := fmt.Errorf("open conversation: %w", ports.ErrProjectConversationReplaced)
+	fc := &fakeCommander{restoreErr: fmt.Errorf("restore mer-1: %w", &sessionmanager.RelaunchError{Step: "chat start", Err: cause})}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: fc, Store: newFakeStore(), Telemetry: sink})
+
+	for _, call := range []func() error{
+		func() error { _, err := svc.Restore(context.Background(), "mer-1"); return err },
+		func() error { _, err := svc.ResumeAgent(context.Background(), "mer-1"); return err },
+	} {
+		var apiErr *apierr.Error
+		if err := call(); !errors.As(err, &apiErr) || apiErr.Kind != apierr.KindConflict || apiErr.Code != "ORCHESTRATOR_REPLACED" {
+			t.Fatalf("err = %#v, want conflict ORCHESTRATOR_REPLACED", err)
+		}
+	}
+	if captured != 2 || len(sink.events) != 2 || sink.events[0].Payload["error_code"] != "ORCHESTRATOR_REPLACED" {
+		t.Fatalf("captured = %d, events = %#v, want both failures still reported", captured, sink.events)
+	}
+}
+
 func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
 	var sentryErrs []error
 	var sentryTags []map[string]string
