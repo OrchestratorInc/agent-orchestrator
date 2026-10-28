@@ -2352,9 +2352,9 @@ describe("Sidebar", () => {
 		const renameItem = await screen.findByRole("menuitem", { name: "Rename fix login" });
 		const menu = renameItem.closest('[role="menu"]');
 		if (!menu) throw new Error("Session context menu not found");
-		await within(menu as HTMLElement).findByRole("menuitem", { name: "Open in Cursor" });
+		await within(menu as HTMLElement).findByRole("menuitem", { name: "Open in" });
 		expect(within(menu as HTMLElement).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
-			"Open in Cursor",
+			"Open in",
 			"Copy path",
 			"Rename",
 			"Pin session",
@@ -2374,7 +2374,7 @@ describe("Sidebar", () => {
 		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
 
 		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
-		await user.click(await screen.findByRole("menuitem", { name: "Open in Cursor" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Open in" }));
 		const finder = await screen.findByRole("menuitem", { name: "Finder" });
 		const submenu = finder.closest('[role="menu"]');
 		if (!submenu) throw new Error("Editor submenu not found");

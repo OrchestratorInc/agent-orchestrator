@@ -800,6 +800,7 @@
 	"editor.noEditorInstalled": "Kein Editor installiert",
 	"editor.openInAria": "In {{name}} öffnen",
 	"editor.openInTarget": "In {{name}} öffnen",
+	"editor.openIn": "Öffnen in",
 	"editor.openOptionsAria": "Optionen zum Öffnen des Arbeitsbereichs",
 	"editor.copyPath": "Pfad kopieren",
 	"editor.openWorkspaceInTitle": "Arbeitsbereich dieser Sitzung in {{name}} öffnen",

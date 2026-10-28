@@ -800,6 +800,7 @@
 	"editor.noEditorInstalled": "未安装编辑器",
 	"editor.openInAria": "在 {{name}} 中打开",
 	"editor.openInTarget": "在 {{name}} 中打开",
+	"editor.openIn": "打开方式",
 	"editor.openOptionsAria": "打开工作区选项",
 	"editor.copyPath": "复制路径",
 	"editor.openWorkspaceInTitle": "在 {{name}} 中打开此会话的工作区",

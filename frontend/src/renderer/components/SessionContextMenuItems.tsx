@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Archive, Code2, Copy, ExternalLink, GitBranch, Pencil, Pin, PinOff, Play } from "lucide-react";
@@ -148,6 +148,7 @@ function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 		sessionTerminated: session.isTerminated,
 	});
 	const { data: state, isPending } = handoff;
+	const refreshedTargets = useRef(false);
 	const open = useOpenSessionTarget();
 	const targets = state?.workspaceAvailable ? state.targets : [];
 	const preferred = targets.find((target) => target.kind === "editor" && target.id === state?.preferredEditorId);
@@ -185,13 +186,17 @@ function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 			) : targets.length > 0 ? (
 				<ContextMenuSub
 					onOpenChange={(isOpen) => {
-						// Like the topbar menu, look for newly installed terminals on open.
-						if (isOpen) void handoff.refreshTargets().catch(() => undefined);
+						// Like the topbar menu, look for newly installed terminals, once per menu.
+						if (!isOpen || refreshedTargets.current) return;
+						refreshedTargets.current = true;
+						void handoff.refreshTargets().catch(() => undefined);
 					}}
 				>
+					{/* Opening the submenu is all this row does, so it names no single target;
+					    the default editor leads the list. */}
 					<ContextMenuSubTrigger>
 						<TargetIcon target={preferred} />
-						{preferred ? t("editor.openInTarget", { name: preferred.name }) : t("editor.open")}
+						{t("editor.openIn")}
 					</ContextMenuSubTrigger>
 					<ContextMenuSubContent className="min-w-40">
 						{editorTargets.map(targetItem)}

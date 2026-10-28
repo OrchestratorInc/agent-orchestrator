@@ -805,6 +805,7 @@
 	"editor.noEditorInstalled": "No hay ningún editor instalado",
 	"editor.openInAria": "Abrir en {{name}}",
 	"editor.openInTarget": "Abrir en {{name}}",
+	"editor.openIn": "Abrir en",
 	"editor.openOptionsAria": "Opciones para abrir el espacio de trabajo",
 	"editor.copyPath": "Copiar ruta",
 	"editor.openWorkspaceInTitle": "Abrir el espacio de trabajo de esta sesión en {{name}}",

@@ -800,6 +800,7 @@
 	"editor.noEditorInstalled": "エディターがインストールされていません",
 	"editor.openInAria": "{{name}} で開く",
 	"editor.openInTarget": "{{name}} で開く",
+	"editor.openIn": "アプリで開く",
 	"editor.openOptionsAria": "ワークスペースを開くオプション",
 	"editor.copyPath": "パスをコピー",
 	"editor.openWorkspaceInTitle": "このセッションのワークスペースを {{name}} で開く",
