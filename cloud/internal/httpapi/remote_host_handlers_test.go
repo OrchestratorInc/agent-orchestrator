@@ -169,19 +169,11 @@ func (s *remoteHostTunnelFakeStore) GetRemoteHostTunnel(_ context.Context, userI
 func (s *remoteHostTunnelFakeStore) SaveRemoteHostTunnel(_ context.Context, t domain.RemoteHostTunnel, recordCreated bool) (time.Time, error) {
 	t.UpdatedAt = time.Now()
 	t.CreatedAt = s.tunnels[t.UserID+":"+t.HostID].CreatedAt
-	t.LinkedAt = s.tunnels[t.UserID+":"+t.HostID].LinkedAt
 	if recordCreated || t.CreatedAt.IsZero() {
 		t.CreatedAt = t.UpdatedAt
 	}
 	s.tunnels[t.UserID+":"+t.HostID] = t
 	return t.CreatedAt, nil
-}
-func (s *remoteHostTunnelFakeStore) MarkRemoteHostTunnelLinked(_ context.Context, userID, hostID string) error {
-	if t, ok := s.tunnels[userID+":"+hostID]; ok {
-		t.LinkedAt = time.Now()
-		s.tunnels[userID+":"+hostID] = t
-	}
-	return nil
 }
 func (s *remoteHostTunnelFakeStore) TouchRemoteHostTunnel(_ context.Context, tunnelID string, _ time.Time) error {
 	s.touched = append(s.touched, tunnelID)
@@ -349,6 +341,12 @@ func TestLinkedHostGetsOneFixedTunnel(t *testing.T) {
 	if !strings.Contains(w.Body.String(), `"repaired":true`) {
 		t.Fatalf("a repair that remade the tunnel did not say so: %s", w.Body.String())
 	}
+	// A repair is a replacement: the old tunnel is deleted and the new one
+	// has its own token, at the same address.
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if _, deleted := api.snapshot(); got.RunToken == "run-token-tun-1" || "https://"+got.Hostname+":443" != fixed || !slices.Contains(deleted, "tun-1") {
+		t.Fatalf("repair answered %+v, deleted %v", got, deleted)
+	}
 
 	// Released while the machine was offline: its next request gets a new
 	// tunnel at the same address, never the deleted tunnel's token.
@@ -417,23 +415,15 @@ func TestAStandingTunnelKeepsTheListingAtItsAddress(t *testing.T) {
 			t.Fatalf("publish %s: %d, want %d", url, w.Code, want)
 		}
 	}
-	// Held, and said so, so the machine sends it again after the hold.
-	publish("https://quiet-river.trycloudflare.com:443", http.StatusAccepted)
+	// A linked machine serves only its fixed address: a quick one it
+	// publishes is one it is leaving, however long after.
+	publish("https://quiet-river.trycloudflare.com:443", http.StatusNoContent)
+	old := store.tunnels[owner+":"+hostID]
+	old.UpdatedAt = time.Now().Add(-time.Hour)
+	store.tunnels[owner+":"+hostID] = old
+	publish("https://quiet-river.trycloudflare.com:443", http.StatusNoContent)
 	if got := store.hosts[owner+":"+hostID].URL; got != fixed {
 		t.Fatalf("a quick address replaced the fixed listing: %q", got)
-	}
-	// Long after, a quick address means the machine cannot serve the fixed
-	// one, and the listing follows it.
-	old := store.tunnels[owner+":"+hostID]
-	old.LinkedAt, old.UpdatedAt = time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)
-	store.tunnels[owner+":"+hostID] = old
-	// A repair writes the tunnel but is no link: it starts no hold.
-	if w := requestTunnel(s, hostID, hex.EncodeToString(sum[:]), `{"repair":true}`); w.Code != http.StatusOK {
-		t.Fatalf("repair: %d", w.Code)
-	}
-	publish("https://quiet-river.trycloudflare.com:443", http.StatusNoContent)
-	if got := store.hosts[owner+":"+hostID].URL; got != "https://quiet-river.trycloudflare.com:443" {
-		t.Fatalf("listing = %q", got)
 	}
 }
 
@@ -555,9 +545,9 @@ func TestRemovingAReleasedHostStartsTheGrace(t *testing.T) {
 	}
 }
 
-// A tunnel the machine's own fetch made, for a host listed at a quick
-// address, was linked by no account: no hold keeps that listing.
-func TestATunnelTheMachineMadeHoldsNoListing(t *testing.T) {
+// A host listed at a quick address moves to its fixed one once the machine
+// serves it: from its first fetch on, only the fixed address is listed.
+func TestAHostListedAtAQuickAddressMovesToItsFixedOne(t *testing.T) {
 	s, store, _ := newTunnelServer(t)
 	hostID := "h_00000000-0000-0000-0000-000000000001"
 	owner := "00000000-0000-0000-0000-000000000002"
@@ -568,12 +558,24 @@ func TestATunnelTheMachineMadeHoldsNoListing(t *testing.T) {
 	if w := requestTunnel(s, hostID, hex.EncodeToString(sum[:]), `{}`); w.Code != http.StatusOK {
 		t.Fatalf("tunnel: %d", w.Code)
 	}
-	r := hostRequest(http.MethodPost, hostID, `{"url":"https://new-river.trycloudflare.com:443"}`, "")
-	r.Header.Set("Authorization", "Bearer "+hex.EncodeToString(sum[:]))
-	w = httptest.NewRecorder()
-	s.updateRemoteHostAddress(w, r)
-	if w.Code != http.StatusNoContent || store.hosts[owner+":"+hostID].URL != "https://new-river.trycloudflare.com:443" {
-		t.Fatalf("publish: %d, listing %q", w.Code, store.hosts[owner+":"+hostID].URL)
+	publish := func(url string) {
+		t.Helper()
+		r := hostRequest(http.MethodPost, hostID, `{"url":"`+url+`"}`, "")
+		r.Header.Set("Authorization", "Bearer "+hex.EncodeToString(sum[:]))
+		w := httptest.NewRecorder()
+		s.updateRemoteHostAddress(w, r)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("publish %s: %d", url, w.Code)
+		}
+	}
+	publish("https://new-river.trycloudflare.com:443")
+	if got := store.hosts[owner+":"+hostID].URL; got != "https://old-river.trycloudflare.com:443" {
+		t.Fatalf("a quick address was listed beside a fixed tunnel: %q", got)
+	}
+	fixed := "https://" + store.tunnels[owner+":"+hostID].Hostname + ":443"
+	publish(fixed)
+	if got := store.hosts[owner+":"+hostID].URL; got != fixed {
+		t.Fatalf("listing = %q, want %q", got, fixed)
 	}
 }
 

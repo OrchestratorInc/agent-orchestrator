@@ -10,7 +10,7 @@ import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
 import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
 import { useLocalSignInDialogStore } from "../../stores/local-signin-dialog-store";
-import { deleteAccountRemoteHost, RemoteHostLimitError } from "../../lib/account-remote-hosts";
+import { deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -401,37 +401,25 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			(linked) => ({ linked: linked.hostId, added: linked.added ? linked.hostId : "", failed: false }),
 			(cause: unknown) => {
 				reportLinkError(cause);
-				// A full account refuses the quick tunnel's address too.
-				return { linked: "", added: "", failed: !(cause instanceof RemoteHostLimitError) };
+				return { linked: "", added: "", failed: true };
 			},
 		);
 	};
-	// Moves on each turn-off, so a link still waiting for its tunnel then lists
-	// nothing and reports nothing.
-	const accessGeneration = useRef(0);
-	/** After AO Cloud could not give this computer its fixed address, lists it at the quick tunnel's once it has one, as Allow access does. */
+	/** On an AO Cloud with no fixed addresses, lists this computer at its quick tunnel's address, as Allow access does. */
 	const linkAtTunnelAddress = async (password: string, hostId: string, options?: { ifListed?: boolean }) => {
-		const generation = accessGeneration.current;
-		try {
-			const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
-			if (!ready || generation !== accessGeneration.current) return;
-			await linkThisComputer(cloudBaseUrl, accountId, hostId, password, { ...options, url: ready.url });
-			setLinkError("");
-		} catch (cause) {
-			if (generation === accessGeneration.current) reportLinkError(cause);
-		}
+		const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
+		if (!ready) return;
+		await linkThisComputer(cloudBaseUrl, accountId, hostId, password, { ...options, url: ready.url });
 	};
 	/** Links this computer when signed in, before its tunnel starts, so the code carries its fixed address and stays valid after restarts. */
 	const linkAndStartRemoteAccess = async (password: string, hostId: string) => {
-		const { added, failed } = await linkIfSignedIn(password, hostId);
+		const { added } = await linkIfSignedIn(password, hostId);
 		const started = await apiClient.POST("/api/v1/mobile/remote-access");
 		if (started.error) {
 			// Not left listed at an address nothing serves.
 			if (added) await deleteAccountRemoteHost(cloudBaseUrl, added).catch(() => undefined);
 			throw new Error(apiErrorMessage(started.error));
 		}
-		// The code shows while the tunnel starts; the account lists it once it has an address.
-		if (failed) void linkAtTunnelAddress(password, hostId);
 		return started.data;
 	};
 
@@ -513,10 +501,10 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			// password-paired devices.
 			if (data && !data.noPublicTunnel) {
 				const { linked, failed } = await linkIfSignedIn(data.password ?? "", data.hostId ?? "", { ifListed: true });
-				// Not linked without a url, the account still lists the old token: an AO
-				// Cloud without fixed addresses lists the tunnel's address instead.
-				if (signedIn && (failed || !linked)) {
-					void linkAtTunnelAddress(data.password ?? "", data.hostId ?? "", { ifListed: true });
+				// An AO Cloud without fixed addresses links nothing without a url, and the
+				// account would keep the old token: it lists the tunnel's address instead.
+				if (signedIn && !linked && !failed) {
+					void linkAtTunnelAddress(data.password ?? "", data.hostId ?? "", { ifListed: true }).catch(reportLinkError);
 				}
 			}
 			return data;
@@ -671,7 +659,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		null;
 
 	const turnOff = () => {
-		accessGeneration.current++;
 		clearActionErrors();
 		setOptimisticEnabled(false);
 		disable.mutate();

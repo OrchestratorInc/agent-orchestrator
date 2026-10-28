@@ -33,7 +33,6 @@ type remoteHostAddressStore interface {
 
 type remoteHostTunnelStore interface {
 	GetRemoteHostTunnel(ctx context.Context, userID, hostID string) (domain.RemoteHostTunnel, bool, error)
-	MarkRemoteHostTunnelLinked(ctx context.Context, userID, hostID string) error
 	SaveRemoteHostTunnel(ctx context.Context, tunnel domain.RemoteHostTunnel, recordCreated bool) (time.Time, error)
 	TouchRemoteHostTunnel(ctx context.Context, tunnelID string, seenAt time.Time) error
 	ReleaseRemoteHostTunnel(ctx context.Context, tunnelID string) error
@@ -180,11 +179,6 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 		}
 		// Listed even if the client hangs up now: the tunnel is made.
 		ctx = context.WithoutCancel(ctx)
-		// A link, new or again, starts the hold on quick addresses.
-		if err := tunnels.MarkRemoteHostTunnelLinked(ctx, principal.UserID, hostID); err != nil {
-			s.writeStoreError(w, r, err)
-			return
-		}
 		input.URL = "https://" + tunnel.Hostname + ":443"
 	}
 	encrypted, nonce, err := s.secretCipher.Encrypt([]byte(input.Token), "remote-host:"+principal.UserID+":"+hostID)
@@ -299,20 +293,17 @@ func (s *Server) updateRemoteHostAddress(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	tunnels := s.tunnelStore()
-	held := 0
 	for _, host := range hosts {
-		// Shortly after the account linked the host to its tunnel, the listing
-		// stays at its fixed address: a machine linked just now publishes the
-		// quick address it is about to leave. A repair starts no hold. Later, a quick address means the
-		// machine cannot serve the fixed one, and the listing follows it.
+		// An account that gave the host a tunnel lists it at that fixed
+		// address only: a linked machine serves nothing else, and a quick
+		// address it publishes is one it is leaving.
 		if tunnels != nil {
 			tunnel, found, err := tunnels.GetRemoteHostTunnel(r.Context(), host.UserID, hostID)
 			if err != nil {
 				s.writeStoreError(w, r, err)
 				return
 			}
-			if found && !tunnel.Released && time.Since(tunnel.LinkedAt) < fixedListingHold && input.URL != "https://"+tunnel.Hostname+":443" {
-				held++
+			if found && input.URL != "https://"+tunnel.Hostname+":443" {
 				continue
 			}
 		}
@@ -320,11 +311,6 @@ func (s *Server) updateRemoteHostAddress(w http.ResponseWriter, r *http.Request)
 			s.writeStoreError(w, r, err)
 			return
 		}
-	}
-	if held == len(hosts) {
-		// Nothing written: the machine sends the address again soon.
-		w.WriteHeader(http.StatusAccepted)
-		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -389,10 +375,6 @@ func (s *Server) digestHashes(host domain.RemoteHost, hostID string, digest []by
 // minTunnelRepairInterval spaces the Cloudflare calls one host can cause by
 // asking for a repair.
 const minTunnelRepairInterval = time.Minute
-
-// fixedListingHold is how long after its tunnel was written a listing ignores
-// quick addresses: a nudged machine moves to the fixed one within seconds.
-const fixedListingHold = 10 * time.Minute
 
 // Tunnel writes per account: linking machines, a machine coming back after its
 // tunnel was released, and repairs. Each costs three to five Cloudflare calls,
@@ -513,6 +495,15 @@ func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remo
 	if !s.tunnelLimiter.allow(userID, time.Now()) {
 		writeError(w, r, http.StatusTooManyRequests, "tunnel_rate_limited", "This account changed fixed addresses too often. Try again later.")
 		return hostTunnelResponse{}, false
+	}
+	// A repair is a replacement, as a new credential is: the old tunnel goes,
+	// and a new one is made under the same DNS record, so its token is new
+	// too. A tunnel that could not be deleted is not handed out again.
+	if found && !stored.Released && repair {
+		if err := s.deleteAccountTunnel(r.Context(), userID, hostID, true); err != nil {
+			writeError(w, r, http.StatusBadGateway, "tunnel_unavailable", "The fixed address could not be prepared.")
+			return hostTunnelResponse{}, false
+		}
 	}
 	// Finished even if the client hangs up, so no tunnel is left half made or
 	// unrecorded.

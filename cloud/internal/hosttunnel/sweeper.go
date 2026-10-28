@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
@@ -31,7 +32,16 @@ const (
 	// DefaultSweepInterval runs the sweep every five minutes, so a
 	// disconnected tunnel goes within ten.
 	DefaultSweepInterval = 5 * time.Minute
+	// sweepListPages bounds each of the sweep's two Cloudflare listings, so a
+	// sweep makes at most ten list requests.
+	sweepListPages = 5
+	// sweepDeadline bounds one sweep's time.
+	sweepDeadline = 2 * time.Minute
 )
+
+// sweepDeletions bounds how many tunnels one sweep releases or deletes. A var
+// so tests can lower it.
+var sweepDeletions = 100
 
 // SweepStore is what the sweep reads and writes.
 type SweepStore interface {
@@ -53,8 +63,11 @@ func RunSweeper(ctx context.Context, store SweepStore, cf *Cloudflare, interval 
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	start := 0
 	for {
-		if deleted, err := Sweep(ctx, store, cf, time.Now()); err != nil {
+		deleted, next, err := sweep(ctx, store, cf, time.Now(), start)
+		start = next
+		if err != nil {
 			if ctx.Err() == nil {
 				log.Warn("sweep host tunnels", "error", err, "deleted", deleted)
 			}
@@ -77,20 +90,39 @@ func RunSweeper(ctx context.Context, store SweepStore, cf *Cloudflare, interval 
 // Cloudflare's listings name every host tunnel in the account, including other
 // AO Clouds' sharing it, so a listed tunnel is acted on only when this AO
 // Cloud's row still names it.
+//
+// A sweep is bounded: ten list requests, sweepDeletions tunnels, two minutes,
+// and no more calls once Cloudflare rate-limits, since every account shares
+// the API token's limit.
 func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time) (int, error) {
-	done := 0
+	done, _, err := sweep(ctx, store, cf, now, 0)
+	return done, err
+}
+
+// sweep is Sweep starting start items along its work, and returns where the
+// next sweep starts: one budget further along, so items that keep failing
+// cannot hold back the ones after them.
+func sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time, start int) (done, next int, err error) {
+	ctx, cancel := context.WithTimeout(ctx, sweepDeadline)
+	defer cancel()
 	var errs []error
-	fail := func(err error) { errs = append(errs, err) }
+	limited := false
+	fail := func(err error) {
+		errs = append(errs, err)
+		var apiErr *apiError
+		if errors.As(err, &apiErr) && apiErr.HTTPStatus == http.StatusTooManyRequests {
+			limited = true
+		}
+	}
 
 	cutoff := now.Add(-OfflineRetention)
 	candidates, err := store.ListRemoteHostTunnelSweepCandidates(ctx, cutoff, now.Add(-UnregisteredGrace))
 	if err != nil {
-		return 0, err
+		return 0, start, err
 	}
+	var work []func() bool
 	for _, c := range candidates {
-		if sweepCandidate(ctx, store, cf, c, cutoff, now, fail) {
-			done++
-		}
+		work = append(work, func() bool { return sweepCandidate(ctx, store, cf, c, cutoff, now, fail) })
 	}
 
 	// Machines asleep, offline or quit, and tunnels no connector ever served,
@@ -108,11 +140,22 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 		fail(err)
 	}
 	for _, id := range append(disconnected, unused...) {
-		if releaseIdle(ctx, store, cf, id, now, fail) {
+		work = append(work, func() bool { return releaseIdle(ctx, store, cf, id, now, fail) })
+	}
+
+	offset := 0
+	if len(work) > sweepDeletions {
+		offset = start % len(work)
+	}
+	for i := range work {
+		if done >= sweepDeletions || limited || ctx.Err() != nil {
+			break
+		}
+		if work[(offset+i)%len(work)]() {
 			done++
 		}
 	}
-	return done, errors.Join(errs...)
+	return done, start + sweepDeletions, errors.Join(errs...)
 }
 
 // sweepCandidate deletes one candidate's tunnel and DNS record, unless its

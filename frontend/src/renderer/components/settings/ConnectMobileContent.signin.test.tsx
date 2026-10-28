@@ -139,29 +139,15 @@ test("a full account is said, and remote access still starts", async () => {
 	expect(linkThisComputer).toHaveBeenCalledTimes(1);
 });
 
-test("a computer AO Cloud could not give a fixed address is listed at its quick tunnel's", async () => {
+test("a computer AO Cloud could not give a fixed address says why and is not listed elsewhere", async () => {
 	fake.signedIn = true;
 	fake.tunnelHost = "quick.trycloudflare.com";
 	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("The fixed address could not be prepared.", 502));
 	renderContent();
 	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
 
-	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith(
-		"https://cp.example.test", "user_01JAO", "h_fixture", "pw-1", { url: "https://quick.trycloudflare.com:443" },
-	));
-	await waitFor(() => expect(screen.queryByText("The fixed address could not be prepared.")).toBeNull());
-});
-
-test("a computer turned off while its quick address was pending is not listed", async () => {
-	fake.signedIn = true;
-	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("The fixed address could not be prepared.", 502));
-	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
-	await userEvent.click(await screen.findByRole("button", { name: "Turn off mobile connection" }));
-	// The quick tunnel comes up after the turn-off.
-	fake.status.endpoints.push({ kind: "tunnel", host: "late.trycloudflare.com", port: 443, secure: true });
-	await new Promise((resolve) => setTimeout(resolve, 2_500));
-
+	expect(await screen.findByText("The fixed address could not be prepared.")).toBeVisible();
+	await new Promise((resolve) => setTimeout(resolve, 100));
 	expect(linkThisComputer).toHaveBeenCalledTimes(1);
 });
 
@@ -190,24 +176,6 @@ test("a new password that could not be linked says so", async () => {
 	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
 
 	expect(await screen.findByText("AO Cloud host sync failed (502).")).toBeVisible();
-});
-
-test("a new password that could not be linked is listed at the running tunnel's address", async () => {
-	fake.signedIn = true;
-	Object.assign(fake.status, {
-		enabled: true, noPublicTunnel: false, password: "pw-1",
-		endpoints: [
-			{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
-			{ kind: "tunnel", host: "h-abc.useao.dev", port: 443, secure: true },
-		],
-	});
-	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("AO Cloud host sync failed (502).", 502));
-	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
-
-	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith(
-		"https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true, url: "https://h-abc.useao.dev:443" },
-	));
 });
 
 test("on an AO Cloud without fixed addresses a new password is listed at the tunnel's address", async () => {

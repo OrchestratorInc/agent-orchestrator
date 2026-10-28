@@ -35,7 +35,6 @@ type RemoteHostTunnel struct {
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	LastSeenAt        time.Time
-	LinkedAt          time.Time // the Unix epoch when no account linked it
 	Released          bool
 }
 

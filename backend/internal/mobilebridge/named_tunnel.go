@@ -65,7 +65,16 @@ var (
 	// digest any more: its account removed it. Only AO Cloud's own answer
 	// says so, never a proxy's.
 	errHostRefused = errors.New("AO Cloud no longer lists this machine")
+	// errNoFixedAddresses means this AO Cloud hands out no fixed addresses:
+	// it has no tunnel settings, or predates them.
+	errNoFixedAddresses = errors.New("AO Cloud hands out no fixed addresses")
 )
+
+// unlinked reports an answer that leaves the machine on a quick tunnel: no
+// link, no listing, or no fixed addresses at this AO Cloud.
+func unlinked(err error) bool {
+	return errors.Is(err, errNotLinked) || errors.Is(err, errHostRefused) || errors.Is(err, errNoFixedAddresses)
+}
 
 // digest is the account token digest a signed-in device linked this machine
 // with, or empty while it is not linked.
@@ -103,7 +112,7 @@ func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair
 		_ = os.Remove(s.CachePath) // another link's tunnel
 	}
 	t, err := s.request(ctx, hostID, state.AccountTokenHash, repair)
-	if errors.Is(err, errHostRefused) {
+	if errors.Is(err, errHostRefused) || errors.Is(err, errNoFixedAddresses) {
 		_ = os.Remove(s.CachePath)
 		return NamedTunnel{}, err
 	}
@@ -176,8 +185,16 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		if IsHostDigestRefusal(resp) {
+		var refusal struct {
+			Code string `json:"code"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&refusal)
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized && refusal.Code == "unauthorized":
 			return NamedTunnel{}, errHostRefused
+		case resp.StatusCode == http.StatusNotFound,
+			resp.StatusCode == http.StatusServiceUnavailable && refusal.Code == "fixed_addresses_unavailable":
+			return NamedTunnel{}, errNoFixedAddresses
 		}
 		return NamedTunnel{}, fmt.Errorf("AO Cloud returned %d for the fixed address", resp.StatusCode)
 	}

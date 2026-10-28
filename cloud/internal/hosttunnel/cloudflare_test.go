@@ -29,6 +29,7 @@ type fakeCloudflare struct {
 	records   map[string]fakeRecord // by name
 	live      bool                  // tunnels refuse deletion until connections are dropped
 	noToken   bool                  // run token reads fail
+	limitAt   int                   // calls after this many answer 429; zero never
 }
 
 type fakeTunnel struct {
@@ -64,6 +65,10 @@ func (f *fakeCloudflare) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Header.Get("Authorization") != "Bearer api-token" {
 		fail(http.StatusForbidden, 10000, "Authentication error")
+		return
+	}
+	if f.limitAt > 0 && len(f.calls) > f.limitAt {
+		fail(http.StatusTooManyRequests, 10000, "rate limited")
 		return
 	}
 	const tunnels = "/accounts/acct/cfd_tunnel"
@@ -467,6 +472,29 @@ func TestSweepReleasesTheTunnelsOfMachinesThatLeft(t *testing.T) {
 
 // A machine linked and never run loses its tunnel after an hour and keeps its
 // address: its account may still list it, and a device that looked the name
+// Every account shares the API token's rate limit: once Cloudflare answers
+// 429, the sweep makes no more calls.
+func TestSweepStopsOnceCloudflareRateLimits(t *testing.T) {
+	cf, c := newFakeCloudflare(t)
+	now := time.Now()
+	old := now.Add(-2 * time.Hour)
+	rows := map[string]domain.RemoteHostTunnel{}
+	for i := range 5 {
+		id := fmt.Sprintf("idle-%d", i)
+		cf.tunnels[id] = fakeTunnel{name: "ao-h_" + id, status: "inactive", created: old}
+		rows[id] = domain.RemoteHostTunnel{HostID: "h_" + id, TunnelID: id, Hostname: "h-" + id + ".example.dev"}
+	}
+	cf.limitAt = 3 // the two listings and one release
+	if _, err := Sweep(context.Background(), &fakeSweepStore{rows: rows}, c, now); err == nil {
+		t.Fatal("a rate-limited sweep reported no error")
+	}
+	cf.mu.Lock()
+	defer cf.mu.Unlock()
+	if len(cf.calls) != 4 {
+		t.Fatalf("made %d calls, want 4 (the refused one last): %v", len(cf.calls), cf.calls)
+	}
+}
+
 // up without a record would cache the miss.
 func TestSweepReleasesTunnelsNoConnectorEverServed(t *testing.T) {
 	cf, c := newFakeCloudflare(t)
@@ -493,12 +521,21 @@ func TestSweepReleasesTunnelsNoConnectorEverServed(t *testing.T) {
 	cf.records["h-unused.example.dev"] = fakeRecord{id: "rec-unused", content: "unused.cfargotunnel.com", proxied: true}
 	store := &fakeSweepStore{rows: rows}
 
-	done, err := Sweep(context.Background(), store, c, now)
+	// A sweep releases at most sweepDeletions; the next one starts further
+	// along and releases the rest.
+	done, next, err := sweep(context.Background(), store, c, now, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if done != 106 || len(store.released) != 106 || len(store.deleted) != 0 {
-		t.Fatalf("done %d, released %d, deleted %v", done, len(store.released), store.deleted)
+	if done != sweepDeletions {
+		t.Fatalf("first sweep released %d", done)
+	}
+	more, _, err := sweep(context.Background(), store, c, now, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done+more != 106 || len(store.released) != 106 || len(store.deleted) != 0 {
+		t.Fatalf("done %d, released %d, deleted %v", done+more, len(store.released), store.deleted)
 	}
 	for _, kept := range []string{"young", "foreign", "replaced", "ran", "other"} {
 		if _, ok := cf.tunnels[kept]; !ok {

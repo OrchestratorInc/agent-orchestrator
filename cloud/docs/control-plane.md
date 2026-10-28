@@ -281,8 +281,8 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   tunnel and its proxied CNAME first and is then listed at that address, so no
   device looks the name up before it exists. If Cloudflare fails, the
   registration fails with 502 and anything the call made in Cloudflare is
-  deleted again; without the settings it is refused with 422.
-  Either way the desktop links the computer at its quick tunnel's address.
+  deleted again, and the desktop says so; without the settings it is refused
+  with 422, and the desktop links the computer at its quick tunnel's address.
   A registration with a new host token (a new pairing password, or the
   machine linked again) deletes the account's tunnel first, so a run token
   fetched with the old credential stops working; a new tunnel is made under
@@ -294,13 +294,14 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   without calling Cloudflare, and makes a tunnel only for a host that has
   none, or whose tunnel the sweep released. `since` in the answer is when the
   DNS record was made; the machine holds a newer address back from devices for
-  its settle delay. `{"repair":true}`, sent
-  after the machine's connector had
-  no live connection for 3 minutes or was refused four times in a row, makes the
-  tunnel and record exist again, at most once a minute per host, and the
-  answer says `"repaired":true` when it did; the machine asks for one at most
-  every 30 minutes, and does not start a refused token again until a repair
-  ran. Only this
+  its settle delay. `{"repair":true}`, sent after the machine's connector
+  exited, had no live connection for 3 minutes or was refused four times in a
+  row, replaces the tunnel: the old one is deleted and a new one, with a new
+  token, is made under the same DNS record, at most once a minute per host.
+  The answer says `"repaired":true` when it did; the machine asks for one at
+  most every 2 minutes. A linked machine serves only its fixed address: while
+  AO Cloud cannot hand it out and none is cached, it serves nothing and asks
+  again. Only this
   call counts as AO Cloud seeing the machine; a desktop's registration does
   not. A machine whose new pairing password revoked its link, or whose new
   link AO Cloud does not know yet, keeps serving its tunnel for up to 2
@@ -316,12 +317,10 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   moves its account token to the account: a listing refused after that would
   leave the machine in no account.
 - `ao_remote_host_tunnels` keeps one row per account and host, with the run
-  token encrypted like host tokens. For 10 minutes after an account linked a
-  host to its tunnel (`linked_at`; a repair is no link), the address publish
-  cannot move that account's listing off the fixed address: a quick address
-  published meanwhile is one the machine is about to leave. AO Cloud answers
-  202 when it kept every listing, and the machine sends the address again a
-  minute later.
+  token encrypted like host tokens. An account that gave a host a tunnel lists
+  it at that fixed address only: the address publish cannot move the listing
+  to a quick address, which a linked machine only publishes while it leaves
+  one.
 - A machine's tunnel is released 5 minutes after its last connector left
   (asleep, offline or quit) and AO Cloud last saw the machine, and an hour
   after it was made if no connector ever served it: the sweep deletes the
@@ -337,7 +336,11 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   removal answers, so a host added back right after gets a new tunnel. The DNS
   record stays, as a release leaves it, until the sweep deletes it: a host
   added back meanwhile keeps an address no resolver saw vanish. The sweep runs
-  every 5 minutes. Besides releasing tunnels, it deletes
+  every 5 minutes, bounded to ten Cloudflare list requests, 100 releases or
+  deletions and two minutes, and stops once Cloudflare rate-limits it. A sweep
+  that cannot reach everything starts 100 items further along the next time,
+  so items that keep failing cannot hold back the rest. Besides releasing
+  tunnels, it deletes
   the tunnel and record of a host its account no longer lists (10 minutes
   after the row was written, since a registration makes its tunnel first), of a
   host whose machine has not fetched its token for 90 days. It acts only on
@@ -347,7 +350,8 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   Pro 3,500; a Cloudflare account includes 1,000 tunnels, and Tunnels for
   Platforms sells more at $4.50 a month each. Records track machines seen in
   the last 90 days; tunnels track machines online now. A refused record or
-  tunnel leaves the machine on a quick tunnel.
+  tunnel fails the registration with 502, and the machine stays on a quick
+  tunnel that no account lists.
 - With fixed addresses on, one account lists at most 10 machines
   (`domain.MaxRemoteHostsPerAccount`), so one account cannot fill the zone. A new machine past that is refused with
   409 `remote_host_limit_reached` before any Cloudflare call; machines already
