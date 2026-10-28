@@ -3360,6 +3360,65 @@ func TestACPDriverMapsCostRateLimitsAndAuthRecovery(t *testing.T) {
 	}
 }
 
+// A binding may restate a session/prompt error in the user's terms, but an
+// authentication refusal keeps its sentinel so reauthentication still works.
+func TestACPDriverRestatesPromptErrorThroughBinding(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	var calls int
+	driver := New(Config{
+		Harness:      domain.HarnessHermes,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		PromptErrorFailure: func(err error, _ bool) error {
+			calls++
+			return ports.NewChatProviderFailure("The agent could not finish this turn", "", err)
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+	_ = nextEvent(t, opened.Events())
+
+	completion := func(promptErr error) ports.ChatEvent {
+		t.Helper()
+		agent.mu.Lock()
+		agent.promptErr = promptErr
+		agent.mu.Unlock()
+		ref, err := opened.SendTurn(context.Background(), ports.ChatUserMessage{Text: "continue"})
+		if err != nil {
+			t.Fatalf("SendTurn: %v", err)
+		}
+		if err := opened.(ports.ChatDeferredTurnStarter).StartDeferredTurn(ref.ProviderTurnID); err != nil {
+			t.Fatalf("StartDeferredTurn: %v", err)
+		}
+		for {
+			if event := nextEvent(t, opened.Events()); event.Kind == ports.ChatEventTurnCompleted {
+				return event
+			}
+		}
+	}
+
+	failed := completion(acpsdk.NewInternalError(map[string]any{"details": "admitted_turn_failed"}))
+	if failed.TurnState != domain.TurnStateFailed || failed.Err == nil || failed.Err.Error() != "The agent could not finish this turn" {
+		t.Fatalf("completion = (%q, %v), want the binding's failure", failed.TurnState, failed.Err)
+	}
+	if calls != 1 {
+		t.Fatalf("PromptErrorFailure calls = %d, want 1", calls)
+	}
+
+	refused := completion(acpsdk.NewAuthRequired(nil))
+	if !errors.Is(refused.Err, ports.ErrChatAuthRequired) {
+		t.Fatalf("auth refusal completion error = %v, want ErrChatAuthRequired", refused.Err)
+	}
+	if calls != 1 {
+		t.Fatalf("PromptErrorFailure ran for an authentication refusal")
+	}
+}
+
 func TestACPDriverNormalizesClaudeRetryStatus(t *testing.T) {
 	agent := &fakeAgent{
 		promptBlock:   true,

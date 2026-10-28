@@ -59,6 +59,9 @@ type Config struct {
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
 	SessionPreamble func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
+	// PromptErrorFailure restates a session/prompt error. See
+	// acpdriver.Config.PromptErrorFailure.
+	PromptErrorFailure func(error, bool) error
 	// HistoryReconciler rewrites a completed session/load replay. See
 	// acpdriver.Config.HistoryReconciler.
 	HistoryReconciler            func([]ports.ChatEvent) []ports.ChatEvent
@@ -162,6 +165,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		ValidateInitialize:           cfg.ValidateInitialize,
 		SessionPreamble:              cfg.SessionPreamble,
 		HistoryReconciler:            cfg.HistoryReconciler,
+		PromptErrorFailure:           cfg.PromptErrorFailure,
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,
 		ClientExtensionAliases:       cfg.ClientExtensionAliases,

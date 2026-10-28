@@ -37,12 +37,13 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		Capabilities: ports.ChatCapabilities{
 			ports.ChatCapabilityDiffs: true,
 		},
-		Configure:         configure,
-		SessionMode:       sessionMode,
-		SessionOptions:    sessionOptions,
-		PermissionPolicy:  permissionPolicy,
-		HistoryReconciler: reconcileReplay,
-		VersionProbe:      probe,
+		Configure:          configure,
+		SessionMode:        sessionMode,
+		SessionOptions:     sessionOptions,
+		PermissionPolicy:   permissionPolicy,
+		HistoryReconciler:  reconcileReplay,
+		PromptErrorFailure: promptErrorFailure,
+		VersionProbe:       probe,
 	}, log)
 }
 

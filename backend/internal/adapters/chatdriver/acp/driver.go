@@ -130,6 +130,11 @@ type Config struct {
 	// session, for a binding that reads the failure from the agent's own record,
 	// and whether the turn brought any reply text or tool call.
 	SessionPromptResponseFailure func(sessionID string, response acpsdk.PromptResponse, answered bool) error
+	// PromptErrorFailure lets a provider binding restate a session/prompt the
+	// agent answered with a JSON-RPC error, given whether the turn brought any
+	// reply text or tool call. A nil result keeps the generic error, and an
+	// authentication refusal never reaches it.
+	PromptErrorFailure func(err error, answered bool) error
 	// HistoryNotice reports a replayed user message chunk that the agent wrote
 	// into its own transcript. Replay starts no turn for it, so the agent's
 	// output after it stays in the turn before, as it did live.
@@ -741,6 +746,7 @@ func (d *Driver) initialize(
 	conv.onAuthRejected = d.cfg.OnAuthRejected
 	conv.promptResponseFailure = d.cfg.PromptResponseFailure
 	conv.sessionPromptResponseFailure = d.cfg.SessionPromptResponseFailure
+	conv.promptErrorFailure = d.cfg.PromptErrorFailure
 	conv.hibernationCheck = d.cfg.CanHibernate
 	conv.decodeConversationID = d.cfg.DecodeProviderConversationID
 	conv.historyNotice = d.cfg.HistoryNotice
