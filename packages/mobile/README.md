@@ -440,7 +440,7 @@ scripts/             ao-phone-proxy.js — superseded by Connect Mobile, kept fo
 ## Verify
 
 ```bash
-npm run typecheck    # tsc --noEmit
+npm run typecheck    # tsgo --noEmit
 npm test             # pure state/API/parser regression suite
 npx expo export --platform ios
 npx expo export --platform android

@@ -13,7 +13,9 @@ describe("ChatMarkdown link handling", () => {
 	// invisible to tsc because the context is only read at runtime.
 	it("does not require a provider", () => {
 		expect(source).not.toMatch(/throw new Error\([^)]*ChatLinkProvider/);
-		expect(source).toContain("useContext(OpenChatLink) ?? defaultOpenChatLink");
+		// A web link falls back to the default; an ao:// link without a provider stays words.
+		expect(source).toContain("const provided = useContext(OpenChatLink);");
+		expect(source).toContain("const open = provided ?? defaultOpenChatLink;");
 	});
 
 	// The default has to keep the user inside AO, or a screen without a provider

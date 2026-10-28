@@ -50,6 +50,7 @@ type EventSink interface {
 // empty once the user has opted out.
 type TelemetryIdentity struct {
 	InstallID   string
+	AnonymousID string
 	CloudUserID string
 	GitHubLogin string
 	// OptedOut is true when export must stop: the user opted out, or the identity
@@ -61,6 +62,9 @@ type TelemetryIdentity struct {
 func (i TelemetryIdentity) DistinctID() string {
 	if i.CloudUserID != "" {
 		return i.CloudUserID
+	}
+	if i.AnonymousID != "" {
+		return i.AnonymousID
 	}
 	return i.InstallID
 }

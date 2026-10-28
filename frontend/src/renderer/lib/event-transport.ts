@@ -5,7 +5,7 @@ import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, refreshRemoteConversation } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversation } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
@@ -413,16 +413,19 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							typeof payload?.conversationId !== "string" &&
 							typeof payload?.interfaceTransitionId !== "string"
 						) {
-							// Async chat startup changes the session's provisionState, but
-							// does not emit a conversationId. Refresh the open conversation
-							// so its controller state can leave "connecting".
-							pendingConversationSessions.add(decoded.sessionId);
-							pendingEditorHandoffSessions.add(decoded.sessionId);
-							// Only the workspace waits for an id-only update: the session's
-							// own caches above still refresh at once, because such an update
-							// can be what tells an open chat that its start-up finished.
 							idOnlySessionUpdate =
 								payload !== undefined && Object.keys(payload).every((key) => key === "id" || key === "sessionId");
+							// Async chat startup changes the session's provisionState, but
+							// does not emit a conversationId, and the controller turning
+							// ready writes nothing of its own: whichever session update
+							// follows is what lets an open chat leave "connecting". Once the
+							// chat is ready or working, an id-only update (usage bookkeeping,
+							// cleanup facts, agent-switch rows) changes nothing in it, and
+							// refetching for each one reloaded its whole page every few seconds.
+							if (!idOnlySessionUpdate || !conversationSettled(queryClient, decoded.sessionId)) {
+								pendingConversationSessions.add(decoded.sessionId);
+							}
+							pendingEditorHandoffSessions.add(decoded.sessionId);
 						}
 					} catch {
 						// A malformed CDC payload still invalidates workspaces; it simply

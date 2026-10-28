@@ -5,8 +5,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { SheetHeader } from "../ui";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
-import { can } from "./types";
-import { approvalLabel, effortChoiceLabel } from "./turnSettingsModel";
+import { approvalLabel, effortChoiceLabel, usesProviderControls } from "./turnSettingsModel";
 import { iconSize, microLabel, space, type } from "../tokens";
 
 // Labels come from approvalLabel, which names Codex's default differently.
@@ -44,7 +43,7 @@ export function ChatSettingsSheet({
 	const styles = useThemedStyles(makeStyles);
 	const selected = models.find((model) => model.id === snapshot.settings.model) ?? models.find((model) => model.default);
 	const efforts = selected?.efforts ?? [];
-	const usesProviderOptions = can(snapshot, "config_options");
+	const usesProviderOptions = usesProviderControls(snapshot, options);
 	const hasProviderModel = options.some(
 		(option) => option.category === "model" || option.id === "model" || option.id === "agent",
 	);

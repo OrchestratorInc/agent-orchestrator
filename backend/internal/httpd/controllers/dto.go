@@ -263,6 +263,9 @@ type ListSessionsQuery struct {
 	Active           *bool  `query:"active,omitempty" description:"When true, return non-terminated sessions; when false, return terminated sessions."`
 	OrchestratorOnly *bool  `query:"orchestratorOnly,omitempty" description:"When true, return only orchestrator sessions."`
 	Fresh            *bool  `query:"fresh,omitempty" description:"When true, return only fresh non-terminated sessions."`
+	Kind             string `query:"kind,omitempty" enum:"worker,orchestrator" description:"Session kind filter. worker keeps every session that is not an orchestrator."`
+	Limit            int    `query:"limit,omitempty" minimum:"1" maximum:"200" description:"Page size. When set, sessions are ordered pinned first, then most recently updated, and nextCursor resumes the list. When omitted, every match is returned."`
+	Cursor           string `query:"cursor,omitempty" description:"Opaque cursor returned by the previous page. Requires limit."`
 }
 
 // CleanupSessionsQuery is the query string accepted by POST /api/v1/sessions/cleanup.
@@ -393,6 +396,16 @@ type WorkspaceSearchQuery struct {
 	Limit  int    `query:"limit,omitempty" minimum:"1" maximum:"100" description:"Maximum results. Defaults to 50."`
 }
 
+// WorkspaceContentSearchQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/search/content.
+type WorkspaceContentSearchQuery struct {
+	Query string `query:"query" required:"true" description:"Words to find in file contents, case-insensitive and in any order."`
+}
+
+// ConversationSearchQuery is the query string accepted by GET /api/v1/conversations/search.
+type ConversationSearchQuery struct {
+	Query string `query:"query" required:"true" description:"Words to find in chat messages, matched by word form."`
+}
+
 // WorkspaceResolveQuery is the query string accepted by GET /api/v1/sessions/{sessionId}/workspace/resolve.
 type WorkspaceResolveQuery struct {
 	Path string `query:"path" required:"true" description:"Absolute or workspace-relative file path to classify."`
@@ -499,6 +512,20 @@ type SessionArtifactView struct {
 // ListSessionsResponse is the body of GET /api/v1/sessions.
 type ListSessionsResponse struct {
 	Sessions []SessionView `json:"sessions"`
+	// NextCursor resumes a paged list (limit set) after its last session.
+	// Absent on the last page.
+	NextCursor string `json:"nextCursor,omitempty"`
+	// Archived is present when active=true: how many terminated sessions the
+	// same project and kind filters would have matched, so a client can show
+	// the archive's size without downloading it.
+	Archived *SessionArchiveSummary `json:"archived,omitempty"`
+}
+
+// SessionArchiveSummary sizes the archive behind an active-only session list.
+type SessionArchiveSummary struct {
+	Total int `json:"total"`
+	// ByProject counts per project id. Standalone sessions count under "".
+	ByProject map[string]int `json:"byProject"`
 }
 
 // SpawnSessionRequest is the body of POST /api/v1/sessions.
@@ -875,6 +902,34 @@ type WorkspaceFileSearchResponse struct {
 	Truncated  bool                                `json:"truncated"`
 }
 
+// WorkspaceContentSearchHitResponse is the best matching line of one file.
+type WorkspaceContentSearchHitResponse struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Text string `json:"text" description:"The line, with each match wrapped in U+0002 and U+0003."`
+}
+
+// WorkspaceContentSearchResponse lists files whose contents match, best first.
+type WorkspaceContentSearchResponse struct {
+	Results []WorkspaceContentSearchHitResponse `json:"results"`
+}
+
+// ConversationSearchHitResponse is one visible chat message that matches,
+// with where to open it. SessionID is empty for a chat no session holds.
+type ConversationSearchHitResponse struct {
+	MessageID string `json:"messageId"`
+	SessionID string `json:"sessionId"`
+	ProjectID string `json:"projectId"`
+	ReviewID  string `json:"reviewId,omitempty"`
+	Title     string `json:"title"`
+	Text      string `json:"text" description:"A passage of the message, with each match wrapped in U+0002 and U+0003."`
+}
+
+// ConversationSearchResponse lists matching chat messages, best first.
+type ConversationSearchResponse struct {
+	Results []ConversationSearchHitResponse `json:"results"`
+}
+
 // WorkspacePathResolutionResponse is the body of GET /api/v1/sessions/{sessionId}/workspace/resolve.
 // Path is relative to the root named by Kind and empty when Kind is outside;
 // the response never carries a local absolute path.
@@ -995,7 +1050,36 @@ type BrowserStatusResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	Connected   bool             `json:"connected"`
 	ConnectedAt time.Time        `json:"connectedAt,omitempty"`
-	Transport   string           `json:"transport"`
+	Transport   string           `json:"transport" enum:"electron-webcontents-debugger,chrome-extension"`
+	// Target is the browser this session's commands go to: the AO Browser
+	// panel or the user's own Chrome through the AO extension.
+	Target string `json:"target" enum:"panel,chrome"`
+	// Client and ClientVersion identify the connected Chrome extension.
+	Client        string `json:"client,omitempty"`
+	ClientVersion string `json:"clientVersion,omitempty"`
+}
+
+// BrowserChromeChannel is Chrome-mode registration for one Chrome channel.
+type BrowserChromeChannel struct {
+	Name         string `json:"name"`
+	Available    bool   `json:"available"`
+	Registered   bool   `json:"registered"`
+	ManifestPath string `json:"manifestPath"`
+}
+
+// BrowserChromeStatusResponse describes Chrome mode: whether AO's native host
+// is registered with Chrome, where the unpacked extension is, and whether the
+// extension is connected right now.
+type BrowserChromeStatusResponse struct {
+	Enabled          bool                   `json:"enabled"`
+	Connected        bool                   `json:"connected"`
+	ExtensionID      string                 `json:"extensionId"`
+	ExtensionPath    string                 `json:"extensionPath"`
+	ExtensionBundled bool                   `json:"extensionBundled"`
+	ExtensionVersion string                 `json:"extensionVersion,omitempty"`
+	ClientVersion    string                 `json:"clientVersion,omitempty"`
+	HostPath         string                 `json:"hostPath"`
+	Channels         []BrowserChromeChannel `json:"channels"`
 }
 
 // BrowserCommandRequest is the stable daemon-facing command envelope. Action
@@ -2098,6 +2182,9 @@ type CreateAutomationRequest struct {
 	Cron        string `json:"cron,omitempty"`
 	Timezone    string `json:"timezone"`
 	Enabled     *bool  `json:"enabled,omitempty"`
+	Model       string `json:"model,omitempty"`
+	Mode        string `json:"mode,omitempty"`
+	Effort      string `json:"effort,omitempty"`
 }
 
 // UpdateAutomationRequest is the partial body accepted when updating an automation.
@@ -2110,6 +2197,9 @@ type UpdateAutomationRequest struct {
 	Cron        *string `json:"cron,omitempty"`
 	Timezone    *string `json:"timezone,omitempty"`
 	Enabled     *bool   `json:"enabled,omitempty"`
+	Model       *string `json:"model,omitempty"`
+	Mode        *string `json:"mode,omitempty"`
+	Effort      *string `json:"effort,omitempty"`
 }
 
 // AutomationRunSummaryResponse is the latest-run projection attached to a definition.
@@ -2139,6 +2229,9 @@ type AutomationResponse struct {
 	CreatedAt   time.Time                     `json:"createdAt"`
 	UpdatedAt   time.Time                     `json:"updatedAt"`
 	LatestRun   *AutomationRunSummaryResponse `json:"latestRun,omitempty"`
+	Model       string                        `json:"model,omitempty"`
+	Mode        string                        `json:"mode,omitempty"`
+	Effort      string                        `json:"effort,omitempty"`
 }
 
 // AutomationEnvelope wraps one automation response.
@@ -2474,6 +2567,7 @@ type IdentityResponse struct {
 // phone honors OptedOut. This response carries no email.
 type TelemetryIdentityResponse struct {
 	DistinctID  string `json:"distinctId"`
+	InstallID   string `json:"installId,omitempty"`
 	CloudUserID string `json:"cloudUserId,omitempty"`
 	GitHubLogin string `json:"githubLogin,omitempty"`
 	OptedOut    bool   `json:"optedOut"`
@@ -2673,13 +2767,22 @@ type SendConversationMessageRequest struct {
 	Attachments     []ConversationImageContentRequest     `json:"attachments,omitempty"`
 	Resources       []ConversationResourceContentRequest  `json:"resources,omitempty"`
 	Excerpts        []ConversationExcerptReferenceRequest `json:"excerpts,omitempty"`
+	FileReferences  []ConversationFileReferenceRequest    `json:"fileReferences,omitempty"`
 	// Continuation marks the user's request to continue an interrupted task.
 	Continuation bool `json:"continuation,omitempty"`
 }
 
+// ResolveFileReferenceResponse describes the current availability of captured source.
+type ResolveFileReferenceResponse sessionsvc.FileReferenceResolution
+
+// ConversationFileReferenceRequest carries bounded, user-supplied captured code.
+type ConversationFileReferenceRequest ports.ChatFileReference
+
 // ConversationExcerptReferenceRequest attaches verified selected transcript
 // text to the next message.
 type ConversationExcerptReferenceRequest struct {
+	ID             string `json:"id,omitempty"`
+	Order          int64  `json:"order,omitempty"`
 	ConversationID string `json:"conversationId"`
 	MessageID      string `json:"messageId"`
 	Revision       int64  `json:"revision"`
@@ -2816,10 +2919,13 @@ type EditConversationMessageRequest struct {
 // ConversationContentSummaryResponse is a lightweight attachment/resource chip.
 // Image bytes and embedded resource text never leave the durable server record.
 type ConversationContentSummaryResponse struct {
-	Type     string `json:"type"`
-	MIMEType string `json:"mimeType,omitempty"`
-	URI      string `json:"uri,omitempty"`
-	Name     string `json:"name,omitempty"`
+	FileReference   *ConversationFileReferenceRequest `json:"fileReference,omitempty"`
+	AnnotationID    string                            `json:"annotationId,omitempty"`
+	AnnotationOrder int64                             `json:"annotationOrder,omitempty"`
+	Type            string                            `json:"type"`
+	MIMEType        string                            `json:"mimeType,omitempty"`
+	URI             string                            `json:"uri,omitempty"`
+	Name            string                            `json:"name,omitempty"`
 	// Text is exposed only for verified chat excerpts, so the timeline can show
 	// what the user referred to without exposing internal resource URIs.
 	Text string `json:"text,omitempty"`
@@ -3035,6 +3141,9 @@ type ConversationPlanResponse struct {
 	// Explanation is the agent's note about the plan as a whole, when it gives one.
 	Explanation string                         `json:"explanation,omitempty"`
 	Steps       []ConversationPlanStepResponse `json:"steps"`
+	// SpansTurns marks a list the agent keeps across turns. Later turns carry a
+	// copy of the same list, so a client shows it once, on the latest turn.
+	SpansTurns bool `json:"spansTurns,omitempty"`
 }
 
 // ConversationPlanStepResponse is one step of a plan.
@@ -3114,7 +3223,7 @@ type ConversationActivityResponse struct {
 	// the agent had run something in the worktree. auto_review is not approval: an
 	// approval is a question waiting on a person, while an auto-review is a decision
 	// the provider already made on their behalf, and those are opposites.
-	ActivityKind string `json:"activityKind" enum:"command,file_change,plan,reasoning,approval,usage,error,system,mcp_tool,auto_review,user_input"`
+	ActivityKind string `json:"activityKind" enum:"command,file_change,plan,reasoning,approval,usage,error,system,mcp_tool,auto_review,user_input,ao_action"`
 	Status       string `json:"status" enum:"running,completed,recovered,failed,cancelled,pending,resolved"`
 	Summary      string `json:"summary"`
 	// Detail is the provider-neutral typed payload for this kind. For an approval
@@ -3138,6 +3247,14 @@ type ConversationActivityResponse struct {
 	//   user_input   inputMode, message, schema, url, elicitationId
 	//   system       event -- "compaction", "model.rerouted" or
 	//                "auth.reauth_required" -- plus that event's own fields
+	//   ao_action    action, operationId, sourceSessionId, targetSessionId,
+	//                displayName, previousDisplayName, harness, previousHarness,
+	//                href, prNumber, prTitle, error. action is the neutral
+	//                outcome (session.spawned, session.terminated,
+	//                session.renamed, session.restored, session.agent_switched,
+	//                pull_request.claimed, pull_request.created). There is no
+	//                event key: an event value is a timeline boundary, and
+	//                these actions stay in the ordinary activity batch.
 	Detail    map[string]any `json:"detail,omitempty"`
 	RequestID string         `json:"requestId,omitempty"`
 	// ProviderItemID is the stable parent key used by nested ACP transcripts.
@@ -3151,6 +3268,7 @@ type ConversationSnapshotResponse struct {
 	// SupportsExcerpts advertises daemon-owned source verification separately from
 	// provider capabilities. Older daemons silently ignore the excerpts input.
 	SupportsExcerpts           bool   `json:"supportsExcerpts,omitempty"`
+	SupportsFileReferences     bool   `json:"supportsFileReferences,omitempty"`
 	ConversationID             string `json:"conversationId"`
 	ActiveBranchID             string `json:"activeBranchId,omitempty"`
 	BranchedFromEarlierMessage bool   `json:"branchedFromEarlierMessage"`
@@ -3583,7 +3701,6 @@ type MobileDeviceResponse struct {
 	Token                string    `json:"token,omitempty"`
 	Platform             string    `json:"platform,omitempty" enum:"ios,android"`
 	DeviceName           string    `json:"deviceName,omitempty"`
-	Muted                bool      `json:"muted"`
 	Live                 bool      `json:"live" description:"True when the phone's app is open and polling."`
 	NotificationsEnabled bool      `json:"notificationsEnabled" description:"True when this device has a push token registered."`
 	CreatedAt            time.Time `json:"createdAt"`
@@ -3593,11 +3710,6 @@ type MobileDeviceResponse struct {
 // MobileDevicesResponse is the { devices } envelope for the roster.
 type MobileDevicesResponse struct {
 	Devices []MobileDeviceResponse `json:"devices"`
-}
-
-// MuteDeviceRequest is the body of PATCH /api/v1/mobile/devices/{installId}.
-type MuteDeviceRequest struct {
-	Muted bool `json:"muted" description:"True to stop sending push notifications to this device."`
 }
 
 // InstallIDParam is the {installId} path parameter for mobile-device roster

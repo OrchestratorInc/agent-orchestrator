@@ -19,8 +19,14 @@ import (
 const (
 	maxOutstandingWorkerRequests    = 10
 	maxOutstandingWorkspaceRequests = 6
-	maxTerminalOutputBytes          = 4 << 20
 	maxActiveTerminalSessions       = 8
+	// terminalOutputRetainBytes bounds the durable replay log kept for one
+	// terminal. Output past it prunes the oldest frames rather than failing
+	// the terminal: replay is best effort and must never stop live output.
+	terminalOutputRetainBytes = 8 << 20
+	// terminalOutputPruneBytes is what a prune keeps, so a busy terminal
+	// prunes once per couple of MiB instead of on every frame.
+	terminalOutputPruneBytes = 6 << 20
 	// interactiveSessionLease prevents the idle scanner from pausing a sandbox
 	// while an explicit resume or fresh terminal input is still active.
 	interactiveSessionLease = 2 * time.Minute
@@ -47,6 +53,15 @@ func isWorkspaceWriteKind(kind string) bool {
 	return kind == "workspace.write" || kind == "workspace.review.write"
 }
 
+// isWorkspaceOperateKind reports whether a request kind changes the session,
+// so a viewer may not make it: the file writes, and "workspace.checkout",
+// the Retry that checks the workspace out again and reruns its Setup scripts.
+// A read-only session's owner still retries, so read-only mode gates only the
+// writes.
+func isWorkspaceOperateKind(kind string) bool {
+	return isWorkspaceWriteKind(kind) || kind == "workspace.checkout"
+}
+
 func (s *Store) CreateWorkspaceRequest(
 	ctx context.Context,
 	principal domain.Principal,
@@ -56,7 +71,7 @@ func (s *Store) CreateWorkspaceRequest(
 ) (domain.WorkerRequest, error) {
 	var request domain.WorkerRequest
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
-		if access.Role == "viewer" && isWorkspaceWriteKind(kind) {
+		if access.Role == "viewer" && isWorkspaceOperateKind(kind) {
 			return ErrForbidden
 		}
 		var err error
@@ -188,6 +203,12 @@ func (s *Store) CancelWorkspaceRequest(
 	})
 }
 
+// ClaimWorkerRequest claims the session's next worker request for lease. A
+// claim whose lease lapses is claimed again, up to three attempts, so a
+// request that legitimately runs longer gets a lease that covers it: a Chat
+// steer, and a model catalog, whose discovery may take its whole 20 s budget
+// on a cold worker and would otherwise be claimed again (another discovery)
+// and then failed before the control plane stops waiting.
 func (s *Store) ClaimWorkerRequest(
 	ctx context.Context,
 	orgID, sessionID, workerID string,
@@ -230,7 +251,7 @@ func (s *Store) ClaimWorkerRequest(
 			UPDATE ao_worker_requests request
 			SET status = 'claimed',
 				attempt_count = request.attempt_count + 1,
-				lease_until = now() + CASE WHEN request.kind = 'chat.steer' THEN interval '30 seconds' ELSE $4::interval END,
+				lease_until = now() + CASE WHEN request.kind IN ('chat.steer', 'chat.models') THEN interval '30 seconds' ELSE $4::interval END,
 				updated_at = now()
 			FROM candidate
 			WHERE request.id = candidate.id
@@ -692,9 +713,9 @@ func (s *Store) IssueTerminalTicket(
 		}
 		_, err = tx.Exec(ctx,
 			`INSERT INTO ao_access_tickets (
-				org_id, session_id, purpose, scopes, token_hash, worker_epoch, expires_at
-			) VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval)`,
-			orgID, sessionID, terminalTicketPurpose(kind, terminalID), scopes, hash[:], epoch, intervalString(ttl),
+				org_id, session_id, purpose, scopes, token_hash, worker_epoch, expires_at, user_id
+			) VALUES ($1, $2, $3, $4, $5, $6, now() + $7::interval, NULLIF($8, '')::uuid)`,
+			orgID, sessionID, terminalTicketPurpose(kind, terminalID), scopes, hash[:], epoch, intervalString(ttl), principal.UserID,
 		)
 		return err
 	})
@@ -900,11 +921,11 @@ func (s *Store) OpenTerminal(
 			WHERE token_hash = $1 AND purpose = $2
 			  AND consumed_at IS NULL AND expires_at > now()
 			RETURNING id, org_id, session_id, purpose, scopes,
-				COALESCE(worker_epoch, 0), expires_at`,
+				COALESCE(worker_epoch, 0), expires_at, COALESCE(user_id::text, '')`,
 			hash[:], terminalTicketPurpose(kind, terminalID),
 		).Scan(
 			&ticket.ID, &ticket.OrgID, &ticket.SessionID, &ticket.Purpose,
-			&ticket.Scopes, &ticket.WorkerEpoch, &ticket.ExpiresAt,
+			&ticket.Scopes, &ticket.WorkerEpoch, &ticket.ExpiresAt, &ticket.UserID,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return classifyInvalidTerminalTicket(ctx, tx, hash[:], terminalTicketPurpose(kind, terminalID))
@@ -918,6 +939,7 @@ func (s *Store) OpenTerminal(
 	terminal := domain.TerminalSession{
 		OrgID: ticket.OrgID, SessionID: ticket.SessionID,
 		WorkerEpoch: ticket.WorkerEpoch, Kind: kind, Scopes: ticket.Scopes,
+		UserID: ticket.UserID,
 	}
 	err = s.withOrg(ctx, ticket.OrgID, func(tx pgx.Tx) error {
 		current, err := workerEpochCurrent(
@@ -1118,6 +1140,21 @@ func (s *Store) QueueTerminalResize(
 		"terminalId": terminal.ID,
 		"columns":    columns,
 		"rows":       rows,
+	})
+	return s.queueTerminalRequest(ctx, terminal, "terminal.resize", "", payload)
+}
+
+// QueueTerminalRepaint asks the worker to make the terminal's program redraw
+// at its current size. It rides the terminal.resize kind (so it needs no new
+// request kind) with no dimensions; a worker that predates repaint rejects the
+// zero size as invalid and leaves the terminal untouched.
+func (s *Store) QueueTerminalRepaint(
+	ctx context.Context,
+	terminal domain.TerminalSession,
+) error {
+	payload, _ := json.Marshal(map[string]any{
+		"terminalId": terminal.ID,
+		"repaint":    true,
 	})
 	return s.queueTerminalRequest(ctx, terminal, "terminal.resize", "", payload)
 }
@@ -1355,6 +1392,13 @@ func (s *Store) AppendTerminalOutput(
 // terminal-local cursor. The cursor makes a direct browser frame and a later
 // replay frame refer to the same bytes even if the relay has not finished its
 // background mirror when the browser disconnects.
+//
+// Storage is best effort and idempotent by cursor. A frame below the next
+// cursor is a resend of one already stored (or already skipped) and is
+// acknowledged without a write. A frame above it means frames were lost in
+// transit: it is stored anyway and the cursor moves past it, so one lost frame
+// can never wedge every later one. Readers infer that discontinuity from the
+// gap between stored sequences.
 func (s *Store) AppendTerminalOutputAt(
 	ctx context.Context,
 	orgID, sessionID, workerID, terminalID string,
@@ -1370,7 +1414,7 @@ func (s *Store) AppendTerminalOutputAt(
 func (s *Store) appendTerminalOutput(
 	ctx context.Context,
 	orgID, sessionID, workerID, terminalID string,
-	epoch, expectedSequence int64,
+	epoch, workerSequence int64,
 	data []byte,
 ) (int64, error) {
 	var sequence int64
@@ -1382,53 +1426,63 @@ func (s *Store) appendTerminalOutput(
 		if !current {
 			return ErrStaleWorker
 		}
-		query := `UPDATE ao_terminal_sessions
-			SET next_output_sequence = next_output_sequence + 1,
-				output_bytes = output_bytes + $1,
-				updated_at = now()
-			WHERE org_id = $2 AND session_id = $3 AND id = $4
-			  AND worker_epoch = $5 AND state IN ('opening', 'open')
-			  AND expires_at > now()
-			  AND output_bytes + $1 <= $6
-			RETURNING next_output_sequence - 1`
-		args := []any{len(data), orgID, sessionID, terminalID, epoch, maxTerminalOutputBytes}
-		if expectedSequence > 0 {
-			query = `UPDATE ao_terminal_sessions
-				SET next_output_sequence = next_output_sequence + 1,
-					output_bytes = output_bytes + $1,
-					updated_at = now()
-				WHERE org_id = $2 AND session_id = $3 AND id = $4
-				  AND worker_epoch = $5 AND state IN ('opening', 'open')
-				  AND expires_at > now() AND output_bytes + $1 <= $6
-				  AND next_output_sequence = $7
-				RETURNING next_output_sequence - 1`
-			args = append(args, expectedSequence)
-		}
-		err = tx.QueryRow(ctx, query, args...).Scan(&sequence)
+		var (
+			state   string
+			expired bool
+			next    int64
+		)
+		err = tx.QueryRow(ctx,
+			`SELECT state, expires_at <= now(), next_output_sequence
+			FROM ao_terminal_sessions
+			WHERE org_id = $1 AND session_id = $2 AND id = $3
+			  AND worker_epoch = $4
+			FOR UPDATE`,
+			orgID, sessionID, terminalID, epoch,
+		).Scan(&state, &expired, &next)
 		if errors.Is(err, pgx.ErrNoRows) {
-			_, _ = tx.Exec(ctx,
-				`UPDATE ao_terminal_sessions
-				SET state = 'failed',
-					error_message = 'Terminal output exceeded its limit.',
-					closed_at = now(), updated_at = now()
-				WHERE org_id = $1 AND session_id = $2 AND id = $3
-				  AND worker_epoch = $4 AND state IN ('opening', 'open')
-				  AND output_bytes + $5 > $6`,
-				orgID, sessionID, terminalID, epoch, len(data), maxTerminalOutputBytes,
-			)
-			return ErrTransportExpired
+			return ErrTerminalClosed
 		}
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx,
+		if state != "opening" && state != "open" {
+			return ErrTerminalClosed
+		}
+		if expired {
+			return ErrTerminalExpired
+		}
+		sequence = next
+		if workerSequence > 0 {
+			sequence = workerSequence
+			if workerSequence < next {
+				// Already stored, or skipped by a later frame that arrived first.
+				return nil
+			}
+		}
+		var outputBytes int64
+		if err := tx.QueryRow(ctx,
+			`UPDATE ao_terminal_sessions
+			SET next_output_sequence = $1 + 1,
+				output_bytes = output_bytes + $2,
+				updated_at = now()
+			WHERE org_id = $3 AND session_id = $4 AND id = $5
+			RETURNING output_bytes`,
+			sequence, len(data), orgID, sessionID, terminalID,
+		).Scan(&outputBytes); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO ao_terminal_output (
 				terminal_id, org_id, session_id, sequence, data
 			) VALUES ($1, $2, $3, $4, $5)`,
 			terminalID, orgID, sessionID, sequence, data,
-		)
-		if err != nil {
+		); err != nil {
 			return err
+		}
+		if outputBytes > terminalOutputRetainBytes {
+			if err := pruneTerminalOutput(ctx, tx, orgID, sessionID, terminalID); err != nil {
+				return err
+			}
 		}
 		// Wake any control-plane replica streaming this terminal to a client.
 		// Delivered on commit, so subscribers always find the row.
@@ -1436,6 +1490,40 @@ func (s *Store) appendTerminalOutput(
 		return err
 	})
 	return sequence, err
+}
+
+// pruneTerminalOutput drops the oldest stored frames until the newest ones fit
+// terminalOutputPruneBytes, and sets output_bytes to exactly what is retained.
+// A replay that then starts above sequence 1 is how readers learn the head of
+// the log was pruned.
+func pruneTerminalOutput(
+	ctx context.Context,
+	tx pgx.Tx,
+	orgID, sessionID, terminalID string,
+) error {
+	_, err := tx.Exec(ctx,
+		`WITH retained AS (
+			SELECT sequence,
+				sum(octet_length(data)) OVER (ORDER BY sequence DESC) AS newer_bytes
+			FROM ao_terminal_output
+			WHERE org_id = $1 AND session_id = $2 AND terminal_id = $3
+		), pruned AS (
+			DELETE FROM ao_terminal_output output
+			USING retained
+			WHERE output.org_id = $1 AND output.session_id = $2
+			  AND output.terminal_id = $3
+			  AND output.sequence = retained.sequence
+			  AND retained.newer_bytes > $4
+		)
+		UPDATE ao_terminal_sessions
+		SET output_bytes = (
+			SELECT COALESCE(max(newer_bytes), 0) FROM retained
+			WHERE newer_bytes <= $4
+		)
+		WHERE org_id = $1 AND session_id = $2 AND id = $3`,
+		orgID, sessionID, terminalID, terminalOutputPruneBytes,
+	)
+	return err
 }
 
 func (s *Store) MarkTerminalExited(

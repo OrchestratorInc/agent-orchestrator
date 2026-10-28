@@ -221,6 +221,93 @@ func TestNativeVersionRequiresSupportedFirstLine(t *testing.T) {
 	}
 }
 
+// writeHomebrewKeg lays out a keg the way Homebrew pours one:
+// <prefix>/Cellar/<formula>/<kegDir>/bin/hermes printing banner, an
+// INSTALL_RECEIPT.json recording receiptVersion ("" omits it), and a
+// <prefix>/bin/hermes symlink to it, which it returns.
+func writeHomebrewKeg(t *testing.T, formula, kegDir, receiptVersion, banner string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Homebrew kegs and the shell stand-in are Unix-only")
+	}
+	prefix := t.TempDir()
+	keg := filepath.Join(prefix, "Cellar", formula, kegDir)
+	if err := os.MkdirAll(filepath.Join(keg, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(keg, "bin", "hermes")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho '"+banner+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if receiptVersion != "" {
+		receipt := `{"poured_from_bottle":true,"source":{"versions":{"stable":"` + receiptVersion + `","head":null}}}`
+		if err := os.WriteFile(filepath.Join(keg, "INSTALL_RECEIPT.json"), []byte(receipt), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(prefix, "bin", "hermes")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(binary, link); err != nil {
+		t.Fatal(err)
+	}
+	return link
+}
+
+func TestHomebrewUnknownBannerQualifiesFromKeg(t *testing.T) {
+	// Homebrew builds Hermes from the release tarball, so the bottle cannot read
+	// its version from git and prints `vunknown`. The keg and Homebrew's receipt
+	// then name the release, and only a qualified one is accepted.
+	const unknown = "Hermes Agent vunknown (2026.9.24)"
+	for _, tc := range []struct {
+		name, formula, kegDir, receipt, banner string
+		want                                   bool
+	}{
+		{"qualified keg", "hermes-agent", "0.22.4", "0.22.4", unknown, true},
+		{"banner without a date", "hermes-agent", "0.22.4", "0.22.4", "Hermes Agent vunknown", true},
+		{"revised formula", "hermes-agent", "0.21.6_1", "0.21.6", unknown, true},
+		{"unqualified line", "hermes-agent", "0.23.0", "0.23.0", unknown, false},
+		{"receipt names another release", "hermes-agent", "0.22.4", "0.21.6", unknown, false},
+		{"no receipt", "hermes-agent", "0.22.4", "", unknown, false},
+		{"another formula's keg", "hermes-agent-nightly", "0.22.4", "0.22.4", unknown, false},
+		{"HEAD keg names no release", "hermes-agent", "HEAD-abc1234", "0.22.4", unknown, false},
+		{"other unrecognised banner", "hermes-agent", "0.22.4", "0.22.4", "Hermes Agent vX", false},
+		{"not a Hermes banner", "hermes-agent", "0.22.4", "0.22.4", "wrapper vunknown", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			launcher := writeHomebrewKeg(t, tc.formula, tc.kegDir, tc.receipt, tc.banner)
+			if got := qualifiedHomebrewKeg(launcher, tc.banner); got != tc.want {
+				t.Fatalf("qualifiedHomebrewKeg = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	// Outside a keg, `vunknown` names no release at all.
+	plain := filepath.Join(t.TempDir(), "hermes")
+	if err := os.WriteFile(plain, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if qualifiedHomebrewKeg(plain, unknown) {
+		t.Fatal("vunknown banner accepted outside a Homebrew keg")
+	}
+}
+
+func TestProbeAcceptsHomebrewBottleWithUnknownBanner(t *testing.T) {
+	// The banner AO's own `brew install hermes-agent` produced on macOS.
+	const banner = "Hermes Agent vunknown (2026.9.24)"
+	launcher := writeHomebrewKeg(t, "hermes-agent", "0.22.4", "0.22.4", banner)
+	if ok, reason, timedOut := probeNativeVersion(t.Context(), launcher); !ok || timedOut {
+		t.Fatalf("Homebrew 0.22.4 bottle rejected: ok=%v timedOut=%v reason=%q", ok, timedOut, reason)
+	}
+
+	unverified := writeHomebrewKeg(t, "hermes-agent", "0.22.4", "", banner)
+	ok, reason, _ := probeNativeVersion(t.Context(), unverified)
+	if ok || !strings.Contains(reason, "is not a Hermes release line AO has qualified") {
+		t.Fatalf("keg without Homebrew's receipt: ok=%v reason=%q", ok, reason)
+	}
+}
+
 func TestNativeStateDSNEscapesQueryCharacters(t *testing.T) {
 	dsn := nativeStateDSN("/tmp/hermes?override#fragment")
 	if !strings.Contains(dsn, "%3Foverride%23fragment") || !strings.Contains(dsn, "?mode=ro&_pragma=busy_timeout(1000)") {
@@ -328,6 +415,11 @@ func fakeNativeBinary(t *testing.T) string {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// Probe only the fixture: a Homebrew or system Hermes on the test host
+	// is a qualified install that would otherwise be resolved first.
+	saved := systemLaunchers
+	systemLaunchers = nil
+	t.Cleanup(func() { systemLaunchers = saved })
 	binDir := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		t.Fatal(err)

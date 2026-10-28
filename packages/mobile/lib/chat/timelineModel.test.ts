@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, latestFirstConversationGroups, partitionTurnItems, readableConversationItems } from "./timelineModel";
+import { activityHierarchy, activityNodesRunning, activityStartsExpanded, canRollbackTurn, conversationMarkers, countActivityNodes, editableHumanTurns, groupConversationByTurn, sameEditableTurns, latestFirstConversationGroups, partitionTurnItems, readableConversationItems, summarizeActivities } from "./timelineModel";
 import * as timelineModel from "./timelineModel";
 import type { ConversationActivity, ConversationItem, ConversationSnapshot, ConversationTurn } from "./types";
 
@@ -175,6 +175,20 @@ describe("mobile Chat timeline model", () => {
 function activity(kind: ConversationActivity["activityKind"], sequence: number, turnId?: string): ConversationActivity {
 	return { kind: "activity", id: `${kind}-${sequence}`, turnId, sequence, revision: 1, activityKind: kind, status: "completed", summary: kind, createdAt: "" };
 }
+
+describe("activity run summary", () => {
+	it("labels consecutive AO actions as actions", () => {
+		const renamed = { ...activity("ao_action", 1), summary: "Renamed a session" };
+		const switched = { ...activity("ao_action", 2), summary: "Switched agent" };
+		expect(summarizeActivities([renamed, switched])).toBe("Performed 2 actions");
+	});
+
+	it("counts AO actions separately from commands", () => {
+		const command = { ...activity("command", 1), summary: "npm test" };
+		const renamed = { ...activity("ao_action", 2), summary: "Renamed a session" };
+		expect(summarizeActivities([command, renamed])).toBe("Ran 1 command, 1 action");
+	});
+});
 
 describe("partitionTurnItems", () => {
 	const message = (id: string, sequence: number, role: "user" | "assistant", text: string): ConversationItem => ({ kind: "message", id, turnId: "t", sequence, revision: 1, role, origin: role === "user" ? "human" : "provider", text, streaming: false, createdAt: "" });

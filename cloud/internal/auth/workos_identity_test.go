@@ -284,3 +284,33 @@ func TestWorkOSResolversReadTheCopiedFromID(t *testing.T) {
 		}
 	}
 }
+
+func TestOIDCVerifierKeepsTheSignInProfilePhoto(t *testing.T) {
+	issuer := newTestTokenIssuer(t)
+	for _, avatarURL := range []string{"https://lh3.googleusercontent.com/test-photo", ""} {
+		t.Run(avatarURL, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"id": "user_google", "email": "ada@example.com", "first_name": "Ada",
+					"profile_picture_url": avatarURL,
+				})
+			}))
+			t.Cleanup(server.Close)
+			profiles, err := newWorkOSProfileResolver("sk_test", server.URL, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			verifier, err := NewOIDCVerifier(context.Background(), testIssuer, "client_current", issuer.jwksURL, profiles, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			principal, err := verifier.Verify(context.Background(), issuer.token(t, map[string]any{"sub": "user_google"}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if principal.AvatarURL != avatarURL {
+				t.Fatalf("profile photo = %q, want %q", principal.AvatarURL, avatarURL)
+			}
+		})
+	}
+}

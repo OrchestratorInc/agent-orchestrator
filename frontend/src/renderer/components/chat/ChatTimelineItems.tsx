@@ -27,23 +27,26 @@ import { ProviderMark } from "./ProviderMark";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
 	AlertTriangle,
+	Bot,
 	ArrowRight,
 	Brain,
 	ChevronDown,
 	ChevronRight,
 	CircleAlert,
+	CircleStop,
 	CornerDownLeft,
 	CornerDownRight,
 	File as FileIcon,
 	FileDiff,
 	Gauge,
+	History,
 	KeyRound,
 	Keyboard,
 	ListChecks,
 	Loader2,
-	MousePointer2,
 	Pencil,
 	Plug,
+	RotateCw,
 	Shuffle,
 	ShieldCheck,
 	ShieldQuestion,
@@ -67,6 +70,7 @@ const activityIcon: Record<ActivityKind, typeof SquareTerminal> = {
 	mcp_tool: Plug,
 	auto_review: ShieldCheck,
 	user_input: Keyboard,
+	ao_action: Bot,
 };
 import { cn } from "../../lib/utils";
 import { caretNotation, stripAnsi } from "../../lib/ansi";
@@ -76,6 +80,7 @@ import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-poli
 import { ActivityTitle, ChatMarkdown, OriginPreviewMarkdown, SessionLabelLink, SessionLinkedText } from "./ChatMarkdown";
 import { HighlightedCode } from "./HighlightedCode";
 import { CopyButton } from "./CopyButton";
+import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { RenderFrame } from "./RenderFrame";
@@ -89,6 +94,7 @@ import {
 	exploredFileCount,
 	isNonzeroCommandExit,
 } from "./activity-command";
+import { actionDetailLines, describeConversationActivity } from "./activity-action";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 import {
@@ -113,10 +119,6 @@ import {
 	type TurnDiff,
 } from "../../types/conversation";
 import { resolveTurnFilePath, turnFileOpenPath, turnPathHints } from "../../lib/turn-file-open-path";
-import {
-	parseBrowserAnnotationMessage,
-	type ParsedBrowserAnnotationMessage,
-} from "../../../shared/browser-annotations";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
 	hour: "2-digit",
@@ -299,22 +301,18 @@ function useSmoothStreamingText(message: ConversationMessage): string {
 function TwoRowTimelineMarker({
 	message,
 	detail,
-	tone = "text-muted-foreground/70",
 	detailTone = "text-muted-foreground/70",
-	action,
 	wrapDetail = false,
 }: {
 	message: string;
 	detail?: string;
-	tone?: string;
 	detailTone?: string;
-	action?: ReactNode;
 	/** The detail is an instruction the reader needs whole, so it wraps instead of truncating. */
 	wrapDetail?: boolean;
 }) {
 	return (
 		<div className="flex min-w-0 flex-col gap-1 py-1">
-			<div className={cn("flex min-w-0 items-baseline gap-x-2 gap-y-0.5 text-xs", wrapDetail && "flex-wrap", tone)}>
+			<div className={cn("flex min-w-0 items-baseline gap-x-2 gap-y-0.5 text-xs text-muted-foreground/70", wrapDetail && "flex-wrap")}>
 				<span className="shrink-0">{message}</span>
 				{detail ? (
 					<span
@@ -324,7 +322,6 @@ function TwoRowTimelineMarker({
 						{detail}
 					</span>
 				) : null}
-				{action}
 			</div>
 			<span aria-hidden="true" className="h-px w-full bg-border" />
 		</div>
@@ -428,20 +425,56 @@ export function ContinuedMarker() {
 	return <TwoRowTimelineMarker message="Continued" />;
 }
 
+const TURN_OUTCOME_COPY = {
+	recovered: {
+		label: "This turn was recovered from an earlier session",
+		icon: History,
+		tone: "text-muted-foreground",
+		iconTone: "text-muted-foreground/70",
+	},
+	interrupted: {
+		label: "The agent was interrupted by you",
+		icon: CircleStop,
+		tone: "text-muted-foreground",
+		iconTone: "text-muted-foreground/70",
+	},
+	failed: {
+		label: "The agent ran into a problem",
+		icon: CircleAlert,
+		tone: "font-medium text-destructive",
+		iconTone: "text-destructive",
+	},
+} as const;
+
+/**
+ * How a turn ended when it did not end with an answer: in the answer's place, and
+ * closing on the same action row a finished answer gets.
+ *
+ * It used to be three shapes for one ending — a status line drawn across a rule,
+ * retry off at the far right, undo floating above on a row of its own. Now it reads
+ * like a short reply (mark, what happened, the provider's reason) so a stopped or
+ * failed turn keeps the outline of every other turn.
+ */
 export function TurnOutcome({
 	state,
 	error,
 	retry,
 	usageLimit,
+	copyText,
+	onRollback,
+	rollbackDisabled,
+	timestamp,
+	durationMs,
 }: {
 	state: "recovered" | "interrupted" | "failed";
 	error?: string;
-	retry?: TurnOutcomeRetryControl;
 	usageLimit?: ConversationUsageLimit;
-}) {
+} & TurnActionsProps) {
+	// A usage limit has its own notice, whose resume action stands in for Retry. The
+	// turn still closes on the shared row, so copy and undo stay where they always are.
 	if (state === "failed" && usageLimit) {
 		return (
-			<div className="flex min-w-0 flex-col gap-2 py-3">
+			<div className="group/message flex min-w-0 flex-col gap-2" data-turn-outcome={state}>
 				<UsageLimitNotice
 					compact={!retry}
 					usageLimit={usageLimit}
@@ -451,53 +484,157 @@ export function TurnOutcome({
 					error={retry?.error}
 				/>
 				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
+				<TurnActions
+					copyText={copyText}
+					onRollback={onRollback}
+					rollbackDisabled={rollbackDisabled}
+					timestamp={timestamp}
+					durationMs={durationMs}
+				/>
 			</div>
 		);
 	}
-	const copy = {
-		recovered: {
-			label: "This turn was recovered from an earlier session",
-			tone: "text-muted-foreground/70",
-		},
-		interrupted: {
-			label: "The agent was interrupted by you",
-			tone: "text-muted-foreground/70",
-		},
-		failed: { label: "The agent ran into a problem", tone: "text-destructive" },
-	}[state];
-
-	const action = retry ? (
-		<>
-			{retry.error ? (
-				<span role="alert" className="max-w-[50%] text-pretty text-right text-xs leading-tight text-destructive">
-					{retry.error}
-				</span>
-			) : null}
-			<button
-				type="button"
-				onClick={retry.onRetry}
-				disabled={retry.pending || retry.disabled}
-				aria-label="Retry this turn"
-				title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
-				data-testid="retry-turn"
-				className="shrink-0 rounded px-1.5 py-0.5 text-xs text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50"
-			>
-				{retry.pending ? "Retrying…" : "Retry"}
-			</button>
-		</>
-	) : undefined;
-	if (state === "failed") {
-		return (
-			<div className="flex min-w-0 flex-col gap-2 py-3">
-				<div className="flex items-baseline justify-between gap-3 text-sm font-medium text-destructive">
-					<span>{copy.label}</span>
-					{action}
+	const copy = TURN_OUTCOME_COPY[state];
+	const Icon = copy.icon;
+	return (
+		<div className="group/message flex min-w-0 flex-col gap-1.5" data-turn-outcome={state}>
+			<div className="flex min-w-0 items-start gap-2">
+				<Icon aria-hidden="true" className={cn("mt-[3px] size-3.5 shrink-0", copy.iconTone)} />
+				<span className={cn("min-w-0 text-sm leading-5", copy.tone)}>{copy.label}</span>
+			</div>
+			{error ? (
+				<div
+					className={cn(
+						"whitespace-pre-wrap wrap-anywhere leading-relaxed text-muted-foreground",
+						// A provider's failure text is code-like (status lines, request ids, URLs):
+						// it sits in a quiet mono block like command output, spanning the turn's
+						// width under the title. A stop or recovery note stays in the turn's own
+						// voice, indented with the title.
+						state === "failed" ? "rounded-md bg-surface px-3 py-2 font-mono text-xs" : "pl-[22px] text-sm",
+					)}
+				>
+					{linkifiedProviderErrorText(error)}
 				</div>
-				{error ? <div className="whitespace-pre-wrap wrap-anywhere text-sm leading-relaxed text-foreground">{linkifiedProviderErrorText(error)}</div> : null}
+			) : null}
+			<TurnActions
+				retry={retry}
+				copyText={copyText}
+				onRollback={onRollback}
+				rollbackDisabled={rollbackDisabled}
+				timestamp={timestamp}
+				durationMs={durationMs}
+			/>
+		</div>
+	);
+}
+
+interface TurnActionsProps {
+	/**
+	 * How long the turn ran. "Worked for" carries this when the turn has work to
+	 * fold; a turn that went straight to its answer has no fold, so the time leads
+	 * the action row instead and every turn still says how long it took.
+	 */
+	durationMs?: number;
+	/** Present only when this failed turn is eligible for a new attempt. */
+	retry?: TurnOutcomeRetryControl;
+	/** The answer's stored markdown, so a paste gives back what the agent wrote. */
+	copyText?: string;
+	/** Discard this turn and everything after it. */
+	onRollback?: () => void;
+	/** Keep rollback mounted but inert while another turn is active. */
+	rollbackDisabled?: boolean;
+	/** When the answer was written, revealed on hover of the enclosing `group/message`. */
+	timestamp?: string;
+}
+
+const TURN_ACTION_BUTTON =
+	"flex h-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none motion-reduce:active:scale-100";
+
+/**
+ * The row a turn closes on: how long it ran (when no fold above says so), retry,
+ * copy, roll back, then the time on hover.
+ *
+ * Every ending shares it — a finished answer, a tool-only turn, a stopped or failed
+ * one — so the controls are always in the same place. The negative margin is on the
+ * row rather than its first button, so the leading glyph lines up with the text
+ * above whichever control comes first; the duration pads itself back to the text
+ * edge for the same reason.
+ */
+export function TurnActions({
+	durationMs,
+	retry,
+	copyText,
+	onRollback,
+	rollbackDisabled = false,
+	timestamp,
+	className,
+}: TurnActionsProps & { className?: string }) {
+	const showDuration = durationMs !== undefined && durationMs > 0;
+	if (!retry && copyText === undefined && !onRollback && !showDuration) return null;
+	const time = timestamp ? formatMessageTimestamp(timestamp) : "";
+	return (
+		<div className={cn("flex min-w-0 flex-col gap-1", className)}>
+			<div className="-ml-1.5 flex h-7 items-center gap-0.5" data-turn-actions="">
+				{durationMs !== undefined ? <TurnDuration durationMs={durationMs} /> : null}
+				{retry ? (
+					<button
+						type="button"
+						onClick={retry.onRetry}
+						disabled={retry.pending || retry.disabled}
+						aria-label="Retry this turn"
+						title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
+						data-testid="retry-turn"
+						className={cn(TURN_ACTION_BUTTON, "gap-1.5 px-2 text-xs")}
+					>
+						<RotateCw
+							aria-hidden="true"
+							className={cn("size-3", retry.pending && "animate-spin motion-reduce:animate-none")}
+						/>
+						{retry.pending ? "Retrying…" : "Retry"}
+					</button>
+				) : null}
+				{copyText !== undefined ? (
+					<div className="size-7 shrink-0">
+						<CopyButton
+							text={copyText}
+							label="Copy message as markdown"
+							compact
+							className={cn(TURN_ACTION_BUTTON, "size-7 px-0 py-0")}
+						/>
+					</div>
+				) : null}
+				{onRollback ? (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<button
+								type="button"
+								onClick={onRollback}
+								disabled={rollbackDisabled}
+								aria-label="Roll back to here"
+								className={cn(TURN_ACTION_BUTTON, "size-7")}
+							>
+								<Undo2 aria-hidden="true" className="size-3" />
+							</button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom">Roll back to here</TooltipContent>
+					</Tooltip>
+				) : null}
+				{time ? (
+					<span
+						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
+						aria-label={`Sent ${time}`}
+					>
+						{time}
+					</span>
+				) : null}
 			</div>
-		);
-	}
-	return <TwoRowTimelineMarker message={copy.label} detail={error} tone={copy.tone} action={action} />;
+			{retry?.error ? (
+				<p role="alert" className="text-pretty text-xs leading-snug text-destructive">
+					{retry.error}
+				</p>
+			) : null}
+		</div>
+	);
 }
 
 function formatTokens(tokens: number): string {
@@ -603,17 +740,33 @@ function formatDecisionDuration(ms: number): string {
 	return `${(ms / 1_000).toFixed(1)}s`;
 }
 
+/**
+ * A running setup step's mark: the live row's lattice, so setup and work share one
+ * "working" signal. It sits in the step icons' 12px slot and overhangs it by half a
+ * pixel each side, so the step labels stay aligned with the done and pending marks.
+ */
 export function ResponseSpinner() {
 	return (
-		<Loader2
-			aria-hidden="true"
-			data-testid="response-spinner"
-			className="size-3 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
-		/>
+		<span aria-hidden="true" data-testid="response-spinner" className="flex size-3 shrink-0 items-center justify-center text-muted-foreground">
+			<LatticeLoader />
+		</span>
 	);
 }
 
-function formatTime(iso: string): string {
+/**
+ * The live turn's working mark: a lattice of dots with a trail running round it
+ * (see LatticeLoader). Decorative here, since the label and timer beside it carry
+ * the meaning.
+ */
+export function LiveWorkingMark() {
+	return (
+		<span aria-hidden="true" data-testid="response-spinner" className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
+			<LatticeLoader />
+		</span>
+	);
+}
+
+export function formatTime(iso: string): string {
 	const parsed = new Date(iso);
 	return Number.isNaN(parsed.getTime()) ? "" : timeFormatter.format(parsed);
 }
@@ -633,6 +786,30 @@ function formatMessageTimestamp(iso: string, now = new Date()): string {
 /* -------------------------------------------------------------------------- */
 /* messages                                                                    */
 /* -------------------------------------------------------------------------- */
+
+/** The user's bubble. A queued one reads as not-yet-sent rather than as sent-and-ignored. */
+export function humanBubbleClass(queued?: boolean): string {
+	return cn(
+		"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[10px] px-3 py-2.5 text-sm leading-[1.55]",
+		queued ? "border border-dashed border-border-strong bg-transparent text-muted-foreground" : "bg-raised text-foreground",
+	);
+}
+
+export function MessageTimestamp({ createdAt }: { createdAt: string }) {
+	return (
+		<span className="shrink-0 px-0.5 text-caption tabular-nums text-muted-foreground/75" aria-label={`Sent ${formatMessageTimestamp(createdAt)}`}>
+			{formatMessageTimestamp(createdAt)}
+		</span>
+	);
+}
+
+export function QueuedNote() {
+	return (
+		<div className="flex items-center gap-2 text-xs text-muted-foreground">
+			<span>Queued · sends when the agent finishes</span>
+		</div>
+	);
+}
 
 /** What the user typed. Right-aligned and enclosed so it reads as theirs. */
 const WORKER_REPORT_OPEN = "<ao-worker-reports>";
@@ -701,7 +878,7 @@ export function HumanMessage({
 	const visibleMessageText = humanVisibleText(message.text);
 	const { body, attachments } = stagedAttachmentParts(visibleMessageText);
 	const excerptReferences = (message.content ?? []).filter(
-		(content) => content.type === "excerpt" && Boolean(content.text),
+		(content) => (content.type === "excerpt" && Boolean(content.text)) || Boolean(content.fileReference),
 	);
 	return (
 		<div
@@ -710,6 +887,11 @@ export function HumanMessage({
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
 		>
+			{message.authorName && !editing ? (
+				<span className="max-w-full truncate px-1 text-xs text-muted-foreground" data-chat-message-author>
+					{message.authorName}
+				</span>
+			) : null}
 			{/* A queued message reads as not-yet-sent rather than as sent-and-ignored:
 			    the agent has not seen it, and the timeline should not imply it has. */}
 			{editing ? (
@@ -736,17 +918,12 @@ export function HumanMessage({
 					/* Themes draw sent and queued differently; light theme needs to tell them
 					   apart in CSS because it paints an enclosure only around a sent one. */
 					data-queued={queued ? "" : undefined}
-					className={cn(
-						"cursor-chat-human-message w-fit max-w-[min(78%,560px)] rounded-[10px] px-3 py-2.5 text-sm leading-[1.55]",
-						animateIn && "chat-human-message-enter",
-						queued
-							? "border border-dashed border-border-strong bg-transparent text-muted-foreground"
-							: "bg-raised text-foreground",
-					)}
+					className={cn(humanBubbleClass(queued), animateIn && "chat-human-message-enter")}
 				>
 					{excerptReferences.length > 0 ? (
 						<ChatAnnotationSummary
 							annotations={excerptReferences.map((excerpt) => ({
+								fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
 								text: excerpt.text ?? "",
 								conversationId: excerpt.sourceConversationId,
  messageId: excerpt.sourceMessageId,
@@ -779,12 +956,7 @@ export function HumanMessage({
 			{editing ? null : (
 				<div className="mt-1 flex h-7 items-center gap-1">
 					<div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/message:opacity-100 motion-reduce:transition-none">
-						<span
-							className="shrink-0 px-0.5 text-caption tabular-nums text-muted-foreground/75"
-							aria-label={`Sent ${formatMessageTimestamp(message.createdAt)}`}
-						>
-							{formatMessageTimestamp(message.createdAt)}
-						</span>
+						<MessageTimestamp createdAt={message.createdAt} />
 						{onEdit && onEditStart && message.turnId ? (
 							<Tooltip>
 								<TooltipTrigger asChild>
@@ -817,11 +989,7 @@ export function HumanMessage({
 					) : null}
 				</div>
 			)}
-			{queued ? (
-				<div className="flex items-center gap-2 text-xs text-muted-foreground">
-					<span>Queued · sends when the agent finishes</span>
-				</div>
-			) : null}
+			{queued ? <QueuedNote /> : null}
 			{message.delivery && message.delivery !== "accepted" && message.delivery !== "sending" ? (
 				<DeliveryNote state={message.delivery} />
 			) : null}
@@ -835,11 +1003,6 @@ export function HumanMessage({
  */
 export function OriginMessage({ message }: { message: ConversationMessage }) {
 	const [expanded, setExpanded] = useState(false);
-	const browserAnnotations = parseBrowserAnnotationMessage(message.text);
-	if (browserAnnotations) {
-		return <BrowserAnnotationOrigin message={message} annotations={browserAnnotations} />;
-	}
-
 	const senderSessionId = message.senderSessionId?.trim();
 	const senderProjectId = message.senderProjectId?.trim();
 	const senderLabel = message.senderDisplayName?.trim() || senderSessionId;
@@ -904,52 +1067,6 @@ function AutomationExpandButton({ expanded, onClick }: { expanded: boolean; onCl
 	);
 }
 
-function BrowserAnnotationOrigin({
-	message,
-	annotations,
-}: {
-	message: ConversationMessage;
-	annotations: ParsedBrowserAnnotationMessage;
-}) {
-	const count = annotations.items.length;
-	return (
-		<div className="cursor-chat-origin-message rounded-md border border-border border-l-2 border-l-logo-accent/60 px-3.5 py-2.5">
-			<div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-				<MousePointer2 aria-hidden="true" className="size-3.5 shrink-0 text-logo-accent" />
-				<span>Browser feedback</span>
-				<span className="ml-auto shrink-0 font-normal tabular-nums">{formatTime(message.createdAt)}</span>
-			</div>
-			<p className="text-sm text-foreground">
-				{count} annotation{count === 1 ? "" : "s"} on {annotations.pageTitle}
-			</p>
-			<div className="mt-2 space-y-1.5">
-				{annotations.items.map((item) => (
-					<div key={item.number} className="flex min-w-0 items-start gap-2 text-xs text-muted-foreground">
-						<span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-logo-accent text-micro font-semibold text-white">
-							{item.number}
-						</span>
-						<div className="min-w-0">
-							<p className="truncate text-foreground">
-								{item.comment ||
-									(item.kind === "adjustment"
-										? `${item.changes.length} visual change${item.changes.length === 1 ? "" : "s"}`
-										: "Comment")}
-							</p>
-							{item.target ? <p className="truncate text-foreground">{item.target}</p> : null}
-							{item.text ? <p className="truncate">{item.text}</p> : null}
-						</div>
-					</div>
-				))}
-			</div>
-			{annotations.screenshotCount > 0 ? (
-				<p className="mt-2 text-xs text-muted-foreground">
-					{annotations.screenshotCount} reference screenshot{annotations.screenshotCount === 1 ? "" : "s"}
-				</p>
-			) : null}
-		</div>
-	);
-}
-
 /** The agent's prose. Streaming is represented by text arriving in place. */
 export function AssistantMessage({
 	message,
@@ -957,10 +1074,13 @@ export function AssistantMessage({
 	live = false,
 	onRollback,
 	rollbackDisabled = false,
+	durationMs,
 }: {
 	message: ConversationMessage;
 	/** The final answer owns the copy action; it stays available while that answer streams. */
 	showCopy?: boolean;
+	/** How long the turn ran, for the action row when no "Worked for" fold carries it. */
+	durationMs?: number;
 	/** The enclosing turn is still active, even if its last text chunk has landed. */
 	live?: boolean;
 	/**
@@ -973,10 +1093,11 @@ export function AssistantMessage({
 }) {
 	const visibleText = useSmoothStreamingText(message);
 	const renderingStreaming = message.streaming || visibleText.length < message.text.length;
-	// Copy is ready the moment the text has fully arrived: it copies the stored markdown,
-	// so it need not wait for the typewriter to catch up or for the turn to settle.
-	// Rollback acts on the turn, so it waits for both.
-	const copyReady = showCopy && !message.streaming;
+	// Copy copies the stored markdown, so it need not wait for the typewriter to catch
+	// up. Rollback acts on the turn, so it waits for it to settle. While the turn is
+	// live the row below the answer is the live status; both actions take its place
+	// when the turn settles, so nothing moves.
+	const copyReady = showCopy && !message.streaming && !live;
 	const rollbackReady = Boolean(onRollback) && !live && !renderingStreaming;
 	const showActions = copyReady || rollbackReady;
 	return (
@@ -990,55 +1111,67 @@ export function AssistantMessage({
 			<div data-chat-message-body=""><ChatMarkdown text={visibleText} streaming={renderingStreaming} /></div>
 			{showActions ? (
 				// One action row for the completed answer, not one after every prose
-				// fragment the provider emitted while working. Copy, rollback, and
-				// duration stay visible; only the wall-clock time reveals on hover.
-				<div className="mt-1 flex h-7 items-center gap-0.5">
-					{copyReady ? (
-						<div className="-ml-1.5 size-7 shrink-0">
-							{/* The stored markdown, not a re-serialization of what was rendered:
-							   pasting it into an editor has to give back what the agent wrote. */}
-							<CopyButton
-								text={message.text}
-								label="Copy message as markdown"
-								compact
-								className="size-7 justify-center rounded-md px-0 py-0 transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
-							/>
-						</div>
-					) : null}
-					{rollbackReady ? (
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									type="button"
-									onClick={onRollback}
-									disabled={rollbackDisabled}
-									aria-label="Roll back to here"
-									className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-[scale,background-color,color] duration-150 ease-out hover:bg-interactive-hover hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40 motion-reduce:transition-none motion-reduce:active:scale-100"
-								>
-									<Undo2 aria-hidden="true" className="size-3" />
-								</button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">Roll back to here</TooltipContent>
-						</Tooltip>
-					) : null}
-					<span
-						className="w-auto shrink-0 px-1 text-caption tabular-nums text-muted-foreground/75 opacity-0 transition-opacity duration-150 ease-out group-hover/message:opacity-100 group-focus-within/message:opacity-100 motion-reduce:transition-none"
-						aria-label={`Sent ${formatMessageTimestamp(message.createdAt)}`}
-					>
-						{formatMessageTimestamp(message.createdAt)}
-					</span>
-				</div>
+				// fragment the provider emitted while working. Copy and rollback stay
+				// visible; only the wall-clock time reveals on hover.
+				<TurnActions
+					className="mt-1"
+					durationMs={durationMs}
+					copyText={copyReady ? message.text : undefined}
+					onRollback={rollbackReady ? onRollback : undefined}
+					rollbackDisabled={rollbackDisabled}
+					timestamp={message.createdAt}
+				/>
 			) : null}
 		</div>
 	);
 }
 
 
-export function LiveResponseStatus({ startedAt, settling = false, startupLabel, failed = false, children }: {
+/** What the live row says the agent is doing right now, in the words its own row uses. */
+export function liveTaskLabel(activity: ConversationActivity): string {
+	if (activity.activityKind === "reasoning") return "Thinking";
+	if (activity.activityKind === "auto_review") return "Reviewing";
+	if (activity.activityKind === "mcp_tool") return activity.summary.trim() || "Using a tool";
+	return splitSummary(activity).label;
+}
+
+/**
+ * A provider retry, split for display: the attempt count up front and the reason
+ * behind it, so "Reconnecting… 4/5" reads as a state and the 401 as its detail.
+ * Codex puts the whole error in the summary; Claude keeps the reason in `text`.
+ */
+export function reconnectCopy(activity: ConversationActivity): { label: string; detail?: string } {
+	const summary = activity.summary.trim();
+	const text = activity.detail?.text?.trim() || undefined;
+	// Only a summary that is about reconnecting carries the attempt count; a count
+	// elsewhere in some other error text is not one.
+	const match = /^\W*(?:re-?connect|retry)/i.test(summary) ? /(\d+)\s*(?:\/|of)\s*(\d+)/.exec(summary) : null;
+	if (!match) return { label: summary || "Reconnecting…", detail: text };
+	const rest = summary.slice(match.index + match[0].length).replace(/^[\s.:,;—–-]+/, "").trim();
+	return { label: `Reconnecting… ${match[1]}/${match[2]}`, detail: text ?? (rest || undefined) };
+}
+
+const LIVE_RECONNECT_CHIP =
+	"inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface px-1.5 py-px text-xs tabular-nums text-muted-foreground";
+
+/**
+ * The live edge of a turn: the orb, what the agent is doing, and for how long.
+ *
+ * It sits at the end of the turn and follows the work down. It says only what the
+ * reader cannot see for themselves: the orb is the liveness, the label the current
+ * step (or the retry the provider is on), the timer the duration. No "Working for":
+ * when the turn settles this row fades out where it is and "Worked for" opens at the
+ * top of the turn, so nothing appears to travel between the two.
+ */
+export function LiveResponseStatus({ startedAt, startupLabel, failed = false, task, reconnect, children }: {
 	startedAt?: string;
-	settling?: boolean;
+	/** Replaces the timer while the session is still being set up. */
 	startupLabel?: string;
 	failed?: boolean;
+	/** What the agent is doing right now, named the way its activity row names it. */
+	task?: string;
+	/** The provider is retrying; the row says so in place of the task. */
+	reconnect?: { label: string; detail?: string };
 	children?: ReactNode;
 }) {
 	const reducedMotion = useReducedMotion();
@@ -1048,43 +1181,57 @@ export function LiveResponseStatus({ startedAt, settling = false, startupLabel, 
 	}, [startedAt]);
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
-		if (settling) {
-			// The interval stops while settling; refresh once so the frozen label
-			// matches the final duration instead of lagging up to a second.
-			setNow(Date.now());
-			return;
-		}
 		const timer = window.setInterval(() => setNow(Date.now()), 1000);
 		return () => window.clearInterval(timer);
-	}, [settling]);
+	}, []);
 	const elapsedMs = Math.max(0, now - started);
-	// Settling animates opacity and transform only, never layout, so it stays smooth
-	// even when the main thread is busy finishing the turn. These are keyframe
-	// animations rather than transitions so they also play when the row first
-	// mounts already settled. The spinner shrinks and fades in place while the label
-	// slides left by the spinner's footprint (12px + 6px gap), landing exactly where
-	// the settled "Worked for" row puts it. The label keeps its shimmer class
-	// throughout (only the highlight fades), so the text never changes paint
-	// technique and cannot blink.
+	const label = startupLabel ?? reconnect?.label ?? task;
+	// The provider re-saves its retry on every attempt, and the step label changes
+	// with every tool call. Keyed by its text the label would remount, and replay its
+	// entrance, each time; keyed by kind it updates in place and crossfades only when
+	// the row changes what it is showing.
+	const labelKind = startupLabel ? "startup" : reconnect ? "reconnect" : task ? "task" : undefined;
 	return (
 		<div className="min-w-0">
-			<div className="-mx-1 flex h-7 select-none items-center gap-1.5 border-b border-border px-1 py-0">
-				<span
-					aria-hidden={settling || undefined}
-					data-settling={settling || undefined}
-					className="chat-working-spinner-slot flex shrink-0 origin-center"
-				>
-					{failed ? <X className="size-3 text-destructive" /> : <ResponseSpinner />}
+			<div className="-mx-1 flex h-7 select-none items-center gap-2 px-1 py-0">
+				<span aria-hidden="true" className="flex size-5 shrink-0 items-center justify-center">
+					{failed ? <X className="size-3 text-destructive" /> : <LiveWorkingMark />}
 				</span>
 				<span
 					role={failed ? "alert" : "status"}
 					data-testid="live-working-label"
-					data-settling={settling || undefined}
-					className={cn("text-sm font-normal", failed ? "text-destructive" : "chat-working-shimmer")}
+					className="flex min-w-0 items-center gap-2 text-sm"
 				>
-					{startupLabel ?? `${settling ? "Worked for" : "Working for"} ${formatDuration(elapsedMs)}`}
+					{/* Keyed by kind, so a new kind of label fades in once (see .chat-live-label)
+					    while the text inside updates in place. */}
+					{label && labelKind ? (
+						<span key={labelKind} className="chat-live-label min-w-0 truncate" data-testid="live-working-task">
+							{reconnect && !startupLabel ? (
+								<span className={LIVE_RECONNECT_CHIP}>
+									<span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-warning" />
+									<span className="truncate">{label}</span>
+								</span>
+							) : (
+								<span className={failed ? "text-destructive" : "chat-working-shimmer"}>{label}</span>
+							)}
+						</span>
+					) : null}
+					{startupLabel ? null : (
+						<span className="shrink-0 tabular-nums text-muted-foreground/75" data-testid="live-working-timer">
+							{formatDuration(elapsedMs)}
+						</span>
+					)}
 				</span>
 			</div>
+			{reconnect?.detail && !startupLabel ? (
+				<p
+					className="truncate pl-7 text-xs leading-5 text-muted-foreground"
+					title={reconnect.detail}
+					data-testid="live-turn-status"
+				>
+					{linkifiedProviderErrorText(reconnect.detail)}
+				</p>
+			) : null}
 			<AnimatePresence initial={false}>
 				{children ? (
 					<motion.div
@@ -1145,7 +1292,8 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 		activity.activityKind === "command" ||
 		activity.activityKind === "file_change" ||
 		activity.activityKind === "mcp_tool" ||
-		activity.activityKind === "auto_review";
+		activity.activityKind === "auto_review" ||
+		activity.activityKind === "ao_action";
 	// AO records pages as system rows; a page named by any other row (a cloud
 	// session's, say) is not one this daemon serves.
 	const renderRef = activity.activityKind === "system" ? readRenderRef(activity.detail) : undefined;
@@ -1156,6 +1304,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.activityKind === "auto_review") content = <AutoReviewRow activity={activity} />;
 	else if (activity.activityKind === "reasoning") content = <ReasoningBlock activity={activity} />;
 	else if (activity.activityKind === "error") content = <ErrorActivityRow activity={activity} />;
+	else if (activity.activityKind === "ao_action") content = <AOActionRow activity={activity} />;
 	else if (activity.detail?.event === "model.rerouted") content = <RerouteRow activity={activity} />;
 	else if (activity.detail?.event === "auth.reauth_required") content = <ReauthRow activity={activity} />;
 	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
@@ -1209,6 +1358,69 @@ export function ActivityTransition({
 	);
 }
 
+function AOActionRow({ activity }: { activity: ConversationActivity }) {
+	const { t } = useTranslation();
+	const descriptor = describeConversationActivity(activity);
+	const lines = actionDetailLines(activity);
+	const [override, setOverride] = useState<boolean | null>(null);
+	const reducedMotion = useReducedMotion();
+	const label = descriptor?.label ?? activity.summary;
+	const href = descriptor?.href;
+	const hasBody = lines.length > 0 || Boolean(href);
+	const open = override ?? false;
+	return (
+		<div className="flex min-w-0 max-w-full flex-col">
+			<button
+				type="button"
+				onClick={() => setOverride(!open)}
+				disabled={!hasBody}
+				aria-expanded={hasBody ? open : undefined}
+				aria-label={descriptor?.ariaLabel ?? label}
+				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-row-toggle", !hasBody && "cursor-default")}
+			>
+				<Bot aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/70" />
+				<span className="activity-row-label shrink-0 text-xs font-normal text-muted-foreground">{label}</span>
+				{descriptor?.state === "failed" ? (
+					<span className="text-xs text-destructive">{t("chat.action.status.failed")}</span>
+				) : null}
+				{descriptor?.state === "cancelled" ? (
+					<span className="text-xs text-muted-foreground/70">{t("chat.action.status.cancelled")}</span>
+				) : null}
+				{descriptor?.state === "running" ? (
+					<Loader2 aria-hidden="true" className="size-3 animate-spin text-muted-foreground/60" />
+				) : null}
+				{hasBody ? (
+					<ChevronRight
+						aria-hidden="true"
+						className={cn(
+							"size-3 shrink-0 text-muted-foreground/40 transition-transform group-hover/run:text-muted-foreground",
+							open && "rotate-90",
+						)}
+					/>
+				) : null}
+			</button>
+			<AnimatePresence initial={false}>
+				{open && hasBody ? (
+					<motion.div
+						initial={{ height: 0, opacity: 0 }}
+						animate={{ height: "auto", opacity: 1 }}
+						exit={{ height: 0, opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+						className="overflow-hidden"
+					>
+						<div className="flex flex-col gap-1 px-2 py-1 text-xs text-muted-foreground">
+							{lines.map((line, index) => <span key={index}>{line}</span>)}
+							{href && descriptor?.linkLabelKey ? (
+								<SessionLabelLink href={href}>{t(descriptor.linkLabelKey)}</SessionLabelLink>
+							) : null}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+		</div>
+	);
+}
+
 /**
  * A collapsed activity row: icon, label, target, state. Expands to its payload.
  *
@@ -1241,6 +1453,14 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	// bordered activity row.
 	const compactSummary =
 		activity.activityKind === "command" || activity.activityKind === "file_change";
+	// A provider retry ("Reconnecting… 4/5") is a note on the turn, not a row in a
+	// list: no rule above it and no inset, so it lines up with the turn's text.
+	const notice = activity.activityKind === "system" && activity.detail?.event === "provider.failure";
+	// Only a retry with an attempt count splits; other provider notes keep their summary
+	// whole, and their reason stays behind the disclosure like any other row's.
+	const retry = notice ? reconnectCopy(activity) : undefined;
+	const noticeLabel = retry?.label.startsWith("Reconnecting…") ? retry.label : undefined;
+	const noticeDetail = noticeLabel ? retry?.detail : undefined;
 	const singleEdit = activity.activityKind === "file_change" && files.length === 1 ? files[0] : undefined;
 
 	// Live output is only live if it is on screen, so a command that is still
@@ -1252,7 +1472,11 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 		<div
 			className={cn(
 				"min-w-0 max-w-full",
-				compactSummary ? "flex flex-col" : "group/activity border-t border-border first:border-t-0",
+				compactSummary
+					? "flex flex-col"
+					: notice
+						? "group/activity"
+						: "group/activity border-t border-border first:border-t-0",
 			)}
 		>
 			<button
@@ -1263,7 +1487,9 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				className={cn(
 					compactSummary
 						? ACTIVITY_SUMMARY_BUTTON_CLASS
-						: "flex min-h-[35px] w-full min-w-0 select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
+						: notice
+							? "flex min-h-7 w-full min-w-0 select-none items-center gap-2 py-1 text-left text-xs"
+							: "flex min-h-[35px] w-full min-w-0 select-none items-center gap-[9px] px-[11px] py-2 text-left text-xs",
 					"activity-row-toggle",
 					hasBody && !compactSummary && "hover:text-foreground",
 					!hasBody && "cursor-default",
@@ -1303,14 +1529,22 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 								? "activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground"
 								: "min-w-0 truncate font-medium",
 							!compactSummary &&
-								(activity.status === "failed" ? "text-destructive" : "text-foreground"),
+								(activity.status === "failed"
+									? "text-destructive"
+									: notice
+										? "font-normal text-muted-foreground"
+										: "text-foreground"),
 						)}
-						title={compactSummary ? undefined : label}
+						title={compactSummary ? undefined : noticeLabel ?? label}
 					>
-						<ActivityTitle text={label} />
+						<ActivityTitle text={noticeLabel ?? label} />
 					</strong>
 				)}
-				{path && !singleEdit ? (
+				{noticeDetail ? (
+					<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground/70" title={noticeDetail}>
+						{noticeDetail}
+					</span>
+				) : path && !singleEdit ? (
 					<span
 						className="min-w-0 flex-1 truncate font-mono text-caption text-muted-foreground group-hover/activity:text-foreground"
 						title={path}
@@ -2654,7 +2888,7 @@ export function SteerMessage({
 	);
 }
 
-function stripSteerSenderPrefix(text: string, senderSessionId: string): string {
+export function stripSteerSenderPrefix(text: string, senderSessionId: string): string {
 	const escaped = senderSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const prefix = new RegExp(`^\\[from (?:worker\\s+)?${escaped}(?:\\s+"[^"]*")?\\]\\s*`);
 	return text.replace(prefix, "");
@@ -3225,17 +3459,22 @@ function fileBasename(path: string): string {
 /* turn boundary                                                               */
 /* -------------------------------------------------------------------------- */
 
-/** Turn wall-clock duration; lives on the action row next to rollback, not the Done divider. */
+/**
+ * Turn wall-clock duration: inline after "Worked for", or on its own at the head of
+ * the action row when the turn had no work to fold. On its own it still says what
+ * the number is to a screen reader, since nothing visible does.
+ */
 export function TurnDuration({ durationMs, inline = false }: { durationMs: number; inline?: boolean }) {
 	if (durationMs <= 0) return null;
 	return (
 		<span
 			className={cn(
 				"shrink-0 font-sans text-sm leading-none tabular-nums text-muted-foreground",
-				inline && "group-hover/row:text-foreground",
-				!inline && "px-1",
+				inline ? "group-hover/row:text-foreground" : "pl-1.5 pr-0.5",
 			)}
+			data-turn-duration={inline ? undefined : ""}
 		>
+			{inline ? null : <span className="sr-only">Worked for </span>}
 			{formatDuration(durationMs)}
 		</span>
 	);

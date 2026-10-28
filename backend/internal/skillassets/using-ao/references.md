@@ -10,6 +10,7 @@ Natural-language-to-command mappings for common AO tasks.
 | Show this Markdown or HTML file without a server | `ao preview "<workspace-path>"` |
 | Hand off a newly created browser-displayable artifact | `ao preview "<workspace-path>"` immediately after writing the primary artifact |
 | Inspect and verify this webpage as the agent | `ao browser open "<url>"`, then `ao browser snapshot` |
+| Drive the shared remote browser on a self-hosted host (`AO_AGENT_BROWSER_URL` set) | Read [commands/browser-remote.md](commands/browser-remote.md); `ao browser get url`, `ao browser snapshot` |
 | Click or fill a page element | `ao browser snapshot`, then `ao browser click <ref>` or `ao browser fill <ref> "<text>"` |
 | Check frontend runtime failures | `ao browser errors` and `ao browser console` |
 | Diagnose a request/API/CORS/auth/redirect failure when normal page evidence is insufficient | `ao browser network start`, reproduce once, then `ao browser network stop` |

@@ -2352,6 +2352,76 @@ paths:
       summary: Manage desktop Stay Awake
       tags:
       - settings
+  /api/v1/browser/chrome:
+    delete:
+      operationId: removeBrowserChrome
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersBrowserChromeStatusResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Disable Chrome mode: unregister AO''s native host and remove the installed
+        extension bundle'
+      tags:
+      - browser
+    get:
+      operationId: getBrowserChrome
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersBrowserChromeStatusResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Report Chrome mode: native host registration, extension bundle, and
+        connection'
+      tags:
+      - browser
+    post:
+      operationId: setupBrowserChrome
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersBrowserChromeStatusResponse'
+          description: OK
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Enable Chrome mode: install the AO extension bundle and register AO''s
+        native host with Chrome'
+      tags:
+      - browser
   /api/v1/browser/commands:
     post:
       operationId: executeBrowserCommand
@@ -2482,6 +2552,45 @@ paths:
       summary: Check whether the desktop browser runtime is connected for a session
       tags:
       - browser
+  /api/v1/conversations/search:
+    get:
+      operationId: searchConversations
+      parameters:
+      - description: Words to find in chat messages, matched by word form.
+        in: query
+        name: query
+        required: true
+        schema:
+          description: Words to find in chat messages, matched by word form.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationSearchResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Search visible chat messages across conversations
+      tags:
+      - conversations
   /api/v1/cues/{cueId}:
     delete:
       operationId: deleteCue
@@ -3255,7 +3364,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: List paired mobile devices with their live/muted status
+      summary: List paired mobile devices with their live status
       tags:
       - mobile
   /api/v1/mobile/devices/{installId}:
@@ -3285,52 +3394,6 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Remove a paired device from the roster
-      tags:
-      - mobile
-    patch:
-      operationId: muteMobileDevice
-      parameters:
-      - description: The device's stable install id.
-        in: path
-        name: installId
-        required: true
-        schema:
-          description: The device's stable install id.
-          type: string
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/MuteDeviceRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                additionalProperties:
-                  type: boolean
-                type: object
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Found
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Service Unavailable
-      summary: Mute or unmute push notifications for a paired device
       tags:
       - mobile
   /api/v1/mobile/disable:
@@ -4910,13 +4973,13 @@ paths:
           type:
           - "null"
           - integer
-      - description: Maximum combined messages and activities to return. Defaults
-          to 200.
+      - description: Maximum messages to return; tool activity between them comes
+          along without counting. Defaults to 200.
         in: query
         name: limit
         schema:
-          description: Maximum combined messages and activities to return. Defaults
-            to 200.
+          description: Maximum messages to return; tool activity between them comes
+            along without counting. Defaults to 200.
           maximum: 500
           minimum: 1
           type:
@@ -5373,6 +5436,35 @@ paths:
           type:
           - "null"
           - boolean
+      - description: Session kind filter. worker keeps every session that is not an
+          orchestrator.
+        in: query
+        name: kind
+        schema:
+          description: Session kind filter. worker keeps every session that is not
+            an orchestrator.
+          enum:
+          - worker
+          - orchestrator
+          type: string
+      - description: Page size. When set, sessions are ordered pinned first, then
+          most recently updated, and nextCursor resumes the list. When omitted, every
+          match is returned.
+        in: query
+        name: limit
+        schema:
+          description: Page size. When set, sessions are ordered pinned first, then
+            most recently updated, and nextCursor resumes the list. When omitted,
+            every match is returned.
+          maximum: 200
+          minimum: 1
+          type: integer
+      - description: Opaque cursor returned by the previous page. Requires limit.
+        in: query
+        name: cursor
+        schema:
+          description: Opaque cursor returned by the previous page. Requires limit.
+          type: string
       responses:
         "200":
           content:
@@ -6353,13 +6445,13 @@ paths:
           type:
           - "null"
           - integer
-      - description: Maximum combined messages and activities to return. Defaults
-          to 200.
+      - description: Maximum messages to return; tool activity between them comes
+          along without counting. Defaults to 200.
         in: query
         name: limit
         schema:
-          description: Maximum combined messages and activities to return. Defaults
-            to 200.
+          description: Maximum messages to return; tool activity between them comes
+            along without counting. Defaults to 200.
           maximum: 500
           minimum: 1
           type:
@@ -6668,6 +6760,52 @@ paths:
       summary: Choose one provider-advertised session configuration value
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/conversation/file-references/resolve:
+    post:
+      operationId: resolveFileReference
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationFileReferenceRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolveFileReferenceResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Resolve the current source of a captured file annotation without modifying
+        it
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/conversation/inputs/{requestId}/resolve:
     post:
       operationId: resolveSessionConversationInput
@@ -11675,6 +11813,59 @@ paths:
       summary: Search visible workspace file paths
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/workspace/search/content:
+    get:
+      operationId: searchSessionWorkspaceContent
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - description: Words to find in file contents, case-insensitive and in any order.
+        in: query
+        name: query
+        required: true
+        schema:
+          description: Words to find in file contents, case-insensitive and in any
+            order.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceContentSearchResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Search the contents of visible workspace files
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/tree:
     get:
       operationId: listSessionWorkspaceTree
@@ -13598,6 +13789,8 @@ components:
           type: string
         displayName:
           type: string
+        effort:
+          type: string
         enabled:
           type: boolean
         harness:
@@ -13616,6 +13809,10 @@ components:
           - string
         latestRun:
           $ref: '#/components/schemas/AutomationRunSummaryResponse'
+        mode:
+          type: string
+        model:
+          type: string
         nextRunAt:
           format: date-time
           type: string
@@ -14108,6 +14305,10 @@ components:
       type: object
     BrowserStatusResponse:
       properties:
+        client:
+          type: string
+        clientVersion:
+          type: string
         connected:
           type: boolean
         connectedAt:
@@ -14115,12 +14316,21 @@ components:
           type: string
         sessionId:
           type: string
+        target:
+          enum:
+          - panel
+          - chrome
+          type: string
         transport:
+          enum:
+          - electron-webcontents-debugger
+          - chrome-extension
           type: string
       required:
       - sessionId
       - connected
       - transport
+      - target
       type: object
     CancelReviewResponse:
       properties:
@@ -14155,6 +14365,53 @@ components:
       required:
       - agent
       - modes
+      type: object
+    ChatFileReferenceLine:
+      properties:
+        kind:
+          enum:
+          - context
+          - add
+          - del
+          type: string
+        newNo:
+          type:
+          - "null"
+          - integer
+        oldNo:
+          type:
+          - "null"
+          - integer
+        side:
+          enum:
+          - file
+          - old
+          - new
+          type: string
+        text:
+          type: string
+      required:
+      - kind
+      - oldNo
+      - newNo
+      - text
+      type: object
+    ChatFileReferenceSource:
+      properties:
+        kind:
+          enum:
+          - workspace
+          - pull_request
+          - artifact
+          type: string
+        number:
+          type: integer
+        snapshot:
+          type: string
+        url:
+          type: string
+      required:
+      - kind
       type: object
     ChatPermissionModesResponse:
       properties:
@@ -14901,6 +15158,53 @@ components:
         disabled:
           type: boolean
       type: object
+    ControllersBrowserChromeChannel:
+      properties:
+        available:
+          type: boolean
+        manifestPath:
+          type: string
+        name:
+          type: string
+        registered:
+          type: boolean
+      required:
+      - name
+      - available
+      - registered
+      - manifestPath
+      type: object
+    ControllersBrowserChromeStatusResponse:
+      properties:
+        channels:
+          items:
+            $ref: '#/components/schemas/ControllersBrowserChromeChannel'
+          type: array
+        clientVersion:
+          type: string
+        connected:
+          type: boolean
+        enabled:
+          type: boolean
+        extensionBundled:
+          type: boolean
+        extensionId:
+          type: string
+        extensionPath:
+          type: string
+        extensionVersion:
+          type: string
+        hostPath:
+          type: string
+      required:
+      - enabled
+      - connected
+      - extensionId
+      - extensionPath
+      - extensionBundled
+      - hostPath
+      - channels
+      type: object
     ControllersKeepAwakeStatus:
       properties:
         active:
@@ -15339,6 +15643,7 @@ components:
           - mcp_tool
           - auto_review
           - user_input
+          - ao_action
           type: string
         createdAt:
           type: string
@@ -15479,6 +15784,13 @@ components:
       type: object
     ConversationContentSummaryResponse:
       properties:
+        annotationId:
+          type: string
+        annotationOrder:
+          format: int64
+          type: integer
+        fileReference:
+          $ref: '#/components/schemas/ConversationFileReferenceRequest'
         mimeType:
           type: string
         name:
@@ -15528,8 +15840,13 @@ components:
       properties:
         conversationId:
           type: string
+        id:
+          type: string
         messageId:
           type: string
+        order:
+          format: int64
+          type: integer
         revision:
           format: int64
           type: integer
@@ -15540,6 +15857,64 @@ components:
       - messageId
       - revision
       - text
+      type: object
+    ConversationFileReferenceRequest:
+      properties:
+        commitSha:
+          type: string
+        endLine:
+          type: integer
+        endSide:
+          enum:
+          - file
+          - old
+          - new
+          type: string
+        fileFingerprint:
+          type: string
+        hostId:
+          type: string
+        id:
+          type: string
+        line:
+          type: integer
+        lines:
+          items:
+            $ref: '#/components/schemas/ChatFileReferenceLine'
+          type: array
+        order:
+          format: int64
+          type: integer
+        path:
+          type: string
+        previousPath:
+          type: string
+        scope:
+          type: string
+        sessionId:
+          type: string
+        side:
+          enum:
+          - file
+          - old
+          - new
+          type: string
+        source:
+          $ref: '#/components/schemas/ChatFileReferenceSource'
+        truncated:
+          type: boolean
+        workspaceVersion:
+          type: string
+      required:
+      - id
+      - sessionId
+      - path
+      - source
+      - side
+      - line
+      - endLine
+      - lines
+      - truncated
       type: object
     ConversationImageContentRequest:
       properties:
@@ -15682,6 +16057,8 @@ components:
       properties:
         explanation:
           type: string
+        spansTurns:
+          type: boolean
         steps:
           items:
             $ref: '#/components/schemas/ConversationPlanStepResponse'
@@ -15757,6 +16134,38 @@ components:
       required:
       - uri
       - name
+      type: object
+    ConversationSearchHitResponse:
+      properties:
+        messageId:
+          type: string
+        projectId:
+          type: string
+        reviewId:
+          type: string
+        sessionId:
+          type: string
+        text:
+          description: A passage of the message, with each match wrapped in U+0002
+            and U+0003.
+          type: string
+        title:
+          type: string
+      required:
+      - messageId
+      - sessionId
+      - projectId
+      - title
+      - text
+      type: object
+    ConversationSearchResponse:
+      properties:
+        results:
+          items:
+            $ref: '#/components/schemas/ConversationSearchHitResponse'
+          type: array
+      required:
+      - results
       type: object
     ConversationSkillResponse:
       properties:
@@ -15857,6 +16266,8 @@ components:
         settings:
           $ref: '#/components/schemas/ConversationTurnSettingsPayload'
         supportsExcerpts:
+          type: boolean
+        supportsFileReferences:
           type: boolean
         threadState:
           $ref: '#/components/schemas/ConversationThreadStatePayload'
@@ -16040,6 +16451,8 @@ components:
           type: string
         displayName:
           type: string
+        effort:
+          type: string
         enabled:
           type:
           - "null"
@@ -16050,6 +16463,10 @@ components:
           enum:
           - worker
           - orchestrator
+          type: string
+        mode:
+          type: string
+        model:
           type: string
         projectId:
           type: string
@@ -17282,6 +17699,10 @@ components:
       type: object
     ListSessionsResponse:
       properties:
+        archived:
+          $ref: '#/components/schemas/SessionArchiveSummary'
+        nextCursor:
+          type: string
         sessions:
           items:
             $ref: '#/components/schemas/ControllersSessionView'
@@ -17477,8 +17898,6 @@ components:
         live:
           description: True when the phone's app is open and polling.
           type: boolean
-        muted:
-          type: boolean
         notificationsEnabled:
           description: True when this device has a push token registered.
           type: boolean
@@ -17491,7 +17910,6 @@ components:
           type: string
       required:
       - installId
-      - muted
       - live
       - notificationsEnabled
       - createdAt
@@ -17591,14 +18009,6 @@ components:
       - hostname
       - location
       - lastError
-      type: object
-    MuteDeviceRequest:
-      properties:
-        muted:
-          description: True to stop sending push notifications to this device.
-          type: boolean
-      required:
-      - muted
       type: object
     NotificationEnvelope:
       properties:
@@ -18379,6 +18789,32 @@ components:
       required:
       - action
       type: object
+    ResolveFileReferenceResponse:
+      properties:
+        endLine:
+          type: integer
+        line:
+          type: integer
+        newLineOffset:
+          type: integer
+        oldLineOffset:
+          type: integer
+        path:
+          type: string
+        reason:
+          type: string
+        side:
+          type: string
+        state:
+          enum:
+          - unchanged
+          - changed
+          - unavailable
+          - moved
+          type: string
+      required:
+      - state
+      type: object
     RestoreArtifactVersionRequest:
       properties:
         path:
@@ -18602,6 +19038,10 @@ components:
           items:
             $ref: '#/components/schemas/ConversationExcerptReferenceRequest'
           type: array
+        fileReferences:
+          items:
+            $ref: '#/components/schemas/ConversationFileReferenceRequest'
+          type: array
         resources:
           items:
             $ref: '#/components/schemas/ConversationResourceContentRequest'
@@ -18698,6 +19138,20 @@ components:
           type: string
         codex:
           type: string
+      type: object
+    SessionArchiveSummary:
+      properties:
+        byProject:
+          additionalProperties:
+            type: integer
+          type:
+          - object
+          - "null"
+        total:
+          type: integer
+      required:
+      - total
+      - byProject
       type: object
     SessionArtifact:
       properties:
@@ -20741,6 +21195,8 @@ components:
           type: string
         githubLogin:
           type: string
+        installId:
+          type: string
         optedOut:
           type: boolean
       required:
@@ -20907,6 +21363,10 @@ components:
           type:
           - "null"
           - string
+        effort:
+          type:
+          - "null"
+          - string
         enabled:
           type:
           - "null"
@@ -20919,6 +21379,14 @@ components:
           enum:
           - worker
           - orchestrator
+          type:
+          - "null"
+          - string
+        mode:
+          type:
+          - "null"
+          - string
+        model:
           type:
           - "null"
           - string
@@ -21296,6 +21764,29 @@ components:
       - author
       - timestamp
       - files
+      type: object
+    WorkspaceContentSearchHitResponse:
+      properties:
+        line:
+          type: integer
+        path:
+          type: string
+        text:
+          description: The line, with each match wrapped in U+0002 and U+0003.
+          type: string
+      required:
+      - path
+      - line
+      - text
+      type: object
+    WorkspaceContentSearchResponse:
+      properties:
+        results:
+          items:
+            $ref: '#/components/schemas/WorkspaceContentSearchHitResponse'
+          type: array
+      required:
+      - results
       type: object
     WorkspaceDiffDeferredResponse:
       properties:

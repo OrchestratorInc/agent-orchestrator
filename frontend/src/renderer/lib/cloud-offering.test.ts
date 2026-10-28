@@ -88,6 +88,18 @@ describe("resolveCloudOffering", () => {
 		expect(resolveCloudOffering(legacy)?.customCoder).toBe(false);
 	});
 
+	it("reads artifacts from the server, off for a control plane that does not say", () => {
+		const me = (artifacts?: boolean): CloudCpMeResponse => ({
+			user, organizations: [org("o1")],
+			offering: offering({ providers: ["freestyle"], defaultProvider: "freestyle", kind: "b2c", artifacts }),
+		});
+		expect(resolveCloudOffering(me(true))?.artifacts).toBe(true);
+		expect(resolveCloudOffering(me(false))?.artifacts).toBe(false);
+		expect(resolveCloudOffering(me(undefined))?.artifacts).toBe(false);
+		const legacy: CloudCpMeResponse = { user, organizations: [org("o1")], sandboxProviders: { available: ["freestyle"], default: "freestyle" } };
+		expect(resolveCloudOffering(legacy)?.artifacts).toBe(false);
+	});
+
 	it("reads coderWorkerWorkingFolder from the server, and as off from an older control plane", () => {
 		const generic = (coderWorkerWorkingFolder?: boolean): CloudCpMeResponse => ({
 			user, organizations: [org("o1")],

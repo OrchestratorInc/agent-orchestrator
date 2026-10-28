@@ -191,6 +191,22 @@ type ChatRunner interface {
 // reusing the bootstrap command would start a fresh TUI after ChatUI work.
 type AgentCommandFactory func(context.Context, string, string, string) (workerexec.Command, error)
 
+// modelDiscoveryCommand is the coding agent's command a model catalog is read
+// with: the running agent's, or one built like it (binary, config home and
+// credential) when none has started yet, as in a Chat session before its
+// first turn.
+func (s *Supervisor) modelDiscoveryCommand(ctx context.Context, nativeID, selectedModel, selectedEffort string) (workerexec.Command, error) {
+	s.mu.Lock()
+	command := s.AgentCommand
+	s.mu.Unlock()
+	if command.Path != "" || s.AgentCommandFactory == nil {
+		// Only the builder's Cleanup belongs to this request.
+		command.Cleanup = nil
+		return command, nil
+	}
+	return s.AgentCommandFactory(ctx, nativeID, selectedModel, selectedEffort)
+}
+
 // chatActivity is implemented by the durable headless controller. Keeping it
 // optional preserves the runner boundary for alternate worker implementations
 // while allowing a real Chat turn to drain before a TUI handoff begins.
@@ -365,6 +381,12 @@ type terminalProcess struct {
 	// stream redial must continue its sequence so direct relay frames and the
 	// durable replay log use the same cursor.
 	outputID atomic.Int64
+	// outputMu keeps output publication in cursor order across the stream and
+	// its HTTP fallback, including resends of unacknowledged stream frames.
+	outputMu sync.Mutex
+	// sizeMu serializes PTY size changes so a repaint's nudge cannot restore a
+	// size that a concurrent resize just replaced.
+	sizeMu sync.Mutex
 	// input tracks whether the interactive agent takes the turns the worker types
 	// into it (agent terminals only; see agent_input.go).
 	input agentInput
@@ -842,14 +864,12 @@ func (s *Supervisor) handle(
 		} else if s.Harness == "claude-code" {
 			nativeID := s.nativeConversationID(ctx, interfacePayload{})
 			s.mu.Lock()
-			command := s.AgentCommand
 			selectedModel, selectedEffort, selectionAt := s.SelectedModel, s.SelectedEffort, s.SelectionAt
 			s.mu.Unlock()
-			if command.Path == "" && s.AgentCommandFactory != nil {
-				command, err = s.AgentCommandFactory(ctx, nativeID, selectedModel, selectedEffort)
-				if err == nil && command.Cleanup != nil {
-					defer command.Cleanup()
-				}
+			var command workerexec.Command
+			command, err = s.modelDiscoveryCommand(ctx, nativeID, selectedModel, selectedEffort)
+			if err == nil && command.Cleanup != nil {
+				defer command.Cleanup()
 			}
 			var models []worker.ChatModel
 			var nativeModel, nativeEffort string
@@ -875,13 +895,21 @@ func (s *Supervisor) handle(
 				}
 			}
 		} else {
+			nativeID := s.nativeConversationID(ctx, interfacePayload{})
+			s.mu.Lock()
+			selectedModel, selectedEffort, selectionAt := s.SelectedModel, s.SelectedEffort, s.SelectionAt
+			s.mu.Unlock()
 			var models []worker.ChatModel
-			models, err = workerexec.DiscoverCodexModels(ctx, "codex", s.Workspace)
+			var command workerexec.Command
+			command, err = s.modelDiscoveryCommand(ctx, nativeID, selectedModel, selectedEffort)
+			if err == nil && command.Cleanup != nil {
+				defer command.Cleanup()
+			}
 			if err == nil {
-				s.mu.Lock()
-				selectedModel, selectedEffort, selectionAt := s.SelectedModel, s.SelectedEffort, s.SelectionAt
-				s.mu.Unlock()
-				model, effort, settingsErr := workerexec.CodexConversationSettingsAfter(s.DataDir, s.nativeConversationID(ctx, interfacePayload{}), selectionAt)
+				models, err = workerexec.DiscoverCodexModels(ctx, command)
+			}
+			if err == nil {
+				model, effort, settingsErr := workerexec.CodexConversationSettingsAfter(s.DataDir, nativeID, selectionAt)
 				if settingsErr != nil {
 					err = settingsErr
 				} else {
@@ -934,7 +962,10 @@ func (s *Supervisor) handle(
 	case "terminal.resize":
 		var input worker.TerminalCommand
 		err = decodePayload(request.Payload, &input)
-		if err == nil {
+		if err == nil && input.Repaint && input.Columns == 0 && input.Rows == 0 {
+			err = s.repaintTerminal(input.TerminalID)
+			response = map[string]bool{"repainted": err == nil}
+		} else if err == nil {
 			err = s.resizeTerminal(input)
 			response = map[string]bool{"resized": err == nil}
 		}
@@ -1233,13 +1264,7 @@ func (s *Supervisor) copyTerminalOutput(
 				clearPreviousDisplay = false
 			}
 			id := terminal.outputID.Add(1)
-			if stream := terminal.stream.Load(); stream != nil && stream.sendOutput(id, data) {
-				// Sent over the persistent stream. The control plane acknowledges it
-				// after its durable mirror has accepted the same sequence.
-			} else if outputErr := s.Control.PublishTerminalOutput(ctx, terminalID, id, data); outputErr != nil &&
-				ctx.Err() == nil {
-				s.Logger.Warn("publish terminal output", "error", outputErr, "terminal_id", terminalID)
-			}
+			s.publishTerminalOutput(ctx, terminalID, terminal, id, data)
 		}
 		if err != nil {
 			return
@@ -1314,10 +1339,56 @@ func (s *Supervisor) resizeTerminal(input worker.TerminalCommand) error {
 	if terminal == nil {
 		return errors.New("terminal is not open")
 	}
+	terminal.sizeMu.Lock()
+	defer terminal.sizeMu.Unlock()
 	return pty.Setsize(terminal.pty, &pty.Winsize{
 		Cols: input.Columns,
 		Rows: input.Rows,
 	})
+}
+
+// terminalRepaintNudge is how long a repaint holds the off-by-one width
+// before restoring the real one, so a program that reads the size some time
+// after the signal sees a change rather than a size it may treat as unchanged.
+const terminalRepaintNudge = 50 * time.Millisecond
+
+// repaintTerminal makes the terminal's program redraw its screen, for a viewer
+// whose replay skipped output. A program redraws on SIGWINCH, but neither the
+// kernel nor dtach signals a resize to the size the PTY already has, so the
+// width steps one column away and back. A full-screen program repaints; a
+// line-mode shell at most redraws its prompt.
+func (s *Supervisor) repaintTerminal(terminalID string) error {
+	if terminalID == "" {
+		return errors.New("invalid terminal repaint request")
+	}
+	s.mu.Lock()
+	if s.agentStarting && terminalID == s.AgentTerminalID {
+		// The agent has not drawn anything yet; its first frame is complete.
+		s.mu.Unlock()
+		return nil
+	}
+	terminal := s.terminals[terminalID]
+	s.mu.Unlock()
+	if terminal == nil {
+		return errors.New("terminal is not open")
+	}
+	terminal.sizeMu.Lock()
+	defer terminal.sizeMu.Unlock()
+	size, err := pty.GetsizeFull(terminal.pty)
+	if err != nil {
+		return err
+	}
+	nudged := *size
+	if nudged.Cols > 1 {
+		nudged.Cols--
+	} else {
+		nudged.Cols++
+	}
+	if err := pty.Setsize(terminal.pty, &nudged); err != nil {
+		return err
+	}
+	time.Sleep(terminalRepaintNudge)
+	return pty.Setsize(terminal.pty, size)
 }
 
 // flushReadyAgentTerminal delivers the input and viewport collected while the
@@ -1512,6 +1583,10 @@ func transportError(err error) (string, string) {
 		return "WORKSPACE_PERMISSION_DENIED", "The worker denied access to the workspace path."
 	case errors.Is(err, workerexec.ErrChatAdapterInstalling):
 		return "CHAT_ADAPTER_INSTALLING", "Setting up Chat UI on this workspace. Try again in a minute."
+	case errors.Is(err, exec.ErrNotFound):
+		// The coding agent is not on the workspace yet: a template that installs
+		// its tools in the background, or the worker's own install still running.
+		return "CHAT_AGENT_INSTALLING", "Setting up the coding agent on this workspace. Try again in a minute."
 	case errors.Is(err, workerexec.ErrChatAdapterUnavailable):
 		return "CHAT_ADAPTER_UNAVAILABLE", "Chat UI for Claude needs the Claude ACP adapter (@agentclientprotocol/claude-agent-acp) on this workspace, and AO could not install it. Install it in the workspace template, or use the terminal."
 	default:

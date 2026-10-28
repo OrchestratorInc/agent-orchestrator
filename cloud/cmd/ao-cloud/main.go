@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/activity"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/analytics"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/artifactstore"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/auth"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/billing"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/cifeedback"
@@ -211,6 +212,7 @@ func reconcilerOptions(
 		Interval:               cfg.ReconcileInterval,
 		StartupTimeout:         cfg.SandboxStartupTimeout,
 		HeartbeatTimeout:       cfg.WorkerHeartbeatTimeout,
+		WorkerCheckInTimeout:   cfg.WorkerCheckInTimeout,
 		AllowAnonymousCheckout: cfg.AllowAnonymousCheckout,
 		KeepWarm:               cfg.KeepWarm(),
 		Logger:                 logger,
@@ -501,6 +503,24 @@ func run(logger *slog.Logger) error {
 			break
 		}
 	}
+	var artifacts *artifactstore.Store
+	if cfg.ArtifactsEnabled {
+		artifacts, err = artifactstore.New(ctx, artifactstore.Config{
+			Bucket:   cfg.ArtifactBucket,
+			Region:   cfg.ArtifactRegion,
+			Endpoint: cfg.ArtifactEndpoint,
+		})
+		if err != nil {
+			return fmt.Errorf("build artifact store: %w", err)
+		}
+		logger.Info("cloud artifacts enabled", "bucket", cfg.ArtifactBucket, "region", cfg.ArtifactRegion)
+		go artifactstore.RunSweeper(ctx, store, artifacts, artifactstore.DefaultSweepInterval, logger)
+	}
+	var artifactShares *httpapi.ArtifactShareOptions
+	if cfg.ArtifactSharesEnabled {
+		artifactShares = &httpapi.ArtifactShareOptions{Origin: cfg.ArtifactShareOrigin, Limit: cfg.ArtifactShareLimit}
+		logger.Info("artifact share links enabled", "origin", cfg.ArtifactShareOrigin, "limit", cfg.ArtifactShareLimit)
+	}
 	apiOptions := httpapi.Options{
 		Store:                     store,
 		CoderTemplates:            coderTemplates,
@@ -535,9 +555,12 @@ func run(logger *slog.Logger) error {
 		TerminalRelayEnabled:      cfg.TerminalRelayEnabled,
 		NotificationWake:          notificationProcessor.Wake,
 		// Off unless AO_CLOUD_POSTHOG_KEY is set.
-		Analytics:    analytics.NewPostHog(os.Getenv("AO_CLOUD_POSTHOG_KEY"), posthogHost(), cfg.Environment, nil, logger),
-		Activity:     activityRecorder,
-		SupportToken: cfg.SupportToken,
+		Analytics:            analytics.NewPostHog(os.Getenv("AO_CLOUD_POSTHOG_KEY"), posthogHost(), cfg.Environment, nil, logger),
+		Activity:             activityRecorder,
+		SupportToken:         cfg.SupportToken,
+		Artifacts:            artifacts,
+		ArtifactAccessSecret: cfg.ProviderSecretKey,
+		ArtifactShares:       artifactShares,
 	}
 	if cfg.Environment == "development" &&
 		os.Getenv("AO_CLOUD_DEVELOPMENT_SKIP_CREDENTIAL_VALIDATION") == "true" {
@@ -586,6 +609,7 @@ func run(logger *slog.Logger) error {
 	go notificationProcessor.Run(ctx)
 	feedbackDispatcher := cifeedback.New(store, cifeedback.Config{Logger: logger})
 	go feedbackDispatcher.Run(ctx)
+	go sweepComposerLeases(ctx, store, logger)
 	if cfg.TerminalRelayEnabled {
 		logger.Info("experimental terminal relay enabled",
 			"terminal_stream_enabled", cfg.TerminalStreamEnabled,
@@ -598,6 +622,9 @@ func run(logger *slog.Logger) error {
 		notifyListener := postgres.NewListener(cfg.DatabaseURL, logger)
 		notifyListener.Handle("ao_worker_work", api.HandleWorkerWorkNotify)
 		notifyListener.Handle("ao_notification_event", api.HandleNotificationEventNotify)
+		notifyListener.Handle("ao_session_event", api.HandleSessionEventNotify)
+		notifyListener.Handle("ao_session_live", api.HandleSessionLiveNotify)
+		api.EnableSessionEventNotify()
 		// Any path that asks a sandbox to run again (resume, a message to a
 		// paused session, a restore) starts provisioning now, not at the next tick.
 		notifyListener.Handle("ao_sandbox_wake", func(string) { reconciler.Wake() })
@@ -628,6 +655,7 @@ func run(logger *slog.Logger) error {
 				"interval", cfg.ReconcileInterval,
 				"startup_timeout", cfg.SandboxStartupTimeout,
 				"heartbeat_timeout", cfg.WorkerHeartbeatTimeout,
+				"checkin_timeout", cfg.WorkerCheckInTimeout,
 			)
 			if err := reconciler.Run(ctx); err != nil {
 				logger.Error("sandbox reconciler stopped", "error", err)
@@ -711,4 +739,22 @@ func posthogHost() string {
 		return host
 	}
 	return "https://us.i.posthog.com"
+}
+
+// sweepComposerLeases hands on shared-session composer leases whose grant
+// expired, so everyone sees the composer free, or passed to the next person
+// in line, within a couple of seconds of a holder going quiet.
+func sweepComposerLeases(ctx context.Context, store *postgres.Store, logger *slog.Logger) {
+	ticker := time.NewTicker(postgres.ComposerSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := store.SweepComposerLeases(ctx); err != nil && ctx.Err() == nil {
+				logger.Warn("sweep composer leases", "error", err)
+			}
+		}
+	}
 }

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
+import { useUiStore } from "../../stores/ui-store";
 import { ActivityTitle, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
@@ -790,6 +791,66 @@ describe("ChatMarkdown code highlighting", () => {
 });
 
 
+describe("ChatMarkdown block streaming", () => {
+	it.each([
+		["```text\nprint( ", "print( "],
+		["~~~text\n**literal ", "**literal "],
+		["    **literal", "**literal"],
+		["- item\n\n      **literal", "**literal"],
+		[">     **literal", "**literal"],
+		["[ref]: https://example.com\n\n    **literal", "**literal"],
+	])("preserves streamed code source: %s", (text, code) => {
+		const { container } = render(<ChatMarkdown text={text} streaming />);
+		expect(container.querySelector("pre")?.textContent).toBe(code);
+	});
+
+	it("repairs incomplete inline formatting for display only and keeps partial links inert", () => {
+		const { container, rerender } = render(<ChatMarkdown text="Some **unfinished" streaming />);
+		expect(container.querySelector("strong")).toHaveTextContent("unfinished");
+		rerender(<ChatMarkdown text="Some **unfinished" />);
+		expect(container.querySelector("strong")).toBeNull();
+		expect(container.textContent).toBe("Some **unfinished");
+		rerender(<ChatMarkdown text="See [docs](https://exam" streaming />);
+		expect(container.querySelector("a")).toBeNull();
+		expect(container.textContent).toBe("See docs");
+	});
+
+	it("leaves open fences literal and highlights a completed fence before the reply ends", async () => {
+		const code = 'const literal = "**unfinished";';
+		const fence = "```js\n" + code;
+		const { container, rerender } = render(<ChatMarkdown text={fence} streaming />);
+		expect(container.querySelector("pre")?.textContent).toBe(code);
+		rerender(<ChatMarkdown text={fence + "\n```\n\nMore prose"} streaming />);
+		await waitFor(() => expect(container.querySelector("pre .hljs-keyword")).toBeInTheDocument());
+		expect(container.querySelector("pre")?.textContent).toBe(code);
+	});
+
+	it("resolves late reference definitions and keeps footnote IDs document-wide", () => {
+		const text = "First [docs][ref]\n\nSecond\n\nThird";
+		const { container, rerender } = render(<ChatMarkdown text={text} streaming />);
+		rerender(<ChatMarkdown text={text + "\n\n[ref]: https://example.com/docs"} streaming />);
+		expect(screen.getByRole("link", { name: "docs" })).toHaveAttribute("href", "https://example.com/docs");
+		rerender(<ChatMarkdown text={"First[^a]\n\nSecond[^b]\n\n[^a]: Alpha\n\n[^b]: Beta"} />);
+		const ids = [...container.querySelectorAll("[id]")].map((node) => node.id);
+		expect(new Set(ids).size).toBe(ids.length);
+		expect(container.textContent).toContain("Alpha");
+		expect(container.textContent).toContain("Beta");
+	});
+
+	it("keeps source-relative fade offsets when a chat opens across several blocks", () => {
+		const text = "First\n\nSecond\n\nAlready visible";
+		const view = (source: string) => <ChatOpeningRef.Provider value={{ current: true }}><ChatMarkdown text={source} streaming /></ChatOpeningRef.Provider>;
+		const { container, rerender } = render(view(text));
+		expect(container.querySelectorAll(".stream-char")).toHaveLength(0);
+		rerender(view(text + " new"));
+		expect(container.querySelectorAll(".stream-char")).toHaveLength(4);
+		const first = container.querySelector("p");
+		rerender(view(text + " new\n\nTail"));
+		expect(container.querySelector("p")).toBe(first);
+	});
+});
+
+
 describe("ActivityTitle", () => {
 	it("keeps code delimiters inside multi-backtick code spans", () => {
 		const { container } = render(<ActivityTitle text={"Edit ``file`name.ts``"} />);
@@ -888,5 +949,47 @@ describe("ChatMarkdown streaming fade", () => {
 			</ChatLinkProvider>,
 		);
 		expect(screen.getByRole("link")).toHaveTextContent("docs");
+	});
+});
+
+describe("ChatMarkdown math", () => {
+	afterEach(() => useUiStore.setState({ renderMath: false }));
+
+	it("stops repairing a paused stream's prose once math turns it into a formula", async () => {
+		// With math off, `$a~b$` is prose, and streaming repair escapes its `~`.
+		const { container } = render(<ChatMarkdown text="Paused at $a~b$" streaming />);
+		act(() => useUiStore.setState({ renderMath: true }));
+		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());
+		expect(container.querySelector("[data-tex]")).toHaveAttribute("data-tex", "a~b");
+	});
+
+	it("leaves dollar signs as text while the setting is off", () => {
+		const { container } = render(<ChatMarkdown text="Costs $5 and $10, or $x^2$." />);
+		expect(container).toHaveTextContent("Costs $5 and $10, or $x^2$.");
+		expect(container.querySelector("[data-math]")).toBeNull();
+	});
+
+	it("typesets inline and display formulas in every delimiter when on", async () => {
+		useUiStore.setState({ renderMath: true });
+		const { container } = render(
+			<ChatMarkdown text={"Euler $e^{i\\pi}+1=0$ and \\(x^2\\).\n\n\\[\n\\int_0^1 x\\,dx\n\\]\n\n$$\nE=mc^2\n$$"} />,
+		);
+		await waitFor(() => expect(container.querySelectorAll('[data-math="inline"] .katex')).toHaveLength(2));
+		expect(container.querySelectorAll('[data-math="display"] .katex-display')).toHaveLength(2);
+		expect(container).not.toHaveTextContent("\\(");
+	});
+
+	it("typesets a ```math fence without the setting", async () => {
+		const { container } = render(<ChatMarkdown text={"```math\na^2+b^2=c^2\n```"} />);
+		await waitFor(() => expect(container.querySelector('[data-math="display"] .katex-display')).not.toBeNull());
+		expect(container.querySelector("pre")).toBeNull();
+	});
+
+	it("shows the TeX source when KaTeX cannot parse it", async () => {
+		useUiStore.setState({ renderMath: true });
+		const { container } = render(<ChatMarkdown text={"Try $\\notacommand{x}$ and $y$."} />);
+		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());
+		expect(container.querySelectorAll('[data-math="inline"] .katex')).toHaveLength(1);
+		expect(container).toHaveTextContent("$\\notacommand{x}$");
 	});
 });
