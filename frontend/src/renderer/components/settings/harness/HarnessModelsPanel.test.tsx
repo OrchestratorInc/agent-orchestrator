@@ -10,9 +10,9 @@ vi.mock("../../../hooks/useSettings", () => ({
 	useUpdateHarnessDefault: () => ({ update, error: undefined }),
 }));
 vi.mock("../../../hooks/useAgentModelsQuery", () => ({
-	agentModelsQueryOptions: () => ({
-		queryKey: ["agent-models", "cursor"],
-		queryFn: async () => ({
+	agentModelsQueryOptions: (agentId: string) => ({
+		queryKey: ["agent-models", agentId],
+		queryFn: async () => agentId === "strands" ? ({ selectionMode: "text", models: [], allowCustom: true, customModelEntry: "direct" }) : ({
 			models: [
 				{ id: "claude-opus-4-8-high", label: "Claude Opus 4.8 High", isDefault: true },
 				{ id: "claude-opus-4-8-thinking-high", label: "Claude Opus 4.8 High Thinking" },
@@ -23,6 +23,20 @@ vi.mock("../../../hooks/useAgentModelsQuery", () => ({
 }));
 
 describe("HarnessModelsPanel", () => {
+	it.each([false, true])("explains free-form model selection when login is required: %s", async (needsLogin) => {
+		const onOpenAccount = vi.fn();
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<HarnessModelsPanel agentId="strands" installed needsLogin={needsLogin} onOpenAccount={onOpenAccount} />
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByText(/Strands accepts model IDs/)).toBeInTheDocument();
+		expect(screen.queryByText("This harness reported no models.")).toBeNull();
+		expect(screen.queryByRole("list", { name: "Available models" })).toBeNull();
+		await userEvent.click(screen.getByRole("button", { name: "Account" }));
+		expect(onOpenAccount).toHaveBeenCalledOnce();
+	});
+
 	it("switches a Cursor model's variants together", async () => {
 		render(
 			<QueryClientProvider client={new QueryClient()}>

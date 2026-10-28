@@ -8,14 +8,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// AuthStatus reports only configuration, never provider authorization. Strands
-// has no safe noninteractive CLI auth-status command. Model modules may use
-// arbitrary credential sources, so their authentication remains unknown.
+// AuthStatus verifies supported native providers using the setup wizard's
+// authenticated catalog discovery. Unsupported or inconclusive routes retain
+// configuration evidence, and custom model modules remain unknown.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	if _, err := p.ResolveBinary(ctx); err != nil {
+	binary, err := p.ResolveBinary(ctx)
+	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
 	cfg, _, err := readNativeConfig(ctx)
@@ -24,6 +25,12 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	}
 	if cfg.AgentProject != "" || len(cfg.Profile.ModelModule) > 0 && string(cfg.Profile.ModelModule) != "null" {
 		return ports.AgentAuthStatusUnknown, nil
+	}
+	if status, err := probeNativeAuthentication(ctx, binary); err == nil {
+		return status, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return ports.AgentAuthStatusUnknown, err
 	}
 	provider, _, hasPrefix := strings.Cut(cfg.Profile.Model, "/")
 	if !hasPrefix {
