@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseTelemetryPolicyDiskRecord, telemetryPolicyRetryable, telemetryPolicySnapshot, type TelemetryPolicyDiskRecord, type TelemetryPolicyView } from "./telemetry-policy";
+import { AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED, parseTelemetryPolicyDiskRecord, telemetryPolicyRetryable, telemetryPolicySnapshot, type TelemetryPolicyDiskRecord, type TelemetryPolicyView } from "./telemetry-policy";
 
 describe("telemetry policy wire record", () => {
+	it("opens the release gate for consented desktop error capture", () => {
+		expect(AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED).toBe(true);
+	});
 	it("accepts only the exact snake_case versioned record", () => {
 		expect(parseTelemetryPolicyDiskRecord(JSON.stringify({
 			schema_version: 2,

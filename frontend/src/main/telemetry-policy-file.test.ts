@@ -30,7 +30,7 @@ describe("TelemetryPolicyAuthority", () => {
 			schema_version: 2,
 			events_enabled: true,
 			consent_generation: snapshot.consentGeneration,
-			consent_production_enabled: false,
+			consent_production_enabled: true,
 			updated_at: snapshot.updatedAt,
 		});
 	});

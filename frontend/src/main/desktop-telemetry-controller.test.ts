@@ -73,9 +73,10 @@ describe("DesktopTelemetryController", () => {
 		try {
 			const enabledGeneration = "7f80c8a9-ec67-4a16-a067-a444ffcc5cca";
 			await writeFile(path.join(dataDir, "telemetry_policy.json"), `${JSON.stringify({
-				schema_version: 1,
+				schema_version: 2,
 				events_enabled: true,
 				consent_generation: enabledGeneration,
+				consent_production_enabled: true,
 				updated_at: "2026-08-28T10:15:30.000Z",
 			})}\n`, { mode: 0o600 });
 			let failDirectorySync = false;
