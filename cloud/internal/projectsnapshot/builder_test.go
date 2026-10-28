@@ -656,3 +656,117 @@ func TestWarmScriptReadsThroughAPipe(t *testing.T) {
 		t.Fatalf("warm script must stream tar through a pipe:\n%s", warmScript)
 	}
 }
+
+// leftoverVMs is fakeVMs that can find VMs by name (as Freestyle finds one by
+// slug) and fails the first deletes it is told to.
+type leftoverVMs struct {
+	fakeVMs
+	leftovers   map[string]bool
+	failDeletes int
+}
+
+func (f *leftoverVMs) Get(_ context.Context, id sandbox.ID) (sandbox.Environment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.leftovers[string(id)] {
+		return sandbox.Environment{}, sandbox.ErrNotFound
+	}
+	return sandbox.Environment{ID: id}, nil
+}
+
+func (f *leftoverVMs) Delete(ctx context.Context, id sandbox.ID) error {
+	f.mu.Lock()
+	if f.failDeletes > 0 {
+		f.failDeletes--
+		f.mu.Unlock()
+		return errors.New("provider unavailable")
+	}
+	delete(f.leftovers, string(id))
+	f.mu.Unlock()
+	return f.fakeVMs.Delete(ctx, id)
+}
+
+// keyedStore is fakeStore that lists the repository snapshots on record.
+type keyedStore struct {
+	*fakeStore
+	keys []domain.RepositorySandboxSnapshot
+}
+
+func (f *keyedStore) RepositorySandboxSnapshotKeys(context.Context, string) ([]domain.RepositorySandboxSnapshot, error) {
+	return f.keys, nil
+}
+
+// A builder VM holds a clone of a private repository, so a failed delete is
+// retried, and one still left behind is found by its name and deleted before
+// the next build of the same snapshot and by the collector's sweep.
+func TestBuilderAndWarmingVMsAreNeverLeftBehind(t *testing.T) {
+	previous := deleteRetryDelays
+	deleteRetryDelays = []time.Duration{time.Millisecond, time.Millisecond}
+	t.Cleanup(func() { deleteRetryDelays = previous })
+
+	r := request()
+	buildName, warmName := vmName("build", r.key()), vmName("warm", r.key())
+	if !strings.HasPrefix(buildName, "ao-snapshot-build-") || len(buildName) > 63 || buildName == warmName {
+		t.Fatalf("VM names %q and %q must be distinct, short, slug-safe", buildName, warmName)
+	}
+
+	// A delete that fails twice still succeeds on its last retry.
+	vms := &leftoverVMs{leftovers: map[string]bool{}, failDeletes: 2}
+	builder := New(Config{
+		Provider: sandbox.ProviderFreestyle, VMs: vms, Store: &fakeStore{},
+		Grants: fakeGrants{token: "ghs_secret"},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	builder.Ensure(r)
+	waitIdle(t, builder)
+	if len(vms.created) != 1 || vms.created[0].Name != buildName || len(vms.deleted) != 1 {
+		t.Fatalf("created %+v, deleted %v: want the named builder VM deleted after retries", vms.created, vms.deleted)
+	}
+
+	// A builder VM an earlier build left behind is deleted before the next one.
+	vms = &leftoverVMs{leftovers: map[string]bool{buildName: true}}
+	builder = New(Config{
+		Provider: sandbox.ProviderFreestyle, VMs: vms, Store: &fakeStore{},
+		Grants: fakeGrants{token: "ghs_secret"},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	builder.Ensure(r)
+	waitIdle(t, builder)
+	if vms.leftovers[buildName] || len(vms.deleted) != 2 || vms.deleted[0] != sandbox.ID(buildName) {
+		t.Fatalf("deleted %v: want the leftover builder VM deleted first", vms.deleted)
+	}
+
+	// The collector's sweep deletes leftovers for every snapshot on record and
+	// the harnesses' warming VMs.
+	baseWarm := vmName("warm", "base/claude-code")
+	vms = &leftoverVMs{leftovers: map[string]bool{buildName: true, warmName: true, baseWarm: true}}
+	store := &keyedStore{fakeStore: &fakeStore{}, keys: []domain.RepositorySandboxSnapshot{
+		{OrgID: r.OrgID, RepositoryKey: r.RepositoryKey, Harness: r.Harness},
+	}}
+	New(Config{
+		Provider: sandbox.ProviderFreestyle, VMs: vms, Store: store, BaseHarnesses: []string{"claude-code"},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}).Collect(context.Background())
+	if len(vms.leftovers) != 0 {
+		t.Fatalf("leftover VMs %v survived the sweep", vms.leftovers)
+	}
+}
+
+// A warming VM of a repository snapshot is labelled with its organization and
+// project, like the builder VM, since it holds a copy of the repository.
+func TestARepositorySnapshotsWarmingVMIsLabelled(t *testing.T) {
+	vms, store := &fakeVMs{}, &fakeStore{}
+	builder := New(Config{
+		Provider: sandbox.ProviderFreestyle, VMs: vms, Store: store,
+		Grants: fakeGrants{token: "ghs_secret"}, WarmSnapshots: true,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	r := request()
+	builder.Ensure(r)
+	waitIdle(t, builder)
+	warming := warmingVMs(t, vms, 1)
+	if warming[0].Labels["ao.org_id"] != r.OrgID || warming[0].Labels["ao.project_id"] != r.ProjectID ||
+		warming[0].Name != vmName("warm", r.key()) {
+		t.Fatalf("warming VM = %+v, want it named after the snapshot and labelled with its org and project", warming[0])
+	}
+}

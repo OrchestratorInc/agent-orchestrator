@@ -319,3 +319,32 @@ func (s *Store) RecentRepositorySandboxSnapshots(
 	}
 	return refreshes, nil
 }
+
+// RepositorySandboxSnapshotKeys lists every repository snapshot on provider,
+// across organizations, for the collector's sweep of builder and warming VMs
+// a failed delete left behind (they are named after the snapshot's key).
+func (s *Store) RepositorySandboxSnapshotKeys(ctx context.Context, provider string) ([]domain.RepositorySandboxSnapshot, error) {
+	var keys []domain.RepositorySandboxSnapshot
+	err := s.withService(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT org_id::text, repository_key, harness
+			FROM ao_repository_sandbox_snapshots
+			WHERE provider = $1 AND repository_key NOT LIKE $2`,
+			provider, retiredRepositorySnapshotKeyPrefix+"%")
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			key := domain.RepositorySandboxSnapshot{Provider: provider}
+			if err := rows.Scan(&key.OrgID, &key.RepositoryKey, &key.Harness); err != nil {
+				return err
+			}
+			keys = append(keys, key)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list repository snapshot keys: %w", err)
+	}
+	return keys, nil
+}

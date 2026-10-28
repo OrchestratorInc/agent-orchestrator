@@ -187,6 +187,11 @@ func (c *Client) create(ctx context.Context, spec sandbox.Spec, snapshot string)
 	}
 	if spec.SessionID != "" {
 		body.Slug = SlugFor(spec.SessionID)
+	} else if name := strings.ToLower(strings.TrimSpace(spec.Name)); name != "" {
+		// A VM with no session (a project snapshot builder or warming VM) is
+		// named by its caller, so one a failed delete left behind can be found
+		// again by name.
+		body.Slug = name
 	}
 	if spec.AutoPauseSeconds > 0 {
 		idle := spec.AutoPauseSeconds

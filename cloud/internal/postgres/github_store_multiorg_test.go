@@ -549,6 +549,19 @@ func TestProjectGitHubCheckoutContextForASnapshotBuild(t *testing.T) {
 	if !found {
 		t.Fatalf("recent snapshots %+v, want %s with project %s", recent, key, projectID)
 	}
+	// The collector's sweep lists every snapshot on record, under row-level
+	// security too.
+	keys, err := appStore.RepositorySandboxSnapshotKeys(ctx, "freestyle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := false
+	for _, candidate := range keys {
+		listed = listed || (candidate.RepositoryKey == key && candidate.OrgID == fixture.orgID && candidate.Harness == "claude-code")
+	}
+	if !listed {
+		t.Fatalf("snapshot keys %+v, want %s", keys, key)
+	}
 
 	if _, err := admin.Exec(ctx, `UPDATE ao_projects SET archived_at = now() WHERE id = $1`, projectID); err != nil {
 		t.Fatal(err)

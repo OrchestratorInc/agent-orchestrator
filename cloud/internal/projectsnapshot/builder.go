@@ -14,6 +14,8 @@ package projectsnapshot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -286,7 +288,9 @@ func (b *Builder) start(request Request) bool {
 			"snapshot_id", snapshotID, "duration_ms", b.now().Sub(started).Milliseconds())
 		// Warmed apart from the build, so its slot is free for the next one.
 		if b.config.WarmSnapshots {
-			go b.warm(context.Background(), snapshotID, "project_id", request.ProjectID, "harness", request.Harness)
+			go b.warm(context.Background(), snapshotID, vmName("warm", request.key()),
+				map[string]string{"ao.org_id": request.OrgID, "ao.project_id": request.ProjectID},
+				"project_id", request.ProjectID, "harness", request.Harness)
 		}
 	}()
 	return true
@@ -308,7 +312,10 @@ func (b *Builder) build(ctx context.Context, request Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	name := vmName("build", request.key())
+	b.deleteLeftover(ctx, name)
 	environment, err := b.config.VMs.Create(ctx, sandbox.Spec{
+		Name:   name,
 		RootFS: request.BaseSnapshotID,
 		Labels: map[string]string{
 			"ao.org_id":     request.OrgID,
@@ -319,15 +326,10 @@ func (b *Builder) build(ctx context.Context, request Request) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create builder VM: %w", err)
 	}
-	defer func() {
-		// The builder VM is disposable whatever happened; never leak it. No
-		// session's worker ran in it, so there is no project Cleanup to run.
-		deleteCtx, cancel := context.WithTimeout(sandbox.WithoutCleanup(context.Background()), time.Minute)
-		defer cancel()
-		if err := b.config.VMs.Delete(deleteCtx, environment.ID); err != nil {
-			b.config.Logger.Warn("delete project snapshot builder VM", "provider_id", environment.ID, "error", err)
-		}
-	}()
+	// The builder VM holds a clone of the repository and is disposable
+	// whatever happened; never leak it. No session's worker ran in it, so
+	// there is no project Cleanup to run.
+	defer b.deleteVM(environment.ID, "purpose", "project-snapshot", "project_id", request.ProjectID)
 	env := map[string]string{"AO_CLONE_URL": cloneURL}
 	if token != "" {
 		env["AO_GIT_TOKEN"] = token
@@ -367,23 +369,22 @@ func (b *Builder) build(ctx context.Context, request Request) (string, error) {
 // The first boots from a freshly made snapshot are several seconds slower than
 // later ones (on staging: VM 2-3 s and worker start-to-connect 1.3-2.6 s, then
 // 0.5 s and 0.7 s), so a real session should not be the first.
-func (b *Builder) Warm(ctx context.Context, snapshotID string) error {
+//
+// name names the VM (see vmName) and labels identify whose snapshot it is: a
+// repository snapshot's warming VM holds a copy of that repository.
+func (b *Builder) Warm(ctx context.Context, snapshotID, name string, labels map[string]string) error {
 	ctx, cancel := context.WithTimeout(ctx, warmTimeout)
 	defer cancel()
-	environment, err := b.config.VMs.Create(ctx, sandbox.Spec{
-		RootFS: snapshotID,
-		Labels: map[string]string{"ao.purpose": "snapshot-warm"},
-	})
+	b.deleteLeftover(ctx, name)
+	all := map[string]string{"ao.purpose": "snapshot-warm"}
+	for key, value := range labels {
+		all[key] = value
+	}
+	environment, err := b.config.VMs.Create(ctx, sandbox.Spec{Name: name, RootFS: snapshotID, Labels: all})
 	if err != nil {
 		return fmt.Errorf("create warming VM: %w", err)
 	}
-	defer func() {
-		deleteCtx, cancel := context.WithTimeout(sandbox.WithoutCleanup(context.Background()), time.Minute)
-		defer cancel()
-		if err := b.config.VMs.Delete(deleteCtx, environment.ID); err != nil {
-			b.config.Logger.Warn("delete snapshot warming VM", "provider_id", environment.ID, "error", err)
-		}
-	}()
+	defer b.deleteVM(environment.ID, "purpose", "snapshot-warm", "snapshot_id", snapshotID)
 	if _, err := b.config.VMs.ExecRoot(ctx, environment.ID, warmScript, nil, warmTimeout); err != nil {
 		return fmt.Errorf("read the snapshot in the warming VM: %w", err)
 	}
@@ -392,10 +393,10 @@ func (b *Builder) Warm(ctx context.Context, snapshotID string) error {
 
 // warm runs Warm and logs the outcome; a failed warm only costs the next
 // session the slower first boot.
-func (b *Builder) warm(ctx context.Context, snapshotID string, attrs ...any) {
+func (b *Builder) warm(ctx context.Context, snapshotID, name string, labels map[string]string, attrs ...any) {
 	started := b.now()
 	attrs = append(attrs, "snapshot_id", snapshotID)
-	if err := b.Warm(ctx, snapshotID); err != nil {
+	if err := b.Warm(ctx, snapshotID, name, labels); err != nil {
 		if ctx.Err() == nil {
 			b.config.Logger.Warn("warm snapshot", append(attrs, "error", err)...)
 		}
@@ -419,9 +420,94 @@ func (b *Builder) warmBases(ctx context.Context) {
 		}
 		b.mu.Unlock()
 		if !seen {
-			b.warm(ctx, base, "harness", harness)
+			b.warm(ctx, base, vmName("warm", "base/"+harness), nil, "harness", harness)
 		}
 	}
+}
+
+// vmName names a builder or warming VM after what it serves (a repository
+// snapshot's key, or a harness), so one a failed delete left behind is found
+// again and deleted: before the next VM of that name is created, and by the
+// collector (SweepLeftoverVMs). It is short and slug-safe, like a session's.
+func vmName(kind, key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return "ao-snapshot-" + kind + "-" + hex.EncodeToString(sum[:12])
+}
+
+// vmGetter finds a VM by name (freestyle.Client).
+type vmGetter interface {
+	Get(ctx context.Context, id sandbox.ID) (sandbox.Environment, error)
+}
+
+// deleteLeftover deletes a VM of this name a failed delete left behind. It is
+// best effort: a VM it cannot find or delete does not hold up the caller.
+func (b *Builder) deleteLeftover(ctx context.Context, name string) {
+	getter, ok := b.config.VMs.(vmGetter)
+	if !ok {
+		return
+	}
+	environment, err := getter.Get(ctx, sandbox.ID(name))
+	if err != nil {
+		return
+	}
+	b.config.Logger.Warn("deleting a snapshot VM left behind", "name", name, "provider_id", environment.ID)
+	b.deleteVM(environment.ID, "name", name)
+}
+
+// deleteRetryDelays are the waits between attempts to delete a builder or
+// warming VM.
+var deleteRetryDelays = []time.Duration{2 * time.Second, 10 * time.Second}
+
+// deleteVM deletes a builder or warming VM, retrying a failed delete; one it
+// still cannot delete is reported and left to deleteLeftover and the sweep.
+func (b *Builder) deleteVM(id sandbox.ID, attrs ...any) {
+	for attempt := 0; ; attempt++ {
+		ctx, cancel := context.WithTimeout(sandbox.WithoutCleanup(context.Background()), time.Minute)
+		err := b.config.VMs.Delete(ctx, id)
+		cancel()
+		if err == nil {
+			return
+		}
+		if attempt == len(deleteRetryDelays) {
+			b.config.Logger.Error("could not delete a snapshot VM; it is retried by name later",
+				append(attrs, "provider_id", id, "error", err)...)
+			return
+		}
+		time.Sleep(deleteRetryDelays[attempt])
+	}
+}
+
+// SweepLeftoverVMs deletes builder and warming VMs that failed deletes left
+// behind for the repository snapshots on record, and for the harnesses'
+// warming VMs. Part of every collector run.
+func (b *Builder) SweepLeftoverVMs(ctx context.Context) {
+	if _, ok := b.config.VMs.(vmGetter); !ok {
+		return
+	}
+	for _, harness := range b.config.BaseHarnesses {
+		b.deleteLeftover(ctx, vmName("warm", "base/"+harness))
+	}
+	store, ok := b.config.Store.(keyStore)
+	if !ok {
+		return
+	}
+	keys, err := store.RepositorySandboxSnapshotKeys(ctx, b.config.Provider)
+	if err != nil {
+		if ctx.Err() == nil {
+			b.config.Logger.Warn("list repository snapshots to sweep", "error", err)
+		}
+		return
+	}
+	for _, key := range keys {
+		request := Request{OrgID: key.OrgID, RepositoryKey: key.RepositoryKey, Harness: key.Harness}
+		b.deleteLeftover(ctx, vmName("build", request.key()))
+		b.deleteLeftover(ctx, vmName("warm", request.key()))
+	}
+}
+
+// keyStore lists the repository snapshots on record (postgres.Store).
+type keyStore interface {
+	RepositorySandboxSnapshotKeys(ctx context.Context, provider string) ([]domain.RepositorySandboxSnapshot, error)
 }
 
 // warmScript reads, as root and without failing, the files a session's worker
@@ -515,6 +601,7 @@ func (b *Builder) RunCollector(ctx context.Context) {
 // first and the record only once that succeeds, so a failed provider delete
 // is retried on the next run instead of leaking the copy.
 func (b *Builder) Collect(ctx context.Context) {
+	defer b.SweepLeftoverVMs(ctx)
 	snapshotIDs, err := b.config.Store.CollectIdleRepositorySandboxSnapshots(
 		ctx, b.config.Provider, b.now().Add(-IdleRetention),
 		func(ctx context.Context, snapshotID string) error {
