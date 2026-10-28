@@ -43,9 +43,12 @@ func newTestingCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(verb("prepare", "Prepare the run's pinned clones and builds", noArgs, func(cmd *cobra.Command, _ []string) error {
 		return testingCallTimeout(t, cmd, "testing/prepare", map[string]any{}, runLine, prepareCallTimeout)
 	}))
-	cmd.AddCommand(verb("launch <base|head|main>", "Launch a private copy of a prepared leg", exactArgs(1), func(cmd *cobra.Command, a []string) error {
-		return testingCallTimeout(t, cmd, "testing/launch", map[string]any{"leg": a[0]}, func(r litmus.Run) string { return launchLine(r, a[0]) }, launchCallTimeout)
-	}))
+	var relaunch bool
+	launch := verb("launch <base|head|main>", "Launch a private copy of a prepared leg", exactArgs(1), func(cmd *cobra.Command, a []string) error {
+		return testingCallTimeout(t, cmd, "testing/launch", map[string]any{"leg": a[0], "relaunch": relaunch}, func(r litmus.Run) string { return launchLine(r, a[0]) }, launchCallTimeout)
+	})
+	launch.Flags().BoolVar(&relaunch, "relaunch", false, "Replace a previously launched leg with a fresh private home")
+	cmd.AddCommand(launch)
 	cmd.AddCommand(verb("status", "Show the run, its deadline and its legs", noArgs, func(cmd *cobra.Command, _ []string) error {
 		return testingCall(t, cmd, "testing/status", nil, func(out litmus.RunStatus) string {
 			lines := make([]string, 0, 1+len(out.Run.Legs))

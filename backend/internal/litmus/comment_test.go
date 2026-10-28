@@ -31,6 +31,60 @@ func TestCoverageWithoutReceiptsRendersNoReceipt(t *testing.T) {
 	}
 }
 
+func TestBlockedVerdictKeepsBlockedOn(t *testing.T) {
+	v := Verdict{Result: "blocked", BlockedOn: "Test account unavailable.", NotTested: "Windows."}
+	body := renderVerdict(commentRun, v, nil, t.TempDir(), "", evidence{})
+	for _, want := range []string{"Blocked on: Test account unavailable.\n", "Not tested: Windows.\n"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("verdict omits %q: %s", want, body)
+		}
+	}
+}
+
+func TestFindingCommentSelectsReceiptOutput(t *testing.T) {
+	receipts := []Receipt{
+		{Seq: 1, Leg: "base", Action: "eval", Output: "wrong leg output"},
+		{Seq: 1, Action: "eval", Output: "eval output"},
+		{Seq: 2, Action: "click", Output: "click output"},
+		{Seq: 3, Action: "network", Output: "network output"},
+		{Seq: 4, Action: "eval", Output: "third output"},
+		{Seq: 5, Action: "eval", Output: "uncited output"},
+		{Seq: 6, Action: "eval"},
+	}
+	for _, tc := range []struct {
+		name    string
+		ids     []int
+		outputs int
+	}{
+		{name: "eval and network capped at two", ids: []int{2, 6, 1, 3, 4}, outputs: 2},
+		{name: "click only", ids: []int{2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, findingClipPath(dir, 0), "clip")
+			v := Verdict{Result: "partial", Findings: []Finding{{Title: "API result", Leg: "head", Text: "The request failed.", Receipts: tc.ids}}}
+			ev := evidence{items: []evItem{{kind: kindFinding, finding: "finding-1", file: "finding-1.png"}}}
+			body := renderComments(commentRun, v, dir, ev, func(s string) string { return s }, receipts...)
+			if strings.Count(body, "```text\n") != tc.outputs {
+				t.Fatalf("wrong number of output blocks: %s", body)
+			}
+			if tc.outputs > 0 && !strings.Contains(body, "The request failed.\n\n"+receiptOutput("eval output")+"\n\n"+receiptOutput("network output")+"\n") {
+				t.Fatalf("cited output missing or out of order: %s", body)
+			}
+			for _, unwanted := range []string{"wrong leg output", "click output", "third output", "uncited output"} {
+				if strings.Contains(body, unwanted) {
+					t.Fatalf("comment includes %q: %s", unwanted, body)
+				}
+			}
+			for _, want := range []string{"![API result](evidence/finding-1.png)", "[Clip](clips/finding-1.mp4)"} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("comment lost %q: %s", want, body)
+				}
+			}
+		})
+	}
+}
+
 type fakeComment struct {
 	ID          int64
 	Login, Body string
@@ -331,7 +385,7 @@ func TestFindingCommentsHaveOneBodyPerFinding(t *testing.T) {
 			writeFile(t, findingClipPath(dir, 0), "clip")
 			v := passVerdict()
 			v.Result = tc.result
-			v.BlockedOn = "Signed-in recovery flow."
+			v.NotTested = "Signed-in recovery flow."
 			oldLeg := "base"
 			if tc.kind == "issue" {
 				oldLeg = "main"
@@ -419,31 +473,31 @@ func TestSummaryCommentUsesHeadlineAndRequiredLegGIF(t *testing.T) {
 	}
 }
 
-func TestSummaryCommentUsesBlockedOnOrFirstGap(t *testing.T) {
+func TestSummaryCommentUsesNotTestedOrFirstGap(t *testing.T) {
 	for _, tc := range []struct {
-		name, blocked string
-		gaps          []string
-		want          string
+		name, notTested string
+		gaps            []string
+		want            string
 	}{
 		{name: "nothing untested"},
 		{name: "one gap", gaps: []string{"Signed-in recovery flow."}, want: "Not tested: Signed-in recovery flow.\n"},
 		{name: "several gaps", gaps: []string{"Signed-in recovery flow.", "Another account.", "Base build."}, want: "Not tested: Signed-in recovery flow and 2 more.\n"},
-		{name: "blocked_on wins", blocked: "Missing *test* account.", gaps: []string{"Other gap.", "Last gap."}, want: "Not tested: Missing \\*test\\* account.\n"},
-		{name: "whitespace blocked_on falls back", blocked: " \t\r\n\u2003 ", gaps: []string{"Signed-in recovery flow.", "Another account.", "Base build."}, want: "Not tested: Signed-in recovery flow and 2 more.\n"},
-		{name: "multiline blocked_on", blocked: " One.\nTwo.\r\nThree.\tFour.\u2003Five. ", want: "Not tested: One. Two. Three. Four. Five.\n"},
+		{name: "not_tested wins", notTested: "Missing *test* account.", gaps: []string{"Other gap.", "Last gap."}, want: "Not tested: Missing \\*test\\* account.\n"},
+		{name: "whitespace not_tested falls back", notTested: " \t\r\n\u2003 ", gaps: []string{"Signed-in recovery flow.", "Another account.", "Base build."}, want: "Not tested: Signed-in recovery flow and 2 more.\n"},
+		{name: "multiline not_tested", notTested: " One.\nTwo.\r\nThree.\tFour.\u2003Five. ", want: "Not tested: One. Two. Three. Four. Five.\n"},
 		{name: "multiline gap", gaps: []string{" One.\nTwo.\r\nThree.\tFour.\u2003Five. "}, want: "Not tested: One. Two. Three. Four. Five.\n"},
-		{name: "long blocked_on", blocked: strings.Repeat("x", 600), want: "Not tested: " + strings.Repeat("x", 187) + "…\n"},
+		{name: "long not_tested", notTested: strings.Repeat("x", 600), want: "Not tested: " + strings.Repeat("x", 187) + "…\n"},
 		{name: "long gap keeps count", gaps: []string{strings.Repeat("x", 600), "Another account.", "Base build."}, want: "Not tested: " + strings.Repeat("x", 176) + "… and 2 more.\n"},
-		{name: "run_ao-46 sentence cut", blocked: "No blocker for the exercised Chat paths. Terminal UI report delivery remains unverified: the terminal opened, but attempted typing was not visible. " + strings.Repeat("more ", 120), want: "Not tested: No blocker for the exercised Chat paths. Terminal UI report delivery remains unverified: the terminal opened, but attempted typing was not visible…\n"},
-		{name: "word cut after ellipsis", blocked: "foo… " + strings.Repeat("barbaz", 40), want: "Not tested: foo…\n"},
-		{name: "uncut ellipsis", blocked: "Terminal report remains unverified…", want: "Not tested: Terminal report remains unverified….\n"},
-		{name: "clean blocked_on", blocked: "Missing private-token account.", want: "Not tested: Missing \\[...\\] account.\n"},
+		{name: "run_ao-46 sentence cut", notTested: "No blocker for the exercised Chat paths. Terminal UI report delivery remains unverified: the terminal opened, but attempted typing was not visible. " + strings.Repeat("more ", 120), want: "Not tested: No blocker for the exercised Chat paths. Terminal UI report delivery remains unverified: the terminal opened, but attempted typing was not visible…\n"},
+		{name: "word cut after ellipsis", notTested: "foo… " + strings.Repeat("barbaz", 40), want: "Not tested: foo…\n"},
+		{name: "uncut ellipsis", notTested: "Terminal report remains unverified…", want: "Not tested: Terminal report remains unverified….\n"},
+		{name: "clean not_tested", notTested: "Missing private-token account.", want: "Not tested: Missing \\[...\\] account.\n"},
 		{name: "clean gap", gaps: []string{"Missing private-token account."}, want: "Not tested: Missing \\[...\\] account.\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run := commentRun
 			run.Gaps = tc.gaps
-			v := Verdict{Result: "partial", Headline: "The *fix* held for private-token.", BlockedOn: tc.blocked, Findings: []Finding{{Title: "Menu label", Leg: "head", Text: "The menu is clipped."}}}
+			v := Verdict{Result: "partial", Headline: "The *fix* held for private-token.", NotTested: tc.notTested, Findings: []Finding{{Title: "Menu label", Leg: "head", Text: "The menu is clipped."}}}
 			body := renderComments(run, v, t.TempDir(), evidence{}, func(s string) string { return strings.ReplaceAll(s, "private-token", "[...]") })
 			blocks, err := splitComments(run, v, body)
 			if err != nil || len(blocks) != 2 {
@@ -465,7 +519,7 @@ func TestSubmitBoundsSummaryAndPreservesFullHeadline(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _, dir, artifacts := submitSvc(t)
 			v := passVerdict()
-			v.Result, v.Headline, v.BlockedOn = "partial", tc.headline, "An account is missing."
+			v.Result, v.Headline, v.NotTested = "partial", tc.headline, "An account is missing."
 			v.Findings = []Finding{{Title: "Old bug", Leg: "base", Severity: "worth-a-look", Text: "The old menu is clipped."}}
 			got, err := svc.Submit(ctx, "s1", verdictInput(t, svc, v))
 			is(t, "")(nil, err)

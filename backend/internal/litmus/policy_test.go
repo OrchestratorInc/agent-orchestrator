@@ -60,6 +60,48 @@ func sweep(svc *Service, killErr error) (killed []string) {
 	return killed
 }
 
+func TestSweepReconcilesSleepBeforeFirstPostWakeFrame(t *testing.T) {
+	for _, failSave := range []bool{false, true} {
+		t.Run(fmt.Sprintf("save failure=%t", failSave), func(t *testing.T) {
+			svc, wall := newSvc(t)
+			elapsed := time.Duration(0)
+			svc.elapsed = func() time.Duration { return elapsed }
+			run := Run{ID: "run_s1", SessionID: "s1", State: RunRunning, HeadSHA: fakeSHA, Deadline: wall.Add(time.Minute)}
+			is(t, "")(nil, svc.store.Save(run))
+			svc.sleepSamples[run.ID] = sleepSample{wall: *wall}
+			dir := filepath.Join(svc.store.root, run.ID)
+			if failSave {
+				is(t, "")(nil, os.Remove(filepath.Join(dir, "receipts")))
+				writeFile(t, filepath.Join(dir, "receipts"), "block the deadline save")
+			}
+			*wall = wall.Add(600 * time.Second)
+			elapsed = 20 * time.Second
+			if killed := sweep(svc, nil); len(killed) != 0 {
+				t.Fatalf("sweep killed after sleep: %v", killed)
+			}
+			if svc.inFlight(run.ID) || svc.reaped(run.ID) || fileExists(filepath.Join(dir, verdictFile)) {
+				t.Fatal("sweep closed the run or retained its submit lock")
+			}
+			if failSave {
+				saved, err := svc.store.Get(run.ID)
+				is(t, "")(nil, err)
+				if saved.State != RunRunning || !saved.Deadline.Equal(run.Deadline) || len(saved.Gaps) != 0 {
+					t.Fatalf("failed reconciliation changed run: %+v", saved)
+				}
+				is(t, "")(nil, os.Remove(filepath.Join(dir, "receipts")))
+				if killed := sweep(svc, nil); len(killed) != 0 {
+					t.Fatalf("retry killed after sleep: %v", killed)
+				}
+			}
+			saved, err := svc.store.Get(run.ID)
+			is(t, "")(nil, err)
+			if saved.State != RunRunning || !saved.Deadline.Equal(run.Deadline.Add(580*time.Second)) || len(saved.Gaps) != 1 {
+				t.Fatalf("sweep expired before a post-wake frame: %+v", saved)
+			}
+		})
+	}
+}
+
 func TestSweepSalvagesExitedTesterAfterGrace(t *testing.T) {
 	for _, valid := range []bool{true, false} {
 		t.Run(fmt.Sprintf("valid=%t", valid), func(t *testing.T) {
@@ -438,4 +480,46 @@ func policySvc(t *testing.T, dir string, clock func() time.Time) *Service {
 	svc := New(NewStore(dir), clock).WithGH(fixtureGH(t))
 	svc.runner, svc.retryPause, svc.spawnMarkerWait = gitFixture(t), 0, time.Millisecond
 	return svc
+}
+
+func TestSweepMovesScratchBlockedOnToNotTested(t *testing.T) {
+	svc, _, _, _ := submitSvc(t)
+	v := passVerdict()
+	v.BlockedOn = "Only Codex 0.164 was tested."
+	verdictInput(t, svc, v)
+	run, err := svc.store.Get("run_s1")
+	is(t, "")(nil, err)
+	svc.clock = func() time.Time { return run.Deadline.Add(writeupGrace) }
+	svc.WithActivity(func(context.Context, string) (string, time.Time, bool) { return "exited", run.Deadline, true })
+	sweep(svc, nil)
+	report, comment := readRunFile(t, svc, run, "verdict.md"), readRunFile(t, svc, run, "comment.md")
+	if !strings.HasPrefix(report, "# Verdict: pass\n") || !strings.Contains(report, "Not tested: Only Codex 0.164 was tested.") || !strings.Contains(comment, "Only Codex 0.164 was tested.") {
+		t.Fatalf("deadline salvage lost the verdict or its limit:\n%s\n%s", report, comment)
+	}
+}
+
+func TestSleepReconcileAfterPartialSaveMovesDeadlineOnce(t *testing.T) {
+	svc, wall := newSvc(t)
+	elapsed := time.Duration(0)
+	svc.elapsed = func() time.Duration { return elapsed }
+	run := Run{ID: "run_s2", SessionID: "s2", State: RunRunning, HeadSHA: fakeSHA, BaseSHA: fakeSHA, Deadline: wall.Add(time.Minute)}
+	is(t, "")(nil, svc.store.Save(run))
+	svc.sleepSamples[run.ID] = sleepSample{wall: *wall}
+	target := filepath.Join(svc.store.root, run.ID, "target.json")
+	is(t, "")(nil, os.Remove(target))
+	is(t, "")(nil, os.Mkdir(target, 0o750)) // run.json saves, target.json cannot
+	*wall = wall.Add(600 * time.Second)
+	elapsed = 20 * time.Second
+	if err := svc.reconcileSleepLocked(run.ID); err == nil {
+		t.Fatal("blocked target.json save did not fail")
+	}
+	is(t, "")(nil, os.Remove(target))
+	if err := svc.reconcileSleepLocked(run.ID); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := svc.store.Get(run.ID)
+	is(t, "")(nil, err)
+	if !saved.Deadline.Equal(run.Deadline.Add(580 * time.Second)) {
+		t.Fatalf("deadline %s, want one 580s move from %s", saved.Deadline, run.Deadline)
+	}
 }

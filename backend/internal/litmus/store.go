@@ -51,7 +51,7 @@ func (s *Store) reposDir(repo string) string {
 }
 
 func (s *Store) path(id string, elem ...string) (string, error) {
-	if id == "" || id == "." || id == ".." || filepath.Base(id) != id {
+	if id == "" || id == "." || id == ".." || filepath.Base(id) != id || asideDir(id) { // .pruning names are prune's
 		return "", apierr.Invalid("TESTING_ID_INVALID", fmt.Sprintf("invalid run id %q", id), nil)
 	}
 	return filepath.Join(append([]string{s.root, id}, elem...)...), nil
@@ -353,6 +353,9 @@ func (s *Store) List() ([]Run, error) {
 	}
 	var runs []Run
 	for _, e := range entries {
+		if asideDir(e.Name()) {
+			continue
+		}
 		if run, err := s.Get(e.Name()); err == nil {
 			runs = append(runs, run)
 		}
@@ -386,7 +389,7 @@ func (s *Store) Receipts(id string) ([]Receipt, error) {
 			}
 			return nil, fmt.Errorf("read actions.jsonl: %w", err)
 		}
-		receipts = append(receipts, Receipt{Seq: a.Seq, Leg: a.Leg, Action: a.Action, Theme: a.Theme, Args: a.Args, BeforePath: a.Before, AfterPath: a.After, ConsoleTail: a.ConsoleTail, Output: a.Output, At: a.At, MS: a.MS, TargetRole: a.TargetRole, TargetName: a.TargetName, Box: a.Box, Reason: a.Reason, PageErrors: a.PageErrors})
+		receipts = append(receipts, Receipt{Seq: a.Seq, Leg: a.Leg, Action: a.Action, Theme: a.Theme, Args: a.Args, BeforePath: a.Before, AfterPath: a.After, ConsoleTail: a.ConsoleTail, Output: a.Output, OutputCut: a.OutputCut, At: a.At, MS: a.MS, TargetRole: a.TargetRole, TargetName: a.TargetName, Box: a.Box, Reason: a.Reason, PageErrors: a.PageErrors})
 	}
 }
 

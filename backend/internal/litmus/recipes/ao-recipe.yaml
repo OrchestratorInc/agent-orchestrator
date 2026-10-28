@@ -53,9 +53,9 @@ notes: |
 
   The recipe registers a Sample project and attempts to create a Sample chat
   in the private instance.
-  Create any further fixtures there. A PR-panel issue needs a real PR fixture
-  in an allowed scratch repository. If the required fixture is missing, name
-  it in blocked_on. Do not use the owner's existing sessions as test data.
+  Create any further fixtures there. For a real PR fixture, add the private repo
+  Rishet11/litmus-fixtures as a project; its PR #1 stays open for tests. Read it,
+  never push to it or merge it. Do not use the owner's existing sessions as test data.
 
   For agent or model interactions, use any working model, cheapest first; if refused try another.
   Keep prompts short. Name an unavailable provider or model in the result.

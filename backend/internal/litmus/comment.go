@@ -53,6 +53,9 @@ func renderVerdict(run Run, v Verdict, receipts []Receipt, runDir, ownerLogins s
 	if v.BlockedOn != "" {
 		p("Blocked on: %s\n", text(v.BlockedOn))
 	}
+	if v.NotTested != "" {
+		p("Not tested: %s\n", text(plainList(v.NotTested)))
+	}
 	p("## Findings\n")
 	for i, f := range v.Findings {
 		p("### %s\n\n%s, %s\n\n%s\n", text(f.Title), text(f.Severity), text(run.LegName(f.Leg)), text(f.Text))
@@ -145,13 +148,46 @@ func receiptLinks(leg string, ids []int, receipts []Receipt, runDir string, clea
 				}
 				if r.Output != "" {
 					separator = "\n\n"
-					links[len(links)-1] += "\n\n" + receiptOutput(clean(r.Output)) + "\n"
+					links[len(links)-1] += "\n\n" + receiptOutput(clean(pageContent(r.Output))) + "\n"
 				}
 				break
 			}
 		}
 	}
 	return strings.Join(links, separator)
+}
+
+// pageContent drops the engine's untrusted-content boundary lines: they guard the tester's
+// context and carry a local URL, but say nothing to a human reading the quote.
+func pageContent(output string) string {
+	var kept []string
+	for _, line := range strings.Split(output, "\n") {
+		if (strings.HasPrefix(line, "--- AGENT_BROWSER_PAGE_CONTENT ") || strings.HasPrefix(line, "--- END_AGENT_BROWSER_PAGE_CONTENT ")) && strings.HasSuffix(line, " ---") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	content := strings.Trim(strings.Join(kept, "\n"), "\n")
+	var str string // a string result prints as a JSON literal; quote what the page returned
+	if json.Unmarshal([]byte(content), &str) == nil {
+		return strings.Trim(str, "\n")
+	}
+	return content
+}
+
+// plainList reads a tester's bulleted list as sentences on one line.
+func plainList(s string) string {
+	var items []string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		for _, bullet := range []string{"- ", "* ", "• "} {
+			line = strings.TrimPrefix(line, bullet)
+		}
+		if line != "" {
+			items = append(items, line)
+		}
+	}
+	return strings.Join(items, " ")
 }
 
 // receiptOutput uses a fence longer than any backtick run in the captured output.
@@ -181,12 +217,12 @@ func commentSummaryText(s string, limit int) string {
 	return mdText(s) + "…"
 }
 
-func renderCommentSummary(result, sha, headline, blockedOn, gap string, gapCount, findings int, old ...string) string {
+func renderCommentSummary(result, sha, headline, notTested, gap string, gapCount, findings int, old ...string) string {
 	body := fmt.Sprintf("Litmus: %s at %.7s\n%s\n", mdText(strings.ReplaceAll(result, "_", " ")), sha, commentSummaryText(headline, 200))
-	blockedOn = strings.TrimSpace(blockedOn)
-	if untested := strings.TrimRight(strings.TrimSpace(cmp.Or(blockedOn, gap)), "."); untested != "" {
+	notTested = strings.TrimSpace(notTested)
+	if untested := strings.TrimRight(plainList(cmp.Or(notTested, gap)), "."); untested != "" {
 		ending := "."
-		if blockedOn == "" && gapCount > 1 {
+		if notTested == "" && gapCount > 1 {
 			ending = fmt.Sprintf(" and %d more.", gapCount-1)
 		}
 		limit := 200 - len("Not tested: ") - len(ending)
@@ -214,7 +250,7 @@ func renderCommentSummary(result, sha, headline, blockedOn, gap string, gapCount
 }
 
 // renderComments writes the summary first, then findings, each with its own upsert marker.
-func renderComments(run Run, v Verdict, runDir string, ev evidence, clean func(string) string) string {
+func renderComments(run Run, v Verdict, runDir string, ev evidence, clean func(string) string, receipts ...Receipt) string {
 	if v.Result == "blocked" {
 		return ""
 	}
@@ -233,7 +269,7 @@ func renderComments(run Run, v Verdict, runDir string, ev evidence, clean func(s
 		}
 	}
 	findings := len(v.Findings) - len(old)
-	body := renderCommentSummary(v.Result, sha, clean(v.Headline), clean(v.BlockedOn), clean(gap), len(run.Gaps), findings, old...)
+	body := renderCommentSummary(v.Result, sha, clean(v.Headline), clean(v.NotTested), clean(gap), len(run.Gaps), findings, old...)
 	if findings == 0 {
 		for _, it := range ev.items {
 			if it.kind == kindGIF && it.file == leg+".gif" {
@@ -248,6 +284,28 @@ func renderComments(run Run, v Verdict, runDir string, ev evidence, clean func(s
 		}
 		name := findingID(i)
 		body := fmt.Sprintf("**%s (%s)**\n\n%s\n", text(f.Title), text(run.LegName(f.Leg)), text(f.Text))
+		outputs := 0
+		for _, id := range f.Receipts {
+			if outputs == 2 {
+				break
+			}
+			for _, r := range receipts {
+				if r.onLeg() != f.Leg || r.Seq != id || r.Output == "" || (r.Action != "eval" && r.Action != "network") {
+					continue
+				}
+				output := r.Output
+				if r.OutputCut { // only whole lines go out: redaction cannot recognize a secret the cut split
+					_, output, _ = strings.Cut(output, "\n")
+				}
+				if output = pageContent(output); output == "" {
+					break
+				}
+				lines := strings.SplitN(clean(output), "\n", 11)
+				body += "\n" + receiptOutput(strings.Join(lines[:min(10, len(lines))], "\n")) + "\n"
+				outputs++
+				break
+			}
+		}
 		for _, it := range ev.items {
 			if it.kind == kindFinding && it.finding == name {
 				body += fmt.Sprintf("\n![%s](evidence/%s)\n", text(f.Title), it.file)
@@ -268,6 +326,10 @@ func renderComments(run Run, v Verdict, runDir string, ev evidence, clean func(s
 // composeComment writes the draft bodies and their local evidence without posting or pushing anything.
 func (s *Service) composeComment(run Run, v Verdict, re *regexp.Regexp) (string, evidence, error) {
 	ev := evidence{state: EvidenceOff, videoState: "off"}
+	receipts, err := s.store.Receipts(run.ID)
+	if err != nil {
+		return "", ev, err
+	}
 	runDir := filepath.Join(s.store.root, run.ID)
 	dir := filepath.Join(runDir, "evidence")
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -285,7 +347,7 @@ func (s *Service) composeComment(run Run, v Verdict, re *regexp.Regexp) (string,
 	body := renderComments(run, v, runDir, ev, func(text string) string {
 		text, _ = redact(text, re)
 		return s.scrub(text)
-	})
+	}, receipts...)
 	return body, ev, s.store.WriteFile(run.ID, "comment.md", []byte(body))
 }
 

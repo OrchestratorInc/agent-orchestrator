@@ -185,6 +185,46 @@ func TestSubmitBlockedNeedsBlockedOn(t *testing.T) {
 	}
 }
 
+func TestSubmitRejectsBlockedOnForNonBlockedResult(t *testing.T) {
+	for _, result := range []string{"pass", "partial"} {
+		t.Run(result, func(t *testing.T) {
+			svc, _, dir, _ := submitSvc(t)
+			v := passVerdict()
+			v.Result = result
+			v.BlockedOn = "No blocker for the exercised Chat paths. Terminal UI report delivery remains unverified."
+			_, err := svc.Submit(ctx, "s1", verdictInput(t, svc, v))
+			is(t, "TESTING_VERDICT_BLOCKED_ON")(nil, err)
+			if !strings.Contains(err.Error(), "use not_tested for scope, version or platform limits") {
+				t.Fatal(err)
+			}
+			if fileExists(filepath.Join(dir, verdictFile)) {
+				t.Fatal("invalid verdict saved")
+			}
+		})
+	}
+}
+
+func TestSubmitNotReproducedWithNotTested(t *testing.T) {
+	svc, dir, artifacts := issueSubmitSvc(t)
+	v := passVerdict()
+	v.Result, v.Coverage[0].Leg = "not_reproduced", "main"
+	v.NotTested = "Codex 0.164 only; older versions and existing controllers were not tested."
+	got, err := svc.Submit(ctx, "s1", verdictInput(t, svc, v))
+	is(t, "")(nil, err)
+	if got.NotTested != v.NotTested {
+		t.Fatalf("Submit lost not_tested: %+v", got)
+	}
+	for _, root := range []string{dir, artifacts} {
+		for _, name := range []string{"comment.md", "verdict.md"} {
+			body, err := os.ReadFile(filepath.Join(root, name))
+			is(t, "")(nil, err)
+			if !strings.Contains(string(body), "Not tested: "+v.NotTested+"\n") || strings.Contains(string(body), "Blocked on:") {
+				t.Fatalf("scope limit missing or labeled as a blocker in %s: %s", filepath.Join(root, name), body)
+			}
+		}
+	}
+}
+
 func TestSubmitRefusesReceiptMissingOnNamedLeg(t *testing.T) {
 	for _, item := range []string{"finding", "coverage"} {
 		t.Run(item, func(t *testing.T) {
@@ -581,9 +621,13 @@ func TestSubmitRefusesUnknownSeverity(t *testing.T) {
 	}
 }
 
-func TestReceiptOutputStaysInsideLocalFindingOnly(t *testing.T) {
+func TestReceiptOutputInFindingCommentIsRedactedAndCapped(t *testing.T) {
 	svc, _, dir, _ := submitSvc(t)
-	output := "HTTP 200 ok:true\n```\n![not an image](url)\n"
+	lines := []string{"HTTP 200 ghp_fakeToken123", "```", "![not an image](url)"}
+	for i := 4; i <= 12; i++ {
+		lines = append(lines, fmt.Sprintf("output line %d", i))
+	}
+	output := strings.Join(lines, "\n")
 	after := filepath.Join(dir, "receipts", "head-3-after.png")
 	whitePNG(t, after, 40, 20)
 	svc.attach("run_s1", &actionRec{Seq: 3, Leg: "head", Action: "eval", After: after, Output: output})
@@ -598,9 +642,57 @@ func TestReceiptOutputStaysInsideLocalFindingOnly(t *testing.T) {
 	}
 	comment, err := os.ReadFile(filepath.Join(dir, "comment.md"))
 	is(t, "")(nil, err)
-	for _, unwanted := range []string{output, "receipt 3", "receipts/", "```", "Environment"} {
+	lines[0] = "HTTP 200 [...]"
+	if !strings.Contains(string(comment), "````text\n"+strings.Join(lines[:10], "\n")+"\n````") {
+		t.Fatalf("comment output missing, unredacted or not capped at ten lines: %s", comment)
+	}
+	is(t, "")(nil, checkEgress(svc.credentialPattern(ctx), string(comment)))
+	for _, unwanted := range []string{"ghp_fakeToken123", "output line 11", "output line 12", "receipt 3", "receipts/", "Environment"} {
 		if strings.Contains(string(comment), unwanted) {
 			t.Fatalf("comment contains %q: %s", unwanted, comment)
+		}
+	}
+}
+
+func TestCutReceiptOutputQuotesOnlyWholeLines(t *testing.T) {
+	svc, f, _, dir := driveSvc(t)
+	svc.media = &fakeMedia{}
+	token := "ghp_" + strings.Repeat("a", 36)
+	f.out["eval"] = token + "\n" + strings.Repeat("x", 4<<10-len(token)+2) + "\nlast line"
+	_, err := svc.Drive(ctx, "s1", "eval", nil)
+	is(t, "")(nil, err)
+	if raw := readActions(dir); len(raw) != 1 || !strings.HasPrefix(raw[0].Output, "aaaa") {
+		t.Fatalf("the cut should split the token for this test: %+v", raw)
+	}
+	v := passVerdict()
+	v.Findings = []Finding{{Title: "API result", Leg: "head", Severity: "worth-a-look", Receipts: []int{1}}}
+	is(t, "")(svc.Submit(ctx, "s1", verdictInput(t, svc, v)))
+	comment, err := os.ReadFile(filepath.Join(dir, "comment.md"))
+	is(t, "")(nil, err)
+	if strings.Contains(string(comment), "aaaa") || !strings.Contains(string(comment), "last line") {
+		t.Fatalf("cut output quoted a split first line or lost whole lines: %s", strings.ReplaceAll(string(comment), strings.Repeat("x", 100), "X"))
+	}
+}
+
+func TestQuotedOutputDropsPageBoundaryAndListBullets(t *testing.T) {
+	svc, f, _, dir := driveSvc(t)
+	svc.media = &fakeMedia{}
+	f.out["eval"] = "--- AGENT_BROWSER_PAGE_CONTENT nonce=27b3 origin=http://localhost:5173/#/projects/p ---\n\"[{\\\"text\\\":\\\"Download\\\"}]\"\n--- END_AGENT_BROWSER_PAGE_CONTENT nonce=27b3 ---\n"
+	_, err := svc.Drive(ctx, "s1", "eval", nil)
+	is(t, "")(nil, err)
+	v := passVerdict()
+	v.NotTested = "- Linux and Windows.\n- The benchmark."
+	v.Findings = []Finding{{Title: "Low contrast", Leg: "head", Severity: "worth-a-look", Receipts: []int{1}}}
+	is(t, "")(svc.Submit(ctx, "s1", verdictInput(t, svc, v)))
+	for _, name := range []string{"comment.md", "verdict.md"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		is(t, "")(nil, err)
+		out := string(data)
+		if strings.Contains(out, "AGENT_BROWSER_PAGE_CONTENT") || strings.Contains(out, "localhost:5173") || !strings.Contains(out, "```text\n[{\"text\":\"Download\"}]\n```") {
+			t.Fatalf("%s quoted the engine boundary: %s", name, out)
+		}
+		if !strings.Contains(out, "Not tested: Linux and Windows. The benchmark.") {
+			t.Fatalf("%s did not read the not_tested list as one line: %s", name, out)
 		}
 	}
 }

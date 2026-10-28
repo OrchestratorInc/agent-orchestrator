@@ -142,6 +142,7 @@ type Receipt struct {
 	AfterPath   string    `json:"afterPath,omitempty"`
 	ConsoleTail string    `json:"consoleTail,omitempty"`
 	Output      string    `json:"output,omitempty"`
+	OutputCut   bool      `json:"outputCut,omitempty"` // Output is the last 4 KiB of a longer output
 	At          time.Time `json:"at"`
 	// TargetRole and TargetName are what the tester's last snapshot called the element it acted on, for plain captions.
 	TargetRole string      `json:"targetRole,omitempty"`
@@ -206,6 +207,7 @@ type Verdict struct {
 	Coverage       []Coverage `json:"coverage"`
 	Environment    string     `json:"environment"`
 	BlockedOn      string     `json:"blocked_on,omitempty"`
+	NotTested      string     `json:"not_tested,omitempty"`
 	ReceiptCount   int        `json:"receipt_count,omitempty"`
 	CommentURL     string     `json:"commentUrl,omitempty"`
 	CommentState   string     `json:"commentState,omitempty"`

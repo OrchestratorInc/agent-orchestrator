@@ -1,6 +1,7 @@
 package litmus
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -110,6 +111,97 @@ func TestPruneKeepsEveryCheckoutWhileARunIsUnfinished(t *testing.T) {
 	}
 }
 
+func TestPruneRunRetention(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		auto     bool
+		keepRuns int
+	}{
+		{name: "automatic keeps all 25 runs", auto: true, keepRuns: 25},
+		{name: "manual keeps newest 20 runs", keepRuns: 20},
+		{name: "manual zero removes all finished runs"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := New(NewStore(t.TempDir()), nil)
+			old := time.Now().Add(-48 * time.Hour)
+			reviewFiles := []string{"verdict.md", "verdict.json", "comment.md", "steps.md", "evidence/shot.png", "receipts/000001.json", "head/head.mp4", "base/base.mp4", "clips/f1.mp4"}
+			var runs []Run
+			for i := range 25 {
+				r := Run{ID: fmt.Sprintf("run_%02d", i), Repo: "acme/repo", State: RunSubmitted, CreatedAt: old.Add(time.Duration(i) * time.Minute), HeadSHA: fmt.Sprintf("%040x", i+1)}
+				if err := svc.store.Save(r); err != nil {
+					t.Fatal(err)
+				}
+				runs = append(runs, r)
+				for _, name := range reviewFiles {
+					writeFile(t, filepath.Join(svc.store.root, r.ID, name), name)
+				}
+				for _, leg := range []string{"head", "base"} {
+					legDir := filepath.Join(svc.store.root, r.ID, leg)
+					for _, part := range []string{"frames", "home", "tmp", "data"} {
+						writeFile(t, filepath.Join(legDir, part, "000001.jpg"), "jpeg")
+					}
+					other := filepath.Join(t.TempDir(), "other-run")
+					writeFile(t, filepath.Join(other, "data", "keep.txt"), "keep")
+					if err := os.Symlink(other, filepath.Join(legDir, "link")); err != nil {
+						t.Fatal(err)
+					}
+					if err := writeOwned(legDir, Owned{Dirs: []string{filepath.Join(legDir, "data"), filepath.Join(t.TempDir(), "outside"), filepath.Join(legDir, "link", "data"), legDir}}); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() {
+						if !pathExists(filepath.Join(other, "data", "keep.txt")) {
+							t.Errorf("prune followed a symlinked parent out of %s", legDir)
+						}
+					})
+				}
+				checkout := filepath.Join(svc.store.reposDir(r.Repo), r.HeadSHA)
+				writeFile(t, filepath.Join(checkout, "node_modules", "big.bin"), "build")
+				if err := os.Chtimes(checkout, old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+			asides := []string{filepath.Join(svc.store.root, "run_interrupted.pruning"), filepath.Join(svc.store.reposDir("acme/repo"), runs[24].HeadSHA+".pruning")}
+			for _, aside := range asides {
+				writeFile(t, filepath.Join(aside, "leftover.bin"), "leftover")
+			}
+			if tc.auto {
+				svc.autoPrune(ctx, runs[24])
+			} else if _, err := svc.Prune(ctx, tc.keepRuns, DefaultKeepCheckouts); err != nil {
+				t.Fatal(err)
+			}
+			for i, r := range runs {
+				runDir := filepath.Join(svc.store.root, r.ID)
+				keep := i >= len(runs)-tc.keepRuns
+				if got := pathExists(runDir); got != keep {
+					t.Errorf("%s exists = %v, want %v", r.ID, got, keep)
+				}
+				if keep {
+					for _, name := range append([]string{"run.json"}, reviewFiles...) {
+						if !pathExists(filepath.Join(runDir, name)) {
+							t.Errorf("%s lost %s", r.ID, name)
+						}
+					}
+				}
+				for _, leg := range []string{"head", "base"} {
+					for _, part := range []string{"frames", "home", "tmp", "data"} {
+						if pathExists(filepath.Join(runDir, leg, part)) {
+							t.Errorf("%s kept %s %s", r.ID, leg, part)
+						}
+					}
+				}
+				if got, want := pathExists(filepath.Join(svc.store.reposDir(r.Repo), r.HeadSHA)), i >= len(runs)-DefaultKeepCheckouts; got != want {
+					t.Errorf("%s checkout exists = %v, want %v", r.ID, got, want)
+				}
+			}
+			for _, aside := range asides {
+				if pathExists(aside) {
+					t.Errorf("leftover aside dir survived: %s", aside)
+				}
+			}
+		})
+	}
+}
+
 func TestPruneRefusesPathsOutsideTheDataDir(t *testing.T) {
 	svc, root, _ := pruneFixture(t)
 	outside := t.TempDir()
@@ -173,7 +265,7 @@ func TestAutoPruneLogsOneLineToCommentLog(t *testing.T) {
 	svc.keepRuns, svc.keepCheckouts = 1, 1
 	svc.autoPrune(ctx, recent)
 	log, err := os.ReadFile(filepath.Join(svc.store.root, recent.ID, "comment.log"))
-	if err != nil || !strings.HasSuffix(strings.TrimSpace(string(log)), "pruned: 1 checkouts, 2 runs, 0.0 GB freed") {
+	if err != nil || !strings.HasSuffix(strings.TrimSpace(string(log)), "pruned: 1 checkouts, 0 runs, 0.0 GB freed") {
 		t.Fatalf("comment.log = %q, %v", log, err)
 	}
 }
@@ -227,11 +319,91 @@ func TestPruneSkipsCheckoutsWhileARunJSONIsUnreadable(t *testing.T) {
 	}
 }
 
-func TestAutoPruneKeepsTheCurrentRunAtKeepRunsZero(t *testing.T) {
+func TestPruneRemovesRunWithPermissionDeniedSubdir(t *testing.T) {
+	svc, root, _ := pruneFixture(t)
+	runDir := filepath.Join(svc.store.root, "run_old1")
+	blocked := filepath.Join(runDir, "scratch", "fixtures", "blocked")
+	writeFile(t, filepath.Join(blocked, "nested", "locked.txt"), "fixture")
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	writeFile(t, outside, "keep")
+	if err := os.Chmod(outside, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(blocked, "outside")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(outside, filepath.Join(blocked, "nested", "hardlink")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(blocked, "nested", "locked.txt"), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(blocked, 0o700)
+		_ = os.Chmod(filepath.Join(runDir+".pruning", "scratch", "fixtures", "blocked"), 0o700)
+	})
+	if err := os.Chmod(blocked, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Keep the checkouts until the next pass, after this run's files have been removed.
+	if rep, err := svc.Prune(ctx, 1, 20); err != nil || len(rep.Runs) != 2 || len(rep.Checkouts) != 0 {
+		t.Fatalf("first prune = %+v, %v", rep, err)
+	}
+	if pathExists(runDir) || pathExists(runDir+".pruning") {
+		t.Fatal("run directory survived prune")
+	}
+	if info, err := os.Stat(outside); err != nil || info.Mode().Perm() != 0o400 {
+		t.Fatalf("symlink or hard link target permissions changed: %v, %v", info, err)
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "keep" {
+		t.Fatalf("symlink target changed: %q, %v", data, err)
+	}
+	rep, err := svc.Prune(ctx, 1, 1)
+	checkout := filepath.Join(root, "repos", "aoagents__agent-orchestrator", strings.Repeat("1", 40))
+	if err != nil || len(rep.Checkouts) != 1 || pathExists(checkout) || strings.Contains(strings.Join(rep.Lines, "\n"), "skipped checkouts") {
+		t.Fatalf("next checkout prune = %+v, %v", rep, err)
+	}
+}
+
+func TestPruneDeletesRunsLeftAsideByAnInterruptedPass(t *testing.T) {
+	for _, readable := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing run.json", true: "readable run.json"}[readable], func(t *testing.T) {
+			svc, _, _ := pruneFixture(t)
+			aside := filepath.Join(svc.store.root, "run_x.pruning")
+			if readable {
+				if err := svc.store.Save(Run{ID: "run_x", State: RunRunning, HeadSHA: strings.Repeat("1", 40)}); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(filepath.Join(svc.store.root, "run_x"), aside); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeFile(t, filepath.Join(aside, "scratch", "leftover.txt"), "fixture")
+			if err := svc.store.Save(Run{ID: "run_x.pruning", State: RunRunning}); err == nil {
+				t.Fatal("store accepted a run id in prune's .pruning namespace")
+			}
+			if runs, err := svc.store.List(); err != nil || len(runs) != 4 {
+				t.Fatalf("store listed an aside run: %+v, %v", runs, err)
+			}
+			if runs, unreadable := svc.sortedRuns(); len(runs) != 4 || len(unreadable) != 0 {
+				t.Fatalf("aside run affected prune listing: %+v, %v", runs, unreadable)
+			}
+			if rep, err := svc.PruneDryRun(ctx, 1, 1); err != nil || !slices.Contains(rep.Runs, "runs/run_x.pruning") || !pathExists(aside) {
+				t.Fatalf("dry prune = %+v, %v", rep, err)
+			}
+			rep, err := svc.Prune(ctx, 1, 1)
+			if err != nil || len(rep.Checkouts) != 1 || len(rep.Runs) != 3 || !slices.Contains(rep.Runs, "runs/run_x.pruning") || pathExists(aside) {
+				t.Fatalf("prune with aside run = %+v, %v", rep, err)
+			}
+		})
+	}
+}
+
+func TestAutoPruneKeepsEveryRunAtKeepRunsZero(t *testing.T) {
 	svc, _, recent := pruneFixture(t)
 	svc.keepRuns, svc.keepCheckouts = 0, 0
 	svc.autoPrune(ctx, recent)
-	for id, want := range map[string]bool{"run_recent": true, "run_live": true, "run_old1": false, "run_old2": false} {
+	for id, want := range map[string]bool{"run_recent": true, "run_live": true, "run_old1": true, "run_old2": true} {
 		if got := pathExists(filepath.Join(svc.store.root, id)); got != want {
 			t.Errorf("%s exists = %v, want %v", id, got, want)
 		}

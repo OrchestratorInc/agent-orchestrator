@@ -214,13 +214,16 @@ func (s *Service) closeAtDeadline(ctx context.Context, run Run, log *slog.Logger
 		return true
 	}
 	defer done()
-	run, err = s.store.Get(run.ID)
+	if err = s.reconcileSleepLocked(run.ID); err == nil {
+		run, err = s.store.Get(run.ID)
+	}
+	beforeDeadline := run.State != RunExpired && s.clock().Before(run.Deadline.Add(writeupGrace))
 	s.mu.Unlock()
 	if err != nil {
 		log.Warn("litmus: could not read run at deadline", "error", err)
 		return true
 	}
-	if (run.State.Closed() && run.State != RunExpired) || s.reaped(run.ID) {
+	if beforeDeadline || (run.State.Closed() && run.State != RunExpired) || s.reaped(run.ID) {
 		return true
 	}
 	if run.Error == ReasonNoIntake || strings.HasPrefix(run.Error, ReasonStopped+": no valid scratch/verdict.json:") {
@@ -229,6 +232,9 @@ func (s *Service) closeAtDeadline(ctx context.Context, run Run, log *slog.Logger
 	v, data, readErr := s.readVerdict(run, "scratch/verdict.json")
 	if readErr == nil {
 		v.Environment = strings.TrimSpace(v.Environment + "\nsubmitted by Litmus at the deadline from scratch/verdict.json")
+		if v.Result != "blocked" && v.BlockedOn != "" { // no tester left to move it: keep the limit where the comment shows it
+			v.NotTested, v.BlockedOn = strings.TrimSpace(v.NotTested+"\n"+v.BlockedOn), ""
+		}
 	} else {
 		log.Warn("litmus: no valid scratch verdict at deadline", "run", run.ID, "error", readErr)
 		if s.activity != nil {

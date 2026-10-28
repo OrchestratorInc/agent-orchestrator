@@ -48,7 +48,7 @@ func TestCommentRedactsOnlyAtEgress(t *testing.T) {
 			v := passVerdict()
 			v.Headline = tc.output + "\ntrue receipt 1 https://github.com/o/r/pull/1"
 			// The summary caps the headline, so the full proof also rides in a finding body, which posts uncut.
-			v.Result, v.BlockedOn = "partial", "An account is missing."
+			v.Result, v.NotTested = "partial", "An account is missing."
 			v.Findings = []Finding{{Title: "Proof", Leg: "head", Severity: "worth-a-look", Text: v.Headline}}
 			path := verdictInput(t, svc, v)
 			original, err := os.ReadFile(filepath.Join(dir, path))

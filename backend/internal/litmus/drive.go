@@ -418,6 +418,7 @@ type actionRec struct {
 	Theme       string      `json:"theme,omitempty"`
 	Args        []string    `json:"args,omitempty"`
 	Output      string      `json:"output,omitempty"`
+	OutputCut   bool        `json:"outputCut,omitempty"` // Output is the tail of a longer output
 	Before      string      `json:"before"`
 	After       string      `json:"after"`
 	ConsoleTail string      `json:"consoleTail"`
@@ -438,8 +439,9 @@ func (s *Service) receipt(ctx context.Context, runID string, e *Engine, leg, act
 	s.mu.Lock()
 	seq, err := s.nextSeq(runID, leg)
 	s.mu.Unlock()
+	cut := len(output) > 4<<10
 	output = strings.ToValidUTF8(output[max(0, len(output)-(4<<10)):], "")
-	rec := actionRec{Output: output, Seq: seq, Leg: leg, Action: action, Args: args, Before: e.last, At: s.clock(), MS: took.Milliseconds(), TargetRole: target.role, TargetName: target.name, Click: click, Box: box, Reason: reason}
+	rec := actionRec{Output: output, OutputCut: cut, Seq: seq, Leg: leg, Action: action, Args: args, Before: e.last, At: s.clock(), MS: took.Milliseconds(), TargetRole: target.role, TargetName: target.name, Click: click, Box: box, Reason: reason}
 	warn := func(what string, err error) { rec.Warnings = append(rec.Warnings, what+": "+err.Error()) }
 	if err != nil {
 		warn("receipt sequence", err)

@@ -108,7 +108,7 @@ func (s *Service) sortedRuns() ([]Run, []string) {
 	return runs, unreadable
 }
 
-// prune applies the retention rules. current, when set, is a run dir that is kept whatever keepRuns says.
+// prune applies the retention rules. A nonempty current marks an automatic pass, which keeps every run dir.
 func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bool, current string) (PruneReport, error) {
 	rep := PruneReport{DryRun: dry, Checkouts: []string{}, Runs: []string{}, Lines: []string{}}
 	if keepRuns < 0 || keepCheckouts < 0 {
@@ -127,7 +127,7 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 	}
 	finished := 0
 	for _, r := range runs {
-		if !finishedRun(r) || r.State == RunAwaitingApproval { // an awaiting run still needs its files to be posted
+		if current != "" || !finishedRun(r) || r.State == RunAwaitingApproval { // automatic passes keep review files for the owner
 			keepDir[r.ID] = true
 		} else {
 			finished++
@@ -148,7 +148,7 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 		errs = append(errs, err.Error())
 		rep.Lines = append(rep.Lines, line)
 	}
-	// remove deletes path, or aside when the checkout was already moved there; both are reported as path.
+	// remove deletes path, or aside when the dir was already moved there; both are reported as path.
 	remove := func(path, aside string, into *[]string, kind string) {
 		if aside == "" && ctx.Err() != nil { // a dir already moved aside is deleted whatever the context says
 			return
@@ -167,23 +167,46 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 		if dry {
 			verb = "would remove"
 		} else if err := os.RemoveAll(target); err != nil {
-			fail(fmt.Sprintf("failed to remove %s: %v", filepath.ToSlash(rel), err), err)
-			return
+			if errors.Is(err, fs.ErrPermission) {
+				// Unlinking needs only writable directories, so files (and their hard links) are never changed.
+				// Repair before descent, through os.Root so a swapped-in symlink cannot reach outside the run.
+				var tree *os.Root
+				if tree, err = os.OpenRoot(target); err == nil {
+					err = fs.WalkDir(tree.FS(), ".", func(path string, d fs.DirEntry, err error) error {
+						if err != nil || !d.IsDir() {
+							return err
+						}
+						info, err := d.Info()
+						if err == nil {
+							err = tree.Chmod(path, info.Mode()|0o700)
+						}
+						return err
+					})
+					tree.Close()
+				}
+				if err == nil {
+					err = os.RemoveAll(target)
+				}
+			}
+			if err != nil {
+				fail(fmt.Sprintf("failed to remove %s: %v", filepath.ToSlash(rel), err), err)
+				return
+			}
 		}
 		*into = append(*into, filepath.ToSlash(rel))
 		rep.BytesFreed += size
 		rep.Lines = append(rep.Lines, fmt.Sprintf("%s %s %s (%s)", verb, kind, filepath.ToSlash(rel), humanBytes(size)))
 	}
-	// removeCheckout re-reads the runs under the lock and moves the dir aside only if it is still unpinned, so a run
-	// that started since the plan keeps its checkout. The move is instant; the slow delete runs unlocked.
-	removeCheckout := func(d string) {
+	// removeDir moves runs aside before deletion and rechecks checkout pins under the lock, so a run that started
+	// since the plan keeps its checkout. The move is instant; the slow delete runs unlocked.
+	removeDir := func(d string, into *[]string, kind string) {
 		if asideDir(d) { // moved aside by a pass that did not get to delete it: nothing can use it, delete it now
-			remove(d, d, &rep.Checkouts, "checkout")
+			remove(d, d, into, kind)
 			return
 		}
 		if dry {
-			if !s.recentlyUsed(d) {
-				remove(d, "", &rep.Checkouts, "checkout")
+			if kind == "run" || !s.recentlyUsed(d) {
+				remove(d, "", into, kind)
 			}
 			return
 		}
@@ -197,7 +220,7 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 		s.mu.Lock()
 		runs, unreadable := s.sortedRuns()
 		aside := ""
-		if len(unreadable) == 0 && !checkoutPins(runs, keepCheckouts).holds(d) && !s.recentlyUsed(d) {
+		if kind == "run" || (len(unreadable) == 0 && !checkoutPins(runs, keepCheckouts).holds(d) && !s.recentlyUsed(d)) {
 			aside = d + ".pruning"
 			if err := os.Rename(d, aside); err != nil {
 				aside = ""
@@ -206,7 +229,7 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 		}
 		s.mu.Unlock()
 		if aside != "" {
-			remove(d, aside, &rep.Checkouts, "checkout")
+			remove(d, aside, into, kind)
 		}
 	}
 
@@ -224,24 +247,44 @@ func (s *Service) prune(ctx context.Context, keepRuns, keepCheckouts int, dry bo
 			if fi, err := os.Lstat(d); err != nil || !fi.IsDir() || (plan.holds(d) && !asideDir(d)) {
 				continue
 			}
-			removeCheckout(d)
+			removeDir(d, &rep.Checkouts, "checkout")
 		}
+	}
+	asideRuns, _ := filepath.Glob(filepath.Join(s.store.root, "*.pruning*"))
+	for _, d := range asideRuns {
+		removeDir(d, &rep.Runs, "run")
 	}
 	for _, r := range runs {
 		if !keepDir[r.ID] {
-			remove(filepath.Join(s.store.root, r.ID), "", &rep.Runs, "run")
+			removeDir(filepath.Join(s.store.root, r.ID), &rep.Runs, "run")
 		} else if finishedRun(r) {
-			// Failed or interrupted encodes keep frames only while the run is open.
+			// Failed encodes keep frames, and a failed teardown keeps the leg's private state, only while the run is open.
 			s.mu.Lock()
 			cur, err := s.store.Get(r.ID)
 			closed := err == nil && finishedRun(cur)
 			s.mu.Unlock()
 			if closed {
 				for _, leg := range r.targets() {
-					path := filepath.Join(s.store.root, r.ID, leg.Name, "frames")
-					if _, err := os.Lstat(path); err == nil {
-						var frames []string
-						remove(path, "", &frames, "frames")
+					dir := filepath.Join(s.store.root, r.ID, leg.Name)
+					parts := []string{"frames", "home", "tmp"}
+					realDir, dirErr := filepath.EvalSymlinks(dir)
+					if o, err := readOwned(dir); err == nil && dirErr == nil { // the recipe's isolation dirs, as cleanLeg removes them
+						for _, d := range o.Dirs {
+							rel, err := filepath.Rel(dir, d)
+							if err != nil || !filepath.IsLocal(rel) || rel == "." {
+								continue
+							}
+							if real, err := filepath.EvalSymlinks(d); err == nil && real == filepath.Join(realDir, rel) { // no symlinked parent
+								parts = append(parts, rel)
+							}
+						}
+					}
+					for _, part := range parts {
+						path := filepath.Join(dir, part)
+						if _, err := os.Lstat(path); err == nil {
+							var removed []string
+							remove(path, "", &removed, part)
+						}
 					}
 				}
 			}
@@ -321,7 +364,7 @@ func (s *Service) neededCommits(mirror string) map[string]bool {
 func (s *Service) loadForPrune() (runs []Run, unreadable []string) {
 	entries, _ := os.ReadDir(s.store.root)
 	for _, e := range entries {
-		if !e.IsDir() {
+		if !e.IsDir() || asideDir(e.Name()) {
 			continue
 		}
 		run, err := s.store.Get(e.Name())
@@ -355,7 +398,7 @@ func finishedRun(r Run) bool {
 	return true
 }
 
-// asideDir reports whether a checkout dir was moved aside (<sha>.pruning, possibly several times) by a pass that
+// asideDir reports whether a checkout or run dir was moved aside (<id>.pruning, possibly several times) by a pass that
 // never got to delete it. No run can use such a dir, so prune deletes it without a pin check or another move.
 func asideDir(dir string) bool {
 	return strings.Contains(filepath.Base(dir), ".pruning")

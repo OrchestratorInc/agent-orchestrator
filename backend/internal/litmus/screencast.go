@@ -68,6 +68,22 @@ func newScreencast(ctx context.Context, dir string, started time.Time, clock fun
 	}
 	r := &screencast{ctx: ctx, cancel: cancel, done: make(chan struct{}), dir: dir, clock: clock, elapsed: elapsed, resolve: resolve, trouble: trouble,
 		meta: screencastManifest{StartedWall: started}}
+	if fileExists(filepath.Join(dir, "frames.jsonl")) {
+		r.meta, _, r.err = readRecording(dir, started)
+		if r.err != nil {
+			r.problem(r.err)
+			cancel()
+			close(r.done)
+			return r
+		}
+		// The finished segment's manifest no longer matches the index once frames append;
+		// without it a crash mid-segment rebuilds the manifest from the index.
+		if err := os.Remove(filepath.Join(dir, "manifest.json")); err != nil && !os.IsNotExist(err) {
+			r.problem(fmt.Errorf("drop resumed recording manifest: %w", err))
+		}
+		base := recordingLength(r.meta)
+		r.elapsed = func() time.Duration { return base + elapsed() }
+	}
 	go r.run()
 	return r
 }
@@ -118,7 +134,7 @@ func (r *screencast) run() {
 		r.problem(err)
 		return
 	}
-	index, err := os.OpenFile(filepath.Join(r.dir, "frames.jsonl"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	index, err := os.OpenFile(filepath.Join(r.dir, "frames.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		r.err = err
 		r.problem(err)
@@ -370,7 +386,7 @@ func readRecording(dir string, started time.Time) (screencastManifest, []screenc
 	if err := scan.Err(); err != nil {
 		return meta, nil, err
 	}
-	if len(frames) == 0 {
+	if len(frames) == 0 && (missing || meta.Frames != 0) {
 		return meta, nil, fmt.Errorf("recording has no frames")
 	}
 	if missing {
@@ -460,13 +476,28 @@ func (s *Service) startRecording(ctx context.Context, runID string, leg Leg) Leg
 		}
 		return resolve(ctx)
 	}
-	leg.RecordStartedAt, leg.RecordStoppedAt = s.clock(), time.Time{}
+	if leg.RecordStartedAt.IsZero() {
+		leg.RecordStartedAt = s.clock()
+	}
+	leg.RecordStoppedAt = time.Time{}
+	s.mu.Lock()
+	if _, ok := s.sleepSamples[runID]; !ok {
+		s.sleepSamples[runID] = sleepSample{wall: s.clock().Round(0), offset: s.elapsed()}
+	}
+	s.mu.Unlock()
 	s.recorderMu.Lock()
 	defer s.recorderMu.Unlock()
 	if s.recorders == nil {
 		s.recorders = map[string]*screencast{}
 	}
-	s.recorders[runID+"/"+leg.Name] = newScreencast(e.life, s.store.legDir(runID, leg.Name), leg.RecordStartedAt, s.clock, nil, lookup,
+	s.recorders[runID+"/"+leg.Name] = newScreencast(e.life, s.store.legDir(runID, leg.Name), leg.RecordStartedAt, func() time.Time {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if err := s.reconcileSleepLocked(runID); err != nil {
+			s.engineLog(runID, leg.Name, "sleep deadline: "+err.Error())
+		}
+		return s.clock()
+	}, nil, lookup,
 		func(err error) { s.engineLog(runID, leg.Name, "recording: "+err.Error()) })
 	return leg
 }

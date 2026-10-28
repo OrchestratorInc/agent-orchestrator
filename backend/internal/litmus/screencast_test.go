@@ -627,3 +627,115 @@ func TestRecordingEncodeTimeoutScalesWithFrames(t *testing.T) {
 		t.Fatal("timeout did not scale")
 	}
 }
+
+// syntheticRecording writes a frame through the capture loop without a socket
+// or child process. Its first frame is at 1 s and its stop is at 10 s.
+func syntheticRecording(t *testing.T, dir string, start, wall time.Time) *screencast {
+	t.Helper()
+	ready, saved := make(chan struct{}), make(chan error, 1)
+	var elapsed atomic.Int64
+	elapsed.Store(1000)
+	var r *screencast
+	r = newScreencast(context.Background(), dir, start, func() time.Time { return wall },
+		func() time.Duration { return time.Duration(elapsed.Load()) * time.Millisecond },
+		func(ctx context.Context) (string, error) {
+			<-ready
+			index, err := os.OpenFile(filepath.Join(dir, "frames.jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+			if err == nil {
+				err = r.keepFrame(index, base64.StdEncoding.EncodeToString([]byte("jpeg")))
+				err = errors.Join(err, index.Close())
+			}
+			saved <- err
+			<-ctx.Done()
+			return "", ctx.Err()
+		}, func(err error) { t.Error(err) })
+	t.Cleanup(func() { _ = r.stop(wall) })
+	close(ready)
+	select {
+	case err := <-saved:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-r.done:
+		t.Fatalf("capture ended: %v", r.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("synthetic frame not saved")
+	}
+	elapsed.Store(10000)
+	return r
+}
+
+func TestScreencastResumesAfterSegmentWithoutFrames(t *testing.T) {
+	dir, start := t.TempDir(), time.Unix(1000, 0)
+	ms := int64(10000)
+	meta := screencastManifest{StartedWall: start, StoppedWall: start.Add(10 * time.Second), DurationMS: &ms}
+	data, err := json.Marshal(meta)
+	is(t, "")(nil, err)
+	writeFile(t, filepath.Join(dir, "manifest.json"), string(data))
+	writeFile(t, filepath.Join(dir, "frames.jsonl"), "")
+	r := syntheticRecording(t, dir, start, start.Add(time.Minute))
+	is(t, "")(nil, r.stop(start.Add(2*time.Minute)))
+	meta, frames, err := readRecording(dir, start)
+	is(t, "")(nil, err)
+	if len(frames) != 1 || frames[0].N != 1 || *frames[0].OffsetMS != 11000 || recordingLength(meta) != 20*time.Second {
+		t.Fatalf("resumed empty segment: manifest %+v frames %+v", meta, frames)
+	}
+}
+
+func TestScreencastSleepExtendsDeadlineOnceAcrossLegs(t *testing.T) {
+	svc, wall := newSvc(t)
+	elapsed := time.Duration(0)
+	svc.elapsed = func() time.Duration { return elapsed }
+	run := Run{ID: "run_s1", SessionID: "s1", State: RunRunning, Deadline: wall.Add(2 * time.Minute)}
+	is(t, "")(nil, svc.store.Save(run))
+	svc.sleepSamples[run.ID] = sleepSample{wall: *wall}
+	headClock := func() time.Time {
+		svc.mu.Lock()
+		defer svc.mu.Unlock()
+		is(t, "")(nil, svc.reconcileSleepLocked(run.ID))
+		return svc.clock()
+	}
+	dir := svc.store.legDir(run.ID, "head")
+	is(t, "")(nil, os.MkdirAll(filepath.Join(dir, "frames"), 0o750))
+	index, err := os.Create(filepath.Join(dir, "frames.jsonl"))
+	is(t, "")(nil, err)
+	defer func() { _ = index.Close() }()
+	r := &screencast{dir: dir, clock: headClock, elapsed: svc.elapsed}
+	jpeg := base64.StdEncoding.EncodeToString([]byte("jpeg"))
+	is(t, "")(nil, r.keepFrame(index, jpeg))
+	*wall = wall.Add(600 * time.Second)
+	elapsed = 20 * time.Second
+	is(t, "")(nil, r.keepFrame(index, jpeg))
+	baseDir := t.TempDir()
+	is(t, "")(nil, os.MkdirAll(filepath.Join(baseDir, "frames"), 0o750))
+	baseIndex, err := os.Create(filepath.Join(baseDir, "frames.jsonl"))
+	is(t, "")(nil, err)
+	defer func() { _ = baseIndex.Close() }()
+	base := &screencast{dir: baseDir, clock: headClock, elapsed: svc.elapsed}
+	is(t, "")(nil, base.keepFrame(baseIndex, jpeg))
+	saved, err := svc.store.Get(run.ID)
+	is(t, "")(nil, err)
+	if !saved.Deadline.Equal(run.Deadline.Add(580*time.Second)) || len(saved.Gaps) != 1 || saved.Gaps[0] != "Mac slept 09:00-09:10 (10 min); deadline moved" {
+		t.Fatalf("deadline %s gaps %q", saved.Deadline, saved.Gaps)
+	}
+	frames := readFrameIndex(t, dir)
+	if len(frames) != 2 || *frames[1].OffsetMS-*frames[0].OffsetMS != 20000 || frames[1].WallMS-frames[0].WallMS != 600000 {
+		t.Fatalf("frame clocks %+v", frames)
+	}
+}
+
+func TestSleepDeadlineReconcilesBeforeStatusExpiry(t *testing.T) {
+	svc, wall := newSvc(t)
+	elapsed := time.Duration(0)
+	svc.elapsed = func() time.Duration { return elapsed }
+	run := Run{ID: "run_s1", SessionID: "s1", State: RunRunning, Deadline: wall.Add(time.Minute)}
+	is(t, "")(nil, svc.store.Save(run))
+	svc.sleepSamples[run.ID] = sleepSample{wall: *wall}
+	*wall = wall.Add(600 * time.Second)
+	elapsed = 20 * time.Second
+	status, err := svc.Status(context.Background(), "s1")
+	is(t, "")(nil, err)
+	if status.Run.State != RunRunning || !status.Run.Deadline.Equal(run.Deadline.Add(580*time.Second)) {
+		t.Fatalf("status expired before a post-wake frame: %+v", status.Run)
+	}
+}

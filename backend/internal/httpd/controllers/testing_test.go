@@ -305,7 +305,14 @@ func (p *testingProbe) Intake(_ context.Context, session, target string) (litmus
 
 func (p *testingProbe) Launch(_ context.Context, session, leg string) (litmus.Run, error) {
 	p.session, p.path = session, leg
+	p.action = "launch"
 	return litmus.Run{Kind: "issue", IssueNumber: 7}, p.err
+}
+
+func (p *testingProbe) Relaunch(ctx context.Context, session, leg string) (litmus.Run, error) {
+	out, err := p.Launch(ctx, session, leg)
+	p.action = "relaunch"
+	return out, err
 }
 
 func TestTestingAPIIssueStartIntakeAndLaunch(t *testing.T) {
@@ -319,8 +326,17 @@ func TestTestingAPIIssueStartIntakeAndLaunch(t *testing.T) {
 		t.Fatalf("intake %d %+v", out.Code, p)
 	}
 	out = testingRequest(t, p, "POST", "/launch", `{"sessionId":"w1","leg":"main"}`)
-	if out.Code != 200 || p.path != "main" {
+	if out.Code != 200 || p.session != "w1" || p.path != "main" || p.action != "launch" {
 		t.Fatalf("launch %d %+v", out.Code, p)
+	}
+	out = testingRequest(t, p, "POST", "/launch", `{"sessionId":"w1","leg":"main","relaunch":true}`)
+	if out.Code != 200 || p.session != "w1" || p.path != "main" || p.action != "relaunch" {
+		t.Fatalf("relaunch %d %+v", out.Code, p)
+	}
+	p.err = apierr.Conflict("TESTING_LEG_NOT_LAUNCHED", "main has not been launched", nil)
+	out = testingRequest(t, p, "POST", "/launch", `{"sessionId":"w1","leg":"main","relaunch":true}`)
+	if out.Code != 409 || !strings.Contains(out.Body.String(), "TESTING_LEG_NOT_LAUNCHED") {
+		t.Fatalf("relaunch error %d %s", out.Code, out.Body)
 	}
 }
 

@@ -18,6 +18,7 @@ type TestingService interface {
 	Intake(ctx context.Context, sessionID, prURL string) (litmus.Run, error)
 	Prepare(ctx context.Context, sessionID string) (litmus.Run, error)
 	Launch(ctx context.Context, sessionID, leg string) (litmus.Run, error)
+	Relaunch(ctx context.Context, sessionID, leg string) (litmus.Run, error)
 	Status(ctx context.Context, sessionID string) (litmus.RunStatus, error)
 	Submit(ctx context.Context, sessionID, verdictPath string) (litmus.Verdict, error)
 	Cleanup(ctx context.Context, sessionID string) (litmus.Run, error)
@@ -92,6 +93,9 @@ func (c *TestingController) Register(r chi.Router) {
 		return s.Prepare(r.Context(), in.SessionID)
 	}))
 	r.Post("/testing/launch", testingPost(func(r *http.Request, in TestingRequest) (litmus.Run, error) {
+		if in.Relaunch {
+			return s.Relaunch(r.Context(), in.SessionID, in.Leg)
+		}
 		return s.Launch(r.Context(), in.SessionID, in.Leg)
 	}))
 	r.Post("/testing/submit", testingPost(func(r *http.Request, in TestingRequest) (litmus.Verdict, error) {

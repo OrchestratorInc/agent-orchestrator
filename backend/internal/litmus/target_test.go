@@ -802,3 +802,70 @@ func TestRecipeValidationFailureDoesNotFreezeRetention(t *testing.T) {
 		t.Fatalf("tester expiry changed standalone validation: state=%s err=%v", saved.State, err)
 	}
 }
+
+func TestRelaunchLegContinuesReceiptsAndBothRecordingSegments(t *testing.T) {
+	svc, _, _, runDir := driveSvc(t)
+	run, err := svc.store.Get("run_s1")
+	is(t, "")(nil, err)
+	start := svc.clock()
+	f := &fakeSys{started: map[int]time.Time{123: start, 456: start}}
+	svc.sys = f.ops()
+	head, base := svc.store.legDir(run.ID, "head"), svc.store.legDir(run.ID, "base")
+	writeFile(t, filepath.Join(head, "home", "draft"), "discard this hung draft")
+	writeFile(t, filepath.Join(head, "tmp", "old"), "temporary")
+	writeFile(t, filepath.Join(head, "logs", "dev.log"), "first launch\n")
+	writeFile(t, filepath.Join(base, "home", "keep"), "other leg")
+	is(t, "")(nil, writeOwned(head, Owned{RunID: run.ID, Leg: "head", PGID: Proc{123, start}, State: "running"}))
+	is(t, "")(nil, writeOwned(base, Owned{RunID: run.ID, Leg: "base", PGID: Proc{456, start}, State: "running"}))
+	run.Repo = DefaultRepo
+	leg := run.Legs[0]
+	leg.RecordStartedAt = start
+	run.Legs[0] = leg
+	is(t, "")(nil, svc.store.Save(run))
+	e := svc.engineFor(run.ID, leg)
+	first := svc.receipt(ctx, run.ID, e, "head", "snapshot", nil, refInfo{}, nil, nil, 0, "first", "")
+	r := syntheticRecording(t, head, start, start.Add(time.Second))
+	svc.recorders = map[string]*screencast{run.ID + "/head": r}
+	// A stopped target still has the same pid/start identity in owned.json.
+	// The missing build stops this test before startLeg can launch a process.
+	is(t, "TESTING_NOT_PREPARED")(svc.Relaunch(ctx, "s1", "head"))
+	if !reflect.DeepEqual(f.log, []string{"killGroup 123"}) || pathExists(filepath.Join(head, "home")) || pathExists(filepath.Join(head, "tmp")) || !pathExists(filepath.Join(base, "home", "keep")) {
+		t.Fatalf("cleanup affected wrong state: kills %q", f.log)
+	}
+	log, err := os.ReadFile(filepath.Join(head, "logs", "dev.log"))
+	is(t, "")(nil, err)
+	if string(log) != "first launch\n" {
+		t.Fatalf("cleanup lost logs: %q", log)
+	}
+	// Supply the new engine and recorder without starting an app process.
+	leg.Engine = &EngineInfo{RunDir: runDir, Session: "fresh", Namespace: "fresh"}
+	next := svc.engineFor(run.ID, leg)
+	next.connectPage = e.connectPage
+	second := svc.receipt(ctx, run.ID, next, "head", "snapshot", nil, refInfo{}, nil, nil, 0, "second", "")
+	if first.Seq != 1 || second.Seq != 2 {
+		t.Fatalf("receipt numbers restarted: %d, %d", first.Seq, second.Seq)
+	}
+	r = syntheticRecording(t, head, start, start.Add(time.Minute))
+	svc.recorders[run.ID+"/head"] = r
+	svc.runner = &videoProbeRunner{duration: "20"}
+	media := &fakeMedia{}
+	svc.media = media
+	run = svc.stopRecording(ctx, run)
+	meta, frames, err := readRecording(head, start)
+	is(t, "")(nil, err)
+	list, err := os.ReadFile(filepath.Join(head, "frames-concat.txt"))
+	is(t, "")(nil, err)
+	if len(run.Gaps) != 0 || len(frames) != 2 || frames[1].N != 2 || *frames[1].OffsetMS != 11000 || recordingLength(meta) != 20*time.Second || len(media.calls) != 1 || !fileExists(recordingPath(runDir, "head")) || !strings.Contains(string(list), "000001.jpg'\nduration 11.000") || !strings.Contains(string(list), "000002.jpg'\nduration 9.000") {
+		t.Fatalf("relaunch video: frames %+v, manifest %+v, gaps %q, list %s, encodes %v", frames, meta, run.Gaps, list, media.calls)
+	}
+}
+
+func TestLaunchRunningLegStillRefusesAndRelaunchNeedsPriorLaunch(t *testing.T) {
+	svc, _, _, _ := driveSvc(t)
+	is(t, "TESTING_LEG_RUNNING")(svc.Launch(ctx, "s1", "head"))
+	run, err := svc.store.Get("run_s1")
+	is(t, "")(nil, err)
+	run.Repo = DefaultRepo
+	is(t, "")(nil, svc.store.Save(run))
+	is(t, "TESTING_LEG_NOT_LAUNCHED")(svc.Relaunch(ctx, "s1", "head"))
+}

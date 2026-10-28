@@ -187,6 +187,7 @@ func (s *Service) finishFindingClips(ctx context.Context, runDir string, v Verdi
 	if started.IsZero() || !playable {
 		return out
 	}
+	_, frames, _ := readRecording(filepath.Join(runDir, leg), started)
 	for i, f := range v.Findings {
 		if f.Leg != leg || f.Clip == nil {
 			continue
@@ -197,7 +198,7 @@ func (s *Service) finishFindingClips(ctx context.Context, runDir string, v Verdi
 				receipts = append(receipts, Receipt{Seq: a.Seq, Leg: a.Leg, At: a.At, MS: a.MS})
 			}
 		}
-		from, duration, ok := findingClipRange(f, receipts, started, time.Duration(span*float64(time.Second)))
+		from, duration, ok := findingClipRange(f, receipts, started, time.Duration(span*float64(time.Second)), frames...)
 		if !ok {
 			s.commentLogf(Run{ID: filepath.Base(runDir)}, "clip %s: receipt times are outside the recording", findingID(i))
 			continue

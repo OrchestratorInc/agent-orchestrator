@@ -19,6 +19,8 @@ type Service struct {
 	mu              sync.Mutex
 	store           *Store
 	clock           func() time.Time
+	elapsed         func() time.Duration
+	sleepSamples    map[string]sleepSample
 	gh              GH
 	resolve         RepoResolver
 	runner          Runner
@@ -40,7 +42,7 @@ type Service struct {
 	login           string                                             // the gh token's login, read by the first comment post
 	evidenceMu      sync.Mutex                                         // one publish at a time: runs of a repo share its evidence clone
 	prepareBudget   time.Duration                                      // longest a `prepare` verb may run; tests shorten it
-	keepRuns        int                                                // retention after every run: finished run dirs kept
+	keepRuns        int                                                // manual prune default: finished run dirs kept; the pass after every run keeps them all
 	keepCheckouts   int                                                // retention after every run: finished runs whose checkouts are kept
 	spawnMarkerWait time.Duration                                      // longest intake waits for Start to finish saving a spawned session's modes
 	projectRepo     func(ctx context.Context, projectID string) string // the project's own owner/repo; nil reads none
@@ -60,6 +62,9 @@ func New(store *Store, clock func() time.Time) *Service {
 		engines: map[string]*Engine{}, seqs: map[string]int{}, engExec: realExec, spawnMarkerWait: 10 * time.Second,
 		media: execMedia{}, prepareBudget: PrepareBudget, keepRuns: DefaultKeepRuns, keepCheckouts: DefaultKeepCheckouts, mirrorMu: map[string]*sync.Mutex{}, checkoutMu: map[string]chan struct{}{}, retryPause: 2 * time.Second}
 	s.closeEngine = s.closeEngines
+	origin := time.Now()
+	s.elapsed = func() time.Duration { return time.Since(origin) }
+	s.sleepSamples = map[string]sleepSample{}
 	if exe, err := os.Executable(); err == nil {
 		s.binary, _ = resolveBinary("", exe)
 	}
@@ -78,7 +83,7 @@ func (s *Service) WithBrowserBinary(path string) *Service {
 // comment.log when something was deleted or skipped, and never fails the run.
 func (s *Service) autoPrune(ctx context.Context, run Run) {
 	ctx = context.WithoutCancel(ctx)                                     // the client that closed the run may hang up; the disk is freed all the same
-	rep, err := s.prune(ctx, s.keepRuns, s.keepCheckouts, false, run.ID) // this run's dir is kept whatever keepRuns says
+	rep, err := s.prune(ctx, s.keepRuns, s.keepCheckouts, false, run.ID) // automatic passes keep every run's review files
 	if err != nil {
 		s.commentLogf(run, "prune failed: %v", err)
 		return
@@ -226,6 +231,9 @@ func (s *Service) load(sessionID string) (Run, error) {
 	if err != nil {
 		return Run{}, err
 	}
+	if err := s.reconcileSleepLocked(id); err != nil {
+		return Run{}, err
+	}
 	run, err := s.store.Get(id)
 	if errors.Is(err, fs.ErrNotExist) {
 		return Run{}, apierr.NotFound("TESTING_RUN_NOT_FOUND", "no testing run for this session; start with `ao testing intake <pr-url>`")
@@ -250,6 +258,38 @@ func (s *Service) load(sessionID string) (Run, error) {
 		return Run{}, conflict("TESTING_RUN_CLOSED", fmt.Sprintf("run %s is %s%s; testing verbs are refused", run.ID, run.State, why))
 	}
 	return run, nil
+}
+
+type sleepSample struct {
+	wall   time.Time
+	offset time.Duration
+}
+
+func (s *Service) reconcileSleepLocked(id string) error {
+	previous, ok := s.sleepSamples[id]
+	if !ok {
+		return nil
+	}
+	now := sleepSample{wall: s.clock().Round(0), offset: s.elapsed()}
+	gap := now.wall.Sub(previous.wall) - (now.offset - previous.offset)
+	if gap > 30*time.Second {
+		run, err := s.store.Get(id)
+		if err != nil {
+			return err
+		}
+		if !run.State.Closed() {
+			run.Deadline = run.Deadline.Add(gap)
+			run.Gaps = append(run.Gaps, fmt.Sprintf("Mac slept %s-%s (%d min); deadline moved", previous.wall.Format("15:04"), now.wall.Format("15:04"), int(gap.Round(time.Minute)/time.Minute)))
+			if err := s.store.Save(run); err != nil {
+				if saved, gerr := s.store.Get(id); gerr == nil && saved.Deadline.Equal(run.Deadline) {
+					s.sleepSamples[id] = now // run.json landed before the failure: a retry must not move the deadline again
+				}
+				return err
+			}
+		}
+	}
+	s.sleepSamples[id] = now
+	return nil
 }
 
 // App actions end at the deadline; submit and status stay open during the write-up grace.

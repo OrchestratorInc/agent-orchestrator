@@ -516,7 +516,7 @@ func (s *Service) pushEvidence(ctx context.Context, run Run, stage string, names
 
 // findingClipRange uses the selected receipt endpoints.
 // Three seconds of padding on each side are clamped to the recording.
-func findingClipRange(f Finding, receipts []Receipt, started time.Time, span time.Duration) (from, duration time.Duration, ok bool) {
+func findingClipRange(f Finding, receipts []Receipt, started time.Time, span time.Duration, frames ...screencastFrame) (from, duration time.Duration, ok bool) {
 	if f.Clip == nil || started.IsZero() || span <= 0 {
 		return 0, 0, false
 	}
@@ -537,11 +537,32 @@ func findingClipRange(f Finding, receipts []Receipt, started time.Time, span tim
 			last = r.At
 		}
 	}
-	if first.IsZero() || last.IsZero() || first.After(last) || first.Before(started) || last.Sub(started) > span {
+	// position maps wall time to video time from the last frame before it: wall time after that frame counts
+	// (a still screen sends no frames), up to the next frame's offset (a sleep stops the video, not the wall clock).
+	position := func(at time.Time) time.Duration {
+		offset := func(frame screencastFrame) time.Duration {
+			return time.Duration(frameOffset(frame, screencastManifest{StartedWall: started})) * time.Millisecond
+		}
+		pos := at.Sub(started)
+		if len(frames) > 0 && frames[0].WallMS > at.UnixMilli() {
+			pos = min(pos, offset(frames[0]))
+		}
+		for i, frame := range frames {
+			if frame.WallMS > 0 && frame.WallMS <= at.UnixMilli() {
+				pos = offset(frame) + at.Sub(time.UnixMilli(frame.WallMS))
+				if i+1 < len(frames) {
+					pos = min(pos, offset(frames[i+1]))
+				}
+			}
+		}
+		return pos
+	}
+	firstAt, lastAt := position(first), position(last)
+	if first.IsZero() || last.IsZero() || first.After(last) || first.Before(started) || firstAt > lastAt || lastAt > span {
 		return 0, 0, false
 	}
 	// Receipts mark action completion; include the selected action before padding.
-	from = max(first.Sub(started)-time.Duration(max(firstMS, 0))*time.Millisecond-3*time.Second, 0)
-	to := min(last.Sub(started)+3*time.Second, span)
+	from = max(position(first.Add(-time.Duration(max(firstMS, 0))*time.Millisecond))-3*time.Second, 0)
+	to := min(lastAt+3*time.Second, span)
 	return from, to - from, to > from
 }

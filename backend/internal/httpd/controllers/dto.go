@@ -3990,6 +3990,7 @@ type TestingRequest struct {
 	Path          *string  `json:"path,omitempty" description:"recipe validate: recipe file; omit or null selects the stored or embedded AO recipe. An empty string is invalid."`
 	SHA           string   `json:"sha,omitempty" description:"recipe validate: optional commit SHA to prepare, launch, seed and clean up. Omit to parse and validate only."`
 	Leg           string   `json:"leg,omitempty" enum:"base,head,main"`
+	Relaunch      bool     `json:"relaunch,omitempty" description:"launch only: replace a previously launched leg with fresh private state."`
 	VerdictPath   string   `json:"verdictPath,omitempty" description:"submit: tester-written JSON file in this run's scratch directory."`
 	Action        string   `json:"action,omitempty"`
 	Args          []string `json:"args,omitempty" description:"drive: the action's arguments."`

@@ -93,8 +93,9 @@ func TestTestingVerbsSendOneRequestEach(t *testing.T) {
 	}{
 		{[]string{"intake", "o/r#12"}, "POST", "/testing/intake", map[string]any{"prUrl": "o/r#12"}},
 		{[]string{"prepare"}, "POST", "/testing/prepare", map[string]any{}},
-		{[]string{"launch", "head"}, "POST", "/testing/launch", map[string]any{"leg": "head"}},
-		{[]string{"launch", "base"}, "POST", "/testing/launch", map[string]any{"leg": "base"}},
+		{[]string{"launch", "head"}, "POST", "/testing/launch", map[string]any{"leg": "head", "relaunch": false}},
+		{[]string{"launch", "base"}, "POST", "/testing/launch", map[string]any{"leg": "base", "relaunch": false}},
+		{[]string{"launch", "head", "--relaunch"}, "POST", "/testing/launch", map[string]any{"leg": "head", "relaunch": true}},
 		{[]string{"status"}, "GET", "/testing/status?sessionId=w1", nil},
 		{[]string{"cleanup"}, "POST", "/testing/cleanup", map[string]any{}},
 		{[]string{"submit", "--verdict", "scratch/verdict.json"}, "POST", "/testing/submit", map[string]any{"verdictPath": path}},

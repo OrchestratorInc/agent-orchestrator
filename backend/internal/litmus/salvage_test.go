@@ -48,6 +48,7 @@ func TestDeadlineSalvageNeedsNoReceipts(t *testing.T) {
 	is(t, "")(nil, svc.store.WriteFile("run_s1", "actions.jsonl", nil))
 	run, err := svc.store.Get("run_s1")
 	is(t, "")(nil, err)
+	svc.clock = func() time.Time { return run.Deadline.Add(writeupGrace) }
 	if !svc.closeAtDeadline(ctx, run, quiet) {
 		t.Fatal("run was not handled")
 	}

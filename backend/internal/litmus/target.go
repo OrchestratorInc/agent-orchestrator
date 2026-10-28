@@ -417,7 +417,7 @@ func (s *Service) startLeg(ctx context.Context, run Run, r Recipe, leg Leg, w *l
 	if err = errors.Join(err, legRoot.Close()); err != nil {
 		return leg, err
 	}
-	logf, err := os.Create(logPath)
+	logf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return leg, err
 	}
@@ -559,6 +559,15 @@ func poll(ctx context.Context, fn func() error) error {
 
 // Launch starts the base or head target privately and seeds it. Base and head may be launched at once.
 func (s *Service) Launch(ctx context.Context, sessionID, leg string) (Run, error) {
+	return s.launch(ctx, sessionID, leg, false)
+}
+
+// Relaunch replaces one previously launched target with a fresh private home.
+func (s *Service) Relaunch(ctx context.Context, sessionID, leg string) (Run, error) {
+	return s.launch(ctx, sessionID, leg, true)
+}
+
+func (s *Service) launch(ctx context.Context, sessionID, leg string, relaunch bool) (Run, error) {
 	if leg != "base" && leg != "head" && leg != "main" {
 		return Run{}, invalid("TESTING_LEG_INVALID", "leg must be base, head or main")
 	}
@@ -574,7 +583,7 @@ func (s *Service) Launch(ctx context.Context, sessionID, leg string) (Run, error
 	if i < 0 {
 		return Run{}, conflict("TESTING_NOT_PREPARED", "run `ao testing prepare` before launching "+leg)
 	}
-	if run.Legs[i].State == "running" {
+	if !relaunch && run.Legs[i].State == "running" {
 		return Run{}, conflict("TESTING_LEG_RUNNING", leg+" is already running")
 	}
 	recipe, err := s.store.LoadRecipe(run.Repo)
@@ -583,6 +592,35 @@ func (s *Service) Launch(ctx context.Context, sessionID, leg string) (Run, error
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), launchBudget(len(recipe.Seed)))
 	defer cancel()
+	if relaunch {
+		dir := s.store.legDir(run.ID, leg)
+		o, err := readOwned(dir)
+		if errors.Is(err, fs.ErrNotExist) || (err == nil && o.PGID.PID == 0) {
+			return Run{}, conflict("TESTING_LEG_NOT_LAUNCHED", leg+" has not been launched; omit --relaunch")
+		}
+		if err != nil {
+			return Run{}, err
+		}
+		key := run.ID + "/" + leg
+		s.recorderMu.Lock()
+		r := s.recorders[key]
+		delete(s.recorders, key)
+		s.recorderMu.Unlock()
+		if r != nil {
+			if err := r.stop(s.clock()); err != nil {
+				return Run{}, err
+			}
+		}
+		if err := cleanLeg(ctx, s.sys, dir, true); err != nil {
+			return Run{}, err
+		}
+		if run.Legs[i].Engine != nil {
+			s.engineFor(run.ID, run.Legs[i]).Close(s.sys)
+		}
+		s.mu.Lock()
+		delete(s.engines, key)
+		s.mu.Unlock()
+	}
 	var seedGap string
 	started, lerr := s.startLeg(ctx, run, recipe, run.Legs[i], newLaps(), &seedGap)
 	if lerr == nil {

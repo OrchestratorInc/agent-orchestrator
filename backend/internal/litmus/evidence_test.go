@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 const fakeSHA = "0123456789abcdef0123456789abcdef01234567"
@@ -304,5 +305,32 @@ func TestPushEvidenceReusesCommitOnlyWhenStagedFilesAreUnchanged(t *testing.T) {
 				t.Fatal("unchanged checkout did not resolve its existing HEAD")
 			}
 		})
+	}
+}
+
+func TestFindingClipRangeAcrossSleep(t *testing.T) {
+	start := time.UnixMilli(1793165389392)
+	a, b := int64(239713), int64(260440)
+	frames := []screencastFrame{
+		{N: 34, WallMS: 1793165629105, OffsetMS: &a},
+		{N: 35, WallMS: 1793166252101, OffsetMS: &b},
+	}
+	f := Finding{Leg: "head", Clip: &FindingClip{From: 1, To: 2}}
+	receipts := []Receipt{{Seq: 1, At: time.UnixMilli(frames[0].WallMS + 100)}, {Seq: 2, At: time.UnixMilli(frames[1].WallMS + 100)}}
+	from, duration, ok := findingClipRange(f, receipts, start, 592647*time.Millisecond, frames...)
+	if !ok || from != 236813*time.Millisecond || duration != 26727*time.Millisecond {
+		t.Fatalf("clip from %s duration %s ok %t", from, duration, ok)
+	}
+	// A still screen sends no frames: a click 20 s after the last frame is 20 s later in the video.
+	still := []Receipt{{Seq: 1, At: time.UnixMilli(frames[0].WallMS + 1000)}, {Seq: 2, At: time.UnixMilli(frames[0].WallMS + 20000)}}
+	if from, duration, ok := findingClipRange(f, still, start, 592647*time.Millisecond, frames...); !ok || from != 237713*time.Millisecond || duration != 25000*time.Millisecond {
+		t.Fatalf("still-screen clip from %s duration %s ok %t", from, duration, ok)
+	}
+	// Missing wall timestamps keep the old recording-origin calculation.
+	for i := range frames {
+		frames[i].WallMS = 0
+	}
+	if _, _, ok := findingClipRange(f, receipts, start, 592647*time.Millisecond, frames...); ok {
+		t.Fatal("wall-less index did not retain legacy out-of-range rejection")
 	}
 }

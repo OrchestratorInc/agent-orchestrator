@@ -28,6 +28,7 @@ type verdictInputData struct {
 	Coverage    []Coverage `json:"coverage"`
 	Environment string     `json:"environment"`
 	BlockedOn   string     `json:"blocked_on,omitempty"`
+	NotTested   string     `json:"not_tested,omitempty"`
 }
 
 // Submit accepts the tester's JSON under scratch and obeys the project's posting setting.
@@ -38,6 +39,9 @@ func (s *Service) Submit(ctx context.Context, sessionID, verdictPath string) (Ve
 	}
 	defer done()
 	v, data, err := s.readVerdict(run, verdictPath)
+	if err == nil && v.Result != "blocked" && v.BlockedOn != "" { // the tester is still here to fix it
+		err = invalid("TESTING_VERDICT_BLOCKED_ON", "blocked_on is only for blocked results; use not_tested for scope, version or platform limits")
+	}
 	if err != nil {
 		return Verdict{}, err
 	}
@@ -82,7 +86,7 @@ func (s *Service) readVerdict(run Run, verdictPath string) (Verdict, []byte, err
 	if err := dec.Decode(new(any)); err != io.EOF {
 		return Verdict{}, nil, invalid("TESTING_VERDICT_INVALID", "verdict JSON must contain one object")
 	}
-	v := Verdict{Result: input.Result, Headline: input.Headline, Findings: input.Findings, Coverage: input.Coverage, Environment: input.Environment, BlockedOn: input.BlockedOn}
+	v := Verdict{Result: input.Result, Headline: input.Headline, Findings: input.Findings, Coverage: input.Coverage, Environment: input.Environment, BlockedOn: input.BlockedOn, NotTested: input.NotTested}
 	receipts, err := s.store.Receipts(run.ID)
 	if err != nil {
 		return Verdict{}, nil, err
