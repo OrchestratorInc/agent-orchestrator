@@ -24,6 +24,19 @@ concurrency:
 jobs:
   cloud-build-test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: mirror.gcr.io/library/postgres:17-bookworm
+        env:
+          POSTGRES_DB: ao_cloud_test
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d ao_cloud_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
     defaults:
       run:
         working-directory: cloud
@@ -54,6 +67,8 @@ jobs:
         # -count=1 disables Go's test-result cache, which the restored build
         # cache would otherwise use to replay results from an earlier run.
         run: go test -race -count=1 ./...
+        env:
+          AO_CLOUD_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/ao_cloud_test?sslmode=disable
 
       - name: Test Expat security backport
         run: |
