@@ -1,5 +1,5 @@
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, QueryObserver, InfiniteQueryObserver, type InfiniteData } from "@tanstack/react-query";
 import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -21,6 +21,7 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 
 import {
 	clearConversationProviderCatalogs,
+	conversationQueryKey, conversationQueryOptions, refreshLocalConversation, mergeConversationPages,
 	conversationConfigOptionsQueryKey,
 	useConversation,
 	ProviderSwitchFailed,
@@ -29,6 +30,7 @@ import {
 	useConversationSkills,
 	toSnapshot,
 } from "./useConversation";
+import type { ConversationMessage, ConversationSnapshot } from "../types/conversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 import { ChatWorkspace } from "../components/chat/ChatWorkspace";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -42,10 +44,12 @@ function wrapper({ children }: { children: ReactNode }) {
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((resolvePromise) => {
+	let reject!: (reason: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
 		resolve = resolvePromise;
+		reject = rejectPromise;
 	});
-	return { promise, resolve };
+	return { promise, resolve, reject };
 }
 
 it("preserves queued-edit API error codes for delivery recovery", async () => {
@@ -1417,4 +1421,161 @@ it("keeps a live refresh that is in flight when older history starts loading", a
 	await act(async () => { refresh.resolve(page(21)); });
 
 	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(21));
+});
+
+describe("local conversation deltas", () => {
+	function cachedLive() {
+		return toSnapshot({
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready",
+			latestSequence: 3, changeCursor: 10, oldestSequence: 2, hasMoreBefore: true,
+			continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0,
+			settings: {}, messages: [], activities: [], turns: [],
+		});
+	}
+	async function activeCache() {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const live = cachedLive();
+		const older = { ...live, oldestSequence: 1, hasMoreBefore: false };
+		queryClient.setQueryData(conversationQueryKey("ao-1"), { pages: [live, older], pageParams: [undefined, 2] });
+		const observer = new QueryObserver(queryClient, { queryKey: conversationQueryKey("ao-1"), enabled: true, staleTime: Infinity });
+		const unsubscribe = observer.subscribe(() => {});
+		return { queryClient, live, older, unsubscribe };
+	}
+	it("fetches only a delta and preserves all earlier pages", async () => {
+		const { queryClient, live, older, unsubscribe } = await activeCache();
+		getMock.mockResolvedValue({ data: { ...WIRE, changeCursor: 11, afterSequence: 4, oldestSequence: 2, hasMoreBefore: true }, error: undefined });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		await refreshLocalConversation(queryClient, "ao-1");
+		expect(getMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/conversation", { params: { path: { sessionId: "ao-1" }, query: { beforeSequence: undefined, afterSequence: 4, afterChange: 10, limit: 200 } } });
+		const data = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey("ao-1"))!;
+		expect(data.pages).toHaveLength(2);
+		expect(data.pages[1]).toBe(older);
+		expect(data.pages[0].changeCursor).toBe(11);
+		expect(data.pages[0].oldestSequence).toBe(live.oldestSequence);
+		expect(invalidate).not.toHaveBeenCalled();
+		unsubscribe(); queryClient.clear();
+	});
+	it("uses the full-refresh fallback when a delta fails without a settings write", async () => {
+		const { queryClient, unsubscribe } = await activeCache();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+		getMock.mockRejectedValueOnce(new Error("delta connection lost"));
+		await refreshLocalConversation(queryClient, "ao-1");
+		expect(invalidate).toHaveBeenCalledOnce();
+		unsubscribe(); queryClient.clear();
+	});
+	it.each(["resolves", "rejects"] as const)("keeps optimistic settings when an older delta %s during a queued picker write", async (outcome) => {
+		const { queryClient, live, unsubscribe } = await activeCache();
+		live.settings = { model: "model-a" };
+		const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper: local });
+		const deltaResponse = deferred<{ data: Parameters<typeof toSnapshot>[0]; error: undefined }>();
+		getMock.mockReturnValueOnce(deltaResponse.promise);
+		const firstPatch = deferred<{ data: { model: string }; error: undefined }>();
+		const secondPatch = deferred<{ data: { model: string; reasoningEffort: string }; error: undefined }>();
+		patchMock.mockReturnValueOnce(firstPatch.promise).mockReturnValueOnce(secondPatch.promise);
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+		const refresh = refreshLocalConversation(queryClient, "ao-1");
+		act(() => result.current.chooseSettings({ model: "model-b" }));
+		await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1));
+		await act(async () => {
+			if (outcome === "rejects") deltaResponse.reject(new Error("delta connection lost"));
+			else deltaResponse.resolve({ data: { conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0, latestSequence: 3, oldestSequence: 2, hasMoreBefore: true, settings: { model: "model-a" }, turns: [], messages: [], activities: [], changeCursor: 11, afterSequence: 4 }, error: undefined });
+			await refresh;
+			// A new event during the same write must not start another read either.
+			await refreshLocalConversation(queryClient, "ao-1");
+		});
+		const settings = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey("ao-1"))!.pages[0].settings;
+		expect(settings.model).toBe("model-b");
+		expect(invalidate).not.toHaveBeenCalled();
+		expect(getMock).toHaveBeenCalledTimes(1);
+		act(() => result.current.chooseSettings({ ...settings, reasoningEffort: "high" }));
+		await act(async () => { firstPatch.resolve({ data: { model: "model-b" }, error: undefined }); });
+		await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(2));
+		expect(patchMock.mock.calls[1][1].body).toEqual({ model: "model-b", reasoningEffort: "high" });
+		expect(invalidate).not.toHaveBeenCalled();
+		await act(async () => { secondPatch.resolve({ data: { model: "model-b", reasoningEffort: "high" }, error: undefined }); });
+		await waitFor(() => expect(invalidate).toHaveBeenCalledOnce());
+		expect(queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey("ao-1"))!.pages[0].settings).toEqual({ model: "model-b", reasoningEffort: "high" });
+		unsubscribe(); queryClient.clear();
+	});
+	it.each(["delta-first", "older-first"] as const)("retains the final update and older history when pagination resolves %s", async (order) => {
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const live = cachedLive();
+		const key = conversationQueryKey("ao-1");
+		queryClient.setQueryData(key, { pages: [live], pageParams: [undefined] });
+		const observer = new InfiniteQueryObserver(queryClient, conversationQueryOptions("ao-1"));
+		const unsubscribe = observer.subscribe(() => {});
+		const deltaResponse = deferred<{ data: Parameters<typeof toSnapshot>[0]; error: undefined }>();
+		const olderResponse = deferred<{ data: Parameters<typeof toSnapshot>[0]; error: undefined }>();
+		getMock.mockReturnValueOnce(deltaResponse.promise).mockReturnValueOnce(olderResponse.promise);
+		const refresh = refreshLocalConversation(queryClient, "ao-1");
+		const pagination = observer.fetchNextPage({ cancelRefetch: false });
+		expect(getMock).toHaveBeenCalledTimes(2);
+		const wire: Parameters<typeof toSnapshot>[0] = {
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready",
+			continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0,
+			latestSequence: 3, oldestSequence: 2, hasMoreBefore: true, settings: {}, turns: [], messages: [], activities: [],
+		};
+		const delta: Parameters<typeof toSnapshot>[0] = { ...wire, changeCursor: 11, afterSequence: 4, latestSequence: 4, oldestSequence: 2, hasMoreBefore: true,
+			messages: [{ kind: "message" as const, id: "final-message", turnId: "turn-1", sequence: 4, revision: 2, role: "assistant" as const, origin: "provider" as const, createdAt: "2026-10-26T00:00:00Z", editAvailable: false, text: "finished", streaming: false }] };
+		const older: Parameters<typeof toSnapshot>[0] = { ...wire, oldestSequence: 1, hasMoreBefore: false,
+			messages: [{ kind: "message" as const, id: "older-message", turnId: "turn-1", sequence: 1, revision: 1, role: "user" as const, origin: "human" as const, createdAt: "2026-10-26T00:00:00Z", editAvailable: false, text: "history", streaming: false }] };
+		if (order === "delta-first") {
+			deltaResponse.resolve({ data: delta, error: undefined });
+			// Allow the delta handler to run while the real pagination request is pending.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			olderResponse.resolve({ data: older, error: undefined });
+		} else {
+			olderResponse.resolve({ data: older, error: undefined });
+			await pagination;
+			deltaResponse.resolve({ data: delta, error: undefined });
+		}
+		await Promise.all([refresh, pagination]);
+		const data = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
+		expect(data.pages).toHaveLength(2);
+		expect(data.pages[0].changeCursor).toBe(11);
+		expect(data.pages[0].items).toContainEqual(expect.objectContaining({ id: "final-message", revision: 2, text: "finished", streaming: false }));
+		expect(data.pages[1].items).toContainEqual(expect.objectContaining({ id: "older-message", text: "history" }));
+		expect(getMock).toHaveBeenCalledTimes(2);
+		unsubscribe(); queryClient.clear();
+	});
+	it.each([
+		{ afterSequence: undefined },
+		{ afterSequence: 4, conversationId: "replacement" },
+		{ afterSequence: 4, activeBranchId: "branch-b" },
+		{ afterSequence: 4, visibleAfterSequence: 3 },
+	])("falls back for an unmergeable response %j", async (patch) => {
+		const { queryClient, unsubscribe } = await activeCache();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+		getMock.mockResolvedValue({ data: { ...WIRE, changeCursor: 11, ...patch }, error: undefined });
+		await refreshLocalConversation(queryClient, "ao-1");
+		expect(invalidate).toHaveBeenCalledOnce();
+		unsubscribe(); queryClient.clear();
+	});
+	it("invalidates without a cache and without requesting a delta", async () => {
+		const queryClient = new QueryClient();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+		getMock.mockClear();
+		await refreshLocalConversation(queryClient, "absent");
+		expect(invalidate).toHaveBeenCalledOnce(); expect(getMock).not.toHaveBeenCalled(); queryClient.clear();
+	});
+
+	it("cancels an inactive prefetch that predates the event", async () => {
+		const queryClient = new QueryClient();
+		const pending = deferred<InfiniteData<ConversationSnapshot>>();
+		const prefetch = queryClient.prefetchQuery({ queryKey: conversationQueryKey("ao-1"), queryFn: () => pending.promise });
+		const cancel = vi.spyOn(queryClient, "cancelQueries");
+		await refreshLocalConversation(queryClient, "ao-1");
+		expect(cancel).toHaveBeenCalledWith({ queryKey: conversationQueryKey("ao-1"), type: "inactive" });
+		pending.resolve({ pages: [cachedLive()], pageParams: [undefined] });
+		await prefetch;
+		expect(queryClient.getQueryData(conversationQueryKey("ao-1"))).toBeUndefined();
+		queryClient.clear();
+	});
+	it("keeps the highest revision when a rewritten older row overlaps loaded history", () => {
+		const live = cachedLive();
+		const row = { kind: "message" as const, id: "older-message", sequence: 1, revision: 3, text: "corrected" } as ConversationMessage;
+		const result = mergeConversationPages([{ ...live, items: [row] }, { ...live, items: [{ ...row, revision: 4, text: "newer" }] }]);
+		expect(result?.items).toEqual([{ ...row, revision: 4, text: "newer" }]);
+	});
 });

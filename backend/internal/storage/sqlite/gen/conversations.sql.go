@@ -663,6 +663,22 @@ func (q *Queries) ConversationActivityExistsForProviderItem(ctx context.Context,
 	return exists, err
 }
 
+const conversationResetAfterCursor = `-- name: ConversationResetAfterCursor :one
+SELECT EXISTS(SELECT 1 FROM conversation_row_changes WHERE conversation_id = ? AND kind = 'reset' AND changed_at > ?) AS needs_reset
+`
+
+type ConversationResetAfterCursorParams struct {
+	ConversationID string
+	ChangedAt      int64
+}
+
+func (q *Queries) ConversationResetAfterCursor(ctx context.Context, arg ConversationResetAfterCursorParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, conversationResetAfterCursor, arg.ConversationID, arg.ChangedAt)
+	var needs_reset bool
+	err := row.Scan(&needs_reset)
+	return needs_reset, err
+}
+
 const detachSessionConversation = `-- name: DetachSessionConversation :exec
 UPDATE conversations SET current_session_id = NULL, updated_at = ?
 WHERE id = ? AND scope = 'session' AND current_session_id = ?
@@ -2293,6 +2309,96 @@ func (q *Queries) SelectConversationActivities(ctx context.Context, conversation
 	return items, nil
 }
 
+const selectConversationActivitiesDelta = `-- name: SelectConversationActivitiesDelta :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?1
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_activities.id, conversation_activities.conversation_id, conversation_activities.turn_id, conversation_activities.sequence, conversation_activities.revision, conversation_activities.kind, conversation_activities.status, conversation_activities.summary, conversation_activities.detail_json, conversation_activities.request_id, conversation_activities.provider_item_id, conversation_activities.created_at, conversation_activities.updated_at, conversation_activities.command_output, conversation_activities.command_output_truncated, conversation_activities.streamed_text, conversation_activities.streamed_text_truncated, conversation_activities.branch_id FROM conversation_activities
+JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
+WHERE conversation_activities.conversation_id = ?1
+  AND (conversation_activities.sequence >= ?2 OR conversation_activities.id IN (
+      SELECT row_id FROM conversation_row_changes
+      WHERE conversation_id = ?1 AND kind = 'activity' AND changed_at > ?3
+  ))
+  AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id NOT IN (
+      SELECT discarded.id FROM conversation_turns AS discarded
+      WHERE discarded.conversation_id = ?1
+        AND (
+          discarded.rolled_back_at IS NOT NULL
+          OR discarded.state = 'cancelled'
+        )
+  ))
+ORDER BY conversation_activities.sequence DESC
+LIMIT ?4
+`
+
+type SelectConversationActivitiesDeltaParams struct {
+	ConversationID string
+	AfterSequence  int64
+	AfterChange    int64
+	PageLimit      int64
+}
+
+func (q *Queries) SelectConversationActivitiesDelta(ctx context.Context, arg SelectConversationActivitiesDeltaParams) ([]ConversationActivity, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationActivitiesDelta,
+		arg.ConversationID,
+		arg.AfterSequence,
+		arg.AfterChange,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ConversationActivity{}
+	for rows.Next() {
+		var i ConversationActivity
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConversationID,
+			&i.TurnID,
+			&i.Sequence,
+			&i.Revision,
+			&i.Kind,
+			&i.Status,
+			&i.Summary,
+			&i.DetailJson,
+			&i.RequestID,
+			&i.ProviderItemID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CommandOutput,
+			&i.CommandOutputTruncated,
+			&i.StreamedText,
+			&i.StreamedTextTruncated,
+			&i.BranchID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const selectConversationActivitiesPage = `-- name: SelectConversationActivitiesPage :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
@@ -2761,6 +2867,17 @@ func (q *Queries) SelectConversationBySession(ctx context.Context, currentSessio
 	return i, err
 }
 
+const selectConversationChangeCursor = `-- name: SelectConversationChangeCursor :one
+SELECT cursor FROM conversation_change_clock WHERE id = 1
+`
+
+func (q *Queries) SelectConversationChangeCursor(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, selectConversationChangeCursor)
+	var cursor int64
+	err := row.Scan(&cursor)
+	return cursor, err
+}
+
 const selectConversationContextResetSequence = `-- name: SelectConversationContextResetSequence :one
 SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) AS sequence
 FROM conversation_activities
@@ -3205,6 +3322,99 @@ ORDER BY conversation_messages.sequence
 // offset, so a multi-byte character here silently corrupts later queries.
 func (q *Queries) SelectConversationMessages(ctx context.Context, conversationID string) ([]ConversationMessage, error) {
 	rows, err := q.db.QueryContext(ctx, selectConversationMessages, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ConversationMessage{}
+	for rows.Next() {
+		var i ConversationMessage
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConversationID,
+			&i.TurnID,
+			&i.Sequence,
+			&i.Revision,
+			&i.Role,
+			&i.Origin,
+			&i.Text,
+			&i.Streaming,
+			&i.ProviderItemID,
+			&i.ClientMessageID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeliveryContentJson,
+			&i.BranchID,
+			&i.ClientPayloadHash,
+			&i.SenderSessionID,
+			&i.SenderProjectID,
+			&i.SenderDisplayName,
+			&i.Continuation,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const selectConversationMessagesDelta = `-- name: SelectConversationMessagesDelta :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?1
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation FROM conversation_messages
+JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
+WHERE conversation_messages.conversation_id = ?1
+  AND (conversation_messages.sequence >= ?2 OR conversation_messages.id IN (
+      SELECT row_id FROM conversation_row_changes
+      WHERE conversation_id = ?1 AND kind = 'message' AND changed_at > ?3
+  ))
+  AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
+  AND (conversation_messages.turn_id IS NULL OR conversation_messages.turn_id NOT IN (
+      SELECT discarded.id FROM conversation_turns AS discarded
+      WHERE discarded.conversation_id = ?1
+        AND (
+          discarded.rolled_back_at IS NOT NULL
+          OR (discarded.promoted_to_turn_id IS NOT NULL AND discarded.batched_input = 0)
+          OR discarded.state = 'cancelled'
+        )
+  ))
+ORDER BY conversation_messages.sequence DESC
+LIMIT ?4
+`
+
+type SelectConversationMessagesDeltaParams struct {
+	ConversationID string
+	AfterSequence  int64
+	AfterChange    int64
+	PageLimit      int64
+}
+
+func (q *Queries) SelectConversationMessagesDelta(ctx context.Context, arg SelectConversationMessagesDeltaParams) ([]ConversationMessage, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationMessagesDelta,
+		arg.ConversationID,
+		arg.AfterSequence,
+		arg.AfterChange,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -3752,6 +3962,97 @@ ORDER BY conversation_turns.requested_at, conversation_turns.rowid
 // offset, so a multi-byte character here silently corrupts later queries.
 func (q *Queries) SelectConversationTurns(ctx context.Context, conversationID string) ([]ConversationTurn, error) {
 	rows, err := q.db.QueryContext(ctx, selectConversationTurns, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ConversationTurn{}
+	for rows.Next() {
+		var i ConversationTurn
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConversationID,
+			&i.HandledBySessionID,
+			&i.ProviderTurnID,
+			&i.ControllerGeneration,
+			&i.State,
+			&i.ErrorMessage,
+			&i.RequestedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.DiffJson,
+			&i.RolledBackAt,
+			&i.PlanJson,
+			&i.BranchID,
+			&i.PromotionStartedAt,
+			&i.PromotedToTurnID,
+			&i.RetryOfTurnID,
+			&i.HandledByReviewID,
+			&i.UsageLimitResetsAt,
+			&i.UsageLimitAutoResume,
+			&i.UsageLimitResumeError,
+			&i.BatchedInput,
+			&i.ProviderInputText,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const selectConversationTurnsDelta = `-- name: SelectConversationTurnsDelta :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?1
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_turns.id, conversation_turns.conversation_id, conversation_turns.handled_by_session_id, conversation_turns.provider_turn_id, conversation_turns.controller_generation, conversation_turns.state, conversation_turns.error_message, conversation_turns.requested_at, conversation_turns.started_at, conversation_turns.completed_at, conversation_turns.diff_json, conversation_turns.rolled_back_at, conversation_turns.plan_json, conversation_turns.branch_id, conversation_turns.promotion_started_at, conversation_turns.promoted_to_turn_id, conversation_turns.retry_of_turn_id, conversation_turns.handled_by_review_id, conversation_turns.usage_limit_resets_at, conversation_turns.usage_limit_auto_resume, conversation_turns.usage_limit_resume_error, conversation_turns.batched_input, conversation_turns.provider_input_text FROM conversation_turns
+JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
+WHERE conversation_turns.conversation_id = ?1
+  AND conversation_turns.promoted_to_turn_id IS NULL
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
+        AND lineage_message.sequence <= path.max_sequence
+      UNION ALL
+      SELECT 1 FROM conversation_activities AS lineage_activity
+      WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
+        AND lineage_activity.sequence <= path.max_sequence
+  ))
+  AND conversation_turns.id IN (
+      SELECT row_id FROM conversation_row_changes
+      WHERE conversation_id = ?1 AND kind = 'turn' AND changed_at > ?2
+  )
+ORDER BY conversation_turns.requested_at, conversation_turns.rowid
+LIMIT 1001
+`
+
+type SelectConversationTurnsDeltaParams struct {
+	ConversationID string
+	AfterChange    int64
+}
+
+func (q *Queries) SelectConversationTurnsDelta(ctx context.Context, arg SelectConversationTurnsDeltaParams) ([]ConversationTurn, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationTurnsDelta, arg.ConversationID, arg.AfterChange)
 	if err != nil {
 		return nil, err
 	}

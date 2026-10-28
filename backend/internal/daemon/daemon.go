@@ -398,6 +398,31 @@ func Run(buildVersion string) error {
 				Activities:                       rows.Activities,
 				BranchPoints:                     rows.BranchPoints,
 				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
+				VisibleAfterSequence:             rows.VisibleAfterSequence,
+				ChangeCursor:                     rows.ChangeCursor,
+				AfterSequence:                    rows.AfterSequence,
+				OldestSequence:                   rows.OldestSequence,
+				HasMoreBefore:                    rows.HasMoreBefore,
+			}, nil
+		}),
+		DeltaReader: chatsvc.SnapshotDeltaReader(func(ctx context.Context, conversationID string, afterSequence, afterChange, limit int64) (chatsvc.ConversationRows, error) {
+			rows, err := store.LoadConversationSnapshotDelta(ctx, conversationID, afterSequence, afterChange, limit)
+			if err != nil {
+				return chatsvc.ConversationRows{}, err
+			}
+			return chatsvc.ConversationRows{
+				Conversation:                     rows.Conversation,
+				ActiveBranch:                     rows.ActiveBranch,
+				EditFloorSequence:                rows.EditFloorSequence,
+				NativeForkAvailableAfterSequence: rows.NativeForkAvailableAfterSequence,
+				Turns:                            rows.Turns,
+				Messages:                         rows.Messages,
+				Activities:                       rows.Activities,
+				BranchPoints:                     rows.BranchPoints,
+				BranchedFromEarlierMessage:       rows.BranchedFromEarlierMessage,
+				VisibleAfterSequence:             rows.VisibleAfterSequence,
+				ChangeCursor:                     rows.ChangeCursor,
+				AfterSequence:                    rows.AfterSequence,
 				OldestSequence:                   rows.OldestSequence,
 				HasMoreBefore:                    rows.HasMoreBefore,
 			}, nil

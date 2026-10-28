@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InfiniteQueryObserver, QueryClient, QueryObserver } from "@tanstack/react-query";
+import { toSnapshot } from "../hooks/useConversation";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 
 const {
@@ -80,9 +81,11 @@ function fakeQueryClient() {
 	return {
 		invalidateQueries: vi.fn().mockResolvedValue(undefined),
 		isFetching: vi.fn().mockReturnValue(0),
+		isMutating: vi.fn().mockReturnValue(0),
 		refetchQueries: vi.fn().mockResolvedValue(undefined),
 		setQueryData: vi.fn(),
 		getQueryData: vi.fn(),
+		getQueryCache: vi.fn(() => ({ find: vi.fn(() => undefined) })),
 	} as unknown as Parameters<typeof createEventTransport>[0];
 }
 
@@ -190,6 +193,35 @@ describe("createEventTransport", () => {
 		disconnect();
 		expect(remoteB.closed).toBe(true);
 		expect(unsubscribeConnectedHostsMock).toHaveBeenCalledOnce();
+	});
+
+	it("coalesces local conversation events into one in-flight delta and one catch-up", async () => {
+		vi.useFakeTimers();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const wire = { conversationId: "local-conversation", sessionId: "same", mode: "chat" as const, controller: "ready" as const, latestSequence: 3, changeCursor: 10, oldestSequence: 1, hasMoreBefore: false, messages: [], activities: [], turns: [], settings: {}, continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0 };
+		const page = toSnapshot(wire);
+		client.setQueryData(["conversation", "same"], { pages: [page], pageParams: [undefined] });
+		const observer = new QueryObserver(client, { queryKey: ["conversation", "same"], staleTime: Infinity });
+		const unsubscribe = observer.subscribe(() => {});
+		const replies: Array<(value: unknown) => void> = [];
+		remoteGetMock.mockImplementation(() => new Promise((resolve) => replies.push(resolve)));
+		const disconnect = createEventTransport(client).connect();
+		try {
+			const local = cdcSources()[0];
+			const event = JSON.stringify({ sessionId: "same", payload: { conversationId: "local-conversation" } });
+			local.emit("session_updated", event);
+			await vi.advanceTimersByTimeAsync(200);
+			expect(remoteGetMock).toHaveBeenCalledOnce();
+			for (let i = 0; i < 10; i++) local.emit("session_updated", event);
+			await vi.advanceTimersByTimeAsync(200);
+			expect(remoteGetMock).toHaveBeenCalledOnce();
+			replies[0]({ data: { ...wire, afterSequence: 4, changeCursor: 11 } });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(remoteGetMock).toHaveBeenCalledTimes(2);
+			replies[1]({ data: { ...wire, afterSequence: 4, changeCursor: 12 } });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(remoteGetMock).toHaveBeenCalledTimes(2);
+		} finally { disconnect(); unsubscribe(); client.clear(); vi.useRealTimers(); }
 	});
 
 	it("coalesces a burst of remote conversation events into one catch-up fetch", async () => {
@@ -931,6 +963,35 @@ describe("bounded live refresh", () => {
 		disconnect();
 	});
 
+	it("does not invalidate optimistic settings when an in-flight delta rejects", async () => {
+		vi.useFakeTimers();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["conversation", "chat-1"];
+		const page = toSnapshot({ conversationId: "conv-1", sessionId: "chat-1", mode: "chat", controller: "ready", continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0, latestSequence: 3, changeCursor: 10, hasMoreBefore: false, settings: { model: "model-a" }, messages: [], activities: [], turns: [] });
+		client.setQueryData(key, { pages: [page], pageParams: [undefined] });
+		const observer = new QueryObserver(client, { queryKey: key, staleTime: Infinity });
+		const unsubscribe = observer.subscribe(() => {});
+		let rejectDelta!: (error: Error) => void;
+		remoteGetMock.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectDelta = reject; }));
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		const disconnect = createEventTransport(client).connect();
+		emit();
+		expect(remoteGetMock).toHaveBeenCalledOnce();
+		let finishPatch!: () => void;
+		const mutation = client.getMutationCache().build(client, {
+			mutationKey: ["conversation-settings", "local"],
+			mutationFn: (_variables: { targetSessionId: string }) => new Promise<void>((resolve) => { finishPatch = resolve; }),
+		});
+		const write = mutation.execute({ targetSessionId: "chat-1" });
+		await vi.advanceTimersByTimeAsync(0);
+		client.setQueryData(key, { pages: [{ ...page, settings: { model: "model-b" } }], pageParams: [undefined] });
+		rejectDelta(new Error("delta connection lost"));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(invalidate).not.toHaveBeenCalled();
+		expect(client.getQueryData<{ pages: typeof page[] }>(key)?.pages[0].settings.model).toBe("model-b");
+		finishPatch(); await write;
+		disconnect(); unsubscribe(); client.clear();
+	});
 	it("drops a queued catch-up when disposed during a fetch", async () => {
 		vi.useFakeTimers();
 		const client = fakeQueryClient();

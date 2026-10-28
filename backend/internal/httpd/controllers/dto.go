@@ -3264,6 +3264,11 @@ type ConversationActivityResponse struct {
 
 // ConversationSnapshotResponse is the durable read model a client bootstraps from.
 type ConversationSnapshotResponse struct {
+	VisibleAfterSequence int64 `json:"visibleAfterSequence,omitempty"`
+	// ChangeCursor advances on every row write, including settled-row rewrites.
+	ChangeCursor int64 `json:"changeCursor,omitempty"`
+	// AfterSequence is echoed only when this response is a complete mergeable delta.
+	AfterSequence  *int64 `json:"afterSequence,omitempty"`
 	ContinueTurnID string `json:"continueTurnId"`
 	// SupportsExcerpts advertises daemon-owned source verification separately from
 	// provider capabilities. Older daemons silently ignore the excerpts input.

@@ -381,12 +381,78 @@ export interface ConversationQueryResult {
 	loadOlder: () => void;
 }
 
-async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
+async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number, afterSequence?: number, afterChange?: number): Promise<ConversationSnapshot> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation", {
-		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE } },
+		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE, ...(afterSequence === undefined ? {} : { afterSequence, afterChange }) } },
 	});
 	if (error) throw error;
 	return toSnapshot(data as WireSnapshot);
+}
+
+const conversationSettingsMutationKey = (hostId?: string) => ["conversation-settings", hostId ?? "local"] as const;
+
+/** Refresh an observed local chat without refetching its loaded history pages. */
+export async function refreshLocalConversation(queryClient: QueryClient, sessionId: string): Promise<void> {
+	const queryKey = conversationQueryKey(sessionId);
+	const previous = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(queryKey);
+	const live = previous?.pages?.[0];
+	const settingsPending = () => queryClient.isMutating({
+		mutationKey: conversationSettingsMutationKey(), exact: true,
+		predicate: (mutation) => (mutation.state.variables as ConversationSessionMutationInput | undefined)?.targetSessionId === sessionId,
+	}) > 0;
+	// The latest settings mutation refreshes after committing (or failing). Until
+	// then neither a delta nor its fallback may undo the optimistic picker state.
+	const fallback = () => settingsPending() ? Promise.resolve() : queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
+	if (settingsPending()) return;
+	if (queryClient.isFetching({ queryKey, type: "active" }) > 0) {
+		// Joining a request that predates the event cannot acknowledge that event.
+		// Read its cursor, then catch up after it settles.
+		await fallback();
+		await refreshLocalConversation(queryClient, sessionId);
+		return;
+	}
+	// Inactive caches must remain stale so opening them uses a full snapshot.
+	const active = queryClient.getQueryCache().find({ queryKey, exact: true })?.isActive();
+	if (!active) {
+		// An inactive hover-prefetch cannot acknowledge an event that postdates it.
+		if (queryClient.isFetching({ queryKey, type: "inactive" }) > 0) {
+			await queryClient.cancelQueries({ queryKey, type: "inactive" });
+		}
+		await fallback();
+		return;
+	}
+	if (!live?.changeCursor) {
+		await fallback();
+		return;
+	}
+	const afterSequence = live.latestSequence + 1;
+	let delta: ConversationSnapshot;
+	try {
+		delta = await fetchConversationPage(sessionId, undefined, undefined, afterSequence, live.changeCursor);
+	} catch {
+		await fallback();
+		return;
+	}
+	// Pagination can start after this GET and commit pages captured before it.
+	// Let those writes finish before merging, including a replacement fetch that
+	// starts while we wait. No await separates the final idle check and cache write.
+	let pending = queryClient.getQueryCache().find({ queryKey, exact: true });
+	while (pending?.state.fetchStatus !== "idle" && pending?.promise) {
+		await pending.promise.catch(() => {});
+		pending = queryClient.getQueryCache().find({ queryKey, exact: true });
+	}
+	if (settingsPending()) return;
+	const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(queryKey);
+	if (!current || delta.afterSequence !== afterSequence || delta.conversationId !== live.conversationId || delta.activeBranchId !== live.activeBranchId || delta.visibleAfterSequence !== live.visibleAfterSequence || current.pages[0] !== live) {
+		await fallback();
+		return;
+	}
+	const merged = mergeConversationPages([delta, live]);
+	if (!merged) return;
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(queryKey, {
+		...current,
+		pages: [merged, ...current.pages.slice(1)],
+	});
 }
 
 /** Refresh only the live page; refetching an infinite query downloads all older history. */
@@ -854,6 +920,9 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			} : current,
 		);
 	const chooseSettings = useMutation({
+		// Keep this observer attached across local navigation; targetSessionId in
+		// the variables scopes refresh coordination without resetting pending state.
+		mutationKey: conversationSettingsMutationKey(hostId),
 		// Shown at once, so the next pick builds on this one rather than on the saved settings.
 		onMutate: async ({ targetSessionId, settings }: { targetSessionId: string; settings: TurnSettings }) => {
 			await queryClient.cancelQueries({ queryKey: conversationQueryKey(targetSessionId, hostId) });
@@ -1756,6 +1825,9 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 	].sort((a, b) => a.sequence - b.sequence);
 
 	return {
+		changeCursor: wire.changeCursor,
+		visibleAfterSequence: wire.visibleAfterSequence,
+		afterSequence: wire.afterSequence ?? undefined,
 		continueTurnId: wire.continueTurnId,
 		conversationId: wire.conversationId,
 		supportsFileReferences: wire.supportsFileReferences,
@@ -1943,10 +2015,14 @@ export function mergeConversationPages(pages: ConversationSnapshot[]): Conversat
 
 	const items = new Map<string, ConversationItem>();
 	const turns = new Map<string, ConversationSnapshot["turns"][number]>();
-	// Walk oldest to newest so the live page wins when a row changed after an older
-	// page was fetched (for example, a streamed message settling).
+	// Prefer the highest row revision; for ties, the live page wins. A delta can
+	// update a settled row that also exists on an older loaded page.
 	for (const page of [...pages].reverse()) {
-		for (const item of page.items) items.set(`${item.kind}:${item.id}`, item);
+		for (const item of page.items) {
+			const key = `${item.kind}:${item.id}`;
+			const prior = items.get(key);
+			if (!prior || item.revision >= prior.revision) items.set(key, item);
+		}
 		for (const turn of page.turns) turns.set(turn.id, turn);
 	}
 

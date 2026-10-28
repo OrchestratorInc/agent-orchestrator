@@ -56,6 +56,7 @@ type Service struct {
 	store                  Store
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader
+	deltaReader            SnapshotDeltaReader
 	sessions               SessionReader
 	drivers                ports.ChatDriverRegistry
 	activity               ActivityRecorder
@@ -157,12 +158,13 @@ func (g controllerGate) unlock() { <-g }
 // Options configures a Service. The id factory and clock are injected so tests
 // are deterministic.
 type Options struct {
-	AppRunID   string
-	Store      Store
-	Reader     SnapshotReader
-	PageReader SnapshotPageReader
-	Sessions   SessionReader
-	Drivers    ports.ChatDriverRegistry
+	AppRunID    string
+	Store       Store
+	Reader      SnapshotReader
+	PageReader  SnapshotPageReader
+	DeltaReader SnapshotDeltaReader
+	Sessions    SessionReader
+	Drivers     ports.ChatDriverRegistry
 	// Activity feeds derived session status from turn events. Nil leaves a chat
 	// session reading as idle while it works, so production always wires it.
 	Activity ActivityRecorder
@@ -212,6 +214,7 @@ func New(opts Options) *Service {
 		store:                  opts.Store,
 		reader:                 opts.Reader,
 		pageReader:             opts.PageReader,
+		deltaReader:            opts.DeltaReader,
 		sessions:               opts.Sessions,
 		drivers:                opts.Drivers,
 		activity:               opts.Activity,
@@ -1876,6 +1879,9 @@ func (s *Service) StopAll(ctx context.Context) {
 
 // Snapshot is the durable read model a client bootstraps from.
 type Snapshot struct {
+	VisibleAfterSequence             int64
+	ChangeCursor                     int64
+	AfterSequence                    *int64
 	Conversation                     domain.ConversationRecord
 	ActiveBranch                     domain.ConversationBranch
 	EditFloorSequence                int64
@@ -1922,8 +1928,15 @@ type SnapshotPageReader interface {
 	LoadConversationSnapshotPage(ctx context.Context, conversationID string, beforeSequence, limit int64) (ConversationRows, error)
 }
 
+// SnapshotDeltaReader optionally returns a complete mergeable newest-page delta.
+// A nil reader preserves the unmarked full-page compatibility path.
+type SnapshotDeltaReader func(context.Context, string, int64, int64, int64) (ConversationRows, error)
+
 // ConversationRows is the raw durable read.
 type ConversationRows struct {
+	VisibleAfterSequence             int64
+	ChangeCursor                     int64
+	AfterSequence                    *int64
 	Conversation                     domain.ConversationRecord
 	ActiveBranch                     domain.ConversationBranch
 	EditFloorSequence                int64
@@ -2026,6 +2039,9 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 	}
 
 	return Snapshot{
+		VisibleAfterSequence:             rows.VisibleAfterSequence,
+		ChangeCursor:                     rows.ChangeCursor,
+		AfterSequence:                    rows.AfterSequence,
 		Conversation:                     rows.Conversation,
 		ActiveBranch:                     rows.ActiveBranch,
 		EditFloorSequence:                rows.EditFloorSequence,
@@ -2090,6 +2106,16 @@ func (s *Service) snapshotForReviewRows(review domain.Review, rows ConversationR
 // SnapshotPage reads one bounded timeline page. The live conversation metadata
 // remains current on every page; only turns/messages/activities are windowed.
 func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeSequence, limit int64) (Snapshot, error) {
+	return s.snapshotPage(ctx, id, beforeSequence, limit, nil, 0)
+}
+
+// SnapshotDelta opts in to a complete newest-page delta. Unsupported readers
+// deliberately return an unmarked full page for compatibility.
+func (s *Service) SnapshotDelta(ctx context.Context, id domain.SessionID, afterSequence, afterChange, limit int64) (Snapshot, error) {
+	return s.snapshotPage(ctx, id, 0, limit, &afterSequence, afterChange)
+}
+
+func (s *Service) snapshotPage(ctx context.Context, id domain.SessionID, beforeSequence, limit int64, afterSequence *int64, afterChange int64) (Snapshot, error) {
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
 		return Snapshot{}, err
@@ -2111,7 +2137,12 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		// old full read. Production always wires PageReader.
 		return s.Snapshot(ctx, id)
 	}
-	rows, err := s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, limit)
+	var rows ConversationRows
+	if afterSequence != nil && s.deltaReader != nil {
+		rows, err = s.deltaReader(ctx, conversation.ID, *afterSequence, afterChange, limit)
+	} else {
+		rows, err = s.pageReader.LoadConversationSnapshotPage(ctx, conversation.ID, beforeSequence, limit)
+	}
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("load conversation page %s: %w", conversation.ID, err)
 	}
@@ -2133,6 +2164,9 @@ func (s *Service) SnapshotPage(ctx context.Context, id domain.SessionID, beforeS
 		rows.Conversation.Settings.FastMode, rows.Conversation.Settings.PlanMode = live.FastMode, live.PlanMode
 	}
 	return Snapshot{
+		VisibleAfterSequence:             rows.VisibleAfterSequence,
+		ChangeCursor:                     rows.ChangeCursor,
+		AfterSequence:                    rows.AfterSequence,
 		Conversation:                     rows.Conversation,
 		ActiveBranch:                     rows.ActiveBranch,
 		EditFloorSequence:                rows.EditFloorSequence,

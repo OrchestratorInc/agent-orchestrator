@@ -2010,3 +2010,118 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   ))
 ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
 LIMIT 1;
+
+-- name: SelectConversationMessagesDelta :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_messages.* FROM conversation_messages
+JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
+WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
+  AND (conversation_messages.sequence >= sqlc.arg(after_sequence) OR conversation_messages.id IN (
+      SELECT row_id FROM conversation_row_changes
+      WHERE conversation_id = sqlc.arg(conversation_id) AND kind = 'message' AND changed_at > sqlc.arg(after_change)
+  ))
+  AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
+  AND (conversation_messages.turn_id IS NULL OR conversation_messages.turn_id NOT IN (
+      SELECT discarded.id FROM conversation_turns AS discarded
+      WHERE discarded.conversation_id = sqlc.arg(conversation_id)
+        AND (
+          discarded.rolled_back_at IS NOT NULL
+          OR (discarded.promoted_to_turn_id IS NOT NULL AND discarded.batched_input = 0)
+          OR discarded.state = 'cancelled'
+        )
+  ))
+ORDER BY conversation_messages.sequence DESC
+LIMIT sqlc.arg(page_limit);
+
+-- name: SelectConversationActivitiesDelta :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_activities.* FROM conversation_activities
+JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND (conversation_activities.sequence >= sqlc.arg(after_sequence) OR conversation_activities.id IN (
+      SELECT row_id FROM conversation_row_changes
+      WHERE conversation_id = sqlc.arg(conversation_id) AND kind = 'activity' AND changed_at > sqlc.arg(after_change)
+  ))
+  AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id NOT IN (
+      SELECT discarded.id FROM conversation_turns AS discarded
+      WHERE discarded.conversation_id = sqlc.arg(conversation_id)
+        AND (
+          discarded.rolled_back_at IS NOT NULL
+          OR discarded.state = 'cancelled'
+        )
+  ))
+ORDER BY conversation_activities.sequence DESC
+LIMIT sqlc.arg(page_limit);
+
+-- name: SelectConversationChangeCursor :one
+SELECT cursor FROM conversation_change_clock WHERE id = 1;
+
+-- name: ConversationResetAfterCursor :one
+SELECT EXISTS(SELECT 1 FROM conversation_row_changes WHERE conversation_id = ? AND kind = 'reset' AND changed_at > ?) AS needs_reset;
+
+-- name: SelectConversationTurnsDelta :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_turns.* FROM conversation_turns
+JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
+WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_turns.promoted_to_turn_id IS NULL
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
+        AND lineage_message.sequence <= path.max_sequence
+      UNION ALL
+      SELECT 1 FROM conversation_activities AS lineage_activity
+      WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
+        AND lineage_activity.sequence <= path.max_sequence
+  ))
+  AND conversation_turns.id IN (
+      SELECT row_id FROM conversation_row_changes
+      WHERE conversation_id = sqlc.arg(conversation_id) AND kind = 'turn' AND changed_at > sqlc.arg(after_change)
+  )
+ORDER BY conversation_turns.requested_at, conversation_turns.rowid
+LIMIT 1001;
