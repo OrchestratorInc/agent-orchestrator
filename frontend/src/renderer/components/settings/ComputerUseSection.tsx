@@ -8,7 +8,6 @@ import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
-import { HarnessStateText, type HarnessTone } from "./harness/harness-ui";
 import type { InstallJob } from "./installState";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
@@ -21,6 +20,11 @@ const installJobQueryKey = ["system-install", "cua-driver"] as const;
 const JOB_POLL_MS = 1_500;
 const GRANT_POLL_MS = 2_000;
 const RELEASES_URL = "https://cua.ai/docs/how-to-guides/driver/install";
+// Privacy & Security panes; must match the main process's allowlist in src/main/external-open.ts.
+const PRIVACY_PANE_URLS = {
+	accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+	screenRecording: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+} as const;
 
 async function fetchStatus(): Promise<ComputerUseStatus> {
 	const { data, error } = await apiClient.GET("/api/v1/computer-use/status");
@@ -54,11 +58,14 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 		queryFn: fetchInstallJob,
 		refetchInterval: (query) => (query.state.data?.status === "running" ? JOB_POLL_MS : false),
 	});
-	const [action, setAction] = useState<"install" | "start" | "grant" | "doctor" | null>(null);
+	const [action, setAction] = useState<"install" | "start" | "grant" | null>(null);
 	const [actionError, setActionError] = useState<string | null>(null);
-	const [doctorReport, setDoctorReport] = useState<string | null>(null);
-	const [showOutput, setShowOutput] = useState(false);
 	const [copied, setCopied] = useState(false);
+	const agentAccess = useUpdateComputerUse();
+	// Set when this panel starts a fresh install: installing the driver is asking
+	// for agents to use it, so its success turns agent access on. An update
+	// leaves the user's choice alone.
+	const enableOnInstall = useRef(false);
 
 	// A finished install changes what status reports; refresh it once.
 	const jobStatus = job.data?.status;
@@ -66,9 +73,11 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 	useEffect(() => {
 		if (previousJobStatus.current === "running" && jobStatus && jobStatus !== "running") {
 			void queryClient.invalidateQueries({ queryKey: computerUseStatusQueryKey });
+			if (jobStatus === "succeeded" && enableOnInstall.current) agentAccess.update(true);
+			enableOnInstall.current = false;
 		}
 		previousJobStatus.current = jobStatus;
-	}, [jobStatus, queryClient]);
+	}, [jobStatus, queryClient, agentAccess]);
 
 	const run = async (name: NonNullable<typeof action>, work: () => Promise<void>) => {
 		setAction(name);
@@ -82,9 +91,9 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 		}
 	};
 	const install = () => run("install", async () => {
+		enableOnInstall.current = !installed;
 		const { data, error } = await apiClient.POST("/api/v1/system/install/{target}", { params: { path: { target: "cua-driver" } } });
 		if (error || !data) throw new Error(apiErrorMessage(error));
-		setShowOutput(false);
 		queryClient.setQueryData(installJobQueryKey, data);
 	});
 	const startService = () => run("start", async () => {
@@ -96,11 +105,6 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 		const { data, error } = await apiClient.POST("/api/v1/computer-use/permissions/grant");
 		if (error || !data) throw new Error(apiErrorMessage(error));
 		queryClient.setQueryData(computerUseStatusQueryKey, data);
-	});
-	const doctor = () => run("doctor", async () => {
-		const { data, error } = await apiClient.GET("/api/v1/computer-use/doctor");
-		if (error || !data) throw new Error(apiErrorMessage(error));
-		setDoctorReport(data.report);
 	});
 	const copyCommand = async (command: string) => {
 		await navigator.clipboard.writeText(command);
@@ -151,20 +155,18 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 				<SettingsRow label={t("settings.computerUse.driver")} description={driverDescription}>
 					{driverAction}
 				</SettingsRow>
-				<AgentAccessRow installed={installed} />
+				<AgentAccessRow installed={installed} access={agentAccess} />
 				{installed && current ? (
 					<>
-						<SettingsRow label={t("settings.computerUse.service")} description={current.daemon === "stopped" ? t("settings.computerUse.serviceStopped") : undefined}>
-							<span className="flex items-center gap-3">
-								<HarnessStateText tone={serviceTone(current.daemon)}>{t(`settings.computerUse.daemon.${current.daemon}`)}</HarnessStateText>
-								{current.daemon !== "running" ? (
-									<Button type="button" size="sm" variant="ghost" disabled={action !== null} onClick={() => void startService()}>
-										{action === "start" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-										{t("settings.computerUse.start")}
-									</Button>
-								) : null}
-							</span>
-						</SettingsRow>
+						{/* A running service needs no row; only its absence is worth reporting. */}
+						{current.daemon !== "running" ? (
+							<SettingsRow label={t("settings.computerUse.service")} description={<span className="text-error">{t("settings.computerUse.serviceNotRunning")}</span>}>
+								<Button type="button" size="sm" variant="ghost" disabled={action !== null} onClick={() => void startService()}>
+									{action === "start" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+									{t("settings.computerUse.start")}
+								</Button>
+							</SettingsRow>
+						) : null}
 						{permissions ? (
 							<SettingsRow
 								label={t("settings.computerUse.permissions")}
@@ -180,7 +182,14 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 										{t("settings.computerUse.granting")}
 									</span>
 								) : allGranted(permissions.accessibility, permissions.screenRecording) ? (
-									<span className="text-xs text-settings-muted">{t("settings.computerUse.permission.granted")}</span>
+									// Each opens its own pane, where the user can review or revoke it.
+									<span className="flex items-center gap-1">
+										{(["accessibility", "screenRecording"] as const).map((pane) => (
+											<Button key={pane} type="button" size="sm" variant="ghost" onClick={() => void aoBridge.app.openExternal(PRIVACY_PANE_URLS[pane])}>
+												<Check aria-hidden="true" />{t(`settings.computerUse.${pane}`)}
+											</Button>
+										))}
+									</span>
 								) : (
 									<Button type="button" size="sm" variant="ghost" disabled={action !== null} onClick={() => void grant()}>
 										{t("settings.computerUse.grant")}
@@ -199,53 +208,11 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
 
 			{actionError ? <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{actionError}</p> : null}
 
-			{installed && current ? (
-				<SettingsSection
-					title={t("settings.computerUse.details")}
-					sectionId="computerUseDetails"
-					grouped
-					action={
-						<Button type="button" size="sm" variant="ghost" className="text-settings-muted hover:text-settings-label" disabled={action !== null} onClick={() => void doctor()}>
-							{action === "doctor" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
-							{t("settings.computerUse.runDoctor")}
-						</Button>
-					}
-				>
-					<SettingsRow label={t("settings.computerUse.executable")} description={<span className="break-all font-mono">{current.binaryPath}</span>} />
-					<SettingsRow label={t("settings.computerUse.screenshots")} description={<span className="break-all font-mono">{current.imageDirectory}</span>} />
-					{current.updateAvailable && current.releaseNotesUrl ? (
-						<SettingsRow label={t("settings.computerUse.latestVersion")} description={<span className="font-mono">{current.latestVersion}</span>}>
-							<Button type="button" size="sm" variant="ghost" onClick={() => void aoBridge.app.openExternal(current.releaseNotesUrl!)}>
-								<ExternalLink aria-hidden="true" />{t("settings.computerUse.releaseNotes")}
-							</Button>
-						</SettingsRow>
-					) : null}
-					{doctorReport ? (
-						<div className="settings-content-row">
-							<pre className="settings-thin-scrollbar max-h-64 overflow-auto overscroll-contain whitespace-pre-wrap break-words font-mono text-xs text-settings-muted">{doctorReport}</pre>
-						</div>
-					) : null}
-				</SettingsSection>
-			) : null}
-
 			{(!installed || manualCommand) && status.isSuccess && !installing ? (
 				<div className="flex px-(--settings-row-inset)">
 					<Button type="button" size="sm" variant="ghost" className="-ml-2.5 text-settings-muted hover:text-settings-label" onClick={() => void aoBridge.app.openExternal(RELEASES_URL)}>
 						<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
 					</Button>
-				</div>
-			) : null}
-
-			{job.data?.output && (failed || jobStatus === "succeeded") ? (
-				<div className="flex flex-col gap-2 px-(--settings-row-inset)">
-					<Button type="button" aria-expanded={showOutput} size="sm" variant="ghost" className="-ml-2.5 self-start text-settings-muted hover:text-settings-label" onClick={() => setShowOutput((open) => !open)}>
-						{t(showOutput ? "settings.harness.hideDiagnostics" : "settings.harness.showDiagnostics")}
-					</Button>
-					{showOutput ? (
-						<pre data-computer-use-install-output="" className="settings-thin-scrollbar max-h-48 overflow-auto overscroll-contain whitespace-pre-wrap break-words rounded-md bg-(--color-bg-settings-input) p-3 font-mono text-xs text-settings-muted">
-							{job.data.command ? `$ ${job.data.command}\n\n` : ""}{job.data.output}
-						</pre>
-					) : null}
 				</div>
 			) : null}
 		</>
@@ -257,10 +224,10 @@ export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
  * computer-use tools and a standing instruction to read their guide first.
  * It needs Cua Driver installed to turn on; once on it can always be turned off.
  */
-function AgentAccessRow({ installed }: { installed: boolean }) {
+function AgentAccessRow({ installed, access }: { installed: boolean; access: ReturnType<typeof useUpdateComputerUse> }) {
 	const { t } = useTranslation();
 	const { settings, isLoading } = useSettings();
-	const { update, saving, error } = useUpdateComputerUse();
+	const { update, saving, error } = access;
 	const enabled = settings?.computerUse ?? false;
 	return (
 		<div className="flex w-full flex-col">
@@ -278,10 +245,6 @@ function AgentAccessRow({ installed }: { installed: boolean }) {
 			{error ? <p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">{error}</p> : null}
 		</div>
 	);
-}
-
-function serviceTone(daemon: ComputerUseStatus["daemon"]): HarnessTone {
-	return daemon === "running" ? "ok" : daemon === "stopped" ? "error" : "off";
 }
 
 function allGranted(...states: PermissionState[]): boolean {

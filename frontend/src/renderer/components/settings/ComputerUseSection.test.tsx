@@ -42,7 +42,6 @@ function daemon({ status, job = { target: "cua-driver", status: "idle", command:
 	apiMocks.get.mockImplementation(async (path: string) => {
 		if (path === "/api/v1/computer-use/status") return { data: status(), error: undefined };
 		if (path === "/api/v1/system/install/{target}") return { data: typeof job === "function" ? job() : job, error: undefined };
-		if (path === "/api/v1/computer-use/doctor") return { data: { report: "[ok  ] binary: cua-driver 0.28.2" }, error: undefined };
 		return { data: undefined, error: { message: `unexpected ${path}` } };
 	});
 }
@@ -92,7 +91,41 @@ describe("ComputerUseSection", () => {
 		job = { target: "cua-driver", status: "succeeded", output: "installed cua-driver" };
 		expect(await screen.findByText("0.28.2", {}, { timeout: 4_000 })).toBeInTheDocument();
 		expect(screen.getByText("Installed")).toBeInTheDocument();
-		expect(screen.getByText("Background service")).toBeInTheDocument();
+		expect(screen.queryByText("Background service")).not.toBeInTheDocument();
+	});
+
+	it("turns agent access on once a fresh install succeeds", async () => {
+		let current = notInstalled;
+		let job: Record<string, unknown> = { target: "cua-driver", status: "idle" };
+		daemon({ status: () => current, job: () => job });
+		apiMocks.post.mockImplementation(async () => {
+			job = { target: "cua-driver", status: "running" };
+			return { data: job, error: undefined };
+		});
+		renderSection();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Install · Official installer" }));
+		expect(settingsMocks.update).not.toHaveBeenCalled();
+		current = installed;
+		job = { target: "cua-driver", status: "succeeded" };
+		await waitFor(() => expect(settingsMocks.update).toHaveBeenCalledWith(true), { timeout: 4_000 });
+	});
+
+	it("leaves agent access alone after an update", async () => {
+		let current: Status = { ...installed, latestVersion: "0.37.0", updateAvailable: true };
+		let job: Record<string, unknown> = { target: "cua-driver", status: "idle" };
+		daemon({ status: () => current, job: () => job });
+		apiMocks.post.mockImplementation(async () => {
+			job = { target: "cua-driver", status: "running" };
+			return { data: job, error: undefined };
+		});
+		renderSection();
+
+		await userEvent.click(await screen.findByRole("button", { name: "Update to 0.37.0" }));
+		current = { ...installed, version: "0.37.0", latestVersion: "0.37.0" };
+		job = { target: "cua-driver", status: "succeeded" };
+		expect(await screen.findByText("0.37.0", {}, { timeout: 4_000 })).toBeInTheDocument();
+		expect(settingsMocks.update).not.toHaveBeenCalled();
 	});
 
 	it("shows the driver's state once installed and offers an update", async () => {
@@ -101,14 +134,11 @@ describe("ComputerUseSection", () => {
 		renderSection();
 
 		const update = await screen.findByRole("button", { name: "Update to 0.37.0" });
-		expect(screen.getByText("Running")).toBeInTheDocument();
+		expect(screen.queryByText("Background service")).not.toBeInTheDocument();
 		expect(screen.getByText("macOS permissions")).toBeInTheDocument();
 		expect(screen.queryByText(/Accessibility: Granted/)).not.toBeInTheDocument();
-		expect(screen.getByText("/Users/me/.local/bin/cua-driver")).toBeInTheDocument();
+		expect(screen.queryByText("/Users/me/.local/bin/cua-driver")).not.toBeInTheDocument();
 		expect(screen.getByRole("switch", { name: "Let agents use this computer" })).toBeEnabled();
-
-		await userEvent.click(screen.getByRole("button", { name: "Release notes" }));
-		expect(bridgeMocks.openExternal).toHaveBeenCalledWith("https://example.test/notes");
 
 		await userEvent.click(update);
 		expect(apiMocks.post).toHaveBeenCalledWith("/api/v1/system/install/{target}", { params: { path: { target: "cua-driver" } } });
@@ -119,12 +149,12 @@ describe("ComputerUseSection", () => {
 		apiMocks.post.mockResolvedValue({ data: installed, error: undefined });
 		renderSection();
 
-		expect(await screen.findByText("Stopped")).toBeInTheDocument();
+		expect(await screen.findByText("The background service isn't running.")).toBeInTheDocument();
 		expect(screen.getByText("Start the background service to check them.")).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("button", { name: "Start" }));
 
 		expect(apiMocks.post).toHaveBeenCalledWith("/api/v1/computer-use/daemon/start");
-		expect(await screen.findByText("Running")).toBeInTheDocument();
+		await waitFor(() => expect(screen.queryByText("Background service")).not.toBeInTheDocument());
 	});
 
 	it("asks macOS for missing permissions and follows the request", async () => {
@@ -173,22 +203,14 @@ describe("ComputerUseSection", () => {
 		expect(screen.queryByText("bash was not found on PATH.")).not.toBeInTheDocument();
 	});
 
-	it("shows a failed install and its output", async () => {
+	it("shows a failed install without its raw output", async () => {
 		daemon({ status: () => notInstalled, job: { target: "cua-driver", status: "failed", error: "exit status 1", output: "error: /Applications is not writable", command: "/bin/bash <downloaded from https://cua.ai/driver/install.sh>" } });
 		renderSection();
 
 		expect(await screen.findByText("exit status 1")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Retry install" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Show diagnostics" }));
-		expect(document.querySelector("[data-computer-use-install-output]")).toHaveTextContent("/Applications is not writable");
-	});
-
-	it("runs the driver's doctor report", async () => {
-		daemon({ status: () => installed });
-		renderSection();
-
-		await userEvent.click(await screen.findByRole("button", { name: "Run doctor" }));
-		expect(await screen.findByText(/binary: cua-driver 0.28.2/)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Show diagnostics" })).not.toBeInTheDocument();
+		expect(screen.queryByText(/\/Applications is not writable/)).not.toBeInTheDocument();
 	});
 
 	it("reports an action failure next to the section", async () => {
