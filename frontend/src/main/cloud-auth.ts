@@ -16,6 +16,7 @@ import type { CloudAccount } from "../shared/cloud-account";
 // incorrectly and panic. Both modules only use each other's exports inside
 // functions, so the static ES cycle is safe at module-init time.
 import { revokeLocalSession } from "./cloud-auth-local";
+import { resolveCloudAuthEnvironment } from "./cloud-auth-environment";
 import { providerAuthFlow } from "./provider-auth-flow";
 
 // persistLocalClaudeOAuthToken writes a captured Claude setup-token under the AO
@@ -34,9 +35,13 @@ async function persistLocalClaudeOAuthToken(dataDir: string, token: string): Pro
 // sign-in URL), so a baked default keeps sign-in working without build-time
 // setup; VITE_WORKOS_CLIENT_ID overrides it per build when needed.
 const DEFAULT_WORKOS_CLIENT_ID = "client_01KZ3VRKC374HS91XGRDPT3671";
-const CLIENT_ID =
+const BUILD_CLIENT_ID =
   import.meta.env.VITE_WORKOS_CLIENT_ID?.trim() ||
   (process.env.VITEST ? "client_test" : DEFAULT_WORKOS_CLIENT_ID);
+// Staging's own WorkOS client, return page and sign-in file when this launch's
+// control plane is staging (see cloud-auth-environment.ts).
+const authEnvironment = resolveCloudAuthEnvironment(process.env, app.isPackaged, BUILD_CLIENT_ID);
+const CLIENT_ID = authEnvironment.clientId;
 // A loopback redirect is one we service with a local HTTP server: a dev build's
 // http://127.0.0.1 default, or an explicit 127.0.0.1/localhost override. An
 // HTTPS bounce page is NOT a loopback — it returns to the app via the ao-app://
@@ -65,17 +70,12 @@ function isLoopbackRedirect(redirectUri: string): boolean {
 // A development build doesn't claim ao-app:// by default (see
 // registerCloudProtocol): owning it would take the scheme away from the
 // installed app. It signs in through a loopback callback server instead, the
-// standard desktop-OAuth pattern, with zero setup. AO_CLOUD_AUTH_REDIRECT
-// overrides either default (e.g. to point a packaged build at a staging bounce
-// page).
-const DEFAULT_PACKAGED_REDIRECT_URI = "https://api.aoagents.dev/app/auth/return";
-const REDIRECT_URI =
-  process.env.AO_CLOUD_AUTH_REDIRECT?.trim() ||
-  (app.isPackaged
-    ? DEFAULT_PACKAGED_REDIRECT_URI
-    : "http://127.0.0.1:3000/callback");
+// standard desktop-OAuth pattern, with zero setup. A packaged build pointed at
+// staging returns through staging's bounce page; AO_CLOUD_AUTH_REDIRECT
+// overrides every default.
+const REDIRECT_URI = authEnvironment.redirectUri;
 const useLoopbackRedirect = isLoopbackRedirect(REDIRECT_URI);
-const AUTH_STORE_FILE = "cloud-auth.bin";
+const AUTH_STORE_FILE = authEnvironment.storeFile;
 const LEGACY_SESSION_FILE = "cloud-session.json";
 const PKCE_TTL_MS = 10 * 60 * 1000;
 const workos = CLIENT_ID ? createWorkOS({ clientId: CLIENT_ID }) : null;
