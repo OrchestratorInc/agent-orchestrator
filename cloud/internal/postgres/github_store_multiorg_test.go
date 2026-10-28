@@ -510,6 +510,12 @@ func TestProjectGitHubCheckoutContextForASnapshotBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if appCheckout, err := func() (domain.GitHubCheckoutContext, error) {
+		appStore, _ := openAppRoleStore(t, admin)
+		return appStore.ProjectGitHubCheckoutContext(ctx, fixture.orgID, projectID)
+	}(); err != nil || appCheckout.ProjectID != projectID {
+		t.Fatalf("project checkout under row-level security = %+v, %v", appCheckout, err)
+	}
 	if checkout.ProjectID != projectID || checkout.SessionID != "" ||
 		checkout.GitHubInstallationID != installationID || checkout.GitHubRepositoryID != repository.GitHubRepositoryID ||
 		checkout.CloneURL != repository.CloneURL {
@@ -526,7 +532,10 @@ func TestProjectGitHubCheckoutContextForASnapshotBuild(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	recent, err := store.RecentRepositorySandboxSnapshots(ctx, "freestyle", time.Now().Add(-time.Hour))
+	// The control plane runs as a role row-level security applies to, which
+	// sees no project from the service context.
+	appStore, _ := openAppRoleStore(t, admin)
+	recent, err := appStore.RecentRepositorySandboxSnapshots(ctx, "freestyle", time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +556,7 @@ func TestProjectGitHubCheckoutContextForASnapshotBuild(t *testing.T) {
 	if _, err := store.ProjectGitHubCheckoutContext(ctx, fixture.orgID, projectID); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("archived project checkout = %v, want ErrForbidden", err)
 	}
-	if recent, err = store.RecentRepositorySandboxSnapshots(ctx, "freestyle", time.Now().Add(-time.Hour)); err != nil {
+	if recent, err = appStore.RecentRepositorySandboxSnapshots(ctx, "freestyle", time.Now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	for _, refresh := range recent {

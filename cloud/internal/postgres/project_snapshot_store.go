@@ -257,55 +257,65 @@ type RepositorySnapshotRefresh struct {
 // the harness snapshots makes every one of them unusable; the builder rebuilds
 // these ahead of their next session. Snapshots keyed by URL (anonymous public
 // clones) are left to their next session.
+//
+// The snapshots are listed under the service context and each project is
+// looked up in its own organization: projects have no service-context read
+// policy, so a cross-organization join would see none of them.
 func (s *Store) RecentRepositorySandboxSnapshots(
 	ctx context.Context,
 	provider string,
 	usedSince time.Time,
 ) ([]RepositorySnapshotRefresh, error) {
-	var refreshes []RepositorySnapshotRefresh
+	var snapshots []domain.RepositorySandboxSnapshot
 	err := s.withService(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT snapshot.org_id::text, snapshot.repository_key,
-				snapshot.repository_identity, snapshot.provider, snapshot.harness,
-				snapshot.snapshot_id, snapshot.base_snapshot_id, snapshot.created_at,
-				project.id::text, project.repository_url, project.github_repository_id
-			FROM ao_repository_sandbox_snapshots snapshot
-			JOIN LATERAL (
-				SELECT candidate.id, candidate.repository_url, candidate.github_repository_id
-				FROM ao_projects candidate
-				WHERE candidate.org_id = snapshot.org_id
-				  AND candidate.archived_at IS NULL
-				  AND candidate.github_repository_id IS NOT NULL
-				  AND snapshot.repository_key = 'github:' || candidate.github_repository_id::text
-				ORDER BY candidate.updated_at DESC
-				LIMIT 1
-			) project ON true
-			WHERE snapshot.provider = $1 AND snapshot.last_used_at >= $2
-			ORDER BY snapshot.last_used_at DESC`,
+		rows, err := tx.Query(ctx, `SELECT org_id::text, repository_key, repository_identity, provider, harness,
+				snapshot_id, base_snapshot_id, created_at
+			FROM ao_repository_sandbox_snapshots
+			WHERE provider = $1 AND last_used_at >= $2 AND repository_key LIKE 'github:%'
+			ORDER BY last_used_at DESC`,
 			provider, usedSince)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var refresh RepositorySnapshotRefresh
-			var repositoryID int64
-			snapshot := &refresh.Snapshot
+			var snapshot domain.RepositorySandboxSnapshot
 			if err := rows.Scan(
 				&snapshot.OrgID, &snapshot.RepositoryKey, &snapshot.RepositoryIdentity,
 				&snapshot.Provider, &snapshot.Harness, &snapshot.SnapshotID,
 				&snapshot.BaseSnapshotID, &snapshot.CreatedAt,
-				&refresh.Project.ID, &refresh.Project.RepositoryURL, &repositoryID,
 			); err != nil {
 				return err
 			}
-			refresh.Project.OrgID = snapshot.OrgID
-			refresh.Project.GitHubRepositoryID = &repositoryID
-			refreshes = append(refreshes, refresh)
+			snapshots = append(snapshots, snapshot)
 		}
 		return rows.Err()
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list recent repository snapshots: %w", err)
+	}
+	var refreshes []RepositorySnapshotRefresh
+	for _, snapshot := range snapshots {
+		project := domain.Project{OrgID: snapshot.OrgID}
+		var repositoryID int64
+		err := s.withOrg(ctx, snapshot.OrgID, func(tx pgx.Tx) error {
+			return tx.QueryRow(ctx, `SELECT id::text, repository_url, github_repository_id
+				FROM ao_projects
+				WHERE org_id = $1 AND archived_at IS NULL AND github_repository_id IS NOT NULL
+				  AND 'github:' || github_repository_id::text = $2
+				ORDER BY updated_at DESC
+				LIMIT 1`,
+				snapshot.OrgID, snapshot.RepositoryKey,
+			).Scan(&project.ID, &project.RepositoryURL, &repositoryID)
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("find the project of repository snapshot %s: %w", snapshot.RepositoryKey, err)
+		}
+		project.GitHubRepositoryID = &repositoryID
+		refreshes = append(refreshes, RepositorySnapshotRefresh{Snapshot: snapshot, Project: project})
 	}
 	return refreshes, nil
 }
