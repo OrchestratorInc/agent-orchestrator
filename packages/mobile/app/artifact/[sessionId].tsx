@@ -8,6 +8,8 @@ import { useArtifactActions } from "../../lib/artifact-menu";
 import { artifactCommentTarget, resolveArtifactAssetPath, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
+import { useRenderTheme } from "../../lib/chat/RenderFrame";
+import { renderThemeScript } from "../../lib/chat/renderFrameModel";
 import { ChatMarkdown, type MarkdownImageSource } from "../../lib/chat/ChatMarkdown";
 import { authHeaders, type ServerConfig } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
@@ -25,7 +27,7 @@ import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { font, iconSize, radius, space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
-import { useInlinedArtifactPage, INLINE_ARTIFACT_PAGES } from "../../lib/useInlinedArtifactPage";
+import { useInlinedArtifactPage } from "../../lib/useInlinedArtifactPage";
 import { useSessionArtifacts } from "../../lib/useSessionArtifacts";
 
 // Above this, a text file shows as plain text: a full grammar pass over it
@@ -192,7 +194,7 @@ function ArtifactWeb({ config, url, version, page }: {
 	config: ServerConfig;
 	url: string;
 	version: string;
-	/** An HTML page, loaded with its own files inlined where the platform needs it. */
+	/** An HTML page, loaded with the files it links inlined. */
 	page?: { sessionId: string; path: string };
 }) {
 	const t = useTheme();
@@ -200,8 +202,14 @@ function ArtifactWeb({ config, url, version, page }: {
 	const web = useRef<WebView>(null);
 	const [error, setError] = useState<string>();
 	const inlined = useInlinedArtifactPage({ enabled: Boolean(page), config, sessionId: page?.sessionId ?? "", path: page?.path ?? "", version });
-	// Inlining failed: the page still opens from its URL, as on iOS.
-	if (page && INLINE_ARTIFACT_PAGES && !inlined.html && !inlined.failed) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	// An inlined page carries AO's theme bootstrap; it takes the app's live theme, as a chat frame does.
+	const theme = useRenderTheme();
+	const loaded = useRef(false);
+	useEffect(() => {
+		if (inlined.html && loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
+	}, [inlined.html, theme]);
+	// Inlining failed: the page still opens from its URL.
+	if (page && !inlined.html && !inlined.failed) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	return (
 		<View style={styles.screen}>
 			<WebView
@@ -215,6 +223,10 @@ function ArtifactWeb({ config, url, version, page }: {
 				startInLoadingState
 				renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
 				onLoadStart={() => setError(undefined)}
+				onLoadEnd={() => {
+					loaded.current = true;
+					if (inlined.html) web.current?.injectJavaScript(renderThemeScript(theme));
+				}}
 				onHttpError={(event) => setError(event.nativeEvent.statusCode === 404 ? "The worker no longer has this file." : "This artifact didn't load. Retry, or check it on that machine.")}
 				onError={(event) => setError(event.nativeEvent.description || "This artifact didn't load.")}
 			/>

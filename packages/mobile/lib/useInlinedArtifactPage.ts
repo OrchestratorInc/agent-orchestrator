@@ -1,15 +1,7 @@
 import { useEffect, useState } from "react";
-import { Platform } from "react-native";
-import { artifactFileUrl, getArtifactText } from "./api";
+import { artifactFileUrl, getArtifactPage, getArtifactText } from "./api";
 import { inlineArtifactPage, MAX_INLINED_IMAGE_BYTES, type ArtifactAssetLoader } from "./artifactPageInliner";
 import { authHeaders, type ServerConfig } from "./config";
-
-/**
- * Whether an HTML artifact must be loaded inlined rather than from its URL:
- * Android's WebView sends the sandboxed page no preview cookie, so its own
- * images and stylesheets fail (see artifactPageInliner). iOS sends it.
- */
-export const INLINE_ARTIFACT_PAGES = Platform.OS === "android";
 
 // A thread can show the same page in several frames; a page is read once per version.
 const CACHE_SIZE = 6;
@@ -55,9 +47,9 @@ function assetLoader(config: ServerConfig, sessionId: string): ArtifactAssetLoad
 }
 
 /**
- * The artifact page at `path` with the files it links inlined, on Android;
- * nothing elsewhere. `version` (the file's modified time) re-reads a rewritten
- * page. `failed` asks the caller to fall back to loading the page's URL.
+ * The HTML artifact page at `path` with the files it links inlined (see
+ * artifactPageInliner for why). `version` (the file's modified time) re-reads
+ * a rewritten page. `failed` asks the caller to fall back to the page's URL.
  */
 export function useInlinedArtifactPage({ enabled, config, sessionId, path, version }: {
 	enabled: boolean;
@@ -68,12 +60,13 @@ export function useInlinedArtifactPage({ enabled, config, sessionId, path, versi
 }): { html?: string; failed: boolean } {
 	const key = `${config?.host ?? ""}:${config?.httpPort ?? ""}|${sessionId}|${path}|${version ?? ""}`;
 	const [state, setState] = useState<{ key: string; html?: string; failed: boolean }>({ key: "", failed: false });
-	const active = enabled && INLINE_ARTIFACT_PAGES && Boolean(config);
+	const active = enabled && Boolean(config);
 	useEffect(() => {
 		if (!active || !config) return;
 		let live = true;
 		cached(key, async () => {
-			const html = await getArtifactText(config, sessionId, path);
+			// The page as the desktop frames it, with AO's theme written in.
+			const html = await getArtifactPage(config, sessionId, path);
 			return (await inlineArtifactPage(html, path, assetLoader(config, sessionId), sessionId)).html;
 		})
 			.then((html) => { if (live) setState({ key, html, failed: false }); })

@@ -4,13 +4,15 @@ import { resolveArtifactAssetPath } from "./artifacts";
  * Makes an HTML artifact self-contained, the way `ao render` does for a render
  * page (backend/internal/cli/render_images.go): the files it links beside it
  * in the artifact folder are read through the authenticated API and written
- * into the page.
+ * into the page. The page itself comes from the artifact-files route, with
+ * AO's theme bootstrap already in it, as the desktop frames it.
  *
- * Android needs this. The daemon serves an artifact page in a CSP sandbox, so
- * it has an opaque origin, and Android's WebView then sends no `SameSite=Lax`
- * preview cookie with the page's own requests: its images, stylesheets and
- * scripts all fail. A page loaded from memory, with everything inlined, needs
- * no cookie and no origin at all.
+ * The daemon serves an artifact page in a CSP sandbox, so it has an opaque
+ * origin, and Android's WebView then sends no `SameSite=Lax` preview cookie
+ * with the page's own requests: its images, stylesheets and scripts all fail.
+ * And on any platform, an image the agent named by its absolute path on the
+ * machine never loads from a URL. A page loaded from memory, with everything
+ * inlined, needs no cookie and has no origin to reach the daemon from.
  */
 
 /** Reads one file of the artifact folder, by its folder-relative path. */

@@ -1,4 +1,4 @@
-import { artifactFilePath, parseArtifacts, sortArtifacts, type SessionArtifact } from "./artifacts";
+import { artifactFilePath, artifactPagePath, parseArtifacts, sortArtifacts, type SessionArtifact } from "./artifacts";
 import { parseVersion, parseVersionSummaries, type ArtifactVersion, type ArtifactVersionSummary } from "./artifactVersions";
 import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
@@ -699,6 +699,14 @@ export function artifactImageSource(cfg: ServerConfig, sessionId: string, path: 
 /** One artifact's contents as text. The caller decides whether it is really text. */
 export async function getArtifactText(cfg: ServerConfig, sessionId: string, path: string, init?: Pick<RequestInit, "signal">): Promise<string> {
 	const route = artifactFilePath(sessionId, path, { raw: true });
+	if (!route) throw new Error("This artifact's path can't be opened.");
+	const res = await req(cfg, route, init);
+	return res.text();
+}
+
+/** An HTML artifact as a page, with AO's theme bootstrap written in (see artifactPagePath). */
+export async function getArtifactPage(cfg: ServerConfig, sessionId: string, path: string, init?: Pick<RequestInit, "signal">): Promise<string> {
+	const route = artifactPagePath(sessionId, path);
 	if (!route) throw new Error("This artifact's path can't be opened.");
 	const res = await req(cfg, route, init);
 	return res.text();

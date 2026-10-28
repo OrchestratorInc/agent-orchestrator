@@ -35,7 +35,7 @@ import {
 } from "./renderFrameModel";
 import { RenderSkeleton } from "./RenderSkeleton";
 import { startRenderHeightStore } from "./renderHeightStore";
-import { INLINE_ARTIFACT_PAGES, useInlinedArtifactPage } from "../useInlinedArtifactPage";
+import { useInlinedArtifactPage } from "../useInlinedArtifactPage";
 
 startRenderHeightStore();
 
@@ -54,7 +54,8 @@ const SKELETON_DELAY_MS = 250;
 const LEAVE_RANGE_DELAY_MS = 400;
 const VIEWER_STYLE_SCRIPT = renderViewerStyleScript(space.xl);
 
-function useRenderTheme(): RenderTheme {
+/** The app's theme as a page's variables; the artifact viewer posts it into inlined pages too. */
+export function useRenderTheme(): RenderTheme {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	return useMemo(() => renderTheme(t, scheme === "light" ? "light" : "dark"), [t, scheme]);
@@ -68,7 +69,7 @@ function useRenderTheme(): RenderTheme {
  */
 function RenderDocument({ path, html, displayMode, onHeight, onReady, onGone, onFailed }: {
 	path: string;
-	/** The page itself, loaded from memory instead of `path` (an inlined artifact on Android). */
+	/** The page itself, loaded from memory instead of `path` (an inlined artifact). */
 	html?: string;
 	displayMode: RenderDisplayMode;
 	onHeight?: (height: number) => void;
@@ -221,13 +222,13 @@ export const RenderFrame = memo(function RenderFrame({ render, artifact }: {
 	const [failed, setFailed] = useState(false);
 	const page = useRenderPage();
 	const [expanded, setExpanded] = useState(false);
-	// On Android an artifact page is read with its own files inlined, and only
+	// An artifact page is read with the files it links inlined, and only
 	// while its frame is in range; the file's version re-reads a rewrite.
 	const version = artifact ? sessions?.find((session) => session.id === artifact.sessionId)?.artifacts?.find((file) => file.path === artifact.path)?.updatedAt : undefined;
 	const inlined = useInlinedArtifactPage({ enabled: Boolean(artifact) && live, config, sessionId: artifact?.sessionId ?? "", path: artifact?.path ?? "", version });
 	// The skeleton covers the frame until the inlined page is ready; if inlining
 	// fails the page loads from its URL instead.
-	const awaitingInline = Boolean(artifact) && INLINE_ARTIFACT_PAGES && !inlined.html && !inlined.failed;
+	const awaitingInline = Boolean(artifact) && !inlined.html && !inlined.failed;
 	// Sized on this device already: by a report this mount, or one saved earlier.
 	const measured = contentHeight !== undefined || rememberedRenderHeight(render.path, width) !== undefined;
 	const liveRef = useRef(live);

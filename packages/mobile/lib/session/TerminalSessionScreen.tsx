@@ -1206,6 +1206,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					{artifactCount > 0 ? (
 						<Pressable
 							hitSlop={10}
+							accessibilityRole="button"
 							accessibilityLabel={`Artifacts, ${artifactCount}`}
 							onPress={openArtifacts}
 							style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: press.opacity }]}

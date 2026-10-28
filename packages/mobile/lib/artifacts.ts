@@ -155,6 +155,16 @@ export function resolveArtifactAssetPath(fromPath: string, ref: string): string 
 	return isSafeArtifactPath(resolved) ? resolved : undefined;
 }
 
+/**
+ * The daemon path serving an HTML artifact as a page: the file with AO's theme
+ * variables, font and viewport written in (the render bootstrap), which pages
+ * written for AO style against. The desktop frames artifacts from this route.
+ */
+export function artifactPagePath(sessionId: string, path: string): string | undefined {
+	if (!isSafeArtifactPath(path)) return undefined;
+	return `/api/v1/sessions/${encodeURIComponent(sessionId)}/artifact-files/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 /** Decoded text that is really a binary file: a NUL, or mostly undecodable bytes. */
 export function looksBinary(text: string): boolean {
 	if (text.includes("\u0000")) return true;

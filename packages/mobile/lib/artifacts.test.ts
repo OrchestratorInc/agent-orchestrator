@@ -5,6 +5,7 @@ import {
 	artifactExtensionLabel,
 	artifactFilePath,
 	artifactMenuActions,
+	artifactPagePath,
 	artifactViewKind,
 	resolveArtifactAssetPath,
 	canCopyArtifact,
@@ -146,5 +147,12 @@ describe("resolveArtifactAssetPath", () => {
 		expect(resolveArtifactAssetPath("plan.md", "/etc/a.png")).toBeUndefined();
 		expect(resolveArtifactAssetPath("plan.md", "../a.png")).toBeUndefined();
 		expect(resolveArtifactAssetPath("plan.md", "#section")).toBeUndefined();
+	});
+});
+
+describe("artifactPagePath", () => {
+	it("names the route that serves an HTML artifact with AO's theme written in", () => {
+		expect(artifactPagePath("ao-1", "deck/my page.html")).toBe("/api/v1/sessions/ao-1/artifact-files/deck/my%20page.html");
+		expect(artifactPagePath("ao-1", "../x.html")).toBeUndefined();
 	});
 });

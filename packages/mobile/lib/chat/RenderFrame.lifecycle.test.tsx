@@ -17,8 +17,8 @@ vi.mock("expo-router/react-navigation", async () => {
 	const subscribe = (listener: () => void) => { navigation.listeners.add(listener); return () => { navigation.listeners.delete(listener); }; };
 	return { useIsFocused: () => React.useSyncExternalStore(subscribe, () => navigation.focused) };
 });
-// Inlining an artifact page is Android's, and has its own tests.
-vi.mock("../useInlinedArtifactPage", () => ({ INLINE_ARTIFACT_PAGES: false, useInlinedArtifactPage: () => ({ failed: false }) }));
+// Inlining an artifact page has its own tests; these frames are renders.
+vi.mock("../useInlinedArtifactPage", () => ({ useInlinedArtifactPage: () => ({ failed: false }) }));
 // An artifact frame opens the artifact viewer through the router.
 vi.mock("expo-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
