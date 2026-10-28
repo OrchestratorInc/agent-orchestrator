@@ -401,17 +401,8 @@ func TestSandboxReadinessReportsStartupTiming(t *testing.T) {
 		t.Fatal(err)
 	}
 	if readiness.Provider != "docker" || readiness.SessionKind != "worker" || readiness.StartupStartedAt == nil ||
-		readiness.PreviousWorkerSeenAt != nil || readiness.WorkerConnectedBefore || readiness.SessionCreatedAt.IsZero() {
+		readiness.PreviousWorkerSeenAt != nil || readiness.SessionCreatedAt.IsZero() {
 		t.Fatalf("readiness = %+v", readiness)
-	}
-	// A worker that registered before makes the next registration a resume,
-	// even after a wake cleared worker_last_seen_at.
-	if _, err := admin.Exec(ctx, `INSERT INTO ao_activity_events (org_id, session_id, kind)
-		VALUES ($1, $2, 'worker.connected')`, fixture.orgID, fixture.sessionID); err != nil {
-		t.Fatal(err)
-	}
-	if readiness, err = store.SandboxReadiness(ctx, fixture.orgID, fixture.sessionID); err != nil || !readiness.WorkerConnectedBefore {
-		t.Fatalf("readiness after a connect = %+v, %v", readiness, err)
 	}
 	if _, err := store.SandboxReadiness(ctx, fixture.orgID, uuid.NewString()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing sandbox = %v, want ErrNotFound", err)

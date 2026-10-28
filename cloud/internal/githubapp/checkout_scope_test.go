@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -532,65 +531,5 @@ func TestIssueCheckoutGrantPrimaryOnlyWhenNoExtras(t *testing.T) {
 	}
 	if store.extrasSeen != 1 {
 		t.Fatalf("WorkerSessionGrantedExtraRepos called %d times, want 1", store.extrasSeen)
-	}
-}
-
-// projectGrantStore resolves a project's own repository authority and records
-// project grants (postgres.Store).
-type projectGrantStore struct {
-	checkoutStubStore
-	auditErr error
-	audited  []string
-}
-
-func (s *projectGrantStore) ProjectGitHubCheckoutContext(context.Context, string, string) (domain.GitHubCheckoutContext, error) {
-	project := s.primary
-	project.SessionID = ""
-	return project, nil
-}
-
-func (s *projectGrantStore) ProjectRemoteGitHubCheckoutContext(context.Context, string, string) (domain.RemoteGitHubCheckoutContext, error) {
-	return domain.RemoteGitHubCheckoutContext{}, errors.New("not a capability project")
-}
-
-func (s *projectGrantStore) RecordProjectCheckoutGrant(_ context.Context, orgID, projectID string, repositoryID int64) error {
-	if s.auditErr != nil {
-		return s.auditErr
-	}
-	s.audited = append(s.audited, fmt.Sprintf("%s/%s/%d", orgID, projectID, repositoryID))
-	return nil
-}
-
-// A project grant (a snapshot build no session triggered) is read-only, for
-// the primary repository only, and handed out only once it is audited.
-func TestIssueProjectCheckoutGrantIsReadOnlyPrimaryOnlyAndAudited(t *testing.T) {
-	backend := &installationRepositoryServer{repos: []Repository{{ID: 1, FullName: "octo/app"}, {ID: 2, FullName: "octo/lib"}}}
-	server := httptest.NewServer(backend.handler(t))
-	defer server.Close()
-	client := newAppTestClient(t, server.URL, server.Client())
-	store := &projectGrantStore{checkoutStubStore: checkoutStubStore{
-		primary: primaryContext(),
-		extras:  []domain.RepoRef{{URL: "https://github.com/octo/lib"}},
-	}}
-	svc := newCheckoutTestService(t, store, client)
-
-	grant, err := svc.IssueProjectCheckoutGrant(context.Background(), "org-1", "proj-1")
-	if err != nil || grant.Token == "" || grant.CloneURL != "https://github.com/octo/app.git" {
-		t.Fatalf("grant = %+v, %v", grant, err)
-	}
-	if len(backend.mintedRepoIDs) != 1 || backend.mintedRepoIDs[0] != 1 ||
-		backend.mintedPermissions["contents"] != "read" || len(backend.mintedPermissions) != 1 {
-		t.Fatalf("minted %v with %v, want the primary repository read-only", backend.mintedRepoIDs, backend.mintedPermissions)
-	}
-	if len(store.audited) != 1 || store.audited[0] != "org-1/proj-1/1" {
-		t.Fatalf("audited %v, want the grant", store.audited)
-	}
-	// Another project's id is refused, and without an audit record no token.
-	if _, err := svc.IssueProjectCheckoutGrant(context.Background(), "org-1", "proj-other"); err == nil {
-		t.Fatal("issued a grant for a project the authority does not belong to")
-	}
-	store.auditErr = errors.New("audit unavailable")
-	if grant, err := svc.IssueProjectCheckoutGrant(context.Background(), "org-1", "proj-1"); err == nil || grant.Token != "" {
-		t.Fatalf("grant without an audit record = %+v, %v; want refused", grant, err)
 	}
 }

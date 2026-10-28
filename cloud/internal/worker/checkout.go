@@ -289,37 +289,13 @@ func cloneIntoNonEmptyWorkspace(
 // It is applied only when CheckoutOptions.PartialClone is set (Freestyle).
 const partialCloneFilter = "--filter=blob:none"
 
-// shallowCloneArgs make a partial clone a two-step one: it takes only each
-// branch's tip, so the session starts without waiting for the history, which
-// CompleteShallowClone fetches in the background. Every branch keeps its tip
-// (--no-single-branch), so a session resuming an existing branch can still
-// check it out.
-var shallowCloneArgs = []string{"--depth=1", "--no-single-branch"}
-
 // cloneArgs builds the primary-checkout clone command.
 func cloneArgs(options CheckoutOptions, cloneURL, destination string) []string {
 	args := []string{"clone", "--origin", "origin", "--no-tags"}
 	if options.PartialClone {
-		args = append(append(args, partialCloneFilter), shallowCloneArgs...)
+		args = append(args, partialCloneFilter)
 	}
 	return append(args, "--", cloneURL, destination)
-}
-
-// CompleteShallowClone fetches the history a two-step partial clone left out
-// (see shallowCloneArgs), still without older file contents. It is a no-op for
-// a checkout that is not shallow, so it also finishes a history fetch an
-// earlier worker did not. Run it after ConfigureWorkerGit: the fetch
-// authenticates through the repository's credential helper.
-func CompleteShallowClone(ctx context.Context, runner GitRunner, workspace string) error {
-	output, err := runner.Run(ctx, workspace, nil, "rev-parse", "--is-shallow-repository")
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(output) != "true" {
-		return nil
-	}
-	_, err = runner.Run(ctx, workspace, nil, "fetch", "--unshallow", "--no-tags", partialCloneFilter, "origin")
-	return err
 }
 
 // ConfigureWorkerGit prepares the assigned branch and a repo-local credential

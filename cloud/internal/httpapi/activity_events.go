@@ -9,7 +9,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/logctx"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
 
 // sandboxReadinessStore is the optional store capability behind the
@@ -67,21 +66,21 @@ func (s *Server) recordWorkerReady(
 		}
 		return
 	}
+	now := time.Now()
+	phase := "create"
+	since := readiness.SessionCreatedAt
+	if readiness.PreviousWorkerSeenAt != nil {
+		phase = "resume"
+		if readiness.StartupStartedAt != nil {
+			since = *readiness.StartupStartedAt
+		}
+	}
 	ready := map[string]any{
-		"phase":            "create",
+		"phase":            phase,
+		"ttr_ms":           now.Sub(since).Milliseconds(),
 		"startup_attempts": readiness.StartupAttempts,
 		"session_kind":     readiness.SessionKind,
 		"epoch":            epoch,
-	}
-	// A resume is timed from its own start, never from the session's creation
-	// (days for a session woken from an idle pause); without one it has no ttr.
-	if readiness.PreviousWorkerSeenAt != nil || readiness.WorkerConnectedBefore {
-		ready["phase"] = "resume"
-		if readiness.StartupStartedAt != nil {
-			ready["ttr_ms"] = time.Since(*readiness.StartupStartedAt).Milliseconds()
-		}
-	} else {
-		ready["ttr_ms"] = time.Since(readiness.SessionCreatedAt).Milliseconds()
 	}
 	if readiness.ConnectionID != "" {
 		ready["connection_id"] = readiness.ConnectionID
@@ -89,28 +88,5 @@ func (s *Server) recordWorkerReady(
 	s.activity.Record(r.Context(), domain.ActivityEvent{
 		OrgID: orgID, SessionID: sessionID, Kind: domain.ActivitySandboxReady,
 		Provider: readiness.Provider, Attrs: ready,
-	})
-}
-
-// recordWorkspaceReady records a worker's startup timings. They are the
-// worker's own report, so only well-formed values are kept.
-func (s *Server) recordWorkspaceReady(r *http.Request, claims worker.Claims, startup worker.WorkspaceStartupTimings) {
-	if s.activity == nil {
-		return
-	}
-	attrs := map[string]any{"epoch": claims.Epoch, "first_start": startup.FirstStart, "self_updated": startup.SelfUpdated}
-	for name, value := range map[string]int64{
-		"connected_ms": startup.ConnectedMS, "checkout_ms": startup.CheckoutMS, "setup_ms": startup.SetupMS,
-	} {
-		if value >= 0 && value <= (24*time.Hour).Milliseconds() {
-			attrs[name] = value
-		}
-	}
-	switch startup.Checkout {
-	case worker.CheckoutFromSnapshot, worker.CheckoutCloned, worker.CheckoutExisting, worker.CheckoutNone:
-		attrs["checkout"] = startup.Checkout
-	}
-	s.activity.Record(r.Context(), domain.ActivityEvent{
-		OrgID: claims.OrgID, SessionID: claims.SessionID, Kind: domain.ActivityWorkspaceReady, Attrs: attrs,
 	})
 }

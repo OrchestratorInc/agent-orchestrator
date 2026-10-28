@@ -375,7 +375,6 @@ func TestACPRequestPermissionPolicies(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			control := &approvalFlowControl{created: make(chan worker.ChatApproval, 1), decision: test.decision}
 			client := &cloudACPClient{control: control, turn: worker.Turn{ID: "turn-1", Attempt: 1, Harness: test.harness, Mode: test.mode, ApprovalMode: test.approval}}
-			client.live.Store(true)
 			kind := acp.ToolKindExecute
 			if test.kind {
 				kind = acp.ToolKindEdit
@@ -410,7 +409,6 @@ func TestACPRequestPermissionPolicies(t *testing.T) {
 func TestACPRequestPermissionCancellationRepliesCancelled(t *testing.T) {
 	control := &approvalFlowControl{created: make(chan worker.ChatApproval, 1), waitForCancel: true}
 	client := &cloudACPClient{control: control, turn: worker.Turn{ID: "turn-1", Attempt: 1, Harness: "claude-code", Mode: "standard"}}
-	client.live.Store(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	type result struct {
@@ -443,7 +441,6 @@ func TestACPRequestPermissionCancellationRepliesCancelled(t *testing.T) {
 func TestACPRequestPermissionCancelledBeforeBypass(t *testing.T) {
 	control := &approvalFlowControl{created: make(chan worker.ChatApproval, 1)}
 	client := &cloudACPClient{control: control, turn: worker.Turn{Harness: "claude-code", Mode: "trusted", ApprovalMode: "bypass-permissions"}}
-	client.live.Store(true)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	response, err := client.RequestPermission(ctx, acp.RequestPermissionRequest{

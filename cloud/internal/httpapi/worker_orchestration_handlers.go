@@ -282,12 +282,6 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 		s.writeSessionPlanError(w, r, claims.OrgID, "", err)
 		return
 	}
-	// A Freestyle child boots from its project's repository snapshot, as a
-	// session the app creates does, rather than cloning the repository.
-	plan, projectSnapshot := s.bootFromProjectSnapshot(r, claims.OrgID, domain.Project{
-		ID: parent.ProjectID, OrgID: claims.OrgID, RepositoryURL: parent.RepositoryURL,
-		GitHubRepositoryID: parent.GitHubRepositoryID,
-	}, request.Harness, plan)
 	child, err := s.store.CreateOrchestratorChild(
 		r.Context(), claims.OrgID, claims.SessionID, key, s.maxSandboxes,
 		domain.CreateSession{
@@ -302,10 +296,6 @@ func (s *Server) createWorkerChild(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
-	}
-	if projectSnapshot != nil {
-		projectSnapshot.SessionID = child.ID
-		s.projectSnapshots.Ensure(*projectSnapshot)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"session": toSessionResponse(child, nil)})
 }

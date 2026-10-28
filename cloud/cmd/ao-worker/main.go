@@ -95,7 +95,6 @@ func main() {
 }
 
 func run(logger *slog.Logger) error {
-	startedAt := time.Now()
 	publicURL := strings.TrimRight(strings.TrimSpace(os.Getenv("AO_CLOUD_PUBLIC_URL")), "/")
 	sessionID := strings.TrimSpace(os.Getenv("AO_CLOUD_SESSION_ID"))
 	bootstrapToken := strings.TrimSpace(os.Getenv("AO_WORKER_BOOTSTRAP_TOKEN"))
@@ -156,11 +155,6 @@ func run(logger *slog.Logger) error {
 	bootstrap, err := client.connect(ctx, logger, bootstrapToken)
 	if err != nil {
 		return err
-	}
-	startup := worker.WorkspaceStartupTimings{
-		ConnectedMS: time.Since(startedAt).Milliseconds(),
-		SelfUpdated: os.Getenv(selfUpdateAttemptEnv) != "",
-		FirstStart:  firstStart,
 	}
 	if bootstrap.SessionID != sessionID {
 		return errors.New("worker session does not match AO_CLOUD_SESSION_ID")
@@ -309,9 +303,6 @@ func run(logger *slog.Logger) error {
 		logger.Info("agent browser off", "reason", err)
 	}
 	var agentCommandFactory workertransport.AgentCommandFactory
-	// agentCheckoutReady closes once the checkout is prepared and restored,
-	// before the project's Setup runs.
-	agentCheckoutReady := make(chan struct{})
 	var artifacts *artifactSyncer
 	if bootstrap.Launch.Artifacts {
 		artifactsDir := worker.ArtifactsDir(dataDir, bootstrap.SessionID)
@@ -414,22 +405,8 @@ func run(logger *slog.Logger) error {
 		if bootstrap.Launch.RepositoryURL != "" && !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 			gitRefReporter = func(ctx context.Context) error { return client.reportGitRefs(ctx, workspace) }
 		}
-		// The first Chat turn's agent starts while the workspace is prepared
-		// (its session opens once the checkout is ready), and each turn starts
-		// the next one's. Only providers that opt in (Freestyle) prewarm: it
-		// keeps an idle agent in the sandbox between turns.
-		var warmTurn *worker.Turn
-		if os.Getenv("AO_WORKER_PREWARM_AGENT") == "1" {
-			warmTurn = &worker.Turn{
-				Harness: bootstrap.Launch.Harness, Model: bootstrap.Launch.Model,
-				ReasoningEffort: bootstrap.Launch.ReasoningEffort, Mode: bootstrap.Launch.Mode,
-				DeniedCommands: bootstrap.Launch.DeniedCommands, AgentSessionID: bootstrap.Launch.AgentSessionID,
-			}
-		}
 		chatRunner = &workerexec.Supervisor{
 			Control: client, Builder: b, Runner: workerexec.OSRunner{},
-			WarmTurn:           warmTurn,
-			SessionGate:        agentCheckoutReady,
 			PullRequestClaimer: client.claimPullRequest,
 			GitRefReporter:     gitRefReporter,
 			// A Chat turn's end syncs artifacts at once, as the terminal's
@@ -648,7 +625,6 @@ func run(logger *slog.Logger) error {
 		// reopened records that the session was reopened after a failed start,
 		// so the retry reads the project's current Setup commands.
 		reopened := false
-		startup.Checkout = checkoutSource(bootstrap.Launch.RepositoryURL, workspace)
 		for {
 			err := workingDirectoryErr
 			if err == nil {
@@ -689,8 +665,6 @@ func run(logger *slog.Logger) error {
 		// Restore a previously deleted session's state before the agent launches.
 		// A fresh session finds nothing captured and this returns quickly.
 		rehydrateSession(runCtx, logger, client, bootstrap, workspace, dataDir)
-		close(agentCheckoutReady)
-		startup.CheckoutMS = time.Since(startedAt).Milliseconds()
 		// A standalone session has no repository on GitHub to report branches of.
 		if bootstrap.Launch.RepositoryURL != "" && !worker.IsScratchRepositoryURL(bootstrap.Launch.RepositoryURL) {
 			if err := client.reportGitRefs(runCtx, workspace); err != nil {
@@ -732,9 +706,8 @@ func run(logger *slog.Logger) error {
 			transportSupervisor.SetWorkspaceStartupFailed(false)
 			reopened = true
 		}
-		startup.SetupMS = time.Since(startedAt).Milliseconds()
 		// Clears a failure this or an earlier worker reported for the session.
-		reportWorkspaceStartup(runCtx, logger, client, worker.WorkspaceStartupEvent{Status: worker.WorkspaceStartupReady, Startup: &startup})
+		reportWorkspaceStartup(runCtx, logger, client, worker.WorkspaceStartupEvent{Status: worker.WorkspaceStartupReady})
 		close(rehydrateDone)
 		go startChatOnceWorkspaceReady(chatReadyClosed, func() {
 			// A Claude session starting in Chat first settles whether its ACP
@@ -886,21 +859,6 @@ func interactiveLaunchSettings(launch worker.LaunchContext, dataDir, nativeConve
 	return launch, nil
 }
 
-// checkoutSource says where the session's checkout is about to come from,
-// for the startup timings: a project snapshot leaves its marker in .git.
-func checkoutSource(repositoryURL, workspace string) string {
-	if strings.TrimSpace(repositoryURL) == "" || worker.IsScratchRepositoryURL(repositoryURL) {
-		return worker.CheckoutNone
-	}
-	if _, err := os.Stat(filepath.Join(workspace, ".git", worker.ProjectSnapshotMarker)); err == nil {
-		return worker.CheckoutFromSnapshot
-	}
-	if _, err := os.Stat(filepath.Join(workspace, ".git")); err == nil {
-		return worker.CheckoutExisting
-	}
-	return worker.CheckoutCloned
-}
-
 func prepareWorkspace(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -956,13 +914,6 @@ func prepareWorkspace(
 		// for repositories the installation can access; arbitrary private
 		// third-party repos need per-repo grants (a follow-up).
 		cloneExtraRepos(ctx, logger, checkoutGrant.Token, bootstrap, workspace, dataDir, userWorkspace)
-		// A Freestyle checkout without a project snapshot cloned only the
-		// branch tips; its history arrives while the session already runs.
-		go func() {
-			if err := worker.CompleteShallowClone(ctx, worker.ExecGitRunner{}, workspace); err != nil && ctx.Err() == nil {
-				logger.Warn("fetch the repository history after a shallow clone", "error", err)
-			}
-		}()
 	}
 	if err := worker.EnsureWorkspaceReviewBase(
 		ctx, worker.ExecGitRunner{}, workspace, bootstrap.Launch.DefaultBranch,

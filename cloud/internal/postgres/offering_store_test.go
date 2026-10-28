@@ -57,10 +57,6 @@ func TestOrchestratorPlacementInheritsBYOCoderConnection(t *testing.T) {
 	if repositoryURL == "" || placement.RepositoryURL != repositoryURL {
 		t.Fatalf("repository = %q, want the project's %q", placement.RepositoryURL, repositoryURL)
 	}
-	// A child's repository snapshot is keyed by the project and its repository.
-	if placement.ProjectID != fixture.projectID {
-		t.Fatalf("project = %q, want %q", placement.ProjectID, fixture.projectID)
-	}
 	if len(placement.CoderConnections) != 1 || placement.CoderConnections[0].ID != connection.ID {
 		t.Fatalf("coder connections = %+v, want the org's single connection", placement.CoderConnections)
 	}

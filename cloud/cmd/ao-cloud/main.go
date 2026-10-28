@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -586,20 +585,10 @@ func run(logger *slog.Logger) error {
 			Store:          store,
 			Grants:         grants,
 			AllowAnonymous: cfg.AllowAnonymousCheckout,
-			BaseSnapshot: func(harness string) string {
-				plan, err := provisioningDefaults(cfg).SessionPlanForProvider(harness, sandbox.ProviderFreestyle)
-				if err != nil {
-					return ""
-				}
-				return sandbox.FreestyleSnapshot(plan)
-			},
-			WarmSnapshots: true,
-			BaseHarnesses: slices.Sorted(maps.Keys(cfg.FreestyleSnapshotByHarness)),
-			Logger:        logger,
+			Logger:         logger,
 		})
 		apiOptions.ProjectSnapshots = projectSnapshots
 		go projectSnapshots.RunCollector(ctx)
-		go projectSnapshots.RunRefresher(ctx)
 	}
 	if cfg.BillingEnabled() {
 		store.EnableBilling(cfg.BillingPastDueGrace, cfg.BillingExemptOrgsCreatedBefore)

@@ -14,8 +14,6 @@ package projectsnapshot
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,7 +24,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/githubapp"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/worker"
 )
@@ -43,13 +40,8 @@ const (
 	// DefaultMaxConcurrentBuilds is how many builder VMs one replica runs at
 	// once by default.
 	DefaultMaxConcurrentBuilds = 2
-	// collectInterval is how often idle snapshots are looked for, and stale
-	// ones refreshed.
+	// collectInterval is how often idle snapshots are looked for.
 	collectInterval = time.Hour
-	// refreshRetryInterval is how long Refresh waits for a free build slot.
-	refreshRetryInterval = 5 * time.Second
-	// warmTimeout bounds warming one snapshot.
-	warmTimeout = 3 * time.Minute
 	// collectDeleteTimeout bounds one provider snapshot delete. The record
 	// stays locked meanwhile, so a lookup racing it waits at most this long.
 	collectDeleteTimeout = 30 * time.Second
@@ -96,17 +88,6 @@ type Store interface {
 // Grants issues a short-lived clone token for a session's repository.
 type Grants interface {
 	IssueCheckoutGrant(ctx context.Context, orgID, sessionID string) (githubapp.CheckoutGrant, error)
-}
-
-// ProjectGrants issues a clone token for a project's repository when no
-// session triggered the build (Ensure at connect, Refresh after a deploy).
-type ProjectGrants interface {
-	IssueProjectCheckoutGrant(ctx context.Context, orgID, projectID string) (githubapp.CheckoutGrant, error)
-}
-
-// RefreshStore lists the snapshots Refresh considers (postgres.Store).
-type RefreshStore interface {
-	RecentRepositorySandboxSnapshots(ctx context.Context, provider string, usedSince time.Time) ([]postgres.RepositorySnapshotRefresh, error)
 }
 
 // Request identifies the snapshot one session would use. SessionID is the
@@ -166,15 +147,7 @@ type Config struct {
 	// Builder VMs count against the provider account's VM limit like session
 	// VMs do, so an unbounded burst of builds could starve sessions.
 	MaxConcurrentBuilds int
-	// BaseSnapshot returns the harness snapshot new sessions on harness boot
-	// from, or "" when there is none. Refresh needs it to tell a snapshot built
-	// on an older base (before a deploy rebaked the harness snapshots).
-	BaseSnapshot func(harness string) string
-	// WarmSnapshots warms each repository snapshot once it is built, and
-	// BaseHarnesses' harness snapshots at start (see Warm).
-	WarmSnapshots bool
-	BaseHarnesses []string
-	Logger        *slog.Logger
+	Logger              *slog.Logger
 }
 
 // Builder looks up and (re)builds project snapshots.
@@ -182,7 +155,6 @@ type Builder struct {
 	config   Config
 	mu       sync.Mutex
 	inflight map[string]bool
-	warmed   map[string]bool
 	now      func() time.Time
 }
 
@@ -197,7 +169,7 @@ func New(config Config) *Builder {
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	return &Builder{config: config, inflight: map[string]bool{}, warmed: map[string]bool{}, now: time.Now}
+	return &Builder{config: config, inflight: map[string]bool{}, now: time.Now}
 }
 
 // Lookup returns the snapshot a new session should boot from, and marks it
@@ -228,19 +200,13 @@ func usable(snapshot domain.RepositorySandboxSnapshot, request Request) bool {
 // Ensure starts a background build when the project has no usable snapshot or
 // it is older than MaxAge. At most one build runs per project and harness.
 func (b *Builder) Ensure(request Request) {
-	// A build skipped here is not lost: every session create calls Ensure, so
-	// the next one starts it once a slot is free.
-	b.start(request)
-}
-
-// start begins Ensure's background build, reporting false when a build for
-// the same snapshot is running or every build slot is taken.
-func (b *Builder) start(request Request) bool {
 	key := request.key()
 	b.mu.Lock()
+	// A build skipped here is not lost: every session create calls Ensure, so
+	// the next one starts it once a slot is free.
 	if b.inflight[key] || len(b.inflight) >= b.config.MaxConcurrentBuilds {
 		b.mu.Unlock()
-		return false
+		return
 	}
 	b.inflight[key] = true
 	b.mu.Unlock()
@@ -286,14 +252,7 @@ func (b *Builder) start(request Request) bool {
 		b.config.Logger.Info("project snapshot ready",
 			"project_id", request.ProjectID, "harness", request.Harness,
 			"snapshot_id", snapshotID, "duration_ms", b.now().Sub(started).Milliseconds())
-		// Warmed apart from the build, so its slot is free for the next one.
-		if b.config.WarmSnapshots {
-			go b.warm(context.Background(), snapshotID, vmName("warm", request.key()),
-				map[string]string{"ao.org_id": request.OrgID, "ao.project_id": request.ProjectID},
-				"project_id", request.ProjectID, "harness", request.Harness)
-		}
 	}()
-	return true
 }
 
 func (b *Builder) needsBuild(ctx context.Context, request Request) bool {
@@ -312,10 +271,7 @@ func (b *Builder) build(ctx context.Context, request Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name := vmName("build", request.key())
-	b.deleteLeftover(ctx, name)
 	environment, err := b.config.VMs.Create(ctx, sandbox.Spec{
-		Name:   name,
 		RootFS: request.BaseSnapshotID,
 		Labels: map[string]string{
 			"ao.org_id":     request.OrgID,
@@ -326,10 +282,15 @@ func (b *Builder) build(ctx context.Context, request Request) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create builder VM: %w", err)
 	}
-	// The builder VM holds a clone of the repository and is disposable
-	// whatever happened; never leak it. No session's worker ran in it, so
-	// there is no project Cleanup to run.
-	defer b.deleteVM(environment.ID, "purpose", "project-snapshot", "project_id", request.ProjectID)
+	defer func() {
+		// The builder VM is disposable whatever happened; never leak it. No
+		// session's worker ran in it, so there is no project Cleanup to run.
+		deleteCtx, cancel := context.WithTimeout(sandbox.WithoutCleanup(context.Background()), time.Minute)
+		defer cancel()
+		if err := b.config.VMs.Delete(deleteCtx, environment.ID); err != nil {
+			b.config.Logger.Warn("delete project snapshot builder VM", "provider_id", environment.ID, "error", err)
+		}
+	}()
 	env := map[string]string{"AO_CLONE_URL": cloneURL}
 	if token != "" {
 		env["AO_GIT_TOKEN"] = token
@@ -364,223 +325,6 @@ func (b *Builder) build(ctx context.Context, request Request) (string, error) {
 	return snapshotID, nil
 }
 
-// Warm boots a throwaway VM from snapshotID, reads what a session's first
-// seconds read (the worker, the agent CLIs, the repository), and deletes it.
-// The first boots from a freshly made snapshot are several seconds slower than
-// later ones (on staging: VM 2-3 s and worker start-to-connect 1.3-2.6 s, then
-// 0.5 s and 0.7 s), so a real session should not be the first.
-//
-// name names the VM (see vmName) and labels identify whose snapshot it is: a
-// repository snapshot's warming VM holds a copy of that repository.
-func (b *Builder) Warm(ctx context.Context, snapshotID, name string, labels map[string]string) error {
-	ctx, cancel := context.WithTimeout(ctx, warmTimeout)
-	defer cancel()
-	b.deleteLeftover(ctx, name)
-	all := map[string]string{"ao.purpose": "snapshot-warm"}
-	for key, value := range labels {
-		all[key] = value
-	}
-	environment, err := b.config.VMs.Create(ctx, sandbox.Spec{Name: name, RootFS: snapshotID, Labels: all})
-	if err != nil {
-		return fmt.Errorf("create warming VM: %w", err)
-	}
-	defer b.deleteVM(environment.ID, "purpose", "snapshot-warm", "snapshot_id", snapshotID)
-	if _, err := b.config.VMs.ExecRoot(ctx, environment.ID, warmScript, nil, warmTimeout); err != nil {
-		return fmt.Errorf("read the snapshot in the warming VM: %w", err)
-	}
-	return nil
-}
-
-// warm runs Warm and logs the outcome; a failed warm only costs the next
-// session the slower first boot.
-func (b *Builder) warm(ctx context.Context, snapshotID, name string, labels map[string]string, attrs ...any) {
-	started := b.now()
-	attrs = append(attrs, "snapshot_id", snapshotID)
-	if err := b.Warm(ctx, snapshotID, name, labels); err != nil {
-		if ctx.Err() == nil {
-			b.config.Logger.Warn("warm snapshot", append(attrs, "error", err)...)
-		}
-		return
-	}
-	b.config.Logger.Info("snapshot warmed", append(attrs, "duration_ms", b.now().Sub(started).Milliseconds())...)
-}
-
-// warmBases warms the harness snapshots sessions now boot from, once each per
-// control-plane process: a deploy bakes new ones, and starts the process.
-func (b *Builder) warmBases(ctx context.Context) {
-	if !b.config.WarmSnapshots || b.config.BaseSnapshot == nil {
-		return
-	}
-	for _, harness := range b.config.BaseHarnesses {
-		base := b.config.BaseSnapshot(harness)
-		b.mu.Lock()
-		seen := base == "" || b.warmed[base]
-		if !seen {
-			b.warmed[base] = true
-		}
-		b.mu.Unlock()
-		if !seen {
-			b.warm(ctx, base, vmName("warm", "base/"+harness), nil, "harness", harness)
-		}
-	}
-}
-
-// vmName names a builder or warming VM after what it serves (a repository
-// snapshot's key, or a harness), so one a failed delete left behind is found
-// again and deleted: before the next VM of that name is created, and by the
-// collector (SweepLeftoverVMs). It is short and slug-safe, like a session's.
-func vmName(kind, key string) string {
-	sum := sha256.Sum256([]byte(key))
-	return "ao-snapshot-" + kind + "-" + hex.EncodeToString(sum[:12])
-}
-
-// vmGetter finds a VM by name (freestyle.Client).
-type vmGetter interface {
-	Get(ctx context.Context, id sandbox.ID) (sandbox.Environment, error)
-}
-
-// deleteLeftover deletes a VM of this name a failed delete left behind. It is
-// best effort: a VM it cannot find or delete does not hold up the caller.
-func (b *Builder) deleteLeftover(ctx context.Context, name string) {
-	getter, ok := b.config.VMs.(vmGetter)
-	if !ok {
-		return
-	}
-	environment, err := getter.Get(ctx, sandbox.ID(name))
-	if err != nil {
-		return
-	}
-	b.config.Logger.Warn("deleting a snapshot VM left behind", "name", name, "provider_id", environment.ID)
-	b.deleteVM(environment.ID, "name", name)
-}
-
-// deleteRetryDelays are the waits between attempts to delete a builder or
-// warming VM.
-var deleteRetryDelays = []time.Duration{2 * time.Second, 10 * time.Second}
-
-// deleteVM deletes a builder or warming VM, retrying a failed delete; one it
-// still cannot delete is reported and left to deleteLeftover and the sweep.
-func (b *Builder) deleteVM(id sandbox.ID, attrs ...any) {
-	for attempt := 0; ; attempt++ {
-		ctx, cancel := context.WithTimeout(sandbox.WithoutCleanup(context.Background()), time.Minute)
-		err := b.config.VMs.Delete(ctx, id)
-		cancel()
-		if err == nil {
-			return
-		}
-		if attempt == len(deleteRetryDelays) {
-			b.config.Logger.Error("could not delete a snapshot VM; it is retried by name later",
-				append(attrs, "provider_id", id, "error", err)...)
-			return
-		}
-		time.Sleep(deleteRetryDelays[attempt])
-	}
-}
-
-// SweepLeftoverVMs deletes builder and warming VMs that failed deletes left
-// behind for the repository snapshots on record, and for the harnesses'
-// warming VMs. Part of every collector run.
-func (b *Builder) SweepLeftoverVMs(ctx context.Context) {
-	if _, ok := b.config.VMs.(vmGetter); !ok {
-		return
-	}
-	for _, harness := range b.config.BaseHarnesses {
-		b.deleteLeftover(ctx, vmName("warm", "base/"+harness))
-	}
-	store, ok := b.config.Store.(keyStore)
-	if !ok {
-		return
-	}
-	keys, err := store.RepositorySandboxSnapshotKeys(ctx, b.config.Provider)
-	if err != nil {
-		if ctx.Err() == nil {
-			b.config.Logger.Warn("list repository snapshots to sweep", "error", err)
-		}
-		return
-	}
-	for _, key := range keys {
-		request := Request{OrgID: key.OrgID, RepositoryKey: key.RepositoryKey, Harness: key.Harness}
-		b.deleteLeftover(ctx, vmName("build", request.key()))
-		b.deleteLeftover(ctx, vmName("warm", request.key()))
-	}
-}
-
-// keyStore lists the repository snapshots on record (postgres.Store).
-type keyStore interface {
-	RepositorySandboxSnapshotKeys(ctx context.Context, provider string) ([]domain.RepositorySandboxSnapshot, error)
-}
-
-// warmScript reads, as root and without failing, the files a session's worker
-// start, agent start and checkout read first, so the provider has them paged
-// in. tar writes to a pipe: GNU tar skips reading files when its archive is
-// /dev/null.
-const warmScript = `set +e
-cat /usr/local/bin/ao-worker /usr/local/bin/ao >/dev/null 2>&1
-for tool in node git gh claude claude-agent-acp codex cursor-agent; do
-  path="$(command -v "$tool" 2>/dev/null)" && cat "$(readlink -f "$path")" >/dev/null 2>&1
-done
-root="$(npm root -g 2>/dev/null)"
-[ -n "$root" ] && tar -cf - "$root" 2>/dev/null | cat >/dev/null
-[ -d ` + repositoryDir + ` ] && tar -cf - ` + repositoryDir + ` 2>/dev/null | cat >/dev/null
-true`
-
-// RunRefresher rebuilds snapshots left on an older base: once at start, which
-// follows a deploy that rebaked the harness snapshots, and every
-// collectInterval after that until ctx ends.
-func (b *Builder) RunRefresher(ctx context.Context) {
-	ticker := time.NewTicker(collectInterval)
-	defer ticker.Stop()
-	b.warmBases(ctx)
-	for {
-		b.Refresh(ctx)
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-// Refresh rebuilds the snapshots a session booted from within IdleRetention
-// that were built on an older harness snapshot than the one sessions now boot
-// from: a deploy rebakes the harness snapshots, which makes every repository
-// snapshot unusable until its next session rebuilds it, so that session clones.
-// It cannot see a deploy directly; a snapshot on a different base is the same
-// fact. Each rebuild clones with its project's authority and waits for a free
-// build slot, most recently used first.
-func (b *Builder) Refresh(ctx context.Context) {
-	store, ok := b.config.Store.(RefreshStore)
-	if !ok || b.config.BaseSnapshot == nil {
-		return
-	}
-	refreshes, err := store.RecentRepositorySandboxSnapshots(ctx, b.config.Provider, b.now().Add(-IdleRetention))
-	if err != nil {
-		if ctx.Err() == nil {
-			b.config.Logger.Warn("list project snapshots to refresh", "error", err)
-		}
-		return
-	}
-	for _, refresh := range refreshes {
-		base := b.config.BaseSnapshot(refresh.Snapshot.Harness)
-		if base == "" || base == refresh.Snapshot.BaseSnapshotID {
-			continue
-		}
-		request, ok := NewRequest(refresh.Snapshot.OrgID, refresh.Project, refresh.Snapshot.Harness, base)
-		if !ok || request.RepositoryKey != refresh.Snapshot.RepositoryKey {
-			continue
-		}
-		for !b.start(request) {
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(refreshRetryInterval):
-			}
-		}
-		b.config.Logger.Info("refreshing project snapshot onto the current harness snapshot",
-			"project_id", request.ProjectID, "harness", request.Harness)
-	}
-}
-
 // RunCollector deletes idle snapshots every collectInterval until ctx ends.
 func (b *Builder) RunCollector(ctx context.Context) {
 	ticker := time.NewTicker(collectInterval)
@@ -601,7 +345,6 @@ func (b *Builder) RunCollector(ctx context.Context) {
 // first and the record only once that succeeds, so a failed provider delete
 // is retried on the next run instead of leaking the copy.
 func (b *Builder) Collect(ctx context.Context) {
-	defer b.SweepLeftoverVMs(ctx)
 	snapshotIDs, err := b.config.Store.CollectIdleRepositorySandboxSnapshots(
 		ctx, b.config.Provider, b.now().Add(-IdleRetention),
 		func(ctx context.Context, snapshotID string) error {
@@ -618,19 +361,10 @@ func (b *Builder) Collect(ctx context.Context) {
 }
 
 // cloneSource returns the URL and token to clone with: the triggering
-// session's checkout grant, the project's when no session triggered the build,
-// or an anonymous public clone where allowed.
+// session's checkout grant, or an anonymous public clone where allowed.
 func (b *Builder) cloneSource(ctx context.Context, request Request) (string, string, error) {
 	if b.config.Grants != nil {
-		var grant githubapp.CheckoutGrant
-		var err error
-		if request.SessionID != "" {
-			grant, err = b.config.Grants.IssueCheckoutGrant(ctx, request.OrgID, request.SessionID)
-		} else if projectGrants, ok := b.config.Grants.(ProjectGrants); ok {
-			grant, err = projectGrants.IssueProjectCheckoutGrant(ctx, request.OrgID, request.ProjectID)
-		} else {
-			err = errors.New("no session to issue a checkout grant for")
-		}
+		grant, err := b.config.Grants.IssueCheckoutGrant(ctx, request.OrgID, request.SessionID)
 		if err == nil && grant.CloneURL != "" && grant.Token != "" {
 			return grant.CloneURL, grant.Token, nil
 		}

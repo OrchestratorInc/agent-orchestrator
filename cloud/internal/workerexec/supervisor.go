@@ -44,12 +44,6 @@ type Supervisor struct {
 	// TurnEnded, when set, runs after each Chat turn has run, before the
 	// turn is reported complete.
 	TurnEnded func()
-	// WarmTurn turns prewarming on (see acp_prewarm.go): it describes the
-	// first turn Prewarm starts an agent for, and each turn then prewarms the
-	// next. SessionGate, when set, keeps the first agent from opening its
-	// session until it closes: the checkout is ready.
-	WarmTurn    *worker.Turn
-	SessionGate <-chan struct{}
 
 	// busy covers both a claim in flight and its turn until completion. A
 	// handoff must not cancel Run between a durable claim and turn completion.
@@ -70,10 +64,6 @@ type Supervisor struct {
 	activeACP   *acpSession
 	activeCodex *codexSession
 	prObserver  *pullRequestObserver
-
-	warmMu           sync.Mutex
-	warm             *warmACP
-	startupPrewarmed atomic.Bool
 }
 
 // SetWorkspaceStartupError keeps Chat from running a prompt in a workspace
@@ -182,9 +172,6 @@ func (s *Supervisor) Run(ctx context.Context) error {
 	if s.PullRequestClaimer != nil {
 		s.prObserver = &pullRequestObserver{claim: s.PullRequestClaimer}
 	}
-	// An agent prewarmed for a turn that never came is gone before Run
-	// returns, so a handoff's terminal agent never shares its conversation.
-	defer s.discardWarmACP()
 
 	for {
 		if s.stopping.Load() || s.drainFences.Load() > 0 || s.workspaceStartupError.Load() != nil {
@@ -336,9 +323,6 @@ func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
 	acpTurn := s.UseProviderProtocol && (turn.Harness == "claude-code" || turn.Harness == "cursor")
 	codexTurn := s.UseProviderProtocol && turn.Harness == "codex"
 	var runErr error
-	// The conversation the next turn continues: this turn's, or the one it
-	// had to create.
-	nextAgentSessionID := turn.AgentSessionID
 	if acpTurn {
 		runErr = s.runACP(executionCtx, turn, command, func(output Output) error {
 			if s.prObserver != nil {
@@ -348,7 +332,6 @@ func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
 				TurnID: turn.ID, Attempt: turn.Attempt, Stream: output.Stream, Text: output.Text, ItemID: output.ItemID, Activity: output.Activity,
 			})
 		}, func(identity string) error {
-			nextAgentSessionID = identity
 			if publisher, ok := s.Control.(conversationIdentityPublisher); ok {
 				return publisher.PublishActivity(executionCtx, worker.ActivityEvent{
 					Harness: turn.Harness, Event: "session-start", AgentSessionID: identity,
@@ -433,12 +416,6 @@ func (s *Supervisor) execute(ctx context.Context, turn worker.Turn) error {
 	}
 	if runErr != nil {
 		return s.retryFailure(ctx, turn.ID, turn.Attempt, boundedError(runErr.Error()))
-	}
-	if s.WarmTurn != nil && acpTurn && nextAgentSessionID != "" && !s.stopping.Load() && s.drainFences.Load() == 0 {
-		next := turn
-		next.ID, next.Prompt, next.Attempt, next.CancelRequested = "", "", 0, false
-		next.AgentSessionID = nextAgentSessionID
-		s.prewarm(ctx, next)
 	}
 	return s.retryComplete(ctx, turn.ID, turn.Attempt, false)
 }

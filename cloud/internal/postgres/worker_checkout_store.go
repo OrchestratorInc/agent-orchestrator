@@ -20,46 +20,6 @@ func (s *Store) WorkerGitHubCheckoutContext(
 	orgID, sessionID string,
 ) (domain.GitHubCheckoutContext, error) {
 	authorization := domain.GitHubCheckoutContext{OrgID: orgID, SessionID: sessionID}
-	return s.githubCheckoutContext(ctx, sessionCheckoutScope, orgID, sessionID, authorization)
-}
-
-// ProjectGitHubCheckoutContext resolves a project, rather than one of its
-// sessions, to the installation that may read its repository: for a project
-// snapshot build, which no session triggers (at connect, after a deploy). The
-// same grant, installation and repository checks apply; the project must not
-// be archived.
-func (s *Store) ProjectGitHubCheckoutContext(
-	ctx context.Context,
-	orgID, projectID string,
-) (domain.GitHubCheckoutContext, error) {
-	return s.githubCheckoutContext(ctx, projectCheckoutScope, orgID, projectID, domain.GitHubCheckoutContext{OrgID: orgID})
-}
-
-// checkoutScope picks the project a checkout context is resolved for: a live
-// session's project, or a project directly. $1 is the org and $2 the session
-// or project id.
-type checkoutScope struct{ from, where string }
-
-var (
-	sessionCheckoutScope = checkoutScope{
-		from: `FROM ao_sessions session
-			JOIN ao_projects project
-			  ON project.org_id = session.org_id AND project.id = session.project_id`,
-		where: `session.org_id = $1 AND session.id = $2
-			  AND session.is_terminated = false`,
-	}
-	projectCheckoutScope = checkoutScope{
-		from:  `FROM ao_projects project`,
-		where: `project.org_id = $1 AND project.id = $2 AND project.archived_at IS NULL`,
-	}
-)
-
-func (s *Store) githubCheckoutContext(
-	ctx context.Context,
-	scope checkoutScope,
-	orgID, id string,
-	authorization domain.GitHubCheckoutContext,
-) (domain.GitHubCheckoutContext, error) {
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		var projectGrantID, activeGrantID string
 		err := tx.QueryRow(ctx,
@@ -68,7 +28,9 @@ func (s *Store) githubCheckoutContext(
 				repository.github_repository_id, repository.full_name,
 				repository.clone_url, project.default_branch,
 				installation.access_scope, COALESCE(installation.scope_user_id::text, '')
-			`+scope.from+`
+			FROM ao_sessions session
+			JOIN ao_projects project
+			  ON project.org_id = session.org_id AND project.id = session.project_id
 			JOIN ao_github_repository_grants grant_row
 			  ON grant_row.org_id = project.org_id
 			 AND grant_row.github_repository_id = project.github_repository_id
@@ -77,7 +39,8 @@ func (s *Store) githubCheckoutContext(
 			 AND installation.id = grant_row.installation_id
 			JOIN ao_github_repositories repository
 			  ON repository.github_repository_id = grant_row.github_repository_id
-			WHERE `+scope.where+`
+			WHERE session.org_id = $1 AND session.id = $2
+			  AND session.is_terminated = false
 			  AND project.github_repository_id IS NOT NULL
 			  AND project.github_repository_grant_id IS NOT NULL
 			  AND project.repository_url = repository.html_url
@@ -92,7 +55,7 @@ func (s *Store) githubCheckoutContext(
 			  AND `+githubUserScopeIntactSQL+`
 			ORDER BY grant_row.granted_at DESC
 			LIMIT 1`,
-			orgID, id,
+			orgID, sessionID,
 		).Scan(
 			&authorization.ProjectID,
 			&projectGrantID,
@@ -341,25 +304,6 @@ func (s *Store) WorkerRemoteGitHubCheckoutContext(
 	authorization := domain.RemoteGitHubCheckoutContext{
 		OrgID: orgID, SessionID: sessionID,
 	}
-	return s.remoteGitHubCheckoutContext(ctx, sessionCheckoutScope, orgID, sessionID, authorization)
-}
-
-// ProjectRemoteGitHubCheckoutContext is ProjectGitHubCheckoutContext for a
-// project whose repository authority is a remote capability.
-func (s *Store) ProjectRemoteGitHubCheckoutContext(
-	ctx context.Context,
-	orgID, projectID string,
-) (domain.RemoteGitHubCheckoutContext, error) {
-	return s.remoteGitHubCheckoutContext(ctx, projectCheckoutScope, orgID, projectID,
-		domain.RemoteGitHubCheckoutContext{OrgID: orgID})
-}
-
-func (s *Store) remoteGitHubCheckoutContext(
-	ctx context.Context,
-	scope checkoutScope,
-	orgID, id string,
-	authorization domain.RemoteGitHubCheckoutContext,
-) (domain.RemoteGitHubCheckoutContext, error) {
 	err := s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
 		err := tx.QueryRow(
 			ctx,
@@ -368,15 +312,19 @@ func (s *Store) remoteGitHubCheckoutContext(
 				project.github_authority_environment, project.repository_url,
 				project.github_capability_ciphertext,
 				project.github_capability_nonce
-			`+scope.from+`
-			WHERE `+scope.where+`
+			FROM ao_sessions session
+			JOIN ao_projects project
+			  ON project.org_id = session.org_id
+			 AND project.id = session.project_id
+			WHERE session.org_id = $1 AND session.id = $2
+			  AND session.is_terminated = false
 			  AND project.github_repository_grant_id IS NULL
 			  AND project.github_installation_id IS NOT NULL
 			  AND project.github_repository_id IS NOT NULL
 			  AND project.github_capability_ciphertext IS NOT NULL
 			  AND project.github_capability_nonce IS NOT NULL`,
 			orgID,
-			id,
+			sessionID,
 		).Scan(
 			&authorization.ProjectID,
 			&authorization.GitHubInstallationID,
@@ -399,23 +347,4 @@ func (s *Store) remoteGitHubCheckoutContext(
 		return domain.RemoteGitHubCheckoutContext{}, err
 	}
 	return authorization, nil
-}
-
-// RecordProjectCheckoutGrant writes the audit record of a checkout token
-// issued for a project rather than a session (a project snapshot build): no
-// user acted, so the record is the only trace of the read access.
-func (s *Store) RecordProjectCheckoutGrant(ctx context.Context, orgID, projectID string, githubRepositoryID int64) error {
-	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO ao_audit_events (
-				org_id, action, resource_type, resource_id, metadata
-			) VALUES (
-				$1, 'github.checkout_grant.project_issued', 'project', $2,
-				jsonb_build_object('githubRepositoryId', $3::bigint, 'purpose', 'project-snapshot')
-			)`,
-			orgID, projectID, githubRepositoryID)
-		if err != nil {
-			return fmt.Errorf("record project checkout grant: %w", err)
-		}
-		return nil
-	})
 }

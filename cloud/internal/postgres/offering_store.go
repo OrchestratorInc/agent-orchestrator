@@ -28,15 +28,14 @@ func (s *Store) OrchestratorPlacement(
 			ctx,
 			`SELECT sandbox.provider,
 				COALESCE(sandbox.provider_connection_id::text, ''),
-				project.config, project.display_name, project.repository_url,
-				project.id::text, project.github_repository_id
+				project.config, project.display_name, project.repository_url
 			FROM ao_sandboxes sandbox
 			JOIN ao_projects project
 			  ON project.org_id = sandbox.org_id AND project.id = $3
 			WHERE sandbox.org_id = $1 AND sandbox.session_id = $2`,
 			orgID, orchestratorSessionID, projectID,
 		).Scan(&placement.Provider, &placement.ConnectionID, &placement.ProjectConfig, &placement.ProjectName,
-			&placement.RepositoryURL, &placement.ProjectID, &placement.GitHubRepositoryID); err != nil {
+			&placement.RepositoryURL); err != nil {
 			return err
 		}
 		rows, err := tx.Query(

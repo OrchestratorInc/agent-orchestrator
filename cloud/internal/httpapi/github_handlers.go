@@ -587,7 +587,6 @@ func (s *Server) createGitHubProject(w http.ResponseWriter, r *http.Request) {
 		"project_id", project.ID,
 		"github_repository_id", githubRepositoryID,
 	)
-	s.ensureProjectSnapshots(r, orgID, project)
 	writeJSON(w, http.StatusCreated, map[string]any{"project": toProjectResponse(project)})
 }
 

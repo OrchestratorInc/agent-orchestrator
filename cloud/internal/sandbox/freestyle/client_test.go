@@ -212,26 +212,6 @@ func TestCreateBootsSessionSnapshotWithEgressOnlyFirewall(t *testing.T) {
 	}
 }
 
-// A VM with no session (a project snapshot builder or warming VM) takes the
-// name its caller gives it as its slug, so a leftover can be found again; a
-// session's VM keeps its session slug whatever the name.
-func TestCreateNamesASessionlessVMByItsName(t *testing.T) {
-	api := newFakeAPI()
-	client := testClient(t, api)
-	if _, err := client.Create(context.Background(), sandbox.Spec{Name: "ao-snapshot-build-abc", RootFS: "snap-codex"}); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if slug := api.last(http.MethodPost, "/v5/vms").body["slug"]; slug != "ao-snapshot-build-abc" {
-		t.Fatalf("slug = %v, want the given name", slug)
-	}
-	if _, err := client.Create(context.Background(), sandbox.Spec{Name: "ao-ignored", SessionID: "Session-2", RootFS: "snap-codex"}); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if slug := api.last(http.MethodPost, "/v5/vms").body["slug"]; slug != "ao-session-2" {
-		t.Fatalf("session VM slug = %v, want its session slug", slug)
-	}
-}
-
 func TestCreateFallsBackToDefaultSnapshot(t *testing.T) {
 	api := newFakeAPI()
 	if _, err := testClient(t, api).Create(context.Background(), sandbox.Spec{SessionID: "s"}); err != nil {
@@ -256,7 +236,7 @@ func TestBootstrapWorkerLaunchesBakedWorkerWithoutUnconditionalChown(t *testing.
 	command, _ := api.last(http.MethodPost, "/exec-await").body["command"].(string)
 	for _, want := range []string{
 		// Freestyle keeps the agent alive across the worker restart a wake does.
-		"runuser --user 'ao-worker' -- env 'AO_WORKER_BOOTSTRAP_TOKEN=ticket' 'AO_WORKER_PARTIAL_CLONE=1' 'AO_WORKER_PERSIST_AGENT=1' 'AO_WORKER_PREWARM_AGENT=1' '/usr/local/bin/ao-worker'",
+		"runuser --user 'ao-worker' -- env 'AO_WORKER_BOOTSTRAP_TOKEN=ticket' 'AO_WORKER_PARTIAL_CLONE=1' 'AO_WORKER_PERSIST_AGENT=1' '/usr/local/bin/ao-worker'",
 		`[ "$(stat -c %U /workspace)" = 'ao-worker' ] || chown -R`,
 		"setsid nohup",
 	} {

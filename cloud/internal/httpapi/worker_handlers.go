@@ -1252,9 +1252,6 @@ func (s *Server) workerEvent(w http.ResponseWriter, r *http.Request) {
 		var err error
 		if startup.Status == worker.WorkspaceStartupReady {
 			err = s.store.ClearWorkspaceStartupError(r.Context(), claims.OrgID, claims.SessionID, claims.WorkerID, claims.Epoch)
-			if err == nil && startup.Startup != nil {
-				s.recordWorkspaceReady(r, claims, *startup.Startup)
-			}
 		} else {
 			// The script redaction: a Setup failure's detail is its output.
 			// RedactScriptOutput strips escapes and control characters before

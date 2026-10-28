@@ -105,7 +105,6 @@ logged as `msg = "activity event"` with `activity_kind` and its attributes under
 | `bootstrap.stage` | a provider bootstrap stage finished (Coder) | `stage`, `ok`, `duration_ms`, `workspace_id`, `coder_owner`, `coder_template`, `agent_lifecycle`, `code`, `error` |
 | `worker.connected` | a worker registered | `worker_id`, `epoch`, `worker_version` |
 | `sandbox.ready` | worker up (time-to-ready) | `phase` create/resume, `ttr_ms`, `startup_attempts` |
-| `workspace.ready` | worker prepared the workspace | `connected_ms`, `checkout_ms`, `setup_ms` (since the worker process started), `checkout` snapshot/clone/existing/none, `first_start`, `self_updated` |
 | `session.start_failed` | a new startup error for the session | `code`, `message`, `stage`, `cause`, `customer_owned`, `job_error`, `agent_lifecycle`, `build_log_tail`, `agent_log_tail` |
 | `sandbox.paused` / `sandbox.resuming` | compute stopped / restore started | `desired_state`, `reason` |
 | `session.resume_requested` | user resumed a session | `observed_state` |
@@ -177,13 +176,6 @@ Time-to-ready p50/p95 per provider (first start):
 ```
 filter activity_kind = "sandbox.ready" and activity.phase = "create"
 | stats count(*) as ready, pct(activity.ttr_ms, 50) as p50_ms, pct(activity.ttr_ms, 95) as p95_ms, max(activity.ttr_ms) as max_ms by sandbox_provider
-```
-
-Worker startup phases by checkout source (first start), in ms since the worker process started:
-
-```
-filter activity_kind = "workspace.ready" and activity.first_start = 1
-| stats count(*) as n, pct(activity.connected_ms, 50) as connected_p50, pct(activity.checkout_ms, 50) as checkout_p50, pct(activity.checkout_ms, 95) as checkout_p95, pct(activity.setup_ms, 50) as setup_p50 by activity.checkout
 ```
 
 Session start outcomes per provider (success rate = ready / requested):

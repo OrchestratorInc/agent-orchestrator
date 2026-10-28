@@ -9,10 +9,8 @@ import (
 	"errors"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/google/uuid"
@@ -470,123 +468,4 @@ func seedInstallationRow(t *testing.T, pool *pgxpool.Pool, orgID, userID string,
 		t.Fatalf("commit installation row: %v", err)
 	}
 	return installationID
-}
-
-// A project snapshot build that no session triggers resolves the project's
-// own repository authority, with the same grant checks, and never an archived
-// project's. The refresher finds the project behind a recently used snapshot.
-func TestProjectGitHubCheckoutContextForASnapshotBuild(t *testing.T) {
-	store, admin := openGitHubMultiOrgStore(t)
-	ctx := context.Background()
-	installationID := randomGitHubInstallationID(t)
-	fixture := seedGitHubOrg(t, admin, installationID)
-	installation, err := store.CompleteGitHubInstallation(ctx, fixture.stateHash, testGitHubInstallation(installationID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	repository := domain.GitHubRepository{
-		GitHubRepositoryID: randomGitHubInstallationID(t), GitHubOwnerID: 7,
-		Name: "repo", FullName: "octo-org/repo", HTMLURL: "https://github.com/octo-org/repo",
-		CloneURL: "https://github.com/octo-org/repo.git", DefaultBranch: "main", Visibility: "private", IsPrivate: true,
-	}
-	generation, err := store.BeginGitHubRepositorySync(ctx, installation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.ReconcileGitHubRepositories(ctx, fixture.orgID, installation, generation, []domain.GitHubRepository{repository}); err != nil {
-		t.Fatal(err)
-	}
-	var projectID string
-	if err := store.withOrg(ctx, fixture.orgID, func(tx pgx.Tx) error {
-		return tx.QueryRow(ctx, `INSERT INTO ao_projects (org_id, display_name, repository_url, github_repository_id, github_repository_grant_id)
-			SELECT $1, 'repo', $2, $3, id FROM ao_github_repository_grants
-			WHERE org_id = $1 AND github_repository_id = $3 AND revoked_at IS NULL
-			RETURNING id`, fixture.orgID, repository.HTMLURL, repository.GitHubRepositoryID).Scan(&projectID)
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	checkout, err := store.ProjectGitHubCheckoutContext(ctx, fixture.orgID, projectID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if appCheckout, err := func() (domain.GitHubCheckoutContext, error) {
-		appStore, _ := openAppRoleStore(t, admin)
-		return appStore.ProjectGitHubCheckoutContext(ctx, fixture.orgID, projectID)
-	}(); err != nil || appCheckout.ProjectID != projectID {
-		t.Fatalf("project checkout under row-level security = %+v, %v", appCheckout, err)
-	}
-	if checkout.ProjectID != projectID || checkout.SessionID != "" ||
-		checkout.GitHubInstallationID != installationID || checkout.GitHubRepositoryID != repository.GitHubRepositoryID ||
-		checkout.CloneURL != repository.CloneURL {
-		t.Fatalf("project checkout = %+v", checkout)
-	}
-	if _, err := store.ProjectGitHubCheckoutContext(ctx, uuid.NewString(), projectID); err == nil {
-		t.Fatal("resolved a project under another organization")
-	}
-	// A project grant leaves an audit record, written as the app role.
-	auditStore, _ := openAppRoleStore(t, admin)
-	if err := auditStore.RecordProjectCheckoutGrant(ctx, fixture.orgID, projectID, repository.GitHubRepositoryID); err != nil {
-		t.Fatal(err)
-	}
-	var audited int
-	if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_audit_events
-		WHERE org_id = $1 AND action = 'github.checkout_grant.project_issued' AND resource_id = $2
-		  AND (metadata->>'githubRepositoryId')::bigint = $3`,
-		fixture.orgID, projectID, repository.GitHubRepositoryID).Scan(&audited); err != nil || audited != 1 {
-		t.Fatalf("audit records = %d, %v; want one", audited, err)
-	}
-
-	key := "github:" + strconv.FormatInt(repository.GitHubRepositoryID, 10)
-	if _, err := store.ReplaceRepositorySandboxSnapshot(ctx, domain.RepositorySandboxSnapshot{
-		OrgID: fixture.orgID, RepositoryKey: key, RepositoryIdentity: "octo-org/repo",
-		Provider: "freestyle", Harness: "claude-code", SnapshotID: "sh-" + uuid.NewString(), BaseSnapshotID: "sh-old-base",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	// The control plane runs as a role row-level security applies to, which
-	// sees no project from the service context.
-	appStore, _ := openAppRoleStore(t, admin)
-	recent, err := appStore.RecentRepositorySandboxSnapshots(ctx, "freestyle", time.Now().Add(-time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, refresh := range recent {
-		if refresh.Snapshot.RepositoryKey == key {
-			found = refresh.Project.ID == projectID && refresh.Project.OrgID == fixture.orgID &&
-				refresh.Snapshot.BaseSnapshotID == "sh-old-base"
-		}
-	}
-	if !found {
-		t.Fatalf("recent snapshots %+v, want %s with project %s", recent, key, projectID)
-	}
-	// The collector's sweep lists every snapshot on record, under row-level
-	// security too.
-	keys, err := appStore.RepositorySandboxSnapshotKeys(ctx, "freestyle")
-	if err != nil {
-		t.Fatal(err)
-	}
-	listed := false
-	for _, candidate := range keys {
-		listed = listed || (candidate.RepositoryKey == key && candidate.OrgID == fixture.orgID && candidate.Harness == "claude-code")
-	}
-	if !listed {
-		t.Fatalf("snapshot keys %+v, want %s", keys, key)
-	}
-
-	if _, err := admin.Exec(ctx, `UPDATE ao_projects SET archived_at = now() WHERE id = $1`, projectID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.ProjectGitHubCheckoutContext(ctx, fixture.orgID, projectID); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("archived project checkout = %v, want ErrForbidden", err)
-	}
-	if recent, err = appStore.RecentRepositorySandboxSnapshots(ctx, "freestyle", time.Now().Add(-time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	for _, refresh := range recent {
-		if refresh.Snapshot.RepositoryKey == key {
-			t.Fatalf("refresh offered an archived project's snapshot: %+v", refresh)
-		}
-	}
 }
