@@ -112,7 +112,7 @@
 	/* Board lane signals, matched to the landing hero's board preview. */
 	--color-status-working: #60a5fa;
 	--color-status-needs-you: #f06445;
-	--color-status-validating: #22d3ee;
+	--color-status-validating: #e58bb5;
 	--color-status-in-review: #f59e0b;
 	--color-status-ready: #4ade80;
 	--color-status-merged: #c084fc;
@@ -738,7 +738,7 @@
 	/* Same lane hues as dark, deepened so they hold contrast on a light canvas. */
 	--color-status-working: #2563eb;
 	--color-status-needs-you: #c2412d;
-	--color-status-validating: #0891b2;
+	--color-status-validating: #9b4871;
 	--color-status-in-review: #d97706;
 	--color-status-ready: #16a34a;
 	--color-status-merged: #9333ea;
