@@ -524,6 +524,18 @@ func TestProjectGitHubCheckoutContextForASnapshotBuild(t *testing.T) {
 	if _, err := store.ProjectGitHubCheckoutContext(ctx, uuid.NewString(), projectID); err == nil {
 		t.Fatal("resolved a project under another organization")
 	}
+	// A project grant leaves an audit record, written as the app role.
+	auditStore, _ := openAppRoleStore(t, admin)
+	if err := auditStore.RecordProjectCheckoutGrant(ctx, fixture.orgID, projectID, repository.GitHubRepositoryID); err != nil {
+		t.Fatal(err)
+	}
+	var audited int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM ao_audit_events
+		WHERE org_id = $1 AND action = 'github.checkout_grant.project_issued' AND resource_id = $2
+		  AND (metadata->>'githubRepositoryId')::bigint = $3`,
+		fixture.orgID, projectID, repository.GitHubRepositoryID).Scan(&audited); err != nil || audited != 1 {
+		t.Fatalf("audit records = %d, %v; want one", audited, err)
+	}
 
 	key := "github:" + strconv.FormatInt(repository.GitHubRepositoryID, 10)
 	if _, err := store.ReplaceRepositorySandboxSnapshot(ctx, domain.RepositorySandboxSnapshot{

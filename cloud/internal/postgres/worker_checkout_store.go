@@ -400,3 +400,22 @@ func (s *Store) remoteGitHubCheckoutContext(
 	}
 	return authorization, nil
 }
+
+// RecordProjectCheckoutGrant writes the audit record of a checkout token
+// issued for a project rather than a session (a project snapshot build): no
+// user acted, so the record is the only trace of the read access.
+func (s *Store) RecordProjectCheckoutGrant(ctx context.Context, orgID, projectID string, githubRepositoryID int64) error {
+	return s.withOrg(ctx, orgID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO ao_audit_events (
+				org_id, action, resource_type, resource_id, metadata
+			) VALUES (
+				$1, 'github.checkout_grant.project_issued', 'project', $2,
+				jsonb_build_object('githubRepositoryId', $3::bigint, 'purpose', 'project-snapshot')
+			)`,
+			orgID, projectID, githubRepositoryID)
+		if err != nil {
+			return fmt.Errorf("record project checkout grant: %w", err)
+		}
+		return nil
+	})
+}

@@ -577,6 +577,7 @@ func (s *Service) IssueCheckoutGrant(
 type projectCheckoutStore interface {
 	ProjectGitHubCheckoutContext(context.Context, string, string) (domain.GitHubCheckoutContext, error)
 	ProjectRemoteGitHubCheckoutContext(context.Context, string, string) (domain.RemoteGitHubCheckoutContext, error)
+	RecordProjectCheckoutGrant(context.Context, string, string, int64) error
 }
 
 // IssueProjectCheckoutGrant issues a read-only token for a project's primary
@@ -619,6 +620,11 @@ func (s *Service) IssueProjectCheckoutGrant(
 	}
 	if access.ExpiresAt.After(time.Now().UTC().Add(2 * time.Hour)) {
 		return CheckoutGrant{}, errors.New("GitHub returned an unexpectedly long-lived installation token")
+	}
+	// No user acted, so the token is handed out only once its audit record is
+	// written; without one it goes unused and expires.
+	if err := store.RecordProjectCheckoutGrant(ctx, orgID, projectID, authorization.GitHubRepositoryID); err != nil {
+		return CheckoutGrant{}, err
 	}
 	return CheckoutGrant{CloneURL: authorization.CloneURL, Token: access.Token, ExpiresAt: access.ExpiresAt}, nil
 }

@@ -120,6 +120,7 @@ func (b *RemoteCheckoutBroker) IssueCheckoutGrant(
 // sessions, to its remote repository authority (postgres.Store).
 type remoteProjectCapabilityStore interface {
 	ProjectRemoteGitHubCheckoutContext(context.Context, string, string) (domain.RemoteGitHubCheckoutContext, error)
+	RecordProjectCheckoutGrant(context.Context, string, string, int64) error
 }
 
 // IssueProjectCheckoutGrant redeems a project's capability for a project
@@ -139,7 +140,16 @@ func (b *RemoteCheckoutBroker) IssueProjectCheckoutGrant(
 	if authorization.ProjectID != projectID {
 		return CheckoutGrant{}, errors.New("remote repository authority is invalid")
 	}
-	return b.redeem(ctx, orgID, "", authorization)
+	grant, err := b.redeem(ctx, orgID, "", authorization)
+	if err != nil {
+		return CheckoutGrant{}, err
+	}
+	// No user acted, so the token is handed out only once its audit record is
+	// written; without one it goes unused and expires.
+	if err := store.RecordProjectCheckoutGrant(ctx, orgID, projectID, authorization.GitHubRepositoryID); err != nil {
+		return CheckoutGrant{}, err
+	}
+	return grant, nil
 }
 
 // redeem exchanges a remote authority (resolved for sessionID, or for its
