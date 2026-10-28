@@ -442,6 +442,9 @@ type SessionSearchHit struct {
 	// MatchTotalCapped reports that the ranking stage hit its candidate cap,
 	// so MatchTotal is a floor and the exact total needs a count.
 	MatchTotalCapped bool
+	// NamedForQuery reports that the session's name holds every typed word:
+	// the ranking's name tier, which put the session ahead of any bm25 score.
+	NamedForQuery bool
 }
 
 // SessionSearchHighlight is one matched span in a snippet, in UTF-16 code units:
@@ -482,6 +485,11 @@ type SessionSearchResult struct {
 	// ReviewID is set when the match is in one of the session's reviewer chats,
 	// which is where opening the result goes.
 	ReviewID string `json:"reviewId,omitempty"`
+	// NamedForQuery reports that the session's name holds every typed word,
+	// which is why it ranks first. A desktop merging several machines' lists
+	// keeps such sessions first: unlike bm25 scores, which depend on each
+	// machine's own index, a name match means the same thing on every machine.
+	NamedForQuery bool `json:"namedForQuery,omitempty"`
 }
 
 // SessionSearchCoverage says what the index can and cannot see.

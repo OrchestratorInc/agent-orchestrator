@@ -361,7 +361,7 @@ func TestSearchSessionsGroupsBySessionByDefault(t *testing.T) {
 		Group: domain.SessionSearchGroupSession,
 		Results: []domain.SessionSearchResult{{
 			SessionID: "proj-1", Kind: domain.SessionSearchKindUser, Snippet: "flaky", SessionMatches: 4,
-			ReviewID: "review-1",
+			ReviewID: "review-1", NamedForQuery: true,
 		}},
 	}}
 	srv := newSessionSearchServer(t, svc)
@@ -377,14 +377,16 @@ func TestSearchSessionsGroupsBySessionByDefault(t *testing.T) {
 		Results []struct {
 			SessionMatches int    `json:"sessionMatches"`
 			ReviewID       string `json:"reviewId"`
+			NamedForQuery  bool   `json:"namedForQuery"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// reviewId routes a reviewer-chat match to that reviewer chat.
+	// reviewId routes a reviewer-chat match to that reviewer chat;
+	// namedForQuery lets a merge across machines keep a name match first.
 	if decoded.Group != "session" || len(decoded.Results) != 1 || decoded.Results[0].SessionMatches != 4 ||
-		decoded.Results[0].ReviewID != "review-1" {
+		decoded.Results[0].ReviewID != "review-1" || !decoded.Results[0].NamedForQuery {
 		t.Fatalf("response = %s", body)
 	}
 
