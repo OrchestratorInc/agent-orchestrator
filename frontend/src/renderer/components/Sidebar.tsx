@@ -20,13 +20,10 @@ import {
 	Archive,
 	CalendarClock,
 	ChevronRight,
-	ChevronsDownUp,
-	ChevronsUpDown,
 	Copy,
 	Download,
 	ExternalLink,
 	GitBranch,
-	Hash,
 	LayoutGrid,
 	File,
 	Folder,
@@ -2054,16 +2051,14 @@ const ProjectItem = memo(function ProjectItem({
 						{t("shell.openDashboard")}
 					</ContextMenuItem>
 				) : null}
-				<ContextMenuSeparator />
-				<ContextMenuItem onSelect={toggleDisclosure}>
-					{expanded ? <ChevronsDownUp aria-hidden="true" /> : <ChevronsUpDown aria-hidden="true" />}
-					{expanded ? t("shell.collapse") : t("shell.expand")}
-				</ContextMenuItem>
 				{workspace.path ? (
-					<ContextMenuItem onSelect={() => copyToClipboard(workspace.path)}>
-						<Copy aria-hidden="true" />
-						{t("editor.copyPath")}
-					</ContextMenuItem>
+					<>
+						<ContextMenuSeparator />
+						<ContextMenuItem onSelect={() => copyToClipboard(workspace.path)}>
+							<Copy aria-hidden="true" />
+							{t("editor.copyPath")}
+						</ContextMenuItem>
+					</>
 				) : null}
 				{!isStandalone ? <ContextMenuSeparator /> : null}
 				{!isStandalone && <ContextMenuItem onSelect={() => selection.goSettings(workspace.id, workspace.cloudOrgId)}>
@@ -2223,11 +2218,6 @@ function ScratchpadSection({
 					<ContextMenuItem onSelect={selection.goStandaloneBoard}>
 						<Archive aria-hidden="true" />
 						{t("shell.archivedSessions")}
-					</ContextMenuItem>
-					<ContextMenuSeparator />
-					<ContextMenuItem onSelect={onToggle}>
-						{open ? <ChevronsDownUp aria-hidden="true" /> : <ChevronsUpDown aria-hidden="true" />}
-						{open ? t("shell.collapse") : t("shell.expand")}
 					</ContextMenuItem>
 				</ContextMenuContent>
 			</ContextMenu>
@@ -2741,7 +2731,7 @@ function SessionRowMenuItems({
 					{t("command.resumeAgent")}
 				</ContextMenuItem>
 			) : null}
-			<ContextMenuSeparator />
+			{pr || showBranch ? <ContextMenuSeparator /> : null}
 			{pr ? (
 				<>
 					<ContextMenuItem onSelect={() => void aoBridge.app.openExternal(pr.url)}>
@@ -2760,10 +2750,6 @@ function SessionRowMenuItems({
 					{t("command.copyBranch")}
 				</ContextMenuItem>
 			) : null}
-			<ContextMenuItem onSelect={() => copyToClipboard(session.id)}>
-				<Hash aria-hidden="true" />
-				{t("shell.copySessionId")}
-			</ContextMenuItem>
 			<ContextMenuSeparator />
 			<ContextMenuItem onSelect={onArchive}>
 				<Archive aria-hidden="true" />
