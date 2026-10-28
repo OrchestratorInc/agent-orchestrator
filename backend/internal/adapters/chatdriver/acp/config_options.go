@@ -397,6 +397,12 @@ func resolveLegacyModelChoice(choices []ports.ChatConfigOptionChoice, requested 
 	if matched != "" {
 		return matched, true
 	}
+	// Hermes' session/new offers auto:<model>, the id a composer start stores,
+	// but a session/load replaces that row with the provider it resolved to. A
+	// stored auto: id that is no longer offered re-resolves through its model.
+	if model, auto := strings.CutPrefix(requested, "auto:"); auto && model != "" {
+		return resolveProviderPrefixedChoice(choices, model)
+	}
 	return resolveProviderPrefixedChoice(choices, requested)
 }
 

@@ -887,7 +887,7 @@ func serveLegacyKimi(agent *legacyKimiAgent, in io.Reader, out io.Writer) {
 					"sessionCapabilities": map[string]any{"resume": map[string]any{}},
 				},
 			}
-		case "session/new":
+		case "session/new", "session/resume":
 			currentModel := agent.currentModel
 			availableModels := agent.availableModels
 			if currentModel == "" {
@@ -3893,6 +3893,24 @@ func TestResolveLegacyModelChoiceResolvesProviderPrefixedAdvertisedID(t *testing
 			requested: "gpt-5.6",
 			want:      "auto:gpt-5.6",
 		},
+		{
+			name: "a stored auto id resolves to the provider row a loaded session offers",
+			choices: []ports.ChatConfigOptionChoice{
+				{Value: "openrouter:anthropic/claude-opus-4.6"},
+				{Value: "gemini:gemini-3.8-flash"},
+			},
+			requested: "auto:anthropic/claude-opus-4.6",
+			want:      "openrouter:anthropic/claude-opus-4.6",
+		},
+		{
+			name: "a stored auto id with two provider rows stays ambiguous",
+			choices: []ports.ChatConfigOptionChoice{
+				{Value: "openrouter:anthropic/claude-opus-4.6"},
+				{Value: "copilot:anthropic/claude-opus-4.6"},
+			},
+			requested: "auto:anthropic/claude-opus-4.6",
+			want:      "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -4011,6 +4029,44 @@ func TestACPDriverTranslatesBareConfigModelToProviderPrefixedAdvertisedID(t *tes
 	agent.mu.Unlock()
 	if calls != 1 || model != "auto:anthropic/claude-opus-4.6" {
 		t.Fatalf("session/set_model = (%q, %d calls), want the auto:-prefixed advertised id set once", model, calls)
+	}
+}
+
+// A composer start stores Hermes' auto:<model> id, but a restored session
+// offers the provider row auto: resolved to instead. Resume must re-resolve the
+// stored id rather than fail the restore with an unoffered model.
+func TestACPDriverResumesStoredAutoModelAgainstResolvedProviderRow(t *testing.T) {
+	agent := &legacyKimiAgent{
+		currentModel: "openrouter:anthropic/claude-opus-4.6",
+		availableModels: []legacyModelInfo{
+			{ModelID: "openrouter:anthropic/claude-opus-4.6", Name: "OpenRouter · anthropic/claude-opus-4.6"},
+			{ModelID: "gemini:gemini-3.8-flash", Name: "Gemini · gemini-3.8-flash"},
+		},
+		rejectUnknownModel: true,
+	}
+	driver := New(Config{
+		Harness: domain.HarnessHermes,
+		Capabilities: ports.ChatCapabilities{
+			ports.ChatCapabilityStreaming: true, ports.ChatCapabilityResume: true,
+		},
+		Probe:  func(context.Context) error { return nil },
+		Launch: func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Resume(context.Background(), ports.ChatResumeConfig{
+		WorkspacePath: t.TempDir(), ProviderConversationID: "kimi-session-1",
+		Model: "auto:anthropic/claude-opus-4.6",
+	})
+	if err != nil {
+		t.Fatalf("Resume with stored auto: model: %v", err)
+	}
+	defer conv.Close()
+	agent.mu.Lock()
+	calls := agent.modelCalls
+	agent.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("session/set_model calls = %d, want none: the restored provider row is already current", calls)
 	}
 }
 
