@@ -73,6 +73,14 @@ describe("cloud artifact thumbnails", () => {
 		expect(screen.queryByTitle("No preview available")).not.toBeInTheDocument();
 	});
 
+	it("resolves Markdown images under the signed session root", async () => {
+		mocks.fetch.mockResolvedValue(new Response("# Report\n\n![Chart](assets/chart.png)"));
+		const { container } = renderThumbnails([artifact("reports/notes.md", "markdown")]);
+
+		await screen.findByText("Report");
+		expect(container.querySelector("img")).toHaveAttribute("src", `${ROOT}reports/assets/chart.png`);
+	});
+
 	it("frames cloud HTML with the cloud sandbox and verifies availability through the bridge", async () => {
 		renderThumbnails([artifact("index.html", "html")]);
 

@@ -148,7 +148,7 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 					style={{ width: MARKDOWN_PAGE_WIDTH, height: PAGE_HEIGHT, transform: `scale(${width / MARKDOWN_PAGE_WIDTH})` }}
 				>
 					<MarkdownFileView
-						artifactOrigin={contentUrl ? new URL(rawUrl ?? contentUrl).origin : undefined}
+						artifactOrigin={cloud ? access.data?.replace(/\/+$/, "") : contentUrl ? new URL(rawUrl ?? contentUrl).origin : undefined}
 						content={content}
 						filePath={row.path}
 						presentation="thumbnail"
