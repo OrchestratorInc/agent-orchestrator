@@ -26,6 +26,7 @@ const BACK_MS = 200;
 // next one that slides under the pointer.
 let scrollSpent = false;
 let scrollSpentTimer: number | undefined;
+let mountedCount = 0;
 
 function prefersReducedMotion(): boolean {
 	return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -58,18 +59,34 @@ function leave(element: HTMLElement, from: number, done: () => void, style: "sli
 	}, outMs);
 }
 
-/** Wires swipe-to-dismiss on `ref` and returns a quick fade-out for a × button. */
-export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss: () => void, enabled = true): () => void {
+/** Undoes `leave`, for a dismissal that failed. */
+function restore(element: HTMLElement): void {
+	for (const property of ["transition", "transform", "opacity", "height", "overflow", "padding-top", "padding-bottom", "margin-top", "border-width"]) {
+		element.style.removeProperty(property);
+	}
+}
+
+/** Wires swipe-to-dismiss on `ref` and returns a quick fade-out for a × button.
+ * If `onDismiss` resolves to false the dismissal failed and the element comes back. */
+export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss: () => void | Promise<boolean>, enabled = true): () => void {
 	const dismissRef = useRef(onDismiss);
 	dismissRef.current = onDismiss;
 	const leaving = useRef(false);
+	const complete = useCallback(() => {
+		void Promise.resolve(dismissRef.current()).then((dismissed) => {
+			const element = ref.current;
+			if (dismissed !== false || !element) return;
+			restore(element);
+			leaving.current = false;
+		});
+	}, [ref]);
 	const dismiss = useCallback(() => {
 		const element = ref.current;
 		if (leaving.current) return;
 		leaving.current = true;
-		if (!element) dismissRef.current();
-		else leave(element, 0, () => dismissRef.current(), "fade");
-	}, [ref]);
+		if (!element) complete();
+		else leave(element, 0, complete, "fade");
+	}, [complete, ref]);
 
 	useEffect(() => {
 		const element = ref.current;
@@ -113,7 +130,7 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			const width = element.offsetWidth || 1;
 			if (offset >= width * DISMISS_FRACTION || (offset > AXIS_DECIDE_PX && speed >= FLICK_SPEED_PX)) {
 				leaving.current = true;
-				outTimer = leave(element, offset, () => dismissRef.current());
+				outTimer = leave(element, offset, complete);
 				return;
 			}
 			offset = 0;
@@ -160,7 +177,9 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 				decayFrom = speed;
 			}
 			lastSpeed = speed;
-			if (decay >= MOMENTUM_DECAY_EVENTS && decayFrom >= FLICK_SPEED_PX) {
+			// Only past the dismiss point, where lifting would dismiss anyway: fingers
+			// that are still down and slowing look the same as momentum.
+			if (decay >= MOMENTUM_DECAY_EVENTS && decayFrom >= FLICK_SPEED_PX && offset >= (element.offsetWidth || 1) * DISMISS_FRACTION) {
 				// Released into momentum: dismiss now instead of after it.
 				speed = decayFrom;
 				scrollSpent = true;
@@ -222,7 +241,11 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 		// A native drag would cancel the pointer stream mid-gesture.
 		const onDragStart = (event: DragEvent) => event.preventDefault();
 		element.addEventListener("dragstart", onDragStart);
+		mountedCount += 1;
 		return () => {
+			// Nothing left to swipe, so no momentum left to swallow.
+			mountedCount -= 1;
+			if (mountedCount === 0) scrollSpent = false;
 			element.removeEventListener("dragstart", onDragStart);
 			stopPhases();
 			element.removeEventListener("wheel", onWheel);
@@ -230,6 +253,6 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			window.clearTimeout(idleTimer);
 			window.clearTimeout(outTimer);
 		};
-	}, [enabled, ref]);
+	}, [complete, enabled, ref]);
 	return dismiss;
 }

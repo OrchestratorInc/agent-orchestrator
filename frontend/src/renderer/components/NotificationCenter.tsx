@@ -579,11 +579,12 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		}).finally(() => setClearingAll(false));
 	}, [clearAll, clearCloud, clearLocal, clearingAll, queryClient, remoteAll.hosts, t]);
 
-	const handleClear = useCallback((notification: NotificationDTO, hostId: HostId) => {
+	/** Resolves to whether the notification was cleared. */
+	const handleClear = useCallback((notification: NotificationDTO, hostId: HostId): Promise<boolean> => {
 		setActionError(null);
 		const key = notificationKey(hostId, notification.id);
 		setClearingNotificationIds((current) => new Set(current).add(key));
-		void (hostId === LOCAL_HOST ? clearOne.mutateAsync(notification) : (async () => {
+		return (hostId === LOCAL_HOST ? clearOne.mutateAsync(notification) : (async () => {
 			await clearRemoteNotification(hostId, notification.id, queryClient);
 			remoteHistoryGeneration.current += 1;
 			setRemoteLoadingEarlierHost(null);
@@ -594,8 +595,9 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 				})),
 			}));
 		})())
-			.catch((error: unknown) => {
+			.then(() => true, (error: unknown) => {
 				setActionError(error instanceof Error ? error.message : t("notify.couldNotClearOne"));
+				return false;
 			})
 			.finally(() => {
 				setClearingNotificationIds((current) => {
@@ -606,13 +608,15 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			});
 	}, [clearOne, queryClient, t]);
 
-	const handleClearCloud = useCallback((notification: CloudCpNotification) => {
+	/** Resolves to whether the notification was cleared. */
+	const handleClearCloud = useCallback((notification: CloudCpNotification): Promise<boolean> => {
 		const clearingId = cloudRowKey(notification.id);
 		setActionError(null);
 		setClearingNotificationIds((current) => new Set(current).add(clearingId));
-		void clearCloudOne(notification)
-			.catch((error: unknown) => {
+		return clearCloudOne(notification)
+			.then(() => true, (error: unknown) => {
 				setActionError(error instanceof Error ? error.message : t("notify.couldNotClearOne"));
+				return false;
 			})
 			.finally(() => {
 				setClearingNotificationIds((current) => {
@@ -947,7 +951,7 @@ const NotificationItem = memo(function NotificationItem({
 	offerRestore: boolean;
 	onOpenSession: (notification: NotificationDTO) => void;
 	onRestore: (notification: NotificationDTO) => void;
-	onClear: (notification: NotificationDTO) => void;
+	onClear: (notification: NotificationDTO) => Promise<boolean>;
 	hostLabel?: string;
 	projectName?: string;
 	clearing: boolean;
@@ -1090,7 +1094,7 @@ const NotificationItem = memo(function NotificationItem({
 								disabled={clearDisabled}
 								onClick={(event) => {
 									event.stopPropagation();
-									onClear(notification);
+									void onClear(notification);
 								}}
 								onKeyDown={(event) => event.stopPropagation()}
 								type="button"
@@ -1140,7 +1144,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 	offerRestore: boolean;
 	onOpenSession: (projectId: string, sessionId: string) => void;
 	onRestore: (projectId: string, sessionId: string) => void;
-	onClear: (notification: CloudCpNotification) => void;
+	onClear: (notification: CloudCpNotification) => Promise<boolean>;
 	projectId?: string;
 	projectName?: string;
 	clearing: boolean;
@@ -1261,7 +1265,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 								disabled={clearDisabled}
 								onClick={(event) => {
 									event.stopPropagation();
-									onClear(notification);
+									void onClear(notification);
 								}}
 								onKeyDown={(event) => event.stopPropagation()}
 								type="button"
