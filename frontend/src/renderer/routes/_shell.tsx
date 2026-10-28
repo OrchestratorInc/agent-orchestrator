@@ -1482,15 +1482,18 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	);
 	if (onboardingFinishRequest) {
 		return (
-			<main className="grid h-[100dvh] w-screen place-items-center bg-background text-foreground">
-				<div className="flex flex-col items-center gap-4 text-center">
-					<Loader2 className="size-5 animate-spin text-muted-foreground" aria-hidden="true" />
-					<div>
-						<h1 className="text-xl font-medium tracking-[-0.02em]">{t("onboarding.startingOrchestrator")}</h1>
-						<p className="mt-2 text-sm text-muted-foreground">{t("onboarding.preparingProject")}</p>
+			<>
+				<main className="grid h-[100dvh] w-screen place-items-center bg-background text-foreground">
+					<div className="flex flex-col items-center gap-4 text-center">
+						<Loader2 className="size-5 animate-spin text-muted-foreground" aria-hidden="true" />
+						<div>
+							<h1 className="text-xl font-medium tracking-[-0.02em]">{t("onboarding.startingOrchestrator")}</h1>
+							<p className="mt-2 text-sm text-muted-foreground">{t("onboarding.preparingProject")}</p>
+						</div>
 					</div>
-				</div>
-			</main>
+				</main>
+				{quitConfirmDialog}
+			</>
 		);
 	}
 
