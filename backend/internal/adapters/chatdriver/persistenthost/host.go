@@ -523,8 +523,32 @@ func ShutdownQuick(ctx context.Context, dataDir, sessionID string) error {
 	return shutdown(ctx, dataDir, sessionID, true)
 }
 
-func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error {
+func readShutdownDescriptor(ctx context.Context, dataDir, sessionID string) (Descriptor, error) {
 	d, err := readDescriptor(dataDir, sessionID)
+	if !isDescriptorSharingViolation(err) {
+		return d, err
+	}
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return Descriptor{}, ctx.Err()
+		case <-timeout.C:
+			return Descriptor{}, err
+		case <-ticker.C:
+			d, err = readDescriptor(dataDir, sessionID)
+			if !isDescriptorSharingViolation(err) {
+				return d, err
+			}
+		}
+	}
+}
+
+func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error {
+	d, err := readShutdownDescriptor(ctx, dataDir, sessionID)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -566,7 +590,7 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		current, readErr := readDescriptor(dataDir, sessionID)
+		current, readErr := readShutdownDescriptor(waitCtx, dataDir, sessionID)
 		if readErr == nil && current.Token != d.Token {
 			return nil // A new owner could only publish after the old lock released.
 		}
