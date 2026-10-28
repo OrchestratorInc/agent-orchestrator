@@ -28,17 +28,21 @@ describe("sendMessage", () => {
 		expect(sentBody()).toEqual({ message: "Hi", userAuthored: true });
 	});
 
-	it("leaves AO-generated relays unmarked", async () => {
-		await sendMessage(cfg, "w-1", "Review summary");
-		expect(sentBody()).toEqual({ message: "Review summary" });
+	it("leaves the message unmarked when the caller does not opt in", async () => {
+		await sendMessage(cfg, "w-1", "Coordination");
+		expect(sentBody()).toEqual({ message: "Coordination" });
 	});
 });
 
-describe("terminal composer", () => {
-	// The composer is a large screen component; pin the call itself so a refactor
-	// can't silently drop the flag and bring the <ao-session-delivery> echo back.
-	it("sends the user's text as userAuthored", () => {
-		const source = readFileSync(new URL("./session/TerminalSessionScreen.tsx", import.meta.url), "utf8");
-		expect(source).toContain("await sendMessage(activeConfig, id, text, { userAuthored: true });");
+// These are large screen components; pin each call so a refactor can't silently
+// drop the flag and bring the <ao-session-delivery> echo back. Desktop sends the
+// same review messages as userAuthored (SessionInspector sendMessageToWorker).
+describe("user-initiated sends", () => {
+	it.each([
+		["the terminal composer", "./session/TerminalSessionScreen.tsx", "await sendMessage(activeConfig, id, text, { userAuthored: true });"],
+		["Send review to worker", "../app/review/[sessionId].tsx", "await sendMessage(config, sessionId, formatReviewSummaryMessage(run), { userAuthored: true });"],
+		["Send feedback to worker", "../app/sheets/review-actions.tsx", "await sendMessage(config, sessionId, message, { userAuthored: true });"],
+	])("%s sends as userAuthored", (_name, path, call) => {
+		expect(readFileSync(new URL(path, import.meta.url), "utf8")).toContain(call);
 	});
 });

@@ -1228,8 +1228,9 @@ export async function resumeSessionAgent(cfg: ServerConfig, id: string): Promise
 /**
  * Without `userAuthored`, the daemon treats the text as AO coordination (an
  * `ao send` from another session) and types it into the agent wrapped in an
- * `<ao-session-delivery>` envelope. Words the user typed must set it, the way
- * desktop does, so the agent sees them as a plain user prompt.
+ * `<ao-session-delivery>` envelope. Anything the user chose to send (typed text,
+ * or a review they forwarded) must set it, the way desktop does, so the agent
+ * sees it as a plain user prompt.
  */
 export async function sendMessage(cfg: ServerConfig, id: string, message: string, options?: { userAuthored?: boolean }): Promise<void> {
 	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/send`, {
