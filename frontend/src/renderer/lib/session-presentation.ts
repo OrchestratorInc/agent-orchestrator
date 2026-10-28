@@ -11,6 +11,7 @@ import {
 	getSessionTimelinePillView as getPortableSessionTimelinePillView,
 	isAgentActivityWorking,
 	isSessionIdle,
+	toKanbanColumn,
 	type AgentActivityView,
 	type AttentionZone,
 	type AttentionZoneView,
@@ -62,36 +63,38 @@ export type SessionStatusDotView = {
 	breathe: boolean;
 };
 
-// The session dot carries two independent signals. Colour comes from the board
-// section represented by the SCM state, which survives a running agent —
-// `status` is activity-first, so it collapses to `working` the moment an agent
-// wakes and would otherwise take every pull request tone with it. Merged keeps
-// its split-section tone instead of sharing Ready to merge's tone.
+// The session dot carries two independent signals. Colour is the board lane's
+// header colour, so a row reads the same as the column it sits in. The lane is
+// the daemon's `kanbanColumn`; for a daemon too old to send one it falls back
+// to the SCM state, which survives a running agent — `status` is
+// activity-first, so it collapses to `working` the moment an agent wakes and
+// would otherwise take every pull request tone with it. Finished sessions have
+// no lane on the board, so the archive keeps its merged / closed / exited tones.
 //
-// Motion stays on raw agent activity. A no-PR idle session is the exception to
-// the preserved section colour: when its agent starts working it blinks blue.
+// Motion stays on raw agent activity.
 export function getSessionStatusDotView(
 	session: {
 		activity?: SessionActivity | null;
 		displayStatus?: string;
+		kanbanColumn?: KanbanColumn;
 		scmStatus?: SessionStatus;
 		status: SessionStatus;
 	},
 	t: TFunction = appI18n.t,
 ): SessionStatusDotView {
 	const working = isAgentActivityWorking(session.activity);
-	const closedWithoutMerge = session.displayStatus === "Closed without merge";
-	const sectionStatus: SessionStatus =
-		closedWithoutMerge ? "exited" : (session.scmStatus ?? session.status);
-	const toneStatus = sectionStatus === "idle" && working ? "working" : sectionStatus;
+	const sectionStatus: SessionStatus = session.scmStatus ?? session.status;
+	const column = toKanbanColumn(session.kanbanColumn, sectionStatus);
 	const className =
-		closedWithoutMerge
-			? getSessionStatusView("exited", t).dotClassName
-			: toneStatus === "exited"
-				? "bg-passive"
-				: toneStatus === "idle" || toneStatus === "merged"
-					? getSessionStatusView(toneStatus, t).dotClassName
-					: getAttentionZoneView(toneStatus, t).dotClassName;
+		column !== "archive"
+			? getKanbanColumnView(column, t).dotClassName
+			: session.displayStatus === "Closed without merge"
+				? getSessionStatusView("exited", t).dotClassName
+				: sectionStatus === "exited"
+					? "bg-passive"
+					: sectionStatus === "merged"
+						? getSessionStatusView("merged", t).dotClassName
+						: getKanbanColumnView(column, t).dotClassName;
 
 	return {
 		className,

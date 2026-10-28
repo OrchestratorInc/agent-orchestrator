@@ -2778,7 +2778,7 @@ describe("Sidebar", () => {
 		}
 	});
 
-	it("paints the dot from its board section while activity drives the pulse", () => {
+	it("paints the dot from its board lane while activity drives the pulse", () => {
 		renderSidebar({
 			workspaces: [
 				{
@@ -2841,19 +2841,19 @@ describe("Sidebar", () => {
 		const sessionDot = (title: string) =>
 			screen.getByLabelText(`Open ${title}`).querySelector<HTMLElement>("[data-session-status]");
 
-		// No pull request: the dot falls back to runtime status.
-		expect(sessionDot("idle task")).toHaveClass("bg-status-idle");
+		// No pull request: the session sits in Building, so the dot takes its tone.
+		expect(sessionDot("idle task")).toHaveClass("bg-status-working");
 		expect(sessionDot("idle task")).not.toHaveClass("animate-status-pulse");
 
 		const workingDot = sessionDot("working task");
 		expect(workingDot).toHaveClass("bg-status-working");
 		expect(workingDot).toHaveClass("animate-status-pulse");
 
-		// The board-section tone stays visible while the pulse says the agent is busy.
-		expect(sessionDot("ci failed task")).toHaveClass("bg-status-needs-you", "animate-status-pulse");
-		expect(sessionDot("review task")).toHaveClass("bg-status-in-review", "animate-status-pulse");
+		// The board lane's header tone stays visible while the pulse says the agent is busy.
+		expect(sessionDot("ci failed task")).toHaveClass("bg-status-in-review", "animate-status-pulse");
+		expect(sessionDot("review task")).toHaveClass("bg-status-validating", "animate-status-pulse");
 		expect(sessionDot("ready task")).toHaveClass("bg-status-ready", "animate-status-pulse");
-		expect(sessionDot("merged task")).toHaveClass("bg-status-merged", "animate-status-pulse");
+		expect(sessionDot("merged task")).toHaveClass("bg-status-ready", "animate-status-pulse");
 	});
 
 	it("blinks blue when an idle-section session has working activity", () => {
@@ -2913,10 +2913,11 @@ describe("Sidebar", () => {
 			.querySelector<HTMLElement>("span.rounded-full");
 		const idleDraftDot = screen.getByLabelText("Open idle draft task").querySelector<HTMLElement>("span.rounded-full");
 
-		// An idle session with no pull request stays gray; a parked draft keeps
-		// the in-review tone the board gives it, without any motion.
-		expect(idleActivityDot).toHaveClass("bg-status-idle");
-		expect(idleDraftDot).toHaveClass("bg-status-in-review");
+		// An idle session with no pull request takes Building's tone; a parked
+		// draft keeps the Validating tone of the lane the board gives it, without
+		// any motion.
+		expect(idleActivityDot).toHaveClass("bg-status-working");
+		expect(idleDraftDot).toHaveClass("bg-status-validating");
 		expect(idleActivityDot).not.toHaveClass("animate-status-pulse");
 		expect(idleDraftDot).not.toHaveClass("animate-status-pulse");
 	});

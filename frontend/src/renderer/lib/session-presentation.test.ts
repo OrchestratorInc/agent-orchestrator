@@ -3,6 +3,7 @@ import {
 	attentionZone,
 	getAgentActivityView,
 	getAttentionZoneView,
+	getKanbanColumnView,
 	getSessionStatusDotView,
 	getSessionStatusView,
 	getSessionTimelinePillView,
@@ -110,64 +111,76 @@ describe("session presentation", () => {
 	});
 
 	it.each([
-		["idle", "bg-status-idle"],
+		["idle", "bg-status-working"],
 		["working", "bg-status-working"],
-		["needs_input", "bg-status-needs-you"],
-		["exited", "bg-passive"],
-		["no_signal", "bg-status-needs-you"],
-		["ci_failed", "bg-status-needs-you"],
-		["changes_requested", "bg-status-needs-you"],
-		["unknown", "bg-status-needs-you"],
-		["draft", "bg-status-in-review"],
-		["pr_open", "bg-status-in-review"],
-		["review_pending", "bg-status-in-review"],
+		["needs_input", "bg-status-in-review"],
+		["exited", "bg-status-in-review"],
+		["no_signal", "bg-status-in-review"],
+		["ci_failed", "bg-status-in-review"],
+		["changes_requested", "bg-status-in-review"],
+		["unknown", "bg-status-in-review"],
+		["draft", "bg-status-validating"],
+		["pr_open", "bg-status-validating"],
+		["review_pending", "bg-status-validating"],
 		["approved", "bg-status-ready"],
 		["mergeable", "bg-status-ready"],
-		["merged", "bg-status-merged"],
+		["merged", "bg-status-ready"],
 		["terminated", "bg-status-terminated"],
-	] as const)("paints the %s session dot with its board-section tone", (status, dotClassName) => {
+	] as const)("paints the %s session dot with its fallback lane's header tone", (status, dotClassName) => {
 		expect(getSessionStatusDotView(sessionWith({ status }))).toMatchObject({ className: dotClassName });
 	});
 
-	it("prefers SCM state over runtime status for the dot tone", () => {
-		// A running agent drives status to `working`, which would erase every PR
-		// tone in the sidebar. SCM state wins so the row keeps saying "merged".
-		const merged = sessionWith({
+	it.each([
+		["building", "bg-status-working"],
+		["validating", "bg-status-validating"],
+		["needs_review", "bg-status-in-review"],
+		["ready", "bg-status-ready"],
+		["archive", "bg-status-terminated"],
+	] as const)("paints a %s-lane session dot with that column header's tone", (kanbanColumn, dotClassName) => {
+		// The daemon's lane wins over status, so the row matches the column it sits in.
+		expect(
+			getSessionStatusDotView(sessionWith({ status: "ci_failed", kanbanColumn })),
+		).toMatchObject({ className: dotClassName });
+		expect(getKanbanColumnView(kanbanColumn).dotClassName).toBe(dotClassName);
+	});
+
+	it("prefers SCM state over runtime status for the fallback lane", () => {
+		// A running agent drives status to `working`, which would pull every PR
+		// row into Building. SCM state wins so the row keeps its PR lane.
+		const mergeable = sessionWith({
 			status: "working",
-			scmStatus: "merged",
+			scmStatus: "mergeable",
 			activity: { state: "active", lastActivityAt: "" },
 		});
 
-		expect(getSessionStatusDotView(merged)).toEqual({ className: "bg-status-merged", breathe: true });
+		expect(getSessionStatusDotView(mergeable)).toEqual({ className: "bg-status-ready", breathe: true });
 	});
 
-	it("keeps board-section color while raw working activity starts the motion", () => {
-		const scmStatus = "mergeable" as const;
+	it("keeps lane color while raw working activity starts the motion", () => {
+		const kanbanColumn = "validating" as const;
 
 		expect(
-			getSessionStatusDotView(sessionWith({ status: "idle", scmStatus, activity: { state: "idle", lastActivityAt: "" } })),
-		).toEqual({ className: "bg-status-ready", breathe: false });
+			getSessionStatusDotView(sessionWith({ status: "idle", kanbanColumn, activity: { state: "idle", lastActivityAt: "" } })),
+		).toEqual({ className: "bg-status-validating", breathe: false });
 		expect(
 			getSessionStatusDotView(
-				sessionWith({ status: "working", scmStatus, activity: { state: "active", lastActivityAt: "" } }),
+				sessionWith({ status: "working", kanbanColumn, activity: { state: "active", lastActivityAt: "" } }),
 			),
-		).toEqual({ className: "bg-status-ready", breathe: true });
+		).toEqual({ className: "bg-status-validating", breathe: true });
 	});
 
-	it("uses a blinking blue dot when an idle-section session starts working", () => {
+	it("keeps merged, closed and exited tones for archived sessions", () => {
+		expect(
+			getSessionStatusDotView(sessionWith({ status: "merged", kanbanColumn: "archive" })).className,
+		).toBe("bg-status-merged");
 		expect(
 			getSessionStatusDotView(
-				sessionWith({ status: "idle", activity: { state: "active", lastActivityAt: "" } }),
-			),
-		).toEqual({ className: "bg-status-working", breathe: true });
-	});
-
-	it("paints a closed-without-merge session red", () => {
+				sessionWith({ status: "terminated", kanbanColumn: "archive", displayStatus: "Closed without merge" }),
+			).className,
+		).toBe("bg-status-exited");
 		expect(
-			getSessionStatusDotView(
-				sessionWith({ status: "idle", displayStatus: "Closed without merge" }),
-			),
-		).toEqual({ className: "bg-status-exited", breathe: false });
+			getSessionStatusDotView(sessionWith({ status: "exited", kanbanColumn: "archive" })).className,
+		).toBe("bg-passive");
 	});
 
 	it("keeps activity indicator color independent from PR and CI presentation", () => {
