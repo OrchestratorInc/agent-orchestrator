@@ -22,7 +22,7 @@ func TestSandboxRelayPolicyCoversEveryRootCommand(t *testing.T) {
 			t.Errorf("root command %q has no sandbox relay decision; add it to sandboxRelayPolicy", name)
 		}
 	}
-	for _, denied := range []string{"launch", "agent-process", "pty-host", "project", "daemon", "spawn", "send", "cue", "automation", "render", "review", "browser", "session", "orchestrator", "pr"} {
+	for _, denied := range []string{"launch", "agent-process", "pty-host", "project", "daemon", "spawn", "send", "cue", "automation", "render", "review", "browser", "browser-host", "session", "orchestrator", "pr"} {
 		if sandboxRelayPolicy[denied] {
 			t.Errorf("%q must be denied: it can execute host commands or disable the sandbox", denied)
 		}

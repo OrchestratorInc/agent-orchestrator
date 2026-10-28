@@ -42,7 +42,7 @@ var sandboxRelayPolicy = map[string]bool{
 
 	"spawn": false, "send": false, "session": false, "orchestrator": false,
 	"pr": false, "review": false, "automation": false, "cue": false,
-	"render": false, "browser": false,
+	"render": false, "browser": false, "browser-host": false,
 	"daemon": false, "start": false, "stop": false, "remote-host": false,
 	"doctor": false, "agent": false, "mcp": false, "agent-process": false,
 	"chat-host": false, "unreal-provider": false, "launch": false,
