@@ -118,3 +118,36 @@ func TestKimiPermissionResultWithAnotherApprovalPendingStaysWaiting(t *testing.T
 		t.Fatalf("state after final result = %q, want active", got)
 	}
 }
+
+// An id-less PermissionResult (older CLI, or a payload without tool_call_id)
+// cannot prove which approval it resolved, so while correlated approvals are
+// tracked it must keep the session on waiting_input; only the last pending
+// approval's own result lifts the wait. The legacy all-id-less path — no
+// tracked approvals, unconditional clear — is pinned by
+// TestKimiActivityNextApprovalReArmsWaitingInput above and the cline
+// sequence test.
+func TestKimiIdLessPermissionResultKeepsWaitingWhileCorrelatedApprovalsPending(t *testing.T) {
+	m, st, _ := newManager()
+	seedSignaled(st, "mer-1", domain.ActivityActive)
+
+	applyKimiApproval(t, m, "permission-request", "call-a")
+	applyKimiApproval(t, m, "permission-request", "call-b")
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("state after requests = %q, want waiting_input", got)
+	}
+
+	applyKimi(t, m, "permission-resolved")
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("state after id-less result with tracked approvals = %q, want waiting_input", got)
+	}
+
+	applyKimiApproval(t, m, "permission-resolved", "call-a")
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("state after first correlated result = %q, want waiting_input", got)
+	}
+
+	applyKimiApproval(t, m, "permission-resolved", "call-b")
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("state after final correlated result = %q, want active", got)
+	}
+}
