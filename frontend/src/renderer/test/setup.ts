@@ -192,6 +192,7 @@ if (typeof window !== "undefined") {
 		},
 		cloudArtifact: {
 			save: async () => true,
+			cancelSave: async () => undefined,
 			onFrameNavigated: () => () => undefined,
 		},
 		daemon: {

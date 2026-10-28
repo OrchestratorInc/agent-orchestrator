@@ -177,7 +177,7 @@ import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
-import { registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
+import { abortCloudArtifactSaves, registerCloudArtifactIpc } from "./main/cloud-artifact-ipc";
 import { BrowserProfileImportService } from "./main/browser-profile-import";
 import {
 	registerBrowserProfileIpc,
@@ -3733,6 +3733,8 @@ app.on("before-quit", (event) => {
 		return;
 	}
 	browserQuitRequested = true;
+	// A cloud artifact download cut off by the quit removes its partial file.
+	abortCloudArtifactSaves();
 	disposeBrowserRuntimeLink();
 	disposeBrowserStreamLink();
 	trayLifecycle.dispose();
