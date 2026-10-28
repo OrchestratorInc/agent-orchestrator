@@ -1,4 +1,12 @@
+import type { components } from "../../api/schema";
 import type { AgentAccount, AgentAccountProvider } from "../hooks/useAgentAccounts";
+
+export type UsageLimitWindows = components["schemas"]["UsageLimitWindowsResponse"];
+export type UsageLimitLogin = components["schemas"]["UsageLimitLogin"];
+export type UsageLimitSpan = components["schemas"]["UsageLimitSpan"];
+
+/** Windows a day or longer are weekly limits; shorter ones are sessions. */
+export const DAY_MINUTES = 24 * 60;
 
 export type ProviderAccounts = {
 	provider: AgentAccountProvider;
@@ -38,4 +46,30 @@ export function formatCountdown(resetsAt: string | null | undefined, now: Date):
 	if (days > 0) return `${days}d ${hours}h`;
 	if (hours > 0) return `${hours}h ${minutes % 60}m`;
 	return `${minutes}m`;
+}
+
+export type WeeklyPace = {
+	/** Percent used at the reset if the pace so far holds, capped at 100. */
+	atReset: number;
+	/** When it reaches 100% at that pace, if before the reset. */
+	runsOutAt: Date | null;
+};
+
+/**
+ * Where a weekly window lands if it keeps the pace it has had since it opened.
+ * null until it has been open an hour, when one reading would say little.
+ */
+export function weeklyPace(span: UsageLimitSpan): WeeklyPace | null {
+	if (!span.startsAt) return null;
+	const start = Date.parse(span.startsAt);
+	const reset = Date.parse(span.resetsAt);
+	const last = span.points?.at(-1);
+	const lastAt = last ? Date.parse(last.at) : Date.parse(span.lastReadAt);
+	const used = last ? last.usedPercent : span.peakUsedPercent;
+	const elapsed = lastAt - start;
+	if (!(elapsed >= 3_600_000) || !(reset > lastAt)) return null;
+	const perMs = used / elapsed;
+	const atReset = Math.min(100, used + perMs * (reset - lastAt));
+	const runsOut = perMs > 0 ? lastAt + (100 - used) / perMs : Number.POSITIVE_INFINITY;
+	return { atReset, runsOutAt: runsOut < reset ? new Date(runsOut) : null };
 }

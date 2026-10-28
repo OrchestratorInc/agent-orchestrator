@@ -145,9 +145,13 @@ func (c *Codex) Limits(ctx context.Context, home string) (domain.AgentAccountLim
 			if prefix != "" {
 				label = prefix + " · " + label
 			}
-			out.Windows = append(out.Windows, domain.AgentAccountLimitWindow{
+			window := domain.AgentAccountLimitWindow{
 				ID: bucket.LimitID + ":" + label, Label: label, UsedPercent: min(max(w.UsedPercent, 0), 100), ResetsAt: w.ResetsAt,
-			})
+			}
+			if w.WindowDurationMinutes != nil && *w.WindowDurationMinutes > 0 {
+				window.DurationMinutes = int(*w.WindowDurationMinutes)
+			}
+			out.Windows = append(out.Windows, window)
 		}
 	}
 	addBucket(capacity.Overall, "")

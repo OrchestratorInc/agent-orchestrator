@@ -3,7 +3,7 @@ import { ScrollArea } from "radix-ui";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAgentAccountActions, useAgentAccounts } from "../../hooks/useAgentAccounts";
-import { useUsageReport } from "../../hooks/useUsageReport";
+import { useUsageLimitWindows, useUsageReport } from "../../hooks/useUsageReport";
 import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { hidesShellTopbar } from "../../lib/platform";
 import { formatRange } from "../../lib/usage-format";
@@ -13,13 +13,15 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../../types/workspa
 import { HARNESS_TAB_CLASS, HARNESS_TABS_CLASS } from "../settings/harness/harness-ui";
 import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
 import { topbarProjectLabelClass } from "../TopbarButton";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { UsageLimits } from "./UsageLimits";
 import { UsageSpend } from "./UsageSpend";
+import { UsageWindows } from "./UsageWindows";
 
-type UsageTab = "spend" | "limits";
+type UsageTab = "spend" | "limits" | "windows";
 const ALL_PROJECTS = "all";
 const PERIODS = [
 	{ days: 1, label: "usage.period.day" },
@@ -62,10 +64,16 @@ export function UsageView() {
 	);
 	const report = useUsageReport(days, offset, projectFilter === ALL_PROJECTS ? undefined : projectFilter);
 	const accounts = useAgentAccounts(tab === "limits");
+	const limitWindows = useUsageLimitWindows(7, tab === "windows");
 	const accountActions = useAgentAccountActions();
 	const isLimits = tab === "limits";
+	const isWindows = tab === "windows";
 
 	const refresh = async () => {
+		if (isWindows) {
+			await limitWindows.refetch();
+			return;
+		}
 		if (!isLimits) {
 			await report.refetch();
 			return;
@@ -77,7 +85,7 @@ export function UsageView() {
 			setRefreshingLimits(false);
 		}
 	};
-	const refreshing = isLimits ? refreshingLimits || accounts.isFetching : report.isFetching;
+	const refreshing = isWindows ? limitWindows.isFetching : isLimits ? refreshingLimits || accounts.isFetching : report.isFetching;
 	const range = report.data ? formatRange(report.data.since, report.data.until, i18n.language) : null;
 
 	return (
@@ -88,7 +96,7 @@ export function UsageView() {
 					{t("usage.title")}
 				</h1>
 				<div className="workspace-topbar-actions flex min-w-0 shrink-0 items-center gap-2">
-					{!isLimits && projects.length > 0 ? (
+					{tab === "spend" && projects.length > 0 ? (
 						<SettingsOptionMenu
 							aria-label={t("usage.projectFilter")}
 							value={projectFilter}
@@ -99,7 +107,7 @@ export function UsageView() {
 							triggerClassName="h-(--size-control-md)! text-xs!"
 						/>
 					) : null}
-					{!isLimits ? (
+					{tab === "spend" ? (
 						<div className="flex items-center gap-0.5">
 							<Button variant="ghost" size="icon" aria-label={t("usage.period.previous")} onClick={() => setOffset((value) => value + 1)} className="size-8">
 								<ChevronLeft aria-hidden="true" className="size-icon-sm" />
@@ -145,9 +153,21 @@ export function UsageView() {
 								<TabsList aria-label={t("usage.views")} className={HARNESS_TABS_CLASS}>
 									<TabsTrigger value="spend" className={HARNESS_TAB_CLASS}>{t("usage.view.spend")}</TabsTrigger>
 									<TabsTrigger value="limits" className={HARNESS_TAB_CLASS}>{t("usage.view.limits")}</TabsTrigger>
+									<TabsTrigger value="windows" className={cn(HARNESS_TAB_CLASS, "gap-1.5")}>
+										{t("usage.view.windows")}
+										<Badge className="h-4 px-1.5 text-2xs font-normal">{t("usage.windows.experimental")}</Badge>
+									</TabsTrigger>
 								</TabsList>
 							</Tabs>
-							{isLimits ? (
+							{isWindows ? (
+								limitWindows.isLoading ? (
+									<p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>
+								) : limitWindows.error ? (
+									<p role="alert" className="py-16 text-center text-sm text-destructive">{limitWindows.error.message}</p>
+								) : limitWindows.data ? (
+									<UsageWindows history={limitWindows.data} now={now} />
+								) : null
+							) : isLimits ? (
 								accounts.isLoading ? (
 									<p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>
 								) : accounts.error ? (

@@ -27,6 +27,11 @@ type UsageReportService interface {
 	Report(ctx context.Context, days, offset int, timeZone string, projectID domain.ProjectID) (domain.UsageReport, error)
 }
 
+// UsageLimitHistoryService reads the windows AO's own limit readings show.
+type UsageLimitHistoryService interface {
+	History(ctx context.Context, days int) (domain.UsageLimitHistory, error)
+}
+
 // SessionMemoryService samples resident memory per live session.
 type SessionMemoryService interface {
 	ListMemory(context.Context, domain.ProjectID) ([]domain.SessionMemory, error)
@@ -60,15 +65,43 @@ type UsageController struct {
 	Pressure MemoryPressureReader
 	// Report is optional: without it the report route is 501.
 	Report UsageReportService
+	// LimitHistory is optional: without it the limit windows route is 501.
+	LimitHistory UsageLimitHistoryService
 }
 
 // Register mounts usage routes on the supplied router.
 func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/report", c.getReport)
+	r.Get("/usage/limit-windows", c.getLimitWindows)
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/memory", c.listMemory)
 	r.Get("/usage/memory/pressure", c.getPressure)
 	r.Get("/usage/sessions/{sessionId}", c.getSession)
+}
+
+func (c *UsageController) getLimitWindows(w http.ResponseWriter, r *http.Request) {
+	if c.LimitHistory == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/limit-windows")
+		return
+	}
+	days := 7
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			envelope.WriteError(w, r, apierr.Invalid("INVALID_USAGE_WINDOW", "days must be a whole number", nil))
+			return
+		}
+		days = parsed
+	}
+	history, err := c.LimitHistory.History(r.Context(), days)
+	if err != nil {
+		c.Log.WarnContext(r.Context(), "failed to read limit windows", "error", err)
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, UsageLimitWindowsResponse{
+		Since: history.Since, Until: history.Until, FirstReadingAt: history.FirstReadingAt, Logins: history.Logins,
+	})
 }
 
 func (c *UsageController) getReport(w http.ResponseWriter, r *http.Request) {

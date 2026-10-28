@@ -12987,6 +12987,48 @@ paths:
         can adopt it
       tags:
       - identity
+  /api/v1/usage/limit-windows:
+    get:
+      operationId: getUsageLimitWindows
+      parameters:
+      - description: Days of readings to read; they are kept for 14. Defaults to 7.
+        in: query
+        name: days
+        schema:
+          description: Days of readings to read; they are kept for 14. Defaults to
+            7.
+          maximum: 14
+          minimum: 1
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageLimitWindowsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read each login's five-hour and weekly windows from the limit readings
+        AO took
+      tags:
+      - usage
   /api/v1/usage/memory/pressure:
     get:
       operationId: getMemoryPressure
@@ -13320,6 +13362,9 @@ components:
       type: object
     AgentAccountLimitWindow:
       properties:
+        durationMinutes:
+          minimum: 0
+          type: integer
         id:
           type: string
         label:
@@ -22018,6 +22063,113 @@ components:
           type: string
       required:
       - harness
+      type: object
+    UsageLimitLogin:
+      properties:
+        accountId:
+          type: string
+        email:
+          type: string
+        provider:
+          enum:
+          - claude
+          - codex
+          type: string
+        windows:
+          items:
+            $ref: '#/components/schemas/UsageLimitSpan'
+          type: array
+      required:
+      - provider
+      - accountId
+      - windows
+      type: object
+    UsageLimitPoint:
+      properties:
+        at:
+          format: date-time
+          type: string
+        usedPercent:
+          format: double
+          maximum: 100
+          minimum: 0
+          type: number
+      required:
+      - at
+      - usedPercent
+      type: object
+    UsageLimitSpan:
+      properties:
+        durationMinutes:
+          minimum: 0
+          type: integer
+        firstReadAt:
+          format: date-time
+          type: string
+        label:
+          type: string
+        lastReadAt:
+          format: date-time
+          type: string
+        peakUsedPercent:
+          format: double
+          maximum: 100
+          minimum: 0
+          type: number
+        points:
+          items:
+            $ref: '#/components/schemas/UsageLimitPoint'
+          type: array
+        readings:
+          minimum: 1
+          type: integer
+        resetsAt:
+          format: date-time
+          type: string
+        startsAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        state:
+          enum:
+          - final
+          - partial
+          - open
+          type: string
+        windowId:
+          type: string
+      required:
+      - windowId
+      - label
+      - resetsAt
+      - peakUsedPercent
+      - firstReadAt
+      - lastReadAt
+      - readings
+      - state
+      type: object
+    UsageLimitWindowsResponse:
+      properties:
+        firstReadingAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        logins:
+          items:
+            $ref: '#/components/schemas/UsageLimitLogin'
+          type: array
+        since:
+          format: date-time
+          type: string
+        until:
+          format: date-time
+          type: string
+      required:
+      - since
+      - until
+      - logins
       type: object
     UsageModelResponse:
       properties:

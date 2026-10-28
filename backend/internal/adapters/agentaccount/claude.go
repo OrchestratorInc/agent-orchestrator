@@ -218,11 +218,15 @@ func (b claudeUsageBody) limits(now time.Time) domain.AgentAccountLimits {
 	if r == nil {
 		return out
 	}
+	// Every window but the session is weekly.
 	add := func(id, label string, w *claudeUsageWindow) {
 		if w == nil || w.Utilization == nil {
 			return
 		}
-		window := domain.AgentAccountLimitWindow{ID: id, Label: label, UsedPercent: min(max(*w.Utilization, 0), 100)}
+		window := domain.AgentAccountLimitWindow{ID: id, Label: label, UsedPercent: min(max(*w.Utilization, 0), 100), DurationMinutes: 7 * 24 * 60}
+		if id == "five_hour" {
+			window.DurationMinutes = 5 * 60
+		}
 		if w.ResetsAt != nil {
 			if at, err := time.Parse(time.RFC3339, *w.ResetsAt); err == nil {
 				window.ResetsAt = &at

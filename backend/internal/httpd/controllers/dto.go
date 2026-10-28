@@ -1964,6 +1964,21 @@ type UsageReportQuery struct {
 	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Read one project only."`
 }
 
+// UsageLimitWindowsQuery is the period of limit readings to read.
+type UsageLimitWindowsQuery struct {
+	Days int `query:"days,omitempty" minimum:"1" maximum:"14" description:"Days of readings to read; they are kept for 14. Defaults to 7."`
+}
+
+// UsageLimitWindowsResponse is each login's five-hour and weekly windows over a
+// period, built only from the limit readings AO took itself.
+type UsageLimitWindowsResponse struct {
+	Since time.Time `json:"since"`
+	Until time.Time `json:"until"`
+	// FirstReadingAt is the oldest reading in the period; absent when there is none.
+	FirstReadingAt *time.Time               `json:"firstReadingAt,omitempty"`
+	Logins         []domain.UsageLimitLogin `json:"logins"`
+}
+
 // UsageReportResponse is token and estimated-cost usage over a window, by day
 // or by hour in the requested time zone. Costs are API-equivalent estimates in
 // nano-USD, not a subscription bill.

@@ -4363,6 +4363,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/limit-windows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read each login's five-hour and weekly windows from the limit readings AO took */
+        get: operations["getUsageLimitWindows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/memory/pressure": {
         parameters: {
             query?: never;
@@ -4506,6 +4523,7 @@ export interface components {
             sourceKind?: "environment" | "file" | "command" | "keychain";
         };
         AgentAccountLimitWindow: {
+            durationMinutes?: number;
             id: string;
             label: string;
             /** Format: date-time */
@@ -7848,6 +7866,47 @@ export interface components {
             subagentId?: string;
             subagentTranscriptPath?: string;
             transcriptPath?: string;
+        };
+        UsageLimitLogin: {
+            accountId: string;
+            email?: string;
+            /** @enum {string} */
+            provider: "claude" | "codex";
+            windows: components["schemas"]["UsageLimitSpan"][];
+        };
+        UsageLimitPoint: {
+            /** Format: date-time */
+            at: string;
+            /** Format: double */
+            usedPercent: number;
+        };
+        UsageLimitSpan: {
+            durationMinutes?: number;
+            /** Format: date-time */
+            firstReadAt: string;
+            label: string;
+            /** Format: date-time */
+            lastReadAt: string;
+            /** Format: double */
+            peakUsedPercent: number;
+            points?: components["schemas"]["UsageLimitPoint"][];
+            readings: number;
+            /** Format: date-time */
+            resetsAt: string;
+            /** Format: date-time */
+            startsAt?: null | string;
+            /** @enum {string} */
+            state: "final" | "partial" | "open";
+            windowId: string;
+        };
+        UsageLimitWindowsResponse: {
+            /** Format: date-time */
+            firstReadingAt?: null | string;
+            logins: components["schemas"]["UsageLimitLogin"][];
+            /** Format: date-time */
+            since: string;
+            /** Format: date-time */
+            until: string;
         };
         UsageModelResponse: {
             modelId: string;
@@ -24172,6 +24231,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TelemetryIdentityResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageLimitWindows: {
+        parameters: {
+            query?: {
+                /** @description Days of readings to read; they are kept for 14. Defaults to 7. */
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageLimitWindowsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Implemented */

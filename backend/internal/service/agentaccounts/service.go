@@ -50,8 +50,10 @@ type Service struct {
 	terminals Terminals
 	// stopAgents stops every running agent on an account before it is removed.
 	stopAgents func(context.Context, string) error
-	log        *slog.Logger
-	now        func() time.Time
+	// limitLog keeps every limits read for the usage page's window history.
+	limitLog ports.AgentLimitReadingStore
+	log      *slog.Logger
+	now      func() time.Time
 
 	mu       sync.Mutex
 	readings map[string]*reading
@@ -120,6 +122,56 @@ func (s *Service) SetAgentStopper(stop func(ctx context.Context, accountID strin
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stopAgents = stop
+}
+
+// SetLimitLog late-binds where each limits read is kept.
+func (s *Service) SetLimitLog(log ports.AgentLimitReadingStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.limitLog = log
+}
+
+// KeepReadingLimits reads each account's limits again once its last reading is
+// stale, so the window history keeps going while no screen asks for limits. It
+// returns when ctx ends.
+func (s *Service) KeepReadingLimits(ctx context.Context, every time.Duration) {
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := s.List(ctx, false); err != nil && ctx.Err() == nil {
+				s.log.DebugContext(ctx, "background limits read failed", "error", err)
+			}
+		}
+	}
+}
+
+// recordLimits keeps one read's windows. A failed write loses one point of
+// history, never the read itself.
+func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email string, limits domain.AgentAccountLimits) {
+	s.mu.Lock()
+	log := s.limitLog
+	s.mu.Unlock()
+	if log == nil || len(limits.Windows) == 0 {
+		return
+	}
+	at := limits.FetchedAt
+	if at.IsZero() {
+		at = s.now()
+	}
+	readings := make([]domain.AgentLimitReading, 0, len(limits.Windows))
+	for _, w := range limits.Windows {
+		readings = append(readings, domain.AgentLimitReading{
+			AccountID: account.ID, Provider: account.Provider, Email: email, WindowID: w.ID, Label: w.Label,
+			DurationMinutes: w.DurationMinutes, UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt, ReadAt: at,
+		})
+	}
+	if err := log.RecordAgentLimitReadings(context.WithoutCancel(ctx), readings); err != nil {
+		s.log.WarnContext(ctx, "failed to record limit readings", "account", account.ID, "error", err)
+	}
 }
 
 // AccountView is an account with its latest readings, as the app shows it.
@@ -217,6 +269,11 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 			r.limitsErr = limitsErr.Error()
 		} else {
 			r.limits = &limits
+			email := identity.Email
+			if email == "" {
+				email = account.Email
+			}
+			s.recordLimits(ctx, account, email, limits)
 		}
 	}
 	// A caller that went away (a closed request, a cancelled move) says nothing
