@@ -383,7 +383,7 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 		} else {
 			lastErr = err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 	if d, readErr := readDescriptor(cfg.DataDir, cfg.SessionID); readErr == nil && processalive.Alive(d.PID) {
 		return nil, fmt.Errorf("%w: %w", ErrOwnershipInconclusive, lastErr)

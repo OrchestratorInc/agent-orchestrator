@@ -54,6 +54,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/artifact-shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt: they no longer serve but still use a slot, so used counts them. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        get: operations["listArtifactShares"];
+        put?: never;
+        /** @description Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link at <project>-<feature>-<email> under the share origin; a taken name gets a -2, -3, ... suffix. Publishing a document that already has a link replaces the version that link serves: the URL and slot stay, the earlier version is no longer served, and the response is 200 with replaced true. A revoked link is restored the same way. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document would exceed the user's limit of links; revoked links count toward it. */
+        post: operations["createArtifactShare"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/{shareId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Replaces the file an existing link serves. The link keeps its URL and does not count against the limit again. name must match the link's file name, which is part of its document; another name returns 409 artifact_share_name_changed, and the renamed file is published as a new link with POST. */
+        put: operations["updateArtifactShare"];
+        post?: never;
+        /** @description Revokes a link: it stops serving at once and its stored file is deleted after a grace period. The link still uses its slot, so revoking never makes room for a new document. Publishing the same document again restores it. A link already revoked returns 404. */
+        delete: operations["deleteArtifactShare"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/github/user": {
         parameters: {
             query?: never;
@@ -459,6 +497,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Lists the session's committed artifact files, sorted by path. Reads Postgres only and never wakes or resumes the sandbox. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        get: operations["listSessionArtifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Returns a short-lived path prefix that serves this session's artifact files without a bearer header, for a sandboxed frame. Append a file's URL-escaped path to filesPrefix; relative links inside an HTML file resolve against the same prefix. A prefix lasts ten minutes and stops working when the caller leaves the organization; request a new one before expiresAt. */
+        post: operations["createSessionArtifactAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests": {
         parameters: {
             query?: never;
@@ -665,7 +743,249 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Stop a turn. Allowed for the person whose message started it, the composer lease holder, the session's creator, and the organization's owners and admins; anyone else gets 403. */
         post: operations["cancelTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/acquire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Take the composer lease when it is free and nobody is ahead in line, or renew it when already held. Viewers are refused with 403. */
+        post: operations["composerAcquire"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/renew": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Extend a held grant. typing reports a keystroke since the last renewal; a holder who has not typed for 45 seconds loses the lease. */
+        post: operations["composerRenew"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Give up a held grant; the next person in line gets the lease. Releasing a grant no longer held does nothing. */
+        post: operations["composerRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Get in line for the composer lease. A free lease passes at once to the first person in line who has the session open. */
+        post: operations["composerRequestTurn"];
+        /** @description Leave the line for the composer lease. */
+        delete: operations["composerLeaveQueue"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/takeover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Take the composer lease from whoever holds it. Only the session's creator and the organization's owners and admins may; others get 403. */
+        post: operations["composerTakeOver"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/composer/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Share what the holder is typing, so everyone else in the session sees it live, read-only. Counts as a keystroke, renewing the grant. Anyone not holding the grant they present is refused with granted false. */
+        post: operations["composerPublishDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Set the model, reasoning effort, mode and approval mode the session's turns run with. Only the session's owner may; everyone else gets 403 and sees the change on their live stream. */
+        put: operations["sessionSetChatSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests/{number}/merge-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                number: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Ask the owner of a shared project to merge one of the session's pull requests. Only someone the project or session was shared with, who may write in the session, asks; a merge by them is refused with MERGE_NEEDS_APPROVAL. Asking again while a request is pending returns it. The session's creator is notified. */
+        post: operations["requestPullRequestMerge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/merge-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description A project's merge requests, pending first, then newest first. A member of the organization sees them all; someone the project was shared with sees their own. */
+        get: operations["listProjectMergeRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/merge-requests/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Merge the requested pull request as the approving owner (the session's creator, or an organization owner or admin), through the same readiness checks as their own merge, and tell the guest. A pull request that cannot merge leaves the request pending. */
+        post: operations["approveMergeRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/merge-requests/{requestId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Decline a pending merge request and tell the guest. */
+        post: operations["rejectMergeRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/session-participants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description Who is in each of the named sessions that someone has shared, for a board. Sessions the caller may not open, or that nobody has shared, are left out. Reading this does not make the caller present in any session. */
+        get: operations["listSessionParticipants"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -705,6 +1025,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Answer an approval prompt. Allowed for the same people who may stop its turn (see cancelTurn); anyone else gets 403. */
         post: operations["decideChatApproval"];
         delete?: never;
         options?: never;
@@ -776,8 +1097,37 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Upgrade to a terminal WebSocket using a short-lived ticket. */
+        /**
+         * Upgrade to a terminal WebSocket using a short-lived ticket.
+         * @description On the agent terminal, keystrokes are talking to the agent, so they need
+         *     the session's composer lease: typing takes it when it is free and nobody
+         *     is waiting, and renews it while the typist keeps typing. While someone
+         *     else holds it or is waiting for it, input is dropped and the server
+         *     sends `{"type":"input_refused","inputId":...,"message":...}` instead of
+         *     `input_ack`; the connection stays open.
+         *
+         */
         get: operations["connectTerminal"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-files/{token}/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one artifact file through an access prefix.
+         * @description Streams the committed version of one artifact file. The token comes from createSessionArtifactAccess and binds one organization and session. Every response carries a Content-Security-Policy sandbox without allow-same-origin, X-Content-Type-Options nosniff, and an ETag of the file's SHA-256. A listed file whose stored object is gone returns 404 with code artifact_unavailable.
+         */
+        get: operations["getSessionArtifactFile"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1203,6 +1553,71 @@ export interface paths {
          *     the sandbox. The token must never be logged or persisted.
          *      */
         post: operations["createWorkerCheckoutGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/artifacts/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Compares the worker's artifact directory listing against the
+         *     session's committed files and returns the paths whose size or SHA-256
+         *     differ, including new paths. Requires `worker:connect`. Absent when
+         *     the deployment does not keep artifacts.
+         *      */
+        post: operations["compareWorkerArtifactManifest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/artifacts/blob/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Streams one artifact file to storage under the worker's own session.
+         *     Content-Length is required and the body's SHA-256 must match the
+         *     X-AO-Artifact-SHA256 header; storage rejects a mismatch without
+         *     keeping it. Returns the stored version for the commit. Requires
+         *     `worker:connect`.
+         *      */
+        put: operations["putWorkerArtifactBlob"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/worker/artifacts/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Records uploaded versions and deletions for the worker's own session
+         *     in one transaction and appends an artifact.changed event. Each
+         *     version must exist with the given size and SHA-256
+         *     (artifact_version_missing or artifact_version_mismatch otherwise).
+         *     Requires `worker:connect`.
+         *      */
+        post: operations["commitWorkerArtifacts"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1635,6 +2050,8 @@ export interface components {
             features: string[];
             /** @description The organization may connect its own Coder deployment: it holds the coder capability (WorkOS metadata capabilities=coder), or the deployment offers coder without gating it. Also true while the organization still has a stored connection, so it can inspect or clear one. Absent from older control planes. */
             customCoder?: boolean;
+            /** @description Whether cloud sessions keep artifact files. When false the artifact routes return 404 and requestedOutput "artifact" is rejected. Older control planes omit it. */
+            artifacts?: boolean;
             /** @description A Coder session whose worker runs as the dedicated ao-worker user checks the main repository out in the project's working folder (AO_CLOUD_CODER_WORKER_WORKING_FOLDER). When false, a project's working folder applies only with the workspace user. Absent from older control planes; clients treat absent as false. */
             coderWorkerWorkingFolder?: boolean;
         };
@@ -2149,6 +2566,9 @@ export interface components {
             /** Format: uri */
             repositoryUrl: string;
             defaultBranch: string;
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description When true the worker syncs the session's artifact directory through the worker artifact routes and names that directory in the agent prompt and AO_SESSION_ARTIFACTS_DIR. Workers that do not advertise the session.artifacts capability ignore it. */
+            artifacts?: boolean;
         };
         WorkerBootstrapResponse: {
             /**
@@ -2412,6 +2832,11 @@ export interface components {
             mode?: components["schemas"]["SessionMode"];
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            /**
+             * Format: int64
+             * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+             */
+            composerEpoch?: number;
         };
         ChatApprovalDecisionInput: {
             decisionId: string;
@@ -2423,12 +2848,19 @@ export interface components {
             default: boolean;
             efforts?: string[];
             defaultEffort?: string;
+            /** @description Approval modes a turn on this model can run, as its provider offers them. Absent when the worker does not know; a client then offers every mode the session allows. */
+            approvalModes?: ("default" | "accept-edits" | "auto" | "bypass-permissions")[];
         };
         ChatModelsResponse: {
             models: components["schemas"]["ChatModel"][];
         };
         SendMessageInput: {
             text: string;
+            /**
+             * Format: int64
+             * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
+             */
+            composerEpoch?: number;
         };
         WorkerWorkspaceListPayload: {
             path: string;
@@ -2710,10 +3142,126 @@ export interface components {
             coderWorkspaceUrl?: string;
             activeTurn?: components["schemas"]["Turn"];
             isTerminated: boolean;
+            requestedOutput?: components["schemas"]["RequestedOutput"];
+            /** @description The guest the session was started for, when someone the project was shared with asked its orchestrator for it. They may write in it; the rest of the project share watches. */
+            requestedBy?: {
+                userId: string;
+                name: string;
+            };
+            outputType?: components["schemas"]["SessionOutputType"];
+            /** @description How many committed artifact files the session has, on the session read and list routes while the deployment keeps artifacts. */
+            artifactCount?: number;
+            /**
+             * Format: date-time
+             * @description When the newest of the session's artifact files was committed. It changes whenever a commit changes the files, and only then, so a client can keep a file list until it moves. Absent without files.
+             */
+            artifactsUpdatedAt?: string;
+            /** @description The session's committed artifact files, on the session read route while the deployment keeps artifacts. The list route sends only artifactCount; listSessionArtifacts returns the files. */
+            artifactFiles?: components["schemas"]["SessionArtifact"][];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        /**
+         * @description The deliverable a session was created for. artifact asks the agent for a file in its artifact directory instead of a pull request.
+         * @enum {string}
+         */
+        RequestedOutput: "artifact";
+        /**
+         * @description What the session owns, a pull request, artifact files, or both.
+         * @enum {string}
+         */
+        SessionOutputType: "none" | "pr" | "artifact" | "pr_artifact";
+        SessionArtifact: {
+            /** @description Slash-separated path in the session's artifact directory. */
+            path: string;
+            name: string;
+            /** @enum {string} */
+            kind: "html" | "markdown" | "file";
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+            /**
+             * Format: date-time
+             * @description When the control plane last committed a new version of the file.
+             */
+            updatedAt: string;
+        };
+        SessionArtifactList: {
+            artifacts: components["schemas"]["SessionArtifact"][];
+        };
+        SessionArtifactAccess: {
+            /** @description Path on this control plane ending in "/", for example /api/cloud/v1/artifact-files/<token>/. */
+            filesPrefix: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        ArtifactShare: {
+            /** Format: uuid */
+            id: string;
+            /** @description The link's subdomain label. */
+            slug: string;
+            /** @description The public link, for example http://<slug>.share.localhost:8081/. */
+            url: string;
+            name: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /**
+             * Format: date-time
+             * @description When the link was revoked. A revoked link serves nothing but still uses a slot.
+             */
+            revokedAt?: string;
+        };
+        ArtifactShareEnvelope: {
+            share: components["schemas"]["ArtifactShare"];
+        };
+        ArtifactSharePublishResult: {
+            share: components["schemas"]["ArtifactShare"];
+            /** @description True when publishing replaced the version of the document's existing link. */
+            replaced: boolean;
+        };
+        ArtifactShareList: {
+            shares: components["schemas"]["ArtifactShare"][];
+            limit: number;
+            used: number;
+        };
+        WorkerArtifactFile: {
+            path: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+        };
+        WorkerArtifactManifestInput: {
+            files: components["schemas"]["WorkerArtifactFile"][];
+        };
+        WorkerArtifactManifestResponse: {
+            changed: string[];
+        };
+        WorkerArtifactBlobResponse: {
+            path: string;
+            versionId: string;
+        };
+        WorkerArtifactCommitFile: {
+            path: string;
+            versionId: string;
+            /** Format: int64 */
+            size: number;
+            sha256: string;
+            /** Format: date-time */
+            mtime?: string;
+        };
+        WorkerArtifactCommitInput: {
+            files?: components["schemas"]["WorkerArtifactCommitFile"][];
+            /** @description Paths this worker previously synced and has since removed. */
+            deleted?: string[];
         };
         /** @description The latest user-facing reason the session's sandbox has not started. Present until the worker first checks in or the user retries. While runtimeState is "terminated" AO has stopped retrying; otherwise it is still trying in the background. The worker-reported codes repository_checkout_failed, working_directory_unusable, working_directory_occupied, project_setup_failed and agent_start_failed are the exception: the worker has checked in but could not prepare the workspace or start the terminal agent, so the agent does not start; they stay until the worker reports the workspace ready (or the agent started) after the user retries or reopens the session (a workspace checkout request). */
         SessionStartupError: {
@@ -2741,6 +3289,7 @@ export interface components {
             deniedCommands: string[];
             /** Format: uuid */
             sandboxProviderConnectionId?: string;
+            requestedOutput?: components["schemas"]["RequestedOutput"];
             /** @description Interface the session starts in. Optional; omitted resolves it from defaultInterfaceMode, else starts in the terminal (tui). chat needs a harness listed in the current account's chatHarnesses, else the request is refused with SESSION_MODE_UNSUPPORTED. A session that starts in chat queues its prompt as its first turn and launches its terminal without it. */
             interfaceMode?: components["schemas"]["SessionInterfaceMode"];
             /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
@@ -2938,6 +3487,143 @@ export interface components {
             reviews: components["schemas"]["AOPullRequestReviewState"][];
             runs: components["schemas"]["AOReviewRun"][];
         };
+        SessionViewer: {
+            /** Format: uuid */
+            userId: string;
+            /** @description Display name. Never an email address. */
+            name: string;
+            /** @description Profile photo from the sign-in provider. Omitted when unavailable. */
+            avatarUrl?: string;
+            /**
+             * @description member is an organization member; editor and viewer are share-grant roles.
+             * @enum {string}
+             */
+            role: "member" | "editor" | "viewer";
+        };
+        /** @description Ephemeral state of a shared session, sent as session.live frames on a live=1 event stream. Never part of the event log. */
+        SessionLiveState: {
+            /** @constant */
+            type: "session.live";
+            chatSettings: components["schemas"]["SessionChatSettings"];
+            /** @description Whether the person reading this stream owns the session and may change chatSettings (sessionSetChatSettings). */
+            canConfigure: boolean;
+            /** @description Changes whenever a merge request in the session's project is asked for or decided, so a client re-reads them at once. Absent while the project has none. */
+            mergeRequestsVersion?: string;
+            /**
+             * Format: uuid
+             * @description The user this stream is authenticated as. Clients compare against it rather than an identity they remember.
+             */
+            you: string;
+            /** @description Whether the person reading this stream may take the composer lease from its holder (composerTakeOver). */
+            canTakeOver: boolean;
+            /** @description Everyone with the session open right now, once each, in the order they joined. */
+            viewers: components["schemas"]["SessionViewer"][];
+            composer: components["schemas"]["ComposerLeaseState"];
+        };
+        /** @description A guest's request that a shared project's owner merge a pull request. */
+        MergeRequest: {
+            /** Format: uuid */
+            id: string;
+            projectId: string;
+            sessionId: string;
+            sessionName: string;
+            pullRequest: {
+                id: string;
+                number: number;
+                url: string;
+                title: string;
+                repository: string;
+            };
+            requestedBy: components["schemas"]["MergeRequestPerson"];
+            /** @enum {string} */
+            status: "pending" | "merged" | "rejected";
+            decidedBy?: components["schemas"]["MergeRequestPerson"];
+            /** Format: date-time */
+            decidedAt?: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        MergeRequestPerson: {
+            userId: string;
+            name: string;
+        };
+        SharedSessionParticipants: {
+            /** Format: uuid */
+            sessionId: string;
+            /** @description The session's creator first, then each person a share link let in, in the order they joined, then any other organization member who has it open. */
+            participants: components["schemas"]["SessionParticipant"][];
+        };
+        SessionParticipant: {
+            userId: string;
+            /** @description Display name, never an email address. */
+            name: string;
+            /** @description Profile photo from the sign-in provider. Omitted when unavailable. */
+            avatarUrl?: string;
+            /** @enum {string} */
+            role: "owner" | "member" | "editor" | "viewer";
+            /** @description Whether they have the session open now. */
+            present: boolean;
+            /**
+             * @description working while they hold the composer, waiting while in line for it, otherwise idle.
+             * @enum {string}
+             */
+            state: "working" | "waiting" | "idle";
+        };
+        /** @description The settings a session's turns run with, set by its owner (its creator, or an organization owner or admin). Everyone else's messages run with them whatever they ask for. Empty fields mean the defaults. */
+        SessionChatSettings: {
+            model?: string;
+            /** @enum {string} */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            mode?: components["schemas"]["SessionMode"];
+            /** @enum {string} */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+        };
+        ComposerParticipant: {
+            /** Format: uuid */
+            userId: string;
+            /** @description Display name. Never an email address. */
+            name: string;
+        };
+        /** @description The session's composer lease, its hard lock on talking to the agent. Only the holder may send or steer. */
+        ComposerLeaseState: {
+            /** @description Who holds the lease, or null while it is free. */
+            holder: components["schemas"]["ComposerParticipant"] | null;
+            /**
+             * Format: int64
+             * @description Increases with every grant. A holder presents it to send, steer, renew, or release.
+             */
+            epoch: number;
+            /** @description Everyone waiting for the lease, first in line first. */
+            waitlist: components["schemas"]["ComposerParticipant"][];
+            /** @description What the holder is typing, shown live and read-only to everyone else; null while they have typed nothing. It clears when their turn ends. */
+            draft?: components["schemas"]["ComposerDraft"] | null;
+        };
+        ComposerDraft: {
+            text: string;
+            /** @description The caret's offset into text, in UTF-16 code units as the writing client counts them. */
+            cursor: number;
+        };
+        ComposerLeaseAnswer: {
+            composer: components["schemas"]["ComposerLeaseState"] & {
+                /**
+                 * Format: int64
+                 * @description How long the caller's grant has left; 0 unless granted.
+                 */
+                expiresInMs: number;
+            };
+            /** @description Whether the caller holds the lease after the request. */
+            granted: boolean;
+        };
+        ComposerGrantInput: {
+            /** Format: int64 */
+            epoch: number;
+            /** @description renew only. True when the holder typed since the last renewal. */
+            typing?: boolean;
+            /** @description draft only. The holder's draft. */
+            text?: string;
+            /** @description draft only. The caret's offset into text. */
+            cursor?: number;
+        };
         UserMessageEvent: {
             sessionId: string;
             /** Format: int64 */
@@ -2948,6 +3634,13 @@ export interface components {
                 text: string;
                 /** Format: uuid */
                 turnId?: string;
+                /**
+                 * Format: uuid
+                 * @description The user who sent the message. Absent when an orchestrator, automation, or the agent's own terminal sent it.
+                 */
+                authorUserId?: string;
+                /** @description The sender's display name when the message was sent. Never an email address, so a share guest can see it. */
+                authorName?: string;
             };
             /** Format: date-time */
             createdAt: string;
@@ -3268,6 +3961,10 @@ export interface components {
         };
     };
     parameters: {
+        /** @description The file name, without a directory. */
+        ArtifactShareName: string;
+        /** @description Lowercase hex SHA-256 of the body. */
+        ArtifactShareSHA256: string;
         OrgId: string;
         ProjectId: string;
         SessionId: string;
@@ -3385,6 +4082,123 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The personal coding-agent credential was disconnected. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listArtifactShares: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user's share links. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createArtifactShare: {
+        parameters: {
+            query: {
+                /** @description The file name, without a directory. */
+                name: components["parameters"]["ArtifactShareName"];
+                project?: string;
+                feature?: string;
+            };
+            header: {
+                /** @description Lowercase hex SHA-256 of the body. */
+                "X-AO-Artifact-SHA256": components["parameters"]["ArtifactShareSHA256"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The document's existing link, now serving the new version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
+                };
+            };
+            /** @description The new share link. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateArtifactShare: {
+        parameters: {
+            query: {
+                /** @description The file name, without a directory. */
+                name: components["parameters"]["ArtifactShareName"];
+            };
+            header: {
+                /** @description Lowercase hex SHA-256 of the body. */
+                "X-AO-Artifact-SHA256": components["parameters"]["ArtifactShareSHA256"];
+            };
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The updated share link. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteArtifactShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                shareId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link was revoked. */
             204: {
                 headers: {
                     [name: string]: unknown;
@@ -4187,6 +5001,54 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    listSessionArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session's artifact files. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createSessionArtifactAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file access prefix. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactAccess"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listSessionPullRequests: {
         parameters: {
             query?: never;
@@ -4490,6 +5352,361 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    composerAcquire: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRenew: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerRequestTurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerLeaveQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerTakeOver: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. A refusal is this same answer with granted false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    composerPublishDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ComposerGrantInput"];
+            };
+        };
+        responses: {
+            /** @description The composer lease after the request, and whether the caller holds it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ComposerLeaseAnswer"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sessionSetChatSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionChatSettings"];
+            };
+        };
+        responses: {
+            /** @description The session's chat settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        chatSettings: components["schemas"]["SessionChatSettings"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    requestPullRequestMerge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                number: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    prUrl: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The pending merge request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequest: components["schemas"]["MergeRequest"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listProjectMergeRequests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The merge requests. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequests: components["schemas"]["MergeRequest"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    approveMergeRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    expectedHeadSha: string;
+                };
+            };
+        };
+        responses: {
+            /** @description GitHub accepted the merge; the request is recorded as merged. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequest: components["schemas"]["MergeRequest"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    rejectMergeRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The declined request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        mergeRequest: components["schemas"]["MergeRequest"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSessionParticipants: {
+        parameters: {
+            query?: {
+                /** @description A session to describe; repeat for each, at most 100. */
+                sessionId?: string[];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The shared sessions among those asked for, in the order asked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        sessions: components["schemas"]["SharedSessionParticipants"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     steerTurn: {
         parameters: {
             query?: never;
@@ -4592,6 +5809,12 @@ export interface operations {
                 after?: components["parameters"]["After"];
                 /** @description Only events of these client event types, comma separated (for example types=workspace.setup,workspace.script.step); the parameter may also repeat. At most 32 types. A type the control plane does not serve to clients matches nothing. Omitted or empty, every client event type is served. nextAfter and hasMore follow the filtered events. */
                 types?: components["parameters"]["EventTypes"];
+                /** @description 1 opts this stream in to the session's live state. The caller is
+                 *     listed as a viewer while the stream stays open, and the stream also
+                 *     carries session.live frames (see SessionLiveState) whenever that
+                 *     state changes. Omitted, the stream carries only ClientEvents.
+                 *      */
+                live?: "1";
             };
             header?: never;
             path: {
@@ -4603,7 +5826,10 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Replay followed by live client-visible events. Each SSE data field
-             *     contains a ClientEvent; the SSE id is its sequence.
+             *     contains a ClientEvent; the SSE id is its sequence. With live=1 the
+             *     stream also carries `event: session.live` frames whose data is a
+             *     SessionLiveState. Those frames have no SSE id and never move the
+             *     replay cursor; each one replaces the previous state.
              *      */
             200: {
                 headers: {
@@ -4665,6 +5891,49 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionArtifactFile: {
+        parameters: {
+            query?: never;
+            header?: {
+                "If-None-Match"?: string;
+            };
+            path: {
+                token: string;
+                /** @description The file's path in the artifact directory; may contain slashes. */
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file bytes, with Content-Type from the file extension. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "*/*": string;
+                };
+            };
+            /** @description The file has not changed since the given ETag. */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The access token is invalid or expired (artifact_access_invalid). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -5354,6 +6623,104 @@ export interface operations {
             404: components["responses"]["WorkerRoutesDisabled"];
             502: components["responses"]["Error"];
             503: components["responses"]["Error"];
+        };
+    };
+    compareWorkerArtifactManifest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerArtifactManifestInput"];
+            };
+        };
+        responses: {
+            /** @description The changed paths. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerArtifactManifestResponse"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            413: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    putWorkerArtifactBlob: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-AO-Artifact-SHA256": string;
+            };
+            path: {
+                /** @description The file's path in the artifact directory; may contain slashes. */
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The stored version. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkerArtifactBlobResponse"];
+                };
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            411: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            /** @description The body does not match its SHA-256 (checksum_mismatch). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    commitWorkerArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkerArtifactCommitInput"];
+            };
+        };
+        responses: {
+            /** @description The changes are committed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["WorkerUnauthorized"];
+            403: components["responses"]["WorkerScopeRequired"];
+            409: components["responses"]["Error"];
+            413: components["responses"]["Error"];
+            default: components["responses"]["Error"];
         };
     };
     listWorkerChildren: {

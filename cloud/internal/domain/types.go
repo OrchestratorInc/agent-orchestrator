@@ -16,6 +16,7 @@ type Principal struct {
 	ExternalID    string
 	Email         string
 	DisplayName   string
+	AvatarURL     string
 	ExternalOrgID string
 	OrgName       string
 	OrgRole       string
@@ -128,8 +129,18 @@ type Session struct {
 	// terminal on it and re-attach to the live agent instead of clinging to the
 	// dead epoch's exited terminal. 0 when no worker has ever connected.
 	WorkerEpoch int64
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// RequestedOutput is the deliverable the session was created for: empty
+	// for the ordinary task flow, RequestedOutputArtifact for a file.
+	RequestedOutput string
+	// RequestedByUserID is the guest the session was started for, when
+	// someone a project was shared with asked its orchestrator for it; empty
+	// otherwise. RequestedByName is their display name.
+	RequestedByUserID string
+	RequestedByName   string
+	// OutputType is what the session owns: none, pr, artifact or pr_artifact.
+	OutputType string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // CoderWorkspaceRef is the non-secret identity of one session's Coder
@@ -211,6 +222,10 @@ type CreateSession struct {
 	// from a cache, so it stays out of the create's idempotency payload: a
 	// retry after the cache changed still replays the first create.
 	CoderCapability bool `json:"-"`
+	// RequestedOutput is empty or RequestedOutputArtifact. It is omitted from
+	// the idempotency payload when empty, so a create stored before the field
+	// existed still replays.
+	RequestedOutput string `json:",omitempty"`
 }
 
 // RepoRef is one additional repository (beyond the project's primary repo) to
@@ -556,6 +571,9 @@ type TerminalSession struct {
 	Scopes             []string
 	ErrorMessage       string
 	ExpiresAt          time.Time
+	// UserID is the person whose ticket opened this connection; empty when
+	// unknown.
+	UserID string
 }
 
 type TerminalOutput struct {

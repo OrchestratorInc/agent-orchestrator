@@ -14,7 +14,8 @@ export type ActivityKind =
 	| "system"
 	| "mcp_tool"
 	| "auto_review"
-	| "user_input";
+	| "user_input"
+	| "ao_action";
 
 export type ApprovalMode = "default" | "accept-edits" | "auto" | "bypass-permissions";
 export type TurnSettings = { model?: string; reasoningEffort?: string; approvalMode?: ApprovalMode };
@@ -59,6 +60,10 @@ export type ConversationMessage = {
 	streaming: boolean;
 	delivery?: DeliveryState;
 	senderLabel?: string;
+	/** The AO session that sent this message (`ao send`), when another agent did. */
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	/** The daemon can branch before this human prompt and resend it edited. */
 	editAvailable?: boolean;
 	createdAt: string;
@@ -134,6 +139,10 @@ export type ActivityDetail = {
 	host?: string;
 	commandSource?: string;
 	event?: "compaction" | "model.rerouted" | "auth.reauth_required" | "steer" | "plan" | string;
+	/** steer: the AO session that sent it, when another agent did. */
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	fromModel?: string;
 	toModel?: string;
 	origin?: string;

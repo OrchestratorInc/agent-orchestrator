@@ -5,6 +5,7 @@ import { sessionUiKey } from "../lib/hosts";
 import type { ProjectSettingsSection as ProjectFormSection } from "../components/ProjectSettingsForm";
 import type { TerminalTarget } from "../types/terminal";
 import type { FilesSelection } from "../hooks/useSessionWorkspaceFiles";
+import type { CloudCpWorkspaceReviewScope } from "../lib/cloud-cp";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
@@ -57,6 +58,8 @@ export type SettingsModal =
 			startLogin?: boolean;
 			/** Open the diagnostics of focusAgentId's failed install or update, ready to copy. */
 			showDiagnostics?: HarnessDiagnosticsRequest;
+			/** Visible label of one setting on the page to scroll to and highlight, e.g. a palette hit. */
+			focusSetting?: string;
 			/** Preserve the project form while global recovery settings is above it. */
 			returnTo?: Extract<SettingsModal, { scope: "project" }>;
 	}
@@ -73,6 +76,17 @@ export type SettingsModal =
 export type WorkbenchTab = "changes" | "files" | "terminal";
 export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
 
+export type CloudReviewUiState = {
+	showChanges?: boolean;
+	filter?: string;
+	selectedPath?: string | null;
+	commitBrowserOpen?: boolean;
+	pane?: {
+		selectionKey: string;
+		files: Record<string, { fingerprint: string; collapsed: boolean; loadedDeferred: boolean }>;
+	};
+};
+
 export type InspectorSessionState = {
 	isOpen: boolean;
 	view: InspectorView;
@@ -84,6 +98,11 @@ export type InspectorSessionState = {
 	filesChangedOnly?: boolean;
 	/** Files tab: the branch and changes under review, shared by the docked and maximized explorers. Unset follows the default. */
 	filesSelection?: FilesSelection;
+	/** Cloud Files: review targets per repository, shared by docked and maximized explorers. The main repository uses "". */
+	cloudReviewSelection?: Record<string, { scope: CloudCpWorkspaceReviewScope; commitSha?: string }>;
+	/** Cloud Files: selected repository across remounts; "" or unset selects the main repository. */
+	cloudReviewRepository?: string;
+	cloudReviewUi?: Record<string, CloudReviewUiState>;
 	/** Files: display mode picked per path in a centre tab, restored for the same open request after a remount. */
 	fileDisplayModes?: Record<string, RememberedFileDisplayMode>;
 	/** The session-entry defaulting (Summary tab, baseline browser reveal) has already run once for this session's lifetime. */
@@ -113,6 +132,19 @@ export type WorkspaceFileOpenRequest = {
 	path: string;
 	/** "artifact" resolves `path` against the session's artifact files instead of its workspace. */
 	source?: "artifact";
+	/** 1-based line to reveal, e.g. a palette content hit. */
+	line?: number;
+	nonce: number;
+};
+
+/** Asks a local session's chat to scroll to one message, e.g. a palette chat hit. */
+export type ChatMessageFocusRequest = {
+	sessionId: string;
+	messageId: string;
+	/** The matched text, used to mark the passage inside the message. */
+	text: string;
+	/** Set when the message is in the session's reviewer chat for this review. */
+	reviewId?: string;
 	nonce: number;
 };
 
@@ -144,6 +176,9 @@ export type UiState = {
 	windowTranslucency: boolean;
 	/** Copy the terminal selection to the clipboard on mouse-up, like native terminals. Default on. */
 	terminalCopyOnSelect: boolean;
+	navigationGestures: boolean;
+	/** Typeset `$…$`, `$$…$$`, `\(…\)` and `\[…\]` in markdown. Default off: a lone `$` is also currency. */
+	renderMath: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -155,13 +190,14 @@ export type UiState = {
 	globalToasts: GlobalToast[];
 	globalToast: GlobalToast | null;
 	globalToastSequence: number;
-	// Transient "open the New Task dialog for this project" signal. The nonce
-	// bumps on every request so a repeat press (even for the same project) still
-	// re-fires; the always-mounted GlobalNewTaskDialog consumes it. Selection
-	// still lives in the URL — this is a one-shot action, not persisted state.
+	// Transient "start a new task for this project" signal. The nonce bumps on
+	// every request so a repeat press (even for the same project) still re-fires;
+	// the always-mounted NewTaskNavigator consumes it by opening the new chat
+	// page. Selection still lives in the URL — this is a one-shot action.
 	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
+	chatMessageFocusRequest: ChatMessageFocusRequest | null;
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
@@ -196,11 +232,13 @@ export type UiState = {
 	setSideChats: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
+	setNavigationGestures: (enabled: boolean) => void;
+	setRenderMath: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
 	closeUpdateInstallPrompt: () => void;
-	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean }) => void;
+	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
@@ -224,6 +262,9 @@ export type UiState = {
 	setFilesSelection: (sessionId: string, selection: FilesSelection) => void;
 	/** Back to the checked-out branch and the default changes. */
 	resetFilesSelection: (sessionId: string) => void;
+	setCloudReviewSelection: (sessionId: string, repository: string | undefined, selection: { scope: CloudCpWorkspaceReviewScope; commitSha?: string }) => void;
+	setCloudReviewRepository: (sessionId: string, repository: string) => void;
+	setCloudReviewUi: (sessionId: string, repository: string | undefined, changes: CloudReviewUiState) => void;
 	setFileDisplayMode: (sessionId: string, path: string, mode: FileDisplayMode, requestKey: number) => void;
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
@@ -235,8 +276,10 @@ export type UiState = {
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
 	requestNewTask: (projectId: string, hostId?: string) => void;
-	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact") => void;
+	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact", line?: number) => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
+	requestChatMessageFocus: (sessionId: string, messageId: string, text: string, reviewId?: string) => void;
+	clearChatMessageFocusRequest: (nonce: number) => void;
 	requestCreateProject: () => void;
 	requestCreateProjectFromPath: (path: string) => void;
 	requestNewShellTerminal: () => void;
@@ -257,6 +300,8 @@ const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
+const navigationGesturesStorageKey = "ao.navigationGestures";
+const renderMathStorageKey = "ao.renderMath";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -271,8 +316,8 @@ function initialDeveloperMode() {
 }
 
 function initialRemoteHosts() {
-	// Developer mode remains the feature gate. Once enabled, signed-in devices
-	// should discover account hosts without an extra per-device setup switch.
+	// On by default: signed-in devices discover account hosts without an extra
+	// per-device setup switch.
 	return getLocalStorage()?.getItem(remoteHostsStorageKey) !== "false";
 }
 
@@ -350,6 +395,8 @@ export const useUiStore = create<UiState>((set, get) => ({
 	sideChats: initialSideChats(),
 	windowTranslucency: initialWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
+	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) === "true",
+	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
@@ -360,6 +407,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	globalToastSequence: 0,
 	newTaskRequest: null,
 	workspaceFileOpenRequest: null,
+	chatMessageFocusRequest: null,
 	createProjectNonce: 0,
 	folderDropRequest: null,
 	newShellTerminalNonce: 0,
@@ -412,6 +460,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(windowTranslucencyStorageKey, String(windowTranslucency));
 		set({ windowTranslucency });
 	},
+	setNavigationGestures: (navigationGestures) => {
+		getLocalStorage()?.setItem(navigationGesturesStorageKey, String(navigationGestures));
+		set({ navigationGestures });
+	},
+	setRenderMath: (renderMath) => {
+		getLocalStorage()?.setItem(renderMathStorageKey, String(renderMath));
+		set({ renderMath });
+	},
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
@@ -428,6 +484,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			...(options?.harnessView ? { harnessView: options.harnessView } : {}),
 			...(options?.startLogin && options.focusAgentId ? { startLogin: true } : {}),
 			...(options?.showDiagnostics && options.focusAgentId ? { showDiagnostics: options.showDiagnostics } : {}),
+			...(options?.focusSetting ? { focusSetting: options.focusSetting } : {}),
 			...(options?.preserveProject && state.settingsModal?.scope === "project"
 				? { returnTo: state.settingsModal }
 				: options?.preserveProject && state.settingsModal?.scope === "global" && state.settingsModal.returnTo
@@ -565,11 +622,51 @@ export const useUiStore = create<UiState>((set, get) => ({
 	resetFilesSelection: (sessionId) =>
 		set((state) => {
 			const current = state.inspectorSessions[sessionId];
-			if (!current?.filesSelection) return state;
+			if (!current || (!current.filesSelection && !current.cloudReviewSelection && current.cloudReviewRepository === undefined && !current.cloudReviewUi)) return state;
 			return {
 				inspectorSessions: {
 					...state.inspectorSessions,
-					[sessionId]: { ...current, filesSelection: undefined },
+					[sessionId]: { ...current, filesSelection: undefined, cloudReviewSelection: undefined, cloudReviewRepository: undefined, cloudReviewUi: undefined },
+				},
+			};
+		}),
+	setCloudReviewSelection: (sessionId, repository, selection) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const key = repository ?? "";
+			const previous = current.cloudReviewSelection?.[key];
+			if (previous?.scope === selection.scope && previous.commitSha === selection.commitSha) return state;
+			const cloudReviewUi = current.cloudReviewUi?.[key]?.pane
+				? { ...current.cloudReviewUi, [key]: { ...current.cloudReviewUi[key], pane: undefined } }
+				: current.cloudReviewUi;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, cloudReviewSelection: { ...current.cloudReviewSelection, [key]: selection }, cloudReviewUi },
+				},
+			};
+		}),
+	setCloudReviewRepository: (sessionId, cloudReviewRepository) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			if ((current.cloudReviewRepository ?? "") === cloudReviewRepository) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, cloudReviewRepository },
+				},
+			};
+		}),
+	setCloudReviewUi: (sessionId, repository, changes) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const key = repository ?? "";
+			const previous = current.cloudReviewUi?.[key];
+			if (previous && Object.entries(changes).every(([field, value]) => previous[field as keyof CloudReviewUiState] === value)) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, cloudReviewUi: { ...current.cloudReviewUi, [key]: { ...previous, ...changes } } },
 				},
 			};
 		}),
@@ -662,19 +759,34 @@ export const useUiStore = create<UiState>((set, get) => ({
 		}
 		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
-	requestWorkspaceFileOpen: (sessionId, path, hostId, source) =>
+	requestWorkspaceFileOpen: (sessionId, path, hostId, source, line) =>
 		set((state) => ({
 			workspaceFileOpenRequest: {
 				sessionId,
 				path,
 				...(hostId ? { hostId } : {}),
 				...(source ? { source } : {}),
+				...(line ? { line } : {}),
 				nonce: (state.workspaceFileOpenRequest?.nonce ?? 0) + 1,
 			},
 		})),
 	clearWorkspaceFileOpenRequest: (nonce) =>
 		set((state) => state.workspaceFileOpenRequest?.nonce === nonce
 			? { workspaceFileOpenRequest: null }
+			: state),
+	requestChatMessageFocus: (sessionId, messageId, text, reviewId) =>
+		set((state) => ({
+			chatMessageFocusRequest: {
+				sessionId,
+				messageId,
+				text,
+				...(reviewId ? { reviewId } : {}),
+				nonce: (state.chatMessageFocusRequest?.nonce ?? 0) + 1,
+			},
+		})),
+	clearChatMessageFocusRequest: (nonce) =>
+		set((state) => state.chatMessageFocusRequest?.nonce === nonce
+			? { chatMessageFocusRequest: null }
 			: state),
 	requestCreateProject: () => set((state) => ({ createProjectNonce: state.createProjectNonce + 1 })),
 	requestCreateProjectFromPath: (path) =>

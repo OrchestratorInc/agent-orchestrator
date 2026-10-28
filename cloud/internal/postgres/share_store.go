@@ -339,6 +339,19 @@ func (s *Store) RedeemProjectShareLink(
 	if err != nil {
 		return domain.SharedProject{}, fmt.Errorf("look up share link: %w", err)
 	}
+	// Someone already in the organization (the link's creator included)
+	// needs no grant: the link only says where to go.
+	member, err := orgMemberTx(ctx, tx, principal, orgID)
+	if err != nil {
+		return domain.SharedProject{}, err
+	}
+	if member {
+		shared, err := memberSharedProjectTx(ctx, tx, orgID, link.ProjectID, link.SessionID)
+		if err != nil {
+			return domain.SharedProject{}, err
+		}
+		return shared, tx.Commit(ctx)
+	}
 	if link.CreatedByUserID == principal.UserID {
 		return domain.SharedProject{}, ErrForbidden
 	}
@@ -390,6 +403,37 @@ func (s *Store) RedeemProjectShareLink(
 	if err := tx.Commit(ctx); err != nil {
 		return domain.SharedProject{}, fmt.Errorf("commit redeem project share link: %w", err)
 	}
+	return shared, nil
+}
+
+// memberSharedProjectTx describes where a share link leads for someone who
+// already belongs to its organization: the project and session, no grant.
+func memberSharedProjectTx(ctx context.Context, tx pgx.Tx, orgID, projectID, sessionID string) (domain.SharedProject, error) {
+	shared := domain.SharedProject{Member: true, SessionID: sessionID}
+	var githubRepoID *int64
+	var config []byte
+	err := tx.QueryRow(ctx,
+		`SELECT project.id, project.org_id, project.display_name, project.repository_url, project.default_branch,
+			project.github_repository_id, project.config, project.created_at, project.updated_at,
+			COALESCE(session_row.display_name, '')
+		FROM ao_projects project
+		LEFT JOIN ao_sessions session_row
+			ON session_row.org_id = project.org_id AND session_row.id = NULLIF($3, '')::uuid
+		WHERE project.org_id = $1 AND project.id = $2 AND project.archived_at IS NULL`,
+		orgID, projectID, sessionID,
+	).Scan(
+		&shared.Project.ID, &shared.Project.OrgID, &shared.Project.DisplayName, &shared.Project.RepositoryURL,
+		&shared.Project.DefaultBranch, &githubRepoID, &config, &shared.Project.CreatedAt, &shared.Project.UpdatedAt,
+		&shared.SessionName,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.SharedProject{}, ErrNotFound
+	}
+	if err != nil {
+		return domain.SharedProject{}, err
+	}
+	shared.Project.GitHubRepositoryID = githubRepoID
+	shared.Project.Config = config
 	return shared, nil
 }
 
@@ -458,7 +502,8 @@ func (s *Store) ListSharedProjects(
 	return shared, nil
 }
 
-// ListSharedProjectSessions lists sessions covered by a whole-project grant.
+// ListSharedProjectSessions lists the project's sessions the caller's share grants
+// reach: all of them for a whole-project grant, otherwise the granted ones.
 func (s *Store) ListSharedProjectSessions(
 	ctx context.Context,
 	principal domain.Principal,
@@ -476,25 +521,31 @@ func (s *Store) ListSharedProjectSessions(
 	); err != nil {
 		return nil, err
 	}
-	var allowed bool
+	// A grant for the whole project reaches every session in it; a grant for
+	// one session reaches only that one. Without either the project is not
+	// shared with this person.
+	var grants int
+	var wholeProject bool
+	var sessionIDs []string
 	if err := tx.QueryRow(
 		ctx,
-		`SELECT EXISTS (
-			SELECT 1 FROM ao_project_share_grants
-			WHERE org_id = $1 AND project_id = $2 AND user_id = $3
-			  AND status = 'active' AND session_id IS NULL
-		)`,
+		`SELECT count(*), COALESCE(bool_or(session_id IS NULL), false),
+			COALESCE(array_agg(session_id::text) FILTER (WHERE session_id IS NOT NULL), ARRAY[]::text[])
+		FROM ao_project_share_grants
+		WHERE org_id = $1 AND project_id = $2 AND user_id = $3 AND status = 'active'`,
 		orgID, projectID, principal.UserID,
-	).Scan(&allowed); err != nil {
+	).Scan(&grants, &wholeProject, &sessionIDs); err != nil {
 		return nil, err
 	}
-	if !allowed {
+	if grants == 0 {
 		return nil, ErrForbidden
 	}
 	rows, err := tx.Query(
 		ctx,
-		sessionSelect+` WHERE session.org_id = $1 AND session.project_id = $2 ORDER BY session.updated_at DESC`,
-		orgID, projectID,
+		sessionSelect+` WHERE session.org_id = $1 AND session.project_id = $2
+			AND ($3 OR session.id::text = ANY($4))
+		ORDER BY session.updated_at DESC`,
+		orgID, projectID, wholeProject, sessionIDs,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list shared project sessions: %w", err)
@@ -562,28 +613,11 @@ func effectiveDeniedCommands(sessionDenied, grantDenied []string) []string {
 }
 
 // withSessionAccess authorizes members and active share-grant holders.
-func (s *Store) withSessionAccess(
-	ctx context.Context,
-	principal domain.Principal,
-	orgID, sessionID string,
-	fn func(tx pgx.Tx, access sessionAccess) error,
-) error {
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	if _, err := tx.Exec(
-		ctx,
-		`SELECT set_config('ao.user_id', $1, true), set_config('ao.org_id', $2, true)`,
-		principal.UserID, orgID,
-	); err != nil {
-		return err
-	}
-
+// orgMemberTx reports whether principal is an active member of the
+// organization, under the same identity rules every tenant request uses.
+func orgMemberTx(ctx context.Context, tx pgx.Tx, principal domain.Principal, orgID string) (bool, error) {
 	var isMember bool
-	if err := tx.QueryRow(
+	err := tx.QueryRow(
 		ctx,
 		`SELECT EXISTS (
 			SELECT 1
@@ -609,44 +643,84 @@ func (s *Store) withSessionAccess(
 			  )
 		)`,
 		orgID, principal.UserID, principal.Provider, principal.ExternalOrgID,
-	).Scan(&isMember); err != nil {
+	).Scan(&isMember)
+	return isMember, err
+}
+
+func (s *Store) withSessionAccess(
+	ctx context.Context,
+	principal domain.Principal,
+	orgID, sessionID string,
+	fn func(tx pgx.Tx, access sessionAccess) error,
+) error {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(
+		ctx,
+		`SELECT set_config('ao.user_id', $1, true), set_config('ao.org_id', $2, true)`,
+		principal.UserID, orgID,
+	); err != nil {
+		return err
+	}
+
+	isMember, err := orgMemberTx(ctx, tx, principal, orgID)
+	if err != nil {
 		return err
 	}
 
 	access := sessionAccess{Role: "member"}
 	if !isMember {
-		var projectID string
+		var projectID, kind, requestedBy string
 		err := tx.QueryRow(
 			ctx,
-			`SELECT project_id FROM ao_sessions WHERE org_id = $1 AND id = $2`,
+			`SELECT project_id, kind, COALESCE(requested_by_user_id::text, '')
+			FROM ao_sessions WHERE org_id = $1 AND id = $2`,
 			orgID, sessionID,
-		).Scan(&projectID)
+		).Scan(&projectID, &kind, &requestedBy)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrForbidden
 		}
 		if err != nil {
 			return err
 		}
+		var wholeProject bool
 		err = tx.QueryRow(
 			ctx,
-			`SELECT role, COALESCE(mode_cap, ''), COALESCE(denied_commands, ARRAY[]::text[])
+			`SELECT role, COALESCE(mode_cap, ''), COALESCE(denied_commands, ARRAY[]::text[]), session_id IS NULL
 			FROM ao_project_share_grants
 			WHERE org_id = $1 AND project_id = $2 AND user_id = $3 AND status = 'active'
 			  AND (session_id = $4 OR session_id IS NULL)
 			ORDER BY (session_id IS NULL)
 			LIMIT 1`,
 			orgID, projectID, principal.UserID, sessionID,
-		).Scan(&access.Role, &access.ModeCap, &access.DeniedCommands)
+		).Scan(&access.Role, &access.ModeCap, &access.DeniedCommands, &wholeProject)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrForbidden
 		}
 		if err != nil {
 			return err
 		}
+		access.Role = projectGrantRole(access.Role, wholeProject, kind, requestedBy, principal.UserID)
 	}
 
 	if err := fn(tx, access); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// projectGrantRole is what a guest's grant lets them do in one session. A
+// link to the session itself applies as it is. A link to the whole project
+// applies as it is to its orchestrator, where guests ask for sessions, and to
+// the sessions started for that guest; every other session in the project,
+// the owner's and other guests', they only watch.
+func projectGrantRole(role string, wholeProject bool, kind, requestedBy, userID string) string {
+	if !wholeProject || kind == "orchestrator" || (requestedBy != "" && requestedBy == userID) {
+		return role
+	}
+	return "viewer"
 }

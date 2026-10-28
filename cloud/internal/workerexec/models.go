@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -15,15 +16,26 @@ import (
 )
 
 // DiscoverCodexModels asks the installed Codex app-server for this worker's
-// account-entitled catalog. No catalog is guessed or stored by AO.
-func DiscoverCodexModels(ctx context.Context, binary, workspace string) ([]worker.ChatModel, error) {
+// account-entitled catalog. No catalog is guessed or stored by AO. It runs with
+// the coding agent's own command (binary, CODEX_HOME and credential), so the
+// catalog is the one the session's turns get, before any turn has run.
+func DiscoverCodexModels(ctx context.Context, agent Command) ([]worker.ChatModel, error) {
+	binary := agent.Path
+	if binary == "" || binary == codexSpec.binary {
+		// Wait, within the request's own deadline, for the pinned Codex a fresh
+		// workspace is still installing.
+		binary = EnsureCodex(ctx)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if binary == "" {
-		binary = "codex"
-	}
 	command := exec.CommandContext(ctx, binary, "app-server")
-	command.Dir = workspace
+	command.Env = mergedEnvironment(agent.Env)
+	// The catalog belongs to the account, not the checkout. Asked before the
+	// checkout exists (a sandbox that starts faster than its clone), Codex runs
+	// from the worker's own directory instead of failing to start.
+	if info, err := os.Stat(agent.Dir); agent.Dir != "" && err == nil && info.IsDir() {
+		command.Dir = agent.Dir
+	}
 	command.Stderr = io.Discard
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -147,6 +159,7 @@ func parseCodexModelList(raw json.RawMessage) ([]worker.ChatModel, string, error
 		model := worker.ChatModel{
 			ID: id, DisplayName: name, Description: entry.Description,
 			Default: entry.IsDefault, DefaultEffort: entry.DefaultEffort,
+			ApprovalModes: append([]string(nil), codexApprovalModes...),
 		}
 		for _, effort := range entry.Efforts {
 			if effort.ReasoningEffort != "" {

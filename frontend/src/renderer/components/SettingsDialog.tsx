@@ -1,13 +1,16 @@
-import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import type { AppIcon } from "./icons";
+import { Bot, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { aoBridge } from "../lib/bridge";
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
+import { useSectionHistory } from "../hooks/useSectionHistory";
+import { SwipeNavigation, type SwipeNavigationActions } from "./SwipeNavigation";
 import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
 import { writeCodexAccounts } from "../hooks/codex-accounts-state";
 import { GlobalSettingsForm } from "./GlobalSettingsForm";
@@ -28,6 +31,7 @@ import { LOCAL_HOST, refKey } from "../lib/hosts";
 import { globalSettingsItem, visibleGlobalSettings } from "./settings/settingsCatalog";
 import { fetchMobileStatus, mobileStatusQueryKey } from "./settings/ConnectMobileContent";
 import { fetchDevices, mobileDevicesQueryKey } from "./settings/MobileDevicesSection";
+import { findSettingsTarget, highlightSettingsTarget, SETTINGS_FOCUS_HIGHLIGHT_MS } from "../lib/settings-focus";
 
 function initialProjectSaveState(): ProjectSettingsSaveState {
 	return { phase: "idle" };
@@ -95,7 +99,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
 		label: string;
-		icon: LucideIcon;
+		icon: AppIcon;
 	}> = [
 		{ id: "general", label: t("settings.project.general"), icon: MonitorCog },
 		{ id: "agents", label: t("settings.project.agents"), icon: Bot },
@@ -116,18 +120,21 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	}
 
 	const isProjectSettings = displaySettings?.scope === "project";
-	const [activeSection, setActiveSection] = useState<GlobalSettingsSection>("general");
+	const globalHistory = useSectionHistory<GlobalSettingsSection>("general");
+	const activeSection = globalHistory.current;
+	const globalRequestRef = useRef<{ modal: SettingsModal; section: GlobalSettingsSection } | null>(null);
 	const [focusAgentId, setFocusAgentId] = useState<string>();
 	const [harnessView, setHarnessView] = useState<"local" | "cloud">();
 	const [startLogin, setStartLogin] = useState(false);
 	const [showDiagnostics, setShowDiagnostics] = useState<HarnessDiagnosticsRequest | undefined>();
-	const [activeProjectSection, setActiveProjectSection] = useState<ProjectSettingsSection>("general");
-	const [pendingProjectSection, setPendingProjectSection] = useState<ProjectSettingsSection | null>(null);
+	const projectHistory = useSectionHistory<ProjectSettingsSection>("general");
+	const activeProjectSection = projectHistory.current;
+	const [pendingProjectSection, setPendingProjectSection] = useState<{ navigate: () => void } | null>(null);
 	const [projectSaveState, setProjectSaveState] = useState<ProjectSettingsSaveState>(initialProjectSaveState);
 	const [cueBusy, setCueBusy] = useState(false);
 	useEffect(() => {
 		if (pendingProjectSection && projectSaveState.phase === "saved" && !projectSaveState.dirty) {
-			setActiveProjectSection(pendingProjectSection);
+			pendingProjectSection.navigate();
 			setPendingProjectSection(null);
 		}
 	}, [pendingProjectSection, projectSaveState]);
@@ -185,18 +192,22 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	// it once the offering allows it.
 	useEffect(() => {
 		if (settingsModal?.scope === "global") {
-			setActiveSection(globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).id);
+			const section = globalSettingsItem(settingsModal.section ?? "general", { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling }).id;
+			if (globalRequestRef.current?.modal !== settingsModal) globalHistory.reset(section);
+			else if (globalRequestRef.current.section !== section) globalHistory.visit(section);
+			globalRequestRef.current = { modal: settingsModal, section };
 		}
-	}, [cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, settingsModal]);
+	}, [cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, settingsModal, globalHistory.reset, globalHistory.visit]);
 	// Project scope resets only when a project is opened, never when a gate
 	// settles, so a reported save state survives the offering loading.
 	useEffect(() => {
 		if (settingsModal?.scope === "project") {
-			setActiveProjectSection(settingsModal.cloudOrgId !== undefined && settingsModal.section === "cues" ? "general" : settingsModal.section ?? "general");
+			projectHistory.reset(settingsModal.cloudOrgId !== undefined && settingsModal.section === "cues" ? "general" : settingsModal.section ?? "general");
+			setPendingProjectSection(null);
 			setProjectSaveState(initialProjectSaveState());
 			setCueBusy(false);
 		}
-	}, [settingsModal]);
+	}, [settingsModal, projectHistory.reset]);
 
 	useEffect(() => {
 		setFocusAgentId(settingsModal?.scope === "global" ? settingsModal.focusAgentId : undefined);
@@ -229,21 +240,38 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 		void queryClient.prefetchQuery({ queryKey: mobileDevicesQueryKey, queryFn: fetchDevices });
 	}, [queryClient, settingsModal?.scope]);
 
-	const selectProjectSection = (id: ProjectSettingsSection) => {
+	const selectProjectSection = (id: ProjectSettingsSection, navigate = () => projectHistory.visit(id)) => {
 		if (projectSaveState.dirty && !projectSaveState.unsaveable && id !== activeProjectSection) {
-			setPendingProjectSection(id);
+			setPendingProjectSection({ navigate });
 			(document.getElementById("project-settings-form") as HTMLFormElement | null)?.requestSubmit();
 		} else {
-			setActiveProjectSection(id);
+			navigate();
 		}
 	};
 	const selectGlobalSection = (id: GlobalSettingsSection) => {
-		setActiveSection(id);
+		globalHistory.visit(id);
 		setFocusAgentId(undefined);
 	};
 	const navItems: SettingsNavEntry[] = isProjectSettings
 		? projectSections.map(({ id, label, icon }) => ({ id, label, icon, active: activeProjectSection === id, disabled: cueBusy, onSelect: () => selectProjectSection(id) }))
 		: globalSections.map(({ id, label, icon }) => ({ id, label: label(t), icon, active: activeSection === id, onSelect: () => selectGlobalSection(id) }));
+	const navigationBlocked = isProjectSettings && (cueBusy || projectSaveState.requestPending === true || (projectSaveState.phase === "pending" && !projectSaveState.unsaveable) || projectSaveState.phase === "saving");
+	const history = isProjectSettings ? projectHistory : globalHistory;
+	const navigation: SwipeNavigationActions = {
+		canGoBack: !navigationBlocked,
+		canGoForward: !navigationBlocked && history.next !== undefined,
+		back: () => {
+			if (navigationBlocked) return;
+			if (isProjectSettings && projectHistory.previous !== undefined) selectProjectSection(projectHistory.previous, projectHistory.back);
+			else if (!isProjectSettings && globalHistory.previous !== undefined) { globalHistory.back(); setFocusAgentId(undefined); }
+			else closeSettingsDialog();
+		},
+		forward: () => {
+			if (navigationBlocked) return;
+			if (isProjectSettings && projectHistory.next !== undefined) selectProjectSection(projectHistory.next, projectHistory.forward);
+			else if (!isProjectSettings) { globalHistory.forward(); setFocusAgentId(undefined); }
+		},
+	};
 	const showSaveStatus = isProjectSettings && activeProjectSection !== "cues" &&
 		(projectSaveState.phase === "failed" ||
 			(projectSaveState.phase === "pending" && !projectSaveState.unsaveable) ||
@@ -252,6 +280,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	return {
 		modal: settingsModal,
+		navigation,
 		navItems,
 		showSaveStatus,
 		projectSaveState,
@@ -301,7 +330,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 export type SettingsNavEntry = {
 	id: string;
 	label: string;
-	icon: LucideIcon;
+	icon: AppIcon;
 	active: boolean;
 	disabled?: boolean;
 	onSelect: () => void;
@@ -402,6 +431,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
  */
 export function SettingsPane() {
 	const page = useContext(SettingsPageContext);
+	const scrollerRef = useRef<HTMLDivElement>(null);
+	useSettingsRowFocus(scrollerRef, page?.active ?? null);
 	if (!page) return null;
 	const layer = page.active;
 	return (
@@ -425,6 +456,7 @@ export function SettingsPane() {
 					aria-busy={!entry.isBodyReady}
 					className={cn("settings-thin-scrollbar relative min-h-0 flex-1 overflow-y-auto", entry !== layer && "hidden")}
 					key={entry.bodyKey}
+					ref={entry === layer ? scrollerRef : undefined}
 				>
 					<div className="settings-dialog-body mx-auto flex w-full max-w-6xl flex-col gap-4 px-6 pb-12 pt-[calc(var(--spacing-toolbar)+--spacing(4))]">
 						<h1 className="mb-8 flex items-center gap-2 px-(--settings-row-inset) text-heading font-medium leading-7 text-foreground">
@@ -542,6 +574,7 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 					}}
 					ref={contentRef}
 				>
+					<SwipeNavigation containerRef={contentRef} navigation={layer.navigation} />
 					<div className="flex h-full min-h-0">
 						<aside className="flex w-48 shrink-0 flex-col border-r border-(--color-border-settings-dialog-header) bg-card">
 							<p className="px-3 pb-1 pt-1.5 text-2xs font-medium tracking-normal text-muted-foreground/60">{t("shell.projectSettings")}</p>
@@ -585,4 +618,44 @@ function ProjectSettingsModal({ layer, covered }: { layer: SettingsLayerState; c
 		</Dialog.Root>
 		</>
 	);
+}
+
+// A page's rows can arrive after it opens (accounts, devices, profiles load),
+// so the lookup retries for a few seconds before giving up quietly.
+const SETTINGS_FOCUS_RETRY_MS = 100;
+const SETTINGS_FOCUS_ATTEMPTS = 40;
+
+/**
+ * Scrolls to and briefly highlights the setting a global settings request names
+ * (`focusSetting`, its visible label), once the requested page is showing.
+ */
+function useSettingsRowFocus(scrollerRef: RefObject<HTMLDivElement | null>, layer: SettingsLayer | null) {
+	const settingsModal = useUiStore((state) => state.settingsModal);
+	const request = settingsModal?.scope === "global" && settingsModal.focusSetting ? settingsModal : null;
+	const layerRef = useRef(layer);
+	layerRef.current = layer;
+	useEffect(() => {
+		const label = request?.focusSetting;
+		if (!label) return;
+		let attempts = 0;
+		let timer: number | undefined;
+		let clearHighlight: (() => void) | undefined;
+		const tryFocus = () => {
+			const current = layerRef.current;
+			const activeSection = current?.navItems.find((item) => item.active)?.id;
+			const onRequestedPage = current?.isBodyReady && (!request.section || activeSection === request.section);
+			const target = onRequestedPage && scrollerRef.current ? findSettingsTarget(scrollerRef.current, label) : null;
+			if (target) {
+				clearHighlight = highlightSettingsTarget(target);
+				timer = window.setTimeout(() => clearHighlight?.(), SETTINGS_FOCUS_HIGHLIGHT_MS);
+				return;
+			}
+			if (++attempts < SETTINGS_FOCUS_ATTEMPTS) timer = window.setTimeout(tryFocus, SETTINGS_FOCUS_RETRY_MS);
+		};
+		timer = window.setTimeout(tryFocus, 0);
+		return () => {
+			window.clearTimeout(timer);
+			clearHighlight?.();
+		};
+	}, [request, scrollerRef]);
 }

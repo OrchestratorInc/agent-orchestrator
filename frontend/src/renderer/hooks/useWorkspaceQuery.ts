@@ -1,10 +1,11 @@
 import { type QueryClient, useQueries, useQuery, useQueryClient, type Query } from "@tanstack/react-query";
 import type { TraySessionEntry } from "../../shared/tray";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
-import { CloudCpError, type CloudCpProject, type CloudCpSession } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpProject, type CloudCpSession, type CloudCpSharedProject, type CloudCpSessionArtifact } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
+import { cloudArtifactFilesQueryKey } from "./useCloudArtifacts";
 import { useCloudOrg } from "./useCloudOrg";
 import { mockWorkspaces } from "../lib/mock-data";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
@@ -410,6 +411,7 @@ export function useWorkspacePolling(enabled = true) {
 // items. Invalidated by the cloud create flow (CreateProjectFlow).
 export const cloudProjectsQueryKey = ["cloud-projects"] as const;
 export const cloudSessionsQueryKey = ["cloud-sessions"] as const;
+export const sharedCloudWorkspacesQueryKey = ["cloud-shared-workspaces"] as const;
 
 // Maps one control-plane session onto the board's session shape. Cloud sessions
 // carry the same status/activity/harness vocabulary as local ones, so the same
@@ -474,7 +476,20 @@ export function toCloudWorkspaceSession(
 			runtimeError: session.runtimeError,
 			startupError: session.startupError,
 			coderWorkspaceUrl: session.coderWorkspaceUrl,
+			...(session.requestedBy ? { requestedBy: session.requestedBy } : {}),
 		},
+		outputType: session.outputType,
+		requestedOutput: session.requestedOutput,
+		// The list route sends only a count; useCloudSessionsQuery fills in the
+		// files from each session's own artifact list query. File URLs come from a short-lived access prefix when a file is
+		// opened (useCloudArtifactAccess), not from the list.
+		artifactFiles: session.artifactFiles?.map((file) => ({
+			kind: file.kind,
+			name: file.name,
+			path: file.path,
+			size: file.size,
+			updatedAt: file.updatedAt,
+		})),
 	};
 }
 
@@ -573,11 +588,39 @@ export function useCloudProjectsQuery(options: WorkspaceSubscriptionOptions = {}
 	});
 }
 
+/** At most this many cloud artifact lists are read at once. */
+const CLOUD_ARTIFACT_LIST_CONCURRENCY = 4;
+let cloudArtifactListsRunning = 0;
+const cloudArtifactListWaiters: Array<() => void> = [];
+
+async function withCloudArtifactListSlot<T>(read: () => Promise<T>): Promise<T> {
+	if (cloudArtifactListsRunning >= CLOUD_ARTIFACT_LIST_CONCURRENCY) {
+		await new Promise<void>((resolve) => cloudArtifactListWaiters.push(resolve));
+	}
+	cloudArtifactListsRunning++;
+	try {
+		return await read();
+	} finally {
+		cloudArtifactListsRunning--;
+		cloudArtifactListWaiters.shift()?.();
+	}
+}
+
+/** A cloud session's artifact version: its file count and newest commit time. */
+function cloudArtifactVersion(session: CloudCpSession): string {
+	return `${session.artifactCount ?? 0}:${session.artifactsUpdatedAt ?? session.updatedAt}`;
+}
+
+/** Each query's data. useQueries keeps the array while no query changes. */
+function queryResultsData<T>(results: { data?: T }[]): (T | undefined)[] {
+	return results.map((result) => result.data);
+}
+
 export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const { client, ready, baseUrl } = useCloudCp();
 	const { org } = useCloudOrg();
 	const orgId = org?.id;
-	return useQuery({
+	const list = useQuery({
 		queryKey: [...cloudSessionsQueryKey, baseUrl, orgId ?? ""],
 		enabled: options.enabled !== false && ready && orgId !== undefined,
 		subscribed: options.subscribed,
@@ -589,6 +632,69 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 			if (orgId === undefined) return [];
 			const response = await client.listSessions(orgId, { limit: 100 });
 			return response.items;
+		},
+	});
+	// The list carries only an artifact count. Each live session's files are
+	// read in their own query, once per artifact version, without holding up
+	// the list.
+	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0 && !session.isTerminated);
+	const fileData = useQueries({
+		queries: withFiles.map((session) => ({
+			queryKey: cloudArtifactFilesQueryKey(baseUrl, orgId ?? "", session.id, cloudArtifactVersion(session)),
+			enabled: orgId !== undefined && options.enabled !== false,
+			subscribed: options.subscribed,
+			staleTime: Infinity,
+			retry: 1,
+			queryFn: ({ signal }: { signal: AbortSignal }) =>
+				withCloudArtifactListSlot(async () => (await client.listSessionArtifacts(orgId ?? "", session.id, { signal })).artifacts),
+		})),
+		combine: queryResultsData,
+	});
+	// A session keeps its last good list while a new version loads or after a
+	// failed read, so its Artifacts tab and open file stay.
+	const lastFiles = useRef(new Map<string, CloudCpSessionArtifact[]>());
+	const data = useMemo(() => {
+		if (list.data === undefined) return undefined;
+		const read = new Map(withFiles.map((session, index) => [session.id, fileData[index]] as const));
+		return list.data.map((session) => {
+			const files = read.get(session.id) ?? lastFiles.current.get(session.id);
+			if (read.get(session.id)) lastFiles.current.set(session.id, read.get(session.id)!);
+			return files && (session.artifactCount ?? 0) > 0 ? { ...session, artifactFiles: files } : session;
+		});
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [list.data, fileData]);
+	return { ...list, data };
+}
+
+/**
+ * Cloud projects and sessions people in other organizations shared with this
+ * person, as workspaces beside their own. A project shared both whole and
+ * one session at a time shows once.
+ */
+export function useSharedCloudWorkspacesQuery(options: WorkspaceSubscriptionOptions = {}) {
+	const { client, ready, baseUrl } = useCloudCp();
+	return useQuery({
+		queryKey: [...sharedCloudWorkspacesQueryKey, baseUrl],
+		enabled: options.enabled !== false && ready,
+		subscribed: options.subscribed,
+		retry: 1,
+		refetchInterval: 15_000,
+		queryFn: async (): Promise<WorkspaceSummary[]> => {
+			const { shared } = await client.listSharedProjects();
+			const byProject = new Map<string, CloudCpSharedProject>();
+			for (const item of shared) {
+				const key = `${item.project.orgId}/${item.project.id}`;
+				if (!byProject.has(key)) byProject.set(key, item);
+			}
+			return Promise.all([...byProject.values()].map(async (item) => {
+				const { sessions } = await client.listSharedProjectSessions(item.project.orgId, item.project.id);
+				const workspace = toCloudWorkspace(item.project, sessions, item.project.orgId);
+				return {
+					...workspace,
+					sessions: workspace.sessions.map((session) => session.cloud ? { ...session, cloud: { ...session.cloud, shared: true } } : session),
+					shared: { byName: item.sharedByName || undefined },
+				};
+			}));
 		},
 	});
 }
@@ -692,11 +798,13 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 	const cloudOptions = { ...options, enabled: includeCloud && options.enabled !== false };
 	const cloud = useCloudProjectsQuery(cloudOptions);
 	const cloudSessions = useCloudSessionsQuery(cloudOptions);
+	const sharedWorkspaces = useSharedCloudWorkspacesQuery(cloudOptions);
 	const { org, ready } = useCloudOrg();
 	const orgId = org?.id;
 	const localData = local.data;
 	const cloudData = cloud.data;
 	const cloudSessionData = cloudSessions.data;
+	const sharedData = sharedWorkspaces.data;
 	const queryClient = useQueryClient();
 	const { baseUrl: cloudBaseUrl } = useCloudCp();
 	// Checked where both lists meet, so it runs whichever arrives last: the
@@ -710,17 +818,17 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 		// Local stays authoritative for loading/error semantics: cloud items only
 		// render once the local list exists, and never replace it.
 		if (localData === undefined) return localData;
-		if (cloudData === undefined || cloudData.length === 0) return localData;
 		// Signing out (or turning the offering off) disables the cloud queries,
 		// but react-query keeps their last data; without this gate the stale
 		// cloud projects would keep rendering for a signed-out user.
 		if (!ready || orgId === undefined) return localData;
 		const sessions = cloudSessionData ?? [];
-		return placeStandaloneWorkspaceLast([
-			...localData,
-			...cloudData.map((project) => toCloudWorkspace(project, sessions, orgId)),
-		]);
-	}, [localData, cloudData, cloudSessionData, includeCloud, orgId, ready]);
+		const own = (cloudData ?? []).map((project) => toCloudWorkspace(project, sessions, orgId));
+		// A project shared from the person's own organization is already listed.
+		const shared = (sharedData ?? []).filter((workspace) => !own.some((ownWorkspace) => ownWorkspace.id === workspace.id));
+		if (own.length === 0 && shared.length === 0) return localData;
+		return placeStandaloneWorkspaceLast([...localData, ...own, ...shared]);
+	}, [localData, cloudData, cloudSessionData, sharedData, includeCloud, orgId, ready]);
 	return { ...local, data };
 }
 

@@ -1,7 +1,7 @@
 import { Feather } from "../icons";
 import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import * as Clipboard from "expo-clipboard";
-import { createContext, isValidElement, memo, useCallback, useContext, useState, type ReactNode } from "react";
+import { createContext, isValidElement, memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
@@ -11,15 +11,20 @@ import { textSelectionColors } from "../textSelection";
 import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
-import { parseBlocks, type MarkdownBlock } from "./markdownBlocks";
+import { parseBlocks, type MarkdownBlock, type TableAlign } from "./markdownBlocks";
 import { iconSize, microLabel, prose, radius, space, type } from "../tokens";
 import type { ChatExcerpt } from "./types";
+import { sessionLink } from "./automationMessages";
 
 // The conversation screen decides how a tapped link opens (it knows the AO host
 // that the agent's localhost links map onto); the renderer only reports the tap.
 
 const AddResponseToChat = createContext<((text: string, source?: Omit<ChatExcerpt, "text">) => void) | null>(null);
 const OpenChatLink = createContext<((url: string) => void) | null>(null);
+// The name to show for a session a bare `ao://sessions/…` link names, and a way
+// to ask for one the surface does not know yet.
+type SessionNames = { name?: (sessionId: string) => string | undefined; want?: (sessionId: string) => void };
+const SessionNameOf = createContext<SessionNames | null>(null);
 
 /**
  * What a tapped link does when the renderer is used outside a provider.
@@ -39,8 +44,15 @@ function defaultOpenChatLink(url: string): void {
 	void openGitHub(url);
 }
 
-export function ChatLinkProvider({ onLinkOpen, onAddToChat, children }: { onLinkOpen: (url: string) => void; onAddToChat?: (text: string, source?: Omit<ChatExcerpt, "text">) => void; children: ReactNode }) {
-	return <OpenChatLink.Provider value={onLinkOpen}><AddResponseToChat.Provider value={onAddToChat ?? null}>{children}</AddResponseToChat.Provider></OpenChatLink.Provider>;
+/**
+ * How links in this chat open. `onLinkOpen` also receives `ao://sessions/…`
+ * links: only the surface knows which machine the conversation is on, so a
+ * session link is a link only under a provider, and `sessionName` lets a bare
+ * one read as the session's name rather than its URL.
+ */
+export function ChatLinkProvider({ onLinkOpen, onAddToChat, sessionName, onSessionNameNeeded, children }: { onLinkOpen: (url: string) => void; onAddToChat?: (text: string, source?: Omit<ChatExcerpt, "text">) => void; sessionName?: (sessionId: string) => string | undefined; onSessionNameNeeded?: (sessionId: string) => void; children: ReactNode }) {
+	const names = useMemo<SessionNames>(() => ({ name: sessionName, want: onSessionNameNeeded }), [onSessionNameNeeded, sessionName]);
+	return <OpenChatLink.Provider value={onLinkOpen}><AddResponseToChat.Provider value={onAddToChat ?? null}><SessionNameOf.Provider value={names}>{children}</SessionNameOf.Provider></AddResponseToChat.Provider></OpenChatLink.Provider>;
 }
 
 /**
@@ -57,11 +69,14 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 	const selectionColor = textSelectionColors(t).selectionColor;
 	const blocks = parseBlocks(text);
 	if (continuousSelection) {
-		// Native selection cannot cross sibling views. Keep every response text block
-		// in one text surface, then show image previews without repeating captions.
+		// Native selection cannot cross sibling views. Keep each run of response text
+		// in one text surface; only a table breaks the run, because a grid cannot
+		// live inside text. Image previews follow without repeating captions.
 		const images = blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
 		return <View style={styles.root}>
-			<SelectableResponseText text={text} source={selectionSource} />
+			{splitAtTables(blocks).map((run, index) => Array.isArray(run)
+				? <SelectableResponseText key={index} blocks={run} source={selectionSource} />
+				: <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} />)}
 			{images.map((image, index) => <MarkdownImage key={`${image.url}-${index}`} alt={image.alt} url={image.url} selectionColor={selectionColor} showCaption={false} />)}
 		</View>;
 	}
@@ -85,7 +100,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		const index = content.length;
 		if (block.kind === "code") content.push(<CodeBlock key={index} {...block} streaming={streaming} />);
 		else if (block.kind === "image") content.push(<MarkdownImage key={index} alt={block.alt} url={block.url} selectionColor={selectionColor} />);
-		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} rows={block.rows} selectionColor={selectionColor} />);
+		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} align={block.align} rows={block.rows} selectionColor={selectionColor} />);
 		else if (block.kind === "rule") content.push(<View key={index} style={styles.rule} />);
 		else if (block.kind === "quote") content.push(<View key={index} style={styles.quote}><SelectableInlineText value={block.text} selectionColor={selectionColor} style={styles.quoteText} styles={styles} /></View>);
 		else content.push(<View key={index} style={styles.list}>{block.items.map((item, itemIndex) => <View key={itemIndex} style={styles.listRow}><Text style={styles.marker}>{item.checked !== undefined ? (item.checked ? "☑" : "☐") : block.ordered ? `${itemIndex + 1}.` : "•"}</Text><SelectableInlineText value={item.text} selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]} styles={styles} /></View>)}</View>);
@@ -95,6 +110,19 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		<View style={styles.root}>{content}</View>
 	);
 });
+
+type TableBlock = Extract<MarkdownBlock, { kind: "table" }>;
+
+function splitAtTables(blocks: MarkdownBlock[]): Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock> {
+	const runs: Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock> = [];
+	for (const block of blocks) {
+		const last = runs[runs.length - 1];
+		if (block.kind === "table") runs.push(block);
+		else if (Array.isArray(last)) last.push(block);
+		else runs.push([block]);
+	}
+	return runs;
+}
 
 function hasInlineLink(value: string, styles: ReturnType<typeof makeStyles>): boolean {
 	return inline(value, styles).some((node) => isValidElement(node) && node.type === MarkdownLink);
@@ -108,8 +136,8 @@ function SelectableProseGroup({ blocks, selectionColor, styles }: { blocks: Arra
 	</Text>;
 }
 
-/** One native text surface for selecting across every part of a response. */
-export function SelectableResponseText({ text, source }: { text: string; source?: Omit<ChatExcerpt, "text"> }) {
+/** One native text surface for selecting across a run of response blocks. */
+export function SelectableResponseText({ blocks, source }: { blocks: Array<Exclude<MarkdownBlock, TableBlock>>; source?: Omit<ChatExcerpt, "text"> }) {
 	const t = useTheme();
 	const addToChat = useContext(AddResponseToChat);
 	const select = useCallback((selected: string) => source ? addToChat?.(selected, source) : addToChat?.(selected), [addToChat, source]);
@@ -117,22 +145,21 @@ export function SelectableResponseText({ text, source }: { text: string; source?
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = textSelectionColors(t).selectionColor;
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={Boolean(addToChat && source)} onAddToChat={(event) => select(event.nativeEvent.text)}>
-		{parseBlocks(text).map((block, index) => {
+		{blocks.map((block, index) => {
 			const separator = index > 0 ? "\n\n" : "";
 			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles)}</Text>;
 			if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles)}</Text>;
 			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles)}</Text>;
 			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles)}</Text>)}</Text>;
 			if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
-			if (block.kind === "table") return <Text key={index}>{separator}{[block.headers, ...block.rows].map((row, rowIndex) => <Text key={rowIndex}>{rowIndex > 0 ? "\n" : ""}{row.map((cell, cellIndex) => <Text key={cellIndex}>{cellIndex > 0 ? "  |  " : ""}{inline(cell, styles)}</Text>)}</Text>)}</Text>;
 			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles)}</Text>;
 			return <Text key={index}>{separator}────────</Text>;
 		})}
 	</Text>;
 }
 
-function SelectableInlineText({ value, selectionColor, style, styles }: { value: string; selectionColor: string; style: StyleProp<TextStyle>; styles: ReturnType<typeof makeStyles> }) {
-	const content = inline(value, styles);
+function SelectableInlineText({ value, selectionColor, style, styles, codeStyle }: { value: string; selectionColor: string; style: StyleProp<TextStyle>; styles: ReturnType<typeof makeStyles>; codeStyle?: StyleProp<TextStyle> }) {
+	const content = inline(value, styles, true, codeStyle);
 	// The native UITextView flattens inline children into one accessibility node.
 	// Keep links on RN Text on iOS so VoiceOver can focus their link role.
 	const hasLink = content.some((node) => isValidElement(node) && node.type === MarkdownLink);
@@ -148,9 +175,33 @@ function MarkdownImage({ alt, url, selectionColor, showCaption = true }: { alt: 
 	return <View style={styles.imageCard}><Image accessibilityLabel={alt || "Conversation image"} accessibilityIgnoresInvertColors source={{ uri: url }} resizeMode="contain" onError={() => setFailed(true)} style={styles.image} />{alt && showCaption ? <Text selectable uiTextView selectionColor={selectionColor} style={styles.imageCaption}>{alt}</Text> : null}</View>;
 }
 
-function MarkdownTable({ headers, rows, selectionColor }: { headers: string[]; rows: string[][]; selectionColor: string }) {
+// React Native has no grid layout, so a column's width is estimated from its
+// longest cell and every row uses that width; that keeps columns aligned.
+// Columns then grow in proportion to fill a wide screen, or scroll when they
+// overflow a narrow one. It must be `width`, not `flexBasis`: inside a
+// horizontal ScrollView the row's width is undefined, and Yoga then ignores a
+// numeric basis and sizes each cell to its own content.
+const TABLE_CHAR_WIDTH = 7.4;
+const TABLE_COLUMN_MIN = 72;
+const TABLE_COLUMN_MAX = 220;
+
+function tableColumnWidth(cells: string[]): number {
+	const chars = Math.max(0, ...cells.map((cell) => cell.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/[*`~]/g, "").length));
+	return Math.min(TABLE_COLUMN_MAX, Math.max(TABLE_COLUMN_MIN, Math.ceil(chars * TABLE_CHAR_WIDTH) + space.sm * 2));
+}
+
+function MarkdownTable({ headers, align, rows, selectionColor }: { headers: string[]; align: TableAlign[]; rows: string[][]; selectionColor: string }) {
 	const styles = useThemedStyles(makeStyles);
-	return <ScrollView horizontal showsHorizontalScrollIndicator><View style={styles.table}><View style={[styles.tableRow, styles.tableHeader]}>{headers.map((cell, index) => <Text key={index} selectable uiTextView selectionColor={selectionColor} style={[styles.tableCell, styles.tableHeaderText]}>{cell}</Text>)}</View>{rows.map((row, rowIndex) => <View key={rowIndex} style={styles.tableRow}>{headers.map((_, cellIndex) => <Text key={cellIndex} selectable uiTextView selectionColor={selectionColor} style={styles.tableCell}>{row[cellIndex] ?? ""}</Text>)}</View>)}</View></ScrollView>;
+	const widths = headers.map((header, column) => tableColumnWidth([header, ...rows.map((row) => row[column] ?? "")]));
+	const row = (cells: string[], header: boolean) => headers.map((_, column) => <View key={column} style={[styles.tableCell, column === 0 && styles.tableFirstCell, { width: widths[column], flexGrow: widths[column] }]}>
+		<SelectableInlineText value={cells[column] ?? ""} selectionColor={selectionColor} style={[header ? styles.tableHeaderText : styles.tableText, align[column] && { textAlign: align[column] }]} styles={styles} codeStyle={styles.tableCode} />
+	</View>);
+	return <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={styles.tableScroll}>
+		<View style={styles.table}>
+			<View style={[styles.tableRow, styles.tableHeader]}>{row(headers, true)}</View>
+			{rows.map((cells, index) => <View key={index} style={styles.tableRow}>{row(cells, false)}</View>)}
+		</View>
+	</ScrollView>;
 }
 
 function CodeBlock({ text, language, streaming }: { text: string; language?: string; streaming?: boolean }) {
@@ -186,12 +237,28 @@ function CodeBlock({ text, language, streaming }: { text: string; language?: str
 }
 
 function MarkdownLink({ url, label, style }: { url: string; label: string; style: StyleProp<TextStyle> }) {
-	const open = useContext(OpenChatLink) ?? defaultOpenChatLink;
+	const provided = useContext(OpenChatLink);
+	const names = useContext(SessionNameOf);
+	const session = sessionLink(url);
+	// A bare link reads as the session it names, asked for once when the surface does not know it; an authored label is kept.
+	const bareSessionId = session && label === url ? session.sessionId : undefined;
+	const known = bareSessionId ? names?.name?.(bareSessionId) : undefined;
+	useEffect(() => {
+		if (bareSessionId && !known) names?.want?.(bareSessionId);
+	}, [bareSessionId, known, names]);
+	if (session) {
+		const text = bareSessionId ? known || bareSessionId : label;
+		// Without a provider nothing knows which machine the session is on, so it stays words.
+		if (!provided) return <Text>{text}</Text>;
+		return <Text accessibilityRole="link" accessibilityHint="Opens this session's chat" style={style} onPress={() => { haptics.tap(); provided(url); }}>{text}</Text>;
+	}
+	const open = provided ?? defaultOpenChatLink;
 	return <Text accessibilityRole="link" style={style} onPress={() => { haptics.tap(); open(url); }}>{label}</Text>;
 }
 
-function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true): ReactNode[] {
-	const pattern = /(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|<(https?:\/\/[^\s>]+)>|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+))/g;
+function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>): ReactNode[] {
+	// Web links, and AO's own `ao://` links; a bare session link stops before prose punctuation.
+	const pattern = /(\[([^\]]+)\]\(((?:https?|ao):\/\/[^\s)]+)\)|<((?:https?|ao):\/\/[^\s>]+)>|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+)|(ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"]))/g;
 	const nodes: ReactNode[] = [];
 	let at = 0;
 	let match: RegExpExecArray | null;
@@ -199,12 +266,12 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 		if (match.index > at) nodes.push(text.slice(at, match.index));
 		if ((match[7] || match[10]) && !allowsUnderscoreEmphasis(text, match.index, pattern.lastIndex)) {
 			nodes.push(match[0]);
-		} else if ((match[2] && match[3]) || match[4] || match[11]) {
-			const url = match[3] ?? match[4] ?? match[11];
+		} else if ((match[2] && match[3]) || match[4] || match[11] || match[12]) {
+			const url = match[3] ?? match[4] ?? match[11] ?? match[12];
 			const label = match[2] ?? url;
 			nodes.push(linksPressable ? <MarkdownLink key={`${match.index}-link`} url={url} label={label} style={styles.link} /> : <Text key={`${match.index}-link`} style={styles.link}>{label}</Text>);
 		} else if (match[5]) {
-			nodes.push(<Text key={`${match.index}-code`} style={styles.inlineCode}>{match[5]}</Text>);
+			nodes.push(<Text key={`${match.index}-code`} style={codeStyle ? [styles.inlineCode, codeStyle] : styles.inlineCode}>{match[5]}</Text>);
 		} else if (match[6] || match[7]) {
 			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{match[6] ?? match[7]}</Text>);
 		} else if (match[8]) {
@@ -255,9 +322,13 @@ const makeStyles = (t: Theme) =>
 		image: { width: "100%", minHeight: 190, maxHeight: 420 },
 		imageCaption: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, paddingHorizontal: space.sm, paddingVertical: space.xs, borderTopWidth: 1, borderTopColor: t.borderSubtle },
 		imageFallback: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize, fontStyle: "italic" },
-		table: { borderWidth: 1, borderColor: t.borderSubtle, borderRadius: radius.sm, borderCurve: "continuous", overflow: "hidden" },
+		tableScroll: { flexGrow: 1 },
+		table: { flexGrow: 1, borderWidth: 1, borderColor: t.borderSubtle, borderRadius: radius.sm, borderCurve: "continuous", overflow: "hidden" },
 		tableRow: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
 		tableHeader: { borderTopWidth: 0, backgroundColor: t.bgSubtle },
-		tableCell: { fontFamily: "Geist_400Regular", minWidth: 110, maxWidth: 260, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, paddingHorizontal: space.sm, paddingVertical: space.xs, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: t.borderSubtle },
-		tableHeaderText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontWeight: "600" },
+		tableCell: { flexShrink: 0, paddingHorizontal: space.sm, paddingVertical: space.xs, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: t.borderSubtle },
+		tableFirstCell: { borderLeftWidth: 0 },
+		tableText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		tableHeaderText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+		tableCode: { fontSize: type.caption1.fontSize },
 	});

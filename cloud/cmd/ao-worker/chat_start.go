@@ -69,11 +69,13 @@ func startInterface(ctx context.Context, logger *slog.Logger, launch worker.Laun
 }
 
 // claudeChatAdapterWait bounds how long a Claude session that starts in Chat
-// waits, once its workspace is ready, for the Claude ACP adapter: long enough
-// for an install that is already finishing, never long enough to make the
-// person wait on npm. Past it the session starts in the terminal while the
+// waits, once its workspace is ready, for the Claude ACP adapter. A template
+// that installs Node in its own startup script lets the worker start the
+// install only then, and it takes about 20 s, so a short wait moved every
+// first start of such a session to the terminal. The app shows the startup
+// steps meanwhile. Past it the session starts in the terminal while the
 // install carries on in the background for a later switch to Chat.
-const claudeChatAdapterWait = 15 * time.Second
+const claudeChatAdapterWait = 90 * time.Second
 
 // chatAdapterSettle is what settleClaudeChatStart asks of the workspace, the
 // control plane and the transport; tests replace them.

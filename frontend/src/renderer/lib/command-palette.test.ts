@@ -5,8 +5,10 @@ import {
 	buildSessionActions,
 	buildWorkspaceFileCommands,
 	filterCommands,
+	matchScore,
 	groupCommands,
 	displayGroups,
+	titleHighlights,
 	findSession,
 	visibleForQuery,
 	MAX_ATTENTION_SEARCH_RESULTS,
@@ -648,11 +650,15 @@ describe("groupCommands", () => {
 	});
 });
 
-describe("session rows open the actions panel", () => {
-	it("emits open-session-actions for session rows while PR rows stay navigate", () => {
+describe("session rows jump to the session", () => {
+	it("navigates on Enter and keeps the actions panel as the Cmd+Enter alternative", () => {
 		const items = buildCommands({ workspaces: workspaces() });
 		const map = byId(items);
-		expect(map.get("attention:w-merge")?.action).toEqual({ kind: "open-session-actions", sessionId: "w-merge" });
+		expect(map.get("attention:w-merge")?.action).toEqual({
+			kind: "navigate",
+			target: { to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "proj-1", sessionId: "w-merge" } },
+		});
+		expect(map.get("attention:w-merge")?.secondaryAction).toEqual({ kind: "open-session-actions", sessionId: "w-merge" });
 		expect(map.get("pr:w-pr:42")?.action?.kind).toBe("navigate");
 		expect(map.get("project:proj-1")?.action?.kind).toBe("navigate");
 	});
@@ -743,5 +749,48 @@ describe("pending branch presentation", () => {
 		expect(sessionBranchPresentation({ ...launched, isTerminated: true })).toEqual({ branch: "ao/mer-7/root", naming: false });
 		// A start that failed after launch has its worktree.
 		expect(sessionBranchPresentation({ ...launched, provisionState: "failed", provisionSteps: [{ id: "worktree", status: "done" }] })).toEqual({ branch: "ao/mer-7/root", naming: false });
+	});
+});
+
+describe("search groups", () => {
+	it("keep daemon results below local rows so Enter never moves to them", () => {
+		const local = buildCommands({ workspaces: workspaces() });
+		const file: CommandItem = { id: "file:x", group: "files", title: "app.ts", action: { kind: "toggle-theme" } };
+		const ids = displayGroups([...local, file], "app").map((group) => group.id);
+		expect(ids[ids.length - 1]).toBe("files");
+		expect(ids[0]).not.toBe("files");
+	});
+
+	it("are not cut by the local result cap", () => {
+		const projects: WorkspaceSummary[] = Array.from({ length: 50 }, (_, i) => ({
+			id: `p${i}`, name: `project-${i}`, path: `/repos/p${i}`, type: "main" as const, sessions: [],
+		}));
+		const local = buildCommands({ workspaces: projects });
+		const chats: CommandItem[] = Array.from({ length: 3 }, (_, index) => ({
+			id: `message:${index}`, group: "messages", title: `project chat ${index}`, contentMatch: true,
+		}));
+		const groups = displayGroups([...local, ...chats], "project");
+		expect(groups.find((group) => group.id === "messages")?.items).toHaveLength(3);
+	});
+});
+
+describe("titleHighlights", () => {
+	it("marks the typed text, then each word, then loose letters", () => {
+		expect(titleHighlights("side", "Toggle sidebar")).toEqual([{ start: 7, end: 11 }]);
+		expect(titleHighlights("toggle bar", "Toggle sidebar")).toEqual([{ start: 0, end: 6 }, { start: 11, end: 14 }]);
+		expect(titleHighlights("tgl", "Toggle")).toEqual([{ start: 0, end: 1 }, { start: 2, end: 3 }, { start: 4, end: 5 }]);
+		expect(titleHighlights("zz", "Toggle")).toEqual([]);
+	});
+});
+
+describe("loose keyword matches", () => {
+	const setting: CommandItem = { id: "setting:x", group: "settings", title: "Add account", keywords: ["subscriptions", "devices"] };
+
+	it("match a short query across keywords", () => {
+		expect(matchScore("sb", setting)).toBe(100);
+	});
+
+	it("do not match a longer query whose letters are only scattered across keywords", () => {
+		expect(matchScore("side", setting)).toBe(0);
 	});
 });

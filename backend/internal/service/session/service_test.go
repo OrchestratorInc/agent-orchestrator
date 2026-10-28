@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
@@ -80,6 +81,8 @@ type fakeStore struct {
 	listPRFactsCalls    int
 	listReviewRunsCalls int
 	num                 int
+	conversations       map[domain.SessionID]domain.ConversationRecord
+	activities          []domain.ConversationActivity
 
 	// getCleanupFactsCalls counts single-session reads; listCleanupFactsCalls
 	// counts batched ones, and cleanupFactsRequested records the ids they asked for.
@@ -107,6 +110,68 @@ func newFakeStore() *fakeStore {
 
 func (f *fakeStore) ListWorkspaceRepos(context.Context, string) ([]domain.WorkspaceRepoRecord, error) {
 	return nil, nil
+}
+
+func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionID) (domain.ConversationRecord, error) {
+	conversation, ok := f.conversations[id]
+	if !ok {
+		return domain.ConversationRecord{}, domain.ErrNoConversation
+	}
+	return conversation, nil
+}
+
+func (f *fakeStore) SessionForActivityProviderItem(_ context.Context, providerItemID string) (domain.SessionID, bool, error) {
+	for _, activity := range f.activities {
+		if activity.ProviderItemID != providerItemID {
+			continue
+		}
+		for sessionID, conversation := range f.conversations {
+			if conversation.ID == activity.ConversationID {
+				return sessionID, true, nil
+			}
+		}
+	}
+	return "", false, nil
+}
+
+func (f *fakeStore) ActivityStatusByProviderItem(_ context.Context, conversationID, providerItemID string) (domain.ActivityStatus, bool, error) {
+	for _, existing := range f.activities {
+		if existing.ConversationID == conversationID && existing.ProviderItemID == providerItemID {
+			return existing.Status, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func (f *fakeStore) UpsertActivity(_ context.Context, conversationID, _ string, activity domain.ConversationActivity, now time.Time) error {
+	if activity.ProviderItemID != "" {
+		for i, existing := range f.activities {
+			if existing.ConversationID == conversationID && existing.ProviderItemID == activity.ProviderItemID {
+				if activity.Kind == domain.ActivityKindAOAction &&
+					activity.Status == domain.ActivityStatusRunning &&
+					(existing.Status == domain.ActivityStatusCompleted ||
+						existing.Status == domain.ActivityStatusFailed ||
+						existing.Status == domain.ActivityStatusCancelled ||
+						existing.Status == domain.ActivityStatusResolved) {
+					return nil
+				}
+				activity.ID = existing.ID
+				activity.ConversationID = conversationID
+				activity.Sequence = existing.Sequence
+				activity.Revision = existing.Revision + 1
+				activity.UpdatedAt = now
+				f.activities[i] = activity
+				return nil
+			}
+		}
+	}
+	activity.ConversationID = conversationID
+	activity.Sequence = int64(len(f.activities) + 1)
+	activity.Revision = 1
+	activity.CreatedAt = now
+	activity.UpdatedAt = now
+	f.activities = append(f.activities, activity)
+	return nil
 }
 
 func TestListBatchesKanbanReads(t *testing.T) {
@@ -2555,39 +2620,40 @@ func TestSessionRenameMissingSessionReturnsNotFound(t *testing.T) {
 // fakeCommander records Kill/Spawn calls so a test can assert the
 // clean-orchestrator ordering without wiring a real session engine.
 type fakeCommander struct {
-	killed           []domain.SessionID
-	retired          []domain.SessionID
-	exited           []domain.SessionID
-	resumed          []domain.SessionID
-	ready            []domain.SessionID
-	sent             []domain.SessionID
-	sentMessages     []string
-	cleanupProjects  []domain.ProjectID
-	killErr          error
-	retireErr        error
-	retireFunc       func(context.Context, domain.SessionID) error
-	sendErr          error
-	sendFunc         func(domain.SessionID, string) error
-	cleanupErr       error
-	spawnErr         error
-	spawnWaitsForCtx bool
-	spawnHook        func(context.Context)
-	spawnRecord      domain.SessionRecord
-	spawnFunc        func(ports.SpawnConfig) domain.SessionRecord
-	spawnCalls       int
-	spawned          bool
-	spawnedCfg       ports.SpawnConfig
-	spawnCtx         context.Context
-	killsAtSpawn     int
-	restoreErr       error
-	restoreResult    sessionmanager.RestoreResult
-	readyErr         error
-	backgroundResult string
-	backgroundErr    error
-	backgroundFunc   func(backgroundTaskCall) (string, error)
-	backgroundCalls  []backgroundTaskCall
-	killFunc         func(domain.SessionID)
-	killMu           sync.Mutex
+	killed            []domain.SessionID
+	retired           []domain.SessionID
+	exited            []domain.SessionID
+	resumed           []domain.SessionID
+	ready             []domain.SessionID
+	sent              []domain.SessionID
+	sentMessages      []string
+	cleanupProjects   []domain.ProjectID
+	killErr           error
+	retireErr         error
+	retireFunc        func(context.Context, domain.SessionID) error
+	sendErr           error
+	sendFunc          func(domain.SessionID, string) error
+	cleanupErr        error
+	spawnErr          error
+	spawnWaitsForCtx  bool
+	spawnHook         func(context.Context)
+	spawnRecord       domain.SessionRecord
+	requestKillResult *sessionmanager.KillResult
+	spawnFunc         func(ports.SpawnConfig) domain.SessionRecord
+	spawnCalls        int
+	spawned           bool
+	spawnedCfg        ports.SpawnConfig
+	spawnCtx          context.Context
+	killsAtSpawn      int
+	restoreErr        error
+	restoreResult     sessionmanager.RestoreResult
+	readyErr          error
+	backgroundResult  string
+	backgroundErr     error
+	backgroundFunc    func(backgroundTaskCall) (string, error)
+	backgroundCalls   []backgroundTaskCall
+	killFunc          func(domain.SessionID)
+	killMu            sync.Mutex
 }
 
 type backgroundTaskCall struct {
@@ -3721,7 +3787,9 @@ func TestToAPIErrorMapsWorkspaceBranchSentinels(t *testing.T) {
 		{"artifact output unavailable", fmt.Errorf("spawn: %w", sessionmanager.ErrArtifactOutputUnavailable), apierr.KindInvalid, "ARTIFACT_OUTPUT_UNAVAILABLE"},
 		{"harness install active", fmt.Errorf("spawn: %w", sessionmanager.ErrHarnessInstallActive), apierr.KindConflict, "HARNESS_INSTALL_ACTIVE"},
 		{"awaiting decision", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAwaitingDecision), apierr.KindConflict, "SESSION_AWAITING_DECISION"},
+		{"delivery unconfirmed", fmt.Errorf("send mer-1: %w", sessionmanager.ErrDeliveryUnconfirmed), apierr.KindConflict, "SESSION_DELIVERY_UNCONFIRMED"},
 		{"startup pending", fmt.Errorf("send mer-1: %w", sessionmanager.ErrStartupPending), apierr.KindConflict, "SESSION_STARTUP_PENDING"},
+		{"composer busy", fmt.Errorf("send mer-1: %w", sessionmanager.ErrComposerBusy), apierr.KindConflict, "SESSION_COMPOSER_BUSY"},
 		{"agent exited", fmt.Errorf("send mer-1: %w", sessionmanager.ErrAgentExited), apierr.KindConflict, "AGENT_EXITED"},
 		{"agent not exited", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrAgentNotExited), apierr.KindConflict, "AGENT_NOT_EXITED"},
 		{"resume in progress", fmt.Errorf("resume agent mer-1: %w", sessionmanager.ErrResumeInProgress), apierr.KindConflict, "AGENT_RESUME_IN_PROGRESS"},
@@ -5856,6 +5924,9 @@ func (f *fakeStore) ListSessionCleanupFactsForSessions(_ context.Context, ids []
 }
 
 func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	if f.requestKillResult != nil {
+		return *f.requestKillResult, nil
+	}
 	freed, err := f.Kill(ctx, id)
 	return sessionmanager.KillResult{Freed: freed}, err
 }
@@ -5982,5 +6053,65 @@ func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
 	}
 	if len(deleter.deleted) != 1 {
 		t.Fatalf("deleted = %v, want [mer-1]", deleter.deleted)
+	}
+}
+
+func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
+	var sentryErrs []error
+	var sentryTags []map[string]string
+	captureRelaunchError = func(_ context.Context, err error, tags map[string]string, _ string) {
+		sentryErrs = append(sentryErrs, err)
+		sentryTags = append(sentryTags, tags)
+	}
+	t.Cleanup(func() { captureRelaunchError = sentryobs.CaptureHTTPError })
+	cause := sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("tmux: secret-token failed")}
+	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", &cause)}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: fc, Store: newFakeStore(), Telemetry: sink})
+
+	_, err := svc.ResumeAgent(context.Background(), "mer-1")
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Kind != apierr.KindConflict || apiErr.Code != "AGENT_RESUME_FAILED" {
+		t.Fatalf("err = %#v, want conflict AGENT_RESUME_FAILED", err)
+	}
+	if apiErr.Details["step"] != "runtime" || strings.Contains(apiErr.Message, "secret-token") {
+		t.Fatalf("details/message = %v / %q", apiErr.Details, apiErr.Message)
+	}
+	// Restore relaunches the same way and answers the same 409.
+	if _, err := svc.Restore(context.Background(), "mer-1"); !errors.As(err, &apiErr) || apiErr.Code != "AGENT_RESUME_FAILED" {
+		t.Fatalf("restore err = %#v, want AGENT_RESUME_FAILED", err)
+	}
+	// The failures left ao.http.5xx, so each must still be counted on its own event.
+	if len(sink.events) != 2 {
+		t.Fatalf("events = %#v, want one relaunch_failed per operation", sink.events)
+	}
+	for i, operation := range []string{"resume_agent", "restore_session"} {
+		ev := sink.events[i]
+		if ev.Name != "ao.session.relaunch_failed" || ev.Payload["operation"] != operation ||
+			ev.Payload["step"] != "runtime" || ev.Payload["cause_type"] != "*errors.errorString" {
+			t.Fatalf("event %d = %#v, want relaunch_failed for %s step runtime", i, ev, operation)
+		}
+		if strings.Contains(fmt.Sprint(ev.Payload), "secret-token") {
+			t.Fatalf("telemetry payload leaked the raw error: %v", ev.Payload)
+		}
+	}
+
+	fc.restoreErr = fmt.Errorf("resume agent mer-1: %w", &sessionmanager.RelaunchError{Step: "runtime", Err: context.DeadlineExceeded})
+	_, err = svc.ResumeAgent(context.Background(), "mer-1")
+	if errors.As(err, &apiErr) {
+		t.Fatalf("deadline must stay unmapped for the 503 path, got %v", err)
+	}
+	if len(sink.events) != 2 {
+		t.Fatalf("a deadline is already counted as ao.http.5xx; events = %#v", sink.events)
+	}
+	fc.restoreErr = fmt.Errorf("resume agent mer-1: %w", &sessionmanager.RelaunchError{Step: "runtime", Err: context.Canceled})
+	_, _ = svc.ResumeAgent(context.Background(), "mer-1")
+	if len(sink.events) != 2 {
+		t.Fatalf("a client that left mid-relaunch is not a failure to count; events = %#v", sink.events)
+	}
+	// Sentry keeps the raw error the 500 used to carry, once per relaunch failure.
+	if len(sentryErrs) != 2 || !strings.Contains(sentryErrs[0].Error(), "secret-token") ||
+		sentryTags[1]["operation"] != "restore_session" || sentryTags[1]["step"] != "runtime" {
+		t.Fatalf("sentry captures = %v / %v, want the raw error for both operations", sentryErrs, sentryTags)
 	}
 }

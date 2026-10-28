@@ -89,7 +89,7 @@ export default function ProjectsScreen() {
 					/>
 				}
 			/>
-			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
+			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
 
 			{fleetLoading && allProjects.length === 0 ? (
 				<View style={styles.center}>

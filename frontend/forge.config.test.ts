@@ -96,6 +96,9 @@ describe("native runtime resources", () => {
 
 	it("bundles the native update helper only on macOS", () => {
 		expect(extraResourcesForPlatform("darwin")).toContain("update-helper");
+		for (const platform of ["darwin", "linux", "win32"] as const) {
+			expect(extraResourcesForPlatform(platform)).toContain("browser-extension");
+		}
 		expect(extraResourcesForPlatform("linux")).not.toContain("update-helper");
 		expect(extraResourcesForPlatform("win32")).not.toContain("update-helper");
 	});

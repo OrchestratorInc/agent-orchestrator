@@ -80,6 +80,18 @@ class ValidateHostedSettingsCLITests(unittest.TestCase):
         result = run(*offering_arguments("staging", "coder,freestyle"))
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_offering_artifacts(self):
+        ok = run(*offering_arguments(
+            "staging", "coder,freestyle",
+            artifacts="1",
+            artifact_bucket="ao-cloud-staging-tenant-artifacts",
+            artifact_region="eu-north-1",
+        ))
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        missing = run(*offering_arguments("staging", "coder,freestyle", artifacts="1"))
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("AO_CLOUD_ARTIFACT_BUCKET", missing.stderr)
+
     def test_offering_rejects_a_malformed_coder_rollout_flag(self):
         result = run(*offering_arguments("staging", "coder,freestyle", coder_readable_names="yes"))
         self.assertNotEqual(result.returncode, 0)
@@ -269,3 +281,68 @@ class ShellSyntaxTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ArtifactBucketCheckTest(unittest.TestCase):
+    """check_artifact_bucket with a stubbed aws_cli."""
+
+    def check(self, denied_objects="", denied_bucket="", versioning="Enabled", artifacts="1", fail=""):
+        # fail names a call (a pattern of its arguments) that exits 254 with
+        # nothing on stdout, as the CLI does for AccessDenied.
+        stub = f"""
+aws_cli() {{
+	if [[ -n "{fail}" && "$*" == *"{fail}"* ]]; then
+		echo "An error occurred (AccessDenied)" >&2
+		return 254
+	fi
+	case "$*" in
+	*head-bucket*) return 0 ;;
+	*get-bucket-versioning*) echo "{versioning}" ;;
+	*describe-services*) echo "arn:aws:ecs:eu-north-1:1:task-definition/api:7" ;;
+	*describe-task-definition*) echo "arn:aws:iam::1:role/ao-cloud-staging-task-role" ;;
+	*ListBucket*) echo "{denied_bucket}" ;;
+	*simulate-principal-policy*) echo "{denied_objects}" ;;
+	esac
+}}
+AO_CLOUD_ARTIFACTS={artifacts}
+AO_CLOUD_ARTIFACT_BUCKET=ao-cloud-staging-tenant-artifacts
+# The deploy scripts' own call form, which turns errexit off inside the helper.
+check_artifact_bucket ao-cloud-staging ao-cloud-staging-api || exit 1
+"""
+        return bash(stub)
+
+    def test_passes_when_the_role_may_use_the_bucket(self):
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_fails_when_the_role_lacks_object_access(self):
+        result = self.check(denied_objects="s3:PutObject\ts3:GetObjectVersion")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("s3:PutObject s3:GetObjectVersion denied", result.stderr)
+
+    def test_fails_when_the_role_cannot_list_the_bucket(self):
+        result = self.check(denied_bucket="s3:ListBucket")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("s3:ListBucket denied", result.stderr)
+
+    def test_fails_without_versioning(self):
+        result = self.check(versioning="Suspended")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("versioning", result.stderr)
+
+    def test_fails_when_an_aws_call_fails(self):
+        for call in (
+            "get-bucket-versioning",
+            "describe-services",
+            "describe-task-definition",
+            "s3:PutObject",
+            "s3:ListBucket",
+        ):
+            with self.subTest(call=call):
+                result = self.check(fail=call)
+                self.assertNotEqual(result.returncode, 0, f"{call} failed but the check passed")
+                self.assertIn("Could not", result.stderr)
+
+    def test_skips_every_check_with_artifacts_off(self):
+        result = self.check(denied_objects="s3:PutObject", artifacts="0")
+        self.assertEqual(result.returncode, 0, result.stderr)

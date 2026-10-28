@@ -277,7 +277,7 @@ beforeEach(() => {
 	conversationCommandState.echoBeforeSend.mockReset();
 	conversationCommandState.dropEcho.mockReset();
 	catalogObserverState.enabled = [];
-	useUiStore.setState({ inspectorSessions: {}, developerMode: true });
+	useUiStore.setState({ inspectorSessions: {}, developerMode: false });
 });
 
 afterEach(() => {
@@ -320,7 +320,7 @@ describe("SessionChatSurface pending switch effort", () => {
 		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
 	});
 
-	it("lets a pick lapse when Developer Mode is turned off", async () => {
+	it("keeps a pick when Developer Mode is toggled", async () => {
 		conversationState.snapshot = { ...snapshotFor(session.id), harness: "claude-code" };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		await act(async () => {
@@ -328,9 +328,9 @@ describe("SessionChatSurface pending switch effort", () => {
 		});
 		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "codex" });
 		await act(async () => {
-			useUiStore.setState({ developerMode: false });
+			useUiStore.setState({ developerMode: true });
 		});
-		expect(sideMocks.agentSwitch?.pending).toBeUndefined();
+		expect(sideMocks.agentSwitch?.pending).toEqual({ harness: "codex" });
 	});
 
 	it("sends nothing with a switch until the agent's permission modes are known", async () => {

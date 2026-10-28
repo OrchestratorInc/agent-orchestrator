@@ -1,3 +1,4 @@
+import type { ChatFileReference } from "../../shared/chat-file-reference";
 /**
  * Chat conversation view model.
  *
@@ -45,7 +46,8 @@ export type ActivityKind =
 	| "system"
 	| "mcp_tool"
 	| "auto_review"
-	| "user_input";
+	| "user_input"
+	| "ao_action";
 
 /**
  * `cancelled` means the enclosing turn stopped before the provider completed the
@@ -99,6 +101,8 @@ export interface PlanStep {
 export interface ConversationPlan {
 	explanation?: string;
 	steps: PlanStep[];
+	/** The agent keeps this list across turns (Claude's task list), so later turns carry copies of it. */
+	spansTurns?: boolean;
 }
 
 export interface ConversationUsageLimit {
@@ -160,6 +164,9 @@ export interface TurnDiff {
 
 /** Lightweight, durable prompt content retained when a human message is edited. */
 export interface ConversationContentSummary {
+	fileReference?: ChatFileReference;
+	annotationId?: string;
+	annotationOrder?: number;
 	type: string;
 	mimeType?: string;
 	uri?: string;
@@ -197,6 +204,8 @@ export interface ConversationMessage {
 	/** True while more deltas are expected. */
 	streaming: boolean;
 	delivery?: DeliveryState;
+	/** Set on a human message another participant in a shared session sent. */
+	authorName?: string;
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
 	senderSessionId?: string;
@@ -431,6 +440,25 @@ export interface ArtifactRef {
 }
 
 /**
+ * A daemon-confirmed AO mutation. `action` is the only classifier. Command
+ * text and tool prose never promote an attempt into one of these.
+ */
+export interface AOActionDetail {
+	action?: string;
+	operationId?: string;
+	sourceSessionId?: string;
+	targetSessionId?: string;
+	displayName?: string;
+	previousDisplayName?: string;
+	harness?: string;
+	previousHarness?: string;
+	href?: string;
+	prNumber?: number;
+	prTitle?: string;
+	error?: string;
+}
+
+/**
  * A `system` activity's discriminator and the fields that belong to it.
  *
  * The kind is a general bucket, so the daemon stamps the event rather than leaving
@@ -452,7 +480,9 @@ export interface SystemEventDetail {
 		| "artifact"
 		| "workspace.setup"
 		| "workspace.script.run"
-		| "account.switched";
+		| "account.switched"
+		/** A Cloud turn ran a weaker approval mode than it asked for, which its model does not offer; the summary says which. */
+		| "approval_mode.substituted";
 	/** workspace.script.run: one Setup or Cleanup run, grouped from its workspace.script.step events. */
 	scriptRun?: ScriptRun;
 	/** account.switched: the account a stopped turn's conversation continues on. */
@@ -616,7 +646,8 @@ export interface ConversationActivity {
 		AutoReviewDetail &
 		UserInputDetail &
 		SystemEventDetail &
-		PlanDetail;
+		PlanDetail &
+		AOActionDetail;
 	/**
 	 * The provider's identifier for an approval. Resolving matches on this, so a
 	 * card left on screen cannot answer a request that replaced it.
@@ -825,6 +856,7 @@ export interface McpServer {
 }
 
 export interface ConversationSnapshot {
+	supportsFileReferences?: boolean;
 	/** Backend-selected dispatched turn; an empty value means Continue is unavailable. */
 	continueTurnId?: string;
 	conversationId: string;

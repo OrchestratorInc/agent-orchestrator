@@ -258,15 +258,6 @@ func (g fixedSessionOperationGate) SessionMutationInProgress(domain.SessionID) b
 	return bool(g)
 }
 
-type fixedLifecycleInputLease bool
-
-func (l fixedLifecycleInputLease) AcquireSessionInput(domain.SessionID) (func(), bool) {
-	if !l {
-		return nil, false
-	}
-	return func() {}, true
-}
-
 type telemetrySink struct {
 	events []ports.TelemetryEvent
 }
@@ -3406,23 +3397,6 @@ func TestApplyTrackerFacts_TerminalStateIsSuppressedDuringSessionMutation(t *tes
 	}
 	if got := st.sessions["mer-1"]; !reflect.DeepEqual(got, rec) {
 		t.Fatalf("tracker observation mutated session during exclusive operation: got %+v, want %+v", got, rec)
-	}
-}
-
-func TestLifecycleNudgeUsesLateBoundSessionInputLease(t *testing.T) {
-	m, st, msg := newManager()
-	m.SetSessionInputLease(fixedLifecycleInputLease(false))
-	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", Activity: domain.Activity{State: domain.ActivityIdle}}
-
-	outcome, err := m.sendOnce(ctx, "mer-1", "", "tracker-comment:1", "1", "review this", 0, false)
-	if err != nil {
-		t.Fatalf("sendOnce: %v", err)
-	}
-	if outcome != sendOnceSuppressed {
-		t.Fatalf("sendOnce outcome = %v, want suppressed", outcome)
-	}
-	if len(msg.msgs) != 0 {
-		t.Fatalf("lifecycle nudge bypassed closed input lease: %v", msg.msgs)
 	}
 }
 

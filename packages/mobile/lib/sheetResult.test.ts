@@ -102,10 +102,13 @@ describe("route builders", () => {
 
 	it("builds the machine-name route and reports a nullable choice", () => {
 		const fn = vi.fn();
-		const route = machineNameSheetRoute({ suggested: "studio-mac", onSelect: fn });
+		const route = machineNameSheetRoute({ suggested: "studio-mac", appearance: { symbol: "laptop" }, hostId: "h_new", onSelect: fn });
 		expect(route.pathname).toBe("/sheets/machine-name");
 		expect(route.params.suggested).toBe("studio-mac");
-		takeSheetResult<string | null>(route.params.resultKey)?.("Studio");
-		expect(fn).toHaveBeenCalledWith("Studio");
+		expect(route.params.symbol).toBe("laptop");
+		expect(route.params.hostId).toBe("h_new");
+		const choice = { name: "Studio", appearance: { symbol: "desktop" as const } };
+		takeSheetResult<typeof choice | null>(route.params.resultKey)?.(choice);
+		expect(fn).toHaveBeenCalledWith(choice);
 	});
 });

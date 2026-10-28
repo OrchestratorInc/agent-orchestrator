@@ -54,10 +54,10 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.Use(middleware.RequestID)
 	r.Use(requestLogger(log, deps.Telemetry))
 	r.Use(recoverTelemetry(log, deps.Telemetry))
-	// Account-management routes do not inherit the general localhost preview
-	// exception. This guard must wrap corsMiddleware so hostile preflights are
-	// rejected before the general CORS layer can answer them.
+	// Credential routes retain their exact renderer-only boundary even for
+	// authenticated LAN callers. Check before CORS can answer a preflight.
 	r.Use(codexAccountOriginMiddleware(cfg.AllowedOrigins))
+	r.Use(mobileControlOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
 	r.Use(previewOriginMiddleware(api.sessions))
 
@@ -68,7 +68,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.MethodNotAllowed(methodNotAllowedJSON)
 
 	mountHealth(r, cfg)
-	mountTerminalMux(r, termMgr, log)
+	mountTerminalMux(r, termMgr, log, cfg.AllowedOrigins)
 	mountControl(r, control)
 	mountTelemetry(r, cfg, deps.Telemetry)
 	mountTelemetryIdentity(r, deps.TelemetryIdentity)
@@ -144,7 +144,8 @@ func mountControl(r chi.Router, deps ControlDeps) {
 // on the LAN listener instead, by lanControlBlock, which 404s /api/v1/mobile on
 // the 0.0.0.0 socket the phone reaches — a transport-based check that cannot be
 // spoofed with a forged Host header. On the loopback listener these routes are
-// protected by the same CORS allowlist as every other app route.
+// protected by mobileControlOriginMiddleware: exact renderer origins or native
+// requests without browser metadata, independent of general preview CORS.
 func mountMobile(r chi.Router, c *controllers.MobileController) {
 	if c == nil {
 		return
@@ -179,7 +180,6 @@ func mountMobileDevices(r chi.Router, c *controllers.MobileDevicesController) {
 		return
 	}
 	r.Get("/api/v1/mobile/devices", c.List)
-	r.Patch("/api/v1/mobile/devices/{installId}", c.Mute)
 	r.Delete("/api/v1/mobile/devices/{installId}", c.Remove)
 }
 
