@@ -21,7 +21,6 @@ vi.mock("./bridge", () => ({ aoBridge: { remotes: { computerName: async () => "M
 import { linkThisComputer } from "./link-this-computer";
 
 const link = (options?: { url?: string; ifListed?: boolean }) => linkThisComputer("https://cp.example.test", "user_01", "h_this", "pw", options);
-const others = (n: number) => Array.from({ length: n }, (_, i) => ({ hostId: `h_${i}` }));
 
 beforeEach(() => {
 	fake.directory = { hosts: [], fixedAddresses: true };
