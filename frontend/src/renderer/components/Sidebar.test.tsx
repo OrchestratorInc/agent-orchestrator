@@ -31,6 +31,7 @@ import { agentReadinessQueryKey } from "../hooks/useAgentReadinessQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import { useUiStore } from "../stores/ui-store";
+import { aoBridge } from "../lib/bridge";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
@@ -2365,6 +2366,27 @@ describe("Sidebar", () => {
 
 		expect(screen.getByRole("textbox", { name: "Rename fix login" })).toHaveFocus();
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("lists every open target in the editor row's submenu", async () => {
+		const user = userEvent.setup();
+		const open = vi.spyOn(aoBridge.editorHandoff, "open");
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+
+		fireEvent.contextMenu(screen.getByRole("button", { name: "Open fix login" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Open in Cursor" }));
+		const finder = await screen.findByRole("menuitem", { name: "Finder" });
+		const submenu = finder.closest('[role="menu"]');
+		if (!submenu) throw new Error("Editor submenu not found");
+		expect(within(submenu as HTMLElement).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+			"Cursor",
+			"Finder",
+			"Terminal",
+		]);
+		await user.click(finder);
+
+		await waitFor(() => expect(open).toHaveBeenCalledWith({ sessionId: "proj-1-1", targetId: "file-manager" }));
+		open.mockRestore();
 	});
 
 	it("asks before archiving from the session context menu", async () => {
