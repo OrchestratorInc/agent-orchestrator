@@ -225,8 +225,6 @@ export type WorkspaceSession = {
 	outputType?: SessionOutputType;
 	/** The deliverable requested at spawn; "artifact" for sessions started from Create artifact. */
 	requestedOutput?: "artifact";
-	/** The orchestrator that spawned this session; absent when a person created it. */
-	spawnedBy?: string;
 	/**
 	 * Files present in this session's artifact directory, when {@link outputType}
 	 * is `"artifact"`. Empty/absent for sessions whose output is a PR or nothing.
