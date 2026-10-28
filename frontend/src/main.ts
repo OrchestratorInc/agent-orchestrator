@@ -609,13 +609,12 @@ function annotatePreloadPath(): string {
 	return path.join(__dirname, "annotate-preload.js");
 }
 
-// Runtime window/taskbar icon for Linux and Windows. macOS ignores this and
-// uses the .app bundle's .icns instead. Packaged: shipped via extraResource to
-// resources/icon.png.
-// Unpackaged runs return undefined so the dev window keeps Electron's default
-// icon and never impersonates the installed app's taskbar/dock icon (#3642).
+// Runtime window/taskbar icon for Linux and Windows, and the macOS dock icon.
+// Packaged: shipped via extraResource to resources/icon.png. Unpackaged runs use
+// the orange "DEV" variant so they are recognisable and never impersonate the
+// installed app's taskbar/dock icon (#3642).
 function windowIconPath(): string | undefined {
-	if (!app.isPackaged) return undefined;
+	if (!app.isPackaged) return path.join(__dirname, "../../assets/icon-dev.png");
 	const iconFile = process.platform === "win32" ? "icon.ico" : "icon.png";
 	const candidate = path.join(process.resourcesPath, iconFile);
 	if (existsSync(candidate)) return candidate;
@@ -633,9 +632,6 @@ function writeClipboardImage(image: Electron.NativeImage): Promise<void> {
 
 function applyRuntimeAppIcon(): void {
 	if (process.platform !== "darwin") return;
-	// Unpackaged runs keep Electron's default dock icon so the dev window is
-	// visually distinct from the installed app (#3642).
-	if (!app.isPackaged) return;
 	const iconPath = windowIconPath();
 	if (!iconPath) return;
 	const icon = nativeImage.createFromPath(iconPath);
