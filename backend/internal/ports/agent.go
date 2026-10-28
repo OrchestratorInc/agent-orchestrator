@@ -839,6 +839,7 @@ const (
 	PermissionModeAcceptEdits       = domain.PermissionModeAcceptEdits
 	PermissionModeAuto              = domain.PermissionModeAuto
 	PermissionModeBypassPermissions = domain.PermissionModeBypassPermissions
+	PermissionModeDontAsk           = domain.PermissionModeDontAsk
 )
 
 // NormalizePermissionMode collapses an empty or unrecognized mode to

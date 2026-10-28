@@ -15,6 +15,9 @@ import (
 // session and terminal. The target starts a fresh native thread seeded with the
 // handoff note: native histories cannot be merged across harnesses.
 func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) error {
+	if err := m.refuseTestingSession(ctx, id); err != nil {
+		return err
+	}
 	target := request.TargetHarness
 	if err := m.beginAgentOperation(ctx, id, agentOperationProviderSwitch); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {

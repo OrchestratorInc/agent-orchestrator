@@ -231,6 +231,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newMCPCommand(ctx))
 	root.AddCommand(newBrowserCommand(ctx))
 	root.AddCommand(newBrowserHostCommand())
+	root.AddCommand(newTestingCommand(ctx))
 	root.AddCommand(newHooksCommand(ctx))
 	root.AddCommand(newAgentProcessCommand(ctx))
 	root.AddCommand(newChatHostCommand())

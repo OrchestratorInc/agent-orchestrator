@@ -162,6 +162,9 @@ func (m *Manager) StartInterfaceTransition(
 	policy domain.SessionInterfaceTransitionPolicy,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
 ) (domain.SessionInterfaceTransition, error) {
+	if err := m.refuseTestingSession(ctx, id); err != nil {
+		return domain.SessionInterfaceTransition{}, err
+	}
 	if !target.Valid() {
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("target mode %q is invalid", target)
 	}
@@ -955,7 +958,7 @@ func (m *Manager) preflightTerminalLaunch(
 	var cmd []string
 	if nativeConversationID == "" {
 		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
-			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "")
+			rec.Metadata, systemPrompt, "", config, rec.Kind, rec.Harness, m.dataDir, true, "")
 	} else {
 		var resumable bool
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{

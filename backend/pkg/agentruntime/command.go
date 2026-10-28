@@ -29,6 +29,7 @@ type PermissionPolicy string
 // Provider-neutral permission policies.
 const (
 	PermissionDefault           PermissionPolicy = "default"
+	PermissionDontAsk           PermissionPolicy = "dontAsk"
 	PermissionAcceptEdits       PermissionPolicy = "accept-edits"
 	PermissionAuto              PermissionPolicy = "auto"
 	PermissionBypassPermissions PermissionPolicy = "bypass-permissions"
@@ -160,7 +161,7 @@ func ClaudeSessionID(sessionID string) string {
 // provider's established default behavior.
 func NormalizePermissionPolicy(policy PermissionPolicy) PermissionPolicy {
 	switch policy {
-	case PermissionDefault, PermissionAcceptEdits, PermissionAuto, PermissionBypassPermissions:
+	case PermissionDefault, PermissionDontAsk, PermissionAcceptEdits, PermissionAuto, PermissionBypassPermissions:
 		return policy
 	default:
 		return PermissionDefault
@@ -184,6 +185,8 @@ func PermissionPolicyForMode(mode SessionMode) PermissionPolicy {
 // ClaudePermissionArgs maps AO policy onto Claude Code flags.
 func ClaudePermissionArgs(policy PermissionPolicy) []string {
 	switch NormalizePermissionPolicy(policy) {
+	case PermissionDontAsk:
+		return []string{"--permission-mode", "dontAsk"}
 	case PermissionAcceptEdits:
 		return []string{"--permission-mode", "acceptEdits"}
 	case PermissionAuto:

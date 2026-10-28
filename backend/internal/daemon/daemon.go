@@ -45,6 +45,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/notify"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
@@ -755,6 +756,71 @@ func Run(buildVersion string) error {
 		browserService.UseChrome(chrome.broker, chrome.targets, log)
 		browserChrome = chrome
 	}
+	// The one way a tester is stopped, for the deadline sweep and for a run that has closed.
+	// Any session can open a run, so only a tester (one working in its run dir) is stopped.
+	killTester := func(ctx context.Context, sessionID string) error {
+		rec, found, err := store.GetSession(ctx, domain.SessionID(sessionID))
+		if err != nil || !found || !litmus.IsRunDir(cfg.DataDir, rec.Metadata.WorkspacePath) {
+			return err
+		}
+		_, err = sessMgr.Kill(ctx, domain.SessionID(sessionID))
+		return err
+	}
+	testingService := litmus.New(litmus.NewStore(cfg.DataDir), nil).WithBrowserBinary(os.Getenv("AO_AGENT_BROWSER_PATH")).WithRepos(litmus.NewRepoResolver(func(ctx context.Context) ([]litmus.Registered, error) {
+		projects, err := projectSvc.List(ctx) // the registered projects' checkouts and the remotes they are known by
+		if err != nil {
+			return nil, err
+		}
+		var out []litmus.Registered
+		for _, summary := range projects {
+			if got, err := projectSvc.Get(ctx, summary.ID); err == nil && got.Project != nil && !got.Project.FolderMissing {
+				reg := litmus.Registered{Path: got.Project.Path, URLs: []string{got.Project.Repo}}
+				if got.Project.Config != nil {
+					reg.URLs = append(reg.URLs, got.Project.Config.CanonicalRepoURL)
+				}
+				out = append(out, reg)
+			}
+		}
+		return out, nil
+	})).WithProjectRepo(func(ctx context.Context, projectID string) string {
+		got, err := projectSvc.Get(ctx, domain.ProjectID(projectID))
+		if err != nil || got.Project == nil {
+			return ""
+		}
+		repo := litmus.RepoSlug(got.Project.Repo)
+		if repo == "" && got.Project.Config != nil {
+			repo = litmus.RepoSlug(got.Project.Config.CanonicalRepoURL)
+		}
+		return repo
+	}).WithProjectHarness(func(ctx context.Context, projectID string) string {
+		got, err := projectSvc.Get(ctx, domain.ProjectID(projectID))
+		if err != nil || got.Project == nil || got.Project.Config == nil {
+			return ""
+		}
+		return string(got.Project.Config.Worker.Harness)
+	}).WithReporter(func(ctx context.Context, sessionID, note string) error {
+		_, err := reportSvc.Create(ctx, reportsvc.CreateInput{SessionID: domain.SessionID(sessionID), State: domain.ReportDone, Note: note})
+		return err
+	}).WithSpawner(func(ctx context.Context, req litmus.SpawnRequest) (string, error) {
+		// A tui worker in its run dir; the ctx marker is what gives it the testing profile.
+		sess, _, _, err := sessionSvc.Spawn(sessionmanager.WithTestingProfile(ctx), ports.SpawnConfig{
+			ProjectID:     domain.ProjectID(req.ProjectID),
+			Kind:          domain.KindWorker,
+			Harness:       domain.AgentHarness(req.Harness),
+			RequestedMode: domain.SessionModeTUI,
+			DisplayName:   req.Name,
+			Prompt:        req.Prompt,
+		})
+		return string(sess.ID), err
+	}).WithKiller(killTester).WithActivity(func(ctx context.Context, sessionID string) (string, time.Time, bool) {
+		rec, found, err := store.GetSession(ctx, domain.SessionID(sessionID))
+		if err != nil || !found {
+			return "", time.Time{}, false
+		}
+		return string(rec.Activity.State), rec.Activity.LastActivityAt, true
+	})
+	litmus.SweepStale(cfg.DataDir, log) // stop targets a previous daemon left running
+
 	browserLive := httpd.NewBrowserLiveHub(browserStreamBroker, sessionSvc, func() bool {
 		state, err := mobilebridge.Load(bs.ConfigPath)
 		return err == nil && state.Enabled && state.BrowserRemoteAccess
@@ -1057,6 +1123,7 @@ func Run(buildVersion string) error {
 		}),
 		Browser:                  browserService,
 		BrowserChrome:            browserChrome,
+		Testing:                  testingService,
 		LinkPreview:              linkpreviewsvc.New(nil),
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,
@@ -1230,6 +1297,19 @@ func Run(buildVersion string) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
+				}
+			}
+		}()
+		go func() {
+			ticker := time.NewTicker(litmus.SweepInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					testingService.SweepExpired(ctx, killTester, log)
+					go testingService.SweepMirrors(ctx, log)
 				}
 			}
 		}()

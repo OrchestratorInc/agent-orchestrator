@@ -3947,3 +3947,55 @@ type SwitchSessionAgentAccountRequest struct {
 	// account's limit. Otherwise the move waits for the turn to finish.
 	StopTurn bool `json:"stopTurn,omitempty"`
 }
+
+// TestingStatusQuery is the query of GET /api/v1/testing/status.
+type TestingStatusQuery struct {
+	SessionID string `query:"sessionId" required:"true" description:"The testing worker's AO session id."`
+}
+
+// TestingRunsQuery is the query of GET /api/v1/testing/runs.
+type TestingRunsQuery struct {
+	ProjectID string `query:"projectId,omitempty" description:"Only runs of this AO project (runs started before projects were recorded are listed for every project). Omit for all runs."`
+	Limit     *int   `query:"limit,omitempty" minimum:"1" maximum:"200" description:"Maximum runs to return, newest first. Defaults to 50."`
+}
+
+// TestingRunIDParam is the {id} path parameter of the run routes.
+type TestingRunIDParam struct {
+	ID string `path:"id" description:"Run id, e.g. run_ao-25."`
+}
+
+// TestingProjectIDParam is the {id} path parameter of the project settings routes.
+type TestingProjectIDParam struct {
+	ID string `path:"id" description:"AO project id."`
+}
+
+// UpdateTestingProjectSettingsRequest replaces a project's Litmus settings.
+type UpdateTestingProjectSettingsRequest struct {
+	SessionID        string `json:"sessionId,omitempty" description:"The calling session. Settings changes need no session and refuse Litmus testers."`
+	AskBeforePosting bool   `json:"askBeforePosting" description:"When on, a finished run writes its comment and waits for approval instead of posting it."`
+	Harness          string `json:"harness,omitempty" description:"Agent the project's testers run on: claude-code or codex. Empty uses the project's worker agent, then claude-code." enum:"claude-code,codex"`
+	Model            string `json:"model,omitempty" description:"Model the project's testers run on. Empty uses the project's worker model, then the Litmus default."`
+	Effort           string `json:"effort,omitempty" description:"Reasoning effort the project's testers run at. Empty uses the project's worker effort, then the Litmus default."`
+}
+
+// TestingRequest is the body of every POST /api/v1/testing verb; each verb reads
+// only the fields it needs. SessionID attributes the call to the worker's run.
+// User verbs need no session and refuse Litmus testers.
+type TestingRequest struct {
+	SessionID     string   `json:"sessionId,omitempty" description:"The calling session. User verbs start, post, discard, recipe validate and prune need no session and refuse Litmus testers."`
+	ProjectID     string   `json:"projectId,omitempty" description:"start: the project the worker runs in."`
+	Harness       string   `json:"harness,omitempty"`
+	PRURL         string   `json:"prUrl,omitempty" description:"PR or explicit issue URL."`
+	CandidateURL  string   `json:"candidateUrl,omitempty" description:"start only: candidate PR in the issue repository."`
+	Path          *string  `json:"path,omitempty" description:"recipe validate: recipe file; omit or null selects the stored or embedded AO recipe. An empty string is invalid."`
+	SHA           string   `json:"sha,omitempty" description:"recipe validate: optional commit SHA to prepare, launch, seed and clean up. Omit to parse and validate only."`
+	Leg           string   `json:"leg,omitempty" enum:"base,head,main"`
+	VerdictPath   string   `json:"verdictPath,omitempty" description:"submit: tester-written JSON file in this run's scratch directory."`
+	Action        string   `json:"action,omitempty"`
+	Args          []string `json:"args,omitempty" description:"drive: the action's arguments."`
+	NoComment     bool     `json:"noComment,omitempty" description:"start only: the run's verdict is written to comment.md but not posted to the pull request."`
+	NoEvidence    bool     `json:"noEvidence,omitempty" description:"start only: no screenshots or GIFs are published to the repo's litmus/evidence branch for the comment."`
+	KeepRuns      *int     `json:"keepRuns,omitempty" minimum:"0" description:"prune only: finished run dirs to keep besides unfinished ones (default 20)."`
+	KeepCheckouts *int     `json:"keepCheckouts,omitempty" minimum:"0" description:"prune only: most recent finished runs whose checkouts are kept besides those of unfinished runs (default 2)."`
+	DryRun        bool     `json:"dryRun,omitempty" description:"prune only: report what would be deleted and delete nothing."`
+}
