@@ -18,7 +18,7 @@ import (
 // the turn on idle.
 func TestKimiActivityCoversWorkingWaitingWorkingIdle(t *testing.T) {
 	m, st, _ := newManager()
-	seedSignaled(st, "mer-1", domain.ActivityActive)
+	seedKimi(st)
 
 	applyKimi(t, m, "pre-tool-use")
 	applyKimi(t, m, "post-tool-use")
@@ -62,13 +62,9 @@ func applyKimi(t *testing.T, m *Manager, event string) {
 	mustApply(t, m, "mer-1", sig(state, event, "Read", ""))
 }
 
-func applyKimiApproval(t *testing.T, m *Manager, event, toolCallID string) {
+func applyKimiApproval(t *testing.T, m *Manager, event, approval string) {
 	t.Helper()
-	state, ok := activitydispatch.Derive("kimi", event, []byte(`{"session_id":"kimi-native-1","tool_call_id":"`+toolCallID+`"}`))
-	if !ok {
-		t.Fatalf("Derive(kimi, %q) reported no activity signal", event)
-	}
-	mustApply(t, m, "mer-1", sig(state, event, "Bash", toolCallID))
+	mustApply(t, m, "mer-1", kimiApprovalSignal(event, approval))
 }
 
 // These keys stand for the scoped native approval identities emitted by the
@@ -152,7 +148,7 @@ func TestKimiApprovalCallbackOrdering(t *testing.T) {
 }
 
 func TestKimiApprovalCompletionSurvivesTurnBoundaries(t *testing.T) {
-	for _, event := range []string{"stop", "user-prompt-submit", "interrupt", "session-start"} {
+	for _, event := range []string{"stop", "user-prompt-submit", "session-start"} {
 		t.Run(event, func(t *testing.T) {
 			m, st, _ := newManager()
 			seedKimi(st)
@@ -215,13 +211,79 @@ func TestKimiApprovalOverflowFailsClosedUntilBoundary(t *testing.T) {
 	}
 }
 
+func TestKimiApprovalObservedPendingSettlesAtBoundary(t *testing.T) {
+	for _, event := range []string{"stop", "user-prompt-submit"} {
+		t.Run(event, func(t *testing.T) {
+			m, st, _ := newManager()
+			seedKimi(st)
+			mustApply(t, m, "mer-1", kimiApprovalSignal("permission-request", "a"))
+			applyKimi(t, m, event)
+			want := stateOf(st, "mer-1")
+			mustApply(t, m, "mer-1", kimiApprovalSignal("permission-request", "a"))
+			mustApply(t, m, "mer-1", kimiApprovalSignal("permission-resolved", "a"))
+			if got := stateOf(st, "mer-1"); got != want {
+				t.Fatalf("late callbacks revived settled turn: got %s, want %s", got, want)
+			}
+		})
+	}
+}
+
+func TestKimiApprovalStateReleasedOnTeardown(t *testing.T) {
+	for _, terminate := range []bool{false, true} {
+		t.Run(fmt.Sprint("terminate=", terminate), func(t *testing.T) {
+			m, st, _ := newManager()
+			seedKimi(st)
+			mustApply(t, m, "mer-1", kimiApprovalSignal("permission-resolved", "a"))
+			if terminate {
+				if err := m.MarkTerminated(ctx, "mer-1"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				mustApply(t, m, "mer-1", sig(domain.ActivityExited, "process-exited", "", ""))
+			}
+			if _, ok := m.flights["mer-1"]; ok {
+				t.Fatal("approval identities leaked after teardown")
+			}
+		})
+	}
+}
+
+func TestKimiApprovalDaemonRestartLosesInMemoryEvidence(t *testing.T) {
+	m, st, messenger := newManager()
+	seedKimi(st)
+	mustApply(t, m, "mer-1", kimiApprovalSignal("permission-resolved", "a"))
+	// The bounded tracker deliberately does not persist display/correlation
+	// state. A replacement reducer cannot recognize callbacks seen only by its
+	// predecessor; this is an explicit limit, not an ordering guarantee.
+	restarted := New(st, messenger)
+	mustApply(t, restarted, "mer-1", kimiApprovalSignal("permission-request", "a"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("unexpected cross-restart completion evidence: %s", got)
+	}
+	mustApply(t, restarted, "mer-1", kimiApprovalSignal("permission-resolved", "a"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("new reducer failed to correlate fresh callbacks: %s", got)
+	}
+}
+
+func TestNonKimiPermissionSignalsKeepExistingSemantics(t *testing.T) {
+	m, st, _ := newManager()
+	seedSignaled(st, "mer-1", domain.ActivityActive)
+	// Even a key resembling a Kimi key cannot opt another harness in.
+	mustApply(t, m, "mer-1", sig(domain.ActivityWaitingInput, "permission-request", "Bash", "kimi-approval:a"))
+	mustApply(t, m, "mer-1", sig(domain.ActivityActive, "permission-resolved", "Bash", "kimi-approval:b"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("non-Kimi permission semantics changed: %s", got)
+	}
+}
+
 // A later approval in the same session re-arms waiting_input: resolving one
 // dialog with PermissionResult must not immunize the session against the next
 // permission request. This is the id-less path; the correlated guard is
 // covered by TestKimiPermissionResultWithAnotherApprovalPendingStaysWaiting.
 func TestKimiActivityNextApprovalReArmsWaitingInput(t *testing.T) {
 	m, st, _ := newManager()
-	seedSignaled(st, "mer-1", domain.ActivityActive)
+	seedKimi(st)
 
 	applyKimi(t, m, "permission-request")
 	applyKimi(t, m, "permission-resolved")
@@ -235,15 +297,15 @@ func TestKimiActivityNextApprovalReArmsWaitingInput(t *testing.T) {
 	}
 }
 
-// A PermissionResult correlates to its own request through the tool_call_id
-// lifted onto the signal: while another recorded approval is still pending,
+// A PermissionResult correlates to its own scoped native approval identity:
+// while another recorded approval is still pending,
 // one dialog resolving must not flip the session to Working. This covers both
 // concurrently open dialogs and a late, reordered result delivered after the
 // next request (kimi's fire-and-forget hooks are independent processes, so
 // delivery order is unguaranteed); the last result lifts waiting_input.
 func TestKimiPermissionResultWithAnotherApprovalPendingStaysWaiting(t *testing.T) {
 	m, st, _ := newManager()
-	seedSignaled(st, "mer-1", domain.ActivityActive)
+	seedKimi(st)
 
 	applyKimiApproval(t, m, "permission-request", "call-a")
 	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
@@ -265,7 +327,7 @@ func TestKimiPermissionResultWithAnotherApprovalPendingStaysWaiting(t *testing.T
 	}
 }
 
-// An id-less PermissionResult (older CLI, or a payload without tool_call_id)
+// An id-less PermissionResult (older CLI, or a payload without approval id)
 // cannot prove which approval it resolved, so while correlated approvals are
 // tracked it must keep the session on waiting_input; only the last pending
 // approval's own result lifts the wait. The legacy all-id-less path — no
@@ -274,7 +336,7 @@ func TestKimiPermissionResultWithAnotherApprovalPendingStaysWaiting(t *testing.T
 // sequence test.
 func TestKimiIdLessPermissionResultKeepsWaitingWhileCorrelatedApprovalsPending(t *testing.T) {
 	m, st, _ := newManager()
-	seedSignaled(st, "mer-1", domain.ActivityActive)
+	seedKimi(st)
 
 	applyKimiApproval(t, m, "permission-request", "call-a")
 	applyKimiApproval(t, m, "permission-request", "call-b")

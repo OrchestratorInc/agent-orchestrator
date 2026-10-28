@@ -918,7 +918,7 @@ retryProjection:
 		checkpointChanged || subagentFacts != storedSubagentFacts
 	toolFlightBeforeProjection := cloneToolFlight(m.flights[id])
 	if s.Valid {
-		s = m.applyToolPrecedenceLocked(id, rec.Activity.State, s)
+		s = m.applyToolPrecedenceLocked(id, rec.Harness, rec.Activity.State, s)
 	}
 	if !s.Valid && !metadataChanged {
 		m.mu.Unlock()
@@ -1078,9 +1078,8 @@ retryProjection:
 // post-tool-use is the earliest observable "the decision was resolved"
 // signal; but tool hooks also fire for parallel subagents on the same
 // session, whose traffic must never clear a dialog that is still on screen.
-// In-memory only: a daemon restart loses it and the session degrades to
-// clearing at the next turn boundary — fail-safe staleness, never a spurious
-// clear.
+// In-memory only: a daemon restart loses correlation evidence. Provider-specific
+// compatibility paths and the limits of Kimi's bounded cache are documented below.
 type toolFlight struct {
 	// inflight maps toolUseID -> toolName for pre-tool-use signals whose post
 	// has not arrived yet.
@@ -1098,15 +1097,14 @@ type toolFlight struct {
 	// after-execution event can clear only its own key, and the session remains
 	// blocked until every observed dialog has completed.
 	cursorPending map[string]int
-	// permissionPending records, by lifted tool-use id, the permission
-	// requests whose result has not arrived yet (kimi's PermissionRequest and
-	// PermissionResult both carry the approval's tool_call_id). A correlated
-	// result clears only its own entry, so waiting_input lifts only when the
-	// last pending approval resolves — another dialog still on screen, or a
-	// late result delivered after the next request, keeps the session waiting.
-	// Id-less installs never populate it and keep the unconditional
-	// turn-boundary clear.
-	permissionPending map[string]struct{}
+	// kimiApprovals retains pending (false) and completed (true) native approval
+	// identities. Completion must survive an empty pending set and turn boundaries
+	// because Kimi's independent hook processes may deliver a result first.
+	// kimiApprovalOrder is FIFO by first observation; duplicates never refresh it.
+	// See kimi_approvals.go for the bound, overflow and cleanup contract.
+	kimiApprovals        map[string]bool
+	kimiApprovalOrder    []string
+	kimiApprovalOverflow bool
 }
 
 func cloneToolFlight(flight *toolFlight) *toolFlight {
@@ -1114,10 +1112,12 @@ func cloneToolFlight(flight *toolFlight) *toolFlight {
 		return nil
 	}
 	clone := &toolFlight{
-		inflight:          make(map[string]string, len(flight.inflight)),
-		blockedCandidate:  flight.blockedCandidate,
-		cursorPending:     make(map[string]int, len(flight.cursorPending)),
-		permissionPending: make(map[string]struct{}, len(flight.permissionPending)),
+		inflight:             make(map[string]string, len(flight.inflight)),
+		blockedCandidate:     flight.blockedCandidate,
+		cursorPending:        make(map[string]int, len(flight.cursorPending)),
+		kimiApprovals:        make(map[string]bool, len(flight.kimiApprovals)),
+		kimiApprovalOrder:    append([]string(nil), flight.kimiApprovalOrder...),
+		kimiApprovalOverflow: flight.kimiApprovalOverflow,
 	}
 	for id, name := range flight.inflight {
 		clone.inflight[id] = name
@@ -1125,8 +1125,8 @@ func cloneToolFlight(flight *toolFlight) *toolFlight {
 	for key, count := range flight.cursorPending {
 		clone.cursorPending[key] = count
 	}
-	for id := range flight.permissionPending {
-		clone.permissionPending[id] = struct{}{}
+	for id, completed := range flight.kimiApprovals {
+		clone.kimiApprovals[id] = completed
 	}
 	return clone
 }
@@ -1204,7 +1204,7 @@ func isTurnBoundaryEvent(event string) bool {
 // Event pass through untouched — the compatibility contract for old CLIs and
 // for adapters that don't tag their signals (their last-writer-wins semantics
 // are pinned by tests). Caller must hold m.mu.
-func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.ActivityState, s ports.ActivitySignal) ports.ActivitySignal {
+func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, harness domain.AgentHarness, cur domain.ActivityState, s ports.ActivitySignal) ports.ActivitySignal {
 	if s.Event == "" {
 		return s
 	}
@@ -1218,6 +1218,20 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 			m.flights[id] = fl
 		}
 		return fl
+	}
+	if harness == domain.HarnessKimi {
+		if s.Event == "permission-request" || s.Event == "permission-resolved" {
+			return ensure().applyKimiApproval(s)
+		}
+		if isTurnBoundaryEvent(s.Event) && fl != nil {
+			// Settle observed requests, but keep completion evidence so delayed
+			// callbacks cannot re-arm a wait or revive a finished turn.
+			fl.settleKimiApprovals()
+			fl.inflight = map[string]string{}
+			fl.blockedCandidate = ""
+			fl.cursorPending = nil
+			return s
+		}
 	}
 
 	// Tracking side effects happen regardless of what the state decision is.
@@ -1233,14 +1247,6 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 	case "post-tool-use", "post-tool-use-failure", "post-tool-use-fail":
 		if fl != nil {
 			delete(fl.inflight, s.ToolUseID)
-		}
-	case "permission-request":
-		if s.ToolUseID != "" {
-			f := ensure()
-			if f.permissionPending == nil {
-				f.permissionPending = map[string]struct{}{}
-			}
-			f.permissionPending[s.ToolUseID] = struct{}{}
 		}
 	}
 
@@ -1342,25 +1348,6 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 		// waiting_input: background tool traffic must not clear the "waiting
 		// on the user" marker; only an explicit user/turn signal does.
 		return suppressed
-
-	case s.Event == "permission-resolved":
-		// A correlated result resolves only its own approval: while another
-		// recorded request is still pending — a concurrent dialog, or a late
-		// result reordered after the next request — the session stays on
-		// waiting_input instead of flipping to Working prematurely. An
-		// id-less result cannot prove WHICH approval it resolved, so it must
-		// not clear the wait either while tracked approvals remain. The
-		// unconditional turn-boundary clear survives only when no correlated
-		// requests are tracked (old CLI, restarted daemon, id-less adapters
-		// such as cline).
-		if s.ToolUseID != "" && fl != nil {
-			delete(fl.permissionPending, s.ToolUseID)
-		}
-		if fl != nil && len(fl.permissionPending) > 0 {
-			return suppressed
-		}
-		delete(m.flights, id)
-		return s
 
 	default:
 		if isTurnBoundaryEvent(s.Event) {

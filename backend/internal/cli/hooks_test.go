@@ -1605,6 +1605,24 @@ func TestActivityMetaDoesNotLiftOtherAgentsToolCallID(t *testing.T) {
 	}
 }
 
+func TestKimiApprovalIncompleteIdentityUsesCompatibilityPath(t *testing.T) {
+	for _, payload := range []string{
+		`{}`, `not json`,
+		`{"session_id":"s","agent_id":"main","turn_id":1}`,
+		`{"id":"a","agent_id":"main","turn_id":1}`,
+		`{"id":"a","session_id":"s","turn_id":1}`,
+		`{"id":"a","session_id":"s","agent_id":"main"}`,
+		`{"id":"a","session_id":"s","agent_id":"main","turn_id":-1}`,
+		`{"id":"a","session_id":"s","agent_id":"main","turn_id":1.5}`,
+		`{"id":"a\u0000b","session_id":"s","agent_id":"main","turn_id":1}`,
+		`{"id":"` + strings.Repeat("a", 257) + `","session_id":"s","agent_id":"main","turn_id":1}`,
+	} {
+		if id := kimiApprovalID([]byte(payload)); id != "" {
+			t.Fatalf("incomplete identity produced correlation %q for %s", id, payload)
+		}
+	}
+}
+
 func TestHooks_RegisteredHarnessSessionStartReportsAgentSessionID(t *testing.T) {
 	// Command Code is the one harness here whose SessionStart carries metadata
 	// only: it also fires on resume and clear, and a native restore delivers no
