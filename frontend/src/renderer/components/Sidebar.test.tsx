@@ -2383,7 +2383,9 @@ describe("Sidebar", () => {
 			"Finder",
 			"Terminal",
 		]);
-		await user.click(finder);
+		// A synthetic pointer path from the trigger to the item can close the submenu
+		// in jsdom (no layout for Radix's pointer-grace area), so select directly.
+		fireEvent.click(finder);
 
 		await waitFor(() => expect(open).toHaveBeenCalledWith({ sessionId: "proj-1-1", targetId: "file-manager" }));
 		open.mockRestore();
