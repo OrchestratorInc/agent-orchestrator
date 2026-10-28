@@ -605,14 +605,6 @@ function useSelection() {
 	}), [goArtifacts, goAutomations, goConnectMobile, goGlobalSettings, goHome, goProject, goSession, goSettings, goStandaloneBoard, params.hostId, params.projectId, params.sessionId, pathname]);
 }
 
-// A project keeps every session a person created. Ones an orchestrator spawned
-// show only while working or in another board column; once idle or exited they
-// leave for the board.
-function isListedInSidebar(session: WorkspaceSession): boolean {
-	if (session.isTerminated === true) return false;
-	return !session.spawnedBy || isAgentActivityWorking(session.activity) || getSessionRowMarker(session) !== null;
-}
-
 // Sessions that need the user sit above the rest. Stable, so the manual order
 // (and the default recency order) still holds within each group.
 function floatAttention(sessions: WorkspaceSession[]): WorkspaceSession[] {

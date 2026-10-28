@@ -139,7 +139,6 @@ export function toWorkspaceSession(
 		prs: (session.prs ?? []).map(toPullRequestFacts),
 		outputType: session.outputType,
 		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
-		...(session.spawnedBy ? { spawnedBy: session.spawnedBy } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
@@ -244,7 +243,6 @@ function toLocalWorkspaceSession(
 		prs: (session.prs ?? []).map(toPullRequestFacts),
 		outputType: session.outputType,
 		...(session.requestedOutput ? { requestedOutput: session.requestedOutput } : {}),
-		...(session.spawnedBy ? { spawnedBy: session.spawnedBy } : {}),
 		artifactFiles: session.artifactFiles?.map(toSessionArtifact),
 	};
 }
