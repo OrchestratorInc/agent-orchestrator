@@ -164,7 +164,7 @@ const EMPTY_PROFILE_STATE: BrowserProfileViewState = {
 	temporary: true,
 };
 
-type PreviewTrigger = { revision: number | null; target: string; origin: string };
+type PreviewTrigger = { revision: number | null; target: string; origin: string; sessionEnded: boolean };
 
 // The native view survives React session switches, so remember which preview
 // trigger was already consumed for each session. This prevents switching back
@@ -470,9 +470,6 @@ export function useBrowserView({
 		// Preview revisions are scoped to a session. A native view survives session
 		// switches, so seed from the per-session consumed trigger to avoid
 		// reasserting previewUrl over manual navigation on switch-back.
-		// A termination transition follows daemon browser teardown. Reopen durable
-		// artifacts in a fresh target instead of retaining the destroyed view id.
-		if (sessionEnded) consumedPreviewTriggers.delete(sessionId);
 		previewTriggerRef.current = hasNativeBrowser ? (consumedPreviewTriggers.get(sessionId) ?? null) : null;
 		setStateSessionId(sessionId);
 		setViewId("");
@@ -1107,9 +1104,12 @@ export function useBrowserView({
 		const source = origin ? `${origin.hostId}:${origin.sessionId}:${origin.proxyBase}` : "local";
 		const revision = typeof previewRevision === "number" ? previewRevision : null;
 		const previous = previewTriggerRef.current;
-		if (previous?.revision === revision && previous.target === target && previous.origin === source) return;
-		if (revision !== null && previous?.revision === revision && previous.origin === source) return;
-		const consumed: PreviewTrigger = { revision, target, origin: source };
+		// Reassert once after daemon teardown, but preserve manual navigation when
+		// revisiting an already-ended artifact session.
+		const sameLifecycle = previous?.sessionEnded === Boolean(sessionEnded);
+		if (sameLifecycle && previous?.revision === revision && previous.target === target && previous.origin === source) return;
+		if (sameLifecycle && revision !== null && previous?.revision === revision && previous.origin === source) return;
+		const consumed: PreviewTrigger = { revision, target, origin: source, sessionEnded: Boolean(sessionEnded) };
 		previewTriggerRef.current = consumed;
 		if (hasNativeBrowser) consumedPreviewTriggers.set(sessionId, consumed);
 		if (target) {
@@ -1125,7 +1125,7 @@ export function useBrowserView({
 			void clear();
 		}
 		return undefined;
-	}, [clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionId, showPreview, terminated, viewId]);
+	}, [clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionEnded, sessionId, showPreview, terminated, viewId]);
 
 	const destroy = useCallback(() => {
 		const id = viewIdRef.current;

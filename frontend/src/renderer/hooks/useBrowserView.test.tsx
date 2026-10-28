@@ -2010,6 +2010,21 @@ describe("useBrowserView", () => {
 		expect(bridge.destroy).not.toHaveBeenCalled();
 	});
 
+	it("preserves manual navigation when revisiting an already-ended artifact session", async () => {
+		const bridge = setupBridge();
+		const options = {
+			sessionId: "sess-1", active: true, poppedOut: false, terminated: false, sessionEnded: true,
+			previewUrl: "http://ao-preview-artifact.onwxg.localhost:3300/report.html", previewRevision: 1,
+		};
+		const first = renderHook(() => useBrowserView(options));
+		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(1));
+		await act(() => first.result.current.navigate("https://example.com/manual"));
+		first.unmount();
+		const second = renderHook(() => useBrowserView(options));
+		await waitFor(() => expect(second.result.current.viewId).toBe("42:sess-1"));
+		expect(bridge.navigate).toHaveBeenCalledTimes(2);
+	});
+
 	it("does not create a browser for an already terminated session", () => {
 		const bridge = setupBridge();
 		const { result } = renderHook(() => useBrowserView({
