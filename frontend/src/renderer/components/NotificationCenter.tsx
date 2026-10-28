@@ -25,6 +25,7 @@ import {
 	useNotificationsQuery,
 } from "../hooks/useNotificationsQuery";
 import { useRestoreSession } from "../hooks/useRestoreSession";
+import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import type { WorkspaceSummary } from "../types/workspace";
 import { aoBridge } from "../lib/bridge";
@@ -785,7 +786,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						<>
 						<div
 						aria-busy={allQuery.isFetchingNextPage || remoteLoadingEarlierHost !== null}
-						className="board-scrollbar min-h-0 max-h-notification-max-height overflow-y-auto overscroll-contain"
+						className="board-scrollbar min-h-0 max-h-notification-max-height overflow-x-hidden overflow-y-auto overscroll-contain"
 						onScroll={loadEarlierOnScroll}
 						role="list"
 					>
@@ -967,8 +968,10 @@ const NotificationItem = memo(function NotificationItem({
 	const openRow = () => {
 		if (canOpenSession) onOpenSession(notification);
 	};
+	const rowRef = useRef<HTMLDivElement>(null);
+	useSwipeToDismiss(rowRef, () => onClear(notification), !clearDisabled);
 	return (
-		<div className="border-b border-border last:border-b-0" role="listitem">
+		<div ref={rowRef} className="touch-pan-y select-none border-b border-border last:border-b-0" role="listitem">
 			<div
 				className={cn(
 					"group grid grid-cols-[1rem_minmax(0,1fr)_auto] items-start gap-x-2.5 pl-3.5 pr-3 py-3 text-left transition-none hover:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",
@@ -1156,8 +1159,10 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 	const openRow = () => {
 		if (canOpenSession && projectId) onOpenSession(projectId, sessionId);
 	};
+	const rowRef = useRef<HTMLDivElement>(null);
+	useSwipeToDismiss(rowRef, () => onClear(notification), !clearDisabled);
 	return (
-		<div className="border-b border-border last:border-b-0" data-notification-source="cloud" role="listitem">
+		<div ref={rowRef} className="touch-pan-y select-none border-b border-border last:border-b-0" data-notification-source="cloud" role="listitem">
 			<div
 				className={cn(
 					"group grid grid-cols-[1rem_minmax(0,1fr)_auto] items-start gap-x-2.5 pl-3.5 pr-3 py-3 text-left transition-none hover:bg-interactive-active focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60",

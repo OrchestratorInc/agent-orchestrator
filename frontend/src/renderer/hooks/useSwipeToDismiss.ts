@@ -12,10 +12,20 @@ const AXIS_DECIDE_PX = 8;
 const DISMISS_FRACTION = 0.35;
 // Pixels per wheel event (or per 16ms of pointer travel) that count as a flick.
 const FLICK_SPEED_PX = 12;
+// Chromium holds the scroll end until momentum finishes, which can take a
+// second after a fast swipe. Momentum shows up as steadily shrinking deltas, so
+// a fast swipe that then decays this many events in a row has been released.
+const MOMENTUM_DECAY_EVENTS = 4;
 const OUT_MS = 160;
 const FADE_MS = 120;
 const CLOSE_MS = 180;
 const BACK_MS = 200;
+
+// Set once a swipe is released into momentum and dismissed early. Shared by
+// every swipeable element so the rest of that scroll does not swipe away the
+// next one that slides under the pointer.
+let scrollSpent = false;
+let scrollSpentTimer: number | undefined;
 
 function prefersReducedMotion(): boolean {
 	return typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -69,6 +79,9 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 		let sumY = 0;
 		let offset = 0;
 		let speed = 0;
+		let lastSpeed = 0;
+		let decayFrom = 0;
+		let decay = 0;
 		let idleTimer: number | undefined;
 		let outTimer: number | undefined;
 		let nativePhases = false;
@@ -93,6 +106,9 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			mode = "idle";
 			sumX = 0;
 			sumY = 0;
+			lastSpeed = 0;
+			decayFrom = 0;
+			decay = 0;
 			if (!tracked) return;
 			const width = element.offsetWidth || 1;
 			if (offset >= width * DISMISS_FRACTION || (offset > AXIS_DECIDE_PX && speed >= FLICK_SPEED_PX)) {
@@ -116,6 +132,13 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 			// Pinch-zoom arrives as ctrl+wheel; line/page deltas come from mouse wheels.
 			if (leaving.current || event.ctrlKey || event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
 			if (nativePhases && !fingersDown) return;
+			if (scrollSpent) {
+				if (!nativePhases) {
+					window.clearTimeout(scrollSpentTimer);
+					scrollSpentTimer = window.setTimeout(() => { scrollSpent = false; }, IDLE_MS);
+				}
+				return;
+			}
 			if (!nativePhases) {
 				window.clearTimeout(idleTimer);
 				idleTimer = window.setTimeout(finish, IDLE_MS);
@@ -131,6 +154,19 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 				return;
 			}
 			track(offset - event.deltaX);
+			if (speed > 0 && speed < lastSpeed) decay += 1;
+			else {
+				decay = 0;
+				decayFrom = speed;
+			}
+			lastSpeed = speed;
+			if (decay >= MOMENTUM_DECAY_EVENTS && decayFrom >= FLICK_SPEED_PX) {
+				// Released into momentum: dismiss now instead of after it.
+				speed = decayFrom;
+				scrollSpent = true;
+				if (!nativePhases) scrollSpentTimer = window.setTimeout(() => { scrollSpent = false; }, IDLE_MS);
+				finish();
+			}
 		};
 
 		const onPointerDown = (event: PointerEvent) => {
@@ -157,6 +193,12 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 				window.removeEventListener("pointermove", onMove);
 				window.removeEventListener("pointerup", onUp);
 				window.removeEventListener("pointercancel", onUp);
+				// The click that ends a drag must not also activate the element.
+				if (mode === "tracking") {
+					const swallow = (click: MouseEvent) => click.stopPropagation();
+					element.addEventListener("click", swallow, { capture: true, once: true });
+					window.setTimeout(() => element.removeEventListener("click", swallow, { capture: true }));
+				}
 				finish();
 			};
 			window.addEventListener("pointermove", onMove);
@@ -166,6 +208,7 @@ export function useSwipeToDismiss(ref: RefObject<HTMLElement | null>, onDismiss:
 
 		const stopPhases = aoBridge.app.onScrollPhase((phase) => {
 			nativePhases = true;
+			scrollSpent = false;
 			if (phase === "down") {
 				fingersDown = true;
 				window.clearTimeout(idleTimer);
