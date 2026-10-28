@@ -162,6 +162,7 @@ func (s *Store) RestoreSession(
 			SET is_terminated = false,
 				activity_state = 'idle',
 				activity_source_request_id = NULL,
+				artifacts_deleted_at = NULL,
 				updated_at = now()
 			WHERE id = $1 AND org_id = $2 AND is_terminated = true`,
 			sessionID, orgID,

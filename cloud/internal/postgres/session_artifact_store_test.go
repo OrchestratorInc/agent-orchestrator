@@ -642,9 +642,10 @@ func TestDeletingASessionCanDeleteItsArtifacts(t *testing.T) {
 	}
 }
 
-// An upload that finishes after the archive, from a worker whose connection
-// is still current, neither records nor commits, so no deleted file returns.
-func TestAnArchivedSessionTakesNoNewArtifacts(t *testing.T) {
+// An upload that finishes after an archive that deleted the artifacts, from a
+// worker whose connection is still current, neither records nor commits, so
+// no deleted file returns.
+func TestArchivingWithDeletedArtifactsRefusesLateUploads(t *testing.T) {
 	_, admin, fixture := openNotificationTestStore(t)
 	store := openRLSStore(t, admin)
 	ctx := context.Background()
@@ -694,5 +695,28 @@ func TestDeletingASessionKeepsItsArtifactsByDefault(t *testing.T) {
 	listed, err := store.ListSessionArtifacts(ctx, principal, fixture.orgID, fixture.sessionID)
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("artifacts after the session was deleted = %+v, %v", listed, err)
+	}
+}
+
+// A plain archive keeps the session's artifacts, so the worker's final sync
+// still records and commits a file written just before it.
+func TestAPlainArchiveStillSavesLateArtifacts(t *testing.T) {
+	_, admin, fixture := openNotificationTestStore(t)
+	store := openRLSStore(t, admin)
+	ctx := context.Background()
+	principal := domain.Principal{UserID: fixture.userID, Provider: "local"}
+
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{testArtifact("flush/report.html", 10)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.TerminateSession(ctx, principal, fixture.orgID, fixture.sessionID, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := commitTestArtifacts(t, store, fixture, []domain.SessionArtifact{testArtifact("flush/late.txt", 4)}, nil); err != nil {
+		t.Fatalf("final sync after a plain archive: %v", err)
+	}
+	listed, err := store.ListSessionArtifacts(ctx, principal, fixture.orgID, fixture.sessionID)
+	if err != nil || len(listed) != 2 {
+		t.Fatalf("artifacts after a plain archive = %+v, %v; want report.html and late.txt", listed, err)
 	}
 }
