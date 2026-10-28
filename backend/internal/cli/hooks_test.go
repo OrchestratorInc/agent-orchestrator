@@ -1530,10 +1530,9 @@ func TestHooks_KimiMidTurnEventsReportActive(t *testing.T) {
 	}
 }
 
-// Kimi identifies tool calls and pending approvals as tool_call_id; the wire
-// must lift it onto toolUseId so lifecycle can correlate a permission result
-// with its own request.
-func TestHooks_KimiToolCallIdLiftsAsToolUseID(t *testing.T) {
+// A tool call alone cannot identify an approval. Old payloads without native
+// approval identity must retain the ID-less compatibility path.
+func TestHooks_KimiToolCallAloneDoesNotIdentifyApproval(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
 	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
@@ -1550,8 +1549,60 @@ func TestHooks_KimiToolCallIdLiftsAsToolUseID(t *testing.T) {
 	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
 	}
-	want := setActivityAPIRequest{State: "active", Event: "permission-resolved", AgentSessionID: "kimi-native-1", ToolUseID: "call-1"}
+	want := setActivityAPIRequest{State: "active", Event: "permission-resolved", AgentSessionID: "kimi-native-1"}
 	assertActivityRequest(t, req, want)
+}
+
+func TestHooks_KimiApprovalIdentityIsScopedAndStable(t *testing.T) {
+	var first string
+	for _, tt := range []struct {
+		name    string
+		event   string
+		payload string
+		same    bool
+	}{
+		{"request", "permission-request", `{"session_id":"native","agent_id":"main","turn_id":1,"id":"approval_a","tool_call_id":"call"}`, true},
+		{"matching result", "permission-resolved", `{"session_id":"native","agent_id":"main","turn_id":1,"id":"approval_a","tool_call_id":"call","decision":"approved"}`, true},
+		{"another approval for same tool", "permission-request", `{"session_id":"native","agent_id":"main","turn_id":1,"id":"approval_b","tool_call_id":"call"}`, false},
+		{"another turn", "permission-request", `{"session_id":"native","agent_id":"main","turn_id":2,"id":"approval_a","tool_call_id":"call"}`, false},
+		{"background agent", "permission-request", `{"session_id":"native","agent_id":"worker","turn_id":1,"id":"approval_a","tool_call_id":"call"}`, false},
+		{"another native session", "permission-request", `{"session_id":"other","agent_id":"main","turn_id":1,"id":"approval_a","tool_call_id":"call"}`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{In: strings.NewReader(tt.payload), ProcessAlive: func(int) bool { return true }}, "hooks", "kimi", tt.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(req.ToolUseID, "kimi-approval:") || len(req.ToolUseID) > maxActivityMetaLen {
+				t.Fatalf("missing bounded native approval identity: %q", req.ToolUseID)
+			}
+			if first == "" {
+				first = req.ToolUseID
+			}
+			if (req.ToolUseID == first) != tt.same {
+				t.Fatalf("identity equality = %v, want %v", req.ToolUseID == first, tt.same)
+			}
+		})
+	}
+}
+
+func TestActivityMetaDoesNotLiftOtherAgentsToolCallID(t *testing.T) {
+	_, id := activityMeta([]byte(`{"tool_call_id":"unrelated"}`))
+	if id != "" {
+		t.Fatalf("tool_call_id changed shared mapper behavior: %q", id)
+	}
+	_, id = activityMeta([]byte(`{"tool_call_id":"unrelated","tool_use_id":"toolu_1"}`))
+	if id != "toolu_1" {
+		t.Fatalf("tool_use_id was not preserved: %q", id)
+	}
 }
 
 func TestHooks_RegisteredHarnessSessionStartReportsAgentSessionID(t *testing.T) {

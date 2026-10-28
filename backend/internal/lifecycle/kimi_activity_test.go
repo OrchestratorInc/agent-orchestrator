@@ -1,10 +1,12 @@
 package lifecycle
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // TestKimiActivityCoversWorkingWaitingWorkingIdle walks the #2814 sequence
@@ -67,6 +69,150 @@ func applyKimiApproval(t *testing.T, m *Manager, event, toolCallID string) {
 		t.Fatalf("Derive(kimi, %q) reported no activity signal", event)
 	}
 	mustApply(t, m, "mer-1", sig(state, event, "Bash", toolCallID))
+}
+
+// These keys stand for the scoped native approval identities emitted by the
+// CLI; they deliberately do not identify tool calls, which can be reused.
+func kimiApprovalSignal(event, approval string) ports.ActivitySignal {
+	state := domain.ActivityActive
+	if event == "permission-request" {
+		state = domain.ActivityWaitingInput
+	}
+	id := ""
+	if approval != "" {
+		id = "kimi-approval:" + approval
+	}
+	s := sig(state, event, "Bash", id)
+	s.ExpectedHarness = domain.HarnessKimi
+	return s
+}
+
+func seedKimi(st *fakeStore) {
+	seedSignaled(st, "mer-1", domain.ActivityActive)
+	rec := st.sessions["mer-1"]
+	rec.Harness = domain.HarnessKimi
+	st.sessions["mer-1"] = rec
+}
+
+func TestKimiApprovalCallbackOrdering(t *testing.T) {
+	type step struct {
+		event string
+		id    string
+		want  domain.ActivityState
+	}
+	for _, tt := range []struct {
+		name  string
+		steps []step
+	}{
+		{"result before own request", []step{
+			{"permission-resolved", "a", domain.ActivityActive},
+			{"permission-request", "a", domain.ActivityActive},
+		}},
+		{"duplicates", []step{
+			{"permission-request", "a", domain.ActivityWaitingInput},
+			{"permission-request", "a", domain.ActivityWaitingInput},
+			{"permission-resolved", "a", domain.ActivityActive},
+			{"permission-resolved", "a", domain.ActivityActive},
+			{"permission-request", "a", domain.ActivityActive},
+			{"permission-request", "b", domain.ActivityWaitingInput},
+			{"permission-resolved", "a", domain.ActivityWaitingInput},
+			{"permission-resolved", "b", domain.ActivityActive},
+		}},
+		{"concurrent requests", []step{
+			{"permission-request", "a", domain.ActivityWaitingInput},
+			{"permission-request", "b", domain.ActivityWaitingInput},
+			{"permission-resolved", "a", domain.ActivityWaitingInput},
+			{"permission-resolved", "b", domain.ActivityActive},
+		}},
+		{"early result while another request pending", []step{
+			{"permission-request", "b", domain.ActivityWaitingInput},
+			{"permission-resolved", "a", domain.ActivityWaitingInput},
+			{"permission-request", "a", domain.ActivityWaitingInput},
+			{"permission-resolved", "b", domain.ActivityActive},
+		}},
+		{"id-less compatibility guard", []step{
+			{"permission-request", "a", domain.ActivityWaitingInput},
+			{"permission-resolved", "", domain.ActivityWaitingInput},
+			{"permission-resolved", "a", domain.ActivityActive},
+			{"permission-request", "", domain.ActivityWaitingInput},
+			{"permission-resolved", "", domain.ActivityActive},
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m, st, _ := newManager()
+			seedKimi(st)
+			for i, step := range tt.steps {
+				mustApply(t, m, "mer-1", kimiApprovalSignal(step.event, step.id))
+				if got := stateOf(st, "mer-1"); got != step.want {
+					t.Fatalf("step %d (%s %s): got %s, want %s", i, step.event, step.id, got, step.want)
+				}
+			}
+		})
+	}
+}
+
+func TestKimiApprovalCompletionSurvivesTurnBoundaries(t *testing.T) {
+	for _, event := range []string{"stop", "user-prompt-submit", "interrupt", "session-start"} {
+		t.Run(event, func(t *testing.T) {
+			m, st, _ := newManager()
+			seedKimi(st)
+			mustApply(t, m, "mer-1", kimiApprovalSignal("permission-resolved", "a"))
+			applyKimi(t, m, event)
+			want := stateOf(st, "mer-1")
+			mustApply(t, m, "mer-1", kimiApprovalSignal("permission-request", "a"))
+			mustApply(t, m, "mer-1", kimiApprovalSignal("permission-resolved", "a"))
+			if got := stateOf(st, "mer-1"); got != want {
+				t.Fatalf("duplicate callbacks after %s: got %s, want %s", event, got, want)
+			}
+			// A distinct approval still re-arms the wait in the next turn.
+			mustApply(t, m, "mer-1", kimiApprovalSignal("permission-request", "b"))
+			if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+				t.Fatalf("new approval after %s: got %s, want waiting_input", event, got)
+			}
+		})
+	}
+}
+
+func TestKimiApprovalBoundEvictsCompletedBeforePending(t *testing.T) {
+	m, st, _ := newManager()
+	seedKimi(st)
+	mustApply(t, m, "mer-1", kimiApprovalSignal("permission-request", "pending"))
+	for i := range 128 {
+		mustApply(t, m, "mer-1", kimiApprovalSignal("permission-resolved", fmt.Sprint(i)))
+	}
+	// The oldest completed entry was evicted; the pending entry was not.
+	mustApply(t, m, "mer-1", kimiApprovalSignal("permission-request", "127"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("completed callback cleared pending approval: %s", got)
+	}
+	mustApply(t, m, "mer-1", kimiApprovalSignal("permission-resolved", "pending"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("pending approval was evicted: %s", got)
+	}
+	mustApply(t, m, "mer-1", kimiApprovalSignal("permission-request", "0"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("oldest completion was not evicted: %s", got)
+	}
+}
+
+func TestKimiApprovalOverflowFailsClosedUntilBoundary(t *testing.T) {
+	m, st, _ := newManager()
+	seedKimi(st)
+	for i := range 129 {
+		mustApply(t, m, "mer-1", kimiApprovalSignal("permission-request", fmt.Sprint(i)))
+	}
+	for i := range 129 {
+		mustApply(t, m, "mer-1", kimiApprovalSignal("permission-resolved", fmt.Sprint(i)))
+	}
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("overflow cleared without a boundary: %s", got)
+	}
+	applyKimi(t, m, "stop")
+	mustApply(t, m, "mer-1", kimiApprovalSignal("permission-request", "new"))
+	mustApply(t, m, "mer-1", kimiApprovalSignal("permission-resolved", "new"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("boundary failed to reset overflow: %s", got)
+	}
 }
 
 // A later approval in the same session re-arms waiting_input: resolving one
