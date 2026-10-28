@@ -22,11 +22,14 @@ jobs:
   # exercise the real CLI and daemon on each host OS. The suite builds its own
   # binary and uses explicit AO_RUN_FILE/AO_DATA_DIR overrides plus a free port.
   # Default state-path resolution is covered by config unit tests.
+  #
+  # PRs run Linux only; macOS and Windows run on main, where a failure still
+  # points at a single merged change.
   native:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest", "windows-latest"]') }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -37,7 +40,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27.1"
-          cache: false
+          cache-dependency-path: backend/go.sum
 
       - name: CLI E2E (native)
         run: go test -tags e2e -v ./internal/cli/...
