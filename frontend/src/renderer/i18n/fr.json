@@ -3731,6 +3731,7 @@
 	"usage.limits.checked": "Vérifié {{value}}",
 	"usage.limits.noWindows": "Aucune fenêtre de limite signalée pour l’instant.",
 	"usage.limits.signedOut": "Déconnecté",
+	"usage.limits.thisComputer": "Connexion de cet ordinateur",
 	"usage.limits.left": "restant",
 	"usage.limits.barLabel": "{{window}} : {{value}} restant",
 	"usage.limits.resetsIn": "Réinitialisation dans {{value}}",

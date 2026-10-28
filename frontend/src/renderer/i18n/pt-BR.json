@@ -3731,6 +3731,7 @@
 	"usage.limits.checked": "Verificado {{value}}",
 	"usage.limits.noWindows": "Nenhuma janela de limite informada ainda.",
 	"usage.limits.signedOut": "Desconectado",
+	"usage.limits.thisComputer": "Login deste computador",
 	"usage.limits.left": "restante",
 	"usage.limits.barLabel": "{{window}}: {{value}} restante",
 	"usage.limits.resetsIn": "Redefine em {{value}}",

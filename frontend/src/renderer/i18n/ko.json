@@ -3663,6 +3663,7 @@
 	"usage.limits.checked": "확인: {{value}}",
 	"usage.limits.noWindows": "아직 보고된 한도 기간이 없습니다.",
 	"usage.limits.signedOut": "로그아웃됨",
+	"usage.limits.thisComputer": "이 컴퓨터의 로그인",
 	"usage.limits.left": "남음",
 	"usage.limits.barLabel": "{{window}}: {{value}} 남음",
 	"usage.limits.resetsIn": "{{value}} 후 초기화",

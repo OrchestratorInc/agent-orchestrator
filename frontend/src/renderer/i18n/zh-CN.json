@@ -3645,6 +3645,7 @@
 	"usage.limits.checked": "检查于 {{value}}",
 	"usage.limits.noWindows": "尚未报告任何限额窗口。",
 	"usage.limits.signedOut": "已退出登录",
+	"usage.limits.thisComputer": "此电脑的登录",
 	"usage.limits.left": "剩余",
 	"usage.limits.barLabel": "{{window}}：剩余 {{value}}",
 	"usage.limits.resetsIn": "{{value}}后重置",

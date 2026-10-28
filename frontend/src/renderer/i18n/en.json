@@ -3644,6 +3644,7 @@
 	"usage.limits.checked": "Checked {{value}}",
 	"usage.limits.noWindows": "No limit windows reported yet.",
 	"usage.limits.signedOut": "Signed out",
+	"usage.limits.thisComputer": "This computer's login",
 	"usage.limits.left": "left",
 	"usage.limits.barLabel": "{{window}}: {{value}} left",
 	"usage.limits.resetsIn": "Resets in {{value}}",

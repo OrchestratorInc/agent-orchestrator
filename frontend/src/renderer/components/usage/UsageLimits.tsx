@@ -66,11 +66,14 @@ function AccountLimitRows({ account, harness, first, now }: { account: AgentAcco
 	const plan = formatPlanName(account.plan);
 	const resetCredits = account.limits?.resetCredits ?? 0;
 	const meta = [
+		// Two logins can share an email, so say which one is this computer's own.
+		account.device ? t("usage.limits.thisComputer") : null,
 		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : null,
 		account.default ? t("settings.agentAccounts.default") : null,
 		resetCredits > 0 ? t("usage.limits.resetCredits", { value: resetCredits }) : null,
 	].filter(Boolean).join(" · ");
-	const issue = account.signedIn ? account.problem : t("usage.limits.signedOut");
+	// A failed probe also reports signed out; its problem says what actually went wrong.
+	const issue = account.problem || (account.signedIn ? null : t("usage.limits.signedOut"));
 	return (
 		<>
 			<div className={cn("col-span-full flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5", !first && "mt-4")} data-usage-account={account.id}>

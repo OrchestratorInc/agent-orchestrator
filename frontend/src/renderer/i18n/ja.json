@@ -3663,6 +3663,7 @@
 	"usage.limits.checked": "確認: {{value}}",
 	"usage.limits.noWindows": "上限の期間はまだ報告されていません。",
 	"usage.limits.signedOut": "サインアウト済み",
+	"usage.limits.thisComputer": "このコンピューターのログイン",
 	"usage.limits.left": "残り",
 	"usage.limits.barLabel": "{{window}}: 残り {{value}}",
 	"usage.limits.resetsIn": "{{value}} 後にリセット",
