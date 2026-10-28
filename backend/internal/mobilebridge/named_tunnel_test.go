@@ -57,7 +57,7 @@ func (f *fakeAOCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if f.skew != 0 {
 		w.Header().Set("Date", time.Now().Add(-f.skew).UTC().Format(http.TimeFormat))
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"hostname": "h-test.example.dev", "runToken": token, "since": since})
+	_ = json.NewEncoder(w).Encode(map[string]any{"hostname": "h-test.example.dev", "runToken": token, "since": since, "repaired": in.Repair})
 }
 
 func (f *fakeAOCloud) set(status int) {
@@ -149,7 +149,14 @@ func TestFixedTunnelFallsBackToTheCacheOnlyWhileAOCloudIsDown(t *testing.T) {
 	if err == nil || cached.RunToken != "run-token-tun-1" {
 		t.Fatalf("down = %+v, %v", cached, err)
 	}
-	// Another host never borrows the cache, nor does another account's link.
+	// A proxy's refusal is not AO Cloud's: the cache stays.
+	cloud.set(http.StatusForbidden)
+	if got, err := src.TunnelFor(ctx, "host-uuid", false); errors.Is(err, errHostRefused) || got.RunToken == "" {
+		t.Fatalf("403 = %+v, %v", got, err)
+	}
+	cloud.set(http.StatusBadGateway)
+	// Another host never borrows the cache, nor does another account's link,
+	// which also drops the run token from disk.
 	if other, _ := src.TunnelFor(ctx, "other-host", false); other.RunToken != "" {
 		t.Fatalf("other host = %+v", other)
 	}
@@ -157,12 +164,10 @@ func TestFixedTunnelFallsBackToTheCacheOnlyWhileAOCloudIsDown(t *testing.T) {
 	if other, _ := src.TunnelFor(ctx, "host-uuid", false); other.RunToken != "" {
 		t.Fatalf("another account's link started %+v", other)
 	}
-	link(t, src, "account-digest")
-	// A proxy's refusal is not AO Cloud's: the cache stays.
-	cloud.set(http.StatusForbidden)
-	if got, err := src.TunnelFor(ctx, "host-uuid", false); errors.Is(err, errHostRefused) || got.RunToken == "" {
-		t.Fatalf("403 = %+v, %v", got, err)
+	if _, err := os.Stat(src.CachePath); !os.IsNotExist(err) {
+		t.Fatalf("another link's run token stayed on disk: %v", err)
 	}
+	link(t, src, "account-digest")
 
 	// Removed from every account: the tunnel is gone, and so is the cache.
 	cloud.set(http.StatusUnauthorized)

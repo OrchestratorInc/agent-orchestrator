@@ -943,7 +943,7 @@ func Run(buildVersion string) error {
 	// own pinned download; the connector starts once it lands.
 	bs.ConnectorInstalling = systemInstall.CloudflaredInstalling
 	bs.ResolveTunnel = func() controllers.TunnelController {
-		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
+		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir, systeminstall.PinnedCloudflared))
 		if res.NeedsInstall {
 			systemInstall.DownloadCloudflaredInBackground(bs.ConnectorInstalled)
 			return nil
@@ -955,7 +955,7 @@ func Run(buildVersion string) error {
 	// needs a connector, such as restoring an enabled bridge, wait for this
 	// lookup rather than racing it.
 	bs.ResolveTunnelInBackground(func() controllers.TunnelController {
-		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir))
+		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir, systeminstall.PinnedCloudflared))
 		if res.NeedsInstall {
 			// Not fatal: the LAN and Tailscale endpoints still work, and Connect
 			// Mobile behaves exactly as it did before remote access existed.

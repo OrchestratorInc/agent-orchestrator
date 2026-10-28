@@ -293,13 +293,18 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   its settle delay. `{"repair":true}`, sent
   after the machine's connector had
   no live connection for 3 minutes or was refused four times in a row, makes the
-  tunnel and record exist again, at most once a minute per host; the machine
-  asks for one at most every 30 minutes. Calls that
+  tunnel and record exist again, at most once a minute per host, and the
+  answer says `"repaired":true` when it did; the machine asks for one at most
+  every 30 minutes unless the edge refused its token. Calls that
   write tunnels are limited to 30 an hour per account (429
   `tunnel_rate_limited`), since every account shares the API token's rate
   limit; the window is kept per replica. Writes for one account and host run
   one at a time, so the desktop's registration and the machine's request never
   make two tunnels of one name.
+- `GET /api/cloud/v1/me/hosts` also returns `limit` (0 for any number) and
+  `fixedAddresses`, which the desktop and the phone check before a machine
+  moves its account token to the account: a listing refused after that would
+  leave the machine in no account.
 - `ao_remote_host_tunnels` keeps one row per account and host, with the run
   token encrypted like host tokens. While an account's tunnel for a host
   stands, the address publish cannot move that account's listing off the

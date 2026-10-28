@@ -101,7 +101,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 						return err
 					}
 				}
-				if !publicAddress && ((tunnel || tunnelOnly) && action.name == "enable" || status.LoopbackOnly || status.Tunnel.Running || status.Tunnel.LastError != "") {
+				if !publicAddress && ((tunnel || tunnelOnly) && action.name == "enable" || status.LoopbackOnly || status.Tunnel.Running || status.Tunnel.LastError != "" || status.Tunnel.Installing) {
 					message := "Tunnel: starting; run `ao remote-host status` for the HTTPS address"
 					if !status.Tunnel.Supported {
 						flag := "--tunnel"

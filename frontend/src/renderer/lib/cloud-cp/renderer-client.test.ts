@@ -3,7 +3,7 @@ import { appI18n } from "../../i18n";
 import { useUiStore } from "../../stores/ui-store";
 import { cloudMeQueryKey } from "../cloud-offering";
 import { queryClient } from "../query-client";
-import { openUpgradeAfterPlanRefusal } from "./renderer-client";
+import { cloudCpFetch, openUpgradeAfterPlanRefusal } from "./renderer-client";
 
 function seedBillingMode(billingMode: "self_serve" | "contract" | "off") {
 	queryClient.setQueryData([...cloudMeQueryKey, "https://cp.test", "user-1"], {
@@ -42,5 +42,23 @@ describe("openUpgradeAfterPlanRefusal", () => {
 	it("never opens Upgrade before the billing mode is known", () => {
 		expect(openUpgradeAfterPlanRefusal(now)).toBe(true);
 		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+});
+
+describe("cloudCpFetch", () => {
+	// The main process cannot be told to stop, but the caller stops waiting
+	// when its signal fires, as with fetch.
+	it("gives up when the caller's signal fires", async () => {
+		const w = window as unknown as { ao?: { cloudCp?: { request: () => Promise<never> } } };
+		const before = w.ao;
+		w.ao = { ...before, cloudCp: { request: () => new Promise<never>(() => undefined) } };
+		try {
+			const controller = new AbortController();
+			const pending = cloudCpFetch("https://cp.test/api/cloud/v1/me/hosts", { signal: controller.signal });
+			controller.abort(new Error("timed out"));
+			await expect(pending).rejects.toThrow("timed out");
+		} finally {
+			w.ao = before;
+		}
 	});
 });

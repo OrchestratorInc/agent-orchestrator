@@ -299,7 +299,9 @@ func TestLinkedHostGetsOneFixedTunnel(t *testing.T) {
 	// provisioning cost no Cloudflare call.
 	calls, _ := api.snapshot()
 	for _, body := range []string{`{}`, `{}`, `{"repair":true}`} {
-		if w := requestTunnel(s, hostID, digest, body); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "run-token-tun-1") {
+		// A repair this soon is answered from the stored tunnel, and says so.
+		if w := requestTunnel(s, hostID, digest, body); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "run-token-tun-1") ||
+			strings.Contains(w.Body.String(), "repaired") {
 			t.Fatalf("%s: %d %s", body, w.Code, w.Body.String())
 		}
 	}
@@ -309,11 +311,15 @@ func TestLinkedHostGetsOneFixedTunnel(t *testing.T) {
 	stale := store.tunnels[key]
 	stale.UpdatedAt = time.Now().Add(-time.Hour)
 	store.tunnels[key] = stale
-	if w := requestTunnel(s, hostID, digest, `{"repair":true}`); w.Code != http.StatusOK {
+	w = requestTunnel(s, hostID, digest, `{"repair":true}`)
+	if w.Code != http.StatusOK {
 		t.Fatalf("repair: %d", w.Code)
 	}
 	if after, _ := api.snapshot(); after == calls {
 		t.Fatal("repair did not ask Cloudflare")
+	}
+	if !strings.Contains(w.Body.String(), `"repaired":true`) {
+		t.Fatalf("a repair that remade the tunnel did not say so: %s", w.Body.String())
 	}
 
 	// Released while the machine was offline: its next request gets a new

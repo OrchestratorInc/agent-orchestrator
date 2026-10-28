@@ -8,6 +8,7 @@ import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
+import { deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -347,16 +348,19 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const signedIn = Boolean(cloudBaseUrl && accountId);
 	// Why the last link left this computer out of the account.
 	const [linkError, setLinkError] = useState("");
-	const linkIfSignedIn = async (password: string, hostId: string, options?: { ifListed?: boolean }) => {
+	/** Returns the host id this call added to the account, or "". */
+	const linkIfSignedIn = async (password: string, hostId: string, options?: { ifListed?: boolean }): Promise<string> => {
 		setLinkError("");
-		if (!signedIn || !password) return;
+		if (!signedIn || !password) return "";
 		// Not fatal: an unlinked computer still gets a quick tunnel, whose
 		// address changes on restart. Said, though: after a new password the
 		// account's devices hold the old one until a link lands. An AO Cloud
 		// without fixed addresses is not linked here, as before them.
-		await linkThisComputer(cloudBaseUrl, accountId, hostId, password, options).catch((cause: unknown) => {
+		const linked = await linkThisComputer(cloudBaseUrl, accountId, hostId, password, options).catch((cause: unknown) => {
 			setLinkError(cause instanceof Error && cause.message ? cause.message : t("remote.shareThisComputerFailed"));
+			return { hostId: "", added: false };
 		});
+		return linked.added ? linked.hostId : "";
 	};
 
 	const query = useQuery({
@@ -406,9 +410,13 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			if (!signedIn) return data;
 			// Linked before the tunnel starts, so the code carries this
 			// computer's fixed address and stays valid after restarts.
-			await linkIfSignedIn(data?.password ?? "", data?.hostId ?? "");
+			const added = await linkIfSignedIn(data?.password ?? "", data?.hostId ?? "");
 			const started = await apiClient.POST("/api/v1/mobile/remote-access");
-			if (started.error) throw new Error(apiErrorMessage(started.error));
+			if (started.error) {
+				// Not left listed at an address nothing serves.
+				if (added) await deleteAccountRemoteHost(cloudBaseUrl, added).catch(() => undefined);
+				throw new Error(apiErrorMessage(started.error));
+			}
 			return started.data;
 		},
 		// The first call can turn the bridge on before the second fails, so read back what is actually on.

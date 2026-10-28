@@ -49,6 +49,8 @@ type NamedTunnel struct {
 	// Since is when AO Cloud made Hostname's DNS record. Until it settles,
 	// resolvers that asked for the name earlier may still hold an NXDOMAIN.
 	Since time.Time `json:"since,omitzero"`
+	// Repaired is set when AO Cloud remade the tunnel for a repair request.
+	Repaired bool `json:"repaired,omitempty"`
 }
 
 type cachedNamedTunnel struct {
@@ -90,10 +92,16 @@ func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair
 		return NamedTunnel{}, err
 	}
 	if state.AccountTokenHash == "" {
+		// Unlinked, or the user's new password revoked the link: its run
+		// token is not kept on disk.
+		_ = os.Remove(s.CachePath)
 		return NamedTunnel{}, errNotLinked
 	}
 	key := s.cacheKey(hostID, state.AccountTokenHash)
-	cached := loadNamedTunnelCache(s.CachePath, key)
+	cached, stale := loadNamedTunnelCache(s.CachePath, key)
+	if stale {
+		_ = os.Remove(s.CachePath) // another link's tunnel
+	}
 	t, err := s.request(ctx, hostID, state.AccountTokenHash, repair)
 	if errors.Is(err, errHostRefused) {
 		_ = os.Remove(s.CachePath)
@@ -108,7 +116,9 @@ func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair
 		t.Since = time.Now()
 	}
 	// A lost cache only costs the fallback until the next good answer.
-	if b, err := json.Marshal(cachedNamedTunnel{Key: key, Tunnel: t}); err == nil && s.CachePath != "" {
+	keep := t
+	keep.Repaired = false
+	if b, err := json.Marshal(cachedNamedTunnel{Key: key, Tunnel: keep}); err == nil && s.CachePath != "" {
 		_ = os.WriteFile(s.CachePath, b, 0o600)
 	}
 	return t, nil
@@ -120,14 +130,21 @@ func (s *FixedTunnelSource) cacheKey(hostID, digest string) string {
 	return strings.TrimRight(s.ControlPlaneURL, "/") + "/" + hostID + "#" + digest
 }
 
-func loadNamedTunnelCache(path, key string) NamedTunnel {
+// loadNamedTunnelCache reads the cached tunnel for key. stale is set when the
+// file holds a tunnel for another key.
+func loadNamedTunnelCache(path, key string) (tunnel NamedTunnel, stale bool) {
 	var cached cachedNamedTunnel
 	b, err := os.ReadFile(path)
-	if err != nil || json.Unmarshal(b, &cached) != nil || cached.Key != key ||
-		cached.Tunnel.Hostname == "" || cached.Tunnel.RunToken == "" {
-		return NamedTunnel{}
+	if err != nil || json.Unmarshal(b, &cached) != nil {
+		return NamedTunnel{}, false
 	}
-	return cached.Tunnel
+	if cached.Key != key {
+		return NamedTunnel{}, true
+	}
+	if cached.Tunnel.Hostname == "" || cached.Tunnel.RunToken == "" {
+		return NamedTunnel{}, false
+	}
+	return cached.Tunnel, false
 }
 
 // fixedTunnelClient follows no redirect, which would carry the host digest
@@ -159,11 +176,7 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		var refusal struct {
-			Code string `json:"code"`
-		}
-		if resp.StatusCode == http.StatusUnauthorized &&
-			json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&refusal) == nil && refusal.Code == "unauthorized" {
+		if IsHostDigestRefusal(resp) {
 			return NamedTunnel{}, errHostRefused
 		}
 		return NamedTunnel{}, fmt.Errorf("AO Cloud returned %d for the fixed address", resp.StatusCode)
@@ -184,6 +197,17 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 		}
 	}
 	return t, nil
+}
+
+// IsHostDigestRefusal reports AO Cloud's own refusal of a host digest: no
+// account lists the machine under it. A proxy's or portal's 401 is not one.
+// It reads the body.
+func IsHostDigestRefusal(resp *http.Response) bool {
+	var refusal struct {
+		Code string `json:"code"`
+	}
+	return resp.StatusCode == http.StatusUnauthorized &&
+		json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&refusal) == nil && refusal.Code == "unauthorized"
 }
 
 // ControlPlaneTarget joins path onto AO Cloud's base URL. Only https, or plain

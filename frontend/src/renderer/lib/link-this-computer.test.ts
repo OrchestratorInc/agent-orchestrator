@@ -30,16 +30,19 @@ beforeEach(() => {
 });
 
 it("links at the fixed address when AO Cloud gives one", async () => {
-	expect(await link()).toBe("h_this");
+	expect(await link()).toEqual({ hostId: "h_this", added: true });
 	expect(fake.calls).toEqual(["directory", "token", "save"]);
+	// Linked again, it was already listed.
+	fake.directory.hosts = [{ hostId: "h_this" }];
+	expect(await link()).toEqual({ hostId: "h_this", added: false });
 });
 
 it("issues no token for an address-free link AO Cloud would refuse", async () => {
 	fake.directory.fixedAddresses = false;
-	expect(await link()).toBe("");
+	expect(await link()).toEqual({ hostId: "", added: false });
 	expect(fake.calls).toEqual(["directory"]);
 	// With the tunnel's address it links.
-	expect(await link({ url: "https://quiet-river.trycloudflare.com:443" })).toBe("h_this");
+	expect((await link({ url: "https://quiet-river.trycloudflare.com:443" })).hostId).toBe("h_this");
 });
 
 it("refuses a full account before the token moves", async () => {
@@ -48,12 +51,12 @@ it("refuses a full account before the token moves", async () => {
 	expect(fake.calls).toEqual(["directory"]);
 	// A machine the full account lists already links again.
 	fake.directory.hosts = [...others(9), { hostId: "h_this" }];
-	expect(await link()).toBe("h_this");
+	expect((await link()).hostId).toBe("h_this");
 });
 
 it("links only a listed computer when asked to", async () => {
-	expect(await link({ ifListed: true })).toBe("");
+	expect((await link({ ifListed: true })).hostId).toBe("");
 	expect(fake.calls).toEqual(["directory"]);
 	fake.directory.hosts = [{ hostId: "h_this" }];
-	expect(await link({ ifListed: true })).toBe("h_this");
+	expect((await link({ ifListed: true })).hostId).toBe("h_this");
 });

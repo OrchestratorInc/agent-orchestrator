@@ -29,16 +29,28 @@ export const cloudCpFetch: typeof fetch = async (input, init) => {
 	const url = new URL(input instanceof Request ? input.url : String(input));
 	const prefixIndex = url.pathname.indexOf(API_PREFIX);
 	const mount = prefixIndex > 0 ? url.pathname.slice(0, prefixIndex) : "";
-	const result = await request({
+	const pending = request({
 		baseUrl: url.origin + mount,
 		path: url.pathname.slice(mount.length) + url.search,
 		method: init?.method ?? "GET",
 		headers: Object.fromEntries(new Headers(init?.headers).entries()),
 		body: typeof init?.body === "string" ? init.body : undefined,
 	});
+	// The main process finishes the request regardless; the caller stops
+	// waiting when its signal fires, as with fetch.
+	const result = init?.signal ? await abortable(pending, init.signal) : await pending;
 	const body = NULL_BODY_STATUSES.has(result.status) || result.body === "" ? null : result.body;
 	return new Response(body, { status: result.status, headers: result.headers });
 };
+
+function abortable<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) return Promise.reject(signal.reason);
+	return new Promise<T>((resolve, reject) => {
+		const abort = () => reject(signal.reason);
+		signal.addEventListener("abort", abort, { once: true });
+		pending.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+	});
+}
 
 export function createRendererCloudCpClient(baseUrl: string): CloudCpClient {
 	// Funnel telemetry (cloud-telemetry.ts) wraps the client; it passes results

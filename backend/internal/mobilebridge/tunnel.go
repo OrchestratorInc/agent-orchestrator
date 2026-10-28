@@ -140,9 +140,13 @@ type CloudflaredLookup struct {
 	EnvPath string
 	// ManagedPath is where AO keeps its own pinned copy (~/.ao/bin/cloudflared).
 	ManagedPath string
-	LookPath    func(file string) (string, error)
-	Exists      func(path string) bool
-	Version     func(path string) (CloudflaredVersion, bool)
+	// ManagedVersion is the release AO pins. A managed copy of another
+	// release, or one that does not run, is not used: the download replaces
+	// it, so a new pin reaches machines that hold an old one. Zero trusts any.
+	ManagedVersion CloudflaredVersion
+	LookPath       func(file string) (string, error)
+	Exists         func(path string) bool
+	Version        func(path string) (CloudflaredVersion, bool)
 }
 
 // CloudflaredResolution is which binary to run, or that one must be installed.
@@ -170,7 +174,7 @@ func ResolveCloudflared(l CloudflaredLookup) CloudflaredResolution {
 	if l.EnvPath != "" {
 		return CloudflaredResolution{Path: l.EnvPath, Source: CloudflaredFromEnv}
 	}
-	if l.ManagedPath != "" && l.Exists != nil && l.Exists(l.ManagedPath) {
+	if l.ManagedPath != "" && l.Exists != nil && l.Exists(l.ManagedPath) && l.managedIsPinned() {
 		return CloudflaredResolution{Path: l.ManagedPath, Source: CloudflaredManaged}
 	}
 	if l.LookPath != nil {
@@ -184,6 +188,17 @@ func ResolveCloudflared(l CloudflaredLookup) CloudflaredResolution {
 	return CloudflaredResolution{Source: CloudflaredAbsent, NeedsInstall: true}
 }
 
+func (l CloudflaredLookup) managedIsPinned() bool {
+	if l.ManagedVersion == (CloudflaredVersion{}) {
+		return true
+	}
+	if l.Version == nil {
+		return false
+	}
+	v, ok := l.Version(l.ManagedPath)
+	return ok && v == l.ManagedVersion
+}
+
 // ManagedCloudflaredPath is where AO keeps its own pinned copy.
 func ManagedCloudflaredPath(dataDir string) string {
 	name := "cloudflared"
@@ -194,12 +209,14 @@ func ManagedCloudflaredPath(dataDir string) string {
 }
 
 // LocalCloudflaredLookup builds the production lookup: the real PATH, the real
-// filesystem, and `cloudflared --version` for the version gate.
-func LocalCloudflaredLookup(dataDir string) CloudflaredLookup {
+// filesystem, and `cloudflared --version` for the version gates. pinned is the
+// release AO's own copy must be.
+func LocalCloudflaredLookup(dataDir string, pinned CloudflaredVersion) CloudflaredLookup {
 	return CloudflaredLookup{
-		EnvPath:     os.Getenv("AO_CLOUDFLARED_PATH"),
-		ManagedPath: ManagedCloudflaredPath(dataDir),
-		LookPath:    exec.LookPath,
+		EnvPath:        os.Getenv("AO_CLOUDFLARED_PATH"),
+		ManagedPath:    ManagedCloudflaredPath(dataDir),
+		ManagedVersion: pinned,
+		LookPath:       exec.LookPath,
 		Exists: func(p string) bool {
 			fi, err := os.Stat(p)
 			return err == nil && !fi.IsDir()

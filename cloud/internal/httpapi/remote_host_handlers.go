@@ -332,6 +332,9 @@ type hostTunnelResponse struct {
 	// Since is when the address's DNS record was made. The machine holds a
 	// newer address back from devices until resolvers can have it.
 	Since time.Time `json:"since"`
+	// Repaired is set when a repair request remade the tunnel. A repair asked
+	// too soon after the last write is answered from the stored tunnel.
+	Repaired bool `json:"repaired,omitempty"`
 }
 
 // remoteHostTunnel gives a linked machine the run token of its tunnel in the
@@ -356,9 +359,17 @@ func (s *Server) remoteHostTunnel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Each account gets its own token from the machine, so only the account
-	// that linked it last holds the one it presents, unless that token leaked.
+	// Each account gets its own token from the machine, so one account holds
+	// the one it presents, unless the token was shared. Then the machine stays
+	// with the tunnel it has: the address publish rewrites every matching
+	// listing, so picking by last write would move it back and forth.
 	host := slices.MaxFunc(hosts, func(a, b domain.RemoteHost) int { return a.UpdatedAt.Compare(b.UpdatedAt) })
+	for _, candidate := range hosts {
+		if stored, found, err := tunnels.GetRemoteHostTunnel(r.Context(), candidate.UserID, hostID); err == nil && found && !stored.Released {
+			host = candidate
+			break
+		}
+	}
 	var input struct {
 		Repair bool `json:"repair"`
 	}
@@ -434,7 +445,7 @@ func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remo
 		s.writeStoreError(w, r, err)
 		return hostTunnelResponse{}, false
 	}
-	return hostTunnelResponse{Hostname: tunnel.Hostname, RunToken: tunnel.RunToken, Since: since}, true
+	return hostTunnelResponse{Hostname: tunnel.Hostname, RunToken: tunnel.RunToken, Since: since, Repaired: repair}, true
 }
 
 func (s *Server) discardTunnel(ctx context.Context, hostID string, tunnel hosttunnel.Tunnel) {

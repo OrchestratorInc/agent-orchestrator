@@ -102,9 +102,9 @@ export function ThisComputerAccess() {
 
 	const turnOn = async () => {
 		const before = await fetchMobileStatus();
-		// Listed before this turn-on, by Connect Mobile or an earlier one: a failure here leaves it listed.
-		const listed = accountHosts.data?.some((host) => host.hostId === before.hostId) ?? false;
+		// Only a listing this turn-on added is taken back when it fails: one Connect Mobile or an earlier turn-on made stays.
 		let hostId = "";
+		let added = false;
 		let shared = false;
 		try {
 			// A running bridge keeps its password, so a phone paired over Connect Mobile stays paired.
@@ -116,10 +116,10 @@ export function ThisComputerAccess() {
 			}
 			// Linked before the tunnel starts, so the tunnel is this computer's fixed address.
 			// A full account refuses the quick tunnel's address too, so it stops here.
-			hostId = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password).catch((cause: unknown) => {
+			({ hostId, added } = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password).catch((cause: unknown) => {
 				if (cause instanceof RemoteHostLimitError) throw cause;
-				return "";
-			});
+				return { hostId: "", added: false };
+			}));
 			const access = await apiClient.POST("/api/v1/mobile/remote-access");
 			if (access.error) throw new Error(apiErrorMessage(access.error));
 			const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
@@ -128,12 +128,12 @@ export function ThisComputerAccess() {
 				return;
 			}
 			// No fixed address from this AO Cloud: listed at the quick tunnel's, as before fixed addresses.
-			if (!hostId) hostId = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password, { url: ready.url });
+			if (!hostId) ({ hostId, added } = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password, { url: ready.url }));
 			shared = true;
 		} finally {
 			// Not shared, the switch shows off; leaving access on, or the account listing this computer, would contradict it.
 			if (!shared) {
-				if (hostId && !listed) await deleteAccountRemoteHost(cloudBaseUrl, hostId).catch(() => undefined);
+				if (hostId && added) await deleteAccountRemoteHost(cloudBaseUrl, hostId).catch(() => undefined);
 				await restoreRemoteAccess(before);
 			}
 		}

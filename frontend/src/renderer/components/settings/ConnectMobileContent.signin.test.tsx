@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { TooltipProvider } from "../ui/tooltip";
 import { apiClient } from "../../lib/api-client";
-import { AccountHostSyncError, RemoteHostLimitError } from "../../lib/account-remote-hosts";
+import { AccountHostSyncError, deleteAccountRemoteHost, RemoteHostLimitError } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 
 // Remote access away from home needs sign-in. The daemon fake is just enough
@@ -12,6 +12,7 @@ import { linkThisComputer } from "../../lib/link-this-computer";
 // remote-access asks for one.
 const fake = vi.hoisted(() => ({
 	signedIn: false,
+	failRemoteAccess: false,
 	status: {
 		enabled: false,
 		noPublicTunnel: false,
@@ -35,7 +36,11 @@ vi.mock("../../lib/cloud-session", () => ({
 	useCloudSession: () => ({ session: fake.signedIn ? { user: { id: "user_01JAO" } } : null }),
 }));
 vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "https://cp.example.test" } }) }));
-vi.mock("../../lib/link-this-computer", () => ({ linkThisComputer: vi.fn(async () => "h_fixture") }));
+vi.mock("../../lib/account-remote-hosts", async (original) => ({
+	...(await original<typeof import("../../lib/account-remote-hosts")>()),
+	deleteAccountRemoteHost: vi.fn(async () => undefined),
+}));
+vi.mock("../../lib/link-this-computer", () => ({ linkThisComputer: vi.fn(async () => ({ hostId: "h_fixture", added: true })) }));
 vi.mock("../../lib/api-client", () => ({
 	apiClient: {
 		GET: async (path: string) => (path === "/api/v1/mobile/devices" ? { data: { devices: [] } } : { data: structuredClone(fake.status) }),
@@ -46,7 +51,10 @@ vi.mock("../../lib/api-client", () => ({
 					endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
 				});
 			}
-			if (path === "/api/v1/mobile/remote-access") fake.status.noPublicTunnel = false;
+			if (path === "/api/v1/mobile/remote-access") {
+				if (fake.failRemoteAccess) return { error: { error: { message: "connector failed" } } };
+				fake.status.noPublicTunnel = false;
+			}
 			if (path === "/api/v1/mobile/regenerate") fake.status.password = "pw-2";
 			return { data: structuredClone(fake.status) };
 		}),
@@ -70,6 +78,8 @@ beforeEach(() => {
 	Object.assign(fake.status, { enabled: false, noPublicTunnel: false, password: "", endpoints: [] });
 	vi.mocked(apiClient.POST).mockClear();
 	vi.mocked(linkThisComputer).mockClear();
+	vi.mocked(deleteAccountRemoteHost).mockClear();
+	fake.failRemoteAccess = false;
 });
 
 const posted = () => (vi.mocked(apiClient.POST).mock.calls as unknown[][]).map(([path]) => path);
@@ -93,6 +103,15 @@ test("a signed-in computer is linked before its tunnel starts", async () => {
 	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-1", undefined);
 	expect(vi.mocked(linkThisComputer).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(apiClient.POST).mock.invocationCallOrder[1]);
 	expect(screen.queryByTestId("mobile-sign-in-for-remote")).toBeNull();
+});
+
+test("a listing this enable added is taken back when remote access fails", async () => {
+	fake.signedIn = true;
+	fake.failRemoteAccess = true;
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
+
+	await waitFor(() => expect(deleteAccountRemoteHost).toHaveBeenCalledWith("https://cp.example.test", "h_fixture"));
 });
 
 test("a full account is said, and remote access still starts", async () => {

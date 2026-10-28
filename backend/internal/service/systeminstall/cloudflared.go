@@ -2,15 +2,22 @@ package systeminstall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// cloudflaredVersion is the connector release AO downloads itself. Bumping it
-// means re-pinning every digest in cloudflaredDownloads.
-const cloudflaredVersion = "2026.10.3"
+// cloudflaredVersion is the connector release AO downloads itself, the same
+// one the macOS app bundles (frontend/scripts/prepare-cloudflared.mjs): the
+// runner reads its log format, so one release runs everywhere. Bumping it
+// means re-pinning every digest here and there; a test holds the two together.
+const cloudflaredVersion = "2026.10.2"
+
+// PinnedCloudflared is cloudflaredVersion parsed, for checking a managed copy.
+var PinnedCloudflared, _ = mobilebridge.ParseCloudflaredVersion(cloudflaredVersion)
 
 const (
 	cloudflaredReleaseURL     = "https://github.com/cloudflare/cloudflared/releases/download/" + cloudflaredVersion + "/"
@@ -18,33 +25,33 @@ const (
 )
 
 // cloudflaredDownloads pins one asset per platform, keyed by GOOS/GOARCH. Each
-// digest is the SHA-256 of the asset as served: streamed from the release and
-// matched against GitHub's asset digest. The Linux and Windows values equal
-// the checksums in Cloudflare's release notes; for the darwin .tgz assets the
-// notes list the extracted binary instead (947e2942… amd64, f249139e… arm64),
-// which is what these archives were checked to contain.
+// digest is the SHA-256 of the asset as served, GitHub's asset digest. The
+// Linux and Windows values equal the checksums in Cloudflare's release notes;
+// for the darwin .tgz assets the notes list the extracted binary instead
+// (4be2a4c0… amd64, 823f993e… arm64), and the archive digests equal the macOS
+// bundle's.
 var cloudflaredDownloads = map[string]ports.ManagedBinaryDownload{
 	"darwin/amd64": {
 		URL:           cloudflaredReleaseURL + "cloudflared-darwin-amd64.tgz",
-		SHA256:        "81b7b85f2376815c4f59b1aa323887b62e16ce8b67555c2e1577dc23f2a82000",
+		SHA256:        "b64efd5a2772fc124b855f60eb3d33ba1a4f2ba67b19ddc58d32b705d42b82c9",
 		ArchiveMember: "cloudflared",
 	},
 	"darwin/arm64": {
 		URL:           cloudflaredReleaseURL + "cloudflared-darwin-arm64.tgz",
-		SHA256:        "1165d14b6f6360a3b8c283d7d1100024d6ec7cd9bc9e32519e96150645f3ec55",
+		SHA256:        "529a07089ac2d46762578389230fa148e5cb6ce2689200fc006956864042d17a",
 		ArchiveMember: "cloudflared",
 	},
 	"linux/amd64": {
 		URL:    cloudflaredReleaseURL + "cloudflared-linux-amd64",
-		SHA256: "053b80b0a23031a038fdbf3c073f59f82b8f1f152aa67971d7383ffafc0dbab0",
+		SHA256: "35fbdd2beb378436c7da377d7358cea8e33f9c94a6705d1d8036bf9b0d6d8005",
 	},
 	"linux/arm64": {
 		URL:    cloudflaredReleaseURL + "cloudflared-linux-arm64",
-		SHA256: "89297ebfb9e8c99c0dc013a1140601453cf3798d8306c5591651f4a3f5210be8",
+		SHA256: "b7e55b4d9702c2ab5f8348f780bb1db044527fc555367714c78e0595750a4665",
 	},
 	"windows/amd64": {
 		URL:    cloudflaredReleaseURL + "cloudflared-windows-amd64.exe",
-		SHA256: "76b2805253d0d6ffacb092a7acfbee99e7af6917835c0c5410e23f3ef5052da2",
+		SHA256: "12c7c887f8aaab779aef1dfa9b60673530a5adb88ecc55dd6df8f56e0b70f199",
 	},
 }
 
@@ -111,7 +118,8 @@ func (s *Service) runCloudflaredDownload(parent context.Context, download ports.
 		ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 		path, err = s.managedBinaries.InstallManagedBinary(ctx, download)
 		cancel()
-		if err == nil || parent.Err() != nil || try >= len(s.downloadWaits) {
+		// A rejected download, the wrong bytes, would be the same again.
+		if err == nil || parent.Err() != nil || errors.Is(err, ports.ErrDownloadRejected) || try >= len(s.downloadWaits) {
 			break
 		}
 		select {

@@ -3,12 +3,16 @@ package systeminstall
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -122,6 +126,43 @@ func TestCloudflaredDownloadFailureFallsBackToThePackageManager(t *testing.T) {
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("download attempts = %d, want the first and one more", calls.Load())
+	}
+}
+
+// The wrong bytes would be the same on every try, so they are not fetched
+// again.
+func TestCloudflaredDownloadDoesNotRetryWrongBytes(t *testing.T) {
+	s, calls := newDownloadService("linux", "amd64", func(ports.ManagedBinaryDownload) (string, error) {
+		return "", fmt.Errorf("%w: cloudflared checksum mismatch", ports.ErrDownloadRejected)
+	}, "apt-get")
+	s.downloadWaits = []time.Duration{time.Millisecond, time.Millisecond}
+	if _, err := s.Start(context.Background(), TargetCloudflared); err != nil {
+		t.Fatal(err)
+	}
+	waitForStatus(t, s, TargetCloudflared, StatusFailed)
+	if calls.Load() != 1 {
+		t.Fatalf("download attempts = %d, want 1", calls.Load())
+	}
+}
+
+// The macOS app bundles cloudflared too (frontend/scripts/prepare-cloudflared.mjs).
+// The runner reads its log format, so both copies are one release, and the
+// darwin archives are the same bytes.
+func TestCloudflaredPinMatchesTheMacOSBundle(t *testing.T) {
+	script, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "frontend", "scripts", "prepare-cloudflared.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(script), `const VERSION = "`+cloudflaredVersion+`";`) {
+		t.Fatalf("the macOS bundle pins another release than %s", cloudflaredVersion)
+	}
+	for _, platform := range []string{"darwin/arm64", "darwin/amd64"} {
+		if digest := cloudflaredDownloads[platform].SHA256; !strings.Contains(string(script), `archive: "`+digest+`"`) {
+			t.Errorf("%s archive %s is not the bundle's", platform, digest)
+		}
+	}
+	if PinnedCloudflared != (mobilebridge.CloudflaredVersion{2026, 10, 2}) {
+		t.Fatalf("PinnedCloudflared = %v", PinnedCloudflared)
 	}
 }
 

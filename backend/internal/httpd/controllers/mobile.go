@@ -766,6 +766,9 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 		b.LAN.SetPasswordHash(nextHash)
 	}
 	if accountTokenHash != prevSt.AccountTokenHash {
+		b.nudgeTunnel() // the new password revoked the account link
+	}
+	if accountTokenHash != prevSt.AccountTokenHash {
 		if setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) }); ok {
 			setter.SetAccountTokenHash(accountTokenHash)
 		}
@@ -898,7 +901,16 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 		return RemoteHostAccountTokenResponse{}, err
 	}
 	setter.SetAccountTokenHash(state.AccountTokenHash)
+	b.nudgeTunnel() // another account's link has another fixed address
 	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token}, nil
+}
+
+// nudgeTunnel has a running connector ask AO Cloud for its address now: the
+// account link it serves changed.
+func (b *BridgeService) nudgeTunnel() {
+	if n, ok := b.tunnel().(interface{ Nudge() }); ok {
+		n.Nudge()
+	}
 }
 
 // Enable generates a fresh password and starts the LAN listener. If it is

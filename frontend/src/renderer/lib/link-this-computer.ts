@@ -17,7 +17,9 @@ export function fitLabel(name: string): string {
  * tunnel starts: AO Cloud makes this computer's fixed address and lists it
  * there, so it never starts a quick tunnel only to replace it.
  *
- * Returns the host id the account now lists, or "" when nothing was linked:
+ * Returns the host id the account now lists, and whether this call added it,
+ * so a caller whose next step fails can take back only what it added. The
+ * host id is "" when nothing was linked:
  * without url on an AO Cloud with no fixed addresses (Allow access links again
  * with the quick tunnel's url once it has one), or with ifListed when the
  * account does not list this computer. Both are decided, and a full account
@@ -30,10 +32,11 @@ export async function linkThisComputer(
 	hostId: string,
 	password: string,
 	options: { url?: string; ifListed?: boolean } = {},
-): Promise<string> {
+): Promise<{ hostId: string; added: boolean }> {
 	const directory = await readAccountHostDirectory(cloudBaseUrl);
-	if (options.url === undefined && !directory.fixedAddresses) return "";
-	if (options.ifListed && !directory.hosts.some((host) => host.hostId === hostId)) return "";
+	const listed = directory.hosts.some((host) => host.hostId === hostId);
+	if (options.url === undefined && !directory.fixedAddresses) return { hostId: "", added: false };
+	if (options.ifListed && !listed) return { hostId: "", added: false };
 	assertRoomFor(directory, hostId);
 	const issued = await apiClient.POST("/api/v1/remote-host/account-token", {
 		headers: { Authorization: `Bearer ${password}`, "X-AO-Account-ID": accountId },
@@ -45,5 +48,5 @@ export async function linkThisComputer(
 		url: options.url,
 		token: issued.data.token,
 	});
-	return issued.data.hostId;
+	return { hostId: issued.data.hostId, added: !listed };
 }

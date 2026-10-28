@@ -101,9 +101,9 @@ func publishRemoteHostAddress(ctx context.Context, client *http.Client, controlP
 		return err
 	}
 	defer func() { _ = response.Body.Close() }()
-	switch response.StatusCode {
-	case http.StatusNoContent:
-	case http.StatusUnauthorized:
+	switch {
+	case response.StatusCode == http.StatusNoContent:
+	case mobilebridge.IsHostDigestRefusal(response):
 		return errAddressRefused
 	default:
 		return fmt.Errorf("control plane returned %d", response.StatusCode)

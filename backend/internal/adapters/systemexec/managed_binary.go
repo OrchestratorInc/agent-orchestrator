@@ -59,15 +59,15 @@ func (a Adapter) InstallManagedBinary(ctx context.Context, download ports.Manage
 		return "", fmt.Errorf("download %s: %w", download.Name, err)
 	}
 	if n > managedBinaryMaxBytes {
-		return "", fmt.Errorf("%s exceeds %d-byte download limit", download.Name, managedBinaryMaxBytes)
+		return "", fmt.Errorf("%w: %s exceeds %d-byte download limit", ports.ErrDownloadRejected, download.Name, managedBinaryMaxBytes)
 	}
 	if got := hash.Sum(nil); !bytes.Equal(got, want) {
-		return "", fmt.Errorf("%s checksum mismatch: got sha256 %x, want %s", download.Name, got, download.SHA256)
+		return "", fmt.Errorf("%w: %s checksum mismatch: got sha256 %x, want %s", ports.ErrDownloadRejected, download.Name, got, download.SHA256)
 	}
 
 	verified := tmp.Name()
 	if download.ArchiveMember != "" {
-		extracted, err := extractTarGzMember(verified, download.ArchiveMember, a.binDir, download.Name)
+		extracted, err := extractTarGzMember(ctx, verified, download.ArchiveMember, a.binDir, download.Name)
 		if err != nil {
 			return "", err
 		}
@@ -86,7 +86,7 @@ func (a Adapter) InstallManagedBinary(ctx context.Context, download ports.Manage
 
 // extractTarGzMember copies the regular file named member out of an already
 // verified .tar.gz into a private temp file in dir and returns its path.
-func extractTarGzMember(archive, member, dir, name string) (string, error) {
+func extractTarGzMember(ctx context.Context, archive, member, dir, name string) (string, error) {
 	file, err := os.Open(archive) //nolint:gosec // Daemon-created temp file.
 	if err != nil {
 		return "", fmt.Errorf("open %s archive: %w", name, err)
@@ -100,7 +100,7 @@ func extractTarGzMember(archive, member, dir, name string) (string, error) {
 	for {
 		header, err := entries.Next()
 		if errors.Is(err, io.EOF) {
-			return "", fmt.Errorf("%s archive has no %s", name, member)
+			return "", fmt.Errorf("%w: %s archive has no %s", ports.ErrDownloadRejected, name, member)
 		}
 		if err != nil {
 			return "", fmt.Errorf("read %s archive: %w", name, err)
@@ -112,11 +112,28 @@ func extractTarGzMember(archive, member, dir, name string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("create %s: %w", name, err)
 		}
-		_, copyErr := io.Copy(out, io.LimitReader(entries, managedBinaryMaxBytes))
+		n, copyErr := io.Copy(out, contextReader{ctx, io.LimitReader(entries, managedBinaryMaxBytes+1)})
+		if copyErr == nil && n > managedBinaryMaxBytes {
+			copyErr = fmt.Errorf("%w: %s exceeds %d bytes", ports.ErrDownloadRejected, member, managedBinaryMaxBytes)
+		}
 		if err := errors.Join(copyErr, out.Sync(), out.Close()); err != nil {
 			_ = os.Remove(out.Name())
 			return "", fmt.Errorf("extract %s: %w", name, err)
 		}
 		return out.Name(), nil
 	}
+}
+
+// contextReader stops a copy once ctx ends: an install timeout or a daemon
+// shutdown must not wait out a long extraction.
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c contextReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
