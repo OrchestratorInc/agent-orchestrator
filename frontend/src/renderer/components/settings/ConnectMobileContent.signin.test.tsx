@@ -80,7 +80,9 @@ function renderContent() {
 beforeEach(() => {
 	Object.assign(fake.status, { enabled: false, noPublicTunnel: false, password: "", endpoints: [] });
 	vi.mocked(apiClient.POST).mockClear();
-	vi.mocked(linkThisComputer).mockClear();
+	// Reset, not cleared: a rejection a test queued and never used must not
+	// reach the next test.
+	vi.mocked(linkThisComputer).mockReset().mockImplementation(async () => ({ hostId: "h_fixture", added: true }));
 	vi.mocked(deleteAccountRemoteHost).mockClear();
 	fake.failRemoteAccess = false;
 	fake.tunnelHost = "";
@@ -184,6 +186,24 @@ test("a new password that could not be linked is listed at the running tunnel's 
 
 	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith(
 		"https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true, url: "https://h-abc.useao.dev:443" },
+	));
+});
+
+test("on an AO Cloud without fixed addresses a new password is listed at the tunnel's address", async () => {
+	fake.signedIn = true;
+	Object.assign(fake.status, {
+		enabled: true, noPublicTunnel: false, password: "pw-1",
+		endpoints: [
+			{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
+			{ kind: "tunnel", host: "quiet-river.trycloudflare.com", port: 443, secure: true },
+		],
+	});
+	vi.mocked(linkThisComputer).mockResolvedValueOnce({ hostId: "", added: false });
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Regenerate password" }));
+
+	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith(
+		"https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true, url: "https://quiet-river.trycloudflare.com:443" },
 	));
 });
 

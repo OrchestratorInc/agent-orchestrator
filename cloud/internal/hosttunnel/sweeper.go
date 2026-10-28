@@ -123,14 +123,23 @@ func sweepCandidate(ctx context.Context, store SweepStore, cf *Cloudflare, c dom
 	// Read again under the lock: the machine may have fetched its token, or
 	// got a new tunnel, since the candidates were read.
 	row, found, err := store.FindRemoteHostTunnel(ctx, c.TunnelID)
-	if err != nil || !found || (c.Registered && !row.LastSeenAt.Before(cutoff)) {
+	if err != nil || !found {
+		if err != nil {
+			fail(err)
+		}
+		return false
+	}
+	// And whether the account lists the host now: it may have listed it
+	// again, or removed it, which starts the grace from the row's write.
+	listed, err := store.RemoteHostListed(ctx, c.UserID, c.HostID)
+	if err != nil || (listed && !row.LastSeenAt.Before(cutoff)) || (!listed && now.Sub(row.UpdatedAt) < UnregisteredGrace) {
 		if err != nil {
 			fail(err)
 		}
 		return false
 	}
 	// A machine whose daemon cannot reach AO Cloud may still be serving.
-	if c.Registered && !c.Released {
+	if listed && !row.Released {
 		online, err := cf.Online(ctx, c.TunnelID)
 		if err != nil {
 			fail(err)
@@ -138,16 +147,6 @@ func sweepCandidate(ctx context.Context, store SweepStore, cf *Cloudflare, c dom
 		}
 		if online {
 			if err := store.TouchRemoteHostTunnel(ctx, c.TunnelID, now); err != nil {
-				fail(err)
-			}
-			return false
-		}
-	}
-	// Asked again under the lock: the account may have listed the host again
-	// since the candidates were read.
-	if !c.Registered {
-		if listed, err := store.RemoteHostListed(ctx, c.UserID, c.HostID); err != nil || listed {
-			if err != nil {
 				fail(err)
 			}
 			return false

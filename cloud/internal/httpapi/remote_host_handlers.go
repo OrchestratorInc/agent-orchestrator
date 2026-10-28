@@ -329,8 +329,8 @@ func (s *Server) remoteHostsForDigest(w http.ResponseWriter, r *http.Request, st
 // matchDigest is the registrations of hostID whose host token hashes to the
 // digest in authorization ("Bearer <hex>"); none for a malformed one.
 func (s *Server) matchDigest(ctx context.Context, store remoteHostAddressStore, hostID, authorization string) ([]domain.RemoteHost, error) {
-	digest, err := hex.DecodeString(strings.TrimPrefix(authorization, "Bearer "))
-	if !validRemoteHostID(hostID) || err != nil || len(digest) != sha256.Size {
+	digest, ok := bearerDigest(authorization)
+	if !validRemoteHostID(hostID) || !ok {
 		return nil, nil
 	}
 	hosts, err := store.FindRemoteHostRegistrations(ctx, hostID)
@@ -349,8 +349,13 @@ func (s *Server) matchDigest(ctx context.Context, store remoteHostAddressStore, 
 // digestMatches reports whether host's token hashes to the digest in
 // authorization ("Bearer <hex>").
 func (s *Server) digestMatches(host domain.RemoteHost, hostID, authorization string) bool {
+	digest, ok := bearerDigest(authorization)
+	return ok && s.digestHashes(host, hostID, digest)
+}
+
+func bearerDigest(authorization string) ([]byte, bool) {
 	digest, err := hex.DecodeString(strings.TrimPrefix(authorization, "Bearer "))
-	return err == nil && len(digest) == sha256.Size && s.digestHashes(host, hostID, digest)
+	return digest, err == nil && len(digest) == sha256.Size
 }
 
 func (s *Server) digestHashes(host domain.RemoteHost, hostID string, digest []byte) bool {

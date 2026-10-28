@@ -282,9 +282,10 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		}
 	case withdrawn.Load():
 		waitErr = errFixedTunnelChanged
-	case fixed && ctx.Err() == nil && health.wasRefused():
-		// Exited by itself on a refusal, before the watchers judged it. A
-		// crash or a kill says nothing about the tunnel.
+	case fixed && ctx.Err() == nil && (health.wasRefused() || !health.servedOnce()):
+		// Exited by itself on a refusal, or before it ever served, as one
+		// whose token cloudflared rejects does: that token is no use as it
+		// stands. A crash after serving says nothing about the tunnel.
 		markUnservedTunnel(true)
 	}
 	if ctx.Err() == nil && (errors.Is(waitErr, errFixedTunnelReady) || errors.Is(waitErr, errFixedTunnelChanged) || refusedNow) {

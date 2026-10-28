@@ -316,6 +316,7 @@ type fakeSweepStore struct {
 	released   []string
 	deleted    []string
 	relisted   map[string]bool // by host, listed again since the candidates were read
+	unlisted   map[string]bool // by host, removed since the candidates were read
 }
 
 func (s *fakeSweepStore) ReleaseRemoteHostTunnel(_ context.Context, tunnelID string) error {
@@ -328,7 +329,12 @@ func (s *fakeSweepStore) ReleaseRemoteHostTunnel(_ context.Context, tunnelID str
 }
 
 func (s *fakeSweepStore) RemoteHostListed(_ context.Context, _, hostID string) (bool, error) {
-	return s.relisted[hostID], nil
+	if s.relisted[hostID] {
+		return true, nil
+	}
+	return !s.unlisted[hostID] && slices.ContainsFunc(s.candidates, func(c domain.RemoteHostTunnelCandidate) bool {
+		return c.HostID == hostID && c.Registered
+	}), nil
 }
 
 func (s *fakeSweepStore) FindRemoteHostTunnel(_ context.Context, tunnelID string) (domain.RemoteHostTunnel, bool, error) {
@@ -378,9 +384,16 @@ func TestSweepDeletesOnlyWhatIsGone(t *testing.T) {
 		{HostID: "relisted", TunnelID: "relisted", Hostname: "h-relisted.example.dev"},
 		{HostID: "back", TunnelID: "back", Hostname: "h-back.example.dev", Registered: true},
 		{HostID: "released", TunnelID: "released", Hostname: "h-released.example.dev", Registered: true, Released: true},
-	}, relisted: map[string]bool{"relisted": true},
-		// Seen after the candidates were read: back after 90 days away.
-		rows: map[string]domain.RemoteHostTunnel{"back": {HostID: "back", TunnelID: "back", Hostname: "h-back.example.dev", LastSeenAt: now}}}
+		{HostID: "removed", TunnelID: "removed", Hostname: "h-removed.example.dev", Registered: true},
+	}, relisted: map[string]bool{"relisted": true}, unlisted: map[string]bool{"removed": true},
+		rows: map[string]domain.RemoteHostTunnel{
+			// Seen after the candidates were read: back after 90 days away.
+			"back": {HostID: "back", TunnelID: "back", Hostname: "h-back.example.dev", LastSeenAt: now},
+			// Removed from the account after the candidates were read: the
+			// record keeps its grace.
+			"removed": {HostID: "removed", TunnelID: "removed", Hostname: "h-removed.example.dev", LastSeenAt: long, UpdatedAt: now, Released: true},
+		}}
+	cf.records["h-removed.example.dev"] = fakeRecord{id: "rec-removed", content: "removed.cfargotunnel.com", proxied: true}
 	cf.tunnels["back"] = fakeTunnel{name: "ao-back", status: "down", inactive: &long}
 	cf.tunnels["relisted"] = fakeTunnel{name: "ao-relisted", status: "healthy"}
 	done, err := Sweep(context.Background(), store, c, now)
@@ -393,7 +406,10 @@ func TestSweepDeletesOnlyWhatIsGone(t *testing.T) {
 	if _, ok := cf.tunnels["back"]; !ok {
 		t.Fatal("a machine seen again during the sweep lost its tunnel")
 	}
-	if done != 4 || strings.Join(store.deleted, ",") != "stale,missing,orphan,released" || strings.Join(store.touched, ",") != "online" {
+	if _, ok := cf.records["h-removed.example.dev"]; !ok {
+		t.Fatal("a host removed during the sweep lost its record before its grace")
+	}
+	if done != 4 || strings.Join(store.deleted, ",") != "stale,missing,orphan,released" || strings.Join(store.touched, ",") != "online,relisted" {
 		t.Fatalf("done %d, deleted %v, touched %v", done, store.deleted, store.touched)
 	}
 	// A machine serving through a daemon that cannot reach AO Cloud is seen now.

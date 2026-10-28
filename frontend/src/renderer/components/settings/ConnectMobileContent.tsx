@@ -380,20 +380,24 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const [linkError, setLinkError] = useState("");
 	const reportLinkError = (cause: unknown) =>
 		setLinkError(cause instanceof Error && cause.message ? cause.message : t("remote.shareThisComputerFailed"));
-	/** Returns the host id this call added to the account, or "", and whether linking failed. */
-	const linkIfSignedIn = async (password: string, hostId: string, options?: { ifListed?: boolean }): Promise<{ added: string; failed: boolean }> => {
+	/** Returns the host id the account lists now and the one this call added, or "", and whether linking failed. */
+	const linkIfSignedIn = async (
+		password: string,
+		hostId: string,
+		options?: { ifListed?: boolean },
+	): Promise<{ linked: string; added: string; failed: boolean }> => {
 		setLinkError("");
-		if (!signedIn || !password) return { added: "", failed: false };
+		if (!signedIn || !password) return { linked: "", added: "", failed: false };
 		// Not fatal: an unlinked computer still gets a quick tunnel, whose
 		// address changes on restart. Said, though: after a new password the
 		// account's devices hold the old one until a link lands. An AO Cloud
 		// without fixed addresses is not linked here, as before them.
 		return linkThisComputer(cloudBaseUrl, accountId, hostId, password, options).then(
-			(linked) => ({ added: linked.added ? linked.hostId : "", failed: false }),
+			(linked) => ({ linked: linked.hostId, added: linked.added ? linked.hostId : "", failed: false }),
 			(cause: unknown) => {
 				reportLinkError(cause);
 				// A full account refuses the quick tunnel's address too.
-				return { added: "", failed: !(cause instanceof RemoteHostLimitError) };
+				return { linked: "", added: "", failed: !(cause instanceof RemoteHostLimitError) };
 			},
 		);
 	};
@@ -470,10 +474,16 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onError: () => setOptimisticEnabled(null),
 	});
 
-	// After cloudflared is installed. Signed in since the bridge started
-	// LAN-only, the computer is linked first, as enable links it.
+	// After cloudflared is installed. A bridge that started LAN-only, signed
+	// out, is linked first, as enable links it; one already serving remote
+	// access was linked when it started.
 	const startRemoteAccess = useMutation({
-		mutationFn: () => linkAndStartRemoteAccess(query.data?.password ?? "", query.data?.hostId ?? ""),
+		mutationFn: async () => {
+			if (query.data?.noPublicTunnel === true) return linkAndStartRemoteAccess(query.data.password, query.data.hostId ?? "");
+			const { data, error } = await apiClient.POST("/api/v1/mobile/remote-access");
+			if (error) throw new Error(apiErrorMessage(error));
+			return data;
+		},
 		onSuccess: invalidate,
 	});
 
@@ -489,8 +499,12 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			// by signing it out of the account; a new password is for
 			// password-paired devices.
 			if (data && !data.noPublicTunnel) {
-				const { failed } = await linkIfSignedIn(data.password ?? "", data.hostId ?? "", { ifListed: true });
-				if (failed) void linkAtTunnelAddress(data.password ?? "", data.hostId ?? "", { ifListed: true }).catch(reportLinkError);
+				const { linked, failed } = await linkIfSignedIn(data.password ?? "", data.hostId ?? "", { ifListed: true });
+				// Not linked without a url, the account still lists the old token: an AO
+				// Cloud without fixed addresses lists the tunnel's address instead.
+				if (signedIn && (failed || !linked)) {
+					void linkAtTunnelAddress(data.password ?? "", data.hostId ?? "", { ifListed: true }).catch(reportLinkError);
+				}
 			}
 			return data;
 		},
