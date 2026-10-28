@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { captureFileReference, formatCapturedFileReferences, isSupportedFileReference } from "./chat-file-reference";
+import { captureFileReference, formatCapturedFileReferences, isFileViewCapture, isSupportedFileReference } from "./chat-file-reference";
 import { normalizeCodeRowText } from "./file-annotations";
 
 it.each(["notes:v2.md", "a\\b", "/absolute", "../outside", "a/../b", "a//b"])("rejects unsupported source path %s without changing it", path => {
@@ -60,4 +60,12 @@ describe("captured row boundaries", () => {
   expect(ref.lines[0].text).toHaveLength(700);
   expect(ref.truncated).toBe(false);
  });
+});
+
+it("keeps a deleted file's historical File-view capture out of diff mode", () => {
+	const row = { kind: "context" as const, oldNo: 2, newNo: null, text: "b();", side: "file" as const };
+	expect(isFileViewCapture({ side: "old", lines: [row] })).toBe(true);
+	expect(isFileViewCapture({ side: "file", lines: [{ ...row, side: undefined }] })).toBe(true);
+	expect(isFileViewCapture({ side: "old", lines: [{ ...row, side: "old" }] })).toBe(false);
+	expect(isFileViewCapture({ side: "old", lines: [row, { ...row, side: "old" }] })).toBe(false);
 });

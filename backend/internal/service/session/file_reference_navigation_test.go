@@ -81,3 +81,15 @@ func TestCapturedDiffIntervalRequiresEveryRow(t *testing.T) {
 		})
 	}
 }
+
+func TestFileReferenceDeletedFileViewCaptureIsNotVerifiedAsDiff(t *testing.T) {
+	ref := ports.ChatFileReference{ID: "deleted-file-view", SessionID: "ao-1", Path: "gone.ts", Source: ports.ChatFileReferenceSource{Kind: "workspace"}, Scope: "combined", Side: "old", EndSide: "old", Line: 2, EndLine: 3, Lines: []ports.ChatFileReferenceLine{
+		{Kind: "context", Side: "file", OldNo: intPointer(2), Text: "b();"},
+		{Kind: "context", Side: "file", OldNo: intPointer(3), Text: "c();"},
+	}}
+	unchanged := FileReferenceResolution{State: "unchanged"}
+	result := (&Service{}).verifyFileReferenceDiff(context.Background(), "ao-1", ref, unchanged, nil)
+	if result != unchanged {
+		t.Fatalf("historical File-view capture was treated as a diff selection: %+v", result)
+	}
+}

@@ -154,10 +154,25 @@ func memoizeFileReferenceRead(path func() string, readSource func(WorkspaceFileB
 	}
 }
 
+// A File-view capture is verified against one revision's text, not a diff. Its
+// top-level side may still be "old" to name the historical revision, so the rows
+// carry the capture mode.
+func isFileViewCapture(ref ports.ChatFileReference) bool {
+	if ref.Side == "file" {
+		return true
+	}
+	for _, row := range ref.Lines {
+		if row.Side != "file" {
+			return false
+		}
+	}
+	return len(ref.Lines) > 0
+}
+
 // A range is navigable only when its complete row sequence is still one
 // continuous diff interval. Independent exact matches on each side are not enough.
 func (s *Service) verifyFileReferenceDiff(ctx context.Context, id domain.SessionID, ref ports.ChatFileReference, result FileReferenceResolution, read func(WorkspaceFileBlobSide) (WorkspaceFileRevision, error)) FileReferenceResolution {
-	if ref.Side == "file" || (result.State != "unchanged" && result.State != "moved") || ref.Source.Kind == "artifact" {
+	if isFileViewCapture(ref) || (result.State != "unchanged" && result.State != "moved") || ref.Source.Kind == "artifact" {
 		return result
 	}
 	var patch string
