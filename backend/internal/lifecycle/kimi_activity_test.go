@@ -266,6 +266,29 @@ func TestKimiApprovalDaemonRestartLosesInMemoryEvidence(t *testing.T) {
 	}
 }
 
+func TestKimiApprovalSpawnResetsCacheAndFencesOldLaunch(t *testing.T) {
+	m, st, _ := newManager()
+	seedKimi(st)
+	mustApply(t, m, "mer-1", kimiApprovalSignal("permission-resolved", "a"))
+	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "new-launch"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.flights["mer-1"]; ok {
+		t.Fatal("approval completion leaked into a fresh launch")
+	}
+	s := kimiApprovalSignal("permission-request", "a")
+	s.LaunchID = "old-launch"
+	mustApply(t, m, "mer-1", s)
+	if got := stateOf(st, "mer-1"); got != domain.ActivityIdle {
+		t.Fatalf("old launch changed fresh activity: %s", got)
+	}
+	s.LaunchID = "new-launch"
+	mustApply(t, m, "mer-1", s)
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("fresh launch inherited old completion: %s", got)
+	}
+}
+
 func TestNonKimiPermissionSignalsKeepExistingSemantics(t *testing.T) {
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
