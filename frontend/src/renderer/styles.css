@@ -503,7 +503,7 @@ html[data-modal-handoff] .dialog-overlay,
 	min-height: 0;
 	width: 100%;
 	background-color: var(--color-bg-sidebar);
-	padding-top: var(--size-center-panel-bottom-inset);
+	padding-top: 0;
 	padding-right: var(--size-center-panel-inline-inset);
 	padding-bottom: var(--size-center-panel-bottom-inset);
 	padding-left: 0;
@@ -535,7 +535,7 @@ html[data-modal-handoff] .dialog-overlay,
 
 /* macOS: use the same block inset above and below the surface. */
 .center-panel-shell.center-panel-shell--mac {
-	padding-top: var(--size-center-panel-inset-mac);
+	padding-top: 0;
 	padding-right: var(--size-center-panel-inset-mac);
 	padding-bottom: var(--size-center-panel-inset-mac);
 	padding-left: 0;
@@ -543,8 +543,43 @@ html[data-modal-handoff] .dialog-overlay,
 
 /* Keep the center surface closed on all four edges, including macOS where the
  * native titlebar sits above the panel rather than replacing its border. */
-.center-panel-shell--mac > .center-panel-surface {
+.center-panel-shell--mac > .center-panel-workspace > .center-panel-surface {
 	border-top-width: 1px;
+}
+
+/* The header keeps the surface's former inset. Only the content below it owns
+ * a rounded border; flex layout gives that pane the remaining height. */
+.center-panel-topbar {
+	position: relative;
+	display: flex;
+	min-height: var(--size-toolbar);
+	flex: 0 0 auto;
+	align-items: flex-start;
+	margin-inline: 1px;
+	overflow: hidden;
+}
+
+.center-panel-topbar-region {
+	container-name: workspace-topbar;
+	container-type: inline-size;
+	min-width: 0;
+	flex: 0 0 auto;
+}
+
+.center-panel-topbar-region--inspector {
+	container-name: inspector;
+	order: 1;
+	margin-left: auto;
+}
+
+.center-panel-workspace:has([data-slot="inspector-container"][data-state="collapsed"]) .center-panel-topbar-region--inspector {
+	display: none;
+}
+
+.center-panel-topbar :is(header, .session-topbar-surface, .session-inspector__topbar) {
+	border: 0;
+	border-radius: 0;
+	background: transparent;
 }
 
 /* Both native platforms drag from the shared header without an extra strip. */
@@ -565,15 +600,15 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	padding: 0;
 }
 
-/* Sidebar closed on mac: content panel expands to fill the full window.
- * Remove all padding and strip the surface border + radius so it's flush. */
+/* Sidebar closed on mac: the workspace fills the window while its content
+ * remains a separate rounded pane beneath the bare header. */
 .sidebar-hidden .center-panel-shell.center-panel-shell--mac {
 	padding: 0;
 }
 
 .sidebar-hidden .center-panel-shell--mac .center-panel-surface {
-	border-color: transparent;
-	border-radius: 0;
+	border-color: var(--color-border-strong);
+	border-radius: var(--radius-center-panel);
 }
 
 /* Session topbar now lives inside .center-panel-surface. When it's rendered
@@ -609,6 +644,14 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	left: 0;
 	right: auto;
 	background: linear-gradient(270deg, transparent 0%, var(--color-bg-primary) 82%);
+}
+
+.center-panel-topbar .session-tab-scroll-fade {
+	background: linear-gradient(90deg, transparent 0%, var(--color-bg-sidebar) 82%);
+}
+
+.center-panel-topbar .session-tab-scroll-fade--left {
+	background: linear-gradient(270deg, transparent 0%, var(--color-bg-sidebar) 82%);
 }
 
 /* Vertical section caps resolve against the actual sidebar space between chrome. */
@@ -3360,7 +3403,7 @@ html.sidebar-reordering * {
 .panel-topbar-controls {
 	position: absolute;
 	top: 0;
-	right: var(--gap-topbar-control);
+	right: calc(var(--gap-topbar-control) + 1px);
 	z-index: var(--z-index-chrome);
 }
 
@@ -3370,7 +3413,7 @@ html.sidebar-reordering * {
 	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--gap-topbar-control) + var(--gap-topbar-control));
 }
 
-.has-topbar-controls .session-split:has([data-slot="inspector-container"][data-state="expanded"]) .session-topbar-actions:not([data-fullscreen]) {
+.has-topbar-controls:has(.center-panel-topbar-region--inspector:not([hidden])):has([data-slot="inspector-container"][data-state="expanded"]) .center-panel-topbar-region--session .session-topbar-actions:not([data-fullscreen]) {
 	padding-right: var(--gap-topbar-control);
 }
 
@@ -5427,17 +5470,55 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 	background: linear-gradient(270deg, transparent 0%, var(--bg) 82%);
 }
 
-.browser-panel__tab {
+.browser-panel__tab,
+.center-panel-topbar-region--session [data-terminal-tab-frame],
+.center-panel-topbar-region--session .session-workspace-tab {
 	position: relative;
 	display: flex;
 	width: 200px;
 	min-width: 150px;
 	max-width: 200px;
-	height: 28px;
+	height: var(--size-topbar-control);
 	flex: 0 1 200px;
 	border-radius: var(--radius-md);
 	color: var(--fg-muted);
 	background: transparent;
+}
+
+.center-panel-topbar-region--session [data-terminal-tab-frame],
+.center-panel-topbar-region--session .session-workspace-tab {
+	align-self: center;
+	border: 0;
+	font-size: 12px;
+	font-weight: 550;
+}
+
+.center-panel-topbar-region--session [data-terminal-tab-frame] > span {
+	height: 100%;
+}
+
+.center-panel-topbar-region--session [data-terminal-tab-frame] [role="tab"] {
+	font-size: 12px;
+}
+
+.center-panel-topbar-region--session [data-terminal-tab-frame] [role="tab"] > span {
+	font-weight: 550;
+}
+
+.center-panel-topbar-region--session [data-terminal-tab-frame] > [data-testid="active-terminal-tab-indicator"] {
+	display: none;
+}
+
+.center-panel-topbar-region--session :is([role="tablist"], .session-tab-items) {
+	column-gap: 2px;
+}
+
+.center-panel-topbar-region--session .session-tab-items:empty {
+	display: none;
+}
+
+.center-panel-topbar-region--session [data-testid="session-tab-strip-action"] {
+	margin-left: 2px;
 }
 
 .browser-panel__tab--drag-placeholder {
@@ -5457,12 +5538,16 @@ body:has(#root .platform-linux) > .files-popout-overlay {
 	pointer-events: none;
 }
 
-.browser-panel__tab:hover {
+.browser-panel__tab:hover,
+.center-panel-topbar-region--session [data-terminal-tab-frame]:hover,
+.center-panel-topbar-region--session .session-workspace-tab:hover {
 	color: var(--fg);
 	background: var(--interactive-hover);
 }
 
-.browser-panel__tab--active {
+.browser-panel__tab--active,
+.center-panel-topbar-region--session [data-terminal-tab-frame]:has([aria-selected="true"]),
+.center-panel-topbar-region--session .session-workspace-tab[aria-selected="true"] {
 	color: var(--fg);
 	background: var(--interactive-active);
 }

@@ -456,12 +456,7 @@ export function CenterPane({
 	const terminalTopbar = (
 		<SessionTabsTopbar
 			fullscreen={isFullscreen}
-			actions={
-				<>
-					{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
-					{topbarActions}
-				</>
-			}
+			actions={topbarActions}
 			clearanceClassName={cn(
 				!isFullscreen && isMac && "session-topbar-titlebar-clearance-mac",
 				!isFullscreen && !isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
@@ -483,7 +478,7 @@ export function CenterPane({
 									className="session-tab-scroll-region scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
 									layoutScroll
 								>
-								<div className="flex w-max items-stretch">
+								<div className="session-tab-items flex w-max items-stretch">
 									{/* The owning session scrolls with its auxiliary terminals, but remains fixed in order. */}
 									{session ? (
 										<SessionPaneTab
@@ -501,7 +496,7 @@ export function CenterPane({
 									<Reorder.Group
 										as="div"
 										axis="x"
-										className="flex items-stretch self-stretch"
+									className="session-tab-items flex items-stretch self-stretch"
 										onReorder={reorderAuxiliaryTabs}
 										values={orderedAuxiliaryTabs.map((tab) => tab.key)}
 									>
@@ -545,6 +540,7 @@ export function CenterPane({
 											</DraggableWorkspaceTab>
 										))}
 									</Reorder.Group>
+									{!isFullscreen && tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
 									{workspaceTabActions}
 								</div>
 							</motion.div>

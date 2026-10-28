@@ -6,10 +6,9 @@ import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 import { PageTopbarSurface } from "./PageTopbar";
 
 /**
- * Shared inset center panel: sidebar-colored outer frame with a bordered inner
- * surface. Used by the shell's app routes (kanban / session), the welcome board,
- * and settings. Chrome lives in `styles.css` (`center-panel-shell` +
- * `center-panel-surface`).
+ * Shared inset workspace: a bare header above a rounded, bordered content pane.
+ * Used by app routes, the welcome board, and settings. PageTopbarSurface keeps
+ * headers outside the content frame without moving their window coordinates.
  *
  * `titlebarAlign` (default true) pulls Board/Terminal titles up level with the
  * fixed TitlebarNav cluster on macOS and Linux. Windows keeps those controls in

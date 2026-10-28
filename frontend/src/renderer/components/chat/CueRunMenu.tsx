@@ -205,10 +205,9 @@ function CueRunMenuTrigger({
 						aria-label={t("cues.run")}
 						// The menu is anchored to this button: pressing must not scale it,
 						// or the open menu shifts with the trigger.
-						className="topbar-control--static-press"
-						data-priority="secondary"
+						className="topbar-control--static-press topbar-control--labeled"
 						disabled={disabled || spinner}
-						variant="icon"
+						variant="action"
 						onPointerEnter={handlePointerEnter}
 						onPointerLeave={handlePointerLeave}
 						// Keyboard activation opens the menu (Radix); only pointer
@@ -223,6 +222,7 @@ function CueRunMenuTrigger({
 						) : (
 							<Play className="size-icon-md" aria-hidden="true" />
 						)}
+						<span>{t("cues.runButton")}</span>
 					</TopbarButton>
 				</DropdownMenuTrigger>
 

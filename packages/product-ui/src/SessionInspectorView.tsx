@@ -49,6 +49,7 @@ export function SessionInspectorShellView({
 	sideChatView,
 	filesView,
 	headerActions,
+	renderHeader = (header) => header,
 	isVisible = true,
 	loadingText,
 	onViewChange,
@@ -64,6 +65,8 @@ export function SessionInspectorShellView({
 	sideChatView?: ReactNode;
 	filesView?: ReactNode;
 	headerActions?: ReactNode;
+	/** Allows the workspace to place this header above its framed content. */
+	renderHeader?: (header: ReactNode) => ReactNode;
 	isVisible?: boolean;
 	loadingText?: string;
 	onViewChange: (view: InspectorView) => void;
@@ -114,7 +117,7 @@ export function SessionInspectorShellView({
 
 	return (
 		<aside className={inspectorShellClass} aria-label={ariaLabel}>
-			<div
+			{renderHeader(<div
 				className={cn(
 					"session-inspector__topbar flex h-inspector-tabs shrink-0 items-center border-b border-border-strong pl-1",
 					activeView === "browser" && "session-inspector__topbar--browser",
@@ -185,7 +188,7 @@ export function SessionInspectorShellView({
 					</div>
 				) : null}
 				{isVisible ? headerActions : null}
-			</div>
+			</div>)}
 
 			<div
 				aria-hidden={!isVisible}

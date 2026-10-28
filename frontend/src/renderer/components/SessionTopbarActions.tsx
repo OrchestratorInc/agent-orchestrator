@@ -38,7 +38,7 @@ import { SessionOwnerTag } from "./SessionOwnerTag";
 
 const noDragStyle = isMacPlatform() ? ({ WebkitAppRegion: "no-drag" } as React.CSSProperties) : undefined;
 
-// The action cluster a session's tab strip hosts: open-in-editor, cues, archive,
+// The action cluster a session's tab strip hosts: open-in-editor, cues,
 // and the orchestrator / board / new-task launchers. The page frame itself is
 // SessionTabsTopbar (PageTopbar.tsx); this renders only the actions, so it has
 // no frame of its own. Orchestrators open the Kanban board and workers open
@@ -140,10 +140,8 @@ export function SessionTopbarActions({
 					</Tooltip>
 				</>
 			) : null}
-			{/* Open-in-editor leads the session actions: it is the only
-			    non-destructive one, and it must sit left of Kill. Kept outside
-			    the local-actions group because Electron main independently
-			    reports whether this session has a live workspace. Cloud sessions
+			{/* Electron main independently reports whether this session has a live
+			    workspace. Cloud sessions
 			    have no local workspace to hand off to an editor: the local daemon
 			    has never heard of them, so querying it just surfaces its 404 as a
 			    confusing "Unknown session" error (see workspace.ts's `kind` doc). */}
@@ -180,18 +178,19 @@ export function SessionTopbarActions({
 					/>
 				</span>
 			) : null}
-			{/* Local worker actions share one tight control group. Navigation
-			    remains a separate visual target in the outer top-bar row. */}
-			{!isOrchestrator &&
-				(sessionAction || (session && !session.cloud && sessionIsActive(session))) ? (
+			{!isOrchestrator && sessionAction ? (
 				<div
 					className="inline-flex shrink-0 items-center gap-(--gap-topbar-control)"
 					data-testid="session-local-actions"
 					style={noDragStyle}
 				>
-					{sessionAction ? <div className="inline-flex shrink-0 items-center">{sessionAction}</div> : null}
-					{session && !session.cloud && sessionIsActive(session) ? (
+					{sessionAction}
+				</div>
+			) : null}
+			{/* Keep the archive shortcut and confirmation without a toolbar button. */}
+			{!isOrchestrator && session && !session.cloud && sessionIsActive(session) ? (
 						<TopbarArchiveButton
+							shortcutOnly
 							key={session.id}
 							session={session}
 							orchestratorId={orchestrator?.id}
@@ -210,8 +209,6 @@ export function SessionTopbarActions({
 								void navigate(projectNavigateTarget(workspaceId, hostId));
 							}}
 						/>
-					) : null}
-				</div>
 			) : null}
 			{!isOrchestrator && supportsProjectActions ? (
 				<Tooltip>
@@ -247,10 +244,12 @@ export function TopbarArchiveButton({
 	session,
 	orchestratorId,
 	onKilled,
+	shortcutOnly = false,
 }: {
 	session: WorkspaceSession;
 	orchestratorId?: string;
 	onKilled: (workspaceId: string, orchestratorId?: string) => void;
+	shortcutOnly?: boolean;
 }) {
 	const { t } = useTranslation();
 	const [confirmOpen, setConfirmOpen] = useState(false);
@@ -269,6 +268,10 @@ export function TopbarArchiveButton({
 		clearTerminateSessionState(queryClient, session.id, session.hostId);
 		setConfirmOpen(true);
 	});
+	if (shortcutOnly) return <>
+		<SessionArchiveDialog onConfirm={confirmKill} onOpenChange={setConfirmOpen} open={confirmOpen} session={session} trigger={<></>} />
+		{error ? <TopbarActionError>{error}</TopbarActionError> : null}
+	</>;
 
 	return (
 		<div className="inline-flex items-center gap-1.5" style={noDragStyle}>

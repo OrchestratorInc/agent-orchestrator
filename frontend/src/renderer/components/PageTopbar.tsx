@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { isLinuxPlatform, isMacPlatform } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { NotificationCenter } from "./NotificationCenter";
+import { PageTopbarPortal, PageTopbarPortalProvider } from "./PageTopbarPortal";
 import { sidebarOccupiesLayout, useUiStore } from "../stores/ui-store";
 
 /**
@@ -27,6 +28,7 @@ export function PageTopbarSurface({ children, notifications = false }: { childre
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const showControls = notifications && !settingsOpen;
 	const surfaceRef = useRef<HTMLDivElement>(null);
+	const [topbarHost, setTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [actionsHost, setActionsHost] = useState<HTMLDivElement | null>(null);
 	useLayoutEffect(() => {
 		const surface = surfaceRef.current;
@@ -44,8 +46,10 @@ export function PageTopbarSurface({ children, notifications = false }: { childre
 
 	return (
 		<TopbarTrailingActionsContext.Provider value={showControls ? actionsHost : null}>
-			<div className={cn("center-panel-surface relative", showControls && "has-topbar-controls")} ref={surfaceRef}>
-				{children}
+			<PageTopbarPortalProvider host={topbarHost}>
+			<div className={cn("center-panel-workspace relative flex min-h-0 min-w-0 flex-1 flex-col", showControls && "has-topbar-controls")} ref={surfaceRef}>
+				<div className="center-panel-topbar workspace-topbar-container" ref={setTopbarHost} />
+				<div className="center-panel-surface relative">{children}</div>
 				{showControls ? (
 					<PageTopbarActions className="panel-topbar-controls" data-testid="panel-topbar-controls">
 						<div className="contents" ref={setActionsHost} />
@@ -53,6 +57,7 @@ export function PageTopbarSurface({ children, notifications = false }: { childre
 					</PageTopbarActions>
 				) : null}
 			</div>
+			</PageTopbarPortalProvider>
 		</TopbarTrailingActionsContext.Provider>
 	);
 }
@@ -92,6 +97,7 @@ export function PageTopbar({
 }) {
 	const paddingLeft = usePageTopbarPaddingLeft();
 	return (
+		<PageTopbarPortal>
 		<PageTopbarFrame
 			className={cn("workspace-topbar-container center-panel-titlebar relative z-chrome gap-3 border-b border-border-strong pr-(--gap-topbar-control)", className)}
 			style={{ ...topbarDragStyle, paddingLeft: isMacPlatform() ? undefined : paddingLeft }}
@@ -104,6 +110,7 @@ export function PageTopbar({
 				{actions}
 			</PageTopbarActions>
 		</PageTopbarFrame>
+		</PageTopbarPortal>
 	);
 }
 
@@ -162,7 +169,7 @@ export function SessionTabsTopbar({
 	/** Native fullscreen hides the panel-owned controls outside this subtree. */
 	fullscreen?: boolean;
 }) {
-	return (
+	const header = (
 		<PageTopbarFrame className={cn("items-stretch bg-sidebar", className)}>
 			<div className="session-topbar-surface flex min-w-0 flex-1" data-testid="session-workspace-topbar">
 				<div
@@ -186,4 +193,5 @@ export function SessionTabsTopbar({
 			</div>
 		</PageTopbarFrame>
 	);
+	return fullscreen ? header : <PageTopbarPortal region="session">{header}</PageTopbarPortal>;
 }

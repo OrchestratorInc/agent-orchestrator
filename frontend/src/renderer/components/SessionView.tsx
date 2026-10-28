@@ -1947,7 +1947,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				>
 					<div className="relative flex h-full min-h-0 flex-col">
 						<SessionTopbarHost
-							className="relative z-chrome flex h-toolbar w-full shrink-0 overflow-hidden"
+							className="relative h-0 w-full shrink-0"
 							data-testid="session-topbar-host"
 						/>
 						<div className="relative min-h-0 flex-1">

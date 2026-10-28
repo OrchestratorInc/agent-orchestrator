@@ -755,6 +755,7 @@
 	"cues.promptPlaceholder": "e.g. Summarize what changed since the last commit",
 	"cues.retry": "Try again",
 	"cues.run": "Run a cue",
+	"cues.runButton": "Run",
 	"cues.save": "Save",
 	"cues.saveFailed": "Could not save the cue.",
 	"cues.runNewSession": "Run in new session",

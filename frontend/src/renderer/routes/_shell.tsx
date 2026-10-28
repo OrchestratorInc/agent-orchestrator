@@ -22,6 +22,7 @@ import { ShareLinkHost } from "../components/OpenShareLinkDialog";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { PageTopbar } from "../components/PageTopbar";
+import { PageTopbarVisibility } from "../components/PageTopbarPortal";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
@@ -159,10 +160,14 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	return (
 		<>
+			<PageTopbarVisibility visible={!settingsOpen}>
 			<div className={cn("relative flex min-h-0 flex-1 flex-col", settingsOpen && "hidden")}>
-				<div className={startingChat ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingChat ? true : undefined}><Outlet /><LocalSessionHost /></div>
+				<PageTopbarVisibility visible={!startingChat}>
+					<div className={startingChat ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingChat ? true : undefined}><Outlet /><LocalSessionHost /></div>
+				</PageTopbarVisibility>
 				{startingChat}
 			</div>
+			</PageTopbarVisibility>
 			<SettingsPane />
 			<ShareLinkHost />
 		</>
@@ -271,7 +276,9 @@ const ShellCenter = memo(function ShellCenter({
 	const startingChat = startingOrchestrator ? <LazyChunkBoundary><Suspense fallback={null}><OrchestratorStartingChat steps={startingSteps} cloud={startingCloudOrchestrator} coderWorkspaceUrl={startingCoderWorkspaceUrl} /></Suspense></LazyChunkBoundary> : null;
 	// Settings is a self-framed route, so its starting chat gets its own panel.
 	const selfFramedOutlet = <>
-		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
+		<PageTopbarVisibility visible={!startingOrchestrator}>
+			<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
+		</PageTopbarVisibility>
 		{startingChat ? <CenterPanelShell notifications>{startingChat}</CenterPanelShell> : null}
 	</>;
 	// Pages own their header content; the panel owns the shared workspace controls.

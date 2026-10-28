@@ -76,7 +76,7 @@ describe("PageTopbarSurface", () => {
 		expect(screen.getByRole("button", { name: "Toggle inspector" })).toBeVisible();
 
 		act(() => useUiStore.getState().openGlobalSettings("harness"));
-		expect(screen.getByRole("tablist")).toBeInTheDocument();
+		expect(screen.getByRole("tablist", { hidden: true })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Toggle inspector" })).not.toBeInTheDocument();
 
