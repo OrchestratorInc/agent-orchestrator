@@ -1,8 +1,9 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
 import { ActivityDetailProvider } from "../../hooks/useActivityDetail";
-import { ActivityRow } from "./ChatTimelineItems";
+import { ActivityRow, TurnChangedFiles } from "./ChatTimelineItems";
 import { TooltipProvider } from "../ui/tooltip";
 
 const { get } = vi.hoisted(() => ({ get: vi.fn() }));
@@ -81,4 +82,58 @@ it("gates compact MCP image content and results until the matching full row arri
 	expect(compact.container.querySelector("pre")).toBeNull();
 	await act(async () => { resolve({ data: full }); });
 	await waitFor(() => expect(body(compact.container)).toEqual(expected));
+});
+
+it.each(["command", "file_change"] as const)("keeps %s navigation hints usable before and after detail expansion", async (kind) => {
+	const user = userEvent.setup();
+	const cwd = `/workspace/${"long-worktree-segment/".repeat(12)}project`;
+	const path = `${cwd}/packages/${"nested/".repeat(24)}new.ts`;
+	const oldPath = `${cwd}/archive/${"nested/".repeat(24)}old.ts`;
+	const body = "restored full detail\n".repeat(100);
+	const full: ConversationActivity = {
+		kind: "activity", id: `navigation-${kind}`, sequence: 2, revision: 1,
+		activityKind: kind, status: "completed", summary: "Changed file",
+		detail: kind === "command"
+			? { cwd, command: "echo changed", output: body }
+			: { cwd, files: [{ path, oldPath, status: "renamed", additions: 1, deletions: 1, patch: body }] },
+		createdAt: "2026-10-28T00:00:00Z",
+	};
+	const preview: ConversationActivity = {
+		...full, detailOmitted: true,
+		detail: kind === "command"
+			? { ...full.detail, output: body.slice(0, 128) }
+			: { cwd, files: [{ path, oldPath, status: "renamed", additions: 1, deletions: 1, patch: body.slice(0, 128) }] },
+	};
+	get.mockReset();
+	let resolve!: (value: { data: ConversationActivity }) => void;
+	get.mockReturnValue(new Promise<{ data: ConversationActivity }>((done) => { resolve = done; }));
+	const onOpenFile = vi.fn();
+	const view = render(<TooltipProvider><ActivityDetailProvider sessionId="navigation-session">
+		<div data-testid="activity-row"><ActivityRow activity={preview} /></div>
+		<TurnChangedFiles
+			diff={{ files: [{ path: "new.ts", oldPath: "old.ts", status: "renamed", additions: 1, deletions: 1 }] }}
+			items={[preview]}
+			onOpenFile={onOpenFile}
+		/>
+	</ActivityDetailProvider></TooltipProvider>);
+	const fileButton = view.getByRole("button", { name: /^Open .*new\.ts in Files$/ });
+	const expectedPath = kind === "file_change" ? path : `${cwd}/new.ts`;
+	const expectedOldPath = kind === "file_change" ? oldPath : `${cwd}/old.ts`;
+	async function checkNavigation() {
+		fireEvent.click(fileButton);
+		expect(onOpenFile).toHaveBeenLastCalledWith(expectedPath);
+		await user.hover(fileButton);
+		expect(await screen.findByRole("tooltip")).toHaveTextContent(`${expectedOldPath} → ${expectedPath}`);
+		await user.unhover(fileButton);
+		await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+	}
+	await checkNavigation();
+	expect(get).not.toHaveBeenCalled();
+	const activity = view.getByTestId("activity-row");
+	fireEvent.click(activity.querySelector("[aria-expanded='false']")!);
+	await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+	await act(async () => { resolve({ data: full }); });
+	await waitFor(() => expect(activity.textContent).toContain("restored full detail"));
+	await checkNavigation();
+	expect(get).toHaveBeenCalledTimes(1);
 });

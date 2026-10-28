@@ -67,9 +67,24 @@ func compactConversationDetails(snapshot *ConversationSnapshotResponse, compact,
 			dedupeActivityDetail(row.ActivityKind, row.Detail)
 		}
 		if compact {
-			_, row.DetailOmitted = previewDetail(row.Detail, false)
+			row.DetailOmitted = previewActivityDetail(row.ActivityKind, row.Detail)
 		}
 	}
+}
+
+func previewActivityDetail(kind string, detail map[string]any) bool {
+	omitted := false
+	for key, value := range detail {
+		// Turn-level file navigation reads the page, independently of expanded
+		// row state. These addresses must remain usable without a full-row read.
+		if key == "cwd" {
+			continue
+		}
+		next, changed := previewDetail(value, strings.EqualFold(key, "progress"), kind == "file_change" && key == "files")
+		detail[key] = next
+		omitted = omitted || changed
+	}
+	return omitted
 }
 
 func dedupeActivityDetail(kind string, detail map[string]any) {
@@ -122,7 +137,7 @@ func walkStrings(value any, visit func(string)) {
 	}
 }
 
-func previewDetail(value any, tail bool) (any, bool) {
+func previewDetail(value any, tail, filePaths bool) (any, bool) {
 	omitted := false
 	switch v := value.(type) {
 	case string:
@@ -143,13 +158,16 @@ func previewDetail(value any, tail bool) (any, bool) {
 		return v[:end], true
 	case map[string]any:
 		for key, child := range v {
-			next, changed := previewDetail(child, tail || strings.EqualFold(key, "progress"))
+			if filePaths && (key == "path" || key == "oldPath") {
+				continue
+			}
+			next, changed := previewDetail(child, tail || strings.EqualFold(key, "progress"), false)
 			v[key] = next
 			omitted = omitted || changed
 		}
 	case []any:
 		for i, child := range v {
-			next, changed := previewDetail(child, tail)
+			next, changed := previewDetail(child, tail, filePaths)
 			v[i] = next
 			omitted = omitted || changed
 		}
