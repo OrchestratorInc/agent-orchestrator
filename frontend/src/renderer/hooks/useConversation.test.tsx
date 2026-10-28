@@ -44,10 +44,12 @@ function wrapper({ children }: { children: ReactNode }) {
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((resolvePromise) => {
+	let reject!: (reason: unknown) => void;
+	const promise = new Promise<T>((resolvePromise, rejectPromise) => {
 		resolve = resolvePromise;
+		reject = rejectPromise;
 	});
-	return { promise, resolve };
+	return { promise, resolve, reject };
 }
 
 it("preserves queued-edit API error codes for delivery recovery", async () => {
@@ -1453,7 +1455,15 @@ describe("local conversation deltas", () => {
 		expect(invalidate).not.toHaveBeenCalled();
 		unsubscribe(); queryClient.clear();
 	});
-	it("keeps optimistic settings when an older delta finishes during a queued picker write", async () => {
+	it("uses the full-refresh fallback when a delta fails without a settings write", async () => {
+		const { queryClient, unsubscribe } = await activeCache();
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue();
+		getMock.mockRejectedValueOnce(new Error("delta connection lost"));
+		await refreshLocalConversation(queryClient, "ao-1");
+		expect(invalidate).toHaveBeenCalledOnce();
+		unsubscribe(); queryClient.clear();
+	});
+	it.each(["resolves", "rejects"] as const)("keeps optimistic settings when an older delta %s during a queued picker write", async (outcome) => {
 		const { queryClient, live, unsubscribe } = await activeCache();
 		live.settings = { model: "model-a" };
 		const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
@@ -1468,7 +1478,8 @@ describe("local conversation deltas", () => {
 		act(() => result.current.chooseSettings({ model: "model-b" }));
 		await waitFor(() => expect(patchMock).toHaveBeenCalledTimes(1));
 		await act(async () => {
-			deltaResponse.resolve({ data: { conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0, latestSequence: 3, oldestSequence: 2, hasMoreBefore: true, settings: { model: "model-a" }, turns: [], messages: [], activities: [], changeCursor: 11, afterSequence: 4 }, error: undefined });
+			if (outcome === "rejects") deltaResponse.reject(new Error("delta connection lost"));
+			else deltaResponse.resolve({ data: { conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0, latestSequence: 3, oldestSequence: 2, hasMoreBefore: true, settings: { model: "model-a" }, turns: [], messages: [], activities: [], changeCursor: 11, afterSequence: 4 }, error: undefined });
 			await refresh;
 			// A new event during the same write must not start another read either.
 			await refreshLocalConversation(queryClient, "ao-1");

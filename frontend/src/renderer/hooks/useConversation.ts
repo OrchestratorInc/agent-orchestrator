@@ -389,14 +389,17 @@ async function fetchConversationPage(sessionId: string, hostId?: string, beforeS
 	return toSnapshot(data as WireSnapshot);
 }
 
-const conversationSettingsMutationKey = (sessionId: string, hostId?: string) => ["conversation-settings", hostId ?? "local", sessionId] as const;
+const conversationSettingsMutationKey = (hostId?: string) => ["conversation-settings", hostId ?? "local"] as const;
 
 /** Refresh an observed local chat without refetching its loaded history pages. */
 export async function refreshLocalConversation(queryClient: QueryClient, sessionId: string): Promise<void> {
 	const queryKey = conversationQueryKey(sessionId);
 	const previous = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(queryKey);
-	const live = previous?.pages[0];
-	const settingsPending = () => queryClient.isMutating({ mutationKey: conversationSettingsMutationKey(sessionId), exact: true }) > 0;
+	const live = previous?.pages?.[0];
+	const settingsPending = () => queryClient.isMutating({
+		mutationKey: conversationSettingsMutationKey(), exact: true,
+		predicate: (mutation) => (mutation.state.variables as ConversationSessionMutationInput | undefined)?.targetSessionId === sessionId,
+	}) > 0;
 	// The latest settings mutation refreshes after committing (or failing). Until
 	// then neither a delta nor its fallback may undo the optimistic picker state.
 	const fallback = () => settingsPending() ? Promise.resolve() : queryClient.invalidateQueries({ queryKey }, { cancelRefetch: false });
@@ -423,7 +426,13 @@ export async function refreshLocalConversation(queryClient: QueryClient, session
 		return;
 	}
 	const afterSequence = live.latestSequence + 1;
-	const delta = await fetchConversationPage(sessionId, undefined, undefined, afterSequence, live.changeCursor);
+	let delta: ConversationSnapshot;
+	try {
+		delta = await fetchConversationPage(sessionId, undefined, undefined, afterSequence, live.changeCursor);
+	} catch {
+		await fallback();
+		return;
+	}
 	// Pagination can start after this GET and commit pages captured before it.
 	// Let those writes finish before merging, including a replacement fetch that
 	// starts while we wait. No await separates the final idle check and cache write.
@@ -911,7 +920,9 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			} : current,
 		);
 	const chooseSettings = useMutation({
-		mutationKey: conversationSettingsMutationKey(sessionId ?? "", hostId),
+		// Keep this observer attached across local navigation; targetSessionId in
+		// the variables scopes refresh coordination without resetting pending state.
+		mutationKey: conversationSettingsMutationKey(hostId),
 		// Shown at once, so the next pick builds on this one rather than on the saved settings.
 		onMutate: async ({ targetSessionId, settings }: { targetSessionId: string; settings: TurnSettings }) => {
 			await queryClient.cancelQueries({ queryKey: conversationQueryKey(targetSessionId, hostId) });

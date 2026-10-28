@@ -5,7 +5,7 @@ import { setEventsConnectionState } from "./events-connection";
 import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshLocalConversation, refreshRemoteConversation } from "../hooks/useConversation";
+import { conversationQueryRoot, conversationSettled, refreshLocalConversation, refreshRemoteConversation } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
@@ -134,7 +134,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					do {
 						state.dirty = false;
 						try { await refreshLocalConversation(queryClient, sessionId); }
-						catch { await queryClient.invalidateQueries({ queryKey: conversationQueryKey(sessionId) }, { cancelRefetch: false }).catch(() => undefined); }
+						catch { /* The refresher owns mutation-aware fallbacks; later events retry. */ }
 					} while (state.dirty && !disposed);
 					localConversationRefreshes.delete(sessionId);
 				})();

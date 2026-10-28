@@ -963,6 +963,35 @@ describe("bounded live refresh", () => {
 		disconnect();
 	});
 
+	it("does not invalidate optimistic settings when an in-flight delta rejects", async () => {
+		vi.useFakeTimers();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["conversation", "chat-1"];
+		const page = toSnapshot({ conversationId: "conv-1", sessionId: "chat-1", mode: "chat", controller: "ready", continueTurnId: "", branchedFromEarlierMessage: false, nativeForkAvailableAfterSequence: 0, latestSequence: 3, changeCursor: 10, hasMoreBefore: false, settings: { model: "model-a" }, messages: [], activities: [], turns: [] });
+		client.setQueryData(key, { pages: [page], pageParams: [undefined] });
+		const observer = new QueryObserver(client, { queryKey: key, staleTime: Infinity });
+		const unsubscribe = observer.subscribe(() => {});
+		let rejectDelta!: (error: Error) => void;
+		remoteGetMock.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectDelta = reject; }));
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		const disconnect = createEventTransport(client).connect();
+		emit();
+		expect(remoteGetMock).toHaveBeenCalledOnce();
+		let finishPatch!: () => void;
+		const mutation = client.getMutationCache().build(client, {
+			mutationKey: ["conversation-settings", "local"],
+			mutationFn: (_variables: { targetSessionId: string }) => new Promise<void>((resolve) => { finishPatch = resolve; }),
+		});
+		const write = mutation.execute({ targetSessionId: "chat-1" });
+		await vi.advanceTimersByTimeAsync(0);
+		client.setQueryData(key, { pages: [{ ...page, settings: { model: "model-b" } }], pageParams: [undefined] });
+		rejectDelta(new Error("delta connection lost"));
+		await vi.advanceTimersByTimeAsync(0);
+		expect(invalidate).not.toHaveBeenCalled();
+		expect(client.getQueryData<{ pages: typeof page[] }>(key)?.pages[0].settings.model).toBe("model-b");
+		finishPatch(); await write;
+		disconnect(); unsubscribe(); client.clear();
+	});
 	it("drops a queued catch-up when disposed during a fetch", async () => {
 		vi.useFakeTimers();
 		const client = fakeQueryClient();
