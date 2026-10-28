@@ -165,24 +165,31 @@ func TestRequestLoggerSkipsOnlyExpectedLinkPreviewBadGateway(t *testing.T) {
 	router := chi.NewRouter()
 	router.Use(requestLoggerWithCapture(log, nil, func(_ context.Context, _ error, _ map[string]string, _ string, _ telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
 		captures++
-		if site.String() == "" || strings.Contains(site.String(), "sentryobs") {
+		if (captures == 1 && site.String() != "") || (captures == 2 && (site.String() == "" || strings.Contains(site.String(), "sentryobs"))) {
 			t.Fatalf("failure site = %q", site.String())
 		}
 	}))
 	router.Get("/api/v1/link-preview", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("expected") == "1" {
+			envelope.CaptureError(r, apierr.Internal("LINK_PREVIEW_FETCH_FAILED", "Link preview fetch failed"))
+		}
 		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "LINK_PREVIEW_FETCH_FAILED", "upstream fetch failed", nil)
 	})
 	router.Get("/api/v1/other", func(w http.ResponseWriter, r *http.Request) {
 		envelope.CaptureError(r, errors.New("other gateway failure"))
 		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "OTHER_GATEWAY_FAILURE", "other gateway failed", nil)
 	})
-	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/link-preview?url=https://example.test", nil))
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/link-preview?expected=1&url=https://example.test", nil))
 	if captures != 0 {
 		t.Fatalf("expected link preview failure captured %d times", captures)
 	}
-	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/other", nil))
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/link-preview?url=https://example.test", nil))
 	if captures != 1 {
-		t.Fatalf("unrelated failure captured %d times, want one", captures)
+		t.Fatalf("unmarked link preview failure captured %d times, want one", captures)
+	}
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/other", nil))
+	if captures != 2 {
+		t.Fatalf("unrelated failure captured %d times, want two", captures)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -34,6 +35,7 @@ var enabled atomic.Bool
 var installID atomic.Pointer[string]
 var release atomic.Pointer[string]
 var environment atomic.Pointer[string]
+var approvedRoutes sync.Map
 
 var captureGate = struct {
 	sync.Mutex
@@ -45,6 +47,7 @@ var captureGate = struct {
 var (
 	safeFingerprint = regexp.MustCompile(`^[0-9a-f]{16}$`)
 	safeRelease     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,79}$`)
+	safeRoute       = regexp.MustCompile(`^/[A-Za-z0-9_./{}*:-]+$`)
 )
 
 // New daemon Sentry capture operations and tags must be registered here.
@@ -54,6 +57,23 @@ var operationLabels = map[string]string{
 	"http_request_panic": "http handler panic",
 	"resume_agent":       "Agent resume failed",
 	"restore_session":    "Session restore failed",
+}
+
+var areaLabels = map[string]string{
+	"git":     "Git operation failed",
+	"db":      "Database operation failed",
+	"agent":   "Agent operation failed",
+	"network": "Network operation failed",
+}
+
+// These are the fixed relaunch steps produced by session_manager.Manager.
+var relaunchSteps = map[string]struct{}{
+	"agent adapter": {}, "system prompt": {}, "system prompt file": {},
+	"browser capability": {}, "model configuration": {}, "agent hooks": {},
+	"launch command": {}, "after-start prompt": {}, "agent binary": {},
+	"supervisor": {}, "runtime preparation": {}, "prepare launch": {},
+	"controller admission": {}, "runtime": {}, "agent start check": {},
+	"record launch": {}, "native initialization": {}, "deliver prompt": {},
 }
 
 // Only literal codes used for reportable daemon errors belong here. A new
@@ -236,17 +256,8 @@ func scrubEvent(event *sentry.Event) *sentry.Event {
 		label = known
 	}
 	if event.Tags["operation"] == "http_request" {
-		switch event.Tags["area"] {
-		case "git":
-			label = "Git operation failed"
-		case "db":
-			label = "Database operation failed"
-		case "agent":
-			label = "Agent operation failed"
-		case "network":
-			label = "Network operation failed"
-		case "update":
-			label = "Update operation failed"
+		if areaLabel, ok := areaLabels[event.Tags["area"]]; ok {
+			label = areaLabel
 		}
 	}
 	if code := event.Tags["error_code"]; safeErrorCode(code) {
@@ -322,8 +333,12 @@ func safeSentryTag(key, value string) bool {
 		_, ok := operationLabels[value]
 		return ok
 	case "path":
-		// applyTags replaces caller-supplied paths with a SafeRoute before send.
-		return value != ""
+		// Only route templates supplied by RoutePattern may pass this final edge.
+		if value == "unmatched" {
+			return true
+		}
+		_, approved := approvedRoutes.Load(value)
+		return approved && safeRoute.MatchString(value)
 	case "method":
 		switch value {
 		case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
@@ -335,10 +350,11 @@ func safeSentryTag(key, value string) bool {
 	case "category":
 		return value == "http_5xx"
 	case "area":
-		switch value {
-		case "git", "db", "agent", "network", "update":
-			return true
-		}
+		_, ok := areaLabels[value]
+		return ok
+	case "step":
+		_, ok := relaunchSteps[value]
+		return ok
 	case "error_kind":
 		return telemetrymeta.IsErrorKind(value)
 	case "panic_kind":
@@ -363,56 +379,50 @@ func ShouldCaptureStatus(status int) bool {
 	return status >= http.StatusInternalServerError && status != http.StatusServiceUnavailable
 }
 
-// CaptureHTTPError captures a reportable daemon error with safe tags and a stable
+// CaptureError captures a reportable daemon error with safe tags and a stable
 // AO failure-site fingerprint when available. No-op when disabled or canceled.
-func CaptureHTTPError(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site ...telemetrymeta.FailureSite) {
+func CaptureError(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
 	if err == nil || errors.Is(err, context.Canceled) || ctx.Err() != nil || !enterCapture() {
 		return
 	}
 	defer leaveCapture()
-	sentry.WithScope(func(scope *sentry.Scope) {
-		scope.SetLevel(sentry.LevelError)
-		applyTags(scope, tags, route)
-		group := fingerprint
-		if len(site) > 0 && site[0].String() != "" {
-			group = telemetrymeta.Fingerprint("sentry", tags["operation"], site[0].String(), tags["error_code"])
-		}
-		if group != "" {
-			scope.SetFingerprint([]string{group})
-		}
-		event := sentry.NewEvent()
-		event.Level = sentry.LevelError
-		event.Exception = []sentry.Exception{{Stacktrace: stackAtSite(site)}}
-		sentry.CaptureEvent(event)
-	})
+	capture(sentry.LevelError, tags, fingerprint, route, site)
 }
 
 // CapturePanic captures a recovered panic at fatal level. No-op when disabled.
-func CapturePanic(ctx context.Context, recovered any, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site ...telemetrymeta.FailureSite) {
+func CapturePanic(ctx context.Context, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
 	if ctx.Err() != nil || !enterCapture() {
 		return
 	}
 	defer leaveCapture()
+	capture(sentry.LevelFatal, tags, fingerprint, route, site)
+}
+
+func capture(level sentry.Level, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
 	sentry.WithScope(func(scope *sentry.Scope) {
-		scope.SetLevel(sentry.LevelFatal)
+		scope.SetLevel(level)
 		applyTags(scope, tags, route)
 		group := fingerprint
-		if len(site) > 0 && site[0].String() != "" {
-			group = telemetrymeta.Fingerprint("sentry", tags["operation"], site[0].String())
+		if site.String() != "" {
+			parts := []string{"sentry", tags["operation"], site.String()}
+			if level == sentry.LevelError {
+				parts = append(parts, tags["error_code"])
+			}
+			group = telemetrymeta.Fingerprint(parts...)
 		}
 		if group != "" {
 			scope.SetFingerprint([]string{group})
 		}
 		event := sentry.NewEvent()
-		event.Level = sentry.LevelFatal
+		event.Level = level
 		event.Exception = []sentry.Exception{{Stacktrace: stackAtSite(site)}}
 		sentry.CaptureEvent(event)
 	})
 }
 
-func stackAtSite(sites []telemetrymeta.FailureSite) *sentry.Stacktrace {
-	if len(sites) > 0 && sites[0].String() != "" {
-		return &sentry.Stacktrace{Frames: []sentry.Frame{{Function: sites[0].String(), Lineno: sites[0].Line(), InApp: true}}}
+func stackAtSite(site telemetrymeta.FailureSite) *sentry.Stacktrace {
+	if site.String() != "" {
+		return &sentry.Stacktrace{Frames: []sentry.Frame{{Function: site.String(), Lineno: site.Line(), InApp: true}}}
 	}
 	return sentry.NewStacktrace()
 }
@@ -427,7 +437,13 @@ func applyTags(scope *sentry.Scope, tags map[string]string, route telemetrymeta.
 			scope.SetTag(k, v)
 		}
 	}
-	scope.SetTag("path", route.String())
+	if tags["operation"] == "http_request" || tags["operation"] == "http_request_panic" {
+		path := route.String()
+		if path != "unmatched" && safeRoute.MatchString(path) {
+			approvedRoutes.Store(path, struct{}{})
+		}
+		scope.SetTag("path", path)
+	}
 	if area := tags["area"]; safeSentryTag("area", area) {
 		scope.SetTag("area", area)
 	}
@@ -448,8 +464,10 @@ func Area(err error, code string) string {
 	if errors.As(err, &sqliteErr) {
 		return "db"
 	}
-	var networkErr net.Error
-	if errors.As(err, &networkErr) {
+	var opErr *net.OpError
+	var dnsErr *net.DNSError
+	var urlErr *url.Error
+	if errors.As(err, &opErr) || errors.As(err, &dnsErr) || errors.As(err, &urlErr) {
 		return "network"
 	}
 	return ""

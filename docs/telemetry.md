@@ -295,7 +295,8 @@ only: the daemon's Sentry capture of reportable 5xx errors, failed agent
 relaunches answered as 409 `AGENT_RESUME_FAILED`, and panics. Sentry
 receives fixed failure or panic labels and allowlisted error codes instead of
 raw error messages. It groups HTTP faults by the AO function that recorded the
-failure when available. Agent relaunches group by operation and failure step.
+failure when available. Agent relaunches group by operation and failure step,
+with a fixed step tag and no HTTP route tag.
 An event may include a bounded `git`, `db`, `agent`, or `network` area when the
 error provides evidence. It keeps stack function and line information, but
 removes stack paths, request data, and panic text.

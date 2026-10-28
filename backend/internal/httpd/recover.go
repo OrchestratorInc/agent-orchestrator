@@ -60,13 +60,12 @@ func recoverTelemetry(log *slog.Logger, sink ports.EventSink) func(http.Handler)
 						})
 					}
 					// Sentry keeps safe stack frames without raw panic text.
-					sentryobs.CapturePanic(r.Context(), rec, map[string]string{
+					sentryobs.CapturePanic(r.Context(), map[string]string{
 						"component":  "httpd",
 						"operation":  "http_request_panic",
 						"method":     r.Method,
 						"path":       path,
 						"panic_kind": panicKind,
-						"request_id": middleware.GetReqID(r.Context()),
 					}, fingerprint, route, failureSite)
 					writeRecoveredError(w, r)
 				}

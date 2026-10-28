@@ -24,36 +24,33 @@ func ErrorKindAndCode(err error) (kind, code string) {
 	return kind, ""
 }
 
+var errorKinds = map[apierr.Kind]string{
+	apierr.KindInternal:        "internal",
+	apierr.KindInvalid:         "invalid",
+	apierr.KindNotFound:        "not_found",
+	apierr.KindConflict:        "conflict",
+	apierr.KindForbidden:       "forbidden",
+	apierr.KindTooManyRequests: "too_many_requests",
+	apierr.KindNotImplemented:  "not_implemented",
+	apierr.KindUnavailable:     "unavailable",
+}
+
 // ErrorKind maps API error kinds to coarse telemetry-safe categories.
 func ErrorKind(kind apierr.Kind) string {
-	switch kind {
-	case apierr.KindInvalid:
-		return "invalid"
-	case apierr.KindNotFound:
-		return "not_found"
-	case apierr.KindConflict:
-		return "conflict"
-	case apierr.KindForbidden:
-		return "forbidden"
-	case apierr.KindTooManyRequests:
-		return "too_many_requests"
-	case apierr.KindNotImplemented:
-		return "not_implemented"
-	case apierr.KindUnavailable:
-		return "unavailable"
-	default:
-		return "internal"
+	if value, ok := errorKinds[kind]; ok {
+		return value
 	}
+	return "internal"
 }
 
 // IsErrorKind accepts only the categories produced by ErrorKind.
 func IsErrorKind(kind string) bool {
-	switch kind {
-	case "internal", "invalid", "not_found", "conflict", "forbidden", "too_many_requests", "not_implemented", "unavailable":
-		return true
-	default:
-		return false
+	for _, value := range errorKinds {
+		if kind == value {
+			return true
+		}
 	}
+	return false
 }
 
 // PanicKind classifies panic payloads without exporting their raw contents.

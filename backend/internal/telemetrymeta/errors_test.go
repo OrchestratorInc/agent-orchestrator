@@ -24,8 +24,19 @@ func TestErrorKindAndCode(t *testing.T) {
 }
 
 func TestSafeErrorAndPanicKinds(t *testing.T) {
-	if !IsErrorKind(ErrorKind(apierr.KindInternal)) || !IsPanicKind(PanicKind("private panic")) {
-		t.Fatal("produced error or panic kind was rejected")
+	for _, kind := range []apierr.Kind{
+		apierr.KindInternal, apierr.KindInvalid, apierr.KindNotFound,
+		apierr.KindConflict, apierr.KindForbidden, apierr.KindTooManyRequests,
+		apierr.KindNotImplemented, apierr.KindUnavailable,
+	} {
+		if !IsErrorKind(ErrorKind(kind)) {
+			t.Fatalf("produced error kind %v was rejected", kind)
+		}
+	}
+	for _, value := range []any{errors.New("private panic"), "private panic", 7} {
+		if !IsPanicKind(PanicKind(value)) {
+			t.Fatalf("produced panic kind %T was rejected", value)
+		}
 	}
 	if IsErrorKind("private_project") || IsPanicKind("private_session") {
 		t.Fatal("dynamic error or panic kind was accepted")

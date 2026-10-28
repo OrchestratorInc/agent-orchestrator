@@ -6109,7 +6109,7 @@ func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("a client that left mid-relaunch is not a failure to count; events = %#v", sink.events)
 	}
-	// Sentry keeps the raw error the 500 used to carry, once per relaunch failure.
+	// The capture boundary receives the error, then removes its text before send.
 	if len(sentryErrs) != 2 || !strings.Contains(sentryErrs[0].Error(), "secret-token") ||
 		sentryTags[1]["operation"] != "restore_session" || sentryTags[1]["step"] != "runtime" {
 		t.Fatalf("sentry captures = %v / %v, want the raw error for both operations", sentryErrs, sentryTags)

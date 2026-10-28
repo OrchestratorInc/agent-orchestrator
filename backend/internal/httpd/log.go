@@ -31,9 +31,7 @@ import (
 // envelope.WriteError: the wire envelope hides internals ("Internal server
 // error"), so without this the cause of a 500 was lost entirely.
 func requestLogger(log *slog.Logger, sink ports.EventSink) func(http.Handler) http.Handler {
-	return requestLoggerWithCapture(log, sink, func(ctx context.Context, err error, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {
-		sentryobs.CaptureHTTPError(ctx, err, tags, fingerprint, route, site)
-	})
+	return requestLoggerWithCapture(log, sink, sentryobs.CaptureError)
 }
 
 type captureHTTPErrorFunc func(context.Context, error, map[string]string, string, telemetrymeta.SafeRoute, telemetrymeta.FailureSite)
@@ -123,7 +121,7 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 					// replaces error text before sending.
 					// 503 (transient contention) is excluded by ShouldCaptureStatus.
 					captureSentry := sentryobs.ShouldCaptureStatus(ww.Status())
-					if ww.Status() == http.StatusBadGateway && path == "/api/v1/link-preview" && capErr == nil {
+					if errorCode == "LINK_PREVIEW_FETCH_FAILED" && ww.Status() == http.StatusBadGateway {
 						captureSentry = false
 					}
 					if captureSentry {
@@ -141,7 +139,6 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 							"error_kind": errorKind,
 							"error_code": errorCode,
 							"area":       sentryobs.Area(capErr, errorCode),
-							"request_id": middleware.GetReqID(r.Context()),
 						}, fingerprint, route, captured.FailureSite)
 					}
 				}
