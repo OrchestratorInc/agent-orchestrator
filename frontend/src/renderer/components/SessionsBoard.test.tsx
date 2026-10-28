@@ -573,6 +573,33 @@ describe("SessionsBoard", () => {
 		expect(status.querySelector(".animate-spin")).not.toBeNull();
 	});
 
+	it("paints a Merged card purple and holds the loader even while its agent keeps running", () => {
+		workspaceQueryMock.mockReturnValue({
+			data: [
+				workspaceWithSessions([
+					boardSession({
+						id: "s-merged-active",
+						title: "merged-active-task",
+						status: "working",
+						displayStatus: "Merged",
+						kanbanColumn: "ready",
+						activity: { state: "active", lastActivityAt: "2026-01-01T00:00:00Z" },
+					}),
+				]),
+			],
+			isError: false,
+			isSuccess: true,
+		});
+
+		renderBoard("p1");
+		const card = screen.getByText("merged-active-task").closest('[data-testid="board-session-card"]') as HTMLElement;
+		const status = within(card).getByTestId("session-status");
+		expect(status).toHaveTextContent("Merged");
+		expect(status).toHaveClass("text-status-merged");
+		expect(status).not.toHaveClass("text-success", "text-status-ready");
+		expect(status.querySelector(".animate-spin")).toBeNull();
+	});
+
 	it("paints Closed without merge red while keeping merged status purple", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [

@@ -28,6 +28,10 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 	const fade = (amount: number) => mixColor(p.bg, p.text, amount);
 	const bright = (color: string) => mixColor(color, dark ? "#ffffff" : p.text, 0.22);
 	const inReview = mixColor(p.orange, p.yellow, 0.5);
+	// A teal between the theme's blue and green stays apart from Building, Ready
+	// and In review. `p.cyan` does not: it equals blue in Dracula and Monokai and
+	// green in Rosé Pine.
+	const validating = mixColor(p.blue, p.green, 0.5);
 
 	return {
 		"--background": p.bg,
@@ -71,7 +75,7 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 
 		"--color-status-working": p.blue,
 		"--color-status-needs-you": p.orange,
-		"--color-status-validating": p.yellow,
+		"--color-status-validating": validating,
 		"--color-status-in-review": inReview,
 		"--color-status-ready": p.green,
 		"--color-status-merged": p.purple,
