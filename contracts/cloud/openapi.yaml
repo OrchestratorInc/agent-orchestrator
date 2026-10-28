@@ -30,6 +30,7 @@ tags:
   - name: Worker Execution
   - name: Worker Orchestration
   - name: Worker Transport
+  - name: Remote Hosts
 paths:
   /api/cloud/v1/me:
     get:
@@ -2964,8 +2965,182 @@ paths:
           description: Every unread notification for the current recipient was marked read.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/hosts:
+    get:
+      operationId: listRemoteHosts
+      tags: [Remote Hosts]
+      description: |
+        The machines the account lists for its devices, with the credential a
+        device presents to each, and whether this deployment gives machines
+        fixed addresses. Clients link a machine without an address only when
+        `fixedAddresses` is true.
+      responses:
+        "200":
+          description: The account's machines.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoteHostList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/hosts/{hostId}:
+    parameters:
+      - $ref: "#/components/parameters/RemoteHostId"
+    put:
+      operationId: putRemoteHost
+      tags: [Remote Hosts]
+      description: |
+        Lists a machine in the account, or updates its listing. Without `url`,
+        the deployment first makes the machine's fixed address and lists it
+        there; a client then falls back to listing the machine at its quick
+        tunnel's address when that fails. A new `token` for a listed machine
+        replaces its fixed tunnel, so a run token fetched with the old
+        credential stops working; the address stays.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoteHostRegistration"
+      responses:
+        "204":
+          description: Listed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses. A registration with `url` still succeeds."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+        "429":
+          description: "`tunnel_rate_limited`: the account made too many fixed-address writes this hour."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "502":
+          description: "`tunnel_unavailable`: the fixed address could not be made. Nothing was listed."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteRemoteHost
+      tags: [Remote Hosts]
+      description: Removes the machine from the account, and its fixed tunnel with it.
+      responses:
+        "204":
+          description: Removed.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/remote-hosts/{hostId}/address:
+    parameters:
+      - $ref: "#/components/parameters/RemoteHostId"
+    post:
+      operationId: publishRemoteHostAddress
+      tags: [Remote Hosts]
+      security:
+        - hostDigest: []
+      description: |
+        The machine publishes the address it serves now to every account that
+        lists it under this credential. A listing with a fixed address keeps
+        it: a quick address published for it is ignored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoteHostAddress"
+      responses:
+        "204":
+          description: Published.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: "`unauthorized`: no account lists the machine under this credential."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/remote-hosts/{hostId}/tunnel:
+    parameters:
+      - $ref: "#/components/parameters/RemoteHostId"
+    post:
+      operationId: getRemoteHostTunnel
+      tags: [Remote Hosts]
+      security:
+        - hostDigest: []
+      description: |
+        The machine fetches the run token of its fixed tunnel in the account
+        that issued its credential, making the tunnel on first use or after it
+        was released. `repair` asks for a replacement tunnel under the same
+        address, at most once a minute per machine.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoteHostTunnelRequest"
+      responses:
+        "200":
+          description: The machine's fixed tunnel.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RemoteHostTunnel"
+        "401":
+          description: "`unauthorized`: no account lists the machine under this credential."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses. The machine keeps a quick tunnel."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "429":
+          description: "`tunnel_rate_limited`: the account made too many fixed-address writes this hour."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "502":
+          description: "`tunnel_unavailable`: the tunnel could not be made."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "503":
+          description: "`fixed_addresses_unavailable`: this deployment gives no fixed addresses."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
+    hostDigest:
+      type: http
+      scheme: bearer
+      description: |
+        Lowercase hex SHA-256 of the machine's account token, the credential
+        the account lists it under. A machine proves itself with it; it is not
+        an account session.
     bearerAuth:
       type: http
       scheme: bearer
@@ -2988,6 +3163,14 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
+    RemoteHostId:
+      name: hostId
+      in: path
+      required: true
+      description: The machine's stable identity, `h_` followed by a UUID.
+      schema:
+        type: string
+        pattern: "^h_[0-9a-fA-F-]{36}$"
     ArtifactShareName:
       name: name
       in: query
@@ -3176,6 +3359,77 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorEnvelope"
   schemas:
+    RemoteHost:
+      type: object
+      required: [hostId, label, url, token, updatedAt]
+      properties:
+        hostId:
+          type: string
+        label:
+          type: string
+        url:
+          type: string
+          description: The address devices reach the machine at.
+        token:
+          type: string
+          description: The credential a device presents to the machine.
+        updatedAt:
+          type: string
+          format: date-time
+    RemoteHostList:
+      type: object
+      required: [hosts]
+      properties:
+        hosts:
+          type: array
+          items:
+            $ref: "#/components/schemas/RemoteHost"
+        fixedAddresses:
+          type: boolean
+          description: Whether this deployment gives machines fixed addresses. Absent from deployments that predate them.
+    RemoteHostRegistration:
+      type: object
+      required: [label, token]
+      properties:
+        label:
+          type: string
+          minLength: 1
+          description: At most 64 bytes.
+        url:
+          type: string
+          description: The machine's address. Omit it to list the machine at a fixed address the deployment makes.
+        token:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    RemoteHostAddress:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: An https address.
+    RemoteHostTunnelRequest:
+      type: object
+      properties:
+        repair:
+          type: boolean
+    RemoteHostTunnel:
+      type: object
+      required: [hostname, runToken, since]
+      properties:
+        hostname:
+          type: string
+          description: The fixed address's host name.
+        runToken:
+          type: string
+          description: The Cloudflare run token for the machine's connector.
+        since:
+          type: string
+          format: date-time
+          description: When the address's DNS record was made; a machine holds a newer address back from devices for a few seconds.
+        repaired:
+          type: boolean
+          description: Set when a repair request replaced the tunnel.
     EmptyObject:
       type: object
       additionalProperties: false
