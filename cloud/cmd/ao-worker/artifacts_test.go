@@ -252,7 +252,7 @@ func TestArtifactSyncSkipsSymlinksVersionsAndOversizedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := big.Truncate(domain.MaxArtifactFileBytes + 1); err != nil {
+	if err := big.Truncate(26 << 20); err != nil {
 		t.Fatal(err)
 	}
 	_ = big.Close()
@@ -485,7 +485,7 @@ func TestArtifactSyncKeepsFilesItCannotSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := big.Truncate(domain.MaxArtifactFileBytes + 1); err != nil {
+	if err := big.Truncate(26 << 20); err != nil {
 		t.Fatal(err)
 	}
 	_ = big.Close()
@@ -557,16 +557,15 @@ func TestArtifactSyncKeepsSyncedFilesAtTheCap(t *testing.T) {
 	if got := len(plane.paths()); got != domain.MaxSessionArtifactFiles {
 		t.Fatalf("synced %d files, want %d", got, domain.MaxSessionArtifactFiles)
 	}
-	last := fmt.Sprintf("f%03d.md", domain.MaxSessionArtifactFiles-1)
 	writeArtifact(t, dir, "a.md", "new")
-	writeArtifact(t, dir, last, "edited")
+	writeArtifact(t, dir, "f199.md", "edited")
 	syncSettled(s)
 	paths := plane.paths()
-	if slices.Contains(paths, "a.md") || !slices.Contains(paths, last) || len(paths) != domain.MaxSessionArtifactFiles {
-		t.Fatalf("at the cap: %d files, a.md=%v, %s=%v", len(paths), slices.Contains(paths, "a.md"), last, slices.Contains(paths, last))
+	if slices.Contains(paths, "a.md") || !slices.Contains(paths, "f199.md") || len(paths) != domain.MaxSessionArtifactFiles {
+		t.Fatalf("at the cap: %d files, a.md=%v, f199.md=%v", len(paths), slices.Contains(paths, "a.md"), slices.Contains(paths, "f199.md"))
 	}
 	plane.mu.Lock()
-	edited := plane.rows[last].size
+	edited := plane.rows["f199.md"].size
 	plane.mu.Unlock()
 	if edited != int64(len("edited")) {
 		t.Fatalf("edit to a synced file at the cap was not synced: size %d", edited)

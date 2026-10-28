@@ -40,7 +40,7 @@ func TestScriptStepEventsAppendToADeletedSession(t *testing.T) {
 		}
 	}
 
-	if err := store.TerminateSession(ctx, principal, fixture.orgID, fixture.sessionID, false); err != nil {
+	if err := store.TerminateSession(ctx, principal, fixture.orgID, fixture.sessionID); err != nil {
 		t.Fatalf("delete session: %v", err)
 	}
 	// The admin pool is held to forced RLS too when it does not own the

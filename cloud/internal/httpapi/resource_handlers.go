@@ -1181,8 +1181,7 @@ func (s *Server) setCloudSessionBooleanPolicy(
 // not call the provider: the reconciler owns every slow provider call, so a
 // degraded provider cannot stall this request. The reconciler releases quota
 // only after it confirms the compute is gone, then marks the retained session
-// terminated so its event history remains available. With
-// ?deleteArtifacts=true it also deletes the session's artifact files.
+// terminated so its event history remains available.
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	sessionID := chi.URLParam(r, "sessionId")
@@ -1195,20 +1194,17 @@ func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
 	// the reconciler — which the idle scanner can race by resetting the sandbox
 	// desired_state, leaving the session active and the card re-appearing. This
 	// makes delete land on the first click, symmetric with restore.
-	deleteArtifacts := r.URL.Query().Get("deleteArtifacts") == "true" && s.artifactsEnabled()
 	if err := s.store.TerminateSession(
 		r.Context(),
 		principalFrom(r),
 		orgID,
 		sessionID,
-		deleteArtifacts,
 	); err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"session":          map[string]any{"id": sessionID, "isTerminated": true, "desiredState": domain.SandboxDesiredDeleted},
-		"artifactsDeleted": deleteArtifacts,
+		"session": map[string]any{"id": sessionID, "isTerminated": true, "desiredState": domain.SandboxDesiredDeleted},
 	})
 }
 

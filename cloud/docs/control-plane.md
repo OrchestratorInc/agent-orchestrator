@@ -188,15 +188,15 @@ and no S3 client is built.
   changed file is relayed to the versioned tenant artifact bucket at
   `orgs/{orgId}/sessions/{sessionId}/{path}` with S3 verifying its SHA-256, so a
   mismatched body creates no version. Every upload is recorded in
-  `ao_artifact_object_versions`; a session can hold at most 100 uncommitted
+  `ao_artifact_object_versions`; a session can hold at most 400 uncommitted
   uploads or 1000 MiB. Sandboxes hold no AWS credentials.
 - **Commit.** The commit checks every uploaded `(path, versionId)` with
   `HeadObject`, then, in one transaction under the session row lock and only
   from the worker's current connection: claims each version as an open upload,
   upserts and deletes `ao_session_artifacts` rows, recomputes the session's
   `output_type`, queues the versions it replaced or deleted, and appends an
-  `artifact.changed` event. A commit over 50 files or 500 MiB per session
-  (100 MiB per file) changes nothing, and a commit that changes nothing appends
+  `artifact.changed` event. A commit over 200 files or 500 MiB per session
+  (25 MiB per file) changes nothing, and a commit that changes nothing appends
   no event.
 - **Cleanup.** A sweeper in the control plane deletes, by version, every
   upload not committed within 24 hours and every replaced or deleted version

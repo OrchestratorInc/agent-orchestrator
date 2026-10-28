@@ -28,8 +28,8 @@ func ValidRequestedOutput(value string) bool {
 
 // Artifact limits: one file, and every file of one session.
 const (
-	MaxArtifactFileBytes    = 100 << 20
-	MaxSessionArtifactFiles = 50
+	MaxArtifactFileBytes    = 25 << 20
+	MaxSessionArtifactFiles = 200
 	MaxSessionArtifactBytes = 500 << 20
 )
 
