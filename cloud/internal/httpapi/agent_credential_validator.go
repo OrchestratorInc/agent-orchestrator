@@ -75,7 +75,7 @@ func (v *agentCredentialValidator) validateClaude(
 ) error {
 	// #nosec G101 -- this checks a public credential-format prefix.
 	if credentialType == "oauth_token" &&
-		(!strings.HasPrefix(string(secret), "sk-ant-oat01-") || len(secret) < 80) {
+		(!strings.HasPrefix(string(secret), "sk-ant-oat") || len(secret) < 80) {
 		return errInvalidAgentCredential
 	}
 	request, err := http.NewRequestWithContext(
@@ -109,7 +109,7 @@ func (v *agentCredentialValidator) validateClaude(
 	switch response.StatusCode {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return errInvalidAgentCredential
-	case http.StatusOK, http.StatusBadRequest, http.StatusTooManyRequests:
+	case http.StatusOK, http.StatusBadRequest:
 		return nil
 	default:
 		return fmt.Errorf(
