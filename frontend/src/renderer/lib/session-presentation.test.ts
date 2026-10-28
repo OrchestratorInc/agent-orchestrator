@@ -3,6 +3,7 @@ import {
 	attentionZone,
 	getAgentActivityView,
 	getAttentionZoneView,
+	getSessionRowMarker,
 	getSessionStatusDotView,
 	getSessionStatusView,
 	getSessionTimelinePillView,
@@ -38,6 +39,20 @@ const openPr: WorkspaceSession["prs"][number] = {
 };
 
 describe("session presentation", () => {
+	it.each([
+		["Needs review", "needs_review"],
+		["Review failed", "review"],
+		["Review scheduled", null],
+		["Reviewing", null],
+	] as const)("maps validating sessions with %s to marker %s", (displayStatus, marker) => {
+		expect(getSessionRowMarker(sessionWith({
+			status: "commented",
+			scmStatus: "commented",
+			kanbanColumn: "validating",
+			displayStatus,
+		}))).toBe(marker);
+	});
+
 	it.each([
 		["active", "Working", true, "bg-status-working animate-status-pulse"],
 		["idle", "Idle", false, "bg-status-idle"],

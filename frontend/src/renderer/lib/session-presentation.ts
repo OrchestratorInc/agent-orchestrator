@@ -105,8 +105,61 @@ export function getSessionStatusDotView(
 	return dot(getKanbanColumnView(column, t).dotClassName);
 }
 
+/**
+ * The things a sidebar row may flag, in order of how much they ask of the
+ * user. Everything else (working aside, which has its own spinner) is quiet, so
+ * the few icons that appear stand out:
+ *  - "attention", red: the session needs you now (input or blocked, CI failing,
+ *    or changes requested)
+ *  - "ready", green: a PR you can merge
+ *  - "review", orange: a person's review is next
+ *  - "needs_review", rose: AO's review has not started yet
+ *  - "merged", purple and dimmed: a PR that has landed, nothing left to do
+ */
+export type SessionRowMarker = "attention" | "ready" | "review" | "needs_review" | "merged";
+
+/**
+ * What a sidebar row says about its session, if anything, from the daemon's
+ * display status (with a fallback to the status for an older daemon). Idle,
+ * exited, draft, AO's active review and closed sessions get no marker: they need
+ * nothing from the user, and the hover card has the detail.
+ */
+export function getSessionRowMarker(session: {
+	activity?: SessionActivity | null;
+	displayStatus?: string;
+	kanbanColumn?: KanbanColumn;
+	scmStatus?: SessionStatus;
+	status: SessionStatus;
+}): SessionRowMarker | null {
+	const sectionStatus: SessionStatus = session.scmStatus ?? session.status;
+	const display = session.displayStatus;
+	if (display === "Terminated" || sectionStatus === "terminated" || display === "Closed without merge") return null;
+
+	if (sessionNeedsInput(session)) return "attention";
+	if (display === "CI failing" || display === "Changes requested") return "attention";
+	if (!display && (session.status === "ci_failed" || session.status === "changes_requested")) {
+		return "attention";
+	}
+
+	switch (toKanbanColumn(session.kanbanColumn, sectionStatus)) {
+		case "needs_review":
+			// The review lane is the person's turn, short of the red states above.
+			return "review";
+		case "validating":
+			if (display === "Needs review") return "needs_review";
+			return display === "Review failed" ? "review" : null;
+		case "ready":
+			if (display ? display === "Merged" : sectionStatus === "merged") return "merged";
+			return (display ? display === "Mergeable" || display === "Approved" : sectionStatus === "mergeable" || sectionStatus === "approved")
+				? "ready"
+				: null;
+		default:
+			return null;
+	}
+}
+
 // The agent has stopped and is waiting on the user (a question or a decision).
-function sessionNeedsInput(session: {
+export function sessionNeedsInput(session: {
 	activity?: SessionActivity | null;
 	displayStatus?: string;
 	status: SessionStatus;
