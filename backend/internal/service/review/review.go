@@ -91,6 +91,7 @@ type Service struct {
 	codexOperationGate ports.CodexOperationGate
 	notifications      reviewNotificationSink
 	prRefresher        PRRefresher
+	reviewRefresher    ThreadRefresher
 	// engineTrigger indirects the engine's source-tagged trigger so the
 	// instrumented path can be exercised without standing up a full engine and
 	// its eighteen-method store. Defaulted in New; only tests replace it.
@@ -142,6 +143,19 @@ type Option func(*Service)
 // requested review, so the pass covers the commit actually on the PR.
 func WithPRRefresher(r PRRefresher) Option {
 	return func(s *Service) { s.prRefresher = r }
+}
+
+// ThreadRefresher asks SCM observation to read one PR's review threads now
+// rather than on its next scheduled poll. It must not block.
+type ThreadRefresher interface {
+	RequestReviewRefresh(prURL string)
+}
+
+// WithThreadRefresher refreshes a PR's review threads as soon as an AO review
+// posted to the provider is submitted, so its comments reach the worker
+// without waiting for the poller to notice them.
+func WithThreadRefresher(r ThreadRefresher) Option {
+	return func(s *Service) { s.reviewRefresher = r }
 }
 
 // WithClock overrides the service clock for tests.
@@ -579,7 +593,6 @@ func (s *Service) triggerWithOptions(
 			"error_kind": reviewErrorKind(err),
 			"trigger":    string(source),
 		})
-		s.emit(ctx, "ao.review.triggered", workerID, triggeredPayload)
 		return reviewcore.TriggerResult{}, err
 	}
 	usesCodex := s.codexReviewUsesCodex(ctx, workerID, harness)
@@ -598,19 +611,18 @@ func (s *Service) triggerWithOptions(
 			"error_kind": reviewErrorKind(err),
 			"trigger":    string(source),
 		})
-		s.emit(ctx, "ao.review.triggered", workerID, triggeredPayload)
 		return result, err
 	}
 	if result.Run.Harness != "" {
 		triggeredPayload["harness"] = string(result.Run.Harness)
 	}
-	// ao.review.triggered counts every attempt. created_runs still counts only
-	// brand-new rows, while Created also covers restart flows that relaunch a
-	// pass against an existing row after a reviewer config change. reused must
-	// stay false for those restarts even though created_runs is zero.
+	// A created run or a restarted pass is an actual review. Reused and skipped
+	// automatic attempts can recur on every sweep and are not new reviews.
 	createdOrRestarted := result.Created || len(result.CreatedRuns) > 0
+	if !createdOrRestarted {
+		return result, nil
+	}
 	triggeredPayload["created_runs"] = len(result.CreatedRuns)
-	triggeredPayload["reused"] = !createdOrRestarted
 	s.emit(ctx, "ao.review.triggered", workerID, triggeredPayload)
 	return result, nil
 }
@@ -832,6 +844,9 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		run.Body = body
 		run.GithubReviewID = githubReviewID
 		run.AutoInjectReview = session.AutoInjectReview
+		if githubReviewID != "" && s.reviewRefresher != nil {
+			s.reviewRefresher.RequestReviewRefresh(run.PRURL)
+		}
 		// Only on the real running -> complete transition. Re-submitting an
 		// already-complete run returns early below, so telemetry stays idempotent
 		// the same way the store does.

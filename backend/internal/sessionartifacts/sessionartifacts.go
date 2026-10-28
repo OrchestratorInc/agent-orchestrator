@@ -5,6 +5,7 @@
 package sessionartifacts
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -45,7 +46,8 @@ const MaxVisited = 10000
 // List walks a session's artifact directory and returns up to MaxFiles of its
 // regular files outside VersionsDir, sorted by path. Entries matched by
 // ignored are skipped, as are unreadable entries rather than failing the walk.
-func List(dir string) ([]domain.SessionArtifactFile, error) {
+// A cancelled ctx stops the walk and returns its error.
+func List(ctx context.Context, dir string) ([]domain.SessionArtifactFile, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		return nil, nil
@@ -57,6 +59,9 @@ func List(dir string) ([]domain.SessionArtifactFile, error) {
 	files := make([]domain.SessionArtifactFile, 0)
 	visited := 0
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			if path == root {
 				return walkErr

@@ -142,44 +142,51 @@ func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.Sessio
 
 // StopHarnessSessions stops every live session of harness without ending it:
 // Chat providers are put to sleep (a message sent meanwhile queues and wakes
-// the session afterwards), and terminal agents are stopped with their input
-// held. It stops nothing more once a session turns out to be busy.
+// the session afterwards), and terminal agents exit the way ExitAgent exits
+// them, with their input held. It stops nothing more once a session turns out
+// to be busy, and returns every session it stopped, including one whose stop
+// could not be fully recorded, so the caller resumes it.
 func (m *Manager) StopHarnessSessions(ctx context.Context, harness domain.AgentHarness) ([]domain.SessionID, error) {
 	live, err := m.liveHarnessSessions(ctx, harness)
 	if err != nil {
 		return nil, err
 	}
-	var stopped []domain.SessionID
+	var ids []domain.SessionID
 	for _, rec := range live {
-		if err := m.stopForUpdate(ctx, rec); err != nil {
-			return stopped, fmt.Errorf("stop %s for update: %w", rec.ID, err)
+		stopped, err := m.stopForUpdate(ctx, rec)
+		if stopped {
+			ids = append(ids, rec.ID)
 		}
-		stopped = append(stopped, rec.ID)
+		if err != nil {
+			return ids, fmt.Errorf("stop %s for update: %w", rec.ID, err)
+		}
 	}
-	return stopped, nil
+	return ids, nil
 }
 
-func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) error {
+// stopForUpdate reports whether it stopped rec's controller, even when it
+// then failed to record that.
+func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) (bool, error) {
 	if err := m.beginAgentOperation(ctx, rec.ID, agentOperationResume); err != nil {
-		return err
+		return false, err
 	}
 	defer m.endAgentOperation(rec.ID, agentOperationResume)
 	if active, err := m.hasActiveInterfaceTransition(ctx, rec.ID); err != nil || active {
-		return errors.Join(err, ErrInterfaceTransitionInProgress)
+		return false, errors.Join(err, ErrInterfaceTransitionInProgress)
 	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
 		hibernator, ok := m.chat.(ChatUpdateHibernator)
 		if !ok {
-			return ErrInterfaceHandoffUnsupported
+			return false, ErrInterfaceHandoffUnsupported
 		}
 		stopped, err := hibernator.HibernateChatForUpdate(ctx, rec.ID)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !stopped {
-			return errors.New("chat has work in progress")
+			return false, errors.New("chat has work in progress")
 		}
-		return nil
+		return true, nil
 	}
 	lastInputAt, releaseInput := m.beginTerminalInputDrain(rec)
 	current, err := m.getRecord(ctx, rec.ID)
@@ -191,6 +198,13 @@ func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) e
 			err = errors.New("terminal became busy")
 		}
 	}
+	// The terminal ends on purpose, as ExitAgent ends it: its launch is
+	// recorded as released before the runtime goes, so the reaper never reads
+	// the dead runtime as a crash and terminates the session while the update
+	// installs.
+	if err == nil {
+		err = m.releaseTerminalRuntime(ctx, current)
+	}
 	if err == nil {
 		err = m.stopSourceControllerConclusive(current)
 	}
@@ -198,12 +212,17 @@ func (m *Manager) stopForUpdate(ctx context.Context, rec domain.SessionRecord) e
 		if releaseInput != nil {
 			releaseInput()
 		}
-		return err
+		return false, err
 	}
 	if releaseInput != nil {
 		m.updateStops.hold(rec.ID, releaseInput)
 	}
-	return nil
+	// Exited, the session neither counts as live while the update installs nor
+	// is reaped; resumeAfterUpdate starts it again.
+	if err := m.recordAgentExited(ctx, current); err != nil {
+		return true, fmt.Errorf("record exit: %w", err)
+	}
+	return true, nil
 }
 
 // ResumeHarnessSessions starts sessions stopped for an update again on the

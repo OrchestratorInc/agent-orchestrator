@@ -20,12 +20,14 @@ import (
 // the coding agent's own command (binary, CODEX_HOME and credential), so the
 // catalog is the one the session's turns get, before any turn has run.
 func DiscoverCodexModels(ctx context.Context, agent Command) ([]worker.ChatModel, error) {
+	binary := agent.Path
+	if binary == "" || binary == codexSpec.binary {
+		// Wait, within the request's own deadline, for the pinned Codex a fresh
+		// workspace is still installing.
+		binary = EnsureCodex(ctx)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	binary := agent.Path
-	if binary == "" {
-		binary = "codex"
-	}
 	command := exec.CommandContext(ctx, binary, "app-server")
 	command.Env = mergedEnvironment(agent.Env)
 	// The catalog belongs to the account, not the checkout. Asked before the
@@ -157,6 +159,7 @@ func parseCodexModelList(raw json.RawMessage) ([]worker.ChatModel, string, error
 		model := worker.ChatModel{
 			ID: id, DisplayName: name, Description: entry.Description,
 			Default: entry.IsDefault, DefaultEffort: entry.DefaultEffort,
+			ApprovalModes: append([]string(nil), codexApprovalModes...),
 		}
 		for _, effort := range entry.Efforts {
 			if effort.ReasoningEffort != "" {

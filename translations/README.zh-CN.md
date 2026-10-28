@@ -1,116 +1,65 @@
 <div align="center">
 
-### Orchestrator.inc
+<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
 
-#### 集中规划、运行和监督编程智能体。
+<h3>别再照看智能体，开始合并真正的成果。</h3>
 
-[![GitHub stars](https://img.shields.io/github/stars/OrchestratorInc/agent-orchestrator?style=flat&logo=github)](https://github.com/OrchestratorInc/agent-orchestrator/stargazers)
-![GitHub 前 6000 名仓库](https://img.shields.io/badge/Top%206k%20repositories-181717?style=flat&logo=github&logoColor=white)
-[![GitHub 版本](https://img.shields.io/github/v/release/OrchestratorInc/agent-orchestrator?style=flat&logo=github)](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest)
-[![GitHub 下载量](https://img.shields.io/github/downloads/OrchestratorInc/agent-orchestrator/total?style=flat&logo=github)](https://github.com/OrchestratorInc/agent-orchestrator/releases)
-[![许可证：Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat)](../LICENSE)
-[![X](https://img.shields.io/badge/@useOrchestrator-555?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
-[![Discord](https://img.shields.io/badge/Discord-555?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
+<p>
+  运行一整支编程智能体队伍，同时让分支、评审和 CI 失败始终可控。
+</p>
 
-让每个编程任务都有自己的智能体、工作区和反馈闭环。<br />
-通过了解项目上下文的编排器规划和委派更大的目标。<br />
-在实时看板中跟踪每个 worker、拉取请求、CI 运行和评审。
+[![GitHub stars](https://img.shields.io/github/stars/OrchestratorInc/agent-orchestrator?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/stargazers)
+[![GitHub release](https://img.shields.io/github/v/release/OrchestratorInc/agent-orchestrator?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest)
+[![GitHub downloads](https://img.shields.io/github/downloads/OrchestratorInc/agent-orchestrator/total?style=flat&logo=github&color=1A9BF0)](https://github.com/OrchestratorInc/agent-orchestrator/releases)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-0B1A33?style=flat)](../LICENSE)
+[![X](https://img.shields.io/badge/@useOrchestrator-0B1A33?style=flat&logo=x&logoColor=white)](https://x.com/useOrchestrator)
+[![Discord](https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.com/invite/UZv7JjxbwG)
 
-[**下载 Orchestrator.inc**](#安装) &nbsp;&bull;&nbsp; [文档](https://docs.orchestrator.inc) &nbsp;&bull;&nbsp; [版本](https://github.com/OrchestratorInc/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [参与贡献](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
+<br />
+
+[**获取 Orchestrator.inc**](https://orchestrator.inc) &nbsp;&bull;&nbsp; [文档](https://docs.orchestrator.inc) &nbsp;&bull;&nbsp; [版本](https://github.com/OrchestratorInc/agent-orchestrator/releases) &nbsp;&bull;&nbsp; [参与贡献](../CONTRIBUTING.md) &nbsp;&bull;&nbsp; [Discord](https://discord.com/invite/UZv7JjxbwG)
 
 [English](../README.md) · **简体中文** · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Português (Brasil)](README.pt-BR.md)
 
 <br />
 
 <img src="../docs/assets/readme/hero.png" alt="Orchestrator.inc 看板，按实时状态分组显示 worker 会话" width="100%" />
+
 </div>
 
-## 面向智能体驱动开发的工作区
+<br />
 
-一个编程智能体可以完成一项任务。当多个智能体同时参与一个项目时，你需要解决的是另一类工作：判断什么最重要，清晰地拆分任务，为每个智能体提供正确的上下文，避免分支冲突，并跟踪每项变更直至评审和合并。
+## 为什么选择 Orchestrator.inc
 
-Orchestrator.inc 是为此打造的本地桌面工作区。添加一个仓库，然后根据任务选择合适的编程智能体、模型和交互界面来创建 worker 会话。对于使用 Git 的工作，Orchestrator.inc 会为每个 worker 分配独立的分支和 worktree。从开始到结束，任务、对话、终端、变更文件、浏览器预览、拉取请求、CI 和评审状态始终与该会话关联。
+一个编程智能体可以完成一项任务。同时运行多个智能体，就意味着要拆分工作、避免分支冲突，并跟踪每项变更走完 CI、评审和合并。Orchestrator.inc 正是为此打造的本地桌面工作区：每项任务都有自己的智能体、分支和 worktree，你的代码始终留在你自己的机器上。
 
-在桌面应用背后，Orchestrator.inc 的本地守护进程会监视智能体活动和源代码管理状态。你看到的是项目统一且实时的全局视图，而不是彼此割裂的终端、分支和浏览器标签页。
+## 功能
 
-<img src="../docs/assets/readme/tui.png" alt="Orchestrator.inc workspace with a supervised native agent interface" width="100%" />
+### 编排器统领整支队伍
 
-## Worker 执行专注、明确的任务
+告诉项目的主智能体你想构建什么。它会规划工作，为每个部分在独立的 worktree 中启动一个 worker，只在需要你时才回来找你。
 
-Worker 是 Orchestrator.inc 的执行单元：一项任务、一个编程智能体和一个隔离工作区。当工作已经明确时，使用 **New task**。描述期望结果，选择智能体和模型，附上相关文件，然后通过结构化 Chat 或智能体原生的终端界面与其协作。
+<img src="../docs/assets/readme/site/orchestrator.jpg" alt="编排器将一个计费功能拆分给三个 worker，每个 worker 在各自的 worktree 中使用不同的编程智能体" width="100%" />
 
-你可以随时打开 worker，继续对话、连接终端、检查变更、使用隔离浏览器、查看拉取请求，或把 CI 和评审反馈交还给同一个智能体。这样，每项任务都能独立理解，并行工作也不会挤进同一个共享上下文。
+### 一个看板，管理所有会话
 
-<img src="../docs/assets/readme/new-task.png" alt="Creating a focused worker task in Orchestrator.inc" width="100%" />
+会话会根据智能体、PR、CI 和评审状态自动归入各个泳道，需要你处理的内容始终排在最上面。
 
-## 项目编排器负责全局规划
+<img src="../docs/assets/readme/site/board.jpg" alt="包含 Working、Needs you、In review 和 Ready to merge 泳道的看板" width="100%" />
 
-项目编排器是 Orchestrator.inc 中持久存在的规划与协调智能体。它工作在单项任务之上，关注整个仓库的产品方向、技术策略、优先级和工作顺序。
+### CI 失败，由对应的智能体修复
 
-你可以在实施之前用编排器探索想法、讨论产品和技术方案、分析取舍、识别高影响力工作，并把模糊的目标转化为具体计划。项目级对话会保留目标、决策、约束和之前的推理。编排器将这些规划历史与仓库上下文及 Orchestrator.inc 的实时状态结合起来，其中包括活跃 worker、任务归属、拉取请求、CI 和评审。这让规划既立足于项目全局，也始终反映正在进行的工作。
+失败的检查、评审意见和合并冲突会交还给负责该分支的 worker，直到 PR 获得批准。评审智能体可以在人工评审之前先审阅每个 PR。
 
-当计划可以付诸执行时，编排器能够将其拆成专注的任务，启动或重定向 worker，把相关上下文交给每个 worker，跟踪进展并协调后续工作。编排器负责规划和委派；worker 负责实现、测试、提交和拉取请求。
+<img src="../docs/assets/readme/site/feedback.jpg" alt="拉取请求时间线：失败的检查和评审意见被交还给 Claude Code，由它推送修复" width="100%" />
 
-<img src="../docs/assets/readme/orchestrator.png" alt="Orchestrator.inc coordinating multiple workers with project context" width="100%" />
+### 使用你已经信任的智能体
 
-## 看板让整个系统一目了然
+为每项任务选择智能体和模型，然后在结构化 Chat 或智能体原生的终端界面中工作。每个 worker 还配有一个浏览器，用于预览和测试其应用。
 
-无论 worker 是通过 **New task** 创建，还是由编排器委派，它都会出现在同一个实时看板上。Orchestrator.inc 根据会话、拉取请求、CI 和评审的实际状态决定每张卡片的位置，让看板成为项目的运行视图：
+#### 支持的智能体
 
-- **Working（处理中）：** 正在实施工作或可以接收下一条指令的 worker
-- **Needs you（需要你）：** 被阻塞、缺少输入、CI 失败、被要求修改或信号丢失的会话
-- **In review（评审中）：** 正在等待检查或评审的已打开拉取请求和草稿拉取请求
-- **Ready to merge（可以合并）：** 已获批准或可合并的工作；已合并的会话会保持可见，直到被归档
-
-每张卡片都把任务、智能体、分支、活动、拉取请求和状态放在一起。打开卡片即可查看对话或终端、变更文件、PR 摘要、评审和预览。看板会告诉你哪些工作正在推进，哪些工作被阻塞，以及你的注意力放在哪里能产生最大影响。
-
-<img src="../docs/assets/readme/hero.png" alt="Orchestrator.inc Kanban showing workers grouped by live status" width="100%" />
-
-## 从想法到合并，一套完整工作流
-
-1. **从正确的层级开始。** 将明确的任务直接交给 worker，或者与项目编排器一起梳理更大的目标并由它形成计划。
-2. **委派专注的工作。** 你可以自己启动 worker，也可以让编排器带着所需的上下文和明确的责任归属来创建 worker。
-3. **在隔离环境中构建。** 每个使用 Git 的 worker 都有自己的分支和 worktree；Scratch worker 则使用由 Orchestrator.inc 管理的无分支目录。
-4. **监督实时状态。** Orchestrator.inc 跟踪智能体活动、拉取请求、CI、评审反馈和合并冲突，并在看板中反映这些事实。
-5. **闭合反馈循环。** 直接检查任意 worker，与编排器一起做出项目层面的决策，再把可操作的失败信息或评审意见交还给负责该工作的智能体。
-
-Orchestrator.inc 与你现有的编程智能体和源代码管理流程配合使用。智能体保留各自的原生优势；Orchestrator.inc 提供项目上下文、隔离执行、协调能力和运行视图，让这些智能体能够作为一个系统协同工作。
-
-## 产品亮点
-
-<table>
-  <tr>
-    <td width="36%" valign="middle">
-      <h3>拉取请求和智能体评审</h3>
-      <p>将 CI、可合并状态、评审者状态和交互式智能体评审放在 worker 旁边，再把要求的修改交还给同一个负责人。</p>
-    </td>
-    <td width="64%">
-      <img src="../docs/assets/readme/review.png" alt="Orchestrator.inc 中包含拉取请求、CI 和智能体评审状态的 worker 会话" width="100%" />
-    </td>
-  </tr>
-  <tr>
-    <td width="36%" valign="middle">
-      <h3>可由智能体控制的浏览器</h3>
-      <p>在 worker 界面旁预览和检查本地应用。每个 worker 都有隔离的浏览器配置，因此并行的界面任务不会共享状态。</p>
-    </td>
-    <td width="64%">
-      <img src="../docs/assets/readme/browser.png" alt="Worker 控制其隔离的应用内浏览器预览" width="100%" />
-    </td>
-  </tr>
-  <tr>
-    <td width="36%" valign="middle">
-      <h3>原生界面，由一个监督层统一管理</h3>
-      <p>使用结构化 Chat 或智能体原生终端界面，同时让 Orchestrator.inc 将任务上下文、工作区状态和反馈集中在一个地方。</p>
-    </td>
-    <td width="64%">
-      <img src="../docs/assets/readme/tui.png" alt="Agent terminal interface supervised inside Orchestrator.inc" width="100%" />
-    </td>
-  </tr>
-</table>
-
-## 支持的智能体
-
-在同一个受监督的工作流中使用编程智能体。当前支持的智能体和模式请查看[功能目录](https://docs.orchestrator.inc/plugins/agents)。
+各智能体对 Worker、Chat 和评审者的支持情况不同；当前的支持矩阵请查看[智能体设置指南](https://docs.orchestrator.inc/plugins/agents)。
 
 <table>
   <tr valign="middle">
@@ -168,64 +117,91 @@ Orchestrator.inc 与你现有的编程智能体和源代码管理流程配合使
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/deepseek-harness-dark.svg" /><img src="../frontend/src/renderer/assets/agents/deepseek-harness-light.svg" alt="DeepSeek" width="24" height="24" align="middle" /></picture> &nbsp; <b>DeepSeek</b></td>
     <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/opencode-dark.svg" /><img src="../frontend/src/renderer/assets/agents/opencode-light.svg" alt="OpenCode 2" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenCode 2</b></td>
   </tr>
+  <tr valign="middle">
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/codewhale-dark.svg" /><img src="../frontend/src/renderer/assets/agents/codewhale-light.svg" alt="Codewhale" width="24" height="24" align="middle" /></picture> &nbsp; <b>Codewhale</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/command-code-dark.svg" /><img src="../frontend/src/renderer/assets/agents/command-code-light.svg" alt="Command Code" width="24" height="24" align="middle" /></picture> &nbsp; <b>Command Code</b></td>
+    <td valign="middle" nowrap><picture><source media="(prefers-color-scheme: dark)" srcset="../frontend/src/renderer/assets/agents/openhands-dark.svg" /><img src="../frontend/src/renderer/assets/agents/openhands-light.svg" alt="OpenHands" width="24" height="24" align="middle" /></picture> &nbsp; <b>OpenHands</b></td>
+  </tr>
 </table>
 
-[浏览智能体设置指南 →](https://docs.orchestrator.inc/plugins/agents)
+<br />
 
-**根据当下的需要选择交互方式：结构化 Chat 或智能体原生的终端界面。**
+### Orchestrator for Mobile
+
+用手机操控在桌面端运行的智能体。安装适用于 [iPhone](https://apps.apple.com/app/ao-mobile/id6792552173) 或 [Android](https://play.google.com/store/apps/details?id=aoagents.dev) 的应用，在 **Settings → Connect Mobile** 中扫描二维码即可与桌面端配对。在家里的 Wi-Fi 和外出时都能使用。
+
+- **接收提醒**：智能体有问题或需要批准时，会收到推送通知。
+- **回复**：在聊天中回答、批准请求，或打开智能体的终端。
+- **开始工作**：创建新的工作者，并选择其智能体和模型。
+- **评审**：查看拉取请求和评审者结果。
+
+<img src="../docs/assets/readme/site/mobile.jpg" alt="移动应用中，一个智能体询问要使用哪家邮件服务商，以及从手机发送的回复" width="100%" />
+
+### Cloud Agents
+
+让工作者在托管的工作区中运行，而不是在你的机器上。选择 **Clone to the cloud** 并挑选一个 GitHub 仓库即可开始。
+
+- **持续运行**：合上笔记本，任务也会继续。
+- **随时跟进**：在桌面应用中打开聊天、文件和终端。
+- **本机不留任何东西**：代码、工作树和智能体全部在云端。
+
+设置方法请参阅 [Cloud 指南](https://docs.orchestrator.inc/guides/cloud)。
 
 ## 安装
 
-下载适用于你所在平台的最新 Orchestrator.inc 桌面应用。Orchestrator.inc 会自动检查更新。
+从 [orchestrator.inc/download](https://orchestrator.inc/download/) 或 [GitHub Releases](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest) 下载。应用会自动更新。
 
-| 平台                   | 下载                                                                                                                      |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| macOS（Apple 芯片）    | [下载](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-arm64.dmg)   |
-| macOS（Intel）         | [下载](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-x64.dmg)     |
-| Windows                | [下载](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-win32-x64.exe)      |
-| Linux（AppImage）      | [下载](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.AppImage) |
-| Linux（Debian/Ubuntu） | [下载](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb)      |
-| Linux（Fedora/RHEL）   | [下载](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm)      |
+| 平台 | 下载 |
+| :-- | :-- |
+| **macOS**（Apple 芯片） | [`agent-orchestrator-darwin-arm64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-arm64.dmg) |
+| **macOS**（Intel） | [`agent-orchestrator-darwin-x64.dmg`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-darwin-x64.dmg) |
+| **Windows** | [`agent-orchestrator-win32-x64.exe`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-win32-x64.exe) |
+| **Linux**（AppImage） | [`agent-orchestrator-linux-x64.AppImage`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.AppImage) |
+| **Linux**（Debian/Ubuntu） | [`agent-orchestrator-linux-x64.deb`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.deb) |
+| **Linux**（Fedora/RHEL） | [`agent-orchestrator-linux-x64.rpm`](https://github.com/OrchestratorInc/agent-orchestrator/releases/latest/download/agent-orchestrator-linux-x64.rpm) |
 
-打开 Orchestrator.inc，并选择你希望 Orchestrator.inc 管理的仓库。桌面应用会为你运行守护进程，因此无需使用 CLI。有关智能体 CLI 的设置和故障排除，请参阅[安装指南](https://docs.orchestrator.inc/installation)。
-
-## 报告 bug
-
-[提交 bug 报告](https://github.com/OrchestratorInc/agent-orchestrator/issues/new?template=bug_report.yml)时，请使用你自己的 GitHub 账号。用自己的话写几句话，说明你做了什么以及发生了什么问题即可。如果有的话，请补充预期结果、复现步骤、Orchestrator.inc 版本和操作系统，或附上截图。这些信息很有帮助，但不是必需的。
-
-本地编程智能体可以使用 [bug-triage skill](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/.agents/skills/bug-triage/SKILL.md)帮助你整理报告和收集证据。Issue 正文只保留你的观察；智能体收集的日志、数据库摘录和调查笔记应放在清楚标注的附件中。请在使用自己的账号提交前检查草稿。不要要求 机器人 代你提交 issue，因为需要保留报告者归属。
-
-如果需要帮助描述问题，可以加入 [Discord bug-triaging 频道](https://discord.com/channels/1476302178913357958/1491735678156013588)。更多信息请参阅[贡献指南](../CONTRIBUTING.md#bugs-and-features)。
-
-## 开发与贡献
-
-欢迎贡献代码、文档、bug 分诊、示例和测试。
-
-```bash
-git clone https://github.com/OrchestratorInc/agent-orchestrator.git
-cd agent-orchestrator
-```
-
-请先阅读[开发指南](../docs/development.md)，了解先决条件、本地设置和测试命令。提交拉取请求前请阅读 [CONTRIBUTING.md](../CONTRIBUTING.md)，并通过 [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) 报告 bug 和提出功能请求。
+打开 Orchestrator.inc，并选择你希望它管理的仓库。桌面应用会为你运行守护进程，因此无需使用 CLI。有关智能体 CLI 的设置和故障排除，请参阅[安装指南](https://docs.orchestrator.inc/installation)。
 
 ## 文档
 
-| 文档                                                                | 需要以下内容时从这里开始                                      |
-| ------------------------------------------------------------------- | ------------------------------------------------------------- |
-| [产品文档](https://docs.orchestrator.inc)                                  | 安装、智能体设置和日常产品使用。                              |
-| [docs/architecture.md](../docs/architecture.md)                     | 后端心智模型、生命周期、持久化、CDC、状态推导和守护进程边界。 |
-| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | 包职责以及各项后端关注点应归属的位置。                        |
-| [docs/cli/README.md](../docs/cli/README.md)                         | CLI 行为和守护进程路由映射。                                  |
-| [docs/development.md](../docs/development.md)                       | 本地开发的先决条件、构建步骤、测试运行方法和故障排除。        |
-| [docs/STATUS.md](../docs/STATUS.md)                                 | `main` 当前已提供的功能和尚在开发中的内容。                   |
+| 文档 | 需要以下内容时从这里开始 |
+| :-- | :-- |
+| [产品文档](https://docs.orchestrator.inc) | 安装、智能体设置和日常产品使用。 |
+| [docs/documentation-map.md](../docs/documentation-map.md) | 哪些文档面向人阅读，哪些是机器可读的契约，以及内容不一致时以哪个为准。 |
+| [docs/architecture.md](../docs/architecture.md) | 后端心智模型、生命周期、持久化、CDC、状态推导和守护进程边界。 |
+| [docs/backend-code-structure.md](../docs/backend-code-structure.md) | 包职责以及各项后端关注点应归属的位置。 |
+| [docs/cli/README.md](../docs/cli/README.md) | CLI 行为和守护进程路由映射。 |
+| [docs/development.md](../docs/development.md) | 本地开发的先决条件、构建步骤、测试运行方法和故障排除。 |
+| [docs/STATUS.md](../docs/STATUS.md) | `main` 当前已提供的功能和尚在开发中的内容。 |
+
+## 参与贡献
+
+请先阅读[开发指南](../docs/development.md)，了解先决条件、本地设置和测试命令。提交拉取请求前请阅读 [CONTRIBUTING.md](../CONTRIBUTING.md)，并通过 [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) 报告 bug 和提出功能请求。
+
+### 报告 bug
+
+请使用你自己的 GitHub 账号[提交 bug 报告](https://github.com/OrchestratorInc/agent-orchestrator/issues/new?template=bug_report.yml)。用几句话说明你做了什么、出了什么问题即可；如果有版本、操作系统和复现步骤，也会很有帮助。
+
+本地编程智能体可以借助 [bug-triage skill](../.agents/skills/bug-triage/SKILL.md) 帮你收集证据；请把它的日志和笔记放在附件中，并在自行提交前检查草稿。请不要让机器人代你提交 issue。
+
+如果需要帮助描述问题，可以加入 [Discord 上的 bug-triaging 频道](https://discord.com/channels/1476302178913357958/1491735678156013588)。更多信息请参阅[贡献指南](../CONTRIBUTING.md#bugs-and-features)。
 
 ## 社区
 
 加入 [Discord](https://discord.com/invite/UZv7JjxbwG) 获取帮助并参与贡献者讨论，关注 [@useOrchestrator](https://x.com/useOrchestrator) 了解最新动态，或在 [GitHub Issues](https://github.com/OrchestratorInc/agent-orchestrator/issues) 中发起讨论。
 
+## Star 历史
+
+<a href="https://www.star-history.com/#OrchestratorInc/agent-orchestrator&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=OrchestratorInc/agent-orchestrator&type=Date&theme=dark" />
+    <img src="https://api.star-history.com/svg?repos=OrchestratorInc/agent-orchestrator&type=Date" alt="OrchestratorInc/agent-orchestrator 的 Star 历史图表" width="100%" />
+  </picture>
+</a>
+
 ## 产品遥测
 
-Orchestrator.inc 收集不包含项目内容的使用和可靠性指标。但项目的 GitHub 所有者及已登录的 GitHub 用户名可能识别个人，因此这些遥测数据并非匿名。关闭遥测也会停止发送这些信息。[查看详情和设置](../docs/telemetry.md)。
+Orchestrator.inc 收集有限的使用情况和可靠性遥测数据，绝不收集你的代码、提示词、智能体对话或凭据。这些数据包括安装 ID 和你的 GitHub 用户名；如果你登录了 AO Cloud，还会包括你的 AO Cloud 用户 ID 和该账号的电子邮件地址，它们只会作为 PostHog 人员属性设置一次（绝不从 git config 读取）。你可以在 Settings > General > Privacy > Share usage analytics 中将其全部关闭，该设置同时适用于桌面端、守护进程和已配对的手机。[详细了解我们收集哪些数据以及如何选择退出](../docs/telemetry.md)。
 
 ## 许可证
 

@@ -35,12 +35,37 @@ const (
 	claudeCodeTurnWait = 90 * time.Second
 )
 
-// claudeCode resolves the Claude Code executable the worker launches. It uses
-// the workspace's own install when that is at least ClaudeCodeVersion, and
-// otherwise installs ClaudeCodeVersion into ~/.ao/tools once per worker
-// process. A failed upgrade never blocks a session: the older install is
-// still used.
+// CodexVersion is the Codex CLI release cloud workers run, the one AO's own
+// Coder templates install (cloud/coder/main.tf). Codex's app-server protocol,
+// which Chat and model discovery speak, changes between releases, so a
+// template's own newer or older Codex is not used: the worker installs this
+// release into its own prefix instead.
+const CodexVersion = "0.147.0"
+
+// pinnedCLISpec names a coding-agent CLI the worker can install for itself.
+type pinnedCLISpec struct {
+	binary  string
+	pkg     string
+	version string
+	// exact accepts only version; otherwise version or newer.
+	exact bool
+}
+
+var (
+	claudeCodeSpec = pinnedCLISpec{binary: claudeCodeBinary, pkg: claudeCodePackage, version: ClaudeCodeVersion}
+	codexSpec      = pinnedCLISpec{binary: "codex", pkg: "@openai/codex", version: CodexVersion, exact: true}
+)
+
+// claudeCode resolves a pinned coding-agent executable the worker launches
+// (Claude Code by default, Codex with codexSpec). It uses the workspace's own
+// install when that satisfies the pin, and otherwise installs the pinned
+// release into ~/.ao/tools once per worker process, including when the
+// workspace has none yet (a template that installs its tools in the
+// background). A failed install never blocks a session: the workspace's own
+// install is still used.
 type claudeCode struct {
+	// spec is the CLI; the zero value is Claude Code.
+	spec     pinnedCLISpec
 	lookPath func(string) (string, error)
 	homeDir  func() (string, error)
 	version  func(ctx context.Context, path string) (string, error)
@@ -58,6 +83,69 @@ var defaultClaudeCode = &claudeCode{
 	homeDir:  os.UserHomeDir,
 	version:  claudeCodeExecutableVersion,
 	install:  npmInstallClaudeCode,
+}
+
+var defaultCodex = &claudeCode{
+	spec:     codexSpec,
+	lookPath: exec.LookPath,
+	homeDir:  os.UserHomeDir,
+	version:  claudeCodeExecutableVersion,
+	install:  npmInstallPinnedCLI(codexSpec),
+}
+
+func (c *claudeCode) cli() pinnedCLISpec {
+	if c.spec.binary == "" {
+		return claudeCodeSpec
+	}
+	return c.spec
+}
+
+// EnsureCodex returns the Codex executable to launch, installing CodexVersion
+// first when the workspace has no matching release. It waits for an install
+// in progress until ctx is done and then falls back to whatever is installed.
+func EnsureCodex(ctx context.Context) string {
+	return defaultCodex.ensure(ctx)
+}
+
+// WarmCodex starts any needed Codex install in the background.
+func WarmCodex() {
+	go func() { _ = defaultCodex.ensure(context.Background()) }()
+}
+
+// AwaitCodexInstall waits, at most as long as a Chat turn does, for a Codex
+// install in progress, so a terminal launch runs the pinned release.
+func AwaitCodexInstall(ctx context.Context) {
+	defaultCodex.await(ctx, claudeCodeTurnWait)
+}
+
+// PinnedHarnessReady reports, without waiting, whether the worker's own
+// install of a harness it pins (Claude Code, Codex) is ready to launch.
+func PinnedHarnessReady(harness string) bool {
+	var c *claudeCode
+	switch harness {
+	case "claude-code":
+		c = defaultClaudeCode
+	case "codex":
+		c = defaultCodex
+	default:
+		return false
+	}
+	path := c.current()
+	return filepath.IsAbs(path) && fileExecutable(path)
+}
+
+// EnsureHarnessBinary is the pinned executable for a harness the worker
+// installs itself (Claude Code, Codex), and false for any other harness. The
+// path is absolute once the worker's own install, or a workspace install that
+// satisfies the pin, is ready.
+func EnsureHarnessBinary(ctx context.Context, harness string) (string, bool) {
+	switch harness {
+	case "claude-code":
+		return EnsureClaudeCode(ctx), true
+	case "codex":
+		return EnsureCodex(ctx), true
+	}
+	return "", false
 }
 
 // EnsureClaudeCode returns the Claude Code executable to launch, upgrading an
@@ -95,7 +183,7 @@ func (c *claudeCode) current() string {
 	if c.path != "" && fileExecutable(c.path) {
 		return c.path
 	}
-	return claudeCodeBinary
+	return c.cli().binary
 }
 
 func (c *claudeCode) ensure(ctx context.Context) string {
@@ -108,7 +196,7 @@ func (c *claudeCode) ensure(ctx context.Context) string {
 	if c.pending == nil {
 		if c.failures > 0 && time.Since(c.failedAt) < claudeCodeRetryBackoff(c.failures) {
 			c.mu.Unlock()
-			return claudeCodeBinary
+			return c.cli().binary
 		}
 		done := make(chan struct{})
 		c.pending = done
@@ -158,16 +246,17 @@ func claudeCodeRetryBackoff(failures int) time.Duration {
 }
 
 func (c *claudeCode) resolvePath(ctx context.Context) (string, bool) {
+	cli := c.cli()
 	var prefix, local string
 	if home, err := c.homeDir(); err == nil && home != "" {
 		prefix = filepath.Join(home, ".ao", "tools")
-		local = filepath.Join(prefix, "bin", claudeCodeBinary)
+		local = filepath.Join(prefix, "bin", cli.binary)
 	}
-	// A previous worker on this durable home may already have upgraded.
+	// A previous worker on this durable home may already have installed it.
 	if local != "" && fileExecutable(local) && c.atLeastPinned(ctx, local) {
 		return local, true
 	}
-	if path, err := c.lookPath(claudeCodeBinary); err == nil && c.atLeastPinned(ctx, path) {
+	if path, err := c.lookPath(cli.binary); err == nil && c.atLeastPinned(ctx, path) {
 		return path, true
 	}
 	if prefix == "" {
@@ -187,7 +276,14 @@ func (c *claudeCode) atLeastPinned(ctx context.Context, path string) bool {
 	versionCtx, cancel := context.WithTimeout(ctx, claudeCodeVersionTimeout)
 	defer cancel()
 	installed, err := c.version(versionCtx, path)
-	return err == nil && compareReleaseVersions(installed, ClaudeCodeVersion) >= 0
+	if err != nil {
+		return false
+	}
+	cli := c.cli()
+	if cli.exact {
+		return compareReleaseVersions(installed, cli.version) == 0
+	}
+	return compareReleaseVersions(installed, cli.version) >= 0
 }
 
 func claudeCodeExecutableVersion(ctx context.Context, path string) (string, error) {
@@ -195,10 +291,15 @@ func claudeCodeExecutableVersion(ctx context.Context, path string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	// "2.1.287 (Claude Code)"
+	// "2.1.287 (Claude Code)", "codex-cli 0.147.0"
 	fields := strings.Fields(string(output))
 	if len(fields) == 0 {
 		return "", fmt.Errorf("%s --version printed nothing", path)
+	}
+	for _, field := range fields {
+		if _, ok := parseReleaseVersion(field); ok {
+			return field, nil
+		}
 	}
 	return fields[0], nil
 }
@@ -252,15 +353,21 @@ func parseReleaseVersion(value string) ([]int, bool) {
 }
 
 func npmInstallClaudeCode(ctx context.Context, npm, prefix string) error {
-	if err := os.MkdirAll(prefix, 0o755); err != nil {
-		return err
+	return npmInstallPinnedCLI(claudeCodeSpec)(ctx, npm, prefix)
+}
+
+func npmInstallPinnedCLI(cli pinnedCLISpec) func(ctx context.Context, npm, prefix string) error {
+	return func(ctx context.Context, npm, prefix string) error {
+		if err := os.MkdirAll(prefix, 0o755); err != nil {
+			return err
+		}
+		cmd := exec.CommandContext(ctx, npm, "install", "--global", "--prefix", prefix,
+			"--no-fund", "--no-audit", "--loglevel=error",
+			cli.pkg+"@"+cli.version)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("npm install %s: %w: %s", cli.pkg, err, boundedInstallOutput(output))
+		}
+		return nil
 	}
-	cmd := exec.CommandContext(ctx, npm, "install", "--global", "--prefix", prefix,
-		"--no-fund", "--no-audit", "--loglevel=error",
-		claudeCodePackage+"@"+ClaudeCodeVersion)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("npm install %s: %w: %s", claudeCodePackage, err, boundedInstallOutput(output))
-	}
-	return nil
 }

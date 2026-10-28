@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { TooltipProvider } from "./ui/tooltip";
@@ -312,7 +312,7 @@ test("does not tell LAN users to join the same Wi-Fi", async () => {
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
 
 	expect(screen.queryByText(/same Wi-Fi/i)).not.toBeInTheDocument();
-	expect(screen.getByText("Scan with the AO mobile app")).toBeInTheDocument();
+	expect(screen.getByText("Scan with the Orchestrator mobile app")).toBeInTheDocument();
 });
 
 // Both stores are listed in step one now. The platform dropdown that used to
@@ -323,6 +323,18 @@ test("offers both store links without a platform choice", async () => {
 	expect(await screen.findByRole("button", { name: "Open Agent Orchestrator on the App Store" })).toBeInTheDocument();
 	expect(screen.getByRole("button", { name: "Open Agent Orchestrator on Google Play" })).toBeInTheDocument();
 	expect(screen.queryByRole("button", { name: "Get the app" })).not.toBeInTheDocument();
+});
+
+// The store links used to be muted text links, easy to read past. They are a
+// filled segmented control now, next to "Get the app".
+test("shows the store links as one segmented control beside Get the app", async () => {
+	renderMobileSettings();
+
+	const ios = await screen.findByRole("button", { name: "Open Agent Orchestrator on the App Store" });
+	const android = screen.getByRole("button", { name: "Open Agent Orchestrator on Google Play" });
+	expect(ios.parentElement).toBe(android.parentElement);
+	expect(ios.parentElement).toHaveClass("bg-(--color-bg-settings-input)");
+	expect(ios.parentElement?.parentElement).toHaveTextContent("Get the app");
 });
 
 test("shows a square Google Play QR tooltip for Android", async () => {
@@ -641,14 +653,19 @@ test("shows the LAN QR before a supported tunnel starts", () => {
 // that window carries no tunnel and fails away from home. Seen in the field: a
 // photographed code held only the LAN and Tailscale addresses, and the phone
 // reported "same Wi-Fi?" from mobile data with nothing on the desktop to warn.
-test("labels a LAN-only code while remote access is still starting", async () => {
+// The code refreshes itself once the tunnel is up; until then the note under
+// it says remote access is still being enabled.
+test("says remote access is enabling while the tunnel starts", async () => {
 	mobileStatus.tunnel = {
 		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
 	};
 	renderMobileSettings();
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
 
-	expect(screen.getByTestId("mobile-local-only")).toHaveTextContent(/remote access is still starting/i);
+	expect(screen.getByTestId("mobile-remote-access-starting")).toHaveTextContent("Enabling remote access");
+	expect(screen.getByTestId("mobile-remote-access-starting")).toHaveTextContent("Until then, works on this network only");
+	expect(screen.queryByTestId("mobile-remote-access-on")).not.toBeInTheDocument();
+	expect(screen.queryByTestId("mobile-local-only")).not.toBeInTheDocument();
 });
 
 // Tailscale reaches this machine from another network once both devices are
@@ -664,10 +681,51 @@ test("keeps Tailscale as the remote path while the public tunnel is missing", as
 	renderMobileSettings();
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
 
-	const note = screen.getByTestId("mobile-local-only");
-	expect(note).toHaveTextContent(/No public tunnel yet/);
+	const note = screen.getByTestId("mobile-remote-access-starting");
+	expect(note).toHaveTextContent("Enabling remote access");
 	expect(note).toHaveTextContent(/only over Tailscale/);
 	expect(note).not.toHaveTextContent(/this network only/i);
+});
+
+// The note under the code comes and goes with the tunnel, but the code itself
+// must stay the same element: a remount would drop PairingQr's crossfade and
+// pop the next code in (or the last one out) with no transition.
+test("keeps the same code element as the remote access note changes", async () => {
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
+	};
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	renderMobileSettings(client);
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+	expect(screen.getByTestId("mobile-remote-access-starting")).toBeInTheDocument();
+	const square = screen.getByTestId("mobile-pairing-panel").firstElementChild;
+	const canvas = document.querySelector("[data-qr-value]");
+
+	// starting -> failed: the note goes, the code is unchanged.
+	act(() => {
+		client.setQueryData(mobileStatusQueryKey, {
+			...structuredClone(mobileStatus),
+			tunnel: { supported: true, running: false, ready: false, hostname: "", location: "", lastError: "connector exited" },
+		});
+	});
+	await waitFor(() => expect(screen.queryByTestId("mobile-remote-access-starting")).not.toBeInTheDocument());
+	expect(screen.getByTestId("mobile-local-only")).toBeInTheDocument();
+	expect(screen.getByTestId("mobile-pairing-panel").firstElementChild).toBe(square);
+	expect(document.querySelector("[data-qr-value]")).toBe(canvas);
+
+	// -> on: the code gains the tunnel and crossfades inside the same square.
+	act(() => {
+		client.setQueryData(mobileStatusQueryKey, {
+			...structuredClone(mobileStatus),
+			endpoints: [
+				{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
+				{ kind: "tunnel", host: "abc.trycloudflare.com", port: 443, secure: true },
+			],
+			tunnel: { supported: true, running: true, ready: true, hostname: "abc.trycloudflare.com", location: "", lastError: "" },
+		});
+	});
+	await waitFor(() => expect(screen.getByTestId("mobile-remote-access-on")).toBeInTheDocument());
+	expect(screen.getByTestId("mobile-pairing-panel").firstElementChild).toBe(square);
 });
 
 test("keeps Tailscale as the remote path when remote access failed", async () => {
@@ -693,6 +751,14 @@ test("drops the label once the code carries the tunnel", async () => {
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
 
 	expect(screen.queryByTestId("mobile-local-only")).not.toBeInTheDocument();
+	expect(screen.getByTestId("mobile-remote-access-on")).toHaveTextContent("Remote access on");
+});
+
+test("does not claim remote access for a LAN-only code", async () => {
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	expect(screen.queryByTestId("mobile-remote-access-on")).not.toBeInTheDocument();
 });
 
 test("says a LAN-only code stays local when remote access failed", async () => {

@@ -4,6 +4,7 @@ import { editRefusedDefinitively } from "./conversationErrors";
 import { editableMessageText } from "./messageAttachments";
 import { clientMessageId } from "./useConversation";
 import type { ConversationItem, ConversationMessage } from "./types";
+import { humanVisibleText } from "./automationMessages";
 
 /**
  * The prompt open in its inline editor, held above the virtualized list so the
@@ -30,7 +31,8 @@ export function useMessageEdit({ items, onEditMessage, onEditingChange, onStart 
 	draftRef.current = editDraft;
 	const startEdit = useCallback((message: ConversationMessage) => {
 		if (!message.turnId) return;
-		const { body, attachments } = editableMessageText(message.text);
+		// Edit what the user typed: the worker reports the daemon folded in are not theirs to resend.
+		const { body, attachments } = editableMessageText(humanVisibleText(message.text));
 		onStart?.();
 		setEditDraft(messageEditDraft({ turnId: message.turnId, initialText: body, attachments }));
 	}, [onStart]);

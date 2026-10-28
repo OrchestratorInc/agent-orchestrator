@@ -104,6 +104,15 @@ func sentryEnvironment(version string) string {
 	}
 }
 
+// Session Manager asserts the terminal input gate's optional capabilities at
+// runtime: a signature drift compiles but silently turns the send guard's
+// keystroke fence off (#5711).
+var _ interface {
+	sessionmanager.TerminalInputGate
+	sessionmanager.TerminalInputObserver
+	sessionmanager.TerminalInputFencer
+} = (*terminal.Manager)(nil)
+
 // Run starts the daemon and blocks until it exits. SIGINT/SIGTERM drive
 // graceful shutdown through the HTTP server and background workers.
 func Run(buildVersion string) error {
@@ -138,6 +147,11 @@ func Run(buildVersion string) error {
 	}
 	browserAuthority := browsersvc.NewAuthority()
 	browserBroker := browserruntime.New(log, browserRuntimeToken)
+	chrome := newChromeMode(cfg, log)
+	var browserLifecycle sessionmanager.BrowserLifecycle = browserBroker
+	if chrome != nil {
+		browserLifecycle = chrome.lifecycle(browserBroker)
+	}
 	browserStreamBroker := browserstream.New(log, browserRuntimeToken)
 
 	// Fail fast only if a daemon is genuinely still serving the recorded port.
@@ -208,12 +222,16 @@ func Run(buildVersion string) error {
 	sentryobs.SetPolicyEnabled(eventsAllowed)
 	telemetrySink, telemetryIdentity := newTelemetrySink(cfg, store, log)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
-	// Daemon Sentry: captures genuine 5xx/panics with their Go stack. Gated on
-	// Initialize the transport once so a later policy opt-in works without a
-	// daemon restart. The policy gate remains fail-closed and is checked before
-	// every capture; a blank DSN still leaves this as a no-op.
+	installID := ""
+	if telemetryIdentity != nil {
+		installID = telemetryIdentity.Snapshot().InstallID
+	}
+	// Initialize daemon Sentry once so a later policy opt-in works without a
+	// restart. The policy gate is checked before every capture. An unavailable
+	// install ID omits the tag without disabling error reporting.
 	if err := sentryobs.Init(sentryobs.Config{
 		DSN:         cfg.Telemetry.SentryDSN,
+		InstallID:   installID,
 		Release:     cfg.Telemetry.AppVersion,
 		Environment: sentryEnvironment(cfg.Telemetry.AppVersion),
 	}); err != nil {
@@ -519,7 +537,10 @@ func Run(buildVersion string) error {
 		}
 		return fmt.Errorf("reviewer resolver: %w", err)
 	}
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserBroker, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, tracker, codexOperationGate, reviewers, log)
+	// The review service starts before the SCM observer it asks for review
+	// refreshes, so it holds a late-bound handle.
+	reviewRefresher := &scmReviewRefresher{}
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserLifecycle, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, tracker, codexOperationGate, reviewers, reviewRefresher, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -618,7 +639,10 @@ func Run(buildVersion string) error {
 	sessMgr.SetTerminalInputGate(termMgr)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
-	lcStack.LCM.SetSessionInputLease(sessMgr)
+	// Lifecycle reactions deliberately do not hold Session Manager's input
+	// lease: they reach the agent through sessMgr.Send, which leases its own
+	// pane writes. Holding it here deadlocked every reaction to a hibernated
+	// Chat session, because waking it waits for admitted input to drain.
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log})
@@ -657,7 +681,7 @@ func Run(buildVersion string) error {
 		Reviewers:                 store,
 		DisableUpdateChecks:       !cfg.HarnessUpdateChecks,
 		DisableUpdateWhileRunning: !cfg.UpdateWhileRunning,
-		WindowsUpdateWhenIdle:     cfg.WindowsUpdateWhenIdle,
+		UpdateWhenIdle:            cfg.UpdateWhenIdle,
 		ManagedRoot:               managedHarnessRoot(cfg),
 		Releases:                  store,
 		PrivateNPMPrefixes:        privateNPMPrefixes,
@@ -714,6 +738,11 @@ func Run(buildVersion string) error {
 	// HostID is assigned below, once the identity file has been read.
 	mc := &controllers.MobileController{Bridge: bs}
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
+	var browserChrome controllers.BrowserChromeService
+	if chrome != nil {
+		browserService.UseChrome(chrome.broker, chrome.targets, log)
+		browserChrome = chrome
+	}
 	browserLive := httpd.NewBrowserLiveHub(browserStreamBroker, sessionSvc, func() bool {
 		state, err := mobilebridge.Load(bs.ConfigPath)
 		return err == nil && state.Enabled && state.BrowserRemoteAccess
@@ -807,7 +836,7 @@ func Run(buildVersion string) error {
 		}()
 		lcStack.LCM.SetUsageFinalizer(usageCollector)
 	}
-	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.GitLab, log)
+	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.GitLab, reviewRefresher, log)
 	var prActions prsvc.ActionManager
 	prReader := newMultiSCMProvider(cfg.GitLab, log)
 	prMerger := newMultiSCMMerger(cfg.GitLab, log)
@@ -992,6 +1021,7 @@ func Run(buildVersion string) error {
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      chatSvc,
+		ConversationSearch: store,
 		Settings:           settingsSvc,
 		CDC:                store,
 		Events:             cdcPipe.Broadcaster,
@@ -1013,6 +1043,7 @@ func Run(buildVersion string) error {
 			},
 		}),
 		Browser:                  browserService,
+		BrowserChrome:            browserChrome,
 		LinkPreview:              linkpreviewsvc.New(nil),
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,
@@ -1042,6 +1073,11 @@ func Run(buildVersion string) error {
 				log.Warn("browser runtime: serve stopped with error", "err", err)
 			}
 		}()
+	}
+	if chrome != nil {
+		if err := chrome.serve(ctx, cfg.RunFilePath); err != nil {
+			log.Warn("browser chrome: listener unavailable; Chrome mode disabled", "err", err)
+		}
 	}
 	_ = os.Unsetenv(browserstream.RuntimeAddressEnv)
 	if ln, addr, err := browserstream.Listen(cfg.RunFilePath); err != nil {
@@ -1292,7 +1328,11 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 	if d.sessions == nil {
 		return reportsvc.ErrReportDeliveryModeUnsupported
 	}
-	return d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+	err := d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
+	if errors.Is(err, sessionmanager.ErrComposerBusy) {
+		return fmt.Errorf("%w: %w", reportsvc.ErrOrchestratorBusy, err)
+	}
+	return err
 }
 
 func (d reportSemanticDelivery) Interrupt(ctx context.Context, id domain.SessionID) error {

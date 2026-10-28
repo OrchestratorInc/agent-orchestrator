@@ -10,7 +10,8 @@ vi.mock("expo-secure-store", () => ({
 }));
 
 import type { Endpoint } from "./endpoints";
-import { pairFromCode } from "./pairFlow";
+import { machineAppearance, type MachineAppearance } from "./machineAppearance";
+import { type MachineNameChoice, pairFromCode } from "./pairFlow";
 import { encodePairingCode, parsePairingCode } from "./pairingCode";
 
 const lan: Endpoint = { kind: "lan", host: "192.168.1.42", port: 3011, secure: false };
@@ -28,7 +29,7 @@ const code = encodePairingCode({
 const deps = (over: Record<string, unknown> = {}) => ({
 	race: vi.fn(async () => ({ ok: true as const, endpoint: lan, hostId: "h_paired" })),
 	verify: vi.fn(async () => {}),
-	chooseName: vi.fn(async (suggested: string) => suggested),
+	chooseName: vi.fn(async (suggested: string, appearance: MachineAppearance): Promise<MachineNameChoice | null> => ({ name: suggested, appearance })),
 	saveHost: vi.fn(async () => {}),
 	setActiveHost: vi.fn(async () => {}),
 	...over,
@@ -36,12 +37,12 @@ const deps = (over: Record<string, unknown> = {}) => ({
 
 describe("pairFromCode", () => {
 	it("requires a confirmed human-readable name before saving a new machine", async () => {
-		const d = deps({ chooseName: vi.fn(async () => " Studio Mac ") });
+		const d = deps({ chooseName: vi.fn(async () => ({ name: " Studio Mac ", appearance: { symbol: "laptop" as const } })) });
 
 		await pairFromCode(`aomobile://pair#${code}`, d);
 
-		expect(d.chooseName).toHaveBeenCalledWith("prasad-mbp");
-		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ name: "Studio Mac" }));
+		expect(d.chooseName).toHaveBeenCalledWith("prasad-mbp", machineAppearance({ id: "h_paired", name: "prasad-mbp" }), "h_paired");
+		expect(d.saveHost).toHaveBeenCalledWith(expect.objectContaining({ name: "Studio Mac", appearance: { symbol: "laptop" } }));
 	});
 
 	it("stores nothing when machine naming is cancelled", async () => {

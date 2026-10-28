@@ -30,6 +30,9 @@ const maxKeyBytes = 1024
 var (
 	// ErrNotFound reports that the object version does not exist.
 	ErrNotFound = errors.New("artifact object not found")
+	// ErrRangeNotSatisfiable reports that a requested byte range starts past
+	// the end of the object.
+	ErrRangeNotSatisfiable = errors.New("artifact range not satisfiable")
 	// ErrChecksumMismatch reports that S3 rejected an upload whose body did not
 	// match its claimed SHA-256.
 	ErrChecksumMismatch = errors.New("artifact checksum mismatch")
@@ -63,10 +66,12 @@ type Head struct {
 	SHA256 []byte
 }
 
-// Object is one object version's body. The caller closes Body.
+// Object is one object version's body. The caller closes Body. Size is the
+// length of Body; ContentRange is set when Body is only a byte range.
 type Object struct {
-	Body io.ReadCloser
-	Size int64
+	Body         io.ReadCloser
+	Size         int64
+	ContentRange string
 }
 
 // New builds a Store with credentials from the default AWS chain.
@@ -140,14 +145,36 @@ func ContentType(cleanPath string) string {
 		return "image/gif"
 	case ".webp":
 		return "image/webp"
+	case ".avif":
+		return "image/avif"
+	case ".apng":
+		return "image/apng"
+	case ".bmp":
+		return "image/bmp"
+	case ".ico":
+		return "image/x-icon"
 	case ".pdf":
 		return "application/pdf"
 	case ".mp3":
 		return "audio/mpeg"
 	case ".wav":
 		return "audio/wav"
+	case ".m4a":
+		return "audio/mp4"
+	case ".aac":
+		return "audio/aac"
+	case ".flac":
+		return "audio/flac"
+	case ".ogg", ".oga", ".opus":
+		return "audio/ogg"
 	case ".mp4":
 		return "video/mp4"
+	case ".m4v":
+		return "video/x-m4v"
+	case ".mov":
+		return "video/quicktime"
+	case ".ogv":
+		return "video/ogg"
 	case ".webm":
 		return "video/webm"
 	}
@@ -205,18 +232,33 @@ func (s *Store) Head(ctx context.Context, key, versionID string) (Head, error) {
 
 // Get opens one object version.
 func (s *Store) Get(ctx context.Context, key, versionID string) (Object, error) {
-	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+	return s.GetRange(ctx, key, versionID, "")
+}
+
+// GetRange opens one object version, or the byte range byteRange (an HTTP
+// Range header value such as "bytes=0-99") of it when that is not empty. A
+// range that starts past the end of the object returns ErrRangeNotSatisfiable.
+func (s *Store) GetRange(ctx context.Context, key, versionID, byteRange string) (Object, error) {
+	input := &s3.GetObjectInput{
 		Bucket:    aws.String(s.bucket),
 		Key:       aws.String(key),
 		VersionId: aws.String(versionID),
-	})
+	}
+	if byteRange != "" {
+		input.Range = aws.String(byteRange)
+	}
+	out, err := s.client.GetObject(ctx, input)
 	if err != nil {
 		if notFound(err) {
 			return Object{}, ErrNotFound
 		}
+		var responseErr *smithyhttp.ResponseError
+		if byteRange != "" && errors.As(err, &responseErr) && responseErr.HTTPStatusCode() == http.StatusRequestedRangeNotSatisfiable {
+			return Object{}, ErrRangeNotSatisfiable
+		}
 		return Object{}, fmt.Errorf("get artifact object: %w", err)
 	}
-	return Object{Body: out.Body, Size: aws.ToInt64(out.ContentLength)}, nil
+	return Object{Body: out.Body, Size: aws.ToInt64(out.ContentLength), ContentRange: aws.ToString(out.ContentRange)}, nil
 }
 
 // DeleteVersion permanently removes one object version.

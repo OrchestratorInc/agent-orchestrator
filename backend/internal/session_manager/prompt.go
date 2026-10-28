@@ -291,6 +291,7 @@ func workerSystemPrompt(project promptProject, hasOrchestrator bool) string {
 	repoRules := `## Git and PR/MR Rules
 
 - Work on a feature branch, not the default branch.
+- Claiming a PR changes ownership metadata only; it does not check out its branch. Before implementation on an existing PR, preserve local edits, fetch the PR, and switch the session's registered worktree using the provider's verified full head commit SHA. Never pass FETCH_HEAD as a checkout target: a branch named FETCH_HEAD can make Git fail after replacing the index/worktree. Check git status, branch, and HEAD after every checkout, including failed commands; stop on unexpected changes instead of continuing in another worktree while AO still shows the original.
 - Keep commits focused and use conventional commit messages when committing.
 - Open or update a PR/MR according to the task source rules above when provider-backed work or project workflow makes it viable.
 - Link the provider issue in the PR/MR body when there is one.
@@ -331,10 +332,8 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 - After a meaningful milestone, run `+"`ao report --checkpoint --note <text>`"+`.
 - When a decision or missing input blocks progress, run `+"`ao report --needs-input --note <text>`"+`.
 - When work cannot proceed for another reason, run `+"`ao report --stuck --note <text>`"+`.
-- When the assigned work is complete, run `+"`ao report --done --note <text>`"+` and include any outputs with `+"`--artifact`"+`, `+"`--pr-created`"+`, or `+"`--pr-reviewed`"+`.
-- Whenever you produce a reviewable deliverable the orchestrator or the human should be able to open directly — a requested document, a rendered dashboard, or similar durable output — attach it with `+"`--artifact <reference>`"+` on the report for that milestone. Report it as soon as it exists; do not wait for `+"`--done`"+` and do not let it go unreported.
-- Keep routine test logs, command output, scratch notes, and intermediate diagnostics out of report attachments unless requested or needed to explain an actionable failure. Summarize validation in the report note; when a separate deliverable is useful, prefer one consolidated report over individual logs.
-- Saving a local artifact or attaching its reference to an AO report is not external publishing authorization. Publish externally only within the user-authorized scope.
+- When the assigned work is complete, run `+"`ao report --done --note <text>`"+`. Attach deliverables with `+"`--artifact`"+` and PRs with `+"`--pr-created`"+` or `+"`--pr-reviewed`"+`; summarize validation and mention anything else, such as issues you filed, in the note.
+- Attach each deliverable with `+"`--artifact <absolute-path>`"+` as soon as it exists, on the report for that milestone; do not wait for `+"`--done`"+`. `+"`--artifact`"+` takes only a path to a file in the session artifact directory, one flag per deliverable, not its supporting files.
 - Do not file a report for routine commands. Report meaningful transitions, decisions, blockers, outputs, and completion. Outputs do not imply completion, and `+"`--done`"+` does not terminate the session. This limit applies to `+"`ao report`"+` only, not to what you tell the user in the conversation.
 
 ## In-App Session Links

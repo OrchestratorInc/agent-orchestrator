@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
+	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 )
 
@@ -30,6 +31,8 @@ type lifecycleStore struct {
 	// called with; retryNameErr is what it returns.
 	retryNames   []string
 	retryNameErr error
+	// launch is what LatestWorkerLaunch returns; nil reports no ticket.
+	launch *postgres.WorkerLaunch
 }
 
 type startupErrorRecord struct{ code, message string }
@@ -74,6 +77,12 @@ func (s *lifecycleStore) DisconnectSessionWorkers(context.Context, string, strin
 func (s *lifecycleStore) RecordSandboxStartupRepair(context.Context, string, string, string) (int, error) {
 	s.repairs++
 	return s.repairs, nil
+}
+func (s *lifecycleStore) LatestWorkerLaunch(context.Context, string, string) (postgres.WorkerLaunch, error) {
+	if s.launch == nil {
+		return postgres.WorkerLaunch{}, postgres.ErrNotFound
+	}
+	return *s.launch, nil
 }
 func (s *lifecycleStore) RecordSandboxStartupError(_ context.Context, _, _, _, code, message string) error {
 	s.startupErrors = append(s.startupErrors, startupErrorRecord{code: code, message: message})

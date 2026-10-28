@@ -82,6 +82,7 @@ function fakeQueryClient() {
 		isFetching: vi.fn().mockReturnValue(0),
 		refetchQueries: vi.fn().mockResolvedValue(undefined),
 		setQueryData: vi.fn(),
+		getQueryData: vi.fn(),
 	} as unknown as Parameters<typeof createEventTransport>[0];
 }
 
@@ -973,12 +974,35 @@ describe("id-only session updates", () => {
 		}
 		// The first update refreshes at once (t=0), then one refresh at 5 s and 10 s.
 		expect(workspaceRefreshes(client)).toBe(3);
-		// While the workspace waits, the session's own caches still refresh at once.
+		// While the workspace waits, the editor handoff still refreshes at once.
 		idOnly("d");
 		await vi.advanceTimersByTimeAsync(150);
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["editor-handoff", "d"] }, { cancelRefetch: false });
-		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation", "d"] }, { cancelRefetch: false });
 		expect(workspaceRefreshes(client)).toBe(3);
+		disconnect();
+	});
+
+	it("leaves a ready chat alone for id-only updates but not for sessions-row updates", async () => {
+		vi.useFakeTimers();
+		const client = fakeQueryClient();
+		let controller = "connecting";
+		vi.mocked(client.getQueryData).mockImplementation((key) =>
+			JSON.stringify(key) === '["conversation","a"]' ? { pages: [{ controller: { state: controller } }], pageParams: [undefined] } : undefined);
+		const disconnect = createEventTransport(client).connect();
+		const conversationRefreshes = () =>
+			vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === '["conversation","a"]').length;
+		// Still starting up: any session update may be the one that says it is ready.
+		idOnly("a");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(conversationRefreshes()).toBe(1);
+
+		controller = "ready";
+		idOnly("a");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(conversationRefreshes()).toBe(1);
+		sessionRow("a", "active");
+		await vi.advanceTimersByTimeAsync(150);
+		expect(conversationRefreshes()).toBe(2);
 		disconnect();
 	});
 
