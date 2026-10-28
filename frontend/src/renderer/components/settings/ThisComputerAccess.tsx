@@ -7,42 +7,12 @@ import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { useCloudSession } from "../../lib/cloud-session";
 import { linkThisComputer } from "../../lib/link-this-computer";
 import { Switch } from "../ui/switch";
-import { fetchMobileStatus, mobileStatusQueryKey, mobileStatusRefetchInterval } from "./ConnectMobileContent";
+import { fetchMobileStatus, mobileStatusQueryKey, mobileStatusRefetchInterval, tunnelUrl, waitForTunnel } from "./ConnectMobileContent";
 import { InstallCloudflared } from "./InstallCloudflared";
 import { SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 
 type MobileStatus = Awaited<ReturnType<typeof fetchMobileStatus>>;
-
-const TUNNEL_POLL_MS = 2_000;
-// A tunnel usually has its address within half a minute.
-const TUNNEL_WAIT_MS = 90_000;
-
-/** The tunnel address in the form the daemon's address publisher sends, so a
- * later publish never rewrites the record and reconnects every device. */
-function tunnelUrl(status: MobileStatus): string | null {
-	const tunnel = status.endpoints?.find((endpoint) => endpoint.kind === "tunnel" && endpoint.secure);
-	return tunnel ? `https://${tunnel.host}:${tunnel.port}` : null;
-}
-
-/** Polls until the tunnel has a public address; null when no connector is installed or on its way. */
-async function waitForTunnel(timeoutMessage: string): Promise<{ status: MobileStatus; url: string } | null> {
-	let deadline = Date.now() + TUNNEL_WAIT_MS;
-	for (;;) {
-		const status = await fetchMobileStatus();
-		const url = tunnelUrl(status);
-		if (url) return { status, url };
-		if (status.tunnel?.supported === false) {
-			// No connector, and none on its way; one that is starts the tunnel by itself when it lands.
-			if (!status.tunnel.installing) return null;
-			// The download, tens of MB on a slow link, does not count against the tunnel's start.
-			deadline = Date.now() + TUNNEL_WAIT_MS;
-		}
-		if (status.tunnel?.lastError) throw new Error(status.tunnel.lastError);
-		if (Date.now() >= deadline) throw new Error(timeoutMessage);
-		await new Promise((resolve) => setTimeout(resolve, TUNNEL_POLL_MS));
-	}
-}
 
 async function disableRemoteAccess() {
 	const stopped = await apiClient.POST("/api/v1/mobile/disable");

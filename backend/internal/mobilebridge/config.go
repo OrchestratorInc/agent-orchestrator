@@ -101,7 +101,13 @@ func Save(path string, s State) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	return writeFileAtomic(path, b)
+}
+
+// writeFileAtomic replaces path with b, readable by this user only, so a
+// reader never sees half a file.
+func writeFileAtomic(path string, b []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}

@@ -8,7 +8,7 @@ import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
-import { deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
+import { deleteAccountRemoteHost, RemoteHostLimitError } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -278,6 +278,36 @@ export async function fetchMobileStatus(): Promise<MobileStatus> {
 	return data;
 }
 
+const TUNNEL_POLL_MS = 2_000;
+// A tunnel usually has its address within half a minute.
+const TUNNEL_WAIT_MS = 90_000;
+
+/** The tunnel address in the form the daemon's address publisher sends, so a
+ * later publish never rewrites the record and reconnects every device. */
+export function tunnelUrl(status: MobileStatus): string | null {
+	const tunnel = status.endpoints?.find((endpoint) => endpoint.kind === "tunnel" && endpoint.secure);
+	return tunnel ? `https://${tunnel.host}:${tunnel.port}` : null;
+}
+
+/** Polls until the tunnel has a public address; null when no connector is installed or on its way. */
+export async function waitForTunnel(timeoutMessage: string): Promise<{ status: MobileStatus; url: string } | null> {
+	let deadline = Date.now() + TUNNEL_WAIT_MS;
+	for (;;) {
+		const status = await fetchMobileStatus();
+		const url = tunnelUrl(status);
+		if (url) return { status, url };
+		if (status.tunnel?.supported === false) {
+			// No connector, and none on its way; one that is starts the tunnel by itself when it lands.
+			if (!status.tunnel.installing) return null;
+			// The download, tens of MB on a slow link, does not count against the tunnel's start.
+			deadline = Date.now() + TUNNEL_WAIT_MS;
+		}
+		if (status.tunnel?.lastError) throw new Error(status.tunnel.lastError);
+		if (Date.now() >= deadline) throw new Error(timeoutMessage);
+		await new Promise((resolve) => setTimeout(resolve, TUNNEL_POLL_MS));
+	}
+}
+
 type KeepAwakeStatus = NonNullable<MobileStatus["keepAwake"]>;
 
 /**
@@ -348,19 +378,31 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const signedIn = Boolean(cloudBaseUrl && accountId);
 	// Why the last link left this computer out of the account.
 	const [linkError, setLinkError] = useState("");
-	/** Returns the host id this call added to the account, or "". */
-	const linkIfSignedIn = async (password: string, hostId: string, options?: { ifListed?: boolean }): Promise<string> => {
+	const reportLinkError = (cause: unknown) =>
+		setLinkError(cause instanceof Error && cause.message ? cause.message : t("remote.shareThisComputerFailed"));
+	/** Returns the host id this call added to the account, or "", and whether linking failed. */
+	const linkIfSignedIn = async (password: string, hostId: string, options?: { ifListed?: boolean }): Promise<{ added: string; failed: boolean }> => {
 		setLinkError("");
-		if (!signedIn || !password) return "";
+		if (!signedIn || !password) return { added: "", failed: false };
 		// Not fatal: an unlinked computer still gets a quick tunnel, whose
 		// address changes on restart. Said, though: after a new password the
 		// account's devices hold the old one until a link lands. An AO Cloud
 		// without fixed addresses is not linked here, as before them.
-		const linked = await linkThisComputer(cloudBaseUrl, accountId, hostId, password, options).catch((cause: unknown) => {
-			setLinkError(cause instanceof Error && cause.message ? cause.message : t("remote.shareThisComputerFailed"));
-			return { hostId: "", added: false };
-		});
-		return linked.added ? linked.hostId : "";
+		return linkThisComputer(cloudBaseUrl, accountId, hostId, password, options).then(
+			(linked) => ({ added: linked.added ? linked.hostId : "", failed: false }),
+			(cause: unknown) => {
+				reportLinkError(cause);
+				// A full account refuses the quick tunnel's address too.
+				return { added: "", failed: !(cause instanceof RemoteHostLimitError) };
+			},
+		);
+	};
+	/** After AO Cloud could not give this computer its fixed address, lists it at the quick tunnel's once it has one, as Allow access does. */
+	const linkAtTunnelAddress = async (password: string, hostId: string) => {
+		const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
+		if (!ready) return;
+		await linkThisComputer(cloudBaseUrl, accountId, hostId, password, { url: ready.url });
+		setLinkError("");
 	};
 
 	const query = useQuery({
@@ -410,13 +452,15 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			if (!signedIn) return data;
 			// Linked before the tunnel starts, so the code carries this
 			// computer's fixed address and stays valid after restarts.
-			const added = await linkIfSignedIn(data?.password ?? "", data?.hostId ?? "");
+			const { added, failed } = await linkIfSignedIn(data?.password ?? "", data?.hostId ?? "");
 			const started = await apiClient.POST("/api/v1/mobile/remote-access");
 			if (started.error) {
 				// Not left listed at an address nothing serves.
 				if (added) await deleteAccountRemoteHost(cloudBaseUrl, added).catch(() => undefined);
 				throw new Error(apiErrorMessage(started.error));
 			}
+			// The code shows while the tunnel starts; the account lists it once it has an address.
+			if (failed) void linkAtTunnelAddress(data?.password ?? "", data?.hostId ?? "").catch(reportLinkError);
 			return started.data;
 		},
 		// The first call can turn the bridge on before the second fails, so read back what is actually on.

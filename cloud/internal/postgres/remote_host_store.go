@@ -72,14 +72,14 @@ func (s *Store) DeleteRemoteHost(ctx context.Context, principal domain.Principal
 	})
 }
 
-// FindRemoteHostRegistrations reads only rows for one opaque host identity.
-// The HTTP edge must prove knowledge of the host token hash before it may
-// update any returned account's address.
+// FindRemoteHostRegistrations reads only rows for one opaque host identity,
+// always in the same order. The HTTP edge must prove knowledge of the host
+// token hash before it may update any returned account's address.
 func (s *Store) FindRemoteHostRegistrations(ctx context.Context, hostID string) ([]domain.RemoteHost, error) {
 	hosts := []domain.RemoteHost{}
 	err := s.withService(ctx, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT host_id, user_id, label, url, encrypted_token, token_nonce, updated_at
-			FROM ao_remote_hosts WHERE host_id = $1`, hostID)
+			FROM ao_remote_hosts WHERE host_id = $1 ORDER BY user_id`, hostID)
 		if err != nil {
 			return err
 		}
@@ -156,8 +156,7 @@ func (s *Store) SaveRemoteHostTunnel(ctx context.Context, t domain.RemoteHostTun
 			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (user_id, host_id) DO UPDATE SET tunnel_id = EXCLUDED.tunnel_id,
 			hostname = EXCLUDED.hostname, encrypted_run_token = EXCLUDED.encrypted_run_token,
-			run_token_nonce = EXCLUDED.run_token_nonce, updated_at = now(), last_seen_at = now(),
-			released_at = NULL,
+			run_token_nonce = EXCLUDED.run_token_nonce, updated_at = now(), released_at = NULL,
 			created_at = CASE WHEN $7 THEN now() ELSE ao_remote_host_tunnels.created_at END
 			RETURNING created_at`,
 			t.UserID, t.HostID, t.TunnelID, t.Hostname, t.EncryptedRunToken, t.RunTokenNonce, recordCreated).Scan(&since)

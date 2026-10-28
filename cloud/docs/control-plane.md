@@ -295,7 +295,11 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   no live connection for 3 minutes or was refused four times in a row, makes the
   tunnel and record exist again, at most once a minute per host, and the
   answer says `"repaired":true` when it did; the machine asks for one at most
-  every 30 minutes unless the edge refused its token. Calls that
+  every 30 minutes, or every 10 while the edge refuses its token. Only this
+  call counts as AO Cloud seeing the machine; a desktop's registration does
+  not. A machine whose new pairing password revoked its link keeps serving
+  its tunnel for 90 seconds, time for the desktop to link it again, and gives
+  the address up only if no link comes. Calls that
   write tunnels are limited to 30 an hour per account (429
   `tunnel_rate_limited`), since every account shares the API token's rate
   limit; the window is kept per replica. Writes for one account and host run
@@ -326,7 +330,7 @@ account) turn fixed addresses off; an unreachable Cloudflare does not.
   tunnel. The sweep runs every 5 minutes. Besides releasing tunnels, it deletes
   the tunnel and record of a host its account no longer lists (10 minutes
   after the row was written, since a registration makes its tunnel first), of a
-  host AO Cloud has not seen for 90 days. It acts only on
+  host whose machine has not fetched its token for 90 days. It acts only on
   tunnels its own rows name, since other AO Clouds may share the account.
   A machine whose record went gets both back at the same address.
 - Zone records and tunnels are the limits. A Free zone holds 200 records and

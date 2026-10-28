@@ -13,6 +13,8 @@ import { linkThisComputer } from "../../lib/link-this-computer";
 const fake = vi.hoisted(() => ({
 	signedIn: false,
 	failRemoteAccess: false,
+	// The quick tunnel's name once remote access starts; "" starts none.
+	tunnelHost: "",
 	status: {
 		enabled: false,
 		noPublicTunnel: false,
@@ -54,6 +56,7 @@ vi.mock("../../lib/api-client", () => ({
 			if (path === "/api/v1/mobile/remote-access") {
 				if (fake.failRemoteAccess) return { error: { error: { message: "connector failed" } } };
 				fake.status.noPublicTunnel = false;
+				if (fake.tunnelHost) fake.status.endpoints.push({ kind: "tunnel", host: fake.tunnelHost, port: 443, secure: true });
 			}
 			if (path === "/api/v1/mobile/regenerate") fake.status.password = "pw-2";
 			return { data: structuredClone(fake.status) };
@@ -80,6 +83,7 @@ beforeEach(() => {
 	vi.mocked(linkThisComputer).mockClear();
 	vi.mocked(deleteAccountRemoteHost).mockClear();
 	fake.failRemoteAccess = false;
+	fake.tunnelHost = "";
 });
 
 const posted = () => (vi.mocked(apiClient.POST).mock.calls as unknown[][]).map(([path]) => path);
@@ -122,6 +126,20 @@ test("a full account is said, and remote access still starts", async () => {
 
 	expect(await screen.findByText("An account can list up to 10 machines. Remove one to add another.")).toBeVisible();
 	expect(posted()).toEqual(["/api/v1/mobile/enable-lan-only", "/api/v1/mobile/remote-access"]);
+	expect(linkThisComputer).toHaveBeenCalledTimes(1);
+});
+
+test("a computer AO Cloud could not give a fixed address is listed at its quick tunnel's", async () => {
+	fake.signedIn = true;
+	fake.tunnelHost = "quick.trycloudflare.com";
+	vi.mocked(linkThisComputer).mockRejectedValueOnce(new AccountHostSyncError("The fixed address could not be prepared.", 502));
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
+
+	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith(
+		"https://cp.example.test", "user_01JAO", "h_fixture", "pw-1", { url: "https://quick.trycloudflare.com:443" },
+	));
+	await waitFor(() => expect(screen.queryByText("The fixed address could not be prepared.")).toBeNull());
 });
 
 test("a new password links the computer again, so its fixed address survives", async () => {

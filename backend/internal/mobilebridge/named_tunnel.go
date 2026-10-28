@@ -199,23 +199,6 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 	return t, nil
 }
 
-// writeFileAtomic replaces path whole, so a runner stopping while its
-// replacement writes, or a crash, never leaves half a cache.
-func writeFileAtomic(path string, b []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
-	if err != nil {
-		return err
-	}
-	_, err = tmp.Write(b)
-	if err = errors.Join(err, tmp.Close()); err == nil {
-		err = os.Rename(tmp.Name(), path)
-	}
-	if err != nil {
-		_ = os.Remove(tmp.Name())
-	}
-	return err
-}
-
 // IsHostDigestRefusal reports AO Cloud's own refusal of a host digest: no
 // account lists the machine under it. A proxy's or portal's 401 is not one.
 // It reads the body.

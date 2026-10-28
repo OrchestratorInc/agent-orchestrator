@@ -2,6 +2,7 @@ package mobilebridge
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -57,6 +58,7 @@ type TunnelRunner struct {
 	lostGrace    time.Duration // zero uses connectionLostGrace
 	upgradeEvery time.Duration // zero uses fixedUpgradeInterval
 	recheckEvery time.Duration // zero uses fixedRecheckInterval
+	relinkWait   time.Duration // zero uses relinkGrace
 }
 
 // Run supervises the connector until ctx is cancelled. It blocks, so callers
@@ -255,8 +257,12 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		waitErr = errors.New(*unserved.Load())
 		switch {
 		case refusedRun.Load():
-			// Refusals say the tunnel is gone: repaired every time.
-			t.repair, t.refused = true, named.RunToken
+			// Refusals say the tunnel is gone, so they are repaired sooner,
+			// but not on every restart: a tunnel a repair found standing is
+			// refused for another reason, and each repair spends the
+			// account's write budget.
+			t.refused = named.RunToken
+			t.repair = t.repairedAt.IsZero() || time.Since(t.repairedAt) >= refusedRepairSpacing
 		default:
 			// A connector that only could not connect may be on a network
 			// that blocks Cloudflare's edge, where a repair every few minutes
@@ -378,11 +384,12 @@ func (h *connectorHealth) deadSince() (time.Time, bool) {
 
 // A fixed connector is restarted, and its tunnel repaired, after three minutes
 // with no live connection or four refusals in a row; repaired at most every
-// half hour.
+// half hour, or every ten minutes while refused.
 const (
-	connectorDeadAfter = 3 * time.Minute
-	connectorRefusals  = 4
-	repairSpacing      = 30 * time.Minute
+	connectorDeadAfter   = 3 * time.Minute
+	connectorRefusals    = 4
+	repairSpacing        = 30 * time.Minute
+	refusedRepairSpacing = 10 * time.Minute
 )
 
 // awaitFixedTunnel calls ready once AO Cloud hands out this host's tunnel,
@@ -437,7 +444,10 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, repair bool, ready 
 // what says so. An unreachable AO Cloud is not a withdrawal.
 //
 // It asks at once when nudged: a device just linked the machine, possibly to
-// another account, whose tunnel is another one.
+// another account, whose tunnel is another one, or a new password revoked the
+// link. A signed-in desktop links the machine again right after a new
+// password, so an unlinked machine waits relinkGrace for that before it gives
+// up the address.
 //
 // It also asks as soon as every connection has been down for lostGrace. A
 // machine offline for more than AO Cloud's five minutes has had its tunnel
@@ -468,9 +478,15 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 				continue
 			}
 		}
-		requestCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
-		named, err := t.Fixed.TunnelFor(requestCtx, t.HostID, false)
-		cancel()
+		named, err := t.fixedTunnel(ctx)
+		if errors.Is(err, errNotLinked) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(cmp.Or(t.relinkWait, relinkGrace)):
+			}
+			named, err = t.fixedTunnel(ctx)
+		}
 		if errors.Is(err, errHostRefused) || errors.Is(err, errNotLinked) {
 			withdrawn(nil)
 			return
@@ -482,12 +498,20 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 	}
 }
 
+func (t *TunnelRunner) fixedTunnel(ctx context.Context) (NamedTunnel, error) {
+	requestCtx, cancel := context.WithTimeout(ctx, namedProvisionTimeout)
+	defer cancel()
+	return t.Fixed.TunnelFor(requestCtx, t.HostID, false)
+}
+
 // fixedRecheckInterval spaces those checks: one AO Cloud call per machine
 // every 30 minutes, and one more each time its connections all stay down for
-// connectionLostGrace.
+// connectionLostGrace. relinkGrace outlasts the desktop's 75 seconds for a
+// link.
 const (
 	fixedRecheckInterval = 30 * time.Minute
 	connectionLostGrace  = 10 * time.Second
+	relinkGrace          = 90 * time.Second
 )
 
 // Asking for the fixed address while a quick tunnel serves: every 30s, backing

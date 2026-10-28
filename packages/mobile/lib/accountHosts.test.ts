@@ -89,6 +89,13 @@ it("classifies directory addresses: named tunnels as tunnels, LAN names as LAN",
 	pair("https://100.72.46.7:443");
 	await syncAccountHosts(account);
 	expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "tailscale", host: "100.72.46.7", port: 443, secure: true }, quick]);
+
+	// Nor an https address on a private name or an IP literal.
+	for (const [url, name] of [["https://desktop.home.arpa:3011", "desktop.home.arpa"], ["https://[fd00::5]:3011", "[fd00::5]"], ["https://desktop:3011", "desktop"]]) {
+		pair(url);
+		await syncAccountHosts(account);
+		expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "lan", host: name, port: 3011, secure: true }, quick]);
+	}
 });
 
 it("does not take a paired machine into an account that is already full", async () => {

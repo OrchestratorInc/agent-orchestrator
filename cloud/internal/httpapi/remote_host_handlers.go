@@ -28,6 +28,7 @@ type remoteHostStore interface {
 
 type remoteHostAddressStore interface {
 	FindRemoteHostRegistrations(context.Context, string) ([]domain.RemoteHost, error)
+	RemoteHostListed(ctx context.Context, userID, hostID string) (bool, error)
 	UpdateRemoteHostAddress(context.Context, string, string, string) error
 }
 
@@ -349,6 +350,7 @@ type hostTunnelResponse struct {
 	// Repaired is set when a repair request remade the tunnel. A repair asked
 	// too soon after the last write is answered from the stored tunnel.
 	Repaired bool `json:"repaired,omitempty"`
+	tunnelID string
 }
 
 // remoteHostTunnel gives a linked machine the run token of its tunnel in the
@@ -395,12 +397,12 @@ func (s *Server) remoteHostTunnel(w http.ResponseWriter, r *http.Request) {
 	defer unlock()
 	// Asked again under the lock: a removal that ran first must not be
 	// followed by a new tunnel for a host the account no longer lists.
-	again, err := s.matchDigest(r.Context(), registrations, hostID, r.Header.Get("Authorization"))
+	listed, err := registrations.RemoteHostListed(r.Context(), host.UserID, hostID)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
-	if !slices.ContainsFunc(again, func(h domain.RemoteHost) bool { return h.UserID == host.UserID }) {
+	if !listed {
 		writeError(w, r, http.StatusUnauthorized, "unauthorized", "Invalid host credential.")
 		return
 	}
@@ -408,6 +410,9 @@ func (s *Server) remoteHostTunnel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Only the machine's own fetch counts as seeing it: a desktop listing a
+	// machine that never connects must not keep its record.
+	_ = tunnels.TouchRemoteHostTunnel(r.Context(), tunnel.tunnelID, time.Now())
 	writeJSON(w, http.StatusOK, tunnel)
 }
 
@@ -436,8 +441,7 @@ func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remo
 	if found && !stored.Released && (!repair || time.Since(stored.UpdatedAt) < minTunnelRepairInterval) {
 		token, err := s.secretCipher.Decrypt(stored.EncryptedRunToken, stored.RunTokenNonce, aad)
 		if err == nil {
-			_ = tunnels.TouchRemoteHostTunnel(r.Context(), stored.TunnelID, time.Now())
-			return hostTunnelResponse{Hostname: stored.Hostname, RunToken: string(token), Since: stored.CreatedAt}, true
+			return hostTunnelResponse{Hostname: stored.Hostname, RunToken: string(token), Since: stored.CreatedAt, tunnelID: stored.TunnelID}, true
 		}
 	}
 	// ponytail: per-replica in-memory window; move it to Postgres if AO Cloud
@@ -470,7 +474,7 @@ func (s *Server) hostTunnel(w http.ResponseWriter, r *http.Request, tunnels remo
 		s.writeStoreError(w, r, err)
 		return hostTunnelResponse{}, false
 	}
-	return hostTunnelResponse{Hostname: tunnel.Hostname, RunToken: tunnel.RunToken, Since: since, Repaired: repair}, true
+	return hostTunnelResponse{Hostname: tunnel.Hostname, RunToken: tunnel.RunToken, Since: since, Repaired: repair, tunnelID: tunnel.ID}, true
 }
 
 func (s *Server) discardTunnel(ctx context.Context, hostID string, tunnel hosttunnel.Tunnel) {

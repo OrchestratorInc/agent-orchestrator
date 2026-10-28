@@ -34,18 +34,22 @@ type ManagedTunnel struct {
 	cancel  context.CancelFunc
 	port    int
 	done    chan struct{}
-	// nudge asks a running connector to ask AO Cloud for its address now.
+	// nudge asks the running connector to ask AO Cloud for its address now.
+	// Each run has its own, so a run still unwinding takes none meant for the
+	// next.
 	nudge chan struct{}
 }
 
 // NewManagedTunnel builds a stopped tunnel controller.
 func NewManagedTunnel(deps ManagedTunnelDeps) *ManagedTunnel {
-	return &ManagedTunnel{deps: deps, runtime: &TunnelRuntime{}, nudge: make(chan struct{}, 1)}
+	return &ManagedTunnel{deps: deps, runtime: &TunnelRuntime{}}
 }
 
 // Nudge has a quick tunnel ask AO Cloud for this machine's fixed address at
 // once, rather than at its next check: a device has just linked the machine.
 func (m *ManagedTunnel) Nudge() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	select {
 	case m.nudge <- struct{}{}:
 	default:
@@ -67,19 +71,16 @@ func (m *ManagedTunnel) Start(localPort int) {
 		return
 	}
 	m.stopLocked()
-	// A new run asks AO Cloud first, so an earlier nudge tells it nothing.
-	select {
-	case <-m.nudge:
-	default:
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rt := &TunnelRuntime{}
 	done := make(chan struct{})
-	m.cancel, m.port, m.runtime, m.done = cancel, localPort, rt, done
+	// A new run asks AO Cloud first, so an earlier nudge tells it nothing.
+	nudge := make(chan struct{}, 1)
+	m.cancel, m.port, m.runtime, m.done, m.nudge = cancel, localPort, rt, done, nudge
 	run := m.deps.Run
 	if run == nil {
-		run = m.runReal
+		run = func(ctx context.Context, localPort int, rt *TunnelRuntime) { m.runReal(ctx, localPort, rt, nudge) }
 	}
 	m.mu.Unlock()
 
@@ -137,7 +138,7 @@ func (m *ManagedTunnel) Status() TunnelStatus {
 	return rt.Snapshot()
 }
 
-func (m *ManagedTunnel) runReal(ctx context.Context, localPort int, rt *TunnelRuntime) {
+func (m *ManagedTunnel) runReal(ctx context.Context, localPort int, rt *TunnelRuntime, nudge <-chan struct{}) {
 	(&TunnelRunner{
 		Binary:    m.deps.Binary,
 		LocalPort: localPort,
@@ -146,6 +147,6 @@ func (m *ManagedTunnel) runReal(ctx context.Context, localPort int, rt *TunnelRu
 		Log:       m.deps.Log,
 		Fixed:     m.deps.Fixed,
 		HostID:    m.deps.HostID,
-		nudge:     m.nudge,
+		nudge:     nudge,
 	}).Run(ctx)
 }

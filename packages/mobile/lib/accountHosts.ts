@@ -10,14 +10,20 @@ export { ignoreAccountHost, unignoreAccountHost } from "./accountHostPreferences
 const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.aoagents.dev").replace(/\/$/, "");
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 
+// Tunnels, quick or named, are https on a public DNS name; the LAN listener is
+// plain http. An IP literal or a private name is never a tunnel.
+function isTunnelAddress(url: URL): boolean {
+	const name = url.hostname.toLowerCase();
+	return url.protocol === "https:" && name.includes(".") && !name.startsWith("[") && !/^[\d.]+$/.test(name)
+		&& !isLocalNetworkHost(name) && !/\.(home\.arpa|lan|internal|localdomain)$/.test(name);
+}
+
 function endpoint(raw: string): Endpoint | null {
 	try {
 		const url = new URL(raw);
 		if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
 		return {
-			// Tunnels, quick or named, are https on a public name; the LAN listener is plain http.
-			kind: url.hostname.endsWith(".ts.net") || isTailscaleHost(url.hostname) ? "tailscale"
-				: url.protocol === "https:" && !isLocalNetworkHost(url.hostname) ? "tunnel" : "lan",
+			kind: url.hostname.endsWith(".ts.net") || isTailscaleHost(url.hostname) ? "tailscale" : isTunnelAddress(url) ? "tunnel" : "lan",
 			host: url.hostname,
 			port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
 			secure: url.protocol === "https:",

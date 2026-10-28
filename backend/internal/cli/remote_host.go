@@ -90,7 +90,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 				if publicAddress {
 					message := "Fixed address: it stays the same after restarts."
 					if !status.Tunnel.Fixed {
-						message = "Quick tunnel: the address changes on restart and has no uptime guarantee. Add this machine from a signed-in AO desktop to give it a fixed address."
+						message = "Quick tunnel: the address changes on restart and has no uptime guarantee. Where AO Cloud offers fixed addresses, adding this machine from a signed-in AO desktop gives it one."
 					}
 					if _, err := fmt.Fprintln(cmd.OutOrStdout(), message); err != nil {
 						return err

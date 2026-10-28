@@ -62,6 +62,10 @@ func (s *remoteHostFakeStore) FindRemoteHostRegistrations(_ context.Context, hos
 	}
 	return items, nil
 }
+func (s *remoteHostFakeStore) RemoteHostListed(_ context.Context, userID, hostID string) (bool, error) {
+	_, listed := s.hosts[userID+":"+hostID]
+	return listed, nil
+}
 func (s *remoteHostFakeStore) UpdateRemoteHostAddress(_ context.Context, userID, hostID, address string) error {
 	host := s.hosts[userID+":"+hostID]
 	host.URL = address
@@ -159,6 +163,7 @@ func TestHostCanPublishRotatedAddressWithScopedDigest(t *testing.T) {
 type remoteHostTunnelFakeStore struct {
 	*remoteHostFakeStore
 	tunnels map[string]domain.RemoteHostTunnel
+	touched []string // tunnel IDs, by TouchRemoteHostTunnel
 }
 
 func (s *remoteHostTunnelFakeStore) GetRemoteHostTunnel(_ context.Context, userID, hostID string) (domain.RemoteHostTunnel, bool, error) {
@@ -181,7 +186,8 @@ func (s *remoteHostTunnelFakeStore) MarkRemoteHostTunnelLinked(_ context.Context
 	}
 	return nil
 }
-func (s *remoteHostTunnelFakeStore) TouchRemoteHostTunnel(context.Context, string, time.Time) error {
+func (s *remoteHostTunnelFakeStore) TouchRemoteHostTunnel(_ context.Context, tunnelID string, _ time.Time) error {
+	s.touched = append(s.touched, tunnelID)
 	return nil
 }
 func (s *remoteHostTunnelFakeStore) DeleteRemoteHostTunnel(_ context.Context, tunnelID string) error {
@@ -281,6 +287,12 @@ func TestLinkedHostGetsOneFixedTunnel(t *testing.T) {
 	if _, made := store.tunnels[key]; w.Code != http.StatusNoContent || !made || store.hosts[owner+":"+hostID].URL != fixed {
 		t.Fatalf("register: %d %s url=%q, tunnel made %v", w.Code, w.Body.String(), store.hosts[owner+":"+hostID].URL, made)
 	}
+	// Only the machine's own fetch counts as seeing it.
+	w = httptest.NewRecorder()
+	s.putRemoteHost(w, hostRequest(http.MethodPut, hostID, `{"label":"Mac","token":"`+token+`"}`, owner))
+	if w.Code != http.StatusNoContent || len(store.touched) != 0 {
+		t.Fatalf("register again: %d, touched %v", w.Code, store.touched)
+	}
 
 	if w := requestTunnel(s, hostID, strings.Repeat("b", 64), `{}`); w.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong digest: %d", w.Code)
@@ -300,6 +312,9 @@ func TestLinkedHostGetsOneFixedTunnel(t *testing.T) {
 	}
 	if strings.Contains(string(store.tunnels[key].EncryptedRunToken), got.RunToken) {
 		t.Fatal("run token stored in plaintext")
+	}
+	if len(store.touched) != 1 || store.touched[0] != store.tunnels[key].TunnelID {
+		t.Fatalf("the machine's fetch touched %v", store.touched)
 	}
 
 	// The machine's first request, later starts, and a repair right after

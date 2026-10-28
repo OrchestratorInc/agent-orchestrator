@@ -198,17 +198,24 @@ func TestTunnelRunnerDoesNotRestartARefusedTokenFromTheCache(t *testing.T) {
 	}
 }
 
-// Refusals are repaired however recently the last repair was.
-func TestTunnelRunnerRepairsRefusalsAtOnce(t *testing.T) {
+// Refusals are repaired sooner than a connector that only cannot connect, but
+// not on every restart: each repair spends one of the account's tunnel writes.
+func TestTunnelRunnerSpacesRefusalRepairsOut(t *testing.T) {
 	_, src := newFixedSource(t)
 	refusals := strings.Repeat(refusedLine+"\n", connectorRefusals)
 	bin, _ := fakeCloudflared(t, registeredLine+"\n"+refusals)
 	r := namedRunner(t, bin, src)
-	r.deadAfter, r.repairedAt = time.Hour, time.Now()
+	r.deadAfter = time.Hour
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	if err := r.runOnce(ctx); err == nil || !r.repair {
-		t.Fatalf("runOnce = %v, repair %v", err, r.repair)
+	for _, tc := range []struct {
+		ago  time.Duration
+		want bool
+	}{{2 * time.Minute, false}, {15 * time.Minute, true}} {
+		r.repair, r.repairedAt = false, time.Now().Add(-tc.ago)
+		if err := r.runOnce(ctx); err == nil || r.repair != tc.want {
+			t.Fatalf("repaired %s ago: runOnce = %v, repair %v", tc.ago, err, r.repair)
+		}
 	}
 }
 
@@ -416,6 +423,54 @@ func TestTunnelRunnerRechecksAFixedTunnelWhenNudged(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the nudge did not recheck the fixed tunnel")
+	}
+}
+
+// A new password revokes the link, and a signed-in desktop links the machine
+// again at once: the fixed tunnel keeps serving through that, and is given up
+// only when no link comes.
+func TestTunnelRunnerWaitsForARelinkAfterANewPassword(t *testing.T) {
+	for _, relinked := range []bool{true, false} {
+		cloud, src := newFixedSource(t)
+		bin, _ := fakeCloudflared(t, registeredLine)
+		r := namedRunner(t, bin, src)
+		r.recheckEvery, r.relinkWait = time.Hour, 300*time.Millisecond
+		nudge := make(chan struct{}, 1)
+		r.nudge = nudge
+
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		done := make(chan error, 1)
+		go func() { done <- r.runOnce(ctx) }()
+		for deadline := time.Now().Add(10 * time.Second); r.Runtime.UnsettledHostname() == ""; time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("fixed connector never registered")
+			}
+		}
+		link(t, src, "") // the new password
+		nudge <- struct{}{}
+		time.Sleep(100 * time.Millisecond)
+		if relinked {
+			link(t, src, "new-account-digest")
+		}
+		select {
+		case err := <-done:
+			if relinked || !errors.Is(err, errFixedTunnelChanged) {
+				t.Fatalf("relinked %v: runOnce = %v", relinked, err)
+			}
+		case <-time.After(time.Second):
+			if !relinked {
+				t.Fatal("kept the fixed address with no link")
+			}
+			cloud.mu.Lock()
+			got := cloud.digests[len(cloud.digests)-1]
+			cloud.mu.Unlock()
+			if got != "new-account-digest" {
+				t.Fatalf("asked with %q", got)
+			}
+			cancel()
+			<-done
+		}
+		cancel()
 	}
 }
 
