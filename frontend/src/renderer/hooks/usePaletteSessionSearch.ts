@@ -24,6 +24,9 @@ export type SessionSearchCoverage = components["schemas"]["SessionSearchCoverage
  * person opening it to "go back to that session" gets the recent list, the way
  * Raycast and Atuin show recents before a query is typed.
  */
+/** Rows the palette asks each machine for: a launcher, not a results page. */
+export const PALETTE_SESSION_SEARCH_LIMIT = 8;
+
 export function usePaletteSessionSearch(
 	query: string,
 	hostId: HostId = LOCAL_HOST,
@@ -51,7 +54,7 @@ export function usePaletteSessionSearch(
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/search/sessions", {
 				// The contract types q as required; an empty q plus sort=recent is the
 				// recency browse the daemon accepts.
-				params: { query: { q: trimmed, sort: trimmed ? undefined : "recent", limit: 8 } },
+				params: { query: { q: trimmed, sort: trimmed ? undefined : "recent", limit: PALETTE_SESSION_SEARCH_LIMIT } },
 			});
 			if (error) throw new Error(apiErrorMessage(error, "Could not search past sessions"));
 			if (!data) throw new Error("Could not search past sessions");

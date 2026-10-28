@@ -7,6 +7,8 @@ import { formatTimeCompact } from "../lib/format-time";
 import { LOCAL_HOST } from "../lib/hosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { revealSessionSearchMatch } from "../lib/session-search-reveal";
+import { machinesNotSearched, mergeMachineSearchResults, type MachineSearchResult } from "../lib/session-search-machines";
+import { useRemoteMachineSearch } from "../hooks/useRemoteMachineSearch";
 import { hidesShellTopbar } from "../lib/platform";
 import { cn } from "../lib/utils";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -17,7 +19,6 @@ import {
 	useSessionSearch,
 	type SessionSearchCoverage,
 	type SessionSearchFilters,
-	type SessionSearchResult,
 } from "../hooks/useSessionSearch";
 import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
 import { Input } from "./ui/input";
@@ -82,12 +83,32 @@ export function SessionSearchView() {
 		[from, harness, limit, projectId, query, sort, to],
 	);
 	const search = useSessionSearch(filters);
-	const results = search.data?.results ?? [];
-	const coverage = search.data?.coverage;
-	const total = search.data?.total ?? results.length;
-	const hasMore = results.length < total;
 	const trimmed = query.trim();
 	const tooShort = trimmed.length > 0 && trimmed.length < SESSION_SEARCH_MIN_QUERY_CHARS;
+	// Words are also searched on every connected remote AO machine. A project
+	// filter keeps the search here: a project id names a project on this machine.
+	const remoteSearch = useRemoteMachineSearch(
+		{ query, harness: filters.harness, from, to, sort, limit },
+		trimmed.length >= SESSION_SEARCH_MIN_QUERY_CHARS && !filters.projectId,
+	);
+	const localData = search.isPlaceholderData ? undefined : search.data;
+	// This machine's results show at once; the merged list replaces them once
+	// every machine has answered or timed out, so rows do not jump while read.
+	const results: MachineSearchResult[] = useMemo(() => {
+		const local = search.data?.results ?? [];
+		if (!localData || !remoteSearch.settled || !remoteSearch.answers.some((answer) => answer.outcome === "searched")) return local;
+		return mergeMachineSearchResults([
+			{ hostId: LOCAL_HOST, label: "", outcome: "searched", results: localData.results ?? [], total: localData.total ?? 0 },
+			...remoteSearch.answers,
+		], sort === "recent" || localData.sort === "recent").slice(0, limit);
+	}, [limit, localData, remoteSearch, search.data, sort]);
+	const notSearched = remoteSearch.settled ? machinesNotSearched(remoteSearch.answers, t) : [];
+	const coverage = search.data?.coverage;
+	const remoteTotal = localData && remoteSearch.settled
+		? remoteSearch.answers.reduce((sum, answer) => sum + (answer.outcome === "searched" ? answer.total : 0), 0)
+		: 0;
+	const total = (search.data?.total ?? results.length) + remoteTotal;
+	const hasMore = results.length < total;
 
 	const projectOptions = useMemo(
 		() => [
@@ -110,7 +131,7 @@ export function SessionSearchView() {
 		];
 	}, [coverage, t, workspaces]);
 
-	const open = (result: SessionSearchResult) => {
+	const open = (result: MachineSearchResult) => {
 		// Hand the match to the session before navigating: the Chat timeline is
 		// mounted by the shell, so it picks this up when it renders rather than
 		// from route state.
@@ -122,10 +143,11 @@ export function SessionSearchView() {
 			query: filters.query,
 			reviewId: result.reviewId,
 		});
+		// A session on another machine opens on that machine's route.
 		const target = sessionNavigateTarget(
 			result.projectId || undefined,
 			result.sessionId,
-			LOCAL_HOST,
+			result.hostId || LOCAL_HOST,
 		);
 		void navigate(target);
 	};
@@ -250,9 +272,11 @@ export function SessionSearchView() {
 								<div className="flex flex-col items-center gap-1 py-16 text-center">
 									<p className="text-control font-medium text-foreground">{t("search.noMatches")}</p>
 									<CoverageNote coverage={coverage} />
+									<MachinesNotSearched machines={notSearched} />
 								</div>
 							) : (
 								<>
+									<MachinesNotSearched machines={notSearched} className="px-3 pb-2" />
 									{/* How many matched, not just how many are on screen. */}
 									<p className="px-3 pb-2 text-xs text-muted-foreground" data-testid="session-search-count">
 										{t("search.resultCount", { shown: results.length, total })}
@@ -260,7 +284,7 @@ export function SessionSearchView() {
 									<ul className="divide-y divide-border" data-testid="session-search-results">
 										{results.map((result) => (
 											<SearchResultRow
-												key={`${result.sessionId}:${result.messageId}:${result.seq}:${result.kind}`}
+												key={`${result.hostId ?? ""}:${result.sessionId}:${result.messageId}:${result.seq}:${result.kind}`}
 												result={result}
 												onOpen={() => open(result)}
 											/>
@@ -287,7 +311,18 @@ export function SessionSearchView() {
 	);
 }
 
-function SearchResultRow({ result, onOpen }: { result: SessionSearchResult; onOpen: () => void }) {
+/** "Not searched on Laptop (offline)": machines whose sessions are missing, and why. */
+function MachinesNotSearched({ machines, className }: { machines: string[]; className?: string }) {
+	const { t } = useTranslation();
+	if (machines.length === 0) return null;
+	return (
+		<p role="status" className={cn("text-xs text-muted-foreground", className)} data-testid="search-machines-not-searched">
+			{t("command.machinesNotSearched", { machines: machines.join(", ") })}
+		</p>
+	);
+}
+
+function SearchResultRow({ result, onOpen }: { result: MachineSearchResult; onOpen: () => void }) {
 	const { t } = useTranslation();
 	const segments = snippetSegments(result.snippet, result.highlights);
 	const sessionName = result.sessionName || result.sessionId;
@@ -312,6 +347,13 @@ function SearchResultRow({ result, onOpen }: { result: SessionSearchResult; onOp
 					) : null}
 					{result.reviewId ? (
 						<span className="shrink-0 text-xs text-muted-foreground">{t("terminal.reviewer")}</span>
+					) : null}
+					{result.hostId ? (
+						// The machine the session is on, and where it opens. Plain
+						// metadata, like the sidebar's machine names.
+						<span className="shrink-0 text-xs text-muted-foreground" data-testid="search-result-machine">
+							{result.machineLabel || result.hostId}
+						</span>
 					) : null}
 					<span className="min-w-0 shrink truncate text-xs text-muted-foreground">{projectName}</span>
 					<span className="shrink-0 text-xs text-passive">{result.harness}</span>
