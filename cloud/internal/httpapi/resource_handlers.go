@@ -17,7 +17,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/domain"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/postgres"
-	"github.com/aoagents/agent-orchestrator/cloud/internal/projectsnapshot"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox"
 	"github.com/aoagents/agent-orchestrator/cloud/internal/sandbox/coder"
 	"github.com/go-chi/chi/v5"
@@ -780,23 +779,7 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 		s.writeSessionPlanError(w, r, orgID, request.ProjectID, err)
 		return
 	}
-	// A Freestyle session boots from its project's prepared snapshot (the
-	// repository already cloned) when one exists for the current harness
-	// build; otherwise from the harness snapshot, and a build starts below.
-	var projectSnapshot *projectsnapshot.Request
-	if s.projectSnapshots != nil {
-		base := sandbox.FreestyleSnapshot(plan)
-		if snapshotRequest, ok := projectsnapshot.NewRequest(orgID, project, request.Harness, base); ok && base != "" {
-			if snapshotID, ok := s.projectSnapshots.Lookup(r.Context(), snapshotRequest); ok {
-				if prepared, rewriteErr := sandbox.WithFreestyleSnapshot(plan, snapshotID); rewriteErr == nil {
-					plan = prepared
-				} else {
-					s.logger.Warn("use project snapshot", "error", rewriteErr, "request_id", requestID(r))
-				}
-			}
-			projectSnapshot = &snapshotRequest
-		}
-	}
+	plan, projectSnapshot := s.bootFromProjectSnapshot(r, orgID, project, request.Harness, plan)
 	session, err := s.store.CreateSession(
 		r.Context(),
 		principalFrom(r),

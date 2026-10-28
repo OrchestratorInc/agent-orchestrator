@@ -182,3 +182,36 @@ func TestCreateWorkerChildOfManagedParentInBYOOrgStaysManaged(t *testing.T) {
 		t.Fatalf("child base URL = %q, want the managed deployment", profile.BaseURL)
 	}
 }
+
+// A Freestyle orchestrator's child boots from the project's repository
+// snapshot, as a session the app creates does, and keeps it fresh; it never
+// clones a repository the snapshot already holds.
+func TestCreateWorkerChildBootsFromTheProjectSnapshot(t *testing.T) {
+	t.Parallel()
+	repositoryID := int64(4242)
+	store := &placementChildStore{
+		stubChildStore: stubChildStore{credentialAvailable: true},
+		placement: domain.OrchestratorPlacement{
+			Provider:           sandbox.ProviderFreestyle,
+			ProjectID:          "11111111-2222-3333-4444-555555555555",
+			RepositoryURL:      "https://github.com/acme/repo",
+			GitHubRepositoryID: &repositoryID,
+		},
+	}
+	snapshots := &fakeProjectSnapshots{snapshotID: "sh-project"}
+	srv := freestyleServer(store, snapshots)
+
+	rec := httptest.NewRecorder()
+	srv.createWorkerChild(rec, childRequest(t, []string{"worker:orchestrate"}))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body.String())
+	}
+	if got := sandbox.FreestyleSnapshot(sandbox.Plan{ResourceProfile: store.captured.ResourceProfile}); got != "sh-project" {
+		t.Fatalf("child boots from %q, want the project snapshot", got)
+	}
+	if len(snapshots.ensured) != 1 || snapshots.ensured[0].SessionID != "00000000-0000-0000-0000-0000000000c3" ||
+		snapshots.ensured[0].ProjectID != store.placement.ProjectID || snapshots.ensured[0].RepositoryKey != "github:4242" {
+		t.Fatalf("Ensure calls = %+v; want one, keyed to the child, its project and repository", snapshots.ensured)
+	}
+}

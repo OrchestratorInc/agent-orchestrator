@@ -94,6 +94,10 @@ type OrchestratorPlacement struct {
 	// RepositoryURL is the orchestrator project's main repository, which
 	// resolves {repo} in the project's working folder for its children.
 	RepositoryURL string
+	// ProjectID and GitHubRepositoryID identify the orchestrator's project and
+	// its repository, which key the repository snapshot its children boot from.
+	ProjectID          string
+	GitHubRepositoryID *int64
 	// CoderConnections are the organization's Coder provider connections,
 	// without secrets.
 	CoderConnections []ProviderConnection

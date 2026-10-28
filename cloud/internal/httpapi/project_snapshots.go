@@ -52,3 +52,33 @@ func (s *Server) ensureProjectSnapshots(r *http.Request, orgID string, project d
 		}
 	}
 }
+
+// bootFromProjectSnapshot points a Freestyle plan at its project's prepared
+// snapshot (the repository already cloned) when one exists for the current
+// harness build; otherwise the session boots from the harness snapshot and
+// clones. The returned request, when non-nil, is passed to Ensure once the
+// session exists, so a missing or stale snapshot is (re)built for the next one.
+func (s *Server) bootFromProjectSnapshot(
+	r *http.Request,
+	orgID string,
+	project domain.Project,
+	harness string,
+	plan sandbox.Plan,
+) (sandbox.Plan, *projectsnapshot.Request) {
+	if s.projectSnapshots == nil {
+		return plan, nil
+	}
+	base := sandbox.FreestyleSnapshot(plan)
+	request, ok := projectsnapshot.NewRequest(orgID, project, harness, base)
+	if !ok || base == "" {
+		return plan, nil
+	}
+	if snapshotID, ok := s.projectSnapshots.Lookup(r.Context(), request); ok {
+		if prepared, err := sandbox.WithFreestyleSnapshot(plan, snapshotID); err == nil {
+			plan = prepared
+		} else {
+			s.logger.Warn("use project snapshot", "error", err, "request_id", requestID(r))
+		}
+	}
+	return plan, &request
+}
