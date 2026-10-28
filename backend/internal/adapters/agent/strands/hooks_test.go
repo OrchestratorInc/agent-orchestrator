@@ -2,6 +2,7 @@ package strands
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,7 +94,8 @@ func TestNodePreloadLeavesProjectChildrenNative(t *testing.T) {
 	baseline := exec.Command(node, "--input-type=module", "-e", `import * as m from "node:module"; process.exit(typeof m.registerHooks === "function" ? 0 : 77)`)
 	baseline.Env = append(os.Environ(), "NODE_OPTIONS=", "AO_STRANDS_NODE_HOOK_WORKAROUND=")
 	if err := baseline.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 77 {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 77 {
 			t.Skip("Node lacks synchronous module hooks")
 		}
 		t.Fatal(err)
