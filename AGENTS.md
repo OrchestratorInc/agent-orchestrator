@@ -103,6 +103,18 @@ For code entry points:
 - Do not add abstractions for one-off use cases. Add helpers only when they remove duplication across real call sites.
 - Tests should cover the user-visible behavior and boundary being changed: happy path, validation/missing args, daemon error envelopes, and any destructive confirmation path.
 
+## Writing tests
+
+The repo has about as much test code as source code, mostly from near-copies and repeated setup (#7181). New tests should add coverage, not lines.
+
+- Add a new case as a table row (Go) or an `it.each` entry (vitest). Do not copy a test and change one value.
+- Reuse the package's existing fakes, builders and test helpers. Search for one before writing a new `fakeStore`, `fakeRuntime` or inline `New(Deps{...})` setup.
+- Test behavior through the public surface. Do not assert private fields, exact `err.Error()` text when an error type or code exists, or exact call counts that are not part of the contract.
+- No tests that read source files and match their text (`*.source.test.ts`), and no assertions on Tailwind class names, inline styles or easing strings. Put layout checks in renderer smoke (Playwright).
+- Behavior shared by all agent adapters belongs in one test over the adapter registry, not a copy in each adapter package.
+- Frontend tests that render nothing use the Node environment (`// @vitest-environment node`), not jsdom.
+- Do not wait with sleeps or real backoff. Wait on a signal, or inject a clock.
+
 ## Hard rules and boundaries
 
 - The daemon's **primary (loopback) listener** stays bound to `127.0.0.1` and unauthenticated. Do not change its bind host or add auth to it.
