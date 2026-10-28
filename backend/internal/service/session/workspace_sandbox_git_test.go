@@ -189,24 +189,24 @@ func TestWorkspaceRevisionResolversCarrySandboxMarking(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				assertSandboxGitContext(t, ctx, repo, mode)
+				assertSandboxGitContext(ctx, t, repo, mode)
 				ctx, _, _, err = svc.workspaceSelection(context.Background(), "ao-1", view, []string{head}, "", false)
 				if err != nil {
 					t.Fatal(err)
 				}
-				assertSandboxGitContext(t, ctx, repo, mode)
+				assertSandboxGitContext(ctx, t, repo, mode)
 				view.ExpectedTipSHA, view.ExpectedBaseSHA = head, base
 				ctx, _, err = svc.snapshotSelection(context.Background(), "ao-1", WorkspaceSelectionRevisionInput{View: view, CommitSHAs: []string{head}})
 				if err != nil {
 					t.Fatal(err)
 				}
-				assertSandboxGitContext(t, ctx, repo, mode)
+				assertSandboxGitContext(ctx, t, repo, mode)
 			}
 		})
 	}
 }
 
-func assertSandboxGitContext(t *testing.T, ctx context.Context, repo string, mode domain.SandboxMode) {
+func assertSandboxGitContext(ctx context.Context, t *testing.T, repo string, mode domain.SandboxMode) {
 	t.Helper()
 	marked, _ := ctx.Value(sandboxedWorkspaceGitKey{}).(bool)
 	want := mode != domain.SandboxModeOff
