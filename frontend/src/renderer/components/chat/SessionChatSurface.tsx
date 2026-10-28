@@ -1,3 +1,4 @@
+import type { OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { agentLabel } from "../../lib/agent-options";
@@ -120,6 +121,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	shellError,
 	onOpenFiles,
 	onOpenFile,
+	onOpenFileAnnotation,
 	onOpenLinkInBrowser,
 	headerActions,
 	sessionTabAction,
@@ -171,6 +173,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFileAnnotation?: OpenFileAnnotation;
 	/** Opens a chat link in the active blank tab or a new tab in this session's AO Browser. */
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;
@@ -685,12 +688,16 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onLoadOlder={loadOlder}
 				busy={commands.busy}
 				excerptsEnabled
-				onSend={async (text, attachments, clientMessageId, excerpts) => {
+				fileReferencesEnabled={Boolean(renderSnapshot.supportsFileReferences)}
+				onSend={async (text, attachments, clientMessageId, excerpts, fileReferences) => {
 					// Only claim /btw and /side where side chats can open. Elsewhere the
 					// text goes to the agent as typed (it may be the harness's own skill),
 					// so a failed side launch can never strand the main draft.
 					const btw = sideCreationEnabled ? /^\/(?:btw|side)(?:\s+|$)/i.exec(text) : null;
-					if (btw) {
+     if (btw && fileReferences?.length) {
+      throw Object.assign(new Error("File annotations cannot be sent to side chats yet. Send in the main chat or remove the file annotations."), { code: "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED" });
+     }
+     if (btw) {
 						openSideInspector();
 						const side = await sideChats.create(undefined, true, clientMessageId);
 						const question = text.slice(btw[0].length).trim();
@@ -705,7 +712,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 						text: viaClaude && (pendingSwitch ? pendingSwitch.ultracode : ultracode.on) ? withUltracode(text) : text,
 						attachments,
 						clientMessageId,
+						fileReferences,
 						excerpts: excerpts?.map((excerpt) => ({
+							id: excerpt.id, order: excerpt.order,
 							conversationId: excerpt.conversationId,
 							messageId: excerpt.messageId,
 							revision: excerpt.revision,
@@ -815,6 +824,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				rollbackError={commands.rollbackError}
 				onOpenFiles={onOpenFiles}
 				onOpenFile={onOpenFile}
+				onOpenFileAnnotation={onOpenFileAnnotation}
 				retryControl={commands.retryControl}
 				onEditMessage={commands.editMessage}
 				editMessagePending={commands.editMessagePending}

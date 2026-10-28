@@ -1343,6 +1343,9 @@ func (s *Service) Send(
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
+	if err := validateFileReferenceContent(msg, string(id)); err != nil {
+		return domain.ConversationTurn{}, err
+	}
 	if s.switchBeforeSend(ctx, record) {
 		// The provider stopped on its old release. The hibernated path below
 		// queues this message and wakes the session on the installed one.
@@ -1355,6 +1358,9 @@ func (s *Service) Send(
 			if existing, found, lookupErr := controller.store.ConversationMessageByClientID(ctx, controller.conversation.ID, msg.ClientMessageID); lookupErr != nil {
 				return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
 			} else if found {
+				if !fileReferenceContentsMatch(existing.DeliveryContentJSON, msg.Content) {
+					return domain.ConversationTurn{}, domain.ErrClientMessageConflict
+				}
 				msg.ClientPayloadHash = existing.ClientPayloadHash
 				return controller.Send(ctx, msg)
 			}
@@ -1433,6 +1439,11 @@ func (s *Service) Send(
 
 // SendForOwner sends a user message to an owner-specific chat controller.
 func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwner, msg ports.ChatUserMessage) (domain.ConversationTurn, error) {
+	for _, block := range msg.Content {
+		if block.Type == "file_reference" {
+			return domain.ConversationTurn{}, fmt.Errorf("%w: file annotations require the main chat", ErrExcerptInvalid)
+		}
+	}
 	controller, err := s.ControllerForOwner(owner)
 	if err != nil {
 		return domain.ConversationTurn{}, err
@@ -1446,6 +1457,9 @@ func (s *Service) SendForOwner(ctx context.Context, owner domain.ConversationOwn
 		); lookupErr != nil {
 			return domain.ConversationTurn{}, fmt.Errorf("read message delivery: %w", lookupErr)
 		} else if found {
+			if !fileReferenceContentsMatch(existing.DeliveryContentJSON, msg.Content) {
+				return domain.ConversationTurn{}, domain.ErrClientMessageConflict
+			}
 			msg.ClientPayloadHash = existing.ClientPayloadHash
 			return controller.Send(ctx, msg)
 		}

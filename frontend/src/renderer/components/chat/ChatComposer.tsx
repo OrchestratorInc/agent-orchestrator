@@ -53,6 +53,8 @@ import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } fro
 import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { formatCapturedFileReferences, type ChatFileReference } from "../../../shared/chat-file-reference";
+import { chatDraftAnnotations, writeChatFileReferences } from "../../lib/chat-drafts";
 import { ChatAnnotationSummary } from "./ChatAnnotationSummary";
 import { cn } from "../../lib/utils";
 import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-client";
@@ -115,6 +117,7 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	AGENT_SWITCH_FAILED,
 	// The new chat page could not create the session this brief would start.
 	"TASK_CREATE_FAILED",
+	"CHAT_FILE_REFERENCE_INVALID", "CHAT_ANNOTATION_LIMIT", "CHAT_FILE_REFERENCES_SIDE_UNSUPPORTED",
 	// Cloud validation failures reject the request before durable acceptance.
 	"validation_error",
 	"INVALID_BODY",
@@ -245,12 +248,16 @@ export const ChatComposer = memo(function ChatComposer({
 	onSelectAnnotation,
 	sentMessages,
 	sentMessagesScope,
+	fileReferencesEnabled = false,
+	fileReferenceDelivery,
 }: {
 	onSelectAnnotation?: (annotation: { text: string; messageId?: string; revision?: number }) => void;
 	/** This conversation's sent human messages, oldest first, recalled with Up and Down. */
 	sentMessages?: readonly string[];
 	/** The conversation branch `sentMessages` belongs to; changing it ends an open walk. */
 	sentMessagesScope?: string;
+	fileReferencesEnabled?: boolean;
+	fileReferenceDelivery?: import("../../../shared/chat-file-reference").FileReferenceDelivery;
 	focusRef?: Ref<ChatComposerHandle>;
 	onSend: (
 		text: string,
@@ -258,6 +265,7 @@ export const ChatComposer = memo(function ChatComposer({
 		clientMessageId?: string,
 		retainedContent?: number[],
 		excerpts?: ChatDraftExcerptReference[],
+	fileReferences?: ChatFileReference[],
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
 	/** Mode rows for the add menu. With them the plus button opens a menu instead of the file picker. */
@@ -461,14 +469,24 @@ export const ChatComposer = memo(function ChatComposer({
 	// Code selected in a file or diff view ("Ask in chat") arrives here as a
 	// reference chip. Only the session's ordinary prompt accepts it; a queued-turn
 	// edit has no draftSessionId and stays out of the way.
-	useEffect(() => {
-		if (!draftSessionId) return;
-		return subscribeChatComposerReferences(draftSessionId, (reference) => {
-			editor.current?.insertReference(reference.path, reference.display, reference.wire);
+ useEffect(() => {
+  if (!draftSessionId || !draftScope) return;
+  return subscribeChatComposerReferences(draftSessionId, (reference) => {
+   const draft = readChatSessionDraft(draftScope);
+   if (getChatComposerMutation(draftScope).pending || draft.composer.delivery) return false;
+   const files = draft.composer.fileReferences ?? [];
+   if(files.some(file => file.path===reference.path && file.side===reference.side && file.line===reference.line && file.endLine===reference.endLine && file.scope===reference.scope && file.commitSha===reference.commitSha && JSON.stringify(file.source)===JSON.stringify(reference.source) && JSON.stringify(file.lines)===JSON.stringify(reference.lines)))return true;
+   if (files.length + (draft.composer.excerpts?.length ?? 0) >= 8) { setSendError("chat.draft.annotationLimit"); return false; }
+   const order = Math.max(Date.now(), ...files.map(item => item.order + 1), ...(draft.composer.excerpts ?? []).map(item => (item.order ?? 0) + 1));
+   const result = writeChatFileReferences(draftScope, [...files, { ...reference, order }]);
+   composerRevision.current = result.draft.composer.revision;
+   setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
+			if (!result.ok) return false;
 			// The Chat surface may only now be coming forward from behind a file tab.
 			window.requestAnimationFrame(() => window.requestAnimationFrame(() => editor.current?.focus()));
+			return true;
 		});
-	}, [draftSessionId]);
+	}, [draftSessionId, draftScope]);
 	const restoredSeedKey = useRef<string | undefined>(undefined);
 	const restoredSessionId = useRef<string | undefined>(undefined);
 	const persistedDraft = useMemo(
@@ -489,10 +507,14 @@ export const ChatComposer = memo(function ChatComposer({
 		getComposerMutation,
 	);
 	const optimisticSend = Boolean(durableDelivery?.draft && composerMutation.pending);
-	const contextReferences = draftScope
+	const chatReferences = draftScope
 		? readChatSessionDraft(draftScope).composer.excerpts ?? []
 		: [];
-	const [appliedAcceptanceSequence, setAppliedAcceptanceSequence] = useState(0);
+ const fileReferences = draftScope ? readChatSessionDraft(draftScope).composer.fileReferences ?? [] : [];
+ const contextReferences = chatDraftAnnotations({ revision: 0, text: "", attachments: [], excerpts: chatReferences, fileReferences }).map(annotation => annotation.kind === "chat"
+  ? annotation.reference
+  : { kind: "file" as const, id: annotation.reference.id, text: annotation.reference.path, order: annotation.reference.order, fileReference: annotation.reference });
+ const [appliedAcceptanceSequence, setAppliedAcceptanceSequence] = useState(0);
 	const composerRevision = useRef(persistedDraft?.composer.revision ?? 0);
 	const unsavedText = useRef<{ text: string; revision: number } | undefined>(undefined);
 	const synchronouslyClearedDeliveryRevision = useRef<number | undefined>(undefined);
@@ -674,7 +696,7 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [sendInFlight]);
 	const sendConcealed = sendInFlight && !concealExpired;
 	const canSend =
-		(hasText || staged) &&
+		hasDraft &&
 		(savingQueuedEdit || !busy) &&
 		!disabled &&
 		!steerPending &&
@@ -1276,6 +1298,7 @@ export const ChatComposer = memo(function ChatComposer({
 		setSteerOutcomeNotice(null);
 
 		if (!recoveringDelivery && !savingQueuedEdit && body === "/compact" && onCompact) {
+			if (fileReferences.length) { setSendError("chat.draft.fileReferencesCompactUnsupported"); return; }
 			if (draftScope && !mutationToken) return;
 			let mutationFinished = false;
 			setSubmitting(true);
@@ -1352,7 +1375,7 @@ export const ChatComposer = memo(function ChatComposer({
 			return all.length > 0 ? all : undefined;
 		};
 		const shouldSteer = Boolean(forceSteer && !savingQueuedEdit && contextReferences.length === 0);
-		const message = withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} chat excerpt(s) as context` : "");
+		const message = withAttachmentReferences(body, attachedPaths) || (contextReferences.length > 0 ? `Use the attached ${contextReferences.length} ${fileReferences.length ? "annotation(s)" : "chat excerpt(s)"} as context` : "");
 		// Ordinary delivery reserves its exact draft before these staged reads await.
 		// Queue editors use their existing owner/revision CAS before mutation.
 		const attachmentScope = queuedDraftScope ?? draftScope;
@@ -1457,7 +1480,11 @@ export const ChatComposer = memo(function ChatComposer({
 			return;
 		}
 
-		const requestText = recoveringDelivery
+  if ((recoveringDelivery?.fileReferences?.length || fileReferences.length) && (fileReferenceDelivery ?? (fileReferencesEnabled ? "structured" : "unsupported")) === "unsupported") {
+   setSendError("chat.draft.fileReferencesUnsupported");
+   return;
+  }
+  const requestText = recoveringDelivery
 			? recoveringDelivery.requestText
 			: message;
 		const prepared = prepareChatComposerDelivery(draftScope, {
@@ -1476,7 +1503,8 @@ export const ChatComposer = memo(function ChatComposer({
 						}]
 					: [],
 			),
-			excerpts: recoveringDelivery?.excerpts ?? contextReferences,
+			excerpts: recoveringDelivery?.excerpts ?? chatReferences,
+			fileReferences: recoveringDelivery?.fileReferences ?? fileReferences,
 			requestText,
 			clientMessageId: recoveringDelivery?.clientMessageId ?? crypto.randomUUID(),
 		});
@@ -1536,17 +1564,17 @@ export const ChatComposer = memo(function ChatComposer({
 				}
 			} else {
 				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
-				if (delivery.excerpts?.length) {
-					await onSend(
-						delivery.requestText,
-						deliveryAttachments,
-						delivery.clientMessageId,
-						undefined,
-						delivery.excerpts,
-					);
-				} else {
-					await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId);
-				}
+    if (delivery.fileReferences?.length) {
+     if (fileReferenceDelivery === "text") {
+      await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
+     } else {
+      await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences);
+     }
+    } else if (delivery.excerpts?.length) {
+     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
+    } else {
+     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId);
+    }
 			}
 			acceptAndClearDurableDelivery(delivery, mutationToken);
 			mutationFinished = true;
@@ -1944,15 +1972,22 @@ export const ChatComposer = memo(function ChatComposer({
 								disabled={controlsDisabled || draftMutationPending}
 								onRemoveAll={() => {
 									if (!draftScope || submitInFlight.current) return;
-									const result = writeChatExcerptReferences(draftScope, []);
+         const removedFiles = writeChatFileReferences(draftScope, []);
+         if (!removedFiles.ok) { setTextDraftPersistenceError("chat.draft.saveFailed"); return; }
+         const result = writeChatExcerptReferences(draftScope, []);
 									composerRevision.current = result.draft.composer.revision;
 									setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");
 								}}
 								onRemove={(excerpt) => {
 									if (!draftScope || submitInFlight.current || !excerpt.id) return;
+         if (fileReferences.some(ref => ref.id === excerpt.id)) {
+          const result = writeChatFileReferences(draftScope, fileReferences.filter(ref => ref.id !== excerpt.id));
+          composerRevision.current = result.draft.composer.revision;
+          setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed"); return;
+         }
 									const result = writeChatExcerptReferences(
 										draftScope,
-										contextReferences.filter((item) => item.id !== excerpt.id),
+										chatReferences.filter((item) => item.id !== excerpt.id),
 									);
 									composerRevision.current = result.draft.composer.revision;
 									setTextDraftPersistenceError(result.ok ? null : "chat.draft.saveFailed");

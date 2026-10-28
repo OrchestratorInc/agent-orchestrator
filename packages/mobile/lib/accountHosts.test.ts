@@ -68,47 +68,6 @@ it("updates a manually paired tunnel without replacing its original password", a
 	expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "tunnel", host: "new.trycloudflare.com", port: 443, secure: true }]);
 });
 
-it("classifies directory addresses: named tunnels as tunnels, LAN names as LAN", async () => {
-	const id = "h_00000000-0000-0000-0000-000000000005";
-	const quick = { kind: "tunnel", host: "old.trycloudflare.com", port: 443, secure: true } as const;
-	const pair = (url: string) => {
-		saved.hosts = [{ id, name: "Studio", platform: "macos", token: "original-password", lastConnected: 0, endpoints: [quick] }];
-		vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hosts: [{ ...host(id), url }] }) })));
-	};
-
-	pair("https://h-0d483066194a12a5dc17.useao.dev");
-	await syncAccountHosts(account);
-	expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "tunnel", host: "h-0d483066194a12a5dc17.useao.dev", port: 443, secure: true }]);
-
-	// A LAN name must not displace the pairing's tunnel, the only route off-network.
-	pair("http://studio.local:3011");
-	await syncAccountHosts(account);
-	expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "lan", host: "studio.local", port: 3011, secure: false }, quick]);
-
-	// Nor may a Tailscale address, https or not.
-	pair("https://100.72.46.7:443");
-	await syncAccountHosts(account);
-	expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "tailscale", host: "100.72.46.7", port: 443, secure: true }, quick]);
-
-	// Nor an https address on a private name, an IP literal or a custom domain.
-	for (const [url, name] of [["https://desktop.home.arpa:3011", "desktop.home.arpa"], ["https://[fd00::5]:3011", "[fd00::5]"], ["https://desktop:3011", "desktop"], ["https://ao.example.com:3011", "ao.example.com"]]) {
-		pair(url);
-		await syncAccountHosts(account);
-		expect(saved.hosts[0]?.endpoints).toEqual([{ kind: "lan", host: name, port: 3011, secure: true }, quick]);
-	}
-});
-
-it("does not take a paired machine into an account that is already full", async () => {
-	const full = Array.from({ length: 10 }, (_, i) => host(`h_00000000-0000-0000-0000-${String(i).padStart(12, "0")}`));
-	const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ hosts: full, limit: 10 }) }));
-	vi.stubGlobal("fetch", fetch);
-	saved.hosts = [{ id: "h_00000000-0000-0000-0000-0000000000aa", name: "Studio", platform: "macos", token: "original-password", lastConnected: 0,
-		endpoints: [{ kind: "lan", host: "192.168.1.20", port: 3011, secure: false }] }];
-	await syncAccountHosts(account);
-	// Only the directory read: no identity probe, and no token claim.
-	expect(fetch).toHaveBeenCalledTimes(1);
-});
-
 it("keeps a forgotten account machine hidden until explicitly re-paired", async () => {
 	const item = host("h_00000000-0000-0000-0000-000000000004");
 	vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ hosts: [item] }) })));

@@ -1152,6 +1152,8 @@ export interface CloudCpSessionDeletedResponse {
 		id: string;
 		desiredState: string;
 	};
+	/** Whether the session's artifact files were deleted. */
+	artifactsDeleted?: boolean;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/resume accepts user resume intent. */

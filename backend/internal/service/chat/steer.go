@@ -278,7 +278,7 @@ func (c *Controller) PromoteQueuedTurn(
 		Text: queued.Text, Content: content, Origin: queued.Origin,
 		ClientMessageID: queued.ClientMessageID,
 	}
-	ref, err := steerer.Steer(ctx, target, msg)
+	ref, err := steerer.Steer(ctx, target, excerptDeliveryMessage(msg))
 	if err != nil {
 		classified := classify(err)
 		switch {

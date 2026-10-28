@@ -1,4 +1,6 @@
 import { BrowserIcon } from "./icons";
+import { getApiBaseUrl } from "../lib/api-client";
+import { baseUrlForHost } from "../lib/host-clients";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, PanelRight, Plus } from "lucide-react";
 import { useBlocker } from "@tanstack/react-router";
@@ -15,6 +17,7 @@ import {
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
+import { isFileViewCapture } from "../../shared/chat-file-reference";
 import { defaultShortcutBindings, shortcutBindingLabel } from "../../shared/shortcuts";
 import { BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { CenterPane } from "./CenterPane";
@@ -32,7 +35,7 @@ import { CloudSessionStartupLoader } from "./CloudSessionStartupLoader";
 import { SessionFileTab } from "./SessionFileTabs";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import { SessionFilesPopOut } from "./SessionFilesPopOut";
-import { isArtifactPreviewUrl } from "../lib/artifact-preview";
+import { sessionBrowserUnavailable } from "../lib/artifact-preview";
 import { SessionBrowserPopOut } from "./SessionBrowserPopOut";
 import { SessionTabMenu } from "./TerminalAgentControls";
 import { SessionInspector } from "./SessionInspector";
@@ -112,7 +115,7 @@ import {
 	inspectorMaxWidthCss,
 } from "../lib/inspector-width";
 
-type CenterFileOpenRequest = { path?: string; source?: FileOpenOptions["source"]; previousPath?: string; commitSha?: string; editing: boolean; key: number; line?: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
+type CenterFileOpenRequest = { path?: string; source?: FileOpenOptions["source"]; annotationRange?: FileOpenOptions["annotationRange"]; previousPath?: string; commitSha?: string; editing: boolean; key: number; line?: number; mode: FileViewMode; scope?: FileOpenOptions["scope"] };
 const EMPTY_AUXILIARY_TAB_ORDER: string[] = [];
 // Centre-file open requests take keys from this process-wide counter, not a
 // per-mount one: the display mode remembered for a request (ui-store) outlives a
@@ -1054,6 +1057,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						[path]: {
 							path: filePath,
 							source: options?.source,
+ annotationRange: options?.annotationRange ? {...options.annotationRange,requestKey:key}:undefined,
 							previousPath: options?.previousPath,
 							commitSha: options?.commitSha,
 							editing: options?.editing ?? false,
@@ -1354,7 +1358,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// A completed session's HTML artifact is static output the daemon keeps
 	// serving, so an artifact preview the user opened stays visible; every other
 	// preview of a terminated session is a stale DB fact and is still torn down.
-	const browserTerminated = terminated && !(isArtifactPreviewUrl(previewUrl) && !hostId);
+	const browserTerminated = sessionBrowserUnavailable(session, hostId);
 	const browserView = useBrowserView({
 		sessionId: uiSessionId,
 		origin: hostId ? { hostId, sessionId, proxyBase: remoteBase ?? "" } : undefined,
@@ -1362,6 +1366,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		active: browserSlotVisible,
 		poppedOut: browserPoppedOut,
 		terminated: browserTerminated,
+		sessionEnded: session?.isTerminated,
 		previewUrl,
 		previewRevision,
 	});
@@ -2037,6 +2042,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									}
 									onOpenFiles={browserOnly ? undefined : handleOpenFiles}
 									onOpenFile={handleOpenFile}
+         onOpenFileAnnotation={(reference,resolution)=>{
+          if(reference.sessionId!==sessionId || resolution.state==="unavailable")return;
+          const path=resolution.path??reference.path;
+          const source: NonNullable<FileOpenOptions["source"]> = reference.source.kind==="pull_request"
+           ? {kind:"pull_request",number:reference.source.number!,url:reference.source.url??"",label:`PR #${reference.source.number}`,snapshot:reference.source.snapshot}
+           : reference.source.kind==="artifact"
+           ? {kind:"artifact",rawUrl:`${(hostId?baseUrlForHost(hostId):getApiBaseUrl())}/api/v1/sessions/${encodeURIComponent(sessionId)}/artifact-files/${path.split("/").map(encodeURIComponent).join("/")}?raw=true`}
+           : {kind:"workspace"};
+          openCenterFile(path,{source,previousPath:reference.previousPath,commitSha:reference.commitSha,scope:reference.scope as FileOpenOptions["scope"],mode:isFileViewCapture(reference)?"file":"diff",annotationRange:resolution.state==="changed" ? undefined : {...reference,line:resolution.line??reference.line,endLine:resolution.endLine??reference.endLine,lines:reference.lines.map(row=>({...row,oldNo:row.oldNo==null?null:row.oldNo+(resolution.oldLineOffset??0),newNo:row.newNo==null?null:row.newNo+(resolution.newLineOffset??0)})),requestKey:0}});
+         }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
 								{reviewerChatId ? (
@@ -2103,14 +2118,14 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 												return (
 													<div
 														key={fileKey}
-														className={cn("absolute inset-0", fileTabs.activePath !== fileKey && "invisible pointer-events-none")}
+														className={cn("absolute inset-0", fileTabs.activePath !== fileKey && "invisible pointer-events-none [content-visibility:hidden]")}
 														inert={fileTabs.activePath !== fileKey ? true : undefined}
 													>
 														<SessionFileWorkspace
 															active={fileTabs.activePath === fileKey && !filesPoppedOut}
 															fileKey={fileKey}
 															hostId={hostId}
-															source={request?.source}
+															source={request?.source} annotationRange={request?.annotationRange}
 															previousPath={request?.previousPath}
 															annotation={fileAnnotation}
 															commitSha={request?.commitSha}

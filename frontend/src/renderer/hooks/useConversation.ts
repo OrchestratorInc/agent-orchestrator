@@ -1,3 +1,4 @@
+import type { ChatFileReference } from "../../shared/chat-file-reference";
 /**
  * Live conversation data for a Chat session.
  *
@@ -69,6 +70,7 @@ export interface ConversationSendInput {
 	attachments?: WireImageContent[];
 	resources?: WireResourceContent[];
 	excerpts?: WireExcerptReference[];
+	fileReferences?: ChatFileReference[];
 	/** Caller-owned durable idempotency key used for crash-safe retries. */
 	clientMessageId?: string;
 	/** The user's one-click "continue" after stopping a turn. */
@@ -164,7 +166,8 @@ export type ConversationLocalEcho = {
 	/** A turn was already active when this was sent, so it belongs in the queue dock, not the chat. */
 	queued?: boolean;
 	/** Excerpts are rendered inside the optimistic user message bubble. */
-	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision"> & { conversationId?: string })[];
+	fileReferences?: ChatFileReference[];
+	excerpts?: (Pick<ChatDraftExcerptReference, "text" | "messageId" | "revision" | "order"> & { id?: string; conversationId?: string })[];
 	/** Filled after the daemon accepts the send, then used for exact reconciliation. */
 	turnId?: string;
 	/** Sent with an agent switch: the transcript shows the "Switched" line above it at once. */
@@ -602,7 +605,9 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				clientMessageId: variables.clientMessageId,
 				text: variables.input.text,
 				continuation: variables.input.continuation,
-				excerpts: variables.input.excerpts?.map((excerpt) => ({
+				fileReferences: variables.input.fileReferences,
+			excerpts: variables.input.excerpts?.map((excerpt) => ({
+				id: excerpt.id, order: excerpt.order,
 					conversationId: excerpt.conversationId,
 					text: excerpt.text,
 					messageId: excerpt.messageId,
@@ -1753,6 +1758,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 	return {
 		continueTurnId: wire.continueTurnId,
 		conversationId: wire.conversationId,
+		supportsFileReferences: wire.supportsFileReferences,
 		sessionId: wire.sessionId,
 		harness: wire.harness ?? "",
 		mode: wire.mode as SessionMode,
@@ -1970,6 +1976,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 			uri: item.uri || undefined,
 			name: item.name || undefined,
 			text: item.text || undefined,
+			fileReference: item.fileReference as ChatFileReference | undefined, annotationId: item.annotationId, annotationOrder: item.annotationOrder,
 			sourceConversationId: item.sourceConversationId || undefined,
 			sourceMessageId: item.sourceMessageId || undefined,
 			sourceRevision: item.sourceRevision ?? undefined,

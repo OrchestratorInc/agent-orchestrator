@@ -3,6 +3,7 @@
 @import "../styles/tokens.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
+@import "./components/artifact-document.css";
 @source "../../../packages/product-ui/src";
 
 @custom-variant dark (&:is(.dark *, :root:not([data-theme="light"]) *));

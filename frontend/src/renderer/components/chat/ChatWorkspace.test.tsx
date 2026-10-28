@@ -1,4 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { captureFileReference } from "../../../shared/chat-file-reference";
+import { FileAnnotationPreview } from "./FileAnnotationPreview";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
@@ -204,6 +206,14 @@ beforeEach(() => {
 });
 
 describe("ChatWorkspace prompt suggestions", () => {
+	it("shows cloud captured previews without querying the local daemon", async () => {
+		const snapshot={...chatFixtureEmpty,sessionId:"cloud-preview"};
+		const reference=captureFileReference({path:"cloud.ts",side:"file",line:1,endLine:1,lines:[{kind:"context",oldNo:1,newNo:1,text:"CLOUD_STATIC_PREVIEW"}]},snapshot.sessionId);
+		const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
+		render(<QueryClientProvider client={client}><ChatWorkspace snapshot={snapshot} fileReferenceDelivery="text" headerActions={<FileAnnotationPreview reference={reference}/>}/></QueryClientProvider>);
+		expect(await screen.findByText("CLOUD_STATIC_PREVIEW")).toBeInTheDocument();
+		expect(client.getQueryCache().findAll({queryKey:["file-annotation-source"]})).toHaveLength(0);
+	});
 	it("inserts a contextual suggestion into the normal draft on Tab without sending it", async () => {
 		const onSend = vi.fn();
 		const promptSuggestion = { id: "context-1", text: "Explain the fix." };

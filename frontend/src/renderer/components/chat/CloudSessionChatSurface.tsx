@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { formatCapturedFileReferences } from "../../../shared/chat-file-reference";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
@@ -1131,7 +1132,8 @@ export function CloudSessionChatSurface({
 			} : undefined}
 			steerPending={steer.isPending}
 			showSteerButton
-			onSend={(text, _attachments, clientMessageId) => send.mutateAsync({ text, clientMessageId })}
+			fileReferenceDelivery="text"
+			onSend={(text, _attachments, clientMessageId, _excerpts, fileReferences) => send.mutateAsync({ text: formatCapturedFileReferences(text, fileReferences), clientMessageId })}
 			session={chatSession}
 			settingsReady={!startStopped}
 			onResumeAgent={workspaceFailure ? () => retryStart.mutate() : undefined}

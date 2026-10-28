@@ -1,3 +1,4 @@
+import type { ChatFileReference } from "../../shared/chat-file-reference";
 /**
  * Chat conversation view model.
  *
@@ -163,6 +164,9 @@ export interface TurnDiff {
 
 /** Lightweight, durable prompt content retained when a human message is edited. */
 export interface ConversationContentSummary {
+	fileReference?: ChatFileReference;
+	annotationId?: string;
+	annotationOrder?: number;
 	type: string;
 	mimeType?: string;
 	uri?: string;
@@ -852,6 +856,7 @@ export interface McpServer {
 }
 
 export interface ConversationSnapshot {
+	supportsFileReferences?: boolean;
 	/** Backend-selected dispatched turn; an empty value means Continue is unavailable. */
 	continueTurnId?: string;
 	conversationId: string;

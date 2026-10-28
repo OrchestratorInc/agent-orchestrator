@@ -33,6 +33,7 @@ export function DropdownMenuContent({
 	portalContainer,
 	sideOffset = 6,
 	onPointerDownOutside,
+	onContextMenu,
 	...props
 }: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & {
 	portalContainer?: React.ComponentProps<typeof DropdownMenuPrimitive.Portal>["container"];
@@ -47,6 +48,12 @@ export function DropdownMenuContent({
 				onPointerDownOutside={(event) => {
 					onPointerDownOutside?.(event);
 					if (shield) swallowClickAfter(event);
+				}}
+				onContextMenu={(event) => {
+					onContextMenu?.(event);
+					// Portals bubble React events up the component tree; keep a right-click
+					// here from opening the context menu of a row that renders this menu.
+					event.stopPropagation();
 				}}
 				sideOffset={sideOffset}
 				className={cn(

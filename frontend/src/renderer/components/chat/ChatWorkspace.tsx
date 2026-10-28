@@ -1,3 +1,5 @@
+import { FileAnnotationContext } from "./FileAnnotationPreview";
+import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
@@ -431,11 +433,14 @@ export interface ChatWorkspaceProps {
 	/** The surface's onSend forwards transcript excerpts. Without it, "Add to
 	 * chat" is hidden so a selection cannot be cleared from the draft unsent. */
 	excerptsEnabled?: boolean;
+	fileReferencesEnabled?: boolean;
+	fileReferenceDelivery?: import("../../../shared/chat-file-reference").FileReferenceDelivery;
 	onSend?: (
 		text: string,
 		attachments?: { mimeType: string; data: string }[],
 		clientMessageId?: string,
 		excerpts?: ChatDraftExcerptReference[],
+		fileReferences?: ChatFileReference[],
 	) => void | Promise<unknown>;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
@@ -536,6 +541,7 @@ export interface ChatWorkspaceProps {
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFileAnnotation?: OpenFileAnnotation;
 	/**
 	 * Re-dispatch a failed turn's durable prompt as a new turn. Offered only for
 	 * eligible failed human turns, so the affordance is drawn on the failed-turn
@@ -744,6 +750,8 @@ function ChatWorkspaceContent({
 	loadingOlder,
 	onLoadOlder,
 	excerptsEnabled = false,
+	fileReferencesEnabled = false,
+	fileReferenceDelivery,
 	onSend,
 	onDecide,
 	onResolveInput,
@@ -785,6 +793,7 @@ function ChatWorkspaceContent({
 	rollbackError,
 	onOpenFiles,
 	onOpenFile,
+	onOpenFileAnnotation,
 	retryControl,
 	onEditMessage,
 	editMessagePending,
@@ -829,6 +838,8 @@ function ChatWorkspaceContent({
 	const draftScopeKey = chatDraftScopeKey(draftScope);
 	const uiSessionId = draftScope.sessionId;
 	const activeRemoteHostId = remoteHostId ?? session?.hostId;
+ const fileNavigationGeneration=useRef(0);
+ useEffect(()=>{fileNavigationGeneration.current++;return ()=>{fileNavigationGeneration.current++}},[snapshot.sessionId,activeRemoteHostId,workspaceActiveTabKey]);
 	const remoteCreateMux = useMemo(
 		() => assetBaseUrl ? () => createTerminalMux(muxUrlFromApiBase(assetBaseUrl)) : undefined,
 		[assetBaseUrl],
@@ -1148,7 +1159,7 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[]) => {
+		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[]) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -1199,7 +1210,7 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
-			return onSend?.(text, attachments, clientMessageId, excerpts);
+			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -1727,6 +1738,7 @@ function ChatWorkspaceContent({
 	}, [conversationEmpty]);
 
 	return (
+ <FileAnnotationContext.Provider value={fileReferenceDelivery === "text" ? undefined : { sessionId: snapshot.sessionId, hostId: activeRemoteHostId, onOpen: onOpenFileAnnotation, generation: fileNavigationGeneration }}>
 		<section
 			ref={surfaceRef}
 			onKeyDown={handleChatKeyDown}
@@ -1973,6 +1985,8 @@ function ChatWorkspaceContent({
 										approval={composerApproval}
 										elicitation={composerElicitation}
 										onSend={handleComposerSend}
+						fileReferencesEnabled={fileReferencesEnabled && Boolean(snapshot.supportsFileReferences)}
+						fileReferenceDelivery={fileReferenceDelivery}
 										sentMessages={sentMessages}
 										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
 										draftSeed={composerDraftSeed}
@@ -2116,6 +2130,7 @@ function ChatWorkspaceContent({
 				}}
 			/>
 		</section>
+ </FileAnnotationContext.Provider>
 	);
 }
 
@@ -2920,7 +2935,9 @@ export function Timeline({
 				item.revision === selectionAction.excerpt.revision &&
 				item.text === selectionAction.excerpt.text,
 		);
-		const next = duplicate ? current : [...current, selectionAction.excerpt].slice(-8);
+		if (!duplicate && current.length + (composer.fileReferences?.length ?? 0) >= 8) { setDraftPersistenceError("chat.draft.annotationLimit"); return; }
+  const order = Math.max(Date.now(), ...current.map(item => (item.order ?? 0) + 1), ...(composer.fileReferences ?? []).map(item => item.order + 1));
+  const next = duplicate ? current : [...current, { ...selectionAction.excerpt, order }];
 		const result = writeChatExcerptReferences(draftScope, next);
 		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
 		setSelectionAction(null);
@@ -3458,13 +3475,14 @@ export function Timeline({
 				origin: "human",
 				text: echo.text,
 				continuation: echo.continuation,
-				content: echo.excerpts?.map((excerpt) => ({
+				content: [...(echo.excerpts?.map((excerpt) => ({
+					annotationId: excerpt.id, annotationOrder: excerpt.order,
 					type: "excerpt",
 					text: excerpt.text,
 					sourceConversationId: excerpt.conversationId,
 					sourceMessageId: excerpt.messageId,
 					sourceRevision: excerpt.revision,
-				})),
+				})) ?? []), ...(echo.fileReferences ?? []).map(fileReference => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order }))],
 				streaming: false,
 				delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
 				createdAt: echo.createdAt,

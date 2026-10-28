@@ -696,6 +696,9 @@ function UpdateStatusLine({
 			label = status.netError
 				? t("settings.updates.netErrorRestartGuidance")
 				: status.message ?? t("settings.updates.updateFailed");
+			// Name the build being held back (a full disk refuses staging, a
+			// download failed) so the user still learns what they are missing.
+			detail = status.version ? t("settings.updates.availableVersion", { version: status.version }) : null;
 			break;
 		default:
 			label = t("settings.updates.notChecked");

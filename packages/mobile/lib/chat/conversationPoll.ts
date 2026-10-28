@@ -1,5 +1,4 @@
 import type { ServerConfig } from "../config";
-import { isQuickTunnelHost } from "../staleTunnel";
 
 /**
  * How often the chat screen should re-read its conversation, or null to rely
@@ -15,7 +14,7 @@ import { isQuickTunnelHost } from "../staleTunnel";
  * session list rather than the conversation.
  *
  * A stopgap for the same reason as the main poll: it costs battery and data,
- * and applies only while a quick tunnel is in use; a named tunnel streams.
+ * and applies only while the tunnel is in use.
  *
  * See docs/adr/0004-cloudflare-tunnel-for-remote-mobile-access.md: carrying
  * conversation events over the mux WebSocket removes it.
@@ -23,5 +22,5 @@ import { isQuickTunnelHost } from "../staleTunnel";
 export const CONVERSATION_POLL_MS = 2_000;
 
 export function conversationPollIntervalFor(cfg: ServerConfig | null): number | null {
-	return cfg?.endpointKind === "tunnel" && isQuickTunnelHost(cfg.host) ? CONVERSATION_POLL_MS : null;
+	return cfg?.endpointKind === "tunnel" ? CONVERSATION_POLL_MS : null;
 }

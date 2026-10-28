@@ -74,6 +74,8 @@ type UseBrowserViewOptions = {
 	 * remain visible even if the DB still carries a preview_url.
 	 */
 	terminated?: boolean;
+	/** The daemon tears down native targets when the session ends, even for durable artifacts. */
+	sessionEnded?: boolean;
 	/**
 	 * Preview target driven by the daemon (via `ao preview`, streamed over CDC).
 	 * When set, the view navigates here automatically; an empty value clears it.
@@ -162,7 +164,7 @@ const EMPTY_PROFILE_STATE: BrowserProfileViewState = {
 	temporary: true,
 };
 
-type PreviewTrigger = { revision: number | null; target: string; origin: string };
+type PreviewTrigger = { revision: number | null; target: string; origin: string; sessionEnded: boolean };
 
 // The native view survives React session switches, so remember which preview
 // trigger was already consumed for each session. This prevents switching back
@@ -282,9 +284,12 @@ export function useBrowserView({
 	active,
 	poppedOut,
 	terminated,
+	sessionEnded,
 	previewUrl,
 	previewRevision,
 }: UseBrowserViewOptions): BrowserViewModel {
+	const lifecycleRef = useRef({ sessionId, terminated });
+	lifecycleRef.current = { sessionId, terminated };
 	const [viewId, setViewId] = useState("");
 	const [navState, setNavState] = useState<BrowserNavState>(EMPTY_NAV_STATE);
 	const [annotationMode, setAnnotationModeState] = useState(false);
@@ -488,6 +493,11 @@ export function useBrowserView({
 			window.clearTimeout(tabNoticeTimerRef.current);
 			tabNoticeTimerRef.current = null;
 		}
+		if (terminated) {
+			consumedPreviewTriggers.delete(sessionId);
+			closedTabsBySession.delete(sessionId);
+			return;
+		}
 		if (!hasNativeBrowser) {
 			const state = {
 				...EMPTY_NAV_STATE,
@@ -514,7 +524,12 @@ export function useBrowserView({
 			};
 		}
 		window.ao?.browser.ensure(sessionId, false).then((state) => {
-			if (disposed) return;
+			if (disposed) {
+				if (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated) {
+					window.ao?.browser.destroy(state.viewId);
+				}
+				return;
+			}
 			viewIdRef.current = state.viewId;
 			setViewId(state.viewId);
 			setNavState(state);
@@ -549,11 +564,17 @@ export function useBrowserView({
 					});
 					setAnnotationModeState(false);
 				}
-				sendHiddenBounds(id);
+				if (lifecycleRef.current.sessionId === sessionId && lifecycleRef.current.terminated) {
+					window.ao?.browser.destroy(id);
+				} else {
+					sendHiddenBounds(id);
+				}
 			}
 			viewIdRef.current = "";
 		};
 	}, [
+		sessionEnded,
+		terminated,
 		hasNativeBrowser,
 		scheduleSettleMeasure,
 		sendHiddenBounds,
@@ -1083,9 +1104,12 @@ export function useBrowserView({
 		const source = origin ? `${origin.hostId}:${origin.sessionId}:${origin.proxyBase}` : "local";
 		const revision = typeof previewRevision === "number" ? previewRevision : null;
 		const previous = previewTriggerRef.current;
-		if (previous?.revision === revision && previous.target === target && previous.origin === source) return;
-		if (revision !== null && previous?.revision === revision && previous.origin === source) return;
-		const consumed: PreviewTrigger = { revision, target, origin: source };
+		// Reassert once after daemon teardown, but preserve manual navigation when
+		// revisiting an already-ended artifact session.
+		const sameLifecycle = previous?.sessionEnded === Boolean(sessionEnded);
+		if (sameLifecycle && previous?.revision === revision && previous.target === target && previous.origin === source) return;
+		if (sameLifecycle && revision !== null && previous?.revision === revision && previous.origin === source) return;
+		const consumed: PreviewTrigger = { revision, target, origin: source, sessionEnded: Boolean(sessionEnded) };
 		previewTriggerRef.current = consumed;
 		if (hasNativeBrowser) consumedPreviewTriggers.set(sessionId, consumed);
 		if (target) {
@@ -1101,7 +1125,7 @@ export function useBrowserView({
 			void clear();
 		}
 		return undefined;
-	}, [clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionId, showPreview, terminated, viewId]);
+	}, [clear, hasNativeBrowser, origin?.hostId, origin?.sessionId, origin?.proxyBase, previewRevision, previewUrl, sessionEnded, sessionId, showPreview, terminated, viewId]);
 
 	const destroy = useCallback(() => {
 		const id = viewIdRef.current;
@@ -1119,16 +1143,6 @@ export function useBrowserView({
 		setFindState(EMPTY_FIND_STATE);
 		setClosedTabs([]);
 	}, [sendHiddenBounds]);
-
-	// Termination invalidates the complete session-owned browser, including all
-	// tabs, captures, profile state, and target mappings. `clear` remains the
-	// explicit preview-reset operation.
-	useEffect(() => {
-		if (!terminated || !viewId) return;
-		consumedPreviewTriggers.delete(sessionId);
-		closedTabsBySession.delete(sessionId);
-		destroy();
-	}, [destroy, sessionId, terminated, viewId]);
 
 	// Hook state survives a `sessionId` prop change until the reset effect above
 	// commits. Keep navigation, tab, and activity state hidden during that

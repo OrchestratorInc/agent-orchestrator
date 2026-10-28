@@ -1,30 +1,20 @@
 import { getAccountAccessToken, loadAccount, type Account } from "./account";
 import { ignoredAccountHosts, mutateAccountHosts } from "./accountHostPreferences";
-import { isTailscaleHost } from "./connectionError";
 import { forgetPairedHost } from "./disconnect";
 import { endpointBaseUrl, type Endpoint } from "./endpoints";
 import { loadHosts, saveHost, type Host } from "./hosts";
-import { isQuickTunnelHost } from "./staleTunnel";
 
 export { ignoreAccountHost, unignoreAccountHost } from "./accountHostPreferences";
 
 const CONTROL_PLANE = (process.env.EXPO_PUBLIC_AO_CLOUD_API_BASE_URL || "https://api.aoagents.dev").replace(/\/$/, "");
 type AccountHost = { hostId: string; label: string; url: string; token: string };
 
-// Tunnels are a quick tunnel's name or AO Cloud's fixed address,
-// h-<20 hex>.<zone>, over https. Anything else, a custom domain included, is
-// kept beside the pairing's tunnel rather than in its place.
-function isTunnelAddress(url: URL): boolean {
-	const name = url.hostname.toLowerCase();
-	return url.protocol === "https:" && (isQuickTunnelHost(name) || /^h-[0-9a-f]{20}\.[^.]+\.[^.]+/.test(name));
-}
-
 function endpoint(raw: string): Endpoint | null {
 	try {
 		const url = new URL(raw);
 		if ((url.protocol !== "https:" && url.protocol !== "http:") || !url.hostname || url.username || url.password) return null;
 		return {
-			kind: url.hostname.endsWith(".ts.net") || isTailscaleHost(url.hostname) ? "tailscale" : isTunnelAddress(url) ? "tunnel" : "lan",
+			kind: url.hostname.endsWith(".trycloudflare.com") ? "tunnel" : url.hostname.endsWith(".ts.net") ? "tailscale" : "lan",
 			host: url.hostname,
 			port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
 			secure: url.protocol === "https:",
@@ -79,14 +69,10 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 		headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
 	}, 10_000, signal);
 	if (!response.ok) throw new Error(`Orchestrator Cloud host sync failed (${response.status}).`);
-	// limit is how many machines the account can list; 0 or absent for any number.
-	const { hosts, limit } = response.body as { hosts: AccountHost[]; limit?: number };
+	const { hosts } = response.body as { hosts: AccountHost[] };
 	if (!await current()) return;
 	const paired = await loadHosts();
 	for (const manual of paired.filter((host) => !host.accountUserId && host.id && !hosts.some((item) => item.hostId === host.id))) {
-		// A full account refuses the listing only after the machine has moved
-		// its account token here, cutting off the account that had it.
-		if (limit && hosts.length >= limit) break;
 		for (const address of manual.endpoints) {
 			if (!await current()) return;
 			if ((await ignoredAccountHosts(account.id)).has(manual.id)) break;
