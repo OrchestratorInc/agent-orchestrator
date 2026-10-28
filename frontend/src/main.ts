@@ -2640,6 +2640,14 @@ ipcMain.handle("editorHandoff:getState", (event, sessionId: string, options) => 
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "", { refreshTerminals: options?.refreshTerminals === true });
 });
+ipcMain.handle("editorHandoff:getEditors", (event) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.getEditors();
+});
+ipcMain.handle("editorHandoff:setPreferredEditor", (event, editorId: unknown) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.setPreferredEditor(editorId);
+});
 ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.open(input && typeof input === "object" ? input : { sessionId: "" });

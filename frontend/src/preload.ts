@@ -33,6 +33,8 @@ import type { RemoteHealth } from "./main/remote-request";
 import type {
 	EditorHandoffState,
 	EditorHandoffStateOptions,
+	EditorId,
+	EditorPreferenceState,
 	OpenSessionArtifactsInput,
 	OpenSessionTargetInput,
 	OpenSessionTargetResult,
@@ -417,6 +419,9 @@ const api = {
 	editorHandoff: {
 		getState: (sessionId: string, options?: EditorHandoffStateOptions) =>
 			ipcRenderer.invoke("editorHandoff:getState", sessionId, options) as Promise<EditorHandoffState>,
+		getEditors: () => ipcRenderer.invoke("editorHandoff:getEditors") as Promise<EditorPreferenceState>,
+		setPreferredEditor: (editorId: EditorId) =>
+			ipcRenderer.invoke("editorHandoff:setPreferredEditor", editorId) as Promise<EditorId>,
 		open: (input: OpenSessionTargetInput) =>
 			ipcRenderer.invoke("editorHandoff:open", input) as Promise<OpenSessionTargetResult>,
 		openArtifacts: (input: OpenSessionArtifactsInput) =>

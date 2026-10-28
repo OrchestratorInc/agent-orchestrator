@@ -56,6 +56,8 @@ const {
 	setAnalyticsOptOut,
 	isMacPlatform,
 	isWindowsPlatform,
+	getEditors,
+	setPreferredEditor,
 } = vi.hoisted(() => ({
 	getUpdate: vi.fn(),
 	setUpdate: vi.fn(),
@@ -87,6 +89,8 @@ const {
 	setAnalyticsOptOut: vi.fn(),
 	isMacPlatform: vi.fn(() => false),
 	isWindowsPlatform: vi.fn(() => true),
+	getEditors: vi.fn(),
+	setPreferredEditor: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -134,6 +138,7 @@ vi.mock("../lib/bridge", () => ({
 			onStatus: updOnStatus,
 		},
 		featureBuilds: { list: featListBuilds, getActive: featGetActive },
+		editorHandoff: { getEditors, setPreferredEditor },
 		telemetry: { getPolicy: getTelemetryPolicy, setEventsEnabled: setTelemetryEvents, onPolicy: onTelemetryPolicy, getBootstrap: vi.fn(), capture: vi.fn(), getAnalyticsOptOut, setAnalyticsOptOut },
 	},
 }));
@@ -185,6 +190,8 @@ beforeEach(async () => {
 		setAnalyticsOptOut,
 		isMacPlatform,
 		isWindowsPlatform,
+		getEditors,
+		setPreferredEditor,
 	]) {
 		m.mockReset();
 	}
@@ -219,6 +226,14 @@ beforeEach(async () => {
 	onTelemetryPolicy.mockReturnValue(() => undefined);
 	getAnalyticsOptOut.mockResolvedValue(false);
 	setAnalyticsOptOut.mockImplementation(async (optedOut: boolean) => optedOut);
+	getEditors.mockResolvedValue({
+		editors: [
+			{ id: "cursor", name: "Cursor", kind: "editor" },
+			{ id: "vscode", name: "VS Code", kind: "editor" },
+		],
+		preferredEditorId: "cursor",
+	});
+	setPreferredEditor.mockImplementation(async (editorId: string) => editorId);
 	// Locale defaults to English so existing copy assertions stay green.
 	await appI18n.changeLanguage("en");
 	useLocaleStore.setState({ locale: "en", loaded: false, saving: false, saveError: false });
@@ -486,6 +501,45 @@ describe("GlobalSettingsForm", () => {
 		await user.click(await screen.findByRole("menuitem", { name: "Git Bash" }));
 
 		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "git-bash" } }));
+	});
+
+	it("picks the default editor from the installed editors and updates every session's cached state", async () => {
+		const user = userEvent.setup();
+		const qc = renderForm("general");
+		qc.setQueryData(["editor-handoff", "sess-1"], { targets: [], preferredEditorId: "cursor", workspaceAvailable: true });
+		const selector = await screen.findByLabelText("Default editor");
+		await waitFor(() => expect(selector).toHaveTextContent("Cursor"));
+
+		await user.click(selector);
+		await user.click(await screen.findByRole("menuitem", { name: "VS Code" }));
+
+		await waitFor(() => expect(setPreferredEditor).toHaveBeenCalledWith("vscode"));
+		await waitFor(() => expect(selector).toHaveTextContent("VS Code"));
+		expect(qc.getQueryData(["editor-handoff", "sess-1"])).toMatchObject({ preferredEditorId: "vscode" });
+	});
+
+	it("says when the stored default editor is not installed instead of showing another one", async () => {
+		getEditors.mockResolvedValue({ editors: [{ id: "vscode", name: "VS Code", kind: "editor" }], preferredEditorId: "cursor" });
+		renderForm("general");
+
+		expect(await screen.findByText("The default editor is not installed on this computer. Choose another one.")).toBeInTheDocument();
+		expect(screen.getByLabelText("Default editor")).toHaveTextContent("Choose editor");
+	});
+
+	it("keeps the current default editor and reports a save failure", async () => {
+		setPreferredEditor.mockRejectedValue(
+			new Error("Error invoking remote method 'editorHandoff:setPreferredEditor': Error: That editor is not installed. Choose another option."),
+		);
+		const user = userEvent.setup();
+		renderForm("general");
+		const selector = await screen.findByLabelText("Default editor");
+		await waitFor(() => expect(selector).toHaveTextContent("Cursor"));
+
+		await user.click(selector);
+		await user.click(await screen.findByRole("menuitem", { name: "VS Code" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("Could not save the default editor.");
+		expect(selector).toHaveTextContent("Cursor");
 	});
 
 	it("discards an uncommitted custom shell path when editing is cancelled", async () => {
