@@ -94,9 +94,6 @@ test("untouched Chat reports interface refusal and can dismiss and retry @T0", a
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
 	await expect(page.getByRole("region", { name: "Chat" })).toBeVisible();
 	const switchToTerminal = async () => {
-		// The session tab's menu takes the agent icon's slot on hover, like every
-		// other tab's close control.
-		await page.getByRole("tablist", { name: "Chat tabs" }).getByRole("tab", { name: /^Chat switch worker/ }).hover();
 		await page.getByRole("button", { name: "Session actions" }).click();
 		await page.getByRole("menuitem", { name: "Switch to terminal UI" }).click();
 	};

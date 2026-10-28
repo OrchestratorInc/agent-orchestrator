@@ -110,7 +110,6 @@ describe("ShellTerminalTab rename", () => {
 			"absolute",
 			"left-2",
 			"opacity-0",
-			"pointer-events-none",
 			"group-hover:opacity-100",
 		);
 		expect(closeButton).not.toHaveClass("transition-opacity", "transition-[opacity,background,color]");

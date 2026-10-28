@@ -60,7 +60,7 @@ export function TerminalTabFrame({
 				>
 					<span
 						className={cn(
-							"grid size-icon-base shrink-0 place-items-center",
+							"pointer-events-none grid size-icon-base shrink-0 place-items-center",
 							action && (actionPinned ? "opacity-0" : "group-hover:opacity-0 group-focus-within:opacity-0 group-has-[[data-state=open]]:opacity-0 in-data-dragging:opacity-0"),
 						)}
 					>
@@ -73,9 +73,11 @@ export function TerminalTabFrame({
 				<span
 					className={cn(
 						"absolute left-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center",
+						// Hit-testable even while faded: a pointer reveals it on the way in,
+						// so the control, never the icon under it, takes the click.
 						actionPinned
 							? undefined
-							: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100 in-data-dragging:opacity-100",
+							: "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 has-[[data-state=open]]:opacity-100 in-data-dragging:opacity-100",
 					)}
 					data-terminal-tab-action
 				>
