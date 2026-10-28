@@ -165,7 +165,10 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	if err != nil || len(batch.Reports) == 0 {
 		return err
 	}
-	if batch.hasState(domain.ReportStuck) {
+	// Terminal orchestrators queue typed input during a turn, and a Ctrl-C
+	// there cancels the running turn or a prompt that was just submitted, so
+	// stuck reports are delivered to them like any other report.
+	if batch.hasState(domain.ReportStuck) && domain.NormalizeSessionMode(target.Mode) == domain.SessionModeChat {
 		interrupted := false
 		var nextInterrupt time.Time
 		for _, worker := range batch.stuckWorkers() {

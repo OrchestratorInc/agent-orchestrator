@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -144,6 +145,56 @@ func TestCoordinatorBusyOrchestratorDoesNotHoldUpOtherProjects(t *testing.T) {
 	}
 	if len(delivery.submissions) != 2 || delivery.submissions[1].target != "orch-p" {
 		t.Fatalf("submissions = %#v, want p's report delivered once its composer cleared", delivery.submissions)
+	}
+}
+
+func TestCoordinatorNeverInterruptsTerminalOrchestrator(t *testing.T) {
+	for _, mode := range []domain.SessionMode{domain.SessionModeTUI, ""} {
+		now := time.Date(2026, 10, 28, 2, 10, 0, 0, time.UTC)
+		store := newCoordinatorStore(now)
+		store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: mode}}
+		first := reportAt("stuck-1", "worker", now, now, "cannot continue")
+		first.State = domain.ReportStuck
+		store.add(first)
+		delivery := &coordinatorDelivery{}
+		c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+		if _, err := c.RunDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(delivery.interrupts) != 0 || len(delivery.submissions) != 1 {
+			t.Fatalf("mode %q: interrupts = %v, submissions = %d", mode, delivery.interrupts, len(delivery.submissions))
+		}
+		repeat := reportAt("stuck-2", "worker", now.Add(time.Minute), now, "still cannot continue")
+		repeat.State = domain.ReportStuck
+		store.add(repeat)
+		if _, err := c.RunDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(delivery.interrupts) != 0 || len(delivery.submissions) != 2 {
+			t.Fatalf("mode %q repeat: interrupts = %v, submissions = %d", mode, delivery.interrupts, len(delivery.submissions))
+		}
+	}
+}
+
+func TestCoordinatorRetriesTerminalStuckReportWithoutInterrupt(t *testing.T) {
+	now := time.Date(2026, 10, 28, 2, 10, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI}}
+	stuck := reportAt("stuck-1", "worker", now, now, "cannot continue")
+	stuck.State = domain.ReportStuck
+	store.add(stuck)
+	delivery := &coordinatorDelivery{submitErr: errors.New("composer is not empty")}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	for i := 0; i < 3; i++ {
+		_, _ = c.RunDue(context.Background())
+		now = now.Add(time.Minute)
+	}
+	delivery.submitErr = nil
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.interrupts) != 0 || len(delivery.submissions) != 1 {
+		t.Fatalf("interrupts = %v, submissions = %d", delivery.interrupts, len(delivery.submissions))
 	}
 }
 
