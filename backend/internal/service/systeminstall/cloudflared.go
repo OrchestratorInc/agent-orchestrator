@@ -114,16 +114,18 @@ func (s *Service) cloudflaredDownloadPlan() (Plan, bool) {
 func (s *Service) runCloudflaredDownload(parent context.Context, download ports.ManagedBinaryDownload, job *Job) {
 	var path string
 	var err error
+	// Every try fits in one install timeout, so a slow link cannot keep the
+	// job running for an hour.
+	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
+	defer cancel()
 	for try := 0; ; try++ {
-		ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 		path, err = s.managedBinaries.InstallManagedBinary(ctx, download)
-		cancel()
 		// A rejected download, the wrong bytes, would be the same again.
-		if err == nil || parent.Err() != nil || errors.Is(err, ports.ErrDownloadRejected) || try >= len(s.downloadWaits) {
+		if err == nil || ctx.Err() != nil || errors.Is(err, ports.ErrDownloadRejected) || try >= len(s.downloadWaits) {
 			break
 		}
 		select {
-		case <-parent.Done():
+		case <-ctx.Done():
 		case <-time.After(s.downloadWaits[try]):
 		}
 	}

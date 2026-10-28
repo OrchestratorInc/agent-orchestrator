@@ -88,7 +88,7 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 		return 0, err
 	}
 	for _, c := range candidates {
-		if sweepCandidate(ctx, store, cf, c, now, fail) {
+		if sweepCandidate(ctx, store, cf, c, cutoff, now, fail) {
 			done++
 		}
 	}
@@ -118,8 +118,17 @@ func Sweep(ctx context.Context, store SweepStore, cf *Cloudflare, now time.Time)
 // sweepCandidate deletes one candidate's tunnel and DNS record, unless its
 // machine still serves it or its account lists the host again. It reports
 // whether it deleted them.
-func sweepCandidate(ctx context.Context, store SweepStore, cf *Cloudflare, c domain.RemoteHostTunnelCandidate, now time.Time, fail func(error)) bool {
+func sweepCandidate(ctx context.Context, store SweepStore, cf *Cloudflare, c domain.RemoteHostTunnelCandidate, cutoff, now time.Time, fail func(error)) bool {
 	defer cf.Lock(c.UserID, c.HostID)()
+	// Read again under the lock: the machine may have fetched its token, or
+	// got a new tunnel, since the candidates were read.
+	row, found, err := store.FindRemoteHostTunnel(ctx, c.TunnelID)
+	if err != nil || !found || (c.Registered && !row.LastSeenAt.Before(cutoff)) {
+		if err != nil {
+			fail(err)
+		}
+		return false
+	}
 	// A machine whose daemon cannot reach AO Cloud may still be serving.
 	if c.Registered && !c.Released {
 		online, err := cf.Online(ctx, c.TunnelID)

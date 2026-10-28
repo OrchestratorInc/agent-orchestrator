@@ -44,7 +44,10 @@ export const cloudCpFetch: typeof fetch = async (input, init) => {
 };
 
 function abortable<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
-	if (signal.aborted) return Promise.reject(signal.reason);
+	if (signal.aborted) {
+		pending.catch(() => undefined); // its outcome no longer has a reader
+		return Promise.reject(signal.reason);
+	}
 	return new Promise<T>((resolve, reject) => {
 		const abort = () => reject(signal.reason);
 		signal.addEventListener("abort", abort, { once: true });

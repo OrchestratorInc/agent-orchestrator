@@ -450,6 +450,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSuccess: invalidate,
 	});
 
+	// Off is a pause: the computer stays in the account at its fixed address,
+	// and on brings it back there. Allow access is where it leaves the account.
 	const disable = useMutation({
 		mutationFn: async () => {
 			const { error } = await apiClient.POST("/api/v1/mobile/disable");

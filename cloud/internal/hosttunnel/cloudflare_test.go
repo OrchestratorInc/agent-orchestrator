@@ -332,8 +332,16 @@ func (s *fakeSweepStore) RemoteHostListed(_ context.Context, _, hostID string) (
 }
 
 func (s *fakeSweepStore) FindRemoteHostTunnel(_ context.Context, tunnelID string) (domain.RemoteHostTunnel, bool, error) {
-	row, ok := s.rows[tunnelID]
-	return row, ok, nil
+	if row, ok := s.rows[tunnelID]; ok {
+		return row, true, nil
+	}
+	// A candidate's row, as the listing read it: last seen long ago.
+	for _, c := range s.candidates {
+		if c.TunnelID == tunnelID && !slices.Contains(s.deleted, tunnelID) {
+			return domain.RemoteHostTunnel{UserID: c.UserID, HostID: c.HostID, TunnelID: c.TunnelID, Hostname: c.Hostname, Released: c.Released}, true, nil
+		}
+	}
+	return domain.RemoteHostTunnel{}, false, nil
 }
 
 func (s *fakeSweepStore) ListRemoteHostTunnelSweepCandidates(context.Context, time.Time, time.Time) ([]domain.RemoteHostTunnelCandidate, error) {
@@ -368,8 +376,12 @@ func TestSweepDeletesOnlyWhatIsGone(t *testing.T) {
 		{HostID: "missing", TunnelID: "missing", Hostname: "h-missing.example.dev", Registered: true},
 		{HostID: "orphan", TunnelID: "orphan", Hostname: "h-orphan.example.dev"},
 		{HostID: "relisted", TunnelID: "relisted", Hostname: "h-relisted.example.dev"},
+		{HostID: "back", TunnelID: "back", Hostname: "h-back.example.dev", Registered: true},
 		{HostID: "released", TunnelID: "released", Hostname: "h-released.example.dev", Registered: true, Released: true},
-	}, relisted: map[string]bool{"relisted": true}}
+	}, relisted: map[string]bool{"relisted": true},
+		// Seen after the candidates were read: back after 90 days away.
+		rows: map[string]domain.RemoteHostTunnel{"back": {HostID: "back", TunnelID: "back", Hostname: "h-back.example.dev", LastSeenAt: now}}}
+	cf.tunnels["back"] = fakeTunnel{name: "ao-back", status: "down", inactive: &long}
 	cf.tunnels["relisted"] = fakeTunnel{name: "ao-relisted", status: "healthy"}
 	done, err := Sweep(context.Background(), store, c, now)
 	if err != nil {
@@ -377,6 +389,9 @@ func TestSweepDeletesOnlyWhatIsGone(t *testing.T) {
 	}
 	if _, ok := cf.tunnels["relisted"]; !ok {
 		t.Fatal("a host listed again during the sweep lost its tunnel")
+	}
+	if _, ok := cf.tunnels["back"]; !ok {
+		t.Fatal("a machine seen again during the sweep lost its tunnel")
 	}
 	if done != 4 || strings.Join(store.deleted, ",") != "stale,missing,orphan,released" || strings.Join(store.touched, ",") != "online" {
 		t.Fatalf("done %d, deleted %v, touched %v", done, store.deleted, store.touched)

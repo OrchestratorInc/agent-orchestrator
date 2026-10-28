@@ -174,6 +174,13 @@ func (s *remoteHostTunnelFakeStore) SaveRemoteHostTunnel(_ context.Context, t do
 	s.tunnels[t.UserID+":"+t.HostID] = t
 	return t.CreatedAt, nil
 }
+func (s *remoteHostTunnelFakeStore) MarkRemoteHostTunnelLinked(_ context.Context, userID, hostID string) error {
+	if t, ok := s.tunnels[userID+":"+hostID]; ok {
+		t.UpdatedAt = time.Now()
+		s.tunnels[userID+":"+hostID] = t
+	}
+	return nil
+}
 func (s *remoteHostTunnelFakeStore) TouchRemoteHostTunnel(context.Context, string, time.Time) error {
 	return nil
 }

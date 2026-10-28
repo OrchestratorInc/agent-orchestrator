@@ -165,6 +165,15 @@ func (s *Store) SaveRemoteHostTunnel(ctx context.Context, t domain.RemoteHostTun
 	return since, err
 }
 
+// MarkRemoteHostTunnelLinked records that the account linked the host to its
+// tunnel again, which starts the hold on quick addresses.
+func (s *Store) MarkRemoteHostTunnelLinked(ctx context.Context, userID, hostID string) error {
+	return s.withService(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET updated_at = now() WHERE user_id = $1 AND host_id = $2`, userID, hostID)
+		return err
+	})
+}
+
 func (s *Store) TouchRemoteHostTunnel(ctx context.Context, tunnelID string, seenAt time.Time) error {
 	return s.withService(ctx, func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx, `UPDATE ao_remote_host_tunnels SET last_seen_at = $2 WHERE tunnel_id = $1`, tunnelID, seenAt)

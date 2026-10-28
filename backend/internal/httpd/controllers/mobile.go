@@ -766,12 +766,10 @@ func (b *BridgeService) enableWithPasswordLocked(pw string, noPublicTunnel, loop
 		b.LAN.SetPasswordHash(nextHash)
 	}
 	if accountTokenHash != prevSt.AccountTokenHash {
-		b.nudgeTunnel() // the new password revoked the account link
-	}
-	if accountTokenHash != prevSt.AccountTokenHash {
 		if setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) }); ok {
 			setter.SetAccountTokenHash(accountTokenHash)
 		}
+		b.nudgeTunnel() // the new password revoked the account link
 	}
 	// Re-point the proxy at the port Start actually bound. This runs on every
 	// listener start driven through this method — enable and password rotation
@@ -901,7 +899,9 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 		return RemoteHostAccountTokenResponse{}, err
 	}
 	setter.SetAccountTokenHash(state.AccountTokenHash)
-	b.nudgeTunnel() // another account's link has another fixed address
+	// Not nudged here: the device that asked lists the new token at AO Cloud
+	// only after this returns, and asking first would read as a refusal.
+	// Remote access nudges once the device has linked.
 	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token}, nil
 }
 

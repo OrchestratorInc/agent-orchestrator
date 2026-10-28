@@ -33,6 +33,7 @@ type remoteHostAddressStore interface {
 
 type remoteHostTunnelStore interface {
 	GetRemoteHostTunnel(ctx context.Context, userID, hostID string) (domain.RemoteHostTunnel, bool, error)
+	MarkRemoteHostTunnelLinked(ctx context.Context, userID, hostID string) error
 	SaveRemoteHostTunnel(ctx context.Context, tunnel domain.RemoteHostTunnel, recordCreated bool) (time.Time, error)
 	TouchRemoteHostTunnel(ctx context.Context, tunnelID string, seenAt time.Time) error
 	DeleteRemoteHostTunnel(ctx context.Context, tunnelID string) error
@@ -153,6 +154,11 @@ func (s *Server) putRemoteHost(w http.ResponseWriter, r *http.Request) {
 	if input.URL == "" {
 		tunnel, ok := s.hostTunnel(w, r, tunnels, principal.UserID, hostID, false)
 		if !ok {
+			return
+		}
+		// A link, new or again, starts the hold on quick addresses.
+		if err := tunnels.MarkRemoteHostTunnelLinked(r.Context(), principal.UserID, hostID); err != nil {
+			s.writeStoreError(w, r, err)
 			return
 		}
 		input.URL = "https://" + tunnel.Hostname + ":443"
@@ -279,18 +285,30 @@ func (s *Server) updateRemoteHostAddress(w http.ResponseWriter, r *http.Request)
 // remoteHostsForDigest returns the registrations whose host token hashes to
 // the bearer digest. It writes the error response itself when there are none.
 func (s *Server) remoteHostsForDigest(w http.ResponseWriter, r *http.Request, store remoteHostAddressStore, hostID string) ([]domain.RemoteHost, bool) {
-	hash := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	digest, err := hex.DecodeString(hash)
-	if !validRemoteHostID(hostID) || err != nil || len(digest) != sha256.Size {
-		writeError(w, r, http.StatusUnauthorized, "unauthorized", "Invalid host credential.")
-		return nil, false
-	}
-	hosts, err := store.FindRemoteHostRegistrations(r.Context(), hostID)
+	matched, err := s.matchDigest(r.Context(), store, hostID, r.Header.Get("Authorization"))
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return nil, false
 	}
-	matched := []domain.RemoteHost{}
+	if len(matched) == 0 {
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "Invalid host credential.")
+		return nil, false
+	}
+	return matched, true
+}
+
+// matchDigest is the registrations of hostID whose host token hashes to the
+// digest in authorization ("Bearer <hex>"); none for a malformed one.
+func (s *Server) matchDigest(ctx context.Context, store remoteHostAddressStore, hostID, authorization string) ([]domain.RemoteHost, error) {
+	digest, err := hex.DecodeString(strings.TrimPrefix(authorization, "Bearer "))
+	if !validRemoteHostID(hostID) || err != nil || len(digest) != sha256.Size {
+		return nil, nil
+	}
+	hosts, err := store.FindRemoteHostRegistrations(ctx, hostID)
+	if err != nil {
+		return nil, err
+	}
+	var matched []domain.RemoteHost
 	for _, host := range hosts {
 		token, err := s.secretCipher.Decrypt(host.EncryptedToken, host.TokenNonce, "remote-host:"+host.UserID+":"+hostID)
 		if err != nil {
@@ -302,11 +320,7 @@ func (s *Server) remoteHostsForDigest(w http.ResponseWriter, r *http.Request, st
 			matched = append(matched, host)
 		}
 	}
-	if len(matched) == 0 {
-		writeError(w, r, http.StatusUnauthorized, "unauthorized", "Invalid host credential.")
-		return nil, false
-	}
-	return matched, true
+	return matched, nil
 }
 
 // minTunnelRepairInterval spaces the Cloudflare calls one host can cause by
@@ -378,8 +392,19 @@ func (s *Server) remoteHostTunnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	unlock := s.hostTunnels.Lock(host.UserID, hostID)
+	defer unlock()
+	// Asked again under the lock: a removal that ran first must not be
+	// followed by a new tunnel for a host the account no longer lists.
+	again, err := s.matchDigest(r.Context(), registrations, hostID, r.Header.Get("Authorization"))
+	if err != nil {
+		s.writeStoreError(w, r, err)
+		return
+	}
+	if !slices.ContainsFunc(again, func(h domain.RemoteHost) bool { return h.UserID == host.UserID }) {
+		writeError(w, r, http.StatusUnauthorized, "unauthorized", "Invalid host credential.")
+		return
+	}
 	tunnel, ok := s.hostTunnel(w, r, tunnels, host.UserID, hostID, input.Repair)
-	unlock()
 	if !ok {
 		return
 	}

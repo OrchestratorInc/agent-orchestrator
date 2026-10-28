@@ -119,7 +119,7 @@ func (s *FixedTunnelSource) TunnelFor(ctx context.Context, hostID string, repair
 	keep := t
 	keep.Repaired = false
 	if b, err := json.Marshal(cachedNamedTunnel{Key: key, Tunnel: keep}); err == nil && s.CachePath != "" {
-		_ = os.WriteFile(s.CachePath, b, 0o600)
+		_ = writeFileAtomic(s.CachePath, b)
 	}
 	return t, nil
 }
@@ -197,6 +197,23 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 		}
 	}
 	return t, nil
+}
+
+// writeFileAtomic replaces path whole, so a runner stopping while its
+// replacement writes, or a crash, never leaves half a cache.
+func writeFileAtomic(path string, b []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	_, err = tmp.Write(b)
+	if err = errors.Join(err, tmp.Close()); err == nil {
+		err = os.Rename(tmp.Name(), path)
+	}
+	if err != nil {
+		_ = os.Remove(tmp.Name())
+	}
+	return err
 }
 
 // IsHostDigestRefusal reports AO Cloud's own refusal of a host digest: no

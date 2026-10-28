@@ -140,9 +140,11 @@ type CloudflaredLookup struct {
 	EnvPath string
 	// ManagedPath is where AO keeps its own pinned copy (~/.ao/bin/cloudflared).
 	ManagedPath string
-	// ManagedVersion is the release AO pins. A managed copy of another
-	// release, or one that does not run, is not used: the download replaces
-	// it, so a new pin reaches machines that hold an old one. Zero trusts any.
+	// ManagedVersion is the release AO pins. A managed copy that says it is
+	// another release is not used: the download replaces it, so a new pin
+	// reaches machines that hold an old one. One whose version cannot be read
+	// is kept: a slow first scan or a noexec mount would otherwise download it
+	// forever, and running it says what is wrong. Zero trusts any.
 	ManagedVersion CloudflaredVersion
 	LookPath       func(file string) (string, error)
 	Exists         func(path string) bool
@@ -196,7 +198,7 @@ func (l CloudflaredLookup) managedIsPinned() bool {
 		return false
 	}
 	v, ok := l.Version(l.ManagedPath)
-	return ok && v == l.ManagedVersion
+	return !ok || v == l.ManagedVersion
 }
 
 // ManagedCloudflaredPath is where AO keeps its own pinned copy.

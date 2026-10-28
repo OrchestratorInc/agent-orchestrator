@@ -54,15 +54,15 @@ type InstallScriptRunner interface {
 	RunInstallScript(ctx context.Context, command InstallScriptCommand, stdout, stderr io.Writer) (InstallScriptResult, error)
 }
 
-// ManagedBinaryDownload is a daemon-owned release asset installed into AO's
-// own bin directory (<data dir>/bin). SHA256 pins the downloaded bytes and is
-// checked before anything reads them. ArchiveMember names the executable
-// inside a .tar.gz asset; empty means the asset is the executable itself.
 // ErrDownloadRejected marks a managed download whose bytes were wrong (a
 // checksum mismatch, an asset over the size limit, an archive without the
 // binary): trying again would fetch the same.
 var ErrDownloadRejected = errors.New("download rejected")
 
+// ManagedBinaryDownload is a daemon-owned release asset installed into AO's
+// own bin directory (<data dir>/bin). SHA256 pins the downloaded bytes and is
+// checked before anything reads them. ArchiveMember names the executable
+// inside a .tar.gz asset; empty means the asset is the executable itself.
 type ManagedBinaryDownload struct {
 	URL           string
 	SHA256        string
