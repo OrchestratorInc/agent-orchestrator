@@ -538,7 +538,7 @@ export function ArtifactPathCode({ text, children }: { text: string; children: R
 	const href = artifactLinkForPath(text, workspaces);
 	const path = explicitWorkspaceFilePath(text);
 	if (href) return <MarkdownLink href={href} menuPath={path && isAbsoluteFileReference(path) ? path : undefined}>{children}</MarkdownLink>;
-	return path ? <ChatPathMenu path={path}>{children}</ChatPathMenu> : <>{children}</>;
+	return path ? <ChatPathMenu path={path}><span>{children}</span></ChatPathMenu> : <>{children}</>;
 }
 
 function InlineCode({ children, className }: { children?: ReactNode; className?: string }) {
