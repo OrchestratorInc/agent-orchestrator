@@ -26,6 +26,8 @@ type sendMessageRequest struct {
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	Mode            string `json:"mode,omitempty"`
 	ApprovalMode    string `json:"approvalMode,omitempty"`
+	// ComposerEpoch is the composer lease grant the sender holds, 0 for none.
+	ComposerEpoch int64 `json:"composerEpoch,omitempty"`
 }
 
 var chatModelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
@@ -88,7 +90,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", err.Error())
 		return
 	}
-	event, err := s.store.SendMessage(
+	event, err := s.store.SendMessageWithLease(
 		r.Context(),
 		principalFrom(r),
 		orgID,
@@ -96,6 +98,7 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) {
 		key,
 		request.Text,
 		domain.ChatTurnSettings{Model: request.Model, ReasoningEffort: request.ReasoningEffort, Mode: request.Mode, ApprovalMode: request.ApprovalMode},
+		request.ComposerEpoch,
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)
@@ -149,7 +152,7 @@ func (s *Server) steerTurn(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusUnprocessableEntity, "validation_error", "Message text must be between 1 and 65536 bytes.")
 		return
 	}
-	event, err := s.store.SteerTurn(r.Context(), principalFrom(r), orgID, sessionID, turnID, key, request.Text)
+	event, err := s.store.SteerTurn(r.Context(), principalFrom(r), orgID, sessionID, turnID, key, request.Text, request.ComposerEpoch)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
@@ -174,6 +177,11 @@ func (s *Server) replayClientEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	types, err := parseEventTypes(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	events, hasMore, err := s.store.ListClientEvents(
 		r.Context(),
 		principalFrom(r),
@@ -181,6 +189,7 @@ func (s *Server) replayClientEvents(w http.ResponseWriter, r *http.Request) {
 		sessionID,
 		after,
 		limit,
+		types,
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)
@@ -215,6 +224,15 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	types, err := parseEventTypes(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	// Subscribe before the first read so an event committed between that read
+	// and the wait below still wakes this stream.
+	wake, pollEvery, unsubscribe := s.subscribeSessionEvents(sessionID)
+	defer unsubscribe()
 	events, hasMore, err := s.store.ListClientEvents(
 		r.Context(),
 		principalFrom(r),
@@ -222,11 +240,13 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 		sessionID,
 		after,
 		eventPageLimit,
+		types,
 	)
 	if err != nil {
 		s.writeStoreError(w, r, err)
 		return
 	}
+	lastRead := time.Now()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("Connection", "keep-alive")
@@ -237,10 +257,32 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 	if err := flusher.Flush(); err != nil {
 		return
 	}
+	live := s.openLiveFeed(r, orgID, sessionID)
+	defer live.close()
+	if !live.write(w) {
+		return
+	}
 
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
 	lastWrite := time.Now()
+	read := func() bool {
+		events, hasMore, err = s.store.ListClientEvents(
+			r.Context(),
+			principalFrom(r),
+			orgID,
+			sessionID,
+			after,
+			eventPageLimit,
+			types,
+		)
+		lastRead = time.Now()
+		if err != nil {
+			s.logger.Warn("poll event stream", "error", err, "request_id", requestID(r))
+			return false
+		}
+		return true
+	}
 	for {
 		for _, event := range events {
 			if err := writeSSEEvent(w, event); err != nil {
@@ -262,6 +304,7 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 				sessionID,
 				after,
 				eventPageLimit,
+				types,
 			)
 			if err != nil {
 				s.logger.Warn("replay event stream", "error", err, "request_id", requestID(r))
@@ -275,17 +318,36 @@ func (s *Server) streamClientEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-s.drain:
 			return
+		case <-wake:
+			// Fold a burst of wakes into one read per interval; the wake
+			// channel coalesces whatever arrives meanwhile.
+			if wait := sessionEventMinInterval - time.Since(lastRead); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-r.Context().Done():
+					timer.Stop()
+					return
+				case <-s.drain:
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+			if !read() {
+				return
+			}
+		case <-live.wake():
+			if !live.throttle() || !live.write(w) {
+				return
+			}
+		case <-live.refresh():
+			// Also catches a viewer whose replica died without leaving.
+			live.touch()
+			if !live.write(w) {
+				return
+			}
 		case now := <-ticker.C:
-			events, hasMore, err = s.store.ListClientEvents(
-				r.Context(),
-				principalFrom(r),
-				orgID,
-				sessionID,
-				after,
-				eventPageLimit,
-			)
-			if err != nil {
-				s.logger.Warn("poll event stream", "error", err, "request_id", requestID(r))
+			if !read() {
 				return
 			}
 			if len(events) == 0 && now.Sub(lastWrite) >= eventKeepalive {
@@ -311,6 +373,33 @@ func parseEventSequence(value string) (int64, error) {
 		return 0, errors.New("after must be between 0 and 9007199254740991")
 	}
 	return sequence, nil
+}
+
+// maxEventTypes bounds the types filter.
+const maxEventTypes = 32
+
+// parseEventTypes reads the optional types filter: client event types,
+// comma separated (types=workspace.setup,workspace.script.step) or repeated.
+// nil means every client event type. A type the control plane does not serve
+// matches nothing, so a client may ask for one a newer control plane serves.
+func parseEventTypes(r *http.Request) ([]string, error) {
+	var types []string
+	for _, value := range r.URL.Query()["types"] {
+		for _, eventType := range strings.Split(value, ",") {
+			if eventType = strings.TrimSpace(eventType); eventType != "" {
+				types = append(types, eventType)
+			}
+		}
+	}
+	if len(types) > maxEventTypes {
+		return nil, fmt.Errorf("types may name at most %d event types", maxEventTypes)
+	}
+	for _, eventType := range types {
+		if len(eventType) > 64 {
+			return nil, errors.New("types must name event types")
+		}
+	}
+	return types, nil
 }
 
 func parseEventLimit(r *http.Request) (int, error) {

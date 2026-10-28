@@ -427,7 +427,7 @@ function InstallAction({
 				<>
 					{job?.error ? <p className="text-caption text-error">{job.error}</p> : null}
 					{job?.output ? (
-						<pre className="max-h-daemon-failure-details-max overflow-auto rounded-md border border-[var(--color-border-settings-dialog)] bg-[var(--color-bg-settings-input)] px-2 py-1.5 font-mono text-caption leading-relaxed text-settings-muted">
+						<pre className="max-h-daemon-failure-details-max overflow-auto rounded-md border border-(--color-border-settings-input) bg-[var(--color-bg-settings-input)] px-2 py-1.5 font-mono text-caption leading-relaxed text-settings-muted">
 							{job.output}
 						</pre>
 					) : null}
@@ -455,7 +455,7 @@ function ManualCommand({ command, t }: { command: string; t: TFunction }) {
 	};
 
 	return (
-		<div className="flex items-center gap-2 rounded-md border border-[var(--color-border-settings-dialog)] bg-[var(--color-bg-settings-input)] px-2 py-1.5">
+		<div className="flex items-center gap-2 rounded-md border border-(--color-border-settings-input) bg-[var(--color-bg-settings-input)] px-2 py-1.5">
 			<code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-caption text-settings-title">
 				{command}
 			</code>

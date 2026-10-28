@@ -19,6 +19,9 @@ type automationDTO struct {
 	Prompt      string                   `json:"prompt"`
 	Kind        string                   `json:"kind"`
 	Harness     string                   `json:"harness,omitempty"`
+	Model       string                   `json:"model,omitempty"`
+	Mode        string                   `json:"mode,omitempty"`
+	Effort      string                   `json:"effort,omitempty"`
 	RRule       string                   `json:"rrule"`
 	Timezone    string                   `json:"timezone"`
 	Enabled     bool                     `json:"enabled"`

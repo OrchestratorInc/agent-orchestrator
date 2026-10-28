@@ -17,6 +17,14 @@ import (
 
 const githubUserRefreshSkew = 5 * time.Minute
 
+// A replica that won a refresh checks the account with GitHub before it
+// stores the new tokens. A replica whose refresh was rejected waits this long
+// for that write before treating the authorization as revoked.
+var (
+	githubUserRotationWait = 5 * time.Second
+	githubUserRotationPoll = 200 * time.Millisecond
+)
+
 func (s *Service) StartUserAuthorization(
 	ctx context.Context,
 	principal domain.Principal,
@@ -180,25 +188,18 @@ func (s *Service) ClaimUserInstallation(
 	if err != nil {
 		return domain.GitHubInstallation{}, err
 	}
-	if !InstallationSupportsAuthorityProof(providerInstallation) {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
-	}
-	authorized, err := s.client.UserCanAdministerInstallation(
-		ctx,
-		token,
-		providerInstallation,
-	)
+	// Someone who does not administer the installation (a GitHub organization
+	// member who is not an owner) connects it user-scoped: only the
+	// repositories they can access, in an organization that is theirs alone.
+	candidate, err := s.scopedInstallation(ctx, principal, token, providerInstallation)
 	if err != nil {
 		return domain.GitHubInstallation{}, err
-	}
-	if !authorized {
-		return domain.GitHubInstallation{}, postgres.ErrForbidden
 	}
 	installation, err := s.store.BindGitHubInstallation(
 		ctx,
 		principal,
 		orgID,
-		toDomainInstallation(providerInstallation),
+		candidate,
 	)
 	if err != nil {
 		return domain.GitHubInstallation{}, err
@@ -263,11 +264,17 @@ func (s *Service) PrepareScratchRepository(
 	if eligible, _ := scratchInstallationEligibility(providerInstallation); !eligible {
 		return domain.GitHubRepository{}, nil, postgres.ErrForbidden
 	}
+	// Seeing the installation is not administering it: a member who is not
+	// an owner connects it user-scoped, as everywhere else.
+	scoped, err := s.scopedInstallation(ctx, principal, token, providerInstallation)
+	if err != nil {
+		return domain.GitHubRepository{}, nil, err
+	}
 	bound, err := s.store.BindGitHubInstallation(
 		ctx,
 		principal,
 		orgID,
-		toDomainInstallation(providerInstallation),
+		scoped,
 	)
 	if err != nil {
 		return domain.GitHubRepository{}, nil, err
@@ -390,12 +397,30 @@ func (s *Service) githubUserAccessToken(
 		return domain.GitHubUserConnection{}, "", err
 	}
 	rotated, err := s.client.RefreshUserAccessToken(ctx, string(refreshToken))
-	if err != nil {
+	if errors.Is(err, ErrUserAuthorizationRejected) {
+		// Refresh tokens are single use, so another control-plane replica
+		// that refreshed first makes this one fail. Use what it stored rather
+		// than discarding a working connection.
+		if current, token, ok := s.awaitRotatedElsewhere(ctx, userID, connection); ok {
+			return current, token, nil
+		}
+		if ctx.Err() != nil {
+			return domain.GitHubUserConnection{}, "", ctx.Err()
+		}
 		_ = s.store.DeleteGitHubUserConnection(ctx, userID)
 		return domain.GitHubUserConnection{}, "", postgres.ErrNotFound
 	}
+	if err != nil {
+		// GitHub did not answer (network, 5xx, a cancelled request): the
+		// connection may still be fine, so keep it and fail this call only.
+		return domain.GitHubUserConnection{}, "", err
+	}
 	user, err := s.client.GetUser(ctx, rotated.Token())
-	if err != nil || user.ID != connection.GitHubUserID {
+	if err != nil {
+		// The old refresh token is spent, so keep the rotated tokens under the
+		// identity already on file rather than losing the connection.
+		user = User{ID: connection.GitHubUserID, Login: connection.GitHubLogin, AvatarURL: connection.GitHubAvatarURL}
+	} else if user.ID != connection.GitHubUserID {
 		_ = s.store.DeleteGitHubUserConnection(ctx, userID)
 		return domain.GitHubUserConnection{}, "", postgres.ErrNotFound
 	}
@@ -409,6 +434,59 @@ func (s *Service) githubUserAccessToken(
 		return domain.GitHubUserConnection{}, "", err
 	}
 	return updated, rotated.Token(), nil
+}
+
+// awaitRotatedElsewhere polls rotatedElsewhere until the replica that won the
+// refresh has stored its tokens, or githubUserRotationWait passes.
+func (s *Service) awaitRotatedElsewhere(
+	ctx context.Context,
+	userID string,
+	connection domain.GitHubUserConnection,
+) (domain.GitHubUserConnection, string, bool) {
+	deadline := time.Now().Add(githubUserRotationWait)
+	for {
+		if current, token, ok := s.rotatedElsewhere(ctx, userID, connection); ok {
+			return current, token, true
+		}
+		if !time.Now().Before(deadline) {
+			return domain.GitHubUserConnection{}, "", false
+		}
+		timer := time.NewTimer(githubUserRotationPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return domain.GitHubUserConnection{}, "", false
+		case <-timer.C:
+		}
+	}
+}
+
+// rotatedElsewhere returns the user's connection when it was refreshed after
+// connection was read (by another replica) and its access token is still
+// usable.
+func (s *Service) rotatedElsewhere(
+	ctx context.Context,
+	userID string,
+	connection domain.GitHubUserConnection,
+) (domain.GitHubUserConnection, string, bool) {
+	current, err := s.store.GitHubUserConnection(ctx, userID)
+	if err != nil || current.GitHubUserID != connection.GitHubUserID ||
+		!current.UpdatedAt.After(connection.UpdatedAt) {
+		return domain.GitHubUserConnection{}, "", false
+	}
+	if current.AccessTokenExpiresAt != nil && !current.AccessTokenExpiresAt.After(time.Now().UTC()) {
+		return domain.GitHubUserConnection{}, "", false
+	}
+	token, err := Decrypt(
+		s.credentialKey,
+		current.AccessTokenCiphertext,
+		current.AccessTokenNonce,
+		githubUserTokenAssociatedData(userID, current.GitHubUserID, "access"),
+	)
+	if err != nil {
+		return domain.GitHubUserConnection{}, "", false
+	}
+	return current, string(token), true
 }
 
 func (s *Service) encryptGitHubUserConnection(

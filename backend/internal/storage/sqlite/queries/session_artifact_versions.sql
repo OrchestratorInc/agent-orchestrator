@@ -19,15 +19,20 @@ WHERE session_id = sqlc.arg(session_id) AND path = sqlc.arg(path);
 
 -- name: InsertSessionArtifactVersion :one
 INSERT INTO session_artifact_versions (
-    session_id, path, version, sha256, size, content_type, mtime, created_at
+    session_id, path, version, sha256, size, content_type, mtime, created_at, source, harness, restored_from
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING *;
 
 -- name: DeleteSessionArtifactVersionsBelow :many
 DELETE FROM session_artifact_versions
 WHERE session_id = sqlc.arg(session_id) AND path = sqlc.arg(path)
   AND version < sqlc.arg(min_version)
+RETURNING sha256;
+
+-- name: DeleteSessionArtifactPathVersions :many
+DELETE FROM session_artifact_versions
+WHERE session_id = sqlc.arg(session_id) AND path = sqlc.arg(path)
 RETURNING sha256;
 
 -- name: DeleteSessionArtifactVersions :exec

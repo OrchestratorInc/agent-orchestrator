@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
-import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides } from "./shared/shortcuts";
+import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, QUIT_CONFIRM_REQUEST_CHANNEL, QUIT_CONFIRM_RESULT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides, type QuitConfirmRequest } from "./shared/shortcuts";
+import { SCROLL_PHASE_CHANNEL, type ScrollPhase } from "./shared/scroll-phase";
+import type { PendingSideClose } from "./shared/side-close";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
 	type ChatDraftBoundaryKind,
@@ -30,6 +32,10 @@ import type { ConnectedHostView } from "./main/remote-registry";
 import type { RemoteHealth } from "./main/remote-request";
 import type {
 	EditorHandoffState,
+	EditorHandoffStateOptions,
+	EditorId,
+	EditorPreferenceState,
+	OpenSessionArtifactsInput,
 	OpenSessionTargetInput,
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
@@ -55,10 +61,6 @@ import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import type { UpdateCheckOptions } from "./main/auto-updater";
 import type { FeatureBuild } from "./main/feature-builds";
-import {
-	AGENT_SWITCH_VISIBILITY_IPC_CHANNEL,
-	type AgentSwitchVisibilitySignalBody,
-} from "./shared/agent-switch-observability";
 import type {
 	BrowserAnnotationActionInput,
 	BrowserAnnotationCancelPayload,
@@ -71,6 +73,8 @@ import type {
 import type {
 	BrowserProfile,
 	BrowserProfileListState,
+	BrowserProfileUsageResult,
+	BrowserProfileDeleteResult,
 	BrowserProfileMenuInput,
 	BrowserProfileSelectInput,
 	BrowserProfileViewState,
@@ -233,6 +237,16 @@ const api = {
 				ipcRenderer.off(KEYBOARD_SHORTCUTS_HELP_CHANNEL, wrapped);
 			};
 		},
+		// ⌘Q on macOS: show the quit confirm, then answer with resolveQuitConfirm.
+		onQuitConfirmRequest: (listener: (request: QuitConfirmRequest) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, request?: Partial<QuitConfirmRequest>) =>
+				listener({ keepsRunning: request?.keepsRunning === true });
+			ipcRenderer.on(QUIT_CONFIRM_REQUEST_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(QUIT_CONFIRM_REQUEST_CHANNEL, wrapped);
+			};
+		},
+		resolveQuitConfirm: (confirmed: boolean) => ipcRenderer.send(QUIT_CONFIRM_RESULT_CHANNEL, confirmed),
 		// Fired by the main process when ⌘T / Ctrl+T is pressed in any web contents,
 		// including while focus is inside a terminal pane.
 		onNewShellTerminalShortcut: (listener: () => void) => {
@@ -297,6 +311,13 @@ const api = {
 				ipcRenderer.off(APP_SHORTCUT_CHANNEL, wrapped);
 			};
 		},
+		onScrollPhase: (listener: (phase: ScrollPhase) => void) => {
+			const wrapped = (_event: unknown, phase: ScrollPhase) => listener(phase);
+			ipcRenderer.on(SCROLL_PHASE_CHANNEL, wrapped);
+			return () => {
+				ipcRenderer.off(SCROLL_PHASE_CHANNEL, wrapped);
+			};
+		},
 	},
 	terminal: {
 		saveDroppedFile: (input: { name: string; bytes: Uint8Array }) =>
@@ -357,6 +378,21 @@ const api = {
 	clipboard: {
 		writeText: (text: string) => ipcRenderer.invoke("clipboard:writeText", text) as Promise<void>,
 		readText: () => ipcRenderer.invoke("clipboard:readText") as Promise<string>,
+		writeImage: (bytes: Uint8Array) => ipcRenderer.invoke("clipboard:writeImage", bytes) as Promise<void>,
+	},
+	chatImage: {
+		fetch: (url: string) => ipcRenderer.invoke("chatImage:fetch", url) as Promise<{ bytes: Uint8Array; mimeType: string }>,
+		save: (input: { name: string; bytes: Uint8Array }) => ipcRenderer.invoke("chatImage:save", input) as Promise<boolean>,
+	},
+	cloudArtifact: {
+		fetch: (url: string) => ipcRenderer.invoke("cloudArtifact:fetch", url) as Promise<Uint8Array>,
+		onFrameNavigated: (listener: (navigation: { url: string; status: number }) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, navigation: { url: string; status: number }) => listener(navigation);
+			ipcRenderer.on("cloudArtifact:frameNavigated", wrapped);
+			return () => {
+				ipcRenderer.off("cloudArtifact:frameNavigated", wrapped);
+			};
+		},
 	},
 	daemon: {
 		getStatus: () => ipcRenderer.invoke("daemon:getStatus") as Promise<DaemonStatus>,
@@ -373,12 +409,23 @@ const api = {
 	},
 	sideChats: {
 		capture: (closedSideId?: string, cancelClose = false) => ipcRenderer.invoke("sideChats:capture", closedSideId, cancelClose) as Promise<void>,
+		confirmClose: (sideId: string, alreadyClosed = false) => ipcRenderer.invoke("sideChats:confirmClose", sideId, alreadyClosed) as Promise<void>,
+		getPendingCloses: (sessionId: string) => ipcRenderer.invoke("sideChats:pendingCloses", sessionId) as Promise<PendingSideClose[]>,
+		onPendingClosesChanged: (listener: () => void) => {
+			ipcRenderer.on("sideChats:pendingClosesChanged", listener);
+			return () => { ipcRenderer.removeListener("sideChats:pendingClosesChanged", listener); };
+		},
 	},
 	editorHandoff: {
-		getState: (sessionId: string) =>
-			ipcRenderer.invoke("editorHandoff:getState", sessionId) as Promise<EditorHandoffState>,
+		getState: (sessionId: string, options?: EditorHandoffStateOptions) =>
+			ipcRenderer.invoke("editorHandoff:getState", sessionId, options) as Promise<EditorHandoffState>,
+		getEditors: () => ipcRenderer.invoke("editorHandoff:getEditors") as Promise<EditorPreferenceState>,
+		setPreferredEditor: (editorId: EditorId) =>
+			ipcRenderer.invoke("editorHandoff:setPreferredEditor", editorId) as Promise<EditorId>,
 		open: (input: OpenSessionTargetInput) =>
 			ipcRenderer.invoke("editorHandoff:open", input) as Promise<OpenSessionTargetResult>,
+		openArtifacts: (input: OpenSessionArtifactsInput) =>
+			ipcRenderer.invoke("editorHandoff:openArtifacts", input) as Promise<OpenSessionTargetResult>,
 		copyWorkspacePath: (sessionId: string) =>
 			ipcRenderer.invoke("editorHandoff:copyWorkspacePath", sessionId) as Promise<void>,
 	},
@@ -388,6 +435,17 @@ const api = {
 			if (bootstrap && currentTelemetryPolicy) currentTelemetryPolicy = { ...currentTelemetryPolicy, eventsEnabled: bootstrap.eventsEnabled, consentGeneration: bootstrap.consentGeneration };
 			return bootstrap;
 		},
+		getAnalyticsOptOut: () => ipcRenderer.invoke("telemetry:getAnalyticsOptOut") as Promise<boolean>,
+		setAnalyticsOptOut: (optedOut: boolean) => ipcRenderer.invoke("telemetry:setAnalyticsOptOut", optedOut) as Promise<boolean>,
+		onAnalyticsOptOut: (listener: (optedOut: boolean) => void) => {
+			const wrapped = (_event: unknown, optedOut: boolean) => listener(optedOut);
+			ipcRenderer.on("telemetry:analyticsOptOutChanged", wrapped);
+			return () => {
+				ipcRenderer.off("telemetry:analyticsOptOutChanged", wrapped);
+			};
+		},
+		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
+		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;
 			currentTelemetryPolicy = view;
@@ -401,17 +459,12 @@ const api = {
 			if (!currentTelemetryPolicy) return Promise.resolve(false);
 			return ipcRenderer.invoke("telemetry:capture", { ...input, consentGeneration: currentTelemetryPolicy.consentGeneration }) as Promise<boolean>;
 		},
-		signalAgentSwitchVisibility: (signal: AgentSwitchVisibilitySignalBody) => {
-			if (!currentTelemetryPolicy) return false;
-			ipcRenderer.send(AGENT_SWITCH_VISIBILITY_IPC_CHANNEL, { consentGeneration: currentTelemetryPolicy.consentGeneration, signal });
-			return true;
-		},
 	},
 	browser: {
 		reconnectRuntime: () => ipcRenderer.invoke("browser:runtime:reconnect") as Promise<void>,
 		getRuntimeState: () => ipcRenderer.invoke("browser:runtime:state") as Promise<BrowserRuntimeState>,
 		nativeCompositionEnabled: true,
-		ensure: (sessionId: string) => ipcRenderer.invoke("browser:ensure", sessionId) as Promise<BrowserNavState>,
+		ensure: (sessionId: string, createInitialTab = true) => ipcRenderer.invoke("browser:ensure", sessionId, createInitialTab) as Promise<BrowserNavState>,
 		setBounds: (input: BrowserBoundsInput) => ipcRenderer.send("browser:setBounds", input),
 		onBoundsApplied: (listener: (result: BrowserBoundsApplied) => void) => {
 			const wrapped = (_event: Electron.IpcRendererEvent, result: BrowserBoundsApplied) => listener(result);
@@ -599,7 +652,9 @@ const api = {
 		rename: (input: { id: string; name: string }) =>
 			ipcRenderer.invoke("browserProfiles:rename", input) as Promise<BrowserProfile>,
 		clear: (id: string) => ipcRenderer.invoke("browserProfiles:clear", { id }) as Promise<void>,
-		delete: (id: string) => ipcRenderer.invoke("browserProfiles:delete", { id }) as Promise<void>,
+		usage: (id: string) => ipcRenderer.invoke("browserProfiles:usage", { id }) as Promise<BrowserProfileUsageResult>,
+		delete: (id: string, confirmedViewIds: string[]) => ipcRenderer.invoke("browserProfiles:delete", { id, confirmedViewIds }) as Promise<BrowserProfileDeleteResult>,
+		setDefault: (id: string | null) => ipcRenderer.invoke("browserProfiles:setDefault", { id }) as Promise<void>,
 		discoverImportSources: (input?: BrowserImportDiscoveryRequest) =>
 			(input === undefined
 				? ipcRenderer.invoke("browserProfiles:import:discover")
@@ -725,10 +780,18 @@ const api = {
 		remove: (url: string) => ipcRenderer.invoke("remotes:remove", url) as Promise<void>,
 		connect: (url: string, hostId?: string) => ipcRenderer.invoke("remotes:connect", url, hostId) as Promise<ConnectedHostView>,
 		disconnect: (url: string) => ipcRenderer.invoke("remotes:disconnect", url) as Promise<void>,
+		// The name this machine is listed under on the account's other devices.
+		computerName: () => ipcRenderer.invoke("remotes:computerName") as Promise<string>,
 		previewUrl: (hostId: string, sessionId: string, sourceUrl: string) =>
 			ipcRenderer.invoke("remotes:previewUrl", hostId, sessionId, sourceUrl) as Promise<string>,
 		resolvePreviewUrl: (hostId: string, sessionId: string, viewedUrl: string) =>
 			ipcRenderer.invoke("remotes:resolvePreviewUrl", hostId, sessionId, viewedUrl) as Promise<string>,
+		// The host's agent browser for the session's agent tab ("" when none).
+		agentBrowserUrl: (hostId: string, sessionId: string) =>
+			ipcRenderer.invoke("remotes:agentBrowserUrl", hostId, sessionId) as Promise<string>,
+		// A preview's address for a browser outside AO; any other URL unchanged.
+		externalUrl: (hostId: string, url: string) =>
+			ipcRenderer.invoke("remotes:externalUrl", hostId, url) as Promise<string>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,
@@ -757,6 +820,16 @@ const api = {
 				ipcRenderer.off("cloud:sessionChanged", wrapped);
 			};
 		},
+		// A shared session's link opened while the app runs (ao-app://share/...).
+		onOpenShareLink: (listener: (url: string) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, url: string) => listener(url);
+			ipcRenderer.on("cloud:openShareLink", wrapped);
+			return () => {
+				ipcRenderer.off("cloud:openShareLink", wrapped);
+			};
+		},
+		// One that arrived before the window was ready, taken once.
+		takePendingShareLink: () => ipcRenderer.invoke("cloud:takePendingShareLink") as Promise<string | null>,
 	},
 	// Cloud control-plane transport. The CP has no CORS and the WorkOS bearer
 	// token lives only in the main process, so every CP call is proxied through
@@ -770,6 +843,9 @@ const api = {
 		closeStream: (streamId: string) => {
 			ipcRenderer.send("cloudCp:closeStream", streamId);
 		},
+		/** A cloud session's agent browser for its agent tab; "" when its sandbox has none. */
+		agentBrowserUrl: (baseUrl: string, orgId: string, sessionId: string) =>
+			ipcRenderer.invoke("cloudCp:agentBrowserUrl", baseUrl, orgId, sessionId) as Promise<string>,
 		onStreamEvent: (streamId: string, listener: (event: CloudCpStreamEvent) => void) => {
 			const channel = `cloudCp:stream:${streamId}`;
 			const wrapped = (_event: Electron.IpcRendererEvent, event: CloudCpStreamEvent) => listener(event);

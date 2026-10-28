@@ -168,3 +168,53 @@ func TestUnsandboxedChangesPanelKeepsSubmoduleRecursion(t *testing.T) {
 		t.Fatalf("fixture inert: unhardened host git did not run the planted filter: %v", err)
 	}
 }
+
+func TestWorkspaceRevisionResolversCarrySandboxMarking(t *testing.T) {
+	for _, mode := range []domain.SandboxMode{domain.SandboxModeOff, domain.SandboxModePerAgent} {
+		t.Run(string(mode), func(t *testing.T) {
+			repo := newWorkspaceRepo(t)
+			runGit(t, repo, "branch", "-M", "main")
+			runGit(t, repo, "remote", "add", "origin", "https://example.test/acme/repo.git")
+			base := gitHead(t, repo)
+			runGit(t, repo, "switch", "-c", "feature")
+			head := commitWorkspaceFile(t, repo, "feature.txt", "feature\n", "feature")
+			svc := branchViewService(repo)
+			st := svc.store.(*fakeStore)
+			project := st.projects["proj"]
+			project.Config.Sandbox = domain.SandboxConfig{Mode: mode, Image: "node:22"}
+			st.projects["proj"] = project
+			st.prs["ao-1"] = []domain.PullRequest{{Number: 42, URL: "https://example.test/acme/repo/-/merge_requests/42", Provider: "gitlab", Host: "example.test", Repo: "acme/repo", BaseSHA: base, HeadSHA: head}}
+			for _, view := range []WorkspaceView{{Branch: "feature"}, {PRNumber: 42}} {
+				ctx, _, err := svc.resolveWorkspaceView(context.Background(), "ao-1", view)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertSandboxGitContext(t, ctx, repo, mode)
+				ctx, _, _, err = svc.workspaceSelection(context.Background(), "ao-1", view, []string{head}, "", false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertSandboxGitContext(t, ctx, repo, mode)
+				view.ExpectedTipSHA, view.ExpectedBaseSHA = head, base
+				ctx, _, err = svc.snapshotSelection(context.Background(), "ao-1", WorkspaceSelectionRevisionInput{View: view, CommitSHAs: []string{head}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertSandboxGitContext(t, ctx, repo, mode)
+			}
+		})
+	}
+}
+
+func assertSandboxGitContext(t *testing.T, ctx context.Context, repo string, mode domain.SandboxMode) {
+	t.Helper()
+	marked, _ := ctx.Value(sandboxedWorkspaceGitKey{}).(bool)
+	want := mode != domain.SandboxModeOff
+	if marked != want {
+		t.Fatalf("sandbox marking = %v, want %v", marked, want)
+	}
+	args := workspaceGitCommand(ctx, repo, "diff", "HEAD").Args
+	if got := strings.Contains(strings.Join(args, " "), "--ignore-submodules=all"); got != want {
+		t.Fatalf("git argv = %v, want submodule recursion disabled = %v", args, want)
+	}
+}

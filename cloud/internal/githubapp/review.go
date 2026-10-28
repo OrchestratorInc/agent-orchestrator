@@ -118,6 +118,9 @@ func (s *Service) SubmitReview(
 	if err != nil {
 		return domain.ReviewRun{}, err
 	}
+	if err := s.requireUserScopedPush(ctx, orgID, run.PullRequestRepository, repositoryID); err != nil {
+		return domain.ReviewRun{}, err
+	}
 	access, err := s.client.repositoryWriteToken(ctx, installationID, repositoryID)
 	if err != nil {
 		return domain.ReviewRun{}, err

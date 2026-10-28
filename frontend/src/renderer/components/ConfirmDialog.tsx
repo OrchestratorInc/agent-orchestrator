@@ -30,6 +30,7 @@ type ConfirmDialogProps = {
 	/** Options shown between the description and the buttons. */
 	children?: React.ReactNode;
 	busy?: boolean;
+	confirmDisabled?: boolean;
 	error?: string | null;
 	onConfirm: () => void;
 	onOpenChange: (open: boolean) => void;
@@ -49,6 +50,7 @@ export function ConfirmDialog({
 	destructive,
 	children,
 	busy,
+	confirmDisabled,
 	error,
 	onConfirm,
 	onOpenChange,
@@ -72,8 +74,10 @@ export function ConfirmDialog({
 				// DOM tree, so a confirm rendered from inside a clickable row or card
 				// would otherwise also trigger that ancestor's onClick (opening the very
 				// session being confirmed). The modal — dimmed backdrop included — owns
-				// its own clicks. Radix still dismisses on the native pointerdown.
+				// its own clicks, right-clicks included. Radix still dismisses on the
+				// native pointerdown.
 				onClick={(event) => event.stopPropagation()}
+				onContextMenu={(event) => event.stopPropagation()}
 				onOpenAutoFocus={(event) => {
 					// Destructive confirms start on the safe choice, not the close X.
 					const target = destructive ? cancelRef.current : confirmRef.current;
@@ -82,7 +86,7 @@ export function ConfirmDialog({
 					target.focus();
 				}}
 				onCloseAutoFocus={restoreFocusOnClose}
-				overlay={<DialogOverlay onClick={(event) => event.stopPropagation()} />}
+				overlay={<DialogOverlay onClick={(event) => event.stopPropagation()} onContextMenu={(event) => event.stopPropagation()} />}
 			>
 				<DialogClose asChild>
 					<button
@@ -126,7 +130,7 @@ export function ConfirmDialog({
 						type="button"
 						variant="footer-primary"
 						className={cn(compactButtonClass, destructive && "bg-danger-strong hover:bg-danger-strong")}
-						disabled={busy}
+						disabled={busy || confirmDisabled}
 						onClick={onConfirm}
 					>
 						{confirmLabel}

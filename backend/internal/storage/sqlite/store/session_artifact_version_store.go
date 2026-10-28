@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"time"
@@ -48,6 +49,7 @@ func (s *Store) AppendSessionArtifactVersion(ctx context.Context, v domain.Sessi
 		row, err = q.InsertSessionArtifactVersion(ctx, gen.InsertSessionArtifactVersionParams{
 			SessionID: v.SessionID, Path: v.Path, Version: next, Sha256: v.SHA256, Size: v.Size,
 			ContentType: v.ContentType, Mtime: v.ModTime.UnixNano(), CreatedAt: v.CreatedAt,
+			Source: string(cmp.Or(v.Source, domain.ArtifactVersionSourceAgent)), Harness: string(v.Harness), RestoredFrom: v.RestoredFrom,
 		})
 		if err != nil {
 			return err
@@ -77,6 +79,19 @@ func (s *Store) DeleteSessionArtifactVersions(ctx context.Context, id domain.Ses
 	return nil
 }
 
+// DeleteSessionArtifactPathVersions removes every version row of one artifact
+// path, for when the user deletes that file, and returns the removed rows'
+// hashes.
+func (s *Store) DeleteSessionArtifactPathVersions(ctx context.Context, id domain.SessionID, path string) ([]string, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	sums, err := s.qw.DeleteSessionArtifactPathVersions(ctx, gen.DeleteSessionArtifactPathVersionsParams{SessionID: id, Path: path})
+	if err != nil {
+		return nil, fmt.Errorf("delete artifact versions for %s %q: %w", id, path, err)
+	}
+	return sums, nil
+}
+
 // CountSessionArtifactVersionsBySHA counts a session's version rows, across
 // all paths, whose content is the blob named by sha.
 func (s *Store) CountSessionArtifactVersionsBySHA(ctx context.Context, id domain.SessionID, sha string) (int64, error) {
@@ -99,5 +114,6 @@ func sessionArtifactVersionFromGen(r gen.SessionArtifactVersion) domain.SessionA
 	return domain.SessionArtifactVersion{
 		SessionID: r.SessionID, Path: r.Path, Version: r.Version, SHA256: r.Sha256, Size: r.Size,
 		ContentType: r.ContentType, ModTime: time.Unix(0, r.Mtime).UTC(), CreatedAt: r.CreatedAt,
+		Source: domain.ArtifactVersionSource(r.Source), Harness: domain.AgentHarness(r.Harness), RestoredFrom: r.RestoredFrom,
 	}
 }

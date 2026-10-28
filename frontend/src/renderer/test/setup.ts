@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import * as jestDomMatchers from "@testing-library/jest-dom/matchers";
-import { expect } from "vitest";
+import { beforeEach, expect } from "vitest";
 import { appI18n } from "../i18n";
 import { appCatalogs } from "../i18n/all-messages";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
@@ -67,6 +67,17 @@ if (typeof window !== "undefined") {
 		value: ResizeObserverStub,
 	});
 
+	// jsdom has no Web Animations API. Components that animate from a
+	// requestAnimationFrame callback (the file tree's expand slide) would
+	// otherwise throw after their test has already passed.
+	if (typeof HTMLElement.prototype.animate !== "function") {
+		Object.defineProperty(HTMLElement.prototype, "animate", {
+			configurable: true,
+			writable: true,
+			value: () => ({ cancel() {}, finish() {}, addEventListener() {}, removeEventListener() {}, finished: Promise.resolve() }),
+		});
+	}
+
 	Object.defineProperty(window, "matchMedia", {
 		configurable: true,
 		writable: true,
@@ -85,6 +96,8 @@ if (typeof window !== "undefined") {
 	const localStorageStub = (() => {
 		const values = new Map<string, string>();
 		return {
+			get length() { return values.size; },
+			key: (index: number) => [...values.keys()][index] ?? null,
 			clear: () => values.clear(),
 			getItem: (key: string) => values.get(key) ?? null,
 			removeItem: (key: string) => values.delete(key),
@@ -92,10 +105,18 @@ if (typeof window !== "undefined") {
 		};
 	})();
 
-	Object.defineProperty(window, "localStorage", {
-		configurable: true,
-		writable: true,
-		value: localStorageStub,
+	const installLocalStorage = () => {
+		Object.defineProperty(window, "localStorage", {
+			configurable: true,
+			writable: true,
+			value: localStorageStub,
+		});
+	};
+	installLocalStorage();
+	// A test can spy on the getter and return a Storage that has no clear().
+	// The next file's beforeEach calls clear(). Put the stub back first.
+	beforeEach(() => {
+		if (typeof window.localStorage?.clear !== "function") installLocalStorage();
 	});
 
 	HTMLCanvasElement.prototype.getContext = (() => ({})) as unknown as typeof HTMLCanvasElement.prototype.getContext;
@@ -123,6 +144,8 @@ if (typeof window !== "undefined") {
 			onOpenFolderPath: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
+			onQuitConfirmRequest: () => () => undefined,
+			resolveQuitConfirm: () => undefined,
 			onNewShellTerminalShortcut: () => () => undefined,
 			onCloseShellTerminalShortcut: () => () => undefined,
 			setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -133,6 +156,7 @@ if (typeof window !== "undefined") {
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
+			onScrollPhase: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
@@ -160,6 +184,15 @@ if (typeof window !== "undefined") {
 		clipboard: {
 			writeText: async () => undefined,
 			readText: async () => "",
+			writeImage: async () => undefined,
+		},
+		chatImage: {
+			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
+			save: async () => true,
+		},
+		cloudArtifact: {
+			fetch: async () => new Uint8Array(),
+			onFrameNavigated: () => () => undefined,
 		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),
@@ -168,7 +201,7 @@ if (typeof window !== "undefined") {
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
-		sideChats: { capture: async () => undefined },
+		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 	editorHandoff: {
 			getState: async () => ({
 				targets: [
@@ -179,26 +212,35 @@ if (typeof window !== "undefined") {
 				preferredEditorId: "cursor",
 				workspaceAvailable: true,
 			}),
+			getEditors: async () => ({ editors: [{ id: "cursor", name: "Cursor", kind: "editor" }], preferredEditorId: "cursor" }),
+			setPreferredEditor: async (editorId) => editorId,
 			open: async ({ targetId }) => {
 				if (targetId === "file-manager") return { id: "file-manager", name: "Finder", kind: "file_manager" };
 				if (targetId === "terminal") return { id: "terminal", name: "Terminal", kind: "terminal" };
 				return { id: targetId ?? "cursor", name: "Cursor", kind: "editor" };
 			},
+			openArtifacts: async ({ targetId }) => targetId === "terminal"
+				? { id: "terminal", name: "Terminal", kind: "terminal" }
+				: { id: "file-manager", name: "Finder", kind: "file_manager" },
 			copyWorkspacePath: async () => undefined,
 		},
 		telemetry: {
 			getBootstrap: async () => null,
+			getAnalyticsOptOut: async () => false,
+			setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+			onAnalyticsOptOut: () => () => undefined,
+			setCloudUser: async () => false,
+			getGithubLogin: async () => null,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			onPolicy: () => () => false,
 			onClearQueues: () => () => false,
 			capture: async () => false,
-			signalAgentSwitchVisibility: () => false,
 		},
 		browser: {
 			nativeCompositionEnabled: true,
 			reconnectRuntime: async () => undefined,
-			getRuntimeState: async () => ({ connected: false }),
+			getRuntimeState: async () => ({ connected: false, connecting: false, rejected: false }),
 			ensure: async (sessionId: string) => ({
 				viewId: `test:${sessionId}`,
 				url: "",
@@ -313,7 +355,7 @@ if (typeof window !== "undefined") {
 			onAnnotationState: () => () => undefined,
 		},
 		browserProfiles: {
-			list: async () => ({ profiles: [] }),
+			list: async () => ({ profiles: [], defaultProfileId: null }),
 			create: async (name: string) => {
 				const now = new Date().toISOString();
 				return { id: `test-${name}`, name, createdAt: now, updatedAt: now };
@@ -323,7 +365,9 @@ if (typeof window !== "undefined") {
 				return { id, name, createdAt: now, updatedAt: now };
 			},
 			clear: async () => undefined,
-			delete: async () => undefined,
+			usage: async () => ({ sessions: [] }),
+			delete: async () => ({}),
+			setDefault: async () => undefined,
 			discoverImportSources: async () => ({ sources: [] }),
 			import: async () => ({ sourceName: "", entries: [] }),
 			onImportProgress: () => () => undefined,
@@ -389,8 +433,11 @@ if (typeof window !== "undefined") {
 			remove: async () => undefined,
 			connect: async () => { throw new Error("no remote hosts in test bridge"); },
 			disconnect: async () => undefined,
+			computerName: async () => "Test computer",
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
+		agentBrowserUrl: async () => "",
+			externalUrl: async (_hostId: string, url: string) => url,
 		},
 		cloud: {
 			getSession: async () => null,
@@ -406,12 +453,15 @@ if (typeof window !== "undefined") {
 				throw new Error("not available in tests");
 			},
 			onSessionChanged: () => () => undefined,
+			onOpenShareLink: () => () => undefined,
+			takePendingShareLink: async () => null,
 		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),
 			openStream: async () => ({ streamId: "stream_test" }),
 			closeStream: () => undefined,
 			onStreamEvent: () => () => undefined,
+			agentBrowserUrl: async () => "",
 		},
 	};
 } // end if (typeof window !== "undefined")

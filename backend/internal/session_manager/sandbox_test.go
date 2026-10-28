@@ -360,22 +360,6 @@ func TestKillKeepsSharedSandboxWhenSessionListFails(t *testing.T) {
 	}
 }
 
-func TestSwitchAgentRejectsSandboxedSessionBeforeCreatingSaga(t *testing.T) {
-	runtime := &fakeRestartRuntime{fakeRuntime: &fakeRuntime{}}
-	manager, store, _ := newSwitchTestManager(t, runtime)
-	project := store.projects["proj"]
-	project.Config.Sandbox = domain.SandboxConfig{Mode: domain.SandboxModePerAgent, Image: "node:22"}
-	store.projects["proj"] = project
-
-	_, err := switchAgentSynchronously(context.Background(), manager, "proj-1", SwitchAgentConfig{TargetHarness: domain.HarnessCodex, IdempotencyKey: "sandboxed"})
-	if !errors.Is(err, ports.ErrSandboxMisconfigured) {
-		t.Fatalf("switch error = %v, want ErrSandboxMisconfigured", err)
-	}
-	if len(store.switches) != 0 || runtime.restarted != 0 || runtime.destroyed != 0 {
-		t.Fatalf("sandbox rejection had side effects: switches=%d restarts=%d destroys=%d", len(store.switches), runtime.restarted, runtime.destroyed)
-	}
-}
-
 func TestInterfaceTransitionToChatRejectedForSandboxedSession(t *testing.T) {
 	m, st, _, _ := newManager()
 	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: sandboxedConfig(domain.SandboxModePerAgent)}

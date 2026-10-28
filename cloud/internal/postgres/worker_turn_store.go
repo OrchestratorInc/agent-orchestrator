@@ -140,7 +140,7 @@ func (s *Store) ClaimWorkerTurn(
 		// created from a capped share-grant holder's message narrows that
 		// ceiling further, never loosens it. See effectiveMode.
 		turn.Mode = effectiveMode(effectiveMode(turn.Mode, turnModeCap), requestedMode)
-		turn.ApprovalMode = approvalMode
+		turn.ApprovalMode = effectiveApprovalMode(turn.Mode, turn.Harness, approvalMode)
 		turn.DeniedCommands = effectiveDeniedCommands(turn.DeniedCommands, turnDeniedCommands)
 		turn.CancelRequested = state == "cancel_requested"
 		claimed = true
@@ -166,13 +166,22 @@ func (s *Store) ClaimWorkerTurn(
 }
 
 // RequestTurnCancellation records user intent exactly once. Repeated requests
-// are idempotent and do not create duplicate chat events.
+// are idempotent and do not create duplicate chat events. Only someone who
+// may direct the turn (see mayDirectTurnTx) may stop it.
 func (s *Store) RequestTurnCancellation(
 	ctx context.Context,
 	principal domain.Principal,
 	orgID, sessionID, turnID string,
 ) error {
-	return s.withTenant(ctx, principal, orgID, func(tx pgx.Tx) error {
+	return s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
+		if access.Role == "viewer" {
+			return ErrForbidden
+		}
+		if allowed, err := mayDirectTurnTx(ctx, tx, orgID, sessionID, turnID, principal.UserID); err != nil {
+			return err
+		} else if !allowed {
+			return ErrForbidden
+		}
 		var state string
 		err := tx.QueryRow(
 			ctx,
@@ -214,11 +223,14 @@ func (s *Store) RequestTurnCancellation(
 }
 
 // SteerTurn queues guidance for the active worker. Delivery is recorded only
-// after its live provider connection acknowledges the injection.
+// after its live provider connection acknowledges the injection. Like a
+// message, steering needs the composer lease (composerEpoch, 0 for none) and
+// releases it to the next person in line.
 func (s *Store) SteerTurn(
 	ctx context.Context,
 	principal domain.Principal,
 	orgID, sessionID, turnID, idempotencyKey, text string,
+	composerEpoch int64,
 ) (domain.ClientEvent, error) {
 	var event domain.ClientEvent
 	err := s.withSessionAccess(ctx, principal, orgID, sessionID, func(tx pgx.Tx, access sessionAccess) error {
@@ -242,6 +254,9 @@ func (s *Store) SteerTurn(
 		}
 		if err != nil {
 			return normalizeConstraintError(err)
+		}
+		if err := claimComposerForSendTx(ctx, tx, orgID, sessionID, principal.UserID, composerEpoch); err != nil {
+			return err
 		}
 		var state string
 		if err := tx.QueryRow(ctx, `SELECT state FROM ao_turns
@@ -690,4 +705,23 @@ func appendTypedEvent(
 		encoded,
 	)
 	return err
+}
+
+// effectiveApprovalMode drops a turn's approval mode that the turn's
+// effective mode does not allow, as the worker's validateApprovalMode would
+// reject it and fail the turn: none under read-only, bypass only when
+// trusted, and Codex's full access ("default") not under standard. A message
+// from a share grantee capped below the session's mode can carry such a
+// mode, since the request only checks the value. Without one the worker
+// derives the approval from the effective mode.
+func effectiveApprovalMode(mode, harness, approvalMode string) string {
+	switch {
+	case mode == "read-only":
+		return ""
+	case approvalMode == "bypass-permissions" && mode != "trusted":
+		return ""
+	case approvalMode == "default" && mode == "standard" && harness == "codex":
+		return ""
+	}
+	return approvalMode
 }

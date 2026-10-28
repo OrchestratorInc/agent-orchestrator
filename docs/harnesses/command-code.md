@@ -117,6 +117,16 @@ The Chat binding lives in
 `chatdriver/registry`, which is what makes the TUI ⇄ Chat toggle appear for this
 harness.
 
+Standing instructions reach Chat sessions through the first prompt (an embedded
+`ao://agent-orchestrator/standing-instructions` resource), not through hooks:
+the workspace `SessionStart` hook fires only in the TUI lifecycle and `cmd acp`
+never calls it, so installing `.commandcode/settings.json` changes nothing for
+Chat delivery. For the same reason AO never passes `--mod`/`--mod-option` on
+the ACP path: `cmd acp` accepts the flag but silently never loads the mod
+(verified on v1.82.4/v1.83.0 against issue #6784 — the same sentinel mod logs
+under `cmd -p --mod` and logs nothing under `cmd acp`). Passing it would look
+configured while staying inert.
+
 ## Restore
 
 AO restores a Command Code session with `cmd --resume <session-id>` after the
@@ -143,3 +153,8 @@ the terminal.
 
 - Headless `-p`/`--print` sessions. AO runs supervised, multi-turn Terminal UI
   sessions and does not use Command Code's single-turn print mode.
+- Mods on the Chat (`cmd acp`) path: `--mod`/`--mod-option`, `settings.mods.paths`,
+  and `<project>/.commandcode/mods/` are silently ignored there (upstream vendor
+  gap, issue #6784). AO does not pass them for Chat; standing instructions ride
+  the first prompt instead. The `SessionStart` hook likewise never fires under
+  ACP, while `PreToolUse`/`PostToolUse`/`Stop` continue to work.

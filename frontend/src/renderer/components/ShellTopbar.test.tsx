@@ -90,7 +90,6 @@ vi.mock("../lib/telemetry", () => ({
 	captureRendererEvent: vi.fn(),
 	captureRendererException: vi.fn(),
 }));
-vi.mock("./NewTaskDialog", () => ({ NewTaskDialog: () => null }));
 vi.mock("./NotificationCenter", () => ({
 	NotificationCenter: () => <button aria-label="Notifications" type="button" />,
 }));
@@ -132,19 +131,6 @@ function sessionWith(overrides: Partial<WorkspaceSession> = {}): WorkspaceSessio
 	return {
 		...worker,
 		activity: { state: "active", lastActivityAt: "2026-06-10T00:00:00Z" },
-		...overrides,
-	};
-}
-
-function activeAgentSwitch(
-	overrides: Partial<NonNullable<WorkspaceSession["activeAgentSwitch"]>> = {},
-): NonNullable<WorkspaceSession["activeAgentSwitch"]> {
-	return {
-		agentHandoffStatus: "received",
-		fromHarness: "claude-code",
-		id: "switch-1",
-		state: "starting_target",
-		targetHarness: "codex",
 		...overrides,
 	};
 }
@@ -333,7 +319,7 @@ describe("ShellTopbar status pill", () => {
 			true,
 			<>
 				<button type="button">New terminal</button>
-				<button type="button">Switch agent</button>
+				<button type="button">Session option</button>
 				<button type="button">Switch to chat UI</button>
 			</>,
 		);
@@ -344,7 +330,7 @@ describe("ShellTopbar status pill", () => {
 		expect(localActions).toHaveClass("gap-1");
 		expect(localActions).not.toHaveClass("gap-px", "mr-0.5");
 		expect(localActions.contains(screen.getByRole("button", { name: "New terminal" }))).toBe(true);
-		expect(localActions.contains(screen.getByRole("button", { name: "Switch agent" }))).toBe(true);
+		expect(localActions.contains(screen.getByRole("button", { name: "Session option" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Switch to chat UI" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Archive session" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Open orchestrator" }))).toBe(false);
@@ -417,22 +403,6 @@ describe("ShellTopbar status pill", () => {
 
 		expect(screen.queryByText("session/sess-1")).not.toBeInTheDocument();
 		expect(screen.getByText("Working")).toBeInTheDocument();
-	});
-
-	it("shows switch progress instead of the exited source in the status pill", () => {
-		renderTopbar(sessionWith({
-			status: "exited",
-			activity: {
-				state: "exited",
-				lastActivityAt: "2026-06-10T00:00:00Z",
-			},
-			activeAgentSwitch: activeAgentSwitch(),
-		}));
-
-		const pill = screen.getByText("Switching to Codex").closest("span") as HTMLElement;
-		expect(pill).toHaveStyle({ color: "var(--color-status-working)" });
-		expect(pill.querySelector("span")).toHaveClass("animate-status-pulse");
-		expect(screen.queryByText("Exited")).not.toBeInTheDocument();
 	});
 });
 
@@ -573,16 +543,10 @@ describe("ShellTopbar orchestrator actions", () => {
 		expect(spawnMock).not.toHaveBeenCalled();
 	});
 
-	it("opens an exited orchestrator without resuming while its agent switch is active", async () => {
-		const switchingOrchestrator = {
-			...orchestrator,
-			activeAgentSwitch: activeAgentSwitch(),
-			activity: { state: "exited", lastActivityAt: "2026-06-10T00:00:00Z" },
-			status: "exited",
-		} satisfies WorkspaceSession;
-		renderTopbarSessions([worker, switchingOrchestrator], worker.id);
+	it("opens the project orchestrator from the open-orchestrator shortcut", () => {
+		renderTopbarSessions([worker, orchestrator], worker.id);
 
-		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
+		act(() => appShortcutBus.emit({ id: "open-orchestrator" }));
 
 		expect(postMock).not.toHaveBeenCalled();
 		expect(navigateMock).toHaveBeenCalledWith({
@@ -745,7 +709,7 @@ describe("TopbarArchiveButton", () => {
 		await userEvent.click(archiveButton);
 		expect(postMock).not.toHaveBeenCalled();
 		const confirmation = screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
-		expect(confirmation).toHaveClass("left-[50%]", "top-[50%]", "bg-popover", "p-0");
+		expect(confirmation).toHaveClass("left-[50%]", "top-[50%]", "bg-overlay", "p-0");
 		expect(confirmation).toHaveTextContent("You can always restore it from the Archive section later.");
 		expect(within(confirmation).getByRole("button", { name: "No" })).toBeInTheDocument();
 		expect(within(confirmation).getByRole("button", { name: "Confirm, archive session" })).toHaveTextContent("Confirm");

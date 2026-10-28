@@ -140,7 +140,26 @@ type SessionArtifactVersion struct {
 	ContentType string
 	ModTime     time.Time
 	CreatedAt   time.Time
+	// Source is who wrote the version: the agent, or the user through an
+	// artifact save or restore.
+	Source ArtifactVersionSource
+	// Harness is the agent that was running the session when the version was
+	// recorded; empty for a version recorded before this was kept.
+	Harness AgentHarness
+	// RestoredFrom is the version number whose content a restore wrote back;
+	// zero for a version that is not a restore.
+	RestoredFrom int64
 }
+
+// ArtifactVersionSource names who wrote an artifact version.
+type ArtifactVersionSource string
+
+const (
+	// ArtifactVersionSourceAgent marks a version the session's agent wrote.
+	ArtifactVersionSourceAgent ArtifactVersionSource = "agent"
+	// ArtifactVersionSourceUser marks a version saved or restored in the app.
+	ArtifactVersionSourceUser ArtifactVersionSource = "user"
+)
 
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
@@ -155,7 +174,11 @@ type SessionMetadata struct {
 	DiffBaseRef       string `json:"diffBaseRef,omitempty"`
 	RuntimeHandleID   string `json:"runtimeHandleId,omitempty"`
 	RuntimeLaunchID   string `json:"runtimeLaunchId,omitempty"`
-	AgentSessionID    string `json:"agentSessionId,omitempty"`
+	// RuntimeReleasedLaunchID is the launch whose terminal AO destroyed on
+	// purpose while keeping the session (an agent exit). Its runtime's death is
+	// then not a crash. It names one launch, so a new launch is never covered.
+	RuntimeReleasedLaunchID string `json:"-"`
+	AgentSessionID          string `json:"agentSessionId,omitempty"`
 	// AgentSessionIDLaunchID identifies the terminal runtime generation proven to
 	// own AgentSessionID. Usually that proof comes from a provider hook. A
 	// coordinated Chat-to-TUI handoff may also establish it by launching the
@@ -282,6 +305,11 @@ type SessionRecord struct {
 	// HibernatedAt records that the idle Chat controller was stopped while the
 	// session and conversation remain resumable. Nil means no recorded hibernation.
 	HibernatedAt *time.Time `json:"hibernatedAt,omitempty"`
+	// StaleBinary is set while the session's current launch still runs a
+	// harness release an update has since replaced. It is derived when the row
+	// is read: any later launch starts on the installed release and reads as
+	// current without a write.
+	StaleBinary *SessionStaleBinary `json:"staleBinary,omitempty"`
 	// TerminateOnPRMerge is a user-controlled lifecycle policy. When enabled,
 	// completing the session's PR set through a merge tears down the session.
 	TerminateOnPRMerge bool              `json:"terminateOnPrMerge"`
@@ -328,6 +356,51 @@ type SessionRecord struct {
 	// branch-state reconcile writes it only when a fact changes; nil until the first
 	// observation, and a failed git read keeps the last known value.
 	BranchState *SessionBranchState `json:"branchState,omitempty"`
+	// BranchNaming is set while a task's generated branch name is on the way:
+	// from the start of naming until the background rename settles. Clients keep
+	// the temporary branch private meanwhile. Written only by its narrow setter.
+	BranchNaming bool `json:"branchNaming,omitempty"`
+	// TemporaryBranch is the branch a task started on before its generated name
+	// replaced it. The session keeps owning refs under it, and full-row writes
+	// never put it back. Written only by the rename.
+	TemporaryBranch string `json:"-"`
+}
+
+// SessionStaleBinary describes a launch left on a replaced harness release.
+type SessionStaleBinary struct {
+	// Version is the release now installed, which the session moves to.
+	Version string `json:"version" description:"Harness release now installed; the session moves to it on its next launch."`
+	// Since is when an update first left this launch on an older release.
+	Since time.Time `json:"since"`
+	// SwitchFailedAt is set when an automatic move to Version failed. The
+	// session keeps its queued messages and waits for the user to resume it.
+	SwitchFailedAt *time.Time `json:"switchFailedAt,omitempty"`
+}
+
+// SessionWaitReason says why an update that runs when sessions are idle is
+// still waiting for a session.
+type SessionWaitReason string
+
+const (
+	// SessionWaitWorking means the agent is taking a turn.
+	SessionWaitWorking SessionWaitReason = "working"
+	// SessionWaitCommand means the agent runs a command, such as a dev server.
+	SessionWaitCommand SessionWaitReason = "command"
+	// SessionWaitApproval means the agent waits for the user's answer.
+	SessionWaitApproval SessionWaitReason = "approval"
+	// SessionWaitStarting means the session is still starting.
+	SessionWaitStarting SessionWaitReason = "starting"
+	// SessionWaitReviewer means a reviewer runs the harness.
+	SessionWaitReviewer SessionWaitReason = "reviewer"
+	// SessionWaitResume means a terminal could not be started again on its own
+	// conversation, so it is not stopped for the update; it waits until it ends.
+	SessionWaitResume SessionWaitReason = "resume"
+)
+
+// SessionWait is one session an update waits for.
+type SessionWait struct {
+	SessionID SessionID         `json:"sessionId"`
+	Reason    SessionWaitReason `json:"reason" enum:"working,command,approval,starting,reviewer,resume"`
 }
 
 // SessionBranchState is the session branch's commit and push facts.
@@ -473,10 +546,9 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus     DisplayStatus         `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
-	TerminalHandleID  string                `json:"terminalHandleId,omitempty"`
-	ArtifactFiles     []SessionArtifactFile `json:"-"`
-	ActiveAgentSwitch *AgentSwitch          `json:"-"`
+	DisplayStatus    DisplayStatus         `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Interrupted,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	TerminalHandleID string                `json:"terminalHandleId,omitempty"`
+	ArtifactFiles    []SessionArtifactFile `json:"-"`
 	// PRs are the session's attributed pull requests (one session can own many).
 	// They feed status derivation and are surfaced on the API read model. Not
 	// serialized here: the HTTP boundary maps them to the curated wire shape.

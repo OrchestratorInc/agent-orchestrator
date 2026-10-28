@@ -14,7 +14,7 @@ import (
 
 const getAppSettings = `-- name: GetAppSettings :one
 
-SELECT id, default_session_mode, updated_at, cloud_offering FROM app_settings WHERE id = 1
+SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh FROM app_settings WHERE id = 1
 `
 
 // Daemon-owned user preferences. One row, seeded by migration 0042, so a read
@@ -27,8 +27,27 @@ func (q *Queries) GetAppSettings(ctx context.Context) (AppSetting, error) {
 		&i.DefaultSessionMode,
 		&i.UpdatedAt,
 		&i.CloudOffering,
+		&i.HarnessDefaults,
+		&i.VersionRefresh,
 	)
 	return i, err
+}
+
+const resetHarnessDefault = `-- name: ResetHarnessDefault :exec
+UPDATE app_settings
+SET harness_defaults = json_remove(harness_defaults, ?1),
+    updated_at = ?2
+WHERE id = 1
+`
+
+type ResetHarnessDefaultParams struct {
+	HarnessPath interface{}
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) ResetHarnessDefault(ctx context.Context, arg ResetHarnessDefaultParams) error {
+	_, err := q.db.ExecContext(ctx, resetHarnessDefault, arg.HarnessPath, arg.UpdatedAt)
+	return err
 }
 
 const setCloudOffering = `-- name: SetCloudOffering :exec
@@ -56,5 +75,37 @@ type SetDefaultSessionModeParams struct {
 
 func (q *Queries) SetDefaultSessionMode(ctx context.Context, arg SetDefaultSessionModeParams) error {
 	_, err := q.db.ExecContext(ctx, setDefaultSessionMode, arg.DefaultSessionMode, arg.UpdatedAt)
+	return err
+}
+
+const setHarnessDefault = `-- name: SetHarnessDefault :exec
+UPDATE app_settings
+SET harness_defaults = json_set(harness_defaults, ?1, json(?2)),
+    updated_at = ?3
+WHERE id = 1
+`
+
+type SetHarnessDefaultParams struct {
+	HarnessPath interface{}
+	Config      interface{}
+	UpdatedAt   time.Time
+}
+
+func (q *Queries) SetHarnessDefault(ctx context.Context, arg SetHarnessDefaultParams) error {
+	_, err := q.db.ExecContext(ctx, setHarnessDefault, arg.HarnessPath, arg.Config, arg.UpdatedAt)
+	return err
+}
+
+const setVersionRefresh = `-- name: SetVersionRefresh :exec
+UPDATE app_settings SET version_refresh = ?, updated_at = ? WHERE id = 1
+`
+
+type SetVersionRefreshParams struct {
+	VersionRefresh bool
+	UpdatedAt      time.Time
+}
+
+func (q *Queries) SetVersionRefresh(ctx context.Context, arg SetVersionRefreshParams) error {
+	_, err := q.db.ExecContext(ctx, setVersionRefresh, arg.VersionRefresh, arg.UpdatedAt)
 	return err
 }
