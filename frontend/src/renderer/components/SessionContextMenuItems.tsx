@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Archive, Copy, ExternalLink, GitBranch, Pencil, Pin, PinOff, Play } from "lucide-react";
+import { Archive, Code2, Copy, ExternalLink, GitBranch, Pencil, Pin, PinOff, Play } from "lucide-react";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import { canResumeAgent, resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
 import { editorHandoffErrorMessage, useEditorHandoffState, useOpenSessionTarget } from "../hooks/useEditorHandoff";
@@ -114,20 +114,20 @@ export function SessionContextMenuItems({
 	);
 }
 
-/** Open in the preferred editor or file manager, and copy the worktree path:
- *  the same Electron handoff as the session topbar's editor button. */
+/** Open in the default editor and copy the worktree path: the same Electron
+ *  handoff as the session topbar's editor button. The editor row holds its
+ *  place while the lookup runs so the menu does not jump when it resolves. */
 function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 	const { t } = useTranslation();
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
-	const { data: state } = useEditorHandoffState(session.id, {
+	const { data: state, isPending } = useEditorHandoffState(session.id, {
 		sessionCreatedAt: session.createdAt,
 		sessionTerminated: session.isTerminated,
 	});
 	const open = useOpenSessionTarget();
-	if (!state?.workspaceAvailable) return null;
-	const editors = state.targets.filter((target) => target.kind === "editor");
-	const editor = editors.find((target) => target.id === state.preferredEditorId) ?? editors[0];
-	const fileManager = state.targets.find((target) => target.kind === "file_manager");
+	const editor = state?.workspaceAvailable
+		? state.targets.find((target) => target.kind === "editor" && target.id === state.preferredEditorId)
+		: undefined;
 	const launch = (target: OpenTarget) => {
 		open.mutate(
 			{ sessionId: session.id, projectId: session.workspaceId, targetId: target.id },
@@ -146,16 +146,15 @@ function SessionWorkspaceMenuItems({ session }: { session: WorkspaceSession }) {
 	};
 	return (
 		<>
-			{editor ? (
+			{isPending ? (
+				<ContextMenuItem disabled>
+					<Code2 aria-hidden="true" />
+					{t("editor.preparingWorkspace")}
+				</ContextMenuItem>
+			) : editor ? (
 				<ContextMenuItem onSelect={() => launch(editor)}>
 					<TargetIcon target={editor} />
 					{t("editor.openInTarget", { name: editor.name })}
-				</ContextMenuItem>
-			) : null}
-			{fileManager ? (
-				<ContextMenuItem onSelect={() => launch(fileManager)}>
-					<TargetIcon target={fileManager} />
-					{t("editor.openInTarget", { name: fileManager.name })}
 				</ContextMenuItem>
 			) : null}
 			<ContextMenuItem onSelect={copyPath}>
