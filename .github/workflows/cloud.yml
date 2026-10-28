@@ -1,0 +1,68 @@
+name: Cloud
+
+# Cloud is its own Go module. cloud/go.mod pins backend to a fixed commit, so
+# backend changes cannot affect this build; it runs only when cloud/ changes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cloud/**"
+      - ".github/workflows/cloud.yml"
+  pull_request:
+    paths:
+      - "cloud/**"
+      - ".github/workflows/cloud.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  cloud-build-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloud
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cloud/go.mod
+          cache-dependency-path: cloud/go.sum
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        # -count=1 disables Go's test-result cache, which the restored build
+        # cache would otherwise use to replay results from an earlier run.
+        run: go test -race -count=1 ./...
+
+      - name: Test Expat security backport
+        run: |
+          docker build --target expat-build --file Dockerfile \
+            --build-arg BUILDKIT_SYNTAX=mirror.gcr.io/docker/dockerfile:1 \
+            --build-arg EXPAT_BUILD_IMAGE=mirror.gcr.io/library/debian:trixie-slim .
+
+      - name: Test Brotli security backport
+        run: |
+          docker build --target brotli-build --file Dockerfile \
+            --build-arg BUILDKIT_SYNTAX=mirror.gcr.io/docker/dockerfile:1 \
+            --build-arg BROTLI_BUILD_IMAGE=mirror.gcr.io/library/debian:trixie-slim .
