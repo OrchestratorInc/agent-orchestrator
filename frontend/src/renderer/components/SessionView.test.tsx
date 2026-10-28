@@ -2024,22 +2024,32 @@ describe("SessionView", () => {
 		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 	});
 
-	it("keeps the restored Chat-mode session's loader while its workspace comes back", () => {
+	it("keeps a waking Freestyle Chat session on its conversation, with its paused badge until the worker is back", () => {
 		const session = workerSession("sess-2");
 		session.mode = "chat";
 		session.runtimeConnected = false;
 		session.cloud = {
 			orgId: "cloud-org",
 			sandboxProvider: "freestyle",
-			desiredState: "running",
-			observedState: "restoring",
+			desiredState: "paused",
+			observedState: "stopped",
 		};
-		useTerminalResetStore.getState().bump("sess-2", 1);
 
-		render(<SessionView sessionId="sess-2" />);
+		const view = render(<SessionView sessionId="sess-2" />);
+		expect(screen.getByRole("status")).toHaveAttribute("data-cloud-lifecycle-stage", "paused");
 
-		expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
-		expect(screen.getByTestId("multi-step-loader-step")).not.toHaveTextContent("Connecting your terminal");
+		// Opening it wakes it: still no startup screen, and the badge stays.
+		for (const observedState of ["restoring", "bootstrapping", "running"]) {
+			session.cloud = { ...session.cloud, desiredState: "running", observedState };
+			view.rerender(<SessionView sessionId="sess-2" />);
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			expect(document.querySelector("[data-cloud-lifecycle-stage=paused]")).toBeInTheDocument();
+		}
+
+		session.runtimeConnected = true;
+		view.rerender(<SessionView sessionId="sess-2" />);
+		expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-cloud-lifecycle-stage=paused]")).not.toBeInTheDocument();
 	});
 
 	it("keeps a restored Coder Chat session's loader while its workspace comes back", () => {

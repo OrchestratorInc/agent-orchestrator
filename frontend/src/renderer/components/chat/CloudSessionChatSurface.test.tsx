@@ -1339,26 +1339,8 @@ describe("CloudSessionChatSurface", () => {
 });
 
 describe("cloudStartupChecklist", () => {
-	const starting = { ...session, runtimeConnected: false, cloud: { orgId: "org-1", sandboxProvider: "freestyle", desiredState: "running", observedState: "bootstrapping" } };
-
-	it("shows a new Freestyle session's start in place while its worker connects", () => {
-		expect(cloudStartupChecklist(starting, [], undefined, false)).toEqual({
-			provisionState: "provisioning",
-			provisionSteps: [{ id: "worktree", status: "running" }, { id: "agent", status: "pending" }],
-		});
-		expect(cloudStartupChecklist({ ...starting, cloud: { ...starting.cloud, observedState: "requested" } }, [], undefined, false))
-			.toMatchObject({ provisionState: "provisioning" });
-	});
-
-	it("shows none once the worker connects, or for a session that already ran a turn", () => {
-		expect(cloudStartupChecklist({ ...starting, runtimeConnected: true }, [], undefined, false)).toBeUndefined();
-		const started: CloudCpClientEvent = { sessionId: session.id, sequence: 1, type: "chat.turn_started", payload: { turnId: "turn-1" }, createdAt: session.updatedAt };
-		expect(cloudStartupChecklist(starting, [started], undefined, false)).toBeUndefined();
-		// A resumed sandbox is not a new session's start.
-		expect(cloudStartupChecklist({ ...starting, cloud: { ...starting.cloud, observedState: "restoring" } }, [], undefined, false)).toBeUndefined();
-	});
-
-	it("shows none for a Coder session, which starts behind the startup screen", () => {
-		expect(cloudStartupChecklist({ ...starting, cloud: { ...starting.cloud, sandboxProvider: "coder" } }, [], undefined, false)).toBeUndefined();
+	it("shows no checklist while a new Freestyle session's worker connects: its composer shimmers instead", () => {
+		const starting = { ...session, mode: "chat" as const, runtimeConnected: false, cloud: { orgId: "org-1", sandboxProvider: "freestyle", desiredState: "running", observedState: "bootstrapping" } };
+		expect(cloudStartupChecklist(starting, [], undefined, false)).toBeUndefined();
 	});
 });

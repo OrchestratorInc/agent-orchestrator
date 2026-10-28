@@ -1,6 +1,6 @@
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
-import { FREESTYLE_PROVIDER } from "../../lib/cloud-offering";
+import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
@@ -1602,10 +1602,12 @@ function ChatWorkspaceContent({
 		startupState === "provisioning" || agentResuming ||
 		(!loadingQuietly && (snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"))
 	);
-	// A Cloud session's messages wait in the control plane's turn queue, so a
-	// starting Freestyle orchestrator takes them as a starting worker does; a
-	// local or other-provider orchestrator opens its composer once it is up.
-	const startupQueues = session?.provisionState === "provisioning" && (sessionRole !== "orchestrator" || session?.cloud?.sandboxProvider === FREESTYLE_PROVIDER);
+	// A Freestyle Chat session starting or waking stays on its conversation:
+	// the composer shimmers and its messages wait in the control plane's turn
+	// queue until the worker connects (cloudChatStartingInPlace).
+	const cloudStarting = cloudChatStartingInPlace(session);
+	// A local or other-provider orchestrator opens its composer once it is up.
+	const startupQueues = cloudStarting || (session?.provisionState === "provisioning" && sessionRole !== "orchestrator");
 	const orchestratorBlocksComposer = orchestratorStarting && !startupQueues;
 	const currentSetupStep = provisionSteps?.find((step) => step.status === "running")?.id;
 	const setupPlaceholder = currentSetupStep === "fetch" ? "Getting the latest code"
@@ -2016,11 +2018,11 @@ function ChatWorkspaceContent({
 										busy={busy}
 										willQueue={Boolean(turn) || startupQueues}
 										queuePlaceholder={
-											session?.provisionState === "provisioning"
+											session?.provisionState === "provisioning" || cloudStarting
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										starting={orchestratorStarting || arrivingInChat}
+										starting={orchestratorStarting || arrivingInChat || cloudStarting}
 										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
