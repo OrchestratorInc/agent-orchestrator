@@ -8,6 +8,8 @@ import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { SettingsDialog } from "./SettingsPageTestHarness";
 import { globalSettingsItemsFor, visibleGlobalSettings } from "./settings/settingsCatalog";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const { getMock, putMock, postMock, cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	putMock: vi.fn(),

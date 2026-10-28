@@ -17,7 +17,7 @@ function render(ui: ReactNode) {
 // first-run states, mocking only the HTTP client, the router, and the native
 // folder picker: an empty daemon shows the import chooser (no column shells), a
 // fresh project shows the task invitation, and any session brings the columns back.
-const { getMock, postMock, deleteMock, navigateMock, chooseDirectoryMock, clipboardWriteMock, spawnOrchestratorMock, terminalPanePropsMock, paramsMock, boardActionsInPanelMock } = vi.hoisted(() => ({
+const { getMock, postMock, deleteMock, navigateMock, chooseDirectoryMock, clipboardWriteMock, spawnOrchestratorMock, terminalPanePropsMock, paramsMock } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	postMock: vi.fn(),
 	deleteMock: vi.fn(),
@@ -27,12 +27,10 @@ const { getMock, postMock, deleteMock, navigateMock, chooseDirectoryMock, clipbo
 	spawnOrchestratorMock: vi.fn(),
 	terminalPanePropsMock: vi.fn(),
 	paramsMock: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
-	boardActionsInPanelMock: vi.fn(() => false),
 }));
 
 vi.mock("../../lib/platform", async (importOriginal) => ({
 	...await importOriginal<typeof import("../../lib/platform")>(),
-	usesBoardActionsInPanel: () => boardActionsInPanelMock(),
 }));
 
 vi.mock("../../lib/spawn-orchestrator", () => ({
@@ -68,7 +66,7 @@ vi.mock("../../lib/bridge", () => ({
 			setCloseShellTerminalShortcutEnabled: vi.fn(),
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
-			// ShellTopbar subscribes to the open-orchestrator shortcut on mount.
+			// The board and session actions subscribe to the open-orchestrator shortcut.
 			onShortcut: () => () => undefined,
 		},
 		clipboard: { writeText: clipboardWriteMock },
@@ -94,7 +92,6 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 });
 
 import { SessionsBoard } from "../../components/SessionsBoard";
-import { ShellTopbar } from "../../components/ShellTopbar";
 import { workspaceQueryKey } from "../../hooks/useWorkspaceQuery";
 import type { WorkspaceSummary } from "../../types/workspace";
 import { ShellProvider, type ShellContextValue } from "../../lib/shell-context";
@@ -208,7 +205,6 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	paramsMock.projectId = undefined;
 	paramsMock.sessionId = undefined;
-	boardActionsInPanelMock.mockReturnValue(false);
 	cloneProjectMock.mockResolvedValue(undefined);
 	createProjectMock.mockResolvedValue(undefined);
 	initializeProjectRepositoryMock.mockResolvedValue(undefined);
@@ -539,6 +535,8 @@ describe("project board with no sessions", () => {
 			);
 		renderBoard(<SessionsBoard projectId="proj-1" />);
 
+		// The header copy yields to the center invitation once the empty board resolves.
+		await screen.findByTestId("project-board-empty");
 		expect(await screen.findByText(/Project added, but orchestrator did not start/)).toBeInTheDocument();
 		expect(screen.getByText(/branch is already checked out/)).toBeInTheDocument();
 	});
@@ -652,10 +650,10 @@ describe("project board with no sessions", () => {
 
 // Mount the actual header and board together. Separate component tests cannot
 // catch divergent emptiness decisions or independent in-flight launch state.
-describe.each([false, true])("shared project board actions, in-panel header=%s", (inPanel) => {
+describe("shared project board actions", () => {
 	function board(projectId = "proj-1") {
 		paramsMock.projectId = projectId;
-		return <><ShellTopbar /><SessionsBoard projectId={projectId} /></>;
+		return <SessionsBoard projectId={projectId} />;
 	}
 
 	function updateWorkers(sessions: WorkspaceSummary["sessions"]) {
@@ -664,16 +662,14 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		));
 	}
 
-	beforeEach(() => boardActionsInPanelMock.mockReturnValue(inPanel));
-
-	it("keeps quiet header copies only while the center invitation is visible", async () => {
+	it("keeps header action styling consistent as the center invitation appears and disappears", async () => {
 		respondWith([project], []);
 		renderBoard(board());
 		const empty = await screen.findByTestId("project-board-empty");
 		const headerTask = screen.getAllByRole("button", { name: "New task" }).find((button) => !empty.contains(button))!;
 		const headerOrchestrator = screen.getAllByRole("button", { name: "Spawn Orchestrator" }).find((button) => !empty.contains(button))!;
-		expect(headerTask).toHaveClass("topbar-control--secondary", "topbar-control--labeled");
-		expect(headerOrchestrator).toHaveClass("topbar-control--secondary", "topbar-control--labeled");
+		expect(headerTask).toHaveClass("topbar-control--primary", "topbar-control--labeled");
+		expect(headerOrchestrator).toHaveClass("topbar-control--primary", "topbar-control--labeled");
 		expect(headerTask).toHaveAttribute("data-priority", "primary");
 		expect(headerTask.querySelector("[data-compact-label]")).not.toBeNull();
 		expect(within(empty).getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
@@ -692,12 +688,12 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		for (const session of [worker, { ...worker, status: "terminated" as const, isTerminated: true }]) {
 			updateWorkers([session]);
 			await waitFor(() => expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument());
-			expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--accent");
+			expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary");
 			expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
 		}
 		updateWorkers([]);
 		await screen.findByTestId("project-board-empty");
-		expect(headerTask).toHaveClass("topbar-control--secondary");
+		expect(headerTask).toHaveClass("topbar-control--primary");
 	});
 
 	it("shows the starting chat while a request is pending, then restores the board with Terminal UI recovery", async () => {
@@ -712,15 +708,8 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		act(() => { buttons[0].click(); buttons[1].click(); });
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledTimes(1));
 		expect(await screen.findByLabelText("Message the agent")).toBeInTheDocument();
-		if (inPanel) {
-			// The header actions live inside the board, so they leave with it.
-			expect(screen.queryByRole("button", { name: "Spawn Orchestrator" })).not.toBeInTheDocument();
-		} else {
-			// Only the topbar's copy outlives the board; it shares the pending state.
-			const headerButton = screen.getByRole("button", { name: "Spawn Orchestrator" });
-			expect(headerButton).toBeDisabled();
-			expect(headerButton).toHaveAttribute("aria-busy", "true");
-		}
+		// The header actions live inside the board, so they leave with it.
+		expect(screen.queryByRole("button", { name: "Spawn Orchestrator" })).not.toBeInTheDocument();
 		act(() => rejectSpawn(Object.assign(new Error("Chat driver unavailable"), { code: "CHAT_DRIVER_UNAVAILABLE" })));
 		expect(await screen.findByText("Chat driver unavailable")).toBeInTheDocument();
 		for (const button of screen.getAllByRole("button", { name: "Spawn Orchestrator" })) expect(button).toBeEnabled();
@@ -761,7 +750,7 @@ describe.each([false, true])("shared project board actions, in-panel header=%s",
 		renderBoard(board());
 		if (state === "missing") await waitFor(() => expect(lastQueryClient!.getQueryState(workspaceQueryKey)?.status).toBe("success"));
 		expect(screen.queryByTestId("project-board-empty")).not.toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--accent");
+		expect(screen.getByRole("button", { name: "New task" })).toHaveClass("topbar-control--primary");
 		expect(screen.getByRole("button", { name: "Spawn Orchestrator" })).toHaveClass("topbar-control--primary");
 	});
 });

@@ -7,6 +7,8 @@ import type { WorkspaceSession } from "../types/workspace";
 import { CenterPane } from "./CenterPane";
 import { TooltipProvider } from "./ui/tooltip";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const shortcutMocks = vi.hoisted(() => ({
 	closeListener: undefined as (() => void) | undefined,
 	nextTabListener: undefined as (() => void) | undefined,
@@ -503,12 +505,12 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.getByText("No session")).toBeInTheDocument();
 	});
 
-	it("uses the inspector tab height for the terminal header", () => {
+	it("uses the shared toolbar height for the terminal header", () => {
 		renderCenterPane({ session: worker });
 
 		const tablist = screen.getByRole("tablist", { name: "Open terminals" });
-		const header = tablist.closest(".h-inspector-tabs");
-		expect(header?.classList.contains("h-inspector-tabs")).toBe(true);
+		const header = tablist.closest(".h-toolbar");
+		expect(header?.classList.contains("h-toolbar")).toBe(true);
 		expect(tablist.classList.contains("h-full")).toBe(true);
 	});
 

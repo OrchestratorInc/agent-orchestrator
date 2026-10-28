@@ -109,6 +109,7 @@ import { SessionPaneTab } from "../CenterPane";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
+import { SessionTabsTopbar } from "../PageTopbar";
 import { ShellTerminalTab } from "../ShellTerminalTab";
 import { TerminalPane } from "../TerminalPane";
 import {
@@ -1778,6 +1779,7 @@ function ChatWorkspaceContent({
 				onReorderAuxiliaryTabs={reorderAuxiliaryTabs}
 				inline={isFullscreen || inlineHeader}
 				slideIn={headerSlideIn}
+				fullscreen={isFullscreen}
 			/>}
 			<div className="relative flex min-h-0 flex-1 flex-col">
 				{reviewerTarget && session ? (
@@ -2276,6 +2278,7 @@ function ChatHeader({
 	onReorderAuxiliaryTabs,
 	inline,
 	slideIn = false,
+	fullscreen,
 	session,
 	onSessionRenamed,
 }: {
@@ -2307,6 +2310,7 @@ function ChatHeader({
 	/** Fullscreen content cannot see the normal topbar portal outside its subtree. */
 	inline?: boolean;
 	slideIn?: boolean;
+	fullscreen?: boolean;
 }) {
 	const { t } = useTranslation();
 	const providerLabel = agentLabel(snapshot.harness);
@@ -2340,21 +2344,21 @@ function ChatHeader({
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(isMac);
 	const tabListRef = useTabListTabStop<HTMLDivElement>();
 	const header = (
-		<header className={cn("flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar", slideIn && "chat-header-slide-in")}>
-			<div
-				className="session-topbar-surface flex min-w-0 flex-1"
-				data-testid="session-workspace-topbar"
-			>
-				<div
-					className={cn(
-						"flex min-w-0 shrink items-stretch",
-						isMac && "session-topbar-titlebar-clearance-mac",
-						!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
-					)}
-					data-testid="session-terminal-region"
-					ref={clearanceRef}
-					style={{ width: "100%" }}
-				>
+		<SessionTabsTopbar
+			className={slideIn ? "chat-header-slide-in" : undefined}
+			fullscreen={fullscreen}
+			actions={
+				<>
+					{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
+					{headerActions}
+				</>
+			}
+			clearanceClassName={cn(
+				isMac && "session-topbar-titlebar-clearance-mac",
+				!isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
+			)}
+			clearanceRef={clearanceRef}
+			tabs={
 					<div
 						aria-label="Chat tabs"
 						className="flex h-full min-w-0 flex-1 items-stretch"
@@ -2449,16 +2453,8 @@ function ChatHeader({
 							{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
 						</div>
 					</div>
-				</div>
-				<div
-					className="ml-auto flex shrink-0 items-center gap-1 pl-2 pr-3"
-					data-testid="session-action-region"
-				>
-					{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
-					{headerActions}
-				</div>
-			</div>
-		</header>
+			}
+		/>
 	);
 	return inline ? header : <SessionTopbarPortal>{header}</SessionTopbarPortal>;
 }

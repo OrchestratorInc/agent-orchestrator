@@ -37,6 +37,7 @@ import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TerminalTabFrame } from "./TerminalTabFrame";
 import { TerminalPane } from "./TerminalPane";
 import { SessionTopbarPortal } from "./SessionTopbarPortal";
+import { SessionTabsTopbar } from "./PageTopbar";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "./ui/context-menu";
 
 type CenterPaneProps = {
@@ -453,21 +454,22 @@ export function CenterPane({
 
 	const clearanceRef = useSidebarChromeClearanceRef<HTMLDivElement>(!isFullscreen && isMac);
 	const terminalTopbar = (
-		<div className="flex h-inspector-tabs w-full shrink-0 items-stretch bg-sidebar">
-
-			<div className="session-topbar-surface flex min-w-0 flex-1" data-testid="session-workspace-topbar">
-				<div
-					className={cn(
-						"flex min-w-0 shrink items-stretch",
-						!isFullscreen && isMac && "session-topbar-titlebar-clearance-mac",
-						!isFullscreen && !isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
-					)}
-					data-testid="session-terminal-region"
-					ref={clearanceRef}
-					style={{
-						width: terminalBounds.width > 0 ? terminalBounds.width : "100%",
-					}}
-				>
+		<SessionTabsTopbar
+			fullscreen={isFullscreen}
+			actions={
+				<>
+					{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
+					{topbarActions}
+				</>
+			}
+			clearanceClassName={cn(
+				!isFullscreen && isMac && "session-topbar-titlebar-clearance-mac",
+				!isFullscreen && !isSidebarOpen && isLinux && "session-topbar-titlebar-clearance-linux",
+			)}
+			clearanceRef={clearanceRef}
+			hideActions={isFullscreen}
+			regionWidth={terminalBounds.width > 0 ? terminalBounds.width : "100%"}
+			tabs={
 					<div
 							aria-label={t("terminal.tabsAria")}
 							className="flex h-full min-w-0 flex-1 items-stretch"
@@ -550,18 +552,8 @@ export function CenterPane({
 								{showRightFade ? <div aria-hidden="true" className="session-tab-scroll-fade" /> : null}
 							</div>
 					</div>
-				</div>
-				{isFullscreen ? null : (
-					<div
-						className="ml-auto flex shrink-0 items-center gap-1 pl-2 pr-3"
-			data-testid="session-action-region"
-		>
-			{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
-			{topbarActions}
-					</div>
-				)}
-			</div>
-		</div>
+			}
+		/>
 	);
 
 	return (

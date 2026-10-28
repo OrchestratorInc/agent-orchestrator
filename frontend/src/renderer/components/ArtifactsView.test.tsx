@@ -8,6 +8,8 @@ import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSession, typ
 import { ArtifactsView } from "./ArtifactsView";
 import { TooltipProvider } from "./ui/tooltip";
 
+vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
+
 const mocks = vi.hoisted(() => ({
 	workspaces: [] as WorkspaceSummary[],
 	agents: [] as Array<Record<string, unknown>>,
