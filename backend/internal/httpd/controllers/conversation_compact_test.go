@@ -68,6 +68,43 @@ func TestCompactConversationEligibilityAndUTF8(t *testing.T) {
 	}
 }
 
+func TestCompactConversationPreservesFileNavigation(t *testing.T) {
+	cwd := "/workspace/" + strings.Repeat("long-worktree-segment/", 12) + "project"
+	path := cwd + "/packages/" + strings.Repeat("nested/", 24) + "new.ts"
+	oldPath := cwd + "/archive/" + strings.Repeat("nested/", 24) + "old.ts"
+	body := strings.Repeat("large body", 100)
+	file := map[string]any{"path": path, "oldPath": oldPath, "patch": body}
+	snapshot := ConversationSnapshotResponse{Activities: []ConversationActivityResponse{
+		{ID: "command", ActivityKind: "command", Status: "completed", Detail: map[string]any{"cwd": cwd, "output": body}},
+		{ID: "file", ActivityKind: "file_change", Status: "completed", Detail: map[string]any{"files": []any{file}}},
+		{ID: "tool", ActivityKind: "mcp_tool", Status: "completed", Detail: map[string]any{"result": map[string]any{"cwd": body, "path": body, "oldPath": body}}},
+	}}
+	compactConversationDetails(&snapshot, true, true)
+	if snapshot.Activities[0].Detail["cwd"] != cwd || file["path"] != path || file["oldPath"] != oldPath {
+		t.Fatal("collapsed turn file-navigation addresses were shortened")
+	}
+	if len(snapshot.Activities[0].Detail["output"].(string)) != activityPreviewBytes || len(file["patch"].(string)) != activityPreviewBytes {
+		t.Fatal("preserving navigation bypassed body previews")
+	}
+	for _, value := range snapshot.Activities[2].Detail["result"].(map[string]any) {
+		if len(value.(string)) != activityPreviewBytes {
+			t.Fatal("unrelated nested payload keys bypassed body previews")
+		}
+	}
+	for _, row := range snapshot.Activities {
+		if !row.DetailOmitted {
+			t.Fatal("body omission marker lost")
+		}
+	}
+	metadataOnly := ConversationSnapshotResponse{Activities: []ConversationActivityResponse{{
+		ActivityKind: "file_change", Status: "completed", Detail: map[string]any{"cwd": cwd, "files": []any{map[string]any{"path": path, "oldPath": oldPath}}},
+	}}}
+	compactConversationDetails(&metadataOnly, true, true)
+	if metadataOnly.Activities[0].DetailOmitted {
+		t.Fatal("complete navigation metadata unnecessarily requires a full-row read")
+	}
+}
+
 func TestDedupePreservesDistinctBodies(t *testing.T) {
 	long := strings.Repeat("body", 100)
 	for _, tc := range []struct {
