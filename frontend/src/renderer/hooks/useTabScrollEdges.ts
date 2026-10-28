@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 type ScrollBehavior = ScrollToOptions["behavior"];
 
@@ -27,8 +27,14 @@ export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 		window.requestAnimationFrame(updateEdges);
 	}, [updateEdges]);
 
+	// The strip can mount after its owner (a portal waiting for its host), so
+	// track the element itself; otherwise the listeners below never attach.
+	const [element, setElement] = useState<HTMLDivElement | null>(null);
+	useLayoutEffect(() => {
+		if (scrollRef.current !== element) setElement(scrollRef.current);
+	});
+
 	useEffect(() => {
-		const element = scrollRef.current;
 		if (!element) return;
 		updateEdges();
 		// Drive the strip from every wheel event over it, whichever axis
@@ -50,7 +56,7 @@ export function useTabScrollEdges(dependencies: readonly unknown[] = []) {
 			element.removeEventListener("wheel", handleWheel);
 			observer?.disconnect();
 		};
-	}, [updateEdges, ...dependencies]);
+	}, [element, updateEdges, ...dependencies]);
 
 	return {
 		scrollRef,

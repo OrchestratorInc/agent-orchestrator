@@ -504,7 +504,10 @@ export function CenterPane({
 									className="session-tab-scroll-region scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto"
 									layoutScroll
 								>
-								<div className="flex w-max items-stretch">
+								{/* The macOS header is a window drag region outside its controls; the
+								    whole tab row opts out so separators and tab edges still take
+								    wheel scrolling and clicks. */}
+								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
 									{/* The owning session scrolls with its auxiliary terminals, but remains fixed in order. */}
 									<div className="flex shrink-0 self-stretch">
 										{session ? (
