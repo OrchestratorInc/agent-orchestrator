@@ -778,9 +778,13 @@ describe("HarnessSettingsSection", () => {
 		expect(within(await findAgentRow("cursor")).queryByRole("button", { name: "Log out" })).toBeNull();
 	});
 
-	it.each(["login", "logout"])("offers DeepSeek account %s through the native web flow", async (action) => {
+	it.each([
+		{ action: "login", state: "authorized", loginLabel: "Log in again" },
+		{ action: "login", state: "unknown", loginLabel: "Login" },
+		{ action: "logout", state: "authorized", loginLabel: "Log in again" },
+	])("offers DeepSeek account $action when $state through the native web flow", async ({ action, state, loginLabel }) => {
 		const readiness = readyCatalog();
-		readiness.agents.push({ ...readiness.agents[0], id: "deepseek-harness", label: "DeepSeek" });
+		readiness.agents.push({ ...readiness.agents[0], id: "deepseek-harness", label: "DeepSeek", authentication: { ...readiness.agents[0].authentication, state } });
 		mockInstalledOperations("npm", readiness);
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models" ? { data: { agentId: "deepseek-harness", models: [] } } as never : path === "/api/v1/agents/auth-plans" ? { data: { plans: [{
@@ -795,10 +799,10 @@ describe("HarnessSettingsSection", () => {
 		} } as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
 		renderSection();
 		const page = await findAgentRow("deepseek-harness");
-		expect(within(page).getByRole("button", { name: "Log in again" })).toBeEnabled();
+		expect(within(page).getByRole("button", { name: loginLabel })).toBeEnabled();
 		expect(within(page).getByRole("button", { name: "Log out" })).toBeEnabled();
 		expect(within(page).queryByRole("button", { name: "Open setup" })).toBeNull();
-		await userEvent.click(within(page).getByRole("button", { name: action === "logout" ? "Log out" : "Log in again" }));
+		await userEvent.click(within(page).getByRole("button", { name: action === "logout" ? "Log out" : loginLabel }));
 		if (action === "logout") {
 			expect(apiClient.POST).not.toHaveBeenCalledWith(endpoint, expect.anything());
 			await userEvent.click(within(screen.getByRole("dialog", { name: "Log out of DeepSeek?" })).getByRole("button", { name: "Log out" }));
