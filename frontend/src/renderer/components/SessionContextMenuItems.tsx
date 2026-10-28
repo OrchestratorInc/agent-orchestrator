@@ -51,8 +51,9 @@ export function SessionContextMenuItems({
 	const branch = sessionBranchPresentation(session).branch;
 	const showBranch = Boolean(branch) && !isOrchestratorSession(session) && branch !== `session/${session.id}`;
 	const pr = primaryPR(session);
-	// Same eligibility as the hover warm-up: a local worker whose agent exited.
-	const canResume = useCanResumeAgent(session, session.hostId) && !session.hostId && !isOrchestratorSession(session);
+	// A local worker whose agent exited and that is not switching interfaces;
+	// orchestrators and remote sessions resume elsewhere, so they skip the check.
+	const canResume = useCanResumeAgent(session.hostId || isOrchestratorSession(session) ? undefined : session);
 	// Remote and Cloud sessions have no local workspace for Electron to hand off.
 	const hasLocalWorkspace = !session.hostId && !session.cloud;
 	// Rename and pin go to the daemon that owns the session; a Cloud session has none.
