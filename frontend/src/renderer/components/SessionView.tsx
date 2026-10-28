@@ -1486,7 +1486,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	// A local session's tab menu holds the interface switch and, in a terminal, its agent; Cloud cannot switch agent.
 	const agentWorking = chatDraftBoundaries.length > 0 || session?.isTerminated === true ||
 		session?.activity?.state === "active" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked";
-	const sessionTabActions = !session || session.cloud
+	// SessionTabMenu renders nothing without a switch or an agent picker; pass no
+	// action then, so the tab keeps its avatar on hover.
+	const sessionTabMenuEmpty = !interfaceUi.switchAction && !interfaceUi.switchControl && interfaceUi.target !== "chat";
+	const sessionTabActions = !session || session.cloud || sessionTabMenuEmpty
 		? (session?.cloud ? interfaceUi.switchControl : null)
 		: (
 			<SessionTabMenu

@@ -2285,7 +2285,6 @@ function ChatHeader({
 	slideIn?: boolean;
 }) {
 	const { t } = useTranslation();
-	const providerLabel = agentLabel(snapshot.harness);
 	const sessionIsOrchestrator = session
 		? isOrchestratorSession(session)
 		: sessionRole === "orchestrator";
@@ -2357,11 +2356,11 @@ function ChatHeader({
 										/>
 									) : (
 										<SessionPaneTab
-											icon={<AgentAvatar className="size-icon-sm!" decorative provider={snapshot.harness} />}
 											isActive={timelineActive}
 											label={label}
 											onSelect={timelineActive ? undefined : onSelectChat}
-											title={`${label} · ${providerLabel}`}
+											provider={snapshot.harness}
+											title={label}
 										/>
 									)}
 								</div>

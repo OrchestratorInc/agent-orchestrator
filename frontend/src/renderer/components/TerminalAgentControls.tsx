@@ -13,7 +13,6 @@ import type { SessionInterfaceMode } from "../hooks/useSessionInterfaceTransitio
 import { RoundedInterfaceIcon } from "./SessionInterfaceSwitch";
 import { terminalTabActionClassName } from "./TerminalTabFrame";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const NO_CHOICES = { models: [], modelLabel: "", efforts: [] };
 
@@ -78,21 +77,18 @@ export function SessionTabMenu({
 	) : null;
 	return (
 		<DropdownMenu open={open} onOpenChange={setOpen}>
-			<Tooltip>
-				<DropdownMenuTrigger asChild>
-					<TooltipTrigger asChild>
-						<button
-							aria-label={t("session.actionsMenu")}
-							className={cn(terminalTabActionClassName, "data-[state=open]:bg-interactive-hover data-[state=open]:text-foreground")}
-							data-session-actions-trigger
-							type="button"
-						>
-							<MoreVertical aria-hidden="true" className="size-icon-sm" />
-						</button>
-					</TooltipTrigger>
-				</DropdownMenuTrigger>
-				<TooltipContent side="bottom">{t("session.actionsMenu")}</TooltipContent>
-			</Tooltip>
+			<DropdownMenuTrigger asChild>
+				{/* A native title: a Radix tooltip would reopen when the menu hands focus back. */}
+				<button
+					aria-label={t("session.actionsMenu")}
+					className={cn(terminalTabActionClassName, "data-[state=open]:bg-interactive-hover data-[state=open]:text-foreground")}
+					data-session-actions-trigger
+					title={t("session.actionsMenu")}
+					type="button"
+				>
+					<MoreVertical aria-hidden="true" className="size-icon-sm" />
+				</button>
+			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className="min-w-48">
 				{switching ? <AgentModelPicker terminal currentHarness={session.provider} current={NO_CHOICES} agentSwitch={agentSwitch} pendingFooter={footer} /> : null}
 				{switchAction ? (

@@ -644,6 +644,8 @@ type SessionPaneTabProps = {
 	onSelect?: () => void;
 	onRenamed?: () => void | Promise<void>;
 	session?: WorkspaceSession;
+	/** The agent shown without a session; its mark is the icon and its name joins the label. */
+	provider?: string;
 	icon?: ReactNode;
 	title?: string;
 	/** Session-scoped controls (interface switch, handoff) in the tab's icon slot. */
@@ -660,6 +662,7 @@ export function SessionPaneTab({
 	onSelect,
 	onRenamed,
 	session,
+	provider = session?.provider,
 	icon,
 	title,
 	tabAction,
@@ -668,8 +671,8 @@ export function SessionPaneTab({
 	const { t } = useTranslation();
 	const { ref, isTruncated } = useTruncatedText<HTMLButtonElement>(label);
 	const activityLabel = session ? getAgentActivityView(session.activity, t).label : undefined;
-	const providerLabel = session ? agentLabel(session.provider) : undefined;
-	const tabIcon = session ? <AgentAvatar className="size-icon-sm!" decorative provider={session.provider} /> : icon;
+	const providerLabel = provider ? agentLabel(provider) : undefined;
+	const tabIcon = provider ? <AgentAvatar className="size-icon-sm!" decorative provider={provider} /> : icon;
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
 	// persist a title without updating their query cache. The project
@@ -699,7 +702,7 @@ export function SessionPaneTab({
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			action={!rename.isEditing && tabAction ? <span className="grid place-items-center" data-testid="session-tab-action">{tabAction}</span> : undefined}
+			action={!rename.isEditing && tabAction ? <span className="grid place-items-center [&_svg]:size-icon-sm" data-testid="session-tab-action">{tabAction}</span> : undefined}
 			actionPinned={tabActionPinned}
 			active={isActive}
 			buttonProps={{
