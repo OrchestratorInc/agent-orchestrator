@@ -1584,6 +1584,11 @@ func (m *Manager) markSpawned(
 				return nil, err
 			}
 		}
+		if rec.Harness == domain.HarnessKimi {
+			// A successful spawn commits a new provider process generation. Its
+			// approval callbacks must not inherit the prior launch's cache.
+			delete(m.flights, id)
+		}
 		return m.usageReactivator, nil
 	}()
 	if err != nil {

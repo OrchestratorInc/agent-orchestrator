@@ -13,9 +13,9 @@ import (
 // until an existing turn boundary settles the unknown outstanding set.
 //
 // Completion evidence survives an empty pending set, Stop and new prompts;
-// boundaries settle observed pending entries and reset overflow. Existing
-// process exit, spawn, termination and controller-replacement cleanup deletes
-// the whole toolFlight. Daemon restart also loses it. Consequently callbacks
+// boundaries settle observed pending entries and reset overflow. Process exit,
+// Kimi spawn, termination and controller replacement delete the whole
+// toolFlight. Daemon restart also loses it. Consequently callbacks
 // beyond eviction/reset, or requests never observed before a boundary, are not
 // ordered by this cache; native hooks supply no durable ordered delivery log.
 const maxKimiApprovals = 128
