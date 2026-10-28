@@ -6,7 +6,7 @@ import { disconnectHost } from "../../lib/host-clients";
 import { requestRemoteHostsRefresh } from "../../hooks/useRemoteHosts";
 import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
 import { useCloudSession } from "../../lib/cloud-session";
-import { assertRoomFor, deleteAccountRemoteHost, readAccountHostDirectory, saveAccountRemoteHost } from "../../lib/account-remote-hosts";
+import { deleteAccountRemoteHost, saveAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { useSettings } from "../../hooks/useSettings";
 import { useLocalSignInDialogStore } from "../../stores/local-signin-dialog-store";
 import { useUiStore } from "../../stores/ui-store";
@@ -97,9 +97,6 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			if (editing && !editing.hostId && editing.url !== nextUrl) await aoBridge.remotes.remove(editing.url);
 			const current = (await aoBridge.remotes.list()).find((item) => item.url === nextUrl);
 			if (current?.hostId && cloudBaseUrl) {
-				// Before the host moves its account token here: a full account
-				// would refuse it after that, cutting off the account that had it.
-				assertRoomFor(await readAccountHostDirectory(cloudBaseUrl), current.hostId);
 				const token = await aoBridge.remotes.issueAccountToken(current.url);
 				await saveAccountRemoteHost(cloudBaseUrl, { hostId: current.hostId, label: current.label, url: current.url, token });
 			}

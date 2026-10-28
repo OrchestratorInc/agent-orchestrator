@@ -1,4 +1,4 @@
-import { assertRoomFor, readAccountHostDirectory, saveAccountRemoteHost } from "./account-remote-hosts";
+import { readAccountHostDirectory, saveAccountRemoteHost } from "./account-remote-hosts";
 import { apiClient, apiErrorMessage } from "./api-client";
 import { aoBridge } from "./bridge";
 
@@ -22,9 +22,8 @@ export function fitLabel(name: string): string {
  * host id is "" when nothing was linked:
  * without url on an AO Cloud with no fixed addresses (Allow access links again
  * with the quick tunnel's url once it has one), or with ifListed when the
- * account does not list this computer. Both are decided, and a full account
- * refused, before the machine moves its account token here, which cuts off
- * an account that had it.
+ * account does not list this computer. Both are decided before the machine
+ * moves its account token here, which cuts off an account that had it.
  */
 export async function linkThisComputer(
 	cloudBaseUrl: string,
@@ -37,7 +36,6 @@ export async function linkThisComputer(
 	const listed = directory.hosts.some((host) => host.hostId === hostId);
 	if (options.url === undefined && !directory.fixedAddresses) return { hostId: "", added: false };
 	if (options.ifListed && !listed) return { hostId: "", added: false };
-	assertRoomFor(directory, hostId);
 	const issued = await apiClient.POST("/api/v1/remote-host/account-token", {
 		headers: { Authorization: `Bearer ${password}`, "X-AO-Account-ID": accountId },
 	});

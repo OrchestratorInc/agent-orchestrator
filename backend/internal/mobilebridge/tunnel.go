@@ -469,21 +469,15 @@ func TunnelBackoff(attempt int) time.Duration {
 // off because the hostname is only available by scraping the log, and a
 // self-update could swap the binary out from under that pinned format. The
 // metrics listener is what /ready is polled on, which is a far more reliable
-// readiness signal than the log alone.
-//
-// The empty --config keeps a personal ~/.cloudflared/config.yml out: cloudflared
-// prefers its ingress rules over --url, and a catch-all there would publish
-// whatever it points at. Measured: such a rule answered on this address
-// instead of the daemon. Network settings still reach the connector through
-// cloudflared's environment variables (TUNNEL_TRANSPORT_PROTOCOL=http2,
-// TUNNEL_EDGE_IP_VERSION, TUNNEL_REGION), which the daemon passes on.
+// readiness signal than the log alone. A personal ~/.cloudflared/config.yml
+// still applies, as it always has, so settings such as protocol: http2 keep
+// working.
 func CloudflaredArgs(localPort, metricsPort int) []string {
 	return []string{
 		"tunnel",
 		"--url", fmt.Sprintf("http://127.0.0.1:%d", localPort),
 		"--metrics", fmt.Sprintf("127.0.0.1:%d", metricsPort),
 		"--no-autoupdate",
-		"--config", os.DevNull,
 	}
 }
 

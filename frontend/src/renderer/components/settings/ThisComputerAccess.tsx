@@ -84,9 +84,11 @@ export function ThisComputerAccess() {
 				if (started.error || !started.data) throw new Error(apiErrorMessage(started.error));
 				password = started.data.password ?? "";
 			}
-			// Linked before the tunnel starts, so the tunnel is this computer's fixed address. A link
-			// that fails stops here: a linked computer serves only its fixed address.
-			({ hostId, added } = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password));
+			// Linked before the tunnel starts, so the tunnel is this computer's fixed address. When
+			// AO Cloud cannot give it one, it is listed at the quick tunnel's address below, as before.
+			({ hostId, added } = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password).catch(
+				() => ({ hostId: "", added: false }),
+			));
 			const access = await apiClient.POST("/api/v1/mobile/remote-access");
 			if (access.error) throw new Error(apiErrorMessage(access.error));
 			const ready = await waitForTunnel(t("remote.shareThisComputerTimeout"));
@@ -94,7 +96,7 @@ export function ThisComputerAccess() {
 				setNeedsConnector(true);
 				return;
 			}
-			// No fixed address from this AO Cloud: listed at the quick tunnel's, as before fixed addresses.
+			// No fixed address: listed at the quick tunnel's, as before fixed addresses.
 			if (!hostId) ({ hostId, added } = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password, { url: ready.url }));
 			shared = true;
 		} finally {

@@ -35,8 +35,9 @@ type TunnelRunner struct {
 	// SettleDelay overrides how long after registration the hostname is
 	// considered resolvable. Zero uses DefaultTunnelSettleDelay.
 	SettleDelay time.Duration
-	// Fixed, when set, serves only this host's fixed address once a
-	// signed-in device links it, and a quick tunnel until then.
+	// Fixed, when set, serves this host's fixed address once a signed-in
+	// device links it, and a quick tunnel until then or while AO Cloud cannot
+	// make it. A machine with a cached fixed tunnel starts that instead.
 	Fixed  *FixedTunnelSource
 	HostID string
 
@@ -132,10 +133,9 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		case named.RunToken != "" && err != nil:
 			t.logger().Warn("could not reach AO Cloud; starting the cached fixed tunnel", "error", err)
 		case err != nil && !unlinked(err):
-			// Linked, with no tunnel to start: retried with backoff. A linked
-			// machine serves only its fixed address.
-			t.Runtime.Exited(err)
-			return fmt.Errorf("fixed address: %w", err)
+			// No fixed tunnel yet and AO Cloud cannot make one: a quick tunnel
+			// serves, as before fixed addresses, and the machine keeps asking.
+			t.logger().Warn("no fixed address yet; starting a quick tunnel", "error", err)
 		}
 	}
 	t.next = nil

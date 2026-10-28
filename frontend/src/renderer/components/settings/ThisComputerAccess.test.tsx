@@ -119,11 +119,8 @@ const fake = vi.hoisted(() => {
 		if (!match) return reply(404);
 		const hostId = match[1] ? decodeURIComponent(match[1]) : "";
 		if (method === "GET") {
-			// A full account lists ten other machines.
-			const others = cloud.full ? Array.from({ length: 10 }, (_, i) => [`h_other-${i}`, { label: `Other ${i}`, url: "https://other.example:443", token: TOKEN }] as const) : [];
 			return reply(200, {
-				hosts: [...cloud.hosts, ...others].map(([id, host]) => ({ hostId: id, ...host, updatedAt: "2026-10-19T08:00:00Z" })),
-				limit: cloud.fixedAddresses ? 10 : 0,
+				hosts: [...cloud.hosts].map(([id, host]) => ({ hostId: id, ...host, updatedAt: "2026-10-19T08:00:00Z" })),
 				fixedAddresses: cloud.fixedAddresses,
 			});
 		}
@@ -131,9 +128,8 @@ const fake = vi.hoisted(() => {
 		if (method === "PUT") {
 			const input = JSON.parse(body ?? "{}") as { label: string; url?: string; token: string };
 			if (cloud.failPut) return reply(503);
-			if (cloud.full && !cloud.hosts.has(hostId)) {
-				return reply(409, { code: "remote_host_limit_reached", message: "An account can list up to 10 machines. Remove one to add another." });
-			}
+			// An account that uses all its fixed addresses can still list more machines.
+			if (cloud.full && input.url === undefined) return reply(409, { code: "fixed_address_limit_reached" });
 			if (input.url === undefined && !cloud.fixedAddresses) return reply(422);
 			input.url ??= `https://${FIXED}:443`;
 			const labelBytes = new TextEncoder().encode(input.label).length;
@@ -224,6 +220,17 @@ it("links this computer before its tunnel starts, so the tunnel is its fixed add
 		`cloud PUT ${fake.HOST_ID}`,
 		"/api/v1/mobile/remote-access",
 	]);
+});
+
+it("links at the quick tunnel's address when the account has no fixed address left, as before", async () => {
+	fake.cloud.full = true;
+	renderAccess();
+	const toggle = await readySwitch();
+	fireEvent.click(toggle);
+
+	expect(await screen.findByText("Your devices see this computer as Dhruv’s Mac mini.")).toBeVisible();
+	expect(toggle).toHaveAttribute("aria-checked", "true");
+	expect(fake.cloud.hosts.get(fake.HOST_ID)?.url).toBe(`https://${fake.TUNNEL}:443`);
 });
 
 it("links at the quick tunnel's address when AO Cloud has no fixed addresses", async () => {
@@ -365,21 +372,6 @@ it("reports a failed link and stays off", async () => {
 	expect(toggle).toHaveAttribute("aria-checked", "false");
 	expect(fake.cloud.hosts.size).toBe(0);
 	expect(fake.daemon.enabled).toBe(false);
-});
-
-it("says when the account lists as many machines as it can", async () => {
-	fake.cloud.full = true;
-	renderAccess();
-	const toggle = await readySwitch();
-	fireEvent.click(toggle);
-
-	expect(await screen.findByRole("alert")).toHaveTextContent("An account can list up to 10 machines. Remove one to add another.");
-	expect(toggle).toHaveAttribute("aria-checked", "false");
-	expect(fake.daemon.enabled).toBe(false);
-	// Known before any tunnel started, so none did, and before the machine
-	// moved its account token to this account.
-	expect(fake.log).not.toContain("/api/v1/mobile/remote-access");
-	expect(fake.tokenRequests).toEqual([]);
 });
 
 it("keeps this computer in the account when it was listed before a failed turn-on", async () => {

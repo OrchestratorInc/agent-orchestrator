@@ -113,6 +113,35 @@ func knownTunnel(t *testing.T, cloud *fakeAOCloud, src *FixedTunnelSource) {
 	}
 }
 
+// AO Cloud's answers that leave the machine on a quick tunnel: no fixed
+// addresses there, an AO Cloud that predates them, or an account that already
+// uses all of its fixed addresses.
+func TestFixedTunnelReadsAOCloudsNoFixedAddressAnswers(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		body   string
+	}{
+		{http.StatusNotFound, ""},
+		{http.StatusServiceUnavailable, `{"code":"fixed_addresses_unavailable"}`},
+		{http.StatusConflict, `{"code":"fixed_address_limit_reached"}`},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(tc.body))
+		}))
+		dir := t.TempDir()
+		if err := os.MkdirAll(dir+"/mobile", 0o700); err != nil {
+			t.Fatal(err)
+		}
+		src := NewFixedTunnelSource(srv.URL, dir)
+		link(t, src, "account-digest")
+		if _, err := src.TunnelFor(context.Background(), "host-uuid", false); !errors.Is(err, errNoFixedAddresses) {
+			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
+		}
+		srv.Close()
+	}
+}
+
 func TestFixedTunnelNeedsALinkedMachine(t *testing.T) {
 	cloud, src := newFixedSource(t)
 	link(t, src, "")

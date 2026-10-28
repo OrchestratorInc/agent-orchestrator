@@ -88,7 +88,7 @@ func TestTunnelRunnerAdvertisesAKnownFixedAddressAtOnce(t *testing.T) {
 		t.Fatalf("advertised %q", got)
 	}
 	argv, token := readArgs(t, argsFile)
-	if !strings.Contains(argv, "--url http://127.0.0.1:4321") || !strings.Contains(argv, "--config "+os.DevNull) ||
+	if !strings.Contains(argv, "--url http://127.0.0.1:4321") ||
 		!strings.HasSuffix(argv, " run") || token != "run-token-tun-1" {
 		t.Fatalf("argv %q, token %q", argv, token)
 	}
@@ -190,21 +190,30 @@ func TestTunnelRunnerReplacesAConnectorThatExits(t *testing.T) {
 	}
 }
 
-// A linked machine serves only its fixed address. While AO Cloud cannot hand
-// it out and none is cached, nothing starts and the status says why.
-func TestTunnelRunnerStartsNoQuickTunnelForALinkedMachine(t *testing.T) {
-	cloud, src := newFixedSource(t)
-	cloud.set(http.StatusBadGateway)
-	bin, argsFile := fakeCloudflared(t, registeredLine)
-	r := namedRunner(t, bin, src)
-	if err := r.runOnce(context.Background()); err == nil || !strings.Contains(err.Error(), "502") {
-		t.Fatalf("runOnce = %v", err)
-	}
-	if _, err := os.Stat(argsFile); err == nil {
-		t.Fatal("a connector started without a fixed address")
-	}
-	if snap := r.Runtime.Snapshot(); snap.Running || !strings.Contains(snap.LastError, "502") {
-		t.Fatalf("status = %+v", snap)
+// A linked machine whose fixed tunnel AO Cloud cannot make yet, and that has
+// none cached, serves a quick tunnel, as before fixed addresses.
+func TestTunnelRunnerServesAQuickTunnelUntilAOCloudCanMakeTheFixedOne(t *testing.T) {
+	for _, status := range []int{http.StatusBadGateway, http.StatusTooManyRequests} {
+		cloud, src := newFixedSource(t)
+		cloud.set(status)
+		bin, argsFile := fakeCloudflared(t, registeredLine)
+		r := namedRunner(t, bin, src)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- r.runOnce(ctx) }()
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+			if _, err := os.Stat(argsFile); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%d: no connector started", status)
+			}
+		}
+		if argv, token := readArgs(t, argsFile); strings.HasSuffix(argv, " run") || token != "" {
+			t.Fatalf("%d: argv %q, token %q", status, argv, token)
+		}
+		cancel()
+		<-done
 	}
 }
 

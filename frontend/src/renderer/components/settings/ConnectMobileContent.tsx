@@ -8,8 +8,6 @@ import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
-import { useCloudLocalAuth } from "../../hooks/useCloudLocalAuth";
-import { useLocalSignInDialogStore } from "../../stores/local-signin-dialog-store";
 import { deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 import { captureRendererEvent } from "../../lib/telemetry";
@@ -370,17 +368,14 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		};
 	}, []);
 
-	// Pairing needs an AO account: a signed-in computer is linked, and its code
-	// carries a fixed address that works at home and away. Only an app with no
-	// AO sign-in at all pairs signed out, on this network only.
-	const { session, status: sessionStatus, configured: signInConfigured, signIn } = useCloudSession();
-	const { available: localAuthAvailable } = useCloudLocalAuth();
-	const openLocalSignIn = useLocalSignInDialogStore((state) => state.openDialog);
+	// A signed-in computer is linked, and its code carries a fixed address that
+	// survives restarts. Signed out, pairing works as it always has, with a
+	// quick tunnel whose address changes on restart.
+	const { session, configured: signInConfigured } = useCloudSession();
 	const { settings } = useSettings();
 	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
 	const accountId = session?.user.id ?? "";
 	const signedIn = Boolean(cloudBaseUrl && accountId);
-	const signInRequired = signInConfigured && !signedIn;
 	// Why the last link left this computer out of the account.
 	const [linkError, setLinkError] = useState("");
 	const reportLinkError = (cause: unknown) =>
@@ -459,9 +454,13 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const enable = useMutation({
 		mutationFn: async () => {
+			if (!signedIn) {
+				const { data, error } = await apiClient.POST("/api/v1/mobile/enable");
+				if (error) throw new Error(apiErrorMessage(error));
+				return data;
+			}
 			const { data, error } = await apiClient.POST("/api/v1/mobile/enable-lan-only");
 			if (error) throw new Error(apiErrorMessage(error));
-			if (!signedIn) return data;
 			return linkAndStartRemoteAccess(data?.password ?? "", data?.hostId ?? "");
 		},
 		// The first call can turn the bridge on before the second fails, so read back what is actually on.
@@ -718,10 +717,10 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 						type="button"
 						variant="footer-primary"
 						className="rounded-md shadow-lg"
-						onClick={signInRequired ? () => (localAuthAvailable ? openLocalSignIn() : signIn()) : startBridge}
-						disabled={signInRequired ? sessionStatus === "loading" : busy || enabled}
+						onClick={startBridge}
+						disabled={busy || enabled}
 					>
-						{signInRequired ? t("shell.signIn") : t("mobile.generate")}
+						{t("mobile.generate")}
 					</Button>
 				</div>
 			) : !qrValue && !unreachable ? (
@@ -881,22 +880,13 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					</p>
 				)}
 
-				{!enabled && signInRequired && (
-					<p className="mt-4 text-xs leading-5 text-settings-muted" data-testid="mobile-sign-in-required" role="status">
-						{t("mobile.signInToConnect", "Sign in to AO to connect a phone. Its code then works at home and away.")}
+				{qrValue && signInConfigured && !signedIn && (
+					<p className="mt-4 text-xs leading-5 text-settings-muted" data-testid="mobile-sign-in-hint" role="status">
+						{t("mobile.signInForFixedAddress", "Sign in to AO to give this computer an address that stays the same after restarts.")}
 					</p>
 				)}
 
-				{qrValue && !signedIn && status.noPublicTunnel === true && (
-					<p className="mt-4 text-xs leading-5 text-settings-muted" data-testid="mobile-sign-in-for-remote" role="status">
-						{t(
-							"mobile.signInForRemoteAccess",
-							"Works on this network only. Sign in to AO to reach this computer away from home.",
-						)}
-					</p>
-				)}
-
-				{remoteAccessUnavailable && (signedIn || status.noPublicTunnel !== true) && (
+				{remoteAccessUnavailable && (
 					// Stated rather than hidden: pairing still works on this network,
 					// so this is a limitation of what the code can reach, not an
 					// error. Without it the QR looks entirely normal and the user

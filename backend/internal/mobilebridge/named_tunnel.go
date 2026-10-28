@@ -63,8 +63,9 @@ var (
 	// digest any more: its account removed it. Only AO Cloud's own answer
 	// says so, never a proxy's.
 	errHostRefused = errors.New("AO Cloud no longer lists this machine")
-	// errNoFixedAddresses means this AO Cloud hands out no fixed addresses:
-	// it has no tunnel settings, or predates them.
+	// errNoFixedAddresses means this AO Cloud hands this machine no fixed
+	// address: it has no tunnel settings or predates them, or the account
+	// already uses all of its fixed addresses.
 	errNoFixedAddresses = errors.New("AO Cloud hands out no fixed addresses")
 )
 
@@ -182,7 +183,8 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 		case resp.StatusCode == http.StatusUnauthorized && code == "unauthorized":
 			return NamedTunnel{}, errHostRefused
 		case resp.StatusCode == http.StatusNotFound,
-			resp.StatusCode == http.StatusServiceUnavailable && code == "fixed_addresses_unavailable":
+			resp.StatusCode == http.StatusServiceUnavailable && code == "fixed_addresses_unavailable",
+			resp.StatusCode == http.StatusConflict && code == "fixed_address_limit_reached":
 			return NamedTunnel{}, errNoFixedAddresses
 		}
 		return NamedTunnel{}, fmt.Errorf("AO Cloud returned %d for the fixed address", resp.StatusCode)

@@ -9,9 +9,6 @@ export class AccountHostSyncError extends Error {
 	}
 }
 
-/** AO Cloud refused a new machine because the account lists as many as it can. */
-export class RemoteHostLimitError extends AccountHostSyncError {}
-
 async function request(baseUrl: string, method: string, path: string, body?: unknown, timeoutMs = 10_000): Promise<Response> {
 	const response = await cloudCpFetch(`${baseUrl.replace(/\/+$/, "")}/api/cloud/v1/me/hosts${path}`, {
 		method,
@@ -20,40 +17,20 @@ async function request(baseUrl: string, method: string, path: string, body?: unk
 		cache: "no-store",
 		signal: AbortSignal.timeout(timeoutMs),
 	});
-	if (!response.ok) {
-		// A full account is the one refusal the user can act on, so its message is shown.
-		const refusal = (await response.json().catch(() => null)) as { code?: string; message?: string } | null;
-		if (refusal?.code === "remote_host_limit_reached" && refusal.message) throw new RemoteHostLimitError(refusal.message, response.status);
-		throw new AccountHostSyncError(`AO Cloud host sync failed (${response.status}).`, response.status);
-	}
+	if (!response.ok) throw new AccountHostSyncError(`AO Cloud host sync failed (${response.status}).`, response.status);
 	return response;
 }
 
-/**
- * The account's machines, how many it can list (0 for any number), and
- * whether this AO Cloud gives machines fixed addresses.
- */
-export type AccountHostDirectory = { hosts: AccountRemoteHost[]; limit: number; fixedAddresses: boolean };
+/** The account's machines, and whether this AO Cloud gives machines fixed addresses. */
+export type AccountHostDirectory = { hosts: AccountRemoteHost[]; fixedAddresses: boolean };
 
 export async function readAccountHostDirectory(baseUrl: string): Promise<AccountHostDirectory> {
 	const body = await (await request(baseUrl, "GET", "")).json() as Partial<AccountHostDirectory>;
-	return { hosts: body.hosts ?? [], limit: body.limit ?? 0, fixedAddresses: body.fixedAddresses === true };
+	return { hosts: body.hosts ?? [], fixedAddresses: body.fixedAddresses === true };
 }
 
 export async function listAccountRemoteHosts(baseUrl: string): Promise<AccountRemoteHost[]> {
 	return (await readAccountHostDirectory(baseUrl)).hosts;
-}
-
-/**
- * Refuses a machine the account has no room for. Checked before the machine
- * moves its account token here: a listing refused after that leaves it in no
- * account.
- */
-export function assertRoomFor(directory: AccountHostDirectory, hostId: string): void {
-	const { hosts, limit } = directory;
-	if (limit > 0 && hosts.length >= limit && !hosts.some((host) => host.hostId === hostId)) {
-		throw new RemoteHostLimitError(`An account can list up to ${limit} machines. Remove one to add another.`, 409);
-	}
 }
 
 /** A host saved without a url is listed at its fixed address: AO Cloud knows it from the host id. */

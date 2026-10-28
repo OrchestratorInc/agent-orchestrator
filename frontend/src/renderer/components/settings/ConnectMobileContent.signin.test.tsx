@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { TooltipProvider } from "../ui/tooltip";
 import { apiClient } from "../../lib/api-client";
-import { AccountHostSyncError, deleteAccountRemoteHost, RemoteHostLimitError } from "../../lib/account-remote-hosts";
+import { AccountHostSyncError, deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 
 // Remote access away from home needs sign-in. The daemon fake is just enough
@@ -54,6 +54,15 @@ vi.mock("../../lib/api-client", () => ({
 	apiClient: {
 		GET: async (path: string) => (path === "/api/v1/mobile/devices" ? { data: { devices: [] } } : { data: structuredClone(fake.status) }),
 		POST: vi.fn(async (path: string) => {
+			if (path === "/api/v1/mobile/enable") {
+				Object.assign(fake.status, {
+					enabled: true, noPublicTunnel: false, password: "pw-1",
+					endpoints: [
+						{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
+						...(fake.tunnelHost ? [{ kind: "tunnel", host: fake.tunnelHost, port: 443, secure: true }] : []),
+					],
+				});
+			}
 			if (path === "/api/v1/mobile/enable-lan-only") {
 				Object.assign(fake.status, {
 					enabled: true, noPublicTunnel: true, password: "pw-1",
@@ -97,15 +106,15 @@ beforeEach(() => {
 
 const posted = () => (vi.mocked(apiClient.POST).mock.calls as unknown[][]).map(([path]) => path);
 
-test("a signed-out computer is asked to sign in before it pairs", async () => {
+test("a signed-out computer pairs with a quick tunnel, as before, and hears what signing in adds", async () => {
 	fake.signedIn = false;
+	fake.tunnelHost = "quiet-river.trycloudflare.com";
 	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
 
-	expect(fake.signIn).toHaveBeenCalled();
-	expect(screen.getByTestId("mobile-sign-in-required")).toHaveTextContent("Sign in to AO to connect a phone");
-	expect(screen.queryByRole("button", { name: "Generate" })).toBeNull();
-	expect(posted()).toEqual([]);
+	expect(await screen.findByTestId("mobile-sign-in-hint")).toHaveTextContent("address that stays the same after restarts");
+	expect(posted()).toEqual(["/api/v1/mobile/enable"]);
+	expect(linkThisComputer).not.toHaveBeenCalled();
 });
 
 test("a signed-in computer is linked before its tunnel starts", async () => {
@@ -116,7 +125,7 @@ test("a signed-in computer is linked before its tunnel starts", async () => {
 	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/enable-lan-only", "/api/v1/mobile/remote-access"]));
 	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-1", undefined);
 	expect(vi.mocked(linkThisComputer).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(apiClient.POST).mock.invocationCallOrder[1]);
-	expect(screen.queryByTestId("mobile-sign-in-for-remote")).toBeNull();
+	expect(screen.queryByTestId("mobile-sign-in-hint")).toBeNull();
 });
 
 test("a listing this enable added is taken back when remote access fails", async () => {
@@ -126,17 +135,6 @@ test("a listing this enable added is taken back when remote access fails", async
 	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
 
 	await waitFor(() => expect(deleteAccountRemoteHost).toHaveBeenCalledWith("https://cp.example.test", "h_fixture"));
-});
-
-test("a full account is said, and remote access still starts", async () => {
-	fake.signedIn = true;
-	vi.mocked(linkThisComputer).mockRejectedValueOnce(new RemoteHostLimitError("An account can list up to 10 machines. Remove one to add another.", 409));
-	renderContent();
-	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
-
-	expect(await screen.findByText("An account can list up to 10 machines. Remove one to add another.")).toBeVisible();
-	expect(posted()).toEqual(["/api/v1/mobile/enable-lan-only", "/api/v1/mobile/remote-access"]);
-	expect(linkThisComputer).toHaveBeenCalledTimes(1);
 });
 
 test("a computer AO Cloud could not give a fixed address says why and is not listed elsewhere", async () => {

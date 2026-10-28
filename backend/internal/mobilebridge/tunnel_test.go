@@ -435,10 +435,6 @@ func TestCloudflaredArgsTargetLoopback(t *testing.T) {
 		t.Errorf("autoupdate not disabled — a self-update would swap the binary "+
 			"under a pinned log-format contract: %v", args)
 	}
-	// A personal ~/.cloudflared/config.yml's ingress would win over --url.
-	if !strings.Contains(joined, "--config "+os.DevNull) {
-		t.Errorf("default config file not shut out: %v", args)
-	}
 }
 
 func TestTunnelBackoffGrowsAndCaps(t *testing.T) {

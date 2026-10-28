@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 // them is what is tested: nothing may move the machine's account token to an
 // account that would then refuse to list it.
 const fake = vi.hoisted(() => ({
-	directory: { hosts: [] as Array<{ hostId: string }>, limit: 10, fixedAddresses: true },
+	directory: { hosts: [] as Array<{ hostId: string }>, fixedAddresses: true },
 	calls: [] as string[],
 }));
 vi.mock("./account-remote-hosts", async (original) => ({
@@ -18,14 +18,13 @@ vi.mock("./api-client", () => ({
 }));
 vi.mock("./bridge", () => ({ aoBridge: { remotes: { computerName: async () => "Mac" } } }));
 
-import { RemoteHostLimitError } from "./account-remote-hosts";
 import { linkThisComputer } from "./link-this-computer";
 
 const link = (options?: { url?: string; ifListed?: boolean }) => linkThisComputer("https://cp.example.test", "user_01", "h_this", "pw", options);
 const others = (n: number) => Array.from({ length: n }, (_, i) => ({ hostId: `h_${i}` }));
 
 beforeEach(() => {
-	fake.directory = { hosts: [], limit: 10, fixedAddresses: true };
+	fake.directory = { hosts: [], fixedAddresses: true };
 	fake.calls.length = 0;
 });
 
@@ -43,15 +42,6 @@ it("issues no token for an address-free link AO Cloud would refuse", async () =>
 	expect(fake.calls).toEqual(["directory"]);
 	// With the tunnel's address it links.
 	expect((await link({ url: "https://quiet-river.trycloudflare.com:443" })).hostId).toBe("h_this");
-});
-
-it("refuses a full account before the token moves", async () => {
-	fake.directory.hosts = others(10);
-	await expect(link()).rejects.toBeInstanceOf(RemoteHostLimitError);
-	expect(fake.calls).toEqual(["directory"]);
-	// A machine the full account lists already links again.
-	fake.directory.hosts = [...others(9), { hostId: "h_this" }];
-	expect((await link()).hostId).toBe("h_this");
 });
 
 it("links only a listed computer when asked to", async () => {
