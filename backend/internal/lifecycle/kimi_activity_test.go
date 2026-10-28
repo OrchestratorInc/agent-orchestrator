@@ -60,12 +60,19 @@ func applyKimi(t *testing.T, m *Manager, event string) {
 	mustApply(t, m, "mer-1", sig(state, event, "Read", ""))
 }
 
+func applyKimiApproval(t *testing.T, m *Manager, event, toolCallID string) {
+	t.Helper()
+	state, ok := activitydispatch.Derive("kimi", event, []byte(`{"session_id":"kimi-native-1","tool_call_id":"`+toolCallID+`"}`))
+	if !ok {
+		t.Fatalf("Derive(kimi, %q) reported no activity signal", event)
+	}
+	mustApply(t, m, "mer-1", sig(state, event, "Bash", toolCallID))
+}
+
 // A later approval in the same session re-arms waiting_input: resolving one
 // dialog with PermissionResult must not immunize the session against the next
-// permission request. (Concurrent unresolved approvals are a known limitation:
-// a PermissionResult carries no correlation AO's waiting_input path tracks, so
-// one dialog resolving can leave the pill on Working while another is still
-// pending. Kimi's payloads do carry toolCallId/agentId for a future fix.)
+// permission request. This is the id-less path; the correlated guard is
+// covered by TestKimiPermissionResultWithAnotherApprovalPendingStaysWaiting.
 func TestKimiActivityNextApprovalReArmsWaitingInput(t *testing.T) {
 	m, st, _ := newManager()
 	seedSignaled(st, "mer-1", domain.ActivityActive)
@@ -79,5 +86,35 @@ func TestKimiActivityNextApprovalReArmsWaitingInput(t *testing.T) {
 	applyKimi(t, m, "permission-request")
 	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
 		t.Fatalf("state after next permission request = %q, want waiting_input", got)
+	}
+}
+
+// A PermissionResult correlates to its own request through the tool_call_id
+// lifted onto the signal: while another recorded approval is still pending,
+// one dialog resolving must not flip the session to Working. This covers both
+// concurrently open dialogs and a late, reordered result delivered after the
+// next request (kimi's fire-and-forget hooks are independent processes, so
+// delivery order is unguaranteed); the last result lifts waiting_input.
+func TestKimiPermissionResultWithAnotherApprovalPendingStaysWaiting(t *testing.T) {
+	m, st, _ := newManager()
+	seedSignaled(st, "mer-1", domain.ActivityActive)
+
+	applyKimiApproval(t, m, "permission-request", "call-a")
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("state after first request = %q, want waiting_input", got)
+	}
+	applyKimiApproval(t, m, "permission-request", "call-b")
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("state after second request = %q, want waiting_input", got)
+	}
+
+	applyKimiApproval(t, m, "permission-resolved", "call-a")
+	if got := stateOf(st, "mer-1"); got != domain.ActivityWaitingInput {
+		t.Fatalf("state after first result while second approval pending = %q, want waiting_input", got)
+	}
+
+	applyKimiApproval(t, m, "permission-resolved", "call-b")
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("state after final result = %q, want active", got)
 	}
 }

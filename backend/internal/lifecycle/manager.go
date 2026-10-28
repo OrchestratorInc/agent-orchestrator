@@ -1098,6 +1098,15 @@ type toolFlight struct {
 	// after-execution event can clear only its own key, and the session remains
 	// blocked until every observed dialog has completed.
 	cursorPending map[string]int
+	// permissionPending records, by lifted tool-use id, the permission
+	// requests whose result has not arrived yet (kimi's PermissionRequest and
+	// PermissionResult both carry the approval's tool_call_id). A correlated
+	// result clears only its own entry, so waiting_input lifts only when the
+	// last pending approval resolves — another dialog still on screen, or a
+	// late result delivered after the next request, keeps the session waiting.
+	// Id-less installs never populate it and keep the unconditional
+	// turn-boundary clear.
+	permissionPending map[string]struct{}
 }
 
 func cloneToolFlight(flight *toolFlight) *toolFlight {
@@ -1105,15 +1114,19 @@ func cloneToolFlight(flight *toolFlight) *toolFlight {
 		return nil
 	}
 	clone := &toolFlight{
-		inflight:         make(map[string]string, len(flight.inflight)),
-		blockedCandidate: flight.blockedCandidate,
-		cursorPending:    make(map[string]int, len(flight.cursorPending)),
+		inflight:          make(map[string]string, len(flight.inflight)),
+		blockedCandidate:  flight.blockedCandidate,
+		cursorPending:     make(map[string]int, len(flight.cursorPending)),
+		permissionPending: make(map[string]struct{}, len(flight.permissionPending)),
 	}
 	for id, name := range flight.inflight {
 		clone.inflight[id] = name
 	}
 	for key, count := range flight.cursorPending {
 		clone.cursorPending[key] = count
+	}
+	for id := range flight.permissionPending {
+		clone.permissionPending[id] = struct{}{}
 	}
 	return clone
 }
@@ -1221,6 +1234,14 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 		if fl != nil {
 			delete(fl.inflight, s.ToolUseID)
 		}
+	case "permission-request":
+		if s.ToolUseID != "" {
+			f := ensure()
+			if f.permissionPending == nil {
+				f.permissionPending = map[string]struct{}{}
+			}
+			f.permissionPending[s.ToolUseID] = struct{}{}
+		}
 	}
 
 	switch {
@@ -1321,6 +1342,22 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 		// waiting_input: background tool traffic must not clear the "waiting
 		// on the user" marker; only an explicit user/turn signal does.
 		return suppressed
+
+	case s.Event == "permission-resolved" && s.ToolUseID != "":
+		// A correlated result resolves only its own approval: while another
+		// recorded request is still pending — a concurrent dialog, or a late
+		// result reordered after the next request — the session stays on
+		// waiting_input instead of flipping to Working prematurely. An
+		// id-less or unrecorded result (old CLI, restarted daemon) keeps the
+		// unconditional turn-boundary clear.
+		if fl != nil && fl.permissionPending != nil {
+			delete(fl.permissionPending, s.ToolUseID)
+			if len(fl.permissionPending) > 0 {
+				return suppressed
+			}
+		}
+		delete(m.flights, id)
+		return s
 
 	default:
 		if isTurnBoundaryEvent(s.Event) {

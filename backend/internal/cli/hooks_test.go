@@ -1530,6 +1530,30 @@ func TestHooks_KimiMidTurnEventsReportActive(t *testing.T) {
 	}
 }
 
+// Kimi identifies tool calls and pending approvals as tool_call_id; the wire
+// must lift it onto toolUseId so lifecycle can correlate a permission result
+// with its own request.
+func TestHooks_KimiToolCallIdLiftsAsToolUseID(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"kimi-native-1","tool_call_id":"call-1"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "kimi", "permission-resolved")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	want := setActivityAPIRequest{State: "active", Event: "permission-resolved", AgentSessionID: "kimi-native-1", ToolUseID: "call-1"}
+	assertActivityRequest(t, req, want)
+}
+
 func TestHooks_RegisteredHarnessSessionStartReportsAgentSessionID(t *testing.T) {
 	// Command Code is the one harness here whose SessionStart carries metadata
 	// only: it also fires on resume and clear, and a native restore delivers no

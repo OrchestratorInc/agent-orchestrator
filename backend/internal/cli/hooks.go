@@ -112,16 +112,22 @@ const (
 // payload. The field names are shared vocabulary across agent CLIs that emit
 // them (claude-code's PreToolUse/PostToolUse/PostToolUseFailure and
 // PermissionRequest payloads); adapters whose payloads lack them yield empty
-// strings and the signal degrades to today's state-only form.
+// strings and the signal degrades to today's state-only form. Kimi identifies
+// its tool calls (and pending approvals) as tool_call_id, so that field is
+// lifted onto the same correlation id when tool_use_id is absent.
 func activityMeta(payload []byte) (toolName, toolUseID string) {
 	payload = normalizeHookPayload(payload)
 	var p struct {
-		ToolName  string `json:"tool_name"`
-		ToolUseID string `json:"tool_use_id"`
+		ToolName   string `json:"tool_name"`
+		ToolUseID  string `json:"tool_use_id"`
+		ToolCallID string `json:"tool_call_id"`
 	}
 	_ = json.Unmarshal(payload, &p)
 	if len(p.ToolName) > maxActivityMetaLen {
 		p.ToolName = ""
+	}
+	if p.ToolUseID == "" && len(p.ToolCallID) <= maxActivityMetaLen {
+		p.ToolUseID = p.ToolCallID
 	}
 	if len(p.ToolUseID) > maxActivityMetaLen {
 		p.ToolUseID = ""
