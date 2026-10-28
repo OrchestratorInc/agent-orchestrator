@@ -758,6 +758,27 @@ describe("harness updates while sessions run", () => {
 		expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
 	});
 
+	it("shows how long a slow update has run and the output it has printed so far", async () => {
+		jobs = [{ target: "claude-code", status: "installing", startedAt: new Date(Date.now() - 161_000).toISOString(), output: "Downloading Claude Code 2.1.292\n 42%" }];
+		mountNotice();
+		const busy = await screen.findByRole("button", { name: "Updating…" });
+		expect(busy).toBeDisabled();
+		// The button keeps one width; the time sits below the versions.
+		expect(busy).toHaveTextContent(/^Updating…$/);
+		expect(screen.getByText(/^2:4\d elapsed$/)).toBeInTheDocument();
+		expect(screen.getByText("Still downloading. This can take a few minutes on slow networks.")).toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Show output" }));
+		expect(screen.getByLabelText("Installer output")).toHaveTextContent("Downloading Claude Code 2.1.292 42%");
+	});
+
+	it("keeps a just-started update to its elapsed time", async () => {
+		jobs = [{ target: "claude-code", status: "installing", startedAt: new Date(Date.now() - 5_000).toISOString() }];
+		mountNotice();
+		expect(await screen.findByRole("button", { name: "Updating…" })).toBeDisabled();
+		expect(screen.getByText(/^0:0\d elapsed$/)).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Show output" })).toBeNull();
+	});
+
 	it("starts a Windows update that waits for idle sessions without asking", async () => {
 		advisories["claude-code"] = { ...claudeAdvisory, inUse: { liveSessions: 1, sessionIds: ["s1"], level: "idle" } };
 		mountNotice();

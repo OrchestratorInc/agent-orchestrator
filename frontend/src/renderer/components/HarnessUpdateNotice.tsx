@@ -15,6 +15,7 @@ import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { AgentAvatar } from "./AgentAvatar";
+import { HarnessJobSlowDetail, JobElapsedLine } from "./settings/harness/HarnessJobProgress";
 import { HarnessSessionsDialog, IdleUpdateStatus } from "./settings/harness/HarnessSessionsDialog";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -306,6 +307,9 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 				<p role="alert" className="line-clamp-3 break-words text-caption text-error">{error}</p>
 				<Button type="button" size="sm" variant="outline" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
 			</div> : null}
+			{/* Elapsed time sits below the row: the fixed-width button keeps the versions in place. */}
+			{busy ? <JobElapsedLine job={job} className="mt-1 text-caption text-muted-foreground" /> : null}
+			{busy ? <HarnessJobSlowDetail job={job} className="mt-1" /> : null}
 			{job && isWaitingForIdleJob(job) ? <IdleUpdateStatus agentId={agentId} job={job} onViewSessions={(waiting) => setSessionsView({ agentId, inUse: waiting })} /> : null}
 			{!error && !busy && inUse[agentId] ? <p role="status" className="mt-2 break-words text-caption text-muted-foreground">
 				{inUse[agentId]!.starting ? t("settings.harness.inUseStarting", { agent: agentLabel(agentId) }) : t("settings.harness.inUseBlocked", { count: inUse[agentId]!.count, agent: agentLabel(agentId) })}

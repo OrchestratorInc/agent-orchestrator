@@ -51,6 +51,7 @@ import { HarnessAccountTab } from "./HarnessAccountTab";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 import { diagnosticsText, healthText, machineText } from "./harness-diagnostics";
 import { HarnessHealthTab } from "./HarnessHealthTab";
+import { JobElapsed } from "./HarnessJobProgress";
 import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
 import { HarnessSessionsDialog } from "./HarnessSessionsDialog";
@@ -828,6 +829,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 								<AgentAvatar className={cn("shrink-0", split ? "size-5" : "size-6", !details.isInstalled && "opacity-45 grayscale")} decorative provider={agentId} />
 								<span className={cn("min-w-0 flex-1 truncate text-sm", details.isInstalled || selected ? "text-settings-label" : "text-settings-muted")}>{agentLabel(agentId)}</span>
 								{/* One status slot: progress replaces the update icon while an install, update or login runs. */}
+								{details.busy ? <JobElapsed job={details.job} className="shrink-0 text-caption text-settings-muted" /> : null}
 								{details.busy ? <span role="status" className="flex size-4 shrink-0 items-center justify-center"><LoaderCircle className="size-4 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" /><span className="sr-only">{details.progressLabel}</span></span>
 									: details.authBusy ? <LoaderCircle className="size-4 shrink-0 animate-spin text-settings-muted" strokeWidth={1.75} aria-hidden="true" />
 									: details.isInstalled && details.updateAvailable ? <CircleArrowUp

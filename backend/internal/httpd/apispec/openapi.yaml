@@ -17129,10 +17129,26 @@ components:
           description: Fixed user-visible consequence to acknowledge before running
             this install.
           type: string
+        operation:
+          description: What this harness job does. Absent for a job recovered after
+            a daemon restart.
+          enum:
+          - install
+          - reinstall
+          - update
+          type: string
         output:
           description: Combined stdout+stderr from the install command, tail-capped
-            to the last ~4000 bytes.
+            to the last ~4000 bytes. While the command runs, the output it has printed
+            so far.
           type: string
+        runStartedAt:
+          description: When the install command started running. Later than startedAt
+            when an update first waited for idle sessions.
+          format: date-time
+          type:
+          - "null"
+          - string
         startedAt:
           format: date-time
           type:
