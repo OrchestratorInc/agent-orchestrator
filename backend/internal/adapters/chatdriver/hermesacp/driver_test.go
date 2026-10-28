@@ -50,7 +50,7 @@ func TestConfigureLaunchesNativeACPWithEnvSystemPrompt(t *testing.T) {
 			// Hermes reads an explicit environment prompt ahead of its
 			// configuration, so the persona from config.yaml must not replace
 			// it when the launch inherits one.
-			name: "an inherited explicit prompt wins over the config persona",
+			name: "a session-env explicit prompt wins over the config persona",
 			cfg: acpdriver.LaunchConfig{
 				SystemPrompt: "Follow AO rules.",
 				Env: map[string]string{
