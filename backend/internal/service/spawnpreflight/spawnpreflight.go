@@ -83,12 +83,6 @@ type Check struct {
 	// Command is the display-only install or sign-in command for this OS.
 	Command          string `json:"command,omitempty"`
 	DocumentationURL string `json:"documentationUrl,omitempty"`
-	// InstallTarget is set when the daemon can run the fix itself through
-	// POST /api/v1/system/install/{target}.
-	InstallTarget string `json:"installTarget,omitempty"`
-	// CanStartLogin is set when POST /api/v1/agents/{agent}/auth opens the
-	// harness's reviewed sign-in terminal.
-	CanStartLogin bool `json:"canStartLogin,omitempty"`
 }
 
 // Report is the response of POST /api/v1/sessions/preflight.
@@ -246,9 +240,6 @@ func (s *Service) installCheck(ctx context.Context, harness domain.AgentHarness)
 		}
 		check.Command = plan.Command
 		check.DocumentationURL = plan.DocumentationURL
-		if plan.Available && plan.Automatic {
-			check.InstallTarget = plan.AgentID
-		}
 		break
 	}
 	return check
@@ -267,7 +258,6 @@ func (s *Service) loginCheck(ctx context.Context, harness domain.AgentHarness) C
 	}
 	check.Command = plan.DisplayCommand
 	check.DocumentationURL = plan.DocumentationURL
-	check.CanStartLogin = plan.Available && plan.LaunchMode == agentauth.LaunchTerminal
 	return check
 }
 
@@ -276,7 +266,6 @@ func (s *Service) tmuxCheck() Check {
 	check := Check{Code: BlockerRuntimePrerequisiteMissing, Blocking: true, DocumentationURL: plan.DocsURL}
 	if !plan.Unsupported {
 		check.Command = systeminstall.DisplayCommand(plan)
-		check.InstallTarget = string(systeminstall.TargetTmux)
 	}
 	return check
 }

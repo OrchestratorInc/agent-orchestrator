@@ -21162,8 +21162,6 @@ components:
       properties:
         blocking:
           type: boolean
-        canStartLogin:
-          type: boolean
         code:
           enum:
           - agent_not_installed
@@ -21175,8 +21173,6 @@ components:
         command:
           type: string
         documentationUrl:
-          type: string
-        installTarget:
           type: string
       required:
       - code

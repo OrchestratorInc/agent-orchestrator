@@ -48,8 +48,10 @@ func (f fakeAuth) Plan(context.Context, string) (agentauth.Plan, error) { return
 
 type recordingSink struct{ events []ports.TelemetryEvent }
 
-func (s *recordingSink) Emit(_ context.Context, ev ports.TelemetryEvent) { s.events = append(s.events, ev) }
-func (s *recordingSink) Close(context.Context) error                    { return nil }
+func (s *recordingSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
+	s.events = append(s.events, ev)
+}
+func (s *recordingSink) Close(context.Context) error { return nil }
 
 func ready() fakeReadiness {
 	return fakeReadiness{snapshot: domain.AgentReadinessSnapshot{
@@ -140,7 +142,7 @@ func TestRuntimePrerequisitePerOS(t *testing.T) {
 				t.Fatalf("report = %+v, want one blocking check", report)
 			}
 			check := report.Checks[0]
-			if check.Code != BlockerRuntimePrerequisiteMissing || !check.Blocking || check.InstallTarget != "tmux" || !strings.Contains(check.Command, tc.wantCommand) {
+			if check.Code != BlockerRuntimePrerequisiteMissing || !check.Blocking || !strings.Contains(check.Command, tc.wantCommand) {
 				t.Fatalf("check = %+v, want tmux install via %q", check, tc.wantCommand)
 			}
 		})
@@ -166,7 +168,7 @@ func TestAgentNotInstalledCarriesInstallerCommand(t *testing.T) {
 		t.Fatalf("checks = %+v", report.Checks)
 	}
 	check := report.Checks[0]
-	if check.Code != BlockerAgentNotInstalled || !check.Blocking || check.Command != "npm install -g @openai/codex" || check.InstallTarget != "codex" || check.DocumentationURL == "" {
+	if check.Code != BlockerAgentNotInstalled || !check.Blocking || check.Command != "npm install -g @openai/codex" || check.DocumentationURL == "" {
 		t.Fatalf("check = %+v", check)
 	}
 	if sink.events[0].Payload["blockers"] != "agent_not_installed" || sink.events[0].Payload["result"] != "blocked" {
@@ -179,7 +181,7 @@ func TestSignedOutProbeBlocksOnlyCodex(t *testing.T) {
 		Installation:   domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled, Freshness: domain.AgentReadinessFresh},
 		Authentication: domain.AgentAuthenticationObservation{State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh},
 	}}
-	auth := fakeAuth{plan: agentauth.Plan{Available: true, LaunchMode: agentauth.LaunchTerminal, DisplayCommand: "claude /login"}}
+	auth := fakeAuth{plan: agentauth.Plan{DisplayCommand: "claude /login"}}
 	for _, tc := range []struct {
 		harness      domain.AgentHarness
 		wantBlocking bool
@@ -194,7 +196,7 @@ func TestSignedOutProbeBlocksOnlyCodex(t *testing.T) {
 			t.Fatalf("%s: checks = %+v", tc.harness, report.Checks)
 		}
 		check := report.Checks[0]
-		if check.Blocking != tc.wantBlocking || report.CanProceed == tc.wantBlocking || !check.CanStartLogin || check.Command != "claude /login" {
+		if check.Blocking != tc.wantBlocking || report.CanProceed == tc.wantBlocking || check.Command != "claude /login" {
 			t.Fatalf("%s: check = %+v canProceed=%v", tc.harness, check, report.CanProceed)
 		}
 	}

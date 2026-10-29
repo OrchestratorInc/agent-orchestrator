@@ -30,7 +30,7 @@ func TestSpawnPreflightRoute(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	fake := &fakeSpawnPreflight{report: spawnpreflight.Report{
 		Kind: "orchestrator", Harness: "codex", Checks: []spawnpreflight.Check{{
-			Code: spawnpreflight.BlockerAgentNotInstalled, Blocking: true, Command: "npm install -g @openai/codex", InstallTarget: "codex",
+			Code: spawnpreflight.BlockerAgentNotInstalled, Blocking: true, Command: "npm install -g @openai/codex",
 		}},
 	}}
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{SpawnPreflight: fake}, httpd.ControlDeps{}))
@@ -41,7 +41,7 @@ func TestSpawnPreflightRoute(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("POST /sessions/preflight = %d, body=%s", status, body)
 	}
-	for _, want := range []string{`"code":"agent_not_installed"`, `"installTarget":"codex"`, `"blocking":true`} {
+	for _, want := range []string{`"code":"agent_not_installed"`, `"command":"npm install -g @openai/codex"`, `"blocking":true`} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("body missing %s: %s", want, body)
 		}

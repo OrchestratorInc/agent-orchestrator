@@ -7539,12 +7539,10 @@ export interface components {
         };
         SpawnPreflightCheck: {
             blocking: boolean;
-            canStartLogin?: boolean;
             /** @enum {string} */
             code: "agent_not_installed" | "agent_unauthorized" | "runtime_prerequisite_missing" | "default_branch_unresolved" | "agent_required";
             command?: string;
             documentationUrl?: string;
-            installTarget?: string;
         };
         SpawnPreflightRequest: {
             /** @description Harness the spawn will request. Empty resolves the project's role override, as the spawn does. */
