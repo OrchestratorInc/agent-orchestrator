@@ -3684,5 +3684,15 @@
 	"share.people.working": "arbeitet",
 	"share.people.waiting": "wartet",
 	"share.people.idle": "inaktiv",
-	"board.shared.working": "{{name}} arbeitet"
+	"board.shared.working": "{{name}} arbeitet",
+	"newTask.cloudConfiguredDefault": "Projekt- oder Agent-Standard",
+	"newTask.cloudCredentialModels": "Aus der Modellliste Ihres verbundenen Anbieters",
+	"newTask.cloudLegacyModels": "Dieser Cloud-Server kann seine Modelle nicht auflisten. Diese Vorschläge stammen von diesem Computer und laufen in der Cloud möglicherweise nicht.",
+	"newTask.cloudModelsCatalog": "Modelle für {{agent}} in der Cloud",
+	"newTask.cloudModelsFailed": "Die Cloud-Modelle für {{agent}} konnten nicht geladen werden. Nutzen Sie den Standard oder geben Sie eine Modell-ID ein.",
+	"newTask.cloudModelsRelease": "Modelle für {{agent}} {{version}}",
+	"newTask.cloudModelsUnavailable": "Die Cloud hat keine Modellliste für {{agent}}. Nutzen Sie den Standard oder geben Sie eine Modell-ID ein.",
+	"newTask.cloudModelsVerified": "Auf Ihren Cloud-Workern geprüft",
+	"newTask.cloudModelUnlisted": "{{model}} steht nicht in der Cloud-Modellliste für {{agent}} und läuft daher möglicherweise nicht.",
+	"settings.models.useConfiguredDefault": "Projekt- oder Agent-Standard verwenden"
 }

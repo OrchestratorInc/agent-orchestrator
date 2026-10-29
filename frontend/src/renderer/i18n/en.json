@@ -3665,5 +3665,15 @@
 	"share.people.working": "working",
 	"share.people.waiting": "in line",
 	"share.people.idle": "idle",
-	"board.shared.working": "{{name}} working"
+	"board.shared.working": "{{name}} working",
+	"newTask.cloudConfiguredDefault": "Project or agent default",
+	"newTask.cloudCredentialModels": "From your connected provider's model list",
+	"newTask.cloudLegacyModels": "This Cloud server can't list its models. These suggestions come from this computer and may not run in Cloud.",
+	"newTask.cloudModelsCatalog": "Models for {{agent}} in Cloud",
+	"newTask.cloudModelsFailed": "Couldn't load Cloud's models for {{agent}}. Use the default or enter a model ID.",
+	"newTask.cloudModelsRelease": "Models for {{agent}} {{version}}",
+	"newTask.cloudModelsUnavailable": "Cloud has no model list for {{agent}}. Use the default or enter a model ID.",
+	"newTask.cloudModelsVerified": "Verified on your Cloud workers",
+	"newTask.cloudModelUnlisted": "{{model}} isn't in Cloud's model list for {{agent}}, so it may not run.",
+	"settings.models.useConfiguredDefault": "Use project or agent default"
 }

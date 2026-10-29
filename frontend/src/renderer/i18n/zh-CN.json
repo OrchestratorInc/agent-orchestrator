@@ -3666,5 +3666,15 @@
 	"share.people.working": "工作中",
 	"share.people.waiting": "排队中",
 	"share.people.idle": "空闲",
-	"board.shared.working": "{{name}} 工作中"
+	"board.shared.working": "{{name}} 工作中",
+	"newTask.cloudConfiguredDefault": "项目或智能体默认值",
+	"newTask.cloudCredentialModels": "来自你已连接提供商的模型列表",
+	"newTask.cloudLegacyModels": "此云端服务器无法列出其模型。这些建议来自此电脑，可能无法在云端运行。",
+	"newTask.cloudModelsCatalog": "云端 {{agent}} 的模型",
+	"newTask.cloudModelsFailed": "无法加载云端 {{agent}} 的模型。请使用默认值或输入模型 ID。",
+	"newTask.cloudModelsRelease": "{{agent}} {{version}} 的模型",
+	"newTask.cloudModelsUnavailable": "云端没有 {{agent}} 的模型列表。请使用默认值或输入模型 ID。",
+	"newTask.cloudModelsVerified": "已在你的云端工作节点上验证",
+	"newTask.cloudModelUnlisted": "{{model}} 不在云端 {{agent}} 的模型列表中，可能无法运行。",
+	"settings.models.useConfiguredDefault": "使用项目或智能体默认值"
 }

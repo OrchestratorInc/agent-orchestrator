@@ -734,12 +734,12 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		? undefined
 		: cloudCatalog
 			? cloudCatalog.source === "worker"
-				? t("newTask.cloudModelsVerified", { defaultValue: "Verified on your Cloud workers" })
+				? t("newTask.cloudModelsVerified")
 				: cloudCatalog.cliVersion
-					? t("newTask.cloudModelsRelease", { agent: selectedAgentLabel, version: cloudCatalog.cliVersion, defaultValue: "Models for {{agent}} {{version}}" })
-					: t("newTask.cloudModelsCatalog", { agent: selectedAgentLabel, defaultValue: "Models for {{agent}} in Cloud" })
+					? t("newTask.cloudModelsRelease", { agent: selectedAgentLabel, version: cloudCatalog.cliVersion })
+					: t("newTask.cloudModelsCatalog", { agent: selectedAgentLabel })
 			: localCatalogForCloud && cloudCatalogGap === "unavailable"
-				? t("newTask.cloudCredentialModels", { defaultValue: "From your connected provider's model list" })
+				? t("newTask.cloudCredentialModels")
 				: cloudModelCatalogQuery.isFetching
 					? t("settings.models.loading")
 					: undefined;
@@ -747,14 +747,14 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		? undefined
 		: cloudCatalog
 			? isConcreteModelID(selectedModelOrMode) && !cloudCatalog.models.some((item) => item.id === selectedModelOrMode)
-				? t("newTask.cloudModelUnlisted", { model: selectedModelOrMode, agent: selectedAgentLabel, defaultValue: "{{model}} isn't in Cloud's model list for {{agent}}, so it may not run." })
+				? t("newTask.cloudModelUnlisted", { model: selectedModelOrMode, agent: selectedAgentLabel })
 				: undefined
 			: cloudCatalogGap === "legacy"
-				? t("newTask.cloudLegacyModels", { defaultValue: "This Cloud server can't list its models. These suggestions come from this computer and may not run in Cloud." })
+				? t("newTask.cloudLegacyModels")
 				: cloudCatalogGap === "unavailable" && !localCatalogForCloud
-					? t("newTask.cloudModelsUnavailable", { agent: selectedAgentLabel, defaultValue: "Cloud has no model list for {{agent}}. Use the default or enter a model ID." })
+					? t("newTask.cloudModelsUnavailable", { agent: selectedAgentLabel })
 					: cloudCatalogGap === "failed"
-						? t("newTask.cloudModelsFailed", { agent: selectedAgentLabel, defaultValue: "Couldn't load Cloud's models for {{agent}}. Use the default or enter a model ID." })
+						? t("newTask.cloudModelsFailed", { agent: selectedAgentLabel })
 						: undefined;
 	const canSubmit =
 		hostConnected &&

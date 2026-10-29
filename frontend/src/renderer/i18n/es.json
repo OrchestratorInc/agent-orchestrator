@@ -3753,5 +3753,15 @@
 	"share.people.working": "trabajando",
 	"share.people.waiting": "en espera",
 	"share.people.idle": "inactivo",
-	"board.shared.working": "{{name}} trabajando"
+	"board.shared.working": "{{name}} trabajando",
+	"newTask.cloudConfiguredDefault": "Predeterminado del proyecto o del agente",
+	"newTask.cloudCredentialModels": "De la lista de modelos de su proveedor conectado",
+	"newTask.cloudLegacyModels": "Este servidor en la nube no puede listar sus modelos. Estas sugerencias provienen de este equipo y es posible que no funcionen en la nube.",
+	"newTask.cloudModelsCatalog": "Modelos de {{agent}} en la nube",
+	"newTask.cloudModelsFailed": "No se pudieron cargar los modelos de {{agent}} en la nube. Use el predeterminado o introduzca un ID de modelo.",
+	"newTask.cloudModelsRelease": "Modelos de {{agent}} {{version}}",
+	"newTask.cloudModelsUnavailable": "La nube no tiene una lista de modelos para {{agent}}. Use el predeterminado o introduzca un ID de modelo.",
+	"newTask.cloudModelsVerified": "Verificado en sus workers en la nube",
+	"newTask.cloudModelUnlisted": "{{model}} no está en la lista de modelos de {{agent}} en la nube, así que es posible que no funcione.",
+	"settings.models.useConfiguredDefault": "Usar el predeterminado del proyecto o del agente"
 }

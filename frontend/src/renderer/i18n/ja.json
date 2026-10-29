@@ -3684,5 +3684,15 @@
 	"share.people.working": "作業中",
 	"share.people.waiting": "順番待ち",
 	"share.people.idle": "待機中",
-	"board.shared.working": "{{name}} が作業中"
+	"board.shared.working": "{{name}} が作業中",
+	"newTask.cloudConfiguredDefault": "プロジェクトまたはエージェントの既定",
+	"newTask.cloudCredentialModels": "接続済みプロバイダーのモデル一覧から",
+	"newTask.cloudLegacyModels": "このクラウドサーバーはモデルを一覧表示できません。これらの候補はこのコンピューターのもので、クラウドでは動作しない場合があります。",
+	"newTask.cloudModelsCatalog": "クラウドの {{agent}} のモデル",
+	"newTask.cloudModelsFailed": "クラウドの {{agent}} のモデルを読み込めませんでした。既定を使うか、モデル ID を入力してください。",
+	"newTask.cloudModelsRelease": "{{agent}} {{version}} のモデル",
+	"newTask.cloudModelsUnavailable": "クラウドには {{agent}} のモデル一覧がありません。既定を使うか、モデル ID を入力してください。",
+	"newTask.cloudModelsVerified": "あなたのクラウドワーカーで確認済み",
+	"newTask.cloudModelUnlisted": "{{model}} はクラウドの {{agent}} のモデル一覧にないため、動作しない可能性があります。",
+	"settings.models.useConfiguredDefault": "プロジェクトまたはエージェントの既定を使用"
 }

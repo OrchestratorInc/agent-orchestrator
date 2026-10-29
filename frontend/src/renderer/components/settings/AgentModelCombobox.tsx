@@ -426,7 +426,7 @@ export function AgentModelCombobox({
 							<>
 								<DropdownMenuItem onSelect={onUseDefault} className={modelItemClass(explicitModel === "")}>
 									<span className="truncate text-settings-label">
-										{t("settings.models.useConfiguredDefault", { defaultValue: "Use project or agent default" })}
+										{t("settings.models.useConfiguredDefault")}
 									</span>
 								</DropdownMenuItem>
 								{visibleModels.length > 0 && <DropdownMenuSeparator />}

@@ -3753,5 +3753,15 @@
 	"share.people.working": "trabalhando",
 	"share.people.waiting": "na fila",
 	"share.people.idle": "ocioso",
-	"board.shared.working": "{{name}} trabalhando"
+	"board.shared.working": "{{name}} trabalhando",
+	"newTask.cloudConfiguredDefault": "Padrão do projeto ou do agente",
+	"newTask.cloudCredentialModels": "Da lista de modelos do seu provedor conectado",
+	"newTask.cloudLegacyModels": "Este servidor na nuvem não consegue listar seus modelos. Estas sugestões vêm deste computador e podem não funcionar na nuvem.",
+	"newTask.cloudModelsCatalog": "Modelos do {{agent}} na nuvem",
+	"newTask.cloudModelsFailed": "Não foi possível carregar os modelos do {{agent}} na nuvem. Use o padrão ou digite um ID de modelo.",
+	"newTask.cloudModelsRelease": "Modelos do {{agent}} {{version}}",
+	"newTask.cloudModelsUnavailable": "A nuvem não tem uma lista de modelos para o {{agent}}. Use o padrão ou digite um ID de modelo.",
+	"newTask.cloudModelsVerified": "Verificado nos seus workers na nuvem",
+	"newTask.cloudModelUnlisted": "{{model}} não está na lista de modelos do {{agent}} na nuvem, então pode não funcionar.",
+	"settings.models.useConfiguredDefault": "Usar o padrão do projeto ou do agente"
 }

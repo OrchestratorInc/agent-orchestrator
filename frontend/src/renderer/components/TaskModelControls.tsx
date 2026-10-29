@@ -108,7 +108,7 @@ export function TaskModelPicker({
 			onCustom={allowNativeSelection ? onModelChange : undefined}
 			// Default sends no model, so the project's or the agent's own applies.
 			onUseDefault={allowNativeSelection ? () => onModelChange("") : undefined}
-			emptyLabel={allowNativeSelection ? t("newTask.cloudConfiguredDefault", { defaultValue: "Project or agent default" }) : undefined}
+			emptyLabel={allowNativeSelection ? t("newTask.cloudConfiguredDefault") : undefined}
 			footer={footer}
 			agentLabel={agentLabel}
 			onRefresh={onRefresh}
