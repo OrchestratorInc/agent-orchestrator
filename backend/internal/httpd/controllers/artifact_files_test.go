@@ -30,7 +30,7 @@ import (
 )
 
 func TestArtifactFileRemoteCompressionPreservesRangesAndValidators(t *testing.T) {
-	body := strings.Repeat(`{"value":"scratch"}`+"\n", 100)
+	body := `{"values":[` + strings.Repeat(`"scratch",`, 100) + `"last"]}`
 	local, _ := artifactFileServer(t, map[string]string{"data.json": body})
 	remote := httpd.NewMobileLAN(local.Config.Handler, "h_scratch", 0, nil, nil)
 	remote.SetPasswordHash(mobilebridge.HashPassword("test-password"))
@@ -90,14 +90,15 @@ func TestArtifactFileRemoteCompressionPreservesRangesAndValidators(t *testing.T)
 				t.Errorf("partial Content-Length=%d, want100", response.ContentLength)
 			}
 			var decoded io.Reader = response.Body
-			if tc.encoding == "gzip" {
+			switch tc.encoding {
+			case "gzip":
 				reader, err := gzip.NewReader(response.Body)
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer reader.Close()
 				decoded = reader
-			} else if tc.encoding == "deflate" {
+			case "deflate":
 				reader, err := zlib.NewReader(response.Body)
 				if err != nil {
 					t.Fatal(err)
