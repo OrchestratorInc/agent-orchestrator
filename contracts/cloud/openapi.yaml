@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: |
     Client-facing contract for AO Cloud. The Cloud server implementation lives
-    under `cloud/` in this repository, while this file is the versioned contract
+    in a separate private repository, while this file is the versioned contract
     used to generate the runtime-neutral client types. The worker surface
     documents the exact outbound HTTP protocol used by sandbox workers,
     including one-time bootstrap, rotating credentials, fenced turn execution,
@@ -2990,11 +2990,12 @@ paths:
       operationId: putRemoteHost
       tags: [Remote Hosts]
       description: |
-        Lists a machine in the account, or updates its listing. A new `token`
-        for a listed machine replaces its fixed tunnel: the address stays, and
-        a run token fetched with the old credential stops working. A
-        registration that makes or replaces a tunnel can take up to a minute,
-        and completes even if the client disconnects first.
+        Lists a machine in the account, or updates its listing. A standing
+        fixed tunnel is replaced when the registration carries a new `token`,
+        or when the machine was removed and is listed again: the address
+        stays, and a run token fetched with the old credential stops working.
+        A registration that makes or replaces a tunnel waits on Cloudflare,
+        which can take more than a minute.
       requestBody:
         required: true
         content:
@@ -3007,7 +3008,7 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "409":
-          description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses."
+          description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses. A registration with `url` still succeeds."
           $ref: "#/components/responses/Error"
         "422":
           description: "`validation_error`: the label, token or `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses."
@@ -3016,7 +3017,7 @@ paths:
           description: "`tunnel_rate_limited`: the account made too many fixed-address writes; try later. Also for a new `token` on a machine with a fixed tunnel, with or without `url`."
           $ref: "#/components/responses/Error"
         "502":
-          description: "`tunnel_unavailable`: the fixed address could not be made, or a new `token` could not replace the tunnel, with or without `url`. Nothing was listed."
+          description: "`tunnel_unavailable`: the fixed address could not be made, or a new `token` could not replace the tunnel, with or without `url`. The listing is unchanged, though a tunnel being replaced may already be deleted; the machine's next fetch makes a new one."
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
@@ -3024,9 +3025,9 @@ paths:
       operationId: deleteRemoteHost
       tags: [Remote Hosts]
       description: |
-        Removes the machine from the account, and its fixed tunnel with it.
-        It can take up to a minute, and completes even if the client
-        disconnects first.
+        Removes the machine from the account and deletes its fixed tunnel, or
+        leaves that to a later cleanup when Cloudflare fails. Its fixed
+        address counts against the account's limit for a few minutes after.
       responses:
         "204":
           description: Removed.
@@ -3068,9 +3069,11 @@ paths:
       security:
         - hostDigest: []
       description: |
-        The machine fetches the run token of its fixed tunnel in the account
-        that issued its credential. The deployment makes the tunnel when the
-        machine has none.
+        The machine fetches the run token of the fixed tunnel an account gives
+        it: the account that lists the machine under the credential it
+        presents. If several do, the one with a standing tunnel, else the one
+        that listed it last. The deployment makes the tunnel when there is
+        none.
       requestBody:
         required: true
         content:
@@ -3089,6 +3092,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RemoteHostTunnel"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           description: "`unauthorized`: no account lists the machine under this credential."
           $ref: "#/components/responses/Error"
@@ -3337,6 +3342,7 @@ components:
   schemas:
     RemoteHost:
       type: object
+      additionalProperties: false
       required: [hostId, label, url, token, updatedAt]
       properties:
         hostId:
@@ -3354,6 +3360,7 @@ components:
           format: date-time
     RemoteHostList:
       type: object
+      additionalProperties: false
       required: [hosts]
       properties:
         hosts:
@@ -3371,7 +3378,7 @@ components:
         label:
           type: string
           minLength: 1
-          description: At most 64 bytes.
+          description: At most 64 bytes, after surrounding spaces are trimmed.
         url:
           type: string
           description: The machine's address, an http or https origin with no path, query, fragment or user info. Omit it, or send it empty, to list the machine at a fixed address the deployment makes.
@@ -3393,9 +3400,10 @@ components:
       properties:
         repair:
           type: boolean
-          description: Replace the tunnel under the same address. A repair asked too soon returns the current tunnel with `repaired` unset.
+          description: Replace the tunnel under the same address. A repair within a minute of the tunnel's last change returns the current tunnel with `repaired` unset.
     RemoteHostTunnel:
       type: object
+      additionalProperties: false
       required: [hostname, runToken, since]
       properties:
         hostname:
