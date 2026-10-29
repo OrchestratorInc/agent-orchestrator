@@ -5352,6 +5352,10 @@ function firstTurnSettled(snapshot: ConversationSnapshot): boolean {
 	return Boolean(first && first.state !== "queued" && first.state !== "running");
 }
 
+function isPlanRow(item: ConversationItem): item is ConversationActivity {
+	return item.kind === "activity" && item.activityKind === "plan";
+}
+
 /**
  * Group items by the turn that produced them, so a completed turn can be closed
  * off with its outcome.
@@ -5414,11 +5418,29 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 
 	groups.sort((a, b) => a.anchor - b.anchor);
 
+	// Work the agent does after its turn ends belongs to no turn, so each plan
+	// revision in it is its own row. Like a turn's plan, only the latest is current.
+	for (const group of groups) {
+		const latestPlanRow = group.items.findLast(isPlanRow);
+		if (latestPlanRow) {
+			group.items = group.items.filter((item) => !isPlanRow(item) || item === latestPlanRow);
+		}
+	}
+
 	// A list the agent keeps across turns reaches every later turn as a copy of the
-	// same list. Only the latest copy is current, so only that turn shows it.
-	const currentSpanningPlanTurn = groups.findLast(
-		(group) => group.turnId !== undefined && byTurn.get(group.turnId)?.plan?.spansTurns,
-	)?.turnId;
+	// same list, on the turn or, when no turn holds it, as a row. Only the latest
+	// copy is current, so only that group shows it.
+	const currentSpanningPlanGroup = groups.findLast(
+		(group) =>
+			(group.turnId !== undefined && byTurn.get(group.turnId)?.plan?.spansTurns) ||
+			group.items.some((item) => isPlanRow(item) && activityPlan(item)?.spansTurns),
+	);
+	for (const group of groups) {
+		if (group === currentSpanningPlanGroup) continue;
+		if (group.items.some((item) => isPlanRow(item) && activityPlan(item)?.spansTurns)) {
+			group.items = group.items.filter((item) => !isPlanRow(item) || !activityPlan(item)?.spansTurns);
+		}
+	}
 
 	for (const group of groups) {
 		if (!group.turnId) continue;
@@ -5428,7 +5450,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		// running turn's changed-file list growing, and its checklist ticking itself
 		// off, are the useful parts.
 		group.diff = turn.diff;
-		const stalePlan = turn.plan?.spansTurns && group.turnId !== currentSpanningPlanTurn;
+		const stalePlan = turn.plan?.spansTurns && group !== currentSpanningPlanGroup;
 		group.plan = turn.plan?.steps.length && !stalePlan ? turn.plan : undefined;
 		group.live = turn.state === "running";
 		group.liveStartedAt = turn.startedAt ?? turn.requestedAt;

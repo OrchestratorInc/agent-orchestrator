@@ -164,7 +164,7 @@ export const TurnPlan = memo(function TurnPlan({
 										className="flex items-start gap-2.5 py-1"
 										aria-label={`${step.text} — ${STEP_LABEL[step.status]}`}
 									>
-										<StepMark status={step.status} />
+										<StepMark status={step.status} live={Boolean(live)} />
 										{/* The strike is always there and only its colour changes, so a step
 										    being ticked off fades its line in, even across a wrapped line. */}
 										<span
@@ -239,8 +239,11 @@ function activeStepIndex(plan: ConversationPlan): number {
  * them: a spinner that is a pixel taller than a tick would nudge every line below it
  * each time a step finished. All three marks are drawn and only the current one is
  * shown, so a step that ticks over cross-fades in place instead of popping.
+ *
+ * The arc turns only while the turn runs. A turn that has ended, failed or been
+ * stopped is not working on anything, so its unfinished step holds still.
  */
-function StepMark({ status }: { status: PlanStepStatus }) {
+function StepMark({ status, live }: { status: PlanStepStatus; live: boolean }) {
 	const shown = (mark: PlanStepStatus) =>
 		cn("transition-opacity duration-200 motion-reduce:transition-none", status === mark ? "opacity-100" : "opacity-0");
 	return (
@@ -270,7 +273,10 @@ function StepMark({ status }: { status: PlanStepStatus }) {
 						strokeWidth="1.5"
 						strokeLinecap="round"
 						strokeDasharray="12 43"
-						className="origin-center animate-spin [transform-box:fill-box] motion-reduce:animate-none"
+						className={cn(
+							"origin-center [transform-box:fill-box]",
+							live && "animate-spin motion-reduce:animate-none",
+						)}
 					/>
 				</g>
 				{/* Done: an outlined circle whose tick draws itself in as the step finishes. */}

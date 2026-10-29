@@ -4029,6 +4029,10 @@ func planDetail(plan domain.ConversationPlan) []byte {
 	if plan.Explanation != "" {
 		detail["explanation"] = plan.Explanation
 	}
+	// A row with no turn is the only copy of the plan, so it carries the flag too.
+	if plan.SpansTurns {
+		detail["spansTurns"] = true
+	}
 	encoded, err := json.Marshal(detail)
 	if err != nil {
 		return nil
