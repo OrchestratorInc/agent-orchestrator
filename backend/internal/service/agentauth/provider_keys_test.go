@@ -3,6 +3,7 @@ package agentauth
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
@@ -131,5 +132,44 @@ func TestEnvironmentLoginReusesSavedKey(t *testing.T) {
 	}
 	if _, err := svc.StartLoginWithOptions(t.Context(), "codex", "browser", "", LoginOptions{Device: true}); err == nil {
 		t.Fatal("accepted a device setting for a native login")
+	}
+}
+
+func TestHarnessPanelClaimsItsKey(t *testing.T) {
+	stubDeviceEnvironment(t)
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	dir := t.TempDir()
+	svc := NewWithAgentResolver(foundExecutable("claude"), nil, nil, dir)
+	if _, err := svc.SaveProviderKey(t.Context(), "ANTHROPIC_API_KEY", "page-key", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, withhold, _ := providerkeys.ForSession(dir, "claude-code"); len(withhold) != 1 {
+		t.Fatalf("a key saved on the API keys page reached Claude Code: withhold=%v", withhold)
+	}
+	if _, err := svc.StartLogin(t.Context(), "claude-code", "env_ANTHROPIC_API_KEY", "panel-key"); err != nil {
+		t.Fatal(err)
+	}
+	if inject, withhold, _ := providerkeys.ForSession(dir, "claude-code"); len(withhold) != 0 || inject["ANTHROPIC_API_KEY"] != "panel-key" {
+		t.Fatalf("Claude Code's own key was withheld: inject=%v withhold=%v", inject, withhold)
+	}
+}
+
+func TestFailedSaveNeverLeavesAnUntrackedDeviceKey(t *testing.T) {
+	published, withdrawn := stubDeviceEnvironment(t)
+	t.Setenv("GROQ_API_KEY", "")
+	dir := t.TempDir()
+	svc := NewWithAgentResolver(nil, nil, nil, dir)
+	// Make AO's key store unwritable after the device marker exists.
+	if err := os.WriteFile(filepath.Join(dir, "provider-api-keys.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SaveProviderKey(t.Context(), "GROQ_API_KEY", "groq-secret", true); err == nil {
+		t.Fatal("reported success with an unreadable key store")
+	}
+	device, _ := providerkeys.DeviceNames(dir)
+	if _, stillPublished := published["GROQ_API_KEY"]; stillPublished {
+		if _, ok := withdrawn["GROQ_API_KEY"]; !ok || device["GROQ_API_KEY"] {
+			t.Fatalf("published key left behind: published=%v withdrawn=%v device=%v", published, withdrawn, device)
+		}
 	}
 }

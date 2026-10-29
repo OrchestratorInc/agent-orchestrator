@@ -148,16 +148,25 @@ func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolv
 	// and model discovery run after a daemon restart.
 	if keys, err := providerkeys.Load(dataDir); err == nil {
 		device, _ := providerkeys.DeviceNames(dataDir)
+		republish := map[string]string{}
 		for name, value := range keys {
 			_ = os.Setenv(name, value)
-			// launchd and systemd user environments are session-scoped. Restore
-			// the keys the user published when AO starts again after a login or
-			// daemon restart.
 			if device[name] && runtime.GOOS != "windows" {
-				refreshCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_ = publishProviderKey(refreshCtx, name, value)
-				cancel()
+				republish[name] = value
 			}
+		}
+		// launchd and systemd user environments are session-scoped. Restore
+		// the keys the user published when AO starts again after a login or
+		// daemon restart, in the background so a slow or missing user bus
+		// never delays daemon startup.
+		if len(republish) > 0 {
+			go func() {
+				for name, value := range republish {
+					refreshCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					_ = publishProviderKey(refreshCtx, name, value)
+					cancel()
+				}
+			}()
 		}
 	}
 	return &Service{executables: executables, agents: agents, terminals: terminals, dataDir: dataDir, selfExecutable: os.Executable, operations: make(map[string]*loginOperation), terminalStarts: make(map[string]bool), terminalLogins: make(map[string]string), commandContext: process.CommandContext, loginTimeout: loginLifetime}

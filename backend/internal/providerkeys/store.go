@@ -91,6 +91,9 @@ func Remove(ctx context.Context, dataDir, name string) error {
 			return err
 		}
 	}
+	if err := dropClaimsLocked(ctx, dataDir, name); err != nil {
+		return err
+	}
 	return setDeviceLocked(ctx, dataDir, name, false)
 }
 

@@ -107,6 +107,9 @@ type loginOperation struct {
 	cleanupFailed bool
 	stdin         io.WriteCloser
 	codeSubmitted bool
+	// nativeDigits holds, for each NativeOptions entry, the digit the CLI
+	// printed for it.
+	nativeDigits []string
 }
 
 // StartLogin runs a fixed native login or saves a reviewed provider key.
@@ -185,60 +188,21 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		return LoginSnapshot{}, err
 	}
 	defer release()
+	// Key methods write their store under this harness's reservation only.
+	// s.mu is taken just to record the result, so a slow store (`omp auth
+	// import`, a systemd user bus) never stalls other harnesses' logins.
+	if isKey, err := s.saveLoginKey(ctx, plan, method, secret, model, opts); isKey {
+		if err != nil {
+			return LoginSnapshot{}, err
+		}
+		return s.recordCompletedLogin(agentID, method)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_UNAVAILABLE", "Authentication service is stopping.")
 	}
-	// Retain only the latest operation per harness. A stale tab cannot cancel
-	// its replacement, and repeated logins cannot grow the registry unbounded.
-	for id, op := range s.operations {
-		if op.snapshot.AgentID == agentID {
-			delete(s.operations, id)
-		}
-	}
-	if method == catalogKeyMethod {
-		return s.saveCatalogKey(ctx, plan, opts.Provider, secret)
-	}
-	if writer, ok := directKeyWriter(agentID); ok && !strings.HasPrefix(method, "env_") {
-		if err := writer(ctx, method, secret); err != nil {
-			return LoginSnapshot{}, err
-		}
-		complete := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "succeeded", ExpiresAt: time.Now()}, done: make(chan struct{})}
-		close(complete.done)
-		s.operations[complete.snapshot.ID] = complete
-		return complete.snapshot, nil
-	}
-	if name, ok := environmentMethod(agentID, method); ok {
-		if agentID == "openhands" {
-			model = strings.TrimSpace(model)
-			if !providerModelID.MatchString(model) {
-				return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "Enter a LiteLLM model ID for OpenHands.", nil)
-			}
-			if err := providerkeys.Save(ctx, s.dataDir, "LLM_MODEL", model); err != nil {
-				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be saved.")
-			}
-			if err := os.Setenv("LLM_MODEL", model); err != nil {
-				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be activated.")
-			}
-		}
-		if agentID == "qwen" {
-			if err := saveQwenProvider(ctx, name, model); err != nil {
-				return LoginSnapshot{}, err
-			}
-		} else if agentID == "continue" && name != "CONTINUE_API_KEY" {
-			if err := saveContinueProvider(ctx, name, model, secret); err != nil {
-				return LoginSnapshot{}, err
-			}
-		}
-		if err := s.storeProviderKey(ctx, name, secret, opts.Device); err != nil {
-			return LoginSnapshot{}, err
-		}
-		complete := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "succeeded", ExpiresAt: time.Now()}, done: make(chan struct{})}
-		close(complete.done)
-		s.operations[complete.snapshot.ID] = complete
-		return complete.snapshot, nil
-	}
+	s.pruneOperationsLocked(agentID)
 	expires := time.Now().Add(s.loginTimeout)
 	loginCtx, cancel := context.WithDeadline(context.Background(), expires)
 	op := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires}, cancel: cancel, done: make(chan struct{})}
@@ -405,10 +369,11 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 				continue
 			} // A probe error is not proof of exit.
 			if observation.Alive {
-				kind, selected, options := nativePrompt(observation.Output)
+				kind, selected, options, digits := nativePrompt(observation.Output)
 				s.mu.Lock()
 				if op.snapshot.Status == "running" {
 					op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = kind, selected, options
+					op.nativeDigits = digits
 				}
 				s.mu.Unlock()
 				continue
@@ -444,8 +409,9 @@ func (s *Service) watchNativeLogin(ctx context.Context, terminal guidedAuthTermi
 }
 
 var (
-	nativeSelectedLine     = regexp.MustCompile(`(?m)^\s*[>❯●◉‣▸►]\s*([^\r\n]+?)\s*$`)
-	nativeNumberedLine     = regexp.MustCompile(`(?m)^\s*([1-9])[.)]\s+([^\r\n]+?)\s*$`)
+	nativeSelectedLine = regexp.MustCompile(`(?m)^\s*[>❯●◉‣▸►]\s*([^\r\n]+?)\s*$`)
+	// A cursor glyph may lead the highlighted entry of a numbered picker.
+	nativeNumberedLine     = regexp.MustCompile(`(?m)^\s*(?:[>❯●◉‣▸►]\s*)?([1-9])[.)]\s+([^\r\n]+?)\s*$`)
 	nativeInteractiveWords = regexp.MustCompile(`(?i)(select|choose|enter|password|api key|token|credential)`)
 )
 
@@ -459,66 +425,99 @@ var nativeOptions = map[string]string{
 // reports its highlighted option; a numbered picker reports the recognized
 // choices so the UI can offer them as buttons. Anything unrecognized keeps
 // the explicit terminal fallback.
-func nativePrompt(output string) (kind, selected string, options []string) {
+func nativePrompt(output string) (kind, selected string, options, digits []string) {
 	plain := terminalui.PlainTerminalText(output)
 	if len(plain) > 16*1024 {
 		plain = plain[len(plain)-16*1024:]
 	}
 	numbered := nativeNumberedLine.FindAllStringSubmatch(plain, -1)
+	// Scrollback can hold earlier menus: read only the latest, which starts at
+	// the last "1." entry, and keep the digit the CLI printed for each choice.
+	for i := len(numbered) - 1; i >= 0; i-- {
+		if numbered[i][1] == "1" {
+			numbered = numbered[i:]
+			break
+		}
+	}
+	seen := map[string]bool{}
+	entries := 0
 	for _, match := range numbered {
+		if seen[match[1]] {
+			continue
+		}
+		seen[match[1]] = true
+		entries++
 		if canonical, ok := nativeOptions[strings.ToLower(match[2])]; ok {
 			options = append(options, canonical)
+			digits = append(digits, match[1])
 		}
 	}
 	// A numbered picker with at least two entries is drivable from the UI only
 	// when every choice is a reviewed label; otherwise hand it to the terminal.
-	if len(numbered) > 1 {
-		if len(options) == len(numbered) {
-			return "menu", "", options
+	if entries > 1 {
+		if len(options) == entries {
+			return "menu", "", options, digits
 		}
-		return "terminal_required", "", nil
+		return "terminal_required", "", nil, nil
 	}
 	if matches := nativeSelectedLine.FindAllStringSubmatch(plain, -1); len(matches) > 0 {
 		label := strings.ToLower(strings.TrimSpace(matches[len(matches)-1][1]))
 		if canonical, ok := nativeOptions[label]; ok {
-			return "menu", canonical, nil
+			return "menu", canonical, nil, nil
 		}
-		return "terminal_required", "", nil
+		return "terminal_required", "", nil, nil
 	}
 	if nativeInteractiveWords.MatchString(plain) {
-		return "terminal_required", "", nil
+		return "terminal_required", "", nil, nil
 	}
-	return "waiting", "", nil
+	return "waiting", "", nil, nil
 }
 
-// ActOnLogin sends a reviewed menu choice to a running native login.
+// ActOnLogin sends a reviewed menu choice to a running native login. For a
+// numbered picker a digit names the Nth listed option, sent as the digit the
+// CLI printed for it; Select sends Enter. The PTY write runs outside s.mu.
 func (s *Service) ActOnLogin(ctx context.Context, agentID, id, action string) (LoginSnapshot, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	op := s.operations[id]
 	if op == nil || op.snapshot.AgentID != agentID {
+		s.mu.Unlock()
 		return LoginSnapshot{}, apierr.NotFound("AGENT_AUTH_OPERATION_NOT_FOUND", "Login operation not found.")
 	}
 	if op.snapshot.Method != "native" || op.snapshot.Status != "running" || op.snapshot.NativePrompt != "menu" {
+		s.mu.Unlock()
 		return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_ACTION_UNAVAILABLE", "There is no recognized native menu to control.", nil)
 	}
-	// Numbered pickers accept only their listed digits; arrow-key pickers
-	// accept only navigation. No free-form bytes ever reach the PTY.
+	// Numbered pickers accept their listed options and Enter; arrow-key
+	// pickers accept only navigation. No free-form bytes ever reach the PTY.
+	key := action
 	if len(op.snapshot.NativeOptions) > 0 {
-		if len(action) != 1 || action < "1" || action > "9" || int(action[0]-'0') > len(op.snapshot.NativeOptions) {
+		switch {
+		case action == "select":
+		case len(action) == 1 && action >= "1" && action <= "9" && int(action[0]-'0') <= len(op.nativeDigits):
+			key = op.nativeDigits[action[0]-'1']
+		default:
+			s.mu.Unlock()
 			return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_ACTION_UNAVAILABLE", "Choose one of the listed options.", nil)
 		}
 	} else if action != "previous" && action != "next" && action != "select" {
+		s.mu.Unlock()
 		return LoginSnapshot{}, apierr.Conflict("AGENT_AUTH_ACTION_UNAVAILABLE", "Choose a supported login menu action.", nil)
 	}
+	terminalID := op.terminalID
+	s.mu.Unlock()
 	terminal, ok := s.terminals.(guidedAuthTerminal)
 	if !ok {
 		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_TERMINAL_UNAVAILABLE", "Guided native sign-in is unavailable.")
 	}
-	if err := terminal.SendAuthTerminalKey(ctx, op.terminalID, action); err != nil {
+	if err := terminal.SendAuthTerminalKey(ctx, terminalID, key); err != nil {
 		return LoginSnapshot{}, err
 	}
-	op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = "waiting", "", nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if op.snapshot.Status == "running" {
+		op.snapshot.NativePrompt, op.snapshot.SelectedOption, op.snapshot.NativeOptions = "waiting", "", nil
+		op.nativeDigits = nil
+	}
 	return op.snapshot, nil
 }
 
@@ -663,6 +662,69 @@ func directKeyWriter(agentID string) (func(context.Context, string, string) erro
 		return saveDeepSeekHarnessKey, true
 	}
 	return nil, false
+}
+
+// saveLoginKey saves the credential of a key method in its store and reports
+// isKey=false for a method that runs a native CLI login instead.
+func (s *Service) saveLoginKey(ctx context.Context, plan Plan, method, secret, model string, opts LoginOptions) (isKey bool, err error) {
+	agentID := plan.AgentID
+	if method == catalogKeyMethod {
+		return true, s.saveCatalogKey(ctx, plan, opts.Provider, secret)
+	}
+	if writer, ok := directKeyWriter(agentID); ok && !strings.HasPrefix(method, "env_") {
+		return true, writer(ctx, method, secret)
+	}
+	if name, ok := environmentMethod(agentID, method); ok {
+		if agentID == "openhands" {
+			model = strings.TrimSpace(model)
+			if !providerModelID.MatchString(model) {
+				return true, apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "Enter a LiteLLM model ID for OpenHands.", nil)
+			}
+			if err := providerkeys.Save(ctx, s.dataDir, "LLM_MODEL", model); err != nil {
+				return true, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be saved.")
+			}
+			if err := os.Setenv("LLM_MODEL", model); err != nil {
+				return true, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be activated.")
+			}
+		}
+		if agentID == "qwen" {
+			if err := saveQwenProvider(ctx, name, model); err != nil {
+				return true, err
+			}
+		} else if agentID == "continue" && name != "CONTINUE_API_KEY" {
+			if err := saveContinueProvider(ctx, name, model, secret); err != nil {
+				return true, err
+			}
+		}
+		return true, s.storeProviderKey(ctx, name, secret, opts.Device, agentID)
+	}
+	return false, nil
+}
+
+// recordCompletedLogin registers a finished key save as the harness's latest
+// operation, so the panel can poll it like any other login.
+func (s *Service) recordCompletedLogin(agentID, method string) (LoginSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_UNAVAILABLE", "Authentication service is stopping.")
+	}
+	s.pruneOperationsLocked(agentID)
+	complete := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "succeeded", ExpiresAt: time.Now()}, done: make(chan struct{})}
+	close(complete.done)
+	s.operations[complete.snapshot.ID] = complete
+	return complete.snapshot, nil
+}
+
+// pruneOperationsLocked keeps only the latest operation per harness. A stale
+// tab cannot cancel its replacement, and repeated logins cannot grow the
+// registry unbounded. The caller holds s.mu.
+func (s *Service) pruneOperationsLocked(agentID string) {
+	for id, op := range s.operations {
+		if op.snapshot.AgentID == agentID {
+			delete(s.operations, id)
+		}
+	}
 }
 
 // Login returns an operation only when it belongs to the selected harness.
