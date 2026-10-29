@@ -1,0 +1,131 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
+import { WebView } from "react-native-webview";
+import { artifactMarkdownImageSource, getArtifactText } from "./api";
+import { artifactViewKind, looksBinary, type SessionArtifact } from "./artifacts";
+import { MAX_THUMBNAIL_TEXT_BYTES, THUMBNAIL_TEXT_CHARS, thumbnailPageHtml, thumbnailZoom } from "./artifactThumbnailModel";
+import { ChatMarkdown } from "./chat/ChatMarkdown";
+import { useRenderTheme } from "./chat/RenderFrame";
+import { renderThemeScript } from "./chat/renderFrameModel";
+import type { ServerConfig } from "./config";
+import type { Theme } from "./theme";
+import { useThemedStyles } from "./ThemeProvider";
+import { space } from "./tokens";
+import { useInlinedArtifactPage } from "./useInlinedArtifactPage";
+
+// A markdown card lays the document out at twice its width and draws it at half.
+const MARKDOWN_SCALE = 0.5;
+
+// Text previews read once per file version; a gallery scrolls past the same cards again.
+const TEXT_CACHE_SIZE = 24;
+const textCache = new Map<string, Promise<string | undefined>>();
+
+function cachedText(key: string, read: () => Promise<string | undefined>): Promise<string | undefined> {
+	const hit = textCache.get(key);
+	if (hit) return hit;
+	const pending = read().catch(() => undefined);
+	textCache.set(key, pending);
+	while (textCache.size > TEXT_CACHE_SIZE) textCache.delete(textCache.keys().next().value!);
+	return pending;
+}
+
+/** Whether a card can show a peek at the file's contents (images have their own). */
+export function hasContentThumbnail(artifact: Pick<SessionArtifact, "path" | "kind" | "size">): boolean {
+	const kind = artifactViewKind(artifact);
+	return kind === "html" || ((kind === "markdown" || kind === "text") && artifact.size <= MAX_THUMBNAIL_TEXT_BYTES);
+}
+
+/**
+ * A peek at an artifact's contents on its gallery card, as the desktop gallery
+ * shows it: an HTML page drawn small, a markdown document drawn small, or a
+ * text file's opening lines. It loads only while `visible`, draws over the
+ * card's icon tile once it has something to show, and takes no touches, so the
+ * card's own tap and long-press still work.
+ */
+export function ArtifactThumbnail({ config, sessionId, artifact, visible }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean }) {
+	const styles = useThemedStyles(makeStyles);
+	const [width, setWidth] = useState(0);
+	const onLayout = (event: LayoutChangeEvent) => setWidth(Math.round(event.nativeEvent.layout.width));
+	const kind = artifactViewKind(artifact);
+	return (
+		<View pointerEvents="none" style={StyleSheet.absoluteFill} onLayout={onLayout} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+			{width > 0 && kind === "html" ? <PageThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} />
+				: width > 0 && (kind === "markdown" || kind === "text") ? <TextThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} markdown={kind === "markdown"} styles={styles} />
+				: null}
+		</View>
+	);
+}
+
+function PageThumbnail({ config, sessionId, artifact, visible, width }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean; width: number }) {
+	const styles = useThemedStyles(makeStyles);
+	const web = useRef<WebView>(null);
+	const theme = useRenderTheme();
+	const [loaded, setLoaded] = useState(false);
+	const inlined = useInlinedArtifactPage({ enabled: visible, config, sessionId, path: artifact.path, version: artifact.updatedAt });
+	const html = useMemo(() => inlined.html ? thumbnailPageHtml(inlined.html, thumbnailZoom(width)) : undefined, [inlined.html, width]);
+	useEffect(() => setLoaded(false), [html]);
+	// Off screen, the page lets its WebView go; the inlined page stays cached.
+	if (!visible || !html) return null;
+	return (
+		<WebView
+			ref={web}
+			source={{ html }}
+			style={[styles.page, !loaded && styles.hidden]}
+			scrollEnabled={false}
+			bounces={false}
+			overScrollMode="never"
+			showsHorizontalScrollIndicator={false}
+			showsVerticalScrollIndicator={false}
+			textZoom={100}
+			setSupportMultipleWindows={false}
+			javaScriptCanOpenWindowsAutomatically={false}
+			allowsLinkPreview={false}
+			// Only the page itself; a card never navigates.
+			onShouldStartLoadWithRequest={(request) => request.isTopFrame === false || /^(about:|data:)/.test(request.url)}
+			onLoadEnd={() => {
+				web.current?.injectJavaScript(renderThemeScript(theme));
+				setLoaded(true);
+			}}
+		/>
+	);
+}
+
+function TextThumbnail({ config, sessionId, artifact, visible, width, markdown, styles }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean; width: number; markdown: boolean; styles: ReturnType<typeof makeStyles> }) {
+	const key = `${config.host}:${config.httpPort}|${sessionId}|${artifact.path}|${artifact.updatedAt}`;
+	const [text, setText] = useState<{ key: string; value?: string }>();
+	useEffect(() => {
+		if (!visible || text?.key === key) return;
+		let live = true;
+		void cachedText(key, async () => {
+			const body = await getArtifactText(config, sessionId, artifact.path);
+			return looksBinary(body) ? undefined : body.slice(0, THUMBNAIL_TEXT_CHARS);
+		}).then((value) => { if (live) setText({ key, value }); });
+		return () => { live = false; };
+	}, [artifact.path, config, key, sessionId, text?.key, visible]);
+	const value = text?.key === key ? text.value?.trim() : undefined;
+	// The document's own images, as the viewer shows them.
+	const resolveImage = useCallback((url: string) => artifactMarkdownImageSource(config, sessionId, artifact.path, url), [artifact.path, config, sessionId]);
+	if (!value) return null;
+	if (markdown) {
+		return (
+			<View style={styles.surface}>
+				<View style={[styles.markdown, { width: width / MARKDOWN_SCALE }]}>
+					<ChatMarkdown text={value} resolveImage={resolveImage} />
+				</View>
+			</View>
+		);
+	}
+	return (
+		<View style={styles.surface}>
+			<Text numberOfLines={16} style={styles.code}>{value}</Text>
+		</View>
+	);
+}
+
+const makeStyles = (t: Theme) => StyleSheet.create({
+	page: { ...StyleSheet.absoluteFill, backgroundColor: "transparent" },
+	hidden: { opacity: 0 },
+	surface: { ...StyleSheet.absoluteFill, overflow: "hidden", backgroundColor: t.bgElevated },
+	markdown: { padding: space.lg, transform: [{ scale: MARKDOWN_SCALE }], transformOrigin: "top left" },
+	code: { padding: space.sm, fontFamily: t.fontMono, fontSize: 8, lineHeight: 11, color: t.textSecondary },
+});

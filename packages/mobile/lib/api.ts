@@ -1,4 +1,4 @@
-import { artifactFilePath, artifactPagePath, parseArtifacts, sortArtifacts, type SessionArtifact } from "./artifacts";
+import { artifactFilePath, artifactPagePath, parseArtifacts, resolveArtifactAssetPath, sortArtifacts, type SessionArtifact } from "./artifacts";
 import { parseVersion, parseVersionSummaries, type ArtifactVersion, type ArtifactVersionSummary } from "./artifactVersions";
 import type { ArchiveSummary } from "./archive/archiveSummary";
 import { authHeaders, httpBase, normalizeServerHost, type ServerConfig } from "./config";
@@ -694,6 +694,18 @@ export function artifactImageSource(cfg: ServerConfig, sessionId: string, path: 
 	const url = artifactFileUrl(cfg, sessionId, path);
 	if (!url) return undefined;
 	return { uri: version ? `${url}?v=${encodeURIComponent(version)}` : url, headers: authHeaders(cfg) };
+}
+
+/**
+ * What an image a markdown artifact names should load: a file beside the
+ * document in the artifact folder, with the connection's credential, or a web
+ * image as it is, with none. Undefined when it names neither.
+ */
+export function artifactMarkdownImageSource(cfg: ServerConfig, sessionId: string, documentPath: string, url: string): { uri: string; headers?: Record<string, string> } | undefined {
+	const trimmed = url.trim();
+	if (/^(https?:|data:)/i.test(trimmed)) return { uri: trimmed };
+	const path = resolveArtifactAssetPath(documentPath, trimmed);
+	return path ? artifactImageSource(cfg, sessionId, path) : undefined;
 }
 
 /** One artifact's contents as text. The caller decides whether it is really text. */

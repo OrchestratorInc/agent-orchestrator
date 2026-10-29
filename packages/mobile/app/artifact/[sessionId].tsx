@@ -3,9 +3,9 @@ import * as Clipboard from "expo-clipboard";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AccessibilityInfo, ActivityIndicator, Image, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
-import { artifactFileUrl, artifactImageSource, getArtifactText } from "../../lib/api";
+import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, getArtifactText } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { artifactCommentTarget, resolveArtifactAssetPath, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, type SessionArtifact } from "../../lib/artifacts";
+import { artifactCommentTarget, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { useRenderTheme } from "../../lib/chat/RenderFrame";
@@ -278,11 +278,7 @@ function ArtifactText({ config, sessionId, artifact, markdown, onAsk }: { config
 	const [attempt, setAttempt] = useState(0);
 	// A document's own images live beside it in the artifact folder and need the
 	// connection's credential; a web image loads as it is, with no credential.
-	const resolveImage = useCallback((url: string): MarkdownImageSource | undefined => {
-		if (/^(https?:|data:)/i.test(url.trim())) return { uri: url.trim() };
-		const path = resolveArtifactAssetPath(artifact.path, url);
-		return path ? artifactImageSource(config, sessionId, path) : undefined;
-	}, [artifact.path, config, sessionId]);
+	const resolveImage = useCallback((url: string): MarkdownImageSource | undefined => artifactMarkdownImageSource(config, sessionId, artifact.path, url), [artifact.path, config, sessionId]);
 	useEffect(() => {
 		const controller = new AbortController();
 		getArtifactText(config, sessionId, artifact.path, { signal: controller.signal })

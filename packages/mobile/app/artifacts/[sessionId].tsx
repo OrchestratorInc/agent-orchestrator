@@ -1,6 +1,7 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useLayoutEffect, useState } from "react";
-import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import { ActivityIndicator, FlatList, Image, Pressable, RefreshControl, StyleSheet, Text, useWindowDimensions, View, type ViewToken } from "react-native";
+import { ArtifactThumbnail, hasContentThumbnail } from "../../lib/ArtifactThumbnail";
 import { artifactImageSource } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
 import { artifactExtensionLabel, artifactViewKind, formatArtifactSize, type SessionArtifact } from "../../lib/artifacts";
@@ -9,6 +10,7 @@ import { hostRouteMatches } from "../../lib/hostRoute";
 import { Feather, type FeatherIconName } from "../../lib/icons";
 import { relativeTime } from "../../lib/notificationView";
 import { imageSourceForPlatform } from "../../lib/imageSource";
+import type { ServerConfig } from "../../lib/config";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -59,6 +61,13 @@ function SessionArtifactsContent() {
 		router.push({ pathname: "/sheets/artifact-history", params: { sessionId, path: artifact.path, name: artifact.name, hostId: routeHostId, origin: "gallery" } });
 	}, [routeHostId, router, sessionId]);
 
+	// Previews load only for cards on screen; FlatList wants these callbacks stable.
+	const [visiblePaths, setVisiblePaths] = useState<ReadonlySet<string>>(() => new Set());
+	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<SessionArtifact>[] }) => {
+		setVisiblePaths(new Set(viewableItems.flatMap((token) => token.item ? [token.item.path] : [])));
+	}).current;
+	const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 1, minimumViewTime: 120 }).current;
+
 	const onRefresh = useCallback(async () => {
 		haptics.tap();
 		setRefreshing(true);
@@ -84,12 +93,14 @@ function SessionArtifactsContent() {
 				numColumns={columns}
 				columnWrapperStyle={artifacts.length ? styles.row : undefined}
 				keyExtractor={(artifact) => artifact.path}
+				onViewableItemsChanged={onViewableItemsChanged}
+				viewabilityConfig={viewabilityConfig}
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} tintColor={t.accent} />}
 				ListHeaderComponent={title ? <Text numberOfLines={1} style={styles.caption}>{title}</Text> : null}
 				ListEmptyComponent={<EmptyState icon="layers" title="No artifacts yet" message="Pages and documents the agent writes for this session show up here." />}
 				renderItem={({ item }) => (
 					<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
-						<ArtifactCard artifact={item} thumbnail={config && artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
+						<ArtifactCard artifact={item} config={config} sessionId={sessionId} visible={visiblePaths.has(item.path)} thumbnail={config && artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
 					</View>
 				)}
 			/>
@@ -98,8 +109,12 @@ function SessionArtifactsContent() {
 	);
 }
 
-function ArtifactCard({ artifact, thumbnail, onOpen, onMenu }: {
+function ArtifactCard({ artifact, config, sessionId, visible, thumbnail, onOpen, onMenu }: {
 	artifact: SessionArtifact;
+	config: ServerConfig | null;
+	sessionId: string;
+	/** On screen: the card's preview of its contents may load. */
+	visible: boolean;
 	/** An image artifact's own picture, drawn over its icon tile. */
 	thumbnail?: { uri: string; headers: Record<string, string> };
 	onOpen(): void;
@@ -129,6 +144,7 @@ function ArtifactCard({ artifact, thumbnail, onOpen, onMenu }: {
 				<Feather name={visual.icon} size={28} color={visual.color} />
 				<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.extension, { color: visual.color }]}>{artifactExtensionLabel(artifact.path)}</Text>
 				{/* Over the tile, so the icon shows while it loads and if it cannot. */}
+				{config && hasContentThumbnail(artifact) ? <ArtifactThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} /> : null}
 				{picture ? (
 					<Image
 						accessibilityIgnoresInvertColors

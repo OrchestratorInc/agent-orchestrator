@@ -3,8 +3,8 @@ import { artifactFileUrl, getArtifactPage, getArtifactText } from "./api";
 import { inlineArtifactPage, MAX_INLINED_IMAGE_BYTES, type ArtifactAssetLoader } from "./artifactPageInliner";
 import { authHeaders, type ServerConfig } from "./config";
 
-// A thread can show the same page in several frames; a page is read once per version.
-const CACHE_SIZE = 6;
+// A thread or gallery can show the same page again; a page is read once per version.
+const CACHE_SIZE = 12;
 const cache = new Map<string, Promise<string>>();
 
 function cached(key: string, build: () => Promise<string>): Promise<string> {
