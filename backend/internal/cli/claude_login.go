@@ -1,18 +1,21 @@
 package cli
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 )
+
+const claudeSetupTokenPrefix = "sk-ant-oat"
 
 var claudeSetupTokenPattern = regexp.MustCompile(`^sk-ant-oat[0-9A-Za-z_-]{10,}$`)
 
@@ -58,7 +61,7 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	case "3":
 		args = append(args, "--sso")
 	case "4":
-		return c.saveClaudeSetupToken(in, out, style)
+		return c.createClaudeSetupToken(ctx, claude, in, out, style)
 	default:
 		return usageError{fmt.Errorf("login method must be 1, 2, 3, or 4")}
 	}
@@ -78,22 +81,21 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 	return err
 }
 
-func (c *commandContext) saveClaudeSetupToken(in io.Reader, out io.Writer, style codexLoginStyle) error {
-	if _, err := fmt.Fprintf(out, "\nRun claude setup-token in another terminal, then paste its token here.\n%s: ", style.bold("Setup token")); err != nil {
+// createClaudeSetupToken runs claude setup-token on a private terminal and
+// saves the token it prints, so the user only finishes the browser sign-in.
+func (c *commandContext) createClaudeSetupToken(ctx context.Context, claude string, in io.Reader, out io.Writer, style codexLoginStyle) error {
+	if _, err := fmt.Fprintf(out, "\n%s\n\n", style.dim("Creating a long-lived token with claude setup-token. AO saves it for you.")); err != nil {
 		return err
 	}
-	secret, err := c.deps.ReadSecret(in)
-	if _, writeErr := fmt.Fprintln(out); writeErr != nil {
-		return writeErr
-	}
+	screen, err := c.deps.RunCapturedTerminalCommand(ctx, claude, []string{"setup-token"}, in, newSecretCutoffWriter(out, claudeSetupTokenPrefix))
 	if err != nil {
-		return fmt.Errorf("read setup token: %w", err)
+		return fmt.Errorf("claude setup-token failed: %w", err)
+	}
+	secret := claudeSetupTokenFromScreen(screen)
+	if secret == nil {
+		return errors.New("claude setup-token finished without creating a token")
 	}
 	defer zeroBytes(secret)
-	secret = bytes.TrimSpace(secret)
-	if !claudeSetupTokenPattern.Match(secret) {
-		return usageError{fmt.Errorf("setup token must start with sk-ant-oat and contain no spaces")}
-	}
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("resolve AO data directory: %w", err)
@@ -109,6 +111,45 @@ func (c *commandContext) saveClaudeSetupToken(in io.Reader, out io.Writer, style
 	return err
 }
 
+// claudeSetupTokenFromScreen reads the token claude setup-token printed. The
+// CLI hard-wraps it at the terminal width, so a row the token fills to the
+// last column continues at the start of the next row.
+func claudeSetupTokenFromScreen(screen terminalScreen) []byte {
+	for i := len(screen.Rows) - 1; i >= 0; i-- {
+		start := strings.LastIndex(screen.Rows[i], claudeSetupTokenPrefix)
+		if start < 0 {
+			continue
+		}
+		var token []byte
+		row := screen.Rows[i][start:]
+		for {
+			run := leadingSetupTokenRun(row)
+			token = append(token, run...)
+			if len(run) < len(row) || utf8.RuneCountInString(screen.Rows[i]) < screen.Cols || i+1 >= len(screen.Rows) {
+				break
+			}
+			i++
+			row = screen.Rows[i]
+		}
+		if !claudeSetupTokenPattern.Match(token) {
+			zeroBytes(token)
+			return nil
+		}
+		return token
+	}
+	return nil
+}
+
+func leadingSetupTokenRun(row string) string {
+	end := strings.IndexFunc(row, func(r rune) bool {
+		return !(r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r == '_' || r == '-')
+	})
+	if end < 0 {
+		return row
+	}
+	return row[:end]
+}
+
 func writeClaudeLoginMenu(out io.Writer, style codexLoginStyle) error {
 	lines := []string{
 		style.accent("Sign in to Claude Code"),
@@ -117,7 +158,7 @@ func writeClaudeLoginMenu(out io.Writer, style codexLoginStyle) error {
 		fmt.Sprintf("  %s  %s  %s", style.accent("1"), style.bold("Claude subscription"), style.success("Recommended")),
 		fmt.Sprintf("  %s  %s %s", style.accent("2"), style.bold("Anthropic Console"), style.dim("· API usage billing")),
 		fmt.Sprintf("  %s  %s %s", style.accent("3"), style.bold("SSO"), style.dim("· Organization sign-in")),
-		fmt.Sprintf("  %s  %s %s", style.accent("4"), style.bold("Setup token"), style.dim("· Token from claude setup-token")),
+		fmt.Sprintf("  %s  %s %s", style.accent("4"), style.bold("Setup token"), style.dim("· Long-lived token, created for you")),
 		"",
 		style.bold("Enter 1-4 and press Return"),
 		style.dim("Ctrl+C to cancel"),

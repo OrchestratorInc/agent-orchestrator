@@ -81,15 +81,21 @@ func TestClaudeLoginMenuListsEverySupportedMethod(t *testing.T) {
 	}
 }
 
-func runClaudeSetupTokenLogin(t *testing.T, token string) string {
+func runClaudeSetupTokenLogin(t *testing.T, screen terminalScreen, printed string) (string, error) {
 	t.Helper()
 	var output bytes.Buffer
 	deps := Deps{
 		In: strings.NewReader("4\n"), Out: &output, Err: io.Discard,
-		ReadSecret: func(io.Reader) ([]byte, error) { return []byte(token), nil },
 		RunInteractiveCommand: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
-			t.Fatal("setup token must not be sent to the Claude CLI")
+			t.Fatal("setup token flow must not run claude auth login")
 			return nil
+		},
+		RunCapturedTerminalCommand: func(_ context.Context, name string, args []string, _ io.Reader, stdout io.Writer) (terminalScreen, error) {
+			if name != "/managed/bin/claude" || !slices.Equal(args, []string{"setup-token"}) {
+				t.Fatalf("captured command = %q %q, want claude setup-token", name, args)
+			}
+			_, _ = io.WriteString(stdout, printed)
+			return screen, nil
 		},
 	}
 	cmd := newClaudeLoginCommand(&commandContext{deps: deps.withDefaults()})
@@ -97,17 +103,19 @@ func runClaudeSetupTokenLogin(t *testing.T, token string) string {
 	cmd.SetIn(deps.In)
 	cmd.SetOut(deps.Out)
 	cmd.SetErr(deps.Err)
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("Execute: %v", err)
-	}
-	return output.String()
+	err := cmd.Execute()
+	return output.String(), err
 }
 
 func TestClaudeLoginSavesSetupTokenForLocalSessions(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AO_DATA_DIR", dataDir)
 	const token = "sk-ant-oat01-local-setup-token"
-	output := runClaudeSetupTokenLogin(t, token)
+	screen := terminalScreen{Cols: 80, Rows: []string{"Your OAuth token (valid for 1 year):", "", token, "", "Store this token securely."}}
+	output, err := runClaudeSetupTokenLogin(t, screen, "Your OAuth token (valid for 1 year):\r\n\r\n\x1b[33m"+token+"\x1b[39m\r\n")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
 	path := claudecode.LocalOAuthTokenPath(dataDir)
 	got, err := os.ReadFile(path)
 	if err != nil || string(got) != token {
@@ -128,22 +136,52 @@ func TestClaudeLoginSavesSetupTokenForLocalSessions(t *testing.T) {
 	}
 }
 
-func TestClaudeLoginRejectsInvalidSetupToken(t *testing.T) {
+func TestClaudeLoginFailsWhenSetupTokenPrintsNoToken(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AO_DATA_DIR", dataDir)
-	deps := Deps{
-		In: strings.NewReader("4\n"), Out: io.Discard, Err: io.Discard,
-		ReadSecret: func(io.Reader) ([]byte, error) { return []byte("invalid token"), nil },
-	}
-	cmd := newClaudeLoginCommand(&commandContext{deps: deps.withDefaults()})
-	cmd.SetArgs([]string{"--executable", "/managed/bin/claude"})
-	cmd.SetIn(deps.In)
-	cmd.SetOut(deps.Out)
-	cmd.SetErr(deps.Err)
-	if err := cmd.Execute(); err == nil || ExitCode(err) != 2 {
-		t.Fatalf("Execute error = %v, want usage error", err)
+	screen := terminalScreen{Cols: 80, Rows: []string{"OAuth error: cancelled"}}
+	if _, err := runClaudeSetupTokenLogin(t, screen, "OAuth error: cancelled\r\n"); err == nil {
+		t.Fatal("Execute succeeded without a token")
 	}
 	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(dataDir)); !os.IsNotExist(err) {
-		t.Fatalf("invalid token must not be saved, stat error = %v", err)
+		t.Fatalf("no token must be saved, stat error = %v", err)
+	}
+}
+
+func TestClaudeSetupTokenFromScreenJoinsWrappedRows(t *testing.T) {
+	const token = "sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123456789_ABCDEFGHIJ-KLMNOP"
+	screen := terminalScreen{Cols: 20, Rows: []string{
+		"✓ Created!", "", token[:20], token[20:40], token[40:60], token[60:], "", "Store this token",
+	}}
+	if got := string(claudeSetupTokenFromScreen(screen)); got != token {
+		t.Fatalf("token = %q, want %q", got, token)
+	}
+	// A token that exactly fills its row must not swallow the next row.
+	exact := terminalScreen{Cols: 20, Rows: []string{token[:20], "Store this token"}}
+	if got := claudeSetupTokenFromScreen(exact); string(got) != token[:20] {
+		t.Fatalf("exact-width token = %q, want %q", got, token[:20])
+	}
+	if got := claudeSetupTokenFromScreen(terminalScreen{Cols: 80, Rows: []string{"sk-ant-oat"}}); got != nil {
+		t.Fatalf("truncated token = %q, want nil", got)
+	}
+}
+
+func TestSecretCutoffWriterHidesTokenSplitAcrossWrites(t *testing.T) {
+	var out bytes.Buffer
+	w := newSecretCutoffWriter(&out, claudeSetupTokenPrefix)
+	for _, chunk := range []string{"Your token:\r\n\x1b[33msk-a", "nt-oat01-secret", "\x1b[39m\r\nStore it"} {
+		if n, err := w.Write([]byte(chunk)); err != nil || n != len(chunk) {
+			t.Fatalf("Write(%q) = %d, %v", chunk, n, err)
+		}
+	}
+	if got := out.String(); strings.Contains(got, "sk-a") || strings.Contains(got, "secret") || !strings.HasPrefix(got, "Your token:\r\n\x1b[33m") {
+		t.Fatalf("mirrored output = %q", got)
+	}
+	// Text that only resembles the start of the marker is not held back.
+	out.Reset()
+	w = newSecretCutoffWriter(&out, claudeSetupTokenPrefix)
+	_, _ = w.Write([]byte("Paste code here > "))
+	if out.String() != "Paste code here > " {
+		t.Fatalf("prompt held back: %q", out.String())
 	}
 }

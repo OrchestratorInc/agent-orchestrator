@@ -92,6 +92,9 @@ type Deps struct {
 	CommandOutputInDir    func(ctx context.Context, dir, name string, args ...string) ([]byte, error)
 	RunInteractiveCommand func(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error
 	ReadSecret            func(io.Reader) ([]byte, error)
+	// RunCapturedTerminalCommand runs an interactive CLI on a private PTY and
+	// returns the screen it left, for flows whose result is only printed.
+	RunCapturedTerminalCommand func(ctx context.Context, name string, args []string, stdin io.Reader, stdout io.Writer) (terminalScreen, error)
 	// DoctorGitHubRESTBase lets tests point the doctor GitHub token probe at
 	// httptest without mutating package-global state.
 	DoctorGitHubRESTBase string
@@ -105,22 +108,23 @@ type Deps struct {
 // DefaultDeps returns production dependencies.
 func DefaultDeps() Deps {
 	return Deps{
-		In:                    os.Stdin,
-		Out:                   os.Stdout,
-		Err:                   os.Stderr,
-		HTTPClient:            &http.Client{Timeout: 2 * time.Second},
-		Executable:            os.Executable,
-		StartProcess:          startProcess,
-		ProcessAlive:          processalive.Alive,
-		LookPath:              exec.LookPath,
-		CommandOutput:         commandOutput,
-		CommandOutputInDir:    commandOutputInDir,
-		RunInteractiveCommand: runInteractiveCommand,
-		ReadSecret:            readSecret,
-		DoctorGitHubRESTBase:  defaultDoctorGitHubRESTBase,
-		DoctorGitLabRESTBase:  defaultDoctorGitLabRESTBase,
-		Now:                   time.Now,
-		Sleep:                 time.Sleep,
+		In:                         os.Stdin,
+		Out:                        os.Stdout,
+		Err:                        os.Stderr,
+		HTTPClient:                 &http.Client{Timeout: 2 * time.Second},
+		Executable:                 os.Executable,
+		StartProcess:               startProcess,
+		ProcessAlive:               processalive.Alive,
+		LookPath:                   exec.LookPath,
+		CommandOutput:              commandOutput,
+		CommandOutputInDir:         commandOutputInDir,
+		RunInteractiveCommand:      runInteractiveCommand,
+		ReadSecret:                 readSecret,
+		RunCapturedTerminalCommand: runCapturedTerminalCommand,
+		DoctorGitHubRESTBase:       defaultDoctorGitHubRESTBase,
+		DoctorGitLabRESTBase:       defaultDoctorGitLabRESTBase,
+		Now:                        time.Now,
+		Sleep:                      time.Sleep,
 	}
 }
 
@@ -171,6 +175,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.ReadSecret == nil {
 		d.ReadSecret = def.ReadSecret
+	}
+	if d.RunCapturedTerminalCommand == nil {
+		d.RunCapturedTerminalCommand = def.RunCapturedTerminalCommand
 	}
 	if d.DoctorGitHubRESTBase == "" {
 		d.DoctorGitHubRESTBase = def.DoctorGitHubRESTBase
