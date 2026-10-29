@@ -105,7 +105,11 @@ func New(store Store, dataDir string) *Service {
 	if codex == "" {
 		codex = filepath.Join(home, ".codex")
 	}
-	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex}}
+	pi := os.Getenv("PI_CODING_AGENT_DIR")
+	if pi == "" {
+		pi = filepath.Join(home, ".pi", "agent")
+	}
+	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessPi: pi}}
 	if dataDir != "" {
 		s.excluded = []string{canonical(dataDir)}
 	}
@@ -343,8 +347,12 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, root string) ([]sourceFiles, error) {
 	byKey := map[string]*sourceFiles{}
 	dir := filepath.Join(root, "projects")
-	if harness == domain.HarnessCodex {
+	switch harness {
+	case domain.HarnessCodex:
 		// Archived Codex threads are not resumable without unarchiving them in Codex.
+		dir = filepath.Join(root, "sessions")
+	case domain.HarnessPi:
+		// Pi stores one JSONL per conversation under sessions/<cwd-dashed>/.
 		dir = filepath.Join(root, "sessions")
 	}
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -371,6 +379,11 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 			}
 		case domain.HarnessCodex:
 			if key = codexThreadID(path); key == "" {
+				return nil
+			}
+		case domain.HarnessPi:
+			// Each Pi JSONL is one conversation; the default key (its path) groups it alone.
+			if !strings.HasSuffix(entry.Name(), ".jsonl") {
 				return nil
 			}
 		}
@@ -422,6 +435,9 @@ func (f sourceFiles) nativeID() string {
 	if f.harness == domain.HarnessClaudeCode && len(f.paths) > 0 {
 		return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
 	}
+	if f.harness == domain.HarnessPi && len(f.paths) > 0 {
+		return piNativeID(f.paths[0])
+	}
 	return f.key
 }
 
@@ -461,7 +477,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessPi}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {

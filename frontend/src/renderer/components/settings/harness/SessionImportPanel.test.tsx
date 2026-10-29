@@ -5,7 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { workspaceQueryKey } from "../../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../../lib/agent-options";
 import type { WorkspaceSummary } from "../../../types/workspace";
-import { SessionImportPanel } from "./SessionImportPanel";
+import { IMPORTABLE_AGENTS, SessionImportPanel } from "./SessionImportPanel";
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("../../../lib/api-client", () => ({
 	apiClient: api,
@@ -55,6 +55,10 @@ it("lists only this agent's chats, preselects recent ones and imports only the s
 	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["older"] } });
 	expect(screen.getByText("Already in AO")).toBeInTheDocument();
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
+});
+
+it("gates importable harnesses to the ones with a verified resume path", () => {
+	expect([...IMPORTABLE_AGENTS].sort()).toEqual(["claude-code", "codex", "pi"]);
 });
 
 it("reports new, existing and failed imports separately", async () => {
