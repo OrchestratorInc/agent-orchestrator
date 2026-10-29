@@ -1,6 +1,7 @@
 package telemetrymeta
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -21,6 +22,33 @@ func ErrorKindAndCode(err error) (kind, code string) {
 		return ErrorKind(apiErr.Kind), apiErr.Code
 	}
 	return kind, ""
+}
+
+// SQLite primary result codes for a busy/locked database. Extended codes carry
+// these in their low byte. The modernc.org/sqlite error is matched structurally
+// by its Code() method so this package does not depend on the driver.
+const (
+	sqliteBusy   = 5
+	sqliteLocked = 6
+)
+
+// TransientCause names why err is a retryable contention/timeout condition
+// (sqlite_busy, sqlite_locked or deadline), or "" when it is not. Context
+// cancellation is excluded: the client went away and a retry would not help.
+func TransientCause(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "deadline"
+	}
+	var coder interface{ Code() int }
+	if errors.As(err, &coder) {
+		switch coder.Code() & 0xFF {
+		case sqliteBusy:
+			return "sqlite_busy"
+		case sqliteLocked:
+			return "sqlite_locked"
+		}
+	}
+	return ""
 }
 
 // ErrorKind maps API error kinds to coarse telemetry-safe categories.

@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // errCapture is a request-scoped slot WriteError records the raw service error
@@ -125,7 +126,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	// server-side deadline elapsed) is retryable, not a server fault. Map it to
 	// 503 with a stable code so it is not counted or alerted as an
 	// INTERNAL_ERROR 500 and so clients can back off and retry.
-	if isTransient(err) {
+	if telemetrymeta.TransientCause(err) != "" {
 		writeAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "SERVICE_UNAVAILABLE",
 			"The service is momentarily unavailable, please retry.", nil, reportingOwner)
 		return
@@ -143,32 +144,6 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	writeAPIError(w, r, http.StatusInternalServerError, "internal", "INTERNAL_ERROR", "Internal server error", nil, reportingOwner)
-}
-
-// SQLite primary result codes for a busy/locked database. Extended codes (e.g.
-// SQLITE_BUSY_SNAPSHOT) carry these in their low byte. Declared here rather
-// than imported so the envelope layer does not depend on the DB driver; the
-// modernc.org/sqlite error type is matched structurally by its Code() method.
-const (
-	sqliteBusy   = 5
-	sqliteLocked = 6
-)
-
-// isTransient reports whether err is a retryable contention/timeout condition
-// rather than a genuine server fault. It matches the SQLite driver's error via
-// a Code() method (no driver import), plus server-side context deadlines.
-// Context cancellation (the client went away) is deliberately excluded — the
-// response never reaches that caller, and it is not retryable.
-func isTransient(err error) bool {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	var coder interface{ Code() int }
-	if errors.As(err, &coder) {
-		c := coder.Code()
-		return c == sqliteBusy || c == sqliteLocked || c&0xFF == sqliteBusy || c&0xFF == sqliteLocked
-	}
-	return false
 }
 
 // httpStatus maps a semantic failure Kind to its HTTP status and wire word.

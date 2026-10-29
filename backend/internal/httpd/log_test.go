@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -164,3 +165,20 @@ func (s *captureSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
 }
 
 func (s *captureSink) Close(context.Context) error { return nil }
+
+func TestRequestLoggerTagsTransient503Cause(t *testing.T) {
+	sink := &captureSink{}
+	handler := requestLogger(slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), sink)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		envelope.WriteError(w, r, fmt.Errorf("get project: %w", context.DeadlineExceeded))
+	}))
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/orchestrators", nil))
+
+	if rec.Code != http.StatusServiceUnavailable || len(sink.events) != 1 {
+		t.Fatalf("status = %d, events = %d, want 503 and one ao.http.5xx", rec.Code, len(sink.events))
+	}
+	if got := sink.events[0].Payload["transient_cause"]; got != "deadline" {
+		t.Fatalf("payload.transient_cause = %#v, want deadline", got)
+	}
+}

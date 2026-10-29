@@ -515,3 +515,9 @@ func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
 		t.Errorf("second event $process_person_profile = %#v, want false", second["$process_person_profile"])
 	}
 }
+
+func TestHTTP5xxAllowlistExportsTransientCause(t *testing.T) {
+	if _, ok := remotePayloadAllowlist["ao.http.5xx"]["transient_cause"]; !ok {
+		t.Fatal("ao.http.5xx must allowlist transient_cause or PostHog strips it")
+	}
+}

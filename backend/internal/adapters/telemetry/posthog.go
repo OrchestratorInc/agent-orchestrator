@@ -145,6 +145,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"path":               {},
 		"status":             {},
 		"status_family":      {},
+		"transient_cause":    {},
 		"browser_command":    {},
 		"runtime_link_state": {},
 		"count":              {},
