@@ -354,6 +354,10 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if harness == domain.HarnessQwen {
 		return readQwenTranscript(ctx, root, paths...)
 	}
+	// OMP (a Pi fork) has its own record shape; its parser lives in omp.go.
+	if harness == domain.HarnessOMP {
+		return readOMPTranscript(ctx, root, paths...)
+	}
 	root = canonical(root)
 	providerRoot, err := os.OpenRoot(root)
 	if err != nil {

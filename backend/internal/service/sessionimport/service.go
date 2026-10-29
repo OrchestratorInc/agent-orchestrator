@@ -109,7 +109,7 @@ func New(store Store, dataDir string) *Service {
 	if qwen == "" {
 		qwen = filepath.Join(home, ".qwen")
 	}
-	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessQwen: qwen}}
+	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessQwen: qwen, domain.HarnessOMP: ompRoot(home)}}
 	if dataDir != "" {
 		s.excluded = []string{canonical(dataDir)}
 	}
@@ -343,6 +343,7 @@ var errManagedByAO = errors.New("this conversation already belongs to an AO sess
 // cannot be reopened from AO's worktree. Each such harness registers itself here.
 var historyOnlyImportHarnesses = map[domain.AgentHarness]bool{
 	domain.HarnessQwen: true,
+	domain.HarnessOMP:  true,
 }
 
 // historyOnlyImport reports whether a harness's imports are history-only.
@@ -359,8 +360,10 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, root string) ([]sourceFiles, error) {
 	byKey := map[string]*sourceFiles{}
 	dir := filepath.Join(root, "projects")
-	if harness == domain.HarnessCodex {
-		// Archived Codex threads are not resumable without unarchiving them in Codex.
+	switch harness {
+	case domain.HarnessCodex, domain.HarnessOMP:
+		// Codex keeps rollouts and OMP keeps one JSONL per conversation under
+		// <root>/sessions (archived Codex threads aren't resumable regardless).
 		dir = filepath.Join(root, "sessions")
 	}
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
@@ -381,7 +384,8 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 		}
 		key := path
 		switch harness {
-		case domain.HarnessClaudeCode:
+		case domain.HarnessClaudeCode, domain.HarnessOMP:
+			// One JSONL per conversation; the file path is its own group key.
 			if !strings.HasSuffix(entry.Name(), ".jsonl") {
 				return nil
 			}
@@ -439,10 +443,16 @@ func codexSegments(paths []string) []string {
 // nativeID names the conversation as readTranscript will: Claude's file name,
 // Codex's thread id.
 func (f sourceFiles) nativeID() string {
-	// Claude and Qwen name each conversation by its own <id>.jsonl file; Codex's
-	// id is the thread recorded inside the rollout.
-	if len(f.paths) > 0 && (f.harness == domain.HarnessClaudeCode || f.harness == domain.HarnessQwen) {
-		return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
+	// Claude and Qwen name each conversation by its own <id>.jsonl file; OMP
+	// trails the UUID after a timestamp; Codex's id is the thread recorded inside
+	// the rollout.
+	if len(f.paths) > 0 {
+		switch f.harness {
+		case domain.HarnessClaudeCode, domain.HarnessQwen:
+			return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
+		case domain.HarnessOMP:
+			return ompNativeIDFromPath(f.paths[0])
+		}
 	}
 	return f.key
 }
@@ -483,7 +493,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessQwen}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessQwen, domain.HarnessOMP}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {

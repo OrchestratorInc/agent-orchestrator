@@ -53,6 +53,20 @@ it("lists Qwen chats for import", async () => {
 	expect(await screen.findByRole("checkbox", { name: "Import Qwen chat" })).toBeInTheDocument();
 });
 
+it("offers OMP imports as history-only", () => {
+	expect(IMPORTABLE_AGENTS.has("omp")).toBe(true);
+	// OMP (a Pi fork) cannot resume a CLI chat from AO's worktree, so its imports are read-only.
+	expect(HISTORY_ONLY_IMPORT_AGENTS.has("omp")).toBe(true);
+});
+
+it("lists OMP chats for import", async () => {
+	api.GET.mockResolvedValue({
+		data: { candidates: [{ ...chat, id: "omp-1", title: "OMP chat", projectId: "project", harness: "omp" }] },
+	});
+	renderPanel("omp");
+	expect(await screen.findByRole("checkbox", { name: "Import OMP chat" })).toBeInTheDocument();
+});
+
 it("lists only this agent's chats, preselects recent ones and imports only the selection", async () => {
 	renderPanel();
 	const recent = await screen.findByRole("checkbox", { name: "Import Fix parser" });
