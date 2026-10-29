@@ -92,3 +92,14 @@ func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 		env["CLAUDE_CODE_OAUTH_TOKEN"] = token
 	}
 }
+
+// RuntimeCredentialEnv is the setup-token login AugmentRuntimeEnv gives a
+// session that sets no credential of its own, or nil when none is saved.
+func (p *Plugin) RuntimeCredentialEnv(dataDir string) map[string]string {
+	env := map[string]string{}
+	p.AugmentRuntimeEnv(env, dataDir)
+	if len(env) == 0 {
+		return nil
+	}
+	return env
+}

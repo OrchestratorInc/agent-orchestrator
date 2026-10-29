@@ -146,3 +146,16 @@ func TestSaveLocalOAuthTokenReplacesTokenWithoutLeftovers(t *testing.T) {
 		t.Fatalf("credential directory has %d entries, want only the token file", len(entries))
 	}
 }
+
+// Work outside a session (model discovery, the computer's account check) asks
+// for the same credential a session would get.
+func TestRuntimeCredentialEnvReturnsSavedSetupToken(t *testing.T) {
+	dataDir := withSavedSetupToken(t)
+	got := New().RuntimeCredentialEnv(dataDir)
+	if len(got) != 1 || got["CLAUDE_CODE_OAUTH_TOKEN"] != testSetupToken {
+		t.Fatalf("RuntimeCredentialEnv = %v, want only the saved setup token", got)
+	}
+	if got := New().RuntimeCredentialEnv(t.TempDir()); got != nil {
+		t.Fatalf("RuntimeCredentialEnv without a saved token = %v, want nil", got)
+	}
+}

@@ -169,6 +169,14 @@ type AgentRuntimeAuthChecker interface {
 	AuthStatusForRuntime(ctx context.Context, dataDir string) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
 }
 
+// AgentRuntimeCredentialEnv reports the credential environment AO adds when it
+// launches a local session from dataDir (such as a login AO saved itself), so
+// work done outside a session, like model discovery or the computer's account
+// check, sees the same credential. It returns nil when AO adds none.
+type AgentRuntimeCredentialEnv interface {
+	RuntimeCredentialEnv(dataDir string) map[string]string
+}
+
 // Agent is the contract every CLI coding agent adapter (claude-code, codex, …)
 // must satisfy. It supplies the argv and process configuration the Session
 // Manager needs to launch, restore, and read back a native agent session.
