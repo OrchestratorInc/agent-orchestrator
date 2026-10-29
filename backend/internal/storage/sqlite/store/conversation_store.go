@@ -1661,6 +1661,19 @@ func (s *Store) SettleTurn(
 	errMessage string,
 	now time.Time,
 ) error {
+	return s.SettleTurnWithFailureCode(ctx, conversationID, providerTurnID, state, errMessage, "", now)
+}
+
+// SettleTurnWithFailureCode retains a provider-classified cause beside the raw
+// error so recovery guidance survives a daemon or desktop restart.
+func (s *Store) SettleTurnWithFailureCode(
+	ctx context.Context,
+	conversationID, providerTurnID string,
+	state domain.TurnState,
+	errMessage string,
+	failureCode domain.ConversationFailureCode,
+	now time.Time,
+) error {
 	q, unlock := s.conversationWriter(ctx)
 	defer unlock()
 
@@ -1686,6 +1699,7 @@ func (s *Store) SettleTurn(
 	if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,
 		ErrorMessage: errMessage,
+		FailureCode:  string(failureCode),
 		CompletedAt:  sql.NullTime{Time: now, Valid: true},
 		ID:           turn.ID,
 	}); err != nil {
@@ -2903,6 +2917,7 @@ func (s *Store) SettleTurnByID(
 	if err := s.qw.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 		State:        state,
 		ErrorMessage: errMessage,
+		FailureCode:  "",
 		CompletedAt:  sql.NullTime{Time: now, Valid: true},
 		ID:           turnID,
 	}); err != nil {
@@ -4547,6 +4562,7 @@ func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {
 		ProviderInputText:  row.ProviderInputText,
 		State:              row.State,
 		ErrorMessage:       row.ErrorMessage,
+		FailureCode:        domain.ConversationFailureCode(row.FailureCode),
 		RequestedAt:        row.RequestedAt,
 	}
 	if row.RetryOfTurnID.Valid {

@@ -419,6 +419,7 @@ type ConversationTurn struct {
 	UsageLimitResumeError string
 	BatchedInput          int64
 	ProviderInputText     string
+	FailureCode           string
 }
 
 type Cue struct {
