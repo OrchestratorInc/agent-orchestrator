@@ -159,3 +159,80 @@ func TestRuntimeCredentialEnvReturnsSavedSetupToken(t *testing.T) {
 		t.Fatalf("RuntimeCredentialEnv without a saved token = %v, want nil", got)
 	}
 }
+
+const testCloudToken = "sk-ant-oat01-cloud-setup-token"
+
+// withCloudToken isolates Claude's native credential sources and saves the
+// token AO Cloud sign-in writes, as the desktop app does.
+func withCloudToken(t *testing.T) string {
+	t.Helper()
+	clearClaudeCredentialEnv(t)
+	// Prevent a macOS keychain helper from finding real user credentials.
+	t.Setenv("PATH", "")
+	dataDir := t.TempDir()
+	path := CloudOAuthTokenPath(dataDir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(testCloudToken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dataDir
+}
+
+// Nobody chose the AO Cloud token for local sessions, so it must never shadow
+// Claude Code's own login (#5878).
+func TestAugmentRuntimeEnvUsesCloudTokenOnlyWithoutNativeLogin(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T)
+		want  bool
+	}{
+		{"no other login", func(*testing.T) {}, true},
+		{"native credential in the daemon environment", func(t *testing.T) {
+			t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api03-native")
+		}, false},
+		{"native credential in Claude settings", func(t *testing.T) {
+			writeClaudeAuthSettings(t, filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "settings.json"), map[string]string{
+				"ANTHROPIC_API_KEY": "sk-ant-api03-from-settings",
+			})
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := withCloudToken(t)
+			tc.setup(t)
+			env := map[string]string{}
+			(&Plugin{}).AugmentRuntimeEnv(env, dataDir)
+			if got := env["CLAUDE_CODE_OAUTH_TOKEN"] == testCloudToken; got != tc.want {
+				t.Fatalf("cloud token injected = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestChosenSetupTokenOutranksCloudToken(t *testing.T) {
+	dataDir := withCloudToken(t)
+	if err := SaveLocalOAuthToken(dataDir, []byte(testSetupToken)); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	(&Plugin{}).AugmentRuntimeEnv(env, dataDir)
+	if env["CLAUDE_CODE_OAUTH_TOKEN"] != testSetupToken {
+		t.Fatal("the token chosen in the login menu did not sign the session in")
+	}
+}
+
+// Signing in through options 1-3 forgets only the menu's token; the AO Cloud
+// copy stays for the cloud flow and already defers to the new native login.
+func TestRemoveLocalOAuthTokenKeepsCloudToken(t *testing.T) {
+	dataDir := withCloudToken(t)
+	if err := SaveLocalOAuthToken(dataDir, []byte(testSetupToken)); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveLocalOAuthToken(dataDir); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTokenFile(CloudOAuthTokenPath(dataDir)); got != testCloudToken {
+		t.Fatalf("cloud token = %q after removing the menu token", got)
+	}
+}
