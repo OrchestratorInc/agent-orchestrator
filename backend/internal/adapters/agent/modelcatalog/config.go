@@ -25,7 +25,7 @@ type configParser func([]byte) ([]ports.AgentModelInfo, error)
 
 func hasConfigDiscoverySource(agentID string) bool {
 	switch agentID {
-	case "qwen", "continue", "goose", "vibe", "cline", "autohand", "hermes":
+	case "qwen", "continue", "goose", "vibe", "cline", "autohand", "hermes", "stakpak":
 		return true
 	default:
 		return false
@@ -87,6 +87,8 @@ func configModelParser(agentID string) configParser {
 		return parseAutoHandModels
 	case "hermes":
 		return parseHermesModels
+	case "stakpak":
+		return parseStakpakModels
 	default:
 		return nil
 	}
@@ -110,6 +112,11 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 	case "hermes":
 		if root := hermesConfigHome(home, env); root != "" {
 			paths = append(paths, filepath.Join(root, "config.yaml"), filepath.Join(root, "provider_models_cache.json"))
+		}
+	case "stakpak":
+		// Stakpak has no config-dir override; its config is always here.
+		if home != "" {
+			paths = append(paths, filepath.Join(home, ".stakpak", "config.toml"))
 		}
 	case "goose":
 		if root := strings.TrimSpace(env["GOOSE_PATH_ROOT"]); root != "" {
@@ -503,6 +510,37 @@ func parseGooseModels(raw []byte) ([]ports.AgentModelInfo, error) {
 		})
 	}
 	return normalize(models), nil
+}
+
+// parseStakpakModels offers the model of Stakpak's active profile
+// (STAKPAK_PROFILE, else "default", over the shared "all" profile). Stakpak
+// lists no other models: custom providers take any name, so the picker keeps
+// free-form entry for the rest.
+func parseStakpakModels(raw []byte) ([]ports.AgentModelInfo, error) {
+	var config struct {
+		Profiles map[string]struct {
+			Model string `toml:"model"`
+		} `toml:"profiles"`
+	}
+	if err := toml.Unmarshal(raw, &config); err != nil {
+		return nil, err
+	}
+	profile := strings.TrimSpace(os.Getenv("STAKPAK_PROFILE"))
+	if profile == "" {
+		profile = "default"
+	}
+	model := strings.TrimSpace(config.Profiles[profile].Model)
+	if model == "" {
+		model = strings.TrimSpace(config.Profiles["all"].Model)
+	}
+	if model == "" {
+		return nil, nil
+	}
+	provider := ""
+	if prefix, _, ok := strings.Cut(model, "/"); ok {
+		provider = prefix
+	}
+	return []ports.AgentModelInfo{{ID: model, Label: model, Provider: provider, IsDefault: true}}, nil
 }
 
 func parseVibeModels(raw []byte) ([]ports.AgentModelInfo, error) {

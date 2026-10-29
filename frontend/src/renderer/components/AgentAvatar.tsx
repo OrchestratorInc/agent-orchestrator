@@ -62,6 +62,8 @@ import primeAgentDarkLogo from "../assets/agents/prime-agent-dark.svg";
 import primeAgentLightLogo from "../assets/agents/prime-agent-light.svg";
 import qwenDarkLogo from "../assets/agents/qwen-dark.svg";
 import qwenLightLogo from "../assets/agents/qwen-light.svg";
+// stakpak/agent (Apache-2.0): the mark from assets/stakpak-dark.png.
+import stakpakLogo from "../assets/agents/stakpak.png";
 import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
 import vibeLogo from "../assets/agents/vibe.svg";
@@ -94,6 +96,7 @@ const LOGOS: AgentLogoSources = {
 	kimi: { light: kimiLightLogo, dark: kimiDarkLogo },
 	muse: museLogo,
 	memcode: memcodeLogo,
+	stakpak: stakpakLogo,
 	omp: ompLogo,
 	openhands: { light: openhandsLightLogo, dark: openhandsDarkLogo },
 	kiro: kiroLogo,

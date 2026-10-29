@@ -59,6 +59,7 @@ var plans = []Plan{
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
 	plan("hermes", ActionSetup, "Set up Hermes Agent", []string{"hermes", "model"}, "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs"),
+	plan("stakpak", ActionLogin, "Log in to Stakpak", []string{"stakpak", "auth", "login"}, "Native provider login: create a Stakpak API key in the browser, or paste an Anthropic, OpenAI or Gemini key", "https://github.com/stakpak/agent#authentication"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {
