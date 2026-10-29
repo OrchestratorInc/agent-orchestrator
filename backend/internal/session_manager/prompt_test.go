@@ -53,6 +53,9 @@ func TestBuildSystemPrompt_WorkerIncludesRulesAndOrchestrator(t *testing.T) {
 		"ao session claim-pr <full-pr-url>",
 		"## Docker Containers Started By This Session",
 		"## Worktree Git Isolation",
+		"provider's verified full head commit SHA",
+		"Never pass FETCH_HEAD as a checkout target",
+		"including failed commands",
 		"AO sessions use linked Git worktrees.",
 		"remote definitions with the human checkout",
 		"git config --worktree",
@@ -223,10 +226,11 @@ func TestBuildSystemPrompt_WorkerRequiresDurableReports(t *testing.T) {
 		"ao report --needs-input --note <text>",
 		"ao report --stuck --note <text>",
 		"ao report --done --note <text>",
-		"Do not narrate routine commands",
-		"Keep routine test logs",
-		"Summarize validation in the report note",
-		"not external publishing authorization",
+		"Do not file a report for routine commands",
+		"applies to `ao report` only",
+		"summarize validation and mention anything else, such as issues you filed, in the note",
+		"`--artifact <absolute-path>`",
+		"`--artifact` takes only a path to a file in the session artifact directory",
 		"`--done` does not terminate the session",
 	} {
 		if !strings.Contains(got, want) {
@@ -280,6 +284,19 @@ func TestBuildSystemPromptPreservesPublishingScope(t *testing.T) {
 					t.Error("freeform task still treats PR association as publishing authority")
 				}
 			})
+		}
+	}
+}
+
+func TestBuildSystemPromptAsksEveryRoleToNarrateToolCalls(t *testing.T) {
+	for _, cfg := range []systemPromptConfig{
+		{Role: sessionPromptRoleWorker},
+		{Role: sessionPromptRoleWorker, Standalone: true},
+		{Role: sessionPromptRoleOrchestrator},
+	} {
+		got := buildSystemPromptText(cfg)
+		if !strings.Contains(got, "Before each tool call, or each batch of related calls, write one short sentence") {
+			t.Errorf("%s (standalone=%v) prompt does not ask for narration:\n%s", cfg.Role, cfg.Standalone, got)
 		}
 	}
 }

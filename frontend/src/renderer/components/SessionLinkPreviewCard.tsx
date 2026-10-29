@@ -1,10 +1,12 @@
+import { BrowserIcon } from "./icons";
+import { mediaCrossOrigin } from "../lib/file-media";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { FileText, Globe, LoaderCircle, Play, Sheet } from "lucide-react";
+import { FileText, LoaderCircle, Play, Sheet } from "lucide-react";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { csvPreviewRows, tabularDelimiter } from "../lib/csv-preview";
@@ -318,7 +320,7 @@ function ArtifactImagePreview({ rawUrl, name, updatedAt }: { rawUrl: string; nam
 	if (failedSrc === src) return <p className="text-xs text-muted-foreground">{t("artifactLink.noPreview")}</p>;
 	return (
 		<div className="grid max-h-40 place-items-center overflow-hidden rounded-sm text-passive" style={{ background: IMAGE_CHECKERBOARD }}>
-			<img alt={name} className="max-h-40 max-w-full object-contain" onError={() => setFailedSrc(src)} src={src} />
+			<img crossOrigin={mediaCrossOrigin(src)} alt={name} className="max-h-40 max-w-full object-contain" onError={() => setFailedSrc(src)} src={src} />
 		</div>
 	);
 }
@@ -383,20 +385,18 @@ function ArtifactContentPreview({ artifact, session, remote }: { artifact: Sessi
 
 function ArtifactCardBody({ artifact, session, remote }: { artifact: SessionArtifact; session: WorkspaceSession; remote: boolean }) {
 	const { t } = useTranslation();
-	const Icon = artifact.kind === "html" ? Globe : tabularDelimiter(artifact.path) ? Sheet : FileText;
+	const Icon = artifact.kind === "html" ? BrowserIcon : tabularDelimiter(artifact.path) ? Sheet : FileText;
 	const author = session.kind === "orchestrator" ? t("shell.orchestrator") : session.title;
 	return (
 		<div className="space-y-2" role="status" aria-label={artifact.name}>
-			<div className="flex min-w-0 items-start gap-2">
-				<Icon aria-hidden="true" className="mt-0.5 size-icon-sm shrink-0 text-muted-foreground" />
-				<div className="min-w-0 flex-1">
-					<p className="truncate text-sm font-semibold text-foreground">{artifact.name}</p>
-					<p className="mt-0.5 truncate text-xs text-muted-foreground">
-						{author}
-						{author !== session.id ? <span className="font-mono"> · {session.id}</span> : null}
-					</p>
-				</div>
+			<div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-0.5">
+				<Icon aria-hidden="true" className="size-icon-sm text-muted-foreground" />
+				<p className="truncate text-sm font-semibold text-foreground">{artifact.name}</p>
 				<span className="shrink-0 text-xs text-muted-foreground">{relativeTime(artifact.updatedAt, t)}</span>
+				<p className="col-start-2 col-end-4 truncate text-xs text-muted-foreground">
+					{author}
+					{author !== session.id ? <span> · {session.id}</span> : null}
+				</p>
 			</div>
 			<div className="border-t border-border pt-2">
 				<ArtifactContentPreview artifact={artifact} session={session} remote={remote} />

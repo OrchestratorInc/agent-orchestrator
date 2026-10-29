@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert }
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
+import { agentAccountProviderFor, agentAccountsQueryKey, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
 import { agentAuthPlansQueryKeyForHost, probeAgentAuth, useAgentAuthPlans, useStartAgentAuth } from "../../../hooks/useAgentAuth";
 import { agentModelsQueryOptions, invalidateAgentModelCatalogs, refreshAgentModels } from "../../../hooks/useAgentModelsQuery";
 import {
@@ -10,8 +11,10 @@ import {
 	cacheAgentReadiness,
 	ensureAgentReadiness,
 	useAgentReadinessQuery,
+	type AgentReadiness,
 } from "../../../hooks/useAgentReadinessQuery";
 import {
+	advisoryInUse,
 	installedAgentIds,
 	installerQueryKeyForHost,
 	installersQueryOptions,
@@ -27,6 +30,7 @@ import {
 	useStartHarnessUpdate,
 	versionLabel,
 	type AgentUpdateAdvisory,
+	type HarnessInUse,
 	type InstallJob,
 } from "../../../hooks/useHarnessUpdates";
 import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../../hooks/useShellTerminals";
@@ -49,6 +53,7 @@ import { diagnosticsText, healthText, machineText } from "./harness-diagnostics"
 import { HarnessHealthTab } from "./HarnessHealthTab";
 import { FOCUS_HIGHLIGHT_MS, HARNESS_TAB_CLASS, HARNESS_TABS_CLASS, HarnessStatusDot, useWideLayout, type HarnessDetailTab } from "./harness-ui";
 import { HarnessModelsPanel, MULTI_PROVIDER_HARNESSES } from "./HarnessModelsPanel";
+import { HarnessSessionsDialog } from "./HarnessSessionsDialog";
 
 const AUTH_TERMINAL_LIFETIME_MS = 15 * 60_000;
 // The first check right after a login terminal exits can fail transiently (the
@@ -94,6 +99,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const startAgentAuth = useStartAgentAuth(hostId);
 	const startAgentLogout = useStartAgentAuth(hostId, "logout");
 	const [logoutRequest, setLogoutRequest] = useState<AgentId | null>(null);
+	// An update that cannot run alongside open sessions lists the ones it waits for.
+	const [inUseSessions, setInUseSessions] = useState<{ agentId: AgentId; inUse: HarnessInUse } | null>(null);
 	const [authStates, setAuthStates] = useState<AgentAuthStates>({});
 	const [checkingAuth, setCheckingAuth] = useState<AgentId[]>([]);
 	const [authCheckErrors, setAuthCheckErrors] = useState<Partial<Record<AgentId, string>>>({});
@@ -336,6 +343,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
 	}, []);
 
+	const cliLoginOnOwnRow = useCallback((agentId: AgentId) => !hostId && agentAccountProviderFor(agentId) !== null
+		&& followsSavedAccount(queryClient.getQueryData<AgentReadiness>(readinessKey)?.agents.find((agent) => agent.id === agentId)), [hostId, queryClient, readinessKey]);
+
 	// A "Log in" shortcut elsewhere (the task composer's model error) lands here
 	// and starts the same login flow the row's own button would, exactly once.
 	const startAuthRef = useRef<(agentId: AgentId) => Promise<boolean>>(async () => false);
@@ -346,8 +356,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		autoLoginHandledRef.current = true;
 		const plan = agentAuthPlans.get(targetAgentId);
 		if (!plan || !plan.available || plan.action === "instructions") return;
+		// New tasks start on a saved account: the CLI's own login would not fix
+		// them, so the page opens on the accounts list instead.
+		if (cliLoginOnOwnRow(targetAgentId)) return;
 		void startAuthRef.current(targetAgentId);
-	}, [agentAuthPlans, agents.isPending, authPlans.isPending, startLogin, targetAgentId]);
+	}, [agentAuthPlans, agents.isPending, authPlans.isPending, cliLoginOnOwnRow, startLogin, targetAgentId]);
 
 	useEffect(() => {
 		for (const job of jobs.data ?? []) {
@@ -445,6 +458,11 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 					methodId: method,
 					canStart: () => mountedRef.current,
 				});
+				// Sessions are not a failure to retry: show what to end.
+				if (result.inUse) {
+					setInUseSessions({ agentId, inUse: result.inUse });
+					return false;
+				}
 				if (result.error) return fail(result.error);
 				if (!result.job) return false;
 				data = result.job;
@@ -474,6 +492,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		const method = operationMethodId(agentId);
 		if (!method || !supportsUpdate(methods.find((candidate) => candidate.id === method))) return;
 		setActionErrors((current) => ({ ...current, [agentId]: undefined }));
+		const inUse = advisoryInUse(queryClient.getQueryData<AgentUpdateAdvisory>(updateAdvisoryQueryKey(agentId, hostId)));
+		if (inUse) { setInUseSessions({ agentId, inUse }); return; }
 		void startAgentOperation(agentId, method, "update");
 	};
 
@@ -588,19 +608,43 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 
 	checkAuthRef.current = (agentId) => checkAuth(agentId, { fresh: true });
 
+	// Reads the accounts again, so the CLI login's row shows a sign-in that just
+	// changed, and returns whether that login is signed in.
+	const refreshCliLogin = useCallback(async (agentId: AgentId): Promise<boolean | undefined> => {
+		const provider = hostId ? null : agentAccountProviderFor(agentId);
+		if (!provider) return undefined;
+		const accounts = await fetchAgentAccounts(true).catch(() => undefined);
+		if (!accounts) return undefined;
+		queryClient.setQueryData(agentAccountsQueryKey, accounts);
+		return accounts.find((account) => account.provider === provider && account.device)?.signedIn;
+	}, [hostId, queryClient]);
+
 	const finishAuth = useCallback(async (workflow: AuthTerminalWorkflow) => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId || authWorkflowRef.current.phase !== "running") return;
 		authWorkflowRef.current = { ...workflow, phase: "verifying", reason: undefined };
 		setAuthWorkflow(authWorkflowRef.current);
-		const completed = (candidate: AgentAuthProbeResult | undefined) => authWorkflowSucceeded(workflow, candidate?.agent?.authStatus);
+		const signingIn = workflow.action !== "logout";
+		const ownRow = cliLoginOnOwnRow(workflow.agentId);
+		let cliSignedIn: boolean | undefined;
+		const completed = async (candidate: AgentAuthProbeResult | undefined) => {
+			if (ownRow) {
+				cliSignedIn = await refreshCliLogin(workflow.agentId);
+				return cliSignedIn === signingIn;
+			}
+			return authWorkflowSucceeded(workflow, candidate?.agent?.authStatus);
+		};
 		let result = await checkAuth(workflow.agentId, { fresh: true });
-		for (let attempt = 1; attempt < AUTH_VERIFY_ATTEMPTS && !completed(result); attempt++) {
+		let done = await completed(result);
+		for (let attempt = 1; attempt < AUTH_VERIFY_ATTEMPTS && !done; attempt++) {
 			await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
 			if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
 			result = await checkAuth(workflow.agentId, { fresh: true });
+			done = await completed(result);
 		}
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return;
-		if (completed(result)) {
+		const signedOut = ownRow ? cliSignedIn === false : result?.agent?.authStatus === "unauthorized";
+		if (done) {
+			if (!ownRow) void refreshCliLogin(workflow.agentId);
 			try {
 				await closeAuthTerminal(workflow.terminal.handleId, hostId);
 			} catch (error) {
@@ -614,10 +658,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		}
 		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? {
 			...current,
-			phase: result?.agent?.authStatus === "unauthorized" ? "unauthorized" : "unverified",
-			reason: workflow.action === "logout" ? t("settings.harness.logoutUnverified") : result?.agent?.authStatus === "unauthorized" ? t("settings.harness.notLoggedIn") : t("settings.harness.loginUnknown"),
+			phase: signedOut ? "unauthorized" : "unverified",
+			reason: !signingIn ? t("settings.harness.logoutUnverified") : signedOut ? t("settings.harness.notLoggedIn") : t("settings.harness.loginUnknown"),
 		} : current);
-	}, [checkAuth, hostId, queryClient, shellKey, t]);
+	}, [checkAuth, cliLoginOnOwnRow, hostId, queryClient, refreshCliLogin, shellKey, t]);
 
 	const closeAuth = useCallback(async (workflow: AuthTerminalWorkflow): Promise<boolean> => {
 		if (authWorkflowRef.current?.terminal.handleId !== workflow.terminal.handleId) return false;
@@ -642,8 +686,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// instead of leaving a stale "signed out" terminal on screen.
 	useEffect(() => {
 		if (!authWorkflow || (authWorkflow.phase !== "unauthorized" && authWorkflow.phase !== "unverified")) return;
+		if (cliLoginOnOwnRow(authWorkflow.agentId)) return;
 		if (authWorkflowSucceeded(authWorkflow, readinessAgents.get(authWorkflow.agentId)?.authentication.state)) void closeAuth(authWorkflow);
-	}, [authWorkflow, readinessAgents, closeAuth]);
+	}, [authWorkflow, readinessAgents, closeAuth, cliLoginOnOwnRow]);
 
 	useEffect(() => {
 		if (!authWorkflow || authWorkflow.phase !== "running") return;
@@ -711,6 +756,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 			onSelectMethod={(methodId) => setSelectedMethods((current) => ({ ...current, [agentId]: methodId }))}
 			onCopyCommand={(command) => void copyText(agentId, command)}
 			onUpdate={() => requestUpdate(agentId)}
+			onViewSessions={(waiting) => setInUseSessions({ agentId, inUse: waiting })}
 			onLogin={() => void startAuth(agentId)}
 			onLogout={() => setLogoutRequest(agentId)}
 			onVerify={() => void verifyInstall(agentId)}
@@ -864,6 +910,12 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				error={logoutRequest ? authStates[logoutRequest]?.error : null}
 				onConfirm={() => { if (logoutRequest) void startAuth(logoutRequest, "logout").then((started) => { if (started) setLogoutRequest(null); }); }}
 				onOpenChange={(open) => { if (!open && !authStartPendingRef.current) setLogoutRequest(null); }}
+			/>
+			<HarnessSessionsDialog
+				agentId={inUseSessions?.agentId ?? null}
+				inUse={inUseSessions?.inUse}
+				hostId={hostId}
+				onOpenChange={(open) => { if (!open) setInUseSessions(null); }}
 			/>
 		</>
 	);

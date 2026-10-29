@@ -5,6 +5,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { I18nextProvider } from "react-i18next";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
+import { preloadMarkdownFonts } from "./hooks/useMarkdownFontsReady";
 import { queryClient } from "./lib/query-client";
 import { mergeUnreadNotification, unreadNotificationsQueryKey } from "./lib/notifications";
 import { playNotificationSound } from "./lib/notification-sound-player";
@@ -12,7 +13,8 @@ import { createAppRouter } from "./router";
 import { TelemetryBoundary } from "./components/TelemetryBoundary";
 import { CloudOnboardingGate } from "./components/CloudOnboardingGate";
 import { CloudNotificationRuntime } from "./components/CloudNotificationRuntime";
-import { applyRendererTelemetryPolicy, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
+import { TelemetryIdentityRuntime } from "./components/TelemetryIdentityRuntime";
+import { applyAnalyticsOptOut, applyRendererTelemetryPolicy, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
 import { aoBridge } from "./lib/bridge";
 import { startDaemonFailureTelemetry } from "./lib/daemon-telemetry";
 import { startUpdateTelemetry } from "./lib/update-telemetry";
@@ -21,7 +23,9 @@ import { appI18n } from "./i18n";
 import { useLocaleStore } from "./stores/locale-store";
 import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
 import { useTelemetryPolicyStore } from "./stores/telemetry-policy-store";
+import { useAnalyticsOptOutStore } from "./stores/analytics-opt-out-store";
 
+void preloadMarkdownFonts();
 const router = createAppRouter(queryClient);
 
 // Main owns consent and only acknowledges opt-out after every live AO shell
@@ -33,6 +37,16 @@ aoBridge.notifications.onPlaySound(() => {
 	playNotificationSound(() => aoBridge.notifications.reportSoundFailure());
 });
 aoBridge.telemetry.onPolicy((view) => applyRendererTelemetryPolicy(view.eventsEnabled && view.acknowledged && view.state === "applied"));
+
+// The analytics opt-out lives in main (shared with the daemon and mobile). Apply
+// it to this renderer's PostHog client at launch and whenever Settings flips it.
+void aoBridge.telemetry.getAnalyticsOptOut().then((optedOut) => {
+	if (optedOut) void applyAnalyticsOptOut(true);
+}).catch(() => undefined);
+aoBridge.telemetry.onAnalyticsOptOut((optedOut) => {
+	useAnalyticsOptOutStore.setState({ optedOut, loaded: true });
+	void applyAnalyticsOptOut(optedOut);
+});
 
 if (import.meta.env.DEV) {
 	const w = window as never as Record<string, unknown>;
@@ -114,6 +128,7 @@ async function renderApp(): Promise<void> {
 			<TelemetryBoundary>
 				<QueryClientProvider client={queryClient}>
 					<CloudNotificationRuntime />
+					<TelemetryIdentityRuntime />
 					<RouterProvider router={router} />
 					<CloudOnboardingGate />
 				</QueryClientProvider>

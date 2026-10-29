@@ -143,7 +143,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	cmd := commandWithOverrides(binary, cfg.Config, cfg.Permissions)
-	return append(cmd, "resume", agentSessionID), true, nil
+	return append(cmd, "--resume", agentSessionID), true, nil
 }
 
 // SessionInfo surfaces metadata reported by fx's lifecycle integration.

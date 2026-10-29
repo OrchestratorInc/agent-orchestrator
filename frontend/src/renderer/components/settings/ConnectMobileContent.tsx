@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowUpRight, Check, Coffee, Copy, Loader2, RotateCcw, TriangleAlert } from "lucide-react";
+import { Check, Coffee, Copy, Globe, Loader2, MonitorSmartphone, QrCode, RotateCcw, TriangleAlert } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
+import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
+import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -47,7 +49,7 @@ import {
 	type PairingEndpoint,
 } from "../../lib/pairing-payload";
 
-export const mobileStatusQueryKey = ["mobile-status"] as const;
+export { mobileStatusQueryKey };
 
 // One scan gives the mobile app every value required to connect. Keep the
 // secure key absent for plaintext payloads so older mobile builds can decode
@@ -205,10 +207,9 @@ function AndroidIcon({ className }: { className?: string }) {
 	);
 }
 
-/** Quiet store link: platform icon, name and an outbound arrow, muted until
- *  hovered. The icons carry the "this is a link" cue, not an underline. */
-const STORE_LINK_CLASS =
-	"inline-flex items-center gap-1 rounded-sm text-settings-muted transition-colors duration-(--duration-fast) hover:text-settings-label focus-visible:text-settings-label focus-visible:outline-none";
+/** One store in the segmented control: platform icon and name. */
+const STORE_SEGMENT_CLASS =
+	"inline-flex items-center gap-1.5 px-2.5 text-settings-label transition-colors duration-(--duration-fast) hover:bg-[color-mix(in_oklch,var(--color-bg-settings-input),var(--foreground)_6%)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-(--color-settings-accent)";
 
 /** Icon actions beside the password. */
 const ICON_ACTION_CLASS =
@@ -218,6 +219,7 @@ interface MobileStatus {
 	enabled: boolean;
 	/** User intent, independent of whether cloudflared is installed or running. */
 	noPublicTunnel?: boolean;
+	browserRemoteAccess?: boolean;
 	/** This machine's stable identity, echoed into the pairing code so the phone
 	 * can verify the endpoints it races. Optional: a daemon predating the
 	 * endpoint race does not send it, and the QR falls back to the v1 payload. */
@@ -418,26 +420,23 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		onSuccess: invalidate,
 	});
 
-	const setKeepAwake = useMutation({
-		mutationFn: async (keepAwake: boolean) => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", { body: { enabled: keepAwake, lidClosed: false } });
+	// Same switch as the sidebar Stay Awake button, so the two cannot disagree.
+	const stayAwake = useStayAwake(active);
+
+
+	const setBrowserRemoteAccess = useMutation({
+		mutationFn: async (browserRemoteAccess: boolean) => {
+			const { data, error } = await apiClient.POST("/api/v1/mobile/browser-control", { body: { enabled: browserRemoteAccess } });
 			if (error) throw new Error(apiErrorMessage(error));
 			return data;
 		},
-		// Flip the cached status up front so the switch never falls back to the
-		// old value between the POST finishing and the refetch landing.
-		onMutate: async (keepAwake) => {
+		onMutate: async (browserRemoteAccess) => {
 			await queryClient.cancelQueries({ queryKey: mobileStatusQueryKey });
 			const previous = queryClient.getQueryData<MobileStatus>(mobileStatusQueryKey);
-			if (previous?.keepAwake) {
-				queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, {
-					...previous,
-					keepAwake: { ...previous.keepAwake, enabled: keepAwake, lidClosed: false, lidActive: false },
-				});
-			}
+			if (previous) queryClient.setQueryData<MobileStatus>(mobileStatusQueryKey, { ...previous, browserRemoteAccess });
 			return { previous };
 		},
-		onError: (_error, _keepAwake, context) => {
+		onError: (_error, _enabled, context) => {
 			if (context?.previous) queryClient.setQueryData(mobileStatusQueryKey, context.previous);
 		},
 		onSettled: invalidate,
@@ -487,16 +486,6 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const localOnly = status ? localOnlyReason({ ...status, enabled }) : null;
 	const viaTailscale = status?.endpoints?.some((e) => e.kind === "tailscale") ?? false;
 	const secureBlocked = mode === "tailscale" && (status?.securePairing?.enabled ?? false) && !secureActive;
-	const setLidAwake = useMutation({
-		mutationFn: async (lidClosed: boolean) => {
-			const { data, error } = await apiClient.POST("/api/v1/mobile/keep-awake", {
-				body: { enabled: lidClosed || (status?.keepAwake?.enabled ?? false), lidClosed },
-			});
-			if (error) throw new Error(apiErrorMessage(error));
-			return data;
-		},
-		onSettled: invalidate,
-	});
 
 	const busy =
 		enable.isPending ||
@@ -504,8 +493,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.isPending ||
 		disable.isPending ||
 		setSecure.isPending ||
-		setKeepAwake.isPending ||
-		setLidAwake.isPending;
+		setBrowserRemoteAccess.isPending ||
+		stayAwake.busy;
 
 	const clearActionErrors = () => {
 		enable.reset();
@@ -513,8 +502,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		regenerate.reset();
 		disable.reset();
 		setSecure.reset();
-		setKeepAwake.reset();
-		setLidAwake.reset();
+		setBrowserRemoteAccess.reset();
 	};
 
 	const copyPassword = async () => {
@@ -550,8 +538,8 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		(regenerate.error instanceof Error && regenerate.error.message) ||
 		(disable.error instanceof Error && disable.error.message) ||
 		(setSecure.error instanceof Error && setSecure.error.message) ||
-		(setKeepAwake.error instanceof Error && setKeepAwake.error.message) ||
-		(setLidAwake.error instanceof Error && setLidAwake.error.message) ||
+		(setBrowserRemoteAccess.error instanceof Error && setBrowserRemoteAccess.error.message) ||
+		stayAwake.error ||
 		null;
 
 	const turnOff = () => {
@@ -569,7 +557,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		const lastKeepAwake = readLastKeepAwake();
 		return (
 			<>
-				<PairingLayout panel={<QrPlaceholder value={placeholderQrValue()} />}>
+				<PairingLayout panel={<PairingPanel code={<QrPlaceholder value={placeholderQrValue()} />} />}>
 					<ScanIntro />
 					<p className="sr-only" role="status">
 						{t("mobile.checkingStatus")}
@@ -604,11 +592,12 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		: null;
 	const secureReasonText = reasonMessage(status.securePairing?.reason ?? "", t);
 	const unreachable = enabled && !qrValue && noEndpointAvailable;
+	const remoteAccessOn = qrValue !== null && (status.endpoints?.some((e) => e.kind === "tunnel") ?? false);
 
 	// One object throughout: the blurred placeholder sits at the back, the real
 	// code crossfades in over it (and over the previous code on a change), and
 	// the overlay says what is happening while there is no code.
-	const panel = (
+	const code = (
 		<QrPlaceholder value={placeholderQrValue({ ...status, host: activeHost || status.host })}>
 			<PairingQr value={qrValue} size={QR_CODE_SIZE} animate={animateQr} />
 			{!enabled ? (
@@ -636,6 +625,47 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				</div>
 			) : null}
 		</QrPlaceholder>
+	);
+	// Whether the code reaches this machine from elsewhere, said in a few words
+	// under the code it describes: on once the code carries the tunnel, enabling
+	// while the tunnel is still starting (the code refreshes itself when it is
+	// up). A tunnel that failed is a warning, stated in the details column.
+	const remoteAccessStarting = qrValue !== null && !remoteAccessOn && localOnly === "starting";
+	const panel = (
+		<PairingPanel
+			code={code}
+			note={
+				remoteAccessOn || remoteAccessStarting ? (
+					<div
+						className="flex flex-col items-center text-center text-xs leading-5 text-settings-muted"
+						data-testid={remoteAccessOn ? "mobile-remote-access-on" : "mobile-remote-access-starting"}
+						role="status"
+					>
+						<p className="flex items-center gap-1.5">
+							{remoteAccessOn ? (
+								<Globe className="size-3.5 shrink-0" aria-hidden="true" />
+							) : (
+								<Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+							)}
+							{remoteAccessOn
+								? t("mobile.remoteAccessOn", "Remote access on")
+								: t("mobile.remoteAccessEnabling", "Enabling remote access")}
+						</p>
+						{/* Until the tunnel is up the code carries no public address. A
+						    tailnet address still reaches this machine from elsewhere once
+						    both devices are on the tailnet, so only without one is the code
+						    limited to this network. */}
+						{!remoteAccessOn && (
+							<p className="text-caption leading-4">
+								{viaTailscale
+									? t("mobile.remoteAccessEnablingHintTailscale", "Until then, reachable from elsewhere only over Tailscale")
+									: t("mobile.remoteAccessEnablingHint", "Until then, works on this network only")}
+							</p>
+						)}
+					</div>
+				) : null
+			}
+		/>
 	);
 
 	return (
@@ -716,36 +746,26 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					</p>
 				)}
 
-				{qrValue && localOnly && (
-					// The code refreshes itself once the tunnel is advertised; until
-					// then it is a LAN-only code that looks exactly like a full one.
+				{qrValue && localOnly === "failed" && (
+					// A LAN-only code looks exactly like a full one, so say what it
+					// cannot reach. (While the tunnel is still starting, the note under
+					// the code says so instead.)
 					<p
 						className="mt-4 flex items-start gap-1.5 text-xs leading-5 text-settings-muted"
 						data-testid="mobile-local-only"
 						role="status"
 					>
-						{localOnly === "starting" && <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" aria-hidden="true" />}
 						{/* A tailnet address does reach this machine from elsewhere, once
 						    both devices are on the tailnet; only the public tunnel is missing. */}
-						{localOnly === "starting"
-							? viaTailscale
-								? t(
-										"mobile.remoteAccessStartingTailscale",
-										"No public tunnel yet — away from this network the code works only over Tailscale. Remote access is still starting; wait for the code to update.",
-									)
-								: t(
-										"mobile.remoteAccessStarting",
-										"Works on this network only for now — remote access is still starting. Wait for the code to update before using it away from here.",
-									)
-							: viaTailscale
-								? t(
-										"mobile.remoteAccessFailedTailscale",
-										"No public tunnel — remote access couldn't start, so away from this network the code works only over Tailscale.",
-									)
-								: t(
-										"mobile.remoteAccessFailed",
-										"Works on this network only — remote access couldn't start, so this machine can't be reached from elsewhere.",
-									)}
+						{viaTailscale
+							? t(
+									"mobile.remoteAccessFailedTailscale",
+									"No public tunnel — remote access couldn't start, so away from this network the code works only over Tailscale.",
+								)
+							: t(
+									"mobile.remoteAccessFailed",
+									"Works on this network only — remote access couldn't start, so this machine can't be reached from elsewhere.",
+								)}
 					</p>
 				)}
 
@@ -796,18 +816,34 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			    effect whenever the mobile connection is. */}
 			{status.keepAwake?.supported && (
 				<KeepAwakeRow
-					keepAwake={status.keepAwake}
-					disabled={busy}
+					keepAwake={{ ...status.keepAwake, enabled: stayAwake.on, lidClosed: stayAwake.lidOn }}
+					disabled={busy || !stayAwake.supported}
 					onCheckedChange={(next) => {
 						clearActionErrors();
-						setKeepAwake.mutate(next);
+						stayAwake.set(next, true);
 					}}
 					onLidChange={(next) => {
 						clearActionErrors();
-						setLidAwake.mutate(next);
+						stayAwake.setLid(next);
 					}}
 				/>
 			)}
+			<SettingsRow
+				icon={MonitorSmartphone}
+				label={t("mobile.browserRemote.label", "Allow live browser on mobile")}
+				description={t("mobile.browserRemote.help", "Streams browser content and allows touch control from paired phones. This is separate from the mobile connection and is off by default.")}
+				data-testid="mobile-browser-remote-access"
+			>
+				<Switch
+					aria-label={t("mobile.browserRemote.label", "Allow live browser on mobile")}
+					disabled={busy}
+					checked={status.browserRemoteAccess ?? false}
+					onCheckedChange={(next) => {
+						clearActionErrors();
+						setBrowserRemoteAccess.mutate(next);
+					}}
+				/>
+			</SettingsRow>
 		</>
 	);
 }
@@ -913,37 +949,62 @@ function PairingLayout({ panel, children }: { panel: ReactNode; children: ReactN
 	);
 }
 
-/** One instruction and where to get the app. Nothing here changes once paired. */
+/**
+ * One instruction and where to get the app. The two stores are one compact
+ * segmented control, a filled surface that stands out from the muted copy
+ * around it; each segment shows its store's QR on hover or focus. Nothing here
+ * changes once paired.
+ */
 function ScanIntro() {
 	const { t } = useTranslation();
 	return (
 		<>
 			<p className="text-sm leading-5 text-settings-label">{t("mobile.scanHint")}</p>
-			<p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-control leading-5 text-settings-muted">
-				<span>{t("mobile.getApp")}</span>
-				{STORE_LINKS.map(({ key, Icon, url, labelKey, ariaKey, testId }) => (
-					<Tooltip key={key}>
-						<TooltipTrigger asChild>
-							<button
-								type="button"
-								className={STORE_LINK_CLASS}
-								aria-label={t(ariaKey)}
-								onClick={() => void aoBridge.app.openExternal(url)}
-							>
-								<Icon className="size-3.5 shrink-0" />
-								{t(labelKey)}
-								<ArrowUpRight className="size-3" aria-hidden="true" />
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="bottom" className="p-2" data-testid={testId}>
-							<div className="rounded-md bg-(--color-bg-settings-input) p-2">
-								<QrCanvas value={url} size={STORE_QR_SIZE} showLogo={false} cache className="block" />
-							</div>
-						</TooltipContent>
-					</Tooltip>
-				))}
-			</p>
+			<div className="mt-2 flex flex-wrap items-center gap-3 text-control leading-5">
+				<span className="text-settings-muted">{t("mobile.getApp")}</span>
+				<div className="inline-flex h-7 items-stretch divide-x divide-(--color-border-settings-input) overflow-hidden rounded-md bg-(--color-bg-settings-input)">
+					{/* One QR glyph for the whole control: each store reveals its QR on hover. */}
+					<span className="flex items-center px-2 text-settings-muted" aria-hidden="true">
+						<QrCode className="size-3.5" />
+					</span>
+					{STORE_LINKS.map(({ key, Icon, url, labelKey, ariaKey, testId }) => (
+						<Tooltip key={key}>
+							<TooltipTrigger asChild>
+								<button
+									type="button"
+									className={STORE_SEGMENT_CLASS}
+									aria-label={t(ariaKey)}
+									onClick={() => void aoBridge.app.openExternal(url)}
+								>
+									<Icon className="size-3.5 shrink-0" />
+									{t(labelKey)}
+								</button>
+							</TooltipTrigger>
+							<TooltipContent side="bottom" className="p-2" data-testid={testId}>
+								<div className="rounded-md bg-(--color-bg-settings-input) p-2">
+									<QrCanvas value={url} size={STORE_QR_SIZE} showLogo={false} cache className="block" />
+								</div>
+							</TooltipContent>
+						</Tooltip>
+					))}
+				</div>
+			</div>
 		</>
+	);
+}
+
+/**
+ * The code column: the pairing square and an optional note beneath it. Every
+ * state, loading included, renders this same element with the code first, so
+ * the note coming and going never changes the code's place in the tree. A
+ * different wrapper would remount the code and drop PairingQr's crossfade.
+ */
+function PairingPanel({ code, note }: { code: ReactNode; note?: ReactNode }) {
+	return (
+		<div className="flex w-60 shrink-0 flex-col gap-1.5 self-start" data-testid="mobile-pairing-panel">
+			{code}
+			{note}
+		</div>
 	);
 }
 

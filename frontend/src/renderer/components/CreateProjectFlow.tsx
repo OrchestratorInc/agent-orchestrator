@@ -36,6 +36,7 @@ import { additionalReposProblem, canonicalGitHubUrl, sameRepository } from "../l
 import { buildCoderRequestOptions, useCoderSessionOptionsStore } from "../stores/coder-session-options-store";
 import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
+import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { usePreparedClone } from "../hooks/usePreparedClone";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -45,7 +46,7 @@ import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { cloudAgentInfos } from "../lib/cloud-agents";
 import { aoBridge } from "../lib/bridge";
 import { CloudCpError } from "../lib/cloud-cp";
-import { CODER_PROVIDER } from "../lib/cloud-offering";
+import { CODER_PROVIDER, FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { useCloudSession } from "../lib/cloud-session";
@@ -202,6 +203,8 @@ export function CreateProjectFlow({
 	const cloneDialogOpen = activeView === "clone";
 	const [cloneDetails, setCloneDetails] = useState<CloneRepositoryDetails>(() => initialCloneDetails(hostId));
 	const [cloneSelection, setCloneSelection] = useState<CloneRepositorySelection | null>(null);
+	const [cloneActivity, setCloneActivity] = useState<"cloning" | "validating" | null>(null);
+	const [cloneRegistrationFailed, setCloneRegistrationFailed] = useState(false);
 	const preparedClone = usePreparedClone(hostId);
 	const [remoteBrowse, setRemoteBrowse] = useState<RemoteBrowseRequest | null>(null);
 	const folderPickerOpen = activeView === "folder";
@@ -243,7 +246,11 @@ export function CreateProjectFlow({
 	const setProjectImportStep = (step: ProjectImportStep | null) => dispatchView(step ? { type: "open", view: step } : { type: "closeProjectImport" });
 
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	// Settings opens as a page in the center pane; this flow stays mounted under it,
+	// so its modals and backdrop step aside instead of covering the page.
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const resetProjectImportState = () => {
+		setCloneRegistrationFailed(false);
 		setProjectValidation(null);
 		setProjectImportStep(null);
 		setProjectPrepEvents([]);
@@ -265,10 +272,8 @@ export function CreateProjectFlow({
 		try {
 			await preparedClone.cleanup();
 			return true;
-		} catch {
-			reportProjectError(t("createProject.cloneCleanupFailed", {
-				defaultValue: "AO could not remove the incomplete checkout. Try again before leaving this flow.",
-			}));
+		} catch (err) {
+			reportProjectError(apiErrorMessage(err, t("createProject.couldNotAdd")));
 			return false;
 		}
 	};
@@ -282,6 +287,7 @@ export function CreateProjectFlow({
 	};
 	const transitionFromFolder = (open: () => void) => {
 		setFolderPickerOpen(false);
+		if (cloneDialogOpen) setCloneDialogOpen(false);
 		transitionToChild(open);
 	};
 
@@ -333,6 +339,7 @@ export function CreateProjectFlow({
 					setFolderPickerOpen(false);
 					showGlobalToast("Project already added", "Opened the registered project for this folder.");
 					await onOpenExistingProject(registeredPath);
+					if (cloneDialogOpen) setCloneDialogOpen(false);
 					return;
 				}
 				const validation = await validateImportFolder(path, "project", hostId);
@@ -491,7 +498,15 @@ export function CreateProjectFlow({
 			if (cloneSelection) {
 				const prepared = preparedClone.current();
 				if (!prepared) throw new Error(t("createProject.couldNotAdd"));
-				await onCreateProject({ path: selectedPath, clonePreparationId: prepared.preparationId, ...selection });
+				for (let attempt = 0; ; attempt++) {
+					try {
+						await onCreateProject({ path: selectedPath, clonePreparationId: prepared.preparationId, ...selection });
+						break;
+					} catch (err: unknown) {
+						if (attempt === 2 || !(err instanceof TypeError || apiErrorCode(err) === "SERVICE_UNAVAILABLE")) throw err;
+						await new Promise((resolve) => window.setTimeout(resolve, (attempt + 1) * 1000));
+					}
+				}
 				setSelectedPath(null);
 				setCloneSelection(null);
 				preparedClone.complete();
@@ -523,12 +538,18 @@ export function CreateProjectFlow({
 		} catch (err) {
 			const code = err instanceof Error && "code" in err ? (err.code as string | undefined) : undefined;
 			const message = cloneSelection
-				? t("createProject.cloneFailedTitle", { defaultValue: "Could not clone repository" })
-				: err instanceof Error ? err.message : t("createProject.couldNotAdd");
+				? t("createProject.cloneRegistrationFailed", {
+					path: selectedPath,
+					message: safeProjectCreationError(apiErrorMessage(err), t("createProject.createFailedBody", { defaultValue: "AO could not create this project. Try again." })),
+				})
+				: apiErrorMessage(err, t("createProject.couldNotAdd"));
 			if (!cloneSelection && selectedKind === "single_repo" && isRepositorySetupRecoveryCode(code)) {
 				setRepositorySetup(code);
 			}
-			if (cloneSelection) reportProjectError(message);
+			if (cloneSelection) {
+				setCloneRegistrationFailed(true);
+				reportProjectError(message);
+			}
 			else if (selectedKind === "single_repo") reportProjectError(safeProjectCreationError(
 				message,
 				t("createProject.createFailedBody", { defaultValue: "AO could not create this project. Try again." }),
@@ -566,13 +587,17 @@ export function CreateProjectFlow({
 			reportProjectError(t("remote.connectBeforeStart"));
 			return;
 		}
-		if (preparedClone.current() && !(await abandonPreparedClone())) return;
+		const previous = preparedClone.current();
+		if (previous && !preparedClone.matches(next) && !(await abandonPreparedClone())) return;
 		setError(null);
+		setCloneRegistrationFailed(false);
 		setIsPreparingGit(true);
+		setCloneActivity(preparedClone.current() ? "validating" : "cloning");
 		let clonedPath: string | null = null;
 		try {
-			const data = await preparedClone.prepare(next.remoteUrl, next.destinationParent);
+			const data = preparedClone.current() ?? await preparedClone.prepare(next.remoteUrl, next.destinationParent);
 			clonedPath = data.path;
+			setCloneActivity("validating");
 			const validation = await validateImportFolder(data.path, "project", hostId);
 			setCloneDialogOpen(false);
 			setCloneSelection(next);
@@ -593,18 +618,18 @@ export function CreateProjectFlow({
 			}
 			setSelectedPath(data.path);
 		} catch (err) {
-			reportProjectError(clonedPath
-				? t("createProject.cloneValidationFailed", {
-					defaultValue: "AO cloned the repository but could not verify the checkout. Try again.",
-				})
-				: apiErrorCode(err) === "GIT_CLONE_FAILED"
-					? t("createProject.cloneFailedGuidance", {
-						defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection.",
-					})
-					: t("createProject.cloneFailedTitle", { defaultValue: "Could not clone repository" }));
-			if (clonedPath) await abandonPreparedClone();
+			if (err instanceof DOMException && err.name === "AbortError") {
+				setError(t("createProject.cloneCancelled"));
+			} else {
+				reportProjectError(clonedPath
+					? t("createProject.cloneValidationKept", { path: clonedPath })
+					: apiErrorCode(err) === "GIT_CLONE_TIMED_OUT"
+						? t("createProject.cloneTimedOut")
+						: safeProjectCreationError(apiErrorMessage(err), t("createProject.cloneFailedGuidance", { defaultValue: "Could not clone this repository. Check the URL, your Git credentials, and your network connection." })));
+			}
 			setCloneDialogOpen(true);
 		} finally {
+			setCloneActivity(null);
 			setIsPreparingGit(false);
 		}
 	};
@@ -750,7 +775,7 @@ export function CreateProjectFlow({
 					error,
 					label,
 				})}
-			{!isCreating && !isInitializing ? <CreateProjectFlowBackdrop open={modePickerOpen || cloneDialogOpen || folderDialogOpen || selectedPath !== null || childTransitioning || projectImportOpen || remoteBrowse !== null} /> : null}
+			{!isCreating && !isInitializing ? <CreateProjectFlowBackdrop open={!settingsOpen && (modePickerOpen || cloneDialogOpen || folderDialogOpen || selectedPath !== null || childTransitioning || projectImportOpen || remoteBrowse !== null)} /> : null}
 			{hasModePicker && embedded && !modePickerOpen && !cloneDialogOpen && selectedPath === null && (
 				<div className="flex w-full flex-col items-center gap-3">
 					{cloudEnabled && offering === "cloud" ? (
@@ -786,7 +811,7 @@ export function CreateProjectFlow({
 						onCloudBack={() => setOffering("local")}
 						onSignIn={cloudSignIn}
 						onCreateStandaloneAgent={onCreateStandaloneAgent}
-						open={modePickerOpen}
+						open={modePickerOpen && !settingsOpen}
 						onOpenChange={(open) => {
 							if (isBusy) return;
 							setModePickerOpen(open);
@@ -809,6 +834,7 @@ export function CreateProjectFlow({
 							remote={Boolean(hostId)}
 							onChooseRemoteDestination={() => setRemoteBrowse({ kind: "clone_destination" })}
 							disabled={isBusy}
+							cloning={cloneActivity === "cloning"}
 							error={error}
 							existingProjectNames={existingProjectNames}
 							existingProjectPaths={existingProjectPaths}
@@ -822,9 +848,17 @@ export function CreateProjectFlow({
 							onClose={() => {
 								void leaveCloneDialog(false);
 							}}
+							onCheckDestination={preparedClone.checkDestination}
+							onUseExisting={(path) => {
+								setError(null);
+								setCloneSelection(null);
+								void chooseDirectory("single_repo", path, true);
+							}}
+							onCancel={preparedClone.cancel}
+							activity={cloneActivity}
 							onContinue={(next) => void prepareClone(next)}
 							onError={reportProjectError}
-							open={cloneDialogOpen}
+							open={cloneDialogOpen && !settingsOpen}
 							shake={projectImportShake}
 							value={cloneDetails}
 						/>
@@ -833,7 +867,7 @@ export function CreateProjectFlow({
 						disabled={isBusy}
 						error={error}
 						kind={selectedKind}
-						open={folderDialogOpen}
+						open={folderDialogOpen && !settingsOpen}
 						scan={validationScan}
 						validation={projectValidation}
 						isPreparingGit={isPreparingGit}
@@ -906,7 +940,7 @@ export function CreateProjectFlow({
 					}
 				}}
 				onTryWorkspace={tryProjectAsWorkspace}
-				open={projectImportOpen}
+				open={projectImportOpen && !settingsOpen}
 				githubRepository={projectGitHubRepo}
 				remoteUrl={projectRemoteUrl}
 				step={projectImportStep}
@@ -915,7 +949,15 @@ export function CreateProjectFlow({
 				validation={projectValidation}
 			/>
 			<CreateProjectAgentSheet
-				action={cloneSelection ? "clone" : "create"}
+				preparedClonePath={cloneSelection ? selectedPath ?? undefined : undefined}
+				onKeepCheckout={cloneRegistrationFailed ? async () => {
+					if (!(await abandonPreparedClone())) return;
+					setSelectedPath(null);
+					setCloneSelection(null);
+					setCloneRegistrationFailed(false);
+					setError(null);
+					onDismiss?.();
+				} : undefined}
 				connected={connected}
 				error={error}
 				hostId={hostId}
@@ -1126,7 +1168,9 @@ function CreateProjectFlowBackdrop({ open }: { open: boolean }) {
 				<motion.div
 					aria-hidden="true"
 					className="dialog-overlay z-[calc(var(--z-overlay)-1)]"
-					initial={{ opacity: 0 }}
+					// Arriving from another modal (lib/modal-handoff.ts), it shows at
+					// full strength so the dim never dips.
+					initial={document.documentElement.dataset.modalHandoff ? false : { opacity: 0 }}
 					animate={{ opacity: 1, transition: { duration: 0.08 } }}
 					exit={{ opacity: 0, transition: { duration: 0.06 } }}
 				/>
@@ -1668,7 +1712,13 @@ function CloudProjectCard({
 					displayName: selectedRepo.name,
 					config,
 				});
+			useSidebarOrderStore.getState().moveProjectToTop(project.id);
 			await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
+			// A Freestyle project opens on its orchestrator, already starting; a
+			// Coder one opens on its board as before.
+			if (projectSandboxProvider(project.config, offering) === FREESTYLE_PROVIDER) {
+				useUiStore.getState().setAutoStartOrchestrator(project.id, true);
+			}
 			onCreated(project.id);
 		} catch (err) {
 			// A repository backs at most one active project per workspace; the
@@ -1937,6 +1987,7 @@ function CloudProjectCard({
 								overrides={coderParameters}
 								onChange={setCoderParameters}
 								disabled={isCreating}
+								repositoryUrls={standalone || !mainRepoUrl ? [] : [mainRepoUrl, ...extraRepoUrls]}
 							/>
 						) : null}
 						{showCoderWorkspaceNamePrefix ? <div className="flex flex-col gap-2 text-sm">
@@ -2110,7 +2161,7 @@ function ImportSourcePicker({
 							</button>
 						))}
 						{onCreateStandaloneAgent ? (
-							<button type="button" className="group flex min-h-[76px] items-center gap-3 px-3.5 py-3 text-left hover:bg-accent/50" aria-label={t("home.newStandaloneAgent")} disabled={disabled} onClick={createStandaloneAgent}>
+							<button type="button" className="group flex min-h-[76px] items-center gap-3 px-3.5 py-3 text-left hover:bg-accent/50 active:bg-accent disabled:pointer-events-none disabled:opacity-50" aria-label={t("home.newStandaloneAgent")} disabled={disabled} onClick={createStandaloneAgent}>
 								<span className="grid w-9 shrink-0 place-items-center text-muted-foreground group-hover:text-foreground">
 									<MessageSquarePlus className="size-5" aria-hidden="true" strokeWidth={1.8} />
 								</span>
@@ -2259,7 +2310,7 @@ function ProjectImportDialog({
 		<Dialog.Root open={open} onOpenChange={onOpenChange}>
 			<Dialog.Portal>
 				<Dialog.Content
-					className={cn("fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none", shake && "modal-shake")}
+					className={cn("fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(560px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none", shake && "modal-shake")}
 					onInteractOutside={(event) => event.preventDefault()}
 					onPointerDownOutside={(event) => event.preventDefault()}
 				>
@@ -2596,7 +2647,7 @@ function CreateProjectFolderDialog({
 	return (
 		<Dialog.Root open={open} onOpenChange={onOpenChange}>
 			<Dialog.Portal>
-				<Dialog.Content className={cn("fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(640px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none", shake && "modal-shake")}>
+				<Dialog.Content className={cn("fixed left-1/2 top-1/2 z-overlay flex max-h-[min(640px,calc(100svh-24px))] w-[min(640px,calc(100vw-24px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none", shake && "modal-shake")}>
 					<div className="relative flex shrink-0 items-start gap-3 px-4 pt-3">
 						<Button
 							type="button"

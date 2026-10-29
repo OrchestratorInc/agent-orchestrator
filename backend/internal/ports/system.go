@@ -24,6 +24,13 @@ type CommandRunner interface {
 type InstallCommand struct {
 	Argv []string
 	Env  []string
+	// Dir, when set, is the installer's working directory.
+	Dir string
+	// Isolated keeps the daemon's environment out of the installer except for
+	// locale, temp, proxy and TLS settings, so a variable the user exported
+	// (an install directory, a vendor home) cannot redirect it; Env supplies
+	// everything else.
+	Isolated bool
 }
 
 // InstallCommandRunner executes an installer with closed stdin and controlled
@@ -33,12 +40,15 @@ type InstallCommandRunner interface {
 }
 
 // InstallScriptCommand is a daemon-owned remote installer recipe. The caller
-// selects the exact URL and interpreter; the adapter downloads the complete
-// script before executing it.
+// selects the exact URL, interpreter, and fixed script arguments; the adapter
+// downloads the complete script before executing it.
 type InstallScriptCommand struct {
 	URL         string
 	Interpreter []string
+	Args        []string
 	Env         []string
+	// Isolated runs the script with InstallCommand.Isolated.
+	Isolated bool
 }
 
 // InstallScriptResult records display-safe evidence about a downloaded script.

@@ -3,7 +3,9 @@
 AO supports Gemini CLI 0.60.0 and newer in Terminal UI mode. Install or update
 Gemini with npm from Settings → Agents, then use **Set up Gemini CLI** to authenticate
 with the native `/auth` chooser, which AO opens automatically after Gemini
-starts. AO does not read or copy Gemini credentials.
+starts. If `/auth` stays in the editor, press Enter after its command completion
+appears. An authentication picker that is already open is left alone. AO does not
+read or copy Gemini credentials.
 AO currently omits Homebrew as an install method because its formula trails the
 minimum supported Gemini CLI version.
 
@@ -28,7 +30,7 @@ Permission mapping:
 
 Tool allowlists and denylists are rejected because Gemini's native policy engine
 has not been integrated. AO reports authentication as `configured` when it finds
-Gemini's cached OAuth credentials, an API key environment variable, or Gemini's
+Gemini's cached OAuth credentials, `GEMINI_API_KEY`, or Gemini's
 saved `gemini-api-key` authentication selection (whose key may live in the OS
 keychain). This is a local configuration check only; it does not prove that the
 credential is still valid, so Gemini remains the authoritative check at launch.

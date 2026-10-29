@@ -157,10 +157,8 @@ var (
 )
 
 func hasCachedCredentials() (bool, error) {
-	for _, name := range []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"} {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			return true, nil
-		}
+	if strings.TrimSpace(os.Getenv("GEMINI_API_KEY")) != "" {
+		return true, nil
 	}
 	configDir, err := geminiConfigDir()
 	if err != nil {
@@ -267,3 +265,17 @@ func geminiCredentialFileConfigured(path string, stat func(string) (os.FileInfo,
 func (p *Plugin) ResolveBinaryPresence(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, binarySpec)
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}
+
+// SupportsTerminalVersionRefresh opts into idle restarts using the captured
+// native session ID. Restore preserves session model and permission options.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

@@ -48,6 +48,18 @@ func TestAuthStatusUsesCachedAPIKey(t *testing.T) {
 	}
 }
 
+func TestAuthStatusIgnoresGoogleAPIKeyAlone(t *testing.T) {
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "google-sdk-key")
+	t.Setenv("GOOGLE_GENAI_USE_VERTEXAI", "")
+	t.Setenv("GEMINI_CLI_HOME", t.TempDir())
+
+	status, err := (&Plugin{resolvedBinary: "gemini"}).AuthStatus(context.Background())
+	if err != nil || status != ports.AgentAuthStatusUnknown {
+		t.Fatalf("AuthStatus = (%q, %v), want unknown for GOOGLE_API_KEY alone", status, err)
+	}
+}
+
 func TestAuthStatusUsesCachedOAuthCredentials(t *testing.T) {
 	t.Setenv("GEMINI_API_KEY", "")
 	t.Setenv("GOOGLE_API_KEY", "")

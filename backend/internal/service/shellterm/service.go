@@ -568,9 +568,9 @@ func (s *Service) sendInitialInputAfterTimeout(handle ports.RuntimeHandle, input
 }
 
 func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.RuntimeHandle, input string, readyStates []InitialInputReadyState, sendOnTimeout bool) {
-	ctx, cancel := context.WithTimeout(ctx, s.initialInputTimeout)
-	defer cancel()
-	ready := s.waitForInitialInputReadyState(ctx, handle, readyStates)
+	readyCtx, cancelReady := context.WithTimeout(ctx, s.initialInputTimeout)
+	defer cancelReady()
+	ready := s.waitForInitialInputReadyState(readyCtx, handle, readyStates)
 	if ready == nil {
 		if sendOnTimeout {
 			s.sendInitialInputAfterTimeout(handle, input)
@@ -582,21 +582,26 @@ func (s *Service) sendInitialInputWhenReady(ctx context.Context, handle ports.Ru
 	if ready.SkipInput {
 		return
 	}
+	inputCtx := readyCtx
 	if ready.RawPrefix != "" {
-		if err := s.runtime.SendInput(ctx, handle, ready.RawPrefix); err != nil {
+		if err := s.runtime.SendInput(inputCtx, handle, ready.RawPrefix); err != nil {
 			s.log.Warn("authentication terminal initial input prefix failed", "handleId", handle.ID, "error", err)
 			return
 		}
 	}
 	if ready.SubmitReadyText != "" {
-		if s.waitForInitialInputReadyState(ctx, handle, []InitialInputReadyState{{Text: ready.SubmitReadyText}}) == nil {
+		// Startup and command completion each receive a full bounded wait.
+		completionCtx, cancelCompletion := context.WithTimeout(ctx, s.initialInputTimeout)
+		defer cancelCompletion()
+		inputCtx = completionCtx
+		if s.waitForInitialInputReadyState(completionCtx, handle, []InitialInputReadyState{{Text: ready.SubmitReadyText}}) == nil {
 			// The prefix is already in the editor. Without the reviewed completion
 			// marker, Enter could send it as a prompt to the model.
 			s.log.Warn("authentication terminal initial input completion did not appear", "handleId", handle.ID)
 			return
 		}
 	}
-	if err := s.runtime.SendMessage(ctx, handle, input); err != nil {
+	if err := s.runtime.SendMessage(inputCtx, handle, input); err != nil {
 		s.log.Warn("authentication terminal initial input failed", "handleId", handle.ID, "error", err)
 	}
 }
