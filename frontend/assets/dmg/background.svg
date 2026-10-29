@@ -2,7 +2,7 @@
 	<!--
 		Source for the macOS install window background (background.png and
 		background@2x.png beside this file). Regenerate after editing:
-		  node scripts/render-dmg-assets.mjs
+		  node scripts/render-dmg-background.mjs
 		The image sets the window FRAME size, so Finder's title bar covers the
 		bottom ~32pt: keep everything within the top 368pt. Geometry is coupled
 		to DMG_LAYOUT in scripts/build-mac-dmg.mjs: the app icon is centred at

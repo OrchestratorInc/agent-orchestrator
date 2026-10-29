@@ -5,6 +5,7 @@ import path from "node:path";
 import {
 	APP_BUNDLE_NAME,
 	BACKGROUND_IMAGE,
+	VOLUME_ICON,
 	DMG_LAYOUT,
 	buildMacDmg,
 	macDmgLayout,
@@ -24,6 +25,35 @@ function pngSize(file) {
 	// IHDR is always the first chunk: width and height at bytes 16 and 20.
 	return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
 }
+
+// assets/icon.icns is both the app bundle icon and the dmg's volume icon. It
+// once stored its 16/32px sizes as PNG in the legacy icp4/icp5 slots, which
+// Finder decodes as noise: the title bar and small listings showed garbage.
+// iconutil writes those sizes as ic04/ic05; regenerate it with iconutil from an
+// iconset, never by hand-packing PNGs.
+describe("app icon", () => {
+	function chunks(file) {
+		const icns = readFileSync(file);
+		expect(icns.toString("latin1", 0, 4)).toBe("icns");
+		const types = [];
+		for (let at = 8; at < icns.length; at += icns.readUInt32BE(at + 4)) types.push(icns.toString("latin1", at, at + 4));
+		return types;
+	}
+
+	it("is the volume icon", () => {
+		expect(path.relative(path.dirname(BACKGROUND_IMAGE), VOLUME_ICON)).toBe(path.join("..", "icon.icns"));
+	});
+
+	it("encodes its 16 and 32px sizes in the types Finder decodes", () => {
+		const types = chunks(VOLUME_ICON);
+		expect(types).not.toContain("icp4");
+		expect(types).not.toContain("icp5");
+		// 16, 32, 16@2x, 32@2x, 128, 128@2x, 256, 256@2x, 512, 512@2x (1024).
+		for (const type of ["ic04", "ic05", "ic11", "ic12", "ic07", "ic13", "ic08", "ic14", "ic09", "ic10"]) {
+			expect(types).toContain(type);
+		}
+	});
+});
 
 describe("install window layout", () => {
 	it("is a compact window with large icons, app on the left and Applications on the right, aligned", () => {

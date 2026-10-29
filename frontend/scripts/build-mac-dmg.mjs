@@ -54,10 +54,7 @@ export const DMG_LAYOUT = Object.freeze({
 export const BACKGROUND_IMAGE = path.join(frontendDir, "assets/dmg/background.png");
 // Becomes .VolumeIcon.icns: the mounted volume shows the app icon in the window
 // title bar, Finder's sidebar and on the desktop instead of a generic disk.
-// Generated from assets/icon.png by render-dmg-assets.mjs with iconutil, NOT
-// a copy of assets/icon.icns: that file stores its 16/32px sizes as PNG in the
-// legacy icp4/icp5 slots, which Finder decodes as noise at title-bar size.
-export const VOLUME_ICON = path.join(frontendDir, "assets/dmg/volume.icns");
+export const VOLUME_ICON = path.join(frontendDir, "assets/icon.icns");
 
 /**
  * electron-builder `dmg` options for the install window. Spread into the dmg
