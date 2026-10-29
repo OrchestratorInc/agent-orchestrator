@@ -1,9 +1,11 @@
 package httpd
 
 import (
+	"bufio"
 	"compress/flate"
 	"compress/zlib"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 
@@ -25,7 +27,7 @@ func remoteJSONCompression(next http.Handler) http.Handler {
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		encoding := preferredRemoteEncoding(r.Header.Values("Accept-Encoding"))
-		if encoding == "" {
+		if encoding == "" || r.Header.Get("Range") != "" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -34,11 +36,65 @@ func remoteJSONCompression(next http.Handler) http.Handler {
 		// may proxy the request) still sees the original, unmodified headers.
 		negotiated := r.Clone(r.Context())
 		negotiated.Header.Set("Accept-Encoding", encoding)
-		compressor.Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			next.ServeHTTP(w, r)
+		compressor.Handler(http.HandlerFunc(func(encoded http.ResponseWriter, _ *http.Request) {
+			next.ServeHTTP(&remoteJSONResponseWriter{ResponseWriter: encoded, uncompressed: w}, r)
 		})).ServeHTTP(w, negotiated)
 	})
 }
+
+// Decide before chi commits headers: a partial response must bypass its encoder,
+// and a strong validator cannot describe both the original and encoded bytes.
+type remoteJSONResponseWriter struct {
+	http.ResponseWriter
+	uncompressed http.ResponseWriter
+	wroteHeader  bool
+}
+
+func (w *remoteJSONResponseWriter) WriteHeader(status int) {
+	if !w.wroteHeader {
+		w.wroteHeader = true
+		if status == http.StatusPartialContent {
+			w.ResponseWriter = w.uncompressed
+		} else {
+			contentType, _, _ := strings.Cut(w.Header().Get("Content-Type"), ";")
+			if contentType == "application/json" && w.Header().Get("Content-Encoding") == "" {
+				if etag := w.Header().Get("ETag"); strings.HasPrefix(etag, `"`) {
+					w.Header().Set("ETag", "W/"+etag)
+				}
+			}
+		}
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *remoteJSONResponseWriter) Write(body []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(body)
+}
+
+func (w *remoteJSONResponseWriter) FlushError() error {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+func (w *remoteJSONResponseWriter) Flush() { _ = w.FlushError() }
+
+func (w *remoteJSONResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(w.ResponseWriter).Hijack()
+}
+
+func (w *remoteJSONResponseWriter) Push(target string, opts *http.PushOptions) error {
+	if pusher, ok := w.ResponseWriter.(http.Pusher); ok {
+		return pusher.Push(target, opts)
+	}
+	return http.ErrNotSupported
+}
+
+func (w *remoteJSONResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func preferredRemoteEncoding(fields []string) string {
 	qualities := make(map[string]int, 4)

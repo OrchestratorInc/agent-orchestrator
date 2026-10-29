@@ -1,9 +1,13 @@
 package controllers_test
 
 import (
+	"compress/gzip"
+	"compress/zlib"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,12 +19,99 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/renderpage"
 )
+
+func TestArtifactFileRemoteCompressionPreservesRangesAndValidators(t *testing.T) {
+	body := strings.Repeat(`{"value":"scratch"}`+"\n", 100)
+	local, _ := artifactFileServer(t, map[string]string{"data.json": body})
+	remote := httpd.NewMobileLAN(local.Config.Handler, "h_scratch", 0, nil, nil)
+	remote.SetPasswordHash(mobilebridge.HashPassword("test-password"))
+	port, err := remote.StartLoopback(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = remote.Stop(context.Background()) })
+	transport := &http.Transport{DisableCompression: true}
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+	url := fmt.Sprintf("http://127.0.0.1:%d/api/v1/sessions/ao-1/artifact-files/data.json", port)
+	identity, _ := getArtifactFile(t, local, "data.json", "")
+	strongETag := identity.Header.Get("ETag")
+	if !strings.HasPrefix(strongETag, `"`) {
+		t.Fatalf("fixture ETag=%q, want a strong validator", strongETag)
+	}
+	for _, tc := range []struct {
+		name, accept, byteRange, ifRange, ifNoneMatch string
+		status                                        int
+		encoding, etag, contentRange, wantBody        string
+	}{
+		{"identity", "identity", "", "", "", 200, "", strongETag, "", body},
+		{"gzip", "gzip", "", "", "", 200, "gzip", "W/" + strongETag, "", body},
+		{"deflate", "deflate", "", "", "", 200, "deflate", "W/" + strongETag, "", body},
+		{"gzip_range", "gzip", "bytes=0-99", "", "", 206, "", strongETag, fmt.Sprintf("bytes 0-99/%d", len(body)), body[:100]},
+		{"deflate_range", "deflate", "bytes=0-99", "", "", 206, "", strongETag, fmt.Sprintf("bytes 0-99/%d", len(body)), body[:100]},
+		{"matching_if_range", "gzip", "bytes=0-99", strongETag, "", 206, "", strongETag, fmt.Sprintf("bytes 0-99/%d", len(body)), body[:100]},
+		{"mismatched_if_range", "gzip", "bytes=0-99", `"stale"`, "", 200, "", strongETag, "", body},
+		{"weak_if_range", "deflate", "bytes=0-99", "W/" + strongETag, "", 200, "", strongETag, "", body},
+		{"weak_revalidation", "gzip", "", "", "W/" + strongETag, 304, "", strongETag, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Authorization", "Bearer test-password")
+			req.Header.Set("Accept-Encoding", tc.accept)
+			req.Header.Set("Range", tc.byteRange)
+			req.Header.Set("If-Range", tc.ifRange)
+			req.Header.Set("If-None-Match", tc.ifNoneMatch)
+			response, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != tc.status {
+				t.Fatalf("status=%d, want %d", response.StatusCode, tc.status)
+			}
+			for name, want := range map[string]string{"Content-Encoding": tc.encoding, "ETag": tc.etag, "Content-Range": tc.contentRange} {
+				if got := response.Header.Get(name); got != want {
+					t.Errorf("%s=%q, want %q", name, got, want)
+				}
+			}
+			if tc.status == http.StatusPartialContent && response.ContentLength != 100 {
+				t.Errorf("partial Content-Length=%d, want100", response.ContentLength)
+			}
+			var decoded io.Reader = response.Body
+			if tc.encoding == "gzip" {
+				reader, err := gzip.NewReader(response.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reader.Close()
+				decoded = reader
+			} else if tc.encoding == "deflate" {
+				reader, err := zlib.NewReader(response.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reader.Close()
+				decoded = reader
+			}
+			got, err := io.ReadAll(decoded)
+			if err != nil || string(got) != tc.wantBody {
+				t.Fatalf("file body changed: bytes=%d err=%v", len(got), err)
+			}
+		})
+	}
+}
 
 // artifactFileServer serves session ao-1 with the given artifact files.
 func artifactFileServer(t *testing.T, files map[string]string) (*httptest.Server, string) {

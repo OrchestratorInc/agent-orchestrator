@@ -143,3 +143,68 @@ func TestRemoteJSONCompressionFlushesEventStreams(t *testing.T) {
 		t.Fatal("event stream was encoded or changed")
 	}
 }
+
+func TestRemoteJSONCompressionPreservesPartialResponses(t *testing.T) {
+	for _, encoding := range []string{"gzip", "deflate"} {
+		t.Run(encoding, func(t *testing.T) {
+			// A 206 without a Range request still must bypass compression.
+			handler := remoteJSONCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Content-Range", "bytes 0-3/10")
+				w.Header().Set("Content-Length", "4")
+				w.Header().Set("ETag", `"original"`)
+				w.WriteHeader(http.StatusPartialContent)
+				_, _ = io.WriteString(w, "part")
+				if err := http.NewResponseController(w).Flush(); err != nil {
+					t.Fatal(err)
+				}
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/file.json", nil)
+			req.Header.Set("Accept-Encoding", encoding)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusPartialContent || recorder.Body.String() != "part" || !recorder.Flushed {
+				t.Fatalf("partial response changed: status=%d body=%q flushed=%v", recorder.Code, recorder.Body.String(), recorder.Flushed)
+			}
+			for name, want := range map[string]string{"Content-Encoding": "", "Content-Range": "bytes 0-3/10", "Content-Length": "4", "ETag": `"original"`} {
+				if got := recorder.Header().Get(name); got != want {
+					t.Errorf("%s=%q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestRemoteJSONCompressionValidators(t *testing.T) {
+	for _, tc := range []struct {
+		name, accept, contentType, existingEncoding, etag, wantETag string
+	}{
+		{"gzip_strong", "gzip", "application/json", "", `"original"`, `W/"original"`},
+		{"deflate_strong", "deflate", "application/json; charset=utf-8", "", `"original"`, `W/"original"`},
+		{"already_weak", "gzip", "application/json", "", `W/"original"`, `W/"original"`},
+		{"no_validator", "gzip", "application/json", "", "", ""},
+		{"identity", "gzip;q=0", "application/json", "", `"original"`, `"original"`},
+		{"existing_encoding", "gzip", "application/json", "br", `"original"`, `"original"`},
+		{"other_content_type", "gzip", "text/plain", "", `"original"`, `"original"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := remoteJSONCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tc.contentType)
+				if tc.existingEncoding != "" {
+					w.Header().Set("Content-Encoding", tc.existingEncoding)
+				}
+				if tc.etag != "" {
+					w.Header().Set("ETag", tc.etag)
+				}
+				_, _ = io.WriteString(w, `{"ok":true}`)
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/file.json", nil)
+			req.Header.Set("Accept-Encoding", tc.accept)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if got := recorder.Result().Header.Get("ETag"); got != tc.wantETag {
+				t.Fatalf("ETag=%q, want %q", got, tc.wantETag)
+			}
+		})
+	}
+}
