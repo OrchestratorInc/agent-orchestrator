@@ -161,25 +161,34 @@ func TestGuidedNativeLoginHidesTerminalAndCancels(t *testing.T) {
 
 func TestNativePromptRequiresFallbackForUnreviewedOutput(t *testing.T) {
 	for _, output := range []string{"secret=do-not-return\n> Custom provider", "Enter your API key: do-not-return", "Choose a provider\n", "Choose a provider\n1) Anthropic\n2) Custom gateway\n"} {
-		kind, label, options := nativePrompt(output)
+		kind, label, options, _ := nativePrompt(output)
 		if kind != "terminal_required" || label != "" || options != nil {
 			t.Fatalf("output=%q kind=%q label=%q options=%v", output, kind, label, options)
 		}
 	}
 	// A lone numbered line is ordinary output text, not a menu.
-	if kind, _, _ := nativePrompt("1. Read the docs first"); kind != "waiting" {
+	if kind, _, _, _ := nativePrompt("1. Read the docs first"); kind != "waiting" {
 		t.Fatalf("lone numbered line kind=%q", kind)
 	}
 }
 
 func TestNativePromptRecognizesNumberedMenus(t *testing.T) {
-	kind, selected, options := nativePrompt("Select a provider\n1) Anthropic\n2) OpenAI\n3) OpenRouter\n")
+	kind, selected, options, _ := nativePrompt("Select a provider\n1) Anthropic\n2) OpenAI\n3) OpenRouter\n")
 	if kind != "menu" || selected != "" || !reflect.DeepEqual(options, []string{"Anthropic", "OpenAI", "OpenRouter"}) {
 		t.Fatalf("kind=%q selected=%q options=%v", kind, selected, options)
 	}
-	kind, selected, options = nativePrompt("1) Anthropic\n2) Custom provider\n")
+	kind, selected, options, _ = nativePrompt("1) Anthropic\n2) Custom provider\n")
 	if kind != "terminal_required" || selected != "" || options != nil {
 		t.Fatalf("unreviewed numbered menu kind=%q options=%v", kind, options)
+	}
+}
+
+func TestNativePromptReadsOnlyTheLatestMenuWithItsDigits(t *testing.T) {
+	// An earlier menu in scrollback, then the current one with a cursor line.
+	output := "1) Anthropic\n2) OpenAI\nSaved.\nSelect a provider\n\u276f 1) OpenRouter\n  2) Anthropic\n"
+	kind, _, options, digits := nativePrompt(output)
+	if kind != "menu" || !reflect.DeepEqual(options, []string{"OpenRouter", "Anthropic"}) || !reflect.DeepEqual(digits, []string{"1", "2"}) {
+		t.Fatalf("kind=%q options=%v digits=%v", kind, options, digits)
 	}
 }
 
@@ -215,8 +224,19 @@ func TestGuidedNativeLoginDrivesNumberedMenuWithDigitsOnly(t *testing.T) {
 	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "2"); err != nil {
 		t.Fatal(err)
 	}
+	// A CLI that reads a line needs Enter after the digit.
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if current, _ = svc.Login(t.Context(), "goose", started.ID); current.NativePrompt == "menu" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := svc.ActOnLogin(t.Context(), "goose", started.ID, "select"); err != nil {
+		t.Fatalf("Enter on a numbered menu: %v", err)
+	}
 	pty.mu.Lock()
-	if !reflect.DeepEqual(pty.keys, []string{"2"}) {
+	if !reflect.DeepEqual(pty.keys, []string{"2", "select"}) {
 		t.Fatalf("keys=%v", pty.keys)
 	}
 	pty.mu.Unlock()
