@@ -44,6 +44,8 @@ import (
 )
 
 type fakeSessionService struct {
+	deleted   []domain.SessionID
+	deleteErr error
 	// lastListFilter is the filter the controller parsed; listPage, when set,
 	// replaces the page built from sessions so a test can pin the wire shape.
 	lastListFilter             sessionsvc.ListFilter
@@ -5354,5 +5356,42 @@ func TestSessionsAPI_LegacyPreviewDocumentsHaveNoAPIOrigin(t *testing.T) {
 		if status != 200 || headers.Get("Content-Security-Policy") != "" {
 			t.Fatalf("isolated %s: status=%d headers=%v", name, status, headers)
 		}
+	}
+}
+
+func (f *fakeSessionService) Delete(_ context.Context, id domain.SessionID) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	f.deleted = append(f.deleted, id)
+	return nil
+}
+
+func TestSessionsAPI_DeleteSession(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodDelete, "/api/v1/sessions/ao-1", "")
+	if status != http.StatusOK {
+		t.Fatalf("delete = %d, want 200; body=%s", status, body)
+	}
+	var got struct {
+		OK        bool   `json:"ok"`
+		SessionID string `json:"sessionId"`
+	}
+	mustJSON(t, body, &got)
+	if !got.OK || got.SessionID != "ao-1" || len(svc.deleted) != 1 || svc.deleted[0] != "ao-1" {
+		t.Fatalf("delete response = %#v, deleted = %v", got, svc.deleted)
+	}
+}
+
+func TestSessionsAPI_DeleteSessionRefusal(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.deleteErr = apierr.Conflict("WORKSPACE_NOT_RELEASED", "The session's worktree has not been cleaned up yet.", nil)
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, http.MethodDelete, "/api/v1/sessions/ao-1", "")
+	if status != http.StatusConflict || !strings.Contains(string(body), "WORKSPACE_NOT_RELEASED") {
+		t.Fatalf("delete = %d %s, want 409 WORKSPACE_NOT_RELEASED", status, body)
 	}
 }

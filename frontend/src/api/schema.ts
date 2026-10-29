@@ -2246,7 +2246,8 @@ export interface paths {
         get: operations["getSession"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Permanently delete a terminated session whose workspace is released */
+        delete: operations["deleteSession"];
         options?: never;
         head?: never;
         /** Rename a session display name */
@@ -5952,6 +5953,10 @@ export interface components {
             ok: boolean;
             orchestratorId?: string;
             workerId: string;
+        };
+        DeleteSessionResponse: {
+            ok: boolean;
+            sessionId: string;
         };
         DesktopArtifactLocationResponse: {
             artifactDir: string;
@@ -15712,6 +15717,65 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

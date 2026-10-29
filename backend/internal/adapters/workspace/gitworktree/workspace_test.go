@@ -102,6 +102,16 @@ func TestParseWorktreePorcelain(t *testing.T) {
 	}
 }
 
+func TestParseWorktreePorcelainKeepsLockReason(t *testing.T) {
+	recs, err := parseWorktreePorcelain("worktree /managed/a\nHEAD abc\nlocked initializing\n\nworktree /managed/b\nHEAD def\nlocked\n\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(recs) != 2 || !recs[0].Locked || recs[0].LockReason != "initializing" || !recs[1].Locked || recs[1].LockReason != "" {
+		t.Fatalf("records = %#v", recs)
+	}
+}
+
 func TestManagedPathSafety(t *testing.T) {
 	root := t.TempDir()
 	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"proj": root}})

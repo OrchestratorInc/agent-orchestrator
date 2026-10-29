@@ -1,6 +1,15 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrSessionHistoryShared refuses deleting a session that a conversation it
+// does not own still records (a project orchestrator conversation's turns or
+// current session). Deleting the row would cascade those turns out of, or
+// unlink it from, a conversation that outlives the session.
+var ErrSessionHistoryShared = errors.New("session is part of a conversation it does not own")
 
 // WorkspaceDisposition is the session-level rollup of a terminated session's
 // workspace teardown, mirrored to session_cleanup_facts.workspace_disposition.

@@ -5756,6 +5756,50 @@ paths:
       tags:
       - sessions
   /api/v1/sessions/{sessionId}:
+    delete:
+      operationId: deleteSession
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteSessionResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Permanently delete a terminated session whose workspace is released
+      tags:
+      - sessions
     get:
       operationId: getSession
       parameters:
@@ -17136,6 +17180,16 @@ components:
       required:
       - ok
       - workerId
+      type: object
+    DeleteSessionResponse:
+      properties:
+        ok:
+          type: boolean
+        sessionId:
+          type: string
+      required:
+      - ok
+      - sessionId
       type: object
     DesktopArtifactLocationResponse:
       properties:

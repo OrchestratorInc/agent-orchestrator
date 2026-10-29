@@ -90,6 +90,10 @@ const usageReconcileTick = 3 * time.Minute
 
 const chatHibernateSweepTick = 30 * time.Second
 
+// workspaceCleanupSweepTick paces the terminated-session cleanup reconcile.
+// Its work is retry and bookkeeping, not anything a user waits on.
+const workspaceCleanupSweepTick = 10 * time.Minute
+
 // sentryEnvironment maps the daemon's app version to a Sentry environment so a
 // nightly/edge build's issues do not mix with stable release health.
 func sentryEnvironment(version string) string {
@@ -1236,6 +1240,28 @@ func Run(buildVersion string) error {
 					if err := sessMgr.HibernateIdleChats(ctx); err != nil && ctx.Err() == nil {
 						log.Warn("idle Chat hibernation failed", "err", err)
 					}
+				}
+			}
+		}()
+		go func() {
+			defer sentryobs.RecoverBackground()
+			// Boot restore and reconciliation settle which terminated sessions
+			// are coming back before this pass looks at any of them.
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return
+			}
+			ticker := time.NewTicker(workspaceCleanupSweepTick)
+			defer ticker.Stop()
+			for {
+				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
+					log.Warn("workspace cleanup reconcile failed", "err", err)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
 				}
 			}
 		}()

@@ -255,6 +255,7 @@ func (c *SessionsController) Register(r chi.Router) {
 	r.Get("/sessions/{sessionId}/pr", c.listPRs)
 	r.Post("/sessions/{sessionId}/pr/claim", c.claimPR)
 	r.Patch("/sessions/{sessionId}", c.rename)
+	r.Delete("/sessions/{sessionId}", c.deleteSession)
 	r.Patch("/sessions/{sessionId}/merge-policy", c.setMergePolicy)
 	r.Patch("/sessions/{sessionId}/auto-inject-review", c.setAutoInjectReviewPolicy)
 	r.Patch("/sessions/{sessionId}/auto-inject-ci", c.setAutoInjectCIPolicy)
@@ -2161,6 +2162,27 @@ func (c *SessionsController) rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	envelope.WriteJSON(w, http.StatusOK, RollbackSessionResponse{OK: true, SessionID: sessionID(r), Deleted: out.Deleted, Killed: out.Killed})
+}
+
+// sessionDeleteService is optional so unrelated controller fakes keep
+// implementing the stable SessionService surface.
+type sessionDeleteService interface {
+	Delete(ctx context.Context, id domain.SessionID) error
+}
+
+// deleteSession permanently removes a terminated session's record. The service
+// refuses a live session and one whose worktree is not cleaned up yet.
+func (c *SessionsController) deleteSession(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(sessionDeleteService)
+	if !ok {
+		apispec.NotImplemented(w, r, http.MethodDelete, "/api/v1/sessions/{sessionId}")
+		return
+	}
+	if err := svc.Delete(r.Context(), sessionID(r)); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, DeleteSessionResponse{OK: true, SessionID: sessionID(r)})
 }
 
 func (c *SessionsController) cleanup(w http.ResponseWriter, r *http.Request) {

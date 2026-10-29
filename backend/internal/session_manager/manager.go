@@ -2799,6 +2799,13 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 			return KillResult{}, err
 		}
 	}
+	// Record the outcome so `ao session cleanup` and its dry-run skip a
+	// workspace this kill already settled.
+	if freed {
+		m.recordSettledWorkspaceCleanup(ctx, rec, domain.DispositionRemoved)
+	} else if ws.Path == "" {
+		m.recordSettledWorkspaceCleanup(ctx, rec, domain.DispositionNotApplicable)
+	}
 	return KillResult{Freed: freed}, nil
 }
 
@@ -5481,13 +5488,16 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 		Skipped:     []CleanupSkip{},
 	}
 	for _, rec := range recs {
-		if !rec.IsTerminated {
+		// A workspace already released (or never created) for the session's
+		// current generation is not revisited, so repeat runs report nothing.
+		if !rec.IsTerminated || m.workspaceCleanupSettled(ctx, rec) {
 			continue
 		}
 		ws := workspaceInfo(rec)
 		if ws.Path == "" {
 			m.cleanupAgentWorkspace(ctx, rec, "")
 			m.cleanupSystemPromptDir(rec.ID)
+			m.recordSettledWorkspaceCleanup(ctx, rec, domain.DispositionNotApplicable)
 			continue
 		}
 		// Runtime teardown is keyed on the terminated session's own handle, not
@@ -5553,6 +5563,11 @@ func (m *Manager) cleanupWorkspaceUnderGate(ctx context.Context, rec domain.Sess
 			m.logger.Error("record retried workspace cleanup", "sessionID", rec.ID, "error", err)
 			return reclaim, "workspace teardown failed"
 		}
+	} else if reason == "" {
+		// An untracked session records success only. Its failures stay
+		// report-only, as before, so an old dirty or blocked worktree does not
+		// start showing a cleanup error in the app.
+		m.recordSettledWorkspaceCleanup(ctx, rec, domain.DispositionRemoved)
 	}
 	return reclaim, reason
 }
@@ -5676,6 +5691,9 @@ func cleanupSkipReason(err error) string {
 	}
 	if errors.Is(err, ports.ErrWorkspaceDeferred) {
 		return "worktree is in use; will retry on a later run"
+	}
+	if errors.Is(err, ports.ErrWorkspaceLocked) {
+		return "worktree is locked by git; run `git worktree unlock` on it, then retry cleanup"
 	}
 	if errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
 		return "project repository is missing; remove worktree manually"

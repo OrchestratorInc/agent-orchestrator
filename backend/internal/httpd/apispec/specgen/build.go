@@ -457,6 +457,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersOpenSessionEditorResponse":                "OpenSessionEditorResponse",
 	"ControllersKillSessionResponse":                      "KillSessionResponse",
 	"ControllersRollbackSessionResponse":                  "RollbackSessionResponse",
+	"ControllersDeleteSessionResponse":                    "DeleteSessionResponse",
 	"ControllersSendSessionMessageRequest":                "SendSessionMessageRequest",
 	"ControllersSendSessionMessageResponse":               "SendSessionMessageResponse",
 	"ControllersDelegateTaskRequest":                      "DelegateTaskRequest",
@@ -3651,6 +3652,20 @@ func sessionOperations() []operation {
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/sessions/{sessionId}", id: "deleteSession", tag: "sessions",
+			summary:    "Permanently delete a terminated session whose workspace is released",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.DeleteSessionResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				// Conflict: the session is live, its worktree is not cleaned up
+				// yet, or its turns belong to a conversation that outlives it.
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
 		{

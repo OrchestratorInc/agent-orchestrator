@@ -812,6 +812,11 @@ type SessionInterfaceTransitionMessage struct {
 	AuthoredByUser  bool
 }
 
+type SessionNumFloor struct {
+	IDPrefix string
+	MaxNum   int64
+}
+
 type SessionTerminalTurn struct {
 	ID              int64
 	SessionID       string

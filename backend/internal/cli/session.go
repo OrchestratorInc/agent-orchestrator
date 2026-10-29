@@ -37,6 +37,11 @@ type sessionCleanupOptions struct {
 	dryRun  bool
 }
 
+type sessionDeleteOptions struct {
+	project string
+	yes     bool
+}
+
 type sessionClaimPROptions struct {
 	project    string
 	json       bool
@@ -63,6 +68,9 @@ type sessionDTO struct {
 	BranchState  *branchStateDTO `json:"branchState,omitempty"`
 	PRs          []sessionPRDTO  `json:"prs"`
 	Mode         string          `json:"mode,omitempty"`
+	// WorkspaceCleanup is the recorded teardown outcome of a terminated
+	// session's workspace, empty when none has been recorded.
+	WorkspaceCleanup string `json:"workspaceCleanup,omitempty"`
 }
 
 type branchStateDTO struct {
@@ -102,6 +110,10 @@ type sessionPRSummaryDTO struct {
 
 type sessionResponse struct {
 	Session sessionDTO `json:"session"`
+}
+
+type deleteSessionResponse struct {
+	SessionID string `json:"sessionId"`
 }
 
 type killSessionResponse struct {
@@ -214,6 +226,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionResumeAgentCommand(ctx))
 	cmd.AddCommand(newSessionRenameCommand(ctx))
 	cmd.AddCommand(newSessionCleanupCommand(ctx))
+	cmd.AddCommand(newSessionDeleteCommand(ctx))
 	cmd.AddCommand(newSessionClaimPRCommand(ctx))
 	cmd.AddCommand(newSessionHistoryCommand(ctx))
 	return cmd
@@ -384,6 +397,27 @@ func newSessionCleanupCommand(ctx *commandContext) *cobra.Command {
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Filter by project ID")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Skip confirmation prompt")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Preview which sessions would be cleaned without removing anything")
+	return cmd
+}
+
+func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
+	var opts sessionDeleteOptions
+	cmd := &cobra.Command{
+		Use:   "delete <id>",
+		Short: "Permanently delete a terminated session",
+		Long: "Permanently delete a terminated session's record and its AO history (conversation, PR facts, attachments and artifacts). " +
+			"The session must be terminated and its worktree cleaned up first (ao session cleanup). Git branches and pull requests are not touched.",
+		Args: oneSessionIDArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := normalizeSessionID(args[0])
+			if err != nil {
+				return err
+			}
+			return ctx.deleteSession(cmd.Context(), cmd, id, opts)
+		},
+	}
+	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
+	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Skip confirmation prompt")
 	return cmd
 }
 
@@ -690,6 +724,31 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 	return err
 }
 
+func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionDeleteOptions) error {
+	if opts.project != "" {
+		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
+			return err
+		}
+	}
+	out := cmd.OutOrStdout()
+	if !opts.yes {
+		confirmed, err := confirmTyped(cmd, fmt.Sprintf("Permanently delete session %s and its history? Type yes to confirm: ", id))
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			_, err := fmt.Fprintln(out, "aborted")
+			return err
+		}
+	}
+	var res deleteSessionResponse
+	if err := c.deleteJSON(ctx, "sessions/"+url.PathEscape(id), &res); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(out, "session %s deleted\n", res.SessionID)
+	return err
+}
+
 func (c *commandContext) restoreSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
 	sess, err := c.fetchScopedSession(ctx, id, opts.project)
 	if err != nil {
@@ -870,7 +929,15 @@ func (c *commandContext) previewCleanupSessions(ctx context.Context, project str
 	if err := c.getJSON(ctx, apiPath("sessions", params), &res); err != nil {
 		return nil, err
 	}
-	return filterAndSortSessions(res.Sessions, true), nil
+	// Cleanup skips a workspace already released (or never created), so the
+	// preview must not offer it again on every run.
+	pending := make([]sessionDTO, 0, len(res.Sessions))
+	for _, sess := range res.Sessions {
+		if sess.WorkspaceCleanup != "removed" && sess.WorkspaceCleanup != "not_applicable" {
+			pending = append(pending, sess)
+		}
+	}
+	return filterAndSortSessions(pending, true), nil
 }
 
 func (c *commandContext) fetchScopedSession(ctx context.Context, id, project string) (sessionDTO, error) {
@@ -1168,7 +1235,12 @@ func confirmSessionCleanup(cmd *cobra.Command, count int, project string) (bool,
 	if project != "" {
 		scope = fmt.Sprintf(" in project %q", project)
 	}
-	if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Clean %d terminated session%s%s? Type yes to confirm: ", count, pluralS(count), scope); err != nil {
+	return confirmTyped(cmd, fmt.Sprintf("Clean %d terminated session%s%s? Type yes to confirm: ", count, pluralS(count), scope))
+}
+
+// confirmTyped prints prompt and reports whether the user typed "yes".
+func confirmTyped(cmd *cobra.Command, prompt string) (bool, error) {
+	if _, err := fmt.Fprint(cmd.OutOrStdout(), prompt); err != nil {
 		return false, err
 	}
 	reader := bufio.NewReader(cmd.InOrStdin())

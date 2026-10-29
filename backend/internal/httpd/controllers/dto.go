@@ -1258,6 +1258,12 @@ type RollbackSessionResponse struct {
 	Killed    bool             `json:"killed,omitempty"`
 }
 
+// DeleteSessionResponse is the body of DELETE /api/v1/sessions/{sessionId}.
+type DeleteSessionResponse struct {
+	OK        bool             `json:"ok"`
+	SessionID domain.SessionID `json:"sessionId"`
+}
+
 // CleanupSkippedSession is one terminal session whose workspace cleanup
 // preserved rather than reclaimed (a dirty worktree is never force-deleted),
 // with the user-facing reason.

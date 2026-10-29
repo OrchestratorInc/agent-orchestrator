@@ -486,11 +486,12 @@ var (
 	// this state after path-safety checks, while real preserve failures remain
 	// fatal.
 	ErrWorkspaceStale = errors.New("workspace: stale managed worktree")
-	// ErrWorkspaceLocked reports a registered git worktree whose directory is
-	// missing but whose registration is locked (`git worktree lock`). `git
-	// worktree prune` deliberately leaves a locked registration in place even
-	// when its directory is gone, and `git worktree add`/`remove` at the same
-	// path then fail with an opaque git error. Callers must not treat this as
+	// ErrWorkspaceLocked reports a registered git worktree whose registration
+	// is locked (`git worktree lock`): one whose directory is missing on
+	// restore, or one that Destroy cannot remove. `git worktree prune`
+	// deliberately leaves a locked registration in place even when its
+	// directory is gone, and `git worktree add`/`remove` at the same path then
+	// fail with an opaque git error. Callers must not treat this as
 	// recoverable on their own; the operator has to unlock or remove the
 	// registration first.
 	ErrWorkspaceLocked = errors.New("workspace: registered worktree is locked")

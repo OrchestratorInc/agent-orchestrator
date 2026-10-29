@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -1082,6 +1083,46 @@ func (s *Service) DeleteArtifacts(ctx context.Context, id domain.SessionID) erro
 	return err
 }
 
+// sessionDeleteCommander is optional so focused fakes keep implementing the
+// stable commander surface.
+type sessionDeleteCommander interface {
+	DeleteSession(ctx context.Context, id domain.SessionID) error
+}
+
+// Delete permanently removes a terminated session whose workspace is released,
+// then its artifact files. The record goes first: a refused delete must not
+// have already thrown the artifacts away.
+func (s *Service) Delete(ctx context.Context, id domain.SessionID) error {
+	deleter, ok := s.manager.(sessionDeleteCommander)
+	if !ok {
+		return apierr.NotImplemented("SESSION_DELETE_UNSUPPORTED", "Session deletion is not supported by this daemon")
+	}
+	if err := deleter.DeleteSession(ctx, id); err != nil {
+		return toAPIError(err)
+	}
+	s.cancelTitleRefinement(id)
+	s.deleteArtifactDir(ctx, id)
+	return nil
+}
+
+// deleteArtifactDir removes a deleted session's artifact directory. Failures
+// are logged, not returned: the record is already gone.
+func (s *Service) deleteArtifactDir(ctx context.Context, id domain.SessionID) {
+	dir := sessionartifacts.Dir(s.dataDir, id)
+	if s.artifactDeleter == nil || dir == "" {
+		return
+	}
+	// The deleter waits out an in-flight capture, then leaves an empty
+	// directory for a restore that cannot happen now, so remove that too.
+	err := s.artifactDeleter.DeleteSession(ctx, id)
+	if err == nil {
+		err = os.Remove(dir)
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) && s.logger != nil {
+		s.logger.Warn("delete artifacts of deleted session", "session", id, "err", err)
+	}
+}
+
 // RollbackSpawn deletes a seed-state session row, or falls back to a Kill if
 // the session has spawn output. Used by the CLI to undo a `spawn --claim-pr`
 // when the claim step fails, avoiding the orphan terminated row that a plain
@@ -1607,6 +1648,14 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
 		return apierr.Conflict("SESSION_TERMINATED", "Session is terminated", nil)
+	case errors.Is(err, sessionmanager.ErrSessionNotTerminated):
+		return apierr.Conflict("SESSION_NOT_TERMINATED", "Archive the session before deleting it.", nil)
+	case errors.Is(err, sessionmanager.ErrWorkspaceNotReleased):
+		return apierr.Conflict("WORKSPACE_NOT_RELEASED",
+			"The session's worktree has not been cleaned up yet. Run `ao session cleanup` first.", nil)
+	case errors.Is(err, domain.ErrSessionHistoryShared):
+		return apierr.Conflict("SESSION_HISTORY_SHARED",
+			"This session's turns belong to a conversation that outlives it, so it cannot be deleted.", nil)
 	case errors.Is(err, sessionmanager.ErrAgentExited):
 		return apierr.Conflict("AGENT_EXITED",
 			"The agent process exited; relaunch it before sending another message", nil)
