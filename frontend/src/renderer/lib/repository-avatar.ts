@@ -18,7 +18,9 @@ export function repositoryOwnerAvatar(repo: string): { owner: string; url: strin
 	const owner = pathname.replace(/^\/+|\/+$/g, "").split("/")[0]?.replace(/\.git$/, "");
 	if (!owner) return null;
 	const encodedOwner = encodeURIComponent(owner);
-	if (host === "github.com") return { owner, url: `https://github.com/${encodedOwner}.png?size=64` };
+	// The avatars host serves the image directly with CORS, so it can be cached
+	// as a data URL. github.com/<owner>.png is an uncached redirect to it.
+	if (host === "github.com") return { owner, url: `https://avatars.githubusercontent.com/${encodedOwner}?s=64` };
 	if (host === "gitlab.com") return { owner, url: `https://gitlab.com/-/avatar?username=${encodedOwner}` };
 	if (host === "bitbucket.org") return { owner, url: `https://bitbucket.org/account/${encodedOwner}/avatar/64/` };
 	return { owner, url: `https://unavatar.io/${encodeURIComponent(host)}/${encodedOwner}` };
