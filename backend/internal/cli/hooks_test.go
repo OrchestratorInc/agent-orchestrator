@@ -684,6 +684,38 @@ func TestHooks_ClaudeStopFailureReportsIdle(t *testing.T) {
 	}
 }
 
+// Kimi fires StopFailure, not Stop, when a provider error such as an invalid
+// API key ends the turn and Kimi returns to its prompt (#3387). It must report
+// idle as a turn boundary without recording the error as the turn's answer.
+func TestHooks_KimiStopFailureReportsIdle(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	payload := `{"hook_event_name":"StopFailure","session_id":"kimi-native-1","cwd":"/work","error_type":"ChatProviderError","error_message":"[provider.auth_error] 401 The API Key appears to be invalid or may have expired."}`
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(payload),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "kimi", "stop-failure")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if capture.hits != 1 {
+		t.Fatalf("daemon calls = %d, want 1", capture.hits)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.State != "idle" || req.Event != "stop-failure" || req.AgentSessionID != "kimi-native-1" {
+		t.Fatalf("request = %#v, want idle stop-failure for kimi-native-1", req)
+	}
+	if req.FinalAssistantMessage != "" || req.TurnUserRequest != "" || req.LatestAssistantUpdate != "" {
+		t.Fatalf("stop-failure reported conversation facts: %#v", req)
+	}
+}
+
 func TestHooks_ClaudeStopCarriesRunningSubagents(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")

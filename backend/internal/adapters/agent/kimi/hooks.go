@@ -368,12 +368,21 @@ func mergeKimiHooksConfig(existing string) string {
 	return joinKimiConfigParts(existing[:start], block, existing[end:])
 }
 
+// kimiHooksConfigBlock is AO's managed hook block. Kimi checks each hook's
+// event against its own list and refuses the whole config on an unknown one,
+// so an event is added only when every release that accepts this block
+// already knows it. StopFailure predates PermissionRequest; Interrupt (an
+// Esc'd turn) stays out because releases before 0.14 refuse it.
 func kimiHooksConfigBlock() string {
 	return kimiHooksSentinelStart + "\n\n" +
 		kimiHookEntry("SessionStart", "startup", "ao hooks kimi session-start") +
 		kimiHookEntry("UserPromptSubmit", "", "ao hooks kimi user-prompt-submit") +
 		kimiHookEntry("PermissionRequest", "", "ao hooks kimi permission-request") +
 		kimiHookEntry("Stop", "", "ao hooks kimi stop") +
+		// Kimi fires StopFailure instead of Stop when a provider error (an
+		// invalid API key, a rate limit) ends the turn. Without it that turn
+		// leaves the session active, reading "working" forever.
+		kimiHookEntry("StopFailure", "", "ao hooks kimi stop-failure") +
 		kimiHooksSentinelEnd + "\n"
 }
 
