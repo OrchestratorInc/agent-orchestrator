@@ -30,34 +30,40 @@ func saveOpenCodeAPIKey(ctx context.Context, method, key string) error {
 			root = filepath.Join(home, ".local", "share", "opencode")
 		}
 	}
+	return saveModelsDevAuth(ctx, root, "OpenCode", provider, key)
+}
+
+// saveModelsDevAuth writes {"type":"api","key"} under provider in root's
+// auth.json, the format OpenCode and its forks (Kilo Code, MiMo Code) share.
+func saveModelsDevAuth(ctx context.Context, root, harness, provider, key string) error {
 	if !filepath.IsAbs(root) {
-		return apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", "OpenCode's credential home must be absolute.", nil)
+		return apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", harness+"'s credential home must be absolute.", nil)
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
-		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "OpenCode's credential home could not be prepared.")
+		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", harness+"'s credential home could not be prepared.")
 	}
 	path := filepath.Join(root, "auth.json")
 	entries := make(map[string]json.RawMessage)
 	if info, err := os.Lstat(path); err == nil {
 		if !info.Mode().IsRegular() || info.Size() > 1024*1024 {
-			return apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", "OpenCode's credential file is not a safe regular file.", nil)
+			return apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", harness+"'s credential file is not a safe regular file.", nil)
 		}
 		file, err := os.Open(path)
 		if err != nil {
-			return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "OpenCode's credential file could not be read.")
+			return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", harness+"'s credential file could not be read.")
 		}
 		opened, err := file.Stat()
 		if err != nil || !os.SameFile(info, opened) {
 			_ = file.Close()
-			return apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", "OpenCode's credential file changed while opening it.", nil)
+			return apierr.Invalid("AGENT_AUTH_STORE_UNSAFE", harness+"'s credential file changed while opening it.", nil)
 		}
 		data, readErr := io.ReadAll(io.LimitReader(file, 1024*1024+1))
 		_ = file.Close()
 		if readErr != nil || len(data) > 1024*1024 || json.Unmarshal(data, &entries) != nil || entries == nil {
-			return apierr.Invalid("AGENT_AUTH_STORE_INVALID", "OpenCode's credential file is invalid; use its native login to repair it.", nil)
+			return apierr.Invalid("AGENT_AUTH_STORE_INVALID", harness+"'s credential file is invalid; use its native login to repair it.", nil)
 		}
 	} else if !os.IsNotExist(err) {
-		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "OpenCode's credential file could not be inspected.")
+		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", harness+"'s credential file could not be inspected.")
 	}
 	value, _ := json.Marshal(struct {
 		Type string `json:"type"`
@@ -66,19 +72,19 @@ func saveOpenCodeAPIKey(ctx context.Context, method, key string) error {
 	entries[provider] = value
 	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
-		return apierr.Internal("AGENT_AUTH_STORE_UNAVAILABLE", "OpenCode's credential could not be encoded.")
+		return apierr.Internal("AGENT_AUTH_STORE_UNAVAILABLE", harness+"'s credential could not be encoded.")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(root, ".ao-auth-*")
 	if err != nil {
-		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "OpenCode's credential file could not be prepared.")
+		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", harness+"'s credential file could not be prepared.")
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "OpenCode's credential file could not be secured.")
+		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", harness+"'s credential file could not be secured.")
 	}
 	_, writeErr := tmp.Write(append(data, '\n'))
 	if writeErr == nil {
@@ -86,13 +92,13 @@ func saveOpenCodeAPIKey(ctx context.Context, method, key string) error {
 	}
 	closeErr := tmp.Close()
 	if writeErr != nil || closeErr != nil {
-		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "OpenCode's credential file could not be written.")
+		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", harness+"'s credential file could not be written.")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
-		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "OpenCode's credential file could not be replaced.")
+		return apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", harness+"'s credential file could not be replaced.")
 	}
 	return nil
 }
