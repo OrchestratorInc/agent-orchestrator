@@ -279,4 +279,91 @@ describe("SpawnPreflightDialog", () => {
 		await user.keyboard("{Escape}");
 		expect(mocks.closeTerminal).toHaveBeenCalledWith("shell-2");
 	});
+
+	describe("a late result from a replaced launch", () => {
+		const blockedA: SpawnPreflightReport = {
+			ready: false, canProceed: false, kind: "orchestrator", harness: "codex",
+			checks: [{ code: "agent_not_installed", blocking: true, canInstall: true, canStartLogin: true }],
+		};
+		const blockedB: SpawnPreflightReport = {
+			ready: false, canProceed: false, kind: "orchestrator", harness: "claude-code",
+			checks: [{ code: "default_branch_unresolved", blocking: true }],
+		};
+
+		function deferred<T>() {
+			let resolve!: (value: T) => void;
+			const promise = new Promise<T>((done) => { resolve = done; });
+			return { promise, resolve };
+		}
+
+		function openB() {
+			const b = { resolve: vi.fn(), reject: vi.fn() };
+			act(() => {
+				useSpawnPreflightStore.getState().open({ input: { projectId: "proj-b", kind: "orchestrator" }, report: blockedB, ...b });
+			});
+			return b;
+		}
+
+		function expectBUntouched(b: { resolve: ReturnType<typeof vi.fn>; reject: ReturnType<typeof vi.fn> }) {
+			expect(b.resolve).not.toHaveBeenCalled();
+			expect(b.reject).not.toHaveBeenCalled();
+			expect(useSpawnPreflightStore.getState().pending).toMatchObject({ report: blockedB, input: { projectId: "proj-b" } });
+			expect(screen.getByText("The default branch could not be found")).toBeInTheDocument();
+		}
+
+		it("does not start or overwrite B when A's re-check finishes after B opened", async () => {
+			const user = userEvent.setup();
+			const check = deferred<SpawnPreflightReport>();
+			mocks.check.mockReturnValueOnce(check.promise);
+			const a = openDialog(blockedA, { projectId: "proj-a", kind: "orchestrator" });
+			await user.click(screen.getByRole("button", { name: "Check again" }));
+			const b = openB();
+			expect(a.reject).toHaveBeenCalledOnce();
+			// A ready result would have spawned B with A's harness.
+			await act(async () => check.resolve(readyReport));
+			expectBUntouched(b);
+			expect(a.resolve).not.toHaveBeenCalled();
+		});
+
+		it("keeps B's report when A's still-blocked re-check finishes after B opened", async () => {
+			const user = userEvent.setup();
+			const check = deferred<SpawnPreflightReport>();
+			mocks.check.mockReturnValueOnce(check.promise);
+			openDialog(blockedA, { projectId: "proj-a", kind: "orchestrator" });
+			await user.click(screen.getByRole("button", { name: "Check again" }));
+			const b = openB();
+			await act(async () => check.resolve(blockedA));
+			expectBUntouched(b);
+		});
+
+		it("does not re-check for B when A's install finishes after B opened", async () => {
+			const user = userEvent.setup();
+			const job = deferred<{ target: string; status: string }>();
+			mocks.install.mockReturnValueOnce(job.promise);
+			mocks.check.mockResolvedValue(readyReport);
+			openDialog(blockedA, { projectId: "proj-a", kind: "orchestrator" });
+			await user.click(screen.getByRole("button", { name: "Install" }));
+			const b = openB();
+			await act(async () => job.resolve({ target: "codex", status: "succeeded" }));
+			expect(mocks.check).not.toHaveBeenCalled();
+			expectBUntouched(b);
+		});
+
+		it("closes A's login terminal and leaves B alone when sign-in starts after B opened", async () => {
+			const user = userEvent.setup();
+			const auth = deferred<unknown>();
+			mocks.startAuth.mockReturnValueOnce(auth.promise);
+			openDialog({ ...blockedA, checks: [{ code: "agent_unauthorized", blocking: true, canStartLogin: true }] }, { projectId: "proj-a", kind: "orchestrator" });
+			await user.click(screen.getByRole("button", { name: "Sign in" }));
+			const b = openB();
+			await act(async () => auth.resolve({
+				action: "login",
+				terminal: { handleId: "shell-a", title: "Sign in to Codex", workingDir: "/tmp", createdAt: "2026-10-28T00:00:00Z" },
+			}));
+			expect(mocks.closeTerminal).toHaveBeenCalledWith("shell-a");
+			expect(screen.queryByText("Sign in to Codex")).toBeNull();
+			expect(mocks.check).not.toHaveBeenCalled();
+			expectBUntouched(b);
+		});
+	});
 });

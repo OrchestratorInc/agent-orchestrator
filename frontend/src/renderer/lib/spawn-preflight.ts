@@ -37,6 +37,9 @@ export function isSpawnPreflightCancelled(error: unknown): error is SpawnPreflig
 }
 
 export type PendingSpawnPreflight = {
+	/** Stable identity of one blocked launch. Work started for it must not
+	 *  touch a later launch that replaced it. */
+	id: number;
 	input: SpawnPreflightInput;
 	report: SpawnPreflightReport;
 	resolve: (outcome: SpawnPreflightOutcome) => void;
@@ -45,11 +48,17 @@ export type PendingSpawnPreflight = {
 
 type SpawnPreflightState = {
 	pending: PendingSpawnPreflight | null;
-	open: (pending: PendingSpawnPreflight) => void;
-	update: (report: SpawnPreflightReport, input?: SpawnPreflightInput) => void;
-	/** Settle the pending check: proceed with an outcome, or cancel. */
-	settle: (outcome: SpawnPreflightOutcome | null) => void;
+	open: (pending: Omit<PendingSpawnPreflight, "id">) => number;
+	/** True while launch id is still the one the dialog shows. */
+	isCurrent: (id: number) => boolean;
+	/** Replace launch id's report. Ignored once it was cancelled or replaced. */
+	update: (id: number, report: SpawnPreflightReport, input?: SpawnPreflightInput) => void;
+	/** Settle launch id: proceed with an outcome, or cancel. Ignored once it
+	 *  was cancelled or replaced. */
+	settle: (id: number, outcome: SpawnPreflightOutcome | null) => void;
 };
+
+let nextPendingId = 0;
 
 export const useSpawnPreflightStore = create<SpawnPreflightState>((set, get) => ({
 	pending: null,
@@ -57,15 +66,18 @@ export const useSpawnPreflightStore = create<SpawnPreflightState>((set, get) => 
 		// One dialog at a time: a newer blocked start replaces an older one,
 		// which is cancelled rather than left hanging.
 		get().pending?.reject(new SpawnPreflightCancelledError());
-		set({ pending });
+		const id = ++nextPendingId;
+		set({ pending: { ...pending, id } });
+		return id;
 	},
-	update: (report, input) => {
+	isCurrent: (id) => get().pending?.id === id,
+	update: (id, report, input) => {
 		const pending = get().pending;
-		if (pending) set({ pending: { ...pending, report, input: input ?? pending.input } });
+		if (pending?.id === id) set({ pending: { ...pending, report, input: input ?? pending.input } });
 	},
-	settle: (outcome) => {
+	settle: (id, outcome) => {
 		const pending = get().pending;
-		if (!pending) return;
+		if (pending?.id !== id) return;
 		set({ pending: null });
 		if (outcome) pending.resolve(outcome);
 		else pending.reject(new SpawnPreflightCancelledError());

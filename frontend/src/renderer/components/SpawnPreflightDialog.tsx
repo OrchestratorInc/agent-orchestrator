@@ -39,12 +39,16 @@ const AGENT_CHECKS = new Set<SpawnPreflightCheck["code"]>(["agent_not_installed"
 export function SpawnPreflightDialog() {
 	const pending = useSpawnPreflightStore((state) => state.pending);
 	if (!pending) return null;
-	return <SpawnPreflightBody pending={pending} />;
+	// Keyed by launch so a replacing launch never inherits in-flight state.
+	return <SpawnPreflightBody key={pending.id} pending={pending} />;
 }
 
 function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 	const { t } = useTranslation();
-	const { input, report } = pending;
+	const { id, input, report } = pending;
+	// Every continuation below belongs to launch id. Once the user dismissed
+	// it or another launch replaced it, a late result must change nothing.
+	const isCurrent = () => useSpawnPreflightStore.getState().isCurrent(id);
 	const readiness = useAgentReadinessQuery();
 	useEnsureAgentReadiness();
 	// The most recent fix the user reached for; the next re-check reports it.
@@ -72,14 +76,16 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 	const needsAgent = report.checks.some((check) => AGENT_CHECKS.has(check.code));
 
 	const recheck = async (nextMethod: SpawnPreflightMethod, nextInput: SpawnPreflightInput = input) => {
+		if (!isCurrent()) return;
 		setBusy(true);
 		setError(null);
 		try {
 			const next = await checkSpawnPreflight(nextInput, { blockers: report.checks.map((check) => check.code), method: nextMethod });
+			if (!isCurrent()) return;
 			const store = useSpawnPreflightStore.getState();
-			if (next.ready) store.settle({ harness: nextInput.harness ?? next.harness });
+			if (next.ready) store.settle(id, { harness: nextInput.harness ?? next.harness });
 			else {
-				store.update(next, nextInput);
+				store.update(id, next, nextInput);
 				setMethod("recheck");
 			}
 		} catch {
@@ -99,7 +105,7 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 			setBusy(false);
 			return;
 		}
-		await recheck(nextMethod, nextInput);
+		if (isCurrent()) await recheck(nextMethod, nextInput);
 	};
 
 	// AO runs the install itself, then re-checks as soon as the job ends.
@@ -121,7 +127,7 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 		} finally {
 			setInstalling(null);
 		}
-		await recheck("install");
+		if (isCurrent()) await recheck("install");
 	};
 
 	// The harness's own reviewed login runs in an embedded terminal; when it
@@ -132,6 +138,11 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 		setError(null);
 		try {
 			const result = await startAuth.mutateAsync(report.harness);
+			if (!isCurrent()) {
+				// The launch is gone, so nothing will ever show or close this terminal.
+				await closeAuthTerminal(result.terminal.handleId).catch(() => undefined);
+				return;
+			}
 			setAuthWorkflow({
 				agentId: report.harness as AgentId,
 				action: result.action,
@@ -157,7 +168,7 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? { ...current, phase: "verifying" } : current);
 		await closeAuthTerminal(workflow.terminal.handleId).catch(() => undefined);
 		setAuthWorkflow(null);
-		await recheck("login");
+		if (isCurrent()) await recheck("login");
 	};
 
 	const useAgent = () => {
@@ -178,7 +189,7 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 	};
 
 	return (
-		<Dialog open onOpenChange={(open) => !open && useSpawnPreflightStore.getState().settle(null)}>
+		<Dialog open onOpenChange={(open) => !open && useSpawnPreflightStore.getState().settle(id, null)}>
 			<DialogContent className={settingsDialogContentClass}>
 				<div className={settingsDialogHeaderClass}>
 					<DialogTitle className="settings-dialog-title">
@@ -262,7 +273,7 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 							type="button"
 							className="settings-footer-button"
 							disabled={busy}
-							onClick={() => useSpawnPreflightStore.getState().settle({ harness: input.harness ?? report.harness })}
+							onClick={() => useSpawnPreflightStore.getState().settle(id, { harness: input.harness ?? report.harness })}
 						>
 							{t("spawnPreflight.startAnyway")}
 						</button>

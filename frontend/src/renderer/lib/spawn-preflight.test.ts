@@ -65,7 +65,8 @@ describe("ensureSpawnPreflight", () => {
 		respond(blocked);
 		const outcome = ensureSpawnPreflight({ projectId: "p1", kind: "orchestrator" });
 		await vi.waitFor(() => expect(useSpawnPreflightStore.getState().pending?.report).toEqual(blocked));
-		useSpawnPreflightStore.getState().settle({ harness: "claude-code" });
+		const pending = useSpawnPreflightStore.getState().pending!;
+		useSpawnPreflightStore.getState().settle(pending.id, { harness: "claude-code" });
 		await expect(outcome).resolves.toEqual({ harness: "claude-code" });
 		expect(useSpawnPreflightStore.getState().pending).toBeNull();
 	});
@@ -79,8 +80,32 @@ describe("ensureSpawnPreflight", () => {
 		const firstError = await first.catch((error: unknown) => error);
 		expect(isSpawnPreflightCancelled(firstError)).toBe(true);
 		await vi.waitFor(() => expect(useSpawnPreflightStore.getState().pending?.input.projectId).toBe("p2"));
-		useSpawnPreflightStore.getState().settle(null);
+		useSpawnPreflightStore.getState().settle(useSpawnPreflightStore.getState().pending!.id, null);
 		expect(isSpawnPreflightCancelled(await second.catch((error: unknown) => error))).toBe(true);
+	});
+});
+
+describe("useSpawnPreflightStore", () => {
+	it("ignores updates and settlements for a launch that was replaced", () => {
+		const first = { resolve: vi.fn(), reject: vi.fn() };
+		const second = { resolve: vi.fn(), reject: vi.fn() };
+		const store = useSpawnPreflightStore.getState();
+		const firstId = store.open({ input: { projectId: "a", kind: "orchestrator" }, report: blocked, ...first });
+		const secondId = store.open({ input: { projectId: "b", kind: "orchestrator" }, report: blocked, ...second });
+		expect(first.reject).toHaveBeenCalledOnce();
+		expect(store.isCurrent(firstId)).toBe(false);
+
+		store.update(firstId, ready, { projectId: "a", kind: "worker" });
+		store.settle(firstId, { harness: "codex" });
+		expect(useSpawnPreflightStore.getState().pending).toMatchObject({ id: secondId, report: blocked, input: { projectId: "b" } });
+		expect(second.resolve).not.toHaveBeenCalled();
+		expect(first.resolve).not.toHaveBeenCalled();
+
+		store.settle(secondId, { harness: "claude-code" });
+		expect(second.resolve).toHaveBeenCalledWith({ harness: "claude-code" });
+		// A settled launch cannot be settled again.
+		store.settle(secondId, null);
+		expect(second.reject).not.toHaveBeenCalled();
 	});
 });
 
