@@ -36,6 +36,7 @@ import { shouldAutoResume } from "./autoResume";
 import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
+import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
 import { brokenMcpServers, can, type ConversationSnapshot } from "./types";
 import { useMobileConversation } from "./useConversation";
 import { SessionStartupStatus } from "./SessionStartup";
@@ -55,6 +56,8 @@ import { userFacingError, NOT_PAIRED_ACTION_COPY } from "../connectionError";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { useChangeSummary } from "../files/useChangeSummary";
+import { sessionLink } from "./automationMessages";
+import { readSession } from "./sessionLookup";
 
 type MobileChatSession = DashboardSession | OrchestratorLink;
 
@@ -85,11 +88,19 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const navigation = useNavigation();
 	const router = useRouter();
 	const openPage = useOpenPage();
-	const { config, currentHostId, connection, unreachable, projects, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
+	const { config, currentHostId, connection, unreachable, linkHealth, projects, sessions, refresh: refreshBoard, setWorkerPinned, renameWorker, kill } = useApp();
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, session.id);
-	useChatViewLease(config, session.id);
+	// Opening a hibernated chat wakes it, and only the lease request says when.
+	// The catalog is asked for again too if it has none of its own yet: a page
+	// cached as ready loads it before the wake, and that load can fail unseen.
+	const { refresh: refreshOnView, loadTurnOptions: loadTurnOptionsOnView } = conversation;
+	const onViewing = useCallback(() => {
+		void refreshOnView();
+		void loadTurnOptionsOnView({ refresh: true, ifMissing: true }).catch(() => {});
+	}, [loadTurnOptionsOnView, refreshOnView]);
+	useChatViewLease(config, session.id, onViewing);
 	// A load that failed while the desktop was unreachable retries as soon as the
 	// board's poll reconnects, which is what the offline state promises.
 	// Keyed on a failed load, not a missing one, so the first mount doesn't send a
@@ -191,11 +202,16 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		),
 	);
 
+	// Loaded again when the provider comes up: a chat opened while hibernated or
+	// connecting has no catalog to give, and the composer would otherwise keep the
+	// empty one until the screen was reopened.
+	const providerLive = conversation.snapshot ? providerCatalogLive(conversation.snapshot) : undefined;
 	useEffect(() => {
-		if (!conversation.snapshot || turnOptionsRequestedFor.current === session.id) return;
-		turnOptionsRequestedFor.current = session.id;
-		void conversation.loadTurnOptions().catch(() => {});
-	}, [conversation.loadTurnOptions, conversation.snapshot, session.id]);
+		const load = turnOptionsLoadFor(turnOptionsRequestedFor.current, session.id, providerLive);
+		if (!load) return;
+		turnOptionsRequestedFor.current = load.key;
+		void conversation.loadTurnOptions(load.refresh ? { refresh: true } : undefined).catch(() => {});
+	}, [conversation.loadTurnOptions, providerLive, session.id]);
 
 	const sessionName = sessionTitle(session);
 	// Codex-style: every surface that shows the agent changed files can open them.
@@ -307,9 +323,25 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// localhost is never the dev server the agent named); openGitHub then applies
 	// the package's rule for a web page - GitHub app when it has a screen for it,
 	// the in-app browser otherwise.
+	// An `ao://sessions/…` link opens that session's chat on this conversation's machine.
 	const openLink = useCallback((url: string) => {
+		const target = sessionLink(url);
+		if (target) {
+			router.push({ pathname: "/session/[id]", params: { id: target.sessionId, projectId: target.projectId, hostId: currentHostId } });
+			return;
+		}
 		void openGitHub(mobileReachablePreviewURL(url, config?.host ?? "")?.href ?? url);
-	}, [config?.host]);
+	}, [config?.host, currentHostId, router]);
+	// A session the board leaves out (archived, say) is read once for its name.
+	const [readSessionNames, setReadSessionNames] = useState<Readonly<Record<string, string>>>({});
+	const nameOfSession = useCallback((sessionId: string) => sessions.find((candidate) => candidate.id === sessionId)?.displayName || readSessionNames[sessionId] || undefined, [readSessionNames, sessions]);
+	const wantSessionName = useCallback((sessionId: string) => {
+		if (!config) return;
+		void readSession(config, sessionId).then((read) => {
+			const name = read?.displayName;
+			if (name) setReadSessionNames((current) => current[sessionId] === name ? current : { ...current, [sessionId]: name });
+		});
+	}, [config]);
 
 	const resume = useCallback(async (quiet = false) => {
 		if (resuming) return;
@@ -573,6 +605,12 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	}
 	// The board's poll is the app's view of the link: when it is down, say so in
 	// the board's words instead of echoing whatever this request failed with.
+	if (!conversation.snapshot && linkHealth === "phone-offline") {
+		return <Failure><EmptyState icon="offline" title="You're offline" message="This conversation loads once this phone is back online." /></Failure>;
+	}
+	if (!conversation.snapshot && connection !== "open" && linkHealth === "reconnecting") {
+		return <Failure><EmptyState icon="refresh" title="Reconnecting…" message="This conversation loads once the app reconnects." /></Failure>;
+	}
 	if (!conversation.snapshot && unreachable) {
 		return <Failure><EmptyState icon="offline" title="This machine is offline" message="This conversation loads once the app reconnects." action={<Button title="Retry" icon="refresh" onPress={() => void conversation.refresh()} />} /></Failure>;
 	}
@@ -663,7 +701,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			<ConversationRenamePrompt request={renameRequest} onClose={closeRename} />
 			{SYSTEM_GLASS_HEADER ? null : banners}
 			<View style={styles.conversation}>
-			<ChatLinkProvider onLinkOpen={openLink} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
+			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
 				<ChatTimeline
 					snapshot={snapshot}

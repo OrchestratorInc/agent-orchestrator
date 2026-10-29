@@ -5,6 +5,7 @@ import {
 	workerSessions,
 	type ArtifactKind,
 	type WorkspaceSummary,
+	type WorkspaceSession,
 } from "../types/workspace";
 import { isArchivedSession } from "./standalone-archive";
 
@@ -14,15 +15,21 @@ export type ArtifactRow = {
 	name: string;
 	kind: ArtifactKind;
 	previewUrl?: string;
+	inlineUrl?: string;
 	rawUrl?: string;
 	updatedAt: string;
 	sessionId: string;
 	sessionTitle: string;
+	cloud?: WorkspaceSession["cloud"];
 	/** Undefined for a Scratchpad session. */
 	projectId?: string;
 	/** The writing session's agent is working, so the file may still change. */
 	generating: boolean;
 };
+
+export function artifactKey(artifact: Pick<ArtifactRow, "sessionId" | "path">): string {
+	return JSON.stringify([artifact.sessionId, artifact.path]);
+}
 
 /** One project's artifacts, newest first. */
 export type ArtifactGroup = {
@@ -53,10 +60,12 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[])
 					name: artifact.name,
 					kind: artifact.kind,
 					previewUrl: artifact.previewUrl,
+					inlineUrl: artifact.inlineUrl,
 					rawUrl: artifact.rawUrl,
 					updatedAt: artifact.updatedAt,
 					sessionId: session.id,
 					sessionTitle: session.title,
+					cloud: session.cloud,
 					projectId: isScratchpad ? undefined : workspace.id,
 					generating: isAgentActivityWorking(session.activity),
 				})),
@@ -74,16 +83,17 @@ export function artifactCount(groups: readonly ArtifactGroup[]): number {
 }
 
 /**
- * Keeps groups matching the project filter, and rows whose file name or
- * session title contains the query. Groups left without rows are dropped.
+ * Keeps groups matching the project filter, and rows whose project, file name
+ * or session title contains the query. Groups left without rows are dropped.
  */
-export function filterArtifactGroups(groups: readonly ArtifactGroup[], query: string, projectId: string): ArtifactGroup[] {
+export function filterArtifactGroups(groups: readonly ArtifactGroup[], query: string, projectId: string, scratchpadName?: string): ArtifactGroup[] {
 	const needle = query.trim().toLocaleLowerCase();
 	return groups
 		.filter((group) => !projectId || group.id === projectId)
 		.map((group) => ({
 			...group,
-			rows: needle
+			rows: needle && !group.name.toLocaleLowerCase().includes(needle)
+				&& !(group.isScratchpad && scratchpadName?.toLocaleLowerCase().includes(needle))
 				? group.rows.filter(
 						(row) =>
 							row.name.toLocaleLowerCase().includes(needle) ||

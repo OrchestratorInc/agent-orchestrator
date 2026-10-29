@@ -6,7 +6,6 @@ on:
   pull_request:
     paths:
       - "backend/**"
-      - "cloud/**"
       - "pricing/**"
       - "frontend/src/api/schema.ts"
       - "package.json"
@@ -210,51 +209,6 @@ jobs:
 
       - name: Test Goose readiness and inventory
         run: go test -race -count=1 -timeout=10m -run '^Test(FindInstalledBinary|WarmReadinessAndFindInstalled|PresslyGoose|Refresh|Probe|ReadinessCoordinator)' ./internal/service/agent
-
-  cloud-build-test:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: cloud
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: cloud/go.mod
-          cache-dependency-path: cloud/go.sum
-
-      - name: Check formatting
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "These files need gofmt:"
-            echo "$unformatted"
-            exit 1
-          fi
-
-      - name: Build
-        run: go build ./...
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Test
-        # -count=1 for the same reason as build-test: the restored build cache
-        # would otherwise replay test results from an earlier run.
-        run: go test -race -count=1 ./...
-
-      - name: Test Expat security backport
-        run: |
-          docker build --target expat-build --file Dockerfile \
-            --build-arg BUILDKIT_SYNTAX=mirror.gcr.io/docker/dockerfile:1 \
-            --build-arg EXPAT_BUILD_IMAGE=mirror.gcr.io/library/debian:trixie-slim .
-
-      - name: Test Brotli security backport
-        run: |
-          docker build --target brotli-build --file Dockerfile \
-            --build-arg BUILDKIT_SYNTAX=mirror.gcr.io/docker/dockerfile:1 \
-            --build-arg BROTLI_BUILD_IMAGE=mirror.gcr.io/library/debian:trixie-slim .
 
   lint:
     runs-on: ubuntu-latest

@@ -1,3 +1,4 @@
+import { normalizeCodeRowText } from "../../../shared/file-annotations";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { FileCodeReference } from "../../../shared/file-annotations";
 import type { SelectedLineRange } from "@pierre/diffs";
@@ -8,7 +9,7 @@ export type CodeSelection = {
 	/** The Pierre surface (one per file) the selection is in. */
 	host: HTMLElement;
 	/** Every selected row, top to bottom, in diff-row form. */
-	rows: DiffRow[];
+	rows: Array<DiffRow & { side?: "old" | "new" }>;
 	/** The selection as a Pierre range, for surfaces that resolve their own rows. */
 	range: SelectedLineRange;
 	/** Just past the end of the selected text on its last line, for the Ask button. */
@@ -34,7 +35,7 @@ function inDeletionsColumn(element: Element): boolean {
 function diffRow(element: Element): DiffRow {
 	const line = Number(element.getAttribute("data-line"));
 	const type = element.getAttribute("data-line-type") ?? "";
-	const text = element.textContent ?? "";
+	const text = normalizeCodeRowText(element.textContent ?? "");
 	if (type === "change-addition") return { kind: "add", oldNo: null, newNo: line, text };
 	if (type === "change-deletion") return { kind: "del", oldNo: line, newNo: null, text };
 	// Context rows carry their column's number, and the other side's as data-alt-line.
@@ -72,7 +73,8 @@ export function codeReference(path: string, selection: CodeSelection, diff: bool
 		side: diff ? (selection.range.side === "deletions" ? "old" : "new") : "file",
 		line: selection.range.start,
 		endLine: selection.range.end,
-		lines: selection.rows.map(({ kind, oldNo, newNo, text }) => ({ kind: kind as "context" | "add" | "del", oldNo, newNo, text })),
+		endSide: diff ? (selection.range.endSide === "deletions" ? "old" : "new") : "file",
+		lines: selection.rows.map(({ kind, oldNo, newNo, text, side }) => ({ kind: kind as "context" | "add" | "del", oldNo, newNo, text, side: diff ? side : "file" })),
 	};
 }
 
@@ -111,7 +113,7 @@ export function readCodeSelection(host: HTMLElement, dragging = false): CodeSele
 	const edge = onLastLine.length ? Math.max(...onLastLine.map((rect) => rect.right)) : lastBox.left;
 	return {
 		host,
-		rows: elements.map(diffRow),
+		rows: elements.map(element => ({ ...diffRow(element), side: rowSide(element) === "deletions" ? "old" : "new" })),
 		range: { start: Number(first.getAttribute("data-line")), side: rowSide(first), end: Number(last.getAttribute("data-line")), endSide: rowSide(last) },
 		point: { x: edge, y: lastBox.top + lastBox.height / 2 },
 		dragging,
@@ -149,7 +151,7 @@ export type CodeSelectionSource = {
  * re-rendering the surface would redraw Pierre's rows and drop the very
  * selection it shows.
  */
-export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, onAsk: (selection: CodeSelection) => void, enabled = true) {
+export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, onAsk: (selection: CodeSelection) => boolean | void, enabled = true) {
 	const [store] = useState(createSelectionStore);
 	const selectionRef = useRef<CodeSelection | null>(null);
 	const onAskRef = useRef(onAsk);
@@ -159,7 +161,7 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 	const ask = useCallback((): boolean => {
 		const current = selectionRef.current;
 		if (!current) return false;
-		onAskRef.current(current);
+		if (onAskRef.current(current) === false) return false;
 		clearSelection(current.host);
 		return true;
 	}, []);
@@ -214,11 +216,6 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 			if (event.key === "Escape") {
 				clearSelection(current.host);
 				return;
-			}
-			// Cmd/Ctrl+L adds the selection to chat, as in Cursor.
-			if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "l" && ask()) {
-				event.preventDefault();
-				event.stopPropagation();
 			}
 		};
 		document.addEventListener("selectionchange", schedule);

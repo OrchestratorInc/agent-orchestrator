@@ -1,7 +1,7 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AppState, Linking, Platform, StyleSheet, Text, View } from "react-native";
+import { AccessibilityInfo, AppState, Linking, Platform, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { pingServer } from "../lib/api";
 import { AppSymbol } from "../lib/AppSymbol";
@@ -19,7 +19,7 @@ import type { Theme } from "../lib/theme";
 import { haptics } from "../lib/haptics";
 import { clearOnboardingSkipped } from "../lib/onboardingStore";
 import { completeOnboarding } from "../lib/onboardingNavigation";
-import { pairFromCode, type MachineNameChoice } from "../lib/pairFlow";
+import { pairedNotice, pairFromCode, type MachineNameChoice, type PairedNotice } from "../lib/pairFlow";
 import { registerForPush } from "../lib/push";
 import { isLegacyPairingCode, parsePairingCode } from "../lib/pairingCode";
 import { findHost, saveHost, setActiveHost, type Host } from "../lib/hosts";
@@ -59,6 +59,9 @@ export default function PairScreen() {
 	const [permission, requestPermission] = useCameraPermissions();
 	const [failure, setFailure] = useState<ConnectionErrorCopy | null>(null);
 	const [busy, setBusy] = useState(false);
+	// Shown in place of "Connecting…" between a successful pair and the screen
+	// closing, when what happened would not otherwise be obvious.
+	const [paired, setPaired] = useState<PairedNotice | null>(null);
 	// Set while a scan keeps trying a LAN address that iOS may be holding behind
 	// its Local Network prompt; shown as progress rather than as an error.
 	const [awaitingLocalNetwork, setAwaitingLocalNetwork] = useState(false);
@@ -142,9 +145,22 @@ export default function PairScreen() {
 		}
 	}
 
-	async function finish() {
-		await clearOnboardingSkipped();
-		await reloadConfig(); // reconnect with the new credentials
+	async function finish(notice?: PairedNotice | null) {
+		if (notice) {
+			setPaired(notice);
+			// The notice closes with the screen, before VoiceOver would reach it.
+			// Android already reads it through accessibilityLiveRegion.
+			if (Platform.OS === "ios") AccessibilityInfo.announceForAccessibility([notice.title, notice.message].filter(Boolean).join(". "));
+		}
+		await Promise.all([
+			clearOnboardingSkipped().then(() => reloadConfig()), // reconnect with the new credentials
+			// Held long enough to read; the reconnect runs meanwhile.
+			notice ? new Promise((resolve) => setTimeout(resolve, PAIRED_NOTICE_MS)) : null,
+		]);
+		// The machine is saved either way, so onboarding still completes. Going
+		// back is only for this screen: after leaving early it would pop
+		// whatever screen is now in front.
+		if (!fromOnboarding && !mounted.current) return;
 		if (fromOnboarding) completeOnboarding(navigation);
 		else backOr(router);
 	}
@@ -184,6 +200,9 @@ export default function PairScreen() {
 			// ended. Without this the scanner would stay claimed and ignore scans,
 			// and the spinner would just stop with nothing to act on.
 			console.warn("[pair] attempt failed", e);
+			// A throw after pairing (the reconnect, navigation) must not leave the
+			// success notice claiming a finished pair on a screen that stays open.
+			setPaired(null);
 			setAwaitingLocalNetwork(false);
 			setBusy(false);
 			if (gate.release()) {
@@ -206,9 +225,6 @@ export default function PairScreen() {
 		setBusy(true);
 		setFailure(null);
 
-		// A generic scan of a machine already in the list is also an in-place
-		// refresh. Preserve its human-readable name instead of asking again.
-		const knownHost = repairHost ?? (offer?.hostId ? await findHost(offer.hostId) : null);
 		const localNetworkConfirmed = await loadLocalNetworkConfirmed();
 		promptAnsweredAt.current = null;
 		let awaitedLocalNetwork = false;
@@ -229,9 +245,12 @@ export default function PairScreen() {
 			chooseName: (suggested, appearance, hostId) => new Promise<MachineNameChoice | null>((resolve) => {
 				router.push(machineNameSheetRoute({ suggested, appearance, hostId, onSelect: resolve }));
 			}),
+			// A scan of a machine already in the list is an in-place refresh that
+			// keeps its name, whichever screen it started from.
+			findHost,
 			saveHost,
 			setActiveHost,
-		}, { repairHost: knownHost ?? undefined });
+		}, { repairHost: repairHost ?? undefined });
 
 		setAwaitingLocalNetwork(false);
 		if (!result.ok) {
@@ -245,14 +264,7 @@ export default function PairScreen() {
 				awaitedLocalNetwork: awaitedLocalNetwork && result.reason === "none-reachable",
 			});
 			haptics.warning();
-			if (result.reason === "wrong-machine") {
-				setFailure({
-					title: "Different machine",
-					icon: "alert-circle",
-					message: `That code belongs to a different machine. Scan the code from ${repairHost?.name ?? "the selected machine"}.`,
-					showLocalNetworkHint: false,
-				});
-			} else if (result.reason === "name-required") {
+			if (result.reason === "name-required") {
 				setFailure({
 					title: "Machine name required",
 					icon: "alert-circle",
@@ -303,7 +315,7 @@ export default function PairScreen() {
 		mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "qr", from_onboarding: fromOnboarding });
 		if (fromOnboarding) mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
 		haptics.success();
-		await finish();
+		await finish(pairedNotice(result));
 		// A successful scan counts as a deliberate trigger for the one-shot OS
 		// prompt (see `ask` on registerForPushNow in lib/push.ts): a granted device
 		// registers with this machine now instead of waiting on the Settings switch.
@@ -398,7 +410,15 @@ export default function PairScreen() {
 			{/* From the moment a scan starts: the first race alone can take ~20 s
 			    when a code's tunnel is down, and a frozen-looking scanner after the
 			    haptic reads as broken. The Local Network line only while waiting on it. */}
-			{(busy || awaitingLocalNetwork) && !failure ? (
+			{paired ? (
+				<View style={styles.notice} accessibilityLiveRegion="polite">
+					<View style={styles.noticeLead}><AppSymbol name="checkCircle" size={iconSize.sm} color={t.green} /></View>
+					<View style={styles.noticeBody}>
+						<Text style={styles.noticeTitle}>{paired.title}</Text>
+						{paired.message ? <Text style={styles.noticeText}>{paired.message}</Text> : null}
+					</View>
+				</View>
+			) : (busy || awaitingLocalNetwork) && !failure ? (
 				<View style={styles.notice} accessibilityLiveRegion="polite">
 					<View style={styles.noticeLead}><Spinner size={iconSize.sm} /></View>
 					<View style={styles.noticeBody}>
@@ -486,6 +506,9 @@ function CameraGate({
 		</View>
 	);
 }
+
+// Two short sentences at most; long enough to read without asking for a tap.
+const PAIRED_NOTICE_MS = 2000;
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({

@@ -122,7 +122,7 @@ export default function PRsScreen() {
 		<>
 			{hostStates.length === 1 && !routeHostId ? <ProjectSwitcher /> : null}
 			<PRFilterControl filter={filter} counts={counts} onChange={setFilter} />
-			{hostStates.length === 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
+			{hostStates.length === 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
 		</>
 	);
 

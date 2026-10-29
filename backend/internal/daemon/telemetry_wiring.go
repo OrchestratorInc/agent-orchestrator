@@ -39,7 +39,7 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	if !cfg.Telemetry.Events {
 		return telemetryadapter.NoopSink{}, standaloneIdentity(cfg, log)
 	}
-	local := telemetryadapter.NewLocalSQLiteSink(store, log)
+	local := telemetryadapter.NewLocalSQLiteSink(store, log, cfg.Telemetry.LocalRetention)
 	if cfg.Telemetry.Remote != config.TelemetryRemotePostHog {
 		return local, standaloneIdentity(cfg, log)
 	}

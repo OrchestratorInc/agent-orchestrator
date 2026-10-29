@@ -53,6 +53,9 @@ func TestBuildSystemPrompt_WorkerIncludesRulesAndOrchestrator(t *testing.T) {
 		"ao session claim-pr <full-pr-url>",
 		"## Docker Containers Started By This Session",
 		"## Worktree Git Isolation",
+		"provider's verified full head commit SHA",
+		"Never pass FETCH_HEAD as a checkout target",
+		"including failed commands",
 		"AO sessions use linked Git worktrees.",
 		"remote definitions with the human checkout",
 		"git config --worktree",
@@ -225,9 +228,9 @@ func TestBuildSystemPrompt_WorkerRequiresDurableReports(t *testing.T) {
 		"ao report --done --note <text>",
 		"Do not file a report for routine commands",
 		"applies to `ao report` only",
-		"Keep routine test logs",
-		"Summarize validation in the report note",
-		"not external publishing authorization",
+		"summarize validation and mention anything else, such as issues you filed, in the note",
+		"`--artifact <absolute-path>`",
+		"`--artifact` takes only a path to a file in the session artifact directory",
 		"`--done` does not terminate the session",
 	} {
 		if !strings.Contains(got, want) {

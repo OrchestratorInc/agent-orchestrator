@@ -189,7 +189,7 @@ function ReviewDetailContent() {
 		setMutation(`send:${run.id}`);
 		setError("");
 		try {
-			await sendMessage(config, sessionId, formatReviewSummaryMessage(run));
+			await sendMessage(config, sessionId, formatReviewSummaryMessage(run), { userAuthored: true });
 			setSentRuns((current) => new Set(current).add(run.id));
 			haptics.success();
 		} catch (value) {

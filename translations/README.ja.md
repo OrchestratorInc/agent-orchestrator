@@ -1,8 +1,10 @@
 <div align="center">
 
-<img src="../docs/assets/readme/banner.png" alt="Orchestrator.inc" width="100%" />
+<img src="../docs/assets/readme/logo.png" alt="Orchestrator.inc logo" width="96" height="96" />
 
-<h3>エージェントの子守りはもう終わり。本物の成果をマージしよう。</h3>
+### Orchestrator.inc
+
+<h4>エージェントの子守りはもう終わり。本物の成果をマージしよう。</h4>
 
 <p>
   ブランチ、レビュー、CI の失敗を管理しやすく保ちながら、複数のコーディングエージェントを一斉に動かせます。

@@ -228,6 +228,7 @@ function Shell() {
 				<Stack.Screen name="reviewer/[reviewId]" options={{ title: "Reviewer" }} />
 				<Stack.Screen name="shell/[handleId]" options={{ title: "Worktree shell" }} />
 				<Stack.Screen name="preview/[id]" options={{ title: "Preview" }} />
+				<Stack.Screen name="artifact/[sessionId]" options={{ title: "Artifact" }} />
 				{/* An agent's page, expanded from the conversation. Modal, so iOS
 				    swipes it away; the page titles the bar with its own name. */}
 				<Stack.Screen name="render" options={{ presentation: "modal", title: "Page" }} />

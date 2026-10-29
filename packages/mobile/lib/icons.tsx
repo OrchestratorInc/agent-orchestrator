@@ -7,6 +7,10 @@ import Activity from "lucide-react-native/icons/activity";
 import CircleAlert from "lucide-react-native/icons/circle-alert";
 import TriangleAlert from "lucide-react-native/icons/triangle-alert";
 import Archive from "lucide-react-native/icons/archive";
+import ArrowDown from "lucide-react-native/icons/arrow-down";
+import ArrowUp from "lucide-react-native/icons/arrow-up";
+import ArrowUpFromLine from "lucide-react-native/icons/arrow-up-from-line";
+import ClipboardCheck from "lucide-react-native/icons/clipboard-check";
 import Check from "lucide-react-native/icons/check";
 import CircleCheck from "lucide-react-native/icons/circle-check";
 import Circle from "lucide-react-native/icons/circle";
@@ -24,7 +28,10 @@ import ListTree from "lucide-react-native/icons/list-tree";
 import Folder from "lucide-react-native/icons/folder";
 import GitBranch from "lucide-react-native/icons/git-branch";
 import GitMerge from "lucide-react-native/icons/git-merge";
+import GitCommitHorizontal from "lucide-react-native/icons/git-commit-horizontal";
 import GitPullRequest from "lucide-react-native/icons/git-pull-request";
+import GitPullRequestDraft from "lucide-react-native/icons/git-pull-request-draft";
+import MousePointer2 from "lucide-react-native/icons/mouse-pointer-2";
 import Globe from "lucide-react-native/icons/globe";
 import KeyRound from "lucide-react-native/icons/key-round";
 import Link from "lucide-react-native/icons/link";
@@ -70,6 +77,10 @@ export const glyphs = {
 	"alert-circle": CircleAlert,
 	"alert-triangle": TriangleAlert,
 	"archive": Archive,
+	"arrow-down": ArrowDown,
+	"arrow-up": ArrowUp,
+	"arrow-up-from-line": ArrowUpFromLine,
+	"clipboard-check": ClipboardCheck,
 	"check": Check,
 	"check-circle": CircleCheck,
 	"circle": Circle,
@@ -86,7 +97,10 @@ export const glyphs = {
 	"folder": Folder,
 	"git-branch": GitBranch,
 	"git-merge": GitMerge,
+	"git-commit": GitCommitHorizontal,
 	"git-pull-request": GitPullRequest,
+	"git-pull-request-draft": GitPullRequestDraft,
+	"mouse-pointer": MousePointer2,
 	"globe": Globe,
 	"key": KeyRound,
 	"link": Link,

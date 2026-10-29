@@ -65,7 +65,7 @@ export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundar
 export default function SettingsScreen() {
 	const t = useTheme();
 	const router = useRouter();
-	const { config, configured, selectedHostName, switchHost, connection, error, errorStatus, activeEndpoints, loading: appLoading, reloadConfig } = useApp();
+	const { config, configured, selectedHostName, switchHost, connection, error, errorStatus, activeEndpoints, linkHealth, loading: appLoading, reloadConfig } = useApp();
 	const [pairedHosts, setPairedHosts] = useState<PairedHost[]>([]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const [switchingHostId, setSwitchingHostId] = useState<string | null>(null);
@@ -161,7 +161,7 @@ export default function SettingsScreen() {
 		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open")
 			? "tunnel-rotated"
 			: classified ?? (paired && !config && !appLoading ? "unreachable" : null);
-	const machineStatus = describeDesktopStatus({ configured: paired, connection, failure });
+	const machineStatus = describeDesktopStatus({ configured: paired, connection, failure, link: linkHealth });
 	return (
 		<View style={[styles.screen, { backgroundColor: t.bgBase }]} collapsable={false}>
 			{headerItems}

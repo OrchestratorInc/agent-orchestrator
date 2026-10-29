@@ -114,16 +114,22 @@ type checkpointTurn struct {
 // reply it adds after an interrupt marker when the conversation resumes.
 const claudeSyntheticModel = "<synthetic>"
 
+// claudeCompactionSummary opens the summary Claude Code writes as a user
+// message when it compacts a conversation that ran out of context.
+const claudeCompactionSummary = "This session is being continued from a previous conversation that ran out of context."
+
 // claudeTranscriptNotice reports a note Claude Code writes into its transcript
 // as a user message: a background task's <task-notification>, which can carry
-// text after its closing tag, or the marker for a stopped turn. Chat never
-// shows either as a user message.
+// text after its closing tag, the marker for a stopped turn, or a compaction
+// summary. Chat never shows any of them as a user message.
 // ponytail: replay sees only the text, because getSessionMessages drops the
-// record's origin, so a human prompt that starts with the same tag is skipped
-// too. Reading origin from the transcript in the bridge would remove the guess.
+// record's origin and isCompactSummary flag, so a human prompt that starts the
+// same way is skipped too. Reading them from the transcript in the bridge would
+// remove the guess.
 func claudeTranscriptNotice(text string) bool {
 	text = strings.TrimSpace(text)
 	return strings.HasPrefix(text, "<task-notification>") ||
+		strings.HasPrefix(text, claudeCompactionSummary) ||
 		strings.HasPrefix(text, "[Request interrupted by user") && strings.HasSuffix(text, "]")
 }
 

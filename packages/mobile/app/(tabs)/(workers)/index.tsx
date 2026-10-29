@@ -17,6 +17,7 @@ import { WorkerBoardList, type BoardRow } from "../../../lib/worker-board-list";
 import type { ArchiveSource } from "../../../lib/archive/useArchivedSessions";
 import { hostedProjectKey } from "../../../lib/hostedRows";
 import { workerFilterMenu } from "../../../lib/worker-filter-menu";
+import { classifyLink, EMPTY_LINK_TRACKER } from "../../../lib/linkHealth";
 import { WorkerMachineState } from "../../../lib/worker-machine-state";
 import { WorkerEnvironmentFilter } from "../../../lib/worker-environment-filter";
 import {
@@ -41,7 +42,7 @@ export default function FleetScreen() {
 	const router = useRouter();
 	const tabBarInset = useTabBarInset();
 	const headerOverlap = useHeaderOverlap();
-	const { config, configured, configResolved, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread } = useApp();
+	const { config, configured, configResolved, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread, phoneNetwork } = useApp();
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
 	const fleetError = hostStates.length > 1
 		? hostStates.every((host) => host.connection === "closed" && !host.loading)
@@ -163,7 +164,7 @@ export default function FleetScreen() {
 	// exists for is a populated board whose poll has died.
 	const listHeader = unpaired ? null : (
 		<>
-			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
+			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
 			{showsEnvironmentFilter(environments) ? (
 				<WorkerEnvironmentFilter
 					environments={environments}
@@ -204,6 +205,7 @@ export default function FleetScreen() {
 					) : selectedHost && selectedHost.connection !== "open" ? (
 						<WorkerMachineState
 							host={selectedHost}
+							linkHealth={classifyLink(selectedHost.linkTracker ?? EMPTY_LINK_TRACKER, phoneNetwork, Date.now())}
 							environments={environments}
 							onSelectEnvironment={selectEnvironment}
 							onRetry={onRefresh}
