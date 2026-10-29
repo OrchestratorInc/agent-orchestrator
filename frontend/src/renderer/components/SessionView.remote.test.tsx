@@ -114,7 +114,7 @@ it("keeps equal local, Box A, and Box B session IDs isolated through chat sends"
 	])));
 });
 
-it("removes remote chat actions when its host disconnects, without falling back to local", async () => {
+it("keeps a remote chat mounted while its host reconnects, without falling back to local", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -132,13 +132,14 @@ it("removes remote chat actions when its host disconnects, without falling back 
 	await screen.findByRole("combobox", { name: "Message the agent" });
 	await act(async () => { await disconnectHost("box-a"); });
 	expect(queryClient.getQueryData(conversationQueryKey("session-1", "box-a"))).toBeDefined();
-	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	// A tunnel blip must not tear down the chat and any send in flight.
+	expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
+	expect(screen.queryByText("Host is offline. Check its address and password.")).not.toBeInTheDocument();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
 
-it("hides stale chat controls when the upstream daemon fails but its proxy remains connected", async () => {
+it("keeps the chat when the upstream daemon fails but its proxy remains connected", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -162,10 +163,10 @@ it("hides stale chat controls when the upstream daemon fails but its proxy remai
 	upstreamFailed = true;
 	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
 	expect(queryClient.getQueryData(remoteWorkspaceQueryKey("box-a"))).toBeDefined();
-	await waitFor(() => expect(screen.queryByTestId("session-detail")).not.toBeInTheDocument());
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
-	expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
-	expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
+	await waitFor(() => expect(queryClient.getQueryState(remoteWorkspaceQueryKey("box-a"))?.status).toBe("error"));
+	expect(screen.getByTestId("session-detail")).toBeInTheDocument();
+	expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
+	expect(screen.queryByText("Host is offline. Check its address and password.")).not.toBeInTheDocument();
 	expect(localGet).not.toHaveBeenCalled();
 	expect(localPost).not.toHaveBeenCalled();
 });
@@ -586,7 +587,7 @@ it("reattaches a terminal when the same host gets a new proxy connection", async
 	await waitFor(() => expect(screen.getByTestId("remote-terminal-base")).toHaveTextContent("http://127.0.0.1:4001/new"));
 });
 
-it("reuses a Chat delivery ID when a lost response is retried", async () => {
+it("retries a lost Chat response by itself with the same delivery ID once the host is back", async () => {
 	const deliveryIds: string[] = [];
 	const posts: string[] = [];
 	localGet.mockReset();
@@ -618,13 +619,12 @@ it("reuses a Chat delivery ID when a lost response is retried", async () => {
 	const message = await screen.findByRole("combobox", { name: "Message the agent" });
 	await typeInLexicalEditor(message, "Continue the task");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	await screen.findByText(/delivery wasn’t confirmed/);
+	await screen.findByText(/Retrying automatically with the same delivery ID/);
 	await act(async () => { await disconnectHost("box-a"); });
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
 	await act(async () => { await connectHost("http://box-a:3001"); });
-	await screen.findByRole("button", { name: "Retry message safely" });
-	await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
-	await waitFor(() => expect(deliveryIds).toHaveLength(2));
+	await waitFor(() => expect(deliveryIds).toHaveLength(2), { timeout: 10_000 });
+	await waitFor(() => expect(screen.queryByText(/Retrying automatically/)).not.toBeInTheDocument());
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 	expect(posts).toEqual([
 		"http://127.0.0.1:4000/api/v1/sessions/session-1/conversation/messages",
@@ -712,13 +712,11 @@ it("retries reviewer Chat on Box B with the same delivery ID", async () => {
 	expect(await screen.findByText("Review on port 4001")).toBeInTheDocument();
 	await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Review this change");
 	await userEvent.click(screen.getByRole("button", { name: "Send message" }));
-	await screen.findByText(/delivery wasn’t confirmed/);
+	await screen.findByText(/Retrying automatically with the same delivery ID/);
 	await act(async () => { await disconnectHost("box-b"); });
-	expect(screen.getByRole("alert")).toHaveTextContent("Host is offline");
+	expect(screen.getByRole("combobox", { name: "Message the agent" })).toBeInTheDocument();
 	await act(async () => { await connectHost("http://box-b:3001"); });
-	await screen.findByRole("button", { name: "Retry message safely" });
-	await userEvent.click(screen.getByRole("button", { name: "Retry message safely" }));
-	await waitFor(() => expect(deliveryIds).toHaveLength(2));
+	await waitFor(() => expect(deliveryIds).toHaveLength(2), { timeout: 10_000 });
 	expect(deliveryIds[1]).toBe(deliveryIds[0]);
 	expect(posts).toEqual([
 		"http://127.0.0.1:4001/api/v1/reviews/review-1/conversation/messages",

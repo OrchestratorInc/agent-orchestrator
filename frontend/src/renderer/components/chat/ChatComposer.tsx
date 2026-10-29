@@ -416,6 +416,12 @@ export const ChatComposer = memo(function ChatComposer({
 	const [sendError, setSendError] = useState<string | null>(null);
 	const [steerOutcomeNotice, setSteerOutcomeNotice] = useState<string | null>(null);
 	const [deliveryRecoveryNotice, setDeliveryRecoveryNotice] = useState<string | null>(null);
+	/**
+	 * A send the daemon never answered (a dropped tunnel, an unreachable host) is
+	 * retried with its delivery ID until it does. The daemon deduplicates that ID,
+	 * so a retry cannot start a second turn. `attempt` drives the backoff.
+	 */
+	const [transportRetry, setTransportRetry] = useState<{ clientMessageId: string; attempt: number }>();
 	const [deliveryUncertain, setDeliveryUncertain] = useState(
 		() =>
 			draftScope !== undefined &&
@@ -666,6 +672,11 @@ export const ChatComposer = memo(function ChatComposer({
 			!submitting &&
 			!composerMutation.pending,
 	);
+	useEffect(() => {
+		if (!transportRetry || !canRecoverDelivery || durableDelivery?.clientMessageId !== transportRetry.clientMessageId) return;
+		const timer = window.setTimeout(() => void submit(), Math.min(1_000 * 2 ** transportRetry.attempt, 5_000));
+		return () => window.clearTimeout(timer);
+	}, [transportRetry, canRecoverDelivery, durableDelivery?.clientMessageId]);
 	const canAbandonUncertainSteer = Boolean(
 		deliveryUncertain &&
 			durableDelivery?.kind === "steer" &&
@@ -680,6 +691,7 @@ export const ChatComposer = memo(function ChatComposer({
 		submitting &&
 			!staged &&
 			!deliveryUncertain &&
+			transportRetry?.clientMessageId !== durableDelivery?.clientMessageId &&
 			durableDelivery?.kind === "send" &&
 			durableDelivery.state === "dispatching",
 	);
@@ -1524,10 +1536,10 @@ export const ChatComposer = memo(function ChatComposer({
 		}
 		setDurableDelivery(delivery);
 		setTextDraftPersistenceError(null);
-		setDeliveryRecoveryNotice(
+		setDeliveryRecoveryNotice((current) =>
 			delivery.state === "accepted"
 				? "chat.draft.acceptedMessage"
-				: null,
+				: current === "chat.draft.sendRetrying" ? current : null,
 		);
 		if (delivery.state === "accepted") {
 			acceptAndClearDurableDelivery(delivery);
@@ -1609,11 +1621,18 @@ export const ChatComposer = memo(function ChatComposer({
 				setSendError(apiErrorCode(error) === AGENT_SWITCH_FAILED ? null : apiErrorMessage(error));
 				return;
 			}
+			// No daemon answered (no error code, or one of the remote proxy's own
+			// 502s), so keep trying. A coded refusal needs the person's decision.
+			const code = apiErrorCode(error);
+			const unanswered = delivery.kind === "send" && (code === undefined || code === "UPSTREAM_UNAVAILABLE" || code === "HOST_IDENTITY_UNVERIFIED");
+			setTransportRetry((current) => unanswered
+				? { clientMessageId: delivery.clientMessageId, attempt: current?.clientMessageId === delivery.clientMessageId ? current.attempt + 1 : 0 }
+				: undefined);
 			setDeliveryUncertain(true);
 			setDeliveryRecoveryNotice(
 				delivery.kind === "steer"
 					? "chat.draft.steerUncertain"
-					: "chat.draft.sendUncertain",
+					: unanswered ? "chat.draft.sendRetrying" : "chat.draft.sendUncertain",
 			);
 		} finally {
 			if (!mutationFinished) cancelChatComposerMutation(draftScope, mutationToken);
