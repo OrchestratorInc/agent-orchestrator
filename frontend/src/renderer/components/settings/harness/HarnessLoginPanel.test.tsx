@@ -37,7 +37,8 @@ describe("HarnessLoginPanel", () => {
 		const onVerify = vi.fn().mockResolvedValue("configured");
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId: "goose", method: "env_OPENAI_API_KEY", status: "succeeded", loginUrl: undefined, deviceCode: undefined });
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("button", { name: "OpenAI API key" })).toHaveAccessibleDescription(/agent sessions it starts/);
+		expect(screen.getByRole("button", { name: "OpenAI API key" })).toHaveAccessibleDescription("Not set");
+		expect(screen.getByText("AO passes these keys to the agent sessions it starts.")).toBeVisible();
 		const input = screen.getByLabelText("API key");
 		expect(input).toHaveAttribute("type", "password");
 		await user.type(input, "test-secret");

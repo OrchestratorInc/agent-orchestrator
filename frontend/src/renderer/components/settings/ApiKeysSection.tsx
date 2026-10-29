@@ -7,6 +7,7 @@ import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { SettingsRow } from "./SettingsRow";
+import { SettingsSearch } from "./SettingsSearch";
 import { SettingsSection } from "./SettingsSection";
 
 type Notice = { tone: "status" | "error"; text: string };
@@ -16,6 +17,7 @@ export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const keys = useProviderKeys();
 	const [editing, setEditing] = useState<string>();
+	const [query, setQuery] = useState("");
 	const [notices, setNotices] = useState<Record<string, Notice>>({});
 	const notify = (name: string, notice?: Notice) => setNotices((current) => {
 		const next = { ...current };
@@ -23,10 +25,19 @@ export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
 		return next;
 	});
 	const all = keys.data ?? [];
+	const saved = all.filter((key) => key.configured).length;
+	// Matches the provider, the variable, or a harness that reads it.
+	const needle = query.trim().toLocaleLowerCase();
+	const matches = (key: ProviderKey) => !needle || [key.label, key.name, ...key.agents.map(agentLabel)].some((text) => text.toLocaleLowerCase().includes(needle));
+	// The daemon's order (most shared first) stays put, so a row never moves
+	// under the pointer after its key is saved.
+	const ordered = (items: ProviderKey[]) => items.filter(matches);
 	const groups = [
-		{ id: "providers", title: t("settings.apiKeys.providers"), items: all.filter((key) => key.agents.length > 1) },
-		{ id: "services", title: t("settings.apiKeys.services"), items: all.filter((key) => key.agents.length <= 1) },
-	].filter((group) => group.items.length > 0);
+		{ id: "providers", title: t("settings.apiKeys.providers"), items: ordered(all.filter((key) => key.agents.length > 1)) },
+		{ id: "services", title: t("settings.apiKeys.services"), items: ordered(all.filter((key) => key.agents.length <= 1)) },
+	// The first list always renders so the search field stays mounted while typing.
+	].filter((group, index) => index === 0 || group.items.length > 0);
+	const search = <SettingsSearch aria-label={t("settings.apiKeys.search")} placeholder={t("settings.apiKeys.search")} value={query} onChange={setQuery} />;
 
 	if (keys.isPending) return <SettingsSection title={t("settings.apiKeys")} titleHidden={titleHidden}>
 		<p role="status" className="flex items-center gap-2 px-(--settings-row-inset) text-control text-settings-muted"><LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />{t("settings.apiKeys.loading")}</p>
@@ -35,7 +46,14 @@ export function ApiKeysSection({ titleHidden }: { titleHidden?: boolean }) {
 		<p role="alert" className="px-(--settings-row-inset) text-control text-error">{keys.error.message}</p>
 	</SettingsSection>;
 	return <>
-		{groups.map((group) => <SettingsSection key={group.id} sectionId={`api-keys-${group.id}`} title={group.title} grouped>
+		{groups.map((group, index) => <SettingsSection
+			key={group.id}
+			sectionId={`api-keys-${group.id}`}
+			title={group.title}
+			grouped
+			{...(index === 0 ? { toolbar: search, action: saved ? <span className="text-xs text-settings-muted tabular-nums">{t("settings.apiKeys.savedCount", { saved })}</span> : undefined } : {})}
+		>
+			{group.items.length === 0 ? <p role="status" className="settings-content-row text-control text-settings-muted">{t("settings.apiKeys.noMatches")}</p> : null}
 			{group.items.map((key) => <div key={key.name}>
 				<ProviderKeyRow
 					providerKey={key}
