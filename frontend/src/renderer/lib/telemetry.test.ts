@@ -115,6 +115,21 @@ describe("telemetry sanitizers", () => {
 		}
 	});
 
+	it("keeps only enums and counts on the parallel prompt events", async () => {
+		expect(await sanitizeRendererProperties("ao.onboarding.parallel_prompt_shown", {
+			suggestion_count: 3, source: "issue", title: "Fix login", path: "src/a.go",
+		})).toEqual({ suggestion_count: 3, source: "issue" });
+		expect(await sanitizeRendererProperties("ao.onboarding.parallel_prompt_shown", {
+			suggestion_count: -1, source: "Fix login for alice@example.com",
+		})).toEqual({ suggestion_count: 0, source: "other" });
+		expect(await sanitizeRendererProperties("ao.onboarding.parallel_prompt_action", {
+			action: "spawn_all", count: 2, prompt: "Work on issue #12",
+		})).toEqual({ action: "spawn_all", count: 2 });
+		expect(await sanitizeRendererProperties("ao.onboarding.parallel_prompt_action", {
+			action: "rm -rf", count: "2",
+		})).toEqual({ action: "other", count: 0 });
+	});
+
 	it("exports the session management summary under the v2 name", () => {
 		expect(postHogEventName("ao.renderer.session_management_summary")).toBe(
 			"ao.v2.renderer.session_management_summary",

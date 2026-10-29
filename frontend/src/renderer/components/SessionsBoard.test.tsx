@@ -1944,3 +1944,40 @@ function terminatedSession(overrides: Partial<WorkspaceSession> = {}): Workspace
 		...overrides,
 	};
 }
+
+describe("SessionsBoard parallel prompt", () => {
+	beforeEach(() => {
+		window.localStorage.removeItem("ao.parallelPrompt");
+		window.localStorage.removeItem("ao.experiment.parallelPrompt");
+	});
+
+	function workers(count: number) {
+		return Array.from({ length: count }, (_, index) =>
+			boardSession({ id: `w${index}`, title: `Task ${index}`, status: "working", kind: "worker" }));
+	}
+
+	it("offers more tasks on the board after the first worker starts", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [workspaceWithSessions(workers(1))], isSuccess: true, isError: false });
+		renderBoard("p1");
+		expect(await screen.findByTestId("parallel-prompt")).toBeInTheDocument();
+	});
+
+	it("stays away once the install has run three workers, even after archiving", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [workspaceWithSessions(workers(3))], isSuccess: true, isError: false });
+		const { unmount } = renderBoardWithClient(new QueryClient(), "p1");
+		expect(screen.queryByTestId("parallel-prompt")).not.toBeInTheDocument();
+		unmount();
+		workspaceQueryMock.mockReturnValue({ data: [workspaceWithSessions(workers(1))], isSuccess: true, isError: false });
+		renderBoard("p1");
+		await screen.findByText("Task 0");
+		expect(screen.queryByTestId("parallel-prompt")).not.toBeInTheDocument();
+	});
+
+	it("is off when the experiment flag is off", async () => {
+		window.localStorage.setItem("ao.experiment.parallelPrompt", "off");
+		workspaceQueryMock.mockReturnValue({ data: [workspaceWithSessions(workers(1))], isSuccess: true, isError: false });
+		renderBoard("p1");
+		await screen.findByText("Task 0");
+		expect(screen.queryByTestId("parallel-prompt")).not.toBeInTheDocument();
+	});
+});

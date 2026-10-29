@@ -830,6 +830,9 @@ const CLOUD_FUNNEL_EVENTS = new Set([
 
 const ORCHESTRATOR_SPAWN_SOURCE_SET = new Set<string>(ORCHESTRATOR_SPAWN_SOURCES);
 
+const PARALLEL_PROMPT_SOURCES = new Set(["issue", "todo", "starter", "mixed"]);
+const PARALLEL_PROMPT_ACTIONS = new Set(["spawn_one", "spawn_all", "edit", "dismiss"]);
+
 const EDITOR_ID_SET = new Set<string>(EDITOR_IDS);
 const OPEN_TARGET_KIND_SET = new Set(["editor", "file_manager", "terminal"]);
 
@@ -852,6 +855,16 @@ export async function sanitizeRendererProperties(
 		case "ao.onboarding.step_completed":
 		case "ao.onboarding.step_abandoned":
 			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
+			break;
+		case "ao.onboarding.parallel_prompt_shown":
+			// How many follow-up tasks were offered and where they came from;
+			// never their titles, paths or prompts.
+			safe.suggestion_count = nonNegativeNumber(properties?.suggestion_count) ?? 0;
+			safe.source = enumValue(properties?.source, PARALLEL_PROMPT_SOURCES, "other");
+			break;
+		case "ao.onboarding.parallel_prompt_action":
+			safe.action = enumValue(properties?.action, PARALLEL_PROMPT_ACTIONS, "other");
+			safe.count = nonNegativeNumber(properties?.count) ?? 0;
 			break;
 		case "ao.renderer.loaded":
 			break;

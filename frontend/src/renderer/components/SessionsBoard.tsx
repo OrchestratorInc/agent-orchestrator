@@ -14,6 +14,7 @@ import {
 import { AlertTriangle, LayoutDashboard, RotateCw } from "lucide-react";
 import {
 	CLOUD_PROJECT_KIND,
+	STANDALONE_PROJECT_KIND,
 	type WorkspaceSession,
 	isOrchestratorSession,
 	newestActiveOrchestrator,
@@ -57,6 +58,8 @@ import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useDiagnosticsEnabled, usePressureState, useSessionMemory } from "../hooks/useSessionMemory";
 import { AppMemoryIndicator, toSessionFacts, useHasAppMemory } from "./SessionMemoryPanel";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
+import { shouldOfferParallelPrompt } from "../lib/parallel-prompt";
+import { ParallelPromptCard } from "./ParallelPromptCard";
 import {
 	ArchivedSessionCardAdapter,
 	BoardSessionCardAdapter,
@@ -170,6 +173,18 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			: session,
 	);
 	const boardLabels = sessionsBoardLabels(t);
+	// Every worker this install has run, archived ones included: the
+	// "run more at once" card is for the first one, until there are three.
+	const installWorkerCount = all.reduce((count, candidate) => count + workerSessions(candidate.sessions).length, 0);
+	const [parallelPromptDismissed, setParallelPromptDismissed] = useState(false);
+	const offerParallelPrompt = useMemo(
+		() => !hostId && localWorkspaceQuery.isSuccess && shouldOfferParallelPrompt(installWorkerCount),
+		[hostId, localWorkspaceQuery.isSuccess, installWorkerCount],
+	);
+	const showParallelPrompt = Boolean(
+		projectId && workspace && offerParallelPrompt && !parallelPromptDismissed && liveSessions.length > 0 &&
+		workspace.kind !== CLOUD_PROJECT_KIND && workspace.kind !== STANDALONE_PROJECT_KIND && !workspace.folderMissing,
+	);
 	const presentation = useBoardPresentation({
 		projectId,
 		isSuccess: localWorkspaceQuery.isSuccess,
@@ -350,6 +365,9 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 					</span>
 				</div>
 			) : null}
+				{showParallelPrompt && projectId ? (
+					<ParallelPromptCard key={projectId} projectId={projectId} onDismiss={() => setParallelPromptDismissed(true)} />
+				) : null}
 				{!hostId && (presentation.workspaceStartupState === "error" || localWorkspaceQuery.isError) ? (
 					<p className="py-10 text-center text-xs text-passive">{t("shell.couldNotLoadSessions")}</p>
 				) : hostId && !workspace ? null : showWelcome ? (
