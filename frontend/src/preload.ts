@@ -49,6 +49,7 @@ import {
 	type TelemetryPolicyView,
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
+import type { AcquisitionAnswer, AcquisitionChannelState } from "./shared/acquisition-channel";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount } from "./shared/cloud-account";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
@@ -705,6 +706,10 @@ const api = {
 		getMigration: () => ipcRenderer.invoke("appState:getMigration") as Promise<MigrationState>,
 		setMigration: (migration: MigrationState) =>
 			ipcRenderer.invoke("appState:setMigration", migration) as Promise<void>,
+		getAcquisitionChannel: () =>
+			ipcRenderer.invoke("appState:getAcquisitionChannel") as Promise<AcquisitionChannelState>,
+		recordAcquisitionChannel: (answer: AcquisitionAnswer) =>
+			ipcRenderer.invoke("appState:recordAcquisitionChannel", answer) as Promise<boolean>,
 	},
 	cliLink: {
 		setEnabled: (enabled: boolean) => ipcRenderer.invoke("cliLink:setEnabled", enabled) as Promise<void>,

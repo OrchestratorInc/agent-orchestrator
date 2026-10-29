@@ -6,13 +6,17 @@ import path from "node:path";
 import {
 	APP_STATE_FILE_NAME,
 	writeAppStateMarker,
+	readAcquisitionChannel,
 	readMigrationState,
+	recordAcquisitionChannel,
 	updateMigration,
 	type AppStateMarker,
 } from "./app-state";
 
 // The exact key set the Go reader (start.go `appState`) unmarshals.
 const GO_READER_KEYS = ["schemaVersion", "appPath", "version", "installedAt", "lastReconciledAt", "installSource"];
+// App-only keys the Go reader ignores (it does not disallow unknown fields).
+const APP_ONLY_FIRST_WRITE_KEYS = ["acq_channel_self_reported"];
 
 async function readMarker(dir: string): Promise<AppStateMarker> {
 	const raw = await readFile(path.join(dir, APP_STATE_FILE_NAME), "utf8");
@@ -86,7 +90,7 @@ describe("writeAppStateMarker", () => {
 		expect(m.lastReconciledAt).toBe("2026-06-26T11:30:00.000Z");
 	});
 
-	it("written JSON keys exactly match the Go reader struct", async () => {
+	it("written JSON keys match the Go reader struct plus app-only keys", async () => {
 		await writeAppStateMarker({
 			stateDir: dir,
 			appPath: "/Applications/Agent Orchestrator.app",
@@ -97,7 +101,7 @@ describe("writeAppStateMarker", () => {
 
 		const raw = await readFile(path.join(dir, APP_STATE_FILE_NAME), "utf8");
 		const keys = Object.keys(JSON.parse(raw) as Record<string, unknown>);
-		expect(keys.sort()).toEqual([...GO_READER_KEYS].sort());
+		expect(keys.sort()).toEqual([...GO_READER_KEYS, ...APP_ONLY_FIRST_WRITE_KEYS].sort());
 		// Trailing newline, mirroring runfile.Write.
 		expect(raw.endsWith("}\n")).toBe(true);
 	});
@@ -191,5 +195,64 @@ describe("migration marker", () => {
 		const raw = JSON.parse(await readFile(path.join(dir, APP_STATE_FILE_NAME), "utf8"));
 		expect(raw.appPath).toBe("/A.app");
 		expect(raw.migration).toEqual({ status: "failed", error: "x" });
+	});
+});
+
+describe("self-reported acquisition channel", () => {
+	let dir: string;
+	const launch = (version = "1.0.0") =>
+		writeAppStateMarker({ stateDir: dir, appPath: "/A.app", version, now: () => new Date() });
+
+	beforeEach(async () => {
+		dir = await mkdtemp(path.join(os.tmpdir(), "ao-app-state-acq-"));
+	});
+
+	afterEach(async () => {
+		await rm(dir, { recursive: true, force: true });
+	});
+
+	it("asks only on the launch that creates the marker", async () => {
+		await launch();
+		expect(await readAcquisitionChannel(dir)).toBe("pending");
+		// A later launch (an update) keeps the question pending until answered.
+		await launch("1.1.0");
+		expect(await readAcquisitionChannel(dir)).toBe("pending");
+	});
+
+	it("never asks an install whose marker predates the question", async () => {
+		await writeFile(
+			path.join(dir, APP_STATE_FILE_NAME),
+			JSON.stringify({ schemaVersion: 2, appPath: "/A.app", version: "0.9.0", installedAt: "x", lastReconciledAt: "x", installSource: "unknown" }),
+		);
+		await launch();
+		expect(await readAcquisitionChannel(dir)).toBeNull();
+		expect(await recordAcquisitionChannel(dir, "github")).toBe(false);
+		expect((await readMarker(dir)).acq_channel_self_reported).toBeUndefined();
+	});
+
+	it("records one answer per install and keeps it across updates", async () => {
+		await launch();
+		expect(await recordAcquisitionChannel(dir, "hacker_news")).toBe(true);
+		expect(await recordAcquisitionChannel(dir, "skipped")).toBe(false);
+		await launch("2.0.0");
+		expect(await readAcquisitionChannel(dir)).toBe("hacker_news");
+	});
+
+	it("records an explicit skip", async () => {
+		await launch();
+		expect(await recordAcquisitionChannel(dir, "skipped")).toBe(true);
+		expect(await readAcquisitionChannel(dir)).toBe("skipped");
+	});
+
+	it("rejects values outside the closed vocabulary", async () => {
+		await launch();
+		expect(await recordAcquisitionChannel(dir, "my friend bob" as never)).toBe(false);
+		expect(await readAcquisitionChannel(dir)).toBe("pending");
+	});
+
+	it("keeps the field when the migration block is updated", async () => {
+		await launch();
+		await updateMigration({ stateDir: dir, migration: { status: "declined" }, now: () => new Date() });
+		expect(await readAcquisitionChannel(dir)).toBe("pending");
 	});
 });

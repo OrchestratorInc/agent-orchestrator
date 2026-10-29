@@ -7,6 +7,7 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import { useOnboardingStep } from "../lib/onboarding-telemetry";
 import { isMacPlatform } from "../lib/platform";
 import { getProjectLastOpenedAt } from "../lib/project-history";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -23,6 +24,7 @@ import { CreateProjectFlow } from "./CreateProjectFlow";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { GitHubOnboardingNotice } from "./GitHubOnboardingNotice";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
+import { AttributionQuestion } from "./onboarding/AttributionQuestion";
 import { Badge } from "./ui/badge";
 
 /**
@@ -173,6 +175,23 @@ export function HomePage() {
 			workspaceStartupState === "loading" ||
 			(!workspaceQuery.isSuccess && !workspaceQuery.isError) ||
 			requirementsBlocked);
+	const loadFailed = workspaceStartupState === "error" || workspaceQuery.isError;
+	// Home with no projects is the first-run welcome step. Adding a project, or
+	// starting a standalone agent, finishes it; those usually navigate away and
+	// unmount this page, so completion is reported from the handlers.
+	const welcomeActive = !showStartup && !loadFailed && recentProjects.length === 0;
+	const completeWelcomeStep = useOnboardingStep("welcome", welcomeActive);
+	const completeWelcome = () => {
+		if (welcomeActive) completeWelcomeStep();
+	};
+	const finishingWelcome = <A extends unknown[]>(fn: (...args: A) => Promise<void>) => async (...args: A) => {
+		await fn(...args);
+		completeWelcome();
+	};
+	const startStandaloneAgent = () => {
+		completeWelcome();
+		requestNewTask(STANDALONE_WORKSPACE_ID);
+	};
 
 	if (showStartup) return <DaemonStartupLoader />;
 
@@ -188,7 +207,7 @@ export function HomePage() {
 		if (project) void navigate({ to: "/projects/$projectId", params: { projectId: project.id } });
 	};
 
-	if (workspaceStartupState === "error" || workspaceQuery.isError) {
+	if (loadFailed) {
 		return (
 			<div className="flex min-h-full items-center justify-center px-6 py-16">
 				<p className="text-center text-xs text-passive">{t("shell.couldNotLoadProjects")}</p>
@@ -250,7 +269,7 @@ export function HomePage() {
 								<HomeActionCard
 									icon={<MessageSquarePlus strokeWidth={1.8} />}
 									label={t("home.newStandaloneAgent")}
-									onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
+									onClick={startStandaloneAgent}
 								/>
 							)}
 						</div>
@@ -281,6 +300,7 @@ export function HomePage() {
 						)}
 					</section>
 
+					{recentProjects.length === 0 ? <AttributionQuestion /> : null}
 					<GitHubOnboardingNotice />
 				</div>
 
@@ -288,10 +308,10 @@ export function HomePage() {
 					existingProjectNames={projects.map((project) => project.name)}
 					existingProjectPaths={projects.map((project) => project.path)}
 					mode="choose"
-					onCloneProject={cloneProject}
-					onCreateProject={createProject}
-					onCreateStandaloneAgent={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
-					onInitializeProject={initializeProjectRepository}
+					onCloneProject={finishingWelcome(cloneProject)}
+					onCreateProject={finishingWelcome(createProject)}
+					onCreateStandaloneAgent={startStandaloneAgent}
+					onInitializeProject={finishingWelcome(initializeProjectRepository)}
 					onOpenExistingProject={openExistingProject}
 					sourceSignal={sourceSignal}
 				/>

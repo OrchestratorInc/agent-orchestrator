@@ -2,6 +2,7 @@ import type posthogModule from "posthog-js/dist/module.full.no-external";
 import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
 import { ONBOARDING_STEPS } from "./onboarding-steps";
+import { ACQUISITION_CHANNELS } from "../../shared/acquisition-channel";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
@@ -850,8 +851,17 @@ export async function sanitizeRendererProperties(
 			break;
 		case "ao.onboarding.step_viewed":
 		case "ao.onboarding.step_completed":
+		case "ao.onboarding.step_skipped":
 		case "ao.onboarding.step_abandoned":
 			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
+			break;
+		case "ao.onboarding.attribution_answered":
+			// Self-reported acquisition channel from a closed list; a skip carries
+			// no channel. There is no free-text option to leak.
+			if (typeof properties?.skipped === "boolean") safe.skipped = properties.skipped;
+			if (properties?.skipped === false && ACQUISITION_CHANNELS.some((channel) => channel === properties.channel)) {
+				safe.channel = properties.channel;
+			}
 			break;
 		case "ao.renderer.loaded":
 			break;

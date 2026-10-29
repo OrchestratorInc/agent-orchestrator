@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef } from "react";
 import type { OnboardingStep } from "./onboarding-steps";
 import { captureRendererEvent } from "./telemetry";
 
-// Desktop onboarding funnel: each step reports viewed, completed and abandoned at
-// most once per install, so the counts read as a funnel rather than a page-view
+// Desktop onboarding funnel: each step reports viewed, then at most one of
+// completed, skipped or abandoned, once per install, so the counts read as a funnel rather than a page-view
 // firehose. Closed vocabulary on both axes; nothing user-authored is sent.
-export type OnboardingPhase = "viewed" | "completed" | "abandoned";
+export type OnboardingPhase = "viewed" | "completed" | "skipped" | "abandoned";
 
 const STORAGE_KEY = "ao.telemetry.onboardingSteps";
 const memory = new Set<string>();
@@ -22,8 +22,13 @@ function readReported(): Set<string> {
 /** Reserves a (step, phase) slot; false when already reported or contradicted by an earlier phase. */
 export function reserveOnboardingPhase(step: OnboardingStep, phase: OnboardingPhase): boolean {
 	const reported = readReported();
-	// A step that finished is never abandoned afterwards.
-	if (phase === "abandoned" && reported.has(`${step}:completed`)) return false;
+	// A finished (completed or skipped) step is never abandoned afterwards, and
+	// completed and skipped exclude each other: a skipped step leaving the
+	// screen is not also completed. Abandoning does not block a later finish.
+	const finished = (end: OnboardingPhase) => reported.has(`${step}:${end}`);
+	if (phase === "abandoned" && (finished("completed") || finished("skipped"))) return false;
+	if (phase === "completed" && finished("skipped")) return false;
+	if (phase === "skipped" && finished("completed")) return false;
 	const key = `${step}:${phase}`;
 	if (reported.has(key)) return false;
 	reported.add(key);

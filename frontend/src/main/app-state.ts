@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isAcquisitionAnswer, type AcquisitionAnswer, type AcquisitionChannelState } from "../shared/acquisition-channel";
 
 /**
  * The marker the desktop app writes under ~/.ao on every launch (spec §5).
@@ -28,6 +29,14 @@ export interface AppStateMarker {
 	lastReconciledAt: string;
 	installSource: string;
 	migration?: MigrationState;
+	/**
+	 * Self-reported acquisition channel from the first-run onboarding question.
+	 * "pending" on a marker created by this or a later build, then the chosen
+	 * channel or "skipped". Absent on installs that predate the question, which
+	 * therefore never see it. Snake case because it is attached to telemetry
+	 * as-is; the Go reader does not read it.
+	 */
+	acq_channel_self_reported?: string;
 }
 
 /** Current marker format version (spec §5, schemaVersion field). */
@@ -118,9 +127,34 @@ export async function writeAppStateMarker(opts: WriteAppStateOptions): Promise<v
 		installSource: existing?.installSource ?? opts.installedVia ?? "unknown",
 		// Preserve a migration block written before this launch write.
 		...(existing?.migration !== undefined ? { migration: existing.migration } : {}),
+		// Asked only when this launch creates the marker (first-run onboarding);
+		// an existing marker keeps its value, or its absence, across updates.
+		...(existing === null
+			? { acq_channel_self_reported: "pending" }
+			: existing.acq_channel_self_reported !== undefined
+				? { acq_channel_self_reported: existing.acq_channel_self_reported }
+				: {}),
 	};
 
 	await atomicWriteMarker(opts.stateDir, marker);
+}
+
+// readAcquisitionChannel returns the persisted self-reported channel state, or
+// null when the marker is absent, unparseable, or predates the question.
+export async function readAcquisitionChannel(stateDir: string): Promise<AcquisitionChannelState> {
+	const value = (await readExisting(path.join(stateDir, APP_STATE_FILE_NAME)))?.acq_channel_self_reported;
+	return value === "pending" || isAcquisitionAnswer(value) ? value : null;
+}
+
+// recordAcquisitionChannel stores the answer only while the question is still
+// pending, so it is answered at most once per install. Returns whether this
+// call recorded it; the caller sends the telemetry event only then.
+export async function recordAcquisitionChannel(stateDir: string, answer: AcquisitionAnswer): Promise<boolean> {
+	if (!isAcquisitionAnswer(answer)) return false;
+	const existing = await readExisting(path.join(stateDir, APP_STATE_FILE_NAME));
+	if (existing?.acq_channel_self_reported !== "pending") return false;
+	await atomicWriteMarker(stateDir, { ...existing, acq_channel_self_reported: answer });
+	return true;
 }
 
 export interface UpdateMigrationOptions {

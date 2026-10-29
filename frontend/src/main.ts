@@ -208,7 +208,8 @@ import type {
 } from "./main/browser-live-types";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { readProcessStartMs } from "./main/process-start";
-import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
+import { readAcquisitionChannel, readMigrationState, recordAcquisitionChannel, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
+import { isAcquisitionAnswer, type AcquisitionChannelState } from "./shared/acquisition-channel";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import {
 	dockBounceType,
@@ -3083,6 +3084,17 @@ ipcMain.handle("appState:setMigration", async (_event, migration: MigrationState
 	const runFile = runFilePath();
 	if (!runFile) return;
 	await updateMigration({ stateDir: path.dirname(runFile), migration, now: () => new Date() });
+});
+ipcMain.handle("appState:getAcquisitionChannel", async (): Promise<AcquisitionChannelState> => {
+	const runFile = runFilePath();
+	if (!runFile) return null;
+	return readAcquisitionChannel(path.dirname(runFile));
+});
+// Resolves true only for the call that moved the question out of "pending".
+ipcMain.handle("appState:recordAcquisitionChannel", async (_event, answer: unknown): Promise<boolean> => {
+	const runFile = runFilePath();
+	if (!runFile || !isAcquisitionAnswer(answer)) return false;
+	return recordAcquisitionChannel(path.dirname(runFile), answer);
 });
 
 ipcMain.handle("updateSettings:get", async (): Promise<UpdateSettings> => {
