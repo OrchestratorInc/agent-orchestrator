@@ -348,8 +348,7 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, root string) ([]sourceFiles, error) {
 	// Per-harness layouts that do not fit the projects/sessions directory model
 	// discover their own conversations.
-	switch harness {
-	case domain.HarnessKimi:
+	if harness == domain.HarnessKimi {
 		return discoverKimi(ctx, root)
 	}
 	byKey := map[string]*sourceFiles{}
