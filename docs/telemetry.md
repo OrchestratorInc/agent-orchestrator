@@ -37,7 +37,9 @@ Error events can include a standard exception type and allowlisted in-app
 function names and line numbers. Stack paths and raw exception messages are
 removed before sending.
 Turning off Share error events drains the sender and removes that queue before
-the opt-out is complete.
+the opt-out is complete. If the app exits during that cleanup, startup purges
+the leftover queue while sharing is off, before a later opt-in can start the
+sender.
 
 ## What Orchestrator.inc sends
 

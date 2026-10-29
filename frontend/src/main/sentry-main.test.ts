@@ -5,7 +5,7 @@ import path from "node:path";
 import type { ElectronMainOptions, ErrorEvent } from "@sentry/electron/main";
 import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
 import { DesktopTelemetryController } from "./desktop-telemetry-controller";
-import { electronMainSentryDsn, initMainSentry, sanitizeRendererCapture } from "./sentry-main";
+import { clearMainSentryCache, electronMainSentryDsn, initMainSentry, sanitizeRendererCapture } from "./sentry-main";
 
 const sdkTransport = vi.hoisted(() => vi.fn());
 const sdk = vi.hoisted(() => ({
@@ -103,6 +103,40 @@ describe("Electron main Sentry configuration", () => {
 			await transport.closeAndDrain();
 			await transport.clearCache();
 			expect(await readdir(path.join(cacheRoot, "sentry"))).toEqual([]);
+		} finally {
+			await rm(cacheRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("purges an offline event left behind by an interrupted opt-out before a later opt-in", async () => {
+		const cacheRoot = await mkdtemp(path.join(os.tmpdir(), "ao-sentry-restart-"));
+		try {
+			const queuePath = path.join(cacheRoot, "sentry", "queue");
+			await mkdir(queuePath, { recursive: true });
+			await writeFile(path.join(queuePath, "queued-before-opt-out"), "synthetic queued event");
+			let snapshot = { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-10-29T00:00:00.000Z", acknowledged: true, consentRenewalRequired: false };
+			const authority = {
+				durabilitySupported: true,
+				load: async () => snapshot,
+				snapshot: () => snapshot,
+				setEventsEnabled: async (eventsEnabled: boolean) => {
+					snapshot = { ...snapshot, eventsEnabled, consentGeneration: "generation-on" };
+					return snapshot;
+				},
+				retryPendingReplacement: async () => snapshot,
+			};
+			const transportFactory = vi.fn(async () => {
+				expect(await readdir(path.join(cacheRoot, "sentry"))).toEqual([]);
+				return initMainSentry("1.0.0", "/tmp/ao-test", cacheRoot);
+			});
+			const controller = new DesktopTelemetryController({ authority, transportFactory, clearTransportCache: () => clearMainSentryCache(cacheRoot), environmentAllowsEvents: true });
+			await controller.initialize();
+			expect(controller.snapshot()).toMatchObject({ eventsEnabled: false, acknowledged: true, state: "applied" });
+			expect(await readdir(path.join(cacheRoot, "sentry"))).toEqual([]);
+			expect(sdk.init).not.toHaveBeenCalled();
+			await controller.setEventsEnabled(true, "generation-off");
+			expect(transportFactory).toHaveBeenCalledOnce();
+			await controller.close();
 		} finally {
 			await rm(cacheRoot, { recursive: true, force: true });
 		}

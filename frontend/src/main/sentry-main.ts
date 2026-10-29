@@ -36,6 +36,14 @@ const PROCESS_REASONS = ["abnormal-exit", "crashed", "oom", "launch-failed", "in
 const DRAIN_TIMEOUT_MS = 2_000;
 let childProcessHookInstalled = false;
 
+function sentryQueuePath(cacheRoot: string): string {
+	return path.join(cacheRoot, "sentry", "queue");
+}
+
+export async function clearMainSentryCache(cacheRoot: string): Promise<void> {
+	await rm(sentryQueuePath(cacheRoot), { recursive: true, force: true });
+}
+
 function isExpectedNoise(event: Sentry.ErrorEvent): boolean {
 	const values = [event.message, ...(event.exception?.values ?? []).flatMap((value) => [value.type, value.value])];
 	return values.some((value) => typeof value === "string" && (
@@ -88,7 +96,7 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 	if (!dsn) return { capture: () => undefined, closeAndDrain: async () => undefined, clearCache: async () => undefined };
 	const installId = await loadOrCreateTelemetryInstallId(dataDir);
 	const environment = sentryEnvironment(process.env.AO_TELEMETRY_APP_VERSION ?? version);
-	const queuePath = path.join(cacheRoot, "sentry", "queue");
+	const queuePath = sentryQueuePath(cacheRoot);
 	Sentry.init({
 		dsn,
 		release: version,
@@ -136,7 +144,7 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 			if (!(await Sentry.close(DRAIN_TIMEOUT_MS))) throw new Error("Electron Sentry drain timed out");
 		},
 		async clearCache() {
-			await rm(queuePath, { recursive: true, force: true });
+			await clearMainSentryCache(cacheRoot);
 			Sentry.getCurrentScope().clear();
 			Sentry.getIsolationScope().clear();
 		},

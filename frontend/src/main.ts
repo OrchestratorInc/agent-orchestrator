@@ -44,7 +44,7 @@ import {
 	type UpdateCheckOptions,
 } from "./main/auto-updater";
 import { listFeatureBuilds, getActiveFeatureBuild } from "./main/feature-builds";
-import { initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
+import { clearMainSentryCache, initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
 import { TelemetryIdentityController } from "./main/telemetry-identity";
@@ -3546,6 +3546,7 @@ app.whenReady().then(async () => {
 		authority,
 		environmentAllowsEvents: rendererTelemetryEnabled(process.env, app.isPackaged),
 		transportFactory: () => initMainSentry(app.getVersion(), desktopDataDir, app.getPath("userData")),
+		clearTransportCache: () => clearMainSentryCache(app.getPath("userData")),
 		clearRendererQueues: clearRendererTelemetryQueues,
 		broadcast: (view) => {
 			for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(TELEMETRY_POLICY_CHANGED_CHANNEL, view);
