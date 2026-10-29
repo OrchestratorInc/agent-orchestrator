@@ -25,7 +25,8 @@ func writeLoginShellFixture(t *testing.T, path string) string {
 }
 
 // linkDevLauncher reproduces the launcher scripts/daemon-build.sh leaves on
-// PATH: a link named ao into its build cache.
+// PATH: a link named ao into its build cache, with XDG_CACHE_HOME at
+// root/cache.
 func linkDevLauncher(t *testing.T, root string) string {
 	t.Helper()
 	build := writeLoginShellFixture(t, filepath.Join(root, "cache", "aoagents", "agent-orchestrator", "bin", "ao"))
@@ -48,6 +49,7 @@ func TestDoctorLoginShellReportsWhichAOItRuns(t *testing.T) {
 	daemon := writeLoginShellFixture(t, filepath.Join(root, "daemon", "ao"))
 	other := writeLoginShellFixture(t, filepath.Join(root, "other", "ao"))
 	devLink := linkDevLauncher(t, root)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
 	t.Setenv("SHELL", "/bin/zsh")
 	t.Setenv("PATH", "/usr/bin:/bin")
 
@@ -64,7 +66,7 @@ func TestDoctorLoginShellReportsWhichAOItRuns(t *testing.T) {
 		{"app binary still wins", "", ptr(app + "\n"), nil, doctorPass, []string{"still runs this binary (" + app + ")"}, ""},
 		{"running daemon is the authority", daemon, ptr(daemon + "\n"), nil, doctorPass, []string{"the running daemon's binary (" + daemon + ")"}, ""},
 		{"startup file prepends another ao", "", ptr(other + "\n"), nil, doctorWarn, []string{"runs " + other + ", not this binary " + app, "Codex"}, "daemon-build.sh"},
-		{"AO dev launcher is named with its fix", "", ptr(devLink + "\n"), nil, doctorWarn, []string{"runs " + devLink, "scripts/daemon-build.sh", "rm '" + devLink + "'"}, ""},
+		{"AO dev launcher is named with its fix", "", ptr(devLink + "\n"), nil, doctorWarn, []string{"runs " + devLink, "scripts/daemon-build.sh", "AO_KEEP_DEV_LAUNCHER=1", "rm '" + devLink + "'"}, ""},
 		// command -v exits 1 when nothing resolves.
 		{"startup file replaces PATH", "", ptr(""), errors.New("exit status 1"), doctorWarn, []string{"finds no ao even with " + filepath.Dir(app) + " first"}, ""},
 		{"alias shadows ao", "", ptr("alias ao=/opt/old/ao\n"), nil, doctorWarn, []string{`"alias ao=/opt/old/ao"`, "alias or function"}, ""},
@@ -166,6 +168,7 @@ func TestDoctorLoginShellCatchesStartupFilePrepend(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
 	t.Setenv("SHELL", "/bin/sh")
 	t.Setenv("ENV", "")
 	t.Setenv("PATH", "/usr/bin:/bin")

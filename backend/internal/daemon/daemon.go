@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -215,6 +216,9 @@ func Run(buildVersion string) error {
 	if err := skillassets.Install(cfg.DataDir); err != nil {
 		log.Warn("install using-ao skill", "err", err)
 	}
+	// Before any session starts, so login shells in it reach this binary rather
+	// than an old scripts/daemon-build.sh build. Non-fatal.
+	repointDevLaunchers(log, runtime.GOOS, os.Executable, os.Getenv)
 
 	// The app owns the user's "Share error events" choice and writes it to the
 	// policy file. It gates Sentry capture only: product telemetry answers to

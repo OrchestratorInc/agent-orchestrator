@@ -20,6 +20,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
@@ -336,10 +337,6 @@ func sameBinary(a, b string) bool {
 // probe (SHELL_ENV_TIMEOUT_MS in frontend/src/main.ts).
 const loginShellProbeTimeout = 3 * time.Second
 
-// devLauncherBuildPath is where scripts/daemon-build.sh builds a source
-// checkout's ao. The launcher it installs on PATH links here.
-var devLauncherBuildPath = filepath.Join("aoagents", "agent-orchestrator", "bin", "ao")
-
 // checkAOLoginShell reports which ao a login shell runs when it starts with
 // the app's ao first on PATH, as every AO session does. Codex runs each agent
 // command through such a shell, and a new terminal is one. Startup files
@@ -422,23 +419,11 @@ func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe string
 		}, true
 	default:
 		msg = fmt.Sprintf("a %s login shell runs %s, not %s %s: a startup file such as ~/.zprofile puts its directory first, so agent commands that run in a login shell (Codex's) and new terminals run that copy; remove it or stop prepending its directory", shellName, resolved, wantLabel, want)
-		if isDevLauncher(resolved) {
-			msg += fmt.Sprintf("; it links to a scripts/daemon-build.sh dev build, so `rm '%s'` is safe unless you still use that build", strings.ReplaceAll(resolved, "'", `'\''`))
+		if agentlaunch.IsDevLauncher(resolved, agentlaunch.DevLauncherBuildPaths(os.Getenv)) {
+			msg += fmt.Sprintf("; it is the launcher scripts/daemon-build.sh installs, which the desktop app repoints at its own ao when it starts unless %s=1, and `rm '%s'` removes it now", "AO_KEEP_DEV_LAUNCHER", strings.ReplaceAll(resolved, "'", `'\''`))
 		}
 	}
 	return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: name, Message: msg}, true
-}
-
-// isDevLauncher reports whether path is the symlink scripts/daemon-build.sh
-// installs, so doctor can name it as AO's own leftover rather than a foreign
-// install. A copied launcher carries no such proof and is not matched.
-func isDevLauncher(path string) bool {
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink == 0 {
-		return false
-	}
-	target, err := filepath.EvalSymlinks(path)
-	return err == nil && strings.HasSuffix(target, string(filepath.Separator)+devLauncherBuildPath)
 }
 
 func (c *commandContext) checkGit(ctx context.Context) doctorCheck {

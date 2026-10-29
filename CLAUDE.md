@@ -14,7 +14,10 @@ without modifying them and keep snapshots and results under `~/.ao`. The sole
 write exception is Chrome mode's native-messaging host manifest, which Chrome
 only reads from its own `NativeMessagingHosts` directory: written only by an
 explicit `ao browser chrome setup`, removed by `remove`, pointing at a wrapper
-under `~/.ao` and holding no AO state.
+under `~/.ao` and holding no AO state. Besides it, the packaged desktop daemon
+may repoint an `ao` symlink on `PATH` whose target is exactly the
+`scripts/daemon-build.sh` build at its own bundled `ao` (skipped with
+`AO_KEEP_DEV_LAUNCHER=1`); it touches no other file and holds no AO state.
 `frontend/src/main.ts` pins Electron's `userData` to
 `~/.ao/electron`; do not remove that override. See the hard rule in `AGENTS.md`.
 

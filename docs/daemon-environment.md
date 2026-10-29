@@ -33,9 +33,16 @@ to reviewer and shell-terminal launches.
 Interactive login shells can still reorder `PATH` through user startup files,
 so this is a launch invariant and a best-effort convenience inside a shell.
 Codex runs every agent command through a login shell, so it is exposed too.
-`ao doctor`'s `ao-login-shell` check starts the user's login shell with the
-pin applied and warns when a startup file puts another `ao` first, naming the
-launcher `scripts/daemon-build.sh` leaves behind when that is the culprit.
+The usual culprit is the `ao` link `scripts/daemon-build.sh` leaves in a
+directory such as `~/.local/bin`, pointing at an old source build. At startup
+the packaged desktop daemon (an installed app, not an AppImage or a dev build)
+repoints such a link at its own bundled `ao`, so those shells run the app's
+binary. It only touches a symlink whose target is exactly
+`${XDG_CACHE_HOME:-~/.cache}/aoagents/agent-orchestrator/bin/ao`, and
+`AO_KEEP_DEV_LAUNCHER=1` keeps it for developers who use that build on purpose.
+Any other `ao` that a startup file puts first, such as a legacy npm or Homebrew
+install, is left alone: `ao doctor`'s `ao-login-shell` check starts the user's
+login shell with the pin applied and names it.
 When the install directory contains other executable tools, AO creates an
 `ao` shim under its resolved absolute data directory instead of promoting those
 sibling tools. Windows provides both command-shell and Git Bash compatible
