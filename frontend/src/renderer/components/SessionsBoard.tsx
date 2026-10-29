@@ -30,7 +30,9 @@ import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
-import { useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useCloudProjectsQuery, useRemoteProjectQuery, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
+import { useCloudOffering } from "../hooks/useCloudOffering";
+import { FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { NotificationCenter } from "./NotificationCenter";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { TopbarButton, topbarProjectLabelClass } from "./TopbarButton";
@@ -105,6 +107,14 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		? remoteProjectQuery.data ? [remoteProjectQuery.data] : []
 		: projectId ? all.filter((candidate) => candidate.id === projectId) : all;
 	const workspace = projectId ? workspaces[0] : undefined;
+	// A Freestyle cloud project's orchestrator starts in place (see
+	// OrchestratorStartingChat); its session does not exist yet, so the
+	// project's provider decides, as the control plane's does.
+	const cloudProjects = useCloudProjectsQuery({ enabled: workspace?.kind === CLOUD_PROJECT_KIND });
+	const offering = useCloudOffering();
+	const cloudProject = cloudProjects.data?.find((candidate) => candidate.id === projectId);
+	const startsInPlace = workspace?.kind === CLOUD_PROJECT_KIND && cloudProject !== undefined &&
+		projectSandboxProvider(cloudProject.config, offering) === FREESTYLE_PROVIDER;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
 	const boardLabel = t("shell.board");
 	const liveSessions = workspaces.flatMap((workspace) => workerSessions(workspace.sessions));
@@ -235,6 +245,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	if (projectId && (isProvisioning || projectActions.isSpawning)) {
 		return <OrchestratorStartingChat
 			cloud={workspace?.kind === CLOUD_PROJECT_KIND}
+			freestyle={startsInPlace}
 			coderWorkspaceUrl={workspace?.sessions.find((session) => session.kind === "orchestrator")?.cloud?.coderWorkspaceUrl}
 		/>;
 	}

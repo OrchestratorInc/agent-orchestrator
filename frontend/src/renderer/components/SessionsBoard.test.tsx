@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -26,6 +26,7 @@ const {
 	postMock,
 	workspaceQueryMock,
 	boardActionsInPanelMock,
+	cloudProjectsMock,
 } = vi.hoisted(() => ({
 	appMemoryMock: vi.fn(),
 	sessionMemoryMock: vi.fn(),
@@ -34,7 +35,10 @@ const {
 	postMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
 	boardActionsInPanelMock: vi.fn(() => false),
+	cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
 }));
+
+vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "coder" }) }));
 
 vi.mock("./ShellTopbar", async (importOriginal) => ({ ...(await importOriginal<typeof import("./ShellTopbar")>()), ShellTopbar: () => null }));
 
@@ -49,6 +53,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	cloudSessionsQueryKey: ["cloud-sessions"],
 	useWorkspaceQuery: workspaceQueryMock,
 	useRemoteProjectQuery: () => ({ data: undefined, isError: false, isSuccess: false }),
+	useCloudProjectsQuery: () => ({ data: cloudProjectsMock() }),
 	useWorkspaceScope: (projectId?: string) => {
 		const query = workspaceQueryMock();
 		return {
@@ -163,6 +168,27 @@ describe("SessionsBoard", () => {
 			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
 			expect(screen.queryByLabelText("Message the agent")).not.toBeInTheDocument();
 		} finally {
+			useUiStore.getState().setProjectProvisioning("p1", false);
+		}
+	});
+
+	it("starts a Freestyle cloud orchestrator in place, on its conversation, and keeps the loader for Coder", () => {
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
+		useUiStore.getState().setProjectProvisioning("p1", true);
+		try {
+			cloudProjectsMock.mockReturnValue([{ id: "p1", config: { sandboxProvider: "freestyle" } }]);
+			renderBoard("p1");
+			expect(screen.queryByTestId("cloud-session-loader-screen")).not.toBeInTheDocument();
+			const composer = screen.getByRole("combobox", { name: "Message the agent" });
+			expect(composer.closest("form")).toHaveAttribute("data-starting", "true");
+			cleanup();
+			// The org default applies to a project with no provider of its own (Coder here).
+			cloudProjectsMock.mockReturnValue([{ id: "p1", config: {} }]);
+			renderBoard("p1");
+			expect(screen.getByTestId("cloud-session-loader-screen")).toBeInTheDocument();
+			expect(screen.queryByRole("combobox", { name: "Message the agent" })).not.toBeInTheDocument();
+		} finally {
+			cloudProjectsMock.mockReturnValue(undefined);
 			useUiStore.getState().setProjectProvisioning("p1", false);
 		}
 	});
