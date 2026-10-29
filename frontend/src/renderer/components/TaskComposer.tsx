@@ -264,9 +264,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 						projectId: input.projectId,
 						brief: input.brief,
 						agent,
-						// A model belongs to the agent it was picked for.
+						// A model and effort belong to the agent they were picked for;
+						// after a pre-flight switch the new agent uses its own tuning.
 						...(input.model && agent === input.agent ? { model: input.model } : {}),
-						...(input.effort !== undefined ? { effort: input.effort } : {}),
+						...(input.effort !== undefined && agent === input.agent ? { effort: input.effort } : {}),
 						...(input.mode ? { mode: input.mode } : {}),
 						...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 						...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),

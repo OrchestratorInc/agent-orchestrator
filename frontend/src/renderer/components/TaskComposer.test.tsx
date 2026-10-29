@@ -68,8 +68,9 @@ vi.mock("./CreateProjectAgentSheet", () => ({
 }));
 
 // Pre-flight is covered by its own suites; here every spawn is cleared.
+const preflight = vi.hoisted(() => ({ switchTo: undefined as string | undefined }));
 vi.mock("../lib/spawn-preflight", () => ({
-	ensureSpawnPreflight: vi.fn(async (input: { harness?: string }) => ({ harness: input.harness })),
+	ensureSpawnPreflight: vi.fn(async (input: { harness?: string }) => ({ harness: preflight.switchTo ?? input.harness })),
 	isSpawnPreflightCancelled: () => false,
 }));
 
@@ -781,6 +782,46 @@ describe("TaskComposer", () => {
 				expect.objectContaining({ body: expect.objectContaining({ effort: "high" }) }),
 			),
 		);
+	});
+
+	it("drops the original agent's model and effort when the pre-flight switches agents", async () => {
+		preflight.switchTo = "opencode";
+		try {
+			h.agentCatalog = { agents: [agentReadiness("codex", "Codex"), agentReadiness("opencode", "OpenCode")] };
+			h.get.mockImplementation(async (path: string) => {
+				if (path.includes("/models")) {
+					return {
+						data: {
+							agent: "codex",
+							selectionMode: "catalog",
+							models: [{ id: "gpt-5", label: "GPT-5", isDefault: true, efforts: ["low", "high"], defaultEffort: "low" }],
+							allowCustom: true,
+							refreshRecommended: false,
+						},
+					};
+				}
+				return { data: { status: "ok", project: { agent: "codex", config: {} } } };
+			});
+			h.post.mockResolvedValueOnce({ data: { workerId: "worker-switched" } });
+			const onCreated = vi.fn();
+			render(<Wrap><TaskComposer projectId="proj-1" onCreated={onCreated} /></Wrap>);
+
+			fireEvent.change(task(), { target: { value: "Fix the bug" } });
+			const effort = await screen.findByRole("button", { name: "Effort" });
+			await userEvent.click(effort);
+			await userEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
+			await waitForTaskReady();
+			fireEvent.click(startTask());
+
+			await waitFor(() => expect(onCreated).toHaveBeenCalledWith("worker-switched"));
+			const call = h.post.mock.calls.find(([path]) => path === "/api/v1/orchestrators/delegate");
+			const body = (call?.[1] as { body: Record<string, unknown> }).body;
+			expect(body.agent).toBe("opencode");
+			expect(body).not.toHaveProperty("effort");
+			expect(body).not.toHaveProperty("model");
+		} finally {
+			preflight.switchTo = undefined;
+		}
 	});
 
 	it("selects and sends a middle effort when the model reports levels but no default", async () => {
