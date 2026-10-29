@@ -141,7 +141,7 @@ describe("plan", () => {
 			status: "completed" as const,
 			summary: "",
 			detail: {
-				event: "plan",
+				event: "plan" as const,
 				spansTurns: true,
 				steps: current.steps.map((step, index) => ({
 					text: step.text,
@@ -175,7 +175,7 @@ describe("plan", () => {
 			activityKind: "plan" as const,
 			status: "running" as const,
 			summary: "Updated plan",
-			detail: { event: "plan", steps: [{ text: "Resumed plan step", status }] },
+			detail: { event: "plan" as const, steps: [{ text: "Resumed plan step", status }] },
 			createdAt: new Date().toISOString(),
 		});
 		const revised: ConversationSnapshot = {

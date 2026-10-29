@@ -154,6 +154,7 @@ export type ActivityDetail = {
 	clientMessageId?: string;
 	explanation?: string;
 	steps?: PlanStep[];
+	spansTurns?: boolean;
 	tokensBefore?: number;
 	tokensAfter?: number;
 	tokensReclaimed?: number;
