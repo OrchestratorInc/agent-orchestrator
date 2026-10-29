@@ -1,6 +1,7 @@
 // Type declarations for build-mac-dmg.mjs — a plain ESM module run directly by
 // node (the release conductor calls it on a stapled app). makers/maker-dmg.ts
 // imports it, and without this it fails typecheck (TS7016).
+export declare const APP_NAME: string;
 export declare const VOLUME_NAME: string;
 export declare const APP_BUNDLE_NAME: string;
 export declare const DMG_LAYOUT: {

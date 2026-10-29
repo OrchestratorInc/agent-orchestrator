@@ -33,20 +33,26 @@ import { promisify } from "node:util";
 const run = promisify(execFile);
 const frontendDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-export const VOLUME_NAME = "Agent Orchestrator";
-export const APP_BUNDLE_NAME = `${VOLUME_NAME}.app`;
+// The bundle keeps its current name: `ao start`, the updater, stale-copy cleanup
+// and the repair installer look it up by this exact name.
+export const APP_NAME = "Agent Orchestrator";
+export const APP_BUNDLE_NAME = `${APP_NAME}.app`;
+// The mounted volume: Finder's window title and sidebar entry. Nothing looks
+// it up by name.
+export const VOLUME_NAME = "Orchestrator";
 
 // Window and icon geometry in Finder points. Positions are icon centres. The
 // window is the window FRAME (Finder's title bar takes ~32pt of it), so the
 // icons sit in the middle of the ~368pt that is actually visible. The
-// background art (assets/dmg/background.svg) draws the arrow between these
-// exact coordinates, so change both together.
+// background art (assets/dmg/background.svg) places the drag cue between these
+// exact coordinates and keeps its harness tiles clear of them, so change both
+// together (build-mac-dmg.test.mjs checks the pairing).
 export const DMG_LAYOUT = Object.freeze({
 	window: Object.freeze({ width: 660, height: 400 }),
 	iconSize: 128,
 	iconTextSize: 12,
-	app: Object.freeze({ x: 170, y: 172 }),
-	applications: Object.freeze({ x: 490, y: 172 }),
+	app: Object.freeze({ x: 170, y: 184 }),
+	applications: Object.freeze({ x: 490, y: 184 }),
 });
 
 // The 1x file. electron-builder finds background@2x.png beside it and merges the
@@ -64,8 +70,8 @@ export const VOLUME_ICON = path.join(frontendDir, "assets/icon.icns");
 export function macDmgLayout() {
 	return {
 		// Volume name. Without this electron-builder names the volume
-		// "<productName> <version>-<arch>"; the shipped name is just the product.
-		title: "${productName}",
+		// "<productName> <version>-<arch>".
+		title: VOLUME_NAME,
 		background: BACKGROUND_IMAGE,
 		icon: VOLUME_ICON,
 		iconSize: DMG_LAYOUT.iconSize,
@@ -109,7 +115,7 @@ export async function buildMacDmg({ app, arch, output }, { buildForge } = {}) {
 			projectDir: frontendDir,
 			config: {
 				appId: "dev.agent-orchestrator.desktop",
-				productName: VOLUME_NAME,
+				productName: APP_NAME,
 				directories: { output: path.dirname(outputPath) },
 				publish: null,
 				mac: { identity: null },

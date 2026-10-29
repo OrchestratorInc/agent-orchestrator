@@ -149,7 +149,7 @@ describe("MakerDMG", () => {
 		await new MakerDMG().make(makeOptions);
 		const [, options] = buildForge.mock.calls.at(-1)!;
 		const dmg = options.config.dmg;
-		expect(dmg.title).toBe("${productName}");
+		expect(dmg.title).toBe("Orchestrator");
 		expect(dmg.iconSize).toBe(128);
 		expect(dmg.background).toBe(BACKGROUND_IMAGE);
 		expect(path.basename(BACKGROUND_IMAGE)).toBe("background.png");
@@ -159,8 +159,8 @@ describe("MakerDMG", () => {
 		expect(dmg.icon).toBe(VOLUME_ICON);
 		expect(existsSync(VOLUME_ICON)).toBe(true);
 		expect(dmg.contents).toEqual([
-			{ x: 170, y: 172, type: "file" },
-			{ x: 490, y: 172, type: "link", path: "/Applications" },
+			{ x: 170, y: 184, type: "file" },
+			{ x: 490, y: 184, type: "link", path: "/Applications" },
 		]);
 	});
 

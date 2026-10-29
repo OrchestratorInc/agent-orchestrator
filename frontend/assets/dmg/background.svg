@@ -6,26 +6,72 @@
 		The image sets the window FRAME size, so Finder's title bar covers the
 		bottom ~32pt: keep everything within the top 368pt. Geometry is coupled
 		to DMG_LAYOUT in scripts/build-mac-dmg.mjs: the app icon is centred at
-		(170, 172) and the Applications link at (490, 172), both 128pt.
+		(170, 184) and the Applications link at (490, 184), both 128pt, with
+		Finder's labels below them.
+
+		The tiles are the agent harnesses Orchestrator runs, using the renderer's
+		own logo files so the art tracks the product's logo set. Keep them in the
+		margins, clear of the icons and labels (build-mac-dmg.test.mjs checks).
+		The rising beamed phrase between the icons is the drag cue.
 	-->
 	<defs>
-		<linearGradient id="surface" x1="0" y1="0" x2="0" y2="1">
-			<stop offset="0" stop-color="#f8f8f9" />
-			<stop offset="1" stop-color="#eef0f2" />
-		</linearGradient>
+		<filter id="lift" x="-40%" y="-40%" width="180%" height="190%">
+			<feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0b1622" flood-opacity="0.10" />
+		</filter>
 	</defs>
-	<rect width="660" height="400" fill="url(#surface)" />
-
-	<g fill="none" stroke="#a3a9b1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-		<path d="M276 172 H382" />
-		<path d="M375 166 L383 172 L375 178" />
+	<rect width="660" height="400" fill="#fbfbfc" />
+	<g class="harness" transform="rotate(-8 70 70)">
+		<rect x="49" y="49" width="42" height="42" rx="10.9" fill="#fff" stroke="#e3e7ec" stroke-width="0.75" filter="url(#lift)" />
+		<image href="../../src/renderer/assets/agents/claude-code.svg" x="57.4" y="57.4" width="25.2" height="25.2" />
+	</g>
+	<g class="harness" transform="rotate(6 232 52)">
+		<rect x="215" y="35" width="34" height="34" rx="8.8" fill="#fff" stroke="#e3e7ec" stroke-width="0.75" filter="url(#lift)" />
+		<image href="../../src/renderer/assets/agents/codex.svg" x="221.8" y="41.8" width="20.4" height="20.4" />
+	</g>
+	<g class="harness" transform="rotate(-6 430 58)">
+		<rect x="412" y="40" width="36" height="36" rx="9.4" fill="#fff" stroke="#e3e7ec" stroke-width="0.75" filter="url(#lift)" />
+		<image href="../../src/renderer/assets/agents/gemini.svg" x="419.2" y="47.2" width="21.6" height="21.6" />
+	</g>
+	<g class="harness" transform="rotate(8 598 78)">
+		<rect x="577" y="57" width="42" height="42" rx="10.9" fill="#fff" stroke="#e3e7ec" stroke-width="0.75" filter="url(#lift)" />
+		<image href="../../src/renderer/assets/agents/cursor-light.svg" x="585.4" y="65.4" width="25.2" height="25.2" />
+	</g>
+	<g class="harness" transform="rotate(7 44 224)">
+		<rect x="27" y="207" width="34" height="34" rx="8.8" fill="#fff" stroke="#e3e7ec" stroke-width="0.75" filter="url(#lift)" />
+		<image href="../../src/renderer/assets/agents/copilot-light.svg" x="33.8" y="213.8" width="20.4" height="20.4" />
+	</g>
+	<g class="harness" transform="rotate(-7 618 236)">
+		<rect x="600" y="218" width="36" height="36" rx="9.4" fill="#fff" stroke="#e3e7ec" stroke-width="0.75" filter="url(#lift)" />
+		<image href="../../src/renderer/assets/agents/opencode-light.svg" x="607.2" y="225.2" width="21.6" height="21.6" />
+	</g>
+	<g class="harness" transform="rotate(5 120 322)">
+		<rect x="101" y="303" width="38" height="38" rx="9.9" fill="#fff" stroke="#e3e7ec" stroke-width="0.75" filter="url(#lift)" />
+		<image href="../../src/renderer/assets/agents/goose-light.svg" x="108.6" y="310.6" width="22.8" height="22.8" />
+	</g>
+	<g class="harness" transform="rotate(-5 318 330)">
+		<rect x="302" y="314" width="32" height="32" rx="8.3" fill="#fff" stroke="#e3e7ec" stroke-width="0.75" filter="url(#lift)" />
+		<image href="../../src/renderer/assets/agents/aider.svg" x="308.4" y="320.4" width="19.2" height="19.2" />
+	</g>
+	<g class="harness" transform="rotate(7 516 318)">
+		<rect x="497" y="299" width="38" height="38" rx="9.9" fill="#fff" stroke="#e3e7ec" stroke-width="0.75" filter="url(#lift)" />
+		<image href="../../src/renderer/assets/agents/grok-light.svg" x="504.6" y="306.6" width="22.8" height="22.8" />
+	</g>
+	<g class="phrase" fill="#1f8fd6">
+		<ellipse cx="296" cy="192" rx="6" ry="4.3" transform="rotate(-22 296 192)" />
+		<path d="M301.2 190.8V162.00" fill="none" stroke="#1f8fd6" stroke-width="1.3" />
+		<ellipse cx="330" cy="184" rx="6" ry="4.3" transform="rotate(-22 330 184)" />
+		<path d="M335.2 182.8V157.00" fill="none" stroke="#1f8fd6" stroke-width="1.3" />
+		<ellipse cx="364" cy="176" rx="6" ry="4.3" transform="rotate(-22 364 176)" />
+		<path d="M369.2 174.8V152.00" fill="none" stroke="#1f8fd6" stroke-width="1.3" />
+		<path d="M300.55 162 L369.85 152 L369.85 156.6 L300.55 166.6Z" />
 	</g>
 	<text
 		x="330"
-		y="200"
+		y="270"
 		text-anchor="middle"
-		font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif"
-		font-size="12"
-		fill="#6e7681"
-	>Drag to Applications</text>
+		font-family="ui-serif, 'New York', Georgia, serif"
+		font-style="italic"
+		font-size="13.5"
+		fill="#56606b"
+	>drag to Applications</text>
 </svg>

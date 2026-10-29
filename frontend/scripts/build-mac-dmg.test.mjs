@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -67,7 +67,7 @@ describe("install window layout", () => {
 
 	it("passes the layout to electron-builder", () => {
 		expect(macDmgLayout()).toMatchObject({
-			title: "${productName}",
+			title: "Orchestrator",
 			background: BACKGROUND_IMAGE,
 			iconSize: DMG_LAYOUT.iconSize,
 			contents: [
@@ -85,13 +85,45 @@ describe("install window layout", () => {
 	});
 
 	// The art is drawn against the icon coordinates; moving one without the
-	// other leaves the arrow pointing at empty space.
-	it("draws the arrow between the icons, level with them", () => {
-		const arrow = /<path d="M(\d+) (\d+) H(\d+)"/.exec(svg);
-		expect(Number(arrow[2])).toBe(DMG_LAYOUT.app.y);
-		expect(Number(arrow[1])).toBeGreaterThan(DMG_LAYOUT.app.x + DMG_LAYOUT.iconSize / 2);
-		expect(Number(arrow[3])).toBeLessThan(DMG_LAYOUT.applications.x - DMG_LAYOUT.iconSize / 2);
-		expect(svg).toContain(">Drag to Applications</text>");
+	// other leaves the drag cue pointing at empty space.
+	it("draws the rising phrase between the icons, climbing toward Applications", () => {
+		const heads = [...svg.matchAll(/<ellipse cx="([\d.]+)" cy="([\d.]+)"/g)].map(([, x, y]) => ({ x: Number(x), y: Number(y) }));
+		expect(heads).toHaveLength(3);
+		for (const head of heads) {
+			expect(head.x).toBeGreaterThan(DMG_LAYOUT.app.x + DMG_LAYOUT.iconSize / 2);
+			expect(head.x).toBeLessThan(DMG_LAYOUT.applications.x - DMG_LAYOUT.iconSize / 2);
+			expect(Math.abs(head.y - DMG_LAYOUT.app.y)).toBeLessThanOrEqual(16);
+		}
+		// Left to right, each note higher than the last (smaller y).
+		expect(heads.map((h) => h.x)).toEqual([...heads.map((h) => h.x)].sort((a, b) => a - b));
+		expect(heads.map((h) => h.y)).toEqual([...heads.map((h) => h.y)].sort((a, b) => b - a));
+		expect(svg).toContain(">drag to Applications</text>");
+	});
+
+	// The harness tiles are scattered art, not Finder items: a tile under an
+	// icon or label would look like a broken drop target.
+	it("keeps every harness tile in the margins and points it at a real logo", () => {
+		const tiles = [...svg.matchAll(/<g class="harness"[^>]*>\s*<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)"[\s\S]*?href="([^"]+)"/g)];
+		expect(tiles.length).toBeGreaterThanOrEqual(6);
+		// Each icon plus its label (about 160pt wide, 20pt below the icon).
+		const keepOut = [DMG_LAYOUT.app, DMG_LAYOUT.applications].map(({ x, y }) => ({
+			left: x - 80,
+			right: x + 80,
+			top: y - DMG_LAYOUT.iconSize / 2 - 8,
+			bottom: y + DMG_LAYOUT.iconSize / 2 + 28,
+		}));
+		const visibleHeight = DMG_LAYOUT.window.height - 32;
+		for (const [, x, y, w, h, href] of tiles) {
+			const tile = { left: Number(x), top: Number(y), right: Number(x) + Number(w), bottom: Number(y) + Number(h) };
+			for (const box of keepOut) {
+				const overlaps = tile.left < box.right && tile.right > box.left && tile.top < box.bottom && tile.bottom > box.top;
+				expect(overlaps, `${href} overlaps an icon or its label`).toBe(false);
+			}
+			expect(tile.left).toBeGreaterThanOrEqual(0);
+			expect(tile.right).toBeLessThanOrEqual(DMG_LAYOUT.window.width);
+			expect(tile.bottom).toBeLessThan(visibleHeight);
+			expect(existsSync(path.resolve(path.dirname(BACKGROUND_IMAGE), href)), href).toBe(true);
+		}
 	});
 
 	// The background sets the window FRAME size; Finder's title bar covers the
