@@ -698,7 +698,15 @@ export type AgentCatalog = {
 	authorized: AgentInfo[];
 };
 
-export type AgentModelInfo = { id: string; label: string; isDefault?: boolean; provider?: string };
+export type AgentModelInfo = {
+	id: string;
+	label: string;
+	isDefault?: boolean;
+	provider?: string;
+	/** The effort levels this model takes, lowest first; absent for one that takes none. */
+	efforts?: string[];
+	defaultEffort?: string;
+};
 export type AgentModelCatalog = {
 	agentId: string;
 	selectionMode: "catalog" | "text" | "mode";
@@ -1234,7 +1242,7 @@ export async function sendMessage(cfg: ServerConfig, id: string, message: string
 
 export async function spawnSession(
 	cfg: ServerConfig,
-	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; approvalMode?: ApprovalMode; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
+	opts: { projectId?: string; prompt?: string; issueId?: string; harness?: string; model?: string; effort?: string; approvalMode?: ApprovalMode; mode?: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/sessions`, {
 		method: "POST",
@@ -1247,6 +1255,7 @@ export async function spawnSession(
 			// default worker.agent; the spawn screen lets the user pick one.
 			harness: opts.harness || undefined,
 			model: opts.model || undefined,
+			effort: opts.effort || undefined,
 			// Omitted keeps the project's policy (Auto when it names none).
 			approvalMode: opts.approvalMode || undefined,
 			// Mobile is Chat-first. Callers may deliberately request TUI for a harness
@@ -1275,7 +1284,7 @@ export async function getSession(cfg: ServerConfig, id: string): Promise<Dashboa
 
 export async function delegateTask(
 	cfg: ServerConfig,
-	opts: { projectId: string; brief: string; agent?: string; model?: string; approvalMode?: ApprovalMode; mode: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
+	opts: { projectId: string; brief: string; agent?: string; model?: string; effort?: string; approvalMode?: ApprovalMode; mode: SessionMode; attachments?: SpawnAttachmentInput[]; clientRequestId?: string },
 ): Promise<DashboardSession> {
 	const res = await req(cfg, `${API}/orchestrators/delegate`, {
 		method: "POST",
@@ -1285,6 +1294,7 @@ export async function delegateTask(
 			brief: opts.brief,
 			agent: opts.agent || undefined,
 			model: opts.model || undefined,
+			effort: opts.effort || undefined,
 			approvalMode: opts.approvalMode || undefined,
 			mode: opts.mode,
 			attachments: opts.attachments?.length ? opts.attachments : undefined,

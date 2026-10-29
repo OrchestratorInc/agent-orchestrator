@@ -1,14 +1,11 @@
 import { Host } from "@expo/ui";
 import { Asset } from "expo-asset";
-import { Button, Divider, HStack, Image, Label, Menu, Section, Spacer, Text, Toggle, VStack } from "@expo/ui/swift-ui";
+import { Button, Divider, HStack, Image, Label, Menu, Section, Spacer, Text, VStack } from "@expo/ui/swift-ui";
 import {
 	accessibilityIdentifier,
 	accessibilityLabel,
-	backgroundOverlay,
 	buttonStyle,
-	clipShape,
 	contentShape,
-	disabled as disabledModifier,
 	font,
 	frame,
 	lineLimit,
@@ -20,10 +17,9 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
-import { COMPOSER_DISC } from "./chat/composerStyles";
 import { hasLogo, logoKey } from "./harnessLogo";
 import { logoFor } from "./harnessLogoAssets";
-import { haptics } from "./haptics";
+import { ApprovalMenu, Choice, EffortMenu, ModelCapsuleLabel, useTriggerModifiers } from "./model-controls.ios";
 import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { defaultModelChoice } from "./spawnModel";
@@ -59,6 +55,8 @@ export function SpawnComposerControls({
 	approvalModes,
 	approvalMode,
 	onSelectApprovalMode,
+	effortChoices,
+	onSelectEffort,
 	onChoosePhoto,
 	onChooseFile,
 	voice,
@@ -77,15 +75,9 @@ export function SpawnComposerControls({
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
-	const approvalOption = approvalModes.find((mode) => mode.id === approvalMode);
 	// The model the task runs: the one picked or pinned, else the catalog's own
 	// default by name, and the agent's name only when the catalog names none.
 	const agentTitle = usesDefaultModel ? agentModels[harness]?.defaultLabel ?? harnessLabel : modelLabel;
-	// A choice only fires when it changes, so each one is worth the tick.
-	const choose = (apply: (id: string) => void, id: string) => {
-		haptics.select();
-		apply(id);
-	};
 
 	return (
 		<View style={styles.stack}>
@@ -103,7 +95,7 @@ export function SpawnComposerControls({
 							label={<SelectorLabel icon={<SelectorGlyph name="laptopcomputer" />} title={hostLabel} />}
 							modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityLabel(`Run on ${hostLabel}`), accessibilityIdentifier("spawn-host")]}
 						>
-							{hosts.map((host) => <Choice key={host.id} label={host.label} selected={host.id === hostId} onChoose={() => choose(onSelectHost, host.id)} />)}
+							{hosts.map((host) => <Choice key={host.id} label={host.label} selected={host.id === hostId} onChoose={() => onSelectHost(host.id)} />)}
 						</Menu>
 						<Spacer minLength={0} />
 					</HStack>
@@ -115,7 +107,7 @@ export function SpawnComposerControls({
 						>
 							{projects.flatMap((project) => [
 								project.sectionBreakBefore ? <Divider key={`${project.id}-break`} /> : null,
-								<Choice key={project.id} label={project.label} systemImage={projectSystemImage(project)} selected={project.id === projectId} onChoose={() => choose(onSelectProject, project.id)} />,
+								<Choice key={project.id} label={project.label} systemImage={projectSystemImage(project)} selected={project.id === projectId} onChoose={() => onSelectProject(project.id)} />,
 							])}
 						</Menu>
 						<Spacer minLength={0} />
@@ -138,33 +130,18 @@ export function SpawnComposerControls({
 				busy={busy}
 				disabled={disabled}
 				settings={
-					// As the chat's turn settings: who runs the task at the row's
-					// start beside attach, how freely at its end beside the round
-					// button; the space between them gives way first.
+					// The chat's controls row (see model-controls): who runs the task
+					// and its effort at the start beside attach, how freely at the
+					// end beside the round button; the space between gives way first.
 					<Host ignoreSafeArea="all" colorScheme={scheme} style={styles.settingsHost}>
 						<HStack spacing={space.none}>
 							{/* The harness's mark and the model it runs (the harness's
-							    name only when the catalog names no default), in the chat
-							    composer's capsule; each agent in its menu opens one level
-							    down onto its models. */}
+							    name only when the catalog names no default). Each agent in
+							    its menu opens one level down onto its models, so this is
+							    also where the task's agent is switched. */}
 							<Menu
-								label={
-									<HStack modifiers={[frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>
-										<HStack spacing={space.xs} modifiers={[padding({ horizontal: space.md }), frame({ minHeight: COMPOSER_DISC, maxHeight: COMPOSER_DISC }), backgroundOverlay({ color: t.bgElevated }), clipShape("capsule")]}>
-											<HarnessImage harness={harness} />
-											<SelectorText>{agentTitle}</SelectorText>
-											<SelectorGlyph name="chevron.up.chevron.down" indicator />
-										</HStack>
-									</HStack>
-								}
-								modifiers={[
-									buttonStyle("plain"),
-									menuOrder("fixed"),
-									tint(t.textSecondary),
-									disabledModifier(busy),
-									accessibilityLabel(`${harnessLabel}, ${modelLabel}`),
-									accessibilityIdentifier("spawn-harness"),
-								]}
+								label={<ModelCapsuleLabel mark={<HarnessImage harness={harness} />} title={agentTitle} />}
+								modifiers={useTriggerModifiers({ label: `${harnessLabel}, ${modelLabel}`, id: "spawn-harness", disabled: busy })}
 							>
 								{agents.map((agent) => (
 									<Menu
@@ -179,7 +156,7 @@ export function SpawnComposerControls({
 												key={model.id}
 												label={model.label}
 												selected={agent.id === harness && model.id === modelSelection}
-												onChoose={() => choose((id) => onSelectAgentModel(agent.id, id), model.id)}
+												onChoose={() => onSelectAgentModel(agent.id, model.id)}
 											/>
 										))}
 										{(agentModels[agent.id]?.total ?? 0) > (agentModels[agent.id]?.models.length ?? 0) ? (
@@ -190,55 +167,20 @@ export function SpawnComposerControls({
 									</Menu>
 								))}
 							</Menu>
+							{effortChoices.length ? <EffortMenu choices={effortChoices} onChoose={onSelectEffort} disabled={busy} id="spawn-effort" /> : null}
 							<Spacer minLength={0} />
-							{/* The approval mode as its symbol alone, the chat's; the menu
-							    and VoiceOver name it. */}
-							<Menu
-								label={
-									<Image
-										systemName={approvalSymbol(approvalMode, harness)}
-										modifiers={[font({ textStyle: "subheadline", weight: "medium" }), frame({ width: touchTarget, height: touchTarget }), contentShape(shapes.rectangle())]}
-									/>
-								}
-								modifiers={[
-									buttonStyle("plain"),
-									menuOrder("fixed"),
-									tint(t.textSecondary),
-									disabledModifier(busy),
-									accessibilityLabel(`Approval, ${approvalOption?.label ?? "Auto"}`),
-									accessibilityIdentifier("spawn-approval"),
-								]}
-							>
-								<Section title="Approval">
-									{approvalModes.map((mode) => (
-										<Choice key={mode.id} label={mode.label} systemImage={approvalSymbol(mode.id, harness)} selected={mode.id === approvalMode} onChoose={() => choose(onSelectApprovalMode, mode.id)} />
-									))}
-								</Section>
-							</Menu>
+							<ApprovalMenu
+								choices={approvalModes.map((mode) => ({ value: mode.id, label: mode.label, symbol: approvalSymbol(mode.id, harness), selected: mode.id === approvalMode }))}
+								onChoose={onSelectApprovalMode}
+								disabled={busy}
+								id="spawn-approval"
+							/>
 						</HStack>
 					</Host>
 				}
 			/>
 		</View>
 	);
-}
-
-/**
- * One option in a selector menu. A Toggle is the system's checkable menu item:
- * it draws the checkmark and VoiceOver's selected state from `selected` alone,
- * and turning the current choice off again changes nothing.
- */
-function Choice({ label, systemImage, icon, selected, onChoose }: {
-	label: string;
-	systemImage?: IOSSymbol;
-	icon?: ReactNode;
-	selected: boolean;
-	onChoose: () => void;
-}) {
-	const onIsOnChange = (on: boolean) => { if (on) onChoose(); };
-	return icon
-		? <Toggle isOn={selected} onIsOnChange={onIsOnChange}><Label title={label} icon={icon} /></Toggle>
-		: <Toggle isOn={selected} onIsOnChange={onIsOnChange} label={label} systemImage={systemImage} />;
 }
 
 /**
@@ -254,10 +196,6 @@ function SelectorLabel({ icon, title }: { icon: ReactNode; title: string }) {
 			<SelectorGlyph name="chevron.up.chevron.down" indicator />
 		</HStack>
 	);
-}
-
-function SelectorText({ children }: { children: string }) {
-	return <Text modifiers={[font({ textStyle: "subheadline", weight: "medium" }), lineLimit(1), truncationMode("tail")]}>{children}</Text>;
 }
 
 /** A symbol that scales with the label beside it; the disclosure arrow sits a step smaller. */

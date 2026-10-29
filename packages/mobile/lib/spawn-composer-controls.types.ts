@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { EffortChoice } from "./modelEffort";
 import type { VoiceMode, VoiceState } from "./voice/types";
 
 export type SpawnComposerOption = {
@@ -59,6 +60,9 @@ export type SpawnComposerControlsProps = {
 	approvalModes: readonly SpawnComposerOption[];
 	approvalMode: string;
 	onSelectApprovalMode: (mode: string) => void;
+	/** The picked model's effort levels, the one it will run at checked; empty for a model that takes none. */
+	effortChoices: readonly EffortChoice[];
+	onSelectEffort: (effort: string) => void;
 	/** The attach button offers both the photo library and the file picker. */
 	onChoosePhoto: () => void;
 	onChooseFile: () => void;

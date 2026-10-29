@@ -118,7 +118,6 @@ export function ChatComposer({
 	onPromoteQueuedTurn,
 	onCancelQueuedTurn,
 	onInterrupt,
-	onOpenSettings,
 	onSettings,
 	onConfigOption,
 	restingInset,
@@ -165,7 +164,6 @@ export function ChatComposer({
 	onPromoteQueuedTurn(turnId: string): Promise<void>;
 	onCancelQueuedTurn(turnId: string): Promise<void>;
 	onInterrupt(): void;
-	onOpenSettings(): void;
 	onSettings(settings: TurnSettings): Promise<void>;
 	onConfigOption(id: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>;
 	/**
@@ -675,7 +673,7 @@ export function ChatComposer({
 				    drawn when the row opens rather than appearing partway through. */}
 				<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>
 					<View style={styles.settingsSlot}>
-						<ChatTurnSettingsControl snapshot={snapshot} models={models} options={configOptions ?? []} disabled={disabled || stopped || pending || submitting} onSettings={onSettings} onOption={onConfigOption} onOpenFallback={onOpenSettings} />
+						<ChatTurnSettingsControl snapshot={snapshot} models={models} options={configOptions ?? []} disabled={disabled || stopped || pending || submitting} onSettings={onSettings} onOption={onConfigOption} />
 					</View>
 					{deliveryNote}
 					{steerAction}

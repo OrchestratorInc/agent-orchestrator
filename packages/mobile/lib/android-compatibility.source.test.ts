@@ -104,25 +104,20 @@ describe("Android native compatibility boundaries", () => {
 		expect(shell).toContain('style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}');
 	});
 
-	// One turn-settings sheet serves both platforms. On Android its choices open
-	// in Compose's dropdown, not the exposed-dropdown picker, and inside the
-	// sheet rather than as a second sheet on top; its Compose rows sit in a
-	// React Native scroll view, which Material's sheet hands a drag to.
-	it("picks Android turn settings from Compose menus inside the sheet", () => {
-		expect(existsSync(fileURLToPath(new URL("./chat/ChatSettingsModal.android.tsx", import.meta.url)))).toBe(false);
-		const sheet = source("./chat/ChatSettingsModal.tsx");
-		expect(sheet).toContain("<DropdownMenu expanded={expanded} onDismissRequest={() => setExpanded(false)}>");
-		expect(sheet).not.toContain("ExposedDropdownMenuBox");
-		expect(sheet).not.toContain('@expo/ui/community/bottom-sheet');
-		expect(sheet).not.toMatch(/\bModal\b/);
-		expect(sheet).toContain("<ScrollView\n\t\t\t\tnestedScrollEnabled");
-		expect(sheet).not.toContain('width: "100%"');
+	// The turn's settings have no sheet of their own: they are the controls
+	// row's dropdowns, opened from React Native buttons that are real
+	// accessibility nodes, as the attach button's is.
+	it("picks Android turn settings from the controls row's own menus", () => {
+		expect(existsSync(fileURLToPath(new URL("./chat/ChatSettingsModal.tsx", import.meta.url)))).toBe(false);
+		const control = source("./chat/ChatTurnSettingsControl.tsx");
+		expect(control).toContain("<MenuView ref={menu} colorScheme={scheme} actions={actions} onPressAction={onAction}");
+		expect(control).toContain("onPress={() => menu.current?.show()}");
+		expect(control).not.toContain("All turn settings");
 	});
 
 	it("dismisses the Android keyboard before presenting chat sheets", () => {
 		const screen = source("./chat/ChatSessionScreen.tsx");
 		expect(screen).toContain("dismissKeyboardBeforeSheet");
-		expect(screen).toMatch(/openTurnSettings[\s\S]*await dismissKeyboardBeforeSheet/);
 		expect(screen).toMatch(/const presentSheet = useCallback\(async \(entry: ChatSheetEntry\) => \{\s*await dismissKeyboardBeforeSheet/);
 	});
 

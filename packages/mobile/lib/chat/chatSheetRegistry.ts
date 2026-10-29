@@ -1,6 +1,6 @@
 import type { ComposerPickerCatalog } from "./composerSuggestions";
 import type { ConversationMarker } from "./timelineModel";
-import type { ChatConfigOption, ChatModel, ConversationSnapshot, TurnSettings } from "./types";
+import type { ConversationSnapshot } from "./types";
 
 /** The conversation's context window, token counts and account limits, kept current while the sheet is up. */
 export type ConversationUsageEntry = {
@@ -12,7 +12,6 @@ export type ConversationUsageEntry = {
 };
 
 export type ChatSheetEntry =
-	| { kind: "turn-settings"; snapshot: ConversationSnapshot; models: ChatModel[]; options: ChatConfigOption[]; disabled?: boolean; error?: string; onSettings(settings: TurnSettings): Promise<void>; onOption(id: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>; onRefresh(): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }> }
 	| { kind: "conversation-map"; markers: ConversationMarker[]; onSelect(sequence: number): void }
 	| { kind: "composer-picker"; catalog: ComposerPickerCatalog; initialQuery?: string; truncated?: boolean; onSelect(value: string): void }
 	| ConversationUsageEntry;
@@ -33,7 +32,6 @@ export function resetChatSheets(): void { entries.clear(); sequence = 0; }
 export function chatSheetRoute(entry: ChatSheetEntry) {
 	const sheetKey = parkChatSheet(entry);
 	const pathname = {
-		"turn-settings": "/sheets/chat-settings",
 		"conversation-map": "/sheets/conversation-map",
 		"conversation-usage": "/sheets/conversation-usage",
 		"composer-picker": "/sheets/composer-picker",

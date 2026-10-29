@@ -1,115 +1,88 @@
 import { Host } from "@expo/ui";
-import { Button, HStack, Image, Menu, Picker, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
-import { accessibilityLabel, backgroundOverlay, buttonStyle, clipShape, contentShape, disabled as disabledModifier, font, foregroundStyle, frame, lineLimit, padding, pickerStyle, shapes, tag, truncationMode } from "@expo/ui/swift-ui/modifiers";
+import { HStack, Menu, Picker, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
+import { pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
 import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
 import { approvalSymbol } from "../approvalSymbol";
-import { COMPOSER_DISC } from "./composerStyles";
+import { ApprovalMenu, Choice, EffortMenu, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
 import { HarnessImage } from "../spawn-composer-controls.ios";
 import type { IOSSymbol } from "../symbols";
-import { useTheme, useThemeState } from "../ThemeProvider";
+import { useThemeState } from "../ThemeProvider";
 import { space, touchTarget } from "../tokens";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
-import { turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow, type TurnSettingTopic } from "./turnSettingsModel";
+import { turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow } from "./turnSettingsModel";
 
-/** The model's capsule: the new-task sheet's, scaled to the composer's row. */
-const CAPSULE_HEIGHT = COMPOSER_DISC;
-
-const topicSymbols: Record<Exclude<TurnSettingTopic, "permissions">, IOSSymbol> = {
-	model: "square.stack.3d.up",
-	effort: "gauge.medium",
+const topicSymbols: Partial<Record<NonNullable<ReturnType<typeof turnSettingTopic>>, IOSSymbol>> = {
 	fast: "bolt",
 	setting: "slider.horizontal.3",
 };
 
-export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, onOpenFallback }: ChatTurnSettingsControlProps) {
-	const t = useTheme();
+/**
+ * The chat's controls row, drawn as the new task's (see model-controls): the
+ * model in a capsule, the effort as a speedometer beside it, and the approval
+ * mode as its symbol at the row's end. The capsule's menu lists the agent's
+ * models as the new task's lists each agent's, then any other setting the
+ * provider offers, such as Fast mode.
+ */
+export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption }: ChatTurnSettingsControlProps) {
 	const { scheme } = useThemeState();
 	const rows = turnSettingsRows(snapshot, models, options);
-	// The approval mode is its own control, as on the spawn sheet, so it is
-	// never read as part of the model.
-	const approvalRow = rows.find((row) => turnSettingTopic(row) === "permissions");
-	const modelRows = rows.filter((row) => row !== approvalRow);
+	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
+	const modelRow = select("model");
+	const effortRow = select("effort");
+	const approvalRow = select("permissions");
+	const otherRows = rows.filter((row) => row !== modelRow && row !== effortRow && row !== approvalRow);
 	const parts = turnSettingsParts(snapshot, models, options);
-	const summary = [parts.model, parts.effort].filter(Boolean).join(" · ");
-	// A SwiftUI picker keeps showing the choice it was given when the save fails
-	// and the setting stays put. Rebuilding the menu then shows the setting as
-	// saved; the menu has long closed, so nothing visibly moves.
+	const off = Boolean(disabled);
+	// A SwiftUI menu keeps showing the choice it was given when the save fails
+	// and the setting stays put. Rebuilding the menus then shows the setting as
+	// saved; they have long closed, so nothing visibly moves.
 	const [generation, setGeneration] = useState(0);
 
 	const choose = (row: TurnSettingRow, choice: string | boolean) => {
-		haptics.select();
 		const write = turnSettingWrite(snapshot.settings, row, choice);
 		const saved = write.kind === "option" ? onOption(write.id, write.value) : onSettings(write.settings);
 		void saved.then(() => {}, () => setGeneration((value) => value + 1));
 	};
 
-	// The model in a filled capsule, as the new-task sheet draws who runs a
-	// task: the harness's mark, the model and its effort, and the menu arrow.
-	// The label is a full touch target tall around the capsule, so every point
-	// of it opens the menu.
-	const label = (
-		<HStack modifiers={[frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>
-			<HStack spacing={space.xs} modifiers={[padding({ horizontal: space.md }), frame({ minHeight: CAPSULE_HEIGHT, maxHeight: CAPSULE_HEIGHT }), backgroundOverlay({ color: t.bgElevated }), clipShape("capsule")]}>
-				{snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null}
-				<Text modifiers={[font({ textStyle: "subheadline", weight: "medium" }), foregroundStyle(t.textSecondary), lineLimit(1), truncationMode("tail")]}>{summary || "Turn settings"}</Text>
-				<Image systemName="chevron.up.chevron.down" color={t.textSecondary} modifiers={[font({ textStyle: "caption2", weight: "semibold" })]} />
-			</HStack>
-		</HStack>
-	);
-	const modifiers = [
-		buttonStyle("plain"),
-		accessibilityLabel(summary ? `Turn settings, ${summary}` : "Turn settings"),
-		disabledModifier(Boolean(disabled)),
-	];
-	const approvalSelection = approvalRow?.kind === "boolean" ? undefined : approvalRow?.choices.find((choice) => choice.selected);
-
 	return (
 		<Host style={styles.host} ignoreSafeArea="all" colorScheme={scheme}>
-			{/* The model at the row's start beside attach, approvals at its end
-			    beside the round button; the space between them gives way first. */}
+			{/* Who runs the turn and its effort at the row's start beside attach,
+			    approvals at its end beside the round button; the space between
+			    them gives way first. */}
 			<HStack spacing={space.none}>
-				<Menu key={generation} label={label} modifiers={modifiers}>
-					<Section title="Turn settings">
-						{modelRows.map((row) => <SettingPicker key={row.id} row={row} onChoose={(choice) => choose(row, choice)} />)}
-					</Section>
-					{/* The sheet adds what a menu cannot: each choice's description and a refresh. */}
-					<Section>
-						<Button label="All turn settings" systemImage={topicSymbols.setting} onPress={onOpenFallback} />
-					</Section>
-				</Menu>
-				<Spacer minLength={0} />
-				{approvalRow && approvalRow.kind !== "boolean" ? (
-					<Menu
-						key={`approval-${generation}`}
-						// The mode as its symbol alone, the new-task sheet's for each mode;
-						// the menu and VoiceOver name it.
-						label={
-							<Image
-								systemName={approvalSymbol(approvalSelection?.permissionMode, snapshot.harness)}
-								color={t.textSecondary}
-								modifiers={[font({ textStyle: "subheadline", weight: "medium" }), frame({ width: touchTarget, height: touchTarget }), contentShape(shapes.rectangle())]}
-							/>
-						}
-						modifiers={[
-							buttonStyle("plain"),
-							accessibilityLabel(`${approvalRow.label}, ${parts.approval || approvalRow.value}`),
-							disabledModifier(Boolean(disabled)),
-						]}
-					>
-						<Section title={approvalRow.label}>
-							{approvalRow.choices.map((choice) => (
-								<Toggle
-									key={choice.value}
-									label={choice.label}
-									systemImage={approvalSymbol(choice.permissionMode, snapshot.harness)}
-									isOn={choice.value === approvalSelection?.value}
-									onIsOnChange={(on) => { if (on) choose(approvalRow, choice.value); }}
-								/>
-							))}
+				<Menu
+					key={`model-${generation}`}
+					label={<ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}
+					modifiers={useTriggerModifiers({ label: parts.model ? `Model, ${parts.model}` : "Model", id: "chat-model", disabled: off })}
+				>
+					{modelRow?.choices.map((choice) => <Choice key={choice.value} label={choice.label} selected={choice.selected} onChoose={() => choose(modelRow, choice.value)} />)}
+					{otherRows.length ? (
+						<Section>
+							{otherRows.map((row) => <SettingPicker key={row.id} row={row} onChoose={(choice) => { haptics.select(); choose(row, choice); }} />)}
 						</Section>
-					</Menu>
+					) : null}
+				</Menu>
+				{effortRow ? (
+					<EffortMenu
+						key={`effort-${generation}`}
+						choices={effortRow.choices.map((choice) => ({ value: choice.value, label: choice.label, selected: choice.selected }))}
+						onChoose={(value) => choose(effortRow, value)}
+						disabled={off}
+						id="chat-effort"
+					/>
+				) : null}
+				<Spacer minLength={0} />
+				{approvalRow ? (
+					<ApprovalMenu
+						key={`approval-${generation}`}
+						title={approvalRow.label}
+						choices={approvalRow.choices.map((choice) => ({ value: choice.value, label: choice.label, symbol: approvalSymbol(choice.permissionMode, snapshot.harness), selected: choice.selected }))}
+						onChoose={(value) => choose(approvalRow, value)}
+						disabled={off}
+						id="chat-approval"
+					/>
 				) : null}
 			</HStack>
 		</Host>
@@ -117,14 +90,15 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 }
 
 /**
- * One setting as a submenu: a toggle for an on/off option, otherwise a picker,
- * which shows the current choice under its title and ticks it inside, and which
- * VoiceOver announces as selected.
+ * Any other setting as a submenu: a toggle for an on/off option, otherwise a
+ * picker, which shows the current choice under its title and ticks it inside,
+ * and which VoiceOver announces as selected.
  */
 function SettingPicker({ row, onChoose }: { row: TurnSettingRow; onChoose(choice: string | boolean): void }) {
 	const topic = turnSettingTopic(row);
+	const systemImage = topic ? topicSymbols[topic] : undefined;
 	if (row.kind === "boolean") {
-		return <Toggle label={row.label} systemImage={topic && topic !== "permissions" ? topicSymbols[topic] : undefined} isOn={Boolean(row.enabled)} onIsOnChange={onChoose} />;
+		return <Toggle label={row.label} systemImage={systemImage} isOn={Boolean(row.enabled)} onIsOnChange={onChoose} />;
 	}
 	const choices = row.choices.map((choice) => <Text key={choice.value} modifiers={[tag(choice.value)]}>{choice.label}</Text>);
 	const selection = row.choices.find((choice) => choice.selected)?.value ?? null;
@@ -132,7 +106,7 @@ function SettingPicker({ row, onChoose }: { row: TurnSettingRow; onChoose(choice
 		if (value !== null) onChoose(value);
 	};
 	return (
-		<Picker label={row.label} systemImage={topic && topic !== "permissions" ? topicSymbols[topic] : undefined} selection={selection} onSelectionChange={onSelectionChange} modifiers={[pickerStyle("menu")]}>
+		<Picker label={row.label} systemImage={systemImage} selection={selection} onSelectionChange={onSelectionChange} modifiers={[pickerStyle("menu")]}>
 			{choices}
 		</Picker>
 	);

@@ -13,7 +13,6 @@ describe("chat sheet registry", () => {
 	});
 
 	it.each([
-		["turn-settings", "/sheets/chat-settings"],
 		["conversation-map", "/sheets/conversation-map"],
 		["composer-picker", "/sheets/composer-picker"],
 		["conversation-usage", "/sheets/conversation-usage"],

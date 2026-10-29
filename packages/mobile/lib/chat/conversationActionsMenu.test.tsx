@@ -23,7 +23,6 @@ const state: ConversationMenuState = {
 	canDelete: true,
 	hasUsage: true,
 	pinned: false,
-	modelLabel: "Opus",
 	openingShell: false,
 	refreshing: false,
 	compacting: false,
@@ -64,10 +63,9 @@ describe("conversation actions menu", () => {
 		const items = children(menu).flatMap((entry) => entry.type === Stack.Toolbar.Menu ? children(entry) : [entry]);
 		const compact = items.find((item) => item.props.children === "Compact history")!;
 		expect(compact.props.disabled).toBe(true);
-		const settings = items.find((item) => item.props.children === "Turn settings")!;
-		expect(settings.props.subtitle).toBe("Opus");
-		(settings.props.onPress as () => void)();
-		expect(onSelect).toHaveBeenCalledWith("settings");
+		const history = items.find((item) => item.props.children === "Conversation history")!;
+		(history.props.onPress as () => void)();
+		expect(onSelect).toHaveBeenCalledWith("map");
 	});
 
 	// Android's menu items draw only bundled images and drop an SF name.

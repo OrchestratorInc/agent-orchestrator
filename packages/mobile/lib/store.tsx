@@ -72,6 +72,8 @@ export type SpawnOptions = {
 	prompt?: string;
 	harness?: string;
 	model?: string;
+	/** The model's effort level; omitted runs the model's default. */
+	effort?: string;
 	/** The worker's starting approval mode; omitted keeps the project's. */
 	approvalMode?: ApprovalMode;
 	attachments?: SpawnAttachmentInput[];
@@ -904,12 +906,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [activeProjectId, projects]);
 
 	const spawn = useCallback(
-		async ({ hostId, projectId, prompt, harness, model, approvalMode, mode, attachments, clientRequestId }: SpawnOptions) => {
+		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
 				const c = requireConfig(hostId);
 				if (projectId === STANDALONE_PROJECT) {
-					const session = await spawnSession(c, { prompt, harness, model, approvalMode, mode: resolvedMode, attachments, clientRequestId });
+					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
 					await refreshHost(hostId);
 					return session;
 				}
@@ -921,6 +923,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					brief: prompt ?? "",
 					agent: harness,
 					model,
+					effort,
 					approvalMode,
 					mode: resolvedMode,
 					attachments,

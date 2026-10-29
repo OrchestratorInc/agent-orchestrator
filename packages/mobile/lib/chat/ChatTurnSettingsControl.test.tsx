@@ -13,8 +13,9 @@ vi.mock("@expo/ui/community/menu", async () => {
 	return { MenuView };
 });
 vi.mock("react-native", () => ({
+	Platform: { OS: "android" },
 	Pressable: "Pressable",
-	StyleSheet: { create: <T,>(styles: T) => styles },
+	StyleSheet: { create: <T,>(styles: T) => styles, hairlineWidth: 1 },
 	Text: "Text",
 	View: "View",
 }));
@@ -72,57 +73,63 @@ function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; o
 	const handlers = {
 		onSettings: vi.fn(() => Promise.resolve()),
 		onOption: vi.fn(() => Promise.resolve([] as ChatConfigOption[])),
-		onOpenFallback: vi.fn(),
 	};
 	act(() => {
 		renderer = create(<ChatTurnSettingsControl snapshot={over.snapshot ?? snapshot()} models={over.models ?? models} options={over.options ?? [fast]} disabled={over.disabled} {...handlers} />);
 	});
 	return handlers;
 }
-const menu = () => renderer!.root.findByType("MenuView" as never);
-const trigger = () => renderer!.root.findByType("Pressable" as never);
+const trigger = (id: string) => renderer!.root.find((node) => node.type === ("Pressable" as never) && node.props.testID === id);
+const menu = (id: string) => renderer!.root.find((node) => node.type === ("MenuView" as never) && node.props.testID === `${id}-menu`);
+const titles = (id: string) => menu(id).props.actions.map((action: { title: string; state?: string }) => [action.title, action.state]);
+const pick = (id: string, event: string) => act(() => menu(id).props.onPressAction({ nativeEvent: { event } }));
 
-describe("Android turn settings menu", () => {
-	it("offers a submenu per setting whose title carries its value, choices ticked", () => {
+describe("Android chat controls row", () => {
+	// The new task's row: the model's capsule, the effort's speedometer and the
+	// approval mode's shield, each opening its own menu.
+	it("names the model on its capsule and lists the agent's models, then any other setting", () => {
 		render();
-		const actions = menu().props.actions;
-		expect(actions.map((action: { title: string }) => action.title)).toEqual(["Fast mode", "Model · Opus", "Effort · Low", "Approvals · Ask when unsure", "All turn settings"]);
-		expect(actions[0]).toMatchObject({ state: "off", image: "bolt" });
-		expect(actions[1].image).toBe("square.stack.3d.up");
-		expect(actions[1].subactions).toEqual([
-			{ id: "1:0", title: "Opus", state: "on" },
-			{ id: "1:1", title: "Haiku", state: "off" },
-		]);
-	});
-
-	it("opens the menu from the whole summary row", () => {
-		render();
-		expect(trigger().props.accessibilityLabel).toBe("Turn settings, Opus · Low · Ask when unsure");
-		expect(trigger().props.android_ripple).toEqual({ color: "ripple" });
-		act(() => trigger().props.onPress());
+		expect(trigger("chat-model").props.accessibilityLabel).toBe("Model, Opus");
+		expect(titles("chat-model")).toEqual([["Opus", "on"], ["Haiku", "off"], ["Fast mode", "off"]]);
+		expect(menu("chat-model").props.actions[2].image).toBe("bolt");
+		act(() => trigger("chat-model").props.onPress());
 		expect(fixtures.show).toHaveBeenCalledOnce();
 	});
 
-	it("saves a choice to the setting it belongs to", () => {
+	it("offers the model's effort levels from the speedometer", () => {
+		render();
+		expect(trigger("chat-effort").props.accessibilityLabel).toBe("Effort, Low");
+		expect(titles("chat-effort")).toEqual([["Low", "on"], ["High", "off"]]);
+		expect(renderer!.root.findAll((node) => node.type === ("AppSymbol" as never)).map((node) => node.props.name)).toContainEqual({ ios: "gauge.medium", android: "speed" });
+	});
+
+	it("draws no speedometer for a model that takes no effort", () => {
+		render({ snapshot: snapshot({ settings: { model: "haiku", approvalMode: "auto" } }) });
+		expect(renderer!.root.findAll((node) => node.type === ("Pressable" as never) && node.props.testID === "chat-effort")).toHaveLength(0);
+	});
+
+	it("offers the approval modes from the shield", () => {
+		render();
+		expect(trigger("chat-approval").props.accessibilityLabel).toBe("Approvals, Ask when unsure");
+		expect(titles("chat-approval").find(([, state]: [string, string]) => state === "on")).toEqual(["Ask when unsure", "on"]);
+	});
+
+	it("saves each choice to the setting it belongs to", () => {
 		const { onSettings, onOption } = render();
-		act(() => menu().props.onPressAction({ nativeEvent: { event: "1:1" } }));
-		expect(onSettings).toHaveBeenCalledExactlyOnceWith({ model: "haiku", approvalMode: "auto", reasoningEffort: undefined });
-		act(() => menu().props.onPressAction({ nativeEvent: { event: "0" } }));
+		pick("chat-model", "model:1");
+		expect(onSettings).toHaveBeenLastCalledWith({ model: "haiku", approvalMode: "auto", reasoningEffort: undefined });
+		pick("chat-effort", "1");
+		expect(onSettings).toHaveBeenLastCalledWith({ model: "opus", approvalMode: "auto", reasoningEffort: "high" });
+		pick("chat-model", "other:0:0");
 		expect(onOption).toHaveBeenCalledExactlyOnceWith("fast", { enabled: true });
-		expect(fixtures.select).toHaveBeenCalledTimes(2);
+		expect(fixtures.select).toHaveBeenCalledTimes(3);
 	});
 
-	it("opens the full sheet from the menu's last item", () => {
-		const { onOpenFallback, onSettings, onOption } = render();
-		act(() => menu().props.onPressAction({ nativeEvent: { event: "all-settings" } }));
-		expect(onOpenFallback).toHaveBeenCalledOnce();
-		expect(onSettings).not.toHaveBeenCalled();
-		expect(onOption).not.toHaveBeenCalled();
-	});
-
-	it("disables the row while the conversation cannot take a change", () => {
+	it("disables every control while the conversation cannot take a change", () => {
 		render({ disabled: true });
-		expect(trigger().props.disabled).toBe(true);
-		expect(trigger().props.accessibilityState).toEqual({ disabled: true });
+		for (const id of ["chat-model", "chat-effort", "chat-approval"]) {
+			expect(trigger(id).props.disabled).toBe(true);
+			expect(trigger(id).props.accessibilityState).toEqual({ disabled: true });
+		}
 	});
 });

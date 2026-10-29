@@ -115,6 +115,8 @@ const baseProps = (overrides: Partial<Props> = {}): Props => ({
 	approvalModes: [{ id: "auto", label: "Auto", shortLabel: "Auto" }, { id: "bypass-permissions", label: "Bypass permissions", shortLabel: "Bypass" }],
 	approvalMode: "auto",
 	onSelectApprovalMode: vi.fn(),
+	effortChoices: [{ value: "low", label: "Low", selected: false }, { value: "high", label: "High", selected: true }],
+	onSelectEffort: vi.fn(),
 	modelSelection: "__auto__",
 	modelLabel: "Default model",
 	onSelectModel: vi.fn(),
@@ -253,6 +255,25 @@ describe("Android spawn model", () => {
 		expect(mark("opencode").findAllByType("Box" as never)).toHaveLength(1);
 		expect(mark("opencode").findByType("Icon" as never).props).toMatchObject({ source: "logo:opencode", tint: null });
 		expect(mark("aider").findByType("Icon" as never).props.source).toBe("drawable:terminal");
+	});
+
+	// The chat's speedometer, beside the model's capsule.
+	it("picks the effort from a speedometer beside the model", async () => {
+		const props = baseProps();
+		const root = await render(props);
+		const effort = trigger(root, "spawn-effort");
+		expect(String(effort.type)).toBe("IconButton");
+		expect(effort.findByType("Icon" as never).props).toMatchObject({ source: "drawable:speed", contentDescription: "Effort, High" });
+		await act(async () => effort.props.onClick());
+		const menu = menuOf(trigger(root, "spawn-effort"));
+		expect(items(menu).map((node) => [text(node), isSelected(node)])).toEqual([["Low", false], ["High", true]]);
+		await act(async () => item(menu, "Low").props.onClick());
+		expect(props.onSelectEffort).toHaveBeenCalledWith("low");
+	});
+
+	it("draws no speedometer for a model that takes no effort", async () => {
+		const root = await render(baseProps({ effortChoices: [] }));
+		expect(trigger(root, "spawn-effort")).toBeUndefined();
 	});
 
 	it("opens a catalog too long for its menu whole", async () => {

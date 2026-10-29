@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
-import { effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, isExecutionModeOption, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsModelLabel, turnSettingsRows, turnSettingsSummary, turnSettingTopic, turnSettingWrite, readableModelId } from "./turnSettingsModel";
+import { nativeModelLabel, NOT_REPORTED, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, readableModelId } from "./turnSettingsModel";
+
+// What the controls row names, all three parts read together: the model's
+// capsule, the effort's speedometer and the approval mode's symbol.
+const turnSettingsSummary = (...args: Parameters<typeof turnSettingsParts>) => {
+	const parts = turnSettingsParts(...args);
+	return [parts.model, parts.effort, parts.approval].filter(Boolean).join(" · ");
+};
+const turnSettingsModelLabel = (...args: Parameters<typeof turnSettingsParts>) => turnSettingsParts(...args).model;
 
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
@@ -28,12 +36,6 @@ describe("turnSettingsRows", () => {
 		];
 
 		expect(controls.map(providerTurnControlKind)).toEqual(["fast", "model", "effort", "permissions"]);
-		expect(orderedProviderControls([...controls].reverse()).map((option) => option.id)).toEqual([
-			"fast",
-			"model",
-			"effort",
-			"permission_mode",
-		]);
 	});
 
 	it("treats a provider's binary Fast mode select as one direct on/off control", () => {
@@ -49,9 +51,6 @@ describe("turnSettingsRows", () => {
 		};
 
 		expect(providerTurnControlKind(fastMode)).toBe("fast");
-		expect(fastControlEnabled(fastMode)).toBe(false);
-		expect(fastControlValue(fastMode, true)).toBe("on");
-		expect(fastControlValue(fastMode, false)).toBe("off");
 	});
 
 	it("orders provider controls as fast mode, model, effort, permissions, then remaining controls", () => {
@@ -79,13 +78,6 @@ describe("turnSettingsRows", () => {
 		const rows = turnSettingsRows(snapshot({ settings: { approvalMode: "bypass-permissions" } }), [], options);
 		expect(rows.map((row) => row.label)).toContain("Approvals");
 		expect(rows.find((row) => row.label === "Approvals")?.value).toBe("Never ask");
-	});
-
-	it("tells execution modes from a mode option that sets permissions", () => {
-		const mode = (choices: string[]): ChatConfigOption => ({ id: "mode", name: "Mode", category: "mode", type: "select", currentValue: choices[0], choices: choices.map((value) => ({ value, name: value })) });
-		expect(isExecutionModeOption(mode(["build", "plan"]))).toBe(true);
-		expect(isExecutionModeOption(mode(["plan", "bypassPermissions"]))).toBe(false);
-		expect(isExecutionModeOption({ id: "permission_mode", name: "Permissions", type: "select", currentValue: "plan", choices: [{ value: "plan", name: "Plan only" }] })).toBe(false);
 	});
 
 	it("builds model, effort, and approvals drill-down rows when provider controls are unavailable", () => {
@@ -412,26 +404,6 @@ describe("default labels", () => {
 		expect(turnSettingsModelLabel(snapshot({ capabilities: [], settings: { model: "opus" } }), [], [])).toBe("opus");
 		expect(turnSettingsModelLabel(snapshot({ capabilities: [], settings: { model: "default" } }), [], [])).toBe("");
 		expect(turnSettingsModelLabel(snapshot({ capabilities: [], settings: {} }), [], [])).toBe("");
-	});
-});
-
-// Review on #6071: the fix for the Android slider's unasked save lived only in
-// the component. These are the two decisions it now delegates.
-describe("effort slider", () => {
-	const levels = [{ value: "low" }, { value: "medium" }, { value: "high" }];
-
-	it("saves nothing when the sheet opens on an effort that is none of its levels", () => {
-		for (const selected of ["default", "ultra", ""]) {
-			const index = effortSliderIndex(levels, selected);
-			expect(index).toBe(-1);
-			expect(effortSliderWrite(levels, selected, index)).toBeUndefined();
-		}
-	});
-
-	it("saves the level it is moved to, the first one included, and nothing once that level is current", () => {
-		expect(effortSliderWrite(levels, "default", 0)).toBe("low");
-		expect(effortSliderWrite(levels, "low", 2)).toBe("high");
-		expect(effortSliderWrite(levels, "high", effortSliderIndex(levels, "high"))).toBeUndefined();
 	});
 });
 

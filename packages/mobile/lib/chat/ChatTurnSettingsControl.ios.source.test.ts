@@ -7,55 +7,34 @@ import { describe, expect, it } from "vitest";
 
 const source = readFileSync(fileURLToPath(new URL("./ChatTurnSettingsControl.ios.tsx", import.meta.url)), "utf8");
 
-describe("iOS turn settings menu trigger", () => {
-	// The label used to be an invisible SwiftUI text in a fixed 220pt host with
-	// the visible summary drawn over it, so a tap right of 220pt did nothing.
-	it("draws the real summary as the menu's own label", () => {
-		expect(source).toContain("<Menu key={generation} label={label} modifiers={modifiers}>");
-		expect(source).not.toContain("opacity(0)");
-		expect(source).not.toContain("width: 220");
+describe("iOS chat controls row", () => {
+	// The new task's row, from the same pieces: the model's capsule, the effort's
+	// speedometer and the approval mode's symbol.
+	it("draws the new task's model capsule, effort speedometer and approval symbol", () => {
+		expect(source).toContain('import { ApprovalMenu, Choice, EffortMenu, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";');
+		expect(source).toContain('label={<ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}');
+		expect(source).toContain("<EffortMenu");
+		expect(source).toContain("<ApprovalMenu");
+		expect(source).toContain("symbol: approvalSymbol(choice.permissionMode, snapshot.harness)");
 		expect(source).toContain('host: { alignSelf: "stretch", height: touchTarget }');
-		// A full touch target tall around the new-task sheet's filled capsule.
-		expect(source).toContain("<HStack modifiers={[frame({ minHeight: touchTarget }), contentShape(shapes.rectangle())]}>");
-		expect(source).toContain('frame({ minHeight: CAPSULE_HEIGHT, maxHeight: CAPSULE_HEIGHT }), backgroundOverlay({ color: t.bgElevated }), clipShape("capsule")');
-		expect(source).toContain('accessibilityLabel(summary ? `Turn settings, ${summary}` : "Turn settings")');
 	});
 
-	it("sizes the label with Dynamic Type and marks it a pull-down", () => {
-		// The new-task sheet's selector type.
-		expect(source).toContain('font({ textStyle: "subheadline", weight: "medium" }), foregroundStyle(t.textSecondary), lineLimit(1), truncationMode("tail")');
-		expect(source).toContain('<Image systemName="chevron.up.chevron.down"');
-		expect(source).not.toMatch(/font\(\{ size:/);
+	// The turn has no settings sheet: everything is in the row's own menus.
+	it("lists the agent's models as checkable items, then any other setting", () => {
+		expect(source).toContain("{modelRow?.choices.map((choice) => <Choice");
+		expect(source).toContain("{otherRows.map((row) => <SettingPicker");
+		expect(source).not.toContain("All turn settings");
+		expect(source).not.toContain("Turn settings");
 	});
 });
 
-describe("iOS turn settings choices", () => {
+describe("iOS other settings", () => {
 	// A checkmark image on a button is not announced; a picker's choice is.
-	it("offers each setting as a picker, or a toggle when it is on/off", () => {
+	it("offers each as a picker, or a toggle when it is on/off", () => {
 		expect(source).toContain('modifiers={[pickerStyle("menu")]}');
 		expect(source).toContain("<Text key={choice.value} modifiers={[tag(choice.value)]}>{choice.label}</Text>");
 		expect(source).toContain("<Toggle label={row.label}");
 		expect(source).not.toContain('systemImage={choice.selected ? "checkmark" : undefined}');
-	});
-
-	it("ends with the way into the full sheet", () => {
-		expect(source).toContain('<Button label="All turn settings" systemImage={topicSymbols.setting} onPress={onOpenFallback} />');
-	});
-
-	it("shows a layers symbol on the model selector", () => {
-		expect(source).toContain('model: "square.stack.3d.up"');
-	});
-
-	// The approval mode is its own control beside the model, so it is never
-	// read as part of the model: the mode's symbol alone, named to VoiceOver,
-	// with each choice in its menu marked by its own.
-	it("puts the approval mode on its own icon-only control", () => {
-		expect(source).toContain('const approvalRow = rows.find((row) => turnSettingTopic(row) === "permissions");');
-		expect(source).toContain("systemName={approvalSymbol(approvalSelection?.permissionMode, snapshot.harness)}");
-		expect(source).toContain("frame({ width: touchTarget, height: touchTarget })");
-		expect(source).toContain("accessibilityLabel(`${approvalRow.label}, ${parts.approval || approvalRow.value}`)");
-		expect(source).toContain("systemImage={approvalSymbol(choice.permissionMode, snapshot.harness)}");
-		expect(source).toContain("{modelRows.map((row) => <SettingPicker");
 	});
 });
 

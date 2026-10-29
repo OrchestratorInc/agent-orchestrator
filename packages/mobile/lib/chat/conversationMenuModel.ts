@@ -8,7 +8,6 @@ export type ConversationMenuAction =
 	| "pull_requests"
 	| "map"
 	| "refresh"
-	| "settings"
 	| "usage"
 	| "rename"
 	| "pin"
@@ -48,7 +47,6 @@ export function conversationMenuSections({
 			actions: [
 				"map",
 				"refresh",
-				"settings",
 				...(hasUsage ? ["usage" as const] : []),
 				...(canRename ? ["rename" as const] : []),
 				...(canPin ? ["pin" as const] : []),
@@ -75,8 +73,6 @@ export type ConversationMenuState = {
 	canDelete: boolean;
 	hasUsage: boolean;
 	pinned: boolean;
-	/** What the Turn settings item names; empty when nothing is known. */
-	modelLabel: string;
 	openingShell: boolean;
 	refreshing: boolean;
 	compacting: boolean;
@@ -121,7 +117,6 @@ function conversationMenuItem(action: ConversationMenuAction, state: Conversatio
 		case "pull_requests": return { action, label: "PR Review", icon: "arrow.triangle.pull" };
 		case "map": return { action, label: "Conversation history", icon: "list.bullet" };
 		case "refresh": return { action, label: state.refreshing ? "Refreshing conversation…" : "Refresh conversation", disabled: state.refreshing, icon: "arrow.clockwise" };
-		case "settings": return { action, label: "Turn settings", subtitle: state.modelLabel || undefined, icon: "slider.horizontal.3" };
 		case "usage": return { action, label: "Context & usage", icon: "chart.bar" };
 		case "rename": return { action, label: "Rename conversation", icon: "pencil" };
 		case "pin": return { action, label: state.pinned ? "Unpin worker" : "Pin worker", icon: state.pinned ? "pin.slash" : "pin" };

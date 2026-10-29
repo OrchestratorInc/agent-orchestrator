@@ -28,7 +28,7 @@ import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
 import { font, iconSize, space, touchTarget } from "./tokens";
 
-type OpenMenu = "host" | "project" | "approval" | "harness";
+type OpenMenu = "host" | "project" | "approval" | "harness" | "effort";
 
 type MenuOption = { id: string; label: string; leading?: ReactNode; sectionBreakBefore?: boolean };
 
@@ -60,6 +60,8 @@ export function SpawnComposerControls({
 	approvalModes,
 	approvalMode,
 	onSelectApprovalMode,
+	effortChoices,
+	onSelectEffort,
 	onChoosePhoto,
 	onChooseFile,
 	voice,
@@ -203,6 +205,23 @@ export function SpawnComposerControls({
 									))}
 								</DropdownMenu.Items>
 							</DropdownMenu>
+
+							{/* The effort as a speedometer, the chat's; the menu names the
+							    model's levels and checks the one it will run at. */}
+							{effortChoices.length ? (
+								<DropdownMenu expanded={openMenu === "effort"} onDismissRequest={close} color={t.bgElevated}>
+									<DropdownMenu.Trigger>
+										<IconButton onClick={() => setOpenMenu("effort")} enabled={!busy} colors={{ contentColor: t.textSecondary }} modifiers={[testID("spawn-effort")]}>
+											<Icon source={materialDrawable("speed")} size={iconSize.lg} contentDescription={`Effort, ${effortChoices.find((choice) => choice.selected)?.label ?? "default"}`} />
+										</IconButton>
+									</DropdownMenu.Trigger>
+									<DropdownMenu.Items>
+										{effortChoices.map((choice) => (
+											<MenuRow key={choice.value} label={choice.label} selected={choice.selected} onClick={() => choose(effortChoices.find((item) => item.selected)?.value ?? null, onSelectEffort)(choice.value)} />
+										))}
+									</DropdownMenu.Items>
+								</DropdownMenu>
+							) : null}
 
 							<Spacer modifiers={[weight(1)]} />
 

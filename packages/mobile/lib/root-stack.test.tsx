@@ -135,7 +135,7 @@ describe("root stack", () => {
 	it.each(["ios", "android"])("titles the picker sheets in a native bar only on iOS, on %s", async (platform) => {
 		const renderer = await renderRoot(platform);
 		try {
-			for (const [name, title] of [["sheets/agent", "Agent"], ["sheets/model", "Model"], ["sheets/chat-settings", "Turn settings"]]) {
+			for (const [name, title] of [["sheets/agent", "Agent"], ["sheets/model", "Model"]]) {
 				expect(renderer.root.findByProps({ name }).props.options).toMatchObject({
 					presentation: "formSheet",
 					title,

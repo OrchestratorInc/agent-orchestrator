@@ -118,7 +118,7 @@ export function resolveDefaultChoices(options: ChatConfigOption[]): ChatConfigOp
 function resolveDefaultChoice(option: ChatConfigOption): ChatConfigOption {
 	if (option.type !== "select") return option;
 	const kind = providerTurnControlKind(option);
-	// Fast mode is a toggle, and fastControlValue reads a "default" choice as Off.
+	// Fast mode is a toggle, which reads a "default" choice as Off.
 	if (kind === "fast") return option;
 	if (kind === "permissions") {
 		const choices = option.choices.map(namePermissionChoice);
@@ -212,62 +212,6 @@ function sentValue(value: string | undefined): string | undefined {
 }
 
 /**
- * Where an effort slider sits for `selected`: the index of that level, or -1
- * when the effort is none of the slider's levels (not reported, or a level this
- * model does not list). -1 must not be clamped to the first level: the slider
- * saves the level it sits on, so a clamp saved a level nobody picked.
- */
-export function effortSliderIndex(levels: ReadonlyArray<{ value: string }>, selected: string): number {
-	return levels.findIndex((level) => level.value === selected);
-}
-
-/** The level a slider sitting at `index` should save: none while it is unplaced (-1) or on `selected` already. */
-export function effortSliderWrite(levels: ReadonlyArray<{ value: string }>, selected: string, index: number): string | undefined {
-	const next = index < 0 ? undefined : levels[index]?.value;
-	return next && next !== selected ? next : undefined;
-}
-
-/** Providers encode Fast mode as either a boolean or an On/Off select. */
-export function fastControlEnabled(option: ChatConfigOption): boolean {
-	if (option.type === "boolean") return Boolean(option.currentBoolean);
-	const current = option.choices.find((choice) => choice.value === option.currentValue);
-	return fastChoiceMatches(current, true) || fastChoiceMatches({ value: option.currentValue ?? "", name: option.currentValue ?? "" }, true);
-}
-
-/** Returns the provider-owned value for an On/Off Fast mode select. */
-export function fastControlValue(option: ChatConfigOption, enabled: boolean): string | undefined {
-	if (option.type !== "select") return undefined;
-	const direct = option.choices.find((choice) => fastChoiceMatches(choice, enabled));
-	if (direct) return direct.value;
-	if (option.choices.length === 2) {
-		const current = option.choices.find((choice) => choice.value === option.currentValue);
-		if (current) return option.choices.find((choice) => choice.value !== current.value)?.value;
-	}
-	return undefined;
-}
-
-function fastChoiceMatches(choice: { value: string; name: string } | undefined, enabled: boolean): boolean {
-	if (!choice) return false;
-	const text = `${choice.value} ${choice.name}`.toLowerCase();
-	const words = text.split(/[^a-z]+/).filter(Boolean);
-	return enabled
-		? words.some((word) => ["on", "true", "fast", "enabled", "enable"].includes(word))
-		: words.some((word) => ["off", "false", "normal", "standard", "disabled", "disable", "default"].includes(word));
-}
-
-/** The mobile form starts with the controls people actively tune each turn. */
-export function orderedProviderControls(options: ChatConfigOption[]): ChatConfigOption[] {
-	const priority: Record<ProviderTurnControlKind, number> = {
-		fast: 0,
-		model: 1,
-		effort: 2,
-		permissions: 3,
-		other: 4,
-	};
-	return options.sort((a, b) => priority[providerTurnControlKind(a)] - priority[providerTurnControlKind(b)]);
-}
-
-/**
  * A provider `mode` option replaces the Approvals row only when it offers
  * approval choices. OpenCode advertises build/plan there — execution modes —
  * and mistaking them for approvals leaves the session with no way to bypass.
@@ -276,11 +220,6 @@ function isPermissionModeOption(option: ChatConfigOption): boolean {
 	if (option.category !== "mode" && option.id !== "mode") return false;
 	return option.choices.some((choice) =>
 		![choice.value, choice.name].some((text) => /^(?:plan|agent|build)(?:[\s_-]mode)?$/i.test(text.trim())));
-}
-
-/** A provider `mode` option that offers only execution modes, such as OpenCode's build/plan. */
-export function isExecutionModeOption(option: ChatConfigOption): boolean {
-	return (option.category === "mode" || option.id === "mode") && !isPermissionModeOption(option);
 }
 
 export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatModel[], options: ChatConfigOption[]): TurnSettingRow[] {
@@ -340,11 +279,6 @@ export function turnSettingsRows(snapshot: ConversationSnapshot, models: ChatMod
 	return rows.sort((a, b) => controlPriority(a) - controlPriority(b));
 }
 
-export function turnSettingsSummary(snapshot: ConversationSnapshot, models: ChatModel[], options: ChatConfigOption[]): string {
-	const parts = turnSettingsParts(snapshot, models, options);
-	return [parts.model, parts.effort, parts.approval].filter(Boolean).join(" · ");
-}
-
 /**
  * The summary's parts, for a control that shows the approval mode apart from
  * the model. Effort is the setting people change most after the model, and it
@@ -360,14 +294,6 @@ export function turnSettingsParts(snapshot: ConversationSnapshot, models: ChatMo
 		effort: named(effort ? effort.value : capitalize(snapshot.settings.reasoningEffort ?? "")),
 		approval: named(permissions?.value ?? approvalLabel(snapshot.settings.approvalMode ?? "default", snapshot.harness)),
 	};
-}
-
-/**
- * The model the next turn runs on, as the turn-settings control names it.
- * Empty when nothing names one (#5834).
- */
-export function turnSettingsModelLabel(snapshot: ConversationSnapshot, models: ChatModel[], options: ChatConfigOption[]): string {
-	return modelLabel(turnSettingsRows(snapshot, models, options), snapshot);
 }
 
 function modelLabel(rows: TurnSettingRow[], snapshot: ConversationSnapshot): string {

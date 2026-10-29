@@ -55,7 +55,6 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 const PICKER_SHEETS = [
 	{ name: "sheets/agent", title: "Agent" },
 	{ name: "sheets/model", title: "Model" },
-	{ name: "sheets/chat-settings", title: "Turn settings" },
 ] as const;
 
 // The manual-connect form — the only sheet with text inputs, and the only one

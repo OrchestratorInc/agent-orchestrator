@@ -36,7 +36,6 @@ import { shouldAutoResume } from "./autoResume";
 import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
-import { turnSettingsModelLabel } from "./turnSettingsModel";
 import { brokenMcpServers, can, type ConversationSnapshot } from "./types";
 import { useMobileConversation } from "./useConversation";
 import { SessionStartupStatus } from "./SessionStartup";
@@ -292,30 +291,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		return request;
 	}, [config, conversation.snapshot, filePaths, filePathsTruncated, session.id]);
 
-	const openTurnSettings = useCallback(async () => {
-		const current = conversation.snapshot;
-		if (!current) return;
-		await dismissKeyboardBeforeSheet(keyboardVisible);
-		let catalog = { models: conversation.models, configOptions: conversation.configOptions };
-		let catalogError = conversation.actionErrors.settings ?? conversation.actionErrors.config;
-		try {
-			catalog = await conversation.loadTurnOptions();
-		} catch (cause) {
-			catalogError = conversationActionError(cause);
-		}
-		router.push(chatSheetRoute({
-			kind: "turn-settings",
-			snapshot: current,
-			models: catalog.models,
-			options: catalog.configOptions,
-			disabled: current.controller.state === "stopped" || conversation.pendingActions.includes("settings") || conversation.pendingActions.includes("config"),
-			error: catalogError,
-			onSettings: conversation.chooseSettings,
-			onOption: conversation.setConfigOption,
-			onRefresh: () => conversation.loadTurnOptions({ refresh: true }),
-		}));
-	}, [conversation, keyboardVisible, router]);
-
 	const openShell = useCallback(async () => {
 		if (!config || openingShell) return;
 		setOpeningShell(true);
@@ -454,7 +429,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const menuCanReloadMcp = Boolean(menuSnapshot && can(menuSnapshot, "mcp_reload")) && !conversationActionUnsupported("mcp", conversation.actionCodes.mcp);
 	const menuHasUsage = Boolean(menuSnapshot?.usage || menuSnapshot?.rateLimits);
 	const menuPinned = "projectName" in session ? false : Boolean(session.isPinned);
-	const menuModelLabel = menuSnapshot ? turnSettingsModelLabel(menuSnapshot, conversation.models, conversation.configOptions) : "";
 	// Only a refresh asked for from the menu: the conversation also refreshes
 	// itself after every streamed event, and a menu that followed those would be
 	// rebuilt, and closed under the finger, all through a running turn.
@@ -473,7 +447,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		canReloadMcp: menuCanReloadMcp,
 		hasUsage: menuHasUsage,
 		pinned: menuPinned,
-		modelLabel: menuModelLabel,
 		openingShell,
 		refreshing: menuRefreshing,
 		compacting: menuCompacting,
@@ -482,7 +455,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		interfaceSupported: menuInterfaceSupported,
 		interfaceReason: menuInterfaceReason,
 		interfaceSwitching: menuInterfaceSwitching,
-	}) : undefined, [isOrchestrator, menuCanCompact, menuCanReloadMcp, menuCanRename, menuCompacting, menuHasUsage, menuInterfaceReason, menuInterfaceSupported, menuInterfaceSwitching, menuMcpReloading, menuModelLabel, menuPinned, menuReady, menuRefreshing, openingShell, turnActive]);
+	}) : undefined, [isOrchestrator, menuCanCompact, menuCanReloadMcp, menuCanRename, menuCompacting, menuHasUsage, menuInterfaceReason, menuInterfaceSupported, menuInterfaceSwitching, menuMcpReloading, menuPinned, menuReady, menuRefreshing, openingShell, turnActive]);
 
 	// Each menu item's work, read when it is chosen, so the menu does not have to
 	// change whenever a callback does.
@@ -507,7 +480,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			setManualRefreshing(true);
 			void conversation.refresh().finally(() => setManualRefreshing(false));
 		},
-		settings: () => void openTurnSettings(),
 		usage: openUsage,
 		rename: () => setRenameRequest((current) => ({
 			id: (current?.id ?? 0) + 1,
@@ -762,7 +734,6 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					onPromoteQueuedTurn={conversation.promoteQueuedTurn}
 					onCancelQueuedTurn={conversation.cancelQueuedTurn}
 					onInterrupt={() => void conversation.interrupt().catch(() => {})}
-					onOpenSettings={() => void openTurnSettings()}
 					onSettings={conversation.chooseSettings}
 					onConfigOption={conversation.setConfigOption}
 					restingInset={chatKeyboard.restingInset}

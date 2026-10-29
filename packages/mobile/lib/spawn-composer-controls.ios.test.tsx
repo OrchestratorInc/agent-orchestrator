@@ -97,6 +97,8 @@ const baseProps = (overrides: Partial<Props> = {}): Props => ({
 	approvalModes: [{ id: "auto", label: "Auto", shortLabel: "Auto" }, { id: "bypass-permissions", label: "Bypass permissions", shortLabel: "Bypass" }],
 	approvalMode: "auto",
 	onSelectApprovalMode: vi.fn(),
+	effortChoices: [{ value: "low", label: "Low", selected: false }, { value: "high", label: "High", selected: true }],
+	onSelectEffort: vi.fn(),
 	modelSelection: "__auto__",
 	modelLabel: "Default model",
 	onSelectModel: vi.fn(),
@@ -228,6 +230,27 @@ describe("iOS spawn selectors", () => {
 		expect(choices(menu).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Auto", false], ["Bypass permissions", true]]);
 		await act(async () => choices(menu)[0].props.onIsOnChange(true));
 		expect(props.onSelectApprovalMode).toHaveBeenCalledWith("auto");
+	});
+
+	// The chat's speedometer: its needle at the chosen level, the model's levels in its menu.
+	it("picks the effort from a speedometer beside the model", async () => {
+		const props = baseProps();
+		const root = await render(props);
+		const menu = identified(root, "spawn-effort");
+		expect(modifier(menu, "accessibilityLabel")?.args).toEqual(["Effort, High"]);
+		let face: ReactTestRenderer | undefined;
+		await act(async () => { face = create(menu.props.label); });
+		expect(face!.root.findAll((node) => hostType(node) === "Image")[0].props.systemName).toBe("gauge.high");
+		await act(async () => face!.unmount());
+		expect(choices(menu).map((choice) => [choiceLabel(choice), choice.props.isOn])).toEqual([["Low", false], ["High", true]]);
+		await act(async () => choices(menu)[0].props.onIsOnChange(true));
+		expect(props.onSelectEffort).toHaveBeenCalledWith("low");
+		expect(fixtures.select).toHaveBeenCalledOnce();
+	});
+
+	it("draws no speedometer for a model that takes no effort", async () => {
+		const root = await render(baseProps({ effortChoices: [] }));
+		expect(identified(root, "spawn-effort")).toBeUndefined();
 	});
 
 	it("sizes every selector to its content and scales its text with Dynamic Type", async () => {

@@ -20,6 +20,7 @@ import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, r
 import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
+import { spawnEffortChoices } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
@@ -76,6 +77,8 @@ export default function SpawnScreen() {
 	const [attachmentError, setAttachmentError] = useState<string>();
 	const [model, setModel] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
+	// An effort picked here; until then the model runs at its own default.
+	const [effort, setEffort] = useState<string>();
 	const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>();
 	// Every agent's own models, so the agent menu can offer each one's list
 	// before it is picked. The picked agent's list is the project-aware catalog.
@@ -174,6 +177,11 @@ export default function SpawnScreen() {
 	const projectApproval = projectDetail?.config?.worker?.agentConfig?.permissions ?? projectDetail?.config?.agentConfig?.permissions;
 	const approvalMode = resolveApprovalMode({ harness, chosen: approvalChoice, projectMode: projectApproval });
 	const modelSelection = modelTouched ? model : "__auto__";
+	// The model the task will run, picked or the catalog's default, for its
+	// effort levels.
+	const runningModel = displayedModel ? currentModels.find((item) => item.id === displayedModel) : currentModels.find((item) => item.isDefault);
+	const effortChoices = useMemo(() => spawnEffortChoices(runningModel, effort), [effort, runningModel]);
+	const chosenEffort = effortChoices.some((choice) => choice.selected && choice.value === effort) ? effort : undefined;
 	// Each agent's menu list, built once per change rather than per keystroke:
 	// some catalogs run to thousands of models.
 	const agentMenuModels = useMemo(() => Object.fromEntries(agents.filter((agent) => agent.selectable).map((agent) => [
@@ -275,7 +283,8 @@ export default function SpawnScreen() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [connection]);
 
-	const clearModelOverride = () => { setModel(""); setModelTouched(false); };
+	// A level belongs to the model it was picked for, so a new model starts at its own default.
+	const clearModelOverride = () => { setModel(""); setModelTouched(false); setEffort(undefined); };
 	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
 	const chooseHost = (nextHostId: string) => {
 		if (nextHostId === selectedHostId) return;
@@ -329,6 +338,7 @@ export default function SpawnScreen() {
 			clearModelOverride();
 			return;
 		}
+		if (nextModel !== model) setEffort(undefined);
 		setModel(nextModel);
 		setModelTouched(true);
 	};
@@ -431,6 +441,8 @@ export default function SpawnScreen() {
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
 				model: modelOverride(displayedModel, modelTouched),
+				// Only a level picked here; otherwise the model's default applies.
+				effort: chosenEffort,
 				// Only a mode picked here overrides the project's; an untouched
 				// picker names the project's mode, which the daemon applies anyway.
 				approvalMode: approvalChoice === approvalMode ? approvalChoice : undefined,
@@ -524,6 +536,8 @@ export default function SpawnScreen() {
 					approvalModes={approvalOptions(harness)}
 					approvalMode={approvalMode}
 					onSelectApprovalMode={(next) => setApprovalChoice(next as ApprovalMode)}
+					effortChoices={effortChoices}
+					onSelectEffort={setEffort}
 					onChoosePhoto={() => { void pickPhotos(); }}
 					onChooseFile={() => { void pickFiles(); }}
 					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut, onToggleLatched: voice.toggleLatched }}

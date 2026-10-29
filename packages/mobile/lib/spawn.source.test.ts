@@ -94,6 +94,17 @@ describe("spawn composer", () => {
 	});
 });
 
+describe("spawn effort", () => {
+	// The model's own default applies unless a level was picked here, and a
+	// level belongs to the model it was picked for.
+	it("sends only an effort the user picked, and forgets it when the model changes", () => {
+		expect(spawn).toContain("effort: chosenEffort,");
+		expect(spawn).toContain("const effortChoices = useMemo(() => spawnEffortChoices(runningModel, effort), [effort, runningModel]);");
+		expect(spawn).toContain("const clearModelOverride = () => { setModel(\"\"); setModelTouched(false); setEffort(undefined); };");
+		expect(spawn).toContain("if (nextModel !== model) setEffort(undefined);");
+	});
+});
+
 describe("spawn approval mode", () => {
 	// An untouched picker shows the project's mode, which the daemon applies on
 	// its own; only a mode picked on the sheet is sent as an override.
