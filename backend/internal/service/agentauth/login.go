@@ -75,6 +75,11 @@ func nativeLoginMethods(agentID string) []LoginMethod {
 		return []LoginMethod{{"gemini_api_key", "Google AI Studio API key", true}, {"native", "Other native sign-in", false}}
 	case "deepseek-harness":
 		return []LoginMethod{{"deepseek_api_key", "DeepSeek API key", true}, {"native", "Other native setup", false}}
+	case "copilot":
+		// GitHub Enterprise and Microsoft Entra stay in Copilot's own picker.
+		return []LoginMethod{{"browser", "GitHub account in browser", false}, {"device_code", "Device code", false}, {"copilot_token", "GitHub token", true}, {"native", "Other native sign-in", false}}
+	case "kimi":
+		return []LoginMethod{{"device_code_global", "Kimi account (kimi.ai)", false}, {"device_code_cn", "Kimi account (kimi.com)", false}, {"native", "Other native sign-in", false}}
 	default:
 		if plan, ok := planByAgentID[agentID]; ok && len(plan.command) > 0 && plan.LaunchMode == LaunchTerminal {
 			return []LoginMethod{{"native", "Native sign-in", false}}
@@ -645,6 +650,25 @@ func loginArgs(agentID, method string) ([]string, bool, error) {
 	if agentID == "deepseek-harness" && method == "deepseek_api_key" {
 		return nil, true, nil
 	}
+	if agentID == "copilot" {
+		switch method {
+		case "browser":
+			return []string{"login", "--web-flow"}, false, nil
+		case "device_code":
+			return []string{"login", "--device-code"}, false, nil
+		case "copilot_token":
+			// Copilot reads the token from stdin into its own credential store.
+			return []string{"login", "--with-token"}, true, nil
+		}
+	}
+	if agentID == "kimi" {
+		switch method {
+		case "device_code_global":
+			return []string{"login", "--region", "global"}, false, nil
+		case "device_code_cn":
+			return []string{"login", "--region", "mainland-cn"}, false, nil
+		}
+	}
 	return nil, false, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This harness does not support that UI login method. Use terminal login instead.", nil)
 }
 
@@ -843,7 +867,7 @@ func (w *loginOutput) Write(p []byte) (int, error) {
 			w.operation.snapshot.LoginURL = match
 		}
 	}
-	if w.operation.snapshot.Method == "device_code" {
+	if strings.HasPrefix(w.operation.snapshot.Method, "device_code") {
 		if code := deviceCodePattern.FindString(output); code != "" {
 			w.operation.snapshot.DeviceCode = code
 		}
@@ -861,6 +885,17 @@ func safeLoginURL(agentID, raw string) bool {
 	}
 	if agentID == "cline" {
 		return u.Hostname() == "app.cline.bot"
+	}
+	if agentID == "copilot" {
+		return u.Hostname() == "github.com" && (u.Path == "/login/device" || u.Path == "/login/oauth/authorize")
+	}
+	if agentID == "kimi" {
+		// Kimi Code's device flow: auth.kimi.ai (global) or auth.kimi.com.
+		switch u.Hostname() {
+		case "auth.kimi.ai", "auth.kimi.com", "www.kimi.ai", "www.kimi.com", "kimi.ai", "kimi.com":
+			return true
+		}
+		return false
 	}
 	if agentID != "claude-code" {
 		return false

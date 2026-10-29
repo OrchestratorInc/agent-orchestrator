@@ -181,6 +181,24 @@ func TestNativePromptRecognizesNumberedMenus(t *testing.T) {
 	}
 }
 
+func TestCopilotAndKimiLoginLinksStayOnTheirHosts(t *testing.T) {
+	for _, tc := range []struct {
+		agent, url string
+		ok         bool
+	}{
+		{"copilot", "https://github.com/login/device", true},
+		{"copilot", "https://github.com/login/oauth/authorize?client_id=x", true},
+		{"copilot", "https://evil.example/login/device", false},
+		{"kimi", "https://auth.kimi.ai/device?user_code=ABCD-1234", true},
+		{"kimi", "https://auth.kimi.com/device?user_code=ABCD-1234", true},
+		{"kimi", "https://kimi.example.com/device", false},
+	} {
+		if got := safeLoginURL(tc.agent, tc.url); got != tc.ok {
+			t.Errorf("safeLoginURL(%s, %s) = %v", tc.agent, tc.url, got)
+		}
+	}
+}
+
 func TestNativePromptReadsOnlyTheLatestMenuWithItsDigits(t *testing.T) {
 	// An earlier menu in scrollback, then the current one with a cursor line.
 	output := "1) Anthropic\n2) OpenAI\nSaved.\nSelect a provider\n\u276f 1) OpenRouter\n  2) Anthropic\n"
@@ -262,6 +280,11 @@ func TestLoginMethodsInvokeOnlyFixedCommands(t *testing.T) {
 		{"continue", "browser", []string{"login"}, false},
 		{"grok", "browser", []string{"login"}, false},
 		{"command-code", "browser", []string{"login"}, false},
+		{"copilot", "browser", []string{"login", "--web-flow"}, false},
+		{"copilot", "device_code", []string{"login", "--device-code"}, false},
+		{"copilot", "copilot_token", []string{"login", "--with-token"}, true},
+		{"kimi", "device_code_global", []string{"login", "--region", "global"}, false},
+		{"kimi", "device_code_cn", []string{"login", "--region", "mainland-cn"}, false},
 		{"opencode", "anthropic_key", nil, true},
 		{"opencode", "openai_key", nil, true},
 		{"opencode", "openrouter_key", nil, true},
