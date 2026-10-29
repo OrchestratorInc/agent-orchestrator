@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "packages/mobile/**"
+      - "packages/product-ui/src/mcp-app*"
       - ".github/workflows/mobile.yml"
 
 permissions:

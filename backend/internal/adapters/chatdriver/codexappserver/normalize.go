@@ -67,6 +67,11 @@ const itemError codexproto.ThreadItemType = "error"
 // timeline was labelled "Called tool".
 type threadItem struct {
 	codexproto.ThreadItem
+	// Added after the generated protocol's version. Older builds use appContext
+	// or mcpAppResourceUri; all three identify the same MCP Apps resource.
+	MCPAppUI *struct {
+		ResourceURI string `json:"resourceUri"`
+	} `json:"mcpAppUi,omitempty"`
 	// Message carries the text of the undeclared error item above.
 	Message string `json:"message"`
 }
@@ -1029,6 +1034,14 @@ func normalizeItem(params json.RawMessage, completed bool) []ports.ChatEvent {
 		Summary:        summary,
 		Detail:         activityDetail(it),
 	}
+	if uri := mcpAppResourceURI(it); uri != "" && len(it.Arguments)+len(it.Result) <= 8<<20 {
+		args := it.Arguments
+		if len(args) == 0 || isJSONNull(args) {
+			args = json.RawMessage(`{}`)
+		}
+		ev.MCPApp = &domain.MCPAppData{Server: deref(it.Server), Tool: deref(it.Tool), ResourceURI: uri,
+			ThreadID: p.ThreadID, Arguments: args, Result: it.Result}
+	}
 	if kind == domain.ActivityKindReasoning {
 		// The settled form of what the summary deltas streamed. Carried on the event so
 		// the projection can replace its accumulation without decoding the detail
@@ -1052,6 +1065,9 @@ func normalizeItem(params json.RawMessage, completed bool) []ports.ChatEvent {
 		// "completed"; the schema's McpToolCallError is what a failure sets.
 		if it.Error != nil && it.Error.Message != "" {
 			ev.ActivityStatus = domain.ActivityStatusFailed
+			if ev.MCPApp != nil {
+				ev.MCPApp.Result, _ = json.Marshal(map[string]any{"isError": true, "content": []map[string]string{{"type": "text", "text": it.Error.Message}}})
+			}
 		}
 		if it.Success != nil && !*it.Success {
 			ev.ActivityStatus = domain.ActivityStatusFailed
@@ -1160,6 +1176,9 @@ func truncateLabel(value string) string {
 // Provider DTOs are not passed through: only named fields AO renders.
 func activityDetail(it threadItem) []byte {
 	detail := map[string]any{}
+	if uri := mcpAppResourceURI(it); uri != "" {
+		detail["mcpApp"] = map[string]string{"resourceUri": uri}
+	}
 	if cmd := deref(it.Command); cmd != "" {
 		detail["command"] = commanddetail.UnwrapShell(cmd)
 		detail["rawCommand"] = cmd
@@ -1247,6 +1266,23 @@ func activityDetail(it threadItem) []byte {
 		return nil
 	}
 	return encodeDetail(detail)
+}
+
+func mcpAppResourceURI(it threadItem) string {
+	if it.Type != itemMcpToolCall || deref(it.Server) == "" || deref(it.Tool) == "" {
+		return ""
+	}
+	uri := deref(it.McpAppResourceURI) //nolint:staticcheck // Older Codex versions expose only this deprecated field.
+	if it.AppContext != nil && it.AppContext.ResourceURI != nil {
+		uri = *it.AppContext.ResourceURI
+	}
+	if it.MCPAppUI != nil {
+		uri = it.MCPAppUI.ResourceURI
+	}
+	if len(uri) > 4096 || !strings.HasPrefix(uri, "ui://") {
+		return ""
+	}
+	return uri
 }
 
 func isJSONNull(raw json.RawMessage) bool {

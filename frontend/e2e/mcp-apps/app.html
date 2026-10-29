@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Revenue explorer</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:24px;font:14px system-ui;color:var(--color-text-primary,#ddd);background:var(--color-background-primary,#111)}
+header{display:flex;justify-content:space-between;gap:16px}h1{margin:4px 0;font-size:22px;font-weight:600}.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--color-text-secondary,#888)}p{color:var(--color-text-secondary,#888);font-size:12px;margin:8px 0 18px}
+button{font:inherit;color:inherit;background:transparent;border:1px solid var(--color-border-primary,#444);border-radius:6px;padding:7px 11px;cursor:pointer}button[aria-pressed=true]{background:#164e46;color:#b6f5df;border-color:#3e9a85}nav{display:flex;gap:6px;margin:18px 0}
+.total{font-size:32px;font-weight:600;letter-spacing:-.05em}.chart{height:140px;display:flex;align-items:flex-end;gap:22px;padding:0 10px;border-bottom:1px solid var(--color-border-primary,#444)}.column{flex:1;display:flex;align-items:center;flex-direction:column;gap:6px;font-size:11px;color:var(--color-text-secondary,#aaa)}.bar{width:100%;max-width:90px;background:#459b87;border-radius:4px 4px 0 0}.labels{display:flex;gap:22px;padding:6px 10px;font-size:11px;color:var(--color-text-secondary,#888)}.labels span{flex:1;text-align:center}footer{display:flex;gap:8px;margin-top:20px;flex-wrap:wrap}#status{min-height:18px;margin:10px 0 0}
+</style></head><body>
+<header><div><div class="eyebrow">Analytics · 2026</div><h1>Quarterly revenue</h1></div><div><div class="total" id="total">$8.4m</div><div class="eyebrow" style="text-align:right">+18% year over year</div></div></header>
+<p>Explore a region, then send the selection back to the conversation.</p>
+<nav aria-label="Region"><button aria-pressed="true" data-region="All regions">All regions</button><button aria-pressed="false" data-region="Europe">Europe</button><button aria-pressed="false" data-region="Americas">Americas</button></nav>
+<div class="chart" id="chart" aria-label="Quarterly revenue chart"></div><div class="labels"><span>Q1</span><span>Q2</span><span>Q3</span><span>Q4</span></div>
+<footer><button id="save">Save selection</button><button id="message">Discuss selection</button><button id="export">Export data</button></footer><p id="status" role="status"></p>
+<script>
+let sequence=1,region='All regions';const waiting=new Map();
+const notify=(method,params={})=>parent.postMessage({jsonrpc:'2.0',method,params},'*');
+const request=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;waiting.set(id,{resolve,reject});parent.postMessage({jsonrpc:'2.0',id,method,params},'*')});
+const sets={'All regions':[50,65,75,94],Europe:[40,53,68,86],Americas:[62,68,80,97]};
+function draw(){document.querySelector('#chart').innerHTML=sets[region].map((height,i)=>'<div class="column"><span>$'+(height/30).toFixed(1)+'m</span><div class="bar" style="height:'+height+'px"></div></div>').join('');document.querySelector('#total').textContent=region==='All regions'?'$8.4m':region==='Europe'?'$3.8m':'$4.6m'}
+function context(value){if(value.theme)document.documentElement.style.colorScheme=value.theme;for(const [key,color] of Object.entries(value.styles?.variables??{}))document.documentElement.style.setProperty(key,color)}
+addEventListener('message',event=>{const msg=event.data;if(msg?.jsonrpc!=='2.0')return;if(msg.id===1&&msg.result){context(msg.result.hostContext);notify('ui/notifications/initialized');notify('ui/notifications/size-changed',{height:410});return}if(msg.method==='ui/notifications/host-context-changed')context(msg.params);if(msg.method==='ui/resource-teardown'){parent.postMessage({jsonrpc:'2.0',id:msg.id,result:{}},'*');return}const pending=waiting.get(msg.id);if(pending){waiting.delete(msg.id);msg.error?pending.reject(Error(msg.error.message)):pending.resolve(msg.result)}});
+for(const button of document.querySelectorAll('[data-region]'))button.onclick=()=>{region=button.dataset.region;for(const item of document.querySelectorAll('[data-region]'))item.setAttribute('aria-pressed',String(item===button));draw();request('ui/update-model-context',{structuredContent:{region,year:2026}}).catch(()=>{})};
+const run=async(method,params)=>{try{await request(method,params);document.querySelector('#status').textContent='Done'}catch(error){document.querySelector('#status').textContent=error.message}};
+document.querySelector('#save').onclick=()=>run('tools/call',{name:'save_selection',arguments:{region,year:2026}});
+document.querySelector('#message').onclick=()=>run('ui/message',{role:'user',content:[{type:'text',text:'Explain the revenue trend for '+region+'.'}]});
+document.querySelector('#export').onclick=()=>run('ui/download-file',{contents:[{type:'resource_link',uri:'mcp://analytics/revenue.csv',name:'revenue.csv',mimeType:'text/csv'}]});
+draw();parent.postMessage({jsonrpc:'2.0',id:1,method:'ui/initialize',params:{protocolVersion:'2026-01-26',appInfo:{name:'Revenue explorer',version:'1.0.0'},appCapabilities:{availableDisplayModes:['inline','fullscreen']}}},'*');
+</script></body></html>

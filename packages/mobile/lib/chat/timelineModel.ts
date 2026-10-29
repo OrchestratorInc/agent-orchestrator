@@ -125,6 +125,7 @@ function isHumanItem(item: ConversationItem): boolean {
 }
 
 function isNoticeItem(item: ConversationItem): boolean {
+	if (item.kind === "activity" && item.activityKind === "mcp_tool" && item.detail?.mcpApp) return true;
 	if (item.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
 	return item.detail?.event !== undefined && !isSteerItem(item) && item.detail.event !== "compaction" && item.activityKind !== "plan";

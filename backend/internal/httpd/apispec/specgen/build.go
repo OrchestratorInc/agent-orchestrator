@@ -159,6 +159,11 @@ func schemaName(_ reflect.Type, defaultName string) string {
 // by projectOperations(). Add an entry when a new contract type is introduced;
 // the drift test fails until the spec is regenerated, which flags the gap.
 var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names include reset-credit contracts; no credential value is stored here.
+	"ControllersMCPAppConversationIDParam":                 "MCPAppConversationIDParam",
+	"ControllersMCPAppActivityIDParam":                     "MCPAppActivityIDParam",
+	"ControllersMCPAppSnapshotResponse":                    "MCPAppSnapshotResponse",
+	"ControllersMCPAppActionRequest":                       "MCPAppActionRequest",
+	"ControllersMCPAppActionResponse":                      "MCPAppActionResponse",
 	"ControllersTelemetryIdentityResponse":                 "TelemetryIdentityResponse",
 	"ControllersAgentAccountIDParam":                       "AgentAccountIDParam",
 	"ControllersAgentAccountLoginIDParam":                  "AgentAccountLoginIDParam",
@@ -1618,6 +1623,21 @@ func shellTerminalOperations() []operation {
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/conversations/{conversationId}/mcp-apps/{activityId}", id: "getMCPApp", tag: "conversations",
+			summary: "Load an interactive tool app and its durable input and result", pathParams: []any{controllers.MCPAppConversationIDParam{}, controllers.MCPAppActivityIDParam{}},
+			resps: []respUnit{{http.StatusOK, controllers.MCPAppSnapshotResponse{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/conversations/{conversationId}/mcp-apps/{activityId}/document", id: "getMCPAppDocument", tag: "conversations",
+			summary: "Serve a saved MCP app in an opaque-origin sandbox", pathParams: []any{controllers.MCPAppConversationIDParam{}, controllers.MCPAppActivityIDParam{}},
+			resps: []respUnit{{http.StatusOK, ""}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}}, contentTypes: map[int]string{http.StatusOK: "text/html"},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/conversations/{conversationId}/mcp-apps/{activityId}/actions", id: "mcpAppAction", tag: "conversations",
+			summary: "Run an action scoped to an app's originating tool server", pathParams: []any{controllers.MCPAppConversationIDParam{}, controllers.MCPAppActivityIDParam{}}, reqBody: controllers.MCPAppActionRequest{},
+			resps: []respUnit{{http.StatusOK, controllers.MCPAppActionResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusConflict, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/renders", id: "publishSessionRender", tag: "conversations",

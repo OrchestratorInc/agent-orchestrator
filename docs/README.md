@@ -19,6 +19,7 @@ in [gemini-cli.md](gemini-cli.md).
 | [documentation-coverage.md](documentation-coverage.md) | Stable-release baseline, covered user paths, and hands-on verification still needed. |
 | [Public manual sources](../frontend/src/docs/content/index.mdx) | Existing user guides, configuration, capability catalog, CLI reference, and mobile access pages. |
 | [architecture.md](architecture.md)                     | Current backend model, package layout, status derivation, persistence/CDC, and load-bearing rules.                    |
+| [mcp-apps.md](mcp-apps.md) | Interactive Codex tool apps, action approvals, saved views, protocol boundaries, and validation. |
 | [scm-observer.md](scm-observer.md)                     | SCM subsystem: polling pipeline, durable-state invariants, PR identity model, and the rename/transfer design.         |
 | [backend-code-structure.md](backend-code-structure.md) | Package ownership rules for the Go backend: domain, services, ports, adapters, storage, HTTP, CLI, and daemon wiring. |
 | [cli/README.md](cli/README.md)                         | CLI commands and daemon control surface.                                                                              |

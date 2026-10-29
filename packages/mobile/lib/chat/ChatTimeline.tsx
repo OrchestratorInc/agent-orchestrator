@@ -47,6 +47,7 @@ import {
 	validateInput,
 } from "./elicitationModel";
 import { previewFilePath } from "../api";
+import { MCPAppFrame } from "./MCPAppFrame";
 import { ImageViewer } from "../ImageViewer";
 import { attachmentName, attachmentTileSize, editableMessageText, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
 import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEditor";
@@ -573,7 +574,7 @@ function activityRuns(items: ConversationItem[]): TimelineRow[] {
 			item.activityKind !== "error" &&
 			item.activityKind !== "file_change" &&
 			item.activityKind !== "reasoning" &&
-			item.detail?.event === undefined;
+			item.detail?.event === undefined && !item.detail?.mcpApp;
 		const previous = rows[rows.length - 1];
 		if (runnable && previous?.kind === "activities" && previous.items[0]?.turnId === item.turnId) {
 			previous.items.push(item);
@@ -649,6 +650,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const failed = activity.status === "failed" || detail.success === false || Boolean(detail.error);
 	const body = detail.arguments !== undefined || detail.result !== undefined || Boolean(detail.error || detail.progress);
 	return <View style={styles.activityWrap}>
+		{detail.mcpApp?.conversationId && <MCPAppFrame conversationId={detail.mcpApp.conversationId} activityId={activity.id} completed={activity.status !== "running"} />}
 		<Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => { haptics.tap(); setOpen((value) => !value); }} style={styles.activityRow}>
 			<Feather name="tool" size={12} color={failed ? t.red : t.textSecondary} />
 			<Text style={[styles.server, failed && { color: t.red }]}>{detail.server ?? detail.namespace ? `${detail.server ?? detail.namespace}/` : ""}</Text>

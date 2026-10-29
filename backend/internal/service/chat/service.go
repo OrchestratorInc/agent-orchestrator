@@ -53,6 +53,7 @@ type SessionReader interface {
 
 // Service owns the live Chat controllers.
 type Service struct {
+	mcpAppApprovals        sync.Map
 	store                  Store
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader

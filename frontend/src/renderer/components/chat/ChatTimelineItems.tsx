@@ -1,4 +1,5 @@
 import { AppLink } from "../AppLink";
+import { MCPAppFrame } from "./MCPAppFrame";
 import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 /**
  * Timeline entries for the Chat surface.
@@ -2096,6 +2097,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 
 	return (
 		<div className="min-w-0 max-w-full">
+			{detail?.mcpApp?.conversationId && <MCPAppFrame conversationId={detail.mcpApp.conversationId} activityId={activity.id} completed={activity.status !== "running"} />}
 			<button
 				type="button"
 				onClick={() => setOpen((prev) => !prev)}
