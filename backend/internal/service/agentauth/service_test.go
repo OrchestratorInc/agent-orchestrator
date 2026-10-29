@@ -353,6 +353,8 @@ type recordingTerminalOpener struct {
 	calls    int
 	input    shellterm.OpenCommandTerminalInput
 	terminal shellterm.ShellTerminal
+	alive    bool
+	probeErr error
 }
 
 type managedExecutableResolver struct {
@@ -384,6 +386,10 @@ func (o *recordingTerminalOpener) OpenCommandTerminal(_ context.Context, in shel
 	o.calls++
 	o.input = in
 	return o.terminal, nil
+}
+
+func (o *recordingTerminalOpener) IsShellTerminalChildAlive(context.Context, string) (bool, error) {
+	return o.alive, o.probeErr
 }
 
 func TestLogoutUsesAdapterExecutableAndNeverLoginLauncher(t *testing.T) {

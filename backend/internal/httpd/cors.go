@@ -117,6 +117,10 @@ func rendererOnlyArea(path string) string {
 			"/api/v1/agents/codex/account-switches",
 			"/api/v1/agents/accounts",
 		}},
+		{"agent credential management", []string{
+			"/api/v1/agents/codex/auth/operations",
+			"/api/v1/agents/claude-code/auth/operations",
+		}},
 		// Cua Driver operates native apps with the user's OS permissions, and
 		// the settings toggle decides whether agents are told to use it.
 		{"computer use", []string{

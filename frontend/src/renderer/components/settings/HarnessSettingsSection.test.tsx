@@ -265,6 +265,75 @@ describe("HarnessSettingsSection", () => {
 		expect(await within(page).findByText("Login status unavailable")).toBeInTheDocument();
 	});
 
+	it("opens login inside the Account tab without a modal or terminal", async () => {
+		const readiness = readyCatalog();
+		readiness.agents.find((agent) => agent.id === "codex")!.authentication.state = "unauthorized";
+		mockInstalledOperations("npm", readiness);
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/auth-plans"
+			? { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal", methods: [{ id: "browser", label: "ChatGPT in browser", secret: false }, { id: "api_key", label: "OpenAI API key", secret: true }] }] } } as never
+			: get(path, options));
+		renderSection();
+		await userEvent.click(await findListRow("codex"));
+		const page = await findAgentRow("codex");
+		await userEvent.click(within(page).getByRole("button", { name: "Login" }));
+		expect(await within(page).findByRole("region", { name: "Sign in to Codex" })).toBeVisible();
+		expect(screen.getByRole("tabpanel", { name: "Account" })).toContainElement(screen.getByRole("region", { name: "Sign in to Codex" }));
+		expect(screen.queryByRole("dialog")).toBeNull();
+		expect(screen.getByRole("button", { name: "ChatGPT in browser" })).toBeEnabled();
+		expect(screen.queryByTestId("inline-terminal-body")).toBeNull();
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
+		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		expect(screen.queryByRole("region", { name: "Sign in to Codex" })).toBeNull();
+		await userEvent.click(within(page).getByRole("button", { name: "Login" }));
+		await userEvent.click(within(page).getByRole("tab", { name: "Health" }));
+		await userEvent.click(within(page).getByRole("tab", { name: "Account" }));
+		expect(screen.queryByRole("region", { name: "Sign in to Codex" })).toBeNull();
+		expect(within(page).getByRole("button", { name: "Login" })).toBeEnabled();
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("blocks updates during inline sign-in and releases the guard after cancellation", async () => {
+		mockInstalledOperations("npm");
+		const login = { id: "login-update-guard", agentId: "codex", method: "browser", status: "running", expiresAt: "2026-10-28T12:00:00Z", loginUrl: "https://auth.openai.com/authorize" };
+		const get = vi.mocked(apiClient.GET).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", available: true, launchMode: "terminal", methods: [{ id: "browser", label: "ChatGPT in browser", secret: false }] }] } } as never;
+			if (path === "/api/v1/agents/{agent}/auth/operations/{operationId}") return { data: login } as never;
+			return get(path, options);
+		});
+		const post = vi.mocked(apiClient.POST).getMockImplementation()! as (path: string, options: unknown) => Promise<never>;
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth/operations" ? { data: login } as never : post(path, options));
+		let finishCancellation!: () => void;
+		const cancellation = new Promise<never>((resolve) => { finishCancellation = () => resolve({} as never); });
+		vi.spyOn(apiClient, "DELETE").mockReturnValue(cancellation);
+		try {
+			renderSection();
+			const page = await findAgentRow("codex");
+			const update = await within(page).findByRole("button", { name: "Update" });
+			expect(update).toBeEnabled();
+			// Also exercise the handler before React replaces the old Update control.
+			act(() => {
+				fireEvent.click(within(page).getByRole("button", { name: "Log in again" }));
+				fireEvent.click(update);
+			});
+			const panel = await within(page).findByRole("region", { name: "Sign in to Codex" });
+			await userEvent.click(within(panel).getByRole("button", { name: "ChatGPT in browser" }));
+			expect(await within(panel).findByRole("button", { name: "Open sign-in page" })).toBeVisible();
+			expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
+			await userEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
+			await act(async () => finishCancellation());
+			const unlockedUpdate = await within(page).findByRole("button", { name: "Update" });
+			expect(unlockedUpdate).toBeEnabled();
+			await userEvent.click(unlockedUpdate);
+			await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } }));
+		} finally {
+			finishCancellation();
+		}
+	});
+
 	it("lists names with a status and update mark, then opens one harness page with its actions", async () => {
 		mockInstalledOperations("npm");
 		renderSection();
@@ -776,6 +845,43 @@ describe("HarnessSettingsSection", () => {
 		mockInstalledOperations("npm");
 		renderSection();
 		expect(within(await findAgentRow("cursor")).queryByRole("button", { name: "Log out" })).toBeNull();
+	});
+
+	it("blocks updates during inline login and its cleanup after leaving the page", async () => {
+		mockInstalledOperations("npm");
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
+		const operation = { id: "inline-login", agentId: "codex", method: "browser", status: "running", expiresAt: "2026-10-27T12:00:00Z" };
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "codex", action: "login", launchMode: "terminal", available: true, methods: [{ id: "browser", label: "ChatGPT in browser", secret: false }] }] } } as never;
+			if (path === "/api/v1/agents/{agent}/auth/operations/{operationId}") return { data: operation } as never;
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/auth/operations" ? { data: operation } as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
+		let finishStop!: () => void;
+		const stopped = new Promise<never>((resolve) => { finishStop = () => resolve({} as never); });
+		const remove = vi.spyOn(apiClient, "DELETE").mockReturnValue(stopped);
+		try {
+			renderSection();
+			let page = await findAgentRow("codex");
+			expect(await within(page).findByRole("button", { name: "Update" })).toBeEnabled();
+			await userEvent.click(within(page).getByRole("button", { name: "Log in again" }));
+			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
+			await userEvent.click(within(page).getByRole("button", { name: "ChatGPT in browser" }));
+			await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/auth/operations", expect.anything()));
+			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
+			expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/install", expect.anything());
+			backToList();
+			await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+			page = await findAgentRow("codex");
+			expect(within(page).queryByRole("button", { name: "Update" })).toBeNull();
+			await act(async () => finishStop());
+			await waitFor(() => expect(within(page).getByRole("button", { name: "Update" })).toBeEnabled());
+			await userEvent.click(within(page).getByRole("button", { name: "Update" }));
+			expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { method: "npm", operation: "update", expectedVersion: "1.3.0" } });
+		} finally {
+			finishStop();
+		}
 	});
 
 	it("offers to log in again for a signed-in harness", async () => {

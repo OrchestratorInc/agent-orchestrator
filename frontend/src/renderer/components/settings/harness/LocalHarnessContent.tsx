@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, CircleArrowUp, LoaderCircle, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
 import { agentAccountProviderFor, agentAccountsQueryKey, fetchAgentAccounts, followsSavedAccount } from "../../../hooks/useAgentAccounts";
@@ -35,6 +35,7 @@ import {
 } from "../../../hooks/useHarnessUpdates";
 import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../../hooks/useShellTerminals";
 import { AgentCheckError } from "../../../lib/agent-check-error";
+import { agentLoginKey, isAgentLoginPending, pendingAgentLogins, subscribeAgentLogins } from "../../../lib/agent-login-lifecycle";
 import { agentLabel, AGENT_OPTIONS, type AgentId } from "../../../lib/agent-options";
 import { apiErrorMessage } from "../../../lib/api-client";
 import { aoBridge } from "../../../lib/bridge";
@@ -48,6 +49,7 @@ import { Button } from "../../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
 import { describeHarness, supportsUpdate, type AgentAuthState, type AgentOperation, type HarnessDetails, type OperationAttempt } from "./describe-harness";
 import { HarnessAccountTab } from "./HarnessAccountTab";
+import { HarnessLoginPanel } from "./HarnessLoginPanel";
 import { closeAuthTerminal, type AuthTerminalWorkflow } from "./HarnessAuthTerminalPanel";
 import { diagnosticsText, healthText, machineText } from "./harness-diagnostics";
 import { HarnessHealthTab } from "./HarnessHealthTab";
@@ -104,6 +106,10 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const [expandedDiagnostics, setExpandedDiagnostics] = useState<Partial<Record<AgentId, boolean>>>({});
 	const [copiedAgent, setCopiedAgent] = useState<AgentId | null>(null);
 	const [authWorkflow, setAuthWorkflow] = useState<AuthTerminalWorkflow | null>(null);
+	const [uiLoginAgent, setUiLoginAgent] = useState<AgentId | null>(null);
+	const pendingUILogins = useSyncExternalStore(subscribeAgentLogins, pendingAgentLogins);
+	const uiLoginAgentRef = useRef<AgentId | null>(null);
+	const closeUILogin = () => { uiLoginAgentRef.current = null; setUiLoginAgent(null); };
 	const authWorkflowRef = useRef<AuthTerminalWorkflow | null>(null);
 	const authStartPendingRef = useRef(false);
 	const mountedRef = useRef(true);
@@ -132,12 +138,14 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	// Opening a page refreshes its models once readiness says it is installed.
 	const modelsRefreshPending = useRef<AgentId | null>(null);
 	const openDetail = (agentId: AgentId, tab: HarnessDetailTab = "account") => {
+		if (uiLoginAgentRef.current && (uiLoginAgentRef.current !== agentId || tab !== "account")) closeUILogin();
 		selectedAgentRef.current = agentId;
 		setSelectedAgentId(agentId);
 		setDetailTab(tab);
 		modelsRefreshPending.current = agentId;
 	};
 	const closeDetail = () => {
+		closeUILogin();
 		selectedAgentRef.current = null;
 		setSelectedAgentId(null);
 	};
@@ -432,6 +440,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 
 	const startAgentOperation = async (agentId: AgentId, method: string, operation: AgentOperation): Promise<boolean> => {
 		if (isActiveInstallJob(queryClient.getQueryData<InstallJob[]>(jobsKey)?.find((job) => job.target === agentId))
+			|| uiLoginAgentRef.current === agentId || isAgentLoginPending(agentId, hostId)
 			|| authWorkflowRef.current?.agentId === agentId || authStartPendingRef.current) return false;
 		if (operation === "update" && (!installed.has(agentId)
 			|| operationMethodId(agentId) !== method
@@ -451,7 +460,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				const result = await startHarnessUpdate({
 					agentId,
 					methodId: method,
-					canStart: () => mountedRef.current,
+					canStart: () => mountedRef.current && uiLoginAgentRef.current !== agentId && !isAgentLoginPending(agentId, hostId),
 				});
 				// Sessions are not a failure to retry: show what to end.
 				if (result.inUse) {
@@ -482,6 +491,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 
 	const requestUpdate = (agentId: AgentId) => {
 		if (!installed.has(agentId) || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))
+			|| uiLoginAgentRef.current === agentId || isAgentLoginPending(agentId, hostId)
 			|| authWorkflowRef.current?.agentId === agentId || authStartPendingRef.current) return;
 		const methods = plans.get(agentId)?.methods ?? [];
 		const method = operationMethodId(agentId);
@@ -522,9 +532,14 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		window.setTimeout(() => setCopiedAgent((current) => (current === agentId ? null : current)), 1_500);
 	};
 
-	const startAuth = async (agentId: AgentId, action: "login" | "logout" = "login"): Promise<boolean> => {
-		if (authWorkflowRef.current || authStartPendingRef.current || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))) return false;
+	const startAuth = async (agentId: AgentId, action: "login" | "logout" = "login", terminal = false): Promise<boolean> => {
+		if (authWorkflowRef.current || uiLoginAgentRef.current || isAgentLoginPending(agentId, hostId) || authStartPendingRef.current || pendingActions.current.has(agentId) || isActiveInstallJob(jobMap.get(agentId))) return false;
 		if (action === "logout" && !agentAuthPlans.get(agentId)?.logoutCommand) return false;
+		if (action === "login" && !terminal && agentAuthPlans.get(agentId)?.methods?.length) {
+			uiLoginAgentRef.current = agentId;
+			setUiLoginAgent(agentId);
+			return true;
+		}
 		authStartPendingRef.current = true;
 		updateAuthState(agentId, { pending: true, error: null });
 		try {
@@ -735,7 +750,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		authPlan: agentAuthPlans.get(agentId),
 		authPlansPending: authPlans.isPending,
 		authPlansFailed: authPlans.isError,
-		authState: authStates[agentId],
+		authState: { error: authStates[agentId]?.error ?? null, pending: Boolean(authStates[agentId]?.pending || uiLoginAgent === agentId || pendingUILogins.has(agentLoginKey(agentId, hostId))) },
 		authWorkflow: authWorkflow?.agentId === agentId ? authWorkflow : null,
 		updatedAt: lastUpdatedAt[agentId],
 	});
@@ -746,7 +761,25 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 		return <HarnessAccountTab
 			details={details}
 			hostId={hostId}
-			authWorkflowActive={Boolean(authWorkflow)}
+			loginPanel={uiLoginAgent === agentId ? <HarnessLoginPanel
+				key={agentId}
+				agentId={agentId}
+				methods={agentAuthPlans.get(agentId)?.methods ?? []}
+				hostId={hostId}
+				onClose={closeUILogin}
+				onTerminal={async () => { closeUILogin(); await startAuth(agentId, "login", true); }}
+				onVerify={async () => {
+					for (let attempt = 0; attempt < AUTH_VERIFY_ATTEMPTS; attempt++) {
+						if (attempt) await new Promise((resolve) => window.setTimeout(resolve, AUTH_VERIFY_RETRY_MS));
+						if (!mountedRef.current || uiLoginAgentRef.current !== agentId) return false;
+						const result = await checkAuth(agentId, { fresh: true });
+						const cliSignedIn = await refreshCliLogin(agentId);
+						if (cliLoginOnOwnRow(agentId) ? cliSignedIn === true : result?.agent?.authStatus === "authorized") return true;
+					}
+					return false;
+				}}
+			/> : undefined}
+			authWorkflowActive={Boolean(authWorkflow) || uiLoginAgent !== null}
 			copied={copiedAgent === agentId}
 			diagnosticsExpanded={expandedDiagnostics[agentId] === true}
 			onToggleDiagnostics={() => setExpandedDiagnostics((current) => ({ ...current, [agentId]: !current[agentId] }))}
@@ -862,7 +895,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 							{/* Pane title: one step above row labels (15px), below the page heading. */}
 							<span className="min-w-0 flex-1 text-subtitle font-semibold leading-6 text-settings-label" id={`harness-agent-${selectedDetails.agentId}`}>{agentLabel(selectedDetails.agentId)}</span>
 						</div>
-						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab} onValueChange={(value) => setDetailTab(value as HarnessDetailTab)}>
+						<Tabs className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden" value={detailTab} onValueChange={(value) => { if (value !== "account") closeUILogin(); setDetailTab(value as HarnessDetailTab); }}>
 							<TabsList className={HARNESS_TABS_CLASS} aria-label={t("settings.harness.detailTabs", { agent: agentLabel(selectedDetails.agentId) })}>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="account">{t("settings.harness.tabAccount")}</TabsTrigger>
 								<TabsTrigger className={HARNESS_TAB_CLASS} value="models">{t("settings.harness.tabModels")}</TabsTrigger>
@@ -898,6 +931,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 					</div>
 				) : null}
 			</div>
+
 			<ConfirmDialog
 				open={logoutRequest !== null}
 				title={t("settings.harness.logoutConfirmTitle", { agent: logoutRequest ? agentLabel(logoutRequest) : "" })}
