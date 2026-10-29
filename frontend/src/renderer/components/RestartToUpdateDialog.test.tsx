@@ -377,6 +377,20 @@ it("renders bounded recovery details as plain text", async () => {
 	expect(alert.lastElementChild?.textContent).toHaveLength(1000);
 });
 
+it("keeps only the heading when the install rejects with an updater dump (#5755)", async () => {
+	updInstall.mockRejectedValue(new Error(
+		"Error invoking remote method 'updates:install': Error: HttpError: 504 Gateway Time-out\nHeaders: {\"set-cookie\": \"_gh_sess=abc123\"}",
+	));
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({ state: "downloaded", version: "1.2.3" });
+	await screen.findByText("v1.2.3");
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	const alert = await screen.findByRole("alert");
+	expect(alert).toHaveTextContent("AO could not prepare the update. Please try again.");
+	expect(alert).not.toHaveTextContent(/HttpError|set-cookie/);
+	expect(alert.children).toHaveLength(1);
+});
+
 it("shows the replacement build and requires another explicit confirmation", async () => {
 	useUiStore.setState({ updateInstallPromptOpen: true });
 	updInstall.mockResolvedValueOnce({ state: "confirmation-required", version: "2.2.0", releaseNotes: "New release B" });

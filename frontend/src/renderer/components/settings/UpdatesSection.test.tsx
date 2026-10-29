@@ -127,6 +127,27 @@ it("names the newer build when a full disk holds it back (#6607)", async () => {
 	expect(screen.getByText("v0.13.8-nightly.202610121355 is available")).toBeVisible();
 });
 
+// A dump the main process has not learned to rewrite yet must still stay out
+// of Settings: no response body, headers or app.asar paths (#5755).
+const UPDATER_DUMP =
+	'Cannot parse releases feed: HttpError: 504 Gateway Time-out\nHeaders: {"set-cookie": "_gh_sess=abc123"}\n    at createHttpError (C:\\AO\\resources\\app.asar\\httpExecutor.js:53:12)';
+
+it("shows a short failure instead of an updater dump in the status line (#5755)", async () => {
+	updGetStatus.mockResolvedValue({ state: "error", message: UPDATER_DUMP } satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByText("Update failed.")).toBeVisible();
+	expect(screen.queryByText(/set-cookie|app\.asar|HttpError/)).toBeNull();
+});
+
+it("shows a short failure instead of an updater dump beside a staged build (#5755)", async () => {
+	updGetStatus.mockResolvedValue({ state: "downloaded", version: "1.2.3", checkError: UPDATER_DUMP } satisfies UpdateStatus);
+	renderUpdates();
+
+	expect(await screen.findByText("Update failed.")).toBeVisible();
+	expect(screen.queryByText(/set-cookie|app\.asar|HttpError/)).toBeNull();
+});
+
 it.each(["downloaded", "error"] as const)("shows updating feedback immediately until the update reaches %s", async (state) => {
 	let emit: (status: UpdateStatus) => void = () => undefined;
 	updOnStatus.mockImplementation((listener: typeof emit) => {

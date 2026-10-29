@@ -37,6 +37,7 @@ import {
   type UpdatePhase,
   type UpdateTrigger,
 } from "../shared/update-telemetry";
+import { isManifest404Error, userFacingUpdateError } from "../shared/update-error-message";
 
 // Current AO uses the stock full-ZIP path. A future compatible build explicitly
 // selects the v2 subclass; old clients never learn its metadata or map URLs.
@@ -1622,7 +1623,7 @@ function recordAutomaticNetFailure(): void {
 // server and so breaks the streak — otherwise a single interleaving non-net
 // error would let a stale streak still trip the nudge (#3526).
 function recordAutomaticCheckFailure(err: unknown): void {
-  lastCheckError = errorMessage(err);
+  lastCheckError = userFacingUpdateError(err, "check");
   if (isNetError(err)) recordAutomaticNetFailure();
   else consecutiveAutomaticNetFailures = 0;
   // Guarded like the net streak: one check can surface as both an "error" event
@@ -1677,26 +1678,11 @@ function clearUnrecoverableRememberedBuild(): void {
   stopEscalationTimer();
 }
 
-// errorMessage extracts the user-facing message for an update error status,
-// defaulting null/undefined to a generic label. Net-error restart guidance is
-// localized in the renderer from the netError flag instead of being built here
-// (#3526).
-function errorMessage(err: unknown): string {
-  return err instanceof Error
-    ? err.message
-    : err == null
-      ? "Update check failed"
-      : String(err);
-}
-
-// isManifest404Error checks whether the error is a 404 on a release
-// manifest YAML file — a routine condition that should not be surfaced
-// to users as an error dialog.
-function isManifest404Error(err: unknown): boolean {
-  const e = err as Error & { code?: string };
-  if (e.code === "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND") return true;
-  const msg = e.message ?? "";
-  return msg.includes("HttpError: 404") && /\.yml\b/i.test(msg);
+// The restart dialog renders a rejected install's message, so it gets the
+// rewritten line too, never electron-updater's dump (#5755).
+function userFacingInstallError(err: unknown): unknown {
+  const message = userFacingUpdateError(err, "install");
+  return err instanceof Error && err.message === message ? err : new Error(message);
 }
 
 // A staged build that the native installer refused to install, as opposed to
@@ -1776,7 +1762,7 @@ function settleWithoutFailure(): void {
 }
 
 function isStagedInstallRejection(err: unknown): boolean {
-  return STAGED_INSTALL_REJECTION_PATTERN.test(errorMessage(err));
+  return STAGED_INSTALL_REJECTION_PATTERN.test(err instanceof Error ? err.message : String(err));
 }
 
 /**
@@ -2294,7 +2280,7 @@ function wireUpdaterEvents(): void {
           }),
         );
       } else if (stagedAtMs !== undefined) {
-        lastCheckError = errorMessage(err);
+        lastCheckError = userFacingUpdateError(err, "check");
         broadcastUpdaterStatus(stagedDownloadedStatus());
       } else {
         broadcastCompletedCheck({
@@ -2308,9 +2294,11 @@ function wireUpdaterEvents(): void {
     // All other errors: broadcast so the user knows something went wrong.
     // Chromium network-stack failures carry a netError flag so the renderer can
     // localize restart guidance instead of showing the raw net:: string (#3526).
+    // The full error stays in the log; Settings gets one sentence (#5755).
+    console.error(`update ${activeUpdaterPhase} failed:`, err);
     const status: UpdateStatus = {
       state: "error",
-      message: errorMessage(err),
+      message: userFacingUpdateError(err, activeUpdaterPhase),
       ...(isNetError(err) ? { netError: true } : {}),
     };
     if (activeUpdaterPhase === "check") broadcastCompletedCheck(status);
@@ -2463,7 +2451,7 @@ async function runAutomaticUpdateCheck(
         // (#3526). Record before restoring so the restore broadcast is stamped.
         if (handleMacStagingFailure(err)) return;
         if (activeUpdaterPhase === "download") {
-          if (!downloadStalled && lastStatus.state !== "error") broadcast(withActiveRequest({ state: "error", message: errorMessage(err), version: pendingUpdateVersion }));
+          if (!downloadStalled && lastStatus.state !== "error") broadcast(withActiveRequest({ state: "error", message: userFacingUpdateError(err, "download"), version: pendingUpdateVersion }));
         } else {
           recordAutomaticCheckFailure(err);
           restoreAutomaticCheckPreviousStatus();
@@ -2682,13 +2670,14 @@ export async function checkForUpdatesNow(
         ...(options.requestId === undefined ? {} : { requestId: options.requestId }),
       });
       if (stagedAtMs !== undefined) {
-        lastCheckError = errorMessage(err);
+        lastCheckError = userFacingUpdateError(err, failed.phase);
         broadcast(stagedDownloadedStatus());
       }
     } else {
+      console.error(`manual update ${failed.phase} failed:`, err);
       broadcastCompletedCheck({
         state: "error",
-        message: errorMessage(err),
+        message: userFacingUpdateError(err, failed.phase),
         ...(isNetError(err) ? { netError: true } : {}),
         ...(options.requestId === undefined ? {} : { requestId: options.requestId }),
       });
@@ -2757,11 +2746,10 @@ export async function returnToHome(
       settleWithoutFailure();
       return;
     }
+    console.error(`return home ${failed.phase} failed:`, err);
     broadcast({
       state: "error",
-      message:
-        (err as Error)?.message ??
-        (failed.phase === "download" ? "Download failed" : "Return failed"),
+      message: userFacingUpdateError(err, failed.phase),
       ...(requestId === undefined ? {} : { requestId }),
     });
   }
@@ -2824,9 +2812,10 @@ export async function downloadUpdateNow(requestId?: string): Promise<void> {
         requestId,
       });
     } else {
+      console.error("update download failed:", err);
       broadcast({
         state: "error",
-        message: (err as Error)?.message ?? "Download failed",
+        message: userFacingUpdateError(err, "download"),
         requestId,
       });
     }
@@ -2956,9 +2945,14 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       throw new Error("The update is not ready to install. Check for updates again.");
     }
     if (!stagedInCurrentProcess) {
-      await runSerializedUpdaterOperation("manual-install", async () => {
-        await prepareRememberedNonDarwinUpdate();
-      });
+      try {
+        await runSerializedUpdaterOperation("manual-install", async () => {
+          await prepareRememberedNonDarwinUpdate();
+        });
+      } catch (err) {
+        console.error("failed to prepare update for restart:", err);
+        throw userFacingInstallError(err);
+      }
     }
     if (confirmedVersion !== undefined && stagedVersion && confirmedVersion !== stagedVersion) {
       return { state: "confirmation-required", version: stagedVersion,
@@ -3050,9 +3044,10 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       stagedInCurrentProcess = false;
       nativeReadyVersion = undefined;
       console.error("failed to prepare update for restart:", err);
-      await progress?.fail(errorMessage(err)).catch(() => undefined);
-      broadcast({ state: "error", message: errorMessage(err) });
-      throw err;
+      const message = userFacingUpdateError(err, "install");
+      await progress?.fail(message).catch(() => undefined);
+      broadcast({ state: "error", message });
+      throw userFacingInstallError(err);
     }
   }).then(() => confirmation, err => {
     installAbandoned = true;

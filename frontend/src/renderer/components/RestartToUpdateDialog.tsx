@@ -10,6 +10,7 @@ import { useUiStore } from "../stores/ui-store";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { DesktopReleaseNotes } from "./DesktopReleaseNotes";
+import { displayableUpdateError } from "../../shared/update-error-message";
 import {
 	Dialog,
 	DialogContent,
@@ -140,9 +141,10 @@ function RestartToUpdateDialogBody() {
 		} catch (error) {
 			if (mounted.current) {
 				// Electron wraps IPC rejections with transport details. Keep the
-				// actionable main-process message, rendered as bounded plain text.
+				// actionable main-process message, rendered as bounded plain text,
+				// and drop an updater dump in favor of the heading alone (#5755).
 				setFailureDetail(error instanceof Error
-					? error.message.replace(/^Error invoking remote method ['"][^'"]+['"]: (?:Error: )?/, "").trim().slice(0, 1000)
+					? displayableUpdateError(error.message.replace(/^Error invoking remote method ['"][^'"]+['"]: (?:Error: )?/, "").trim().slice(0, 1000), "")
 					: "");
 			}
 		} finally {
