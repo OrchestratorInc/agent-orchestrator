@@ -53,6 +53,12 @@ vi.mock("../hooks/useSettings", () => ({
 	useSettings: () => ({ settings: { trackerIntakeEnabled: trackerIntakeGate.enabled }, isLoading: false, error: undefined }),
 }));
 
+// Pre-flight is covered by its own suites; here every spawn is cleared.
+vi.mock("../lib/spawn-preflight", () => ({
+	ensureSpawnPreflight: vi.fn(async (input: { harness?: string }) => ({ harness: input.harness })),
+	isSpawnPreflightCancelled: () => false,
+}));
+
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
 		GET: getMock,

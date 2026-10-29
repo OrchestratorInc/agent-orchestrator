@@ -1,0 +1,200 @@
+import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SpawnPreflightInput, SpawnPreflightReport } from "../lib/spawn-preflight";
+
+const mocks = vi.hoisted(() => ({
+	check: vi.fn(),
+	setAgent: vi.fn(),
+	setBranch: vi.fn(),
+	clipboard: vi.fn(),
+	openExternal: vi.fn(),
+}));
+
+vi.mock("../lib/spawn-preflight", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/spawn-preflight")>()),
+	checkSpawnPreflight: mocks.check,
+	setProjectOrchestratorAgent: mocks.setAgent,
+	setProjectDefaultBranch: mocks.setBranch,
+}));
+
+vi.mock("../hooks/useAgentReadinessQuery", () => ({
+	useEnsureAgentReadiness: () => true,
+	useAgentReadinessQuery: () => ({
+		data: {
+			agents: [
+				{ id: "codex", label: "Codex", effectiveReadiness: "not_ready" },
+				{ id: "claude-code", label: "Claude Code", effectiveReadiness: "ready" },
+				{ id: "opencode", label: "opencode", effectiveReadiness: "unknown" },
+			],
+		},
+	}),
+}));
+
+vi.mock("../lib/bridge", () => ({
+	aoBridge: { clipboard: { writeText: mocks.clipboard }, app: { openExternal: mocks.openExternal } },
+}));
+
+import { SpawnPreflightDialog } from "./SpawnPreflightDialog";
+import { useSpawnPreflightStore } from "../lib/spawn-preflight";
+
+const readyReport: SpawnPreflightReport = { ready: true, canProceed: true, kind: "orchestrator", harness: "claude-code", checks: [] };
+
+function openDialog(report: SpawnPreflightReport, input: SpawnPreflightInput = { projectId: "p1", kind: "orchestrator" }) {
+	const resolve = vi.fn();
+	const reject = vi.fn();
+	act(() => useSpawnPreflightStore.getState().open({ input, report, resolve, reject }));
+	render(<SpawnPreflightDialog />);
+	return { resolve, reject };
+}
+
+beforeEach(() => {
+	vi.clearAllMocks();
+	useSpawnPreflightStore.setState({ pending: null });
+	mocks.clipboard.mockResolvedValue(undefined);
+	mocks.setAgent.mockResolvedValue(undefined);
+	mocks.setBranch.mockResolvedValue(undefined);
+});
+
+describe("SpawnPreflightDialog", () => {
+	// The daemon resolves each OS's fix; the dialog must show exactly that
+	// command and let the user copy it on every platform.
+	it.each([
+		["Windows", "agent_not_installed", "Codex is not installed", "npm install -g @openai/codex"],
+		["macOS", "runtime_prerequisite_missing", "tmux is not installed", "brew install tmux"],
+		["Linux", "agent_unauthorized", "Codex is not signed in", "codex login"],
+	] as const)("shows and copies the %s fix command", async (_os, code, label, command) => {
+		const user = userEvent.setup();
+		const report: SpawnPreflightReport = {
+			ready: false, canProceed: false, kind: "orchestrator", harness: "codex",
+			checks: [{ code, blocking: true, command, documentationUrl: "https://example.test/setup" }],
+		};
+		openDialog(report);
+		expect(screen.getByRole("dialog", { name: "Finish setup to start the orchestrator" })).toBeInTheDocument();
+		expect(screen.getByText(label)).toBeInTheDocument();
+		expect(screen.getByText(command)).toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Copy command" }));
+		expect(mocks.clipboard).toHaveBeenCalledWith(command);
+		await user.click(screen.getByRole("button", { name: /Setup guide/ }));
+		expect(mocks.openExternal).toHaveBeenCalledWith("https://example.test/setup");
+	});
+
+	it("re-checks with the copied fix as the method and starts once clear", async () => {
+		const user = userEvent.setup();
+		mocks.check.mockResolvedValue(readyReport);
+		const { resolve } = openDialog({
+			ready: false, canProceed: false, kind: "orchestrator", harness: "codex",
+			checks: [{ code: "agent_not_installed", blocking: true, command: "npm install -g @openai/codex" }],
+		});
+		await user.click(screen.getByRole("button", { name: "Copy command" }));
+		await user.click(screen.getByRole("button", { name: "Check again" }));
+		expect(mocks.check).toHaveBeenCalledWith(
+			{ projectId: "p1", kind: "orchestrator" },
+			{ blockers: ["agent_not_installed"], method: "install" },
+		);
+		expect(resolve).toHaveBeenCalledWith({ harness: "claude-code" });
+		expect(useSpawnPreflightStore.getState().pending).toBeNull();
+	});
+
+	it("keeps the dialog open with the new report when a re-check is still blocked", async () => {
+		const user = userEvent.setup();
+		const stillBlocked: SpawnPreflightReport = {
+			ready: false, canProceed: false, kind: "orchestrator", harness: "codex",
+			checks: [{ code: "default_branch_unresolved", blocking: true }],
+		};
+		mocks.check.mockResolvedValue(stillBlocked);
+		const { resolve } = openDialog({
+			ready: false, canProceed: false, kind: "orchestrator", harness: "codex",
+			checks: [{ code: "agent_not_installed", blocking: true }],
+		});
+		await user.click(screen.getByRole("button", { name: "Check again" }));
+		expect(resolve).not.toHaveBeenCalled();
+		expect(useSpawnPreflightStore.getState().pending?.report).toEqual(stillBlocked);
+		expect(mocks.check.mock.calls[0]?.[1]).toEqual({ blockers: ["agent_not_installed"], method: "recheck" });
+	});
+
+	it("switches the orchestrator to another ready agent and persists it", async () => {
+		const user = userEvent.setup();
+		mocks.check.mockResolvedValue(readyReport);
+		const { resolve } = openDialog({
+			ready: false, canProceed: false, kind: "orchestrator", harness: "codex",
+			checks: [{ code: "agent_not_installed", blocking: true }],
+		});
+		await user.click(screen.getByRole("combobox", { name: "Use another installed agent" }));
+		// Only agents that are ready and not the blocked one are offered.
+		expect(screen.queryByRole("option", { name: "opencode" })).toBeNull();
+		await user.click(screen.getByRole("option", { name: "Claude Code" }));
+		await user.click(screen.getByRole("button", { name: "Use this agent" }));
+		expect(mocks.setAgent).toHaveBeenCalledWith("p1", "claude-code");
+		expect(mocks.check).toHaveBeenCalledWith(
+			{ projectId: "p1", kind: "orchestrator", harness: undefined },
+			{ blockers: ["agent_not_installed"], method: "switch_agent" },
+		);
+		expect(resolve).toHaveBeenCalledWith({ harness: "claude-code" });
+	});
+
+	it("switches a worker's harness without changing project config", async () => {
+		const user = userEvent.setup();
+		mocks.check.mockResolvedValue({ ...readyReport, kind: "worker" });
+		const { resolve } = openDialog(
+			{ ready: false, canProceed: false, kind: "worker", harness: "codex", checks: [{ code: "agent_unauthorized", blocking: true }] },
+			{ projectId: "p1", kind: "worker", harness: "codex" },
+		);
+		expect(screen.getByRole("dialog", { name: "Finish setup to start this session" })).toBeInTheDocument();
+		await user.click(screen.getByRole("combobox", { name: "Use another installed agent" }));
+		await user.click(screen.getByRole("option", { name: "Claude Code" }));
+		await user.click(screen.getByRole("button", { name: "Use this agent" }));
+		expect(mocks.setAgent).not.toHaveBeenCalled();
+		expect(resolve).toHaveBeenCalledWith({ harness: "claude-code" });
+	});
+
+	it("saves a default branch, then re-checks", async () => {
+		const user = userEvent.setup();
+		mocks.check.mockResolvedValue(readyReport);
+		openDialog({
+			ready: false, canProceed: false, kind: "orchestrator", harness: "claude-code",
+			checks: [{ code: "default_branch_unresolved", blocking: true }],
+		});
+		expect(screen.getByText("The default branch could not be found")).toBeInTheDocument();
+		await user.type(screen.getByRole("textbox", { name: "Default branch" }), "trunk");
+		await user.click(screen.getByRole("button", { name: "Save branch" }));
+		expect(mocks.setBranch).toHaveBeenCalledWith("p1", "trunk");
+		expect(mocks.check.mock.calls[0]?.[1]).toEqual({ blockers: ["default_branch_unresolved"], method: "set_default_branch" });
+	});
+
+	it("shows a save failure next to the actions and does not re-check", async () => {
+		const user = userEvent.setup();
+		mocks.setBranch.mockRejectedValue(new Error("Could not save the project"));
+		openDialog({
+			ready: false, canProceed: false, kind: "orchestrator", harness: "claude-code",
+			checks: [{ code: "default_branch_unresolved", blocking: true }],
+		});
+		await user.type(screen.getByRole("textbox", { name: "Default branch" }), "trunk");
+		await user.click(screen.getByRole("button", { name: "Save branch" }));
+		expect(screen.getByRole("alert")).toHaveTextContent("Could not save the project");
+		expect(mocks.check).not.toHaveBeenCalled();
+	});
+
+	it("offers Start anyway only when every failed check is soft", async () => {
+		const user = userEvent.setup();
+		const { resolve } = openDialog({
+			ready: false, canProceed: true, kind: "orchestrator", harness: "claude-code",
+			checks: [{ code: "agent_unauthorized", blocking: false, command: "claude /login" }],
+		});
+		await user.click(screen.getByRole("button", { name: "Start anyway" }));
+		expect(resolve).toHaveBeenCalledWith({ harness: "claude-code" });
+	});
+
+	it("has no Start anyway for a blocking check and cancels on close", async () => {
+		const user = userEvent.setup();
+		const { reject, resolve } = openDialog({
+			ready: false, canProceed: false, kind: "orchestrator", harness: "codex",
+			checks: [{ code: "agent_not_installed", blocking: true }],
+		});
+		expect(screen.queryByRole("button", { name: "Start anyway" })).toBeNull();
+		await user.keyboard("{Escape}");
+		expect(resolve).not.toHaveBeenCalled();
+		expect(reject).toHaveBeenCalledOnce();
+		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+});

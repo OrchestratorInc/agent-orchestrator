@@ -342,7 +342,7 @@ export function InstallDependencyDialog({
 	);
 }
 
-function IssueSection({
+export function IssueSection({
 	label,
 	detail,
 	children,
@@ -437,7 +437,7 @@ function InstallAction({
 	);
 }
 
-function ManualCommand({ command, t }: { command: string; t: TFunction }) {
+export function ManualCommand({ command, t, onCopy }: { command: string; t: TFunction; onCopy?: () => void }) {
 	const [copied, setCopied] = useState(false);
 	const resetTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
@@ -446,6 +446,7 @@ function ManualCommand({ command, t }: { command: string; t: TFunction }) {
 	const copy = () => {
 		void aoBridge.clipboard.writeText(command).then(
 			() => {
+				onCopy?.();
 				setCopied(true);
 				clearTimeout(resetTimer.current);
 				resetTimer.current = setTimeout(() => setCopied(false), 1_400);

@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import type { SessionMode } from "../types/conversation";
 import { OrchestratorSpawnError, spawnOrchestrator } from "./spawn-orchestrator";
+import { isSpawnPreflightCancelled } from "./spawn-preflight";
 import type { OrchestratorReplacementFailure } from "../stores/ui-store";
 
 type NavigateToSession = (options: {
@@ -57,6 +58,8 @@ export async function restartProjectOrchestrator({
 			params: { projectId, sessionId },
 		});
 	} catch (error) {
+		// A dismissed pre-flight never touched the running orchestrator.
+		if (isSpawnPreflightCancelled(error)) return;
 		await refreshWorkspaceState(queryClient);
 		setOrchestratorReplacementError(projectId, {
 			message: error instanceof Error ? error.message : "Could not replace orchestrator",

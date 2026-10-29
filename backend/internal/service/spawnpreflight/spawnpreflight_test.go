@@ -27,16 +27,25 @@ func (f *fakeFacts) PreflightSpawn(_ context.Context, in sessionmanager.SpawnPre
 }
 
 type fakeReadiness struct {
-	snapshot domain.AgentReadinessSnapshot
-	err      error
+	snapshot    domain.AgentReadinessSnapshot
+	err         error
+	invalidated *[]string
 }
 
 func (f fakeReadiness) EnsureAgentReadiness(context.Context, string, domain.AgentReadinessPurpose) (domain.AgentReadinessSnapshot, error) {
 	return f.snapshot, f.err
 }
-func (fakeReadiness) InvalidateAgentInstallation(string)   {}
-func (fakeReadiness) InvalidateAgentAuthentication(string) {}
-func (fakeReadiness) RecheckAgent(string)                  {}
+func (f fakeReadiness) InvalidateAgentInstallation(id string) {
+	if f.invalidated != nil {
+		*f.invalidated = append(*f.invalidated, "installation:"+id)
+	}
+}
+func (f fakeReadiness) InvalidateAgentAuthentication(id string) {
+	if f.invalidated != nil {
+		*f.invalidated = append(*f.invalidated, "authentication:"+id)
+	}
+}
+func (fakeReadiness) RecheckAgent(string) {}
 
 type fakeInstalls []systeminstall.AgentPlan
 
@@ -249,7 +258,10 @@ func TestBranchProbeTimeoutIsUnknown(t *testing.T) {
 
 func TestResolutionEmitsOnlyClearedKnownBlockers(t *testing.T) {
 	facts := &fakeFacts{facts: sessionmanager.SpawnPreflightFacts{Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat, DefaultBranchUnresolved: true}}
-	svc, sink := newService(t, Deps{Facts: facts, Readiness: ready(), GOOS: "windows", LookPath: noTmux})
+	var invalidated []string
+	readiness := ready()
+	readiness.invalidated = &invalidated
+	svc, sink := newService(t, Deps{Facts: facts, Readiness: readiness, GOOS: "windows", LookPath: noTmux})
 	_, err := svc.Check(context.Background(), Request{ProjectID: "p1", Kind: "orchestrator", Resolution: &Resolution{
 		Method:   "switch_agent",
 		Blockers: []string{"agent_not_installed", "agent_not_installed", "default_branch_unresolved", "free text"},
@@ -263,6 +275,10 @@ func TestResolutionEmitsOnlyClearedKnownBlockers(t *testing.T) {
 	resolved := sink.events[1].Payload
 	if resolved["blocker"] != "agent_not_installed" || resolved["method"] != "switch_agent" || resolved["harness"] != "claude-code" || resolved["kind"] != "orchestrator" {
 		t.Fatalf("resolved = %+v", resolved)
+	}
+	// A re-check must not be answered by the observation from before the fix.
+	if strings.Join(invalidated, ",") != "installation:claude-code,authentication:claude-code" {
+		t.Fatalf("invalidated = %v, want fresh install and auth checks", invalidated)
 	}
 
 	sink.events = nil

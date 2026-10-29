@@ -31,6 +31,8 @@ const approvedLiterals: Record<string, readonly string[]> = {
 	"components/QuitConfirmDialog.tsx": ["Esc"],
 	"components/RemoteDirectoryPicker.tsx": ["/home/you/code"],
 	"components/SessionInspector.tsx": ["PR #"],
+	// Example branch name in the pre-flight default-branch field.
+	"components/SpawnPreflightDialog.tsx": ["main"],
 	"components/Sidebar.tsx": ["Orchestrator.inc", "daemon"],
 	"components/TitlebarNav.tsx": ["Orchestrator.inc"],
 	"components/WindowTitlebar.tsx": [

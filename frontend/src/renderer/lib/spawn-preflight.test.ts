@@ -1,0 +1,147 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { apiClient } from "./api-client";
+import {
+	checkSpawnPreflight,
+	ensureSpawnPreflight,
+	isSpawnPreflightCancelled,
+	setProjectDefaultBranch,
+	setProjectOrchestratorAgent,
+	useSpawnPreflightStore,
+	type SpawnPreflightReport,
+} from "./spawn-preflight";
+
+vi.mock("./api-client", () => ({
+	apiClient: { POST: vi.fn(), GET: vi.fn(), PUT: vi.fn() },
+	apiErrorMessage: (_error: unknown, fallback = "Request failed") => fallback,
+}));
+
+const post = vi.mocked(apiClient.POST);
+const get = vi.mocked(apiClient.GET);
+const put = vi.mocked(apiClient.PUT);
+
+const ready: SpawnPreflightReport = { ready: true, canProceed: true, kind: "orchestrator", harness: "claude-code", checks: [] };
+const blocked: SpawnPreflightReport = {
+	ready: false,
+	canProceed: false,
+	kind: "orchestrator",
+	harness: "codex",
+	checks: [{ code: "agent_not_installed", blocking: true, command: "npm install -g @openai/codex" }],
+};
+
+function respond(report: unknown) {
+	post.mockResolvedValueOnce({ data: report, error: undefined, response: new Response() } as never);
+}
+
+beforeEach(() => {
+	vi.clearAllMocks();
+	useSpawnPreflightStore.setState({ pending: null });
+});
+
+describe("ensureSpawnPreflight", () => {
+	it("resolves at once with the resolved harness when every check passes", async () => {
+		respond(ready);
+		await expect(ensureSpawnPreflight({ projectId: "p1", kind: "orchestrator" })).resolves.toEqual({ harness: "claude-code" });
+		expect(post).toHaveBeenCalledWith("/api/v1/sessions/preflight", { body: { projectId: "p1", kind: "orchestrator" } });
+		expect(useSpawnPreflightStore.getState().pending).toBeNull();
+	});
+
+	it("never checks a remote host", async () => {
+		await expect(ensureSpawnPreflight({ projectId: "p1", kind: "worker", harness: "codex", hostId: "box-b" })).resolves.toEqual({ harness: "codex" });
+		expect(post).not.toHaveBeenCalled();
+	});
+
+	it("spawns unchecked when the pre-flight cannot run or answers malformed", async () => {
+		post.mockRejectedValueOnce(new Error("offline"));
+		await expect(ensureSpawnPreflight({ projectId: "p1", kind: "worker", harness: "codex" })).resolves.toEqual({ harness: "codex" });
+		post.mockResolvedValueOnce({ data: undefined, error: { code: "NOT_IMPLEMENTED" }, response: new Response() } as never);
+		await expect(ensureSpawnPreflight({ projectId: "p1", kind: "worker" })).resolves.toEqual({ harness: undefined });
+		respond({ ready: false });
+		await expect(ensureSpawnPreflight({ projectId: "p1", kind: "worker" })).resolves.toEqual({ harness: undefined });
+		expect(useSpawnPreflightStore.getState().pending).toBeNull();
+	});
+
+	it("waits on the fix dialog when blocked and resolves once it settles", async () => {
+		respond(blocked);
+		const outcome = ensureSpawnPreflight({ projectId: "p1", kind: "orchestrator" });
+		await vi.waitFor(() => expect(useSpawnPreflightStore.getState().pending?.report).toEqual(blocked));
+		useSpawnPreflightStore.getState().settle({ harness: "claude-code" });
+		await expect(outcome).resolves.toEqual({ harness: "claude-code" });
+		expect(useSpawnPreflightStore.getState().pending).toBeNull();
+	});
+
+	it("rejects with a cancellation when the dialog is dismissed or replaced", async () => {
+		respond(blocked);
+		const first = ensureSpawnPreflight({ projectId: "p1", kind: "orchestrator" });
+		await vi.waitFor(() => expect(useSpawnPreflightStore.getState().pending).not.toBeNull());
+		respond(blocked);
+		const second = ensureSpawnPreflight({ projectId: "p2", kind: "orchestrator" });
+		const firstError = await first.catch((error: unknown) => error);
+		expect(isSpawnPreflightCancelled(firstError)).toBe(true);
+		await vi.waitFor(() => expect(useSpawnPreflightStore.getState().pending?.input.projectId).toBe("p2"));
+		useSpawnPreflightStore.getState().settle(null);
+		expect(isSpawnPreflightCancelled(await second.catch((error: unknown) => error))).toBe(true);
+	});
+});
+
+describe("checkSpawnPreflight", () => {
+	it("reports the previous blockers and the fix the user applied", async () => {
+		respond(ready);
+		await checkSpawnPreflight(
+			{ projectId: "p1", kind: "worker", harness: "codex", mode: "tui" },
+			{ blockers: ["agent_not_installed"], method: "install" },
+		);
+		expect(post).toHaveBeenCalledWith("/api/v1/sessions/preflight", {
+			body: {
+				projectId: "p1",
+				kind: "worker",
+				harness: "codex",
+				mode: "tui",
+				resolution: { blockers: ["agent_not_installed"], method: "install" },
+			},
+		});
+	});
+});
+
+describe("project config fixes", () => {
+	const project = {
+		status: "ok",
+		project: {
+			id: "p1",
+			config: {
+				defaultBranch: "auto",
+				orchestrator: { agent: "codex", agentConfig: { model: "gpt-5", mode: "fast", permissions: "auto" } },
+				worker: { agent: "codex" },
+			},
+		},
+	};
+
+	beforeEach(() => {
+		get.mockResolvedValue({ data: project, error: undefined, response: new Response() } as never);
+		put.mockResolvedValue({ data: {}, error: undefined, response: new Response() } as never);
+	});
+
+	it("switches the orchestrator agent, keeping only harness-neutral permissions", async () => {
+		await setProjectOrchestratorAgent("p1", "claude-code");
+		expect(put).toHaveBeenCalledWith("/api/v1/projects/{id}/config", {
+			params: { path: { id: "p1" } },
+			body: {
+				config: {
+					defaultBranch: "auto",
+					orchestrator: { agent: "claude-code", agentConfig: { permissions: "auto" } },
+					worker: { agent: "codex" },
+				},
+			},
+		});
+	});
+
+	it("sets the default branch without touching other config", async () => {
+		await setProjectDefaultBranch("p1", "trunk");
+		const body = put.mock.calls[0]?.[1] as { body: { config: Record<string, unknown> } };
+		expect(body.body.config).toEqual({ ...project.project.config, defaultBranch: "trunk" });
+	});
+
+	it("surfaces a failed save", async () => {
+		put.mockResolvedValueOnce({ data: undefined, error: { code: "INVALID" }, response: new Response() } as never);
+		await expect(setProjectDefaultBranch("p1", "trunk")).rejects.toThrow("Could not save the project");
+	});
+});

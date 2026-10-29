@@ -5,6 +5,7 @@ import { resumeOnce } from "../hooks/useCanResumeAgent";
 import type { OrchestratorSpawnSource } from "./orchestrator-spawn-sources";
 import { captureRendererEvent } from "./telemetry";
 import { clientForSessionHost } from "./host-clients";
+import { ensureSpawnPreflight } from "./spawn-preflight";
 import type { SessionMode } from "../types/conversation";
 
 // Every UI entry point that spawns an orchestrator: the board CTA, the topbar
@@ -33,6 +34,18 @@ export class OrchestratorSpawnError extends Error {
 		super(message);
 		this.name = "OrchestratorSpawnError";
 	}
+}
+
+/** The enum-only properties ao.renderer.orchestrator_spawn_failed carries:
+ *  the daemon's stable error code (or REQUEST_FAILED when the request never
+ *  produced one), the harness, and the session kind. */
+export function orchestratorSpawnFailureProperties(error: unknown, harness?: string): Record<string, string> {
+	const code = error instanceof OrchestratorSpawnError ? error.code : undefined;
+	return {
+		error_code: code || "REQUEST_FAILED",
+		kind: "orchestrator",
+		...(harness ? { harness } : {}),
+	};
 }
 
 export function isChatPreflightCode(code?: string): boolean {
@@ -65,6 +78,10 @@ export async function spawnOrchestrator(
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions",
 	hostId?: string,
 ): Promise<string> {
+	// A blocked pre-flight shows its fix dialog and resolves once cleared, or
+	// rejects with SpawnPreflightCancelledError. No spawn ran, so neither path
+	// reports a spawn failure. Remote hosts spawn unchecked.
+	const preflight = hostId ? {} : await ensureSpawnPreflight({ projectId, kind: "orchestrator", ...(mode ? { mode } : {}) });
 	try {
 		const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/orchestrators", {
 			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) },
@@ -86,7 +103,11 @@ export async function spawnOrchestrator(
 		void captureRendererEvent("ao.renderer.orchestrator_spawn_succeeded", { project_id: projectId, source });
 		return data.orchestrator.id;
 	} catch (err) {
-		void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", { project_id: projectId, source });
+		void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", {
+			project_id: projectId,
+			source,
+			...orchestratorSpawnFailureProperties(err, preflight.harness),
+		});
 		throw err;
 	}
 }

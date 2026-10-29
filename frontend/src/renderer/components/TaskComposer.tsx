@@ -13,6 +13,7 @@ import type { ApprovalMode, ChatModel, TurnSettings } from "../types/conversatio
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
+import { ensureSpawnPreflight } from "../lib/spawn-preflight";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { captureRendererEvent } from "../lib/telemetry";
@@ -245,6 +246,16 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 
 	const createDaemonTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
+			// A blocked pre-flight opens its fix dialog; dismissing it rejects
+			// before any task exists, so it is not a task-create failure.
+			const preflight = await ensureSpawnPreflight({
+				projectId: input.projectId,
+				kind: "worker",
+				...(input.agent ? { harness: input.agent } : {}),
+				...(input.mode ? { mode: input.mode } : {}),
+				hostId,
+			});
+			const agent = (preflight.harness ?? input.agent) as CreateTaskInput["agent"];
 			try {
 				const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/orchestrators/delegate", {
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
@@ -252,8 +263,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 						clientRequestId: input.clientRequestId,
 						projectId: input.projectId,
 						brief: input.brief,
-						agent: input.agent,
-						...(input.model ? { model: input.model } : {}),
+						agent,
+						// A model belongs to the agent it was picked for.
+						...(input.model && agent === input.agent ? { model: input.model } : {}),
 						...(input.effort !== undefined ? { effort: input.effort } : {}),
 						...(input.mode ? { mode: input.mode } : {}),
 						...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),

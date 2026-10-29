@@ -8,6 +8,7 @@ import {
 } from "./spawn-orchestrator";
 import { apiClient } from "./api-client";
 import { captureRendererEvent } from "./telemetry";
+import { ensureSpawnPreflight, SpawnPreflightCancelledError } from "./spawn-preflight";
 
 const { notificationShowMock } = vi.hoisted(() => ({
 	notificationShowMock: vi.fn(),
@@ -35,6 +36,11 @@ vi.mock("./api-client", () => ({
 		}
 		return fallback;
 	},
+}));
+
+vi.mock("./spawn-preflight", () => ({
+	ensureSpawnPreflight: vi.fn(async (input: { harness?: string }) => ({ harness: input.harness ?? "claude-code" })),
+	SpawnPreflightCancelledError: class SpawnPreflightCancelledError extends Error {},
 }));
 
 vi.mock("./telemetry", () => ({
@@ -123,8 +129,35 @@ describe("spawnOrchestrator", () => {
 		expect(captureMock).toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_failed", {
 			project_id: "proj",
 			source: "topbar",
+			error_code: "REQUEST_FAILED",
+			harness: "claude-code",
+			kind: "orchestrator",
 		});
 		expect(captureMock).not.toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_succeeded", expect.anything());
+	});
+
+	it("runs pre-flight first and neither spawns nor reports a failure when it is dismissed", async () => {
+		vi.mocked(ensureSpawnPreflight).mockRejectedValueOnce(new SpawnPreflightCancelledError());
+		await expect(spawnOrchestrator("proj", "board", false, "tui")).rejects.toBeInstanceOf(SpawnPreflightCancelledError);
+		expect(ensureSpawnPreflight).toHaveBeenCalledWith({ projectId: "proj", kind: "orchestrator", mode: "tui" });
+		expect(apiClient.POST).not.toHaveBeenCalled();
+		expect(captureMock).not.toHaveBeenCalled();
+	});
+
+	it("maps the daemon error code onto the failed event", async () => {
+		(apiClient.POST as ReturnType<typeof vi.fn>).mockResolvedValue({
+			data: undefined,
+			error: { code: "DEFAULT_BRANCH_UNRESOLVED", message: "default branch is unresolved" },
+			response: { status: 400 },
+		});
+		await expect(spawnOrchestrator("proj", "sidebar")).rejects.toBeInstanceOf(OrchestratorSpawnError);
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_failed", {
+			project_id: "proj",
+			source: "sidebar",
+			error_code: "DEFAULT_BRANCH_UNRESOLVED",
+			harness: "claude-code",
+			kind: "orchestrator",
+		});
 	});
 
 	it("surfaces daemon spawn error messages and codes", async () => {

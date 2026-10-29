@@ -596,6 +596,34 @@ describe("telemetry sanitizers", () => {
 		expect(badSource).not.toHaveProperty("source");
 	});
 
+	it("keeps the daemon error code, harness, and kind on orchestrator_spawn_failed only", async () => {
+		const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_failed", {
+			project_id: "demo-project",
+			source: "project_add",
+			error_code: "AGENT_BINARY_NOT_FOUND",
+			harness: "codex",
+			kind: "orchestrator",
+		});
+		expect(Object.keys(props).sort()).toEqual(["error_code", "harness", "kind", "project_id_hash", "source"]);
+		expect(props).toMatchObject({ error_code: "AGENT_BINARY_NOT_FOUND", harness: "codex", kind: "orchestrator" });
+
+		// Free text, paths, unknown harnesses, and unknown kinds never ride along.
+		const unsafe = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_failed", {
+			project_id: "demo-project",
+			error_code: "agent binary /Users/alice/bin/codex not found",
+			harness: "/Users/alice/bin/codex",
+			kind: "reviewer",
+		});
+		expect(Object.keys(unsafe)).toEqual(["project_id_hash"]);
+
+		const succeeded = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_succeeded", {
+			project_id: "demo-project",
+			error_code: "AGENT_BINARY_NOT_FOUND",
+			harness: "codex",
+		});
+		expect(Object.keys(succeeded)).toEqual(["project_id_hash"]);
+	});
+
 	it("keeps every whitelisted spawn source (the shared ORCHESTRATOR_SPAWN_SOURCES list)", async () => {
 		for (const source of ORCHESTRATOR_SPAWN_SOURCES) {
 			const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_succeeded", {

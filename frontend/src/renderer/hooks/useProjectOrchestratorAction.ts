@@ -12,6 +12,7 @@ import {
 	type OrchestratorSpawnSource,
 } from "../lib/spawn-orchestrator";
 import { formatOrchestratorStartupError } from "../lib/orchestrator-startup-error";
+import { isSpawnPreflightCancelled } from "../lib/spawn-preflight";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { useUiStore } from "../stores/ui-store";
 import { useCanResumeAgent } from "./useCanResumeAgent";
@@ -97,13 +98,20 @@ export function useProjectOrchestratorAction({
 			if (earlyResume && resumableOrchestrator && activeRoute.current === routeKey) {
 				void navigate(sessionNavigateTarget(projectId, resumableOrchestrator.id, hostId));
 			}
-			const openedSessionId = hostId
-				? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source)
-				: resumableOrchestrator
-				? (await earlyResume, resumableOrchestrator.id)
-				: project?.kind === CLOUD_PROJECT_KIND
-					? await spawnCloudOrchestrator(queryClient, projectId)
-					: await spawnOrchestrator(projectId, source, false, mode);
+			let openedSessionId: string;
+			try {
+				openedSessionId = hostId
+					? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source)
+					: resumableOrchestrator
+					? (await earlyResume, resumableOrchestrator.id)
+					: project?.kind === CLOUD_PROJECT_KIND
+						? await spawnCloudOrchestrator(queryClient, projectId)
+						: await spawnOrchestrator(projectId, source, false, mode);
+			} catch (cause) {
+				// The pre-flight dialog already explained why it could not start.
+				if (isSpawnPreflightCancelled(cause)) return;
+				throw cause;
+			}
 			await queryClient.invalidateQueries({
 				queryKey: project?.kind === CLOUD_PROJECT_KIND ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId),
 			});

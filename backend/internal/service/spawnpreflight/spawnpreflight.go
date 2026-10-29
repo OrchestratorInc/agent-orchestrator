@@ -189,7 +189,7 @@ func (s *Service) Check(ctx context.Context, req Request) (Report, error) {
 	if facts.Harness == "" {
 		report.Checks = append(report.Checks, Check{Code: BlockerAgentRequired, Blocking: true})
 	} else {
-		report.Checks = append(report.Checks, s.agentChecks(ctx, facts.Harness)...)
+		report.Checks = append(report.Checks, s.agentChecks(ctx, facts.Harness, req.Resolution != nil)...)
 	}
 	if facts.Mode == domain.SessionModeTUI {
 		if err := sessionmanager.RuntimePrerequisiteError(s.d.GOOS, s.d.Executable, s.d.LookPath); err != nil {
@@ -205,9 +205,15 @@ func (s *Service) Check(ctx context.Context, req Request) (Report, error) {
 	return report, nil
 }
 
-func (s *Service) agentChecks(ctx context.Context, harness domain.AgentHarness) []Check {
+func (s *Service) agentChecks(ctx context.Context, harness domain.AgentHarness, recheck bool) []Check {
 	if s.d.Readiness == nil {
 		return nil
+	}
+	if recheck {
+		// The user just installed or signed in; a cached observation from
+		// before the fix must not answer the re-check.
+		s.d.Readiness.InvalidateAgentInstallation(string(harness))
+		s.d.Readiness.InvalidateAgentAuthentication(string(harness))
 	}
 	snapshot, err := s.d.Readiness.EnsureAgentReadiness(ctx, string(harness), domain.AgentReadinessPurposeLaunch)
 	if err != nil {
