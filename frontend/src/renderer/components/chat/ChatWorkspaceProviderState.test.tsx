@@ -186,7 +186,8 @@ describe("plan", () => {
 		};
 		render(<ChatWorkspace snapshot={revised} />);
 		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
-		expect(screen.getByLabelText("Resumed plan step — done")).toBeInTheDocument();
+		// The newest revision, folded to its header because every step is done.
+		expect(screen.getByText("1/1")).toBeInTheDocument();
 	});
 
 	// A turn that failed or was stopped is not working on anything, so the step it
