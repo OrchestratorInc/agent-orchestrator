@@ -216,6 +216,41 @@ paths:
           description: The link was revoked.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/providers/{agent}/models:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: agent
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [claude-code, codex, cursor, opencode]
+    get:
+      operationId: listUserAgentModels
+      tags: [Providers]
+      description: >-
+        The models and reasoning efforts a new Cloud task for this agent runs
+        with, for the authenticated user in this organization. The list is
+        what the next task's worker runs, not a suggestion, and needs no live
+        worker: `source` says whether a Cloud worker running the same CLI
+        version with the user's current credential reported it, or it is the
+        list the control plane's pinned CLI version supports. A task that
+        names no model keeps the project's or the agent's default.
+      responses:
+        "200":
+          description: The model catalog for the next task. It lists at least one model.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatModelsResponse"
+        "409":
+          description: MODEL_CATALOG_UNAVAILABLE. This agent has no Cloud model catalog. Clients keep the agent's own model discovery where it has one, or offer the native default and manual model entry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/github/user:
     get:
       operationId: getGitHubUserConnection
@@ -5178,6 +5213,17 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ChatModel"
+        source:
+          description: >-
+            Where the list came from. worker: reported by a Cloud worker
+            running this CLI version with the user's current credential.
+            release: the models the control plane's pinned CLI version
+            supports.
+          type: string
+          enum: [worker, release]
+        cliVersion:
+          description: The harness CLI version the list is for.
+          type: string
     SendMessageInput:
       type: object
       additionalProperties: false
