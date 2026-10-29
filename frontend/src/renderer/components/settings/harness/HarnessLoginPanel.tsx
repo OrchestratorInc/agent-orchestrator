@@ -328,6 +328,12 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	const savedHint = (key?: ProviderKey) => key?.configured
 		? [key.hint ? t("settings.apiKeys.savedHint", { hint: key.hint }) : t("settings.apiKeys.saved"), key.device ? t("settings.apiKeys.outsideAo") : ""].filter(Boolean).join(" · ")
 		: undefined;
+	// Account sign-ins and API keys are separate lists; the note that applies
+	// to every AO-managed key is said once, under its list.
+	const methodGroups = [
+		{ id: "signIn", title: t("settings.harness.loginUi.groupSignIn"), items: availableMethods.filter((item) => !item.secret), note: "" },
+		{ id: "keys", title: t("settings.harness.loginUi.groupKeys"), items: availableMethods.filter((item) => item.secret), note: availableMethods.some((item) => item.id.startsWith("env_")) ? t("settings.harness.loginUi.envHint") : "" },
+	].filter((group) => group.items.length > 0);
 	const methodKey = (id: string) => id !== "browser" || agentId === "codex" ? id : agentId === "claude-code" ? "claude" : agentId === "cline" ? "cline" : `${agentId}_browser`;
 	const selectedMethodKey = methodKey(selectedMethodId);
 	const methodLabel = t(`settings.harness.loginUi.methods.${selectedMethodKey}`, { defaultValue: method?.label ?? selectedMethodId });
@@ -340,9 +346,12 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 			{remote && !connected && <p className="max-w-prose text-xs leading-4 text-settings-muted">{t(agentId === "codex" ? "settings.harness.loginUi.remoteCodex" : "settings.harness.loginUi.remoteClaude")}</p>}
 		</div>
 		{availableMethods.length > 0 && !connected && !running && !verifying && <form id={titleId + "-form"} className="space-y-4" onSubmit={(event) => { event.preventDefault(); void start(); }}>
-			<fieldset disabled={locked} className="flex flex-col divide-y divide-border overflow-hidden rounded-lg bg-(--color-bg-primary)">
+			<fieldset disabled={locked} className="space-y-3">
 				<legend className="sr-only">{t("settings.harness.loginUi.method")}</legend>
-				{availableMethods.map((item) => {
+				{methodGroups.map((group) => <div key={group.id} className="space-y-1.5">
+				{methodGroups.length > 1 && <p className="px-1 text-xs leading-4 font-medium text-settings-muted">{group.title}</p>}
+				<div className="flex flex-col divide-y divide-border overflow-hidden rounded-lg bg-(--color-bg-primary)">
+				{group.items.map((item) => {
 					const key = methodKey(item.id);
 					const label = t(`settings.harness.loginUi.methods.${key}`, { defaultValue: item.label });
 					const MethodIcon = item.id === "native" ? Terminal : item.secret ? KeyRound : item.id === "device_code" ? Smartphone : item.id === "sso" || item.id === "console" ? Building2 : UserRound;
@@ -352,7 +361,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 						<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted group-aria-expanded/method:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>
 						<span className="min-w-0 flex-1 space-y-0.5">
 							<span className="block text-[13px] leading-5 font-medium text-settings-label">{label}</span>
-							<span id={titleId + "-" + item.id} className="block text-xs leading-4 text-settings-muted">{item.id === "native" ? t("settings.harness.loginUi.nativeHint") : item.id === CATALOG_METHOD ? catalogError || (catalog ? t("settings.harness.loginUi.catalogHint", { total: catalog.length, agent: agentLabel(agentId) }) : t("settings.harness.loginUi.catalogLoading")) : item.id.startsWith("env_") ? savedHint(providerKeyFor(item.id)) ?? t("settings.harness.loginUi.envHint") : t(`settings.harness.loginUi.hints.${key}`, { defaultValue: key.endsWith("_browser") ? "Finish sign-in in your browser." : item.label })}</span>
+							<span id={titleId + "-" + item.id} className="block text-xs leading-4 text-settings-muted">{item.id === "native" ? t("settings.harness.loginUi.nativeHint") : item.id === CATALOG_METHOD ? catalogError || (catalog ? t("settings.harness.loginUi.catalogHint", { total: catalog.length, agent: agentLabel(agentId) }) : t("settings.harness.loginUi.catalogLoading")) : item.id.startsWith("env_") ? savedHint(providerKeyFor(item.id)) ?? t("settings.apiKeys.notSet") : t(`settings.harness.loginUi.hints.${key}`, { defaultValue: key.endsWith("_browser") ? "Finish sign-in in your browser." : item.label })}</span>
 						</span>
 						{busy && selected ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
 							: item.secret ? <ChevronDown className="size-4 shrink-0 text-settings-muted transition-transform group-aria-expanded/method:rotate-180" aria-hidden="true" />
@@ -398,6 +407,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 					</div>}
 					</div>;
 				})}
+				</div>
+				{group.note && <p className="px-1 text-xs leading-4 text-settings-muted">{group.note}</p>}
+				</div>)}
 			</fieldset>
 		</form>}
 		{(running || verifying || connected) && <div className="space-y-3">
