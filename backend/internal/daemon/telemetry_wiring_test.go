@@ -16,14 +16,20 @@ import (
 )
 
 func TestNewTelemetrySink_DefaultsToNoopWhenDisabled(t *testing.T) {
-	sink, _ := newTelemetrySink(config.Config{}, nil, slog.Default())
+	sink, _, active := newTelemetrySink(config.Config{}, nil, slog.Default())
+	if active {
+		t.Fatal("remote export active while events disabled")
+	}
 	if _, ok := sink.(telemetryadapter.NoopSink); !ok {
 		t.Fatalf("sink type = %T, want telemetry.NoopSink", sink)
 	}
 }
 
 func TestNewTelemetrySink_MetricsOnlyDoesNotEnableEvents(t *testing.T) {
-	sink, _ := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Metrics: true}}, nil, slog.Default())
+	sink, _, active := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Metrics: true}}, nil, slog.Default())
+	if active {
+		t.Fatal("remote export active with metrics only")
+	}
 	if _, ok := sink.(telemetryadapter.NoopSink); !ok {
 		t.Fatalf("sink type = %T, want telemetry.NoopSink when only metrics are enabled", sink)
 	}
@@ -37,12 +43,33 @@ func TestNewTelemetrySink_UsesLocalSQLiteWhenEnabled(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	sink, _ := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Events: true}, DataDir: dataDir}, store, slog.Default())
+	sink, _, active := newTelemetrySink(config.Config{Telemetry: config.TelemetryConfig{Events: true}, DataDir: dataDir}, store, slog.Default())
+	if active {
+		t.Fatal("remote export active with local sink")
+	}
 	local, ok := sink.(*telemetryadapter.LocalSQLiteSink)
 	if !ok {
 		t.Fatalf("sink type = %T, want *telemetry.LocalSQLiteSink", sink)
 	}
 	t.Cleanup(func() { _ = local.Close(t.Context()) })
+}
+
+func TestNewTelemetrySink_MissingRemoteCredentialsDisablesRemoteUsage(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := sqlitetest.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	sink, identity, active := newTelemetrySink(config.Config{DataDir: dataDir,
+		Telemetry: config.TelemetryConfig{Events: true, Remote: config.TelemetryRemotePostHog}}, store, slog.Default())
+	if active || identity == nil {
+		t.Fatalf("active = %v, identity = %T, want inactive local sink with identity", active, identity)
+	}
+	if _, ok := sink.(*telemetryadapter.LocalSQLiteSink); !ok {
+		t.Fatalf("sink type = %T, want local sink", sink)
+	}
+	t.Cleanup(func() { _ = sink.Close(t.Context()) })
 }
 
 func TestNewTelemetrySink_FanoutIncludesPostHogWhenConfigured(t *testing.T) {
@@ -53,7 +80,7 @@ func TestNewTelemetrySink_FanoutIncludesPostHogWhenConfigured(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	sink, _ := newTelemetrySink(config.Config{
+	sink, _, active := newTelemetrySink(config.Config{
 		DataDir: dataDir,
 		Telemetry: config.TelemetryConfig{
 			Events:      true,
@@ -62,6 +89,9 @@ func TestNewTelemetrySink_FanoutIncludesPostHogWhenConfigured(t *testing.T) {
 			PostHogHost: "https://us.i.posthog.com",
 		},
 	}, store, slog.Default())
+	if !active {
+		t.Fatal("remote export inactive with PostHog sink")
+	}
 	fanout, ok := sink.(*telemetryadapter.FanoutSink)
 	if !ok {
 		t.Fatalf("sink type = %T, want *telemetry.FanoutSink", sink)

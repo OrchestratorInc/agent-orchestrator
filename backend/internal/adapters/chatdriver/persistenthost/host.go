@@ -227,7 +227,7 @@ func acquireHostLock(dataDir, sessionID string) (func(), error) {
 	return func() { _ = os.Remove(path) }, nil
 }
 
-func readDescriptor(dataDir, sessionID string) (Descriptor, error) {
+func readDescriptorOnce(dataDir, sessionID string) (Descriptor, error) {
 	path, err := descriptorPath(dataDir, sessionID)
 	if err != nil {
 		return Descriptor{}, err
@@ -523,8 +523,12 @@ func ShutdownQuick(ctx context.Context, dataDir, sessionID string) error {
 	return shutdown(ctx, dataDir, sessionID, true)
 }
 
-func readShutdownDescriptor(ctx context.Context, dataDir, sessionID string) (Descriptor, error) {
-	d, err := readDescriptor(dataDir, sessionID)
+func readDescriptor(dataDir, sessionID string) (Descriptor, error) {
+	return readDescriptorContext(context.Background(), dataDir, sessionID)
+}
+
+func readDescriptorContext(ctx context.Context, dataDir, sessionID string) (Descriptor, error) {
+	d, err := readDescriptorOnce(dataDir, sessionID)
 	if !isDescriptorSharingViolation(err) {
 		return d, err
 	}
@@ -539,12 +543,16 @@ func readShutdownDescriptor(ctx context.Context, dataDir, sessionID string) (Des
 		case <-timeout.C:
 			return Descriptor{}, err
 		case <-ticker.C:
-			d, err = readDescriptor(dataDir, sessionID)
+			d, err = readDescriptorOnce(dataDir, sessionID)
 			if !isDescriptorSharingViolation(err) {
 				return d, err
 			}
 		}
 	}
+}
+
+func readShutdownDescriptor(ctx context.Context, dataDir, sessionID string) (Descriptor, error) {
+	return readDescriptorContext(ctx, dataDir, sessionID)
 }
 
 func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error {

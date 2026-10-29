@@ -136,10 +136,14 @@ existing prompt, reviewer Chat, worker
 automation sent into another session, provider messages, tool calls, and
 terminal input in TUI sessions. Counts are stored per session without content.
 They flush about every 30 minutes, when a session is archived, when the
-desktop app exits, and when the daemon stops. Pending counts survive a daemon
-restart. A summary is reserved before entering the existing best-effort
-remote queue, so a crash or export failure after reservation can lose that
-batch; it will not duplicate the count on restart.
+desktop app exits, and when the daemon stops. The first flush runs in the
+background after daemon startup. Pending counts survive a daemon restart.
+A summary is reserved before entering the existing best-effort remote queue.
+Usage events wait for PostHog queue capacity rather than being dropped when
+the buffer is full. A crash, caller cancellation, or export failure after
+reservation can still lose a batch; it will not duplicate the count on restart.
+An identity persistence failure pauses draining without discarding pending
+counts. Only an actual user opt-out discards them.
 The remote sink has a 100,000 event per name per daemon process per rolling
 24-hour window emergency cap for these summaries. Events beyond that cap are
 dropped after reservation, so their counts cannot be recovered from the local
@@ -152,7 +156,9 @@ are excluded. Repeated observations do not add counts. A PR already associated
 with a worker when this measurement is first installed contributes one
 association count, and an already merged PR also contributes one merged
 count. Both carry `historical: true`; newly observed associations and merges
-carry `historical: false`. Counts are grouped per project at each flush.
+carry `historical: false`. Counts are grouped per project at each full flush,
+about every 30 minutes and at daemon or desktop shutdown. The one-minute
+archive pass skips the PR scan.
 PRs and messages accepted while product telemetry is off are not exported
 after a later opt-in.
 If events export is disabled in configuration when this version first runs,

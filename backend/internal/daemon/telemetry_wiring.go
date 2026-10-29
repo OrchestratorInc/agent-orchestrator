@@ -36,19 +36,19 @@ var aggregatedEventNames = []string{
 // newTelemetrySink also returns the live telemetry identity (nil when the data
 // dir is unknown), shared with the remote sink so a sign-in or opt-out seen by
 // the identity routes is what the exporter stamps and honors.
-func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) (ports.EventSink, ports.TelemetryIdentityStore) {
+func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) (ports.EventSink, ports.TelemetryIdentityStore, bool) {
 	if !cfg.Telemetry.Events {
-		return telemetryadapter.NoopSink{}, standaloneIdentity(cfg, log)
+		return telemetryadapter.NoopSink{}, standaloneIdentity(cfg, log), false
 	}
 	local := telemetryadapter.NewLocalSQLiteSink(store, log, cfg.Telemetry.LocalRetention)
 	if cfg.Telemetry.Remote != config.TelemetryRemotePostHog {
-		return local, standaloneIdentity(cfg, log)
+		return local, standaloneIdentity(cfg, log), false
 	}
 	remote, err := telemetryadapter.NewPostHogSink(cfg.DataDir, cfg.Telemetry.PostHogKey, cfg.Telemetry.PostHogHost,
 		cfg.Telemetry.AppVersion, cfg.Agent, nil, log)
 	if err != nil {
 		log.Warn("telemetry remote sink disabled", "remote", cfg.Telemetry.Remote, "error", err)
-		return local, standaloneIdentity(cfg, log)
+		return local, standaloneIdentity(cfg, log), false
 	}
 	// Both wrap only the billed remote sink; local storage keeps every event
 	// unaggregated and unfiltered for debugging regardless of PostHog volume.
@@ -76,7 +76,7 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.
 	denied := telemetryadapter.NewDenylistSink(gated, cfg.Telemetry.DisabledEvents)
-	return telemetryadapter.NewFanoutSink(local, denied), remote.Identity()
+	return telemetryadapter.NewFanoutSink(local, denied), remote.Identity(), true
 }
 
 // standaloneIdentity serves the identity routes when nothing is exported, so the

@@ -27,9 +27,9 @@ type usageTelemetryFlusher struct {
 
 func startUsageTelemetry(ctx context.Context, store *sqlite.Store, sink ports.EventSink, identity ports.TelemetryIdentityStore, log *slog.Logger) *usageTelemetryFlusher {
 	f := &usageTelemetryFlusher{store: store, sink: sink, identity: identity, log: log, archive: make(chan struct{}, 1)}
-	store.SetUsageTelemetryAllowed(func() bool { return identity != nil && !identity.Snapshot().OptedOut })
-	f.flush(context.Background(), false)
+	store.SetUsageTelemetryAllowed(func() bool { return identity != nil && !identity.OptedOut() })
 	go func() {
+		f.flush(ctx, false)
 		minute := time.NewTicker(time.Minute)
 		full := time.NewTicker(usageFlushInterval)
 		defer minute.Stop()
@@ -60,13 +60,16 @@ func (f *usageTelemetryFlusher) requestArchiveFlush() {
 func (f *usageTelemetryFlusher) flush(ctx context.Context, terminatedOnly bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.identity == nil || f.identity.Snapshot().OptedOut {
+	if f.identity == nil || f.identity.OptedOut() {
 		if err := f.store.DiscardUsageMessages(ctx); err != nil {
 			f.log.Warn("discard usage messages", "error", err)
 		}
 		if err := f.store.DiscardPendingWorkerPRUsage(ctx); err != nil {
 			f.log.Warn("discard usage prs", "error", err)
 		}
+		return
+	}
+	if f.identity.ExportSuppressed() {
 		return
 	}
 	installID := f.identity.Snapshot().InstallID
@@ -80,7 +83,7 @@ func (f *usageTelemetryFlusher) flush(ctx context.Context, terminatedOnly bool) 
 			return
 		}
 		for _, b := range batches {
-			if f.identity.Snapshot().OptedOut {
+			if f.identity.ExportSuppressed() {
 				return
 			}
 			sessionKey := sha256.Sum256([]byte(b.ProjectTelemetryID + ":" + b.SessionID))
@@ -98,7 +101,9 @@ func (f *usageTelemetryFlusher) flush(ctx context.Context, terminatedOnly bool) 
 			break
 		}
 	}
-	f.flushPRs(ctx, installID)
+	if !terminatedOnly {
+		f.flushPRs(ctx, installID)
+	}
 }
 
 func (f *usageTelemetryFlusher) flushPRs(ctx context.Context, installID string) {
@@ -114,15 +119,21 @@ func (f *usageTelemetryFlusher) flushPRs(ctx context.Context, installID string) 
 			historical bool
 		}
 		counts := make(map[group]int64)
+		projectIDs := make(map[string]string)
 		processed := 0
 		for _, fact := range facts {
-			if f.identity.Snapshot().OptedOut {
+			if f.identity.ExportSuppressed() {
 				return
 			}
-			projectTelemetryID, err := f.store.UsageProjectID(ctx, fact.ProjectID, installID)
-			if err != nil {
-				f.log.Warn("usage project identity", "error", err)
-				continue
+			projectTelemetryID, ok := projectIDs[fact.ProjectID]
+			if !ok {
+				var err error
+				projectTelemetryID, err = f.store.UsageProjectID(ctx, fact.ProjectID, installID)
+				if err != nil {
+					f.log.Warn("usage project identity", "error", err)
+					continue
+				}
+				projectIDs[fact.ProjectID] = projectTelemetryID
 			}
 			if err := f.store.MarkWorkerPRUsageReported(ctx, fact.Key, fact.AssociationPending, fact.MergePending); err != nil {
 				f.log.Warn("mark worker pr usage", "error", err)
@@ -137,7 +148,7 @@ func (f *usageTelemetryFlusher) flushPRs(ctx context.Context, installID string) 
 			}
 		}
 		for key, count := range counts {
-			if f.identity.Snapshot().OptedOut {
+			if f.identity.ExportSuppressed() {
 				return
 			}
 			f.sink.Emit(ctx, ports.TelemetryEvent{

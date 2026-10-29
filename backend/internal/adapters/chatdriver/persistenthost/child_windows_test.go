@@ -21,7 +21,7 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-func TestReadShutdownDescriptorRetriesSharingViolation(t *testing.T) {
+func TestReadDescriptorRetriesSharingViolation(t *testing.T) {
 	dataDir := t.TempDir()
 	d := Descriptor{Version: ProtocolVersion, SessionID: "locked", Address: "127.0.0.1:1", Token: "token"}
 	if err := writeDescriptor(dataDir, d); err != nil {
@@ -49,7 +49,7 @@ func TestReadShutdownDescriptorRetriesSharingViolation(t *testing.T) {
 	if _, err := os.ReadFile(path); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
 		t.Fatalf("locked descriptor read error = %v, want sharing violation", err)
 	}
-	got, err := readShutdownDescriptor(context.Background(), dataDir, d.SessionID)
+	got, err := readDescriptor(dataDir, d.SessionID)
 	if err != nil {
 		t.Fatalf("read shutdown descriptor: %v", err)
 	}

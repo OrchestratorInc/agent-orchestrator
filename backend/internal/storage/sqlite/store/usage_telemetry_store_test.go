@@ -275,6 +275,25 @@ func TestUsagePRTracksWorkerAssociationAndMergedTransitionOnce(t *testing.T) {
 	assertPending(0)
 }
 
+func TestStandaloneWorkerPRHasNoUsageMeasurement(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	s.SetUsageTelemetryAllowed(func() bool { return true })
+	worker, err := s.CreateSession(ctx, sampleRecord(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr := domain.PullRequest{URL: "https://github.com/org/repo/pull/77", SessionID: worker.ID,
+		Provider: "github", Host: "github.com", Repo: "org/repo", Number: 77, UpdatedAt: time.Now().UTC()}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := s.PendingWorkerPRUsage(ctx, 10)
+	if err != nil || len(facts) != 0 {
+		t.Fatalf("standalone worker usage = %+v, err=%v", facts, err)
+	}
+}
+
 func TestUsageWriteFailureDoesNotFailPROperations(t *testing.T) {
 	dir := t.TempDir()
 	s := sqlitetest.MustOpenAt(t, dir)

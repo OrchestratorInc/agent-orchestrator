@@ -1029,7 +1029,7 @@ SELECT CASE WHEN pr.provider_id <> '' AND pr.provider <> ''
     CASE WHEN ?1 = 0 THEN 1 ELSE 0 END,
     CASE WHEN ?1 = 0 AND pr.pr_state = 'merged' THEN 1 ELSE 0 END
 FROM pr JOIN sessions ON sessions.id = pr.session_id
-WHERE pr.url = ?2 AND sessions.kind = 'worker'
+WHERE pr.url = ?2 AND sessions.kind = 'worker' AND sessions.project_id IS NOT NULL
 ON CONFLICT(pr_key) DO UPDATE SET
     associated_reported = CASE WHEN ?1 = 0 THEN 1 ELSE usage_pr_measurement.associated_reported END,
     merged_reported = CASE WHEN ?1 = 0 AND

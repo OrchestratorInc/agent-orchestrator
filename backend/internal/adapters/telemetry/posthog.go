@@ -342,7 +342,7 @@ func (s *PostHogSink) suppressed() bool { return s.ident != nil && s.ident.Expor
 
 // Emit enqueues an event for best-effort export. An opted-out install exports
 // nothing, so the stream stops the moment the user flips the switch.
-func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
+func (s *PostHogSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	if s.suppressed() {
 		return
 	}
@@ -352,13 +352,26 @@ func (s *PostHogSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
 		return
 	}
 	queued := false
-	select {
-	case s.ch <- ev:
-		queued = true
-	default:
+	if strings.HasPrefix(ev.Name, "ao.usage.") {
+		// Usage summaries have already been reserved in SQLite. Wait for queue
+		// capacity so a burst cannot discard them behind the caller's back.
+		select {
+		case s.ch <- ev:
+			queued = true
+		case <-ctx.Done():
+		}
+	} else {
+		select {
+		case s.ch <- ev:
+			queued = true
+		default:
+		}
 	}
 	s.queueMu.RUnlock()
 	if !queued {
+		if ctx.Err() != nil {
+			return
+		}
 		s.log.Warn("telemetry posthog sink buffer full; dropping event", "name", ev.Name, "source", ev.Source)
 	}
 }

@@ -12,12 +12,15 @@ import (
 )
 
 type usageTestIdentity struct {
-	optedOut bool
+	optedOut   bool
+	suppressed bool
 }
 
 func (i *usageTestIdentity) Snapshot() ports.TelemetryIdentity {
-	return ports.TelemetryIdentity{InstallID: "install-one", OptedOut: i.optedOut}
+	return ports.TelemetryIdentity{InstallID: "install-one", OptedOut: i.optedOut || i.suppressed}
 }
+func (i *usageTestIdentity) OptedOut() bool                                 { return i.optedOut }
+func (i *usageTestIdentity) ExportSuppressed() bool                         { return i.optedOut || i.suppressed }
 func (*usageTestIdentity) SetCloudUserID(context.Context, string) error     { return nil }
 func (*usageTestIdentity) MarkInstalledEvent(context.Context) (bool, error) { return false, nil }
 func (*usageTestIdentity) SetGitHubLogin(string)                            {}
@@ -88,5 +91,16 @@ func TestUsageFlusherEmitsOneContentFreeBatchAndDiscardsOptedOutWork(t *testing.
 	f.flush(ctx, false)
 	if len(sink.events) != 1 {
 		t.Fatalf("replayed messages after opt-out: %+v", sink.events)
+	}
+	identity.suppressed = true
+	add("identity-write-failed")
+	f.flush(ctx, false)
+	if len(sink.events) != 1 {
+		t.Fatalf("exported while identity persistence failed: %+v", sink.events)
+	}
+	identity.suppressed = false
+	f.flush(ctx, false)
+	if len(sink.events) != 2 || sink.events[1].Payload["count"] != int64(1) {
+		t.Fatalf("pending count after identity recovered = %+v", sink.events)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -79,6 +80,32 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("PostHog sink did not send request")
+	}
+}
+
+func TestUsageEventWaitsForPostHogBufferCapacity(t *testing.T) {
+	sink := &PostHogSink{ch: make(chan ports.TelemetryEvent, 1), log: slog.Default()}
+	sink.ch <- ports.TelemetryEvent{Name: "queued"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		sink.Emit(ctx, ports.TelemetryEvent{Name: "ao.usage.messages_sent"})
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("usage event dropped while the queue was full")
+	case <-time.After(20 * time.Millisecond):
+	}
+	<-sink.ch
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("usage event did not enter the queue after capacity opened")
+	}
+	if event := <-sink.ch; event.Name != "ao.usage.messages_sent" {
+		t.Fatalf("queued event = %q", event.Name)
 	}
 }
 

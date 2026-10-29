@@ -222,7 +222,7 @@ func Run(buildVersion string) error {
 	telemetryPolicy := policyauthority.New(filepath.Join(cfg.DataDir, policyauthority.FileName))
 	eventsAllowed := telemetryPolicy.EventsAllowed(context.Background(), cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
 	sentryobs.SetPolicyEnabled(eventsAllowed)
-	telemetrySink, telemetryIdentity := newTelemetrySink(cfg, store, log)
+	telemetrySink, telemetryIdentity, remoteTelemetryActive := newTelemetrySink(cfg, store, log)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	installID := ""
 	if telemetryIdentity != nil {
@@ -269,9 +269,13 @@ func Run(buildVersion string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	var usage *usageTelemetryFlusher
-	if cfg.Telemetry.Events && cfg.Telemetry.Remote == config.TelemetryRemotePostHog && telemetryIdentity != nil {
+	if remoteTelemetryActive && telemetryIdentity != nil {
 		usage = startUsageTelemetry(ctx, store, telemetrySink, telemetryIdentity, log)
-		defer usage.flush(context.Background(), false)
+		defer func() {
+			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			usage.flush(flushCtx, false)
+		}()
 	}
 	go func() {
 		defer sentryobs.RecoverBackground()
