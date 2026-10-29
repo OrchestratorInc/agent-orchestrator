@@ -2671,6 +2671,7 @@
 	"settings.harness.installFailed": "Installation failed.",
 	"settings.harness.installGuide": "インストールガイドを開く",
 	"settings.harness.installed": "Installed",
+	"settings.harness.configured": "設定済み",
 	"settings.harness.installationUnknown": "インストール状態は不明です",
 	"settings.harness.installing": "Installing…",
 	"settings.harness.instructions": "Instructions",

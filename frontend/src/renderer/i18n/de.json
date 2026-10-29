@@ -2671,6 +2671,7 @@
 	"settings.harness.installFailed": "Installation failed.",
 	"settings.harness.installGuide": "Installationsanleitung öffnen",
 	"settings.harness.installed": "Installed",
+	"settings.harness.configured": "Konfiguriert",
 	"settings.harness.installationUnknown": "Installationsstatus unbekannt",
 	"settings.harness.installing": "Installing…",
 	"settings.harness.instructions": "Instructions",

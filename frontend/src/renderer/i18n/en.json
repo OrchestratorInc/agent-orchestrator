@@ -1709,6 +1709,7 @@
 	"settings.harness.updateAllSkipped": "{{agent}} ({{count}})",
 	"settings.harness.installGuide": "Open installation guide",
 	"settings.harness.installed": "Installed",
+	"settings.harness.configured": "Configured",
 	"settings.harness.installationUnknown": "Installation status unknown",
 	"settings.harness.installing": "Installing…",
 	"settings.harness.instructions": "Instructions",
