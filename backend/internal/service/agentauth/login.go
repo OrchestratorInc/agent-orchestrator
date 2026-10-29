@@ -211,7 +211,7 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		}
 	}
 	if method == catalogKeyMethod {
-		return s.saveCatalogKey(ctx, agentID, opts.Provider, secret)
+		return s.saveCatalogKey(ctx, plan, opts.Provider, secret)
 	}
 	if writer, ok := directKeyWriter(agentID); ok && !strings.HasPrefix(method, "env_") {
 		if err := writer(ctx, method, secret); err != nil {
