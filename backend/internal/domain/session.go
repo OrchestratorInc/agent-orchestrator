@@ -98,6 +98,24 @@ func (k RequestedOutput) Valid() bool {
 	return k == "" || k == RequestedOutputArtifact
 }
 
+// SpawnSource names the desktop surface that started a session, for
+// telemetry only. Empty is an ordinary start.
+type SpawnSource string
+
+const (
+	// SpawnSourceParallelPrompt is a start from the board's "run more at once"
+	// suggestions card.
+	SpawnSourceParallelPrompt SpawnSource = "parallel_prompt"
+	// SpawnSourceComposerNext is a start with Cmd/Ctrl+Enter, which keeps the
+	// new-task page open on a fresh draft.
+	SpawnSourceComposerNext SpawnSource = "composer_next"
+)
+
+// Valid reports whether s is empty or a known spawn source.
+func (s SpawnSource) Valid() bool {
+	return s == "" || s == SpawnSourceParallelPrompt || s == SpawnSourceComposerNext
+}
+
 // HasPR reports whether a session's output includes a claimed/observed PR.
 func (t SessionOutputType) HasPR() bool {
 	return t == SessionOutputPR || t == SessionOutputPRAndArtifact

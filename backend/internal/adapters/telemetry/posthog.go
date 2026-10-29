@@ -279,6 +279,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"harness":           {},
 		"kind":              {},
 		"github_actor":      {},
+		"spawn_source":      {},
 		"surface":           {},
 	},
 	// Whether a session delivered: outcome is pr_opened, completed, killed,

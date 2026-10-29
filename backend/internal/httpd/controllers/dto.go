@@ -565,6 +565,10 @@ type SpawnSessionRequest struct {
 	// the ordinary task flow.
 	RequestedOutput domain.RequestedOutput `json:"requestedOutput,omitempty" enum:"artifact"`
 
+	// SpawnSource names the desktop surface that started the session. It only
+	// labels telemetry; omitted is an ordinary start.
+	SpawnSource domain.SpawnSource `json:"spawnSource,omitempty" enum:"parallel_prompt,composer_next"`
+
 	// DisplayName is the sidebar label for the session, capped at 100 characters.
 	// `ao spawn --name` always sets it; other clients (e.g. the desktop new-task
 	// dialog) may omit it and fall back to the session id in the read model.
@@ -1323,12 +1327,34 @@ type DelegateTaskRequest struct {
 	// TaskPreparation is the opaque worktree token returned while the New Task
 	// dialog is open. Missing or expired tokens fall back to normal creation.
 	TaskPreparation string `json:"taskPreparation,omitempty"`
+	// SpawnSource names the desktop surface that started the task. It only
+	// labels telemetry; omitted is an ordinary start.
+	SpawnSource domain.SpawnSource `json:"spawnSource,omitempty" enum:"parallel_prompt,composer_next"`
 }
 
 // PrepareTaskResponse returns the opaque token for a speculative task workspace.
 type PrepareTaskResponse struct {
 	OK              bool   `json:"ok"`
 	TaskPreparation string `json:"taskPreparation,omitempty"`
+}
+
+// TaskSuggestionsResponse lists follow-up tasks the desktop can offer to run
+// next to a project's first worker.
+type TaskSuggestionsResponse struct {
+	Suggestions []TaskSuggestionView `json:"suggestions"`
+}
+
+// TaskSuggestionView is one candidate task: an open tracker issue, or a TODO or
+// FIXME comment in a tracked file. The client words the prompt itself.
+type TaskSuggestionView struct {
+	Source      string `json:"source" enum:"issue,todo"`
+	IssueNumber int    `json:"issueNumber,omitempty"`
+	Title       string `json:"title,omitempty"`
+	URL         string `json:"url,omitempty"`
+	// Path is repository-relative.
+	Path string `json:"path,omitempty"`
+	Line int    `json:"line,omitempty"`
+	Text string `json:"text,omitempty"`
 }
 
 // DelegateTaskResponse confirms which worker was spawned and, when available,

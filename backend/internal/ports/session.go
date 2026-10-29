@@ -70,6 +70,10 @@ type SpawnConfig struct {
 	// task flow; artifact adds an artifact-delivery section to the worker prompt.
 	RequestedOutput domain.RequestedOutput
 
+	// SpawnSource is the desktop surface that started this session. It only
+	// labels the ao.session.spawned telemetry event.
+	SpawnSource domain.SpawnSource
+
 	// DisplayName is the user-facing sidebar label. Empty falls back to the
 	// session id in the read model (e.g. orchestrator sessions).
 	DisplayName string

@@ -466,7 +466,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	// Claimed even when telemetry is off: the marker describes the install.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, firstSession, true)
 	s.recordCreatedBy(ctx, rec.ID, createdBy)
-	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds(), firstForInstall, firstKnown, createdBy)
+	s.emitSpawned(ctx, cfg, rec, s.now().Sub(start).Milliseconds(), firstForInstall, firstKnown, createdBy)
 	if firstSession {
 		s.emitFirstSessionSpawned(ctx, rec, project)
 	}
@@ -567,7 +567,7 @@ func (c *firstSessionClaims) finish(m ports.InstallMilestones, eligible, succeed
 	return ports.FirstForInstall(m, "session_spawned", eligible)
 }
 
-func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64, firstForInstall, firstKnown bool, createdBy domain.SessionCreator) {
+func (s *Service) emitSpawned(ctx context.Context, cfg ports.SpawnConfig, rec domain.SessionRecord, durationMs int64, firstForInstall, firstKnown bool, createdBy domain.SessionCreator) {
 	if s.telemetry == nil {
 		return
 	}
@@ -585,6 +585,9 @@ func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, dur
 	}
 	if firstKnown {
 		payload["first_for_install"] = firstForInstall
+	}
+	if cfg.SpawnSource != "" && cfg.SpawnSource.Valid() {
+		payload["spawn_source"] = string(cfg.SpawnSource)
 	}
 	if actor, ok := s.githubActor(ctx); ok {
 		payload["github_actor"] = actor
