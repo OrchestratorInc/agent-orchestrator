@@ -325,6 +325,13 @@ export function isOrchestratorSession(session: Pick<WorkspaceSession, "id" | "ki
 	return session.kind === "orchestrator" || session.id.endsWith("-orchestrator");
 }
 
+/** Only the daemon that owns a session can rename it, and it refuses the
+ *  project orchestrator (`ORCHESTRATOR_RENAME_UNSUPPORTED`). AO Cloud has no
+ *  rename route, so a Cloud session has nothing to save a new name to. */
+export function canRenameSession(session: Pick<WorkspaceSession, "id" | "kind" | "cloud">): boolean {
+	return !session.cloud && !isOrchestratorSession(session);
+}
+
 /**
  * The project's LIVE orchestrator, if any. Terminated orchestrator rows stay in
  * the session list (the daemon returns all sessions, ordered by spawn number),

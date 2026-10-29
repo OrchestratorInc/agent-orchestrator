@@ -2488,6 +2488,51 @@ describe("Sidebar", () => {
 		expect(screen.getByLabelText("Open fix login")).toBeInTheDocument();
 	});
 
+	// AO Cloud has no rename route, and the daemon refuses the orchestrator, so
+	// a rename there would only snap back.
+	it.each([
+		["a Cloud session", { ...session, cloud: { orgId: "org-mine" } }],
+		["the project orchestrator", { ...session, id: "proj-1-orc", kind: "orchestrator" as const }],
+	])("offers no rename for %s", async (_, unrenamable) => {
+		const user = userEvent.setup();
+		const shared = { byName: "Alice" };
+		renderSidebar({
+			workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", shared, sessions: [unrenamable] }],
+			expandedProjectIds: ["proj-1"],
+		});
+
+		const openSession = screen.getByLabelText("Open fix login");
+		expect(openSession).not.toHaveAttribute("aria-keyshortcuts");
+		openSession.focus();
+		await user.keyboard("{F2}");
+		await user.dblClick(openSession);
+		expect(screen.queryByRole("textbox", { name: "Rename fix login" })).toBeNull();
+
+		fireEvent.contextMenu(openSession);
+		await screen.findByRole("menuitem", { name: "Archive session" });
+		expect(screen.queryByRole("menuitem", { name: "Rename fix login" })).toBeNull();
+		expect(renameSessionMock).not.toHaveBeenCalled();
+	});
+
+	it("still opens a Cloud session after a double tap", () => {
+		const cloudSession = { ...session, cloud: { orgId: "org-mine" } };
+		renderSidebar({
+			workspaces: [{ ...workspace, kind: "cloud", cloudOrgId: "org-mine", sessions: [cloudSession] }],
+			expandedProjectIds: ["proj-1"],
+		});
+
+		const label = screen.getByText("fix login");
+		fireEvent.pointerUp(label, { pointerType: "touch" });
+		fireEvent.pointerUp(label, { pointerType: "touch" });
+		fireEvent.click(screen.getByRole("button", { name: "Open fix login" }), { detail: 1 });
+
+		expect(screen.queryByRole("textbox", { name: "Rename fix login" })).toBeNull();
+		expect(navigateMock).toHaveBeenCalledWith({
+			to: "/projects/$projectId/sessions/$sessionId",
+			params: { projectId: "proj-1", sessionId: "proj-1-1" },
+		});
+	});
+
 	it("always shows action icons and reserves padding for them", () => {
 		renderSidebar();
 
