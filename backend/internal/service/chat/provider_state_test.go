@@ -328,7 +328,8 @@ func TestSuccessfulCompletionKeepsPlanThatSpansTurns(t *testing.T) {
 		t.Errorf("plan activity summary = %q, want the provider's count", activity.Summary)
 	}
 	var detail struct {
-		Steps []domain.ConversationPlanStep `json:"steps"`
+		Steps      []domain.ConversationPlanStep `json:"steps"`
+		SpansTurns bool                          `json:"spansTurns"`
 	}
 	if err := json.Unmarshal(activity.Detail, &detail); err != nil {
 		t.Fatalf("decode plan activity detail: %v", err)
@@ -337,6 +338,11 @@ func TestSuccessfulCompletionKeepsPlanThatSpansTurns(t *testing.T) {
 		if step.Status != plan.Steps[i].Status {
 			t.Errorf("plan activity step %d status = %q, want %q", i, step.Status, plan.Steps[i].Status)
 		}
+	}
+	// A plan row with no turn is the only copy a client gets, so it must say the
+	// list spans turns as the turn's copy does.
+	if !detail.SpansTurns {
+		t.Errorf("plan activity detail = %s, want spansTurns", activity.Detail)
 	}
 }
 

@@ -47,6 +47,16 @@ describe("TurnPlan", () => {
 		expect(screen.getByRole("region", { name: "Agent plan" })).toHaveAttribute("aria-busy", "true");
 	});
 
+	// The step in progress turns only while the agent can still be working on it. A
+	// settled turn's unfinished step keeps its mark, standing still.
+	it("turns the step in progress only while the turn runs", () => {
+		const { container, rerender } = render(<TurnPlan plan={plan} live />);
+		expect(container.querySelector(".animate-spin")).not.toBeNull();
+		rerender(<TurnPlan plan={plan} />);
+		expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
+		expect(container.querySelector(".animate-spin")).toBeNull();
+	});
+
 	// A finished plan is not still planning, even on a turn that is technically live.
 	it("stops claiming to be planning once every step is done", () => {
 		render(
