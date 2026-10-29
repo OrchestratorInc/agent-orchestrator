@@ -126,6 +126,116 @@ describe("plan", () => {
 		expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
 	});
 
+	// Claude can keep working after its turn ends (a background job finishing). That
+	// work belongs to no turn, so each task-list revision arrives as its own row.
+	// Only the newest copy is current: neither the turn's older copy nor the earlier
+	// revision may show, and a step the agent later finished must not keep spinning.
+	it("shows a list revised after its turn ended once, at its newest state", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const planRow = (id: string, sequence: number, done: number) => ({
+			kind: "activity" as const,
+			id,
+			sequence,
+			revision: 0,
+			activityKind: "plan" as const,
+			status: "completed" as const,
+			summary: "",
+			detail: {
+				event: "plan",
+				spansTurns: true,
+				steps: current.steps.map((step, index) => ({
+					text: step.text,
+					status: index < done ? ("completed" as const) : ("pending" as const),
+				})),
+			},
+			createdAt: new Date().toISOString(),
+		});
+		const afterTurn: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) =>
+				turn.id === "turn-2" ? { ...turn, state: "completed", plan: { ...current, spansTurns: true } } : turn,
+			),
+			items: [...chatFixture.items, planRow("plan-late-1", 21, 3), planRow("plan-late-2", 22, 4)],
+			latestSequence: 22,
+		};
+		const { container } = render(<ChatWorkspace snapshot={afterTurn} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
+		expect(screen.getByText("4/4")).toBeInTheDocument();
+		expect(container.querySelector("[data-turn-plan] .animate-spin")).toBeNull();
+	});
+
+	// The same holds for a plan with no turn and no cross-turn flag: consecutive
+	// revisions are one plan changing, not several plans.
+	it("shows consecutive revisions of a turnless plan as one card", () => {
+		const orphanRow = (id: string, sequence: number, status: "pending" | "completed") => ({
+			kind: "activity" as const,
+			id,
+			sequence,
+			revision: 0,
+			activityKind: "plan" as const,
+			status: "running" as const,
+			summary: "Updated plan",
+			detail: { event: "plan", steps: [{ text: "Resumed plan step", status }] },
+			createdAt: new Date().toISOString(),
+		});
+		const revised: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) => ({ ...turn, plan: undefined })),
+			items: [...chatFixture.items, orphanRow("orphan-1", 21, "pending"), orphanRow("orphan-2", 22, "completed")],
+			latestSequence: 22,
+		};
+		render(<ChatWorkspace snapshot={revised} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
+		expect(screen.getByLabelText("Resumed plan step — done")).toBeInTheDocument();
+	});
+
+	// A turn that failed or was stopped is not working on anything, so the step it
+	// left unfinished must not look busy.
+	it.each(["failed", "interrupted", "completed"] as const)(
+		"stops the step spinner once the turn has %s",
+		(state) => {
+			const ended: ConversationSnapshot = {
+				...chatFixture,
+				turns: chatFixture.turns.map((turn) => (turn.id === "turn-2" ? { ...turn, state } : turn)),
+			};
+			const { container } = render(<ChatWorkspace snapshot={ended} />);
+			expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
+			expect(container.querySelector("[data-turn-plan] .animate-spin")).toBeNull();
+		},
+	);
+
+	it("keeps the step spinner while the turn runs", () => {
+		const { container } = render(<ChatWorkspace snapshot={chatFixture} />);
+		expect(container.querySelector("[data-turn-plan] .animate-spin")).not.toBeNull();
+	});
+
+	// A failed turn's copy of a cross-turn list is as stale as a completed one's once
+	// a later turn carries the list.
+	it("replaces a failed turn's copy of a list that spans turns with the later turn's", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const afterFailure: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) =>
+				turn.id === "turn-1"
+					? {
+							...turn,
+							state: "failed",
+							plan: {
+								spansTurns: true,
+								steps: current.steps.map((step, index) => ({
+									...step,
+									status: index === 0 ? ("in_progress" as const) : ("pending" as const),
+								})),
+							},
+						}
+					: { ...turn, plan: { ...current, spansTurns: true } },
+			),
+		};
+		render(<ChatWorkspace snapshot={afterFailure} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
+		expect(screen.getByLabelText("Land the conversation store and its migration — done")).toBeInTheDocument();
+	});
+
 	it("keeps a separate plan on each turn when the plans are per turn", () => {
 		const current = chatFixture.turns[1]!.plan!;
 		const perTurn: ConversationSnapshot = {
