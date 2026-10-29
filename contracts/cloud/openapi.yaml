@@ -2990,12 +2990,11 @@ paths:
       operationId: putRemoteHost
       tags: [Remote Hosts]
       description: |
-        Lists a machine in the account, or updates its listing. A standing
-        fixed tunnel is replaced when the registration carries a new `token`,
-        or when the machine was removed and is listed again: the address
-        stays, and a run token fetched with the old credential stops working.
-        A registration that makes or replaces a tunnel waits on Cloudflare,
-        which can take more than a minute.
+        Lists a machine in the account, or updates its listing. A new `token`,
+        or listing a removed machine again, retires its standing fixed tunnel:
+        a run token fetched with the old credential stops working, and the
+        machine gets a new tunnel at the same address. A registration that
+        makes a tunnel can take more than a minute.
       requestBody:
         required: true
         content:
@@ -3011,13 +3010,13 @@ paths:
           description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses. A registration with `url` still succeeds."
           $ref: "#/components/responses/Error"
         "422":
-          description: "`validation_error`: the label, token or `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses."
+          description: "`validation_error`: the label or token is missing or invalid, `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses."
           $ref: "#/components/responses/ValidationError"
         "429":
           description: "`tunnel_rate_limited`: the account made too many fixed-address writes; try later. Also for a new `token` on a machine with a fixed tunnel, with or without `url`."
           $ref: "#/components/responses/Error"
         "502":
-          description: "`tunnel_unavailable`: the fixed address could not be made, or a new `token` could not replace the tunnel, with or without `url`. The listing is unchanged, though a tunnel being replaced may already be deleted; the machine's next fetch makes a new one."
+          description: "`tunnel_unavailable`: the fixed address could not be made, or a new `token` could not retire the standing tunnel, with or without `url`. The listing is unchanged, and registering again retries. The machine's current run token may already have stopped working."
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
@@ -3025,12 +3024,15 @@ paths:
       operationId: deleteRemoteHost
       tags: [Remote Hosts]
       description: |
-        Removes the machine from the account and deletes its fixed tunnel, or
-        leaves that to a later cleanup when Cloudflare fails. Its fixed
-        address counts against the account's limit for a few minutes after.
+        Removes the machine from the account and deletes its fixed tunnel;
+        when Cloudflare fails, a later cleanup deletes it. The fixed address
+        counts against the account's limit until that cleanup, usually within
+        15 minutes.
       responses:
         "204":
           description: Removed.
+        "400":
+          $ref: "#/components/responses/BadRequest"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/remote-hosts/{hostId}/address:
@@ -3056,7 +3058,7 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          description: "`unauthorized`: no account lists the machine under this credential."
+          description: "`unauthorized`: the credential is missing or malformed, or no account lists the machine under it."
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
@@ -3071,9 +3073,9 @@ paths:
       description: |
         The machine fetches the run token of the fixed tunnel an account gives
         it: the account that lists the machine under the credential it
-        presents. If several do, the one with a standing tunnel, else the one
-        that listed it last. The deployment makes the tunnel when there is
-        none.
+        presents. If several do, one with a standing tunnel is preferred. The
+        deployment makes the tunnel when there is none. A deployment that
+        predates this route answers 404 without an error envelope.
       requestBody:
         required: true
         content:
@@ -3095,7 +3097,7 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          description: "`unauthorized`: no account lists the machine under this credential."
+          description: "`unauthorized`: the credential is missing or malformed, or no account lists the machine under it."
           $ref: "#/components/responses/Error"
         "409":
           description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses."
@@ -3104,7 +3106,7 @@ paths:
           description: "`tunnel_rate_limited`: the account made too many fixed-address writes; try later."
           $ref: "#/components/responses/Error"
         "502":
-          description: "`tunnel_unavailable`: the tunnel could not be made."
+          description: "`tunnel_unavailable`: the tunnel could not be made or replaced. A repair that could not delete the standing tunnel leaves it in place."
           $ref: "#/components/responses/Error"
         "503":
           description: "`fixed_addresses_unavailable`: this deployment gives no fixed addresses."
@@ -3378,7 +3380,7 @@ components:
         label:
           type: string
           minLength: 1
-          description: At most 64 bytes, after surrounding spaces are trimmed.
+          description: At most 64 bytes, after surrounding whitespace is trimmed.
         url:
           type: string
           description: The machine's address, an http or https origin with no path, query, fragment or user info. Omit it, or send it empty, to list the machine at a fixed address the deployment makes.
@@ -3418,7 +3420,7 @@ components:
           description: When the address was made; it may not resolve for a short time after.
         repaired:
           type: boolean
-          description: Set when a repair request replaced the tunnel.
+          description: Set when a repair request got a new tunnel.
     EmptyObject:
       type: object
       additionalProperties: false

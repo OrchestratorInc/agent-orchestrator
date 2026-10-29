@@ -1959,18 +1959,18 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Lists a machine in the account, or updates its listing. A standing
-         *     fixed tunnel is replaced when the registration carries a new `token`,
-         *     or when the machine was removed and is listed again: the address
-         *     stays, and a run token fetched with the old credential stops working.
-         *     A registration that makes or replaces a tunnel waits on Cloudflare,
-         *     which can take more than a minute.
+        /** @description Lists a machine in the account, or updates its listing. A new `token`,
+         *     or listing a removed machine again, retires its standing fixed tunnel:
+         *     a run token fetched with the old credential stops working, and the
+         *     machine gets a new tunnel at the same address. A registration that
+         *     makes a tunnel can take more than a minute.
          *      */
         put: operations["putRemoteHost"];
         post?: never;
-        /** @description Removes the machine from the account and deletes its fixed tunnel, or
-         *     leaves that to a later cleanup when Cloudflare fails. Its fixed
-         *     address counts against the account's limit for a few minutes after.
+        /** @description Removes the machine from the account and deletes its fixed tunnel;
+         *     when Cloudflare fails, a later cleanup deletes it. The fixed address
+         *     counts against the account's limit until that cleanup, usually within
+         *     15 minutes.
          *      */
         delete: operations["deleteRemoteHost"];
         options?: never;
@@ -2014,9 +2014,9 @@ export interface paths {
         put?: never;
         /** @description The machine fetches the run token of the fixed tunnel an account gives
          *     it: the account that lists the machine under the credential it
-         *     presents. If several do, the one with a standing tunnel, else the one
-         *     that listed it last. The deployment makes the tunnel when there is
-         *     none.
+         *     presents. If several do, one with a standing tunnel is preferred. The
+         *     deployment makes the tunnel when there is none. A deployment that
+         *     predates this route answers 404 without an error envelope.
          *      */
         post: operations["ensureRemoteHostTunnel"];
         delete?: never;
@@ -2045,7 +2045,7 @@ export interface components {
             fixedAddresses?: boolean;
         };
         RemoteHostRegistration: {
-            /** @description At most 64 bytes, after surrounding spaces are trimmed. */
+            /** @description At most 64 bytes, after surrounding whitespace is trimmed. */
             label: string;
             /** @description The machine's address, an http or https origin with no path, query, fragment or user info. Omit it, or send it empty, to list the machine at a fixed address the deployment makes. */
             url?: string;
@@ -2072,7 +2072,7 @@ export interface components {
              * @description When the address was made; it may not resolve for a short time after.
              */
             since: string;
-            /** @description Set when a repair request replaced the tunnel. */
+            /** @description Set when a repair request got a new tunnel. */
             repaired?: boolean;
         };
         EmptyObject: Record<string, never>;
@@ -7427,11 +7427,11 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. A registration with `url` still succeeds. */
             409: components["responses"]["Error"];
-            /** @description `validation_error`: the label, token or `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses. */
+            /** @description `validation_error`: the label or token is missing or invalid, `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses. */
             422: components["responses"]["ValidationError"];
             /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. Also for a new `token` on a machine with a fixed tunnel, with or without `url`. */
             429: components["responses"]["Error"];
-            /** @description `tunnel_unavailable`: the fixed address could not be made, or a new `token` could not replace the tunnel, with or without `url`. The listing is unchanged, though a tunnel being replaced may already be deleted; the machine's next fetch makes a new one. */
+            /** @description `tunnel_unavailable`: the fixed address could not be made, or a new `token` could not retire the standing tunnel, with or without `url`. The listing is unchanged, and registering again retries. The machine's current run token may already have stopped working. */
             502: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
@@ -7455,6 +7455,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["BadRequest"];
             default: components["responses"]["Error"];
         };
     };
@@ -7482,7 +7483,7 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
-            /** @description `unauthorized`: no account lists the machine under this credential. */
+            /** @description `unauthorized`: the credential is missing or malformed, or no account lists the machine under it. */
             401: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
@@ -7514,13 +7515,13 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
-            /** @description `unauthorized`: no account lists the machine under this credential. */
+            /** @description `unauthorized`: the credential is missing or malformed, or no account lists the machine under it. */
             401: components["responses"]["Error"];
             /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. */
             409: components["responses"]["Error"];
             /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. */
             429: components["responses"]["Error"];
-            /** @description `tunnel_unavailable`: the tunnel could not be made. */
+            /** @description `tunnel_unavailable`: the tunnel could not be made or replaced. A repair that could not delete the standing tunnel leaves it in place. */
             502: components["responses"]["Error"];
             /** @description `fixed_addresses_unavailable`: this deployment gives no fixed addresses. */
             503: components["responses"]["Error"];
