@@ -1,14 +1,13 @@
 import {
 	Box,
 	Button,
-	CircularProgressIndicator,
 	Column,
 	DropdownMenu,
 	DropdownMenuItem,
-	FilledIconButton,
 	Host,
 	HorizontalDivider,
 	Icon,
+	IconButton,
 	Row,
 	Spacer,
 	Text,
@@ -17,28 +16,27 @@ import {
 import { background, clip, fillMaxWidth, height, padding, semantics, Shapes, size, testID, weight } from "@expo/ui/jetpack-compose/modifiers";
 import { Fragment, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
+import { COMPOSER_DISC } from "./chat/composerStyles";
 import { chipColorFor } from "./harnessLogo";
 import { logoFor } from "./harnessLogoAssets";
 import { haptics } from "./haptics";
+import { SpawnComposer } from "./spawn-composer";
 import type { SpawnComposerControlsProps, SpawnComposerOption } from "./spawn-composer-controls.types";
 import { defaultModelChoice } from "./spawnModel";
 import type { Theme } from "./theme";
 import { useTheme, useThemeState, useThemedStyles } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
-import { font, iconSize, space } from "./tokens";
+import { font, iconSize, space, touchTarget } from "./tokens";
 
-type OpenMenu = "host" | "project" | "approval" | "attach" | "harness";
+type OpenMenu = "host" | "project" | "approval" | "harness";
 
 type MenuOption = { id: string; label: string; leading?: ReactNode; sectionBreakBefore?: boolean };
 
-/** The composer line's controls: Material's 48dp touch target, one height for all three. */
-const ACTION_SIZE = 48;
-
 /**
- * Spawn's controls as Material 3, laid out as on iOS: the machine on its own
- * line, then the project and the approval mode, then the composer's own line,
- * with who runs the task in a filled capsule at its start and the attach and
- * send buttons as filled circles at its end. Each selector is a dropdown menu
+ * Spawn's controls as Material 3, laid out as on iOS: the machine and the
+ * project each on its own line, then the chat's composer, its controls row
+ * holding who runs the task at the start and the approval mode at the end, as
+ * the chat's holds the turn settings. Each selector is a dropdown menu
  * anchored to the button that names the current choice; each agent in its menu
  * opens one level down onto its models. Compose owns the 48dp targets, the
  * ripples and the menu semantics; TalkBack hears the chosen row as selected
@@ -65,7 +63,11 @@ export function SpawnComposerControls({
 	onChoosePhoto,
 	onChooseFile,
 	voice,
-	promptEmpty,
+	prompt,
+	onChangePrompt,
+	placeholder,
+	attachments,
+	hasAttachments,
 	onSpawn,
 	busy,
 	disabled,
@@ -85,13 +87,6 @@ export function SpawnComposerControls({
 	// The model the task runs: the one picked or pinned, else the catalog's own
 	// default by name, and the agent's name only when the catalog names none.
 	const agentTitle = usesDefaultModel ? agentModels[harness]?.defaultLabel ?? harnessLabel : modelLabel;
-	const listening = voice.state === "recording" || voice.state === "starting";
-	const transcribing = voice.state === "transcribing";
-	// Dictating while the mic is busy or the prompt is empty; a device that
-	// cannot dictate keeps Start, which says what is missing when pressed.
-	const dictates = !busy && (listening || transcribing || (promptEmpty && voice.state !== "unavailable" && voice.state !== "denied"));
-	const primaryLabel = busy ? "Starting task" : listening ? "Stop dictating" : transcribing ? "Transcribing" : dictates ? "Dictate the task" : "Start task";
-	const primaryEnabled = dictates ? !transcribing : !disabled;
 	// Only a real change is worth a tick; the owner ignores a repeat anyway.
 	const choose = (current: string | null, apply: (id: string) => void) => (id: string) => {
 		close();
@@ -103,147 +98,132 @@ export function SpawnComposerControls({
 
 	return (
 		<View style={styles.stack}>
+			{/* Where the task runs as plain rows above the composer, one line
+			    each: the machine, then the project. */}
 			<Host matchContents={{ vertical: true }} colorScheme={scheme}>
 				<Column modifiers={[fillMaxWidth()]}>
-					<Row verticalAlignment="center" modifiers={[fillMaxWidth()]}>
-						<SelectorMenu
-							{...menu("host")}
-							label={hostLabel}
-							accessibilityLabel={`Run on ${hostLabel}`}
-							leading={<Icon source={materialDrawable("desktop_windows")} size={iconSize.lg} tint={t.textSecondary} />}
-							options={hosts}
-							selectedId={hostId}
-							onSelect={choose(hostId, onSelectHost)}
-							testTag="spawn-host"
-						/>
-					</Row>
-					<Row horizontalArrangement={{ spacedBy: space.xs }} verticalAlignment="center" modifiers={[fillMaxWidth()]}>
-						<SelectorMenu
-							{...menu("project")}
-							label={projectLabel}
-							leading={<ProjectGlyph project={selectedProject} />}
-							options={projects.map((project) => ({ ...project, leading: <ProjectGlyph project={project} /> }))}
-							selectedId={projectId}
-							onSelect={choose(projectId, onSelectProject)}
-							testTag="spawn-project"
-						/>
-						{/* What the worker may do before it asks, apart from the model. */}
-						<SelectorMenu
-							{...menu("approval")}
-							label={approvalOption?.shortLabel ?? approvalOption?.label ?? "Auto"}
-							leading={<Icon source={materialDrawable("verified_user")} size={iconSize.lg} tint={t.textSecondary} />}
-							options={approvalModes}
-							selectedId={approvalMode}
-							onSelect={choose(approvalMode, onSelectApprovalMode)}
-							testTag="spawn-approval"
-						/>
-					</Row>
-
-					<Row horizontalArrangement={{ spacedBy: space.sm }} verticalAlignment="center" modifiers={[fillMaxWidth(), padding(0, space.xs, 0, 0)]}>
-						{/* Who runs the task: the harness's mark and the model it runs,
-						    in a filled capsule the circles' height. */}
-						<DropdownMenu expanded={openMenu === "harness"} onDismissRequest={close} color={t.bgElevated}>
-							<DropdownMenu.Trigger>
-								<Button
-									onClick={() => setOpenMenu("harness")}
-									colors={{ containerColor: t.bgElevated, contentColor: t.textPrimary }}
-									modifiers={[height(ACTION_SIZE), testID("spawn-harness")]}
-								>
-									<HarnessMark harness={harness} />
-									<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: font.medium }} modifiers={[padding(space.sm, 0, space.xxs, 0)]}>
-										{agentTitle}
-									</Text>
-									<Icon source={materialDrawable("arrow_drop_down")} size={iconSize.xl} tint={t.textTertiary} />
-								</Button>
-							</DropdownMenu.Trigger>
-							<DropdownMenu.Items>
-								{agents.map((agent) => (
-									<DropdownMenu key={agent.id} expanded={openAgent === agent.id} onDismissRequest={() => setOpenAgent(null)} color={t.bgElevated}>
-										<DropdownMenu.Trigger>
-											<DropdownMenuItem onClick={() => setOpenAgent(agent.id)} elementColors={{ textColor: t.textPrimary }} modifiers={[testID(`spawn-model-${agent.id}`)]}>
-												<DropdownMenuItem.Text>
-													<Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyLarge", fontFamily: font.regular }}>{agent.label}</Text>
-												</DropdownMenuItem.Text>
-												<DropdownMenuItem.LeadingIcon><HarnessMark harness={agent.id} /></DropdownMenuItem.LeadingIcon>
-												<DropdownMenuItem.TrailingIcon>
-													<Icon source={materialDrawable("chevron_right")} size={iconSize.xl} tint={t.textTertiary} />
-												</DropdownMenuItem.TrailingIcon>
-											</DropdownMenuItem>
-										</DropdownMenu.Trigger>
-										<DropdownMenu.Items>
-											{/* The default first, named when the catalog says which it is;
-											    then the first few models; then the whole catalog. */}
-											{[{ id: "__auto__", label: defaultModelChoice(agentModels[agent.id]?.defaultLabel) }, ...(agentModels[agent.id]?.models ?? [])].map((model) => (
-												<MenuRow
-													key={model.id}
-													label={model.label}
-													selected={agent.id === harness && model.id === modelSelection}
-													onClick={() => {
-														close();
-														if (agent.id === harness && model.id === modelSelection) return;
-														haptics.select();
-														onSelectAgentModel(agent.id, model.id);
-													}}
-												/>
-											))}
-											{(agentModels[agent.id]?.total ?? 0) > (agentModels[agent.id]?.models.length ?? 0) ? (
-												<>
-													<HorizontalDivider color={t.borderDefault} />
-													<MenuRow
-														label={`All models (${agentModels[agent.id]!.total.toLocaleString()})`}
-														leading={<Icon source={materialDrawable("search")} size={iconSize.xl} tint={t.textSecondary} />}
-														onClick={() => { close(); onBrowseModels(agent.id); }}
-													/>
-												</>
-											) : null}
-										</DropdownMenu.Items>
-									</DropdownMenu>
-								))}
-							</DropdownMenu.Items>
-						</DropdownMenu>
-
-						<Spacer modifiers={[weight(1)]} />
-
-						<DropdownMenu expanded={openMenu === "attach"} onDismissRequest={close} color={t.bgElevated}>
-							<DropdownMenu.Trigger>
-								<FilledIconButton
-									onClick={() => setOpenMenu("attach")}
-									enabled={!busy}
-									colors={{ containerColor: t.bgElevated, contentColor: t.textPrimary, disabledContainerColor: t.bgElevated, disabledContentColor: t.textFaint }}
-									modifiers={[size(ACTION_SIZE, ACTION_SIZE), testID("spawn-attachment")]}
-								>
-									<Icon source={materialDrawable("attach_file")} size={iconSize.xl} contentDescription="Attach" />
-								</FilledIconButton>
-							</DropdownMenu.Trigger>
-							<DropdownMenu.Items>
-								<MenuRow label="Choose photo" leading={<Icon source={materialDrawable("photo")} size={iconSize.xl} tint={t.textSecondary} />} onClick={() => { close(); onChoosePhoto(); }} />
-								<MenuRow label="Choose file" leading={<Icon source={materialDrawable("draft")} size={iconSize.xl} tint={t.textSecondary} />} onClick={() => { close(); onChooseFile(); }} />
-							</DropdownMenu.Items>
-						</DropdownMenu>
-
-						{/* One round button that follows the prompt: with text it starts the
-						    task, with none it dictates, and while the mic is open it stops,
-						    in the recording red. A button only taps, so dictation here is
-						    hands-free: tap, speak, tap again. The success and failure
-						    haptics come from the request itself, so the press adds none. */}
-						<FilledIconButton
-							onClick={dictates ? voice.onToggleLatched : onSpawn}
-							enabled={primaryEnabled}
-							colors={{
-								containerColor: listening ? t.red : t.accent,
-								contentColor: listening ? t.onDestructive : t.onAccent,
-								disabledContainerColor: t.bgElevated,
-								disabledContentColor: t.textFaint,
-							}}
-							modifiers={[size(ACTION_SIZE, ACTION_SIZE), testID(dictates ? "spawn-dictate" : "spawn-submit")]}
-						>
-							{busy || transcribing
-								? <CircularProgressIndicator color={t.textFaint} strokeWidth={2} modifiers={[size(iconSize.md, iconSize.md)]} />
-								: <Icon source={materialDrawable(listening ? "stop" : dictates ? "mic" : "arrow_upward")} size={iconSize.xl} contentDescription={primaryLabel} />}
-						</FilledIconButton>
-					</Row>
+					<SelectorMenu
+						{...menu("host")}
+						label={hostLabel}
+						accessibilityLabel={`Run on ${hostLabel}`}
+						leading={<Icon source={materialDrawable("laptop")} size={iconSize.lg} tint={t.textSecondary} />}
+						options={hosts}
+						selectedId={hostId}
+						onSelect={choose(hostId, onSelectHost)}
+						testTag="spawn-host"
+					/>
+					<SelectorMenu
+						{...menu("project")}
+						label={projectLabel}
+						leading={<ProjectGlyph project={selectedProject} />}
+						options={projects.map((project) => ({ ...project, leading: <ProjectGlyph project={project} /> }))}
+						selectedId={projectId}
+						onSelect={choose(projectId, onSelectProject)}
+						testTag="spawn-project"
+					/>
 				</Column>
 			</Host>
+
+			{attachments}
+
+			<SpawnComposer
+				prompt={prompt}
+				onChangePrompt={onChangePrompt}
+				placeholder={placeholder}
+				hasAttachments={hasAttachments}
+				onChoosePhoto={onChoosePhoto}
+				onChooseFile={onChooseFile}
+				voice={voice}
+				onSpawn={onSpawn}
+				busy={busy}
+				disabled={disabled}
+				settings={
+					<Host matchContents={{ vertical: true }} colorScheme={scheme}>
+						<Row verticalAlignment="center" modifiers={[fillMaxWidth(), height(touchTarget)]}>
+							{/* Who runs the task: the harness's mark and the model it runs,
+							    in a filled capsule the circles' height. */}
+							<DropdownMenu expanded={openMenu === "harness"} onDismissRequest={close} color={t.bgElevated}>
+								<DropdownMenu.Trigger>
+									<Button
+										onClick={() => setOpenMenu("harness")}
+										colors={{ containerColor: t.bgSubtle, contentColor: t.textPrimary }}
+										contentPadding={{ start: space.md, end: space.xs }}
+										enabled={!busy}
+										modifiers={[height(COMPOSER_DISC), testID("spawn-harness")]}
+									>
+										<HarnessMark harness={harness} />
+										<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: font.medium }} modifiers={[padding(space.sm, 0, space.xxs, 0)]}>
+											{agentTitle}
+										</Text>
+										<Icon source={materialDrawable("arrow_drop_down")} size={iconSize.xl} tint={t.textTertiary} />
+									</Button>
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Items>
+									{agents.map((agent) => (
+										<DropdownMenu key={agent.id} expanded={openAgent === agent.id} onDismissRequest={() => setOpenAgent(null)} color={t.bgElevated}>
+											<DropdownMenu.Trigger>
+												<DropdownMenuItem onClick={() => setOpenAgent(agent.id)} elementColors={{ textColor: t.textPrimary }} modifiers={[testID(`spawn-model-${agent.id}`)]}>
+													<DropdownMenuItem.Text>
+														<Text maxLines={1} overflow="ellipsis" style={{ typography: "bodyLarge", fontFamily: font.regular }}>{agent.label}</Text>
+													</DropdownMenuItem.Text>
+													<DropdownMenuItem.LeadingIcon><HarnessMark harness={agent.id} /></DropdownMenuItem.LeadingIcon>
+													<DropdownMenuItem.TrailingIcon>
+														<Icon source={materialDrawable("chevron_right")} size={iconSize.xl} tint={t.textTertiary} />
+													</DropdownMenuItem.TrailingIcon>
+												</DropdownMenuItem>
+											</DropdownMenu.Trigger>
+											<DropdownMenu.Items>
+												{/* The default first, named when the catalog says which it is;
+												    then the first few models; then the whole catalog. */}
+												{[{ id: "__auto__", label: defaultModelChoice(agentModels[agent.id]?.defaultLabel) }, ...(agentModels[agent.id]?.models ?? [])].map((model) => (
+													<MenuRow
+														key={model.id}
+														label={model.label}
+														selected={agent.id === harness && model.id === modelSelection}
+														onClick={() => {
+															close();
+															if (agent.id === harness && model.id === modelSelection) return;
+															haptics.select();
+															onSelectAgentModel(agent.id, model.id);
+														}}
+													/>
+												))}
+												{(agentModels[agent.id]?.total ?? 0) > (agentModels[agent.id]?.models.length ?? 0) ? (
+													<>
+														<HorizontalDivider color={t.borderDefault} />
+														<MenuRow
+															label={`All models (${agentModels[agent.id]!.total.toLocaleString()})`}
+															leading={<Icon source={materialDrawable("search")} size={iconSize.xl} tint={t.textSecondary} />}
+															onClick={() => { close(); onBrowseModels(agent.id); }}
+														/>
+													</>
+												) : null}
+											</DropdownMenu.Items>
+										</DropdownMenu>
+									))}
+								</DropdownMenu.Items>
+							</DropdownMenu>
+
+							<Spacer modifiers={[weight(1)]} />
+
+							{/* The approval mode as its symbol alone, as the chat's; the
+							    menu and TalkBack name it. */}
+							<DropdownMenu expanded={openMenu === "approval"} onDismissRequest={close} color={t.bgElevated}>
+								<DropdownMenu.Trigger>
+									<IconButton onClick={() => setOpenMenu("approval")} enabled={!busy} colors={{ contentColor: t.textSecondary }} modifiers={[testID("spawn-approval")]}>
+										<Icon source={materialDrawable("verified_user")} size={iconSize.lg} contentDescription={`Approval, ${approvalOption?.label ?? "Auto"}`} />
+									</IconButton>
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Items>
+									{approvalModes.map((mode) => (
+										<MenuRow key={mode.id} label={mode.label} selected={mode.id === approvalMode} onClick={() => choose(approvalMode, onSelectApprovalMode)(mode.id)} />
+									))}
+								</DropdownMenu.Items>
+							</DropdownMenu>
+						</Row>
+					</Host>
+				}
+			/>
 		</View>
 	);
 }
@@ -275,8 +255,8 @@ function SelectorMenu({ label, accessibilityLabel, leading, options, selectedId,
 					<Text
 						maxLines={1}
 						overflow="ellipsis"
-						style={{ typography: "labelLarge", fontFamily: font.medium }}
-						modifiers={[padding(leading ? space.xs : 0, 0, space.xxs, 0)]}
+						style={{ typography: "bodyLarge", fontFamily: font.regular }}
+						modifiers={[padding(leading ? space.sm : 0, 0, space.xxs, 0)]}
 					>
 						{label}
 					</Text>
@@ -341,5 +321,5 @@ function HarnessMark({ harness }: { harness: string }) {
 }
 
 const makeStyles = (_t: Theme) => StyleSheet.create({
-	stack: { gap: space.sm },
+	stack: { gap: space.xs },
 });

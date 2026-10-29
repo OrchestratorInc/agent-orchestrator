@@ -13,21 +13,31 @@ describe("iOS spawn menu layout", () => {
 		expect(source).not.toMatch(/height: \d+/);
 		expect(source).toContain("<Host matchContents={{ vertical: true }}");
 		expect(source).toContain("<Spacer minLength={0} />");
-		// The agent and its model are one enclosed capsule, the circles' height,
-		// holding the harness's mark and one name.
-		expect(source).toContain('frame({ minHeight: ACTION_HEIGHT, maxHeight: ACTION_HEIGHT }), backgroundOverlay({ color: t.bgElevated }), clipShape("capsule")');
+		// The agent and its model are one enclosed capsule, the chat composer's
+		// discs' height, holding the harness's mark and one name.
+		expect(source).toContain('frame({ minHeight: COMPOSER_DISC, maxHeight: COMPOSER_DISC }), backgroundOverlay({ color: t.bgElevated }), clipShape("capsule")');
 		expect(source).toContain("<SelectorText>{agentTitle}</SelectorText>");
-		// Beside the project, the approval mode keeps its short name; the
-		// project's gives way first.
-		expect(source).toContain('indicator="chevron.up.chevron.down" priority={1} />');
 		for (const id of ["spawn-host", "spawn-project", "spawn-harness", "spawn-approval"]) {
 			expect(source).toContain(`accessibilityIdentifier("${id}")`);
 		}
 	});
 
+	// The composer is the chat's; its controls row holds who runs the task at
+	// the start and the approval mode's symbol at the end, as the chat's turn
+	// settings do. Only the machine and the project are rows above it.
+	it("fills the chat composer's controls row with the agent, then the approval mode", () => {
+		const settings = source.indexOf("settings={");
+		expect(source).toContain("<SpawnComposer");
+		expect(source.indexOf('accessibilityIdentifier("spawn-project")')).toBeLessThan(settings);
+		expect(source.indexOf('accessibilityIdentifier("spawn-harness")')).toBeGreaterThan(settings);
+		expect(source.indexOf('accessibilityIdentifier("spawn-approval")')).toBeGreaterThan(source.indexOf('accessibilityIdentifier("spawn-harness")'));
+		expect(source).toContain('settingsHost: { alignSelf: "stretch", height: touchTarget }');
+	});
+
 	it("scales every label with Dynamic Type", () => {
 		expect(source).not.toMatch(/font\(\{ size/);
 		expect(source).toContain('font({ textStyle: "subheadline", weight: "medium" })');
+		expect(source).toContain('font({ textStyle: "body" })');
 	});
 
 	// Checkmark images on plain buttons drew a selection VoiceOver never heard.
@@ -45,27 +55,5 @@ describe("iOS spawn menu layout", () => {
 		expect(source).toContain('project?.icon === "message-square-plus" ? "plus.bubble" : "folder"');
 		expect(source).toContain("name={projectSystemImage(selectedProject)}");
 		expect(source).toContain("systemImage={projectSystemImage(project)}");
-	});
-
-	// Attaching sits beside the primary button, as a solid circle that opens
-	// the photo and file pickers; the primary button dictates while the prompt
-	// is empty.
-	it("attaches beside the primary button, which dictates while the prompt is empty", () => {
-		expect(source).toContain('systemName="paperclip"');
-		expect(source).toContain('<Button label="Choose Photo" systemImage="photo" onPress={onChoosePhoto} />');
-		expect(source).toContain('<Button label="Choose File" systemImage="doc" onPress={onChooseFile} />');
-		expect(source).toContain("onPress={dictates ? voice.onToggleLatched : onSpawn}");
-		expect(source).not.toContain("MicKey");
-	});
-
-	// A solid filled capsule on every iOS version, not Liquid Glass's
-	// translucent one, with the attach circle beside it at the same height.
-	it("starts from a native prominent button rather than a scaling Pressable", () => {
-		expect(source).not.toContain("Pressable");
-		expect(source).not.toContain("glassProminent");
-		// A fixed disc in every state, so the row never changes height.
-		expect(source).toContain('<HStack modifiers={[frame({ width: ACTION_HEIGHT, height: ACTION_HEIGHT }), backgroundOverlay({ color: primaryFill }), clipShape("circle")');
-		expect(source).toContain('frame({ width: ACTION_HEIGHT, height: ACTION_HEIGHT }),\n\t\t\t\t\t\t\t\t\tbackgroundOverlay({ color: t.bgElevated }),\n\t\t\t\t\t\t\t\t\tclipShape("circle"),');
-		expect(source).toContain("disabledModifier(primaryDisabled)");
 	});
 });

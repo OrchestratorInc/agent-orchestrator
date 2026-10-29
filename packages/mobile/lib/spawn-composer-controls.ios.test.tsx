@@ -7,7 +7,7 @@ const fixtures = vi.hoisted(() => ({
 	tap: vi.fn(),
 }));
 
-vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }) }));
+vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (make: (theme: object) => object) => make(fixtures.theme) }));
 vi.mock("./harnessLogoAssets", () => ({ logoFor: () => undefined }));
 vi.mock("./haptics", () => ({ haptics: { select: fixtures.select, tap: fixtures.tap } }));
 vi.mock("expo-asset", () => ({ Asset: { fromModule: vi.fn() } }));
@@ -42,7 +42,13 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => {
 	};
 });
 
+vi.mock("./spawn-composer", async () => {
+	const React = await import("react");
+	// The shared shell is tested on its own; here it only holds the settings.
+	return { SpawnComposer: ({ settings, ...props }: { settings?: React.ReactNode }) => React.createElement("SpawnComposer", props, settings) };
+});
 import { SpawnComposerControls } from "./spawn-composer-controls.ios";
+import { COMPOSER_DISC } from "./chat/composerStyles";
 import { touchTarget } from "./tokens";
 
 let renderer: ReactTestRenderer | undefined;
@@ -82,7 +88,11 @@ const baseProps = (overrides: Partial<Props> = {}): Props => ({
 	agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 1 }, aider: { models: [], total: 0 } },
 	onSelectAgentModel: vi.fn(),
 	usesDefaultModel: true,
-	promptEmpty: false,
+	prompt: "",
+	onChangePrompt: vi.fn(),
+	placeholder: "Ask Codex",
+	attachments: null,
+	hasAttachments: false,
 	onBrowseModels: vi.fn(),
 	approvalModes: [{ id: "auto", label: "Auto", shortLabel: "Auto" }, { id: "bypass-permissions", label: "Bypass permissions", shortLabel: "Bypass" }],
 	approvalMode: "auto",
@@ -210,7 +220,7 @@ describe("iOS spawn selectors", () => {
 		expect(identified(root, "spawn-model-aider").findAll((node) => hostType(node) === "Button")).toHaveLength(0);
 	});
 
-	it("picks the approval mode on its own control, naming it shortly", async () => {
+	it("picks the approval mode from its own symbol at the controls row's end", async () => {
 		const props = baseProps({ approvalMode: "bypass-permissions" });
 		const root = await render(props);
 		const menu = identified(root, "spawn-approval");
@@ -223,7 +233,8 @@ describe("iOS spawn selectors", () => {
 	it("sizes every selector to its content and scales its text with Dynamic Type", async () => {
 		const root = await render(baseProps());
 		// A Menu's face is a prop, so each is rendered on its own to read its text.
-		for (const id of ["spawn-host", "spawn-project", "spawn-approval", "spawn-harness"]) {
+		// The approval mode's face is its symbol alone, as the chat's.
+		for (const id of ["spawn-host", "spawn-project", "spawn-harness"]) {
 			let face: ReactTestRenderer | undefined;
 			await act(async () => { face = create(identified(root, id).props.label); });
 			const texts = face!.root.findAll((node) => hostType(node) === "Text");
@@ -239,7 +250,11 @@ describe("iOS spawn selectors", () => {
 			const frame = modifier(identified(root, id), "frame");
 			expect(frame).toBeUndefined();
 		}
-		expect(root.findByType("Host" as never).props.matchContents).toEqual({ vertical: true });
+		// The rows take their content's height; the settings fill the composer's
+		// controls row, as the chat's turn settings do.
+		const [rows, settings] = root.findAllByType("Host" as never);
+		expect(rows.props.matchContents).toEqual({ vertical: true });
+		expect(settings.props.style).toEqual({ alignSelf: "stretch", height: touchTarget });
 	});
 
 	// A plain-style Menu hears taps only inside its label: a frame on the Menu
@@ -253,80 +268,12 @@ describe("iOS spawn selectors", () => {
 			let face: ReactTestRenderer | undefined;
 			await act(async () => { face = create(menu.props.label); });
 			const top = face!.root.findAll((node) => hostType(node) !== "")[0];
-			// At least a touch target: the model's capsule is the circles' taller height.
-			expect((modifier(top, "frame")?.args[0] as { minHeight: number }).minHeight).toBeGreaterThanOrEqual(touchTarget);
+			// At least a touch target: the approval symbol is one square.
+			const frame = modifier(top, "frame")?.args[0] as { minHeight?: number; height?: number };
+			expect(frame.minHeight ?? frame.height).toBeGreaterThanOrEqual(touchTarget);
 			expect(modifier(top, "contentShape")?.args).toEqual([{ shape: "rectangle" }]);
 			await act(async () => face!.unmount());
 		}
 	});
 });
 
-describe("iOS spawn Start", () => {
-	const glyph = (button: ReactTestInstance) => button.findAll((node) => hostType(node) === "Image")[0]?.props.systemName;
-
-	// A disc of one fixed size in every state: a system round button sized
-	// itself to its glyph, so the row's height moved as the glyph changed.
-	const disc = (button: ReactTestInstance) => button.findAll((node) => hostType(node) === "HStack")[0];
-
-	it("starts from a solid round arrow filled with the accent", async () => {
-		const props = baseProps();
-		const root = await render(props);
-		const start = root.findAll((node) => hostType(node) === "Button" && node.props.testID === "spawn-submit")[0];
-		expect(modifier(start, "buttonStyle")?.args).toEqual(["plain"]);
-		expect(modifier(start, "disabled")?.args).toEqual([false]);
-		expect(modifier(disc(start), "frame")?.args).toEqual([{ width: 50, height: 50 }]);
-		expect(modifier(disc(start), "backgroundOverlay")?.args).toEqual([{ color: "#accent" }]);
-		expect(modifier(disc(start), "clipShape")?.args).toEqual(["circle"]);
-		expect(modifier(start, "accessibilityLabel")?.args).toEqual(["Start task"]);
-		expect(glyph(start)).toBe("arrow.up");
-		expect(modifier(start.findAll((node) => hostType(node) === "Image")[0], "foregroundStyle")?.args).toEqual(["#onAccent"]);
-
-		await act(async () => start.props.onPress());
-		expect(props.onSpawn).toHaveBeenCalledOnce();
-		expect(fixtures.tap).not.toHaveBeenCalled();
-		expect(root.findAll((node) => hostType(node) === "Pressable")).toHaveLength(0);
-	});
-
-	it("disables itself and shows the system spinner while the task starts", async () => {
-		const root = await render(baseProps({ busy: true, disabled: true }));
-		const start = root.findAll((node) => hostType(node) === "Button" && node.props.testID === "spawn-submit")[0];
-		expect(modifier(start, "disabled")?.args).toEqual([true]);
-		expect(modifier(start, "accessibilityLabel")?.args).toEqual(["Starting task"]);
-		expect(start.findAllByType("ProgressView" as never)).toHaveLength(1);
-		// Same disc, in the attach circle's grey while it cannot be pressed.
-		expect(modifier(disc(start), "frame")?.args).toEqual([{ width: 50, height: 50 }]);
-		expect(modifier(disc(start), "backgroundOverlay")?.args).toEqual([{ color: "#bgElevated" }]);
-	});
-
-	// The round button follows the prompt: it dictates while there is nothing
-	// written, stops while the mic is open, and starts the task once there is text.
-	it("dictates with an empty prompt, stops while listening, and starts once there is text", async () => {
-		const primary = (root: ReactTestInstance) => root.findAll((node) => hostType(node) === "Button" && ["spawn-dictate", "spawn-submit"].includes(node.props.testID))[0];
-		let props = baseProps({ promptEmpty: true });
-		let root = await render(props);
-		let button = primary(root);
-		expect(button.props.testID).toBe("spawn-dictate");
-		expect(glyph(button)).toBe("mic.fill");
-		expect(modifier(button, "accessibilityLabel")?.args).toEqual(["Dictate the task"]);
-		await act(async () => button.props.onPress());
-		expect(props.voice.onToggleLatched).toHaveBeenCalledOnce();
-		expect(props.onSpawn).not.toHaveBeenCalled();
-		await act(async () => renderer?.unmount());
-
-		props = baseProps({ promptEmpty: false, voice: { ...baseProps().voice, state: "recording", mode: "latched" } });
-		root = await render(props);
-		button = primary(root);
-		expect(glyph(button)).toBe("stop.fill");
-		expect(modifier(disc(button), "backgroundOverlay")?.args).toEqual([{ color: "#red" }]);
-		expect(modifier(disc(button), "frame")?.args).toEqual([{ width: 50, height: 50 }]);
-		await act(async () => renderer?.unmount());
-
-		root = await render(baseProps({ promptEmpty: false }));
-		expect(glyph(primary(root))).toBe("arrow.up");
-		await act(async () => renderer?.unmount());
-
-		// A device that cannot dictate keeps Start, empty prompt or not.
-		root = await render(baseProps({ promptEmpty: true, voice: { ...baseProps().voice, state: "unavailable" } }));
-		expect(primary(root).props.testID).toBe("spawn-submit");
-	});
-});

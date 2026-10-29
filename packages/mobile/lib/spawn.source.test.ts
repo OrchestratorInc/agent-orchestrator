@@ -7,41 +7,40 @@ const attachmentRow = readFileSync(fileURLToPath(new URL("./spawn-attachment-row
 const voiceInput = readFileSync(fileURLToPath(new URL("./voice/useVoiceInput.ts", import.meta.url)), "utf8");
 const layout = readFileSync(fileURLToPath(new URL("../app/_layout.tsx", import.meta.url)), "utf8");
 
-// iOS keeps an empty native bar (no title text, no Cancel): the grabber and a
-// swipe down close the sheet, and the keyboard-riding controls are placed
-// against the bar. Android's Material sheet has neither bar nor title.
-describe("spawn sheet header", () => {
-	it("keeps an empty transparent bar on iOS, titled for VoiceOver", () => {
+// A new task is a page pushed over the tabs, laid out as a conversation that
+// has not begun, rather than a sheet: its settings sit above a chat-style
+// composer at the bottom, and starting it replaces the page with that
+// conversation.
+describe("spawn page", () => {
+	it("is a plain pushed page titled New task", () => {
 		const options = layout.slice(layout.indexOf('name="spawn"'), layout.indexOf("/>", layout.indexOf('name="spawn"')));
-		expect(options).toContain('headerShown: Platform.OS === "ios",');
-		expect(options).toContain('{ headerTransparent: true, headerStyle: undefined, headerTitle: "" }');
-		expect(options).toContain('title: "New task",');
-		expect(options).toContain('presentation: Platform.OS === "ios" ? "formSheet" : "transparentModal",');
+		expect(options).toContain('options={{ title: "New task" }}');
+		expect(options).not.toContain("presentation");
+		expect(spawn).not.toContain("@expo/ui/community/bottom-sheet");
+		expect(spawn).toContain('export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";');
 	});
 
-	it("has no Cancel, and starts the prompt below the empty bar", () => {
-		expect(spawn).not.toContain("Stack.Toolbar");
-		expect(spawn).not.toContain(">Cancel<");
-		expect(spawn).toContain('Platform.OS === "ios" && { paddingTop: headerOverlap },');
-		expect(spawn).toContain("return <View style={styles.screen}>{content}</View>;");
-		// Start keeps its place with the selectors, riding the keyboard.
-		expect(spawn).toContain("onSpawn={() => { void onSpawn(); }}");
+	it("docks the composer at the bottom on the chat's keyboard avoidance", () => {
+		expect(spawn).toContain("const chatKeyboard = useChatKeyboard();");
+		expect(spawn).toContain("<KeyboardAvoidingView");
+		expect(spawn).toContain("transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value) }],");
+		expect(spawn).toContain("<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>");
+		expect(spawn.indexOf("<Pressable accessible={false} style={styles.room}")).toBeLessThan(spawn.indexOf("<SpawnComposerControls"));
 	});
 
-
-	// A started spawn can't be called back. Leaving mid-request used to let the
-	// success path close the sheet a second time, popping the page under it.
-	it("holds the sheet while a spawn runs and navigates only from a sheet still on top", () => {
+	// A started spawn can't be called back. The page holds until the request
+	// settles, then becomes the session's conversation in place.
+	it("holds the page while a spawn runs and replaces it only while it is on top", () => {
+		expect(spawn).toContain("if (holding.current) event.preventDefault();");
 		expect(spawn).toContain("if (!busy) return;\n\t\tnavigation.setOptions({ gestureEnabled: false });\n\t\treturn () => navigation.setOptions({ gestureEnabled: true });\n\t}, [busy, navigation]);");
-		// Android's Material sheet: no drag, back press or outside tap mid-request.
-		expect(spawn).toContain("enablePanDownToClose={!busy}");
 		const success = spawn.slice(spawn.indexOf("const session = await spawn("), spawn.indexOf("} catch (e) {", spawn.indexOf("const session = await spawn(")));
-		// Left mid-request, the sheet still lets go once the request settles:
+		// Covered mid-request, the page still lets go once the request settles:
 		// otherwise coming back finds it locked, with Start stuck on Starting.
 		const leftEarly = "if (!navigation.isFocused()) {\n\t\t\t\tsetBusy(false);\n\t\t\t\treturn;\n\t\t\t}";
-		expect(success.indexOf(leftEarly)).toBeGreaterThan(0);
-		expect(success.indexOf(leftEarly)).toBeLessThan(success.indexOf("backOr(router);"));
-		expect(success.indexOf("backOr(router);")).toBeLessThan(success.indexOf('pathname: "/session/[id]"'));
+		expect(success.indexOf("holding.current = false;")).toBeLessThan(success.indexOf(leftEarly));
+		expect(success.indexOf(leftEarly)).toBeLessThan(success.indexOf("router.replace({"));
+		expect(success).toContain('pathname: "/session/[id]"');
+		expect(spawn).not.toContain("backOr(router)");
 	});
 });
 
@@ -51,13 +50,11 @@ describe("spawn composer", () => {
 		expect(spawn).not.toContain('label: "Standalone worker"');
 	});
 
-	it("reflows attachments and messages above keyboard-lifted controls on iOS", () => {
-		expect(spawn).toContain('height={Platform.OS === "ios" ? promptRoom : undefined}');
-		expect(spawn).toContain('Platform.OS === "ios" && keyboardHeight > 0 ? (');
-		expect(spawn).toContain('height: keyboardHeight, marginTop: -space.sm');
-		expect(spawn.indexOf('style={styles.messages}')).toBeLessThan(spawn.indexOf('height: keyboardHeight, marginTop: -space.sm'));
-		expect(spawn.indexOf('height: keyboardHeight, marginTop: -space.sm')).toBeLessThan(spawn.indexOf('<KeyboardStickyView'));
-		expect(spawn).toContain('promptHostFill: { height: undefined, flex: 1, minHeight: 0 }');
+	it("hands the prompt and the attachments to the chat-style composer", () => {
+		expect(spawn).toContain("prompt={prompt}\n\t\t\t\t\tonChangePrompt={setPrompt}");
+		expect(spawn).toContain('placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}');
+		expect(spawn).toContain("attachments={<SpawnAttachmentRow");
+		expect(spawn).toContain("hasAttachments={attachments.length > 0}");
 	});
 
 	it("keeps the attachment row at its own height so the chips sit on the selectors", () => {
@@ -71,10 +68,10 @@ describe("spawn composer", () => {
 		expect(spawn).toContain('Task prompt is too long. Keep it to 16 KiB or fewer');
 	});
 
-	it("keeps iOS live dictation feedback with the keyboard-sticky controls", () => {
-		expect(spawn).toContain('Platform.OS === "android" ? voiceFeedback : null');
-		expect(spawn).toContain('<KeyboardStickyView offset={{ closed: 0, opened: 0 }}>\n\t\t\t\t{Platform.OS === "ios" ? voiceFeedback : null}');
-		expect(spawn.indexOf('Platform.OS === "ios" ? voiceFeedback : null')).toBeLessThan(spawn.indexOf('<SpawnComposerControls'));
+	it("shows live dictation feedback with the composer's messages", () => {
+		const messages = spawn.slice(spawn.indexOf("style={styles.messages}"), spawn.indexOf("<SpawnComposerControls"));
+		expect(messages).toContain("{voiceFeedback}");
+		expect(spawn).toContain("|| listening\n");
 	});
 
 	it("passes the hook's one-step latch to the mic", () => {

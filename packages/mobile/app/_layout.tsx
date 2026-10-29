@@ -235,33 +235,10 @@ function Shell() {
 				<Stack.Screen name="files/[sessionId]/index" options={{ title: "Files" }} />
 				<Stack.Screen name="files/[sessionId]/folder" options={{ title: "Folder" }} />
 				<Stack.Screen name="files/[sessionId]/file" options={{ title: "File" }} />
-				<Stack.Screen
-					name="spawn"
-					options={{
-						// Android's native form-sheet implementation jumps between
-						// detents as soon as the IME appears. A transparent modal lets
-						// Spawn render a compact, content-sized sheet and lets RN's
-						// KeyboardAvoidingView keep it directly above the keyboard.
-						presentation: Platform.OS === "ios" ? "formSheet" : "transparentModal",
-						// iOS keeps a native bar with nothing in it: no title text and no
-						// Cancel, since the grabber and a swipe down close the sheet. The
-						// bar stays because the sheet places its keyboard-riding controls
-						// against it; without one they sat well above the keyboard. Shown
-						// from the start: a modal whose header appears after it mounts is
-						// rebuilt, losing the draft. Transparent, so nothing is drawn; the
-						// page insets itself by the header's height. The title still
-						// names the screen for VoiceOver.
-						headerShown: Platform.OS === "ios",
-						...(Platform.OS === "ios" ? { headerTransparent: true, headerStyle: undefined, headerTitle: "" } : null),
-						title: "New task",
-						// Fully open or closed on iOS, like Settings and Notifications: no
-						// half detent, where the keyboard is taller than the sheet and the
-						// selectors and Start task end up clipped beneath it.
-						sheetAllowedDetents: Platform.OS === "ios" ? [1] : undefined,
-						sheetGrabberVisible: Platform.OS === "ios",
-						contentStyle: { backgroundColor: Platform.OS === "ios" ? t.bgSurface : "transparent" },
-					}}
-				/>
+				{/* A page pushed over the tabs, laid out as a conversation that has
+				    not begun: its settings sit above the composer at the bottom, and
+				    starting the task replaces it with that conversation. */}
+				<Stack.Screen name="spawn" options={{ title: "New task" }} />
 				{/* Notifications holds a stack of its own, whose page draws the
 				    header. On iOS it is a full-height sheet over the board, like
 				    Settings; on Android a full-screen page with the system back. */}

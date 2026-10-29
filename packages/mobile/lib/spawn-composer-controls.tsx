@@ -1,7 +1,8 @@
 import { Button, Host, Picker } from "@expo/ui";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, TextInput, View } from "react-native";
 import { AppSymbol } from "./AppSymbol";
-import { useThemeState } from "./ThemeProvider";
+import { useTheme, useThemeState } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import type { SpawnComposerControlsProps } from "./spawn-composer-controls.types";
 import { radius, space, touchTarget } from "./tokens";
 
@@ -24,10 +25,15 @@ export function SpawnComposerControls({
 	onSelectApprovalMode,
 	onChoosePhoto,
 	onChooseFile,
+	prompt,
+	onChangePrompt,
+	placeholder,
+	attachments,
 	onSpawn,
 	busy,
 	disabled,
 }: SpawnComposerControlsProps) {
+	const t = useTheme();
 	const { scheme } = useThemeState();
 	return (
 		<View style={styles.stack}>
@@ -49,6 +55,8 @@ export function SpawnComposerControls({
 					</Picker>
 				</Host>
 			</View>
+			{attachments}
+			<TextInput accessibilityLabel="Task prompt" value={prompt} onChangeText={onChangePrompt} placeholder={placeholder} {...textSelectionColors(t)} multiline style={styles.prompt} />
 			<View style={styles.rail}>
 				{/* The universal Button takes no accessibility label, so each glyph
 				    carries its button's name. */}
@@ -84,6 +92,7 @@ export function SpawnComposerControls({
 // Every control is a full touch target tall; the rows take their height from it.
 const styles = StyleSheet.create({
 	stack: { gap: space.xs },
+	prompt: { minHeight: touchTarget * 2 },
 	destinationRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
 	destinationHost: { flex: 1, minWidth: 0, height: touchTarget },
 	rail: { flexDirection: "row", alignItems: "center", gap: space.xs },

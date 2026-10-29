@@ -1,18 +1,11 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-	InteractionManager,
-	Platform,
-	StyleSheet,
-	Text,
-	View,
-} from "react-native";
-import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
-import { useHeaderOverlap } from "../lib/useHeaderOverlap";
+import { Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
+import { KeyboardAvoidingView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { agentErrorCopy } from "../lib/agentError";
 import { AppSymbol } from "../lib/AppSymbol";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
@@ -27,24 +20,20 @@ import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, r
 import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
-import { SpawnPromptInput } from "../lib/spawn-prompt-input";
 import { useApp } from "../lib/store";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button } from "../lib/ui";
 import { iconSize, radius, space, type } from "../lib/tokens";
-import { backOr } from "../lib/backNavigation";
 import { approvalOptions, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
 import { modelSheetRoute } from "../lib/sheetResult";
+import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
+import { KEYBOARD_DOCK_GAP } from "../lib/session/keyboardInset";
 
-export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
+export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
-export default function SpawnModal() {
-	return <SpawnModalContent />;
-}
-
-function SpawnModalContent() {
+export default function SpawnScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
@@ -110,14 +99,22 @@ function SpawnModalContent() {
 	// appended, so dictation can extend what was typed rather than replace it.
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setPrompt((old) => old ? `${old} ${spoken}` : spoken), []) });
 	const listening = voice.state === "starting" || voice.state === "recording";
-	// iOS: the prompt fills the room above the controls. The controls translate
-	// with the keyboard, which does not reflow their siblings; a spacer below
-	// the attachments and messages makes that entire region reflow instead.
-	const [promptRoom, setPromptRoom] = useState<number>();
-	const keyboardHeight = useKeyboardState((state) => state.height);
-	const headerOverlap = useHeaderOverlap();
-
-
+	// The composer docks to the bottom as the chat's does, on the same keyboard
+	// avoidance: its resting inset closes to the keyboard gap as the keys rise.
+	// The page sits below the stack's opaque bar, so the avoider counts it.
+	const chatKeyboard = useChatKeyboard();
+	const keyboard = useReanimatedKeyboardAnimation();
+	const { restingInset, dockRiseOverride } = chatKeyboard;
+	const dockRise = useAnimatedStyle(() => ({
+		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value) }],
+	}));
+	// A started request can't be called back, so the page holds while it runs.
+	// A ref, not state, so the success path can let go and replace the page in
+	// the same tick.
+	const holding = useRef(false);
+	useEffect(() => navigation.addListener("beforeRemove", (event) => {
+		if (holding.current) event.preventDefault();
+	}), [navigation]);
 
 	// Seed from this machine's routed project, or the selected machine's active
 	// project. A project id is never carried across machines.
@@ -200,7 +197,7 @@ function SpawnModalContent() {
 	const hasComposerMessage = Boolean(
 		notices.length > 0
 		|| attachmentError
-		|| (Platform.OS === "android" && listening)
+		|| listening
 		|| voice.error
 		|| error
 		|| offerTUI,
@@ -424,6 +421,7 @@ function SpawnModalContent() {
 		// choice, and the better one: a disabled button with no explanation is
 		// worse than a message naming what is missing.
 		setBusy(true);
+		holding.current = true;
 		setError(null);
 		setOfferTUI(false);
 		try {
@@ -446,31 +444,28 @@ function SpawnModalContent() {
 			}
 			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
-			// Left while the request ran (a notification or link can still
-			// navigate away): the worker shows up on the board, and closing the
-			// sheet again would pop the page that was under it. The sheet lets go
-			// again, or coming back to it would find it locked for good; a second
-			// Start reuses the request id, so it can't spawn a second worker.
+			holding.current = false;
+			// Covered while the request ran (a notification or link can still
+			// open a page over this one): the worker shows up on the board, and
+			// replacing this page now would swap out one the user can't see. The
+			// page lets go again, or coming back to it would find it locked for
+			// good; a second Start reuses the request id, so it can't spawn a
+			// second worker.
 			if (!navigation.isFocused()) {
 				setBusy(false);
 				return;
 			}
 			haptics.success();
-			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
-			// once the dismiss transition has settled. Firing both navigations in the
-			// same tick overlaps their animations (the modal retracts while the session
-			// is already sliding in); runAfterInteractions waits for the modal's
-			// transition to finish so the two happen back-to-back, not on top of each
-			// other. The session screen shows its own "connecting" state while the
-			// terminal attaches, so landing on it before the PTY is ready is expected.
-			backOr(router);
-			InteractionManager.runAfterInteractions(() => {
-				router.push({
-					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId, hostId: selectedHostId },
-				});
+			// The new task becomes its conversation in place, as a new chat does:
+			// the session replaces this page, so going back returns to wherever
+			// the task was started from. The session screen shows its own
+			// "connecting" state while the agent attaches.
+			router.replace({
+				pathname: "/session/[id]",
+				params: { id: session.id, projectId: session.projectId, hostId: selectedHostId },
 			});
 		} catch (e) {
+			holding.current = false;
 			haptics.error();
 			setError(spawnErrorCopy(e));
 			setOfferTUI(mode === "chat" && isChatPreflightError(e));
@@ -478,64 +473,36 @@ function SpawnModalContent() {
 		}
 	};
 
-	// The sheet's bar is empty: a swipe down closes it. A started request can't be
-	// called back, so while it runs the sheet can't be swiped away; it closes
-	// itself on success or stays to show the error.
+	// While a request runs, the back swipe is off too, so it never starts a
+	// transition the hold above would cancel.
 	useEffect(() => {
 		if (!busy) return;
 		navigation.setOptions({ gestureEnabled: false });
 		return () => navigation.setOptions({ gestureEnabled: true });
 	}, [busy, navigation]);
 
-	const content = (
-		<View style={[
-			styles.content,
-			// The sheet's empty bar is laid over the top of the page, so the
-			// prompt starts below it rather than under it.
-			Platform.OS === "ios" && { paddingTop: headerOverlap },
-			Platform.OS === "android" && styles.androidContent,
-		]}>
-				<View
-					style={[styles.promptHost, Platform.OS === "ios" && styles.promptHostFill]}
-					onLayout={Platform.OS === "ios" ? (event) => setPromptRoom(Math.floor(event.nativeEvent.layout.height)) : undefined}
-				>
-					<SpawnPromptInput value={prompt} onChangeText={setPrompt} height={Platform.OS === "ios" ? promptRoom : undefined} />
-				</View>
+	const harnessLabel = agents.find((item) => item.id === harness)?.label;
 
-				<SpawnAttachmentRow
-					attachments={attachments}
-					onRemove={(item) => {
-						attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
-						setAttachments(attachmentsRef.current);
-					}}
-				/>
+	return (
+		<KeyboardAvoidingView
+			style={[styles.screen, chatKeyboard.rootStyle]}
+			behavior={chatKeyboard.behavior}
+			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
+		>
+			{/* The empty conversation the task will become. A tap there puts the
+			    keyboard away, as it does over a conversation. */}
+			<Pressable accessible={false} style={styles.room} onPress={Keyboard.dismiss} />
 
-		{hasComposerMessage ? <View style={styles.messages}>
+			<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
+				{hasComposerMessage ? <View style={styles.messages}>
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
-					{Platform.OS === "android" ? voiceFeedback : null}
+					{voiceFeedback}
 					{voice.error ? <Text accessibilityRole="alert" style={styles.warn}>{voice.error}</Text> : null}
 					{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
 					{offerTUI ? <Button title="Create as Terminal UI instead" variant="secondary" icon="terminal" onPress={() => { selectMode("tui"); setOfferTUI(false); setError(null); }} /> : null}
 				</View> : null}
 
-				{/* The sticky controls move visually but keep their original layout
-				    position. Reserve that movement before them so chips and messages
-				    remain visible above the keyboard, not behind the controls. */}
-				{Platform.OS === "ios" && keyboardHeight > 0 ? (
-					<View pointerEvents="none" style={{ height: keyboardHeight, marginTop: -space.sm }} />
-				) : null}
-
-				{/* The controls ride the keyboard on the UI thread.
-				    iOS does not lift this form sheet for the IME, and every
-				    height-based attempt moved late or not at all: a settled keyboard
-				    height only lands after the animation, animated padding is
-				    interpolated on the JS thread, and a keyboard-avoiding wrapper
-				    mismeasures its own frame inside a sheet, leaving Start task behind
-				    the keyboard. A sticky view translates by the live offset, so
-				    the selectors and the button sit directly above it. */}
-				<KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
-				{Platform.OS === "ios" ? voiceFeedback : null}
 				<SpawnComposerControls
 					hosts={hostOptions}
 					hostId={selectedHostId}
@@ -560,36 +527,24 @@ function SpawnModalContent() {
 					onChoosePhoto={() => { void pickPhotos(); }}
 					onChooseFile={() => { void pickFiles(); }}
 					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut, onToggleLatched: voice.toggleLatched }}
-					promptEmpty={!prompt.trim()}
+					prompt={prompt}
+					onChangePrompt={setPrompt}
+					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
+					attachments={<SpawnAttachmentRow
+						attachments={attachments}
+						onRemove={(item) => {
+							attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
+							setAttachments(attachmentsRef.current);
+						}}
+					/>}
+					hasAttachments={attachments.length > 0}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
 					disabled={!selectedHostId || !config || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
 				/>
-				</KeyboardStickyView>
-		</View>
+			</Animated.View>
+		</KeyboardAvoidingView>
 	);
-
-	if (Platform.OS === "android") {
-		return (
-			<View style={styles.androidModalRoot}>
-				{/* Like the iOS sheet, it holds still while a started request runs:
-				    no drag, back press or outside tap can close it mid-spawn. */}
-				<BottomSheet
-					index={0}
-					enablePanDownToClose={!busy}
-					enableDynamicSizing
-					backgroundStyle={{ backgroundColor: t.bgBase }}
-					onClose={() => backOr(router)}
-				>
-					<BottomSheetView style={styles.androidSheet}>
-						{content}
-					</BottomSheetView>
-				</BottomSheet>
-			</View>
-		);
-	}
-
-	return <View style={styles.screen}>{content}</View>;
 }
 
 // Human copy for a failed spawn, matching every other screen. Never the wire
@@ -602,26 +557,16 @@ function spawnErrorCopy(e: unknown): string {
 	return userFacingError(e, "Couldn't start the worker. Try again.");
 }
 
-// Android's compact field height and the iOS host's minimum layout height.
-const PROMPT_MIN_HEIGHT = 112;
-
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		// The sheet's raised surface, a step above the board it covers.
-		screen: { flex: 1, backgroundColor: t.bgSurface },
-		content: { flex: 1, paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.sm, gap: space.sm },
-		androidModalRoot: { flex: 1, backgroundColor: "transparent" },
-		androidSheet: {
-			paddingTop: space.xs,
-			paddingBottom: space.md,
-			backgroundColor: t.bgBase,
-		},
-		androidContent: { flex: 0, paddingTop: space.md, paddingBottom: space.none },
-		messages: { gap: space.xs },
+		// The page a conversation is drawn on, since this is where one begins.
+		screen: { flex: 1, backgroundColor: t.bgBase },
+		room: { flex: 1 },
+		// The chat composer's dock: its side margin and the gap to the keyboard.
+		dock: { paddingHorizontal: space.md, paddingTop: space.xs, gap: space.xs },
+		messages: { gap: space.xs, paddingHorizontal: space.xs },
 		voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs },
 		voiceText: { fontFamily: "DMSans_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT },
-		promptHostFill: { height: undefined, flex: 1, minHeight: 0 },
 		warn: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		error: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	});

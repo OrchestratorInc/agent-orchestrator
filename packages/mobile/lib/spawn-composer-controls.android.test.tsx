@@ -40,6 +40,7 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 		HorizontalDivider: host("HorizontalDivider"),
 		FilledIconButton: host("FilledIconButton"),
 		Icon: host("Icon"),
+		IconButton: host("IconButton"),
 		Row: host("Row"),
 		Spacer: host("Spacer"),
 		Text: host("ComposeText"),
@@ -62,6 +63,12 @@ vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 	};
 });
 
+import { COMPOSER_DISC } from "./chat/composerStyles";
+vi.mock("./spawn-composer", async () => {
+	const React = await import("react");
+	// The shared shell is tested on its own; here it only holds the settings.
+	return { SpawnComposer: ({ settings, ...props }: { settings?: React.ReactNode }) => React.createElement("SpawnComposer", props, settings) };
+});
 import { SpawnComposerControls } from "./spawn-composer-controls.android";
 
 let renderer: ReactTestRenderer | undefined;
@@ -99,7 +106,11 @@ const baseProps = (overrides: Partial<Props> = {}): Props => ({
 	agentModels: { codex: { models: [{ id: "gpt-5", label: "GPT-5" }], total: 1 }, aider: { models: [], total: 0 } },
 	onSelectAgentModel: vi.fn(),
 	usesDefaultModel: true,
-	promptEmpty: false,
+	prompt: "",
+	onChangePrompt: vi.fn(),
+	placeholder: "Ask Codex",
+	attachments: null,
+	hasAttachments: false,
 	onBrowseModels: vi.fn(),
 	approvalModes: [{ id: "auto", label: "Auto", shortLabel: "Auto" }, { id: "bypass-permissions", label: "Bypass permissions", shortLabel: "Bypass" }],
 	approvalMode: "auto",
@@ -140,11 +151,11 @@ const isSelected = (node: ReactTestInstance) =>
 const modifier = (node: ReactTestInstance, name: string) => (node.props.modifiers as { modifier: string; args: unknown[] }[] | undefined)?.find((entry) => entry.modifier === name);
 
 describe("Android spawn selectors", () => {
-	// Laid out as on iOS: the machine on its own line, then the project and the
-	// approval mode, each a compact text button naming its choice.
+	// Laid out as on iOS: the machine and the project each a row naming its
+	// choice, and the approval mode a symbol in the composer, as the chat's.
 	it("opens each selector as a dropdown under a text button that names it", async () => {
 		const root = await render(baseProps());
-		for (const tag of ["spawn-host", "spawn-project", "spawn-approval"]) {
+		for (const tag of ["spawn-host", "spawn-project"]) {
 			expect(String(trigger(root, tag).type)).toBe("TextButton");
 			// Its label's width, not an equal share of the row.
 			expect(menuOf(trigger(root, tag)).props.modifiers).toBeUndefined();
@@ -152,7 +163,8 @@ describe("Android spawn selectors", () => {
 		expect(text(trigger(root, "spawn-host"))).toBe("Alpha");
 		expect(modifier(trigger(root, "spawn-host"), "semantics")?.args).toEqual([{ contentDescription: "Run on Alpha" }]);
 		expect(text(trigger(root, "spawn-project"))).toBe("Project");
-		expect(text(trigger(root, "spawn-approval"))).toBe("Auto");
+		expect(String(trigger(root, "spawn-approval").type)).toBe("IconButton");
+		expect(trigger(root, "spawn-approval").findByType("Icon" as never).props.contentDescription).toBe("Approval, Auto");
 		// No inline option list: the choices live in the menus, closed until asked for.
 		expect(root.findAll((node) => hostType(node) === "DropdownMenu").every((menu) => menu.props.expanded === false)).toBe(true);
 	});
@@ -201,8 +213,8 @@ describe("Android spawn model", () => {
 		const root = await render(baseProps());
 		const capsule = trigger(root, "spawn-harness");
 		expect(String(capsule.type)).toBe("Button");
-		expect(capsule.props.colors).toEqual({ containerColor: "#bgElevated", contentColor: "#textPrimary" });
-		expect(modifier(capsule, "height")?.args).toEqual([48]);
+		expect(capsule.props.colors).toEqual({ containerColor: "#bgSubtle", contentColor: "#textPrimary" });
+		expect(modifier(capsule, "height")?.args).toEqual([COMPOSER_DISC]);
 		expect(text(capsule)).toBe("Codex");
 		expect(capsule.findAllByType("Icon" as never)[0].props).toMatchObject({ source: "logo:codex", tint: null });
 	});
@@ -253,63 +265,3 @@ describe("Android spawn model", () => {
 	});
 });
 
-describe("Android spawn actions", () => {
-	it("offers both a photo and a file from a filled attach circle", async () => {
-		const props = baseProps();
-		const root = await render(props);
-		const attach = trigger(root, "spawn-attachment");
-		expect(String(attach.type)).toBe("FilledIconButton");
-		expect(modifier(attach, "size")?.args).toEqual([48, 48]);
-		expect(attach.findByType("Icon" as never).props.contentDescription).toBe("Attach");
-
-		await act(async () => attach.props.onClick());
-		const menu = menuOf(trigger(root, "spawn-attachment"));
-		expect(menu.props.expanded).toBe(true);
-		expect(items(menu).map(text)).toEqual(["Choose photo", "Choose file"]);
-		await act(async () => item(menu, "Choose photo").props.onClick());
-		expect(props.onChoosePhoto).toHaveBeenCalledOnce();
-		await act(async () => trigger(root, "spawn-attachment").props.onClick());
-		await act(async () => item(menuOf(trigger(root, "spawn-attachment")), "Choose file").props.onClick());
-		expect(props.onChooseFile).toHaveBeenCalledOnce();
-		expect(fixtures.select).not.toHaveBeenCalled();
-	});
-
-	it("starts from a filled round arrow with the accent's own fill and ink", async () => {
-		const props = baseProps();
-		const root = await render(props);
-		const start = trigger(root, "spawn-submit");
-		expect(String(start.type)).toBe("FilledIconButton");
-		expect(start.props.enabled).toBe(true);
-		expect(start.props.colors).toEqual({ containerColor: "#accent", contentColor: "#onAccent", disabledContainerColor: "#bgElevated", disabledContentColor: "#textFaint" });
-		expect(modifier(start, "size")?.args).toEqual([48, 48]);
-		expect(start.findByType("Icon" as never).props).toMatchObject({ source: "drawable:arrow_upward", contentDescription: "Start task" });
-		await act(async () => start.props.onClick());
-		expect(props.onSpawn).toHaveBeenCalledOnce();
-	});
-
-	it("disables itself and shows progress while the task starts", async () => {
-		const root = await render(baseProps({ busy: true, disabled: true }));
-		const start = trigger(root, "spawn-submit");
-		expect(start.props.enabled).toBe(false);
-		expect(start.findAllByType("CircularProgressIndicator" as never)).toHaveLength(1);
-	});
-
-	// The round button follows the prompt: it dictates while there is nothing
-	// written and stops while the mic is open, in the recording red.
-	it("dictates with an empty prompt and stops while listening", async () => {
-		let props = baseProps({ promptEmpty: true });
-		let root = await render(props);
-		let button = trigger(root, "spawn-dictate");
-		expect(button.findByType("Icon" as never).props).toMatchObject({ source: "drawable:mic", contentDescription: "Dictate the task" });
-		await act(async () => button.props.onClick());
-		expect(props.voice.onToggleLatched).toHaveBeenCalledOnce();
-		expect(props.onSpawn).not.toHaveBeenCalled();
-		await act(async () => renderer?.unmount());
-
-		props = baseProps({ voice: { ...baseProps().voice, state: "recording", mode: "latched" } });
-		root = await render(props);
-		button = trigger(root, "spawn-dictate");
-		expect(button.findByType("Icon" as never).props.source).toBe("drawable:stop");
-		expect(button.props.colors.containerColor).toBe("#red");
-	});
-});

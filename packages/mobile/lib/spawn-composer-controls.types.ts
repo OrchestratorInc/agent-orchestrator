@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { VoiceMode, VoiceState } from "./voice/types";
 
 export type SpawnComposerOption = {
@@ -63,8 +64,14 @@ export type SpawnComposerControlsProps = {
 	onChooseFile: () => void;
 	/** Dictation into the prompt: hold to talk, double-tap for hands-free. */
 	voice: SpawnComposerVoice;
-	/** Whether the prompt has no text yet, when the primary button dictates instead of starting. */
-	promptEmpty: boolean;
+	/** The task's prompt, written in the composer's field. */
+	prompt: string;
+	onChangePrompt: (value: string) => void;
+	/** Names who will answer, as a conversation's field does: "Ask Codex". */
+	placeholder: string;
+	/** The picked files, shown above the composer as the chat shows its own. */
+	attachments: ReactNode;
+	hasAttachments: boolean;
 	onSpawn: () => void;
 	busy: boolean;
 	disabled: boolean;

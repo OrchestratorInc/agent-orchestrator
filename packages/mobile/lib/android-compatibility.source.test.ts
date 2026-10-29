@@ -24,34 +24,18 @@ describe("Android native compatibility boundaries", () => {
 		const spawn = source("../app/spawn.tsx");
 		expect(spawn).not.toContain("@expo/ui/swift-ui");
 		expect(spawn).not.toContain("NativeTextInput");
-		expect(spawn).toContain("SpawnPromptInput");
-
-		const path = fileURLToPath(new URL("./spawn-prompt-input.android.tsx", import.meta.url));
-		expect(existsSync(path)).toBe(true);
-		const android = existsSync(path) ? source("./spawn-prompt-input.android.tsx") : "";
-		expect(android).toContain("TextInput");
-		expect(android).not.toContain("autoFocus");
-		expect(android).not.toContain('width: "100%"');
-		expect(spawn).toContain('@expo/ui/community/bottom-sheet');
-		expect(spawn).toContain("BottomSheetView");
-		expect(spawn).toContain("enablePanDownToClose");
-		expect(spawn).not.toContain("KeyboardAvoidingView");
-		// The controls stick to the keyboard instead, which is the only approach
-		// that moves in step with it inside a native form sheet.
-		expect(spawn).toContain("KeyboardStickyView");
-		expect(spawn).not.toContain("androidGrabber");
-		// Only iOS's prompt flexes to fill the sheet; Android's sheet sizes to its
-		// content, so a flexing child there would have nothing to fill.
-		expect(spawn).toContain('Platform.OS === "ios" && styles.promptHostFill');
-		expect(spawn).toContain("const PROMPT_MIN_HEIGHT = 112;");
-		expect(spawn).toContain('promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT }');
-		expect(source("../app/_layout.tsx")).toContain('presentation: Platform.OS === "ios" ? "formSheet" : "transparentModal"');
+		// The prompt is the chat composer's own field, in the shared shell.
+		expect(spawn).not.toContain("SpawnPromptInput");
+		expect(source("./spawn-composer.tsx")).toContain("<TextInput");
+		// A page on both platforms, so nothing needs a sheet of its own.
+		expect(spawn).not.toContain("@expo/ui/community/bottom-sheet");
+		expect(source("../app/_layout.tsx")).toContain('<Stack.Screen name="spawn" options={{ title: "New task" }} />');
 	});
 
-	// Spawn is itself a bottom sheet on Android, so its choices open inside it.
-	// They used to be a second sheet over the first: two grabbers, and only the
-	// top one answered a swipe down. Each is now a Material dropdown anchored to
-	// its own button, rather than an inline list that replaced the controls.
+	// Spawn's choices open on its own page. They used to be a second sheet over
+	// Spawn's: two grabbers, and only the top one answered a swipe down. Each is
+	// now a Material dropdown anchored to its own button, rather than an inline
+	// list that replaced the controls.
 	it("shows Spawn's choices inside Spawn's own sheet", () => {
 		const android = source("./spawn-composer-controls.android.tsx");
 		expect(android).toContain('from "@expo/ui/jetpack-compose"');
@@ -65,6 +49,9 @@ describe("Android native compatibility boundaries", () => {
 		expect(android).toContain("option.sectionBreakBefore ? <HorizontalDivider");
 		expect(android).toContain('project?.icon === "message-square-plus" ? materialDrawable("add_comment") : materialDrawable("folder")');
 		expect(android).toContain("chipColorFor(harness)");
+		// The approval mode sits in the composer's line, after the agent.
+		expect(android.indexOf('testID("spawn-approval")')).toBeGreaterThan(android.indexOf("settings={"));
+		expect(android.indexOf('testID("spawn-approval")')).toBeGreaterThan(android.indexOf('testID("spawn-harness")'));
 	});
 
 	// The attachment chooser is the same pull-down menu on both platforms, so
@@ -106,30 +93,15 @@ describe("Android native compatibility boundaries", () => {
 		}
 	});
 
-	it("makes the entire iOS Spawn prompt a native text-input hit target", () => {
-		const ios = source("./spawn-prompt-input.ios.tsx");
-		// A SwiftUI TextField keeps an intrinsic one-line hit target even when its
-		// Host is tall. React Native's native TextInput owns the full frame, so every
-		// visible point in the prompt area focuses the editor.
-		expect(ios).toContain('import { StyleSheet, TextInput } from "react-native"');
-		expect(ios).not.toContain('@expo/ui');
-		expect(ios).toContain("height = 112");
-		expect(ios).toMatch(/paddingHorizontal:\s*space\.lg/);
-		// The page starts below the sheet's header, so the field needs only a
-		// small top inset of its own.
-		expect(ios).toMatch(/paddingTop:\s*space\.sm/);
-		expect(ios).toMatch(/paddingBottom:\s*space\.md/);
-		expect(ios).toContain('textAlignVertical="top"');
-		expect(ios).toContain("scrollEnabled");
-		expect(ios).toMatch(/style=\{\[styles\.input,\s*\{\s*height,/);
-	});
-
-	// The native bar now heads the iOS sheet, so the prompt starts at the
-	// content's own inset below it rather than leaving room for the grabber.
-	it("starts the iOS Spawn prompt at the content inset below the native bar", () => {
-		const spawn = source("../app/spawn.tsx");
-		expect(spawn).not.toContain("iosContent");
-		expect(spawn).toMatch(/content:\s*\{[^}]*paddingTop:\s*space\.lg/);
+	// The new task's composer is the chat's on both platforms: its pill, its
+	// field, its attach menu and its round button.
+	it("draws the Spawn composer as the chat composer", () => {
+		const shell = source("./spawn-composer.tsx");
+		expect(shell).not.toContain("@expo/ui");
+		expect(shell).toContain("<ChatAttachmentMenu");
+		expect(shell).toContain("<ComposerGlass radius={COMPOSER_RADIUS} />");
+		expect(shell).toContain("...composerStyleRules(t),");
+		expect(shell).toContain('style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}');
 	});
 
 	// One turn-settings sheet serves both platforms. On Android its choices open

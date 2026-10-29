@@ -8,7 +8,7 @@ vi.mock("@expo/ui", async () => {
 	Picker.Item = "PickerItem";
 	return { Host: "Host", Button: "Button", Picker };
 });
-vi.mock("react-native", () => ({ StyleSheet: { create: (styles: object) => styles }, View: "View" }));
+vi.mock("react-native", () => ({ Platform: { OS: "ios" }, StyleSheet: { create: (styles: object) => styles }, TextInput: "TextInput", View: "View" }));
 vi.mock("./ThemeProvider", () => ({
 	useTheme: () => ({ textSecondary: "secondary" }),
 	useThemeState: () => ({ scheme: "dark" }),
@@ -44,7 +44,7 @@ describe("SpawnComposerControls fallback", () => {
 		const props = {
 			hosts: [{ id: "host-a", label: "Alpha" }], hostId: "host-a", onSelectHost: vi.fn(),
 			projects: [], projectId: null, onSelectProject: vi.fn(),
-			agents: [], harness: "", onSelectHarness: vi.fn(), models: [], agentModels: {}, modelSelection: "__auto__", modelLabel: "Default model", onSelectModel: vi.fn(), onSelectAgentModel: vi.fn(), usesDefaultModel: true, onBrowseModels: vi.fn(), promptEmpty: false,
+			agents: [], harness: "", onSelectHarness: vi.fn(), models: [], agentModels: {}, modelSelection: "__auto__", modelLabel: "Default model", onSelectModel: vi.fn(), onSelectAgentModel: vi.fn(), usesDefaultModel: true, onBrowseModels: vi.fn(), prompt: "", onChangePrompt: vi.fn(), placeholder: "Ask Codex", attachments: null, hasAttachments: false,
 			approvalModes: [{ id: "auto", label: "Auto" }], approvalMode: "auto", onSelectApprovalMode: vi.fn(),
 			onChoosePhoto, onChooseFile, voice: { state: "idle", mode: "push", onPressIn: vi.fn(), onPressOut: vi.fn(), onToggleLatched: vi.fn() }, onSpawn: vi.fn(), busy: false, disabled: false,
 		} as unknown as Parameters<typeof SpawnComposerControls>[0];

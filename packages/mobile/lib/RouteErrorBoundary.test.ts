@@ -28,6 +28,7 @@ const screenRoutes = [
 	"notifications/index.tsx",
 	"onboarding.tsx",
 	"pair.tsx",
+	"spawn.tsx",
 	"preview/[id].tsx",
 	"project/[id].tsx",
 	"render.tsx",
@@ -39,7 +40,6 @@ const screenRoutes = [
 ];
 
 const sheetRoutes = [
-	"spawn.tsx",
 	"sheets/agent.tsx",
 	"sheets/chat-settings.tsx",
 	"sheets/composer-picker.tsx",

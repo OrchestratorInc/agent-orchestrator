@@ -60,7 +60,7 @@ export default function BoardTabsLayout() {
 			{/* New task in the tab bar's own row: iOS 26 sets the search role's
 			    item apart from the tabs as a round button, and the compose glyph
 			    Notes and Mail use replaces the magnifying glass. Disabled, so a
-			    press never selects it; the press opens the spawn sheet the way the
+			    press never selects it; the press opens the New task page the way the
 			    page under it would.
 			    Android keeps its floating New button and never shows this tab:
 			    the role is iOS's, and `hidden` stays fixed so the tabs never
