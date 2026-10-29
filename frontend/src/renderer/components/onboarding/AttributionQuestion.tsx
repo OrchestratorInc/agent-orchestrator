@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId } from "react";
+import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	ACQUISITION_CHANNELS,
@@ -49,25 +49,36 @@ export function AttributionQuestion({ className }: { className?: string }) {
 		retry: false,
 		throwOnError: false,
 	});
+	const [saving, setSaving] = useState(false);
 	const visible = query.data === "pending";
 	useOnboardingStep("attribution", visible);
 
-	const answer = (value: AcquisitionAnswer) => {
+	// The step finishes only once the answer is on disk. A failed write keeps the
+	// question pending and answerable, with no terminal phase reserved.
+	const answer = async (value: AcquisitionAnswer) => {
+		setSaving(true);
+		let recorded: boolean;
+		try {
+			recorded = await aoBridge.appState.recordAcquisitionChannel(value);
+		} catch {
+			setSaving(false);
+			return;
+		}
+		setSaving(false);
+		if (!recorded) {
+			// Already answered elsewhere (another window); that call reported it.
+			void queryClient.invalidateQueries({ queryKey: acquisitionChannelQueryKey });
+			return;
+		}
 		// Reported before the step hides, so hiding is not also counted as completed.
 		if (value === "skipped") reportOnboardingStep("attribution", "skipped");
 		queryClient.setQueryData<AcquisitionChannelState>(acquisitionChannelQueryKey, value);
-		void aoBridge.appState
-			.recordAcquisitionChannel(value)
-			.catch(() => false)
-			.then((recorded) => {
-				// Only the call that moved the marker out of "pending" reports, so
-				// the event is sent at most once per install.
-				if (!recorded) return;
-				void captureRendererEvent(
-					"ao.onboarding.attribution_answered",
-					value === "skipped" ? { skipped: true } : { channel: value, skipped: false },
-				);
-			});
+		// Only the call that moved the marker out of "pending" reports, so the
+		// event is sent at most once per install.
+		void captureRendererEvent(
+			"ao.onboarding.attribution_answered",
+			value === "skipped" ? { skipped: true } : { channel: value, skipped: false },
+		);
 	};
 
 	if (!visible) return null;
@@ -78,13 +89,13 @@ export function AttributionQuestion({ className }: { className?: string }) {
 					{t("onboarding.attribution.title")}
 				</h2>
 				{/* Pulled flush so the label lines up with the Star Us link above. */}
-				<Button className="-mr-2.5 text-muted-foreground" onClick={() => answer("skipped")} size="sm" variant="ghost">
+				<Button className="-mr-2.5 text-muted-foreground" disabled={saving} onClick={() => void answer("skipped")} size="sm" variant="ghost">
 					{t("onboarding.attribution.skip")}
 				</Button>
 			</div>
 			<div aria-labelledby={titleId} className="flex flex-wrap gap-2" role="group">
 				{ACQUISITION_CHANNELS.map((channel) => (
-					<Button key={channel} onClick={() => answer(channel)} size="sm" variant="outline">
+					<Button disabled={saving} key={channel} onClick={() => void answer(channel)} size="sm" variant="outline">
 						{t(CHANNEL_LABEL_KEYS[channel])}
 					</Button>
 				))}
