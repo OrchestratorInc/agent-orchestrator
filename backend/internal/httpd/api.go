@@ -15,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/litmus"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/presence"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
@@ -67,6 +68,7 @@ type APIDeps struct {
 	BrowserLive              *BrowserLiveHub
 	Browser                  controllers.BrowserService
 	BrowserChrome            controllers.BrowserChromeService
+	Testing                  controllers.TestingService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
@@ -150,6 +152,7 @@ type API struct {
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
 	browser       *controllers.BrowserController
+	testing       *controllers.TestingController
 	system        *controllers.SystemController
 	identity      *controllers.IdentityController
 	endpoints     *controllers.EndpointsController
@@ -214,6 +217,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
+		testing:       &controllers.TestingController{Svc: deps.Testing},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
@@ -273,7 +277,21 @@ func (a *API) Register(root chi.Router) {
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
 				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
 				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
+				testingCalls := map[string]http.Handler{
+					"/api/v1/testing/recipe/validate": middleware.Timeout(max(timeout, litmus.RecipeValidateBudget+time.Minute))(next),
+					"/api/v1/testing/intake":          middleware.Timeout(max(timeout, litmus.RecipeValidateBudget+time.Minute))(next),
+					"/api/v1/testing/prepare":         middleware.Timeout(max(timeout, litmus.PrepareBudget+time.Minute))(next),
+					"/api/v1/testing/launch":          middleware.Timeout(max(timeout, litmus.DefaultLaunchBudget+time.Minute))(next),
+					"/api/v1/testing/submit":          middleware.Timeout(max(timeout, litmus.SubmitBudget+time.Minute))(next),
+					"/api/v1/testing/runs/{id}/post":  middleware.Timeout(max(timeout, litmus.PostBudget+time.Minute))(next),
+				}
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					if req.Method == http.MethodPost {
+						if testingCall := testingCalls[chi.RouteContext(req.Context()).RoutePattern()]; testingCall != nil {
+							testingCall.ServeHTTP(w, req)
+							return
+						}
+					}
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/projects/clone" ||
@@ -337,6 +355,9 @@ func (a *API) Register(root chi.Router) {
 			a.settings.Register(r)
 			a.dev.Register(r)
 			a.browser.Register(r)
+			if a.deps.Testing != nil {
+				a.testing.Register(r)
+			}
 			a.system.Register(r)
 			a.identity.Register(r)
 			a.endpoints.Register(r)

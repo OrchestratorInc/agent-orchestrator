@@ -1,0 +1,66 @@
+# Default recipe for orchestratorinc/agent-orchestrator: a private Electron dev
+# instance per leg. Strings are expanded with the leg's environment
+# (LITMUS_ROOT, LITMUS_LEG, LITMUS_LEG_DIR, LITMUS_RUN_ID, LITMUS_RUN_NUM, LITMUS_DEBUG_PORT, LITMUS_APP_PORT).
+# Project ids carry the run id: the private AO registers worktrees and branches (ao/<id>/root) in the
+# shared clone, so two runs must never reuse one. The display names are what a video shows, so they
+# read as samples and carry only the session number.
+kind: electron
+repo: orchestratorinc/agent-orchestrator
+toolchain:
+  node: "24"          # npm ci fails on this lockfile under Node 22
+install:
+  dir: frontend
+  cmd: npm ci --no-audit --no-fund
+  cacheKey: [frontend/package-lock.json]
+build:
+  dir: frontend
+  cmd: npm run predev
+run:
+  dir: frontend
+  # Prepare already ran predev; launch Forge directly so npm scripts in the dev tree keep their normal behavior.
+  cmd: ./node_modules/.bin/electron-forge
+  args: [start, --, "--remote-debugging-port=$LITMUS_DEBUG_PORT", --use-mock-keychain]
+ready:
+  daemonPath: /readyz
+  debugPath: /json/version
+  pageTargets: 1
+seed:
+  # Registration needs no provider. The chat uses the owner's Claude Code login.
+  - cmd: '"$LITMUS_ROOT/frontend/daemon/ao" project add --path "$LITMUS_ROOT" --id "litmus-$LITMUS_LEG-$LITMUS_RUN_ID" --name "Sample project $LITMUS_RUN_NUM"'
+  - cmd: '"$LITMUS_ROOT/frontend/daemon/ao" spawn --harness claude-code --mode chat --project "litmus-$LITMUS_LEG-$LITMUS_RUN_ID" --name "Sample chat $LITMUS_RUN_NUM" --prompt "Reply with the single word READY and stop." --skip-agent-check'
+    waitFor: '"$LITMUS_ROOT/frontend/daemon/ao" session ls --json | grep -q ''"role": "worker"'''
+isolation:
+  home: false
+  dirs: ["$LITMUS_LEG_DIR/electron", "$LITMUS_LEG_DIR/data"]
+  env:
+    AO_PORT: "$LITMUS_APP_PORT"
+    AO_DEV_API_TARGET: "http://127.0.0.1:$LITMUS_APP_PORT"
+    AO_RUN_FILE: "$LITMUS_LEG_DIR/running.json"
+    AO_DATA_DIR: "$LITMUS_LEG_DIR/data"
+    AO_DEV_ELECTRON_DIR: "$LITMUS_LEG_DIR/electron"
+    AO_TMUX_SOCKET_NAME: "litmus-$LITMUS_RUN_ID-$LITMUS_LEG"
+    AO_APP_RUN_ID: "$LITMUS_RUN_ID-$LITMUS_LEG"
+    AO_TELEMETRY_REMOTE: "off"
+env:
+  # Preserve the build's product flags as well as the launch settings above.
+  AO_CLIENT: eleven_x
+  AO_CLOUD_OFFERING: "on"
+notes: |
+  AO has project and session lists, chat and terminal views, a browser panel,
+  agent/model pickers, and settings/account tabs. Use the screens relevant to
+  the target's claim. Any change that touches UI: check it in both themes. Switch with the app's own setting
+  (Settings > General > Appearance); the receipt of the switch and one after-shot per theme are the proof.
+
+  The recipe registers a Sample project and attempts to create a Sample chat
+  in the private instance.
+  Create any further fixtures there. For a real PR fixture, add the private repo
+  Rishet11/litmus-fixtures as a project; its PR #1 stays open for tests. Read it,
+  never push to it or merge it. Do not use the owner's existing sessions as test data.
+
+  For agent or model interactions, use any working model, cheapest first; if refused try another.
+  Keep prompts short. Name an unavailable provider or model in the result.
+
+  Agents in a leg use the owner's real logins; keep agent turns short.
+  On account or login screens, never click Login, Logout, Sign in, Sign out, Use, Switch, Remove, Renew or Refresh login.
+  Never copy the owner's keys, profiles, cookies or keychain into a fixture.
+  Billing and plan links, including a Billing tab, are off limits.

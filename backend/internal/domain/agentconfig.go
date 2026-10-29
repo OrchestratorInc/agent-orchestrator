@@ -17,6 +17,8 @@ const (
 	PermissionModeAcceptEdits       PermissionMode = "accept-edits"
 	PermissionModeAuto              PermissionMode = "auto"
 	PermissionModeBypassPermissions PermissionMode = "bypass-permissions"
+	// PermissionModeDontAsk is launch-only and is not valid project configuration.
+	PermissionModeDontAsk PermissionMode = "dontAsk"
 )
 
 // AgentConfig is the typed per-project agent configuration. It replaces the

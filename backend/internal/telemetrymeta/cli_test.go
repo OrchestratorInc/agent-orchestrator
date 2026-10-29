@@ -86,3 +86,27 @@ func TestCLIActorTypeKeepsConservativeFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestCLIActorTypeClassifiesTestingCommands(t *testing.T) {
+	for actor, verbs := range map[string][]string{
+		"user":  {"", "start", "post", "prune", "settings", "runs", "show", "discard", "recipe", "recipe validate"},
+		"agent": {"intake", "prepare", "launch", "browser", "screenshot", "record", "record start", "record stop", "submit", "status", "cleanup"},
+	} {
+		for _, verb := range verbs {
+			path := "ao testing " + verb
+			if got := CLIActorType("", path); got != actor {
+				t.Errorf("%q classified %q, want %q", path, got, actor)
+			}
+		}
+	}
+	for _, actor := range []string{"user", "agent", "system"} {
+		if got := CLIActorType(actor, "ao testing start"); got != actor {
+			t.Errorf("actor %q became %q", actor, got)
+		}
+	}
+	for _, path := range []string{"ao testing-other", "ao testing surprise", "ao testing record pause", "ao testing recipe unknown"} {
+		if got := CLIActorType("", path); got != "system" {
+			t.Errorf("unknown path %q classified %q", path, got)
+		}
+	}
+}

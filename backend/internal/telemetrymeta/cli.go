@@ -56,10 +56,26 @@ func CLIActorType(actorType, commandPath string) string {
 	if _, ok := legacyActorlessUserCLICommands[normalized]; ok {
 		return "user"
 	}
-	if normalized == "ao hooks" || normalized == "ao report" {
+	if _, ok := legacyActorlessAgentCLICommands[normalized]; ok {
 		return "agent"
 	}
 	return "system"
+}
+
+var legacyActorlessAgentCLICommands = map[string]struct{}{
+	"ao hooks":                {},
+	"ao report":               {},
+	"ao testing intake":       {},
+	"ao testing prepare":      {},
+	"ao testing launch":       {},
+	"ao testing browser":      {},
+	"ao testing screenshot":   {},
+	"ao testing record":       {},
+	"ao testing record start": {},
+	"ao testing record stop":  {},
+	"ao testing submit":       {},
+	"ao testing status":       {},
+	"ao testing cleanup":      {},
 }
 
 var legacyActorlessSystemCLICommands = map[string]struct{}{
@@ -178,6 +194,17 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao spawn":                  {},
 	"ao stop":                   {},
 	"ao version":                {},
+
+	"ao testing":                 {},
+	"ao testing start":           {},
+	"ao testing post":            {},
+	"ao testing prune":           {},
+	"ao testing settings":        {},
+	"ao testing runs":            {},
+	"ao testing show":            {},
+	"ao testing discard":         {},
+	"ao testing recipe":          {},
+	"ao testing recipe validate": {},
 
 	// Legacy commands observed in PostHog's current billing-period data.
 	"ao handoff":                   {},

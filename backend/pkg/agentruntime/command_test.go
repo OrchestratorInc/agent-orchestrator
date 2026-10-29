@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -383,5 +384,55 @@ func TestClaudeEffortFlag(t *testing.T) {
 				t.Fatalf("--effort must be omitted entirely, got %q in %v", found, cmd)
 			}
 		})
+	}
+}
+
+func TestClaudeDontAskPermissionLaunchAndRestore(t *testing.T) {
+	if got := NormalizePermissionPolicy(PermissionDontAsk); got != PermissionDontAsk {
+		t.Fatalf("normalized policy %q", got)
+	}
+	want := []string{"--permission-mode", "dontAsk"}
+	if got := ClaudePermissionArgs(PermissionDontAsk); !reflect.DeepEqual(got, want) {
+		t.Fatalf("permission args %q", got)
+	}
+	if got := CodexPermissionArgs(PermissionDontAsk); !reflect.DeepEqual(got, CodexPermissionArgs(PermissionDefault)) {
+		t.Fatalf("Codex dontAsk args %q differ from default", got)
+	}
+	allowed, denied := []string{"Read", "Bash(ao testing:*)"}, []string{"Write", "Bash(git push:*)"}
+	launch, err := BuildLaunchCommand(LaunchConfig{Harness: HarnessClaudeCode, Binary: "claude", SessionID: "s1", Permission: PermissionDontAsk, AllowedTools: allowed, DisallowedTools: denied})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore, ok, err := BuildRestoreCommand(RestoreConfig{Harness: HarnessClaudeCode, Binary: "claude", SessionID: "s1", Permission: PermissionDontAsk, AllowedTools: allowed, DisallowedTools: denied})
+	if err != nil || !ok {
+		t.Fatalf("restore ok %t err %v", ok, err)
+	}
+	for _, argv := range [][]string{launch, restore} {
+		for flag, want := range map[string]string{"--allowedTools": strings.Join(allowed, ","), "--disallowedTools": strings.Join(denied, ",")} {
+			count := 0
+			for i, arg := range argv {
+				if arg == flag {
+					count++
+					if i+1 >= len(argv) || argv[i+1] != want {
+						t.Fatalf("tool flag %s in argv %q", flag, argv)
+					}
+				}
+			}
+			if count != 1 {
+				t.Fatalf("tool flag %s count=%d in argv %q", flag, count, argv)
+			}
+		}
+		count := 0
+		for i, arg := range argv {
+			if arg == "--permission-mode" {
+				count++
+				if i+1 >= len(argv) || argv[i+1] != "dontAsk" {
+					t.Fatalf("argv %q", argv)
+				}
+			}
+		}
+		if count != 1 {
+			t.Fatalf("argv %q", argv)
+		}
 	}
 }
