@@ -66,16 +66,23 @@ func (c *commandContext) runClaudeLogin(ctx context.Context, executable string, 
 		return fmt.Errorf("claude login failed: %w", err)
 	}
 	// The newest sign-in wins: a setup token saved earlier would otherwise keep
-	// signing sessions in over the login the user just completed.
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("resolve AO data directory: %w", err)
-	}
-	if err := claudecode.RemoveLocalOAuthToken(cfg.DataDir); err != nil {
-		return err
+	// signing sessions in over the login the user just completed. The sign-in
+	// itself already succeeded, so failing to clear the token is only a warning.
+	if err := clearClaudeSetupToken(); err != nil {
+		if _, writeErr := fmt.Fprintf(stderr, "Warning: %v; AO sessions may keep using the earlier setup token.\n", err); writeErr != nil {
+			return writeErr
+		}
 	}
 	_, err = fmt.Fprintf(out, "\n%s\n", style.success("Claude Code sign-in complete."))
 	return err
+}
+
+func clearClaudeSetupToken() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("resolve AO data directory to clear the saved setup token: %w", err)
+	}
+	return claudecode.RemoveLocalOAuthToken(cfg.DataDir)
 }
 
 func (c *commandContext) saveClaudeSetupToken(in io.Reader, out io.Writer, style codexLoginStyle) error {

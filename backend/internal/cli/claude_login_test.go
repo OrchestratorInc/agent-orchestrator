@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -145,5 +146,43 @@ func TestClaudeLoginRejectsInvalidSetupToken(t *testing.T) {
 	}
 	if _, err := os.Stat(claudecode.LocalOAuthTokenPath(dataDir)); !os.IsNotExist(err) {
 		t.Fatalf("invalid token must not be saved, stat error = %v", err)
+	}
+}
+
+// The sign-in already succeeded by the time AO clears an earlier setup token,
+// so a failed cleanup is reported as a warning, not a failed sign-in.
+func TestClaudeLoginSucceedsWhenSetupTokenCleanupFails(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AO_DATA_DIR", dataDir)
+	// A non-empty directory where the token file belongs cannot be removed.
+	blocker := filepath.Join(claudecode.LocalOAuthTokenPath(dataDir), "child")
+	if err := os.MkdirAll(blocker, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	deps := Deps{
+		In:  strings.NewReader("1\n"),
+		Out: &stdout,
+		Err: &stderr,
+		LookPath: func(string) (string, error) {
+			return "", errors.New("not on PATH")
+		},
+		RunInteractiveCommand: func(context.Context, string, []string, io.Reader, io.Writer, io.Writer) error {
+			return nil
+		},
+	}
+	cmd := newClaudeLoginCommand(&commandContext{deps: deps.withDefaults()})
+	cmd.SetArgs([]string{"--executable", "/managed/bin/claude"})
+	cmd.SetIn(deps.In)
+	cmd.SetOut(deps.Out)
+	cmd.SetErr(deps.Err)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "sign-in complete") {
+		t.Fatalf("stdout = %q, want the sign-in reported as complete", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Warning:") {
+		t.Fatalf("stderr = %q, want a cleanup warning", stderr.String())
 	}
 }
