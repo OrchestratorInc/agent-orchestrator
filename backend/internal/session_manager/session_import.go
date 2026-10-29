@@ -74,7 +74,7 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME"}[rec.Harness]
+	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessKimi: "KIMI_CODE_HOME"}[rec.Harness]
 	if key == "" {
 		return
 	}
@@ -142,6 +142,11 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		return claudeSessionLive(ctx, filepath.Join(source.ConfigDir, "sessions"), nativeID, rec.Metadata.WorkspacePath)
 	case domain.HarnessCodex:
 		return providerLockHeld(filepath.Join(source.ConfigDir, "thread-writer-locks", nativeID+".lock"))
+	case domain.HarnessKimi:
+		// Kimi keeps no per-session lock or live-session registry, so a running
+		// Kimi process holding the transcript open for writing is the best
+		// available evidence that the conversation is open elsewhere.
+		return writableTranscriptOwner(ctx, rec.Metadata.NativeTranscriptPath)
 	}
 	return false
 }
@@ -209,7 +214,7 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 		if strings.HasPrefix(line, "c") {
 			command = strings.ToLower(line[1:])
 		}
-		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex")) {
+		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex") || strings.Contains(command, "kimi")) {
 			return true
 		}
 	}

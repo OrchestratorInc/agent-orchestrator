@@ -105,7 +105,12 @@ func New(store Store, dataDir string) *Service {
 	if codex == "" {
 		codex = filepath.Join(home, ".codex")
 	}
-	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex}}
+	// Kimi Code keeps its sessions under KIMI_CODE_HOME, defaulting to ~/.kimi-code.
+	kimi := os.Getenv("KIMI_CODE_HOME")
+	if kimi == "" {
+		kimi = filepath.Join(home, ".kimi-code")
+	}
+	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessKimi: kimi}}
 	if dataDir != "" {
 		s.excluded = []string{canonical(dataDir)}
 	}
@@ -341,6 +346,12 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 
 // discover lists transcripts without reading them, newest first.
 func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, root string) ([]sourceFiles, error) {
+	// Per-harness layouts that do not fit the projects/sessions directory model
+	// discover their own conversations.
+	switch harness {
+	case domain.HarnessKimi:
+		return discoverKimi(ctx, root)
+	}
 	byKey := map[string]*sourceFiles{}
 	dir := filepath.Join(root, "projects")
 	if harness == domain.HarnessCodex {
@@ -461,7 +472,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessKimi}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {

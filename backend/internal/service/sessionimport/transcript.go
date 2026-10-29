@@ -350,6 +350,11 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if len(paths) == 0 {
 		return t, errors.New("no transcript")
 	}
+	// Harnesses whose transcript format differs from the Claude/Codex JSONL
+	// handled below parse in their own file.
+	if harness == domain.HarnessKimi {
+		return readKimiTranscript(ctx, root, paths...)
+	}
 	root = canonical(root)
 	providerRoot, err := os.OpenRoot(root)
 	if err != nil {
