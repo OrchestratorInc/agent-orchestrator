@@ -14,6 +14,17 @@ export const LATTICE_TRAIL = [0, 1, 2, 3, 7, 11, 15, 14, 13, 12, 8, 4] as const;
 /** One lap round the edge, the desktop's keyframe duration. */
 export const LATTICE_LAP_MS = 1200;
 
+/**
+ * Where a cell's dot sits, from the lattice's top left. Each dot is placed
+ * outright rather than left to flex wrapping: Yoga wraps when the float32 sum of
+ * dots and gaps exceeds the box by any amount, so at some Android densities
+ * (2.625 among them) the fourth dot of every row spilled onto a new line.
+ */
+export function latticeCellOrigin(cell: number, dot: number, gap: number): { left: number; top: number } {
+	const pitch = dot + gap;
+	return { left: (cell % LATTICE_SIDE) * pitch, top: Math.floor(cell / LATTICE_SIDE) * pitch };
+}
+
 /** Resting opacity of the four inner dots. */
 export const LATTICE_INNER_OPACITY = 0.1;
 /** Opacity the trail dots hold when Reduce Motion stops the lap. */

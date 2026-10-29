@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { LATTICE_SIDE, LATTICE_TRAIL, latticeTrailOpacity } from "./latticeTrail";
+import { LATTICE_SIDE, LATTICE_TRAIL, latticeCellOrigin, latticeTrailOpacity } from "./latticeTrail";
 
 // The lattice mirrors the desktop's working mark, so what is worth pinning is the
 // shape of the trail and the beat each dot plays, not the animation plumbing.
@@ -16,6 +16,22 @@ describe("lattice trail", () => {
 			10, undefined, undefined, 5,
 			9, 8, 7, 6,
 		]);
+	});
+
+	it("places every dot outright in a 4×4 grid, so no density can wrap a row", () => {
+		// 420 dpi Android (PixelRatio 2.625), where a flex-wrapped row overflowed in float32.
+		const dot = Math.round(2.5 * 2.625) / 2.625;
+		const gap = Math.round(1 * 2.625) / 2.625;
+		const origins = Array.from({ length: LATTICE_SIDE * LATTICE_SIDE }, (_, cell) => latticeCellOrigin(cell, dot, gap));
+		const columns = new Set(origins.map((o) => o.left));
+		const rows = new Set(origins.map((o) => o.top));
+		expect(columns.size).toBe(4);
+		expect(rows.size).toBe(4);
+		expect(latticeCellOrigin(3, dot, gap)).toEqual({ left: 3 * (dot + gap), top: 0 });
+		expect(latticeCellOrigin(12, dot, gap)).toEqual({ left: 0, top: 3 * (dot + gap) });
+		// The last dot ends exactly at the lattice's edge.
+		const size = dot * LATTICE_SIDE + gap * (LATTICE_SIDE - 1);
+		expect(latticeCellOrigin(15, dot, gap).left + dot).toBeCloseTo(size, 10);
 	});
 
 	it("plays the desktop's keyframes: dim, a quick brighten, a hold, then a slower fade", () => {

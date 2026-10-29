@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { PixelRatio, StyleSheet, View } from "react-native";
+import { PixelRatio, StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
 import Animated, {
 	cancelAnimation,
 	Easing,
@@ -17,6 +17,7 @@ import {
 	LATTICE_SIDE,
 	LATTICE_STILL_OPACITY,
 	LATTICE_TRAIL,
+	latticeCellOrigin,
 	latticeTrailOpacity,
 } from "./latticeTrail";
 
@@ -25,6 +26,8 @@ import {
 const DOT = PixelRatio.roundToNearestPixel(2.5);
 const GAP = PixelRatio.roundToNearestPixel(1);
 const SIZE = DOT * LATTICE_SIDE + GAP * (LATTICE_SIDE - 1);
+/** Each dot's place, fixed up front so no density can reflow the lattice (see latticeCellOrigin). */
+const ORIGINS = Array.from({ length: LATTICE_SIDE * LATTICE_SIDE }, (_, cell) => latticeCellOrigin(cell, DOT, GAP));
 
 /**
  * The live turn's working mark, matching the desktop's: a 4×4 lattice of small
@@ -49,20 +52,21 @@ export function LatticeLoader({ color }: { color: string }) {
 		<View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={styles.lattice} testID="lattice-loader">
 			{Array.from({ length: LATTICE_SIDE * LATTICE_SIDE }, (_, cell) => {
 				const step = LATTICE_TRAIL.indexOf(cell as (typeof LATTICE_TRAIL)[number]);
-				if (step < 0) return <View key={cell} style={[styles.dot, { backgroundColor: color, opacity: LATTICE_INNER_OPACITY }]} />;
-				if (reduceMotion) return <View key={cell} style={[styles.dot, { backgroundColor: color, opacity: LATTICE_STILL_OPACITY }]} />;
-				return <TrailDot key={cell} lap={lap} offset={step / LATTICE_TRAIL.length} color={color} />;
+				const dot = [styles.dot, ORIGINS[cell], { backgroundColor: color }];
+				if (step < 0) return <View key={cell} style={[dot, { opacity: LATTICE_INNER_OPACITY }]} />;
+				if (reduceMotion) return <View key={cell} style={[dot, { opacity: LATTICE_STILL_OPACITY }]} />;
+				return <TrailDot key={cell} lap={lap} offset={step / LATTICE_TRAIL.length} style={dot} />;
 			})}
 		</View>
 	);
 }
 
-function TrailDot({ lap, offset, color }: { lap: SharedValue<number>; offset: number; color: string }) {
-	const style = useAnimatedStyle(() => ({ opacity: latticeTrailOpacity(lap.value - offset) }));
-	return <Animated.View style={[styles.dot, { backgroundColor: color }, style]} />;
+function TrailDot({ lap, offset, style }: { lap: SharedValue<number>; offset: number; style: StyleProp<ViewStyle> }) {
+	const trail = useAnimatedStyle(() => ({ opacity: latticeTrailOpacity(lap.value - offset) }));
+	return <Animated.View style={[style, trail]} />;
 }
 
 const styles = StyleSheet.create({
-	lattice: { width: SIZE, height: SIZE, flexDirection: "row", flexWrap: "wrap", gap: GAP },
-	dot: { width: DOT, height: DOT, borderRadius: DOT / 2 },
+	lattice: { width: SIZE, height: SIZE },
+	dot: { position: "absolute", width: DOT, height: DOT, borderRadius: DOT / 2 },
 });
