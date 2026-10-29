@@ -177,9 +177,9 @@ export default function FleetScreen() {
 	return (
 		<View style={styles.screen}>
 			{/* The board is the page's one scroll view in every state, unpaired and
-			    loading included: the large title binds to the first scroll view the
-			    page shows, and a placeholder swapped out for the list left the title
-			    tracking a view that was gone, so it stayed expanded over the rows. */}
+			    loading included: the bar and the tab bar bind to the first scroll
+			    view the page shows, and a placeholder swapped out for the list left
+			    them tracking a view that was gone. */}
 			<WorkerBoardList
 				key={boardIdentityKey}
 				sessions={projectSessions}
@@ -268,8 +268,8 @@ const makeStyles = (t: Theme) =>
 		// No background of its own: the stack's contentStyle paints the page. A
 		// coloured view that is not a stacking context is mounted empty with its
 		// children hoisted after it, which put it ahead of the list as the page's
-		// first native view, so the large title and the tab bar found no scroll
-		// view to follow and stayed expanded over the rows.
+		// first native view, so the bar and the tab bar found no scroll view to
+		// follow.
 		screen: { flex: 1 },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
 		errorActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: space.sm, alignItems: "center" },

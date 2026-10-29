@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const platform = vi.hoisted(() => ({ OS: "ios", Version: "18.5" as string | number }));
 vi.mock("react-native", () => ({ Platform: platform }));
 
-import { largeTitleScreenOptions, stackScreenOptions } from "./stackScreenOptions";
+import { stackScreenOptions, untitledTabScreenOptions } from "./stackScreenOptions";
 import type { Theme } from "./theme";
 
 const theme = new Proxy({}, { get: (_target, property) => `#${String(property)}` }) as Theme;
@@ -13,32 +13,29 @@ beforeEach(() => {
 	platform.Version = "18.5";
 });
 
-describe("large-title header", () => {
-	it("draws the tab roots' titles large, heavy in the system face, without a hairline", () => {
-		expect(largeTitleScreenOptions()).toMatchObject({
-			headerLargeTitleEnabled: true,
-			headerLargeTitleShadowVisible: false,
-			headerLargeTitleStyle: { fontWeight: "800" },
-		});
+describe("board tab header", () => {
+	// The tabs' roots show only their bar items; the title stays for VoiceOver.
+	it("draws no title in the bar", () => {
+		expect(untitledTabScreenOptions()).toMatchObject({ headerTitle: "" });
+		expect(untitledTabScreenOptions()).not.toHaveProperty("headerLargeTitleEnabled");
 	});
 
-	// Before iOS 26 nothing keeps the collapsed title legible over the list, so the
-	// bar keeps the page's colour from the stack defaults.
 	it("keeps the page-coloured bar before iOS 26", () => {
-		const options = { ...stackScreenOptions(theme), ...largeTitleScreenOptions() };
+		const options = { ...stackScreenOptions(theme), ...untitledTabScreenOptions() };
 		expect(options.headerStyle).toEqual({ backgroundColor: "#bgBase" });
+		expect(options.headerTransparent).toBeUndefined();
 	});
 
-	// iOS 26 hides a large title drawn over a set background.
-	it("clears the bar's background on iOS 26", () => {
+	// iOS 26's bar is clear glass, so the list scrolls on under it.
+	it("clears the bar on iOS 26", () => {
 		platform.Version = "26.0";
-		const large = largeTitleScreenOptions();
-		expect(large).toHaveProperty("headerStyle", undefined);
-		expect({ ...stackScreenOptions(theme), ...large }.headerStyle).toBeUndefined();
+		const options = { ...stackScreenOptions(theme), ...untitledTabScreenOptions() };
+		expect(options.headerStyle).toBeUndefined();
+		expect(options.headerTransparent).toBe(true);
 	});
 
-	it("leaves Android's top app bar as the stack draws it", () => {
+	it("leaves Android's top app bar page-coloured, untitled", () => {
 		platform.OS = "android";
-		expect(largeTitleScreenOptions()).toEqual({});
+		expect(untitledTabScreenOptions()).toEqual({ headerTitle: "" });
 	});
 });

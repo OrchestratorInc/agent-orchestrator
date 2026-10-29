@@ -27,7 +27,7 @@ vi.mock("./store", async () => {
 	return { FrozenAppScope: ({ children, ...props }: { children?: React.ReactNode }) => React.createElement("FrozenAppScope", props, children) };
 });
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({}) }));
-vi.mock("./stackScreenOptions", () => ({ stackScreenOptions: () => ({}), largeTitleScreenOptions: () => ({}) }));
+vi.mock("./stackScreenOptions", () => ({ stackScreenOptions: () => ({}), untitledTabScreenOptions: () => ({}) }));
 
 import { TabStack } from "./TabStack";
 
