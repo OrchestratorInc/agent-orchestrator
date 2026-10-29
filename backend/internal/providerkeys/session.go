@@ -13,14 +13,16 @@ import (
 // panel saved it. It never holds a value.
 const harnessFilename = "provider-api-keys-harnesses.json"
 
-// subscriptionKeys are variables that make a harness bill an API account
-// instead of the subscription it is signed in to. A session of that harness
-// receives the variable only when that harness's own panel saved it, so a key
-// saved for another harness never switches it to API billing.
+// subscriptionKeys are variables that would override how a harness signs in:
+// they make it bill an API account instead of its subscription, or beat the
+// key kept in its own credential store (DeepSeek Harness ranks its launch
+// environment first). A session of that harness receives the variable only
+// when that harness's own panel saved it into AO's store.
 var subscriptionKeys = map[string]string{
 	"ANTHROPIC_API_KEY": "claude-code",
 	"OPENAI_API_KEY":    "codex",
 	"GEMINI_API_KEY":    "gemini",
+	"DEEPSEEK_API_KEY":  "deepseek-harness",
 }
 
 // ClaimForHarness records that harness's own panel saved name.
