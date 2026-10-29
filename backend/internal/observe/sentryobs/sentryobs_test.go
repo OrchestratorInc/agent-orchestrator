@@ -328,17 +328,19 @@ func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
 	}
 	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
 	SetPolicyEnabled(true)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		defer RecoverBackground()
-		panic("resume agent ai-sports-coach-113")
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("background panic did not recover")
+	assertRepanic := func(value string) {
+		t.Helper()
+		func() {
+			defer func() {
+				if got := recover(); got != value {
+					t.Fatalf("background panic = %v, want %q", got, value)
+				}
+			}()
+			defer RecoverBackground()
+			panic(value)
+		}()
 	}
+	assertRepanic("resume agent ai-sports-coach-113")
 	select {
 	case event := <-transport.events:
 		if event.Message != "daemon background panic" || event.User.ID != "ins_stable" || event.Tags["panic_kind"] != "string" {
@@ -355,17 +357,7 @@ func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
 		t.Fatal("background panic was not captured")
 	}
 	SetPolicyEnabled(false)
-	doneOff := make(chan struct{})
-	go func() {
-		defer close(doneOff)
-		defer RecoverBackground()
-		panic("private branch")
-	}()
-	select {
-	case <-doneOff:
-	case <-time.After(time.Second):
-		t.Fatal("opted out background panic did not recover")
-	}
+	assertRepanic("private branch")
 	select {
 	case event := <-transport.events:
 		t.Fatalf("opted out background panic was captured: %+v", event)
@@ -390,6 +382,11 @@ func TestSentryTagRules(t *testing.T) {
 	}
 	if !safeSentryTag("step", "runtime") || safeSentryTag("step", "PrivateProjectOrSession_Z9") || safeSentryTag("area", "update") {
 		t.Fatal("step or area tag accepted a dynamic or unsupported value")
+	}
+	for _, step := range []string{"workspace roots", "provider ownership", "chat start"} {
+		if !safeSentryTag("step", step) {
+			t.Fatalf("fixed chat relaunch step %q was dropped", step)
+		}
 	}
 }
 

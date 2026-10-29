@@ -85,7 +85,29 @@ func TestRequestLoggerRecords5xxCause(t *testing.T) {
 			if got := payload["fingerprint"]; got == "" {
 				t.Fatalf("payload.fingerprint = %#v, want non-empty", got)
 			}
+			if got, want := payload["fingerprint"], telemetrymeta.Fingerprint("httpd", "http_request", http.MethodPost, "unmatched", "500", "internal", ""); got != want {
+				t.Fatalf("PostHog fingerprint = %v, want %s", got, want)
+			}
 		})
+	}
+}
+
+func TestRequestLoggerSeparatesStatusWithoutCapturedError(t *testing.T) {
+	var fingerprints []string
+	handler := requestLoggerWithCapture(slog.Default(), nil, func(_ context.Context, _ error, _ map[string]string, fingerprint string, _ telemetrymeta.SafeRoute, _ telemetrymeta.FailureSite) {
+		fingerprints = append(fingerprints, fingerprint)
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("gateway") == "1" {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}))
+	for _, path := range []string{"/failure?gateway=1", "/failure", "/failure?gateway=1"} {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
+	}
+	if len(fingerprints) != 3 || fingerprints[0] == fingerprints[1] || fingerprints[0] != fingerprints[2] {
+		t.Fatalf("status fingerprints = %v", fingerprints)
 	}
 }
 

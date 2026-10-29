@@ -1321,6 +1321,12 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 }
 
 export async function captureRendererException(error: unknown, properties?: Record<string, unknown>): Promise<void> {
+	try {
+		await initTelemetry();
+	} catch {
+		// The main-owned Sentry gate can still accept a crash when analytics cannot initialize.
+	}
+	if (isDeniedEvent("$exception")) return;
 	if (!reserveCapture(`exception:${exceptionName(error)}`)) return;
 	// The main-owned policy gate decides whether this reaches Sentry. Renderer
 	// exceptions no longer enter the PostHog product-analytics path.

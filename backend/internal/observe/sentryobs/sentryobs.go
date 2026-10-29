@@ -14,11 +14,13 @@ package sentryobs
 import (
 	"context"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,6 +77,7 @@ var relaunchSteps = map[string]struct{}{
 	"supervisor": {}, "runtime preparation": {}, "prepare launch": {},
 	"controller admission": {}, "runtime": {}, "agent start check": {},
 	"record launch": {}, "native initialization": {}, "deliver prompt": {},
+	"workspace roots": {}, "provider ownership": {}, "chat start": {},
 }
 
 // Only literal codes used for reportable daemon errors belong here. A new
@@ -399,8 +402,8 @@ func CapturePanic(ctx context.Context, tags map[string]string, fingerprint strin
 	capture(sentry.LevelFatal, tags, fingerprint, route, site)
 }
 
-// RecoverBackground reports a panic from a daemon-owned goroutine without
-// sending the panic value. Call it directly with defer at the goroutine entry.
+// RecoverBackground reports a panic without sending its value to Sentry, then
+// preserves the daemon's crash-on-panic behavior. Defer it at the goroutine entry.
 func RecoverBackground() {
 	rec := recover()
 	if rec == nil {
@@ -408,11 +411,13 @@ func RecoverBackground() {
 	}
 	site := telemetrymeta.CurrentFailureSite()
 	kind := telemetrymeta.PanicKind(rec)
+	log.Printf("daemon background panic: %v\n%s", rec, debug.Stack())
 	CapturePanic(context.Background(), map[string]string{
 		"component":  "daemon",
 		"operation":  "background_panic",
 		"panic_kind": kind,
 	}, telemetrymeta.Fingerprint("daemon", "background_panic", site.String(), kind), telemetrymeta.SafeRoute{}, site)
+	panic(rec)
 }
 
 func capture(level sentry.Level, tags map[string]string, fingerprint string, route telemetrymeta.SafeRoute, site telemetrymeta.FailureSite) {

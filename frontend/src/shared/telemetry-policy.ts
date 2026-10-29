@@ -1,4 +1,4 @@
-export const AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED = true;
+export const AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED = false;
 
 export type TelemetryPolicyDiskRecord = {
 	schema_version: 2;

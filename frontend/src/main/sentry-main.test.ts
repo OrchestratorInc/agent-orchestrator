@@ -31,17 +31,20 @@ vi.mock("../shared/telemetry", () => ({ loadOrCreateTelemetryInstallId: vi.fn().
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); sdk.close.mockResolvedValue(true); });
 
 describe("Electron main Sentry configuration", () => {
-	it("selects the Electron project unless AO_SENTRY_DSN overrides it", () => {
-		vi.stubEnv("AO_SENTRY_DSN", undefined);
-		expect(electronMainSentryDsn()).toBe(DEFAULT_ELECTRON_SENTRY_DSN);
-		vi.stubEnv("AO_SENTRY_DSN", "https://custom.example/2");
-		expect(electronMainSentryDsn()).toBe("https://custom.example/2");
-		vi.stubEnv("AO_SENTRY_DSN", "");
-		expect(electronMainSentryDsn()).toBe("");
+	it("keeps Electron and daemon overrides separate and leaves development empty", () => {
+		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", undefined);
+		vi.stubEnv("AO_SENTRY_DSN", "https://daemon.example/1");
+		expect(electronMainSentryDsn(false)).toBe(DEFAULT_ELECTRON_SENTRY_DSN);
+		expect(electronMainSentryDsn(true)).toBe("");
+		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "https://electron.example/2");
+		expect(electronMainSentryDsn(false)).toBe("https://electron.example/2");
+		expect(electronMainSentryDsn(true)).toBe("https://electron.example/2");
+		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "");
+		expect(electronMainSentryDsn(false)).toBe("");
 	});
 
 	it("creates an offline client with consent-owned crash integrations and an install user", async () => {
-		vi.stubEnv("AO_SENTRY_DSN", undefined);
+		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", undefined);
 		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
 		expect(transport).toBeTruthy();
 		expect(sdk.init).toHaveBeenCalledOnce();
@@ -91,6 +94,28 @@ describe("Electron main Sentry configuration", () => {
 		expect(sdk.clearIsolation).toHaveBeenCalledOnce();
 		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
 		expect(Array.isArray(sdk.init.mock.calls[1]?.[0].integrations) ? sdk.init.mock.calls[1]?.[0].integrations.map((item) => item.name) : undefined).toEqual(["OnUncaughtException", "OnUnhandledRejection"]);
+	});
+
+	it("removes SDK process crash listeners on opt-out before a later opt-in", async () => {
+		const initialUncaught = process.listenerCount("uncaughtException");
+		const initialRejections = process.listenerCount("unhandledRejection");
+		const addSdkListeners = () => {
+			process.on("uncaughtException", () => undefined);
+			process.on("unhandledRejection", () => undefined);
+		};
+		sdk.init.mockImplementationOnce(addSdkListeners).mockImplementationOnce(addSdkListeners);
+		const first = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		expect(process.listenerCount("uncaughtException")).toBe(initialUncaught + 1);
+		expect(process.listenerCount("unhandledRejection")).toBe(initialRejections + 1);
+		await first.closeAndDrain();
+		expect(process.listenerCount("uncaughtException")).toBe(initialUncaught);
+		expect(process.listenerCount("unhandledRejection")).toBe(initialRejections);
+		const second = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		expect(process.listenerCount("uncaughtException")).toBe(initialUncaught + 1);
+		expect(process.listenerCount("unhandledRejection")).toBe(initialRejections + 1);
+		await second.closeAndDrain();
+		expect(process.listenerCount("uncaughtException")).toBe(initialUncaught);
+		expect(process.listenerCount("unhandledRejection")).toBe(initialRejections);
 	});
 
 	it("deletes the offline queue under the supplied cache root after drain", async () => {
@@ -154,7 +179,7 @@ describe("Electron main Sentry configuration", () => {
 				expect(await readdir(path.join(cacheRoot, "sentry"))).toEqual([]);
 				return initMainSentry("1.0.0", "/tmp/ao-test", cacheRoot);
 			});
-			const controller = new DesktopTelemetryController({ authority, transportFactory, clearTransportCache: () => clearMainSentryCache(cacheRoot), environmentAllowsEvents: true });
+			const controller = new DesktopTelemetryController({ authority, transportFactory, clearTransportCache: () => clearMainSentryCache(cacheRoot), environmentAllowsEvents: true, productionEnabled: true });
 			await controller.initialize();
 			expect(controller.snapshot()).toMatchObject({ eventsEnabled: false, acknowledged: true, state: "applied" });
 			expect(await readdir(path.join(cacheRoot, "sentry"))).toEqual([]);
@@ -183,7 +208,7 @@ describe("Electron main Sentry configuration", () => {
 				},
 				retryPendingReplacement: async () => snapshot,
 			};
-			const controller = new DesktopTelemetryController({ authority, transportFactory: () => initMainSentry("1.0.0", "/tmp/ao-test", cacheRoot), environmentAllowsEvents: true });
+			const controller = new DesktopTelemetryController({ authority, transportFactory: () => initMainSentry("1.0.0", "/tmp/ao-test", cacheRoot), environmentAllowsEvents: true, productionEnabled: true });
 			await controller.initialize();
 			expect(sdk.init).not.toHaveBeenCalled();
 			await controller.setEventsEnabled(true, "generation-0");
@@ -266,19 +291,29 @@ describe("Electron main Sentry configuration", () => {
 		}
 		const mainError = (message: string) => beforeSend({
 			type: undefined, message,
-			exception: { values: [{ type: "Error", value: message, mechanism: { type: "auto.node.onunhandledrejection" } }] },
+				exception: { values: [{ type: "Error", value: message, mechanism: { type: "auto.node.onunhandledrejection" } }] },
 		});
 		expect(mainError("resume agent ai-sports-coach-113")?.fingerprint).toEqual(["electron", "unhandled_rejection", "unknown", "Error", "unknown", "electron-main"]);
 		expect(mainError("get project private-repo")?.fingerprint).toEqual(mainError("resume agent ai-sports-coach-113")?.fingerprint);
 		expect(beforeSend({ type: undefined, message: "'renderer' process exited with 'crashed'" })?.fingerprint).toEqual(["electron", "process_exit", "crashed", "Error", "unknown", "electron-main"]);
+		expect(beforeSend({ type: undefined, level: "fatal", exception: { values: [{ type: "TypeError", value: "private", mechanism: { type: "generic" } }] } })?.fingerprint).toEqual(["electron", "uncaught_exception", "unknown", "TypeError", "unknown", "electron-main"]);
 	});
 
 	it("does not start a client when the environment explicitly sets a blank DSN", async () => {
-		vi.stubEnv("AO_SENTRY_DSN", "");
+		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "");
 		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
 		transport.capture({ consentGeneration: "generation-1", kind: "message", message: "error" });
 		expect(sdk.init).not.toHaveBeenCalled();
 		expect(sdk.captureEvent).not.toHaveBeenCalled();
+	});
+
+	it("does not send from development builds without an explicit Electron override", async () => {
+		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", undefined);
+		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test", true);
+		expect(sdk.init).not.toHaveBeenCalled();
+		vi.stubEnv("AO_ELECTRON_SENTRY_DSN", "https://electron.example/2");
+		await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test", true);
+		expect(sdk.init.mock.calls[0]?.[0].dsn).toBe("https://electron.example/2");
 	});
 });
 

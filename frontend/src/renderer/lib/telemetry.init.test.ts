@@ -276,6 +276,13 @@ describe("PostHog identity and opt-out", () => {
 		expect(posthogStub.captureException).not.toHaveBeenCalled();
 	});
 
+	it("honors the remote exception deny list before forwarding to Electron", async () => {
+		const captureToMain = mockBridge(async () => ({ ...bootstrap, disabledEvents: ["$exception"] }));
+		const { captureRendererException } = await import("./telemetry");
+		await captureRendererException(new TypeError("private project"));
+		expect(captureToMain).not.toHaveBeenCalled();
+	});
+
 	it("keeps events anonymous before sign-in and after sign-out", async () => {
 		mockBridge(async () => bootstrap);
 		const { identifyCloudUser, clearCloudUser, captureRendererEvent } = await import("./telemetry");

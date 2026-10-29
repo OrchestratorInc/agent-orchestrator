@@ -79,7 +79,11 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 					if groupCode == "" {
 						groupCode = errorKind
 					}
-					fingerprint := telemetrymeta.Fingerprint("httpd", "http_request", r.Method, path, groupCode)
+					if groupCode == "" {
+						groupCode = strconv.Itoa(ww.Status())
+					}
+					sentryFingerprint := telemetrymeta.Fingerprint("httpd", "http_request", r.Method, path, groupCode)
+					posthogFingerprint := telemetrymeta.Fingerprint("httpd", "http_request", r.Method, path, strconv.Itoa(ww.Status()), errorKind, errorCode)
 					if sink != nil {
 						payload := map[string]any{
 							"component":     "httpd",
@@ -95,7 +99,7 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 							if errorCode != "" {
 								payload["error_code"] = errorCode
 							}
-							payload["fingerprint"] = fingerprint
+							payload["fingerprint"] = posthogFingerprint
 						}
 						for key, value := range captured.Fields {
 							payload[key] = value
@@ -144,7 +148,7 @@ func requestLoggerWithCapture(log *slog.Logger, sink ports.EventSink, captureHTT
 							"error_kind": errorKind,
 							"error_code": errorCode,
 							"area":       sentryobs.Area(capErr, errorCode),
-						}, fingerprint, route, captured.FailureSite)
+						}, sentryFingerprint, route, captured.FailureSite)
 					}
 				}
 			}()

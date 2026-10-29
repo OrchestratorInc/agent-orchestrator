@@ -3545,7 +3545,7 @@ app.whenReady().then(async () => {
 	const policyController = new DesktopTelemetryController({
 		authority,
 		environmentAllowsEvents: rendererTelemetryEnabled(process.env, app.isPackaged),
-		transportFactory: () => initMainSentry(app.getVersion(), desktopDataDir, app.getPath("userData")),
+		transportFactory: () => initMainSentry(app.getVersion(), desktopDataDir, app.getPath("userData"), isDev),
 		clearTransportCache: () => clearMainSentryCache(app.getPath("userData")),
 		clearRendererQueues: clearRendererTelemetryQueues,
 		broadcast: (view) => {

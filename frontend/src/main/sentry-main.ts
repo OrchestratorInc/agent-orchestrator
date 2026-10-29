@@ -8,8 +8,8 @@ import { DEFAULT_ELECTRON_SENTRY_DSN, SAFE_FUNCTION, safeSentryExceptionType, se
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 
-export function electronMainSentryDsn(): string {
-	return process.env.AO_SENTRY_DSN ?? DEFAULT_ELECTRON_SENTRY_DSN;
+export function electronMainSentryDsn(isDev: boolean): string {
+	return process.env.AO_ELECTRON_SENTRY_DSN ?? (isDev ? "" : DEFAULT_ELECTRON_SENTRY_DSN);
 }
 
 const CAPTURE_KEYS = new Set(["consentGeneration", "kind", "level", "message", "tags", "exception"]);
@@ -75,7 +75,7 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const kind = renderer
 		? (rendererKind === "exception" || rendererKind === "message" ? rendererKind : "unknown")
 		: processReason ? "process_exit"
-		: event.exception?.values?.some((value) => value.mechanism?.type === "auto.node.onuncaughtexception") ? "uncaught_exception"
+		: event.level === "fatal" && event.exception?.values?.some((value) => value.mechanism?.type === "generic") ? "uncaught_exception"
 		: event.exception?.values?.some((value) => value.mechanism?.type === "auto.node.onunhandledrejection") ? "unhandled_rejection"
 		: "main_error";
 	const category = event.tags?.["ao.category"];
@@ -103,14 +103,16 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	};
 }
 
-export async function initMainSentry(version: string, dataDir: string, cacheRoot: string): Promise<DesktopTelemetryTransport> {
-	const dsn = electronMainSentryDsn();
+export async function initMainSentry(version: string, dataDir: string, cacheRoot: string, isDev = false): Promise<DesktopTelemetryTransport> {
+	const dsn = electronMainSentryDsn(isDev);
 	if (!dsn) return { capture: () => undefined, closeAndDrain: async () => undefined, clearCache: async () => undefined };
 	const installId = await loadOrCreateTelemetryInstallId(dataDir);
 	const environment = sentryEnvironment(process.env.AO_TELEMETRY_APP_VERSION ?? version);
 	const queuePath = sentryQueuePath(cacheRoot);
 	let accepting = true;
 	const inFlight = new Set<Promise<unknown>>();
+	const priorUncaught = new Set(process.listeners("uncaughtException"));
+	const priorRejections = new Set(process.listeners("unhandledRejection"));
 	Sentry.init({
 		dsn,
 		release: version,
@@ -143,6 +145,8 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 		beforeBreadcrumb: () => null,
 		beforeSend: (event) => scrubMainSentryEvent(event, installId, version, environment),
 	});
+	const uncaughtListeners = process.listeners("uncaughtException").filter((listener) => !priorUncaught.has(listener));
+	const rejectionListeners = process.listeners("unhandledRejection").filter((listener) => !priorRejections.has(listener));
 	childProcessHookInstalled = true;
 	Sentry.setUser({ id: installId });
 	return {
@@ -166,8 +170,14 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 		},
 		async closeAndDrain() {
 			accepting = false;
-			const drained = await Sentry.close(DRAIN_TIMEOUT_MS);
-			await waitForInFlightSends(inFlight);
+			let drained = false;
+			try {
+				drained = await Sentry.close(DRAIN_TIMEOUT_MS);
+			} finally {
+				for (const listener of uncaughtListeners) process.removeListener("uncaughtException", listener);
+				for (const listener of rejectionListeners) process.removeListener("unhandledRejection", listener);
+				await waitForInFlightSends(inFlight);
+			}
 			if (!drained) throw new Error("Electron Sentry drain timed out");
 		},
 		async clearCache() {
