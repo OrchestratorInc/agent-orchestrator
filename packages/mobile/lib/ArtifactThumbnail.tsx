@@ -3,7 +3,7 @@ import { StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { WebView } from "react-native-webview";
 import { artifactMarkdownImageSource, getArtifactText } from "./api";
 import { artifactViewKind, looksBinary, type SessionArtifact } from "./artifacts";
-import { MAX_THUMBNAIL_TEXT_BYTES, THUMBNAIL_TEXT_CHARS, thumbnailPageHtml, thumbnailZoom } from "./artifactThumbnailModel";
+import { MAX_THUMBNAIL_TEXT_BYTES, THUMBNAIL_PAGE_WIDTH, THUMBNAIL_TEXT_CHARS, thumbnailPageHtml, thumbnailScale } from "./artifactThumbnailModel";
 import { ChatMarkdown } from "./chat/ChatMarkdown";
 import { useRenderTheme } from "./chat/RenderFrame";
 import { renderThemeScript } from "./chat/renderFrameModel";
@@ -44,25 +44,32 @@ export function hasContentThumbnail(artifact: Pick<SessionArtifact, "path" | "ki
  */
 export function ArtifactThumbnail({ config, sessionId, artifact, visible }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean }) {
 	const styles = useThemedStyles(makeStyles);
-	const [width, setWidth] = useState(0);
-	const onLayout = (event: LayoutChangeEvent) => setWidth(Math.round(event.nativeEvent.layout.width));
+	const [size, setSize] = useState({ width: 0, height: 0 });
+	const onLayout = (event: LayoutChangeEvent) => {
+		const { width, height } = event.nativeEvent.layout;
+		setSize({ width: Math.round(width), height: Math.round(height) });
+	};
+	const { width, height } = size;
 	const kind = artifactViewKind(artifact);
 	return (
-		<View pointerEvents="none" style={StyleSheet.absoluteFill} onLayout={onLayout} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-			{width > 0 && kind === "html" ? <PageThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} />
+		<View pointerEvents="none" style={styles.fill} onLayout={onLayout} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
+			{width > 0 && kind === "html" ? <PageThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} height={height} />
 				: width > 0 && (kind === "markdown" || kind === "text") ? <TextThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} markdown={kind === "markdown"} styles={styles} />
 				: null}
 		</View>
 	);
 }
 
-function PageThumbnail({ config, sessionId, artifact, visible, width }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean; width: number }) {
+function PageThumbnail({ config, sessionId, artifact, visible, width, height }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean; width: number; height: number }) {
 	const styles = useThemedStyles(makeStyles);
 	const web = useRef<WebView>(null);
 	const theme = useRenderTheme();
 	const [loaded, setLoaded] = useState(false);
 	const inlined = useInlinedArtifactPage({ enabled: visible, config, sessionId, path: artifact.path, version: artifact.updatedAt });
-	const html = useMemo(() => inlined.html ? thumbnailPageHtml(inlined.html, thumbnailZoom(width)) : undefined, [inlined.html, width]);
+	const html = useMemo(() => inlined.html ? thumbnailPageHtml(inlined.html) : undefined, [inlined.html]);
+	// The page lays out in a 420-point window, drawn scaled down to the card.
+	const scale = thumbnailScale(width);
+	const frame = { width: THUMBNAIL_PAGE_WIDTH, height: Math.ceil(height / scale), transform: [{ scale }] };
 	useEffect(() => setLoaded(false), [html]);
 	// Off screen, the page lets its WebView go; the inlined page stays cached.
 	if (!visible || !html) return null;
@@ -70,7 +77,7 @@ function PageThumbnail({ config, sessionId, artifact, visible, width }: { config
 		<WebView
 			ref={web}
 			source={{ html }}
-			style={[styles.page, !loaded && styles.hidden]}
+			style={[styles.page, frame, !loaded && styles.hidden]}
 			scrollEnabled={false}
 			bounces={false}
 			overScrollMode="never"
@@ -123,7 +130,8 @@ function TextThumbnail({ config, sessionId, artifact, visible, width, markdown, 
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
-	page: { ...StyleSheet.absoluteFill, backgroundColor: "transparent" },
+	fill: { ...StyleSheet.absoluteFill, overflow: "hidden" },
+	page: { position: "absolute", top: 0, left: 0, transformOrigin: "top left", backgroundColor: "transparent" },
 	hidden: { opacity: 0 },
 	surface: { ...StyleSheet.absoluteFill, overflow: "hidden", backgroundColor: t.bgElevated },
 	markdown: { padding: space.lg, transform: [{ scale: MARKDOWN_SCALE }], transformOrigin: "top left" },
