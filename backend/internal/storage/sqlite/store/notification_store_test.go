@@ -83,6 +83,37 @@ func TestNotificationStore_SourceKeyDedupesTerminalReviewResult(t *testing.T) {
 	}
 }
 
+// Each finished worker turn is its own fact: a second turn notifies again even
+// while the first row is still unread, and a hook retry for the same turn does not.
+func TestNotificationStore_AgentCompletedKeyedPerTurn(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	sess, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	rec := domain.NotificationRecord{
+		ID: "ntf_1", SessionID: sess.ID, ProjectID: sess.ProjectID,
+		Type: domain.NotificationAgentCompleted, Title: "Worker finished", Status: domain.NotificationUnread,
+		CreatedAt: time.Now().UTC().Truncate(time.Second), SourceKey: "agent_completed:turn-1",
+	}
+	if _, inserted, err := s.CreateNotification(ctx, rec); err != nil || !inserted {
+		t.Fatalf("first turn inserted=%v err=%v", inserted, err)
+	}
+	retry := rec
+	retry.ID = "ntf_retry"
+	if _, inserted, err := s.CreateNotification(ctx, retry); err != nil || inserted {
+		t.Fatalf("retry inserted=%v err=%v, want false nil", inserted, err)
+	}
+	next := rec
+	next.ID = "ntf_2"
+	next.SourceKey = "agent_completed:turn-2"
+	if _, inserted, err := s.CreateNotification(ctx, next); err != nil || !inserted {
+		t.Fatalf("second turn inserted=%v err=%v", inserted, err)
+	}
+}
+
 // Seeing a notification is not the same as fixing what it reported. Dedupe is
 // keyed on the issue being open, so the same session cannot be re-notified
 // about a pause it is still sitting in — only resolving it reopens dedupe.

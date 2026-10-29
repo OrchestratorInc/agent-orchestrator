@@ -18482,6 +18482,7 @@ components:
           - pr_closed_unmerged
           - review_completed
           - review_changes_requested
+          - agent_completed
           type: string
       required:
       - id
