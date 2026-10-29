@@ -236,13 +236,15 @@ func (s *Service) appApproval(c *Controller, app domain.MCPAppRecord, req MCPApp
 		approval, ok := value.(mcpAppApproval)
 		if !ok || now.After(approval.expires) {
 			s.mcpAppApprovals.Delete(key)
-		} else {
+		} else if approval.conversation == app.ConversationID && approval.activity == app.ActivityID && approval.generation == c.generation {
 			count++
 		}
 		return true
 	})
-	if count >= 128 {
-		return MCPAppResponse{}, false, fmt.Errorf("%w: too many pending app actions", ErrMCPApp)
+	// MCPAppAction serializes admission for this controller. A noisy app may
+	// exhaust its own allowance, never another app's or conversation's.
+	if count >= 16 {
+		return MCPAppResponse{}, false, fmt.Errorf("%w: too many pending actions for this app", ErrMCPApp)
 	}
 	var random [32]byte
 	if _, err := rand.Read(random[:]); err != nil {

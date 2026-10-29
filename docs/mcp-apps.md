@@ -40,6 +40,8 @@ The active conversation branch determines visibility. Rollback or branch changes
 revoke access to removed app activities. Approval tokens are single-use, expire
 after five minutes, and bind the conversation, activity, controller generation,
 method, and exact request parameters. Actions serialize with conversation changes.
+Each app activity has its own limit of 16 pending approvals per controller
+generation, so one app cannot exhaust another app's approval allowance.
 
 Documents run without the host origin under a restrictive CSP. Only declared
 public resource/connect/frame domains are admitted. Desktop navigation and local
