@@ -337,6 +337,12 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	if len(prs) == 0 {
 		return TriggerResult{}, fmt.Errorf("%w: %s", ErrInvalid, noTrackedPRMessage(worker))
 	}
+	// Only closed or merged PRs are tracked: say so the same way, not just
+	// that no PR head is open, unless the caller named one of them.
+	noOpenPR := ""
+	if strings.TrimSpace(opts.PRURL) == "" && !hasOpenPR(prs) {
+		noOpenPR = noTrackedPRMessage(worker)
+	}
 	if want := strings.TrimSpace(opts.PRURL); want != "" {
 		// A targeted pass reviews only the named PR, matched by API or web URL.
 		var only []domain.PullRequest
@@ -434,7 +440,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			// A person's rerun reuses the pass already running for this reviewer;
 			// an agent asked for new work and must hear that none started.
 			if opts.Rerun && source == domain.ReviewTriggerAgent {
-				return TriggerResult{}, nothingToReviewError(reviews, runs, harness, true)
+				return TriggerResult{}, nothingToReviewError(reviews, runs, harness, true, noOpenPR)
 			}
 			return TriggerResult{
 				Run:              firstReusableRun(reviews),
@@ -552,7 +558,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			reviewRow.ControllerGeneration = ""
 		}
 		if opts.RejectReviewedHead || (opts.Rerun && source == domain.ReviewTriggerAgent) {
-			return TriggerResult{}, nothingToReviewError(reviews, runs, harness, opts.Rerun)
+			return TriggerResult{}, nothingToReviewError(reviews, runs, harness, opts.Rerun, noOpenPR)
 		}
 		return TriggerResult{Run: firstReusableRun(reviews), ReviewerHandleID: legacyReviewerHandle(reviewRow), Created: false, Reviews: reviews, Runs: runs, ReviewerSurface: reviewerSurface(reviewRow)}, nil
 	}
@@ -777,9 +783,9 @@ func autoReviewSessionReason(worker domain.SessionRecord, now time.Time) string 
 func noTrackedPRMessage(worker domain.SessionRecord) string {
 	retry := fmt.Sprintf("`ao review trigger %s --pr <url>`", worker.ID)
 	if branch := strings.TrimSpace(worker.Metadata.Branch); branch != "" {
-		return fmt.Sprintf("AO is not tracking a PR for worker %q yet and found no open PR from its branch %q; if you just opened one, run %s with that PR's URL", worker.ID, branch, retry)
+		return fmt.Sprintf("AO is not tracking an open PR for worker %q yet and found no open PR from its branch %q; if you just opened one, run %s with that PR's URL", worker.ID, branch, retry)
 	}
-	return fmt.Sprintf("AO is not tracking a PR for worker %q yet; if you just opened one, run %s with that PR's URL", worker.ID, retry)
+	return fmt.Sprintf("AO is not tracking an open PR for worker %q yet; if you just opened one, run %s with that PR's URL", worker.ID, retry)
 }
 
 // headHasReview reports whether any reviewer has a running or completed pass
@@ -807,8 +813,9 @@ func headRunningForHarness(runs []domain.ReviewRun, prURL, targetSHA string, har
 
 // nothingToReviewError explains why a trigger that asked not to reuse silently
 // started nothing. It names the first reviewable PR head, so the caller sees
-// which commit is already covered and what to do next.
-func nothingToReviewError(reviews []PRReviewState, runs []domain.ReviewRun, harness domain.ReviewerHarness, rerun bool) error {
+// which commit is already covered and what to do next. noOpenPR, when set,
+// explains a session whose tracked PRs are all closed or merged.
+func nothingToReviewError(reviews []PRReviewState, runs []domain.ReviewRun, harness domain.ReviewerHarness, rerun bool, noOpenPR string) error {
 	for _, review := range reviews {
 		if review.Status == ReviewStateIneligible {
 			continue
@@ -828,7 +835,20 @@ func nothingToReviewError(reviews []PRReviewState, runs []domain.ReviewRun, harn
 		}
 		return fmt.Errorf("%w: PR #%d head %s was already reviewed (%s); push new commits, or pass --rerun to review this commit again. If you just pushed, wait a few seconds and run it again", ErrHeadAlreadyReviewed, review.PRNumber, sha, verdict)
 	}
+	if noOpenPR != "" {
+		return fmt.Errorf("%w: %s", ErrInvalid, noOpenPR)
+	}
 	return fmt.Errorf("%w: no open PR head to review", ErrInvalid)
+}
+
+// hasOpenPR reports whether any of prs is neither closed nor merged.
+func hasOpenPR(prs []domain.PullRequest) bool {
+	for _, pr := range prs {
+		if !pr.Merged && !pr.Closed {
+			return true
+		}
+	}
+	return false
 }
 
 func shortSHA(sha string) string {

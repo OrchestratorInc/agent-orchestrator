@@ -1135,6 +1135,27 @@ func TestTriggerRequestedAttachesTheBranchPRWhenNoneIsTracked(t *testing.T) {
 	}
 }
 
+// A session whose tracked PR was closed or merged may have opened a new PR on
+// the same branch. With no open tracked PR, the branch lookup still runs and
+// attaches it.
+func TestTriggerRequestedAttachesTheBranchPRWhenOnlyAClosedPRIsTracked(t *testing.T) {
+	var order []string
+	url := "https://github.com/o/r/pull/9"
+	st := &fakeStore{prs: []domain.PullRequest{{URL: "https://api/pr/8", HTMLURL: "https://github.com/o/r/pull/8", Closed: true}}}
+	refresher := &fakePRRefresher{order: &order, branchPRs: []string{url}}
+	svc := New(nil, st, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+url+",trigger" {
+		t.Fatalf("order = %v, want the open branch PR attached before planning", order)
+	}
+}
+
 func TestTriggerRequestedNamesEachBranchPRWhenSeveralAreOpen(t *testing.T) {
 	refresher := &fakePRRefresher{branchPRs: []string{"https://github.com/o/r/pull/9", "https://github.com/o/r/pull/10"}}
 	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))

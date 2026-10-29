@@ -542,7 +542,7 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 	if err != nil {
 		return err
 	}
-	if prURL == "" && len(tracked) == 0 {
+	if prURL == "" && !hasOpenPR(tracked) {
 		return s.attachBranchPR(ctx, workerID)
 	}
 	if prURL != "" {
@@ -571,8 +571,20 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 	return nil
 }
 
+// hasOpenPR reports whether any tracked PR is still open. A session whose
+// only tracked PRs are closed or merged may have opened a new one on the same
+// branch.
+func hasOpenPR(prs []domain.PullRequest) bool {
+	for _, pr := range prs {
+		if !pr.Merged && !pr.Closed {
+			return true
+		}
+	}
+	return false
+}
+
 // attachBranchPR attaches the one open PR from the worker's branch when AO
-// tracks none yet, typically because the PR was opened moments ago. Finding
+// tracks no open PR yet, typically because the PR was opened moments ago. Finding
 // nothing leaves the engine to report that no PR is tracked; a failed lookup
 // and several candidates are reported with the exact retry command.
 func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID) error {
@@ -585,7 +597,7 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 		// Nothing is tracked, so the review cannot go ahead; say the lookup
 		// failed rather than that the branch has no PR.
 		slog.Default().WarnContext(ctx, "review trigger: find PR on worker branch failed", "session", workerID, "err", err)
-		return fmt.Errorf("%w: AO is not tracking a PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
+		return fmt.Errorf("%w: AO is not tracking an open PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
 	}
 	switch len(urls) {
 	case 0:

@@ -433,6 +433,19 @@ func TestTriggerWithNoTrackedPRPointsAtThePRFlag(t *testing.T) {
 	}
 }
 
+// A session whose only tracked PR is closed gets the same explanation and
+// retry command, not just "no open PR head".
+func TestTriggerWithOnlyAClosedTrackedPRPointsAtThePRFlag(t *testing.T) {
+	worker := liveWorker()
+	worker.Metadata.Branch = "ao/mer-1/fix"
+	prs := fakePRs{prs: []domain.PullRequest{{URL: "https://github.com/o/r/pull/8", Number: 8, HeadSHA: "abc", Closed: true}}}
+	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: worker, ok: true}, prs, fakeProjects{}, &fakeLauncher{})
+	_, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "not tracking an open PR") || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") {
+		t.Fatalf("err = %v, want the no-open-PR explanation with the exact --pr retry", err)
+	}
+}
+
 // trigger, triggerWithSource and triggerWithSourceAndMode keep the older
 // engine tests readable now that TriggerWithOptions is the only entry point.
 func trigger(ctx context.Context, e *Engine, workerID domain.SessionID, harness domain.ReviewerHarness, config domain.AgentConfig) (TriggerResult, error) {
