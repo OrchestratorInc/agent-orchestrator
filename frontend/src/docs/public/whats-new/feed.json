@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "enabled": true,
+  "items": [
+    {
+      "id": "2026-11-agent-notifications",
+      "kind": "announcement",
+      "title": "Know when your agents finish",
+      "body": "Orchestrator now notifies you when a worker finishes, when a pull request is ready to merge, and when an agent needs your input.",
+      "publishedAt": "2026-11-03",
+      "cta": { "label": "Read the docs", "url": "https://docs.orchestrator.inc/docs/" }
+    }
+  ]
+}

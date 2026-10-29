@@ -296,10 +296,16 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					import: async () => ({ sourceName: "", entries: [] }),
 					onImportProgress: () => () => undefined,
 				},
+				whatsNew: {
+					list: async () => [],
+					dismiss: async () => undefined,
+					onChanged: () => () => undefined,
+				},
 				notifications: {
 					show: async () => undefined,
 					setBadge: async (_count: number) => undefined,
 					devBounce: async () => undefined,
+					test: async () => "unsupported" as const,
 					onClick: unsubscribe,
 					onPlaySound: unsubscribe,
 					reportSoundFailure: () => undefined,
@@ -1199,10 +1205,16 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					import: async () => ({ sourceName: "", entries: [] }),
 					onImportProgress: () => () => undefined,
 				},
+				whatsNew: {
+					list: async () => [],
+					dismiss: async () => undefined,
+					onChanged: () => () => undefined,
+				},
 				notifications: {
 					show: async () => undefined,
 					setBadge: async (_count: number) => undefined,
 					devBounce: async () => undefined,
+					test: async () => "unsupported" as const,
 					onClick: unsubscribe,
 					onPlaySound: unsubscribe,
 					reportSoundFailure: () => undefined,

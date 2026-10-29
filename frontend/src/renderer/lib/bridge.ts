@@ -294,10 +294,16 @@ export const aoBridge: AoBridge =
 			import: async () => ({ sourceName: "", entries: [] }),
 			onImportProgress: () => () => undefined,
 		},
+		whatsNew: {
+			list: async () => [],
+			dismiss: async () => undefined,
+			onChanged: () => () => undefined,
+		},
 		notifications: {
 			show: async () => undefined,
 			setBadge: async () => undefined,
 			devBounce: async () => undefined,
+			test: async () => "unsupported" as const,
 			onClick: () => () => undefined,
 			onPlaySound: () => () => undefined,
 			reportSoundFailure: () => undefined,

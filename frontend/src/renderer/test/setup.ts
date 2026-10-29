@@ -372,10 +372,16 @@ if (typeof window !== "undefined") {
 			import: async () => ({ sourceName: "", entries: [] }),
 			onImportProgress: () => () => undefined,
 		},
+		whatsNew: {
+			list: async () => [],
+			dismiss: async () => undefined,
+			onChanged: () => () => undefined,
+		},
 		notifications: {
 			show: async () => undefined,
 			setBadge: async () => undefined,
 			devBounce: async () => undefined,
+			test: async () => "granted" as const,
 			onClick: () => () => undefined,
 			onPlaySound: () => () => undefined,
 			reportSoundFailure: () => undefined,

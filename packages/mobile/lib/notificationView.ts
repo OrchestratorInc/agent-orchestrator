@@ -81,6 +81,8 @@ export function notificationVisual(t: Theme, type: string): NotificationVisual {
 			return { icon: "git-pull-request-arrow", color: t.green, label: "Review completed" };
 		case "review_changes_requested":
 			return { icon: "message-square-dot", color: t.amber, label: "Review changes requested" };
+		case "agent_completed":
+			return { icon: "bell", color: t.green, label: "Finished" };
 		default:
 			return { icon: "bell", color: t.textTertiary, label: type || "Notification" };
 	}
@@ -102,7 +104,7 @@ export function notificationTarget(n: { type: string; sessionId?: string; hostId
 	if ((n.type === "review_completed" || n.type === "review_changes_requested") && sessionId && n.prUrl) {
 		return `/review/${encodeURIComponent(sessionId)}?prUrl=${encodeURIComponent(n.prUrl)}&hostId=${hostId}`;
 	}
-	return n.type === "needs_input" && sessionId ? `/session/${encodeURIComponent(sessionId)}?hostId=${hostId}` : `/prs?hostId=${hostId}`;
+	return (n.type === "needs_input" || n.type === "agent_completed") && sessionId ? `/session/${encodeURIComponent(sessionId)}?hostId=${hostId}` : `/prs?hostId=${hostId}`;
 }
 
 /** Compact "3m" / "4h" / "2d" stamp. Returns "" for an unparseable timestamp. */
