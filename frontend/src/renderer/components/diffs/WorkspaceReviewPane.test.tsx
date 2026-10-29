@@ -62,7 +62,7 @@ vi.mock("@pierre/diffs/react", () => ({
 		className: string;
 		items: Array<{ id: string; collapsed?: boolean; fileDiff?: { isPartial?: boolean; additionLines?: string[] }; annotations?: Array<{ lineNumber: number; side: string }> }>;
 		options: { enableGutterUtility?: boolean; overflow?: string; unsafeCSS?: string };
-		renderAnnotation?: (annotation: { lineNumber: number; side: string }, item: { id: string }) => ReactNode;
+		renderAnnotation?: (annotation: { lineNumber: number; side: string }, fileDiff: unknown, item: { id: string }) => ReactNode;
 		renderCodeViewFooter?: () => ReactNode;
 		renderCustomHeader: (item: { id: string }) => ReactNode;
 		renderGutterUtility?: (getHoveredLine: () => { lineNumber: number; side: "additions" }, item: { id: string }) => ReactNode;
@@ -74,7 +74,7 @@ vi.mock("@pierre/diffs/react", () => ({
 				<div data-collapsed={String(Boolean(item.collapsed))} data-partial={String(item.fileDiff?.isPartial)} key={item.id}>
 					{renderCustomHeader(item)}
 					<pre data-testid="review-patch">{item.fileDiff?.additionLines?.join("\n")}</pre>
-					{item.annotations?.map((entry) => <div data-annotation-line={entry.lineNumber} data-annotation-side={entry.side} key={`${entry.side}:${entry.lineNumber}`}>{renderAnnotation?.(entry, item)}</div>)}
+					{item.annotations?.map((entry) => <div data-annotation-line={entry.lineNumber} data-annotation-side={entry.side} key={`${entry.side}:${entry.lineNumber}`}>{renderAnnotation?.(entry, item.fileDiff, item)}</div>)}
 				</div>
 			))}
 			{renderCodeViewFooter?.()}

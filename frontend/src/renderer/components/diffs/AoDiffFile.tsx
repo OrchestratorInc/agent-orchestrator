@@ -11,7 +11,7 @@ import { useAskInChat } from "../../lib/chat-context-bus";
 import { fileReferenceSource } from "../../lib/file-reference-source";
 import { useUiStore } from "../../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, RetryButton, type FileAnnotationModel } from "../WorkspaceDiffView";
-import { AO_PIERRE_SURFACE_CSS } from "./pierreTheme";
+import { AO_PIERRE_SURFACE_CSS, PIERRE_HIGHLIGHTER } from "./pierreTheme";
 import { SelectionAskButton } from "./SelectionAskButton";
 import { endsAtLastHunk, hydratedCopy, patchIdentity } from "./trailingContext";
 import { codeReference, useCodeSelection } from "./useCodeSelection";
@@ -204,6 +204,7 @@ export function AoDiffFile({
 					lineHoverHighlight: "line",
 					onPostRender: () => { gutterHover.restoreAfterRender(); annotationReveal.reveal(); },
 					overflow: "wrap",
+					preferredHighlighter: PIERRE_HIGHLIGHTER,
 					theme: { dark: "github-dark", light: "github-light" },
 					themeType: resolvedTheme,
 					tokenizeMaxLength: 200_000,

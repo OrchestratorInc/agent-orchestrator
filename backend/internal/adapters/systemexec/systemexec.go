@@ -70,7 +70,13 @@ func (Adapter) RunInstall(ctx context.Context, command ports.InstallCommand, std
 	cmd.Stdin = strings.NewReader("")
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	cmd.Env = append(os.Environ(), command.Env...)
+	cmd.Dir = command.Dir
+	env := os.Environ()
+	if command.Isolated {
+		env = installerSafeEnv(env)
+	}
+	env = append(env, command.Env...)
+	cmd.Env = env
 	if err := cmd.Run(); err != nil {
 		return err
 	}
@@ -79,6 +85,27 @@ func (Adapter) RunInstall(ctx context.Context, command ports.InstallCommand, std
 	// verification tries to resolve the newly installed executable.
 	refreshExecutablePath()
 	return nil
+}
+
+// installerSafeEnv keeps the inherited variables an isolated installer still
+// needs to reach the network and write temp files: locale, temp, proxy and
+// TLS trust settings.
+func installerSafeEnv(environ []string) []string {
+	kept := make([]string, 0, len(environ))
+	for _, entry := range environ {
+		name, _, _ := strings.Cut(entry, "=")
+		if upper := strings.ToUpper(name); strings.HasPrefix(upper, "LC_") || installerSafeVars[upper] {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
+}
+
+var installerSafeVars = map[string]bool{
+	"TMPDIR": true, "TMP": true, "TEMP": true, "LANG": true, "LANGUAGE": true, "TZ": true,
+	"USER": true, "LOGNAME": true, "SHELL": true, "TERM": true,
+	"HTTP_PROXY": true, "HTTPS_PROXY": true, "ALL_PROXY": true, "NO_PROXY": true,
+	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "CURL_CA_BUNDLE": true, "REQUESTS_CA_BUNDLE": true, "NODE_EXTRA_CA_CERTS": true,
 }
 
 // Probe takes one cancellation-aware snapshot of the package-manager facts

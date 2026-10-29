@@ -537,6 +537,9 @@ type Manager struct {
 	// nil means they do not (see SetVersionRefreshPolicy).
 	versionPolicyMu sync.Mutex
 	versionPolicy   func() VersionRefreshPolicy
+	// computerUse reports the "Let agents use this computer" setting; nil is off.
+	computerUseMu sync.Mutex
+	computerUse   func(context.Context) bool
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -5985,6 +5988,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	}
 	if pointer := strings.TrimSpace(m.aoSkillPointer(chat)); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
+	}
+	if chat && m.computerUseEnabled(ctx) {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
 	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)

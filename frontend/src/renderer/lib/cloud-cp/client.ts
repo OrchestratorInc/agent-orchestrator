@@ -342,10 +342,11 @@ export interface CloudCpClient {
 	/** Merge a requested pull request as its owner. */
 	approveMergeRequest(orgId: string, requestId: string, expectedHeadSha: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
 	rejectMergeRequest(orgId: string, requestId: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
+	/** Archive a session; `deleteArtifacts` also deletes its artifact files. */
 	deleteSession(
 		orgId: string,
 		sessionId: string,
-		options?: CloudCpRequestOptions,
+		options?: CloudCpRequestOptions & { deleteArtifacts?: boolean },
 	): Promise<CloudCpSessionDeletedResponse>;
 	resumeSession(
 		orgId: string,
@@ -865,7 +866,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		cancelSessionReviews: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/cancel`, { signal: o?.signal }),
 		deleteSession: (orgId, sessionId, o) =>
-			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, {
+			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}${o?.deleteArtifacts ? "?deleteArtifacts=true" : ""}`, {
 				signal: o?.signal,
 			}),
 		resumeSession: (orgId, sessionId, o) =>

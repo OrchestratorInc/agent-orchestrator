@@ -43,6 +43,7 @@ import { shouldAutoResume } from "./autoResume";
 import { controllerStoppedBanner, errorBanner, mcpBanner, quotaBanner, reauthBanner, rolledBackBanner, threadBanner, type BannerCopy } from "./conversationBanners";
 import { conversationActionError, conversationActionUnsupported } from "./conversationErrors";
 import { conversationMarkers } from "./timelineModel";
+import { providerCatalogLive, turnOptionsLoadFor } from "./turnOptionsCatalog";
 import { turnSettingsModelLabel } from "./turnSettingsModel";
 import { brokenMcpServers, can } from "./types";
 import { useMobileConversation } from "./useConversation";
@@ -103,7 +104,15 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// The board's row, with its provisioning facts re-read every second while it starts.
 	const session = useStartupSession(config, boardSession);
 	const conversation = useMobileConversation(config, session.id);
-	useChatViewLease(config, session.id);
+	// Opening a hibernated chat wakes it, and only the lease request says when.
+	// The catalog is asked for again too if it has none of its own yet: a page
+	// cached as ready loads it before the wake, and that load can fail unseen.
+	const { refresh: refreshOnView, loadTurnOptions: loadTurnOptionsOnView } = conversation;
+	const onViewing = useCallback(() => {
+		void refreshOnView();
+		void loadTurnOptionsOnView({ refresh: true, ifMissing: true }).catch(() => {});
+	}, [loadTurnOptionsOnView, refreshOnView]);
+	useChatViewLease(config, session.id, onViewing);
 	// A load that failed while the desktop was unreachable retries as soon as the
 	// board's poll reconnects, which is what the offline state promises.
 	// Keyed on a failed load, not a missing one, so the first mount doesn't send a
@@ -197,11 +206,16 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		),
 	);
 
+	// Loaded again when the provider comes up: a chat opened while hibernated or
+	// connecting has no catalog to give, and the composer would otherwise keep the
+	// empty one until the screen was reopened.
+	const providerLive = conversation.snapshot ? providerCatalogLive(conversation.snapshot) : undefined;
 	useEffect(() => {
-		if (!conversation.snapshot || turnOptionsRequestedFor.current === session.id) return;
-		turnOptionsRequestedFor.current = session.id;
-		void conversation.loadTurnOptions().catch(() => {});
-	}, [conversation.loadTurnOptions, conversation.snapshot, session.id]);
+		const load = turnOptionsLoadFor(turnOptionsRequestedFor.current, session.id, providerLive);
+		if (!load) return;
+		turnOptionsRequestedFor.current = load.key;
+		void conversation.loadTurnOptions(load.refresh ? { refresh: true } : undefined).catch(() => {});
+	}, [conversation.loadTurnOptions, providerLive, session.id]);
 
 	const sessionName = sessionTitle(session);
 	// Codex-style: every surface that shows the agent changed files can open them.

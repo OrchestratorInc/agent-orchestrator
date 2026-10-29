@@ -13,7 +13,7 @@ import { sessionUiKey } from "../lib/hosts";
 import type { WorkspaceDiffScope, WorkspaceFileDetail } from "../hooks/useSessionWorkspaceFiles";
 import { useUiStore } from "../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, PanelMessage, type FileAnnotationModel } from "./WorkspaceDiffView";
-import { AO_PIERRE_SURFACE_CSS } from "./diffs/pierreTheme";
+import { AO_PIERRE_SURFACE_CSS, PIERRE_HIGHLIGHTER } from "./diffs/pierreTheme";
 import { SelectionAskButton } from "./diffs/SelectionAskButton";
 import { codeReference, useCodeSelection } from "./diffs/useCodeSelection";
 import { usePersistentGutterUtility } from "./diffs/usePersistentGutterUtility";
@@ -192,6 +192,7 @@ export function ReadOnlyFileView({
 						annotationReveal.reveal();
 					},
 					overflow: "wrap",
+					preferredHighlighter: PIERRE_HIGHLIGHTER,
 					theme: { dark: "github-dark", light: "github-light" },
 					themeType: resolvedTheme,
 					tokenizeMaxLength: 200_000,

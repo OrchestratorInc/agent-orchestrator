@@ -6,7 +6,7 @@ import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
-import { appendCloudEvents, CloudSessionChatSurface, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -1353,5 +1353,12 @@ describe("CloudSessionChatSurface", () => {
 		expect(toSnapshot(session, [...base, {
 			sessionId: session.id, sequence: 3, type: "chat.turn_capabilities", payload: { turnId: "turn-1", steering: true }, createdAt: session.updatedAt,
 		}]).capabilities).toEqual(["steer"]);
+	});
+});
+
+describe("cloudStartupChecklist", () => {
+	it("shows no checklist while a new Freestyle session's worker connects: its composer shimmers instead", () => {
+		const starting = { ...session, mode: "chat" as const, runtimeConnected: false, cloud: { orgId: "org-1", sandboxProvider: "freestyle", desiredState: "running", observedState: "bootstrapping" } };
+		expect(cloudStartupChecklist(starting, [], undefined, false)).toBeUndefined();
 	});
 });

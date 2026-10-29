@@ -46,7 +46,7 @@ import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { cloudAgentInfos } from "../lib/cloud-agents";
 import { aoBridge } from "../lib/bridge";
 import { CloudCpError } from "../lib/cloud-cp";
-import { CODER_PROVIDER } from "../lib/cloud-offering";
+import { CODER_PROVIDER, FREESTYLE_PROVIDER, projectSandboxProvider } from "../lib/cloud-offering";
 import { coderWorkspaceNamePrefixFor, isValidCoderWorkspaceNamePrefix } from "../lib/coder-workspace-name";
 import { useOrgCoderConfig } from "../hooks/useOrgCoderConfig";
 import { useCloudSession } from "../lib/cloud-session";
@@ -1714,6 +1714,11 @@ function CloudProjectCard({
 				});
 			useSidebarOrderStore.getState().moveProjectToTop(project.id);
 			await queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
+			// A Freestyle project opens on its orchestrator, already starting; a
+			// Coder one opens on its board as before.
+			if (projectSandboxProvider(project.config, offering) === FREESTYLE_PROVIDER) {
+				useUiStore.getState().setAutoStartOrchestrator(project.id, true);
+			}
 			onCreated(project.id);
 		} catch (err) {
 			// A repository backs at most one active project per workspace; the

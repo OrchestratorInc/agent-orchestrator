@@ -171,6 +171,7 @@ type AppSetting struct {
 	CloudOffering      bool
 	HarnessDefaults    string
 	VersionRefresh     bool
+	ComputerUse        bool
 }
 
 type Automation struct {

@@ -4527,6 +4527,45 @@ it("keeps timed-out native preparation non-installable even after a late event",
     expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
     nativeUpdaterEvents.get("update-downloaded")?.({}, "notes", "2.0.0");
     expect(module.getUpdateStatus().state).toBe("error");
+    const records = readFileSync(nodePath.join(stateDir, "logs", "updater.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "native-preparation-started", version: "2.0.0", initialBytes: 1, runningVersion: "1.0.0" }),
+      expect.objectContaining({ event: "native-preparation-sample", bytes: 1, elapsedMs: 10_000 }),
+      expect.objectContaining({ event: "native-preparation-watchdog", reason: "inactivity", elapsedMs: 180_000, inactiveMs: 180_000 }),
+      expect.objectContaining({ event: "operation-blocked", requestedOperation: "manual-install" }),
+      expect.objectContaining({ event: "native-update-downloaded", accepted: false, preparationBlocked: true }),
+    ]));
+  } finally { restore(); vi.useRealTimers(); }
+});
+
+it("persists the original native verification error before rewriting its user message", async () => {
+  const restore = stubProcess("darwin", process.execPath);
+  try {
+    const { module, updaterEvents, nativeUpdaterEvents } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+    nativeUpdaterEvents.get("error")?.(Object.assign(new Error("codesign: designated requirement rejected"), { code: -1 }));
+    const records = readFileSync(nodePath.join(stateDir, "logs", "updater.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: "native-error", targetVersion: "2.0.0", userMessage: expect.stringContaining("Couldn't finish preparing"), error: expect.objectContaining({ message: "codesign: designated requirement rejected", code: "-1" }) }),
+    ]));
+    expect(records.some(record => record.event === "native-preparation-watchdog")).toBe(false);
+  } finally { restore(); }
+});
+
+it.each(["no-signal-cap", "absolute-cap"])("records the %s watchdog branch", async reason => {
+  vi.useFakeTimers();
+  const restore = stubProcess("darwin", process.execPath);
+  try {
+    const { module, updaterEvents } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+    const startedAt = Date.now();
+    module.__setStagingProbesForTesting({ readStagingBytes: () => reason === "no-signal-cap" ? undefined : Date.now() - startedAt });
+    await module.checkForUpdatesNow(stateDir);
+    updaterEvents.get("update-downloaded")?.({ version: "2.0.0" });
+    await vi.advanceTimersByTimeAsync((reason === "no-signal-cap" ? 6 : 15) * 60_000);
+    expect(module.getUpdateStatus()).toMatchObject({ state: "error", staged: { ready: false } });
+    const records = readFileSync(nodePath.join(stateDir, "logs", "updater.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    expect(records).toEqual(expect.arrayContaining([expect.objectContaining({ event: "native-preparation-watchdog", reason })]));
   } finally { restore(); vi.useRealTimers(); }
 });
 

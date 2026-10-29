@@ -115,6 +115,10 @@ export const aoBridge: AoBridge =
 				workspaceAvailable: false,
 				unavailableReason: "Desktop app is required to open a workspace.",
 			}),
+			getEditors: async () => ({ editors: [], preferredEditorId: "cursor" }),
+			setPreferredEditor: async () => {
+				throw new Error("Desktop app is required to choose an editor.");
+			},
 			open: async () => {
 				throw new Error("Desktop app is required to open a workspace.");
 			},

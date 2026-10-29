@@ -80,6 +80,7 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "transparency", section: "general", label: "settings.windowTranslucency", keywords: ["translucency", "vibrancy", "blur"] },
 	{ id: "render-math", section: "general", label: "settings.renderMath", keywords: ["latex", "katex", "equations", "formulas", "tex"] },
 	{ id: "session-interface", section: "general", label: "settings.sessionInterface.label", keywords: ["chat or terminal", "default view"] },
+	{ id: "default-editor", section: "general", label: "settings.defaultEditor.label", keywords: ["preferred editor", "open in editor", "ide", "vscode"] },
 	{ id: "version-refresh", section: "general", label: "settings.versionRefresh.label", keywords: ["auto upgrade sessions", "version refresh"] },
 	{ id: "terminal-shell", section: "general", label: "settings.terminalShell.label", keywords: ["zsh", "bash", "fish", "powershell", "shell path"] },
 	{ id: "copy-on-select", section: "general", label: "settings.terminalCopyOnSelect", keywords: ["terminal copy", "selection", "clipboard"] },

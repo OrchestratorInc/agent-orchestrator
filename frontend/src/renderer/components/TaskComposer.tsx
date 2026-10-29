@@ -43,7 +43,7 @@ import {
 	unknownAgentReadiness,
 	type AgentInfo,
 } from "../lib/agent-select-options";
-import { cloudSessionsQueryKey, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, seedCreatedFreestyleSession, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
@@ -189,7 +189,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	// Cloud vs local is decided here and nowhere else: a cloud project routes task
 	// creation to the control plane (which provisions a sandbox), while a local
 	// project keeps the existing daemon flow untouched.
-	const { client: cloudClient } = useCloudCp();
+	const { client: cloudClient, baseUrl: cloudBaseUrl } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
 	const cloudOffering = useCloudOffering();
 	const cloudProjects = useCloudProjectsQuery();
@@ -226,6 +226,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 				}, input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined);
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
+				seedCreatedFreestyleSession(queryClient, cloudBaseUrl, cloudOrg.id, session);
 				void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 				void captureRendererEvent("ao.renderer.task_create_succeeded", { project_id: input.projectId });
 				return session.id;
@@ -236,7 +237,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 				throw err instanceof Error ? err : new Error(t("newTask.unableToStart"));
 			}
 		},
-		[cloudClient, cloudOrg, queryClient, t],
+		[cloudBaseUrl, cloudClient, cloudOrg, queryClient, t],
 	);
 
 	const createDaemonTask = useCallback(

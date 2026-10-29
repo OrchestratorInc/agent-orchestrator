@@ -9,8 +9,8 @@
 
 import type { IpcMain, Session } from "electron";
 
-/** The control plane refuses artifact files over 25 MiB. */
-export const MAX_CLOUD_ARTIFACT_BYTES = 25 * 1024 * 1024;
+/** The control plane refuses artifact files over 100 MiB. */
+export const MAX_CLOUD_ARTIFACT_BYTES = 100 * 1024 * 1024;
 
 const ARTIFACT_FILES_ROUTE = "/api/cloud/v1/artifact-files/";
 
