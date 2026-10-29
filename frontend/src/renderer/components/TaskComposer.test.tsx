@@ -2744,6 +2744,24 @@ describe("TaskComposer Cloud model catalog", () => {
 		expect(localModelReads()).toEqual([]);
 	});
 
+	it("drops an effort the newly chosen listed model does not take", async () => {
+		const queryClient = cloudFixture("claude-code");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "sonnet", displayName: "Sonnet", default: false, efforts: ["low", "medium", "high"] },
+			{ id: "haiku", displayName: "Haiku", default: false },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Sonnet");
+		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Haiku" }));
+		fireEvent.change(task(), { target: { value: "Use Haiku" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "haiku" }), { idempotencyKey: expect.any(String) }));
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
+	});
+
 	it("keeps a configured model the catalog does not list, and warns that it may not run", async () => {
 		const queryClient = cloudFixture("codex", { model: "configured-model", effort: "high" });
 		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
@@ -2801,21 +2819,29 @@ describe("TaskComposer Cloud model catalog", () => {
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "chosen", reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
 	});
 
-	it.each(["manual-unlisted", "reported-unknown"])("keeps the configured effort for %s, whose levels are unknown", async (modelId) => {
+	it("keeps the configured effort for an entered model the catalog does not list", async () => {
 		const queryClient = cloudFixture("codex", { model: "configured-model", effort: "high" });
-		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "reported-unknown", displayName: "Reported unknown", default: false }]));
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "listed-no-levels", displayName: "Listed without levels", default: false }]));
 		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
 		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
-		if (modelId === "reported-unknown") {
-			await userEvent.click(screen.getByRole("button", { name: "Model" }));
-			await userEvent.click(await screen.findByRole("menuitem", { name: "Reported unknown" }));
-		} else {
-			await enterCloudModel(modelId);
-		}
+		await enterCloudModel("manual-unlisted");
 		expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High");
 		fireEvent.change(task(), { target: { value: "Retain configured effort" } });
 		fireEvent.click(startTask());
-		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: modelId, reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "manual-unlisted", reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
+	});
+
+	it("sends no configured effort with a listed model that reports no levels", async () => {
+		const queryClient = cloudFixture("codex", { model: "configured-model", effort: "high" });
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "listed-no-levels", displayName: "Listed without levels", default: false }]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Listed without levels" }));
+		fireEvent.change(task(), { target: { value: "Use the listed model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "listed-no-levels" }), { idempotencyKey: expect.any(String) }));
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
 	});
 
 	it("sends a listed model with one of its advertised efforts", async () => {

@@ -64,6 +64,11 @@ model; no listed model is picked for the user. A configured, remembered or
 typed model stays selectable even when the catalog does not list it, with a
 warning that it may not run in Cloud. Any model ID can be entered.
 
+A listed model takes only the effort levels the catalog reports for it, so a
+model that reports none (Claude's Haiku) starts with no effort; Claude refuses
+a turn whose effort its model does not offer. A model the catalog does not
+list keeps the chosen effort.
+
 When the control plane has no catalog:
 
 - 409 `MODEL_CATALOG_UNAVAILABLE` (OpenCode today): OpenCode keeps its

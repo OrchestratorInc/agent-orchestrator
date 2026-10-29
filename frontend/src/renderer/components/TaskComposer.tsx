@@ -669,9 +669,13 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		: selectedAgent === configuredProjectAgent
 			? defaultWorkerEffort
 			: "";
-	// A cloud model that reports no levels, or is not listed, may still take the
-	// chosen effort, so that effort is kept rather than dropped.
-	const cloudEffortsUnknown = isCloudProject && catalogModels.find((item) => item.id === selectedModel)?.efforts === undefined;
+	// A model Cloud's catalog lists takes only the levels it reports: Claude
+	// refuses a turn whose effort its model does not offer (Haiku offers none).
+	// Any other model that reports no levels, such as one the catalog does not
+	// list, may still take the chosen effort, so that effort is kept.
+	const cloudEffortsUnknown = isCloudProject &&
+		!cloudCatalog?.models.some((item) => item.id === selectedModel) &&
+		catalogModels.find((item) => item.id === selectedModel)?.efforts === undefined;
 	const { selected: effortModel } = useModelTuning({
 		models: cloudEffortsUnknown ? undefined : catalogModels,
 		model: selectedModel,
