@@ -21,7 +21,6 @@ var providerEnvironment = map[string][]LoginMethod{
 	"amp":          {{"env_AMP_API_KEY", "Amp API key", true}},
 	"crush":        {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}},
 	"cursor":       {{"env_CURSOR_API_KEY", "Cursor API key", true}},
-	"copilot":      {{"env_COPILOT_GITHUB_TOKEN", "GitHub Copilot token", true}},
 	"qwen":         {{"env_DASHSCOPE_API_KEY", "DashScope API key (China endpoint)", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}},
 	"goose":        {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}},
 	"continue":     {{"env_CONTINUE_API_KEY", "Continue API key", true}, {"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}},
