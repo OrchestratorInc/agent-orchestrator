@@ -25,7 +25,8 @@ reporting remains subject to the existing Share error events control.
 
 Electron main and the renderer have a separate desktop Sentry project. Their
 default DSN is distinct from the daemon project; Electron main uses
-`AO_SENTRY_DSN` and the renderer uses `VITE_AO_SENTRY_DSN` for explicit overrides.
+`AO_SENTRY_DSN` for an explicit override. The renderer uses this main-owned
+sender and has no independent DSN override.
 Electron main sends consented error events through its own Sentry transport.
 Renderer diagnostics pass through the existing main-owned consent boundary;
 the renderer has no direct Sentry transport. The mobile app keeps its own

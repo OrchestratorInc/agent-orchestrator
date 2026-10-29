@@ -15,7 +15,8 @@ const sdk = vi.hoisted(() => ({
 	setUser: vi.fn(),
 	clearCurrent: vi.fn(),
 	clearIsolation: vi.fn(),
-	makeElectronOfflineTransport: vi.fn(() => sdkTransport),
+	makeElectronOfflineTransport: vi.fn((_base?: unknown) => sdkTransport),
+	makeElectronTransport: vi.fn(),
 	onUncaughtExceptionIntegration: vi.fn(() => ({ name: "OnUncaughtException" })),
 	onUnhandledRejectionIntegration: vi.fn(() => ({ name: "OnUnhandledRejection" })),
 	childProcessIntegration: vi.fn(() => ({ name: "ChildProcess" })),
@@ -48,7 +49,7 @@ describe("Electron main Sentry configuration", () => {
 		expect(options).toMatchObject({
 			dsn: DEFAULT_ELECTRON_SENTRY_DSN,
 			transport: sdkTransport,
-			transportOptions: { queuePath: "/tmp/ao-electron-test/sentry/queue" },
+			transportOptions: { queuePath: "/tmp/ao-electron-test/sentry/queue", shouldSend: expect.any(Function), shouldStore: expect.any(Function) },
 			ipcMode: 0,
 			defaultIntegrations: [],
 			maxBreadcrumbs: 0,
@@ -99,13 +100,37 @@ describe("Electron main Sentry configuration", () => {
 			await mkdir(queuePath, { recursive: true });
 			await writeFile(path.join(queuePath, "queued-event"), "synthetic queued event");
 			const transport = await initMainSentry("1.0.0", "/tmp/ao-test", cacheRoot);
-			expect(sdk.init.mock.calls[0]?.[0].transportOptions).toEqual({ queuePath });
+			expect(sdk.init.mock.calls[0]?.[0].transportOptions).toMatchObject({ queuePath });
 			await transport.closeAndDrain();
 			await transport.clearCache();
 			expect(await readdir(path.join(cacheRoot, "sentry"))).toEqual([]);
 		} finally {
 			await rm(cacheRoot, { recursive: true, force: true });
 		}
+	});
+
+	it("blocks offline retries after close and waits for a retry already sending", async () => {
+		const transport = await initMainSentry("1.0.0", "/tmp/ao-test", "/tmp/ao-electron-test");
+		let finishSend!: (response: { statusCode: number }) => void;
+		const pendingSend = new Promise<{ statusCode: number }>((resolve) => { finishSend = resolve; });
+		const baseSend = vi.fn(() => pendingSend);
+		sdk.makeElectronTransport.mockReturnValue({ send: baseSend, flush: vi.fn().mockResolvedValue(true) });
+		const baseFactory = sdk.makeElectronOfflineTransport.mock.calls[0]?.[0] as (options: never) => { send: (envelope: never) => Promise<unknown> };
+		const guarded = baseFactory({} as never);
+		const sending = guarded.send([] as never);
+		let closed = false;
+		const closing = transport.closeAndDrain().then(() => { closed = true; });
+		await Promise.resolve();
+		expect(closed).toBe(false);
+		const options = sdk.init.mock.calls[0]?.[0].transportOptions as { shouldSend: () => boolean; shouldStore: () => boolean };
+		expect(options.shouldSend()).toBe(false);
+		expect(options.shouldStore()).toBe(false);
+		finishSend({ statusCode: 200 });
+		await Promise.all([sending, closing]);
+		expect(closed).toBe(true);
+		await transport.clearCache();
+		await expect(guarded.send([] as never)).rejects.toThrow("Electron Sentry sender is closed");
+		expect(baseSend).toHaveBeenCalledOnce();
 	});
 
 	it("purges an offline event left behind by an interrupted opt-out before a later opt-in", async () => {

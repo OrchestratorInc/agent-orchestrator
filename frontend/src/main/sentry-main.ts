@@ -44,6 +44,18 @@ export async function clearMainSentryCache(cacheRoot: string): Promise<void> {
 	await rm(sentryQueuePath(cacheRoot), { recursive: true, force: true });
 }
 
+async function waitForInFlightSends(inFlight: Set<Promise<unknown>>): Promise<void> {
+	if (!inFlight.size) return;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const settled = Promise.allSettled([...inFlight]).then(() => true);
+		const timedOut = new Promise<false>((resolve) => { timeout = setTimeout(() => resolve(false), DRAIN_TIMEOUT_MS); });
+		if (!(await Promise.race([settled, timedOut]))) throw new Error("Electron Sentry retry drain timed out");
+	} finally {
+		if (timeout) clearTimeout(timeout);
+	}
+}
+
 function isExpectedNoise(event: Sentry.ErrorEvent): boolean {
 	const values = [event.message, ...(event.exception?.values ?? []).flatMap((value) => [value.type, value.value])];
 	return values.some((value) => typeof value === "string" && (
@@ -97,12 +109,26 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 	const installId = await loadOrCreateTelemetryInstallId(dataDir);
 	const environment = sentryEnvironment(process.env.AO_TELEMETRY_APP_VERSION ?? version);
 	const queuePath = sentryQueuePath(cacheRoot);
+	let accepting = true;
+	const inFlight = new Set<Promise<unknown>>();
 	Sentry.init({
 		dsn,
 		release: version,
 		environment,
-		transport: Sentry.makeElectronOfflineTransport(),
-		transportOptions: { queuePath },
+		transport: Sentry.makeElectronOfflineTransport((options) => {
+			const base = Sentry.makeElectronTransport(options);
+			return {
+				send(envelope) {
+					if (!accepting) return Promise.reject(new Error("Electron Sentry sender is closed"));
+					const sending = Promise.resolve(base.send(envelope));
+					inFlight.add(sending);
+					void sending.then(() => inFlight.delete(sending), () => inFlight.delete(sending));
+					return sending;
+				},
+				flush: (timeout) => base.flush(timeout),
+			};
+		}),
+		transportOptions: { queuePath, shouldSend: () => accepting, shouldStore: () => accepting },
 		ipcMode: 0 as Sentry.IPCMode,
 		defaultIntegrations: [],
 		integrations: [
@@ -119,7 +145,6 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 	});
 	childProcessHookInstalled = true;
 	Sentry.setUser({ id: installId });
-	let accepting = true;
 	return {
 		capture(request) {
 			if (!accepting) return;
@@ -141,7 +166,9 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 		},
 		async closeAndDrain() {
 			accepting = false;
-			if (!(await Sentry.close(DRAIN_TIMEOUT_MS))) throw new Error("Electron Sentry drain timed out");
+			const drained = await Sentry.close(DRAIN_TIMEOUT_MS);
+			await waitForInFlightSends(inFlight);
+			if (!drained) throw new Error("Electron Sentry drain timed out");
 		},
 		async clearCache() {
 			await clearMainSentryCache(cacheRoot);

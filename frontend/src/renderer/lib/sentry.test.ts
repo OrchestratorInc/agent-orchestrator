@@ -1,22 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_ELECTRON_SENTRY_DSN } from "../../shared/sentry-config";
-import { captureExceptionToSentry, rendererSentryDsn } from "./sentry";
+import { afterEach, expect, it, vi } from "vitest";
+import { captureExceptionToSentry } from "./sentry";
 
 const capture = vi.hoisted(() => vi.fn());
 vi.mock("./bridge", () => ({ aoBridge: { telemetry: { capture } } }));
 
-afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
-
-describe("renderer Sentry configuration", () => {
-	it("selects the Electron project unless VITE_AO_SENTRY_DSN overrides it", () => {
-		vi.stubEnv("VITE_AO_SENTRY_DSN", undefined);
-		expect(rendererSentryDsn()).toBe(DEFAULT_ELECTRON_SENTRY_DSN);
-		vi.stubEnv("VITE_AO_SENTRY_DSN", "https://custom.example/3");
-		expect(rendererSentryDsn()).toBe("https://custom.example/3");
-		vi.stubEnv("VITE_AO_SENTRY_DSN", "");
-		expect(rendererSentryDsn()).toBe("");
-	});
-});
+afterEach(() => vi.clearAllMocks());
 
 it("sends only safe renderer stack frames and a standard exception type through the bridge", () => {
 	const error = new TypeError("resume agent ai-sports-coach-113");
