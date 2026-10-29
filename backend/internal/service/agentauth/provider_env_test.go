@@ -48,10 +48,8 @@ func TestEnvironmentMethodIsHarnessSpecific(t *testing.T) {
 
 func TestEnvironmentLoginPersistsWithoutStartingCLI(t *testing.T) {
 	previous := publishProviderKey
-	publishProviderKey = func(_ context.Context, name, value string) error {
-		if name != "OPENAI_API_KEY" || value != "test-secret" {
-			t.Fatalf("published %s with an unexpected value", name)
-		}
+	publishProviderKey = func(_ context.Context, name, _ string) error {
+		t.Fatalf("published %s to the device environment without the user choosing it", name)
 		return nil
 	}
 	t.Cleanup(func() { publishProviderKey = previous })
@@ -80,7 +78,7 @@ func TestEnvironmentLoginReportsDevicePublicationFailure(t *testing.T) {
 	t.Cleanup(func() { publishProviderKey = previous })
 	dir := t.TempDir()
 	svc := NewWithAgentResolver(foundExecutable("goose"), nil, nil, dir)
-	if _, err := svc.StartLogin(t.Context(), "goose", "env_OPENAI_API_KEY", "test-secret"); err == nil {
+	if _, err := svc.StartLoginWithOptions(t.Context(), "goose", "env_OPENAI_API_KEY", "test-secret", LoginOptions{Device: true}); err == nil {
 		t.Fatal("reported success without publishing to the device environment")
 	}
 	keys, err := providerkeys.Load(dir)
@@ -104,7 +102,7 @@ func TestOpenHandsProviderPublishesKeyAndModel(t *testing.T) {
 	if _, err := svc.StartLogin(t.Context(), "openhands", "env_LLM_API_KEY", "test-secret"); err == nil {
 		t.Fatal("accepted OpenHands key without model")
 	}
-	result, err := svc.StartLoginWithModel(t.Context(), "openhands", "env_LLM_API_KEY", "test-secret", "anthropic/claude-sonnet-4-5")
+	result, err := svc.StartLoginWithOptions(t.Context(), "openhands", "env_LLM_API_KEY", "test-secret", LoginOptions{Model: "anthropic/claude-sonnet-4-5", Device: true})
 	if err != nil || result.Status != "succeeded" {
 		t.Fatalf("OpenHands login = %+v, %v", result, err)
 	}

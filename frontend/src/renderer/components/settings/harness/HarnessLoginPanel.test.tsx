@@ -37,7 +37,7 @@ describe("HarnessLoginPanel", () => {
 		const onVerify = vi.fn().mockResolvedValue("configured");
 		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId: "goose", method: "env_OPENAI_API_KEY", status: "succeeded", loginUrl: undefined, deviceCode: undefined });
 		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} onVerify={onVerify} onClose={vi.fn()} onTerminal={vi.fn()} />);
-		expect(screen.getByRole("button", { name: "OpenAI API key" })).toHaveAccessibleDescription(/device's user environment/);
+		expect(screen.getByRole("button", { name: "OpenAI API key" })).toHaveAccessibleDescription(/agent sessions it starts/);
 		const input = screen.getByLabelText("API key");
 		expect(input).toHaveAttribute("type", "password");
 		await user.type(input, "test-secret");
@@ -53,9 +53,25 @@ describe("HarnessLoginPanel", () => {
 		await user.type(screen.getByLabelText("API key"), "test-secret");
 		const save = screen.getByRole("button", { name: "Save and verify" });
 		expect(save).toBeDisabled();
-		await user.type(screen.getByLabelText("Enter model ID…"), "provider/model-1");
+		await user.type(screen.getByLabelText("Model"), "provider/model-1");
 		await user.click(save);
 		expect(startAgentUILogin).toHaveBeenCalledWith(agentId, agentId === "openhands" ? "env_LLM_API_KEY" : "env_OPENAI_API_KEY", "test-secret", undefined, "provider/model-1");
+	});
+	it("reuses a saved provider key and keeps it in the device environment", async () => {
+		const user = userEvent.setup();
+		vi.mocked(startAgentUILogin).mockResolvedValue({ ...snapshot, agentId: "goose", method: "env_OPENAI_API_KEY", status: "succeeded", loginUrl: undefined, deviceCode: undefined });
+		const onProviderKeysChanged = vi.fn();
+		render(<HarnessLoginPanel agentId="goose" methods={[{ id: "env_OPENAI_API_KEY", label: "OpenAI API key", secret: true }]} providerKeys={[{ name: "OPENAI_API_KEY", label: "OpenAI API key", configured: true, hint: "abcd", device: true, checkable: false, agents: ["goose"] }]} onProviderKeysChanged={onProviderKeysChanged} onVerify={vi.fn().mockResolvedValue("configured")} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		expect(screen.getByRole("button", { name: "OpenAI API key" })).toHaveAccessibleDescription(/Saved, ending abcd · Also set outside AO/);
+		expect(screen.getByRole("checkbox", { name: /Also set for apps outside AO/ })).toBeChecked();
+		await user.click(screen.getByRole("button", { name: "Save and verify" }));
+		expect(startAgentUILogin).toHaveBeenCalledWith("goose", "env_OPENAI_API_KEY", "", undefined, undefined, true);
+		await waitFor(() => expect(onProviderKeysChanged).toHaveBeenCalled());
+	});
+	it("warns that a Claude Code API key can replace the subscription", () => {
+		render(<HarnessLoginPanel agentId="claude-code" methods={[{ id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }]} providerKeys={[{ name: "ANTHROPIC_API_KEY", label: "Anthropic API key", configured: false, device: false, checkable: true, agents: ["claude-code", "crush"] }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		expect(screen.getByText(/instead of your Claude subscription/)).toBeVisible();
+		expect(screen.getByRole("checkbox", { name: /Also set for apps outside AO/ })).not.toBeChecked();
 	});
 	it("runs a native login invisibly and presents reviewed menu controls", async () => {
 		const user = userEvent.setup();

@@ -31,6 +31,15 @@ type AgentUILoginService interface {
 	SubmitLoginCode(context.Context, string, string, string) (agentauth.LoginSnapshot, error)
 }
 
+// ProviderKeyService manages AO-stored provider keys. Values are accepted
+// only in request bodies and never returned.
+type ProviderKeyService interface {
+	ProviderKeys(context.Context) ([]agentauth.ProviderKey, error)
+	SaveProviderKey(ctx context.Context, name, secret string, device bool) (agentauth.ProviderKey, error)
+	RemoveProviderKey(ctx context.Context, name string) (agentauth.ProviderKey, error)
+	CheckProviderKey(ctx context.Context, name, secret string) (agentauth.ProviderKeyCheck, error)
+}
+
 // AgentAuthController owns the safe native authentication routes.
 type AgentAuthController struct {
 	Svc AgentAuthService
@@ -39,6 +48,10 @@ type AgentAuthController struct {
 // Register mounts the agent authentication routes.
 func (c *AgentAuthController) Register(r chi.Router) {
 	r.Get("/agents/auth-plans", c.list)
+	r.Get("/agents/provider-keys", c.listProviderKeys)
+	r.Put("/agents/provider-keys/{name}", c.saveProviderKey)
+	r.Delete("/agents/provider-keys/{name}", c.removeProviderKey)
+	r.Post("/agents/provider-keys/{name}/check", c.checkProviderKey)
 	r.Post("/agents/{agent}/auth", c.start)
 	r.Post("/agents/{agent}/logout", c.logout)
 	r.Post("/agents/{agent}/auth/operations", c.startUILogin)
@@ -135,13 +148,17 @@ func (c *AgentAuthController) startUILogin(w http.ResponseWriter, r *http.Reques
 	}
 	var result agentauth.LoginSnapshot
 	var err error
-	if req.Model != "" {
-		if withModel, ok := c.Svc.(interface {
-			StartLoginWithModel(context.Context, string, string, string, string) (agentauth.LoginSnapshot, error)
+	if req.Model != "" || req.Device {
+		if withOptions, ok := c.Svc.(interface {
+			StartLoginWithOptions(context.Context, string, string, string, agentauth.LoginOptions) (agentauth.LoginSnapshot, error)
 		}); ok {
+			result, err = withOptions.StartLoginWithOptions(r.Context(), chi.URLParam(r, "agent"), req.Method, req.Secret, agentauth.LoginOptions{Model: req.Model, Device: req.Device})
+		} else if withModel, ok := c.Svc.(interface {
+			StartLoginWithModel(context.Context, string, string, string, string) (agentauth.LoginSnapshot, error)
+		}); ok && !req.Device {
 			result, err = withModel.StartLoginWithModel(r.Context(), chi.URLParam(r, "agent"), req.Method, req.Secret, req.Model)
 		} else {
-			err = apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "This login method does not accept a model.", nil)
+			err = apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "This login method does not accept these options.", nil)
 		}
 	} else {
 		result, err = svc.StartLogin(r.Context(), chi.URLParam(r, "agent"), req.Method, req.Secret)
@@ -213,4 +230,88 @@ func (c *AgentAuthController) startFlow(w http.ResponseWriter, r *http.Request, 
 		TerminalInput: result.TerminalInput,
 		Terminal:      shellTerminalResponse(result.Terminal),
 	})
+}
+
+func (c *AgentAuthController) providerKeys(w http.ResponseWriter, r *http.Request, path string) (ProviderKeyService, bool) {
+	w.Header().Set("Cache-Control", "no-store")
+	svc, ok := c.Svc.(ProviderKeyService)
+	if !ok {
+		apispec.NotImplemented(w, r, r.Method, path)
+	}
+	return svc, ok
+}
+
+func (c *AgentAuthController) listProviderKeys(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.providerKeys(w, r, "/api/v1/agents/provider-keys")
+	if !ok {
+		return
+	}
+	keys, err := svc.ProviderKeys(r.Context())
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListProviderKeysResponse{Keys: keys})
+}
+
+func (c *AgentAuthController) saveProviderKey(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.providerKeys(w, r, "/api/v1/agents/provider-keys/{name}")
+	if !ok {
+		return
+	}
+	var req SaveProviderKeyRequest
+	if !decodeOne(w, r, &req, "provider key request") {
+		return
+	}
+	key, err := svc.SaveProviderKey(r.Context(), chi.URLParam(r, "name"), req.Secret, req.Device)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, key)
+}
+
+func (c *AgentAuthController) removeProviderKey(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.providerKeys(w, r, "/api/v1/agents/provider-keys/{name}")
+	if !ok {
+		return
+	}
+	key, err := svc.RemoveProviderKey(r.Context(), chi.URLParam(r, "name"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, key)
+}
+
+func (c *AgentAuthController) checkProviderKey(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.providerKeys(w, r, "/api/v1/agents/provider-keys/{name}/check")
+	if !ok {
+		return
+	}
+	var req CheckProviderKeyRequest
+	if !decodeOne(w, r, &req, "key check request") {
+		return
+	}
+	result, err := svc.CheckProviderKey(r.Context(), chi.URLParam(r, "name"), req.Secret)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, result)
+}
+
+// decodeOne reads exactly one small JSON object with no unknown fields.
+func decodeOne(w http.ResponseWriter, r *http.Request, into any, what string) bool {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 20*1024))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(into); err != nil {
+		envelope.WriteError(w, r, apierr.Invalid("INVALID_JSON", "Invalid "+what+".", nil))
+		return false
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		envelope.WriteError(w, r, apierr.Invalid("INVALID_JSON", "Expected one "+what+".", nil))
+		return false
+	}
+	return true
 }

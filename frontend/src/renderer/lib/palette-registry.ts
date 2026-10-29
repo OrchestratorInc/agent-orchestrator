@@ -97,6 +97,7 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "usage-limits", section: "agents", label: "settings.codexAccounts.generalUsageLimits", keywords: ["usage", "rate limit", "quota"] },
 	{ id: "harness", section: "harness", label: "settings.harness", keywords: [] },
 	{ id: "harness-logins", section: "harness", label: "settings.harness.viewLabel", keywords: ["login", "agent login"] },
+	{ id: "api-keys", section: "apiKeys", label: "settings.apiKeys", keywords: ["api key", "provider key", "environment variable", "anthropic", "openai", "openrouter"] },
 	{ id: "remote-hosts", section: "remoteHosts", label: "settings.remoteHosts", keywords: [] },
 	{ id: "remote-enable", section: "remoteHosts", label: "remote.enable", keywords: [] },
 	{ id: "saved-hosts", section: "remoteHosts", label: "remote.savedHosts", keywords: ["servers"] },

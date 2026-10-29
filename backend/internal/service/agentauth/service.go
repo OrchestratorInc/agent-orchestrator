@@ -147,11 +147,13 @@ func NewWithAgentResolver(executables ExecutableFinder, agents AgentBinaryResolv
 	// Restore AO-managed provider variables before adapter authentication probes
 	// and model discovery run after a daemon restart.
 	if keys, err := providerkeys.Load(dataDir); err == nil {
+		device, _ := providerkeys.DeviceNames(dataDir)
 		for name, value := range keys {
 			_ = os.Setenv(name, value)
 			// launchd and systemd user environments are session-scoped. Restore
-			// them when AO starts again after a login or daemon restart.
-			if runtime.GOOS != "windows" {
+			// the keys the user published when AO starts again after a login or
+			// daemon restart.
+			if device[name] && runtime.GOOS != "windows" {
 				refreshCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				_ = publishProviderKey(refreshCtx, name, value)
 				cancel()

@@ -721,6 +721,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/provider-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List reviewed provider keys with display-safe saved state; values are never returned */
+        get: operations["listProviderKeys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/provider-keys/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save a provider key for AO sessions and set whether it is published to the OS user environment */
+        put: operations["saveProviderKey"];
+        post?: never;
+        /** Remove a provider key from AO and from the OS user environment when AO published it */
+        delete: operations["removeProviderKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/provider-keys/{name}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask the provider whether it accepts a key and list the models it offers */
+        post: operations["checkProviderKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/readiness": {
         parameters: {
             query?: never;
@@ -4966,6 +5018,9 @@ export interface components {
         ChatPermissionModesResponse: {
             agents: components["schemas"]["ChatAgentPermissionModes"][];
         };
+        CheckProviderKeyRequest: {
+            secret?: string;
+        };
         ClaimPRRequest: {
             allowTakeover?: null | boolean;
             pr: string;
@@ -6095,6 +6150,9 @@ export interface components {
         ListProjectsResponse: {
             projects: components["schemas"]["ProjectSummary"][];
         };
+        ListProviderKeysResponse: {
+            keys: components["schemas"]["ProviderKey"][];
+        };
         ListReportsResponse: {
             reports: components["schemas"]["ReportResponse"][];
         };
@@ -6392,6 +6450,20 @@ export interface components {
             providerTurnId: string;
             sourceTurnId: string;
         };
+        ProviderKey: {
+            agents: string[];
+            checkable: boolean;
+            configured: boolean;
+            device: boolean;
+            hint?: string;
+            label: string;
+            name: string;
+        };
+        ProviderKeyCheck: {
+            models?: string[];
+            /** @enum {string} */
+            status: "valid" | "invalid" | "unverified" | "unreachable";
+        };
         ProviderSwitchRequest: {
             /** @enum {string} */
             autoCompactWindow?: "200k" | "1m";
@@ -6634,6 +6706,10 @@ export interface components {
             killed?: boolean;
             ok: boolean;
             sessionId: string;
+        };
+        SaveProviderKeyRequest: {
+            device: boolean;
+            secret?: string;
         };
         SaveRenderArtifactRequest: {
             /** @description Name for the file. Characters a file system refuses are replaced. */
@@ -7370,6 +7446,7 @@ export interface components {
             operation?: "install" | "reinstall" | "update";
         };
         StartAgentUILoginRequest: {
+            device?: boolean;
             method: string;
             model?: string;
             secret?: string;
@@ -10114,6 +10191,202 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listProviderKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListProviderKeysResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    saveProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Provider environment variable, such as ANTHROPIC_API_KEY. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveProviderKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKey"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    removeProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Provider environment variable, such as ANTHROPIC_API_KEY. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKey"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    checkProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Provider environment variable, such as ANTHROPIC_API_KEY. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckProviderKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKeyCheck"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

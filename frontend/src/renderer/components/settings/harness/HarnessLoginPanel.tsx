@@ -3,20 +3,26 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
 import { actOnAgentUILogin, cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot } from "../../../hooks/useAgentAuth";
+import { checkProviderKey, providerKeyName, type ProviderKey } from "../../../hooks/useProviderKeys";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { apiErrorCode } from "../../../lib/api-client";
 import { runAgentLoginTask } from "../../../lib/agent-login-lifecycle";
 import { aoBridge } from "../../../lib/bridge";
 import { LOCAL_HOST } from "../../../lib/hosts";
 import { Button } from "../../ui/button";
+import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
+import { SettingsOptionMenu } from "../SettingsOptionMenu";
 
 type MenuAction = "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
 
-export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose, onTerminal }: {
+export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onProviderKeysChanged, onVerify, onClose, onTerminal }: {
 	agentId: AgentId;
 	methods: components["schemas"]["AgentLoginMethod"][];
 	hostId?: string;
+	/** Saved provider keys, without values, for this host. */
+	providerKeys?: ProviderKey[];
+	onProviderKeysChanged?: () => void;
 	onVerify: (methodId: string) => Promise<boolean | "configured">;
 	onClose: () => void;
 	onTerminal: () => Promise<unknown>;
@@ -29,6 +35,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 	const [methodId, setMethodId] = useState(availableMethods[0]?.id ?? "browser");
 	const [secret, setSecret] = useState("");
 	const [model, setModel] = useState("");
+	const [device, setDevice] = useState(false);
+	const [models, setModels] = useState<string[]>([]);
+	const [loadingModels, setLoadingModels] = useState(false);
 	const [loginCode, setLoginCode] = useState("");
 	const [operation, setOperation] = useState<AgentLoginSnapshot>();
 	const [busy, setBusy] = useState(false);
@@ -46,6 +55,14 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 	verifyRef.current = onVerify;
 	const method = availableMethods.find((item) => item.id === methodId) ?? (methodId ? availableMethods[0] : undefined);
 	const selectedMethodId = method?.id ?? methodId;
+	const providerKeyFor = (id?: string) => {
+		const name = id ? providerKeyName(id) : undefined;
+		return name ? providerKeys?.find((key) => key.name === name) : undefined;
+	};
+	const selectedKey = providerKeyFor(selectedMethodId);
+	const savedKey = selectedKey?.configured ? selectedKey : undefined;
+	// Start from the saved device setting so saving again never withdraws it silently.
+	useEffect(() => { setDevice(selectedKey?.device ?? false); }, [selectedKey?.name, selectedKey?.device]);
 	const needsModel = (agentId === "qwen" || agentId === "openhands" || agentId === "continue" && selectedMethodId !== "env_CONTINUE_API_KEY") && selectedMethodId.startsWith("env_");
 	const running = operation?.status === "running";
 	const locked = busy || running || verifying;
@@ -129,7 +146,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 
 	const start = async (target = method) => {
 		const targetNeedsModel = (agentId === "qwen" || agentId === "openhands" || agentId === "continue" && target?.id !== "env_CONTINUE_API_KEY") && target?.id.startsWith("env_");
-		if (pending.current || locked || !target || (target.secret && !secret.trim()) || (targetNeedsModel && !model.trim())) return;
+		const targetKey = providerKeyFor(target?.id);
+		if (pending.current || locked || !target || (target.secret && !secret.trim() && !targetKey?.configured) || (targetNeedsModel && !model.trim())) return;
 		pending.current = true;
 		setBusy(true);
 		setError("");
@@ -138,9 +156,19 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		setSecret("");
 		setLoginCode("");
 		try {
+			// A new provider key is checked first so a mistyped key is never saved.
+			if (credential && targetKey?.checkable && (await checkProviderKey(targetKey.name, credential, hostId)).status === "invalid") {
+				if (mounted.current) {
+					setSecret(credential);
+					setError(t("settings.apiKeys.rejected"));
+				}
+				return;
+			}
 			await runAgentLoginTask(agentId, hostId, async () => {
 				if (!mounted.current) return;
-				const next = targetNeedsModel
+				const next = targetKey && device
+					? await startAgentUILogin(agentId, target.id, credential, hostId, targetNeedsModel ? model.trim() : undefined, true)
+					: targetNeedsModel
 					? await startAgentUILogin(agentId, target.id, credential, hostId, model.trim())
 					: await startAgentUILogin(agentId, target.id, credential, hostId);
 				if (!mounted.current) {
@@ -149,6 +177,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 				}
 				setMethodId(next.method);
 				updateOperation(next);
+				if (targetKey) onProviderKeysChanged?.();
 			});
 		} catch (err) {
 			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.harness.authFailed"));
@@ -202,12 +231,32 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		setMethodId(item.secret && selectedMethodId === item.id ? "" : item.id);
 		setSecret("");
 		setModel("");
+		setModels([]);
+		setDevice(providerKeyFor(item.id)?.device ?? false);
 		setLoginCode("");
 		setError("");
 		updateOperation(undefined);
 		if (!item.secret) void start(item);
 	};
 	const act = (action: () => Promise<unknown>) => void action().catch(() => setError(t("settings.harness.authFailed")));
+	// Fills the model picker from the provider, using the typed or saved key.
+	const loadModels = async () => {
+		if (!selectedKey || loadingModels || (!secret.trim() && !savedKey)) return;
+		setLoadingModels(true);
+		setError("");
+		try {
+			const result = await checkProviderKey(selectedKey.name, secret.trim(), hostId);
+			if (!mounted.current) return;
+			if (result.status === "valid" && result.models?.length) {
+				setModels(result.models);
+				if (!model) setModel(result.models[0]);
+			} else {
+				setError(t(result.status === "invalid" ? "settings.apiKeys.rejected" : result.status === "unreachable" ? "settings.apiKeys.unreachable" : "settings.apiKeys.noModels"));
+			}
+		} catch (err) {
+			if (mounted.current) setError(err instanceof Error ? err.message : t("settings.apiKeys.checkFailed"));
+		} finally { if (mounted.current) setLoadingModels(false); }
+	};
 	const menuAction = async (action: MenuAction) => {
 		if (!operation || busy || !running) return;
 		setBusy(true);
@@ -240,6 +289,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 		: operation?.status === "cancelled" ? t("settings.harness.loginUi.cancelled")
 		: running ? selectedMethodId === "native" ? t(operation?.nativePrompt === "terminal_required" ? "settings.harness.loginUi.nativeFallback" : operation?.nativePrompt === "menu" ? "settings.harness.loginUi.nativeMenu" : "settings.harness.loginUi.nativeWaiting") : t(method?.secret ? "settings.harness.loginUi.saving" : operation?.deviceCode ? "settings.harness.loginUi.waitingForCode" : "settings.harness.loginUi.waiting") : "";
 
+	const savedHint = (key?: ProviderKey) => key?.configured
+		? [key.hint ? t("settings.apiKeys.savedHint", { hint: key.hint }) : t("settings.apiKeys.saved"), key.device ? t("settings.apiKeys.outsideAo") : ""].filter(Boolean).join(" · ")
+		: undefined;
 	const methodKey = (id: string) => id !== "browser" || agentId === "codex" ? id : agentId === "claude-code" ? "claude" : agentId === "cline" ? "cline" : `${agentId}_browser`;
 	const selectedMethodKey = methodKey(selectedMethodId);
 	const methodLabel = t(`settings.harness.loginUi.methods.${selectedMethodKey}`, { defaultValue: method?.label ?? selectedMethodId });
@@ -264,19 +316,37 @@ export function HarnessLoginPanel({ agentId, methods, hostId, onVerify, onClose,
 						<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted group-aria-expanded/method:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>
 						<span className="min-w-0 flex-1 space-y-0.5">
 							<span className="block text-[13px] leading-5 font-medium text-settings-label">{label}</span>
-							<span id={titleId + "-" + item.id} className="block text-xs leading-4 text-settings-muted">{item.id === "native" ? t("settings.harness.loginUi.nativeHint") : item.id.startsWith("env_") ? t("settings.harness.loginUi.envHint") : t(`settings.harness.loginUi.hints.${key}`, { defaultValue: key.endsWith("_browser") ? "Finish sign-in in your browser." : item.label })}</span>
+							<span id={titleId + "-" + item.id} className="block text-xs leading-4 text-settings-muted">{item.id === "native" ? t("settings.harness.loginUi.nativeHint") : item.id.startsWith("env_") ? savedHint(providerKeyFor(item.id)) ?? t("settings.harness.loginUi.envHint") : t(`settings.harness.loginUi.hints.${key}`, { defaultValue: key.endsWith("_browser") ? "Finish sign-in in your browser." : item.label })}</span>
 						</span>
 						{busy && selected ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
 							: item.secret ? <ChevronDown className="size-4 shrink-0 text-settings-muted transition-transform group-aria-expanded/method:rotate-180" aria-hidden="true" />
 							: <ExternalLink className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />}
 					</button>
 					{open && <div ref={secretRowRef} className="flex scroll-mb-4 flex-wrap items-center gap-2 pr-4 pb-4 pl-15" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); choose(item); } }}>
-						<Input aria-label={t(item.id === "access_token" ? "settings.harness.loginUi.accessToken" : "settings.harness.loginUi.apiKey")} className="min-w-48 flex-1 border-border bg-(--color-bg-primary) font-mono text-[13px] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} onChange={(event) => setSecret(event.target.value)} />
-						{needsModel && <label className="flex min-w-48 flex-1 flex-col gap-1 text-xs text-settings-label"><span>{t("settings.models.custom")}</span><Input className="border-border bg-(--color-bg-primary) font-mono text-[13px]" value={model} disabled={locked} autoComplete="off" spellCheck={false} maxLength={256} onChange={(event) => setModel(event.target.value)} /></label>}
-						<Button type="submit" disabled={busy || !secret.trim() || (needsModel && !model.trim())}>
+						<Input aria-label={t(item.id === "access_token" ? "settings.harness.loginUi.accessToken" : "settings.harness.loginUi.apiKey")} className="min-w-48 flex-1 border-border bg-(--color-bg-primary) font-mono text-[13px] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} placeholder={savedKey ? t("settings.apiKeys.keepSaved") : undefined} onChange={(event) => { setSecret(event.target.value); setModels([]); }} />
+						{needsModel && <div className="flex min-w-48 flex-1 flex-col gap-1 text-xs text-settings-label">
+							<span id={titleId + "-model"}>{t("settings.apiKeys.model")}</span>
+							<div className="flex items-center gap-1">
+								{models.length > 0
+									? <SettingsOptionMenu aria-label={t("settings.apiKeys.model")} value={model} options={models.map((id) => ({ value: id, label: id }))} onChange={setModel} searchable searchPlaceholder={t("settings.apiKeys.searchModels")} disabled={locked} triggerClassName="h-8 min-w-0 flex-1 font-mono" />
+									: <Input aria-labelledby={titleId + "-model"} className="border-border bg-(--color-bg-primary) font-mono text-[13px]" value={model} disabled={locked} autoComplete="off" spellCheck={false} maxLength={256} placeholder={t("settings.models.custom")} onChange={(event) => setModel(event.target.value)} />}
+								{selectedKey?.checkable && models.length === 0 && <Button type="button" size="sm" variant="ghost" disabled={locked || loadingModels || (!secret.trim() && !savedKey)} onClick={() => void loadModels()}>
+									{loadingModels && <LoaderCircle className="animate-spin" aria-hidden="true" />}{t("settings.apiKeys.loadModels")}
+								</Button>}
+							</div>
+						</div>}
+						<Button type="submit" disabled={busy || (!secret.trim() && !savedKey) || (needsModel && !model.trim())}>
 							{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
 							{t("settings.harness.loginUi.save")}
 						</Button>
+						{selectedKey && <label className="flex basis-full items-start gap-2">
+							<Checkbox checked={device} className="mt-0.5" disabled={locked} onCheckedChange={(checked) => setDevice(checked === true)} />
+							<span className="min-w-0 flex-1">
+								<span className="block text-xs leading-4 text-settings-label">{t("settings.apiKeys.device")}</span>
+								<span className="block text-xs leading-4 text-settings-muted">{t("settings.apiKeys.deviceHint")}</span>
+							</span>
+						</label>}
+						{agentId === "claude-code" && item.id === "env_ANTHROPIC_API_KEY" && <p className="basis-full text-xs leading-4 text-settings-muted">{t("settings.apiKeys.claudeBilling")}</p>}
 					</div>}
 					</div>;
 				})}

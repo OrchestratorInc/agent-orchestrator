@@ -33,6 +33,7 @@ import {
 	type HarnessInUse,
 	type InstallJob,
 } from "../../../hooks/useHarnessUpdates";
+import { useInvalidateProviderKeys, useProviderKeys } from "../../../hooks/useProviderKeys";
 import { shellTerminalsQueryKeyForHost, type ShellTerminal } from "../../../hooks/useShellTerminals";
 import { AgentCheckError } from "../../../lib/agent-check-error";
 import { agentLoginKey, isAgentLoginPending, pendingAgentLogins, subscribeAgentLogins } from "../../../lib/agent-login-lifecycle";
@@ -164,6 +165,9 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 	const plans = useMemo(() => new Map(installers.data?.map((plan) => [plan.agentId, plan]) ?? []), [installers.data]);
 	const jobMap = useMemo(() => new Map(jobs.data?.map((job) => [job.target, job]) ?? []), [jobs.data]);
 	const agentAuthPlans = useMemo(() => new Map(authPlans.data?.map((plan) => [plan.agentId, plan]) ?? []), [authPlans.data]);
+	// Saved provider keys, fetched only while a panel that offers one is open.
+	const providerKeys = useProviderKeys(hostId, Boolean(uiLoginAgent && agentAuthPlans.get(uiLoginAgent)?.methods?.some((method) => method.id.startsWith("env_"))));
+	const invalidateProviderKeys = useInvalidateProviderKeys(hostId);
 	const readinessAgents = useMemo(() => new Map(agents.data?.agents.map((agent) => [agent.id, agent]) ?? []), [agents.data]);
 	const installed = useMemo(() => installedAgentIds(agents.data), [agents.data]);
 	const refreshModelsOnOpen = (agentId: AgentId) => {
@@ -769,6 +773,8 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 				agentId={agentId}
 				methods={agentAuthPlans.get(agentId)?.methods ?? []}
 				hostId={hostId}
+				providerKeys={providerKeys.data}
+				onProviderKeysChanged={() => void invalidateProviderKeys()}
 				onClose={closeUILogin}
 				onTerminal={async () => { closeUILogin(); await startAuth(agentId, "login", true); }}
 				onVerify={async (methodId) => {

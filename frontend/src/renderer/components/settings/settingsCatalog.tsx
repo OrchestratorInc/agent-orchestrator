@@ -1,8 +1,9 @@
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, RefreshCw, Server, Settings2, Smartphone } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, KeyRound, Keyboard, RefreshCw, Server, Settings2, Smartphone } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
+import { ApiKeysSection } from "./ApiKeysSection";
 import { BillingSection } from "./BillingSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
@@ -72,6 +73,12 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: Bot,
 		label: (t) => t("settings.harness"),
 		render: (_t, titleHidden, { focusAgentId, hostId, harnessView, startLogin, showDiagnostics }) => <HarnessSettingsSection focusAgentId={focusAgentId} {...(hostId ? { hostId } : {})} {...(harnessView ? { initialView: harnessView } : {})} {...(startLogin ? { startLogin } : {})} {...(showDiagnostics ? { showDiagnostics } : {})} titleHidden={titleHidden} />,
+	},
+	{
+		id: "apiKeys",
+		icon: KeyRound,
+		label: (t) => t("settings.apiKeys"),
+		render: (_t, titleHidden) => <ApiKeysSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "agents",
