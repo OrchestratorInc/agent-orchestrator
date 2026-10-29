@@ -321,15 +321,6 @@ func (m *Manager) SetUsageFinalizer(finalizer sessionUsageFinalizer) {
 	m.usageReactivator, _ = finalizer.(sessionUsageReactivator)
 }
 
-// SetSessionInputLease late-binds Session Manager's pane-input authority into
-// lifecycle's guarded reaction writes. Lifecycle is constructed first during
-// daemon boot, so constructor injection would create a dependency cycle.
-func (m *Manager) SetSessionInputLease(lease sessionguard.InputLease) {
-	if m.guard != nil {
-		m.guard.SetInputLease(lease)
-	}
-}
-
 // SetSessionOperationGate prevents observation-driven terminal facts from
 // racing AO's deliberate provider replacement/relaunch operations.
 func (m *Manager) SetSessionOperationGate(gate sessionOperationGate) {

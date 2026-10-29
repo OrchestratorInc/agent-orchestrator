@@ -9,6 +9,10 @@
  * individual calls only when asked. The summary is not decoration: it counts what
  * the agent did by category, so a reader can tell "it looked around" from "it
  * changed something" without opening anything.
+ *
+ * While the turn is still running the run stays open, so a reader watching the
+ * agent sees each call as it happens and can steer before it goes off track; it
+ * folds back to its summary once the turn settles.
  */
 
 import { useState } from "react";
@@ -29,11 +33,14 @@ export function ActivityRun({
 	disclosureKey,
 	disclosureOverrides,
 	onDisclosureChange,
+	live = false,
 }: {
 	activities: ConversationActivity[];
 	disclosureKey?: string;
 	disclosureOverrides?: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
+	/** The run belongs to a turn that is still running. */
+	live?: boolean;
 }) {
 	// null until someone decides, so a run holding a command that is printing right
 	// now can open itself and close again once everything settles. A click pins the
@@ -77,10 +84,10 @@ export function ActivityRun({
 		return <ActivityRow activity={activities[0]!} />;
 	}
 
-	// Otherwise a command streaming output inside a run stays hidden behind this
-	// summary line, and the live output is live to nobody.
+	// Otherwise the calls of a running turn, and a command streaming output, stay
+	// hidden behind this summary line, and the live work is live to nobody.
 	const streamingOutput = activities.some((a) => a.status === "running" && Boolean(a.detail?.output));
-	const open = override ?? streamingOutput;
+	const open = override ?? (live || streamingOutput);
 
 	return (
 		<motion.div
@@ -152,7 +159,7 @@ export function ActivityRun({
 								? subgroups[0]!.activities.map((activity) => {
 										const node = nodesByActivityID.get(activity.id);
 										return node ? (
-											<ActivityTree key={activity.id} node={node} />
+											<ActivityTree key={activity.id} node={node} live={live} />
 										) : (
 											<ActivityRow key={activity.id} activity={activity} />
 										);
@@ -165,6 +172,7 @@ export function ActivityRun({
 											onDisclosureChange={updateOverride}
 											activities={group.activities}
 											nodesByActivityID={nodesByActivityID}
+											live={live}
 										/>
 								  ))}
 						</div>
@@ -205,12 +213,14 @@ function ActivitySubgroup({
 	disclosureKey,
 	disclosureOverrides,
 	onDisclosureChange,
+	live,
 }: {
 	activities: ConversationActivity[];
 	nodesByActivityID: ReadonlyMap<string, ActivityNode>;
 	disclosureKey?: string;
 	disclosureOverrides: Readonly<Record<string, boolean>>;
 	onDisclosureChange?: (key: string, open: boolean) => void;
+	live: boolean;
 }) {
 	const [localOverride, setLocalOverride] = useState<boolean | null>(null);
 	const reducedMotion = useReducedMotion();
@@ -218,8 +228,8 @@ function ActivitySubgroup({
 		activity.status === "running" && Boolean(activity.detail?.output),
 	);
 	const open = disclosureKey
-		? disclosureOverrides[disclosureKey] ?? streamingOutput
-		: localOverride ?? streamingOutput;
+		? disclosureOverrides[disclosureKey] ?? (live || streamingOutput)
+		: localOverride ?? (live || streamingOutput);
 	const updateOverride = (next: boolean) => {
 		if (disclosureKey && onDisclosureChange) onDisclosureChange(disclosureKey, next);
 		else setLocalOverride(next);
@@ -234,7 +244,7 @@ function ActivitySubgroup({
 				{activities.map((activity) => {
 					const node = nodesByActivityID.get(activity.id);
 					return node ? (
-						<ActivityTree key={activity.id} node={node} />
+						<ActivityTree key={activity.id} node={node} live={live} />
 					) : (
 						<ActivityRow key={activity.id} activity={activity} />
 					);
@@ -271,7 +281,7 @@ function ActivitySubgroup({
 							{activities.map((activity) => {
 								const node = nodesByActivityID.get(activity.id);
 								return node ? (
-									<ActivityTree key={activity.id} node={node} />
+									<ActivityTree key={activity.id} node={node} live={live} />
 								) : (
 									<ActivityRow key={activity.id} activity={activity} />
 								);
@@ -309,25 +319,28 @@ function summarizeSubgroup(activities: ConversationActivity[]): string {
 
 type ActivityNode = { activity: ConversationActivity; children: ActivityNode[] };
 
-function ActivityTree({ node }: { node: ActivityNode }) {
+function ActivityTree({ node, live }: { node: ActivityNode; live: boolean }) {
 	return (
 		<div className="flex flex-col">
 			<ActivityRow activity={node.activity} />
-			{node.children.length > 0 ? <NestedAgentRun nodes={node.children} /> : null}
+			{node.children.length > 0 ? <NestedAgentRun nodes={node.children} live={live} /> : null}
 		</div>
 	);
 }
 
-function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
-	const [open, setOpen] = useState(false);
+function NestedAgentRun({ nodes, live }: { nodes: ActivityNode[]; live: boolean }) {
+	// null until someone clicks, so a subagent still working in a running turn
+	// shows its steps and folds away once it finishes.
+	const [override, setOverride] = useState<boolean | null>(null);
 	const reducedMotion = useReducedMotion();
 	const count = countNodes(nodes);
 	const running = nodes.some(nodeRunning);
+	const open = override ?? (live && running);
 	return (
 		<div className="mb-2 overflow-hidden bg-background/40">
 			<button
 				type="button"
-				onClick={() => setOpen((current) => !current)}
+				onClick={() => setOverride(!open)}
 				aria-label={`Subagent ${count} ${count === 1 ? "step" : "steps"}`}
 				aria-expanded={open}
 				className="activity-row-toggle flex min-h-8 w-full select-none items-center gap-2 text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:outline-none"
@@ -346,7 +359,7 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
 						className="border-t border-border/70"
 					>
-					{nodes.map((node) => <ActivityTree key={node.activity.id} node={node} />)}
+					{nodes.map((node) => <ActivityTree key={node.activity.id} node={node} live={live} />)}
 					</motion.div>
 				) : null}
 			</AnimatePresence>

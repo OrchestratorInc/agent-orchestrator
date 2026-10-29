@@ -229,7 +229,7 @@ function ReviewActionsContent() {
 		setBusy({ kind: "send", id });
 		setError("");
 		try {
-			await sendMessage(config, sessionId, message);
+			await sendMessage(config, sessionId, message, { userAuthored: true });
 			setSent((current) => new Set(current).add(id));
 			haptics.success();
 		} catch (cause) {

@@ -82,28 +82,35 @@ func TestUpdateWhileRunningLevelMatrix(t *testing.T) {
 		target Target
 		method string
 		cask   bool
+		pkg    string
 		want   UpdateWhileRunning
 	}{
-		{"darwin", TargetClaudeCode, "official-installer", false, UpdateWhileRunningSafe},
-		{"linux", TargetCursor, "official-installer", false, UpdateWhileRunningSafe},
-		{"darwin", TargetGrok, "official-installer", false, UpdateWhileRunningSafe},
-		{"darwin", TargetCodex, "official-installer", false, UpdateWhileRunningWarn},
-		{"linux", TargetOpencode, "official-installer", false, UpdateWhileRunningWarn},
-		{"darwin", TargetKimi, "homebrew", false, UpdateWhileRunningSafe},
-		{"darwin", TargetOMP, "homebrew", false, UpdateWhileRunningSafe},
-		{"darwin", TargetCodex, "homebrew", true, UpdateWhileRunningWarn},
-		{"darwin", TargetClaudeCode, "homebrew", true, UpdateWhileRunningWarn},
-		{"darwin", TargetAuggie, "npm", false, UpdateWhileRunningWarn},
-		{"darwin", TargetOMP, "bun", false, UpdateWhileRunningWarn},
-		{"linux", TargetAider, "uv", false, UpdateWhileRunningWarn},
-		{"linux", TargetAider, "pipx", false, UpdateWhileRunningWarn},
-		{"windows", TargetClaudeCode, "official-installer", false, UpdateWhileRunningBlocked},
-		{"windows", TargetCodex, "winget", false, UpdateWhileRunningBlocked},
-		{"windows", TargetCodex, "npm", false, UpdateWhileRunningBlocked},
-		{"darwin", TargetCodex, "manual", false, UpdateWhileRunningBlocked},
+		{"darwin", TargetClaudeCode, "official-installer", false, "", UpdateWhileRunningSafe},
+		{"linux", TargetCursor, "official-installer", false, "", UpdateWhileRunningSafe},
+		{"darwin", TargetGrok, "official-installer", false, "", UpdateWhileRunningSafe},
+		{"darwin", TargetCodex, "official-installer", false, "", UpdateWhileRunningWarn},
+		{"linux", TargetOpencode, "official-installer", false, "", UpdateWhileRunningWarn},
+		{"darwin", TargetKimi, "homebrew", false, "kimi-cli", UpdateWhileRunningSafe},
+		{"darwin", TargetOMP, "homebrew", false, "oh-my-pi", UpdateWhileRunningSafe},
+		{"darwin", TargetCodex, "homebrew", true, "codex", UpdateWhileRunningWarn},
+		{"darwin", TargetClaudeCode, "homebrew", true, "claude-code", UpdateWhileRunningSafe},
+		{"darwin", TargetCopilot, "homebrew", true, "copilot-cli", UpdateWhileRunningSafe},
+		{"darwin", TargetDroid, "homebrew", true, "droid", UpdateWhileRunningSafe},
+		// Only the audited cask is known to ship a single binary.
+		{"darwin", TargetClaudeCode, "homebrew", true, "claude-code@latest", UpdateWhileRunningWarn},
+		{"darwin", TargetCopilot, "homebrew", true, "someone/tap/copilot-cli", UpdateWhileRunningWarn},
+		{"darwin", TargetDroid, "homebrew", true, "", UpdateWhileRunningWarn},
+		{"darwin", TargetAuggie, "npm", false, "", UpdateWhileRunningWarn},
+		{"darwin", TargetOMP, "bun", false, "", UpdateWhileRunningWarn},
+		{"linux", TargetAider, "uv", false, "", UpdateWhileRunningWarn},
+		{"linux", TargetAider, "pipx", false, "", UpdateWhileRunningWarn},
+		{"windows", TargetClaudeCode, "official-installer", false, "", UpdateWhileRunningBlocked},
+		{"windows", TargetCodex, "winget", false, "", UpdateWhileRunningBlocked},
+		{"windows", TargetCodex, "npm", false, "", UpdateWhileRunningBlocked},
+		{"darwin", TargetCodex, "manual", false, "", UpdateWhileRunningBlocked},
 	} {
-		if got := updateWhileRunningLevel(tt.goos, tt.target, tt.method, tt.cask); got != tt.want {
-			t.Errorf("%s %s %s cask=%t = %s, want %s", tt.goos, tt.target, tt.method, tt.cask, got, tt.want)
+		if got := updateWhileRunningLevel(tt.goos, tt.target, tt.method, tt.cask, tt.pkg); got != tt.want {
+			t.Errorf("%s %s %s cask=%t %q = %s, want %s", tt.goos, tt.target, tt.method, tt.cask, tt.pkg, got, tt.want)
 		}
 	}
 }

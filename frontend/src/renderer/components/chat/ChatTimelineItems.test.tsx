@@ -1,8 +1,16 @@
-import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StrictMode, type ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ActivityRow, AssistantMessage, ChatHostId, HumanMessage, ProviderSwitchMarker, TurnOutcome } from "./ChatTimelineItems";
+import {
+	ActivityRow,
+	AssistantMessage,
+	ChatHostId,
+	HumanMessage,
+	LiveResponseStatus,
+	ProviderSwitchMarker,
+	TurnOutcome,
+} from "./ChatTimelineItems";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { groupScriptRuns } from "../../lib/cloud-script-runs";
 import type { ConversationMessage } from "../../types/conversation";
@@ -146,6 +154,102 @@ describe("TurnOutcome", () => {
 			"href",
 			"https://example.com/billing",
 		);
+	});
+
+	it("closes a failed turn on one action row: retry, copy, then undo", () => {
+		const onRetry = vi.fn();
+		const onRollback = vi.fn();
+		render(
+			<TurnOutcome
+				state="failed"
+				error="unexpected status 401 Unauthorized"
+				retry={{ onRetry }}
+				copyText="The partial answer"
+				onRollback={onRollback}
+			/>,
+		);
+
+		const actions = [
+			screen.getByRole("button", { name: "Retry this turn" }),
+			screen.getByRole("button", { name: "Copy message as markdown" }),
+			screen.getByRole("button", { name: "Roll back to here" }),
+		];
+		const rows = new Set(actions.map((action) => action.closest("[data-turn-actions]")));
+		expect(rows.size).toBe(1);
+		expect(rows.has(null)).toBe(false);
+
+		fireEvent.click(actions[0]!);
+		fireEvent.click(actions[2]!);
+		expect(onRetry).toHaveBeenCalledOnce();
+		expect(onRollback).toHaveBeenCalledOnce();
+	});
+
+	it("leads the row with how long the turn ran when no fold above says so", () => {
+		render(
+			<TurnOutcome
+				state="interrupted"
+				durationMs={61_000}
+				copyText="The partial answer"
+				onRollback={vi.fn()}
+			/>,
+		);
+
+		const duration = screen.getByText("1m");
+		const copy = screen.getByRole("button", { name: "Copy message as markdown" });
+		expect(duration.closest("[data-turn-actions]")).toBe(copy.closest("[data-turn-actions]"));
+		expect(duration.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		// Alone on the row, the number carries its name for a screen reader.
+		expect(duration).toHaveTextContent("Worked for 1m");
+	});
+
+	it("says why a retry was refused, under the row it came from", () => {
+		render(<TurnOutcome state="failed" retry={{ onRetry: vi.fn(), error: "Stop the agent first" }} />);
+		expect(screen.getByRole("alert")).toHaveTextContent("Stop the agent first");
+	});
+
+	it("draws no action row when a stopped turn has nothing to act on", () => {
+		render(<TurnOutcome state="interrupted" />);
+		expect(screen.getByText("The agent was interrupted by you")).toBeInTheDocument();
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+	});
+});
+
+describe("LiveResponseStatus", () => {
+	// The provider re-saves its retry on every attempt. The chip has to update its
+	// count in place; remounting it would replay its entrance several times a turn.
+	it("keeps the same retry chip while the attempt count climbs", () => {
+		const view = render(
+			<LiveResponseStatus startedAt={new Date().toISOString()} reconnect={{ label: "Reconnecting… 1/5", detail: "401 Unauthorized" }} />,
+		);
+		const chip = screen.getByTestId("live-working-task");
+		expect(chip).toHaveTextContent("Reconnecting… 1/5");
+
+		view.rerender(
+			<LiveResponseStatus startedAt={new Date().toISOString()} reconnect={{ label: "Reconnecting… 2/5", detail: "401 Unauthorized, again" }} />,
+		);
+		expect(screen.getByTestId("live-working-task")).toBe(chip);
+		expect(chip).toHaveTextContent("Reconnecting… 2/5");
+		expect(screen.getByTestId("live-turn-status")).toHaveTextContent("401 Unauthorized, again");
+	});
+
+	it("updates the step label in place as the step changes, without replaying its entrance", () => {
+		const view = render(<LiveResponseStatus startedAt={new Date().toISOString()} task="Search" />);
+		const label = screen.getByTestId("live-working-task");
+
+		view.rerender(<LiveResponseStatus startedAt={new Date().toISOString()} task="Read file" />);
+		expect(screen.getByTestId("live-working-task")).toBe(label);
+		expect(label).toHaveTextContent("Read file");
+	});
+
+	it("names the current step beside the timer, and only the timer between steps", async () => {
+		const view = render(<LiveResponseStatus startedAt={new Date().toISOString()} task="Search" />);
+		expect(screen.getByTestId("live-working-task")).toHaveTextContent("Search");
+		expect(screen.getByTestId("live-working-timer")).toHaveTextContent(/^\d+[smh]/);
+
+		view.rerender(<LiveResponseStatus startedAt={new Date().toISOString()} />);
+		// The old label fades out before it leaves.
+		await waitFor(() => expect(screen.queryByTestId("live-working-task")).not.toBeInTheDocument());
+		expect(screen.getByTestId("live-working-timer")).toBeInTheDocument();
 	});
 });
 

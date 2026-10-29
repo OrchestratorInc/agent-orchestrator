@@ -24,6 +24,7 @@ const {
 	navigateMock,
 	notificationShowMock,
 	postMock,
+	patchMock,
 	workspaceQueryMock,
 	boardActionsInPanelMock,
 } = vi.hoisted(() => ({
@@ -32,6 +33,7 @@ const {
 	navigateMock: vi.fn(),
 	notificationShowMock: vi.fn(),
 	postMock: vi.fn(),
+	patchMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
 	boardActionsInPanelMock: vi.fn(() => false),
 }));
@@ -74,7 +76,7 @@ vi.mock("../hooks/useSessionMemory", async (importOriginal) => {
 });
 
 vi.mock("../lib/api-client", () => ({
-	apiClient: { POST: (...args: unknown[]) => postMock(...args) },
+	apiClient: { POST: (...args: unknown[]) => postMock(...args), PATCH: (...args: unknown[]) => patchMock(...args) },
 	apiErrorCode: (error: unknown) => (error as { code?: string } | null)?.code,
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
 	getApiBaseUrl: () => "http://127.0.0.1:3001",
@@ -97,6 +99,9 @@ vi.mock("../lib/bridge", () => ({
 		},
 		clipboard: {
 			writeText: vi.fn(),
+		},
+		editorHandoff: {
+			getState: vi.fn().mockResolvedValue({ targets: [], preferredEditorId: "cursor", workspaceAvailable: true }),
 		},
 		notifications: {
 			show: (...args: unknown[]) => notificationShowMock(...args),
@@ -147,6 +152,7 @@ beforeEach(() => {
 	navigateMock.mockReset();
 	notificationShowMock.mockReset().mockResolvedValue(undefined);
 	postMock.mockReset().mockResolvedValue({ data: {} });
+	patchMock.mockReset().mockResolvedValue({ data: {}, response: { status: 200 } });
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
 	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
@@ -178,6 +184,29 @@ describe("SessionsBoard", () => {
 		} finally {
 			useUiStore.getState().setProjectProvisioning("p1", false);
 		}
+	});
+
+	it("renames a session from its card's context menu", async () => {
+		const user = userEvent.setup();
+		workspaceQueryMock.mockReturnValue({
+			data: [workspaceWithSessions([boardSession({ id: "s1", title: "Fix login", status: "working" })])],
+			isSuccess: true, isError: false,
+		});
+		renderBoard("p1");
+
+		fireEvent.contextMenu(await screen.findByText("Fix login"));
+		await user.click(await screen.findByRole("menuitem", { name: "Rename Fix login" }));
+		const dialog = await screen.findByRole("dialog");
+		const input = within(dialog).getByRole("textbox", { name: "Rename Fix login" });
+		await user.clear(input);
+		await user.type(input, "Fix login redirect");
+		await user.click(within(dialog).getByRole("button", { name: "Rename" }));
+
+		await waitFor(() => expect(patchMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}", {
+			params: { path: { sessionId: "s1" } },
+			body: { displayName: "Fix login redirect" },
+		}));
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("says a session's status could not be verified, without offering a retry", () => {

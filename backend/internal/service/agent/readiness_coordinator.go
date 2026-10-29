@@ -612,6 +612,9 @@ func (c *readinessCoordinator) checkAuthentication(item agentregistry.HarnessAge
 			timeout = opencodeV2MigrationTimeout
 		case domain.HarnessHermes:
 			timeout = hermesAuthCheckTimeout
+		case domain.HarnessMiMoCode:
+			// Allow separate 20-second credential detection and verification budgets.
+			timeout = 40 * time.Second
 		}
 	}
 	ctx, cancel := context.WithTimeout(evidenceCtx, timeout)

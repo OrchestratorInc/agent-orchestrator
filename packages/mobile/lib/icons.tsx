@@ -9,6 +9,8 @@ import TriangleAlert from "lucide-react-native/icons/triangle-alert";
 import Archive from "lucide-react-native/icons/archive";
 import ArrowDown from "lucide-react-native/icons/arrow-down";
 import ArrowUp from "lucide-react-native/icons/arrow-up";
+import ArrowUpFromLine from "lucide-react-native/icons/arrow-up-from-line";
+import ClipboardCheck from "lucide-react-native/icons/clipboard-check";
 import Bell from "lucide-react-native/icons/bell";
 import Bookmark from "lucide-react-native/icons/bookmark";
 import CameraOff from "lucide-react-native/icons/camera-off";
@@ -56,7 +58,10 @@ import FolderOpen from "lucide-react-native/icons/folder-open";
 import Flag from "lucide-react-native/icons/flag";
 import GitBranch from "lucide-react-native/icons/git-branch";
 import GitMerge from "lucide-react-native/icons/git-merge";
+import GitCommitHorizontal from "lucide-react-native/icons/git-commit-horizontal";
 import GitPullRequest from "lucide-react-native/icons/git-pull-request";
+import GitPullRequestDraft from "lucide-react-native/icons/git-pull-request-draft";
+import MousePointer2 from "lucide-react-native/icons/mouse-pointer-2";
 import Globe from "lucide-react-native/icons/globe";
 import Grid2x2 from "lucide-react-native/icons/grid-2x2";
 import CircleQuestionMark from "lucide-react-native/icons/circle-question-mark";
@@ -144,6 +149,8 @@ export const glyphs = {
 	"archive": Archive,
 	"arrow-down": ArrowDown,
 	"arrow-up": ArrowUp,
+	"arrow-up-from-line": ArrowUpFromLine,
+	"clipboard-check": ClipboardCheck,
 	"bell": Bell,
 	"bookmark": Bookmark,
 	"camera-off": CameraOff,
@@ -186,7 +193,10 @@ export const glyphs = {
 	"flag": Flag,
 	"git-branch": GitBranch,
 	"git-merge": GitMerge,
+	"git-commit": GitCommitHorizontal,
 	"git-pull-request": GitPullRequest,
+	"git-pull-request-draft": GitPullRequestDraft,
+	"mouse-pointer": MousePointer2,
 	"globe": Globe,
 	"grid": Grid2x2,
 	"help-circle": CircleQuestionMark,
