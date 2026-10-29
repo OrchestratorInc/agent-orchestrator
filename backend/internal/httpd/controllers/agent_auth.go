@@ -40,6 +40,12 @@ type ProviderKeyService interface {
 	CheckProviderKey(ctx context.Context, name, secret string) (agentauth.ProviderKeyCheck, error)
 }
 
+// ProviderCatalogService reads a harness's own provider catalog.
+type ProviderCatalogService interface {
+	CatalogProviders(ctx context.Context, agentID string) ([]agentauth.CatalogProvider, error)
+	CatalogModels(ctx context.Context, agentID, providerID string) ([]string, error)
+}
+
 // AgentAuthController owns the safe native authentication routes.
 type AgentAuthController struct {
 	Svc AgentAuthService
@@ -55,6 +61,8 @@ func (c *AgentAuthController) Register(r chi.Router) {
 	r.Post("/agents/{agent}/auth", c.start)
 	r.Post("/agents/{agent}/logout", c.logout)
 	r.Post("/agents/{agent}/auth/operations", c.startUILogin)
+	r.Get("/agents/{agent}/auth/providers", c.catalogProviders)
+	r.Get("/agents/{agent}/auth/providers/{provider}/models", c.catalogModels)
 	r.Get("/agents/{agent}/auth/operations/{operationId}", c.uiLogin)
 	r.Delete("/agents/{agent}/auth/operations/{operationId}", c.uiLogin)
 	r.Post("/agents/{agent}/auth/operations/{operationId}/actions", c.uiLoginAction)
@@ -148,14 +156,14 @@ func (c *AgentAuthController) startUILogin(w http.ResponseWriter, r *http.Reques
 	}
 	var result agentauth.LoginSnapshot
 	var err error
-	if req.Model != "" || req.Device {
+	if req.Model != "" || req.Device || req.Provider != "" {
 		if withOptions, ok := c.Svc.(interface {
 			StartLoginWithOptions(context.Context, string, string, string, agentauth.LoginOptions) (agentauth.LoginSnapshot, error)
 		}); ok {
-			result, err = withOptions.StartLoginWithOptions(r.Context(), chi.URLParam(r, "agent"), req.Method, req.Secret, agentauth.LoginOptions{Model: req.Model, Device: req.Device})
+			result, err = withOptions.StartLoginWithOptions(r.Context(), chi.URLParam(r, "agent"), req.Method, req.Secret, agentauth.LoginOptions{Model: req.Model, Device: req.Device, Provider: req.Provider})
 		} else if withModel, ok := c.Svc.(interface {
 			StartLoginWithModel(context.Context, string, string, string, string) (agentauth.LoginSnapshot, error)
-		}); ok && !req.Device {
+		}); ok && !req.Device && req.Provider == "" {
 			result, err = withModel.StartLoginWithModel(r.Context(), chi.URLParam(r, "agent"), req.Method, req.Secret, req.Model)
 		} else {
 			err = apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "This login method does not accept these options.", nil)
@@ -314,4 +322,32 @@ func decodeOne(w http.ResponseWriter, r *http.Request, into any, what string) bo
 		return false
 	}
 	return true
+}
+
+func (c *AgentAuthController) catalogProviders(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(ProviderCatalogService)
+	if !ok {
+		apispec.NotImplemented(w, r, r.Method, "/api/v1/agents/{agent}/auth/providers")
+		return
+	}
+	providers, err := svc.CatalogProviders(r.Context(), chi.URLParam(r, "agent"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListCatalogProvidersResponse{Providers: providers})
+}
+
+func (c *AgentAuthController) catalogModels(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(ProviderCatalogService)
+	if !ok {
+		apispec.NotImplemented(w, r, r.Method, "/api/v1/agents/{agent}/auth/providers/{provider}/models")
+		return
+	}
+	models, err := svc.CatalogModels(r.Context(), chi.URLParam(r, "agent"), chi.URLParam(r, "provider"))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ListCatalogModelsResponse{Models: models})
 }

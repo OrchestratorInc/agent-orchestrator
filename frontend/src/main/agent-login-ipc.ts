@@ -7,7 +7,7 @@ import type { IpcMain, WebContents } from "electron";
 // auth-operation routes reach the local daemon immediately.
 
 export type AgentLoginRequest =
-	| { action: "start"; agentId: string; method: string; secret?: string; model?: string; device?: boolean }
+	| { action: "start"; agentId: string; method: string; secret?: string; model?: string; device?: boolean; provider?: string }
 	| { action: "get" | "cancel"; agentId: string; operationId: string }
 	| { action: "code"; agentId: string; operationId: string; code: string };
 
@@ -24,6 +24,7 @@ const AGENT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const OPERATION_ID = /^[A-Za-z0-9-]{1,64}$/;
 const METHOD_ID = /^[a-z][A-Za-z0-9_]{0,63}$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const CATALOG_PROVIDER_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const MAX_SECRET_LENGTH = 16 * 1024;
 const MAX_CODE_LENGTH = 4096;
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -40,7 +41,8 @@ export function parseAgentLoginRequest(input: unknown): AgentLoginRequest {
 		if (value.secret !== undefined && !text(value.secret, MAX_SECRET_LENGTH)) throw new Error("Invalid credential.");
 		if (value.model !== undefined && (typeof value.model !== "string" || !MODEL_ID.test(value.model))) throw new Error("Invalid model.");
 		if (value.device !== undefined && typeof value.device !== "boolean") throw new Error("Invalid device setting.");
-		return { action: "start", agentId: value.agentId, method: value.method, ...(value.secret ? { secret: value.secret } : {}), ...(value.model ? { model: value.model } : {}), ...(value.device ? { device: true } : {}) };
+		if (value.provider !== undefined && (typeof value.provider !== "string" || !CATALOG_PROVIDER_ID.test(value.provider))) throw new Error("Invalid provider.");
+		return { action: "start", agentId: value.agentId, method: value.method, ...(value.secret ? { secret: value.secret } : {}), ...(value.model ? { model: value.model } : {}), ...(value.device ? { device: true } : {}), ...(value.provider ? { provider: value.provider } : {}) };
 	}
 	if (typeof value.operationId !== "string" || !OPERATION_ID.test(value.operationId)) throw new Error("Invalid sign-in operation.");
 	if (value.action === "get" || value.action === "cancel") return { action: value.action, agentId: value.agentId, operationId: value.operationId };
@@ -59,7 +61,7 @@ export async function requestAgentLogin(input: unknown, port: number | undefined
 	let method = "POST";
 	let body: unknown;
 	if (request.action === "start") {
-		body = { method: request.method, ...(request.secret ? { secret: request.secret } : {}), ...(request.model ? { model: request.model } : {}), ...(request.device ? { device: true } : {}) };
+		body = { method: request.method, ...(request.secret ? { secret: request.secret } : {}), ...(request.model ? { model: request.model } : {}), ...(request.device ? { device: true } : {}), ...(request.provider ? { provider: request.provider } : {}) };
 	} else {
 		url = `${operations}/${encodeURIComponent(request.operationId)}`;
 		if (request.action === "get") method = "GET";
