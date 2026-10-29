@@ -3,7 +3,7 @@ import { TriangleAlert } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { agentAccountProviderNames } from "../../hooks/useAgentAccounts";
 import { agentTone } from "../../lib/agent-tone";
-import { DAY_MINUTES, weeklyPace, type UsageLimitLogin, type UsageLimitSpan, type UsageLimitWindows } from "../../lib/usage-limits";
+import { DAY_MINUTES, formatCountdown, weeklyPace, type UsageLimitLogin, type UsageLimitSpan, type UsageLimitWindows } from "../../lib/usage-limits";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -55,11 +55,11 @@ export function UsageWindows({ history, now }: { history: UsageLimitWindows; now
 				{/* Say when recording began only when it began inside the period. */}
 				{firstReading !== null && firstReading - since > HOUR_MS ? ` ${t("usage.windows.recordingSince", { value: dateTime.format(firstReading) })}` : null}
 			</p>
-			{sessions.length > 0 ? <SessionTimeline sessions={sessions} since={timelineStart} until={until} dateTime={dateTime} /> : null}
-			{sessions.length > 0 ? <Fullness sessions={sessions} dateTime={dateTime} /> : null}
+			{sessions.length > 0 ? <SessionTimeline sessions={sessions} since={timelineStart} until={until} now={now} dateTime={dateTime} /> : null}
+			{sessions.length > 0 ? <Fullness sessions={sessions} now={now} dateTime={dateTime} /> : null}
 			{weekly.length > 0 ? (
 				<section aria-labelledby="usage-windows-weekly" className="flex flex-col gap-4">
-					<h2 id="usage-windows-weekly" className="text-control font-medium text-foreground">{t("usage.windows.allowance")}</h2>
+					<SectionHeading id="usage-windows-weekly" title={t("usage.windows.allowance")} help={t("usage.windows.allowanceHelp")} />
 					<div className="grid gap-8 lg:grid-cols-2">
 						{weekly.map(({ login, span }) => <WeeklyAllowance key={`${login.provider}:${login.email}:${span.windowId}`} login={login} span={span} now={now} dateTime={dateTime} />)}
 					</div>
@@ -92,7 +92,50 @@ function spanSummary(span: UsageLimitSpan, dateTime: Intl.DateTimeFormat, t: TFu
 	});
 }
 
-function SessionTimeline({ sessions, since, until, dateTime }: { sessions: Sessions[]; since: number; until: number; dateTime: Intl.DateTimeFormat }) {
+/** A section title with the one line that says how to read it. */
+function SectionHeading({ id, title, help, aside }: { id: string; title: string; help: string; aside?: string }) {
+	return (
+		<div className="flex flex-col gap-1">
+			<div className="flex items-baseline justify-between gap-3">
+				<h2 id={id} className="text-control font-medium text-foreground">{title}</h2>
+				{aside ? <span className="text-xs tabular-nums text-muted-foreground">{aside}</span> : null}
+			</div>
+			<p className="max-w-3xl text-xs text-muted-foreground">{help}</p>
+		</div>
+	);
+}
+
+/** What a window's tooltip says: when, how full, and how sure that number is. */
+function SpanDetails({ span, now, dateTime }: { span: UsageLimitSpan; now: Date; dateTime: Intl.DateTimeFormat }) {
+	const { t } = useTranslation();
+	const start = span.startsAt ? Date.parse(span.startsAt) : Date.parse(span.firstReadAt);
+	const lastAt = Date.parse(span.lastReadAt);
+	const before = formatCountdown(span.resetsAt, new Date(lastAt)) ?? "0m";
+	return (
+		<span className="flex max-w-xs flex-col gap-0.5 tabular-nums">
+			<span className="font-medium">{dateTime.formatRange(start, Date.parse(span.resetsAt))}</span>
+			<span>{span.peakUsedPercent >= 100 ? t("usage.windows.detail.hit") : t("usage.windows.detail.used", { value: `${Math.round(span.peakUsedPercent)}%` })}</span>
+			<span className="opacity-80">
+				{span.state === "open"
+					? t("usage.windows.detail.open", { value: formatCountdown(span.resetsAt, now) ?? "0m" })
+					: span.state === "final"
+						? t("usage.windows.detail.final", { value: before })
+						: t("usage.windows.detail.partial", { time: dateTime.format(lastAt), value: before })}
+			</span>
+		</span>
+	);
+}
+
+/** A legend key drawn like the window it names. */
+function LegendBlock({ state }: { state: UsageLimitSpan["state"] }) {
+	return (
+		<span aria-hidden="true" className={cn("relative h-3 w-4 overflow-hidden rounded-xs bg-foreground/15", state === "partial" && "border border-dashed border-foreground/60")}>
+			<span className={cn("absolute inset-x-0 bottom-0 h-1/2", state === "open" ? "bg-foreground/30" : "bg-foreground/60")} />
+		</span>
+	);
+}
+
+function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: Sessions[]; since: number; until: number; now: Date; dateTime: Intl.DateTimeFormat }) {
 	const { t, i18n } = useTranslation();
 	const span = until - since;
 	const at = (ms: number) => `${Math.min(100, Math.max(0, ((ms - since) / span) * 100))}%`;
@@ -105,12 +148,12 @@ function SessionTimeline({ sessions, since, until, dateTime }: { sessions: Sessi
 	const dayLabel = new Intl.DateTimeFormat(i18n.language, { weekday: "short", day: "numeric" });
 	return (
 		<section aria-labelledby="usage-windows-timeline" className="flex flex-col gap-3">
-			<h2 id="usage-windows-timeline" className="text-control font-medium text-foreground">{t("usage.windows.timeline")}</h2>
+			<SectionHeading id="usage-windows-timeline" title={t("usage.windows.timeline")} help={t("usage.windows.timelineHelp")} />
 			<div className="grid grid-cols-[minmax(0,13rem)_minmax(0,1fr)] gap-x-4 gap-y-2">
 				{sessions.map(({ login, spans }) => (
 					<div key={`${login.provider}:${login.email}:${login.accountId}`} className="contents">
 						<LoginName login={login} />
-						<div className="relative h-9 overflow-hidden rounded-md bg-muted/60">
+						<div className="relative h-11 overflow-hidden rounded-md bg-muted/60">
 							{midnights.map((ms) => <div key={ms} aria-hidden="true" className="absolute inset-y-0 border-s border-border/70" style={{ insetInlineStart: at(ms) }} />)}
 							{spans.map((window) => {
 								const start = window.startsAt ? Date.parse(window.startsAt) : Date.parse(window.firstReadAt);
@@ -138,9 +181,12 @@ function SessionTimeline({ sessions, since, until, dateTime }: { sessions: Sessi
 													className={cn("absolute inset-x-0 bottom-0", window.state === "open" && "opacity-60")}
 													style={{ height: `${Math.min(100, window.peakUsedPercent)}%`, backgroundColor: tone }}
 												/>
+												<span aria-hidden="true" className="absolute inset-x-0 top-0.5 truncate text-center text-2xs font-medium tabular-nums text-foreground">
+													{Math.round(window.peakUsedPercent)}%
+												</span>
 											</div>
 										</TooltipTrigger>
-										<TooltipContent>{label}</TooltipContent>
+										<TooltipContent><SpanDetails span={window} now={now} dateTime={dateTime} /></TooltipContent>
 									</Tooltip>
 								);
 							})}
@@ -155,15 +201,15 @@ function SessionTimeline({ sessions, since, until, dateTime }: { sessions: Sessi
 				</div>
 			</div>
 			<ul className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-				<li className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-2.5 rounded-xs bg-foreground/60" />{t("usage.windows.state.final")}</li>
-				<li className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-2.5 rounded-xs border border-dashed border-foreground/60" />{t("usage.windows.state.partial")}</li>
-				<li className="inline-flex items-center gap-1.5"><span aria-hidden="true" className="size-2.5 rounded-xs bg-foreground/30" />{t("usage.windows.state.open")}</li>
+				{(["final", "partial", "open"] as const).map((state) => (
+					<li key={state} className="inline-flex items-center gap-1.5"><LegendBlock state={state} />{t(`usage.windows.state.${state}`)}</li>
+				))}
 			</ul>
 		</section>
 	);
 }
 
-function Fullness({ sessions, dateTime }: { sessions: Sessions[]; dateTime: Intl.DateTimeFormat }) {
+function Fullness({ sessions, now, dateTime }: { sessions: Sessions[]; now: Date; dateTime: Intl.DateTimeFormat }) {
 	const { t } = useTranslation();
 	const closed = sessions.map(({ login, spans }) => ({ login, spans: spans.filter((span) => span.state !== "open") })).filter((entry) => entry.spans.length > 0);
 	if (closed.length === 0) return null;
@@ -171,10 +217,12 @@ function Fullness({ sessions, dateTime }: { sessions: Sessions[]; dateTime: Intl
 	const hit = closed.reduce((sum, entry) => sum + entry.spans.filter((span) => span.peakUsedPercent >= 100).length, 0);
 	return (
 		<section aria-labelledby="usage-windows-fullness" className="flex flex-col gap-3">
-			<div className="flex items-baseline justify-between gap-3">
-				<h2 id="usage-windows-fullness" className="text-control font-medium text-foreground">{t("usage.windows.fullness")}</h2>
-				<span className="text-xs tabular-nums text-muted-foreground">{t("usage.windows.hitLimit", { hit, total })}</span>
-			</div>
+			<SectionHeading
+				id="usage-windows-fullness"
+				title={t("usage.windows.fullness")}
+				help={t("usage.windows.fullnessHelp")}
+				aside={t("usage.windows.hitLimit", { hit, total })}
+			/>
 			<div className="grid grid-cols-[minmax(0,13rem)_minmax(0,1fr)] items-end gap-x-4 gap-y-4">
 				{closed.map(({ login, spans }) => (
 					<div key={`${login.provider}:${login.email}:${login.accountId}`} className="contents">
@@ -197,7 +245,7 @@ function Fullness({ sessions, dateTime }: { sessions: Sessions[]; dateTime: Intl
 												/>
 											</div>
 										</TooltipTrigger>
-										<TooltipContent>{label}</TooltipContent>
+										<TooltipContent><SpanDetails span={span} now={now} dateTime={dateTime} /></TooltipContent>
 									</Tooltip>
 								);
 							})}
