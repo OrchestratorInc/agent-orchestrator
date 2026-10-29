@@ -3,6 +3,7 @@ import { apiClient } from "./api-client";
 import {
 	checkSpawnPreflight,
 	runPreflightInstall,
+	setWorkspaceRepoDefaultBranch,
 	ensureSpawnPreflight,
 	isSpawnPreflightCancelled,
 	setProjectDefaultBranch,
@@ -197,5 +198,21 @@ describe("runPreflightInstall", () => {
 		post.mockResolvedValueOnce({ data: undefined, error: { code: "INSTALL_UNSUPPORTED" }, response: new Response() } as never);
 		await expect(runPreflightInstall({ code: "agent_not_installed" }, "codex")).rejects.toThrow();
 		await expect(runPreflightInstall({ code: "default_branch_unresolved" }, "codex")).rejects.toThrow("Nothing to install");
+	});
+});
+
+describe("setWorkspaceRepoDefaultBranch", () => {
+	it("writes the child repo's own branch", async () => {
+		put.mockResolvedValueOnce({ data: { project: { id: "ws" } }, error: undefined, response: new Response() } as never);
+		await setWorkspaceRepoDefaultBranch("ws", "web", "trunk");
+		expect(put).toHaveBeenCalledWith("/api/v1/projects/{id}/workspace-repos/{name}/default-branch", {
+			params: { path: { id: "ws", name: "web" } },
+			body: { defaultBranch: "trunk" },
+		});
+	});
+
+	it("rejects when the daemon refuses the branch", async () => {
+		put.mockResolvedValueOnce({ data: undefined, error: { code: "INVALID_BRANCH", message: "bad" }, response: new Response() } as never);
+		await expect(setWorkspaceRepoDefaultBranch("ws", "web", "bad..name")).rejects.toThrow();
 	});
 });

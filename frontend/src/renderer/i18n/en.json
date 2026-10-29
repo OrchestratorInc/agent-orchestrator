@@ -3703,5 +3703,6 @@
 	"spawnPreflight.installing": "Installing…",
 	"spawnPreflight.installFailed": "The install did not finish. Run the command yourself, then check again.",
 	"spawnPreflight.signIn": "Sign in",
-	"spawnPreflight.signInFailed": "Could not open the sign-in terminal."
+	"spawnPreflight.signInFailed": "Could not open the sign-in terminal.",
+	"spawnPreflight.branchUnresolvedRepo": "The default branch of {{repository}} could not be found"
 }

@@ -2844,6 +2844,18 @@ func projectOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPut, path: "/api/v1/projects/{id}/workspace-repos/{name}/default-branch", id: "setWorkspaceRepoDefaultBranch", tag: "projects",
+			summary:    "Set the base branch one child repo of a workspace project starts sessions from",
+			pathParams: []any{controllers.WorkspaceRepoParams{}},
+			reqBody:    projectsvc.SetWorkspaceRepoDefaultBranchInput{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ProjectResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPatch, path: "/api/v1/projects/{id}/permissions", id: "setProjectPermissions", tag: "projects",
 			summary:    "Remember project permissions for future sessions",
 			pathParams: []any{controllers.ProjectIDParam{}},

@@ -317,3 +317,18 @@ func TestCheckValidatesRequest(t *testing.T) {
 		t.Fatalf("err = %v, want PROJECT_NOT_FOUND", err)
 	}
 }
+
+func TestDefaultBranchCheckNamesWorkspaceChild(t *testing.T) {
+	facts := &fakeFacts{facts: sessionmanager.SpawnPreflightFacts{
+		Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
+		DefaultBranchUnresolved: true, DefaultBranchRepo: "web",
+	}}
+	svc, _ := newService(t, Deps{Facts: facts, Readiness: ready(), GOOS: "linux", LookPath: noTmux})
+	report, err := svc.Check(context.Background(), Request{ProjectID: "ws", Kind: "worker"})
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if len(report.Checks) != 1 || report.Checks[0].Code != BlockerDefaultBranchUnresolved || report.Checks[0].Repository != "web" {
+		t.Fatalf("checks = %+v, want the web child named", report.Checks)
+	}
+}

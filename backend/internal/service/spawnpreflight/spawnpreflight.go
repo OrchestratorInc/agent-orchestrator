@@ -90,6 +90,11 @@ type Check struct {
 	// CanStartLogin is set when POST /api/v1/agents/{agent}/auth opens the
 	// harness's reviewed sign-in terminal.
 	CanStartLogin bool `json:"canStartLogin,omitempty"`
+	// Repository names the workspace child repo a default_branch_unresolved
+	// check is about; its branch is set through PUT
+	// /api/v1/projects/{id}/workspace-repos/{name}/default-branch. Empty means
+	// the project's root repository, set through the project config.
+	Repository string `json:"repository,omitempty"`
 }
 
 // Report is the response of POST /api/v1/sessions/preflight.
@@ -205,7 +210,7 @@ func (s *Service) Check(ctx context.Context, req Request) (Report, error) {
 		}
 	}
 	if facts.DefaultBranchUnresolved {
-		report.Checks = append(report.Checks, Check{Code: BlockerDefaultBranchUnresolved, Blocking: true})
+		report.Checks = append(report.Checks, Check{Code: BlockerDefaultBranchUnresolved, Blocking: true, Repository: facts.DefaultBranchRepo})
 	}
 	report.Ready = len(report.Checks) == 0
 	report.CanProceed = !slices.ContainsFunc(report.Checks, func(c Check) bool { return c.Blocking })

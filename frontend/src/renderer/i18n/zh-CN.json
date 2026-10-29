@@ -3704,5 +3704,6 @@
 	"spawnPreflight.installing": "正在安装…",
 	"spawnPreflight.installFailed": "安装未完成。请自行运行此命令，然后重新检查。",
 	"spawnPreflight.signIn": "登录",
-	"spawnPreflight.signInFailed": "无法打开登录终端。"
+	"spawnPreflight.signInFailed": "无法打开登录终端。",
+	"spawnPreflight.branchUnresolvedRepo": "找不到 {{repository}} 的默认分支"
 }

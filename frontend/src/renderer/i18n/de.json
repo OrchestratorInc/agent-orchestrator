@@ -3722,5 +3722,6 @@
 	"spawnPreflight.installing": "Wird installiert…",
 	"spawnPreflight.installFailed": "Die Installation wurde nicht abgeschlossen. Führen Sie den Befehl selbst aus und prüfen Sie dann erneut.",
 	"spawnPreflight.signIn": "Anmelden",
-	"spawnPreflight.signInFailed": "Das Anmeldeterminal konnte nicht geöffnet werden."
+	"spawnPreflight.signInFailed": "Das Anmeldeterminal konnte nicht geöffnet werden.",
+	"spawnPreflight.branchUnresolvedRepo": "Der Standard-Branch von {{repository}} wurde nicht gefunden"
 }

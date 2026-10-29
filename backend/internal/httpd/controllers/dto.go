@@ -94,6 +94,12 @@ type ProjectIDParam struct {
 	ID string `path:"id" description:"Project identifier (registry key)."`
 }
 
+// WorkspaceRepoParams identifies one child repo of a workspace project.
+type WorkspaceRepoParams struct {
+	ID   string `path:"id" description:"Project identifier (registry key)."`
+	Name string `path:"name" description:"Child repository name within the workspace."`
+}
+
 // TaskPreparationTokenParam identifies an unclaimed speculative task workspace.
 type TaskPreparationTokenParam struct {
 	Token string `path:"token" description:"Opaque speculative task-worktree token."`

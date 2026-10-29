@@ -76,6 +76,12 @@ type SetConfigInput struct {
 	Config domain.ProjectConfig `json:"config"`
 }
 
+// SetWorkspaceRepoDefaultBranchInput is the body of
+// PUT /api/v1/projects/{id}/workspace-repos/{name}/default-branch.
+type SetWorkspaceRepoDefaultBranchInput struct {
+	DefaultBranch string `json:"defaultBranch" maxLength:"255" description:"Base branch new session worktrees in this child repo start from. Empty infers the repo's Git default."`
+}
+
 // RemoveResult reports what DELETE /api/v1/projects/{id} actually did.
 type RemoveResult struct {
 	ProjectID         domain.ProjectID `json:"projectId"`

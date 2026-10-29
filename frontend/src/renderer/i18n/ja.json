@@ -3722,5 +3722,6 @@
 	"spawnPreflight.installing": "インストール中…",
 	"spawnPreflight.installFailed": "インストールが完了しませんでした。コマンドを自分で実行してから、もう一度確認してください。",
 	"spawnPreflight.signIn": "サインイン",
-	"spawnPreflight.signInFailed": "サインイン用のターミナルを開けませんでした。"
+	"spawnPreflight.signInFailed": "サインイン用のターミナルを開けませんでした。",
+	"spawnPreflight.branchUnresolvedRepo": "{{repository}} のデフォルトブランチが見つかりませんでした"
 }

@@ -9,6 +9,7 @@ import {
 	checkSpawnPreflight,
 	runPreflightInstall,
 	setProjectDefaultBranch,
+	setWorkspaceRepoDefaultBranch,
 	setProjectOrchestratorAgent,
 	useSpawnPreflightStore,
 	type PendingSpawnPreflight,
@@ -183,9 +184,18 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 		);
 	};
 
+	// The check names the repository to repair: a workspace child, or the
+	// project's root when empty.
+	const branchRepository = report.checks.find((check) => check.code === "default_branch_unresolved")?.repository;
 	const saveBranch = () => {
 		const value = branch.trim();
-		if (value) void run(() => setProjectDefaultBranch(input.projectId, value), "set_default_branch");
+		if (!value) return;
+		void run(
+			branchRepository
+				? () => setWorkspaceRepoDefaultBranch(input.projectId, branchRepository, value)
+				: () => setProjectDefaultBranch(input.projectId, value),
+			"set_default_branch",
+		);
 	};
 
 	return (
@@ -329,7 +339,7 @@ function CheckSection({
 			method: "install" as const,
 		},
 		default_branch_unresolved: {
-			label: t("spawnPreflight.branchUnresolved"),
+			label: check.repository ? t("spawnPreflight.branchUnresolvedRepo", { repository: check.repository }) : t("spawnPreflight.branchUnresolved"),
 			detail: t("spawnPreflight.branchUnresolvedDetail"),
 			method: "set_default_branch" as const,
 		},

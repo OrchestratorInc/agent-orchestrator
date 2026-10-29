@@ -31,6 +31,10 @@ type SpawnPreflightFacts struct {
 	// DefaultBranchUnresolved is true when a repository the spawn would seed a
 	// worktree from has no authoritative default branch.
 	DefaultBranchUnresolved bool
+	// DefaultBranchRepo names the workspace child repo whose default branch is
+	// unresolved; empty means the project's root repository. A child's branch
+	// is set on its own registry row, not in the project config.
+	DefaultBranchRepo string
 }
 
 // PreflightSpawn resolves the harness, controller mode, and default branch the
@@ -51,7 +55,7 @@ func (m *Manager) PreflightSpawn(ctx context.Context, in SpawnPreflightInput) (S
 	}
 	// Harness and Mode stay valid when the branch probe fails, so a caller can
 	// treat a timed-out probe as unknown and still check the harness.
-	facts.DefaultBranchUnresolved, err = m.defaultBranchUnresolved(ctx, project)
+	facts.DefaultBranchRepo, facts.DefaultBranchUnresolved, err = m.defaultBranchUnresolved(ctx, project)
 	return facts, err
 }
 
@@ -88,38 +92,44 @@ func (m *Manager) preflightMode(ctx context.Context, in SpawnPreflightInput, har
 // using the same adapter call as the spawn's default-branch refresh. Only an
 // authoritative "no default" answer counts; a failed or cancelled probe is not
 // proof the spawn will fail.
-func (m *Manager) defaultBranchUnresolved(ctx context.Context, project domain.ProjectRecord) (bool, error) {
+// It returns the first unresolved repository: "" for the root, else the
+// child's registry name.
+func (m *Manager) defaultBranchUnresolved(ctx context.Context, project domain.ProjectRecord) (string, bool, error) {
 	if project.ID == "" || project.Kind.WithDefault() == domain.ProjectKindScratch || strings.TrimSpace(project.Path) == "" {
-		return false, nil
+		return "", false, nil
 	}
 	refresher, ok := m.workspace.(ports.WorkspaceDefaultBranchRefresher)
 	if !ok {
-		return false, nil
+		return "", false, nil
 	}
-	targets := []defaultBranchRefreshTarget{{repoPath: project.Path, configuredBranch: project.Config.WorktreeBaseBranch()}}
+	type target struct {
+		name, repoPath, configuredBranch string
+	}
+	targets := []target{{repoPath: project.Path, configuredBranch: project.Config.WorktreeBaseBranch()}}
 	if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
 		repos, err := m.store.ListWorkspaceRepos(ctx, project.ID)
 		if err != nil {
-			return false, fmt.Errorf("preflight: list workspace repos: %w", err)
+			return "", false, fmt.Errorf("preflight: list workspace repos: %w", err)
 		}
 		for _, repo := range repos {
 			if repo.GitStatus == domain.GitStatusNeedsInit {
 				continue
 			}
-			targets = append(targets, defaultBranchRefreshTarget{
+			targets = append(targets, target{
+				name:             repo.Name,
 				repoPath:         filepath.Join(project.Path, filepath.FromSlash(repo.RelativePath)),
 				configuredBranch: repo.DefaultBranch,
 			})
 		}
 	}
-	for _, target := range targets {
-		_, err := refresher.ResolveDefaultBranch(ctx, target.repoPath, target.configuredBranch)
+	for _, t := range targets {
+		_, err := refresher.ResolveDefaultBranch(ctx, t.repoPath, t.configuredBranch)
 		if errors.Is(err, gitdefault.ErrUnresolved) || errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved) {
-			return true, nil
+			return t.name, true, nil
 		}
 		if err := ctx.Err(); err != nil {
-			return false, err
+			return "", false, err
 		}
 	}
-	return false, nil
+	return "", false, nil
 }

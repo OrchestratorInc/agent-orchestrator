@@ -84,3 +84,33 @@ func TestPreflightSpawnWithoutHarnessOrProject(t *testing.T) {
 		t.Fatalf("err = %v, want ErrProjectNotResolvable", err)
 	}
 }
+
+// The dialog must repair the repository that is actually unresolved: a
+// workspace child's branch is not the project config's.
+func TestPreflightSpawnNamesUnresolvedWorkspaceChild(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ws"] = domain.ProjectRecord{ID: "ws", Path: "/repo/ws", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+	st.workspaceRepo["ws"] = []domain.WorkspaceRepoRecord{
+		{ProjectID: "ws", Name: "api", RelativePath: "api"},
+		{ProjectID: "ws", Name: "web", RelativePath: "web"},
+	}
+	ws := &fakeWorkspace{resolveErr: map[string]error{
+		"/repo/ws/web": fmt.Errorf("resolve: %w", gitdefault.ErrUnresolved),
+	}}
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: fakeAgents{}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}})
+
+	facts, err := m.PreflightSpawn(ctx, SpawnPreflightInput{ProjectID: "ws", Kind: domain.KindWorker, Mode: domain.SessionModeTUI})
+	if err != nil {
+		t.Fatalf("PreflightSpawn: %v", err)
+	}
+	if !facts.DefaultBranchUnresolved || facts.DefaultBranchRepo != "web" {
+		t.Fatalf("facts = %+v, want the web child named", facts)
+	}
+
+	// A resolved workspace names no repository.
+	ws.resolveErr = nil
+	facts, err = m.PreflightSpawn(ctx, SpawnPreflightInput{ProjectID: "ws", Kind: domain.KindWorker, Mode: domain.SessionModeTUI})
+	if err != nil || facts.DefaultBranchUnresolved || facts.DefaultBranchRepo != "" {
+		t.Fatalf("facts, err = %+v, %v; want resolved", facts, err)
+	}
+}

@@ -11,6 +11,9 @@ ON CONFLICT (project_id, name) DO UPDATE SET
     registered_at = excluded.registered_at,
     git_status = excluded.git_status;
 
+-- name: SetWorkspaceRepoDefaultBranch :execrows
+UPDATE workspace_repos SET default_branch = ? WHERE project_id = ? AND name = ?;
+
 -- name: ListWorkspaceRepos :many
 SELECT project_id, name, relative_path, repo_origin_url, default_branch, registered_at, git_status
 FROM workspace_repos

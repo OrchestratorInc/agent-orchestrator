@@ -3791,5 +3791,6 @@
 	"spawnPreflight.installing": "Instalando…",
 	"spawnPreflight.installFailed": "La instalación no terminó. Ejecuta el comando tú mismo y vuelve a comprobar.",
 	"spawnPreflight.signIn": "Iniciar sesión",
-	"spawnPreflight.signInFailed": "No se pudo abrir la terminal de inicio de sesión."
+	"spawnPreflight.signInFailed": "No se pudo abrir la terminal de inicio de sesión.",
+	"spawnPreflight.branchUnresolvedRepo": "No se encontró la rama predeterminada de {{repository}}"
 }

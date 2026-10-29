@@ -4605,6 +4605,59 @@ paths:
       summary: Speculatively create the next task's worktree
       tags:
       - projects
+  /api/v1/projects/{id}/workspace-repos/{name}/default-branch:
+    put:
+      operationId: setWorkspaceRepoDefaultBranch
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      - description: Child repository name within the workspace.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Child repository name within the workspace.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectSetWorkspaceRepoDefaultBranchInput'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+      summary: Set the base branch one child repo of a workspace project starts sessions
+        from
+      tags:
+      - projects
   /api/v1/projects/{projectId}/cues:
     get:
       operationId: listProjectCues
@@ -18823,6 +18876,16 @@ components:
       required:
       - project
       type: object
+    ProjectSetWorkspaceRepoDefaultBranchInput:
+      properties:
+        defaultBranch:
+          description: Base branch new session worktrees in this child repo start
+            from. Empty infers the repo's Git default.
+          maxLength: 255
+          type: string
+      required:
+      - defaultBranch
+      type: object
     ProjectSummary:
       properties:
         folderMissing:
@@ -21177,6 +21240,8 @@ components:
         command:
           type: string
         documentationUrl:
+          type: string
+        repository:
           type: string
       required:
       - code

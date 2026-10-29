@@ -34,6 +34,7 @@ func (c *ProjectsController) Register(r chi.Router) {
 	r.Get("/projects/{id}", c.get)
 	r.Put("/projects/{id}", c.updateSettings)
 	r.Put("/projects/{id}/config", c.setConfig)
+	r.Put("/projects/{id}/workspace-repos/{name}/default-branch", c.setWorkspaceRepoDefaultBranch)
 	r.Patch("/projects/{id}/permissions", c.setPermissions)
 	r.Delete("/projects/{id}/permissions", c.forgetPermissions)
 	r.Delete("/projects/{id}", c.remove)
@@ -208,6 +209,24 @@ func (c *ProjectsController) setConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := c.Mgr.SetConfig(r.Context(), projectID(r), in)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ProjectResponse{Project: p})
+}
+
+func (c *ProjectsController) setWorkspaceRepoDefaultBranch(w http.ResponseWriter, r *http.Request) {
+	if c.Mgr == nil {
+		apispec.NotImplemented(w, r, "PUT", "/api/v1/projects/{id}/workspace-repos/{name}/default-branch")
+		return
+	}
+	var in projectsvc.SetWorkspaceRepoDefaultBranchInput
+	if err := decodeJSONStrict(r, &in); err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+		return
+	}
+	p, err := c.Mgr.SetWorkspaceRepoDefaultBranch(r.Context(), projectID(r), chi.URLParam(r, "name"), in)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

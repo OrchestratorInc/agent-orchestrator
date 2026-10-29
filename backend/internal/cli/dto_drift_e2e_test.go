@@ -318,6 +318,10 @@ func (f *fakeProjectManager) SetPermissions(_ context.Context, id domain.Project
 	return projectsvc.Project{ID: id, Config: &domain.ProjectConfig{AgentConfig: domain.AgentConfig{Permissions: in.Permissions}}}, nil
 }
 
+func (f *fakeProjectManager) SetWorkspaceRepoDefaultBranch(_ context.Context, id domain.ProjectID, _ string, _ projectsvc.SetWorkspaceRepoDefaultBranchInput) (projectsvc.Project, error) {
+	return projectsvc.Project{ID: id}, nil
+}
+
 func (f *fakeProjectManager) ForgetPermissions(_ context.Context, id domain.ProjectID) (projectsvc.Project, error) {
 	return projectsvc.Project{ID: id, Config: &domain.ProjectConfig{}}, nil
 }

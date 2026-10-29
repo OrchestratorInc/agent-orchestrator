@@ -220,6 +220,22 @@ func (s *Store) UpdateProjectSettings(ctx context.Context, id, displayName strin
 	return rows > 0, nil
 }
 
+// SetWorkspaceRepoDefaultBranch sets the base branch for one registered child
+// repo of a workspace project. It reports false when no such child exists.
+func (s *Store) SetWorkspaceRepoDefaultBranch(ctx context.Context, projectID, name, branch string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetWorkspaceRepoDefaultBranch(ctx, gen.SetWorkspaceRepoDefaultBranchParams{
+		DefaultBranch: branch,
+		ProjectID:     domain.ProjectID(projectID),
+		Name:          name,
+	})
+	if err != nil {
+		return false, fmt.Errorf("set workspace repo default branch %s/%s: %w", projectID, name, err)
+	}
+	return rows > 0, nil
+}
+
 // CountProjectsIncludingArchived returns all registry rows, including projects
 // the user archived. It is intentionally separate from ListProjects so first-run
 // seeding does not recreate Scratch after any project has existed.

@@ -3791,5 +3791,6 @@
 	"spawnPreflight.installing": "Instalando…",
 	"spawnPreflight.installFailed": "A instalação não foi concluída. Execute o comando você mesmo e verifique novamente.",
 	"spawnPreflight.signIn": "Entrar",
-	"spawnPreflight.signInFailed": "Não foi possível abrir o terminal de login."
+	"spawnPreflight.signInFailed": "Não foi possível abrir o terminal de login.",
+	"spawnPreflight.branchUnresolvedRepo": "A branch padrão de {{repository}} não foi encontrada"
 }

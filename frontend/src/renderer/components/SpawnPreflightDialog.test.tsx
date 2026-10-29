@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 	check: vi.fn(),
 	setAgent: vi.fn(),
 	setBranch: vi.fn(),
+	setRepoBranch: vi.fn(),
 	clipboard: vi.fn(),
 	openExternal: vi.fn(),
 	install: vi.fn(),
@@ -20,6 +21,7 @@ vi.mock("../lib/spawn-preflight", async (importOriginal) => ({
 	runPreflightInstall: mocks.install,
 	setProjectOrchestratorAgent: mocks.setAgent,
 	setProjectDefaultBranch: mocks.setBranch,
+	setWorkspaceRepoDefaultBranch: mocks.setRepoBranch,
 }));
 
 vi.mock("../hooks/useAgentReadinessQuery", () => ({
@@ -73,6 +75,7 @@ beforeEach(() => {
 	mocks.clipboard.mockResolvedValue(undefined);
 	mocks.setAgent.mockResolvedValue(undefined);
 	mocks.setBranch.mockResolvedValue(undefined);
+	mocks.setRepoBranch.mockResolvedValue(undefined);
 	mocks.closeTerminal.mockResolvedValue(undefined);
 });
 
@@ -180,6 +183,22 @@ describe("SpawnPreflightDialog", () => {
 		await user.click(screen.getByRole("button", { name: "Save branch" }));
 		expect(mocks.setBranch).toHaveBeenCalledWith("p1", "trunk");
 		expect(mocks.check.mock.calls[0]?.[1]).toEqual({ blockers: ["default_branch_unresolved"], method: "set_default_branch" });
+	});
+
+	it("names an unresolved workspace child and saves the branch to that child, not the root", async () => {
+		const user = userEvent.setup();
+		const childBlocked: SpawnPreflightReport = {
+			ready: false, canProceed: false, kind: "worker", harness: "claude-code",
+			checks: [{ code: "default_branch_unresolved", blocking: true, repository: "web" }],
+		};
+		mocks.check.mockResolvedValue(readyReport);
+		const { resolve } = openDialog(childBlocked);
+		expect(screen.getByText("The default branch of web could not be found")).toBeInTheDocument();
+		await user.type(screen.getByRole("textbox", { name: "Default branch" }), "trunk");
+		await user.click(screen.getByRole("button", { name: "Save branch" }));
+		expect(mocks.setRepoBranch).toHaveBeenCalledWith("p1", "web", "trunk");
+		expect(mocks.setBranch).not.toHaveBeenCalled();
+		expect(resolve).toHaveBeenCalled();
 	});
 
 	it("shows a save failure next to the actions and does not re-check", async () => {

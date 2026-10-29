@@ -3722,5 +3722,6 @@
 	"spawnPreflight.installing": "설치 중…",
 	"spawnPreflight.installFailed": "설치가 완료되지 않았습니다. 명령을 직접 실행한 뒤 다시 확인하세요.",
 	"spawnPreflight.signIn": "로그인",
-	"spawnPreflight.signInFailed": "로그인 터미널을 열 수 없습니다."
+	"spawnPreflight.signInFailed": "로그인 터미널을 열 수 없습니다.",
+	"spawnPreflight.branchUnresolvedRepo": "{{repository}}의 기본 브랜치를 찾을 수 없습니다"
 }

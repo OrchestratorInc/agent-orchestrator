@@ -156,6 +156,18 @@ export function setProjectDefaultBranch(projectId: string, branch: string): Prom
 	return updateProjectConfig(projectId, (config) => ({ ...config, defaultBranch: branch }));
 }
 
+/**
+ * Sets the base branch of one workspace child repo. A child's branch lives on
+ * its own registry row, so the project-level defaultBranch cannot fix it.
+ */
+export async function setWorkspaceRepoDefaultBranch(projectId: string, repository: string, branch: string): Promise<void> {
+	const { error } = await apiClient.PUT("/api/v1/projects/{id}/workspace-repos/{name}/default-branch", {
+		params: { path: { id: projectId, name: repository } },
+		body: { defaultBranch: branch },
+	});
+	if (error) throw new Error(apiErrorMessage(error, "Could not save the default branch"));
+}
+
 const ACTIVE_INSTALL_STATUSES = new Set<InstallJob["status"]>(["running", "waiting_for_idle", "installing", "verifying"]);
 
 /**
