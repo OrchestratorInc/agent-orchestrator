@@ -71,7 +71,7 @@ describe("EnvironmentPicker on iOS", () => {
 	it("lists every environment with its machine symbol and a check on the current one", () => {
 		const toggles = render(<EnvironmentPicker environments={environments} selectedEnvironmentId="mac" onSelectEnvironment={vi.fn()} />).findAllByType("SwiftToggle" as never);
 		expect(toggles.map((toggle) => [toggle.props.label, toggle.props.systemImage, toggle.props.isOn])).toEqual([
-			["All environments", "server.rack", false],
+			["All machines", "server.rack", false],
 			["Mac", "laptopcomputer", true],
 			["Dev box", "server.rack", false],
 		]);
@@ -104,7 +104,7 @@ describe("EnvironmentPicker on Android", () => {
 	// Checked with a glyph TalkBack names, not by colour.
 	it("checks the current environment", () => {
 		const items = render(<AndroidEnvironmentPicker environments={environments} selectedEnvironmentId="mac" onSelectEnvironment={vi.fn()} />).findAllByType("DropdownMenuItem" as never);
-		expect(items.map((item) => item.findByType("TextSlot" as never).findByType("ComposeText" as never).props.children)).toEqual(["All environments", "Mac", "Dev box"]);
+		expect(items.map((item) => item.findByType("TextSlot" as never).findByType("ComposeText" as never).props.children)).toEqual(["All machines", "Mac", "Dev box"]);
 		expect(items.map((item) => item.findAllByType("TrailingIconSlot" as never).length)).toEqual([0, 1, 0]);
 		expect(items[1].findByType("TrailingIconSlot" as never).findByType("Icon" as never).props).toMatchObject({ source: "drawable:check", contentDescription: "Current" });
 	});

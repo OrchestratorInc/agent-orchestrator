@@ -64,7 +64,7 @@ describe("environment worker filtering", () => {
 			{ id: "mac", name: "Studio Mac" },
 			{ id: "dev", name: "Dev" },
 		])).toEqual([
-			{ id: ALL_WORKER_ENVIRONMENTS, label: "All environments" },
+			{ id: ALL_WORKER_ENVIRONMENTS, label: "All machines" },
 			{ id: "mac", label: "Studio Mac" },
 			{ id: "dev", label: "Dev" },
 		]);
@@ -92,8 +92,8 @@ describe("workerEnvironmentLabel", () => {
 	it("names the selected machine, and falls back to All environments once it is gone", () => {
 		const environments = [{ id: "mac", name: "Mac" }];
 		expect(workerEnvironmentLabel(environments, "mac")).toBe("Mac");
-		expect(workerEnvironmentLabel(environments, ALL_WORKER_ENVIRONMENTS)).toBe("All environments");
-		expect(workerEnvironmentLabel(environments, "missing")).toBe("All environments");
+		expect(workerEnvironmentLabel(environments, ALL_WORKER_ENVIRONMENTS)).toBe("All machines");
+		expect(workerEnvironmentLabel(environments, "missing")).toBe("All machines");
 	});
 });
 

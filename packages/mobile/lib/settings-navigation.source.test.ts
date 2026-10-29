@@ -8,15 +8,15 @@ function read(relativePath: string): string {
 }
 
 describe("Settings environment navigation", () => {
-	it("pushes Environments inside Settings' own stack", () => {
+	it("pushes the machines list inside Settings' own stack", () => {
 		const rootLayout = read("../app/_layout.tsx");
 		const settingsLayout = read("../app/settings/_layout.tsx");
 		const settings = read("../app/settings/index.tsx");
 
 		expect(settingsLayout).not.toBe("");
 		expect(rootLayout).not.toMatch(/name="environments"/);
-		expect(settingsLayout).toContain('<Stack.Screen name="environments" options={{ title: "Environments", fullScreenGestureEnabled: true }} />');
-		expect(settings).toContain('label="Environments"');
+		expect(settingsLayout).toContain('<Stack.Screen name="environments" options={{ title: "Machines", fullScreenGestureEnabled: true }} />');
+		expect(settings).toContain('label="Paired machines"');
 		expect(settings).toContain('router.push("/settings/environments")');
 		expect(settings).not.toContain('label="All machines"');
 	});

@@ -29,7 +29,7 @@ export function EnvironmentPicker({ environments, selectedEnvironmentId, onSelec
 	return (
 		<Host matchContents colorScheme={scheme}>
 			<Menu label="Switch environment" systemImage={symbols.devices.ios} modifiers={[buttonStyle("bordered"), controlSize("large"), tint(t.accent)]} testID="environment-picker">
-				<Section title="Environment">
+				<Section title="Machine">
 					{workerEnvironmentOptions(environments).map((option) => (
 						<Toggle
 							key={option.id}

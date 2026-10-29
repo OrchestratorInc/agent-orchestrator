@@ -82,7 +82,7 @@ export function workerEnvironmentOptions(
 	environments: readonly WorkerEnvironment[],
 ): { id: string; label: string; appearance?: MachineAppearance }[] {
 	return [
-		{ id: ALL_WORKER_ENVIRONMENTS, label: "All environments" },
+		{ id: ALL_WORKER_ENVIRONMENTS, label: "All machines" },
 		...environments.map((environment) => ({ id: environment.id, label: environment.name, ...(environment.appearance ? { appearance: environment.appearance } : {}) })),
 	];
 }

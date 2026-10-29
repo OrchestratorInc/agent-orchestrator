@@ -122,7 +122,7 @@ describe("Settings", () => {
 	it("is one native form of sections, in order", async () => {
 		const root = await renderSettings();
 		const form = root.findByType("SettingsForm" as never);
-		expect(form.findAllByType("SettingsSection" as never).map((node) => node.props.title)).toEqual(["Machines", "Environments", "Account", "Preferences", "Updates", "Support"]);
+		expect(form.findAllByType("SettingsSection" as never).map((node) => node.props.title)).toEqual(["Machines", "Account", "Preferences", "Updates", "Support"]);
 	});
 
 	it("adds the Developer section only to development builds", async () => {
@@ -143,6 +143,7 @@ describe("Settings", () => {
 			["SettingsButtonRow", "Test connection"],
 			["SettingsButtonRow", "Add a machine"],
 			["SettingsButtonRow", "Retry selected machine"],
+			["SettingsLinkRow", "Paired machines"],
 		]);
 		expect(row(root, "Status").props).toMatchObject({ value: "Unreachable", tone: "bad" });
 		expect(row(root, "Scan new code").props.icon).toBe("scan");
@@ -183,9 +184,9 @@ describe("Settings", () => {
 		expect(remounted.props).toMatchObject({ selectedValue: "dev", disabled: false });
 	});
 
-	it("opens Environments and Theme as pages from link rows", async () => {
+	it("opens the machines list and Theme as pages from link rows", async () => {
 		const root = await renderSettings();
-		const environments = row(root, "Environments");
+		const environments = row(root, "Paired machines");
 		expect(environments.type).toBe("SettingsLinkRow");
 		expect(environments.props.value).toBe("Dev · 1 machine");
 		act(() => environments.props.onPress());

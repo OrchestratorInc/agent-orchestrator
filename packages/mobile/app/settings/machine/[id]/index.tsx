@@ -81,7 +81,7 @@ export default function MachineDetailScreen() {
 			setDefaultHostId(machine.id);
 		} catch {
 			haptics.error();
-			Alert.alert("Could not change default machine", "Try again from Environments.");
+			Alert.alert("Could not change default machine", "Try again from Machines.");
 		} finally {
 			setSwitching(false);
 		}

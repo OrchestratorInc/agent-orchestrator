@@ -259,9 +259,9 @@ describe("Workers filter menu", () => {
 	it("leads the iOS bar with the environment and project choices, current ones checked", () => {
 		act(() => { renderer = create(<FleetScreen />); });
 		expect(filterMenu().props).toMatchObject({ icon: "line.3.horizontal.decrease.circle", accessibilityLabel: "Filter workers" });
-		expect(environmentMenu().props.title).toBe("All environments");
+		expect(environmentMenu().props.title).toBe("All machines");
 		expect(choices(environmentMenu()).map((node) => [node.props.children, node.props.icon, node.props.isOn])).toEqual([
-			["All environments", "server.rack", true],
+			["All machines", "server.rack", true],
 			["Mac", "desktopcomputer", false],
 			["Windows", "desktopcomputer", false],
 		]);
@@ -335,7 +335,7 @@ describe("Workers filter menu", () => {
 		act(() => renderer.update(<FleetScreen />));
 		expect(toolbar("left")!.props.children).not.toBe(menu);
 		// Machines are listed by name, so the rename also moves it first.
-		expect(choices(environmentMenu()).map((node) => node.props.children)).toEqual(["All environments", "Gaming PC", "Mac"]);
+		expect(choices(environmentMenu()).map((node) => node.props.children)).toEqual(["All machines", "Gaming PC", "Mac"]);
 	});
 });
 

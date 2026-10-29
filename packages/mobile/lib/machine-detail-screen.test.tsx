@@ -181,7 +181,7 @@ describe("a machine's page on iOS", () => {
 		fixtures.switchHost.mockRejectedValue(new Error("offline"));
 		await open();
 		await act(async () => byTestID("environment-make-default-a").props.onPress());
-		expect(fixtures.alert).toHaveBeenCalledWith("Could not change default machine", "Try again from Environments.");
+		expect(fixtures.alert).toHaveBeenCalledWith("Could not change default machine", "Try again from Machines.");
 		expect(byTestID("environment-make-default-a")).toBeTruthy();
 	});
 

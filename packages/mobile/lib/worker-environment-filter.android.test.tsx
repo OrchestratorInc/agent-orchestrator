@@ -63,7 +63,7 @@ describe("WorkerEnvironmentFilter on Android", () => {
 		await render("all");
 		const row = renderer!.root.findByType("LazyRow" as never);
 		expect(row.props.modifiers).toContainEqual({ testID: "worker-environment-strip" });
-		expect(chips().map(label)).toEqual(["All environments", "Mac", "Dev box"]);
+		expect(chips().map(label)).toEqual(["All machines", "Mac", "Dev box"]);
 		expect(chips()[1].props.modifiers).toContainEqual({ testID: "worker-environment-chip-mac" });
 	});
 

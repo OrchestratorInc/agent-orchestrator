@@ -189,12 +189,10 @@ export default function SettingsScreen() {
 					{selectedHost && !selectedConfigReady ? (
 						<SettingsButtonRow icon="retry" label="Retry selected machine" onPress={() => { void reloadConfig(); }} testID="settings-retry-machine" />
 					) : null}
-				</SettingsSection>
-
-				<SettingsSection title="Environments">
+					{/* The list of every paired machine, each opening its own page. */}
 					<SettingsLinkRow
 						icon="environments"
-						label="Environments"
+						label="Paired machines"
 						value={environmentSummary(pairedHosts.length, selectedHost?.name ?? selectedHostName)}
 						onPress={() => router.push("/settings/environments")}
 						testID="settings-environments"

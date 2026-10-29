@@ -232,8 +232,8 @@ export default function FleetScreen() {
 					) : workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? (
 						<EmptyState
 							icon="monitor"
-							title={`No workers on ${selectedEnvironmentLabel ?? "this environment"}`}
-							message="Choose another environment from the filter menu."
+							title={`No workers on ${selectedEnvironmentLabel ?? "this machine"}`}
+							message="Choose another machine from the filter menu."
 						/>
 					) : (
 						<EmptyState

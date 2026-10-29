@@ -16,7 +16,7 @@ export default function SettingsLayout() {
 	return (
 		<Stack screenOptions={{ ...stackScreenOptions(t), ...(SYSTEM_GLASS_HEADER ? { headerTransparent: true, headerStyle: undefined } : null) }}>
 			<Stack.Screen name="index" options={{ title: "Settings" }} />
-			<Stack.Screen name="environments" options={{ title: "Environments", fullScreenGestureEnabled: true }} />
+			<Stack.Screen name="environments" options={{ title: "Machines", fullScreenGestureEnabled: true }} />
 			<Stack.Screen name="theme" options={{ title: "Theme", fullScreenGestureEnabled: true }} />
 			{/* A machine's page renames itself to the machine once it loads. */}
 			<Stack.Screen name="machine/[id]/index" options={{ title: "Machine", fullScreenGestureEnabled: true }} />
