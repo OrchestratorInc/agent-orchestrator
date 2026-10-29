@@ -1056,3 +1056,33 @@ func TestReviewNoticeChatDeliveryReadsTheTurn(t *testing.T) {
 		t.Fatalf("another session's lookup: found=%v err=%v", found, err)
 	}
 }
+
+// A notice queued behind another message drains as a member of one combined
+// provider input. Its own turn reads completed once the provider took the
+// batch, so the notice counts as delivered and is not sent again.
+func TestReviewNoticeChatDeliveryReadsABatchedTurn(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	for i, msg := range []domain.ConversationMessage{
+		{ID: "msg-user", Origin: domain.MessageOriginAutomation, Text: "earlier message", ClientMessageID: "client-user"},
+		{ID: "msg-notice", Origin: domain.MessageOriginAutomation, Text: "AO review done: approved", ClientMessageID: "review-done:run-1:0"},
+	} {
+		if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", msg, "turn-"+msg.ID, histClock.Add(time.Duration(i)*time.Second)); err != nil || !created {
+			t.Fatalf("append %s: created=%v err=%v", msg.ID, created, err)
+		}
+	}
+	batch, err := s.ClaimQueuedBatch(ctx, conversation, true, 0, histClock.Add(time.Minute))
+	if err != nil || len(batch) != 2 || batch[1].ClientMessageID != "review-done:run-1:0" {
+		t.Fatalf("claimed batch = %+v, %v", batch, err)
+	}
+	if err := s.BindTurnToProvider(ctx, batch[0].TurnID, "provider-turn-1", histClock.Add(time.Minute)); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	if err := s.CompleteQueuedBatch(ctx, conversation, []string{batch[1].TurnID}, "provider-turn-1", histClock.Add(time.Minute)); err != nil {
+		t.Fatalf("complete batch: %v", err)
+	}
+	state, failure, found, err := s.ReviewNoticeChatDelivery(ctx, session, "review-done:run-1:0")
+	if err != nil || !found || state != domain.TurnStateCompleted || failure != "" {
+		t.Fatalf("batched notice: state=%q failure=%q found=%v err=%v", state, failure, found, err)
+	}
+}
