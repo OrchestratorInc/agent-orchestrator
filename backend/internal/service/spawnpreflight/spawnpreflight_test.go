@@ -47,9 +47,15 @@ func (f fakeReadiness) InvalidateAgentAuthentication(id string) {
 }
 func (fakeReadiness) RecheckAgent(string) {}
 
-type fakeInstalls []systeminstall.AgentPlan
+type fakeInstalls map[systeminstall.Target][2]string
 
-func (f fakeInstalls) AgentPlans(context.Context) ([]systeminstall.AgentPlan, error) { return f, nil }
+func (f fakeInstalls) AgentInstallCommand(_ context.Context, target systeminstall.Target) (string, string, error) {
+	plan, ok := f[target]
+	if !ok {
+		return "", "", errors.New("unknown target")
+	}
+	return plan[0], plan[1], nil
+}
 
 type fakeAuth struct{ plan agentauth.Plan }
 
@@ -164,8 +170,8 @@ func TestAgentNotInstalledCarriesInstallerCommand(t *testing.T) {
 		Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationNotInstalled, Freshness: domain.AgentReadinessFresh},
 	}}
 	installs := fakeInstalls{
-		{AgentID: "claude-code", Command: "npm install -g @anthropic-ai/claude-code", Available: true, Automatic: true},
-		{AgentID: "codex", Command: "npm install -g @openai/codex", DocumentationURL: "https://example.test/codex", Available: true, Automatic: true},
+		"claude-code": {"npm install -g @anthropic-ai/claude-code", ""},
+		"codex":       {"npm install -g @openai/codex", "https://example.test/codex"},
 	}
 	svc, sink := newService(t, Deps{Facts: facts, Readiness: readiness, Installs: installs, GOOS: "windows", LookPath: noTmux})
 

@@ -580,6 +580,36 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 	return out, nil
 }
 
+// AgentInstallCommand returns a command the user can paste into a terminal
+// to install target on this machine, plus its setup guide. It prefers the
+// recommended method, then any other available one. Downloaded-script
+// installers are skipped: their display form names the script rather than a
+// runnable line, so a harness with only those gets just the guide.
+func (s *Service) AgentInstallCommand(ctx context.Context, target Target) (command, docsURL string, err error) {
+	if !IsAgentTarget(target) {
+		return "", "", fmt.Errorf("unknown agent install target %q", target)
+	}
+	planner, err := s.newRequestPlanner(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	plans := planner.agentMethodPlans(target, AgentOperationInstall)
+	recommended := plans[recommendedPlanIndex(plans)]
+	docsURL = recommended.DocsURL
+	if docsURL == "" {
+		docsURL = agentDocumentationURLs[target]
+	}
+	for _, plan := range append([]Plan{recommended}, plans...) {
+		if plan.Unsupported || plan.Script != nil {
+			continue
+		}
+		if command := displayCommand(plan); command != "" {
+			return command, docsURL, nil
+		}
+	}
+	return "", docsURL, nil
+}
+
 func plansByMethod(plans []Plan) map[string]Plan {
 	out := make(map[string]Plan, len(plans))
 	for _, plan := range plans {
@@ -1595,14 +1625,14 @@ func (s *Service) resolvePlan(target Target) Plan {
 	return s.planFor(target)
 }
 
-// displayCommand renders the plan for display. Prepare steps are joined with
-// "; " rather than "&&": a failed step is noted and Command still runs.
 // DisplayCommand is the copyable, display-only form of plan's command, the
 // same text the installer catalog shows. Callers never execute it.
 func DisplayCommand(plan Plan) string {
 	return displayCommand(plan)
 }
 
+// displayCommand renders the plan for display. Prepare steps are joined with
+// "; " rather than "&&": a failed step is noted and Command still runs.
 func displayCommand(plan Plan) string {
 	if plan.Script != nil {
 		display := fmt.Sprintf("%s <downloaded from %s>", strings.Join(plan.Script.Interpreter, " "), plan.Script.URL)

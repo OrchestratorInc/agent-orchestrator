@@ -101,9 +101,10 @@ type SpawnFacts interface {
 	PreflightSpawn(ctx context.Context, in sessionmanager.SpawnPreflightInput) (sessionmanager.SpawnPreflightFacts, error)
 }
 
-// InstallPlans is the agent installer catalog; *systeminstall.Service in production.
+// InstallPlans resolves a copyable install command from the installer
+// catalog; *systeminstall.Service in production.
 type InstallPlans interface {
-	AgentPlans(ctx context.Context) ([]systeminstall.AgentPlan, error)
+	AgentInstallCommand(ctx context.Context, target systeminstall.Target) (command, docsURL string, err error)
 }
 
 // AuthPlans resolves sign-in plans; *agentauth.Service in production.
@@ -236,18 +237,11 @@ func (s *Service) installCheck(ctx context.Context, harness domain.AgentHarness)
 	if s.d.Installs == nil {
 		return check
 	}
-	plans, err := s.d.Installs.AgentPlans(ctx)
+	command, docsURL, err := s.d.Installs.AgentInstallCommand(ctx, systeminstall.Target(harness))
 	if err != nil {
 		return check
 	}
-	for _, plan := range plans {
-		if plan.AgentID != string(harness) {
-			continue
-		}
-		check.Command = plan.Command
-		check.DocumentationURL = plan.DocumentationURL
-		break
-	}
+	check.Command, check.DocumentationURL = command, docsURL
 	return check
 }
 
