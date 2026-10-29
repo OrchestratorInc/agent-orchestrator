@@ -8,6 +8,7 @@ import {
 	defaultDataDir,
 	loadOrCreateTelemetryInstallId,
 	parseDisabledEvents,
+	readTelemetryInstallContext,
 	rendererTelemetryEnabled,
 } from "./telemetry";
 
@@ -178,4 +179,36 @@ test("bootstrapDistinctId never returns an ID retired between the marker check a
 	});
 	expect(beforeRotation).toMatch(/^anon_/);
 	expect(beforeRotation).not.toBe(retired);
+});
+
+test("readTelemetryInstallContext reads app-state.json and sends only enum and day values", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-install-"));
+	tempDirs.push(dir);
+	const base = { stateDir: dir, arch: "arm64", osVersion: "15.1.2", env: {}, exists: () => false };
+	expect(await readTelemetryInstallContext(base)).toEqual({ arch: "arm64", osVersion: "15.1.2", installSource: "unknown", isCi: false });
+
+	await writeFile(
+		path.join(dir, "app-state.json"),
+		JSON.stringify({ installSource: "npm-bootstrap", installedAt: "2026-10-20T23:59:59.000Z", appPath: "/Users/me/AO.app" }),
+	);
+	expect(await readTelemetryInstallContext({ ...base, env: { CI: "true" } })).toEqual({
+		arch: "arm64",
+		osVersion: "15.1.2",
+		installSource: "npm-bootstrap",
+		installedAt: "2026-10-20",
+		isCi: true,
+		ciSignal: "ci_env",
+	});
+
+	await writeFile(path.join(dir, "app-state.json"), JSON.stringify({ installSource: "/Users/me/Downloads" }));
+	expect((await readTelemetryInstallContext({ ...base, stateDir: null })).installSource).toBe("unknown");
+	expect((await readTelemetryInstallContext(base)).installSource).toBe("other");
+});
+
+test("buildTelemetryBootstrap carries the install context", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-bootstrap-install-"));
+	tempDirs.push(dir);
+	const install = { arch: "x64", installSource: "exe", isCi: false };
+	const bootstrap = await buildTelemetryBootstrap({ AO_DATA_DIR: dir }, "1.2.3", "win32", "/home/test", true, enabledPolicy, install);
+	expect(bootstrap?.install).toEqual(install);
 });

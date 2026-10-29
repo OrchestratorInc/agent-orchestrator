@@ -207,6 +207,7 @@ type Service struct {
 	dataDir             string
 	telemetry           ports.EventSink
 	usageArchiveFlush   func(context.Context)
+	milestones          ports.InstallMilestones
 	logger              *slog.Logger
 	backgroundContext   context.Context
 	agentReadiness      ports.AgentReadinessProvider
@@ -286,7 +287,10 @@ type Deps struct {
 	Clock     func() time.Time
 	DataDir   string
 	Telemetry ports.EventSink
-	Logger    *slog.Logger
+	// Milestones durably records the install's first spawned session, so
+	// ao.session.spawned carries first_for_install. Left nil, it is omitted.
+	Milestones ports.InstallMilestones
+	Logger     *slog.Logger
 	// AgentReadiness coordinates advisory native harness checks before launch.
 	AgentReadiness ports.AgentReadinessProvider
 	// BackgroundContext owns best-effort work that must survive an HTTP request
@@ -316,7 +320,7 @@ func NewWithDeps(d Deps) *Service {
 	if backgroundContext == nil {
 		backgroundContext = context.Background()
 	}
-	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter}
+	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter}
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -447,7 +451,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 		s.emitSpawnFailed(ctx, cfg, err, s.now().Sub(start).Milliseconds())
 		return domain.SessionRecord{}, 0, 0, err
 	}
-	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds())
+	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds(), firstSession)
 	if firstSession {
 		s.emitFirstSessionSpawned(ctx, rec, project)
 	}
@@ -509,7 +513,9 @@ func (s *Service) isFirstSession(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64) {
+func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64, noPriorSessions bool) {
+	// Claimed even when telemetry is off: the marker describes the install.
+	firstForInstall, firstKnown := ports.FirstForInstall(s.milestones, "session_spawned", noPriorSessions)
 	if s.telemetry == nil {
 		return
 	}
@@ -519,6 +525,9 @@ func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, dur
 		"kind":        string(rec.Kind),
 		"harness":     string(rec.Harness),
 		"duration_ms": durationMs,
+	}
+	if firstKnown {
+		payload["first_for_install"] = firstForInstall
 	}
 	if actor, ok := s.githubActor(ctx); ok {
 		payload["github_actor"] = actor
@@ -551,6 +560,9 @@ func (s *Service) githubActor(ctx context.Context) (string, bool) {
 	return identity.Login, true
 }
 
+// emitFirstSessionSpawned is deprecated: it fires whenever the sessions table is
+// empty, so it repeats after a user clears their sessions. Use
+// ao.session.spawned with first_for_install=true. Kept for dashboard continuity.
 func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) {
 	if s.telemetry == nil {
 		return

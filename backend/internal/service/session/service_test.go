@@ -6129,3 +6129,90 @@ func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
 		t.Fatalf("sentry captures = %v / %v, want the raw error for both operations", sentryErrs, sentryTags)
 	}
 }
+
+// memMilestones is an in-memory ports.InstallMilestones.
+type memMilestones map[string]bool
+
+func (m memMilestones) Claim(name string) (bool, bool) {
+	if m[name] {
+		return false, true
+	}
+	m[name] = true
+	return true, true
+}
+
+func spawnedFirstForInstall(t *testing.T, sink *fakeTelemetrySink) (any, bool) {
+	t.Helper()
+	for i := len(sink.events) - 1; i >= 0; i-- {
+		if sink.events[i].Name == "ao.session.spawned" {
+			v, ok := sink.events[i].Payload["first_for_install"]
+			return v, ok
+		}
+	}
+	t.Fatalf("no ao.session.spawned in %#v", sink.events)
+	return nil, false
+}
+
+func TestSpawnFirstForInstallIsDurableNotTableEmpty(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink, Milestones: memMilestones{}})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got, _ := spawnedFirstForInstall(t, sink); got != true {
+		t.Fatalf("first spawn first_for_install = %#v, want true", got)
+	}
+	// The fake store stays empty, so the legacy table-empty event fires again;
+	// the durable flag must not.
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn again: %v", err)
+	}
+	if got, _ := spawnedFirstForInstall(t, sink); got != false {
+		t.Fatalf("second spawn first_for_install = %#v, want false", got)
+	}
+	var legacy int
+	for _, ev := range sink.events {
+		if ev.Name == "ao.onboarding.first_session_spawned" {
+			legacy++
+		}
+	}
+	if legacy != 2 {
+		t.Fatalf("legacy first_session_spawned count = %d, want 2 (kept for continuity)", legacy)
+	}
+}
+
+func TestSpawnFirstForInstallFalseForUpgradedInstallWithSessions(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["old"] = domain.SessionRecord{ID: "old", ProjectID: "mer"}
+	sink := &fakeTelemetrySink{}
+	milestones := memMilestones{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink, Milestones: milestones})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got, _ := spawnedFirstForInstall(t, sink); got != false {
+		t.Fatalf("first_for_install = %#v, want false for an install with prior sessions", got)
+	}
+	if !milestones["session_spawned"] {
+		t.Fatal("marker not claimed; a later empty table would report a false first")
+	}
+}
+
+func TestSpawnOmitsFirstForInstallWithoutMilestones(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got, ok := spawnedFirstForInstall(t, sink); ok {
+		t.Fatalf("first_for_install = %#v, want absent", got)
+	}
+}

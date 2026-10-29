@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
@@ -49,6 +51,10 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	if err != nil {
 		log.Warn("telemetry remote sink disabled", "remote", cfg.Telemetry.Remote, "error", err)
 		return local, standaloneIdentity(cfg, log), false
+	}
+	// app-state.json and update-settings.json live beside running.json.
+	if cfg.RunFilePath != "" {
+		remote.SetInstallStateDir(filepath.Dir(cfg.RunFilePath))
 	}
 	// Both wrap only the billed remote sink; local storage keeps every event
 	// unaggregated and unfiltered for debugging regardless of PostHog volume.
@@ -138,4 +144,74 @@ func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident port
 			}
 		}
 	}()
+}
+
+// emitInstallLifecycleEvents sends the install anchors once each.
+// ao.app.installed only fires on a brand-new install's first daemon start, so
+// it undercounts installs whose CLI ran first or that predate it.
+// ao.app.first_open fires once per install ID on any build and is the reliable
+// "first seen" count. Each is reserved durably before it is queued, so a
+// restart cannot send it twice.
+func emitInstallLifecycleEvents(cfg config.Config, ident ports.TelemetryIdentityStore, sink ports.EventSink, log *slog.Logger) {
+	if ident == nil || !cfg.Telemetry.Events {
+		return
+	}
+	payload := map[string]any{"launcher": daemonLauncher(os.Getenv)}
+	marked, err := ident.MarkInstalledEvent(context.Background())
+	if err != nil {
+		log.Warn("record telemetry install event", "error", err)
+	} else if marked {
+		sink.Emit(context.Background(), ports.TelemetryEvent{
+			Name:       "ao.app.installed",
+			Source:     "daemon",
+			OccurredAt: time.Now().UTC(),
+			Level:      ports.TelemetryLevelInfo,
+			Payload:    payload,
+		})
+	}
+	// Only reserve first_open when it can actually be exported; otherwise a
+	// local-only run would spend the one send.
+	if !remoteExportConfigured(cfg) {
+		return
+	}
+	marked, err = ident.MarkFirstOpenEvent(context.Background())
+	if err != nil {
+		log.Warn("record telemetry first open event", "error", err)
+		return
+	}
+	if marked {
+		sink.Emit(context.Background(), ports.TelemetryEvent{
+			Name:       "ao.app.first_open",
+			Source:     "daemon",
+			OccurredAt: time.Now().UTC(),
+			Level:      ports.TelemetryLevelInfo,
+			Payload:    payload,
+		})
+	}
+}
+
+func remoteExportConfigured(cfg config.Config) bool {
+	return cfg.Telemetry.Remote == config.TelemetryRemotePostHog &&
+		strings.TrimSpace(cfg.Telemetry.PostHogKey) != "" &&
+		strings.TrimSpace(cfg.Telemetry.PostHogHost) != ""
+}
+
+// daemonLauncher reports who started this daemon. The desktop supervisor
+// always sets AO_OWNER (app or persistent); a CLI-started daemon has none.
+// The common client property stays "cli" for every daemon event, so this is
+// how install events split desktop from CLI-only installs.
+func daemonLauncher(getenv func(string) string) string {
+	if getenv("AO_OWNER") != "" {
+		return "desktop"
+	}
+	return "cli"
+}
+
+// installMilestones backs first_for_install. Returned as a nil interface (not
+// a typed nil) when there is no data dir, so services omit the property.
+func installMilestones(cfg config.Config) ports.InstallMilestones {
+	if m := telemetryadapter.NewMilestones(cfg.DataDir); m != nil {
+		return m
+	}
+	return nil
 }

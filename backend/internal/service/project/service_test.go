@@ -2469,3 +2469,51 @@ func TestKeepPreparedCloneReleasesCleanupOwnership(t *testing.T) {
 		t.Fatalf("released checkout was modified: %q, %v", data, err)
 	}
 }
+
+type memMilestones map[string]bool
+
+func (m memMilestones) Claim(name string) (bool, bool) {
+	if m[name] {
+		return false, true
+	}
+	m[name] = true
+	return true, true
+}
+
+func TestManager_AddFirstForInstallIsDurable(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	sink := &captureSink{}
+	m := project.NewWithDeps(project.Deps{Store: store, Telemetry: sink, Milestones: memMilestones{}})
+
+	firstForInstall := func() any {
+		t.Helper()
+		for i := len(sink.events) - 1; i >= 0; i-- {
+			if sink.events[i].Name == "ao.projects.created" {
+				return sink.events[i].Payload["first_for_install"]
+			}
+		}
+		t.Fatalf("no ao.projects.created in %#v", sink.events)
+		return nil
+	}
+	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao")}); err != nil {
+		t.Fatalf("Add first: %v", err)
+	}
+	if got := firstForInstall(); got != true {
+		t.Fatalf("first add first_for_install = %#v, want true", got)
+	}
+	if _, err := m.Remove(ctx, "ao"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	// The table is empty again: the legacy event re-fires, the durable flag must not.
+	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao2")}); err != nil {
+		t.Fatalf("Add after remove: %v", err)
+	}
+	if got := firstForInstall(); got != false {
+		t.Fatalf("re-add first_for_install = %#v, want false", got)
+	}
+}

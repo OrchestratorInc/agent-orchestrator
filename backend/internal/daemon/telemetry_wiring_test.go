@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,5 +193,68 @@ func TestTelemetryWiringDailyUsageSummaryPreservesCountOnTheWire(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("PostHog sink did not send the aggregated rollup")
+	}
+}
+
+type lifecycleCaptureSink struct{ names []string }
+
+func (s *lifecycleCaptureSink) Emit(_ context.Context, ev ports.TelemetryEvent) {
+	s.names = append(s.names, ev.Name+":"+ev.Payload["launcher"].(string))
+}
+func (s *lifecycleCaptureSink) Close(context.Context) error { return nil }
+
+func TestEmitInstallLifecycleEventsFirstOpenOncePerInstall(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Config{DataDir: dataDir, Telemetry: config.TelemetryConfig{
+		Events: true, Remote: config.TelemetryRemotePostHog, PostHogKey: "phc_test", PostHogHost: "https://us.i.posthog.com",
+	}}
+	t.Setenv("AO_OWNER", "app")
+	ident, err := telemetryadapter.NewIdentity(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &lifecycleCaptureSink{}
+	emitInstallLifecycleEvents(cfg, ident, sink, slog.Default())
+	want := []string{"ao.app.installed:desktop", "ao.app.first_open:desktop"}
+	if !reflect.DeepEqual(sink.names, want) {
+		t.Fatalf("first start = %v, want %v", sink.names, want)
+	}
+
+	restarted, err := telemetryadapter.NewIdentity(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink = &lifecycleCaptureSink{}
+	emitInstallLifecycleEvents(cfg, restarted, sink, slog.Default())
+	if len(sink.names) != 0 {
+		t.Fatalf("restart re-sent %v", sink.names)
+	}
+}
+
+func TestEmitInstallLifecycleEventsKeepsFirstOpenWhenNotExported(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Config{DataDir: dataDir, Telemetry: config.TelemetryConfig{Events: true}}
+	t.Setenv("AO_OWNER", "")
+	ident, err := telemetryadapter.NewIdentity(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &lifecycleCaptureSink{}
+	emitInstallLifecycleEvents(cfg, ident, sink, slog.Default())
+	for _, n := range sink.names {
+		if strings.HasPrefix(n, "ao.app.first_open") {
+			t.Fatalf("first_open spent on a local-only run: %v", sink.names)
+		}
+	}
+	if marked, err := ident.MarkFirstOpenEvent(context.Background()); !marked || err != nil {
+		t.Fatalf("first_open still reservable = %t, %v", marked, err)
+	}
+}
+
+func TestDaemonLauncher(t *testing.T) {
+	for owner, want := range map[string]string{"app": "desktop", "persistent": "desktop", "": "cli"} {
+		if got := daemonLauncher(func(string) string { return owner }); got != want {
+			t.Errorf("AO_OWNER=%q launcher = %q, want %q", owner, got, want)
+		}
 	}
 }
