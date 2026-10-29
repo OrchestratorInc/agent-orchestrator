@@ -16,7 +16,7 @@ beforeEach(() => {
 
 test("iOS button opens the App Store listing through the app bridge", async () => {
 	render(<ConnectMobileGetApp />);
-	await userEvent.click(screen.getByRole("button", { name: "Open Agent Orchestrator on the App Store" }));
+	await userEvent.click(screen.getByRole("button", { name: "Open Orchestrator on the App Store" }));
 	expect(openExternal).toHaveBeenCalledWith("https://apps.apple.com/app/ao-mobile/id6792552173");
 	expect(IOS_APP_STORE_URL).toBe("https://apps.apple.com/app/ao-mobile/id6792552173");
 });
@@ -30,7 +30,7 @@ test("App Store link is not pinned to a storefront", () => {
 test("Android button opens the Google Play listing", async () => {
 	render(<ConnectMobileGetApp />);
 	expect(screen.getByText("Android")).toBeInTheDocument();
-	await userEvent.click(screen.getByRole("button", { name: "Open Agent Orchestrator on Google Play" }));
+	await userEvent.click(screen.getByRole("button", { name: "Open Orchestrator on Google Play" }));
 	expect(openExternal).toHaveBeenCalledWith("https://play.google.com/store/apps/details?id=aoagents.dev&pcampaignid=web_share");
 	expect(ANDROID_PLAY_STORE_URL).toBe("https://play.google.com/store/apps/details?id=aoagents.dev&pcampaignid=web_share");
 });
@@ -39,7 +39,7 @@ test("Android button opens the Google Play listing", async () => {
 // thing the Android row does rather than explaining a prerequisite install.
 test("iOS row points straight at the App Store", () => {
 	render(<ConnectMobileGetApp />);
-	expect(screen.getByText(/Get Agent Orchestrator on the App Store/i)).toBeInTheDocument();
+	expect(screen.getByText(/Get Orchestrator on the App Store/i)).toBeInTheDocument();
 });
 
 test("QR code stays collapsed until the disclosure is toggled", async () => {

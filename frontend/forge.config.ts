@@ -9,7 +9,7 @@ import MakerNSIS from "./makers/maker-nsis";
 import MakerDMG, { isSigningConfigured, sealDmg, verifyDmg, verifyMacArtifact } from "./makers/maker-dmg";
 import { machoHasX86_64Slice } from "./makers/macho-archs";
 import MakerAppImage from "./makers/maker-appimage";
-import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -30,7 +30,7 @@ const DEFAULT_RELEASE_REPO = "Untrivial-ai/agent-orchestrator";
 // shortcut on Windows (#2414) or "could not find the Electron app binary" on deb.
 const EXECUTABLE_NAME = "agent-orchestrator";
 const AUTH_PROTOCOL = {
-	name: "Agent Orchestrator authentication callback",
+	name: "Orchestrator authentication callback",
 	schemes: ["ao-app"],
 };
 const AUTH_PROTOCOL_MIME_TYPE = "x-scheme-handler/ao-app";
@@ -70,7 +70,7 @@ export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 		"browser-extension",
 		"agent-browser",
 		"resources/acp-runtime",
-		...(platform === "darwin" ? ["update-helper", "wake-helper", "cloudflared"] : []),
+		...(platform === "darwin" ? ["update-helper", "wake-helper", "cloudflared", "assets/mac/en.lproj"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
 		"assets/icon.ico",
@@ -131,6 +131,7 @@ const config: ForgeConfig = {
 		appBundleId: "dev.agent-orchestrator.desktop",
 		name: "Agent Orchestrator",
 		executableName: EXECUTABLE_NAME,
+		extendInfo: { LSHasLocalizedDisplayName: true, CFBundleDevelopmentRegion: "en" },
 		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
 		// App icon. electron-packager appends the per-platform extension
@@ -138,6 +139,25 @@ const config: ForgeConfig = {
 		// deb/rpm makers below, and the runtime window icon from src/main.ts.
 		icon: "assets/icon",
 		extraResource: extraResourcesForPlatform(process.platform),
+		afterCopyExtraResources: [(buildPath, _version, platform, _arch, callback) => {
+			if (platform !== "darwin") return callback();
+			// Finder uses the localized label only when the base display name
+			// matches the bundle filename. Packager defaults it to the executable.
+			// Run before signing so both the plist and localized name are sealed.
+			const result = spawnSync("plutil", [
+				"-replace", "CFBundleDisplayName", "-string", "Agent Orchestrator",
+				path.join(buildPath, "Agent Orchestrator.app", "Contents", "Info.plist"),
+			], { encoding: "utf8" });
+			if (result.error) return callback(result.error);
+			if (result.status !== 0) return callback(new Error(`Setting macOS display name failed: ${result.stderr}`));
+			const resources = path.join(buildPath, "Agent Orchestrator.app", "Contents", "Resources");
+			const label = readFileSync(path.join(resources, "en.lproj", "InfoPlist.strings"));
+			// Finder can select any of Electron's existing regional localizations.
+			for (const locale of readdirSync(resources).filter((entry) => entry.endsWith(".lproj"))) {
+				writeFileSync(path.join(resources, locale, "InfoPlist.strings"), label);
+			}
+			callback();
+		}],
 		// Notarization. Two paths:
 		//  - CI: an App Store Connect API key. APPLE_API_KEY is a PATH to the .p8
 		//    (the workflow decodes APPLE_API_KEY_BASE64 to a temp file), plus the
@@ -337,7 +357,8 @@ const config: ForgeConfig = {
 		new MakerAppImage(
 			{
 				appId: "dev.agent-orchestrator.desktop",
-				productName: "Agent Orchestrator",
+				productName: "Orchestrator",
+				appImage: { artifactName: "Agent Orchestrator-${version}.${ext}" },
 				icon: "assets/icon.png",
 				protocols: [AUTH_PROTOCOL],
 			},
