@@ -427,9 +427,16 @@ func TestTriggerWithNoTrackedPRPointsAtThePRFlag(t *testing.T) {
 	worker := liveWorker()
 	worker.Metadata.Branch = "ao/mer-1/fix"
 	eng := newEngineForTest(&fakeStore{}, fakeSessions{rec: worker, ok: true}, fakePRs{}, fakeProjects{}, &fakeLauncher{})
-	_, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent})
-	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") || !strings.Contains(err.Error(), `branch "ao/mer-1/fix"`) {
+	_, err := eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent, BranchPRLookupFoundNone: true})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") || !strings.Contains(err.Error(), `found no open PR from its branch "ao/mer-1/fix"`) {
 		t.Fatalf("err = %v, want the branch and the exact --pr retry for a PR AO has not picked up", err)
+	}
+
+	// Without a lookup (an automatic pass, or no branch listing) the error
+	// does not claim the branch has no open PR.
+	_, err = eng.TriggerWithOptions(context.Background(), "mer-1", TriggerOptions{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) || strings.Contains(err.Error(), "found no open PR") || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") {
+		t.Fatalf("err = %v, want the exact --pr retry without a claim about the branch", err)
 	}
 }
 

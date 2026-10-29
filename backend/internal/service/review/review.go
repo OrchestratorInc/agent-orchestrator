@@ -485,17 +485,19 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	if req.Rerun && req.RejectReviewedHead {
 		return TriggerOutcome{}, fmt.Errorf("%w: rerun cannot be combined with rejecting an already-reviewed head", ErrInvalid)
 	}
-	if err := s.refreshPRs(ctx, workerID, strings.TrimSpace(req.PRURL)); err != nil {
+	branchLookupFoundNone, err := s.refreshPRs(ctx, workerID, strings.TrimSpace(req.PRURL))
+	if err != nil {
 		return TriggerOutcome{}, err
 	}
 	result, err := s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{
-		Harness:            req.Harness,
-		Config:             req.Config,
-		Source:             source,
-		InterfaceMode:      req.InterfaceMode,
-		PRURL:              strings.TrimSpace(req.PRURL),
-		RejectReviewedHead: req.RejectReviewedHead,
-		Rerun:              req.Rerun,
+		Harness:                 req.Harness,
+		Config:                  req.Config,
+		Source:                  source,
+		InterfaceMode:           req.InterfaceMode,
+		PRURL:                   strings.TrimSpace(req.PRURL),
+		RejectReviewedHead:      req.RejectReviewedHead,
+		Rerun:                   req.Rerun,
+		BranchPRLookupFoundNone: branchLookupFoundNone,
 	})
 	if err != nil {
 		return TriggerOutcome{}, err
@@ -531,16 +533,17 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 // not track it yet; failing to fetch it is an error, because there is nothing
 // else to review. Refreshing already-tracked PRs is best effort: on failure the
 // trigger proceeds with the facts AO has, and its same-commit checks still
-// report a push AO has not observed.
-func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prURL string) error {
+// report a push AO has not observed. It reports whether a lookup of the
+// worker's branch ran and found no open PR.
+func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prURL string) (bool, error) {
 	if s.prRefresher == nil {
-		return nil
+		return false, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, prRefreshTimeout)
 	defer cancel()
 	tracked, err := s.store.ListPRsBySession(ctx, workerID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if prURL == "" && !hasOpenPR(tracked) {
 		return s.attachBranchPR(ctx, workerID)
@@ -554,11 +557,11 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 			}
 		}
 		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil && !known {
-			return err
+			return false, err
 		} else if err != nil {
 			slog.Default().WarnContext(ctx, "review trigger: refresh named PR failed; using stored facts", "session", workerID, "err", err)
 		}
-		return nil
+		return false, nil
 	}
 	for _, pr := range tracked {
 		if pr.Merged || pr.Closed {
@@ -568,7 +571,7 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 			slog.Default().WarnContext(ctx, "review trigger: refresh PR failed; using stored facts", "session", workerID, "err", err)
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // hasOpenPR reports whether any tracked PR is still open. A session whose
@@ -585,31 +588,32 @@ func hasOpenPR(prs []domain.PullRequest) bool {
 
 // attachBranchPR attaches the one open PR from the worker's branch when AO
 // tracks no open PR yet, typically because the PR was opened moments ago. Finding
-// nothing leaves the engine to report that no PR is tracked; a failed lookup
-// and several candidates are reported with the exact retry command.
-func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID) error {
+// nothing leaves the engine to report that no PR is tracked, and is reported
+// as true so the engine can say the branch has none; a failed lookup and
+// several candidates are reported with the exact retry command.
+func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID) (bool, error) {
 	finder, ok := s.prRefresher.(BranchPRFinder)
 	if !ok {
-		return nil
+		return false, nil
 	}
 	urls, err := finder.FindBranchPRs(ctx, workerID)
 	if err != nil {
 		// Nothing is tracked, so the review cannot go ahead; say the lookup
 		// failed rather than that the branch has no PR.
 		slog.Default().WarnContext(ctx, "review trigger: find PR on worker branch failed", "session", workerID, "err", err)
-		return fmt.Errorf("%w: AO is not tracking an open PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
+		return false, fmt.Errorf("%w: AO is not tracking an open PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
 	}
 	switch len(urls) {
 	case 0:
-		return nil
+		return true, nil
 	case 1:
-		return s.prRefresher.RefreshPR(ctx, workerID, urls[0])
+		return false, s.prRefresher.RefreshPR(ctx, workerID, urls[0])
 	}
 	cmds := make([]string, len(urls))
 	for i, url := range urls {
 		cmds[i] = fmt.Sprintf("`ao review trigger %s --pr %s`", workerID, url)
 	}
-	return fmt.Errorf("%w: worker %q has %d open PRs from its branch that AO does not track yet; name one: %s", ErrInvalid, workerID, len(urls), strings.Join(cmds, ", "))
+	return false, fmt.Errorf("%w: worker %q has %d open PRs from its branch that AO does not track yet; name one: %s", ErrInvalid, workerID, len(urls), strings.Join(cmds, ", "))
 }
 
 func firstNonEmpty(values ...string) string {

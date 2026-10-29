@@ -264,6 +264,10 @@ type TriggerOptions struct {
 	// The same reviewer is never started twice on one head at the same time:
 	// a person's rerun reuses that running pass, an agent's rerun is told so.
 	Rerun bool
+	// BranchPRLookupFoundNone reports that the caller looked up open PRs from
+	// the worker's branch just before this trigger and found none, so a
+	// no-PR error may say so.
+	BranchPRLookupFoundNone bool
 }
 
 // TriggerWithOptions starts reviews for every PR on the worker session that needs review.
@@ -335,13 +339,13 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		return TriggerResult{}, err
 	}
 	if len(prs) == 0 {
-		return TriggerResult{}, fmt.Errorf("%w: %s", ErrInvalid, noTrackedPRMessage(worker))
+		return TriggerResult{}, fmt.Errorf("%w: %s", ErrInvalid, noTrackedPRMessage(worker, opts.BranchPRLookupFoundNone))
 	}
 	// Only closed or merged PRs are tracked: say so the same way, not just
 	// that no PR head is open, unless the caller named one of them.
 	noOpenPR := ""
 	if strings.TrimSpace(opts.PRURL) == "" && !hasOpenPR(prs) {
-		noOpenPR = noTrackedPRMessage(worker)
+		noOpenPR = noTrackedPRMessage(worker, opts.BranchPRLookupFoundNone)
 	}
 	if want := strings.TrimSpace(opts.PRURL); want != "" {
 		// A targeted pass reviews only the named PR, matched by API or web URL.
@@ -779,10 +783,11 @@ func autoReviewSessionReason(worker domain.SessionRecord, now time.Time) string 
 }
 
 // noTrackedPRMessage explains a trigger with no PR to review and gives the
-// exact retry command, since the PR may simply not be discovered yet.
-func noTrackedPRMessage(worker domain.SessionRecord) string {
+// exact retry command, since the PR may simply not be discovered yet. It says
+// the worker's branch has no open PR only when a lookup found none.
+func noTrackedPRMessage(worker domain.SessionRecord, branchLookupFoundNone bool) string {
 	retry := fmt.Sprintf("`ao review trigger %s --pr <url>`", worker.ID)
-	if branch := strings.TrimSpace(worker.Metadata.Branch); branch != "" {
+	if branch := strings.TrimSpace(worker.Metadata.Branch); branch != "" && branchLookupFoundNone {
 		return fmt.Sprintf("AO is not tracking an open PR for worker %q yet and found no open PR from its branch %q; if you just opened one, run %s with that PR's URL", worker.ID, branch, retry)
 	}
 	return fmt.Sprintf("AO is not tracking an open PR for worker %q yet; if you just opened one, run %s with that PR's URL", worker.ID, retry)

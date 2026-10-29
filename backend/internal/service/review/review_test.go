@@ -1135,6 +1135,36 @@ func TestTriggerRequestedAttachesTheBranchPRWhenNoneIsTracked(t *testing.T) {
 	}
 }
 
+// The engine may say the worker's branch has no open PR only when a lookup
+// ran and found none, not when it was skipped.
+func TestTriggerRequestedTellsTheEngineWhetherTheBranchLookupFoundNone(t *testing.T) {
+	var got []bool
+	trigger := func(_ context.Context, _ domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		got = append(got, opts.BranchPRLookupFoundNone)
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	open := &fakeStore{prs: []domain.PullRequest{{URL: "https://github.com/o/r/pull/8"}}}
+	for _, svc := range []*Service{
+		New(nil, &fakeStore{}, WithPRRefresher(&fakePRRefresher{})),
+		New(nil, &fakeStore{}, WithPRRefresher(namedPRRefresher{})),
+		New(nil, open, WithPRRefresher(&fakePRRefresher{})),
+		New(nil, &fakeStore{}),
+	} {
+		svc.engineTrigger = trigger
+		if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
+			t.Fatalf("TriggerRequested: %v", err)
+		}
+	}
+	if fmt.Sprint(got) != "[true false false false]" {
+		t.Fatalf("lookup found none = %v, want true only after a lookup that found nothing", got)
+	}
+}
+
+// namedPRRefresher refreshes named PRs but cannot look up a branch's PRs.
+type namedPRRefresher struct{}
+
+func (namedPRRefresher) RefreshPR(context.Context, domain.SessionID, string) error { return nil }
+
 // A session whose tracked PR was closed or merged may have opened a new PR on
 // the same branch. With no open tracked PR, the branch lookup still runs and
 // attaches it.
