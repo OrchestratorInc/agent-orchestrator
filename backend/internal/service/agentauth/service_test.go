@@ -142,7 +142,7 @@ func TestStartPiInjectsLoginAutomatically(t *testing.T) {
 	}
 }
 
-func TestStartOMPInjectsLoginAutomatically(t *testing.T) {
+func TestStartOMPOpensNativeProviderSetupWithoutInjectingInput(t *testing.T) {
 	t.Parallel()
 
 	opener := &recordingTerminalOpener{}
@@ -153,19 +153,14 @@ func TestStartOMPInjectsLoginAutomatically(t *testing.T) {
 		t.Fatalf("Start(omp): %v", err)
 	}
 	wantInput := shellterm.OpenCommandTerminalInput{
-		Argv:         []string{"/test/bin/omp"},
-		Title:        "Log in to OMP",
-		InitialInput: "/login",
-		InitialInputReadyStates: []shellterm.InitialInputReadyState{
-			{Text: "oh-my-pi"},
-		},
-		SendInitialInputOnReadyTimeout: true,
+		Argv:  []string{"/test/bin/omp", "setup"},
+		Title: "Log in to OMP",
 	}
 	if !reflect.DeepEqual(opener.input, wantInput) {
 		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
 	}
 	if got.TerminalInput != "" {
-		t.Fatalf("Start(omp) terminal input = %q, want none so the login is not held behind a button", got.TerminalInput)
+		t.Fatalf("Start(omp) terminal input = %q, want none because OMP owns provider sign-in", got.TerminalInput)
 	}
 }
 

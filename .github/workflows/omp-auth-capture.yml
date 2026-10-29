@@ -31,21 +31,21 @@ jobs:
               agent = root / '.omp' / 'agent'
               agent.mkdir(parents=True)
               if configured:
-                  (agent / 'config.yml').write_text('setup:\n  version: 2\nstartup:\n  setupWizard: false\n  checkUpdate: false\n')
+                  (agent / 'config.yml').write_text('setupVersion: 2\nstartup:\n  setupWizard: false\n  checkUpdate: false\n')
               env = {k: v for k, v in os.environ.items() if not k.startswith(('XDG_', 'PI_', 'OMP_'))}
               env.update(HOME=str(root), PI_CODING_AGENT_DIR=str(agent), TERM='xterm-256color')
               master, slave = pty.openpty()
               fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
-              proc = subprocess.Popen(['/tmp/omp-capture/node_modules/.bin/omp'], stdin=slave, stdout=slave, stderr=slave, cwd=root, env=env, start_new_session=True)
+              proc = subprocess.Popen(['/tmp/omp-capture/node_modules/.bin/omp', 'setup'], stdin=slave, stdout=slave, stderr=slave, cwd=root, env=env, start_new_session=True)
               os.close(slave)
               screen = pyte.Screen(120, 40)
               stream = pyte.Stream(screen)
               start = time.monotonic()
               last = ''
-              sent = False
+              picker = False
               print('CONFIGURED', configured, flush=True)
               try:
-                  while time.monotonic() - start < 25:
+                  while time.monotonic() - start < 15:
                       if select.select([master], [], [], 0.1)[0]:
                           try:
                               data = os.read(master, 65536)
@@ -55,14 +55,13 @@ jobs:
                               break
                           stream.feed(data.decode('utf-8', errors='replace'))
                           text = '\n'.join(line.rstrip() for line in screen.display).strip()
-                          if text != last and time.monotonic() - start > 1:
+                          if 'Sign in to your providers' in text and 'Select provider to login' in text:
+                              picker = True
+                          if text != last and time.monotonic() - start > 12:
                               print(f'SCREEN {time.monotonic() - start:.2f}s\n{text}\nEND SCREEN', flush=True)
                               last = text
-                      if configured and not sent and time.monotonic() - start > 18:
-                          os.write(master, b'/login')
-                          time.sleep(0.2)
-                          os.write(master, b'\r')
-                          sent = True
+                  print('FINAL SCREEN\n' + '\n'.join(line.rstrip() for line in screen.display).strip() + '\nEND FINAL SCREEN', flush=True)
+                  assert picker, f'Native setup did not open provider sign-in: configured={configured}'
               finally:
                   os.killpg(proc.pid, signal.SIGKILL)
                   proc.wait()

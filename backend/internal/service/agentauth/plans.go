@@ -132,16 +132,12 @@ func copilotLoginPlan() Plan {
 	return p
 }
 
-// ompLoginPlan opens OMP's TUI and injects /login after startup. OMP does not
-// expose a separate login subcommand; waiting for its banner keeps the command
-// out of the startup buffer, while the timeout fallback handles versions whose
-// banner text has changed.
+// ompLoginPlan uses OMP's native onboarding command, whose first scene is
+// provider sign-in even when setup is already complete. OMP paints its prompt
+// before opening first-run setup, so prompt markers cannot safely gate /login
+// injection. Let OMP own the picker without sending any terminal input.
 func ompLoginPlan() Plan {
-	p := plan("omp", ActionLogin, "Log in to OMP", []string{"omp"}, "OMP opens its login picker automatically", "https://github.com/can1357/oh-my-pi")
-	p.initialInput = "/login"
-	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "oh-my-pi"}}
-	p.sendInitialInputOnReadyTimeout = true
-	return p
+	return plan("omp", ActionLogin, "Log in to OMP", []string{"omp", "setup"}, "Sign in to a provider in OMP's setup wizard, then finish or skip the remaining setup steps", "https://github.com/can1357/oh-my-pi")
 }
 
 func documentationPlan(agentID, title, guidance, docs string) Plan {
