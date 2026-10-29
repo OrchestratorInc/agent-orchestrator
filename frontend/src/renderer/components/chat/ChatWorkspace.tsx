@@ -411,6 +411,12 @@ export interface ChatWorkspaceProps {
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
 	newWorkDisabled?: boolean;
+	/**
+	 * A Freestyle cloud orchestrator being created, before its session exists:
+	 * drawn as that session's in-place start (prompt suggestions and the queue
+	 * placeholder) so the handoff to it changes nothing on screen.
+	 */
+	pendingInPlaceStart?: boolean;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
 	reviewerChat?: { reviewId: string; harness: string };
@@ -718,6 +724,7 @@ function ChatWorkspaceContent({
 	lastModel,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
+	pendingInPlaceStart = false,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
 	reviewerChat,
@@ -1946,9 +1953,9 @@ function ChatWorkspaceContent({
 									</h1>
 								) : null}
 								<WelcomePromptSuggestions
-									open={conversationEmpty && !newWorkDisabled && composerEmpty}
+									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart)}
 									artifact={artifactSession}
-									onPick={(text) => composerFocusRef.current?.setDraft(text)}
+									onPick={(text) => { if (!pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 								/>
 								<div ref={composerBoxRef} className="relative z-10" data-composer-tray={conversationEmpty && composerTray ? "" : undefined}>
 									{welcomeLeaving ? (
@@ -2029,7 +2036,7 @@ function ChatWorkspaceContent({
 												? composerLockedPlaceholder
 												: arrivingInChat
 												? arrivingPlaceholder
-												: openingStarting && !session
+												: (openingStarting && !session) || pendingInPlaceStart
 												// Same words the session shows once it can queue, so nothing changes on handoff.
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: orchestratorBlocksComposer

@@ -28,6 +28,7 @@ export function OrchestratorStartingChat({ steps, cloud = false, freestyle = fal
 		sessionRole="orchestrator"
 		startingSteps={steps}
 		newWorkDisabled
+		pendingInPlaceStart={cloud && freestyle}
 		inlineHeader
 		headerActions={
 			<div className="session-topbar-session-chrome flex shrink-0 items-center" data-compact-session-chrome="false">
