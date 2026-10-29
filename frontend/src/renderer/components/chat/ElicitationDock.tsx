@@ -409,7 +409,9 @@ function FormRequest({
 					{!questionGroups && schema?.description ? (
 						<p className="px-3 pb-1 text-caption leading-relaxed text-muted-foreground">{schema.description}</p>
 					) : null}
-					<div className={cn(questionGroups ? "flex flex-col" : "flex flex-col gap-3 px-3 pb-1")}>
+					{/* The rows' focus rings draw 2px outside them, so the first and last rows
+					    need that much room or the scroll body clips their ring at its edge. */}
+					<div className={cn(questionGroups ? "flex flex-col py-0.5" : "flex flex-col gap-3 px-3 pb-1")}>
 						{visibleProperties.map(([name, property], index) => (
 							<FormField
 								key={name}

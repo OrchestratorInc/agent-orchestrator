@@ -59,6 +59,28 @@ async function expectReachable(dock: Locator, control: Locator) {
 	expect(layout).toEqual({ insideDock: true, insideWindow: true, onTop: true });
 }
 
+/** The focused field's row paints its whole focus ring, without the scroll body clipping an edge. */
+async function expectRingUnclipped(body: Locator, field: Locator) {
+	const layout = await field.evaluate((node, bodyNode) => {
+		// The row is the nearest ancestor drawing a box-shadow ring; its spread is how far the ring reaches.
+		let row: Element | null = node;
+		let spread = 0;
+		for (; row && row !== bodyNode; row = row.parentElement) {
+			const spreads = [...getComputedStyle(row).boxShadow.matchAll(/(?:-?[\d.]+px\s+){3}(-?[\d.]+)px/g)].map((match) => Number(match[1]));
+			spread = Math.max(0, ...spreads);
+			if (spread > 0) break;
+		}
+		const rect = row!.getBoundingClientRect();
+		const bodyRect = (bodyNode as Element).getBoundingClientRect();
+		return {
+			ring: spread > 0,
+			top: rect.top - spread >= bodyRect.top - 0.5,
+			bottom: rect.bottom + spread <= bodyRect.bottom + 0.5,
+		};
+	}, await body.elementHandle());
+	expect(layout).toEqual({ ring: true, top: true, bottom: true });
+}
+
 test("a long question scrolls on its own and leaves the answers and actions reachable @T0", async ({ page }) => {
 	const dock = await openDock(page, {
 		inputMode: "form",
@@ -78,6 +100,36 @@ test("a long question scrolls on its own and leaves the answers and actions reac
 	const question = dock.getByTestId("elicitation-question");
 	await expect(question).toHaveText(longQuestion);
 	expect(await question.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+});
+
+test("the first choice and the Other answer keep their whole focus ring above the footer @T0", async ({ page }) => {
+	const dock = await openDock(page, {
+		inputMode: "form",
+		message: "Which direction should ship?",
+		schema: { type: "object", required: ["question_0"], properties: {
+			question_0: { type: "string", title: "Direction", oneOf: [
+				{ const: "trail", title: "Pixel trail" },
+				{ const: "keep", title: "Keep current" },
+			] },
+			question_0_custom: {
+				type: "string", title: "Other",
+				_meta: { _askUserQuestionCustomAnswer: { questionId: "question_0", isCustomAnswer: true } },
+			},
+		} },
+	});
+	const body = dock.getByTestId("elicitation-scroll-body");
+
+	// They are the rows on the scroll body's top and bottom edges. Tab in from the
+	// header so the choice shows its keyboard ring; a text field shows one on click.
+	await dock.getByRole("button", { name: "Cancel" }).focus();
+	await page.keyboard.press("Tab");
+	const firstChoice = dock.getByRole("radio", { name: "Pixel trail" });
+	await expect(firstChoice).toBeFocused();
+	await expectRingUnclipped(body, firstChoice);
+
+	const other = dock.getByRole("textbox", { name: "Other" });
+	await other.click();
+	await expectRingUnclipped(body, other);
 });
 
 test("a long URL scrolls between a pinned header and consent actions @T0", async ({ page }) => {
