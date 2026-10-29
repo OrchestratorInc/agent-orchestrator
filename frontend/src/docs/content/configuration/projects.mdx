@@ -152,7 +152,7 @@ ao review ls <worker-session-id>
 
 ## Update from the CLI
 
-Focused `ao project set-config` flags change only the fields they name; the rest of the saved configuration, including settings without a flag such as `effort` and `preRemove`, is kept. A repeatable flag such as `--env` or `--reviewer` replaces that whole map or list. `--config-json` replaces the entire project configuration. Before using it, inspect the current settings and preserve every field you need:
+Focused `ao project set-config` flags change only the fields they name; the rest of the saved configuration, including settings without a flag such as `effort` and `preRemove`, is kept. A repeatable flag such as `--env` or `--reviewer` replaces that whole map or list. Field flags refuse a degraded project, whose configuration can't be read; use `--config-json` to replace it. `--config-json` replaces the entire project configuration. Before using it, inspect the current settings and preserve every field you need:
 
 ```bash
 ao project get <project-id> --json

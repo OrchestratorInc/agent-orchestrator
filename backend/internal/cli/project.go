@@ -304,8 +304,9 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 			"symlinks, post-create, rules, agent model/permissions, role overrides, tracker intake, reviewers). The config " +
 			"is resolved when a session spawns.\n\n" +
 			"Field flags change only the fields they name and keep the rest of the saved config; " +
-			"a repeatable flag replaces that whole list or map. --config-json replaces the whole " +
-			"config with the given object, and --clear removes all config.",
+			"a repeatable flag replaces that whole list or map. Field flags refuse a degraded " +
+			"project, whose config cannot be read; use --config-json to replace its config. " +
+			"--config-json replaces the whole config with the given object, and --clear removes all config.",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if err := cobra.ExactArgs(1)(cmd, args); err != nil {
 				return usageError{err}

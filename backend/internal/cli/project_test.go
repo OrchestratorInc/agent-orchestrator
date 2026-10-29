@@ -6,8 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/spf13/pflag"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -129,7 +132,8 @@ func TestProjectConfigMirrorsDomainJSONKeys(t *testing.T) {
 
 // jsonKeyPaths records every JSON key path typ encodes, descending through
 // pointers, slices, and nested structs so keys like worker.agentConfig.effort
-// are compared too.
+// are compared too. It does not support embedded structs, which encoding/json
+// promotes inline, and it compares key names only, not types.
 func jsonKeyPaths(typ reflect.Type, prefix string, out map[string]bool) {
 	for typ.Kind() == reflect.Pointer || typ.Kind() == reflect.Slice {
 		typ = typ.Elem()
@@ -148,6 +152,24 @@ func jsonKeyPaths(typ reflect.Type, prefix string, out map[string]bool) {
 		}
 		out[prefix+name] = true
 		jsonKeyPaths(field.Type, prefix+name+".", out)
+	}
+}
+
+// TestProjectConfigFlagsListsEveryFieldFlag fails when a set-config field flag
+// is registered but missing from projectConfigFlags, which would make a call
+// with only that flag a "provide at least one config flag" usage error.
+func TestProjectConfigFlagsListsEveryFieldFlag(t *testing.T) {
+	notFieldFlags := map[string]bool{"config-json": true, "clear": true, "json": true}
+	cmd := newProjectSetConfigCommand(&commandContext{})
+	cmd.LocalFlags().VisitAll(func(f *pflag.Flag) {
+		if !notFieldFlags[f.Name] && !slices.Contains(projectConfigFlags, f.Name) {
+			t.Errorf("set-config flag --%s is missing from projectConfigFlags", f.Name)
+		}
+	})
+	for _, name := range projectConfigFlags {
+		if cmd.LocalFlags().Lookup(name) == nil {
+			t.Errorf("projectConfigFlags has %q, which set-config does not register", name)
+		}
 	}
 }
 
