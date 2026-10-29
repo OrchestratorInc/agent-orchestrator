@@ -115,6 +115,20 @@ describe("telemetry sanitizers", () => {
 		}
 	});
 
+	it("keeps notification permission and What's new events to closed values", async () => {
+		expect(await sanitizeRendererProperties("ao.onboarding.step_skipped", { step: "notifications", note: "x" })).toEqual({ step: "notifications" });
+		for (const state of ["granted", "denied", "unsupported", "unknown"]) {
+			expect(await sanitizeRendererProperties("ao.notifications.permission", { state, path: "/Users/x" })).toEqual({ state });
+		}
+		expect(await sanitizeRendererProperties("ao.notifications.permission", { state: "maybe" })).toEqual({});
+		for (const event of ["ao.whats_new.shown", "ao.whats_new.clicked", "ao.whats_new.dismissed"]) {
+			expect(await sanitizeRendererProperties(event, { item_id: "2026-10-notifications", url: "https://x" })).toEqual({
+				item_id: "2026-10-notifications",
+			});
+			expect(await sanitizeRendererProperties(event, { item_id: "someone@example.com" })).toEqual({});
+		}
+	});
+
 	it("exports the session management summary under the v2 name", () => {
 		expect(postHogEventName("ao.renderer.session_management_summary")).toBe(
 			"ao.v2.renderer.session_management_summary",

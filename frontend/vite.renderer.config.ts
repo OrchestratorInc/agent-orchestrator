@@ -9,6 +9,7 @@ import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { DEFAULT_POSTHOG_HOST } from "./src/shared/posthog-config";
+import { WHATS_NEW_MEDIA_ORIGIN } from "./src/shared/whats-new";
 
 const POSTHOG_ORIGINS = (() => {
 	const configured = process.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
@@ -123,7 +124,8 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// scripts, connections, frames, and other resource classes remain scoped.
 		"img-src 'self' data: http://127.0.0.1:* http://*.localhost:* https:",
 		// A cloud session's audio and video artifacts stream from its control plane.
-		["media-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
+		// What's new videos load only from the feed's own host (src/shared/whats-new.ts).
+		["media-src 'self' http://127.0.0.1:* http://*.localhost:*", WHATS_NEW_MEDIA_ORIGIN, ...CLOUD_CP_ORIGINS].join(" "),
 		"font-src 'self' data:",
 		[
 			"connect-src",

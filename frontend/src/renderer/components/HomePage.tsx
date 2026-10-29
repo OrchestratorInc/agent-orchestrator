@@ -23,6 +23,7 @@ import {
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { GitHubOnboardingNotice } from "./GitHubOnboardingNotice";
+import { NotificationsStep } from "./onboarding/NotificationsStep";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { Badge } from "./ui/badge";
 
@@ -280,6 +281,7 @@ export function HomePage() {
 					</section>
 
 					<GitHubOnboardingNotice />
+					<NotificationsStep onboarding={recentProjects.length === 0} />
 				</div>
 
 				<CreateProjectFlow
