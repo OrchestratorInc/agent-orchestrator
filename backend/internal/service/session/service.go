@@ -208,6 +208,7 @@ type Service struct {
 	telemetry           ports.EventSink
 	usageArchiveFlush   func(context.Context)
 	milestones          ports.InstallMilestones
+	firstSession        firstSessionClaims
 	logger              *slog.Logger
 	backgroundContext   context.Context
 	agentReadiness      ports.AgentReadinessProvider
@@ -446,12 +447,18 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	if err != nil {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("count sessions: %w", err)
 	}
+	// Registered before Spawn writes its seed row, so a concurrent spawn that
+	// sees that row cannot take this spawn's first_for_install claim.
+	s.firstSession.begin(firstSession)
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)
 	if err != nil {
+		s.firstSession.finish(s.milestones, firstSession, false)
 		s.emitSpawnFailed(ctx, cfg, err, s.now().Sub(start).Milliseconds())
 		return domain.SessionRecord{}, 0, 0, err
 	}
-	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds(), firstSession)
+	// Claimed even when telemetry is off: the marker describes the install.
+	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, firstSession, true)
+	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds(), firstForInstall, firstKnown)
 	if firstSession {
 		s.emitFirstSessionSpawned(ctx, rec, project)
 	}
@@ -513,9 +520,46 @@ func (s *Service) isFirstSession(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64, noPriorSessions bool) {
-	// Claimed even when telemetry is off: the marker describes the install.
-	firstForInstall, firstKnown := ports.FirstForInstall(s.milestones, "session_spawned", noPriorSessions)
+// firstSessionClaims decides first_for_install on ao.session.spawned. The
+// prior-session check runs before Spawn, which persists a seed row before
+// provisioning, so a spawn that saw an empty install (eligible) can still be
+// provisioning when a later spawn that saw its row (ineligible) finishes.
+// While any eligible spawn is in flight, an ineligible one reports false
+// without claiming the durable marker; the eligible spawn owns the claim. With
+// none in flight, an ineligible spawn claims the marker so an install upgraded
+// from a build without markers never reports a later session as its first.
+type firstSessionClaims struct {
+	mu               sync.Mutex
+	eligibleInFlight int
+}
+
+func (c *firstSessionClaims) begin(eligible bool) {
+	if !eligible {
+		return
+	}
+	c.mu.Lock()
+	c.eligibleInFlight++
+	c.mu.Unlock()
+}
+
+// finish ends a spawn begun with begin. known is false when the flag should be
+// omitted: the spawn failed, there is no marker store, or it was unreadable.
+func (c *firstSessionClaims) finish(m ports.InstallMilestones, eligible, succeeded bool) (first, known bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if eligible {
+		c.eligibleInFlight--
+	}
+	if !succeeded || m == nil {
+		return false, false
+	}
+	if !eligible && c.eligibleInFlight > 0 {
+		return false, true
+	}
+	return ports.FirstForInstall(m, "session_spawned", eligible)
+}
+
+func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64, firstForInstall, firstKnown bool) {
 	if s.telemetry == nil {
 		return
 	}
