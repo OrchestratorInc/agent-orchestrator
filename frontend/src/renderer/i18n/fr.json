@@ -3781,5 +3781,6 @@
 	"parallelPrompt.starter.tests.prompt": "Trouve un chemin de code important sans tests et ajoute des tests ciblés sans modifier son comportement.",
 	"newTask.startNext.hint": "{{shortcut}} lance cette tâche et ouvre un nouveau brouillon",
 	"newTask.startNext.started": "Tâche lancée",
-	"newTask.startNext.startedBody": "Elle est dans la barre latérale. Écrivez la suivante ici."
+	"newTask.startNext.startedBody": "Elle est dans la barre latérale. Écrivez la suivante ici.",
+	"shortcut.context.startNext": "Lancer une nouvelle tâche et ouvrir le brouillon suivant"
 }

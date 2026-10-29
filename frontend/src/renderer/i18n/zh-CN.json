@@ -3694,5 +3694,6 @@
 	"parallelPrompt.starter.tests.prompt": "找到一条没有测试的重要代码路径，在不改变其行为的前提下为它添加有针对性的测试。",
 	"newTask.startNext.hint": "{{shortcut}} 启动此任务并打开新草稿",
 	"newTask.startNext.started": "任务已启动",
-	"newTask.startNext.startedBody": "它在侧边栏中。在这里写下一个任务。"
+	"newTask.startNext.startedBody": "它在侧边栏中。在这里写下一个任务。",
+	"shortcut.context.startNext": "启动新任务并打开下一个草稿"
 }

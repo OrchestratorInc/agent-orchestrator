@@ -3781,5 +3781,6 @@
 	"parallelPrompt.starter.tests.prompt": "Encontre um caminho de código importante sem testes e adicione testes focados sem alterar seu comportamento.",
 	"newTask.startNext.hint": "{{shortcut}} inicia esta tarefa e abre um novo rascunho",
 	"newTask.startNext.started": "Tarefa iniciada",
-	"newTask.startNext.startedBody": "Ela está na barra lateral. Escreva a próxima aqui."
+	"newTask.startNext.startedBody": "Ela está na barra lateral. Escreva a próxima aqui.",
+	"shortcut.context.startNext": "Iniciar uma nova tarefa e abrir o próximo rascunho"
 }

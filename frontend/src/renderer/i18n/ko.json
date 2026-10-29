@@ -3712,5 +3712,6 @@
 	"parallelPrompt.starter.tests.prompt": "테스트가 없는 중요한 코드 경로를 찾아 동작을 바꾸지 않고 집중된 테스트를 추가하세요.",
 	"newTask.startNext.hint": "{{shortcut}}을 누르면 이 작업을 시작하고 새 초안을 엽니다",
 	"newTask.startNext.started": "작업이 시작되었습니다",
-	"newTask.startNext.startedBody": "사이드바에 있습니다. 여기에서 다음 작업을 작성하세요."
+	"newTask.startNext.startedBody": "사이드바에 있습니다. 여기에서 다음 작업을 작성하세요.",
+	"shortcut.context.startNext": "새 작업을 시작하고 다음 초안 열기"
 }
