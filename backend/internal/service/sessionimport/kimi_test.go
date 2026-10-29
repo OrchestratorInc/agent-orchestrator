@@ -39,11 +39,11 @@ const kimiWire = `{"type":"metadata","protocol_version":2,"created_at":170000000
 {"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","turnId":1,"step":1,"part":{"type":"text","text":"Tests pass."}},"time":1700000005000}
 `
 
-const kimiState = `{"id":"` + kimiSession + `","version":2,"cwd":"/work/repo","createdAt":1700000000000,"updatedAt":1700000005000,"title":"Add a README","isCustomTitle":false}`
+const kimiStateJSON = `{"id":"` + kimiSession + `","version":2,"cwd":"/work/repo","createdAt":1700000000000,"updatedAt":1700000005000,"title":"Add a README","isCustomTitle":false}`
 
 func TestKimiDiscoverAndParse(t *testing.T) {
 	root := t.TempDir()
-	path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, kimiState, kimiWire)
+	path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, kimiStateJSON, kimiWire)
 
 	files, err := new(Service).discover(context.Background(), domain.HarnessKimi, root)
 	if err != nil {
@@ -76,7 +76,7 @@ func TestKimiDiscoverAndParse(t *testing.T) {
 
 func TestKimiDropsInjectedContext(t *testing.T) {
 	root := t.TempDir()
-	path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, kimiState, kimiWire)
+	path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, kimiStateJSON, kimiWire)
 	got, err := readTranscript(context.Background(), domain.HarnessKimi, root, path)
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestKimiRejectsConversationWithoutTypedPrompt(t *testing.T) {
 
 func TestKimiDiscoverIgnoresSubagentsAndStrays(t *testing.T) {
 	root := t.TempDir()
-	kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, kimiState, kimiWire)
+	kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, kimiStateJSON, kimiWire)
 	// A subagent transcript sits beside the main agent and is not a conversation.
 	writeFile(t, filepath.Join(root, "sessions", "wd_repo_abc123def456", kimiSession, "agents", "research", "wire.jsonl"), kimiWire)
 	// A directory that is not a session_<uuid> must be ignored entirely.
