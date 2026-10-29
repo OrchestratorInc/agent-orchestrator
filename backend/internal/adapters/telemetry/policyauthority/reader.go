@@ -102,8 +102,8 @@ func validTimestamp(value string) bool {
 	return err == nil && parsed.Location() == time.UTC
 }
 
-// EventsAllowed reports whether the daemon may send error events. A durable
-// production consent and explicit environment enablement are both required.
+// EventsAllowed reports whether the daemon may send error events. A present
+// production-enabled policy record and explicit environment enablement are required.
 func (r *Reader) EventsAllowed(ctx context.Context, envEvents, envExplicit bool) bool {
 	if !envEvents || !envExplicit {
 		return false
@@ -113,22 +113,4 @@ func (r *Reader) EventsAllowed(ctx context.Context, envEvents, envExplicit bool)
 		return false
 	}
 	return snapshot.Present && snapshot.EventsEnabled && snapshot.ConsentProductionEnabled
-}
-
-// Watch re-reads the policy every interval and reports each change, so an
-// opt-out in the app closes the daemon's capture without a restart.
-func (r *Reader) Watch(ctx context.Context, interval time.Duration, envEvents, envExplicit, current bool, onChange func(bool)) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if next := r.EventsAllowed(ctx, envEvents, envExplicit); next != current {
-				current = next
-				onChange(next)
-			}
-		}
-	}
 }

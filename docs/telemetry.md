@@ -29,11 +29,13 @@ default DSN is distinct from the daemon project; Electron main uses
 builds use an empty Electron DSN. The renderer uses this main-owned sender
 and has no independent DSN override. Packaged stable and nightly builds send
 error events through Electron main only when Share error events is enabled.
+On a fresh packaged macOS or Linux install, Share error events starts on by
+default without a prompt. You can turn it off in Settings > General > Privacy.
 Renderer diagnostics pass through the existing main-owned consent boundary;
 the renderer has no direct Sentry transport. The mobile app keeps its own
 Sentry project and DSN. A desktop opt-in recorded while the Electron release
-gate was closed requires a fresh opt-in before this sender starts. Until that
-answer is recorded, neither the Electron nor daemon Sentry sender may send.
+gate was closed requires a fresh opt-in before either desktop sender starts.
+Until that renewal answer is recorded, neither Electron nor daemon Sentry sends.
 On Windows, the desktop cannot durably replace the Share error events policy.
 Both Electron and daemon Sentry therefore remain off, even in packaged releases
 with a DSN, until durable consent support is available. This does not change

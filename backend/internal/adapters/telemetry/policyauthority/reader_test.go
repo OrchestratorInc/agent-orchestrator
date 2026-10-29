@@ -62,7 +62,7 @@ func TestReaderRejectsRecordsWhoseShapeDoesNotMatchTheirVersion(t *testing.T) {
 	}
 }
 
-func TestEventsAllowedFollowsTheFileOverTheEnvironment(t *testing.T) {
+func TestEventsAllowedRequiresProductionConsentAndEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	reader := New(filepath.Join(dir, FileName))
 	ctx := context.Background()
