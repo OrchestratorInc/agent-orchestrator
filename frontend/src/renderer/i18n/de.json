@@ -3779,6 +3779,8 @@
 	"settings.harness.loginUi.nativeCheck": "Anmeldung prüfen",
 	"settings.harness.loginUi.nativeHint": "AO führt die Harness-Anmeldung im Hintergrund aus und zeigt erkannte Schritte hier an.",
 	"settings.harness.loginUi.envHint": "AO übergibt diese Schlüssel an die Agentensitzungen, die es startet.",
+	"settings.harness.loginUi.methods.deepseek_api_key": "DeepSeek-API-Schlüssel",
+	"settings.harness.loginUi.hints.deepseek_api_key": "Wird im eigenen Anmeldedatenspeicher von DeepSeek Harness gespeichert und funktioniert innerhalb und außerhalb von AO.",
 	"settings.apiKeys.notSet": "Nicht gesetzt",
 	"settings.apiKeys.search": "API-Schlüssel suchen",
 	"settings.apiKeys.noMatches": "Keine passenden Schlüssel",

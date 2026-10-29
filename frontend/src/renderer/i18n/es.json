@@ -3848,6 +3848,8 @@
 	"settings.harness.loginUi.nativeCheck": "Comprobar inicio de sesión",
 	"settings.harness.loginUi.nativeHint": "AO ejecuta el inicio de sesión del harness en segundo plano y muestra aquí los pasos reconocidos.",
 	"settings.harness.loginUi.envHint": "AO pasa estas claves a las sesiones de agente que inicia.",
+	"settings.harness.loginUi.methods.deepseek_api_key": "Clave de API de DeepSeek",
+	"settings.harness.loginUi.hints.deepseek_api_key": "Se guarda en el almacén de credenciales de DeepSeek Harness, así que funciona dentro y fuera de AO.",
 	"settings.apiKeys.notSet": "Sin definir",
 	"settings.apiKeys.search": "Buscar claves de API",
 	"settings.apiKeys.noMatches": "No hay claves que coincidan",

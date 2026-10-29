@@ -3848,6 +3848,8 @@
 	"settings.harness.loginUi.nativeCheck": "Verificar login",
 	"settings.harness.loginUi.nativeHint": "O AO executa o login do harness em segundo plano e mostra aqui as etapas reconhecidas.",
 	"settings.harness.loginUi.envHint": "O AO passa estas chaves para as sessões de agente que inicia.",
+	"settings.harness.loginUi.methods.deepseek_api_key": "Chave de API da DeepSeek",
+	"settings.harness.loginUi.hints.deepseek_api_key": "Salva no repositório de credenciais do próprio DeepSeek Harness, então funciona dentro e fora do AO.",
 	"settings.apiKeys.notSet": "Não definida",
 	"settings.apiKeys.search": "Buscar chaves de API",
 	"settings.apiKeys.noMatches": "Nenhuma chave correspondente",
