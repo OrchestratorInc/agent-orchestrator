@@ -29,6 +29,8 @@ const (
 // TaskSuggestionSource names where a suggestion came from.
 type TaskSuggestionSource string
 
+// Task suggestion sources: an open tracker issue, or a TODO/FIXME note in a
+// tracked file.
 const (
 	TaskSuggestionSourceIssue TaskSuggestionSource = "issue"
 	TaskSuggestionSourceTodo  TaskSuggestionSource = "todo"
@@ -182,11 +184,11 @@ func todoSuggestions(ctx context.Context, dir string) []TaskSuggestion {
 			todos = append(todos, suggestion)
 		}
 	}
-	all := append(fixmes, todos...)
-	if len(all) > maxTaskSuggestionsPerSource {
-		all = all[:maxTaskSuggestionsPerSource]
+	fixmes = append(fixmes, todos...)
+	if len(fixmes) > maxTaskSuggestionsPerSource {
+		fixmes = fixmes[:maxTaskSuggestionsPerSource]
 	}
-	return all
+	return fixmes
 }
 
 // cleanTodoText drops comment closers left at the end of a TODO line.
