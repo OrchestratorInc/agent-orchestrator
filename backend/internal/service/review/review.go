@@ -607,7 +607,12 @@ func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID)
 	case 0:
 		return true, nil
 	case 1:
-		return false, s.prRefresher.RefreshPR(ctx, workerID, urls[0])
+		// The PR may have closed since the lookup, seconds ago; say it was
+		// found, so a not-found or not-open error does not read as a miss.
+		if err := s.prRefresher.RefreshPR(ctx, workerID, urls[0]); err != nil {
+			return false, fmt.Errorf("found PR %s on worker %q's branch but could not attach it: %w; run `ao review trigger %s --pr %s` to try again", urls[0], workerID, err, workerID, urls[0])
+		}
+		return false, nil
 	}
 	cmds := make([]string, len(urls))
 	for i, url := range urls {

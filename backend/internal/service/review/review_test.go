@@ -1135,6 +1135,29 @@ func TestTriggerRequestedAttachesTheBranchPRWhenNoneIsTracked(t *testing.T) {
 	}
 }
 
+// A branch PR that cannot be attached right after the lookup found it (closed
+// in between) is reported as found but not attached, keeping the claim's
+// error class, and no review starts.
+func TestTriggerRequestedReportsABranchPRThatCouldNotBeAttached(t *testing.T) {
+	url := "https://github.com/o/r/pull/9"
+	claimErr := fmt.Errorf("%w: pull request %s was not found on the provider", ErrNotFound, url)
+	refresher := &fakePRRefresher{branchPRs: []string{url}, err: map[string]error{url: claimErr}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		t.Fatal("a PR that could not be attached must not start a review")
+		return reviewcore.TriggerResult{}, nil
+	}
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want the claim's ErrNotFound kept", err)
+	}
+	for _, want := range []string{"found PR " + url + " on worker \"mer-1\"'s branch but could not attach it", "`ao review trigger mer-1 --pr " + url + "`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to contain %s", err, want)
+		}
+	}
+}
+
 // The engine may say the worker's branch has no open PR only when a lookup
 // ran and found none, not when it was skipped.
 func TestTriggerRequestedTellsTheEngineWhetherTheBranchLookupFoundNone(t *testing.T) {
