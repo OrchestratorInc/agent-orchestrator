@@ -51,22 +51,16 @@ type kimiRecord struct {
 	Time    int64  `json:"time"`
 	Message struct {
 		Role    string          `json:"role"`
-		Content []kimiBlock     `json:"content"`
+		Content json.RawMessage `json:"content"`
 		Origin  json.RawMessage `json:"origin"`
 	} `json:"message"`
 	Event struct {
-		Type   string `json:"type"`
-		TurnID int    `json:"turnId"`
-		Part   struct {
+		Type string `json:"type"`
+		Part struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"part"`
 	} `json:"event"`
-}
-
-type kimiBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
 }
 
 // kimiSessionDir is the session_<uuid> folder from its main agent's wire path:
@@ -160,7 +154,7 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		items       []tagged
 		prompted    bool
 		pendingText strings.Builder
-		pendingTurn = -1
+		pending     bool
 		pendingAt   time.Time
 	)
 	note := func(at time.Time) {
@@ -177,13 +171,18 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		}
 		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
 	}
+	// A turn's assistant text streams as many content.part events, possibly split
+	// across tool-use steps. Every real user prompt starts a new turn, so the run
+	// of assistant text between two prompts is one reply. Grouping on the prompt
+	// boundary avoids depending on the turnId field, whose JSON type (string vs
+	// number) varies across Kimi versions.
 	flushAssistant := func() {
-		if pendingTurn < 0 {
+		if !pending {
 			return
 		}
 		text := pendingText.String()
 		pendingText.Reset()
-		pendingTurn = -1
+		pending = false
 		appendMessage("assistant", text, pendingAt)
 	}
 	handle := func(line []byte) error {
@@ -204,7 +203,7 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 				return nil
 			}
 			flushAssistant()
-			text := kimiBlockText(r.Message.Content)
+			text := visibleText(r.Message.Content)
 			if strings.TrimSpace(text) != "" {
 				prompted = true
 			}
@@ -214,11 +213,8 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 				// Reasoning ("think"), tool calls and tool results are not messages.
 				return nil
 			}
-			if pendingTurn >= 0 && pendingTurn != r.Event.TurnID {
-				flushAssistant()
-			}
-			if pendingTurn < 0 {
-				pendingTurn, pendingAt = r.Event.TurnID, at
+			if !pending {
+				pending, pendingAt = true, at
 			}
 			pendingText.WriteString(r.Event.Part.Text)
 		}
@@ -295,16 +291,6 @@ func kimiOriginKind(raw json.RawMessage) string {
 		return obj.Kind
 	}
 	return ""
-}
-
-// kimiBlockText joins a message's visible text blocks, as blockText does for the
-// other harnesses, so a huge tool result parsed into the record is still dropped.
-func kimiBlockText(blocks []kimiBlock) string {
-	converted := make([]textBlock, len(blocks))
-	for i, b := range blocks {
-		converted[i] = textBlock{Type: b.Type, Text: b.Text}
-	}
-	return blockText(converted)
 }
 
 // kimiTitle prefers the session's own title, falling back to the opening prompt.
