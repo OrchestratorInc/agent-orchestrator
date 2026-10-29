@@ -110,10 +110,13 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// A Freestyle cloud project's orchestrator starts in place (see
 	// OrchestratorStartingChat); its session does not exist yet, so the
 	// project's provider decides, as the control plane's does.
-	const cloudProjects = useCloudProjectsQuery({ enabled: workspace?.kind === CLOUD_PROJECT_KIND });
-	const offering = useCloudOffering();
+	// Only this machine's cloud projects start in place: a remote host's board
+	// never reads this machine's cloud settings (as useCloudCp below).
+	const localCloudBoard = !hostId && workspace?.kind === CLOUD_PROJECT_KIND;
+	const cloudProjects = useCloudProjectsQuery({ enabled: localCloudBoard });
+	const offering = useCloudOffering(localCloudBoard);
 	const cloudProject = cloudProjects.data?.find((candidate) => candidate.id === projectId);
-	const startsInPlace = workspace?.kind === CLOUD_PROJECT_KIND && cloudProject !== undefined &&
+	const startsInPlace = localCloudBoard && cloudProject !== undefined &&
 		projectSandboxProvider(cloudProject.config, offering) === FREESTYLE_PROVIDER;
 	// Board chrome stays route-oriented; project context remains in the sidebar.
 	const boardLabel = t("shell.board");
