@@ -12248,6 +12248,50 @@ paths:
       summary: Clean up terminated session workspaces
       tags:
       - sessions
+  /api/v1/sessions/preflight:
+    post:
+      operationId: checkSpawnPreflight
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpawnPreflightRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpawnPreflightResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Check a prospective spawn's agent, runtime, and default-branch prerequisites
+        without spawning
+      tags:
+      - sessions
   /api/v1/settings:
     get:
       operationId: getSettings
@@ -21113,6 +21157,109 @@ components:
           $ref: '#/components/schemas/OrchestratorResponse'
       required:
       - orchestrator
+      type: object
+    SpawnPreflightCheck:
+      properties:
+        blocking:
+          type: boolean
+        canStartLogin:
+          type: boolean
+        code:
+          enum:
+          - agent_not_installed
+          - agent_unauthorized
+          - runtime_prerequisite_missing
+          - default_branch_unresolved
+          - agent_required
+          type: string
+        command:
+          type: string
+        documentationUrl:
+          type: string
+        installTarget:
+          type: string
+      required:
+      - code
+      - blocking
+      type: object
+    SpawnPreflightRequest:
+      properties:
+        harness:
+          description: Harness the spawn will request. Empty resolves the project's
+            role override, as the spawn does.
+          type: string
+        kind:
+          description: Session kind the caller is about to spawn.
+          enum:
+          - orchestrator
+          - worker
+          type: string
+        mode:
+          description: Controller mode the spawn will request. Empty resolves the
+            daemon default, as the spawn does.
+          enum:
+          - chat
+          - tui
+          type: string
+        projectId:
+          description: Project the spawn targets.
+          type: string
+        resolution:
+          $ref: '#/components/schemas/SpawnPreflightResolution'
+      required:
+      - projectId
+      - kind
+      type: object
+    SpawnPreflightResolution:
+      properties:
+        blockers:
+          description: Blocker codes the previous check reported.
+          items:
+            type: string
+          maxItems: 8
+          type: array
+        method:
+          description: What the user did before re-checking.
+          enum:
+          - install
+          - login
+          - switch_agent
+          - set_default_branch
+          - recheck
+          type: string
+      required:
+      - blockers
+      - method
+      type: object
+    SpawnPreflightResponse:
+      properties:
+        canProceed:
+          type: boolean
+        checks:
+          items:
+            $ref: '#/components/schemas/SpawnPreflightCheck'
+          type: array
+        harness:
+          description: Harness the spawn would launch.
+          type: string
+        kind:
+          enum:
+          - orchestrator
+          - worker
+          type: string
+        mode:
+          enum:
+          - chat
+          - tui
+          type: string
+        ready:
+          description: True when no check failed.
+          type: boolean
+      required:
+      - ready
+      - canProceed
+      - kind
+      - checks
       type: object
     SpawnSessionRequest:
       properties:

@@ -74,6 +74,7 @@ import (
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	settingssvc "github.com/aoagents/agent-orchestrator/backend/internal/service/settings"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/spawnpreflight"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
@@ -787,6 +788,15 @@ func Run(buildVersion string) error {
 	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
 	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
+	spawnFacts, _ := wiredSessMgr.(spawnpreflight.SpawnFacts)
+	spawnPreflight := spawnpreflight.New(spawnpreflight.Deps{
+		Facts:     spawnFacts,
+		Readiness: agentSvc,
+		Installs:  systemInstall,
+		Auth:      agentAuthSvc,
+		Telemetry: telemetrySink,
+		LookPath:  hostCommands.LookPath,
+	})
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
 	agentAccountSvc.SetTerminals(shellTermSvc)
 	// Late-bound so Kill/Cleanup close a session's scoped shells before its
@@ -1036,6 +1046,7 @@ func Run(buildVersion string) error {
 		CodexAccounts:      agentSvc,
 		AgentAccounts:      agentAccountSvc,
 		SystemChecks:       systemChecks,
+		SpawnPreflight:     spawnPreflight,
 		Installer:          systemInstall,
 		ComputerUse:        computerUse,
 		Sessions:           sessionSvc,

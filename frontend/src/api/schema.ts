@@ -4057,6 +4057,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check a prospective spawn's agent, runtime, and default-branch prerequisites without spawning */
+        post: operations["checkSpawnPreflight"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;
@@ -7519,6 +7536,53 @@ export interface components {
         };
         SpawnOrchestratorResponse: {
             orchestrator: components["schemas"]["OrchestratorResponse"];
+        };
+        SpawnPreflightCheck: {
+            blocking: boolean;
+            canStartLogin?: boolean;
+            /** @enum {string} */
+            code: "agent_not_installed" | "agent_unauthorized" | "runtime_prerequisite_missing" | "default_branch_unresolved" | "agent_required";
+            command?: string;
+            documentationUrl?: string;
+            installTarget?: string;
+        };
+        SpawnPreflightRequest: {
+            /** @description Harness the spawn will request. Empty resolves the project's role override, as the spawn does. */
+            harness?: string;
+            /**
+             * @description Session kind the caller is about to spawn.
+             * @enum {string}
+             */
+            kind: "orchestrator" | "worker";
+            /**
+             * @description Controller mode the spawn will request. Empty resolves the daemon default, as the spawn does.
+             * @enum {string}
+             */
+            mode?: "chat" | "tui";
+            /** @description Project the spawn targets. */
+            projectId: string;
+            resolution?: components["schemas"]["SpawnPreflightResolution"];
+        };
+        SpawnPreflightResolution: {
+            /** @description Blocker codes the previous check reported. */
+            blockers: string[];
+            /**
+             * @description What the user did before re-checking.
+             * @enum {string}
+             */
+            method: "install" | "login" | "switch_agent" | "set_default_branch" | "recheck";
+        };
+        SpawnPreflightResponse: {
+            canProceed: boolean;
+            checks: components["schemas"]["SpawnPreflightCheck"][];
+            /** @description Harness the spawn would launch. */
+            harness?: string;
+            /** @enum {string} */
+            kind: "orchestrator" | "worker";
+            /** @enum {string} */
+            mode?: "chat" | "tui";
+            /** @description True when no check failed. */
+            ready: boolean;
         };
         SpawnSessionRequest: {
             /** @enum {string} */
@@ -23078,6 +23142,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CleanupSessionsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    checkSpawnPreflight: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpawnPreflightRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpawnPreflightResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

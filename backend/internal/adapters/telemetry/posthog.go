@@ -216,6 +216,21 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"kind":        {},
 		"operation":   {},
 	},
+	// Spawn pre-flight outcomes. Every value is a fixed enum: blockers is a
+	// sorted, comma-joined list of pre-flight blocker codes.
+	"ao.session.preflight_checked": {
+		"blocker_count": {},
+		"blockers":      {},
+		"harness":       {},
+		"kind":          {},
+		"result":        {},
+	},
+	"ao.session.preflight_resolved": {
+		"blocker": {},
+		"harness": {},
+		"kind":    {},
+		"method":  {},
+	},
 	"ao.session.relaunch_failed": {
 		"cause_type":  {},
 		"component":   {},

@@ -1597,6 +1597,12 @@ func (s *Service) resolvePlan(target Target) Plan {
 
 // displayCommand renders the plan for display. Prepare steps are joined with
 // "; " rather than "&&": a failed step is noted and Command still runs.
+// DisplayCommand is the copyable, display-only form of plan's command, the
+// same text the installer catalog shows. Callers never execute it.
+func DisplayCommand(plan Plan) string {
+	return displayCommand(plan)
+}
+
 func displayCommand(plan Plan) string {
 	if plan.Script != nil {
 		display := fmt.Sprintf("%s <downloaded from %s>", strings.Join(plan.Script.Interpreter, " "), plan.Script.URL)

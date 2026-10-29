@@ -379,6 +379,29 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 // here ships silently stripped. These assertions are what a review-funnel
 // dashboard actually reads: a renamed key is a broken chart, not a build
 // failure, and nothing ties the emit sites to this map at compile time.
+// The spawn pre-flight events carry only enums; the blocked-installs
+// dashboard reads exactly these keys.
+func TestSpawnPreflightPayloadAllowlist(t *testing.T) {
+	want := map[string][]string{
+		"ao.session.preflight_checked":  {"result", "blockers", "blocker_count", "harness", "kind"},
+		"ao.session.preflight_resolved": {"blocker", "method", "harness", "kind"},
+	}
+	for name, keys := range want {
+		allowed, ok := remotePayloadAllowlist[name]
+		if !ok {
+			t.Fatalf("%s has no allowlist entry", name)
+		}
+		if len(allowed) != len(keys) {
+			t.Errorf("%s allowlist = %v, want exactly %v", name, allowed, keys)
+		}
+		for _, key := range keys {
+			if _, ok := allowed[key]; !ok {
+				t.Errorf("%s is missing allowlisted key %q", name, key)
+			}
+		}
+	}
+}
+
 func TestReviewPayloadAllowlistCoversTheReviewFunnel(t *testing.T) {
 	want := map[string][]string{
 		"ao.review.triggered":      {"harness", "created_runs", "trigger", "rerun"},
