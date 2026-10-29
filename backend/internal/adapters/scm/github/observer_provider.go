@@ -98,7 +98,10 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 // ListOpenPRsByBranch lists the open pull requests whose head is branch in
 // repo itself (head=<owner>:<branch>), so PRs from forks are not returned. One
 // request: GitHub filters on the server, so a repository's other open PRs
-// are never paged through.
+// are never paged through. Reading only the first page of 100 is deliberate:
+// GitHub allows one open PR per head and base, so a branch with more than 100
+// open PRs would need more than 100 base branches. The GitLab provider pages
+// because its client already has a pagination helper; this one has none.
 func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
 	q := url.Values{}
 	q.Set("state", "open")
