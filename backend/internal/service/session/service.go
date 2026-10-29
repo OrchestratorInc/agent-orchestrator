@@ -447,7 +447,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 		s.emitSpawnFailed(ctx, cfg, err, s.now().Sub(start).Milliseconds())
 		return domain.SessionRecord{}, 0, 0, err
 	}
-	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds())
+	s.emitSpawned(ctx, cfg, rec, s.now().Sub(start).Milliseconds())
 	if firstSession {
 		s.emitFirstSessionSpawned(ctx, rec, project)
 	}
@@ -509,7 +509,7 @@ func (s *Service) isFirstSession(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64) {
+func (s *Service) emitSpawned(ctx context.Context, cfg ports.SpawnConfig, rec domain.SessionRecord, durationMs int64) {
 	if s.telemetry == nil {
 		return
 	}
@@ -519,6 +519,9 @@ func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, dur
 		"kind":        string(rec.Kind),
 		"harness":     string(rec.Harness),
 		"duration_ms": durationMs,
+	}
+	if cfg.SpawnSource != "" && cfg.SpawnSource.Valid() {
+		payload["spawn_source"] = string(cfg.SpawnSource)
 	}
 	if actor, ok := s.githubActor(ctx); ok {
 		payload["github_actor"] = actor
