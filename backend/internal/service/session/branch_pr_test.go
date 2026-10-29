@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -61,5 +62,56 @@ func TestFindBranchPRsWithoutBranchOrListingFindsNothing(t *testing.T) {
 	st.sessions["demo-1"] = domain.SessionRecord{ID: "demo-1", ProjectID: "demo", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{Branch: "b"}}
 	if urls, err := NewWithDeps(Deps{Store: st, SCM: fakeSCM{}}).FindBranchPRs(context.Background(), "demo-1"); err != nil || len(urls) != 0 {
 		t.Fatalf("provider cannot list: urls=%v err=%v", urls, err)
+	}
+}
+
+// repoBranchSCM answers ListOpenPRsByBranch per repository, so a test can
+// place PRs in a workspace project's child repositories.
+type repoBranchSCM struct {
+	fakeSCM
+	pulls  map[string][]ports.SCMPRObservation
+	errs   map[string]error
+	listed []string
+}
+
+func (f *repoBranchSCM) ListOpenPRsByBranch(_ context.Context, repo ports.SCMRepo, _ string) ([]ports.SCMPRObservation, error) {
+	f.listed = append(f.listed, repo.Repo)
+	return f.pulls[repo.Repo], f.errs[repo.Repo]
+}
+
+// A worker in a workspace project may open its PR in any registered child
+// repository, the same ones ClaimPR accepts, so each is looked up. A child
+// whose provider cannot list by branch is skipped.
+func TestFindBranchPRsLooksInWorkspaceChildRepositories(t *testing.T) {
+	st := &workspaceClaimStore{fakeStore: newFakeStore(), repos: []domain.WorkspaceRepoRecord{
+		{RepoOriginURL: ""}, {RepoOriginURL: "/local/repo"},
+		{RepoOriginURL: "git@github.com:acme/api.git"},
+		{RepoOriginURL: "https://github.com/acme/web.git"},
+		{RepoOriginURL: "https://github.com/acme/parent.git"},
+	}}
+	st.projects["ws"] = domain.ProjectRecord{ID: "ws", Kind: domain.ProjectKindWorkspace, RepoOriginURL: "https://github.com/acme/parent"}
+	st.sessions["ws-1"] = domain.SessionRecord{ID: "ws-1", ProjectID: "ws", Kind: domain.KindWorker, Metadata: domain.SessionMetadata{Branch: "ao/ws-1", WorkspacePath: "/ws"}}
+	scm := &repoBranchSCM{
+		pulls: map[string][]ports.SCMPRObservation{
+			"acme/web": {{HTMLURL: "https://github.com/acme/web/pull/3", SourceBranch: "ao/ws-1", HeadRepo: "acme/web", BaseRepo: "acme/web"}},
+		},
+		errs: map[string]error{"acme/api": ports.ErrSCMUnsupported},
+	}
+	urls, err := NewWithDeps(Deps{Store: st, SCM: scm}).FindBranchPRs(context.Background(), "ws-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(urls, ",") != "https://github.com/acme/web/pull/3" {
+		t.Fatalf("urls = %v, want the child repository's PR", urls)
+	}
+	if strings.Join(scm.listed, ",") != "acme/parent,acme/api,acme/web" {
+		t.Fatalf("listed %v, want the root once and each child with a parseable origin", scm.listed)
+	}
+
+	// Any other listing failure is reported, so the caller does not claim the
+	// branch has no PR.
+	scm.listed, scm.errs = nil, map[string]error{"acme/api": errors.New("provider down")}
+	if _, err := NewWithDeps(Deps{Store: st, SCM: scm}).FindBranchPRs(context.Background(), "ws-1"); err == nil || !strings.Contains(err.Error(), "acme/api") {
+		t.Fatalf("err = %v, want the failed child repository named", err)
 	}
 }

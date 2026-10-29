@@ -528,10 +528,13 @@ type branchPRLister interface {
 	ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error)
 }
 
-// FindBranchPRs returns the web URLs of open PRs in the project's repository
-// whose source branch is the session's branch, so a caller can attach a PR
-// the SCM observer has not discovered yet. PRs from forks are skipped. It
-// returns nothing when the session has no branch or the provider cannot list.
+// FindBranchPRs returns the web URLs of open PRs whose source branch is the
+// session's branch, so a caller can attach a PR the SCM observer has not
+// discovered yet. It looks in the project's canonical/origin repository and,
+// for a workspace project, in every registered child repository, the same
+// repositories ClaimPR accepts. PRs from forks are skipped. It returns nothing
+// when the session has no branch or the provider cannot list; a repository
+// whose provider does not support branch listing is skipped.
 func (s *Service) FindBranchPRs(ctx context.Context, id domain.SessionID) ([]string, error) {
 	rec, ok, err := s.store.GetSession(ctx, id)
 	if err != nil {
@@ -552,25 +555,66 @@ func (s *Service) FindBranchPRs(ctx context.Context, id domain.SessionID) ([]str
 	if !ok {
 		return nil, nil
 	}
-	repo, ok := s.scm.ParseRepository(firstNonEmpty(project.Config.CanonicalRepoURL, project.RepoOriginURL))
-	if !ok {
-		return nil, nil
-	}
-	pulls, err := lister.ListOpenPRsByBranch(ctx, repo, branch)
+	repos, err := s.branchPRRepos(ctx, project)
 	if err != nil {
-		return nil, fmt.Errorf("list open PRs for %s/%s: %w", repo.Owner, repo.Name, err)
+		return nil, err
 	}
 	var urls []string
-	for _, pr := range pulls {
-		if pr.SourceBranch != branch || pr.Merged || pr.Closed {
+	seen := map[string]bool{}
+	for _, repo := range repos {
+		pulls, err := lister.ListOpenPRsByBranch(ctx, repo, branch)
+		if errors.Is(err, ports.ErrSCMUnsupported) {
 			continue
 		}
-		if pr.HeadRepo != "" && pr.BaseRepo != "" && !strings.EqualFold(pr.HeadRepo, pr.BaseRepo) {
-			continue
+		if err != nil {
+			return nil, fmt.Errorf("list open PRs for %s/%s: %w", repo.Owner, repo.Name, err)
 		}
-		if prURL := firstNonEmpty(pr.HTMLURL, pr.URL); prURL != "" {
-			urls = append(urls, prURL)
+		for _, pr := range pulls {
+			if pr.SourceBranch != branch || pr.Merged || pr.Closed {
+				continue
+			}
+			if pr.HeadRepo != "" && pr.BaseRepo != "" && !strings.EqualFold(pr.HeadRepo, pr.BaseRepo) {
+				continue
+			}
+			if prURL := firstNonEmpty(pr.HTMLURL, pr.URL); prURL != "" && !seen[prURL] {
+				seen[prURL] = true
+				urls = append(urls, prURL)
+			}
 		}
 	}
 	return urls, nil
+}
+
+// branchPRRepos lists the repositories a session's PR can live in: the
+// canonical/origin repository and, for a workspace project, each registered
+// child repository with a parseable origin.
+func (s *Service) branchPRRepos(ctx context.Context, project domain.ProjectRecord) ([]ports.SCMRepo, error) {
+	var repos []ports.SCMRepo
+	seen := map[string]bool{}
+	add := func(origin string) {
+		repo, ok := s.scm.ParseRepository(origin)
+		if !ok {
+			return
+		}
+		key := strings.ToLower(repo.Provider + "|" + repo.Host + "|" + repo.Repo)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		repos = append(repos, repo)
+	}
+	add(firstNonEmpty(project.Config.CanonicalRepoURL, project.RepoOriginURL))
+	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
+		return repos, nil
+	}
+	children, err := s.store.ListWorkspaceRepos(ctx, project.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list workspace repositories for project %s: %w", project.ID, err)
+	}
+	for _, child := range children {
+		if strings.TrimSpace(child.RepoOriginURL) != "" {
+			add(child.RepoOriginURL)
+		}
+	}
+	return repos, nil
 }
