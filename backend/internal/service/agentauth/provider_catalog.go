@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -38,16 +39,31 @@ type catalogEntry struct {
 	models []string
 }
 
-// providerCatalog reads a harness's provider catalog from disk and saves a
-// key in that harness's own credential store.
+// providerCatalog lists a harness's providers, from a catalog file the
+// harness keeps on disk (path and read) or a table generated from its
+// release (static), and saves a key in that harness's own credential store.
 type providerCatalog struct {
-	path func() (string, error)
-	read func([]byte) ([]catalogEntry, error)
-	save func(ctx context.Context, providerID, key string) error
+	path   func() (string, error)
+	read   func([]byte) ([]catalogEntry, error)
+	static []CatalogProvider
+	save   func(ctx context.Context, harness catalogHarness, providerID, key string) error
+}
+
+// catalogHarness is what a save needs to reach the installed harness.
+type catalogHarness struct {
+	binary  string
+	workDir string
+	command func(context.Context, string, ...string) *exec.Cmd
 }
 
 var providerCatalogs = map[string]providerCatalog{
-	"opencode": {path: openCodeCatalogPath, read: readModelsDevCatalog, save: saveOpenCodeProviderKey},
+	"opencode": {path: openCodeCatalogPath, read: readModelsDevCatalog, save: func(ctx context.Context, _ catalogHarness, providerID, key string) error {
+		return saveOpenCodeProviderKey(ctx, providerID, key)
+	}},
+	"pi": {static: piCatalog, save: func(ctx context.Context, _ catalogHarness, providerID, key string) error {
+		return savePiProviderKey(ctx, providerID, key)
+	}},
+	"omp": {static: ompCatalog, save: saveOMPProviderKey},
 }
 
 var (
@@ -75,6 +91,13 @@ func catalogProviders(agentID string) ([]catalogEntry, bool) {
 	catalog, ok := providerCatalogs[agentID]
 	if !ok {
 		return nil, false
+	}
+	if catalog.static != nil {
+		entries := make([]catalogEntry, len(catalog.static))
+		for i, provider := range catalog.static {
+			entries[i] = catalogEntry{CatalogProvider: provider}
+		}
+		return entries, len(entries) > 0
 	}
 	path, err := catalog.path()
 	if err != nil {
@@ -210,11 +233,24 @@ func catalogProvider(agentID, providerID string) (catalogEntry, error) {
 
 // saveCatalogKey writes key for providerID to the harness's own store. The
 // caller holds the login reservation and s.mu.
-func (s *Service) saveCatalogKey(ctx context.Context, agentID, providerID, key string) (LoginSnapshot, error) {
+func (s *Service) saveCatalogKey(ctx context.Context, plan Plan, providerID, key string) (LoginSnapshot, error) {
+	agentID := plan.AgentID
 	if _, err := catalogProvider(agentID, providerID); err != nil {
 		return LoginSnapshot{}, err
 	}
-	if err := providerCatalogs[agentID].save(ctx, providerID, key); err != nil {
+	harness := catalogHarness{command: s.commandContext}
+	if len(plan.command) > 0 {
+		harness.binary = plan.command[0]
+	}
+	if s.dataDir != "" {
+		// A neutral directory, so a harness that reads .env files from its
+		// working directory never picks up a project's.
+		harness.workDir = filepath.Join(s.dataDir, authWorkspaceRootName, "ui-"+agentID)
+		if err := os.MkdirAll(harness.workDir, 0o700); err != nil {
+			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_WORKSPACE_UNAVAILABLE", "The login workspace could not be prepared.")
+		}
+	}
+	if err := providerCatalogs[agentID].save(ctx, harness, providerID, key); err != nil {
 		return LoginSnapshot{}, err
 	}
 	complete := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: catalogKeyMethod, Status: "succeeded", ExpiresAt: time.Now()}, done: make(chan struct{})}
