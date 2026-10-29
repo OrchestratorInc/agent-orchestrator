@@ -27,7 +27,9 @@ const STARTING_SANDBOX_STATES = new Set(["requested", "provisioning", "bootstrap
 export function cloudChatStartingInPlace(session?: WorkspaceSession): boolean {
 	const cloud = session?.cloud;
 	if (session?.mode !== "chat" || cloud?.sandboxProvider !== FREESTYLE_PROVIDER || session.runtimeConnected) return false;
-	return cloud.desiredState !== "paused" && STARTING_SANDBOX_STATES.has(cloud.observedState ?? "");
+	// Only a session meant to run is starting: a paused one keeps its badge, and
+	// one being deleted (or archived) is going away, not getting ready.
+	return cloud.desiredState === "running" && STARTING_SANDBOX_STATES.has(cloud.observedState ?? "");
 }
 
 /**

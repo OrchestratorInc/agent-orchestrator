@@ -74,6 +74,9 @@ describe("cloudChatStartingInPlace", () => {
 	it("lets go once the worker connects, and while the session is paused", () => {
 		expect(cloudChatStartingInPlace(freestyleChat("running", "bootstrapping", true))).toBe(false);
 		expect(cloudChatStartingInPlace(freestyleChat("paused", "stopped"))).toBe(false);
+		// A session being deleted or archived is going away, not getting ready.
+		expect(cloudChatStartingInPlace(freestyleChat("deleted", "stopped"))).toBe(false);
+		expect(cloudChatStartingInPlace(freestyleChat("deleted", "running"))).toBe(false);
 	});
 
 	it("leaves other providers and terminal sessions to the startup screen", () => {
