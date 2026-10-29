@@ -99,9 +99,35 @@ describe("userFacingUpdateError", () => {
 		);
 	});
 
-	// The renderer swaps these for localized restart guidance off netError (#3526).
-	it("passes a bare net:: failure through", () => {
-		expect(userFacingUpdateError(new Error("net::ERR_INTERNET_DISCONNECTED"), "check")).toBe("net::ERR_INTERNET_DISCONNECTED");
+	// The status line still swaps this for localized restart guidance off
+	// netError (#3526); the check-error notice, a download and the restart
+	// dialog have no such flag and render the sentence.
+	it("explains a bare net:: failure", () => {
+		expect(userFacingUpdateError(new Error("net::ERR_INTERNET_DISCONNECTED"), "check")).toBe(
+			"Couldn't check for updates — the update server couldn't be reached. Check your connection and try again.",
+		);
+		expect(userFacingUpdateError(new Error("net::ERR_CONNECTION_RESET"), "install")).toBe(
+			"Couldn't install the update — the update server couldn't be reached. Check your connection and try again.",
+		);
+	});
+
+	// These arrive under the releases-feed code, which alone would read as a feed
+	// that could not be parsed.
+	it.each([
+		["Error: Request timed out", "the update server timed out. Try again in a few minutes."],
+		["Error: connect ETIMEDOUT 140.82.112.3:443", "the update server timed out. Try again in a few minutes."],
+		["Error: getaddrinfo ENOTFOUND github.com", "the update server couldn't be reached. Check your connection and try again."],
+		["Error: socket hang up", "the update server couldn't be reached. Check your connection and try again."],
+	])("explains a wrapped connection failure: %s", (cause, reason) => {
+		const err = Object.assign(
+			new Error(
+				`Cannot parse releases feed: Error: Unable to find latest version on GitHub (${FEED}), please ensure a production release exists: ${cause}\n` +
+					"    at Socket.<anonymous> (C:\\AO\\resources\\app.asar\\node_modules\\builder-util-runtime\\out\\httpExecutor.js:282:26),\nXML:\n<feed></feed>",
+			),
+			{ code: "ERR_UPDATER_INVALID_RELEASE_FEED" },
+		);
+
+		expect(userFacingUpdateError(err, "check")).toBe(`Couldn't check for updates — ${reason}`);
 	});
 
 	it("passes AO's own sentences through", () => {

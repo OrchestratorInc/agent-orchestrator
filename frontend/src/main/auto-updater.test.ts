@@ -1958,6 +1958,40 @@ describe("startAutoUpdates", () => {
     );
   });
 
+  // The check-error notice has no netError guidance of its own, so a bare
+  // net:: string would reach Settings verbatim (#5755).
+  it("keeps a raw net:: string out of checkError (#5755)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+    autoUpdater.checkForUpdates.mockImplementation(() => {
+      updaterEvents.get("checking-for-update")?.();
+      updaterEvents.get("error")?.(new Error("net::ERR_INTERNET_DISCONNECTED"));
+      return Promise.resolve();
+    });
+
+    await module.startAutoUpdates(stateDir);
+
+    expect(module.getUpdateStatus().checkError).toBe("Couldn't check for updates — the update server couldn't be reached. Check your connection and try again.");
+  });
+
+  it("shows one sentence when a manual download fails on the network (#5755)", async () => {
+    const restore = stubProcess("linux", "/usr/bin/node");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const { module, autoUpdater } = await importAutoUpdater();
+      await module.checkForUpdatesNow(stateDir);
+      autoUpdater.downloadUpdate.mockRejectedValue(new Error("net::ERR_CONNECTION_RESET"));
+
+      await module.downloadUpdateNow("failed-download");
+
+      expect(module.getUpdateStatus()).toMatchObject({
+        state: "error",
+        requestId: "failed-download",
+        message: "Download failed — the update server couldn't be reached. Check your connection and try again.",
+      });
+    } finally { restore(); }
+  });
+
   it("flags net errors on a rejected manual check", async () => {
     const { module, autoUpdater } = await importAutoUpdater();
     autoUpdater.checkForUpdates.mockRejectedValueOnce(new Error("net::ERR_FAILED"));
@@ -1966,7 +2000,7 @@ describe("startAutoUpdates", () => {
 
     expect(module.getUpdateStatus()).toEqual({
       state: "error",
-      message: "net::ERR_FAILED",
+      message: "Couldn't check for updates — the update server couldn't be reached. Check your connection and try again.",
       netError: true,
     });
   });
@@ -1979,7 +2013,7 @@ describe("startAutoUpdates", () => {
 
     expect(module.getUpdateStatus()).toEqual({
       state: "error",
-      message: "net::ERR_FAILED",
+      message: "Couldn't check for updates — the update server couldn't be reached. Check your connection and try again.",
       netError: true,
       checkedAt: expect.any(Number),
     });
@@ -1997,7 +2031,7 @@ describe("startAutoUpdates", () => {
 
     expect(module.getUpdateStatus()).toMatchObject({
       state: "error",
-      message: "net::ERR_SSL_PROTOCOL_ERROR",
+      message: "Couldn't check for updates — the update server couldn't be reached. Check your connection and try again.",
       netError: true,
       requestId: "manual-update-1",
     });
@@ -3813,6 +3847,31 @@ describe("quitAndInstallUpdate", () => {
       );
       expect(consoleError).toHaveBeenCalledWith("failed to prepare update for restart:", err);
       expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally { restore(); }
+  });
+
+  // The re-download runs as a check, but Settings must not call a failed
+  // restart a failed check while the dialog calls it a failed install.
+  it.each(["win32", "linux"] as const)("tells Settings a remembered-build restart failed as an install on %s (#5755)", async (platform) => {
+    const restore = stubProcess(platform, "/usr/bin/node");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      writeFileSync(nodePath.join(stateDir, "staged-update.json"), JSON.stringify({ version: "2.1.0", stagedAt: Date.now(), channel: "latest" }));
+      const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+      await module.startAutoUpdates(stateDir);
+      const err = releasesFeedTimeout();
+      autoUpdater.checkForUpdates.mockImplementation(() => {
+        updaterEvents.get("error")?.(err);
+        return Promise.reject(err);
+      });
+
+      await expect(module.quitAndInstallUpdate()).rejects.toThrow(
+        "Couldn't install the update — the update server timed out. Try again in a few minutes.",
+      );
+      expect(module.getUpdateStatus()).toMatchObject({
+        state: "error",
+        message: "Couldn't install the update — the update server timed out. Try again in a few minutes.",
+      });
     } finally { restore(); }
   });
 

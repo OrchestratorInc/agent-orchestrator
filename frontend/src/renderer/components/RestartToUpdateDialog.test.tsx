@@ -364,17 +364,31 @@ it.each(["resolve", "reject"] as const)("ignores an install %s after unmount", a
 	expect(screen.getByRole("button", { name: "Restart & install" })).toBeEnabled();
 });
 
-it("renders bounded recovery details as plain text", async () => {
-	const message = "<strong>Fix folder permissions</strong> " + "x".repeat(1500);
+it("renders recovery details as plain text", async () => {
+	const message = "<strong>Fix folder permissions</strong> " + "x".repeat(900);
 	updInstall.mockRejectedValue(new Error(message));
 	useUiStore.setState({ updateInstallPromptOpen: true });
 	renderDialog({ state: "downloaded", version: "1.2.3" });
 	await screen.findByText("v1.2.3");
 	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
 	const alert = await screen.findByRole("alert");
-	expect(alert).toHaveTextContent(message.slice(0, 1000));
+	expect(alert).toHaveTextContent(message);
 	expect(alert.querySelector("strong")).toBeNull();
-	expect(alert.lastElementChild?.textContent).toHaveLength(1000);
+	expect(alert.lastElementChild?.textContent).toBe(message);
+});
+
+// Settings treats text past 1000 characters as a dump; the dialog must not
+// truncate it first and show the first 1000 characters instead (#5755).
+it("keeps only the heading for overlong recovery details (#5755)", async () => {
+	updInstall.mockRejectedValue(new Error("Fix folder permissions " + "x".repeat(1500)));
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({ state: "downloaded", version: "1.2.3" });
+	await screen.findByText("v1.2.3");
+	await userEvent.click(screen.getByRole("button", { name: "Restart & install" }));
+	const alert = await screen.findByRole("alert");
+	expect(alert).toHaveTextContent("AO could not prepare the update. Please try again.");
+	expect(alert).not.toHaveTextContent(/Fix folder permissions/);
+	expect(alert.children).toHaveLength(1);
 });
 
 it("keeps only the heading when the install rejects with an updater dump (#5755)", async () => {

@@ -141,10 +141,11 @@ function RestartToUpdateDialogBody() {
 		} catch (error) {
 			if (mounted.current) {
 				// Electron wraps IPC rejections with transport details. Keep the
-				// actionable main-process message, rendered as bounded plain text,
-				// and drop an updater dump in favor of the heading alone (#5755).
+				// actionable main-process message, rendered as plain text, and drop
+				// an updater dump (overlong text counts, as in Settings) in favor of
+				// the heading alone (#5755).
 				setFailureDetail(error instanceof Error
-					? displayableUpdateError(error.message.replace(/^Error invoking remote method ['"][^'"]+['"]: (?:Error: )?/, "").trim().slice(0, 1000), "")
+					? displayableUpdateError(error.message.replace(/^Error invoking remote method ['"][^'"]+['"]: (?:Error: )?/, "").trim(), "")
 					: "");
 			}
 		} finally {

@@ -2272,22 +2272,12 @@ function wireUpdaterEvents(): void {
     if (isManifest404Error(err)) {
       console.info("update check failed (404, manifest not found):", err);
       if (activeUpdaterOperation === "manual-download") {
-        broadcast(
-          withActiveRequest({
-            state: "error",
-            message:
-              "Download failed — the update file was not found on the server.",
-          }),
-        );
+        broadcast(withActiveRequest({ state: "error", message: userFacingUpdateError(err, "download") }));
       } else if (stagedAtMs !== undefined) {
         lastCheckError = userFacingUpdateError(err, "check");
         broadcastUpdaterStatus(stagedDownloadedStatus());
       } else {
-        broadcastCompletedCheck({
-          state: "error",
-          message:
-            "Couldn't check for updates — the update information was not found on the server.",
-        });
+        broadcastCompletedCheck({ state: "error", message: userFacingUpdateError(err, "check") });
       }
       return;
     }
@@ -2295,10 +2285,14 @@ function wireUpdaterEvents(): void {
     // Chromium network-stack failures carry a netError flag so the renderer can
     // localize restart guidance instead of showing the raw net:: string (#3526).
     // The full error stays in the log; Settings gets one sentence (#5755).
-    console.error(`update ${activeUpdaterPhase} failed:`, err);
+    // A restart that has to fetch its build again fails here mid-check or
+    // mid-download. The person asked to install, and the restart dialog says
+    // the install failed, so Settings says the same.
+    const failedAs = activeUpdaterOperation === "manual-install" ? "install" : activeUpdaterPhase;
+    console.error(`update ${failedAs} failed:`, err);
     const status: UpdateStatus = {
       state: "error",
-      message: userFacingUpdateError(err, activeUpdaterPhase),
+      message: userFacingUpdateError(err, failedAs),
       ...(isNetError(err) ? { netError: true } : {}),
     };
     if (activeUpdaterPhase === "check") broadcastCompletedCheck(status);
@@ -2661,16 +2655,14 @@ export async function checkForUpdatesNow(
     }
     if (isManifest404Error(err)) {
       console.info(`manual update ${failed.phase} failed:`, err);
+      const message = userFacingUpdateError(err, failed.phase);
       broadcastCompletedCheck({
         state: "error",
-        message:
-          failed.phase === "download"
-            ? "Download failed — the update file was not found on the server."
-            : "Couldn't check for updates — the update information was not found on the server.",
+        message,
         ...(options.requestId === undefined ? {} : { requestId: options.requestId }),
       });
       if (stagedAtMs !== undefined) {
-        lastCheckError = userFacingUpdateError(err, failed.phase);
+        lastCheckError = message;
         broadcast(stagedDownloadedStatus());
       }
     } else {
@@ -2803,22 +2795,12 @@ export async function downloadUpdateNow(requestId?: string): Promise<void> {
       settleWithoutFailure();
       return;
     }
-    if (isManifest404Error(err)) {
-      console.error("update download failed:", err);
-      broadcast({
-        state: "error",
-        message:
-          "Download failed — the update file was not found on the server.",
-        requestId,
-      });
-    } else {
-      console.error("update download failed:", err);
-      broadcast({
-        state: "error",
-        message: userFacingUpdateError(err, "download"),
-        requestId,
-      });
-    }
+    console.error("update download failed:", err);
+    broadcast({
+      state: "error",
+      message: userFacingUpdateError(err, "download"),
+      requestId,
+    });
   } finally {
     manualDownloadPending = false;
     clearDownloadStallWatchdog();

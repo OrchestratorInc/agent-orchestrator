@@ -11,8 +11,6 @@
  * met yet still cannot fill the screen.
  */
 
-import { isNetErrorMessage } from "./update-telemetry";
-
 /** The operation that failed. It decides how the sentence starts. */
 export type UpdateErrorPhase = "check" | "download" | "install";
 
@@ -22,8 +20,8 @@ const LEAD: Record<UpdateErrorPhase, string> = {
 	install: "Couldn't install the update",
 };
 
-// The check and download wording matches the manifest-404 copy auto-updater
-// already broadcasts, so one failure never reads two ways.
+// One wording for a missing manifest, a 404 and a feed with no release, so one
+// failure never reads two ways.
 const NOT_FOUND: Record<UpdateErrorPhase, string> = {
 	check: "the update information was not found on the server.",
 	download: "the update file was not found on the server.",
@@ -31,11 +29,19 @@ const NOT_FOUND: Record<UpdateErrorPhase, string> = {
 };
 
 const TRY_SOON = "Try again in a few minutes.";
+const TIMED_OUT_REASON = `the update server timed out. ${TRY_SOON}`;
+const UNREACHABLE_REASON = "the update server couldn't be reached. Check your connection and try again.";
+
+// Failures below HTTP, bare or wrapped inside a provider's message: a socket
+// timeout from builder-util-runtime, Chromium's net:: codes and Node's socket
+// errors.
+const TIMED_OUT_PATTERN = /\b(?:Request timed out|ETIMEDOUT|ESOCKETTIMEDOUT)\b/;
+const UNREACHABLE_PATTERN = /\bnet::|\b(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ENETUNREACH|EHOSTUNREACH)\b|\bsocket hang up\b/;
 
 /**
- * Longest updater message shown as-is: the bound the restart dialog already
- * applied. AO's own longest sentence, the non-writable install location with
- * its path, stays well under it.
+ * Longest updater message shown as-is: the bound the restart dialog used to
+ * truncate to. AO's own longest sentence, the non-writable install location
+ * with its path, stays well under it.
  */
 const MAX_DISPLAYABLE_CHARS = 1000;
 
@@ -78,30 +84,31 @@ export function isManifest404Error(err: unknown): boolean {
  * One short sentence for a failed update operation.
  *
  * Known failures are explained; AO's own messages pass through; anything else
- * that looks like a dump becomes a generic line. Chromium `net::` failures also
- * pass through, because the renderer swaps them for localized restart guidance
- * keyed off the status's netError flag (#3526).
+ * that looks like a dump becomes a generic line. Chromium `net::` failures get
+ * the connection sentence too: the status line swaps it for localized restart
+ * guidance when the status carries netError (#3526), but the check-error
+ * notice, a download and the restart dialog render the text itself.
  */
 export function userFacingUpdateError(err: unknown, phase: UpdateErrorPhase): string {
 	const raw = errorText(err);
 	const lead = LEAD[phase];
 	if (raw === "") return `${lead}. ${TRY_SOON}`;
-	if (isNetErrorMessage(raw)) return raw;
 	if (isManifest404Error(err)) return `${lead} — ${NOT_FOUND[phase]}`;
 	// Checked before the error codes: the GitHub provider wraps an HTTP failure
 	// on /releases/latest in "Cannot parse releases feed", so the outer code
 	// says "bad feed" while the status inside says what actually happened.
 	const status = httpStatus(err, raw);
-	if (status === 408 || status === 504) return `${lead} — the update server timed out. ${TRY_SOON}`;
+	if (status === 408 || status === 504) return `${lead} — ${TIMED_OUT_REASON}`;
 	if (status !== undefined && status >= 500) return `${lead} — the update server isn't available right now. ${TRY_SOON}`;
 	if (status === 429 || (status === 403 && /rate limit/i.test(raw))) {
 		return `${lead} — the update server is limiting requests. Try again later.`;
 	}
 	if (status === 404) return `${lead} — ${NOT_FOUND[phase]}`;
 	if (status !== undefined) return `${lead} — the update server returned an error (HTTP ${status}). Try again later.`;
-	// A network failure the provider wrapped, so it is no longer anchored at the
-	// start and the renderer's netError guidance does not apply.
-	if (/\bnet::ERR_/.test(raw)) return `${lead} — the update server couldn't be reached. Check your connection and try again.`;
+	// Also checked before the codes: a timeout on /releases/latest arrives under
+	// the same "Cannot parse releases feed" code as an unreadable feed.
+	if (TIMED_OUT_PATTERN.test(raw)) return `${lead} — ${TIMED_OUT_REASON}`;
+	if (UNREACHABLE_PATTERN.test(raw)) return `${lead} — ${UNREACHABLE_REASON}`;
 	const code = errorCode(err);
 	if (UNREADABLE_FEED_CODES.has(code) || /^Cannot parse (?:releases feed|update info)\b/.test(raw)) {
 		return `${lead} — the update information from the server couldn't be read. ${TRY_SOON}`;
