@@ -102,9 +102,8 @@ func validTimestamp(value string) bool {
 	return err == nil && parsed.Location() == time.UTC
 }
 
-// EventsAllowed reports whether the daemon may record events. The environment
-// must allow them explicitly, and a policy file, when present, must too. A file
-// that cannot be trusted or read closes the gate.
+// EventsAllowed reports whether the daemon may send error events. A durable
+// production consent and explicit environment enablement are both required.
 func (r *Reader) EventsAllowed(ctx context.Context, envEvents, envExplicit bool) bool {
 	if !envEvents || !envExplicit {
 		return false
@@ -113,7 +112,7 @@ func (r *Reader) EventsAllowed(ctx context.Context, envEvents, envExplicit bool)
 	if err != nil {
 		return false
 	}
-	return !snapshot.Present || snapshot.EventsEnabled
+	return snapshot.Present && snapshot.EventsEnabled && snapshot.ConsentProductionEnabled
 }
 
 // Watch re-reads the policy every interval and reports each change, so an

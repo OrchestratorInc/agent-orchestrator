@@ -222,6 +222,10 @@ func Run(buildVersion string) error {
 	telemetryPolicy := policyauthority.New(filepath.Join(cfg.DataDir, policyauthority.FileName))
 	eventsAllowed := telemetryPolicy.EventsAllowed(context.Background(), cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
 	sentryobs.SetPolicyEnabled(eventsAllowed)
+	sentryobs.SetPolicyCheck(func() bool {
+		return telemetryPolicy.EventsAllowed(context.Background(), cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
+	})
+	defer sentryobs.SetPolicyCheck(nil)
 	telemetrySink, telemetryIdentity, remoteTelemetryActive := newTelemetrySink(cfg, store, log)
 	configureUsageRecording(cfg, store, telemetryIdentity)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()

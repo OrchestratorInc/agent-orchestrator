@@ -42,6 +42,7 @@ var approvedRoutes sync.Map
 var captureGate = struct {
 	sync.Mutex
 	policyEnabled bool
+	policyCheck   func() bool
 	active        int
 	waiters       []chan struct{}
 }{}
@@ -208,13 +209,25 @@ func SetPolicyEnabled(value bool) {
 	captureGate.Unlock()
 }
 
+// SetPolicyCheck reads the durable authority at capture time. The watcher
+// updates the cached gate, while this check closes the interval before its
+// next tick after an opt-out or a consent replacement.
+func SetPolicyCheck(check func() bool) {
+	captureGate.Lock()
+	captureGate.policyCheck = check
+	captureGate.Unlock()
+}
+
 func enterCapture() bool {
 	if !enabled.Load() {
 		return false
 	}
 	captureGate.Lock()
 	defer captureGate.Unlock()
-	if !captureGate.policyEnabled {
+	if captureGate.policyCheck != nil && !captureGate.policyCheck() {
+		return false
+	}
+	if captureGate.policyCheck == nil && !captureGate.policyEnabled {
 		return false
 	}
 	captureGate.active++

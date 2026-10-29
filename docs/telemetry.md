@@ -27,14 +27,13 @@ Electron main and the renderer have a separate desktop Sentry project. Their
 default DSN is distinct from the daemon project; Electron main uses
 `AO_ELECTRON_SENTRY_DSN` for an explicit override. Without one, development
 builds use an empty Electron DSN. The renderer uses this main-owned sender
-and has no independent DSN override. The production release gate remains
-closed until the privacy policy names Sentry and its data categories.
-Once that gate opens, Electron main sends consented error events through its
-own Sentry transport.
+and has no independent DSN override. Packaged stable and nightly builds send
+error events through Electron main only when Share error events is enabled.
 Renderer diagnostics pass through the existing main-owned consent boundary;
 the renderer has no direct Sentry transport. The mobile app keeps its own
 Sentry project and DSN. A desktop opt-in recorded while the Electron release
-gate was closed requires a fresh opt-in before this sender starts.
+gate was closed requires a fresh opt-in before this sender starts. Until that
+answer is recorded, neither the Electron nor daemon Sentry sender may send.
 Once enabled, renderer exceptions go to Electron Sentry rather than PostHog. Failed
 Sentry sends can wait in an offline queue under AO's Electron data directory.
 Error events can include a standard exception type and allowlisted in-app

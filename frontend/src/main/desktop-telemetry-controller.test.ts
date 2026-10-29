@@ -219,19 +219,25 @@ describe("DesktopTelemetryController", () => {
 				consent_generation: gatedGeneration,
 				updated_at: "2026-08-28T10:15:30.000Z",
 			})}\n`, { mode: 0o600 });
+			const capture = vi.fn();
+			const transportFactory = vi.fn(async () => ({ closeAndDrain: async () => {}, capture, clearCache: async () => {} }));
 			const boot = () => new DesktopTelemetryController({
-				authority: new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "linux", productionEnabled: true }),
-				transportFactory: async () => ({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} }),
-				environmentAllowsEvents: true, productionEnabled: true,
+				authority: new TelemetryPolicyAuthority({ dataDir, packagedDefault: true, platform: "linux" }),
+				transportFactory,
+				environmentAllowsEvents: true,
 			});
 
 			const first = boot();
 			await first.initialize();
 			expect(first.snapshot()).toMatchObject({ eventsEnabled: false, consentRenewalRequired: true, state: "applied", acknowledged: true, consentGeneration: gatedGeneration });
 			expect(first.capture({ consentGeneration: gatedGeneration, kind: "message", message: "not sent" })).toBe(false);
+			expect(transportFactory).not.toHaveBeenCalled();
 
 			const optedIn = await first.setEventsEnabled(true, gatedGeneration);
 			expect(optedIn).toMatchObject({ eventsEnabled: true, consentRenewalRequired: false, state: "applied" });
+			expect(transportFactory).toHaveBeenCalledOnce();
+			expect(first.capture({ consentGeneration: optedIn.consentGeneration, kind: "message", message: "sent" })).toBe(true);
+			expect(capture).toHaveBeenCalledOnce();
 
 			const second = boot();
 			await second.initialize();

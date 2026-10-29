@@ -66,8 +66,8 @@ func TestEventsAllowedFollowsTheFileOverTheEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	reader := New(filepath.Join(dir, FileName))
 	ctx := context.Background()
-	if !reader.EventsAllowed(ctx, true, true) {
-		t.Fatal("no policy file: want the explicit environment to allow events")
+	if reader.EventsAllowed(ctx, true, true) {
+		t.Fatal("no policy file: want error reporting off")
 	}
 	if reader.EventsAllowed(ctx, true, false) {
 		t.Fatal("events not set explicitly: want them off")
@@ -85,10 +85,25 @@ func TestEventsAllowedFollowsTheFileOverTheEnvironment(t *testing.T) {
 		t.Fatal("opted out in the app: want events off")
 	}
 	write(`{"schema_version":1,"events_enabled":true,"consent_generation":"`+generation+`","updated_at":"2026-08-28T10:15:30.000Z"}`, 0o600)
-	if !reader.EventsAllowed(ctx, true, true) {
-		t.Fatal("opted in: want events on")
+	if reader.EventsAllowed(ctx, true, true) {
+		t.Fatal("prior opt-in needs production consent renewal")
 	}
-	write(`{"schema_version":1,"events_enabled":true,"consent_generation":"`+generation+`","updated_at":"2026-08-28T10:15:30.000Z"}`, 0o644)
+	write(`{"schema_version":2,"events_enabled":true,"consent_generation":"`+generation+`","consent_production_enabled":false,"updated_at":"2026-08-28T10:15:30.000Z"}`, 0o600)
+	if reader.EventsAllowed(ctx, true, true) {
+		t.Fatal("unanswered renewal: want error reporting off")
+	}
+	write(`{"schema_version":2,"events_enabled":true,"consent_generation":"`+generation+`","consent_production_enabled":true,"updated_at":"2026-08-28T10:15:30.000Z"}`, 0o600)
+	if !reader.EventsAllowed(ctx, true, true) {
+		t.Fatal("renewed consent: want error reporting on")
+	}
+	if reader.EventsAllowed(ctx, true, false) || reader.EventsAllowed(ctx, false, true) {
+		t.Fatal("environment veto: want error reporting off")
+	}
+	write(`{"schema_version":2,"events_enabled":false,"consent_generation":"`+generation+`","consent_production_enabled":true,"updated_at":"2026-08-28T10:15:30.000Z"}`, 0o600)
+	if reader.EventsAllowed(ctx, true, true) {
+		t.Fatal("explicit opt-out: want error reporting off")
+	}
+	write(`{"schema_version":2,"events_enabled":true,"consent_generation":"`+generation+`","consent_production_enabled":true,"updated_at":"2026-08-28T10:15:30.000Z"}`, 0o644)
 	if reader.EventsAllowed(ctx, true, true) {
 		t.Fatal("unsafe file: want events off")
 	}

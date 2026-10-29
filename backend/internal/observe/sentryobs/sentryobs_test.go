@@ -99,6 +99,34 @@ func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
 	}
 }
 
+func TestCaptureChecksDurableConsentBetweenWatcherTicks(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyCheck(nil); SetPolicyEnabled(false); enabled.Store(false) })
+	allowed := false
+	SetPolicyEnabled(true)
+	SetPolicyCheck(func() bool { return allowed })
+	capture := func() {
+		CaptureError(context.Background(), errString("synthetic"), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	}
+	capture()
+	if len(transport.events) != 0 {
+		t.Fatal("unanswered consent reached transport")
+	}
+	allowed = true
+	capture()
+	if len(transport.events) != 1 {
+		t.Fatal("renewed consent did not reach transport")
+	}
+	allowed = false
+	capture()
+	if len(transport.events) != 1 {
+		t.Fatal("opt-out reached transport before watcher tick")
+	}
+}
+
 type recordingTransport struct{ events chan *sentry.Event }
 
 func (*recordingTransport) Configure(sentry.ClientOptions)        {}
