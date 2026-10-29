@@ -460,6 +460,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		}
 	}
 
+	providerMessage = c.mcpAppContext(ctx, providerMessage)
 	ref, err := steerer.Steer(ctx, turn, providerMessage)
 	if err != nil {
 		kind, definitive, refused := classifySteerRejection(err)

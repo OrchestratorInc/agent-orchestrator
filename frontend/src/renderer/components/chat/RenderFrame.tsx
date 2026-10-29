@@ -52,7 +52,7 @@ const ARTIFACT_FRAME_HEIGHT = 400;
 const ARTIFACT_FRAME_MAX_HEIGHT = 640;
 
 /** The app theme as handed to renders; follows data-theme and data-style-theme flips on <html>. */
-function useRenderTheme(): RenderTheme {
+export function useRenderTheme(): RenderTheme {
 	const [theme, setTheme] = useState(readRenderTheme);
 	useEffect(() => {
 		const observer = new MutationObserver(() =>

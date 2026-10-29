@@ -4,6 +4,10 @@ import { blocksRenderFrameNavigation } from "./render-frame-guard";
 const page = "http://127.0.0.1:3001/api/v1/sessions/p-1/renders/r1";
 
 describe("blocksRenderFrameNavigation", () => {
+	it("keeps a remote app in its token-free document", () => {
+		expect(blocksRenderFrameNavigation("about:srcdoc", "https://example.com")).toBe(true);
+		expect(blocksRenderFrameNavigation("about:srcdoc", "about:srcdoc#selection")).toBe(false);
+	});
 	it("lets a frame load its render and move within it", () => {
 		expect(blocksRenderFrameNavigation("about:blank", `${page}#ao-theme=x`)).toBe(false);
 		expect(blocksRenderFrameNavigation(page, `${page}#section`)).toBe(false);

@@ -212,6 +212,12 @@ describe("partitionTurnItems", () => {
 		expect(ids(part.work)).toEqual(["ls", "note"]);
 		expect(part.final).toEqual([]);
 	});
+	it("keeps interactive MCP apps visible after the turn completes", () => {
+		const app = activity("app", 2, { activityKind: "mcp_tool", detail: { mcpApp: { conversationId: "c", resourceUri: "ui://app" } } });
+		const part = partitionTurnItems([message("u", 1, "user", "go"), app, message("done", 3, "assistant", "Done")], turn("completed"))!;
+		expect(part.work).toEqual([]);
+		expect(part.notices).toEqual([app]);
+	});
 
 	it("keeps errors and warnings out of the fold, and leaves later steers inside it", () => {
 		const items = [message("u", 1, "user", "go"), activity("ls", 2), activity("steer", 3, { activityKind: "system", detail: { event: "steer" } }), activity("err", 4, { activityKind: "error" }), activity("warn", 5, { activityKind: "system", detail: { event: "model.rerouted" } }), message("done", 6, "assistant", "ok")];
