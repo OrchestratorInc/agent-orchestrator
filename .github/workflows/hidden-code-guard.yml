@@ -1,0 +1,40 @@
+name: Hidden code guard
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hidden-code-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Hidden code guard
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'skip-hidden-code-guard') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted base code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Scan added PR lines
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head"
+          if [[ "$(git rev-parse FETCH_HEAD)" != "$HEAD_SHA" ]]; then
+            echo "Fetched PR head does not match the event head SHA" >&2
+            exit 1
+          fi
+          git diff --text --no-ext-diff --no-textconv --unified=0 "$BASE_SHA...$HEAD_SHA" -- . | node .github/scripts/hidden-code-guard.mjs
