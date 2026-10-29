@@ -19612,8 +19612,18 @@ components:
       type: object
     SessionBranchState:
       properties:
+        base:
+          type: string
+        baseRef:
+          type: string
+        behind:
+          type: integer
         commits:
           type: integer
+        conflicts:
+          type: boolean
+        head:
+          type: string
         remoteBranch:
           type: string
         unpushed:
@@ -19621,6 +19631,8 @@ components:
       required:
       - commits
       - unpushed
+      - behind
+      - conflicts
       type: object
     SessionHistoryResponse:
       properties:
@@ -19809,6 +19821,10 @@ components:
       properties:
         autoInjectCI:
           type: boolean
+        checks:
+          items:
+            $ref: '#/components/schemas/SessionPRCheck'
+          type: array
         failingChecks:
           items:
             $ref: '#/components/schemas/SessionPRFailingCheck'
@@ -19823,7 +19839,45 @@ components:
       required:
       - state
       - failingChecks
+      - checks
       - autoInjectCI
+      type: object
+    SessionPRCheck:
+      properties:
+        name:
+          type: string
+        status:
+          enum:
+          - unknown
+          - queued
+          - in_progress
+          - passed
+          - failed
+          - skipped
+          - cancelled
+          type: string
+        url:
+          type: string
+      required:
+      - name
+      - status
+      type: object
+    SessionPRCommit:
+      properties:
+        author:
+          type: string
+        committedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        headline:
+          type: string
+        sha:
+          type: string
+      required:
+      - sha
+      - headline
       type: object
     SessionPRConflictFile:
       properties:
@@ -19902,6 +19956,15 @@ components:
       - status
       - conclusion
       type: object
+    SessionPRLabel:
+      properties:
+        color:
+          type: string
+        name:
+          type: string
+      required:
+      - name
+      type: object
     SessionPRMergeabilitySummary:
       properties:
         conflictFiles:
@@ -19948,6 +20011,17 @@ components:
       - host
       - repo
       - number
+      type: object
+    SessionPRRequestedReviewer:
+      properties:
+        avatarUrl:
+          type: string
+        isTeam:
+          type: boolean
+        login:
+          type: string
+      required:
+      - login
       type: object
     SessionPRReviewCommentLink:
       properties:
@@ -20041,6 +20115,12 @@ components:
         ciObservedAt:
           format: date-time
           type: string
+        commitCount:
+          type: integer
+        commits:
+          items:
+            $ref: '#/components/schemas/SessionPRCommit'
+          type: array
         createdAt:
           format: date-time
           type:
@@ -20048,10 +20128,23 @@ components:
           - string
         deletions:
           type: integer
+        description:
+          type: string
+        descriptionTruncated:
+          type: boolean
+        detailsObservedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         headSha:
           type: string
         htmlUrl:
           type: string
+        labels:
+          items:
+            $ref: '#/components/schemas/SessionPRLabel'
+          type: array
         mergeability:
           $ref: '#/components/schemas/SessionPRMergeabilitySummary'
         number:
@@ -20066,6 +20159,10 @@ components:
           type: string
         repo:
           type: string
+        requestedReviewers:
+          items:
+            $ref: '#/components/schemas/SessionPRRequestedReviewer'
+          type: array
         review:
           $ref: '#/components/schemas/SessionPRReviewSummary'
         reviewObservedAt:
@@ -20112,6 +20209,10 @@ components:
       - review
       - mergeability
       - updatedAt
+      - labels
+      - requestedReviewers
+      - commits
+      - commitCount
       type: object
     SessionPRUnresolvedReviewer:
       properties:

@@ -5,6 +5,7 @@ import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
+import { noPRDetails } from "../lib/pr-display";
 import type { CloudCpPullRequestSummary } from "../lib/cloud-cp";
 import { createRendererCloudCpClient } from "../lib/cloud-cp/renderer-client";
 import { subscribeSessionEventsBridged } from "../lib/cloud-cp/stream-bridge";
@@ -31,10 +32,11 @@ export function cloudPRSummaryToSessionPRSummary(
 	autoInjectCI: boolean,
 ): SessionPRSummary {
 	return {
+		...noPRDetails(),
 		...pr,
 		provider: pr.provider === "gitlab" ? "gitlab" : "github",
 		repo: pr.repository,
-		ci: { ...pr.ci, autoInjectCI },
+		ci: { ...pr.ci, checks: [], autoInjectCI },
 		review: pr.review,
 		mergeability: {
 			...pr.mergeability,

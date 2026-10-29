@@ -19,6 +19,7 @@ import (
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
+	"github.com/aoagents/agent-orchestrator/backend/pkg/contract"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
@@ -1379,13 +1380,56 @@ type SessionPRSummary struct {
 	ObservedAt       time.Time                    `json:"observedAt,omitempty"`
 	CIObservedAt     time.Time                    `json:"ciObservedAt,omitempty"`
 	ReviewObservedAt time.Time                    `json:"reviewObservedAt,omitempty"`
+
+	// Description is the PR body as markdown. It is untrusted provider content
+	// and must be sanitized when rendered.
+	Description          string `json:"description,omitempty"`
+	DescriptionTruncated bool   `json:"descriptionTruncated,omitempty"`
+	// Labels, RequestedReviewers and Commits are empty until DetailsObservedAt
+	// is present, and empty afterwards only when the PR has none.
+	Labels             []SessionPRLabel             `json:"labels"`
+	RequestedReviewers []SessionPRRequestedReviewer `json:"requestedReviewers"`
+	// Commits are the newest commits, oldest first; CommitCount is the total.
+	Commits           []SessionPRCommit `json:"commits"`
+	CommitCount       int               `json:"commitCount"`
+	DetailsObservedAt *time.Time        `json:"detailsObservedAt,omitempty"`
+}
+
+// SessionPRLabel is one label on a session PR.
+type SessionPRLabel struct {
+	Name  string `json:"name"`
+	Color string `json:"color,omitempty"`
+}
+
+// SessionPRRequestedReviewer is a user or team whose review is requested.
+type SessionPRRequestedReviewer struct {
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatarUrl,omitempty"`
+	IsTeam    bool   `json:"isTeam,omitempty"`
+}
+
+// SessionPRCommit is one commit on a session PR's branch.
+type SessionPRCommit struct {
+	SHA         string     `json:"sha"`
+	Headline    string     `json:"headline"`
+	Author      string     `json:"author,omitempty"`
+	CommittedAt *time.Time `json:"committedAt,omitempty"`
 }
 
 // SessionPRCISummary is the CI status block for a session PR summary.
 type SessionPRCISummary struct {
 	State         domain.CIState          `json:"state" enum:"unknown,pending,passing,failing"`
 	FailingChecks []SessionPRFailingCheck `json:"failingChecks"`
-	AutoInjectCI  bool                    `json:"autoInjectCI"`
+	// Checks lists every check on the head commit, failing first.
+	Checks       []SessionPRCheck `json:"checks"`
+	AutoInjectCI bool             `json:"autoInjectCI"`
+}
+
+// SessionPRCheck is one CI check on a session PR's head commit.
+type SessionPRCheck struct {
+	Name   string               `json:"name"`
+	Status domain.PRCheckStatus `json:"status" enum:"unknown,queued,in_progress,passed,failed,skipped,cancelled"`
+	URL    string               `json:"url,omitempty"`
 }
 
 // SessionPRFailingCheck is one failed or cancelled CI check for a PR.
@@ -1494,7 +1538,39 @@ func NewSessionPRSummary(in sessionsvc.PRSummary) SessionPRSummary {
 		ObservedAt:       in.ObservedAt,
 		CIObservedAt:     in.CIObservedAt,
 		ReviewObservedAt: in.ReviewObservedAt,
+
+		Description:          in.Description,
+		DescriptionTruncated: in.DescriptionTruncated,
+		Labels:               newSessionPRLabels(in.Labels),
+		RequestedReviewers:   newSessionPRRequestedReviewers(in.RequestedReviewers),
+		Commits:              newSessionPRCommits(in.Commits),
+		CommitCount:          in.CommitCount,
+		DetailsObservedAt:    optionalTime(in.DetailsObservedAt),
 	}
+}
+
+func newSessionPRLabels(in []contract.PullRequestLabel) []SessionPRLabel {
+	out := make([]SessionPRLabel, 0, len(in))
+	for _, label := range in {
+		out = append(out, SessionPRLabel{Name: label.Name, Color: label.Color})
+	}
+	return out
+}
+
+func newSessionPRRequestedReviewers(in []contract.PullRequestRequestedReviewer) []SessionPRRequestedReviewer {
+	out := make([]SessionPRRequestedReviewer, 0, len(in))
+	for _, reviewer := range in {
+		out = append(out, SessionPRRequestedReviewer{Login: reviewer.Login, AvatarURL: reviewer.AvatarURL, IsTeam: reviewer.IsTeam})
+	}
+	return out
+}
+
+func newSessionPRCommits(in []contract.PullRequestCommit) []SessionPRCommit {
+	out := make([]SessionPRCommit, 0, len(in))
+	for _, commit := range in {
+		out = append(out, SessionPRCommit{SHA: commit.SHA, Headline: commit.Headline, Author: commit.Author, CommittedAt: optionalTime(commit.CommittedAt)})
+	}
+	return out
 }
 
 func optionalTime(value time.Time) *time.Time {
@@ -1509,7 +1585,11 @@ func newSessionPRCISummary(in sessionsvc.PRCISummary) SessionPRCISummary {
 	for _, ch := range in.FailingChecks {
 		checks = append(checks, SessionPRFailingCheck{Name: ch.Name, Status: ch.Status, Conclusion: ch.Conclusion, URL: ch.URL})
 	}
-	return SessionPRCISummary{State: in.State, FailingChecks: checks, AutoInjectCI: in.AutoInjectCI}
+	all := make([]SessionPRCheck, 0, len(in.Checks))
+	for _, ch := range in.Checks {
+		all = append(all, SessionPRCheck{Name: ch.Name, Status: ch.Status, URL: ch.URL})
+	}
+	return SessionPRCISummary{State: in.State, FailingChecks: checks, Checks: all, AutoInjectCI: in.AutoInjectCI}
 }
 
 func newSessionPRReviewSummary(in sessionsvc.PRReviewSummary) SessionPRReviewSummary {

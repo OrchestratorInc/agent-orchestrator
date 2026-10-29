@@ -44,6 +44,8 @@ export type PRCardPresentation = {
 	supporting: PRCardStatus[];
 	/** Compact, priority-ordered rows used by pull-request cards. */
 	statusRows?: PRCardStatus[];
+	/** The facts behind `readiness`, shown when the readiness line is opened. */
+	readinessRows?: PRCardStatus[];
 	readiness?: {
 		label: string;
 		detail: string;

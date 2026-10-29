@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // ErrSCMNotFound is the provider-neutral sentinel for successful SCM lookups
@@ -179,6 +181,10 @@ type SCMPRObservation struct {
 	MergedAtProvider time.Time
 	// ClosedAtProvider is the provider's close timestamp when closed.
 	ClosedAtProvider time.Time
+
+	// Details is the PR's description, labels, requested reviewers and commits.
+	// Nil when the provider did not return them, so the stored ones are kept.
+	Details *domain.PullRequestDetails
 }
 
 // SCMCIObservation carries aggregate CI state plus failing-check details.

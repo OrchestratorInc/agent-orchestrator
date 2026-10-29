@@ -172,6 +172,60 @@ describe("portable leaf components", () => {
 		expect(detail.closest(".grid")).toHaveClass("grid-cols-1");
 	});
 
+	it("folds the readiness rows behind a collapsible readiness line", async () => {
+		const presentation: PRCardPresentation = {
+			primary: { key: "lifecycle", label: "Checking merge readiness", tone: "neutral", links: [] },
+			supporting: [],
+			statusRows: [{ key: "lifecycle", label: "Checking merge readiness", tone: "neutral", links: [] }],
+			readinessRows: [
+				{ key: "merge", label: "No conflicts", tone: "success", links: [] },
+				{ key: "ci", label: "Checks unknown", href: "https://example.com/checks", tone: "passive", links: [] },
+			],
+			readiness: { label: "Checking merge readiness", detail: "Waiting for the latest checks and review state.", tone: "neutral" },
+		};
+		render(
+			<PRCardStatusSummary
+				action={<button type="button">Merge</button>}
+				collapsibleReadiness
+				externalLink={ExternalLink}
+				presentation={presentation}
+			/>,
+		);
+
+		const toggle = screen.getByRole("button", { name: "Checking merge readiness" });
+		expect(toggle).toHaveAttribute("aria-expanded", "false");
+		expect(toggle).toHaveAttribute("title", "Waiting for the latest checks and review state.");
+		expect(screen.queryByText("No conflicts")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Merge" })).toBeInTheDocument();
+
+		fireEvent.click(toggle);
+
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		expect(await screen.findByText("No conflicts")).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: /Checks unknown/ })).toHaveAttribute("href", "https://example.com/checks");
+		expect(screen.getByText("Waiting for the latest checks and review state.")).toBeInTheDocument();
+		// The card's own status rows stay out of the dropdown.
+		expect(screen.getAllByText("Checking merge readiness")).toHaveLength(1);
+	});
+
+	it("shows a plain readiness line with its detail when nothing sits behind it", () => {
+		render(
+			<PRCardStatusSummary
+				collapsibleReadiness
+				externalLink={ExternalLink}
+				presentation={{
+					primary: { key: "lifecycle", label: "Ready to merge", tone: "success", links: [] },
+					supporting: [],
+					readinessRows: [],
+					readiness: { label: "Ready to merge", detail: "Checks pass and the review is approved.", tone: "success" },
+				}}
+			/>,
+		);
+
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+		expect(screen.getByText("Checks pass and the review is approved.")).toBeInTheDocument();
+	});
+
 	it("computes overflow against the requested link limit", () => {
 		const parts: PRSummaryPart[] = [
 			{

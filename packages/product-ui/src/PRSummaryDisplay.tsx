@@ -1,6 +1,7 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useId, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ExternalLinkComponent } from "./external-link";
-import { ArrowUpRightIcon } from "./icons";
+import { ArrowUpRightIcon, ChevronIcon } from "./icons";
 import { UserAvatar } from "./UserAvatar";
 import { scmUserAvatarUrl } from "./scm-avatar";
 import type {
@@ -164,6 +165,7 @@ function PRDiffMeta({
 export function PRCardStatusSummary({
 	action,
 	className,
+	collapsibleReadiness = false,
 	externalLink,
 	omit,
 	presentation,
@@ -171,6 +173,11 @@ export function PRCardStatusSummary({
 }: {
 	action?: ReactNode;
 	className?: string;
+	/**
+	 * Show only the merge-readiness line; the facts behind it
+	 * (`readinessRows`) open above it on click.
+	 */
+	collapsibleReadiness?: boolean;
 	externalLink: ExternalLinkComponent;
 	omit?: PRSummaryPartKey[];
 	presentation: PRCardPresentation;
@@ -181,23 +188,24 @@ export function PRCardStatusSummary({
 		(status) => status.key === "lifecycle" || !omitted?.has(status.key),
 	);
 	const rows = presentation.statusRows?.filter((status) => status.key === "lifecycle" || !omitted?.has(status.key));
+	if (presentation.readinessRows && presentation.readiness && collapsibleReadiness) {
+		return (
+			<CollapsibleReadiness
+				action={action}
+				className={className}
+				externalLink={externalLink}
+				readiness={presentation.readiness}
+				reviewDetailsAction={reviewDetailsAction}
+				rows={presentation.readinessRows}
+			/>
+		);
+	}
 	if (rows && presentation.readiness) {
 		return (
 			<div className={cn("border-t border-border pt-2", className)}>
 				<div className="grid min-w-0 grid-cols-1 gap-y-1.5">
 					{rows.map((status) => (
-						<div className="min-w-0" key={status.key}>
-							<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", toneClass[status.tone])}>
-								<span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full bg-current", status.breathe && "animate-status-pulse")} />
-								<PRCardStatusLink externalLink={externalLink} status={status} />
-							</div>
-							{status.detail || (status.key === "review" && reviewDetailsAction) ? (
-								<div className="mt-0.5 flex min-w-0 items-baseline gap-2 pl-4 text-xs leading-4">
-									{status.detail ? <span className="text-muted-foreground">{status.detail}</span> : null}
-									{status.key === "review" && reviewDetailsAction ? reviewDetailsAction : null}
-								</div>
-							) : null}
-						</div>
+						<StatusRow externalLink={externalLink} key={status.key} reviewDetailsAction={reviewDetailsAction} status={status} />
 					))}
 				</div>
 				<div className="mt-2 border-t border-border pt-2">
@@ -277,6 +285,109 @@ export function PRCardStatusSummary({
 								))}
 							</div>
 						</div>
+					) : null}
+				</div>
+				{action ? <div className="shrink-0 self-center">{action}</div> : null}
+			</div>
+		</div>
+	);
+}
+
+
+function StatusRow({
+	externalLink,
+	reviewDetailsAction,
+	status,
+}: {
+	externalLink: ExternalLinkComponent;
+	reviewDetailsAction?: ReactNode;
+	status: PRCardStatus;
+}) {
+	return (
+		<div className="min-w-0">
+			<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", toneClass[status.tone])}>
+				<span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full bg-current", status.breathe && "animate-status-pulse")} />
+				<PRCardStatusLink externalLink={externalLink} status={status} />
+			</div>
+			{status.detail || (status.key === "review" && reviewDetailsAction) ? (
+				<div className="mt-0.5 flex min-w-0 items-baseline gap-2 pl-4 text-xs leading-4">
+					{status.detail ? <span className="text-muted-foreground">{status.detail}</span> : null}
+					{status.key === "review" && reviewDetailsAction ? reviewDetailsAction : null}
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+/** The merge-readiness line as a disclosure: the status rows behind it open upward. */
+function CollapsibleReadiness({
+	action,
+	className,
+	externalLink,
+	readiness,
+	reviewDetailsAction,
+	rows,
+}: {
+	action?: ReactNode;
+	className?: string;
+	externalLink: ExternalLinkComponent;
+	readiness: NonNullable<PRCardPresentation["readiness"]>;
+	reviewDetailsAction?: ReactNode;
+	rows: PRCardStatus[];
+}) {
+	const [open, setOpen] = useState(false);
+	const regionId = useId();
+	const reduceMotion = useReducedMotion();
+	const label = (
+		<>
+			<span aria-hidden="true" className="size-dot-sm shrink-0 rounded-full bg-current" />
+			<span className="min-w-0 truncate">{readiness.label}</span>
+		</>
+	);
+	return (
+		<div className={cn("border-t border-border pt-2", className)}>
+			<AnimatePresence initial={false}>
+				{open ? (
+					<motion.div
+						animate={{ height: "auto", opacity: 1, y: 0, transitionEnd: { overflow: "visible" } }}
+						className="min-w-0"
+						exit={{ height: 0, opacity: 0, y: 8, overflow: "hidden" }}
+						id={regionId}
+						initial={{ height: 0, opacity: 0, y: 8, overflow: "hidden" }}
+						transition={reduceMotion ? { duration: 0 } : { duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
+					>
+						<div className="grid min-w-0 grid-cols-1 gap-y-1.5 pb-2">
+							{rows.map((status) => (
+								<StatusRow externalLink={externalLink} key={status.key} reviewDetailsAction={reviewDetailsAction} status={status} />
+							))}
+						</div>
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+			<div className="flex min-w-0 items-center justify-between gap-3">
+				<div className="min-w-0 flex-1">
+					{rows.length > 0 ? (
+						<button
+							aria-controls={open ? regionId : undefined}
+							aria-expanded={open}
+							className={cn(
+								"-mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-sm px-1 py-0.5 text-left text-xs font-medium leading-4 hover:bg-interactive-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+								toneClass[readiness.tone],
+							)}
+							onClick={() => setOpen((value) => !value)}
+							title={readiness.detail}
+							type="button"
+						>
+							{label}
+							<ChevronIcon aria-hidden="true" className="ml-auto size-icon-2xs shrink-0 text-passive" direction={open ? "up" : "right"} />
+						</button>
+					) : (
+						<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", toneClass[readiness.tone])} title={readiness.detail}>
+							{label}
+						</div>
+					)}
+					{open || rows.length === 0 ? (
+						<div className="mt-0.5 min-w-0 break-words pl-4 text-xs leading-4 text-muted-foreground">{readiness.detail}</div>
 					) : null}
 				</div>
 				{action ? <div className="shrink-0 self-center">{action}</div> : null}

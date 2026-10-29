@@ -102,6 +102,53 @@ type PullRequest struct {
 	// provider's thread-window cap, so stored thread rows are a partial view.
 	ReviewPartial bool
 	AutoInjectCI  bool
+
+	// Details is the PR's description, labels, requested reviewers and commits
+	// from the latest observation. It is a write carrier: nil means the
+	// observation did not carry details, and the stored ones are left as they
+	// are. Reads load stored details separately.
+	Details *PullRequestDetails
+}
+
+// MaxPullRequestDescriptionBytes caps a stored PR description. Providers allow
+// far larger bodies; the view only renders a description.
+const MaxPullRequestDescriptionBytes = 64 * 1024
+
+// PullRequestLabel is one label on a pull request. Color is a provider hex
+// string without the leading "#", or empty.
+type PullRequestLabel struct {
+	Name  string `json:"name"`
+	Color string `json:"color,omitempty"`
+}
+
+// PullRequestRequestedReviewer is a user or team whose review is requested and
+// not yet given.
+type PullRequestRequestedReviewer struct {
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatarUrl,omitempty"`
+	IsTeam    bool   `json:"isTeam,omitempty"`
+}
+
+// PullRequestCommit is one commit on the pull request's branch.
+type PullRequestCommit struct {
+	SHA         string    `json:"sha"`
+	Headline    string    `json:"headline"`
+	Author      string    `json:"author,omitempty"`
+	CommittedAt time.Time `json:"committedAt,omitempty"`
+}
+
+// PullRequestDetails is the slow-changing, view-only part of a pull request.
+type PullRequestDetails struct {
+	// Description is the PR body as markdown, cut to MaxPullRequestDescriptionBytes.
+	Description          string
+	DescriptionTruncated bool
+	Labels               []PullRequestLabel
+	RequestedReviewers   []PullRequestRequestedReviewer
+	// Commits is the newest commits on the branch, oldest first. CommitCount is
+	// the branch's total, which exceeds len(Commits) when the list was capped.
+	Commits     []PullRequestCommit
+	CommitCount int
+	ObservedAt  time.Time
 }
 
 // PullRequestCheck is one normalized CI check run for a pull request.

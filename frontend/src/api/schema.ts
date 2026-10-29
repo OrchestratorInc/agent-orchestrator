@@ -6918,7 +6918,12 @@ export interface components {
             updatedAt: string;
         };
         SessionBranchState: {
+            base?: string;
+            baseRef?: string;
+            behind: number;
             commits: number;
+            conflicts: boolean;
+            head?: string;
             remoteBranch?: string;
             unpushed: number;
         };
@@ -6996,9 +7001,23 @@ export interface components {
         };
         SessionPRCISummary: {
             autoInjectCI: boolean;
+            checks: components["schemas"]["SessionPRCheck"][];
             failingChecks: components["schemas"]["SessionPRFailingCheck"][];
             /** @enum {string} */
             state: "unknown" | "pending" | "passing" | "failing";
+        };
+        SessionPRCheck: {
+            name: string;
+            /** @enum {string} */
+            status: "unknown" | "queued" | "in_progress" | "passed" | "failed" | "skipped" | "cancelled";
+            url?: string;
+        };
+        SessionPRCommit: {
+            author?: string;
+            /** Format: date-time */
+            committedAt?: null | string;
+            headline: string;
+            sha: string;
         };
         SessionPRConflictFile: {
             path: string;
@@ -7026,6 +7045,10 @@ export interface components {
             status: "failed" | "cancelled";
             url?: string;
         };
+        SessionPRLabel: {
+            color?: string;
+            name: string;
+        };
         SessionPRMergeabilitySummary: {
             conflictFiles?: components["schemas"]["SessionPRConflictFile"][];
             prUrl: string;
@@ -7040,6 +7063,11 @@ export interface components {
             provider: "github" | "gitlab";
             repo: string;
             url: string;
+        };
+        SessionPRRequestedReviewer: {
+            avatarUrl?: string;
+            isTeam?: boolean;
+            login: string;
         };
         SessionPRReviewCommentLink: {
             autoInjectReview: boolean;
@@ -7077,11 +7105,18 @@ export interface components {
             ci: components["schemas"]["SessionPRCISummary"];
             /** Format: date-time */
             ciObservedAt?: string;
+            commitCount: number;
+            commits: components["schemas"]["SessionPRCommit"][];
             /** Format: date-time */
             createdAt?: null | string;
             deletions: number;
+            description?: string;
+            descriptionTruncated?: boolean;
+            /** Format: date-time */
+            detailsObservedAt?: null | string;
             headSha: string;
             htmlUrl?: string;
+            labels: components["schemas"]["SessionPRLabel"][];
             mergeability: components["schemas"]["SessionPRMergeabilitySummary"];
             number: number;
             /** Format: date-time */
@@ -7089,6 +7124,7 @@ export interface components {
             /** @enum {string} */
             provider: "github" | "gitlab";
             repo: string;
+            requestedReviewers: components["schemas"]["SessionPRRequestedReviewer"][];
             review: components["schemas"]["SessionPRReviewSummary"];
             /** Format: date-time */
             reviewObservedAt?: string;

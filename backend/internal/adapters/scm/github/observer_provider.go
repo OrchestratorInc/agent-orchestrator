@@ -392,10 +392,25 @@ func buildSCMBatchQuery(refs []ports.SCMPRRef) (string, []string) {
 }
 
 func scmPRFields() string {
-	return strings.ReplaceAll(`
+	return strings.NewReplacer(
+		"CONTEXT_LIMIT", strconv.Itoa(scmBatchCheckContextLimit),
+		"LABEL_LIMIT", strconv.Itoa(scmDetailsLabelLimit),
+		"REVIEWER_LIMIT", strconv.Itoa(scmDetailsReviewerLimit),
+		"COMMIT_LIMIT", strconv.Itoa(scmDetailsCommitLimit),
+	).Replace(`
 number id url state isDraft merged closed title additions deletions changedFiles
 mergeable mergeStateStatus reviewDecision headRefName headRefOid baseRefName baseRefOid
 createdAt updatedAt mergedAt closedAt
+body
+labels(first:LABEL_LIMIT){ nodes{ name color } }
+reviewRequests(first:REVIEWER_LIMIT){ nodes{ requestedReviewer{
+  __typename
+  ... on User { login avatarUrl }
+  ... on Bot { login avatarUrl }
+  ... on Mannequin { login avatarUrl }
+  ... on Team { name }
+} } }
+commitList: commits(last:COMMIT_LIMIT){ totalCount nodes{ commit{ oid messageHeadline committedDate author{ name user{ login } } } } }
 author{ login avatarUrl }
 mergeCommit{ oid }
 commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state contexts(first:CONTEXT_LIMIT){ nodes{
@@ -403,7 +418,7 @@ commits(last:1){ nodes{ commit{ oid statusCheckRollup{ state contexts(first:CONT
   ... on CheckRun { name status conclusion detailsUrl url databaseId }
   ... on StatusContext { context state targetUrl }
 } pageInfo{ hasNextPage endCursor } } } } } }
-`, "CONTEXT_LIMIT", strconv.Itoa(scmBatchCheckContextLimit))
+`)
 }
 
 func (p *Provider) fetchRemainingCheckContexts(ctx context.Context, ref ports.SCMPRRef, pr map[string]any) error {
@@ -532,6 +547,7 @@ func scmObservationFromGraphQL(ref ports.SCMPRRef, pr map[string]any) ports.SCMO
 			UpdatedAtProvider:        parseGitHubTime(str(pr["updatedAt"])),
 			MergedAtProvider:         parseGitHubTime(str(pr["mergedAt"])),
 			ClosedAtProvider:         parseGitHubTime(str(pr["closedAt"])),
+			Details:                  pullRequestDetailsFromGraphQL(pr),
 		},
 		CI: ports.SCMCIObservation{
 			Summary:           ci,

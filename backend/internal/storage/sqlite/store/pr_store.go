@@ -151,6 +151,9 @@ func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, che
 			return err
 		}
 	}
+	if err := writePRDetails(ctx, q, pr.URL, pr.Details); err != nil {
+		return err
+	}
 	for _, c := range checks {
 		if err := q.UpsertPRCheck(ctx, genCheckParams(pr.URL, c)); err != nil {
 			return err

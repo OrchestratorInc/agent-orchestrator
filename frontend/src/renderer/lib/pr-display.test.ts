@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
 import {
+	noPRDetails,
 	prBrowserUrl,
 	prCardPresentation,
 	prDiffSummary,
@@ -11,6 +12,7 @@ import {
 } from "./pr-display";
 
 const summary = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary => ({
+	...noPRDetails(),
 	url: "https://github.com/acme/repo/pull/7",
 	htmlUrl: "https://github.com/acme/repo/pull/7",
 	number: 7,
@@ -25,7 +27,7 @@ const summary = (overrides: Partial<SessionPRSummary> = {}): SessionPRSummary =>
 	additions: 10,
 	deletions: 3,
 	changedFiles: 2,
-	ci: { autoInjectCI: true, state: "passing", failingChecks: [] },
+	ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] },
 	review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] },
 	mergeability: { state: "mergeable", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" },
 	updatedAt: "2026-06-15T00:00:00Z",
@@ -175,7 +177,7 @@ describe("sessionPRDisplaySummaries", () => {
 
 describe("prStatusRows", () => {
 	it("shows unavailable checks without a loading indicator when cloud cannot read CI", () => {
-		const pr = summary({ ci: { autoInjectCI: true, state: "unknown", failingChecks: [] }, mergeability: {
+		const pr = summary({ ci: { autoInjectCI: true, state: "unknown", failingChecks: [], checks: [] }, mergeability: {
 			state: "mergeable", reasons: ["github_checks_unavailable"], prUrl: "https://github.com/acme/repo/pull/7",
 		} });
 		const card = prCardPresentation(pr);
@@ -195,7 +197,7 @@ describe("prStatusRows", () => {
 	it("formats the three PR states without exposing raw unknown", () => {
 		const rows = prStatusRows(
 			summary({
-				ci: { autoInjectCI: true, state: "unknown", failingChecks: [] },
+				ci: { autoInjectCI: true, state: "unknown", failingChecks: [], checks: [] },
 				review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] },
 				mergeability: { state: "unknown", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" },
 			}),
@@ -232,7 +234,7 @@ describe("prCardPresentation", () => {
 	const priorityCases: Array<[string, Partial<SessionPRSummary>, string]> = [
 		["conflict + passing + approval", { mergeability: { state: "conflicting", reasons: [], prUrl: "" } }, "Not mergeable yet"],
 		["clean + passing + approval", { mergeability: { state: "mergeable", reasons: [], prUrl: "" } }, "Mergeable"],
-		["clean + failing + approval", { ci: { autoInjectCI: true, state: "failing", failingChecks: [] }, mergeability: { state: "mergeable", reasons: [], prUrl: "" } }, "Not mergeable yet"],
+		["clean + failing + approval", { ci: { autoInjectCI: true, state: "failing", failingChecks: [], checks: [] }, mergeability: { state: "mergeable", reasons: [], prUrl: "" } }, "Not mergeable yet"],
 	];
 	it.each(priorityCases)("renders the priority stack for %s", (_name, overrides, readiness) => {
 		const presentation = prCardPresentation(summary(overrides));
@@ -309,7 +311,7 @@ describe("prCardPresentation", () => {
 	it("shows checking merge readiness while provider state is pending", () => {
 		const presentation = prCardPresentation(
 			summary({
-				ci: { autoInjectCI: true, state: "pending", failingChecks: [] },
+				ci: { autoInjectCI: true, state: "pending", failingChecks: [], checks: [] },
 				mergeability: { state: "unknown", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" },
 			}),
 		);
@@ -323,6 +325,7 @@ describe("prCardPresentation", () => {
 			summary({
 				ci: {
 					autoInjectCI: true,
+					checks: [],
 					state: "failing",
 					failingChecks: [{ name: "unit", status: "failed", conclusion: "failure", url: "https://ci/unit" }],
 				},
@@ -343,7 +346,7 @@ describe("prCardPresentation", () => {
 	it("retains running checks as linked supporting state when review is the primary action", () => {
 		const presentation = prCardPresentation(
 			summary({
-				ci: { autoInjectCI: true, state: "pending", failingChecks: [] },
+				ci: { autoInjectCI: true, state: "pending", failingChecks: [], checks: [] },
 				review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] },
 				mergeability: {
 					state: "blocked",
@@ -364,7 +367,7 @@ describe("prCardPresentation", () => {
 	it("shows running checks instead of an internal provider blocker", () => {
 		const presentation = prCardPresentation(
 			summary({
-				ci: { autoInjectCI: true, state: "pending", failingChecks: [] },
+				ci: { autoInjectCI: true, state: "pending", failingChecks: [], checks: [] },
 				mergeability: {
 					state: "unstable",
 					reasons: ["blocked_by_provider"],
@@ -414,6 +417,63 @@ describe("prCardPresentation", () => {
 
 		expect(presentation.primary.detail).toBe("GitLab currently reports this pull request can't be merged.");
 		expect(presentation.readiness?.detail).toBe("GitLab currently reports this pull request can't be merged.");
+	});
+});
+
+describe("merge readiness rows", () => {
+	const labels = (pr: SessionPRSummary) => prCardPresentation(pr).readinessRows?.map((row) => row.label);
+	const reviewEntry = (reviewerId: string, verdict: "approved" | "changes_requested", submittedAt = "2026-06-15T00:00:00Z") => ({
+		autoInjectReview: false,
+		reviewerId,
+		submittedAt,
+		verdict,
+	});
+
+	it("always shows conflicts, checks and review, saying no reviews yet instead of no review required", () => {
+		const pr = summary({ review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [] } });
+		expect(labels(pr)).toEqual(["No conflicts", "Checks passing", "No reviews yet"]);
+		expect(prCardPresentation(pr).readinessRows?.[2]).toMatchObject({ tone: "passive" });
+	});
+
+	it("says what is still unknown while GitHub is computing", () => {
+		const pr = summary({
+			ci: { autoInjectCI: true, state: "unknown", failingChecks: [], checks: [] },
+			mergeability: { state: "unknown", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" },
+			review: { decision: "review_required", hasUnresolvedHumanComments: false, unresolvedBy: [] },
+		});
+		expect(labels(pr)).toEqual(["Conflicts unknown", "Checks unknown", "Review required"]);
+		expect(prCardPresentation(pr).readinessRows?.[1]).toMatchObject({ href: "https://github.com/acme/repo/pull/7/checks" });
+	});
+
+	it("names reviewers by their newest verdict", () => {
+		const pr = summary({
+			review: {
+				decision: "changes_requested",
+				hasUnresolvedHumanComments: false,
+				unresolvedBy: [],
+				reviews: [reviewEntry("ada", "changes_requested", "2026-06-14T00:00:00Z"), reviewEntry("ada", "approved"), reviewEntry("lin", "changes_requested")],
+			},
+		});
+		expect(labels(pr)).toEqual(["No conflicts", "Checks passing", "Changes requested by lin"]);
+	});
+
+	it("keeps a voluntary review when no review is required", () => {
+		const pr = summary({
+			review: { decision: "none", hasUnresolvedHumanComments: false, unresolvedBy: [], reviews: [reviewEntry("ada", "approved")] },
+		});
+		expect(labels(pr)?.at(-1)).toBe("Approved by ada");
+	});
+
+	it("shows unresolved comments, which still block the merge without a review rule", () => {
+		const pr = summary({
+			review: { decision: "none", hasUnresolvedHumanComments: true, unresolvedBy: [{ count: 2, links: [], reviewerId: "ada" }] },
+		});
+		expect(prCardPresentation(pr).readinessRows?.at(-1)).toMatchObject({ label: "2 unresolved comments", tone: "warning" });
+	});
+
+	it("shows a merge conflict in the conflicts row", () => {
+		const pr = summary({ mergeability: { state: "conflicting", reasons: [], prUrl: "https://github.com/acme/repo/pull/7" } });
+		expect(prCardPresentation(pr).readinessRows?.[0]).toMatchObject({ label: "Merge conflict", tone: "error" });
 	});
 });
 
@@ -633,7 +693,7 @@ describe("sessionPRDisplaySummaries", () => {
 				},
 			]),
 			[
-				summary({ number: 7, title: "enriched PR #7", ci: { autoInjectCI: true, state: "passing", failingChecks: [] } }),
+				summary({ number: 7, title: "enriched PR #7", ci: { autoInjectCI: true, state: "passing", failingChecks: [], checks: [] } }),
 				summary({ number: 7, title: "duplicate enriched PR #7" }),
 			],
 		);
@@ -698,6 +758,7 @@ describe("prSummaryParts", () => {
 			summary({
 				ci: {
 					autoInjectCI: true,
+					checks: [],
 					state: "failing",
 					failingChecks: [
 						{ name: "copy-check", status: "failed", conclusion: "failure", url: "https://checks.example/copy" },
@@ -760,6 +821,7 @@ describe("prSummaryParts", () => {
 			summary({
 				ci: {
 					autoInjectCI: true,
+					checks: [],
 					state: "failing",
 					failingChecks: [
 						{ name: "unit", status: "failed", conclusion: "failure", url: "https://checks.example/unit" },
@@ -930,6 +992,7 @@ describe("prSummaryParts", () => {
 				state: "merged",
 				ci: {
 					autoInjectCI: true,
+					checks: [],
 					state: "failing",
 					failingChecks: [{ name: "unit", status: "failed", conclusion: "failure" }],
 				},

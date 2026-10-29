@@ -1952,6 +1952,11 @@ func domainFromObservation(sessionID domain.SessionID, sessionRecord domain.Sess
 		ReviewObservedAt:         reviewObservedAt,
 		ReviewPartial:            reviewPartial,
 	}
+	if obs.PR.Details != nil {
+		details := *obs.PR.Details
+		details.ObservedAt = obs.ObservedAt
+		pr.Details = &details
+	}
 	checks := make([]domain.PullRequestCheck, 0, len(obs.CI.Checks))
 	for _, ch := range obs.CI.Checks {
 		checks = append(checks, domain.PullRequestCheck{Name: ch.Name, CommitHash: obs.CI.HeadSHA, Status: domain.PRCheckStatus(ch.Status), Conclusion: ch.Conclusion, URL: ch.URL, Details: ch.ProviderID, LogTail: ch.LogTail, CreatedAt: now})

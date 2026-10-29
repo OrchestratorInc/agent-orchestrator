@@ -120,8 +120,17 @@ export function sessionPRDisplaySummaries(
 	return [...fromFactsMap.values(), ...summaryOnly].sort(comparePRDisplaySummaries);
 }
 
+// The view-only PR fields (labels, requested reviewers, commits) for a summary
+// no provider details were observed for: AO Cloud summaries, a PR known only
+// from session facts, and fixtures. detailsObservedAt stays absent, so a view
+// can tell "not loaded" from "this PR has none".
+export function noPRDetails(): Pick<SessionPRSummary, "labels" | "requestedReviewers" | "commits" | "commitCount"> {
+	return { labels: [], requestedReviewers: [], commits: [], commitCount: 0 };
+}
+
 function sessionPRFactToSummary(session: WorkspaceSession, pr: PullRequestFacts): SessionPRSummary {
 	return {
+		...noPRDetails(),
 		url: pr.url,
 		htmlUrl: pr.url,
 		number: pr.number,
@@ -140,6 +149,8 @@ function sessionPRFactToSummary(session: WorkspaceSession, pr: PullRequestFacts)
 			autoInjectCI: true,
 			state: toCIState(pr.ci),
 			failingChecks: pr.failingChecks ?? [],
+			// Only the daemon's summary lists every check; session facts know the failing ones.
+			checks: [],
 		},
 		review: {
 			decision: toReviewDecision(pr.review),
@@ -235,29 +246,104 @@ export function prCardPresentation(pr: SessionPRSummary): PRCardPresentation {
 			statusRows.push(cardStatus("ci", pr.ci.state === "pending" ? "pr.card.checksPending" : "pr.card.checksLoading", "neutral", undefined, [], prChecksUrl(pr), true));
 		}
 		statusRows.push(cardStatus("review", "pr.card.reviewStatus", reviewTone(pr.review.decision, pr.review.hasUnresolvedHumanComments), reviewStatusDetail(pr)));
+		const readinessRows = mergeReadinessRows(pr);
 		const mergeable = prCanMerge(pr);
 		if (mergeReasons(pr).includes("github_checks_unavailable")) {
-			return { primary, supporting, statusRows, readiness: {
+			return { primary, supporting, statusRows, readinessRows, readiness: {
 				label: appI18n.t("pr.merge.accessLost"),
 				detail: appI18n.t("pr.merge.checksUnavailableDetail"),
 				tone: "warning",
 			} };
 		}
 		if (hasLostGitHubAccess(pr)) {
-			return { primary, supporting, statusRows, readiness: {
+			return { primary, supporting, statusRows, readinessRows, readiness: {
 				label: appI18n.t("pr.merge.accessLost"),
 				detail: appI18n.t("pr.merge.accessLostDetail"),
 				tone: "warning",
 			} };
 		}
 		const checkingReadiness = pr.ci.state === "pending" || pr.ci.state === "unknown" || pr.mergeability.state === "unknown";
-		return { primary, supporting, statusRows, readiness: {
+		return { primary, supporting, statusRows, readinessRows, readiness: {
 			label: appI18n.t(checkingReadiness ? "pr.merge.checkingReadiness" : mergeable ? "pr.merge.mergeable" : "pr.merge.notMergeableYet"),
 			detail: checkingReadiness ? appI18n.t("pr.merge.checkingDetail") : mergeReadinessDetail(pr),
 			tone: checkingReadiness ? "neutral" : mergeable ? "success" : "error",
 		} };
 	}
 	return { primary, supporting };
+}
+
+/**
+ * What the merge-readiness line is made of: conflicts, checks and review,
+ * always in that order so each keeps its place.
+ */
+function mergeReadinessRows(pr: SessionPRSummary): PRCardStatus[] {
+	const merge = pr.mergeability.state;
+	const conflictsKnown = merge !== "unknown";
+	const rows: PRCardStatus[] = [
+		merge === "conflicting"
+			? cardStatus("merge", "pr.card.mergeConflict", "error", undefined, mergeLinks(pr))
+			: cardStatus("merge", conflictsKnown ? "pr.merge.noConflicts" : "pr.merge.conflictsUnknown", conflictsKnown ? "success" : "passive"),
+	];
+	const checksUrl = prChecksUrl(pr);
+	if (mergeReasons(pr).includes("github_checks_unavailable")) {
+		rows.push(cardStatus("ci", "pr.card.checksUnavailable", "warning", undefined, [], checksUrl));
+	} else if (pr.ci.state === "passing") {
+		rows.push(cardStatus("ci", "pr.card.checksPassing", "success", undefined, [], checksUrl));
+	} else if (pr.ci.state === "failing") {
+		rows.push(cardStatus("ci", "pr.card.checksFailing", "error", undefined, [], checksUrl));
+	} else if (pr.ci.state === "pending") {
+		rows.push(cardStatus("ci", "pr.card.checksPending", "neutral", undefined, [], checksUrl, true));
+	} else {
+		rows.push(cardStatus("ci", "pr.card.checksUnknown", "passive", undefined, [], checksUrl));
+	}
+	rows.push(reviewReadinessRow(pr));
+	return rows;
+}
+
+/**
+ * The review row says what happened on the PR. With no review rule GitHub's
+ * decision is empty, and "No review required" would only describe the repo,
+ * so that case shows the reviews themselves, or that there are none yet.
+ */
+function reviewReadinessRow(pr: SessionPRSummary): PRCardStatus {
+	const { approvedBy, changesRequestedBy } = latestReviewers(pr.review.reviews);
+	const unresolved = pr.review.hasUnresolvedHumanComments
+		? appI18n.t("inspector.unresolvedCount", { count: pr.review.unresolvedBy.reduce((sum, reviewer) => sum + reviewer.count, 0) })
+		: undefined;
+	const row = (label: string, tone: PRDisplayTone, detail?: string): PRCardStatus => ({ key: "review", label, detail, links: [], tone });
+	const decision = pr.review.decision;
+	if (decision === "changes_requested" || (decision === "none" && changesRequestedBy.length > 0)) {
+		return row(
+			changesRequestedBy.length > 0 ? appI18n.t("pr.review.changesRequestedBy", { names: changesRequestedBy.join(", ") }) : appI18n.t("pr.review.changesRequested"),
+			"warning",
+			unresolved,
+		);
+	}
+	if (decision === "review_required") {
+		// A partial approval still counts for something when more reviews are needed.
+		return row(appI18n.t("pr.card.reviewRequired"), "review", approvedBy.length > 0 ? appI18n.t("pr.review.approvedBy", { names: approvedBy.join(", ") }) : unresolved);
+	}
+	if (decision === "approved" || approvedBy.length > 0) {
+		return row(
+			approvedBy.length > 0 ? appI18n.t("pr.review.approvedBy", { names: approvedBy.join(", ") }) : appI18n.t("pr.review.approved"),
+			unresolved ? "warning" : "success",
+			unresolved,
+		);
+	}
+	// No rule and no verdict: unresolved comments still block the merge.
+	return unresolved ? row(unresolved, "warning") : row(appI18n.t("pr.review.noReviewsYet"), "passive");
+}
+
+/** Who currently approves or blocks the PR: each reviewer's newest verdict, a later comment-only review not counting. */
+function latestReviewers(reviews: SessionPRSummary["review"]["reviews"] = []): { approvedBy: string[]; changesRequestedBy: string[] } {
+	const latest = new Map<string, NonNullable<SessionPRSummary["review"]["reviews"]>[number]>();
+	for (const review of reviews) {
+		if (review.verdict !== "approved" && review.verdict !== "changes_requested") continue;
+		const seen = latest.get(review.reviewerId);
+		if (!seen || Date.parse(review.submittedAt) >= Date.parse(seen.submittedAt)) latest.set(review.reviewerId, review);
+	}
+	const names = (verdict: string) => [...latest.values()].filter((review) => review.verdict === verdict).map((review) => review.reviewerId);
+	return { approvedBy: names("approved"), changesRequestedBy: names("changes_requested") };
 }
 
 function cardStatus(
@@ -274,6 +360,9 @@ function cardStatus(
 		| "pr.card.checksPending"
 		| "pr.card.checksLoading"
 		| "pr.card.checksUnavailable"
+		| "pr.card.checksUnknown"
+		| "pr.merge.noConflicts"
+		| "pr.merge.conflictsUnknown"
 		| "pr.card.draft"
 		| "pr.card.readyToMerge"
 		| "pr.card.reviewApproved"

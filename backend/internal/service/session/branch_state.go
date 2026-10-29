@@ -134,24 +134,44 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 		return nil // unborn branch
 	}
 	base := target.baseSHA
+	baseRef := ""
 	for _, ref := range target.baseRefs {
 		if sha := tips[ref]; sha != "" {
-			base = sha
+			base, baseRef = sha, ref
 			break
 		}
 	}
 	rec := target.rec
-	fingerprint := local + " " + remote + " " + base
+	fingerprint := local + " " + remote + " " + base + " " + baseRef
 	if rec.BranchState != nil && s.branchTips[rec.ID] == fingerprint {
 		return nil
 	}
 
 	root := rec.Metadata.WorkspacePath
-	var state domain.SessionBranchState
-	if base != "" {
-		commits, ok := gitRevListCount(ctx, root, base+".."+local)
+	state := domain.SessionBranchState{Head: local}
+	switch {
+	case base != "" && baseRef != "":
+		// One call counts both sides, so reading how far behind the base the
+		// branch is costs no extra git process.
+		ahead, behind, ok := gitLeftRightCount(ctx, root, local, base)
 		if !ok {
 			// A failed read is not evidence that nothing was committed.
+			return nil
+		}
+		state.Commits, state.Behind = ahead, behind
+		state.Base, state.BaseRef = branchBaseNames(baseRef)
+		// Both sides must have moved since they split for a merge to conflict.
+		// merge-tree needs git 2.38; an older git leaves conflicts unreported
+		// rather than dropping the other facts. The tips fingerprint above keeps
+		// this to one in-memory merge per new commit on either side.
+		if ahead > 0 && behind > 0 {
+			files, ok := gitMergeConflictFiles(ctx, root, base, local)
+			state.Conflicts = ok && len(files) > 0
+		}
+	case base != "":
+		// Only a recorded commit: there is no base branch to be behind.
+		commits, ok := gitRevListCount(ctx, root, base+".."+local)
+		if !ok {
 			return nil
 		}
 		state.Commits = commits
@@ -233,6 +253,20 @@ func branchBaseRefs(recordedRef, defaultBranch string) []string {
 	return refs
 }
 
+// branchBaseNames splits a full base ref into its short branch name and the
+// ref as shown to people: "refs/remotes/origin/main" is "main" read as
+// "origin/main", and "refs/heads/main" is "main" read as "main".
+func branchBaseNames(ref string) (name, display string) {
+	if rest, ok := strings.CutPrefix(ref, "refs/remotes/"); ok {
+		if _, branch, ok := strings.Cut(rest, "/"); ok {
+			return branch, rest
+		}
+		return rest, rest
+	}
+	name = strings.TrimPrefix(ref, "refs/heads/")
+	return name, name
+}
+
 // readGitHead reads a worktree's common git dir and HEAD from the files git
 // itself reads, so finding them costs no git process.
 func readGitHead(root string) (commonDir, branch, head string, ok bool) {
@@ -281,4 +315,20 @@ func gitRevListCount(ctx context.Context, root, rangeSpec string) (int, bool) {
 	}
 	count, err := strconv.Atoi(strings.TrimSpace(out))
 	return count, err == nil
+}
+
+// gitLeftRightCount counts the commits on head that base lacks and the commits
+// on base that head lacks.
+func gitLeftRightCount(ctx context.Context, root, head, base string) (ahead, behind int, ok bool) {
+	out, err := gitWorkspaceOutput(ctx, root, "rev-list", "--left-right", "--count", head+"..."+base)
+	if err != nil {
+		return 0, 0, false
+	}
+	fields := strings.Fields(out)
+	if len(fields) != 2 {
+		return 0, 0, false
+	}
+	ahead, aheadErr := strconv.Atoi(fields[0])
+	behind, behindErr := strconv.Atoi(fields[1])
+	return ahead, behind, aheadErr == nil && behindErr == nil
 }

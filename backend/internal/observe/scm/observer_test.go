@@ -346,6 +346,55 @@ func testObs(num int) ports.SCMObservation {
 	}
 }
 
+func TestDomainFromObservationCarriesPRDetailsWithTheObservationTime(t *testing.T) {
+	observedAt := time.Unix(100, 0).UTC()
+	obs := ports.SCMObservation{
+		Provider:   "github",
+		Repo:       "o/r",
+		ObservedAt: observedAt,
+		PR: ports.SCMPRObservation{
+			URL:    "https://github.com/o/r/pull/7",
+			Number: 7,
+			Details: &domain.PullRequestDetails{
+				Description: "body",
+				Labels:      []domain.PullRequestLabel{{Name: "bug"}},
+				CommitCount: 3,
+			},
+		},
+	}
+
+	pr, _, _, _, _ := domainFromObservation("s-1", domain.SessionRecord{}, obs, domain.PullRequest{}, persistenceOptions{}, time.Unix(1, 0).UTC())
+	if pr.Details == nil || pr.Details.Description != "body" || len(pr.Details.Labels) != 1 || pr.Details.CommitCount != 3 {
+		t.Fatalf("details = %+v", pr.Details)
+	}
+	if !pr.Details.ObservedAt.Equal(observedAt) {
+		t.Fatalf("details observedAt = %v, want the observation's %v", pr.Details.ObservedAt, observedAt)
+	}
+	if !obs.PR.Details.ObservedAt.IsZero() {
+		t.Fatal("the observation's own details were mutated; the hash input must stay stable")
+	}
+
+	obs.PR.Details = nil
+	pr, _, _, _, _ = domainFromObservation("s-1", domain.SessionRecord{}, obs, domain.PullRequest{}, persistenceOptions{}, time.Unix(1, 0).UTC())
+	if pr.Details != nil {
+		t.Fatalf("details = %+v, want nil so the stored ones are kept", pr.Details)
+	}
+}
+
+func TestMetadataHashChangesWhenOnlyThePRDetailsChange(t *testing.T) {
+	base := ports.SCMObservation{Provider: "github", Repo: "o/r", PR: ports.SCMPRObservation{URL: "u", Number: 1, Details: &domain.PullRequestDetails{Description: "one"}}}
+	edited := base
+	edited.PR.Details = &domain.PullRequestDetails{Description: "two"}
+	if metadataSemanticHash(base) == metadataSemanticHash(edited) {
+		t.Fatal("a description-only edit must change the metadata hash, or the observer skips persisting it")
+	}
+	same := base
+	same.PR.Details = &domain.PullRequestDetails{Description: "one"}
+	if metadataSemanticHash(base) != metadataSemanticHash(same) {
+		t.Fatal("identical details must hash identically, or every tick rewrites the PR")
+	}
+}
+
 func TestDomainFromObservationPreservesStableIdentityAndAliases(t *testing.T) {
 	oldURL := "https://github.com/old-owner/repo/pull/7"
 	currentURL := "https://github.com/new-owner/repo/pull/7"
