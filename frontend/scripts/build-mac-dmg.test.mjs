@@ -86,17 +86,20 @@ describe("install window layout", () => {
 
 	// The art is drawn against the icon coordinates; moving one without the
 	// other leaves the drag cue pointing at empty space.
-	it("draws the rising phrase between the icons, climbing toward Applications", () => {
-		const heads = [...svg.matchAll(/<ellipse cx="([\d.]+)" cy="([\d.]+)"/g)].map(([, x, y]) => ({ x: Number(x), y: Number(y) }));
-		expect(heads).toHaveLength(3);
-		for (const head of heads) {
-			expect(head.x).toBeGreaterThan(DMG_LAYOUT.app.x + DMG_LAYOUT.iconSize / 2);
-			expect(head.x).toBeLessThan(DMG_LAYOUT.applications.x - DMG_LAYOUT.iconSize / 2);
-			expect(Math.abs(head.y - DMG_LAYOUT.app.y)).toBeLessThanOrEqual(16);
+	it("draws the arrow between the icons, landing on Applications", () => {
+		const arrow = /<g class="arrow">\s*<path d="M([\d.]+) ([\d.]+)[^"]*"[^>]*\/>\s*<path d="M[\d.]+ [\d.]+ L([\d.]+) ([\d.]+)/.exec(svg);
+		expect(arrow).not.toBeNull();
+		const [start, tip] = [
+			{ x: Number(arrow[1]), y: Number(arrow[2]) },
+			{ x: Number(arrow[3]), y: Number(arrow[4]) },
+		];
+		expect(start.x).toBeGreaterThan(DMG_LAYOUT.app.x + DMG_LAYOUT.iconSize / 2);
+		expect(tip.x).toBeLessThan(DMG_LAYOUT.applications.x - DMG_LAYOUT.iconSize / 2);
+		expect(tip.x).toBeGreaterThan(start.x + 100);
+		// Starts and lands within the icons' height band.
+		for (const point of [start, tip]) {
+			expect(Math.abs(point.y - DMG_LAYOUT.app.y)).toBeLessThan(DMG_LAYOUT.iconSize / 2);
 		}
-		// Left to right, each note higher than the last (smaller y).
-		expect(heads.map((h) => h.x)).toEqual([...heads.map((h) => h.x)].sort((a, b) => a - b));
-		expect(heads.map((h) => h.y)).toEqual([...heads.map((h) => h.y)].sort((a, b) => b - a));
 		expect(svg).toContain(">drag to Applications</text>");
 	});
 
