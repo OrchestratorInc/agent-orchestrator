@@ -83,15 +83,14 @@ func TestOMPRejectsIdentityMismatchAndPromptlessSessions(t *testing.T) {
 }
 
 func TestOMPNativeIDFromPath(t *testing.T) {
-	cases := map[string]string{
-		"2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl": ompSession,
-		"/root/sessions/-a-b/2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl": ompSession,
-		"noseparator.jsonl": "noseparator",
+	if got := ompNativeIDFromPath("2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl"); got != ompSession {
+		t.Fatalf("name only: got %q, want %q", got, ompSession)
 	}
-	for path, want := range cases {
-		if got := ompNativeIDFromPath(path); got != want {
-			t.Fatalf("ompNativeIDFromPath(%q) = %q, want %q", path, got, want)
-		}
+	if got := ompNativeIDFromPath("/root/sessions/-a-b/2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl"); got != ompSession {
+		t.Fatalf("full path: got %q, want %q", got, ompSession)
+	}
+	if got := ompNativeIDFromPath("noseparator.jsonl"); got != "noseparator" {
+		t.Fatalf("no separator: got %q, want %q", got, "noseparator")
 	}
 	// sourceFiles derives the same grouping id from the file name.
 	f := sourceFiles{harness: domain.HarnessOMP, paths: []string{ompFile("/root")}}
