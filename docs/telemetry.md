@@ -220,6 +220,30 @@ people choose and whether creation succeeds.
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
 
+## Session start checks
+
+Before the desktop app starts an orchestrator or a worker on this computer,
+the daemon checks that the selected agent is installed and signed in, that the
+terminal runtime it needs is present, and that the project's default branch
+resolves. When product telemetry is enabled, it records these events:
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `ao.session.preflight_checked` | Each check, including each re-check | `result`, `blockers`, `blocker_count`, `harness`, `kind` |
+| `ao.session.preflight_resolved` | A re-check no longer reports a blocker the previous check reported | `blocker`, `method`, `harness`, `kind` |
+| `ao.renderer.orchestrator_spawn_failed` | Starting an orchestrator fails | `project_id_hash`, `source`, `error_code`, `harness`, `kind` |
+
+Every value is from a fixed list. `result` is `pass` or `blocked`. `blockers`
+is a sorted, comma-separated list, and `blocker` is a single value, drawn from
+`agent_not_installed`, `agent_unauthorized`, `runtime_prerequisite_missing`,
+`default_branch_unresolved` and `agent_required`. `method` is what you did
+before re-checking: `install`, `login`, `switch_agent`, `set_default_branch`,
+or `recheck`. `harness` is one of AO's supported agent identifiers. `kind` is
+`orchestrator` or `worker`. `error_code` is the daemon's uppercase error code,
+such as `AGENT_BINARY_NOT_FOUND`, or `REQUEST_FAILED` when the request
+returned no code. The project identifier is hashed. No command, path, branch
+name, or error message is sent. Dismissing the check sends nothing further.
+
 ## What Orchestrator.inc does not intentionally send
 
 Product telemetry is designed not to include:
