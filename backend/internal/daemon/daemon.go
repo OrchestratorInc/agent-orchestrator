@@ -259,7 +259,7 @@ func Run(buildVersion string) error {
 	defer stop()
 	var usage *usageTelemetryFlusher
 	if remoteTelemetryActive && telemetryIdentity != nil {
-		usage = startUsageTelemetry(ctx, store, telemetrySink, telemetryIdentity, log)
+		usage = startUsageTelemetry(ctx, store, telemetrySink, telemetryIdentity, installMilestones(cfg), log)
 		defer func() {
 			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -324,6 +324,14 @@ func Run(buildVersion string) error {
 	messenger := newSessionMessenger(store, runtimeAdapter, log, agents)
 
 	lcStack := startLifecycle(ctx, cfg.DataDir, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log)
+	// ao.session.ended joins the usage summaries through the same grouping IDs,
+	// which are scoped to the install and only minted while export is on.
+	lcStack.LCM.DeliveryTelemetry().SetInstallID(func() string {
+		if telemetryIdentity == nil || telemetryIdentity.OptedOut() || telemetryIdentity.ExportSuppressed() {
+			return ""
+		}
+		return telemetryIdentity.Snapshot().InstallID
+	})
 
 	// Wire the controller-facing session service over the same store + LCM, the
 	// selected runtime, routed git/scratch workspaces, the per-session agent

@@ -85,20 +85,53 @@ var remoteCommandTokens = map[string]struct{}{
 }
 
 var remotePayloadAllowlist = map[string]map[string]struct{}{
+	// count is direct human Chat messages; steer_count and send_count are the
+	// other human sends; the surface counts split all three by client.
 	"ao.usage.messages_sent": {
 		"project_telemetry_id": {},
 		"session_telemetry_id": {},
 		"count":                {},
+		"steer_count":          {},
+		"send_count":           {},
+		"desktop_count":        {},
+		"mobile_count":         {},
+		"cli_count":            {},
+		"kind":                 {},
+		"harness":              {},
 	},
+	// Historical backfill is grouped; new outcomes are one per PR with detail.
 	"ao.usage.worker_pr_associated": {
 		"project_telemetry_id": {},
 		"count":                {},
 		"historical":           {},
+		"harness":              {},
+		"scm_provider":         {},
+		"ms_since_spawn":       {},
+		"first_for_install":    {},
 	},
 	"ao.usage.worker_pr_merged": {
 		"project_telemetry_id": {},
 		"count":                {},
 		"historical":           {},
+		"harness":              {},
+		"scm_provider":         {},
+		"ms_since_spawn":       {},
+		"ms_since_open":        {},
+		"review_rounds":        {},
+		"ao_review_used":       {},
+		"merged_via":           {},
+		"first_for_install":    {},
+	},
+	"ao.usage.worker_pr_closed": {
+		"project_telemetry_id": {},
+		"count":                {},
+		"historical":           {},
+		"harness":              {},
+		"scm_provider":         {},
+		"ms_since_spawn":       {},
+		"ms_since_open":        {},
+		"review_rounds":        {},
+		"ao_review_used":       {},
 	},
 	// Reported by the LAN listener on the first authenticated request per
 	// transport per day (httpd/mobile_connect_telemetry.go). "transport" is a
@@ -237,11 +270,26 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"step":        {},
 	},
 	"ao.session.spawned": {
+		"created_by":        {},
 		"duration_ms":       {},
 		"first_for_install": {},
 		"harness":           {},
 		"kind":              {},
 		"github_actor":      {},
+		"surface":           {},
+	},
+	// Whether a session delivered: outcome is pr_opened, completed, killed,
+	// failed or abandoned (internal/deliverytelemetry).
+	"ao.session.ended": {
+		"created_by":           {},
+		"project_telemetry_id": {},
+		"session_telemetry_id": {},
+		"duration_s":           {},
+		"had_pr":               {},
+		"harness":              {},
+		"kind":                 {},
+		"outcome":              {},
+		"waiting_input_count":  {},
 	},
 	"ao.session.waiting_input_entered": {
 		"state": {},
@@ -288,6 +336,10 @@ type PostHogSink struct {
 	// source, release channel) stamped on every event. See environment.go.
 	env     staticEnvironment
 	install *installContext
+	// experimentCohort is this install's fixed 0-99 bucket (cohort.go). Unset
+	// when it could not be read or assigned, which omits the property.
+	experimentCohort    int
+	hasExperimentCohort bool
 	// ident carries the opt-out switch and the signed-in user attributes. Nil
 	// (zero-value sinks in tests) behaves as anonymous and opted in.
 	ident *Identity
@@ -346,6 +398,7 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 		ctx:          ctx,
 		cancel:       cancel,
 	}
+	s.experimentCohort, s.hasExperimentCohort = loadOrAssignExperimentCohort(dataDir)
 	s.wg.Add(1)
 	go s.loop()
 	return s, nil
@@ -592,6 +645,9 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 		s.env.stamp(props)
 	}
 	s.install.stamp(props)
+	if s.hasExperimentCohort {
+		props["experiment_cohort"] = s.experimentCohort
+	}
 	if ev.RequestID != "" {
 		props["request_id"] = ev.RequestID
 	}

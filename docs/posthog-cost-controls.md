@@ -69,8 +69,11 @@ followed by a space:
    `ao.harness.update_idle_wait`, `ao.harness.version_switch` and
    `ao.harness.stale_sessions` (the last is a gauge sent at most every 10
    minutes, only for harnesses with stale sessions).
-6. Drop `$web_vitals` unless a time-boxed performance investigation needs it.
-7. Apply the same routine-command drop as a defensive backstop to
+6. Keep `ao.session.ended` (one per session end). The `ao.usage.*` summaries
+   stay batched for messages; new worker PR outcomes are one event per PR
+   (`count: 1`), which is low volume next to messages.
+7. Drop `$web_vitals` unless a time-boxed performance investigation needs it.
+8. Apply the same routine-command drop as a defensive backstop to
    `ao.v2.cli.invoked` and CLI-channel `ao.v2.app.active`, even though current
    clients should suppress those routine events before transmission.
 

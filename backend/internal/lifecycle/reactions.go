@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
@@ -297,8 +298,12 @@ func (m *Manager) terminateCompletedSession(ctx context.Context, id domain.Sessi
 	if terminator == nil {
 		return fmt.Errorf("terminate completed session %s: session terminator is not configured", id)
 	}
+	before, live := m.liveBeforeEnd(ctx, id)
 	if _, err := terminator.Kill(ctx, id); err != nil {
 		return fmt.Errorf("terminate completed session %s: %w", id, err)
+	}
+	if live {
+		m.delivery.SessionEnded(ctx, before, deliverytelemetry.EndPRMerged)
 	}
 	return nil
 }
@@ -650,7 +655,14 @@ func (m *Manager) ApplyTrackerFacts(ctx context.Context, id domain.SessionID, o 
 		if m.sessionMutationInProgress(id) {
 			return nil
 		}
-		return m.MarkTerminated(ctx, id)
+		before, live := m.liveBeforeEnd(ctx, id)
+		if err := m.MarkTerminated(ctx, id); err != nil {
+			return err
+		}
+		if live {
+			m.delivery.SessionEnded(ctx, before, deliverytelemetry.EndIssueClosed)
+		}
+		return nil
 	}
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil || !ok {

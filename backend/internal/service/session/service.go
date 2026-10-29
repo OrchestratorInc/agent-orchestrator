@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
@@ -209,6 +210,7 @@ type Service struct {
 	usageArchiveFlush   func(context.Context)
 	milestones          ports.InstallMilestones
 	firstSession        firstSessionClaims
+	delivery            *deliverytelemetry.Recorder
 	logger              *slog.Logger
 	backgroundContext   context.Context
 	agentReadiness      ports.AgentReadinessProvider
@@ -291,7 +293,10 @@ type Deps struct {
 	// Milestones durably records the install's first spawned session, so
 	// ao.session.spawned carries first_for_install. Left nil, it is omitted.
 	Milestones ports.InstallMilestones
-	Logger     *slog.Logger
+	// Delivery emits ao.session.ended on kill and ao.pr.opened on claim. Left
+	// nil, neither is reported from this service.
+	Delivery *deliverytelemetry.Recorder
+	Logger   *slog.Logger
 	// AgentReadiness coordinates advisory native harness checks before launch.
 	AgentReadiness ports.AgentReadinessProvider
 	// BackgroundContext owns best-effort work that must survive an HTTP request
@@ -321,7 +326,7 @@ func NewWithDeps(d Deps) *Service {
 	if backgroundContext == nil {
 		backgroundContext = context.Background()
 	}
-	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter}
+	s := &Service{manager: d.Manager, store: d.Store, prClaimer: d.PRClaimer, scm: d.SCM, tracker: d.Tracker, clock: d.Clock, dataDir: d.DataDir, signalCapable: d.SignalCapable, telemetry: d.Telemetry, milestones: d.Milestones, delivery: d.Delivery, logger: d.Logger, backgroundContext: backgroundContext, agentReadiness: d.AgentReadiness, githubIdentity: d.GithubIdentity, titleRefinementSlots: make(chan struct{}, delegatedTaskTitleConcurrency), titleRefinementCancels: map[domain.SessionID]context.CancelFunc{}, outputTypeReconciler: d.OutputTypeReconciler, artifactDeleter: d.ArtifactDeleter}
 	if s.prClaimer == nil {
 		if w, ok := d.Store.(ports.PRClaimer); ok {
 			s.prClaimer = w
@@ -450,6 +455,7 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	// Registered before Spawn writes its seed row, so a concurrent spawn that
 	// sees that row cannot take this spawn's first_for_install claim.
 	s.firstSession.begin(firstSession)
+	createdBy := s.spawnCreatedBy(ctx, cfg)
 	rec, promptBytes, systemPromptBytes, err := s.manager.Spawn(ctx, cfg)
 	if err != nil {
 		s.firstSession.finish(s.milestones, firstSession, false)
@@ -458,7 +464,8 @@ func (s *Service) spawnWithTelemetry(ctx context.Context, cfg ports.SpawnConfig,
 	}
 	// Claimed even when telemetry is off: the marker describes the install.
 	firstForInstall, firstKnown := s.firstSession.finish(s.milestones, firstSession, true)
-	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds(), firstForInstall, firstKnown)
+	s.recordCreatedBy(ctx, rec.ID, createdBy)
+	s.emitSpawned(ctx, rec, s.now().Sub(start).Milliseconds(), firstForInstall, firstKnown, createdBy)
 	if firstSession {
 		s.emitFirstSessionSpawned(ctx, rec, project)
 	}
@@ -559,7 +566,7 @@ func (c *firstSessionClaims) finish(m ports.InstallMilestones, eligible, succeed
 	return ports.FirstForInstall(m, "session_spawned", eligible)
 }
 
-func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64, firstForInstall, firstKnown bool) {
+func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, durationMs int64, firstForInstall, firstKnown bool, createdBy domain.SessionCreator) {
 	if s.telemetry == nil {
 		return
 	}
@@ -569,6 +576,11 @@ func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, dur
 		"kind":        string(rec.Kind),
 		"harness":     string(rec.Harness),
 		"duration_ms": durationMs,
+		"created_by":  string(createdBy),
+	}
+	// Absent for spawns that no client request started (schedules, intake).
+	if surface, ok := telemetrymeta.SurfaceFromContext(ctx); ok {
+		payload["surface"] = string(surface)
 	}
 	if firstKnown {
 		payload["first_for_install"] = firstForInstall
@@ -1063,6 +1075,7 @@ func restoreModeView(mode sessionmanager.RestoreMode) RestoreModeView {
 // Kill delegates terminal intent and teardown to the internal manager.
 func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.cancelTitleRefinement(id)
+	before, live := s.liveSessionBeforeEnd(ctx, id)
 	freed, err := s.manager.Kill(ctx, id)
 	if err != nil {
 		apiErr := toAPIError(err)
@@ -1073,18 +1086,23 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	if s.usageArchiveFlush != nil {
 		s.usageArchiveFlush(ctx)
 	}
+	s.recordKilled(ctx, before, live)
 	return freed, nil
 }
 
 // RequestKill acknowledges terminal intent without waiting for cleanup scripts.
 func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	s.cancelTitleRefinement(id)
+	before, live := s.liveSessionBeforeEnd(ctx, id)
 	result, err := s.manager.RequestKill(ctx, id)
 	if err != nil {
 		apiErr := toAPIError(err)
 		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
 		return result, apiErr
 	}
+	// Terminal intent is acknowledged even while cleanup still runs: the
+	// session has ended for the user.
+	s.recordKilled(ctx, before, live)
 	// RequestKill can acknowledge terminal intent while cleanup still runs.
 	// A later cleanup failure must not leave a completed action in chat.
 	if !result.CleanupPending {
