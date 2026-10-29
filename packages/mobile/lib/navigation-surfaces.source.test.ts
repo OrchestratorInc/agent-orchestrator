@@ -39,11 +39,11 @@ describe("navigation surfaces", () => {
 
 	// Each board tab is a route group with a stack of its own: the stack gives the
 	// tab's page a native header, the group keeps the page's URL.
-	it("gives each board tab a native, untitled header", () => {
+	it("gives each board tab a native large-title header", () => {
 		for (const [group, screen] of [["(workers)", "index"], ["(projects)", "projects"]]) {
 			expect(source(`../app/(tabs)/${group}/_layout.tsx`)).toContain(`<TabStack screen="${screen}" title={boardTitle("${group}")} />`);
 		}
-		expect(source("./TabStack.tsx")).toContain("<Stack screenOptions={{ ...stackScreenOptions(t), ...untitledTabScreenOptions() }}>");
+		expect(source("./TabStack.tsx")).toContain("<Stack screenOptions={{ ...stackScreenOptions(t), ...largeTitleScreenOptions() }}>");
 	});
 
 	// The header row each page used to draw (a safe-area spacer, a title and a bell

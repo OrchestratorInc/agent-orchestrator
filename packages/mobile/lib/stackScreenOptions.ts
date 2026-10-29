@@ -42,19 +42,23 @@ export function stackScreenOptions(t: Theme): NativeStackNavigationOptions {
 }
 
 /**
- * A board tab's header, spread over `stackScreenOptions`: no title, only the
- * page's bar items, so the list runs on seamlessly up to the bar. The screen's
- * `title` still names it for VoiceOver; only the bar's text goes.
+ * A large-title page's header, spread over `stackScreenOptions`: the board
+ * tabs' roots. iOS only; Android has no large title and keeps its top app bar.
  *
- * iOS 26 draws the bar as clear Liquid Glass over the list, with the system's
- * scroll-edge blur, so the rows scroll on under it. The page is then laid out
- * under the bar, so its first view must be the scroll view, with
- * `contentInsetAdjustmentBehavior="automatic"`. Earlier versions, and
- * Android's top app bar, keep the page-coloured bar from the stack defaults.
+ * iOS 26 hides a large title drawn over a set background, so there the bar
+ * keeps none: native-stack makes it transparent, and the system's scroll-edge
+ * effect keeps the collapsed title legible over the list. Earlier versions have
+ * no such effect, so their bar keeps the page's own colour. A large-title bar is
+ * translucent either way and the page is laid out under it, so its first view
+ * must be the scroll view, with `contentInsetAdjustmentBehavior="automatic"`;
+ * that is also the view the title collapses with.
  */
-export function untitledTabScreenOptions(): NativeStackNavigationOptions {
+export function largeTitleScreenOptions(): NativeStackNavigationOptions {
+	if (Platform.OS !== "ios") return {};
 	return {
-		headerTitle: "",
-		...(Platform.OS === "ios" && parseInt(String(Platform.Version), 10) >= 26 ? { headerTransparent: true, headerStyle: undefined } : null),
+		headerLargeTitleEnabled: true,
+		...(parseInt(String(Platform.Version), 10) >= 26 ? { headerStyle: undefined } : null),
+		headerLargeTitleShadowVisible: false,
+		headerLargeTitleStyle: { fontWeight: "800" },
 	};
 }

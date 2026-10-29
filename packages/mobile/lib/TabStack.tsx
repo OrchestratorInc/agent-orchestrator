@@ -1,15 +1,15 @@
 import { Stack, useIsFocused, useRoute } from "expo-router";
 import { useNavigationState } from "expo-router/react-navigation";
-import { stackScreenOptions, untitledTabScreenOptions } from "./stackScreenOptions";
+import { largeTitleScreenOptions, stackScreenOptions } from "./stackScreenOptions";
 import { FrozenAppScope } from "./store";
 import { useTheme } from "./ThemeProvider";
 
 /**
  * A board tab's own stack, holding just the tab's page.
  *
- * The stack is there for the header: a native bar with no title, holding only
- * the header items the page declares with `Stack.Toolbar`, so the list reads
- * as one seamless page under it. Everything the
+ * The stack is there for the header: a native one, with a large title on iOS
+ * that collapses into the bar as the list scrolls and a top app bar on Android.
+ * The page declares its own header items with `Stack.Toolbar`. Everything the
  * page opens is pushed on the root stack, as before, so it covers the tabs.
  *
  * Every tab stays mounted, so a tab that is not selected is frozen at the state
@@ -25,7 +25,7 @@ export function TabStack({ screen, title }: { screen: string; title: string }) {
 	const live = useIsFocused() || selected;
 	return (
 		<FrozenAppScope frozen={!live}>
-			<Stack screenOptions={{ ...stackScreenOptions(t), ...untitledTabScreenOptions() }}>
+			<Stack screenOptions={{ ...stackScreenOptions(t), ...largeTitleScreenOptions() }}>
 				<Stack.Screen name={screen} options={{ title }} />
 			</Stack>
 		</FrozenAppScope>

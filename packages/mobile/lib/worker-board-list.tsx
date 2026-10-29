@@ -117,7 +117,7 @@ export function WorkerBoardList({
 	query?: string;
 	listRef?: RefObject<FlatList<BoardRow> | null>;
 	contentBottomInset: number;
-	/** "automatic" under a translucent header, which the board tab's is on iOS 26. */
+	/** "automatic" under a translucent header, which the board tab's large title is. */
 	contentInsetAdjustmentBehavior?: ScrollViewProps["contentInsetAdjustmentBehavior"];
 	/**
 	 * How much of the list's top a translucent header covers. The list insets
