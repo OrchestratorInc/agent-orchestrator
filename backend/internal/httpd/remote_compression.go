@@ -57,10 +57,16 @@ func (w *remoteJSONResponseWriter) WriteHeader(status int) {
 			w.ResponseWriter = w.uncompressed
 		} else {
 			contentType, _, _ := strings.Cut(w.Header().Get("Content-Type"), ";")
-			if contentType == "application/json" && w.Header().Get("Content-Encoding") == "" {
+			// ServeContent removes Content-Type on 304. Without that type, use a
+			// weak validator conservatively: compression was negotiated, and a
+			// cached encoded representation must not acquire a strong raw tag.
+			if (contentType == "application/json" || (status == http.StatusNotModified && contentType == "")) && w.Header().Get("Content-Encoding") == "" {
 				if etag := w.Header().Get("ETag"); strings.HasPrefix(etag, `"`) {
 					w.Header().Set("ETag", "W/"+etag)
 				}
+			}
+			if status == http.StatusNotModified {
+				w.ResponseWriter = w.uncompressed // A 304 never has an encoded body.
 			}
 		}
 	}

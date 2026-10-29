@@ -61,7 +61,14 @@ func TestArtifactFileRemoteCompressionPreservesRangesAndValidators(t *testing.T)
 		{"matching_if_range", "gzip", "bytes=0-99", strongETag, "", 206, "", strongETag, fmt.Sprintf("bytes 0-99/%d", len(body)), body[:100]},
 		{"mismatched_if_range", "gzip", "bytes=0-99", `"stale"`, "", 200, "", strongETag, "", body},
 		{"weak_if_range", "deflate", "bytes=0-99", "W/" + strongETag, "", 200, "", strongETag, "", body},
-		{"weak_revalidation", "gzip", "", "", "W/" + strongETag, 304, "", strongETag, "", ""},
+		{"weak_revalidation", "gzip", "", "", "W/" + strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"deflate_revalidation", "deflate", "", "", "W/" + strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"strong_revalidation", "gzip", "", "", strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"list_revalidation", "gzip", "", "", `"stale", W/` + strongETag, 304, "", "W/" + strongETag, "", ""},
+		{"wildcard_revalidation", "gzip", "", "", "*", 304, "", "W/" + strongETag, "", ""},
+		{"identity_revalidation", "identity", "", "", "W/" + strongETag, 304, "", strongETag, "", ""},
+		{"rejected_compression_revalidation", "gzip;q=0, deflate;q=0", "", "", "W/" + strongETag, 304, "", strongETag, "", ""},
+		{"range_revalidation", "gzip", "bytes=0-99", "", "W/" + strongETag, 304, "", strongETag, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req, err := http.NewRequest(http.MethodGet, url, nil)

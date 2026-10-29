@@ -208,3 +208,41 @@ func TestRemoteJSONCompressionValidators(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoteJSONCompressionNotModified(t *testing.T) {
+	for _, tc := range []struct {
+		name, accept, contentType, existingEncoding, etag, wantETag string
+	}{
+		{"gzip_without_type", "gzip", "", "", `"v1"`, `W/"v1"`},
+		{"deflate_without_type", "deflate", "", "", `"v1"`, `W/"v1"`},
+		{"json_type_retained", "gzip", "application/json", "", `"v1"`, `W/"v1"`},
+		{"already_weak", "gzip", "", "", `W/"v1"`, `W/"v1"`},
+		{"no_etag", "gzip", "", "", "", ""},
+		{"identity", "identity", "", "", `"v1"`, `"v1"`},
+		{"no_negotiation", "", "", "", `"v1"`, `"v1"`},
+		{"gzip_rejected", "gzip;q=0", "", "", `"v1"`, `"v1"`},
+		{"known_non_json", "gzip", "text/plain", "", `"v1"`, `"v1"`},
+		{"existing_encoding", "gzip", "", "br", `"v1"`, `"v1"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := remoteJSONCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", tc.contentType)
+				w.Header().Set("Content-Encoding", tc.existingEncoding)
+				w.Header().Set("ETag", tc.etag)
+				w.WriteHeader(http.StatusNotModified)
+			}))
+			req := httptest.NewRequest(http.MethodGet, "/file.json", nil)
+			req.Header.Set("Accept-Encoding", tc.accept)
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusNotModified || recorder.Body.Len() != 0 {
+				t.Fatalf("304 acquired a body: status=%d bytes=%d", recorder.Code, recorder.Body.Len())
+			}
+			for name, want := range map[string]string{"ETag": tc.wantETag, "Content-Encoding": tc.existingEncoding} {
+				if got := recorder.Result().Header.Get(name); got != want {
+					t.Errorf("%s=%q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
