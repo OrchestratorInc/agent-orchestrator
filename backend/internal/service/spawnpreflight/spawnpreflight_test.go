@@ -47,14 +47,14 @@ func (f fakeReadiness) InvalidateAgentAuthentication(id string) {
 }
 func (fakeReadiness) RecheckAgent(string) {}
 
-type fakeInstalls map[systeminstall.Target][2]string
+type fakeInstalls map[systeminstall.Target]systeminstall.AgentInstallHint
 
-func (f fakeInstalls) AgentInstallCommand(_ context.Context, target systeminstall.Target) (string, string, error) {
-	plan, ok := f[target]
+func (f fakeInstalls) AgentInstallCommand(_ context.Context, target systeminstall.Target) (systeminstall.AgentInstallHint, error) {
+	hint, ok := f[target]
 	if !ok {
-		return "", "", errors.New("unknown target")
+		return systeminstall.AgentInstallHint{}, errors.New("unknown target")
 	}
-	return plan[0], plan[1], nil
+	return hint, nil
 }
 
 type fakeAuth struct{ plan agentauth.Plan }
@@ -157,7 +157,7 @@ func TestRuntimePrerequisitePerOS(t *testing.T) {
 				t.Fatalf("report = %+v, want one blocking check", report)
 			}
 			check := report.Checks[0]
-			if check.Code != BlockerRuntimePrerequisiteMissing || !check.Blocking || !strings.Contains(check.Command, tc.wantCommand) {
+			if check.Code != BlockerRuntimePrerequisiteMissing || !check.Blocking || !strings.Contains(check.Command, tc.wantCommand) || !check.CanInstall {
 				t.Fatalf("check = %+v, want tmux install via %q", check, tc.wantCommand)
 			}
 		})
@@ -170,8 +170,8 @@ func TestAgentNotInstalledCarriesInstallerCommand(t *testing.T) {
 		Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationNotInstalled, Freshness: domain.AgentReadinessFresh},
 	}}
 	installs := fakeInstalls{
-		"claude-code": {"npm install -g @anthropic-ai/claude-code", ""},
-		"codex":       {"npm install -g @openai/codex", "https://example.test/codex"},
+		"claude-code": {Command: "npm install -g @anthropic-ai/claude-code", Automatic: true},
+		"codex":       {Command: "npm install -g @openai/codex", DocsURL: "https://example.test/codex", Automatic: true},
 	}
 	svc, sink := newService(t, Deps{Facts: facts, Readiness: readiness, Installs: installs, GOOS: "windows", LookPath: noTmux})
 
@@ -183,7 +183,7 @@ func TestAgentNotInstalledCarriesInstallerCommand(t *testing.T) {
 		t.Fatalf("checks = %+v", report.Checks)
 	}
 	check := report.Checks[0]
-	if check.Code != BlockerAgentNotInstalled || !check.Blocking || check.Command != "npm install -g @openai/codex" || check.DocumentationURL == "" {
+	if check.Code != BlockerAgentNotInstalled || !check.Blocking || check.Command != "npm install -g @openai/codex" || check.DocumentationURL == "" || !check.CanInstall {
 		t.Fatalf("check = %+v", check)
 	}
 	if sink.events[0].Payload["blockers"] != "agent_not_installed" || sink.events[0].Payload["result"] != "blocked" {
@@ -196,7 +196,7 @@ func TestSignedOutProbeBlocksOnlyCodex(t *testing.T) {
 		Installation:   domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled, Freshness: domain.AgentReadinessFresh},
 		Authentication: domain.AgentAuthenticationObservation{State: domain.AgentAuthenticationUnauthorized, Freshness: domain.AgentReadinessFresh},
 	}}
-	auth := fakeAuth{plan: agentauth.Plan{DisplayCommand: "claude /login"}}
+	auth := fakeAuth{plan: agentauth.Plan{Available: true, LaunchMode: agentauth.LaunchTerminal, DisplayCommand: "claude /login"}}
 	for _, tc := range []struct {
 		harness      domain.AgentHarness
 		wantBlocking bool
@@ -211,7 +211,7 @@ func TestSignedOutProbeBlocksOnlyCodex(t *testing.T) {
 			t.Fatalf("%s: checks = %+v", tc.harness, report.Checks)
 		}
 		check := report.Checks[0]
-		if check.Blocking != tc.wantBlocking || report.CanProceed == tc.wantBlocking || check.Command != "claude /login" {
+		if check.Blocking != tc.wantBlocking || report.CanProceed == tc.wantBlocking || check.Command != "claude /login" || !check.CanStartLogin {
 			t.Fatalf("%s: check = %+v canProceed=%v", tc.harness, check, report.CanProceed)
 		}
 	}

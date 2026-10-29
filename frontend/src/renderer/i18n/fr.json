@@ -3786,5 +3786,10 @@
 	"spawnPreflight.useAgent": "Utiliser cet agent",
 	"spawnPreflight.noOtherAgents": "Aucun autre agent connecté n’est disponible.",
 	"spawnPreflight.setupGuide": "Guide de configuration",
-	"spawnPreflight.startAnyway": "Démarrer quand même"
+	"spawnPreflight.startAnyway": "Démarrer quand même",
+	"spawnPreflight.install": "Installer",
+	"spawnPreflight.installing": "Installation…",
+	"spawnPreflight.installFailed": "L’installation n’a pas abouti. Exécutez la commande vous-même, puis vérifiez à nouveau.",
+	"spawnPreflight.signIn": "Se connecter",
+	"spawnPreflight.signInFailed": "Impossible d’ouvrir le terminal de connexion."
 }

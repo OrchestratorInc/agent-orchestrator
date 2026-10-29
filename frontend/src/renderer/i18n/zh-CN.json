@@ -3699,5 +3699,10 @@
 	"spawnPreflight.useAgent": "使用此智能体",
 	"spawnPreflight.noOtherAgents": "没有其他已登录的智能体。",
 	"spawnPreflight.setupGuide": "设置指南",
-	"spawnPreflight.startAnyway": "仍然启动"
+	"spawnPreflight.startAnyway": "仍然启动",
+	"spawnPreflight.install": "安装",
+	"spawnPreflight.installing": "正在安装…",
+	"spawnPreflight.installFailed": "安装未完成。请自行运行此命令，然后重新检查。",
+	"spawnPreflight.signIn": "登录",
+	"spawnPreflight.signInFailed": "无法打开登录终端。"
 }

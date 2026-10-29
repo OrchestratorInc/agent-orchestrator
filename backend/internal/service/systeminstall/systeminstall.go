@@ -580,34 +580,45 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 	return out, nil
 }
 
-// AgentInstallCommand returns a command the user can paste into a terminal
-// to install target on this machine, plus its setup guide. It prefers the
-// recommended method, then any other available one. Downloaded-script
-// installers are skipped: their display form names the script rather than a
-// runnable line, so a harness with only those gets just the guide.
-func (s *Service) AgentInstallCommand(ctx context.Context, target Target) (command, docsURL string, err error) {
+// AgentInstallHint is what a user needs to install one agent harness here.
+type AgentInstallHint struct {
+	// Command is a line the user can paste into a terminal, or empty when
+	// only downloaded-script installers exist: their display form names the
+	// script rather than a runnable line.
+	Command string
+	// DocsURL is the harness's setup guide.
+	DocsURL string
+	// Automatic is true when AO can run the recommended method itself
+	// through POST /api/v1/agents/{agent}/install.
+	Automatic bool
+}
+
+// AgentInstallCommand resolves an AgentInstallHint for target. The command
+// prefers the recommended method, then any other available one.
+func (s *Service) AgentInstallCommand(ctx context.Context, target Target) (AgentInstallHint, error) {
 	if !IsAgentTarget(target) {
-		return "", "", fmt.Errorf("unknown agent install target %q", target)
+		return AgentInstallHint{}, fmt.Errorf("unknown agent install target %q", target)
 	}
 	planner, err := s.newRequestPlanner(ctx)
 	if err != nil {
-		return "", "", err
+		return AgentInstallHint{}, err
 	}
 	plans := planner.agentMethodPlans(target, AgentOperationInstall)
 	recommended := plans[recommendedPlanIndex(plans)]
-	docsURL = recommended.DocsURL
-	if docsURL == "" {
-		docsURL = agentDocumentationURLs[target]
+	hint := AgentInstallHint{DocsURL: recommended.DocsURL, Automatic: !recommended.Unsupported}
+	if hint.DocsURL == "" {
+		hint.DocsURL = agentDocumentationURLs[target]
 	}
 	for _, plan := range append([]Plan{recommended}, plans...) {
 		if plan.Unsupported || plan.Script != nil {
 			continue
 		}
 		if command := displayCommand(plan); command != "" {
-			return command, docsURL, nil
+			hint.Command = command
+			break
 		}
 	}
-	return "", docsURL, nil
+	return hint, nil
 }
 
 func plansByMethod(plans []Plan) map[string]Plan {

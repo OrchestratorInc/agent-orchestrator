@@ -3717,5 +3717,10 @@
 	"spawnPreflight.useAgent": "Diesen Agenten verwenden",
 	"spawnPreflight.noOtherAgents": "Kein anderer angemeldeter Agent verfügbar.",
 	"spawnPreflight.setupGuide": "Einrichtungsanleitung",
-	"spawnPreflight.startAnyway": "Trotzdem starten"
+	"spawnPreflight.startAnyway": "Trotzdem starten",
+	"spawnPreflight.install": "Installieren",
+	"spawnPreflight.installing": "Wird installiert…",
+	"spawnPreflight.installFailed": "Die Installation wurde nicht abgeschlossen. Führen Sie den Befehl selbst aus und prüfen Sie dann erneut.",
+	"spawnPreflight.signIn": "Anmelden",
+	"spawnPreflight.signInFailed": "Das Anmeldeterminal konnte nicht geöffnet werden."
 }

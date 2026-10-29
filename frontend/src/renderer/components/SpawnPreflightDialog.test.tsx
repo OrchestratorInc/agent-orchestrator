@@ -9,11 +9,15 @@ const mocks = vi.hoisted(() => ({
 	setBranch: vi.fn(),
 	clipboard: vi.fn(),
 	openExternal: vi.fn(),
+	install: vi.fn(),
+	startAuth: vi.fn(),
+	closeTerminal: vi.fn(),
 }));
 
 vi.mock("../lib/spawn-preflight", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../lib/spawn-preflight")>()),
 	checkSpawnPreflight: mocks.check,
+	runPreflightInstall: mocks.install,
 	setProjectOrchestratorAgent: mocks.setAgent,
 	setProjectDefaultBranch: mocks.setBranch,
 }));
@@ -29,6 +33,21 @@ vi.mock("../hooks/useAgentReadinessQuery", () => ({
 			],
 		},
 	}),
+}));
+
+vi.mock("../hooks/useAgentAuth", () => ({
+	useStartAgentAuth: () => ({ mutateAsync: mocks.startAuth }),
+}));
+
+// The real panel attaches a terminal; this stand-in exposes the exit signal.
+vi.mock("./settings/harness/HarnessAuthTerminalPanel", () => ({
+	closeAuthTerminal: mocks.closeTerminal,
+	HarnessAuthTerminalPanel: ({ workflow, onTerminalState }: { workflow: { terminal: { title: string } }; onTerminalState: (state: string) => void }) => (
+		<div>
+			<p>{workflow.terminal.title}</p>
+			<button type="button" onClick={() => onTerminalState("exited")}>Exit login</button>
+		</div>
+	),
 }));
 
 vi.mock("../lib/bridge", () => ({
@@ -54,6 +73,7 @@ beforeEach(() => {
 	mocks.clipboard.mockResolvedValue(undefined);
 	mocks.setAgent.mockResolvedValue(undefined);
 	mocks.setBranch.mockResolvedValue(undefined);
+	mocks.closeTerminal.mockResolvedValue(undefined);
 });
 
 describe("SpawnPreflightDialog", () => {
@@ -196,5 +216,67 @@ describe("SpawnPreflightDialog", () => {
 		expect(resolve).not.toHaveBeenCalled();
 		expect(reject).toHaveBeenCalledOnce();
 		expect(screen.queryByRole("dialog")).toBeNull();
+	});
+
+	it("installs with one click and re-checks when the job succeeds", async () => {
+		const user = userEvent.setup();
+		mocks.install.mockResolvedValue({ target: "codex", status: "succeeded" });
+		mocks.check.mockResolvedValue(readyReport);
+		const { resolve } = openDialog({
+			ready: false, canProceed: false, kind: "orchestrator", harness: "codex",
+			checks: [{ code: "agent_not_installed", blocking: true, command: "npm install -g @openai/codex", canInstall: true }],
+		});
+		await user.click(screen.getByRole("button", { name: "Install" }));
+		expect(mocks.install).toHaveBeenCalledWith(expect.objectContaining({ code: "agent_not_installed" }), "codex");
+		expect(mocks.check.mock.calls[0]?.[1]).toEqual({ blockers: ["agent_not_installed"], method: "install" });
+		expect(resolve).toHaveBeenCalledWith({ harness: "claude-code" });
+	});
+
+	it("keeps the dialog open with the job error when an install fails", async () => {
+		const user = userEvent.setup();
+		mocks.install.mockResolvedValue({ target: "tmux", status: "failed", error: "Homebrew is not installed" });
+		openDialog({
+			ready: false, canProceed: false, kind: "worker", harness: "claude-code",
+			checks: [{ code: "runtime_prerequisite_missing", blocking: true, command: "brew install tmux", canInstall: true }],
+		});
+		await user.click(screen.getByRole("button", { name: "Install" }));
+		expect(screen.getByRole("alert")).toHaveTextContent("Homebrew is not installed");
+		expect(mocks.check).not.toHaveBeenCalled();
+	});
+
+	it("signs in through the embedded login terminal and re-checks when it exits", async () => {
+		const user = userEvent.setup();
+		mocks.startAuth.mockResolvedValue({
+			action: "login",
+			terminal: { handleId: "shell-1", title: "Sign in to Codex", workingDir: "/tmp", createdAt: "2026-10-28T00:00:00Z" },
+		});
+		mocks.check.mockResolvedValue(readyReport);
+		const { resolve } = openDialog({
+			ready: false, canProceed: false, kind: "orchestrator", harness: "codex",
+			checks: [{ code: "agent_unauthorized", blocking: true, command: "codex login", canStartLogin: true }],
+		});
+		await user.click(screen.getByRole("button", { name: "Sign in" }));
+		expect(mocks.startAuth).toHaveBeenCalledWith("codex");
+		expect(screen.getByText("Sign in to Codex")).toBeInTheDocument();
+		expect(mocks.check).not.toHaveBeenCalled();
+		await user.click(screen.getByRole("button", { name: "Exit login" }));
+		expect(mocks.closeTerminal).toHaveBeenCalledWith("shell-1");
+		expect(mocks.check.mock.calls[0]?.[1]).toEqual({ blockers: ["agent_unauthorized"], method: "login" });
+		expect(resolve).toHaveBeenCalledWith({ harness: "claude-code" });
+	});
+
+	it("closes an open login terminal when the dialog is dismissed", async () => {
+		const user = userEvent.setup();
+		mocks.startAuth.mockResolvedValue({
+			action: "login",
+			terminal: { handleId: "shell-2", title: "Sign in to Codex", workingDir: "/tmp", createdAt: "2026-10-28T00:00:00Z" },
+		});
+		openDialog({
+			ready: false, canProceed: false, kind: "orchestrator", harness: "codex",
+			checks: [{ code: "agent_unauthorized", blocking: true, canStartLogin: true }],
+		});
+		await user.click(screen.getByRole("button", { name: "Sign in" }));
+		await user.keyboard("{Escape}");
+		expect(mocks.closeTerminal).toHaveBeenCalledWith("shell-2");
 	});
 });

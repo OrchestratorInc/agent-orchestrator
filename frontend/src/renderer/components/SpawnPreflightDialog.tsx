@@ -1,10 +1,13 @@
-import { useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Download, ExternalLink, LogIn } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
+import { useStartAgentAuth } from "../hooks/useAgentAuth";
+import type { AgentId } from "../lib/agent-options";
 import { aoBridge } from "../lib/bridge";
 import {
 	checkSpawnPreflight,
+	runPreflightInstall,
 	setProjectDefaultBranch,
 	setProjectOrchestratorAgent,
 	useSpawnPreflightStore,
@@ -15,6 +18,7 @@ import {
 } from "../lib/spawn-preflight";
 import { cn } from "../lib/utils";
 import { IssueSection, ManualCommand } from "./InstallDependencyDialog";
+import { closeAuthTerminal, HarnessAuthTerminalPanel, type AuthTerminalWorkflow } from "./settings/harness/HarnessAuthTerminalPanel";
 import {
 	Dialog,
 	DialogContent,
@@ -49,6 +53,17 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 	const [agent, setAgent] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+
+	const startAuth = useStartAgentAuth();
+	const [installing, setInstalling] = useState<SpawnPreflightCheck["code"] | null>(null);
+	const [authWorkflow, setAuthWorkflow] = useState<AuthTerminalWorkflow | null>(null);
+	const authWorkflowRef = useRef<AuthTerminalWorkflow | null>(null);
+	authWorkflowRef.current = authWorkflow;
+	// A sign-in terminal must not outlive the dialog that opened it.
+	useEffect(() => () => {
+		const workflow = authWorkflowRef.current;
+		if (workflow) void closeAuthTerminal(workflow.terminal.handleId).catch(() => undefined);
+	}, []);
 
 	const agents = readiness.data?.agents ?? [];
 	const labelFor = (id?: string) => agents.find((candidate) => candidate.id === id)?.label ?? id ?? "";
@@ -87,6 +102,64 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 		await recheck(nextMethod, nextInput);
 	};
 
+	// AO runs the install itself, then re-checks as soon as the job ends.
+	const install = async (check: SpawnPreflightCheck) => {
+		setBusy(true);
+		setInstalling(check.code);
+		setError(null);
+		try {
+			const job = await runPreflightInstall(check, report.harness);
+			if (job.status !== "succeeded") {
+				setError(job.error || t("spawnPreflight.installFailed"));
+				setBusy(false);
+				return;
+			}
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : t("spawnPreflight.installFailed"));
+			setBusy(false);
+			return;
+		} finally {
+			setInstalling(null);
+		}
+		await recheck("install");
+	};
+
+	// The harness's own reviewed login runs in an embedded terminal; when it
+	// exits, the terminal closes and the pre-flight re-checks on its own.
+	const signIn = async () => {
+		if (!report.harness) return;
+		setBusy(true);
+		setError(null);
+		try {
+			const result = await startAuth.mutateAsync(report.harness);
+			setAuthWorkflow({
+				agentId: report.harness as AgentId,
+				action: result.action,
+				terminal: result.terminal,
+				guidance: result.guidance ?? "",
+				terminalInput: result.terminalInput,
+				phase: "running",
+				startedAt: Date.now(),
+			});
+		} catch (cause) {
+			setError(cause instanceof Error ? cause.message : t("spawnPreflight.signInFailed"));
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const closeSignIn = async (workflow: AuthTerminalWorkflow) => {
+		setAuthWorkflow(null);
+		await closeAuthTerminal(workflow.terminal.handleId).catch(() => undefined);
+	};
+
+	const finishSignIn = async (workflow: AuthTerminalWorkflow) => {
+		setAuthWorkflow((current) => current?.terminal.handleId === workflow.terminal.handleId ? { ...current, phase: "verifying" } : current);
+		await closeAuthTerminal(workflow.terminal.handleId).catch(() => undefined);
+		setAuthWorkflow(null);
+		await recheck("login");
+	};
+
 	const useAgent = () => {
 		if (!agent) return;
 		// An orchestrator's agent lives in project config so every later start
@@ -115,7 +188,27 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 				</div>
 				<div className={cn(settingsDialogBodyClass, "gap-5")}>
 					{report.checks.map((check) => (
-						<CheckSection key={check.code} check={check} agentLabel={harnessLabel} onCopy={(copied) => setMethod(copied)} />
+						<CheckSection
+							key={check.code}
+							check={check}
+							agentLabel={harnessLabel}
+							busy={busy || authWorkflow !== null}
+							installing={installing === check.code}
+							onCopy={(copied) => setMethod(copied)}
+							onInstall={() => void install(check)}
+							onSignIn={() => void signIn()}
+						>
+							{check.code === "agent_unauthorized" && authWorkflow ? (
+								<HarnessAuthTerminalPanel
+									workflow={authWorkflow}
+									onClose={() => void closeSignIn(authWorkflow)}
+									onRetry={() => void closeSignIn(authWorkflow).then(signIn)}
+									onTerminalState={(state) => {
+										if (state === "exited" && authWorkflowRef.current?.phase === "running") void finishSignIn(authWorkflowRef.current);
+									}}
+								/>
+							) : null}
+						</CheckSection>
 					))}
 					{report.checks.some((check) => check.code === "default_branch_unresolved") ? (
 						<div className="flex flex-col gap-1.5">
@@ -191,11 +284,21 @@ function SpawnPreflightBody({ pending }: { pending: PendingSpawnPreflight }) {
 function CheckSection({
 	check,
 	agentLabel,
+	busy,
+	installing,
 	onCopy,
+	onInstall,
+	onSignIn,
+	children,
 }: {
 	check: SpawnPreflightCheck;
 	agentLabel: string;
+	busy: boolean;
+	installing: boolean;
 	onCopy: (method: SpawnPreflightMethod) => void;
+	onInstall: () => void;
+	onSignIn: () => void;
+	children?: ReactNode;
 }) {
 	const { t } = useTranslation();
 	const copy = {
@@ -227,8 +330,21 @@ function CheckSection({
 	}[check.code];
 	return (
 		<IssueSection label={copy.label} detail={copy.detail}>
-			{check.command || check.documentationUrl ? (
+			{check.command || check.documentationUrl || check.canInstall || check.canStartLogin || children ? (
 				<div className="mt-1 flex flex-col gap-1.5">
+					{check.canInstall ? (
+						<button type="button" className="settings-footer-button self-start" disabled={busy} onClick={onInstall}>
+							<Download className="size-icon-sm" aria-hidden="true" />
+							{installing ? t("spawnPreflight.installing") : t("spawnPreflight.install")}
+						</button>
+					) : null}
+					{check.canStartLogin && !children ? (
+						<button type="button" className="settings-footer-button self-start" disabled={busy} onClick={onSignIn}>
+							<LogIn className="size-icon-sm" aria-hidden="true" />
+							{t("spawnPreflight.signIn")}
+						</button>
+					) : null}
+					{children}
 					{check.command ? <ManualCommand command={check.command} t={t} onCopy={() => onCopy(copy.method)} /> : null}
 					{check.documentationUrl ? (
 						<button

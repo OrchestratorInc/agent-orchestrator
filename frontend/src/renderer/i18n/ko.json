@@ -3717,5 +3717,10 @@
 	"spawnPreflight.useAgent": "이 에이전트 사용",
 	"spawnPreflight.noOtherAgents": "로그인된 다른 에이전트가 없습니다.",
 	"spawnPreflight.setupGuide": "설정 가이드",
-	"spawnPreflight.startAnyway": "그대로 시작"
+	"spawnPreflight.startAnyway": "그대로 시작",
+	"spawnPreflight.install": "설치",
+	"spawnPreflight.installing": "설치 중…",
+	"spawnPreflight.installFailed": "설치가 완료되지 않았습니다. 명령을 직접 실행한 뒤 다시 확인하세요.",
+	"spawnPreflight.signIn": "로그인",
+	"spawnPreflight.signInFailed": "로그인 터미널을 열 수 없습니다."
 }

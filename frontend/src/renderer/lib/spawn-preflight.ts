@@ -8,6 +8,7 @@ export type SpawnPreflightCheck = components["schemas"]["SpawnPreflightCheck"];
 export type SpawnPreflightBlocker = SpawnPreflightCheck["code"];
 export type SpawnPreflightMethod = components["schemas"]["SpawnPreflightResolution"]["method"];
 type ProjectConfig = components["schemas"]["ProjectConfig"];
+type InstallJob = components["schemas"]["InstallJob"];
 
 export type SpawnPreflightInput = {
 	projectId: string;
@@ -141,4 +142,40 @@ export function setProjectOrchestratorAgent(projectId: string, agent: string): P
 
 export function setProjectDefaultBranch(projectId: string, branch: string): Promise<void> {
 	return updateProjectConfig(projectId, (config) => ({ ...config, defaultBranch: branch }));
+}
+
+const ACTIVE_INSTALL_STATUSES = new Set<InstallJob["status"]>(["running", "waiting_for_idle", "installing", "verifying"]);
+
+/**
+ * Runs AO's own install for an installable pre-flight blocker and waits for
+ * the job to end: the agent through its install route with the recommended
+ * method, or tmux through the system install route. Resolves with the final
+ * job; the caller re-checks on success. The daemon owns every command.
+ */
+export async function runPreflightInstall(
+	check: Pick<SpawnPreflightCheck, "code">,
+	harness: string | undefined,
+	{ intervalMs = 1_000, timeoutMs = 15 * 60_000 }: { intervalMs?: number; timeoutMs?: number } = {},
+): Promise<InstallJob> {
+	const runtime = check.code === "runtime_prerequisite_missing";
+	const agent = harness ?? "";
+	if (!runtime && (check.code !== "agent_not_installed" || !agent)) throw new Error("Nothing to install");
+	const start = runtime
+		? await apiClient.POST("/api/v1/system/install/{target}", { params: { path: { target: "tmux" } } })
+		: await apiClient.POST("/api/v1/agents/{agent}/install", {
+				params: { path: { agent } },
+				body: { operation: "install" },
+			});
+	if (start.error || !start.data) throw new Error(apiErrorMessage(start.error, appI18n.t("spawnPreflight.installFailed")));
+	let job: InstallJob = start.data;
+	const deadline = Date.now() + timeoutMs;
+	while (ACTIVE_INSTALL_STATUSES.has(job.status) && Date.now() < deadline) {
+		await new Promise((resolve) => setTimeout(resolve, intervalMs));
+		const next = runtime
+			? await apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "tmux" } } })
+			: await apiClient.GET("/api/v1/agents/{agent}/install", { params: { path: { agent } } });
+		// A failed status read is transient; keep the last job and poll again.
+		if (next.data) job = next.data;
+	}
+	return job;
 }

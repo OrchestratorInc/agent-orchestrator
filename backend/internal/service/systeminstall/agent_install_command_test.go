@@ -13,9 +13,13 @@ func TestAgentInstallCommandPerOS(t *testing.T) {
 		t.Run(goos, func(t *testing.T) {
 			s := newTestService(goos, "npm", "bash", "powershell.exe")
 			s.installCapabilities = installCapabilitiesStub{prefix: "/Users/test/.npm", writable: true}
-			command, docsURL, err := s.AgentInstallCommand(context.Background(), TargetCodex)
+			hint, err := s.AgentInstallCommand(context.Background(), TargetCodex)
 			if err != nil {
 				t.Fatal(err)
+			}
+			command, docsURL := hint.Command, hint.DocsURL
+			if !hint.Automatic {
+				t.Fatalf("hint = %+v, want AO able to run the install", hint)
 			}
 			if !strings.Contains(command, "npm install") || !strings.Contains(command, "@openai/codex") {
 				t.Fatalf("command = %q, want the npm install line", command)
@@ -34,10 +38,11 @@ func TestAgentInstallCommandWithoutRunnableMethodKeepsGuide(t *testing.T) {
 	for _, goos := range []string{"darwin", "linux", "windows"} {
 		t.Run(goos, func(t *testing.T) {
 			s := newTestService(goos, "bash", "powershell.exe")
-			command, docsURL, err := s.AgentInstallCommand(context.Background(), TargetGoose)
+			hint, err := s.AgentInstallCommand(context.Background(), TargetGoose)
 			if err != nil {
 				t.Fatal(err)
 			}
+			command, docsURL := hint.Command, hint.DocsURL
 			if strings.Contains(command, "<downloaded from") {
 				t.Fatalf("command = %q is a script placeholder", command)
 			}
@@ -46,7 +51,7 @@ func TestAgentInstallCommandWithoutRunnableMethodKeepsGuide(t *testing.T) {
 			}
 		})
 	}
-	if _, _, err := newTestService("linux").AgentInstallCommand(context.Background(), TargetTmux); err == nil {
+	if _, err := newTestService("linux").AgentInstallCommand(context.Background(), TargetTmux); err == nil {
 		t.Fatal("tmux is not an agent target")
 	}
 }

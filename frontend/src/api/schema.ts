@@ -7539,6 +7539,8 @@ export interface components {
         };
         SpawnPreflightCheck: {
             blocking: boolean;
+            canInstall?: boolean;
+            canStartLogin?: boolean;
             /** @enum {string} */
             code: "agent_not_installed" | "agent_unauthorized" | "runtime_prerequisite_missing" | "default_branch_unresolved" | "agent_required";
             command?: string;

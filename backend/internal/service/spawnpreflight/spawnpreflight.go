@@ -83,6 +83,13 @@ type Check struct {
 	// Command is the display-only install or sign-in command for this OS.
 	Command          string `json:"command,omitempty"`
 	DocumentationURL string `json:"documentationUrl,omitempty"`
+	// CanInstall is set when AO can run the install itself: through
+	// POST /api/v1/agents/{agent}/install for an agent, or
+	// POST /api/v1/system/install/tmux for the runtime prerequisite.
+	CanInstall bool `json:"canInstall,omitempty"`
+	// CanStartLogin is set when POST /api/v1/agents/{agent}/auth opens the
+	// harness's reviewed sign-in terminal.
+	CanStartLogin bool `json:"canStartLogin,omitempty"`
 }
 
 // Report is the response of POST /api/v1/sessions/preflight.
@@ -104,7 +111,7 @@ type SpawnFacts interface {
 // InstallPlans resolves a copyable install command from the installer
 // catalog; *systeminstall.Service in production.
 type InstallPlans interface {
-	AgentInstallCommand(ctx context.Context, target systeminstall.Target) (command, docsURL string, err error)
+	AgentInstallCommand(ctx context.Context, target systeminstall.Target) (systeminstall.AgentInstallHint, error)
 }
 
 // AuthPlans resolves sign-in plans; *agentauth.Service in production.
@@ -237,11 +244,11 @@ func (s *Service) installCheck(ctx context.Context, harness domain.AgentHarness)
 	if s.d.Installs == nil {
 		return check
 	}
-	command, docsURL, err := s.d.Installs.AgentInstallCommand(ctx, systeminstall.Target(harness))
+	hint, err := s.d.Installs.AgentInstallCommand(ctx, systeminstall.Target(harness))
 	if err != nil {
 		return check
 	}
-	check.Command, check.DocumentationURL = command, docsURL
+	check.Command, check.DocumentationURL, check.CanInstall = hint.Command, hint.DocsURL, hint.Automatic
 	return check
 }
 
@@ -258,6 +265,7 @@ func (s *Service) loginCheck(ctx context.Context, harness domain.AgentHarness) C
 	}
 	check.Command = plan.DisplayCommand
 	check.DocumentationURL = plan.DocumentationURL
+	check.CanStartLogin = plan.Available && plan.LaunchMode == agentauth.LaunchTerminal
 	return check
 }
 
@@ -266,6 +274,7 @@ func (s *Service) tmuxCheck() Check {
 	check := Check{Code: BlockerRuntimePrerequisiteMissing, Blocking: true, DocumentationURL: plan.DocsURL}
 	if !plan.Unsupported {
 		check.Command = systeminstall.DisplayCommand(plan)
+		check.CanInstall = true
 	}
 	return check
 }

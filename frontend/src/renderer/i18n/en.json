@@ -3698,5 +3698,10 @@
 	"spawnPreflight.useAgent": "Use this agent",
 	"spawnPreflight.noOtherAgents": "No other signed-in agent is available.",
 	"spawnPreflight.setupGuide": "Setup guide",
-	"spawnPreflight.startAnyway": "Start anyway"
+	"spawnPreflight.startAnyway": "Start anyway",
+	"spawnPreflight.install": "Install",
+	"spawnPreflight.installing": "Installing…",
+	"spawnPreflight.installFailed": "The install did not finish. Run the command yourself, then check again.",
+	"spawnPreflight.signIn": "Sign in",
+	"spawnPreflight.signInFailed": "Could not open the sign-in terminal."
 }

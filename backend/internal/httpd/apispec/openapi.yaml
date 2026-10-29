@@ -21162,6 +21162,10 @@ components:
       properties:
         blocking:
           type: boolean
+        canInstall:
+          type: boolean
+        canStartLogin:
+          type: boolean
         code:
           enum:
           - agent_not_installed

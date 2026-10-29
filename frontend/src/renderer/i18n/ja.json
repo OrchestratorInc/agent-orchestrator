@@ -3717,5 +3717,10 @@
 	"spawnPreflight.useAgent": "このエージェントを使用",
 	"spawnPreflight.noOtherAgents": "サインイン済みの他のエージェントはありません。",
 	"spawnPreflight.setupGuide": "セットアップガイド",
-	"spawnPreflight.startAnyway": "このまま開始"
+	"spawnPreflight.startAnyway": "このまま開始",
+	"spawnPreflight.install": "インストール",
+	"spawnPreflight.installing": "インストール中…",
+	"spawnPreflight.installFailed": "インストールが完了しませんでした。コマンドを自分で実行してから、もう一度確認してください。",
+	"spawnPreflight.signIn": "サインイン",
+	"spawnPreflight.signInFailed": "サインイン用のターミナルを開けませんでした。"
 }

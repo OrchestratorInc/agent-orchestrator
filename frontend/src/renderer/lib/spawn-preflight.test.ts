@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "./api-client";
 import {
 	checkSpawnPreflight,
+	runPreflightInstall,
 	ensureSpawnPreflight,
 	isSpawnPreflightCancelled,
 	setProjectDefaultBranch,
@@ -143,5 +144,33 @@ describe("project config fixes", () => {
 	it("surfaces a failed save", async () => {
 		put.mockResolvedValueOnce({ data: undefined, error: { code: "INVALID" }, response: new Response() } as never);
 		await expect(setProjectDefaultBranch("p1", "trunk")).rejects.toThrow("Could not save the project");
+	});
+});
+
+describe("runPreflightInstall", () => {
+	it("installs an agent with the recommended method and polls until the job ends", async () => {
+		post.mockResolvedValueOnce({ data: { target: "codex", status: "installing" }, error: undefined, response: new Response() } as never);
+		get
+			.mockResolvedValueOnce({ data: undefined, error: { code: "TRANSIENT" }, response: new Response() } as never)
+			.mockResolvedValueOnce({ data: { target: "codex", status: "verifying" }, error: undefined, response: new Response() } as never)
+			.mockResolvedValueOnce({ data: { target: "codex", status: "succeeded" }, error: undefined, response: new Response() } as never);
+		const job = await runPreflightInstall({ code: "agent_not_installed" }, "codex", { intervalMs: 0 });
+		expect(job.status).toBe("succeeded");
+		expect(post).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } }, body: { operation: "install" } });
+		expect(get).toHaveBeenCalledTimes(3);
+		expect(get).toHaveBeenCalledWith("/api/v1/agents/{agent}/install", { params: { path: { agent: "codex" } } });
+	});
+
+	it("installs tmux through the system install route", async () => {
+		post.mockResolvedValueOnce({ data: { target: "tmux", status: "succeeded" }, error: undefined, response: new Response() } as never);
+		await expect(runPreflightInstall({ code: "runtime_prerequisite_missing" }, "claude-code")).resolves.toMatchObject({ status: "succeeded" });
+		expect(post).toHaveBeenCalledWith("/api/v1/system/install/{target}", { params: { path: { target: "tmux" } } });
+		expect(get).not.toHaveBeenCalled();
+	});
+
+	it("rejects when the install cannot start or there is nothing to install", async () => {
+		post.mockResolvedValueOnce({ data: undefined, error: { code: "INSTALL_UNSUPPORTED" }, response: new Response() } as never);
+		await expect(runPreflightInstall({ code: "agent_not_installed" }, "codex")).rejects.toThrow();
+		await expect(runPreflightInstall({ code: "default_branch_unresolved" }, "codex")).rejects.toThrow("Nothing to install");
 	});
 });
