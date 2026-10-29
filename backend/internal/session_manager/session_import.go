@@ -74,7 +74,7 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME"}[rec.Harness]
+	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessOpenCode: "OPENCODE_DATA_DIR"}[rec.Harness]
 	if key == "" {
 		return
 	}
@@ -123,6 +123,12 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		if claudeSessionLive(ctx, filepath.Join(source.ConfigDir, "sessions"), source.NativeID, rec.Metadata.WorkspacePath) {
 			return true
 		}
+	case domain.HarnessOpenCode:
+		// OpenCode keeps all conversations in one shared SQLite store with no
+		// per-session lock or live-session registry, and its transcript path is a
+		// row id rather than a writable file. With no positive evidence that
+		// another process holds this conversation, report not-owned.
+		return false
 	}
 	// A writer holds the plain file; Codex restores a compressed one on resume.
 	return writableTranscriptOwner(ctx, strings.TrimSuffix(rec.Metadata.NativeTranscriptPath, ".zst"))

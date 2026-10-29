@@ -34,6 +34,12 @@ it("offers one button per configured agent, each opening that agent's Import tab
 	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "claude-code", harnessTab: "import" });
 });
 
+it("offers OpenCode, whose local chats AO can import", () => {
+	renderOffer(agent("opencode", true, "authorized"));
+	fireEvent.click(screen.getByRole("button", { name: "Import OpenCode chats" }));
+	expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness", focusAgentId: "opencode", harnessTab: "import" });
+});
+
 it("shows nothing when no importable agent is configured", () => {
 	renderOffer(agent("claude-code", false, "authorized"), agent("codex", true, "unauthorized"));
 	expect(screen.queryByText("Bring your earlier chats into AO")).not.toBeInTheDocument();

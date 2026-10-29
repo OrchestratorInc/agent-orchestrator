@@ -105,7 +105,11 @@ func New(store Store, dataDir string) *Service {
 	if codex == "" {
 		codex = filepath.Join(home, ".codex")
 	}
-	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex}}
+	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex}
+	if opencode := openCodeRoot(home); opencode != "" {
+		roots[domain.HarnessOpenCode] = opencode
+	}
+	s := &Service{store: store, home: canonical(home), roots: roots}
 	if dataDir != "" {
 		s.excluded = []string{canonical(dataDir)}
 	}
@@ -341,6 +345,10 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 
 // discover lists transcripts without reading them, newest first.
 func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, root string) ([]sourceFiles, error) {
+	if harness == domain.HarnessOpenCode {
+		// OpenCode stores conversations in a SQLite database, not a projects tree.
+		return discoverOpenCode(ctx, root)
+	}
 	byKey := map[string]*sourceFiles{}
 	dir := filepath.Join(root, "projects")
 	if harness == domain.HarnessCodex {
@@ -461,7 +469,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessOpenCode}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {
