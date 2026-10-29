@@ -61,7 +61,9 @@ async function expectReachable(dock: Locator, control: Locator) {
 
 /** The focused field's row paints its whole focus ring, without the scroll body clipping an edge. */
 async function expectRingUnclipped(body: Locator, field: Locator) {
-	const layout = await field.evaluate((node, bodyNode) => {
+	const bodyHandle = await body.elementHandle();
+	// Polled, because moving focus may still be scrolling the row in.
+	await expect.poll(() => field.evaluate((node, bodyNode) => {
 		// The row is the nearest ancestor drawing a box-shadow ring; its spread is how far the ring reaches.
 		let row: Element | null = node;
 		let spread = 0;
@@ -77,8 +79,7 @@ async function expectRingUnclipped(body: Locator, field: Locator) {
 			top: rect.top - spread >= bodyRect.top - 0.5,
 			bottom: rect.bottom + spread <= bodyRect.bottom + 0.5,
 		};
-	}, await body.elementHandle());
-	expect(layout).toEqual({ ring: true, top: true, bottom: true });
+	}, bodyHandle)).toEqual({ ring: true, top: true, bottom: true });
 }
 
 test("a long question scrolls on its own and leaves the answers and actions reachable @T0", async ({ page }) => {
@@ -102,15 +103,18 @@ test("a long question scrolls on its own and leaves the answers and actions reac
 	expect(await question.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
 });
 
-test("the first choice and the Other answer keep their whole focus ring above the footer @T0", async ({ page }) => {
+test("every focused answer row keeps its whole focus ring inside the scrolling answers @T0", async ({ page }) => {
+	// Enough choices that the answers scroll, so moving focus scrolls rows in to the body's edges.
+	const choices = Array.from({ length: 12 }, (_, index) => ({
+		const: `direction-${index + 1}`,
+		title: `Direction ${index + 1}`,
+		description: "Keeps each icon where a user drops it.",
+	}));
 	const dock = await openDock(page, {
 		inputMode: "form",
 		message: "Which direction should ship?",
 		schema: { type: "object", required: ["question_0"], properties: {
-			question_0: { type: "string", title: "Direction", oneOf: [
-				{ const: "trail", title: "Pixel trail" },
-				{ const: "keep", title: "Keep current" },
-			] },
+			question_0: { type: "string", title: "Direction", oneOf: choices },
 			question_0_custom: {
 				type: "string", title: "Other",
 				_meta: { _askUserQuestionCustomAnswer: { questionId: "question_0", isCustomAnswer: true } },
@@ -118,18 +122,34 @@ test("the first choice and the Other answer keep their whole focus ring above th
 		} },
 	});
 	const body = dock.getByTestId("elicitation-scroll-body");
+	expect(await body.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
 
-	// They are the rows on the scroll body's top and bottom edges. Tab in from the
-	// header so the choice shows its keyboard ring; a text field shows one on click.
+	// Tab in from the header so the choices show their keyboard ring. The first sits on the
+	// body's top edge; each arrow step after that scrolls the next one in at the bottom edge.
 	await dock.getByRole("button", { name: "Cancel" }).focus();
 	await page.keyboard.press("Tab");
-	const firstChoice = dock.getByRole("radio", { name: "Pixel trail" });
-	await expect(firstChoice).toBeFocused();
-	await expectRingUnclipped(body, firstChoice);
+	for (let index = 0; index < choices.length; index++) {
+		if (index > 0) await page.keyboard.press("ArrowDown");
+		const choice = dock.getByRole("radio").nth(index);
+		await expect(choice).toBeFocused();
+		await expectRingUnclipped(body, choice);
+	}
+	expect(await body.evaluate((node) => node.scrollTop > 0)).toBe(true);
 
+	// The browser scrolls to the Other field, which sits inside the row that draws the ring.
+	await page.keyboard.press("Tab");
 	const other = dock.getByRole("textbox", { name: "Other" });
-	await other.click();
+	await expect(other).toBeFocused();
 	await expectRingUnclipped(body, other);
+
+	// Back into the picked choice and up the list: each step scrolls a row in at the top edge.
+	await page.keyboard.press("Shift+Tab");
+	for (let index = choices.length - 1; index >= 0; index--) {
+		if (index < choices.length - 1) await page.keyboard.press("ArrowUp");
+		const choice = dock.getByRole("radio").nth(index);
+		await expect(choice).toBeFocused();
+		await expectRingUnclipped(body, choice);
+	}
 });
 
 test("a long URL scrolls between a pinned header and consent actions @T0", async ({ page }) => {
