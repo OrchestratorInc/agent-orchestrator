@@ -31,7 +31,15 @@ async function viaMain<T>(hostId: string | undefined, request: AgentLoginRequest
 // An empty secret on a provider-key method reuses the key AO already saved;
 // device also publishes the key to the OS user environment.
 export async function startAgentUILogin(agentId: string, method: string, secret: string, hostId?: string, model?: string, device?: boolean): Promise<AgentLoginSnapshot> {
-	const options = { ...(secret ? { secret } : {}), ...(model ? { model } : {}), ...(device ? { device: true } : {}) };
+	return startLogin(agentId, method, hostId, { ...(secret ? { secret } : {}), ...(model ? { model } : {}), ...(device ? { device: true } : {}) });
+}
+
+/** Saves a key for a provider picked from the harness's own catalog, in that harness's own store. */
+export async function startCatalogKeyLogin(agentId: string, provider: string, secret: string, hostId?: string): Promise<AgentLoginSnapshot> {
+	return startLogin(agentId, "provider_key", hostId, { secret, provider });
+}
+
+async function startLogin(agentId: string, method: string, hostId: string | undefined, options: { secret?: string; model?: string; device?: boolean; provider?: string }): Promise<AgentLoginSnapshot> {
 	const { data, error } = await viaMain<AgentLoginSnapshot>(hostId, { action: "start", agentId, method, ...options })
 		?? await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations", {
 			params: { path: { agent: agentId } }, body: { method, ...options },
@@ -129,4 +137,13 @@ export async function probeAgentAuth(agentId: string, hostId?: string) {
 	});
 	if (error || !data) throw new AgentCheckError("Authentication probe", error, response?.status);
 	return data;
+}
+
+export type CatalogProvider = components["schemas"]["CatalogProvider"];
+
+/** Key-only providers in the harness's own provider catalog on this host. */
+export async function fetchCatalogProviders(agentId: string, hostId?: string): Promise<CatalogProvider[]> {
+	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/agents/{agent}/auth/providers", { params: { path: { agent: agentId } } });
+	if (error || !data) throw new Error(apiErrorMessage(error, "Could not load providers."));
+	return data.providers;
 }

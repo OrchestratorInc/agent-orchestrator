@@ -2,7 +2,7 @@ import { Building2, Check, ChevronDown, Copy, ExternalLink, KeyRound, LoaderCirc
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../../../api/schema";
-import { actOnAgentUILogin, cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot } from "../../../hooks/useAgentAuth";
+import { actOnAgentUILogin, cancelAgentUILogin, fetchCatalogProviders, getAgentUILogin, startAgentUILogin, startCatalogKeyLogin, submitAgentUILoginCode, type AgentLoginSnapshot, type CatalogProvider } from "../../../hooks/useAgentAuth";
 import { checkProviderKey, providerKeyName, type ProviderKey } from "../../../hooks/useProviderKeys";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { apiErrorCode } from "../../../lib/api-client";
@@ -13,6 +13,8 @@ import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
+
+const CATALOG_METHOD = "provider_key";
 
 type MenuAction = "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
 
@@ -38,6 +40,10 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	const [device, setDevice] = useState(false);
 	const [models, setModels] = useState<string[]>([]);
 	const [loadingModels, setLoadingModels] = useState(false);
+	// The harness's own provider catalog, for its provider_key method.
+	const [catalog, setCatalog] = useState<CatalogProvider[]>();
+	const [catalogError, setCatalogError] = useState("");
+	const [catalogProvider, setCatalogProvider] = useState("");
 	const [loginCode, setLoginCode] = useState("");
 	const [operation, setOperation] = useState<AgentLoginSnapshot>();
 	const [busy, setBusy] = useState(false);
@@ -82,6 +88,18 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 			if (current) void disposeAgentLogin(agentId, hostId, () => cancelAgentUILogin(agentId, current.id, hostId)).catch(() => undefined);
 		};
 	}, [agentId, hostId]);
+
+	const offersCatalog = availableMethods.some((item) => item.id === CATALOG_METHOD);
+	useEffect(() => {
+		if (!offersCatalog) return;
+		let active = true;
+		void fetchCatalogProviders(agentId, hostId).then((providers) => {
+			if (active) setCatalog(providers);
+		}).catch((err) => {
+			if (active) setCatalogError(err instanceof Error ? err.message : t("settings.harness.loginUi.catalogUnavailable"));
+		});
+		return () => { active = false; };
+	}, [agentId, hostId, offersCatalog, t]);
 
 	// Bring the inline credential field into view and focus it without the
 	// browser's instant focus jump.
@@ -152,7 +170,8 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 	const start = async (target = method) => {
 		const targetNeedsModel = (agentId === "qwen" || agentId === "openhands" || agentId === "continue" && target?.id !== "env_CONTINUE_API_KEY") && target?.id.startsWith("env_");
 		const targetKey = providerKeyFor(target?.id);
-		if (pending.current || locked || !target || (target.secret && !secret.trim() && !targetKey?.configured) || (targetNeedsModel && !model.trim())) return;
+		const targetCatalog = target?.id === CATALOG_METHOD;
+		if (pending.current || locked || !target || (target.secret && !secret.trim() && !targetKey?.configured) || (targetNeedsModel && !model.trim()) || (targetCatalog && !catalogProvider)) return;
 		pending.current = true;
 		setBusy(true);
 		setError("");
@@ -171,7 +190,9 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 			}
 			await runAgentLoginTask(agentId, hostId, async () => {
 				if (!mounted.current) return;
-				const next = targetKey && device
+				const next = targetCatalog
+					? await startCatalogKeyLogin(agentId, catalogProvider, credential, hostId)
+					: targetKey && device
 					? await startAgentUILogin(agentId, target.id, credential, hostId, targetNeedsModel ? model.trim() : undefined, true)
 					: targetNeedsModel
 					? await startAgentUILogin(agentId, target.id, credential, hostId, model.trim())
@@ -243,6 +264,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 		setSecret("");
 		setModel("");
 		setModels([]);
+		setCatalogProvider("");
 		setDevice(providerKeyFor(item.id)?.device ?? false);
 		setLoginCode("");
 		setError("");
@@ -330,13 +352,25 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 						<span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-(--color-bg-tertiary) text-settings-muted group-aria-expanded/method:text-settings-label"><MethodIcon className="size-4" aria-hidden="true" /></span>
 						<span className="min-w-0 flex-1 space-y-0.5">
 							<span className="block text-[13px] leading-5 font-medium text-settings-label">{label}</span>
-							<span id={titleId + "-" + item.id} className="block text-xs leading-4 text-settings-muted">{item.id === "native" ? t("settings.harness.loginUi.nativeHint") : item.id.startsWith("env_") ? savedHint(providerKeyFor(item.id)) ?? t("settings.harness.loginUi.envHint") : t(`settings.harness.loginUi.hints.${key}`, { defaultValue: key.endsWith("_browser") ? "Finish sign-in in your browser." : item.label })}</span>
+							<span id={titleId + "-" + item.id} className="block text-xs leading-4 text-settings-muted">{item.id === "native" ? t("settings.harness.loginUi.nativeHint") : item.id === CATALOG_METHOD ? catalogError || (catalog ? t("settings.harness.loginUi.catalogHint", { total: catalog.length, agent: agentLabel(agentId) }) : t("settings.harness.loginUi.catalogLoading")) : item.id.startsWith("env_") ? savedHint(providerKeyFor(item.id)) ?? t("settings.harness.loginUi.envHint") : t(`settings.harness.loginUi.hints.${key}`, { defaultValue: key.endsWith("_browser") ? "Finish sign-in in your browser." : item.label })}</span>
 						</span>
 						{busy && selected ? <LoaderCircle className="size-3.5 shrink-0 animate-spin text-settings-muted" aria-hidden="true" />
 							: item.secret ? <ChevronDown className="size-4 shrink-0 text-settings-muted transition-transform group-aria-expanded/method:rotate-180" aria-hidden="true" />
 							: <ExternalLink className="size-3.5 shrink-0 text-settings-muted" aria-hidden="true" />}
 					</button>
 					{open && <div ref={secretRowRef} className="flex scroll-mb-4 flex-wrap items-center gap-2 pr-4 pb-4 pl-15" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); choose(item); } }}>
+						{item.id === CATALOG_METHOD && <SettingsOptionMenu
+							aria-label={t("settings.harness.loginUi.catalogProvider")}
+							value={catalogProvider}
+							placeholder={t("settings.harness.loginUi.catalogChoose")}
+							options={(catalog ?? []).map((provider) => ({ value: provider.id, label: provider.name }))}
+							onChange={setCatalogProvider}
+							searchable
+							searchPlaceholder={t("settings.harness.loginUi.catalogSearch")}
+							emptyLabel={t("settings.harness.loginUi.catalogEmpty")}
+							disabled={locked || !catalog}
+							triggerClassName="h-8 basis-full justify-between"
+						/>}
 						<Input aria-label={t(item.id === "setup_token" ? "settings.harness.loginUi.setupToken" : item.id === "access_token" ? "settings.harness.loginUi.accessToken" : "settings.harness.loginUi.apiKey")} className="min-w-48 flex-1 border-border bg-(--color-bg-primary) font-mono text-[13px] placeholder:font-sans focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30" type="password" value={secret} disabled={locked} autoComplete="off" spellCheck={false} maxLength={16384} placeholder={savedKey ? t("settings.apiKeys.keepSaved") : secretPlaceholder(item.id)} onChange={(event) => { setSecret(event.target.value); setModels([]); }} />
 						{needsModel && <div className="flex min-w-48 flex-1 flex-col gap-1 text-xs text-settings-label">
 							<span id={titleId + "-model"}>{t("settings.apiKeys.model")}</span>
@@ -349,7 +383,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 								</Button>}
 							</div>
 						</div>}
-						<Button type="submit" disabled={busy || (!secret.trim() && !savedKey) || (needsModel && !model.trim())}>
+						<Button type="submit" disabled={busy || (!secret.trim() && !savedKey) || (needsModel && !model.trim()) || (item.id === CATALOG_METHOD && !catalogProvider)}>
 							{busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
 							{t("settings.harness.loginUi.save")}
 						</Button>

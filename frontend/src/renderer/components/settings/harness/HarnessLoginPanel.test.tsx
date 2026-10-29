@@ -1,12 +1,12 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { actOnAgentUILogin, cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot } from "../../../hooks/useAgentAuth";
+import { actOnAgentUILogin, cancelAgentUILogin, getAgentUILogin, startAgentUILogin, submitAgentUILoginCode, type AgentLoginSnapshot, fetchCatalogProviders, startCatalogKeyLogin } from "../../../hooks/useAgentAuth";
 import { isAgentLoginPending } from "../../../lib/agent-login-lifecycle";
 import { aoBridge } from "../../../lib/bridge";
 import { HarnessLoginPanel } from "./HarnessLoginPanel";
 
-vi.mock("../../../hooks/useAgentAuth", () => ({ startAgentUILogin: vi.fn(), getAgentUILogin: vi.fn(), cancelAgentUILogin: vi.fn(), actOnAgentUILogin: vi.fn(), submitAgentUILoginCode: vi.fn() }));
+vi.mock("../../../hooks/useAgentAuth", () => ({ startAgentUILogin: vi.fn(), startCatalogKeyLogin: vi.fn(), fetchCatalogProviders: vi.fn(), getAgentUILogin: vi.fn(), cancelAgentUILogin: vi.fn(), actOnAgentUILogin: vi.fn(), submitAgentUILoginCode: vi.fn() }));
 
 const methods = [
 	{ id: "browser", label: "ChatGPT in browser", secret: false },
@@ -73,6 +73,16 @@ describe("HarnessLoginPanel", () => {
 		render(<HarnessLoginPanel agentId="claude-code" methods={[{ id: "env_ANTHROPIC_API_KEY", label: "Anthropic API key", secret: true }]} providerKeys={[{ name: "ANTHROPIC_API_KEY", label: "Anthropic API key", configured: false, device: false, checkable: true, agents: ["claude-code", "crush"] }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
 		expect(screen.getByText(/instead of your Claude subscription/)).toBeVisible();
 		expect(screen.getByRole("checkbox", { name: /Also set for apps outside AO/ })).not.toBeChecked();
+	});
+	it("offers the harness's provider catalog and needs a provider before saving", async () => {
+		const user = userEvent.setup();
+		vi.mocked(fetchCatalogProviders).mockResolvedValue([{ id: "zeta", name: "Zeta AI", env: "ZETA_API_KEY", models: 2 }]);
+		render(<HarnessLoginPanel agentId="opencode" methods={[{ id: "provider_key", label: "Provider API key", secret: true }, { id: "native", label: "Other native sign-in", secret: false }]} onVerify={vi.fn()} onClose={vi.fn()} onTerminal={vi.fn()} />);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Provider API key" })).toHaveAccessibleDescription(/Choose from 1 providers in OpenCode's catalog/));
+		expect(fetchCatalogProviders).toHaveBeenCalledWith("opencode", undefined);
+		await user.type(screen.getByLabelText("API key"), "zeta-secret");
+		expect(screen.getByRole("button", { name: "Save and verify" })).toBeDisabled();
+		expect(startCatalogKeyLogin).not.toHaveBeenCalled();
 	});
 	it("runs a native login invisibly and presents reviewed menu controls", async () => {
 		const user = userEvent.setup();
