@@ -4942,3 +4942,55 @@ func TestScopedPostAgentRefreshesIdleProofWithoutStateTransition(t *testing.T) {
 		})
 	}
 }
+
+func TestActivity_WorkerTurnEndEmitsAgentCompleted(t *testing.T) {
+	st := newFakeStore()
+	sink := &fakeNotificationSink{}
+	m := New(st, nil, WithNotificationSink(sink))
+	now := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, DisplayName: "checkout-flow", Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: now.Add(-time.Minute)}, FirstSignalAt: now.Add(-time.Minute)}
+
+	if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityIdle, Timestamp: now}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.intents) != 1 {
+		t.Fatalf("intents = %+v, want one agent_completed", sink.intents)
+	}
+	intent := sink.intents[0]
+	if intent.Type != domain.NotificationAgentCompleted || intent.SessionID != "mer-1" || intent.ProjectID != "mer" || intent.SessionDisplayName != "checkout-flow" {
+		t.Fatalf("intent = %+v", intent)
+	}
+	if want := fmt.Sprintf("agent_completed:mer-1:%d", now.UnixNano()); intent.SourceKey != want {
+		t.Fatalf("source key = %q, want %q", intent.SourceKey, want)
+	}
+}
+
+func TestActivity_AgentCompletedSkipsOrchestratorsAndNonWorkTransitions(t *testing.T) {
+	now := time.Date(2026, 10, 29, 10, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		name string
+		kind domain.SessionKind
+		prev domain.ActivityState
+	}{
+		{name: "orchestrator turn", kind: domain.KindOrchestrator, prev: domain.ActivityActive},
+		{name: "answered then idle", kind: domain.KindWorker, prev: domain.ActivityWaitingInput},
+		{name: "exited then idle", kind: domain.KindWorker, prev: domain.ActivityExited},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			st := newFakeStore()
+			sink := &fakeNotificationSink{}
+			m := New(st, nil, WithNotificationSink(sink))
+			m.clock = func() time.Time { return now }
+			st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: tt.kind, Activity: domain.Activity{State: tt.prev, LastActivityAt: now.Add(-time.Minute)}, FirstSignalAt: now.Add(-time.Minute)}
+			if err := m.ApplyActivitySignal(ctx, "mer-1", ports.ActivitySignal{Valid: true, State: domain.ActivityIdle, Timestamp: now}); err != nil {
+				t.Fatal(err)
+			}
+			for _, intent := range sink.intents {
+				if intent.Type == domain.NotificationAgentCompleted {
+					t.Fatalf("unexpected agent_completed intent %+v", intent)
+				}
+			}
+		})
+	}
+}
