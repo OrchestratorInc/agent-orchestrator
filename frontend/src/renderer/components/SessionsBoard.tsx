@@ -131,6 +131,25 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		hostId,
 	});
 	const { isProjectRestarting, isProvisioning } = projectActions;
+	// A Freestyle cloud project just created starts its orchestrator on its own
+	// (only those are flagged, see CreateProjectFlow), so it opens on the
+	// orchestrator starting in place rather than on an empty board.
+	const autoStartFlagged = useUiStore((state) => !hostId && projectId !== undefined && state.autoStartOrchestratorProjectIds.has(projectId));
+	const autoStartPending = autoStartFlagged && !orchestrator;
+	const { openOrchestrator } = projectActions;
+	useEffect(() => {
+		if (!autoStartFlagged || !projectId) return;
+		if (orchestrator) {
+			useUiStore.getState().setAutoStartOrchestrator(projectId, false);
+			return;
+		}
+		if (workspace?.kind !== CLOUD_PROJECT_KIND || !startsInPlace) return;
+		// Read the store, not this render: the flag is consumed exactly once.
+		const ui = useUiStore.getState();
+		if (!ui.autoStartOrchestratorProjectIds.has(projectId)) return;
+		ui.setAutoStartOrchestrator(projectId, false);
+		openOrchestrator();
+	}, [autoStartFlagged, openOrchestrator, orchestrator, projectId, startsInPlace, workspace?.kind]);
 	const setProjectRestarting = useUiStore((state) => state.setProjectRestarting);
 	const setOrchestratorReplacementError = useUiStore((state) => state.setOrchestratorReplacementError);
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
@@ -242,10 +261,10 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		<NotificationCenter />
 	) : undefined;
 
-	if (projectId && (isProvisioning || projectActions.isSpawning)) {
+	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
 		return <OrchestratorStartingChat
-			cloud={workspace?.kind === CLOUD_PROJECT_KIND}
-			freestyle={startsInPlace}
+			cloud={workspace?.kind === CLOUD_PROJECT_KIND || autoStartPending}
+			freestyle={startsInPlace || autoStartPending}
 			coderWorkspaceUrl={workspace?.sessions.find((session) => session.kind === "orchestrator")?.cloud?.coderWorkspaceUrl}
 		/>;
 	}

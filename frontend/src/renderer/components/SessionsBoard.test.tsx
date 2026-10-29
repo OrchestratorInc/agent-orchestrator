@@ -27,6 +27,7 @@ const {
 	workspaceQueryMock,
 	boardActionsInPanelMock,
 	cloudProjectsMock,
+	spawnCloudOrchestratorMock,
 } = vi.hoisted(() => ({
 	appMemoryMock: vi.fn(),
 	sessionMemoryMock: vi.fn(),
@@ -36,7 +37,10 @@ const {
 	workspaceQueryMock: vi.fn(),
 	boardActionsInPanelMock: vi.fn(() => false),
 	cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
+	spawnCloudOrchestratorMock: vi.fn(),
 }));
+
+vi.mock("../lib/cloud-orchestrator", () => ({ spawnCloudOrchestrator: spawnCloudOrchestratorMock }));
 
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "coder" }) }));
 
@@ -190,6 +194,36 @@ describe("SessionsBoard", () => {
 		} finally {
 			cloudProjectsMock.mockReturnValue(undefined);
 			useUiStore.getState().setProjectProvisioning("p1", false);
+		}
+	});
+
+	it("starts a just-created Freestyle project's orchestrator once, without showing the empty board", async () => {
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
+		cloudProjectsMock.mockReturnValue([{ id: "p1", config: { sandboxProvider: "freestyle" } }]);
+		spawnCloudOrchestratorMock.mockReset().mockReturnValue(new Promise(() => {}));
+		useUiStore.getState().setAutoStartOrchestrator("p1", true);
+		try {
+			renderBoard("p1");
+			expect(screen.queryByTestId("board")).not.toBeInTheDocument();
+			expect(screen.getByRole("combobox", { name: "Message the agent" }).closest("form")).toHaveAttribute("data-starting", "true");
+			await waitFor(() => expect(spawnCloudOrchestratorMock).toHaveBeenCalledTimes(1));
+			expect(useUiStore.getState().autoStartOrchestratorProjectIds.has("p1")).toBe(false);
+		} finally {
+			cloudProjectsMock.mockReturnValue(undefined);
+			useUiStore.getState().setAutoStartOrchestrator("p1", false);
+		}
+	});
+
+	it("leaves an unflagged cloud project on its board", () => {
+		workspaceQueryMock.mockReturnValue({ data: [{ id: "p1", name: "Cloud project", kind: "cloud", path: "", sessions: [] }], isSuccess: true });
+		cloudProjectsMock.mockReturnValue([{ id: "p1", config: { sandboxProvider: "freestyle" } }]);
+		spawnCloudOrchestratorMock.mockReset();
+		try {
+			renderBoard("p1");
+			expect(screen.getByTestId("board")).toBeInTheDocument();
+			expect(spawnCloudOrchestratorMock).not.toHaveBeenCalled();
+		} finally {
+			cloudProjectsMock.mockReturnValue(undefined);
 		}
 	});
 
