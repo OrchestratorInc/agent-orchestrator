@@ -105,7 +105,7 @@ func New(store Store, dataDir string) *Service {
 	if codex == "" {
 		codex = filepath.Join(home, ".codex")
 	}
-	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex}}
+	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home)}}
 	if dataDir != "" {
 		s.excluded = []string{canonical(dataDir)}
 	}
@@ -347,6 +347,9 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 		// Archived Codex threads are not resumable without unarchiving them in Codex.
 		dir = filepath.Join(root, "sessions")
 	}
+	if harness == domain.HarnessDroid {
+		dir = filepath.Join(root, droidSessions)
+	}
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -366,6 +369,12 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 		key := path
 		switch harness {
 		case domain.HarnessClaudeCode:
+			if !strings.HasSuffix(entry.Name(), ".jsonl") {
+				return nil
+			}
+		case domain.HarnessDroid:
+			// One conversation per <id>.jsonl; the <id>.settings.json sidecar
+			// and its .bak are not transcripts.
 			if !strings.HasSuffix(entry.Name(), ".jsonl") {
 				return nil
 			}
@@ -419,7 +428,7 @@ func codexSegments(paths []string) []string {
 // nativeID names the conversation as readTranscript will: Claude's file name,
 // Codex's thread id.
 func (f sourceFiles) nativeID() string {
-	if f.harness == domain.HarnessClaudeCode && len(f.paths) > 0 {
+	if (f.harness == domain.HarnessClaudeCode || f.harness == domain.HarnessDroid) && len(f.paths) > 0 {
 		return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
 	}
 	return f.key
@@ -461,7 +470,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {
