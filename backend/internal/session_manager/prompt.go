@@ -44,8 +44,7 @@ type systemPromptConfig struct {
 
 // projectRulesConfig loads standing rules text plus an optional repo-relative
 // rules file. It backs both AgentRules/AgentRulesFile (worker role) and
-// OrchestratorRules/OrchestratorRulesFile (orchestrator role) — the field names
-// stay role-neutral since both roles share this loader.
+// OrchestratorRules/OrchestratorRulesFile (orchestrator role), so the field names stay role-neutral.
 type projectRulesConfig struct {
 	ProjectPath string
 	Rules       string
@@ -172,17 +171,13 @@ func buildProjectRules(cfg projectRulesConfig) (string, error) {
 		parts = append(parts, rules)
 	}
 	if rel := strings.TrimSpace(cfg.RulesFile); rel != "" {
-		field := cfg.RulesFileField
-		if field == "" {
-			field = "rulesFile"
-		}
 		path, err := projectRelativeFile(cfg.ProjectPath, rel)
 		if err != nil {
-			return "", fmt.Errorf("%s: %w", field, err)
+			return "", fmt.Errorf("%s: %w", cfg.RulesFileField, err)
 		}
 		data, err := os.ReadFile(path) //nolint:gosec // path is project config validated as repo-relative
 		if err != nil {
-			return "", fmt.Errorf("read %s %s: %w", field, rel, err)
+			return "", fmt.Errorf("read %s %s: %w", cfg.RulesFileField, rel, err)
 		}
 		if rules := strings.TrimSpace(string(data)); rules != "" {
 			parts = append(parts, rules)
