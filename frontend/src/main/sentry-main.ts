@@ -4,7 +4,7 @@ import * as Sentry from "@sentry/electron/main";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { RendererTelemetryCapture } from "../shared/telemetry-policy";
-import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
+import { DEFAULT_ELECTRON_SENTRY_DSN, SAFE_FUNCTION, safeSentryExceptionType, sentryEnvironment } from "../shared/sentry-config";
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
 import type { DesktopTelemetryTransport } from "./desktop-telemetry-controller";
 
@@ -12,7 +12,7 @@ export function electronMainSentryDsn(): string {
 	return process.env.AO_SENTRY_DSN ?? DEFAULT_ELECTRON_SENTRY_DSN;
 }
 
-const CAPTURE_KEYS = new Set(["consentGeneration", "kind", "level", "message", "tags"]);
+const CAPTURE_KEYS = new Set(["consentGeneration", "kind", "level", "message", "tags", "exception"]);
 const TAG_KEYS = new Set([
 	"apierr_kind",
 	"category",
@@ -33,7 +33,6 @@ const WIN_PATH = /[A-Za-z]:\\[^\s"']+|\\\\[^\s"']+/g;
 const SAFE_CATEGORIES = new Set(["agent_runtime", "http_5xx", "integration", "native_crash", "render_crash", "update"]);
 const SAFE_CODES = new Set(["AGENT_RESUME_FAILED", "INTERNAL_ERROR", "WORKSPACE_GIT_READ_FAILED"]);
 const PROCESS_REASONS = ["abnormal-exit", "crashed", "oom", "launch-failed", "integrity-failure"] as const;
-const SAFE_FUNCTION = /^[A-Za-z_$][A-Za-z0-9_$.:<>]*$/;
 const DRAIN_TIMEOUT_MS = 2_000;
 let childProcessHookInstalled = false;
 
@@ -63,29 +62,32 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	const code = event.tags?.["ao.code"];
 	const safeCategory = typeof category === "string" && SAFE_CATEGORIES.has(category) ? category : "unknown";
 	const safeCode = typeof code === "string" && SAFE_CODES.has(code) ? code : "unknown";
+	const exceptionType = safeSentryExceptionType(event.exception?.values?.[0]?.type);
 	const frames = event.exception?.values?.flatMap((value) => value.stacktrace?.frames ?? [])
-		.filter((frame) => typeof frame.function === "string" && SAFE_FUNCTION.test(frame.function))
+		.filter((frame) => frame.in_app !== false && typeof frame.function === "string" && frame.function.length <= 128 && SAFE_FUNCTION.test(frame.function))
+		.slice(-8)
 		.map((frame) => ({ function: frame.function, lineno: frame.lineno, in_app: true }));
+	const topFunction = frames?.at(-1)?.function ?? "unknown";
 	return {
 		type: undefined,
 		event_id: event.event_id,
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
 		message: title,
-		fingerprint: ["electron", kind, renderer ? safeCode : processReason ?? safeCode, renderer ? "renderer" : "electron-main"],
+		fingerprint: ["electron", kind, renderer ? safeCode : processReason ?? safeCode, exceptionType, topFunction, renderer ? "renderer" : "electron-main"],
 		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode } : {}), ...(processReason ? { reason: processReason } : {}) },
 		user: { id: installId },
 		release: version,
 		environment,
-		exception: { values: [{ type: title, value: "", ...(frames?.length ? { stacktrace: { frames } } : {}) }] },
+		exception: { values: [{ type: exceptionType, value: "", ...(frames?.length ? { stacktrace: { frames } } : {}) }] },
 	};
 }
 
-export async function initMainSentry(version: string, dataDir: string, cacheRoot: string, isPackaged: boolean): Promise<DesktopTelemetryTransport> {
+export async function initMainSentry(version: string, dataDir: string, cacheRoot: string): Promise<DesktopTelemetryTransport> {
 	const dsn = electronMainSentryDsn();
 	if (!dsn) return { capture: () => undefined, closeAndDrain: async () => undefined, clearCache: async () => undefined };
 	const installId = await loadOrCreateTelemetryInstallId(dataDir);
-	const environment = isPackaged ? "stable" : "development";
+	const environment = sentryEnvironment(process.env.AO_TELEMETRY_APP_VERSION ?? version);
 	const queuePath = path.join(cacheRoot, "sentry", "queue");
 	Sentry.init({
 		dsn,
@@ -120,6 +122,7 @@ export async function initMainSentry(version: string, dataDir: string, cacheRoot
 			Sentry.captureEvent({
 				message: "Renderer error",
 				level: safe.level ?? "error",
+				...(safe.exception ? { exception: { values: [{ type: safe.exception.type, value: "", stacktrace: { frames: safe.exception.frames.map((frame) => ({ ...frame, in_app: true })) } }] } } : {}),
 				tags: {
 					"ao.origin": "renderer",
 					"ao.kind": safe.kind,
@@ -148,6 +151,24 @@ export function sanitizeRendererCapture(request: unknown): RendererTelemetryCapt
 	if (typeof input.consentGeneration !== "string" || input.consentGeneration.length > 256) return null;
 	if (typeof input.kind !== "string" || !CAPTURE_KINDS.has(input.kind as RendererTelemetryCapture["kind"])) return null;
 	if (input.level !== undefined && (typeof input.level !== "string" || !CAPTURE_LEVELS.has(input.level as NonNullable<RendererTelemetryCapture["level"]>))) return null;
+	let exception: RendererTelemetryCapture["exception"];
+	if (input.exception !== undefined) {
+		if (input.kind !== "exception" || !input.exception || typeof input.exception !== "object" || Array.isArray(input.exception)) return null;
+		const value = input.exception as Record<string, unknown>;
+		if (Object.keys(value).some((key) => key !== "type" && key !== "frames")) return null;
+		if (typeof value.type !== "string" || safeSentryExceptionType(value.type) !== value.type) return null;
+		if (!Array.isArray(value.frames) || value.frames.length > 8) return null;
+		const frames: NonNullable<RendererTelemetryCapture["exception"]>["frames"] = [];
+		for (const frame of value.frames) {
+			if (!frame || typeof frame !== "object" || Array.isArray(frame)) return null;
+			const entry = frame as Record<string, unknown>;
+			if (Object.keys(entry).some((key) => key !== "function" && key !== "lineno")) return null;
+			if (typeof entry.function !== "string" || entry.function.length > 128 || !SAFE_FUNCTION.test(entry.function)) return null;
+			if (entry.lineno !== undefined && (typeof entry.lineno !== "number" || !Number.isSafeInteger(entry.lineno) || entry.lineno < 1 || entry.lineno > 1_000_000)) return null;
+			frames.push({ function: entry.function, ...(entry.lineno === undefined ? {} : { lineno: entry.lineno as number }) });
+		}
+		exception = { type: value.type, frames };
+	}
 
 	let tags: Record<string, string> | undefined;
 	if (input.tags !== undefined) {
@@ -167,6 +188,7 @@ export function sanitizeRendererCapture(request: unknown): RendererTelemetryCapt
 		message: scrubTelemetryText(input.message),
 		...(input.level === undefined ? {} : { level: input.level as NonNullable<RendererTelemetryCapture["level"]> }),
 		...(tags === undefined ? {} : { tags }),
+		...(exception === undefined ? {} : { exception }),
 	};
 }
 

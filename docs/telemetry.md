@@ -33,6 +33,9 @@ Sentry project and DSN. A desktop opt-in recorded while the Electron release
 gate was closed requires a fresh opt-in before this sender starts.
 Renderer exceptions are sent to Electron Sentry rather than PostHog. Failed
 Sentry sends can wait in an offline queue under AO's Electron data directory.
+Error events can include a standard exception type and allowlisted in-app
+function names and line numbers. Stack paths and raw exception messages are
+removed before sending.
 Turning off Share error events drains the sender and removes that queue before
 the opt-out is complete.
 

@@ -13,3 +13,22 @@ export const DEFAULT_ELECTRON_SENTRY_DSN =
 export function daemonSentryDsn(override: string | undefined, isDev: boolean): string {
 	return override ?? (isDev ? "" : DEFAULT_DAEMON_SENTRY_DSN);
 }
+
+export const SAFE_FUNCTION = /^[A-Za-z_$][A-Za-z0-9_$.:<>]*$/;
+
+const SAFE_EXCEPTION_TYPES = new Set([
+	"Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError", "DOMException",
+]);
+
+export function safeSentryExceptionType(value: unknown): string {
+	return typeof value === "string" && SAFE_EXCEPTION_TYPES.has(value) ? value : "Error";
+}
+
+// Keep this version mapping aligned with sentryEnvironment in the Go daemon.
+export function sentryEnvironment(version: string): "unknown" | "nightly" | "development" | "stable" {
+	const value = version.trim().toLowerCase();
+	if (!value) return "unknown";
+	if (value.includes("nightly")) return "nightly";
+	if (value.includes("edge") || value.includes("pr")) return "development";
+	return "stable";
+}
