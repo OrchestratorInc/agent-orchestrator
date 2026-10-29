@@ -235,7 +235,9 @@ paths:
         worker: `source` says whether a Cloud worker running the same CLI
         version with the user's current credential reported it, or it is the
         list the control plane's pinned CLI version supports. A task that
-        names no model keeps the project's or the agent's default.
+        names no model keeps the project's or the agent's default. A listed
+        model without `efforts` takes no reasoning effort; every model that
+        takes one lists its levels.
       responses:
         "200":
           description: The model catalog for the next task. It lists at least one model.

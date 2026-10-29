@@ -1225,6 +1225,11 @@ export interface CloudCpChatModelsResponse {
 	source?: "worker" | "release";
 	/** The harness CLI version the list is for. */
 	cliVersion?: string;
+	/**
+	 * On a session's own list, whether its worker listed the models for the
+	 * signed-in account rather than from the CLI's built-in list.
+	 */
+	accountListed?: boolean;
 }
 
 export interface CloudCpClientEvent {

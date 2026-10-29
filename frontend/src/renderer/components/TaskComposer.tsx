@@ -478,6 +478,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		retry: false,
 	});
 	const cloudCatalog = cloudCatalogAgent ? cloudModelCatalogQuery.data : undefined;
+	// Until the catalog arrives no listed model vouches for the effort, so a task
+	// does not start yet with a level its model refuses.
+	const cloudCatalogLoading = cloudCatalogAgent && Boolean(cloudOrg?.id) && cloudCatalog === undefined && !cloudModelCatalogQuery.isError;
 	const cloudCatalogGap = cloudCatalogAgent && !cloudCatalog && cloudModelCatalogQuery.isError
 		? cloudModelCatalogGap(cloudModelCatalogQuery.error)
 		: undefined;
@@ -493,15 +496,17 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	// A model chosen for one Cloud server, account or organization may not exist on
 	// another, so a change of any of them starts over; values that arrive while the
 	// composer loads are not a change. A new credential for an agent drops only
-	// that agent's choices.
+	// that agent's choices. Leaving Cloud for a local project or Scratchpad is not
+	// a change: their choices stay, and the next Cloud project is compared with
+	// the last one.
 	const previousCloudIdentity = useRef<readonly string[] | undefined>(undefined);
 	const cloudCredentialScopes = useRef<Record<string, string>>({});
 	useEffect(() => {
 		const identity = [projectId ?? "", cloudBaseUrl, cloudUserId, cloudOrg?.id ?? ""];
 		const previous = previousCloudIdentity.current;
-		const identityChanged = previous !== undefined &&
+		const identityChanged = isCloudProject && previous !== undefined &&
 			previous.some((value, index) => (index === 0 || value !== "") && value !== identity[index]);
-		previousCloudIdentity.current = isCloudProject ? identity : undefined;
+		if (isCloudProject) previousCloudIdentity.current = identity;
 		if (identityChanged) {
 			for (const key of Object.keys(agentDrafts)) delete agentDrafts[key];
 			cloudCredentialScopes.current = {};
@@ -763,6 +768,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const canSubmit =
 		hostConnected &&
 		Boolean(projectId) &&
+		!cloudCatalogLoading &&
 		(!isStandalone || selectedAgent !== "") &&
 		(!hostId || Boolean(agentCatalog?.agents.some((candidate) => candidate.id === selectedAgent && isLaunchableAgent(candidate)))) &&
 		(isCloudProject || isStandalone || projectQuery.data !== undefined) &&
@@ -1100,10 +1106,17 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 				setModelTouched(true);
 				// Effort levels are per-model, so a level the newly chosen model
 				// does not advertise has to be dropped rather than carried over. A
-				// cloud model that reports none may still take it.
-				const nextEfforts =
-					modelCatalog?.models?.find((item) => item.id === value)?.efforts;
-				const keepUnknown = isCloudProject && nextEfforts === undefined;
+				// cloud model Cloud's catalog does not list may still take it. The
+				// cloud default shows no effort, so it starts from the project's.
+				if (isCloudProject && value === "") {
+					setEffort(inheritedEffort);
+					return;
+				}
+				const listed = cloudCatalog?.models.find((item) => item.id === value);
+				const nextEfforts = listed
+					? listed.efforts
+					: modelCatalog?.models?.find((item) => item.id === value)?.efforts;
+				const keepUnknown = isCloudProject && !listed && nextEfforts === undefined;
 				setEffort((current) => (current !== "" && !keepUnknown && !nextEfforts?.includes(current) ? "" : current));
 			},
 			onModeChange: (value: string) => {

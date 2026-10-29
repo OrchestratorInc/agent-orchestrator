@@ -2819,6 +2819,60 @@ describe("TaskComposer Cloud model catalog", () => {
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "chosen", reasoningEffort: "high" }), { idempotencyKey: expect.any(String) }));
 	});
 
+	it("waits for Cloud's catalog before starting, so the effort matches the model", async () => {
+		const queryClient = cloudFixture("claude-code", { model: "haiku", effort: "high" });
+		let finishCatalog!: (value: ReturnType<typeof releaseCatalog>) => void;
+		h.cloudListUserAgentModels.mockReturnValue(new Promise((resolve) => { finishCatalog = resolve; }));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
+		fireEvent.change(task(), { target: { value: "Use Haiku" } });
+		expect(startTask()).toBeDisabled();
+		await act(async () => finishCatalog(releaseCatalog([{ id: "haiku", displayName: "Haiku", default: false }])));
+		await waitFor(() => expect(startTask()).toBeEnabled());
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalledWith("org-1", expect.objectContaining({ model: "haiku" }), { idempotencyKey: expect.any(String) }));
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
+	});
+
+	it("drops another model's effort when the default is chosen", async () => {
+		const queryClient = cloudFixture("claude-code");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "opus", displayName: "Opus", default: false, efforts: ["low", "high", "max"] },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await chooseCloudModel("Opus");
+		await userEvent.click(screen.getByRole("button", { name: "Effort" }));
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "Max" }));
+		await userEvent.click(screen.getByRole("button", { name: "Model" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Use project or agent default" }));
+		fireEvent.change(task(), { target: { value: "Use the default" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("model");
+		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
+	});
+
+	it("keeps Scratchpad's choices when the composer leaves a Cloud project", async () => {
+		const queryClient = cloudFixture("codex");
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-6-luna", displayName: "GPT-6-Luna", default: true }], "0.165.0"));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { usageCount: 3, lastUsedAt: "2026-09-20T12:00:00Z" })] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "codex", selectionMode: "text", allowCustom: true, models: [
+				{ id: "gpt-6-astra", label: "GPT-6-Astra", isDefault: true },
+				{ id: "gpt-5.5", label: "GPT-5.5" },
+			] } }
+			: { data: { status: "ok", project: { config: {} } } });
+		const { rerender } = render(<Wrap queryClient={queryClient}><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		const model = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(model).toHaveTextContent("GPT-6-Astra"));
+		await userEvent.click(model);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "GPT-5.5" }));
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(h.cloudListUserAgentModels).toHaveBeenCalled());
+		rerender(<Wrap queryClient={queryClient}><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.5"));
+	});
+
 	it("keeps the configured effort for an entered model the catalog does not list", async () => {
 		const queryClient = cloudFixture("codex", { model: "configured-model", effort: "high" });
 		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "listed-no-levels", displayName: "Listed without levels", default: false }]));

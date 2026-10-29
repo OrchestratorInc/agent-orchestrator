@@ -539,7 +539,7 @@ export function AgentModelCombobox({
 				{footer && (
 					<div className="shrink-0">
 						<DropdownMenuSeparator />
-						<p className="px-2 py-1.5 text-xs text-settings-muted">{footer}</p>
+						<p className="px-2 py-1.5 text-xs text-settings-muted" aria-live="polite">{footer}</p>
 					</div>
 				)}
 				{/* Cursor's effort and thinking open beside the model like other agents' effort (no fast mode here, as for them). */}
