@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { I18nextProvider } from "react-i18next";
+import { createFullAppI18n } from "../../i18n/all-messages";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { ChatImageSourceProvider } from "./chat-image-source";
 import { MCPAppFrame } from "./MCPAppFrame";
@@ -23,7 +25,8 @@ function post(frame: HTMLIFrameElement, id: number | undefined, method: string, 
 }
 
 it("preserves the sandboxed frame and its URL across expansion", async () => {
-	render(<MCPAppFrame conversationId="c" activityId="a" completed />);
+	const language = createFullAppI18n();
+	render(<I18nextProvider i18n={language}><MCPAppFrame conversationId="c" activityId="a" completed /></I18nextProvider>);
 	const frame = await screen.findByTitle("analytics interactive app") as HTMLIFrameElement;
 	expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-forms");
 	const src = frame.src;
@@ -32,6 +35,9 @@ it("preserves the sandboxed frame and its URL across expansion", async () => {
 	expect(frame.src).toBe(src);
 	fireEvent.click(screen.getByRole("button", { name: "Collapse app" }));
 	expect(screen.getByTitle("analytics interactive app")).toBe(frame);
+	await act(() => language.changeLanguage("zh-CN"));
+	expect(screen.getByTitle("analytics 交互式应用")).toBe(frame);
+	expect(frame.src).toBe(src);
 });
 
 it("keeps a remote proxy capability out of the app document and frame URL", async () => {

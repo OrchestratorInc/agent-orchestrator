@@ -2,6 +2,7 @@ import { createMCPAppHost, mcpAppAllowAttribute, mcpAppPath, mcpAppSandboxDocume
 import createClient from "openapi-fetch";
 import { Loader2, Maximize2, Minimize2, RotateCcw, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { paths } from "../../../api/schema";
 import { apiErrorMessage } from "../../lib/api-client";
 import { Button } from "../ui/button";
@@ -12,6 +13,9 @@ type Consent = { title: string; detail: string; resolve(approved: boolean): void
 
 /** The same frame stays mounted when the dialog enters/leaves the top layer. */
 export function MCPAppFrame({ conversationId, activityId, completed }: { conversationId: string; activityId: string; completed: boolean }) {
+	const { t } = useTranslation();
+	const text = useRef(t);
+	text.current = t;
 	const baseUrl = useChatApiBaseUrl();
 	const remote = useChatRemoteHost();
 	const [remoteHTML, setRemoteHTML] = useState<string>();
@@ -49,20 +53,20 @@ export function MCPAppFrame({ conversationId, activityId, completed }: { convers
 		setConsent(undefined);
 	};
 	useEffect(() => {
-		if (!baseUrl) { setFailure("Reconnect to the host to load this app."); return; }
+		if (!baseUrl) { setFailure(text.current("chat.mcp.reconnect")); return; }
 		const abort = new AbortController();
-		const timeout = setTimeout(() => { setFailure("Loading the app timed out. Retry when the host is connected."); abort.abort(); }, 30_000);
+		const timeout = setTimeout(() => { setFailure(text.current("chat.mcp.loadTimeout")); abort.abort(); }, 30_000);
 		setFailure(undefined);
 		void client.GET("/api/v1/conversations/{conversationId}/mcp-apps/{activityId}", { params: { path: { conversationId, activityId } }, signal: abort.signal }).then(async ({ data, error }) => {
 			if (abort.signal.aborted) return;
-			if (error || !data) throw new Error(apiErrorMessage(error, "Could not load app."));
+			if (error || !data) throw new Error(apiErrorMessage(error, text.current("chat.mcp.loadError")));
 			setSnapshot(data);
 			if (data.error) setFailure(data.error);
 			if (remote && data.ready) {
 				// The proxy base URL contains a bearer capability. Fetch in the host
 				// and frame a document with no proxy URL, credentials or referrer.
 				const document = await client.GET("/api/v1/conversations/{conversationId}/mcp-apps/{activityId}/document", { params: { path: { conversationId, activityId } }, signal: abort.signal, parseAs: "text" });
-				if (document.error || !document.data || !data.policy) throw new Error("Could not load the remote app document.");
+				if (document.error || !document.data || !data.policy) throw new Error(text.current("chat.mcp.loadError"));
 				if (!abort.signal.aborted) setRemoteHTML(mcpAppSandboxDocument(document.data, data.policy));
 			}
 		}).catch(error => { if (!abort.signal.aborted) setFailure(String(error instanceof Error ? error.message : error)); }).finally(() => clearTimeout(timeout));
@@ -92,7 +96,7 @@ export function MCPAppFrame({ conversationId, activityId, completed }: { convers
 			post: message => frame.current?.contentWindow?.postMessage(message, "*"), context, confirm,
 			action: async request => {
 				const { data, error } = await client.POST("/api/v1/conversations/{conversationId}/mcp-apps/{activityId}/actions", { params: { path: { conversationId, activityId } }, body: request, signal: abort.signal });
-				if (error || !data) { const message = apiErrorMessage(error, "App action failed."); setFailure(message); throw new Error(message); }
+				if (error || !data) { const message = apiErrorMessage(error, text.current("chat.mcp.actionError")); setFailure(message); throw new Error(message); }
 				return data;
 			},
 			openLink: async url => { window.open(url, "_blank", "noopener,noreferrer"); },
@@ -106,7 +110,7 @@ export function MCPAppFrame({ conversationId, activityId, completed }: { convers
 				}
 			},
 			displayMode: async next => {
-				if (next === "fullscreen" && !mode.current && !await confirm("Expand app?", "This app wants to use the full window.")) return "inline";
+				if (next === "fullscreen" && !mode.current && !await confirm(text.current("chat.mcp.expandPrompt"), text.current("chat.mcp.expandDetail"))) return "inline";
 				setExpanded(next === "fullscreen"); return next;
 			},
 			height: next => { if (!mode.current) setHeight(next); }, ready: () => { clearTimeout(timer); setReady(true); setFailure(undefined); }, close: () => { void bridge.teardown().then(() => setClosed(true)); },
@@ -117,7 +121,7 @@ export function MCPAppFrame({ conversationId, activityId, completed }: { convers
 		window.addEventListener("message", receive);
 		const observer = new ResizeObserver(() => bridge.updateContext());
 		if (frame.current) observer.observe(frame.current);
-		timer = setTimeout(() => { if (!abort.signal.aborted) setFailure("This app has not connected. You can retry or inspect the tool result below."); }, 20_000);
+		timer = setTimeout(() => { if (!abort.signal.aborted) setFailure(text.current("chat.mcp.connectTimeout")); }, 20_000);
 		return () => {
 			clearTimeout(timer); observer.disconnect(); window.removeEventListener("message", receive);
 			consentRef.current?.resolve(false); consentRef.current = undefined; setConsent(undefined);
@@ -128,22 +132,22 @@ export function MCPAppFrame({ conversationId, activityId, completed }: { convers
 	useEffect(() => host.current?.updateContext(), [theme]);
 	useEffect(() => { if (ready) setFailure(undefined); }, [ready]);
 	const retry = async () => { settleConsent(false); await host.current?.teardown(); setClosed(false); setReady(false); setFailure(undefined); setAttempt(n => n + 1); };
-	return <dialog ref={dialog} open aria-label={`${snapshot?.server ?? "MCP"} app`} aria-modal={expanded} role={expanded ? "dialog" : "region"}
+	return <dialog ref={dialog} open aria-label={t("chat.mcp.title", { server: snapshot?.server ?? "MCP" })} aria-modal={expanded} role={expanded ? "dialog" : "region"}
 		onCancel={event => { event.preventDefault(); setExpanded(false); }}
 		className={`m-0 overflow-hidden rounded-lg border border-border bg-background p-0 text-foreground backdrop:bg-black/50 ${expanded ? "fixed inset-4 m-auto flex h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-none flex-col" : "relative w-full max-w-full"}`}>
 		<div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs">
-			<span className="min-w-0 flex-1 truncate font-medium">{snapshot?.server ?? "Interactive tool"}{snapshot && !snapshot.live ? " · Saved view" : ""}</span>
-			<Button variant="ghost" size="icon" className="size-6" aria-label="Reload app" onClick={retry}><RotateCcw className="size-3.5" /></Button>
-			<Button variant="ghost" size="icon" className="size-6" aria-label={expanded ? "Collapse app" : "Expand app"} onClick={() => setExpanded(v => !v)}>{expanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}</Button>
-			{expanded && <Button variant="ghost" size="icon" className="size-6" aria-label="Close expanded view" onClick={() => setExpanded(false)}><X className="size-3.5" /></Button>}
+			<span className="min-w-0 flex-1 truncate font-medium">{snapshot?.server ?? t("chat.mcp.interactiveTool")}{snapshot && !snapshot.live ? ` · ${t("chat.mcp.savedView")}` : ""}</span>
+			<Button variant="ghost" size="icon" className="size-6" aria-label={t("chat.mcp.reload")} onClick={retry}><RotateCcw className="size-3.5" /></Button>
+			<Button variant="ghost" size="icon" className="size-6" aria-label={t(expanded ? "chat.mcp.collapse" : "chat.mcp.expand")} onClick={() => setExpanded(v => !v)}>{expanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}</Button>
+			{expanded && <Button variant="ghost" size="icon" className="size-6" aria-label={t("chat.mcp.closeExpanded")} onClick={() => setExpanded(false)}><X className="size-3.5" /></Button>}
 		</div>
 		{consent && <div className="border-b border-border bg-muted p-3 text-sm" role="alertdialog" aria-label={consent.title}>
 			<p className="font-medium">{consent.title}</p><pre className="my-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs">{consent.detail}</pre>
-			<div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => settleConsent(false)}>Decline</Button><Button size="sm" onClick={() => settleConsent(true)}>Allow once</Button></div>
+			<div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => settleConsent(false)}>{t("chat.mcp.decline")}</Button><Button size="sm" onClick={() => settleConsent(true)}>{t("chat.mcp.allowOnce")}</Button></div>
 		</div>}
-		{(failure || closed) && <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground" role="status"><span className="flex-1">{closed ? "The app closed its view." : failure}</span><Button size="sm" variant="outline" onClick={retry}>Retry</Button></div>}
-		{!ready && !failure && !closed && <div role="status" className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" />Loading app…</div>}
-		{snapshot?.ready && !closed && (!remote || remoteHTML) && <iframe key={attempt} ref={frame} title={`${snapshot.server} interactive app`} src={remote ? undefined : `${baseUrl}${path}/document`} srcDoc={remote ? remoteHTML : undefined} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" allow={mcpAppAllowAttribute(snapshot.permissions)}
-			className={expanded ? "min-h-0 w-full flex-1 border-0" : "block w-full border-0"} style={expanded ? undefined : { height }} onError={() => setFailure("The app document could not load.")} />}
+		{(failure || closed) && <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground" role="status"><span className="flex-1">{closed ? t("chat.mcp.closed") : failure}</span><Button size="sm" variant="outline" onClick={retry}>{t("chat.mcp.retry")}</Button></div>}
+		{!ready && !failure && !closed && <div role="status" className="flex items-center gap-2 p-3 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" />{t("chat.mcp.loading")}</div>}
+		{snapshot?.ready && !closed && (!remote || remoteHTML) && <iframe key={attempt} ref={frame} title={t("chat.mcp.frameTitle", { server: snapshot.server })} src={remote ? undefined : `${baseUrl}${path}/document`} srcDoc={remote ? remoteHTML : undefined} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" allow={mcpAppAllowAttribute(snapshot.permissions)}
+			className={expanded ? "min-h-0 w-full flex-1 border-0" : "block w-full border-0"} style={expanded ? undefined : { height }} onError={() => setFailure(text.current("chat.mcp.loadError"))} />}
 	</dialog>;
 }
