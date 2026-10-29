@@ -12181,3 +12181,206 @@ func TestResumeAgent_RuntimeFailureNamesRelaunchStep(t *testing.T) {
 		t.Fatalf("resume error = %v, want RelaunchError step runtime", err)
 	}
 }
+
+type confirmingAfterStartAgent struct {
+	afterStartAgent
+	confirmErr error
+}
+
+type encodedAfterStartAgent struct {
+	afterStartAgent
+	encodeErr       error
+	confirmedPrompt string
+}
+
+func (a *encodedAfterStartAgent) EncodeTerminalMessage(prompt string) (string, error) {
+	return "\x1b[200~" + prompt + "\x1b[201~", a.encodeErr
+}
+
+func (*encodedAfterStartAgent) PrimesAfterStartSubmit() bool { return false }
+
+func (a *encodedAfterStartAgent) AfterStartSubmitState(_ context.Context, _ ports.LaunchConfig, _, prompt string) (ports.AfterStartSubmitState, error) {
+	a.confirmedPrompt = prompt
+	return ports.AfterStartSubmitted, nil
+}
+
+func TestSpawn_EncodedFirstTurnKeepsSemanticPromptForConfirmation(t *testing.T) {
+	for _, failEncoding := range []bool{false, true} {
+		t.Run(fmt.Sprint(failEncoding), func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+			rt := &selectingRuntime{viewport: "EMPTY"}
+			msg := &fakeMessenger{}
+			agent := &encodedAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}}}
+			if failEncoding {
+				agent.encodeErr = errors.New("invalid terminal payload")
+			}
+			m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+				Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+			prompt := "first line\nsecond line"
+			_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: prompt})
+			if failEncoding {
+				if !errors.Is(err, agent.encodeErr) || len(msg.msgs) != 0 || agent.confirmedPrompt != "" {
+					t.Fatalf("encoding failure: err=%v messages=%d confirmed=%q", err, len(msg.msgs), agent.confirmedPrompt)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(msg.msgs) != 1 || msg.msgs[0] != "\x1b[200~"+prompt+"\x1b[201~" {
+				t.Fatalf("first turn was not encoded exactly once: %#v", msg.msgs)
+			}
+			if agent.confirmedPrompt != prompt || st.sessions["mer-1"].Metadata.Prompt != prompt {
+				t.Fatal("terminal encoding changed the semantic or stored task")
+			}
+		})
+	}
+}
+
+func (confirmingAfterStartAgent) PrimesAfterStartSubmit() bool { return true }
+
+func (confirmingAfterStartAgent) ComposerIsEmpty(output string) bool { return output == "EMPTY" }
+
+func (a confirmingAfterStartAgent) AfterStartSubmitState(_ context.Context, _ ports.LaunchConfig, output, _ string) (ports.AfterStartSubmitState, error) {
+	if a.confirmErr != nil {
+		return ports.AfterStartSubmitUnknown, a.confirmErr
+	}
+	switch output {
+	case "DRAFT":
+		return ports.AfterStartDraftPending, nil
+	case "SUBMITTED":
+		return ports.AfterStartSubmitted, nil
+	default:
+		return ports.AfterStartSubmitUnknown, nil
+	}
+}
+
+func shortenAfterStartSubmitTimings(t *testing.T) {
+	t.Helper()
+	timeout, poll, settle := afterStartSubmitTimeout, afterStartSubmitPoll, afterStartDraftSettle
+	afterStartSubmitTimeout, afterStartSubmitPoll, afterStartDraftSettle = 2*time.Second, time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() {
+		afterStartSubmitTimeout, afterStartSubmitPoll, afterStartDraftSettle = timeout, poll, settle
+	})
+}
+
+func TestSpawn_AfterStartSubmitConfirmerResubmitsStuckDraft(t *testing.T) {
+	shortenAfterStartSubmitTimings(t)
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &selectingRuntime{viewport: "EMPTY"}
+	msg := &fakeMessenger{}
+	msg.onSend = func(_ domain.SessionID, sent string) {
+		if len(msg.msgs) == 2 {
+			rt.viewport = "DRAFT"
+		}
+		// The first Enter after the typed turn submits the stuck draft.
+		if len(msg.msgs) == 3 && sent == "" {
+			rt.viewport = "SUBMITTED"
+		}
+	}
+	agent := confirmingAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}}}
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "fix the button"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 3 || msg.msgs[0] != "" || msg.msgs[1] != "fix the button" || msg.msgs[2] != "" {
+		t.Fatalf("delivered = %#v, want priming Enter, the turn, one re-submit", msg.msgs)
+	}
+}
+
+func TestSpawn_AfterStartSubmitConfirmerFailsWhenDraftNeverSubmits(t *testing.T) {
+	shortenAfterStartSubmitTimings(t)
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &selectingRuntime{viewport: "EMPTY"}
+	msg := &fakeMessenger{}
+	msg.onSend = func(_ domain.SessionID, _ string) {
+		if len(msg.msgs) == 2 {
+			rt.viewport = "DRAFT"
+		}
+	}
+	agent := confirmingAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}}}
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "fix the button"}); err == nil {
+		t.Fatal("spawn reported success while the first turn stayed unsent")
+	}
+	if got := len(msg.msgs); got != 2+afterStartSubmitMaxRetries {
+		t.Fatalf("delivered %d messages (%#v), want priming Enter, the turn and %d bounded re-submits", got, msg.msgs, afterStartSubmitMaxRetries)
+	}
+}
+
+func TestSpawn_AfterStartSubmitConfirmerNeverEntersIntoUnknownScreen(t *testing.T) {
+	shortenAfterStartSubmitTimings(t)
+	afterStartSubmitTimeout = 50 * time.Millisecond
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &selectingRuntime{viewport: "EMPTY"}
+	msg := &fakeMessenger{}
+	msg.onSend = func(_ domain.SessionID, _ string) {
+		if len(msg.msgs) == 2 {
+			rt.viewport = "a native dialog"
+		}
+	}
+	agent := confirmingAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}}}
+	m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "fix the button"}); err == nil || !strings.Contains(err.Error(), "acceptance could not be confirmed") {
+		t.Fatalf("unknown native screen reported success: %v", err)
+	}
+	if len(msg.msgs) != 2 {
+		t.Fatalf("delivered = %#v, want only priming Enter and the turn", msg.msgs)
+	}
+}
+
+func TestSpawn_AfterStartSubmitConfirmerDoesNotPrimeDraftOrDialog(t *testing.T) {
+	for _, viewport := range []string{"DRAFT", "a native dialog"} {
+		t.Run(viewport, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+			rt := &selectingRuntime{viewport: viewport}
+			msg := &fakeMessenger{}
+			agent := confirmingAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}}}
+			m := New(Deps{Runtime: rt, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+				Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+			if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "fix the button"}); err == nil {
+				t.Fatal("spawn primed an unconfirmed composer")
+			}
+			if len(msg.msgs) != 0 || rt.destroyed != 1 {
+				t.Fatalf("messages=%q destroyed=%d", msg.msgs, rt.destroyed)
+			}
+		})
+	}
+}
+
+type runtimeWithoutStyledOutput struct{ runtimeController }
+
+func TestAfterStartSubmitConfirmerRequiresStyledOutputAndNativeEvidence(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &fakeRuntime{}
+	msg := &fakeMessenger{}
+	agent := confirmingAfterStartAgent{afterStartAgent: afterStartAgent{recordingAgent: &recordingAgent{}}}
+	m := New(Deps{Runtime: runtimeWithoutStyledOutput{rt}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: msg, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Prompt: "fix the button"}); err == nil || !strings.Contains(err.Error(), "styled terminal output") {
+		t.Fatalf("missing styled output err=%v", err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("unconfirmed priming input=%q", msg.msgs)
+	}
+	if err := m.confirmAfterStartSubmit(ctx, agent, ports.LaunchConfig{}, ports.RuntimeHandle{}, "mer-1", "fix the button"); err == nil {
+		t.Fatal("confirmation silently succeeded without a styled surface")
+	}
+	m.runtime = &selectingRuntime{viewport: "SUBMITTED"}
+	agent.confirmErr = errors.New("native history unreadable")
+	if err := m.confirmAfterStartSubmit(ctx, agent, ports.LaunchConfig{}, ports.RuntimeHandle{}, "mer-1", "fix the button"); err == nil || !strings.Contains(err.Error(), "native history unreadable") {
+		t.Fatalf("native read failure err=%v", err)
+	}
+}

@@ -507,6 +507,139 @@ func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	}
 }
 
+func TestResolveFreebuffTUIAgentConfigValidatesModelEffort(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		model     string
+		effort    string
+		wantModel string
+		wantErr   error
+	}{
+		{name: "selected model supports effort", model: "z-ai/glm-5.3-flash", effort: "high", wantModel: "z-ai/glm-5.3-flash"},
+		{name: "default model supports effort", effort: "low", wantModel: "z-ai/glm-5.3-flash"},
+		{name: "selected model rejects rung", model: "z-ai/glm-5.3-flash", effort: "max", wantErr: ports.ErrUnsupportedEffort},
+		{name: "selected model has no effort", model: "mimo/mimo-v2.5", effort: "high", wantErr: ports.ErrUnsupportedEffort},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+				{ID: "z-ai/glm-5.3-flash", IsDefault: true, Efforts: []string{"low", "high"}},
+				{ID: "mimo/mimo-v2.5"},
+			}}}}
+			resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessFreebuff,
+				RequestedMode: domain.SessionModeTUI,
+				AgentConfig:   ports.AgentConfig{Model: tt.model, Effort: tt.effort}, EffortOverride: true,
+			}, domain.ProjectConfig{})
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			}
+			if err == nil && (resolved.Model != tt.wantModel || resolved.Effort != tt.effort) {
+				t.Fatalf("resolved = %#v, want model %q, effort %q", resolved, tt.wantModel, tt.effort)
+			}
+		})
+	}
+}
+
+func TestResolveFreebuffTUIAgentConfigPreservesAndResetsInheritedEffort(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "z-ai/glm-5.3-flash", Efforts: []string{"low", "high"}},
+		{ID: "mimo/mimo-v2.5"},
+	}}}}
+	project := domain.ProjectConfig{Worker: domain.RoleOverride{Harness: domain.HarnessFreebuff, AgentConfig: domain.AgentConfig{
+		Model: "z-ai/glm-5.3-flash", Effort: "high",
+	}}}
+	for _, model := range []string{"", "mimo/mimo-v2.5"} {
+		resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+			ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessFreebuff,
+			AgentConfig: ports.AgentConfig{Model: model},
+		}, project)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantEffort := "high"
+		if model != "" {
+			wantEffort = ""
+		}
+		if resolved.Effort != wantEffort {
+			t.Fatalf("model override %q: effort = %q, want %q", model, resolved.Effort, wantEffort)
+		}
+	}
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessFreebuff,
+		EffortOverride: true,
+	}, project)
+	if err != nil || resolved.Effort != "" {
+		t.Fatalf("explicit reset = %#v, %v; want cleared inherited effort", resolved, err)
+	}
+}
+
+func TestResolveFreebuffTUIAgentConfigRequiresCapabilitiesForEffort(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		catalog *tuningCatalog
+	}{
+		{name: "unavailable"},
+		{name: "discovery error", catalog: &tuningCatalog{err: errors.New("discovery failed")}},
+		{name: "missing model", catalog: &tuningCatalog{}},
+		{name: "stale", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Stale: true, Models: []ports.AgentModelInfo{
+			{ID: "z-ai/glm-5.3-flash", Efforts: []string{"high"}},
+		}}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Manager{}
+			if tt.catalog != nil {
+				m.modelCatalog = *tt.catalog
+			}
+			_, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+				ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessFreebuff,
+				AgentConfig: ports.AgentConfig{Model: "z-ai/glm-5.3-flash", Effort: "high"}, EffortOverride: true,
+			}, domain.ProjectConfig{})
+			if !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) {
+				t.Fatalf("error = %v, want ErrModelCapabilitiesUnavailable", err)
+			}
+		})
+	}
+}
+
+func TestSpawnFreebuffTUIResolvesInheritedEffort(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		model      string
+		reset      bool
+		wantEffort string
+	}{
+		{name: "preserves supported inherited effort", wantEffort: "high"},
+		{name: "clears inherited effort for new model", model: "mimo/mimo-v2.5"},
+		{name: "explicit reset clears inherited effort", reset: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m, st, _, _ := newManager()
+			agent := &recordingAgent{}
+			m.agents = singleAgent{agent: agent}
+			m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+				{ID: "z-ai/glm-5.3-flash", Efforts: []string{"low", "high"}},
+				{ID: "mimo/mimo-v2.5"},
+			}}})
+			project := st.projects["mer"]
+			project.Config.Worker = domain.RoleOverride{Harness: domain.HarnessFreebuff, AgentConfig: domain.AgentConfig{
+				Model: "z-ai/glm-5.3-flash", Effort: "high",
+			}}
+			st.projects["mer"] = project
+			rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessFreebuff,
+				RequestedMode: domain.SessionModeTUI,
+				AgentConfig:   ports.AgentConfig{Model: tt.model}, EffortOverride: tt.reset,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if agent.lastConfig.Effort != tt.wantEffort || rec.Metadata.Effort != tt.wantEffort {
+				t.Fatalf("launch/persisted effort = %q/%q, want %q", agent.lastConfig.Effort, rec.Metadata.Effort, tt.wantEffort)
+			}
+		})
+	}
+}
+
 func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing.T) {
 	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
 		{ID: "gemini-2.5-pro", IsDefault: true, Efforts: []string{"low", "high"}},
@@ -522,7 +655,7 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 		if !errors.Is(err, ports.ErrUnsupportedEffort) {
 			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
 		}
-		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, and hermes") {
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, hermes, and freebuff") {
 			t.Fatalf("harness %q error = %v, want support hint", harness, err)
 		}
 		// Unflagged request-carried effort still clears silently, matching the

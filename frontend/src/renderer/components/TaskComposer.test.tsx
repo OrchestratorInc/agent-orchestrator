@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
 	ensureReadiness: vi.fn(),
 	ensureTargetedReadiness: vi.fn(),
 	agentValues: [] as string[],
+	nextAgent: undefined as string | undefined,
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
 	cloudCreateSession: vi.fn(),
@@ -56,7 +57,7 @@ vi.mock("./CreateProjectAgentSheet", () => ({
 				data-value={value}
 				data-manage-view={manageView}
 				disabled={disabled}
-				onClick={() => onChange(value === "codex" ? "claude-code" : "codex")}
+				onClick={() => onChange(h.nextAgent ?? (value === "codex" ? "claude-code" : "codex"))}
 			/>
 		);
 	},
@@ -157,6 +158,7 @@ afterEach(() => {
 	h.cloudChatHarnesses = ["claude-code", "codex", "cursor"];
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
+	h.nextAgent = undefined;
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
 	clearCachedAgentModels("codex");
 });
@@ -721,6 +723,86 @@ describe("TaskComposer", () => {
 				expect.objectContaining({ body: expect.objectContaining({ effort: "high" }) }),
 			),
 		);
+	});
+
+	it("lets a Claude task switch to Freebuff and choose effort in Terminal UI", async () => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: {
+			lastAgent: "claude-code", agents: { "claude-code": { model: "opus", mode: "", effort: "high" } },
+		} }));
+		h.agentCatalog = { agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("freebuff", "Freebuff")] };
+		h.nextAgent = "freebuff";
+		h.get.mockImplementation(async (path: string, options?: { params?: { path?: { agent?: string } } }) => {
+			if (path === "/api/v1/settings") return { data: { defaultSessionMode: "chat", chatHarnesses: ["claude-code"] } };
+			if (path.includes("/models")) {
+				const freebuff = options?.params?.path?.agent === "freebuff";
+				return { data: { agent: freebuff ? "freebuff" : "claude-code", selectionMode: "catalog", models: freebuff ? [
+					{ id: "mimo/mimo-v2.5", label: "MiMo", isDefault: true },
+					{ id: "z-ai/glm-5.3-flash", label: "GLM 5.3 Flash", efforts: ["low", "high"], defaultEffort: "high" },
+				] : [{ id: "opus", label: "Opus", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" }], allowCustom: false } };
+			}
+			return { data: { status: "ok", project: { config: {} } } };
+		});
+		h.post.mockResolvedValueOnce({ data: { session: { id: "freebuff-worker" } } });
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		expect(await screen.findByRole("button", { name: "Effort" })).toHaveTextContent("High");
+		fireEvent.click(screen.getByLabelText("Agent"));
+		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "freebuff"));
+		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "GLM 5.3 Flash" }));
+		const effort = await screen.findByRole("button", { name: "Effort" });
+		expect(effort).toHaveTextContent("High");
+		await userEvent.click(effort);
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Low" }));
+		fireEvent.change(task(), { target: { value: "Chat with Freebuff" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.objectContaining({
+			body: expect.objectContaining({ harness: "freebuff", model: "z-ai/glm-5.3-flash", effort: "low", mode: "tui" }),
+		})));
+	});
+
+	it("replaces a stale Freebuff effort when its model catalog changes", async () => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: {
+			lastAgent: "freebuff", agents: { freebuff: { model: "z-ai/glm-5.3-flash", mode: "", effort: "max" } },
+		} }));
+		h.agentCatalog = { agents: [agentReadiness("freebuff", "Freebuff")] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "freebuff", selectionMode: "catalog", models: [
+				{ id: "z-ai/glm-5.3-flash", label: "GLM 5.3 Flash", isDefault: true, efforts: ["low", "high", "max"], defaultEffort: "high" },
+			], allowCustom: false } }
+			: { data: { defaultSessionMode: "tui", status: "ok", project: { config: {} } } });
+		h.post.mockResolvedValueOnce({ data: { session: { id: "freebuff-worker" } } });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await userEvent.click(await screen.findByRole("button", { name: "Effort" }));
+		await userEvent.click(await screen.findByRole("menuitemradio", { name: "Max" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("Max"));
+		act(() => queryClient.setQueryData(["agent-models", "freebuff", ""], {
+			agent: "freebuff", selectionMode: "catalog", models: [
+				{ id: "z-ai/glm-5.3-flash", label: "GLM 5.3 Flash", isDefault: true, efforts: ["low", "high"], defaultEffort: "high" },
+			], allowCustom: false,
+		}));
+		await waitFor(() => expect(screen.getByRole("button", { name: "Effort" })).toHaveTextContent("High"));
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.objectContaining({
+			body: expect.objectContaining({ model: "z-ai/glm-5.3-flash", effort: "high" }),
+		})));
+	});
+
+	it("explicitly clears inherited Freebuff effort when the selected model has no effort settings", async () => {
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agent: "freebuff", selectionMode: "catalog", models: [
+				{ id: "mimo/mimo-v2.5", label: "MiMo", isDefault: true },
+			], allowCustom: false } }
+			: { data: { defaultSessionMode: "tui", status: "ok", project: { config: { worker: {
+				agent: "freebuff", agentConfig: { model: "mimo/mimo-v2.5", effort: "high" },
+			} } } } });
+		h.post.mockResolvedValueOnce({ data: { workerId: "freebuff-worker" } });
+		render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("MiMo"));
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/orchestrators/delegate", expect.objectContaining({
+			body: expect.objectContaining({ agent: "freebuff", effort: "" }),
+		})));
 	});
 
 	it("selects and sends a middle effort when the model reports levels but no default", async () => {

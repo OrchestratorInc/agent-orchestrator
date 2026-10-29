@@ -126,17 +126,17 @@ func (m *Manager) terminalResumesNatively(ctx context.Context, rec domain.Sessio
 		Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID},
 	}
 	agentConfig := restoredAgentConfig(rec, project.Config)
-	_, ok, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
-		Session: ref, Kind: rec.Kind, DataDir: m.dataDir, Config: agentConfig, Permissions: agentConfig.Permissions,
-	})
-	if err != nil || !ok {
-		return false
-	}
 	env, _, err := m.launchRuntimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	if err != nil {
 		return false
 	}
 	m.augmentAgentRuntimeEnv(agent, env)
+	_, ok, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
+		Env: env, Session: ref, Kind: rec.Kind, DataDir: m.dataDir, Config: agentConfig, Permissions: agentConfig.Permissions,
+	})
+	if err != nil || !ok {
+		return false
+	}
 	return !nativeConversationMissing(ctx, agent, ref, rec.Metadata.AgentSessionID, env)
 }
 

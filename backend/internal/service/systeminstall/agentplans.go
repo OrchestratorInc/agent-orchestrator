@@ -13,6 +13,7 @@ import (
 
 var agentDocumentationURLs = map[Target]string{
 	TargetMemcode:     "https://github.com/memcode-ai/memcode/releases",
+	TargetFreebuff:    "https://www.npmjs.com/package/freebuff",
 	TargetClaudeCode:  "https://code.claude.com/docs/en/installation",
 	TargetCodex:       "https://github.com/openai/codex",
 	TargetCursor:      "https://docs.cursor.com/en/cli/installation",
@@ -283,6 +284,8 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
+	case TargetFreebuff:
+		plans = []Plan{s.planNPM(target, "freebuff")}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}

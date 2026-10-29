@@ -188,6 +188,25 @@ func Base(agentID string) ports.AgentModelCatalog {
 			model("kimi-k3", "Kimi K3", false),
 			model("deepseek-v4-flash", "DeepSeek V4.1 Flash", false),
 		)
+	case "freebuff":
+		// Freebuff 0.2.30's regular /model picker (FREEBUFF_MODELS), in picker
+		// order, with each row's own reasoning ladder. AO saves the id as
+		// Freebuff's picker selection; models the account cannot use stay locked
+		// in Freebuff, as they are in its picker.
+		return catalog(agentID, "official-catalog", entryMode, now,
+			model("mimo/mimo-v2.5", "MiMo v2.6 Flash Fast", true),
+			withEfforts(model("z-ai/glm-5.3-flash", "GLM 5.3 Flash", false), "high", "low", "high"),
+			withEfforts(model("deepseek/deepseek-v4-flash", "DeepSeek V4.1 Flash", false), "high", "low", "high", "max"),
+			withEfforts(model("deepseek/deepseek-v4-flash-fast", "DeepSeek V4.1 Flash Fast", false), "high", "low", "high", "max"),
+			withEfforts(model("openai/gpt-6-luna", "GPT-6 Luna", false), "high", "low", "medium", "high", "xhigh"),
+			model("mimo/mimo-v2.6-pro", "MiMo 2.6 Pro", false),
+			model("upstage/solar-mini4", "Solar Mini 4", false),
+			model("upstage/solar-pro4", "Solar Pro 4", false),
+			withEfforts(model("google/gemini-3.8-flash", "Gemini 3.8 Flash", false), "high", "high"),
+			withEfforts(model("meta/muse-spark-1.3-contributor", "Muse Spark 1.3", false), "high", "low", "medium", "high"),
+			withEfforts(model("google/gemini-4-argon", "Gemini 4 Argon", false), "medium", "low", "medium", "high"),
+			withEfforts(model("openai/gpt-6.1-sol", "GPT-6.1 Sol", false), "medium", "low", "medium", "high"),
+		)
 	case "amp":
 		c := catalog(agentID, "official-modes", entryMode, now,
 			model("low", "Low", false),
@@ -292,7 +311,7 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 	if request.AgentID == "claude-code" {
 		return discoverClaudeCatalog(ctx, request, d.ClaudeModels)
 	}
-	if request.AgentID == "muse" || request.AgentID == "memcode" {
+	if request.AgentID == "muse" || request.AgentID == "memcode" || request.AgentID == "freebuff" {
 		return Base(request.AgentID), nil
 	}
 	if request.AgentID == "codex" {
@@ -969,6 +988,12 @@ func catalog(agentID, source string, entryMode ports.CustomModelEntryMode, at ti
 
 func model(id, label string, isDefault bool) ports.AgentModelInfo {
 	return ports.AgentModelInfo{ID: id, Label: label, IsDefault: isDefault}
+}
+
+func withEfforts(info ports.AgentModelInfo, defaultEffort string, efforts ...string) ports.AgentModelInfo {
+	info.Efforts = efforts
+	info.DefaultEffort = defaultEffort
+	return info
 }
 
 // These harnesses' native selector is provider/model. Restrict this parsing to

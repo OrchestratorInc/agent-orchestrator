@@ -288,7 +288,7 @@ func TestCommandBuilders(t *testing.T) {
 	if got, want := capturePaneArgs("sess-1", 10), []string{"capture-pane", "-t", "sess-1", "-p", "-S", "-10"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("capturePaneArgs = %#v, want %#v", got, want)
 	}
-	if got, want := capturePaneStyledArgs("sess-1", 10), []string{"capture-pane", "-e", "-t", "sess-1", "-p", "-S", "-10"}; !reflect.DeepEqual(got, want) {
+	if got, want := capturePaneStyledArgs("sess-1"), []string{"capture-pane", "-e", "-t", "sess-1", "-p", "-S", "0"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("capturePaneStyledArgs = %#v, want %#v", got, want)
 	}
 }
@@ -2049,7 +2049,7 @@ func TestGetStyledOutputPreservesCaptureMode(t *testing.T) {
 	if !strings.Contains(out, "\x1b[2m") {
 		t.Fatalf("styled output lost SGR sequence: %q", out)
 	}
-	if got, want := fr.calls[0].args, capturePaneStyledArgs("sess-1", 10); !reflect.DeepEqual(got, want) {
+	if got, want := fr.calls[0].args, capturePaneStyledArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("capture-pane args = %#v, want %#v", got, want)
 	}
 }
