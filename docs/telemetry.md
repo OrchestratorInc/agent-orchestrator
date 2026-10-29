@@ -34,6 +34,10 @@ the renderer has no direct Sentry transport. The mobile app keeps its own
 Sentry project and DSN. A desktop opt-in recorded while the Electron release
 gate was closed requires a fresh opt-in before this sender starts. Until that
 answer is recorded, neither the Electron nor daemon Sentry sender may send.
+On Windows, the desktop cannot durably replace the Share error events policy.
+Both Electron and daemon Sentry therefore remain off, even in packaged releases
+with a DSN, until durable consent support is available. This does not change
+the separate Share usage analytics choice for PostHog.
 Once enabled, renderer exceptions go to Electron Sentry rather than PostHog. Failed
 Sentry sends can wait in an offline queue under AO's Electron data directory.
 Error events can include a standard exception type and allowlisted in-app
