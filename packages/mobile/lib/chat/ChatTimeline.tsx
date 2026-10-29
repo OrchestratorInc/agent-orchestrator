@@ -25,6 +25,7 @@ import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { MascotLamp } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
 import { LatticeLoader } from "./LatticeLoader";
+import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { RenderFrame } from "./RenderFrame";
 import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
@@ -712,12 +713,15 @@ function PlanActivity({ activity }: { activity: ConversationActivity }) {
 	const styles = useThemedStyles(makeStyles);
 	const [open, setOpen] = useState(activity.status === "running");
 	const steps = activity.detail?.steps ?? [];
+	// Older daemons report the plan as an activity rather than on the turn; with
+	// steps it is the same checklist, so it gets the same panel.
+	if (steps.length) return <TurnPlan plan={{ explanation: activity.detail?.explanation, steps }} live={activity.status === "running"} title={activity.summary || "Plan"} />;
 	return <View style={styles.planCard}><Pressable
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
 			style={styles.planHeader}
 			onPress={() => { haptics.tap(); setOpen((value) => !value); }}
-			><Feather name="list" size={12} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><Text style={styles.planCount}>{steps.filter((step) => step.status === "completed").length}/{steps.length}</Text><Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} /></Pressable>{open ? <View style={styles.planBody}>{activity.detail?.explanation ? <Text style={styles.detailCopy}>{activity.detail.explanation}</Text> : null}{steps.map((step, index) => <View key={index} style={styles.planStep}><Feather name={step.status === "completed" ? "check-circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} /><Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text></View>)}{!steps.length ? <Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text> : null}</View> : null}</View>;
+			><Feather name="list-checks" size={17} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><Feather name={open ? "chevron-up" : "chevron-down"} size={16} color={t.textFaint} /></Pressable>{open ? <View style={styles.planBody}><Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text></View> : null}</View>;
 }
 
 function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
@@ -834,7 +838,7 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 	const canRollBack = Boolean(onRollback && settled && turn.providerTurnId && !turn.rolledBack);
 	return (
 		<View style={styles.turnWrap}>
-			{turn.plan?.steps.length ? <TurnPlan turn={turn} /> : null}
+			{turn.plan?.steps.length ? <TurnPlan plan={turn.plan} live={turn.state === "running"} /> : null}
 			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
 			{canRollBack ? <View style={styles.turnLine}>
 				<Pressable accessibilityLabel="Roll back to before this turn" hitSlop={8} onPress={() => { haptics.warning(); setConfirming(true); }}>
@@ -860,37 +864,6 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 					{rollbackError ? <Text style={styles.validation}>{rollbackError}</Text> : null}
 				</View>
 			) : null}
-		</View>
-	);
-}
-
-function TurnPlan({ turn }: { turn: ConversationTurn }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const [open, setOpen] = useState(turn.state === "running");
-	const done = turn.plan?.steps.filter((step) => step.status === "completed").length ?? 0;
-	return (
-		<View style={styles.planCard}>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityState={{ expanded: open }}
-				style={styles.planHeader}
-				onPress={() => { haptics.tap(); setOpen((value) => !value); }}
-				>
-				<Feather name="list" size={12} color={t.textTertiary} />
-				<Text style={styles.planTitle}>Plan</Text>
-				{turn.state === "running" ? <Text style={styles.planLive}>STILL CHANGING</Text> : null}
-				<Text style={styles.planCount}>{done}/{turn.plan?.steps.length ?? 0}</Text>
-				<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
-			</Pressable>
-			{open ? <View style={styles.planBody}>
-				{turn.plan?.explanation ? <Text style={styles.detailCopy}>{turn.plan.explanation}</Text> : null}
-				{turn.plan?.steps.map((step, index) => <View key={index} accessibilityLabel={`${step.status.replace("_", " ")}: ${step.text}`} style={styles.planStep}>
-					<Feather name={step.status === "completed" ? "check-circle" : step.status === "in_progress" ? "circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} />
-					<Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text>
-					<Text style={styles.planStepState}>{step.status.replace("_", " ")}</Text>
-				</View>)}
-			</View> : null}
 		</View>
 	);
 }
@@ -1264,10 +1237,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	planLive: { fontFamily: "Geist_600SemiBold", color: t.orange, fontSize: type.caption2.fontSize, letterSpacing: 0.7, fontWeight: "600" },
 	planCount: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
 	planBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xs },
-	planStep: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
-	planStepText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
-	planStepState: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize, textTransform: "uppercase" },
-	planDone: { color: t.textTertiary, textDecorationLine: "line-through" },
 	fileBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xxs },
 	fileRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
 	fileRowTap: { minHeight: 36 },

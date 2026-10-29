@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 const source = readFileSync(new URL("./ChatTimeline.tsx", import.meta.url), "utf8");
 const turnSummarySource = source.slice(
 	source.indexOf("function TurnStatusRow"),
-	source.indexOf("function TurnPlan"),
+	source.indexOf("function ChangedFiles"),
 );
 
 describe("chat turn summary styling", () => {
