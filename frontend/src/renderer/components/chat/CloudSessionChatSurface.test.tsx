@@ -6,7 +6,7 @@ import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
-import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, CloudSessionChatSurface, planRefusalInEvents, cloudStartupChecklist, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -18,6 +18,11 @@ const cloudMocks = vi.hoisted(() => ({
 	resumeSession: vi.fn(),
 	requestWorkspaceCheckout: vi.fn(),
 	chatProps: vi.fn(),
+	promptPlanRefusal: vi.fn(),
+}));
+vi.mock("../../lib/cloud-cp/renderer-client", async (importOriginal) => ({
+	...await importOriginal<typeof import("../../lib/cloud-cp/renderer-client")>(),
+	promptPlanRefusal: cloudMocks.promptPlanRefusal,
 }));
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: cloudMocks }),
@@ -1153,6 +1158,37 @@ describe("CloudSessionChatSurface", () => {
 		const merged = appendCloudEvents(existing, [event(500), event(501)]);
 		expect(merged.map((item) => item.sequence)).toEqual([1, 500, 501]);
 		expect(merged.at(-1)?.sequence).toBe(501);
+	});
+
+	it("offers the upgrade when a tool hits a plan limit while the chat is open, not for history", async () => {
+		const refused = (sequence: number): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed",
+				detail: { output: "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)" } } },
+		});
+		cloudMocks.promptPlanRefusal.mockReset();
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [refused(1)], hasMore: false, nextAfter: 1 })
+			.mockResolvedValue({ events: [refused(2)], hasMore: false, nextAfter: 2 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryData(["cloud-chat-events", "org-1", session.id])).toHaveLength(1));
+		expect(cloudMocks.promptPlanRefusal).not.toHaveBeenCalled();
+		await act(() => queryClient.refetchQueries({ queryKey: ["cloud-chat-events", "org-1", session.id] }));
+		expect(cloudMocks.promptPlanRefusal).toHaveBeenCalledOnce();
+		expect(cloudMocks.promptPlanRefusal).toHaveBeenCalledWith("WORKER_SLOTS_FULL");
+	});
+
+	it("reads plan refusals only from tool output", () => {
+		const activity = (kind: string, detail: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id: "a", kind, detail } },
+		});
+		expect(planRefusalInEvents([activity("mcp_tool", { outputDelta: "409 ORCHESTRATOR_SLOTS_FULL" })])).toBe("ORCHESTRATOR_SLOTS_FULL");
+		expect(planRefusalInEvents([activity("reasoning", { output: "WORKER_SLOTS_FULL" })])).toBeUndefined();
+		expect(planRefusalInEvents([activity("command", { output: "MY_WORKER_SLOTS_FULLY_USED" })])).toBeUndefined();
+		expect(planRefusalInEvents([{ sessionId: session.id, sequence: 2, type: "chat.assistant_delta", payload: { text: "WORKER_SLOTS_FULL" }, createdAt: session.updatedAt }])).toBeUndefined();
 	});
 
 	it("continues a long history from its last sequence", async () => {

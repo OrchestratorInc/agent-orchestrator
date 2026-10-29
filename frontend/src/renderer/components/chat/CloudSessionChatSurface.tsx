@@ -10,7 +10,9 @@ import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
 import type { CloudCpClient, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
 import { cloudStartupProblem, isWorkspaceStartupError, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
+import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { promptPlanRefusal } from "../../lib/cloud-cp/renderer-client";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, SystemEventDetail, TurnSettings } from "../../types/conversation";
@@ -179,6 +181,26 @@ export async function loadCloudChatEvents(
 		if (page.nextAfter <= after) throw new Error("Cloud event cursor did not advance.");
 		after = page.nextAfter;
 	}
+}
+
+const PLAN_REFUSAL_PATTERN = new RegExp(`\\b(${[...PLAN_REFUSAL_CODES].join("|")})\\b`);
+
+/**
+ * The plan refusal code in a tool's output, if any. An agent's own call to the
+ * control plane (an orchestrator spawning a worker) is refused inside the
+ * sandbox, so its output is the only place this desktop sees the refusal.
+ */
+export function planRefusalInEvents(events: CloudCpClientEvent[]): string | undefined {
+	for (const event of events) {
+		if (event.type !== "chat.activity") continue;
+		const activity = eventPayload(event).activity as { kind?: unknown; detail?: Record<string, unknown> } | undefined;
+		if (activity?.kind !== "command" && activity?.kind !== "mcp_tool") continue;
+		for (const output of [activity.detail?.output, activity.detail?.outputDelta]) {
+			const code = typeof output === "string" ? PLAN_REFUSAL_PATTERN.exec(output)?.[1] : undefined;
+			if (code) return code;
+		}
+	}
+	return undefined;
 }
 
 function cloudTurnDiff(patch: string): (DiffFile & { patch: string })[] {
@@ -907,8 +929,12 @@ export function CloudSessionChatSurface({
 		refetchInterval: 1_000,
 		queryFn: async () => {
 			if (!cloud) return [] as CloudCpClientEvent[];
-			const previous = queryClient.getQueryData<CloudCpClientEvent[]>(["cloud-chat-events", cloud.orgId, session.id]) ?? [];
-			return loadCloudChatEvents(client, cloud.orgId, session.id, previous);
+			const cached = queryClient.getQueryData<CloudCpClientEvent[]>(["cloud-chat-events", cloud.orgId, session.id]);
+			const events = await loadCloudChatEvents(client, cloud.orgId, session.id, cached ?? []);
+			// The first load is history; only a refusal that arrives while the chat is open prompts.
+			const refusal = cached ? planRefusalInEvents(events.slice(cached.length)) : undefined;
+			if (refusal) promptPlanRefusal(refusal);
+			return events;
 		},
 	});
 	const invalidate = () =>

@@ -51,8 +51,13 @@ export function createRendererCloudCpClient(baseUrl: string): CloudCpClient {
 			void queryClient.invalidateQueries({ queryKey: ["cloud-org"] });
 			void queryClient.invalidateQueries({ queryKey: cloudMeQueryKey });
 		},
-		onPlanRefused: (code) => reportPlanRefusal(code, openUpgradeAfterPlanRefusal()),
+		onPlanRefused: promptPlanRefusal,
 	}));
+}
+
+/** Report a plan refusal and offer the upgrade, wherever the refusal surfaced. */
+export function promptPlanRefusal(code: string): void {
+	reportPlanRefusal(code, openUpgradeAfterPlanRefusal());
 }
 
 /** How often a plan refusal may open the Upgrade page; retries must not keep reopening it. */
