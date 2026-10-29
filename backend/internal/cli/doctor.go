@@ -208,6 +208,9 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 		c.checkTerminalRuntime(ctx),
 		c.checkAOBinary(daemonExe),
 	)
+	if check, ok := c.checkAOLoginShell(ctx, daemonExe); ok {
+		checks = append(checks, check)
+	}
 	for _, ha := range registry.Harnessed() {
 		id := string(ha.Harness)
 		spec := harnessProbeSpecs[id]
@@ -327,6 +330,115 @@ func sameBinary(a, b string) bool {
 		return os.SameFile(ai, bi)
 	}
 	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+// loginShellProbeTimeout matches the desktop's own login-shell environment
+// probe (SHELL_ENV_TIMEOUT_MS in frontend/src/main.ts).
+const loginShellProbeTimeout = 3 * time.Second
+
+// devLauncherBuildPath is where scripts/daemon-build.sh builds a source
+// checkout's ao. The launcher it installs on PATH links here.
+var devLauncherBuildPath = filepath.Join("aoagents", "agent-orchestrator", "bin", "ao")
+
+// checkAOLoginShell reports which ao a login shell runs when it starts with
+// the app's ao first on PATH, as every AO session does. Codex runs each agent
+// command through such a shell, and a new terminal is one. Startup files
+// (/etc/paths through path_helper, ~/.zprofile, ~/.bash_profile) run after
+// that pin, so one that prepends a directory holding an older ao swaps the
+// app's binary for it, which checkAOBinary cannot see from doctor's own PATH
+// (#3562). ok is false when there is nothing to probe: Windows, a shell this
+// probe does not speak, or a binary not named ao, which sessions never pin.
+func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe string) (check doctorCheck, ok bool) {
+	const name = "ao-login-shell"
+	if runtime.GOOS == "windows" {
+		return doctorCheck{}, false
+	}
+	want, wantLabel := daemonExe, "the running daemon's binary"
+	if want == "" {
+		self, err := c.deps.Executable()
+		if err != nil {
+			return doctorCheck{}, false
+		}
+		want, wantLabel = self, "this binary"
+	}
+	shell := strings.TrimSpace(os.Getenv("SHELL"))
+	shellName := filepath.Base(shell)
+	switch shellName {
+	case "sh", "bash", "zsh", "dash", "ksh":
+	default:
+		return doctorCheck{}, false
+	}
+	if !filepath.IsAbs(shell) || filepath.Base(want) != "ao" {
+		return doctorCheck{}, false
+	}
+
+	couldNotRun := func(err error) (doctorCheck, bool) {
+		return doctorCheck{
+			Level: doctorWarn, Section: doctorSectionTools, Name: name,
+			Message: fmt.Sprintf("could not run a %s login shell to see which ao it runs: %v", shellName, err),
+		}, true
+	}
+	dir, err := os.MkdirTemp("", "ao-doctor-login-shell-*")
+	if err != nil {
+		return couldNotRun(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	answerPath := filepath.Join(dir, "ao")
+	path := filepath.Dir(want)
+	if current := os.Getenv("PATH"); current != "" {
+		path += string(os.PathListSeparator) + current
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, loginShellProbeTimeout)
+	defer cancel()
+	// The shell answers into a file, and its stdout and stderr point at
+	// /dev/null before any startup file runs. A process a startup file leaves
+	// running then cannot hold doctor's output pipe open past the timeout; the
+	// desktop's probe likewise settles when the shell exits.
+	_, err = c.deps.CommandOutput(reqCtx, "/bin/sh", "-c", `exec "$@" </dev/null >/dev/null 2>&1`, "sh",
+		"/usr/bin/env", "PATH="+path, shell, "-l", "-c", `command -v ao >"$1"`, shellName, answerPath)
+	answer, readErr := os.ReadFile(answerPath) //nolint:gosec // path is inside doctor's own temp dir
+	resolved := strings.TrimSpace(string(answer))
+	timedOut := errors.Is(reqCtx.Err(), context.DeadlineExceeded)
+	if readErr != nil || (resolved == "" && timedOut) {
+		switch {
+		case timedOut:
+			err = fmt.Errorf("timed out after %s", loginShellProbeTimeout)
+		case err == nil:
+			err = errors.New("a startup file ended the shell before it checked")
+		}
+		return couldNotRun(err)
+	}
+
+	var msg string
+	switch {
+	case resolved == "":
+		msg = fmt.Sprintf("a %s login shell finds no ao even with %s first on PATH: a startup file replaces PATH, so agent commands that run in a login shell (Codex's) and new terminals cannot run ao", shellName, filepath.Dir(want))
+	case !filepath.IsAbs(resolved):
+		msg = fmt.Sprintf("a %s login shell resolves ao to %q, not %s %s: an alias or function from a startup file shadows it in agent commands that run in a login shell (Codex's) and new terminals", shellName, resolved, wantLabel, want)
+	case sameBinary(want, resolved):
+		return doctorCheck{
+			Level: doctorPass, Section: doctorSectionTools, Name: name,
+			Message: fmt.Sprintf("a %s login shell still runs %s (%s)", shellName, wantLabel, want),
+		}, true
+	default:
+		msg = fmt.Sprintf("a %s login shell runs %s, not %s %s: a startup file such as ~/.zprofile puts its directory first, so agent commands that run in a login shell (Codex's) and new terminals run that copy; remove it or stop prepending its directory", shellName, resolved, wantLabel, want)
+		if isDevLauncher(resolved) {
+			msg += fmt.Sprintf("; it links to a scripts/daemon-build.sh dev build, so `rm '%s'` is safe unless you still use that build", strings.ReplaceAll(resolved, "'", `'\''`))
+		}
+	}
+	return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: name, Message: msg}, true
+}
+
+// isDevLauncher reports whether path is the symlink scripts/daemon-build.sh
+// installs, so doctor can name it as AO's own leftover rather than a foreign
+// install. A copied launcher carries no such proof and is not matched.
+func isDevLauncher(path string) bool {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	target, err := filepath.EvalSymlinks(path)
+	return err == nil && strings.HasSuffix(target, string(filepath.Separator)+devLauncherBuildPath)
 }
 
 func (c *commandContext) checkGit(ctx context.Context) doctorCheck {

@@ -32,6 +32,10 @@ directories, including Codex Chat provider launches, and applies the same pin
 to reviewer and shell-terminal launches.
 Interactive login shells can still reorder `PATH` through user startup files,
 so this is a launch invariant and a best-effort convenience inside a shell.
+Codex runs every agent command through a login shell, so it is exposed too.
+`ao doctor`'s `ao-login-shell` check starts the user's login shell with the
+pin applied and warns when a startup file puts another `ao` first, naming the
+launcher `scripts/daemon-build.sh` leaves behind when that is the culprit.
 When the install directory contains other executable tools, AO creates an
 `ao` shim under its resolved absolute data directory instead of promoting those
 sibling tools. Windows provides both command-shell and Git Bash compatible
