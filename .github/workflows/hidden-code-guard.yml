@@ -37,4 +37,7 @@ jobs:
             echo "Fetched PR head does not match the event head SHA" >&2
             exit 1
           fi
-          git diff --text --no-ext-diff --no-textconv --unified=0 "$BASE_SHA...$HEAD_SHA" -- . | node .github/scripts/hidden-code-guard.mjs
+          # Compare against the merge base, the same tree the PR's diff starts from.
+          BASE_SHA="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          export BASE_SHA
+          git diff --text --no-renames --no-ext-diff --no-textconv --unified=0 "$BASE_SHA" "$HEAD_SHA" -- . | node .github/scripts/hidden-code-guard.mjs
