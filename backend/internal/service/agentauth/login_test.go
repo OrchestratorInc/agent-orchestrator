@@ -105,6 +105,8 @@ func TestGuidedNativeLoginDoesNotStartAnotherCommandAfterCleanupFailure(t *testi
 }
 
 func TestGuidedNativeLoginHidesTerminalAndCancels(t *testing.T) {
+	// No OpenCode catalog, so OpenCode keeps its fixed key methods.
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	pty := &guidedTerminalFake{output: "private credential=do-not-return\n> OpenAI\n"}
 	svc := New(foundExecutable("opencode"), pty)
 	t.Cleanup(svc.Close)
