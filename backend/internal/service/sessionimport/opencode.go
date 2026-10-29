@@ -108,6 +108,46 @@ func discoverOpenCode(ctx context.Context, root string) ([]sourceFiles, error) {
 	return out, rows.Err()
 }
 
+// openCodeMessageText returns each message's concatenated visible text, keyed
+// by message id, and whether any block was truncated to the visible budget.
+func openCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map[string]string, bool, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT message_id, json_extract(data, '$.text')
+		FROM part
+		WHERE session_id = ? AND json_extract(data, '$.type') = 'text'
+		ORDER BY time_created, id`, sessionID)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = rows.Close() }()
+	textByMessage := map[string]string{}
+	shortened := false
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		var messageID string
+		var text sql.NullString
+		if err := rows.Scan(&messageID, &text); err != nil {
+			return nil, false, err
+		}
+		chunk := text.String
+		if strings.TrimSpace(chunk) == "" {
+			continue
+		}
+		if len(chunk) > maxVisibleBytes {
+			chunk = chunk[:maxVisibleBytes]
+			shortened = true
+		}
+		if existing := textByMessage[messageID]; existing != "" {
+			textByMessage[messageID] = existing + "\n\n" + chunk
+		} else {
+			textByMessage[messageID] = chunk
+		}
+	}
+	return textByMessage, shortened, rows.Err()
+}
+
 // readOpenCodeTranscript reads one conversation from the store. paths[0] is the
 // session id. Only user and assistant text parts become visible messages; tool
 // calls, reasoning and step markers are provider internals and stay out.
@@ -157,41 +197,11 @@ func readOpenCodeTranscript(ctx context.Context, root string, paths ...string) (
 
 	// Collect each message's text parts, concatenating multiple blocks the way
 	// Claude's reader joins a reply's content blocks.
-	partRows, err := db.QueryContext(ctx, `
-		SELECT message_id, json_extract(data, '$.text')
-		FROM part
-		WHERE session_id = ? AND json_extract(data, '$.type') = 'text'
-		ORDER BY time_created, id`, sessionID)
+	textByMessage, shortened, err := openCodeMessageText(ctx, db, sessionID)
 	if err != nil {
 		return t, err
 	}
-	textByMessage := map[string]string{}
-	for partRows.Next() {
-		var messageID string
-		var text sql.NullString
-		if err := partRows.Scan(&messageID, &text); err != nil {
-			_ = partRows.Close()
-			return t, err
-		}
-		chunk := text.String
-		if strings.TrimSpace(chunk) == "" {
-			continue
-		}
-		if len(chunk) > maxVisibleBytes {
-			chunk = chunk[:maxVisibleBytes]
-			t.shortened = true
-		}
-		if existing := textByMessage[messageID]; existing != "" {
-			textByMessage[messageID] = existing + "\n\n" + chunk
-		} else {
-			textByMessage[messageID] = chunk
-		}
-	}
-	if err := partRows.Err(); err != nil {
-		_ = partRows.Close()
-		return t, err
-	}
-	_ = partRows.Close()
+	t.shortened = t.shortened || shortened
 
 	msgRows, err := db.QueryContext(ctx, `
 		SELECT id, json_extract(data, '$.role'), time_created

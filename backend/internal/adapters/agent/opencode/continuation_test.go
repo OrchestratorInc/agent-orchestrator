@@ -31,12 +31,15 @@ func TestOpenCodeNativeSessionConfigDir(t *testing.T) {
 	}
 }
 
-func TestOpenCodeProbeNativeSession(t *testing.T) {
-	root := t.TempDir()
+// writeOpenCodeProbeDB builds a synthetic opencode.db and closes it before
+// returning, so the probe reads a settled file. Content is wholly invented.
+func writeOpenCodeProbeDB(t *testing.T, root string) {
+	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(root, "opencode.db")))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec(`CREATE TABLE session (id text PRIMARY KEY, parent_id text, time_archived integer)`); err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +57,11 @@ func TestOpenCodeProbeNativeSession(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_ = db.Close()
+}
+
+func TestOpenCodeProbeNativeSession(t *testing.T) {
+	root := t.TempDir()
+	writeOpenCodeProbeDB(t, root)
 
 	p := New()
 	cases := map[string]struct {
