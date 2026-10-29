@@ -3616,6 +3616,8 @@
 	"settings.harness.loginUi.nativeCheck": "检查登录",
 	"settings.harness.loginUi.nativeHint": "AO 在后台运行 harness 登录，并在此显示已识别的步骤。",
 	"settings.harness.loginUi.envHint": "AO 会将这些密钥传给它启动的智能体会话。",
+	"settings.harness.loginUi.methods.deepseek_api_key": "DeepSeek API 密钥",
+	"settings.harness.loginUi.hints.deepseek_api_key": "保存在 DeepSeek Harness 自己的凭据存储中，因此在 AO 内外都可使用。",
 	"settings.apiKeys.notSet": "未设置",
 	"settings.apiKeys.search": "搜索 API 密钥",
 	"settings.apiKeys.noMatches": "没有匹配的密钥",

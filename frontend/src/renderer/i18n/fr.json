@@ -3703,6 +3703,8 @@
 	"settings.harness.loginUi.nativeCheck": "Vérifier la connexion",
 	"settings.harness.loginUi.nativeHint": "AO exécute la connexion du harness en arrière-plan et affiche ici les étapes reconnues.",
 	"settings.harness.loginUi.envHint": "AO transmet ces clés aux sessions d'agent qu'il lance.",
+	"settings.harness.loginUi.methods.deepseek_api_key": "Clé d'API DeepSeek",
+	"settings.harness.loginUi.hints.deepseek_api_key": "Enregistrée dans le magasin d'identifiants de DeepSeek Harness, elle fonctionne dans AO et en dehors.",
 	"settings.apiKeys.notSet": "Non définie",
 	"settings.apiKeys.search": "Rechercher des clés d'API",
 	"settings.apiKeys.noMatches": "Aucune clé correspondante",

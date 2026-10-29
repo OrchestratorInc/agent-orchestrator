@@ -3634,6 +3634,8 @@
 	"settings.harness.loginUi.nativeCheck": "로그인 확인",
 	"settings.harness.loginUi.nativeHint": "AO는 백그라운드에서 하네스 로그인을 실행하고 인식된 단계를 여기에 표시합니다.",
 	"settings.harness.loginUi.envHint": "AO는 시작하는 에이전트 세션에 이 키들을 전달합니다.",
+	"settings.harness.loginUi.methods.deepseek_api_key": "DeepSeek API 키",
+	"settings.harness.loginUi.hints.deepseek_api_key": "DeepSeek Harness 자체 자격 증명 저장소에 저장되므로 AO 안팎에서 모두 작동합니다.",
 	"settings.apiKeys.notSet": "설정 안 됨",
 	"settings.apiKeys.search": "API 키 검색",
 	"settings.apiKeys.noMatches": "일치하는 키가 없습니다",

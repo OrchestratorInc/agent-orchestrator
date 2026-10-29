@@ -73,6 +73,8 @@ func nativeLoginMethods(agentID string) []LoginMethod {
 		return []LoginMethod{{"aider_openai_key", "OpenAI API key", true}, {"aider_anthropic_key", "Anthropic API key", true}, {"aider_openrouter_key", "OpenRouter API key", true}, {"aider_deepseek_key", "DeepSeek API key", true}, {"aider_gemini_key", "Gemini API key", true}}
 	case "gemini":
 		return []LoginMethod{{"gemini_api_key", "Google AI Studio API key", true}, {"native", "Other native sign-in", false}}
+	case "deepseek-harness":
+		return []LoginMethod{{"deepseek_api_key", "DeepSeek API key", true}, {"native", "Other native setup", false}}
 	default:
 		if plan, ok := planByAgentID[agentID]; ok && len(plan.command) > 0 && plan.LaunchMode == LaunchTerminal {
 			return []LoginMethod{{"native", "Native sign-in", false}}
@@ -641,6 +643,9 @@ func loginArgs(agentID, method string) ([]string, bool, error) {
 	if agentID == "gemini" && method == "gemini_api_key" {
 		return nil, true, nil
 	}
+	if agentID == "deepseek-harness" && method == "deepseek_api_key" {
+		return nil, true, nil
+	}
 	return nil, false, apierr.Invalid("AGENT_AUTH_METHOD_UNSUPPORTED", "This harness does not support that UI login method. Use terminal login instead.", nil)
 }
 
@@ -654,6 +659,8 @@ func directKeyWriter(agentID string) (func(context.Context, string, string) erro
 		return saveAiderAPIKey, true
 	case "gemini":
 		return saveGeminiAPIKey, true
+	case "deepseek-harness":
+		return saveDeepSeekHarnessKey, true
 	}
 	return nil, false
 }

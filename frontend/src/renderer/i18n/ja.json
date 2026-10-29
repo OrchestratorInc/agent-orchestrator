@@ -3634,6 +3634,8 @@
 	"settings.harness.loginUi.nativeCheck": "サインインを確認",
 	"settings.harness.loginUi.nativeHint": "AOはハーネスのログインをバックグラウンドで実行し、認識されたステップをここに表示します。",
 	"settings.harness.loginUi.envHint": "AO は起動するエージェントセッションにこれらのキーを渡します。",
+	"settings.harness.loginUi.methods.deepseek_api_key": "DeepSeek API キー",
+	"settings.harness.loginUi.hints.deepseek_api_key": "DeepSeek Harness 自身の認証情報ストアに保存されるため、AO の内外で使えます。",
 	"settings.apiKeys.notSet": "未設定",
 	"settings.apiKeys.search": "API キーを検索",
 	"settings.apiKeys.noMatches": "一致するキーはありません",
