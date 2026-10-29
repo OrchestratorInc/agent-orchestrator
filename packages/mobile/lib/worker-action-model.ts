@@ -78,7 +78,12 @@ export const ARCHIVE_SESSION_CONFIRM = {
 	confirm: "Confirm",
 } as const;
 
-export const ARCHIVE_SESSION_HINT = "Stops the agent and moves it to Archive. Deletes the worktree folder unless it has uncommitted changes.";
+/**
+ * The Archive item's subtitle. iOS's menu shows two lines of a subtitle and
+ * cuts the rest, so it says only what the title does not: the agent stops, and
+ * a worktree with uncommitted work is kept (a clean one is deleted).
+ */
+export const ARCHIVE_SESSION_HINT = "Stops the agent. Keeps uncommitted work.";
 
 /**
  * Each action's glyph as each platform's own symbol: the SF Symbol iOS's menu

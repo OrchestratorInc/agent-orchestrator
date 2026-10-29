@@ -85,7 +85,8 @@ describe("workerContextActions", () => {
 			cancel: "No",
 			confirm: "Confirm",
 		});
-		expect(ARCHIVE_SESSION_HINT).toMatch(/Deletes the worktree folder unless it has uncommitted changes/);
+		// Short enough for the two lines iOS's menu gives a subtitle.
+		expect(ARCHIVE_SESSION_HINT).toBe("Stops the agent. Keeps uncommitted work.");
 	});
 
 	it("opens with Open, so the menu's first item is the row's own tap", () => {
