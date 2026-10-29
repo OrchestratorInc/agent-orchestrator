@@ -29,7 +29,12 @@ default DSN is distinct from the daemon project; Electron main uses
 Electron main sends consented error events through its own Sentry transport.
 Renderer diagnostics pass through the existing main-owned consent boundary;
 the renderer has no direct Sentry transport. The mobile app keeps its own
-Sentry project and DSN.
+Sentry project and DSN. A desktop opt-in recorded while the Electron release
+gate was closed requires a fresh opt-in before this sender starts.
+Renderer exceptions are sent to Electron Sentry rather than PostHog. Failed
+Sentry sends can wait in an offline queue under AO's Electron data directory.
+Turning off Share error events drains the sender and removes that queue before
+the opt-out is complete.
 
 ## What Orchestrator.inc sends
 

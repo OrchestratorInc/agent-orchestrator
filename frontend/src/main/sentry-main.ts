@@ -1,6 +1,8 @@
 // Electron main is the only desktop Sentry sender. The policy controller owns
 // this transport's lifetime, and the SDK never receives raw renderer text.
 import * as Sentry from "@sentry/electron/main";
+import { rm } from "node:fs/promises";
+import path from "node:path";
 import type { RendererTelemetryCapture } from "../shared/telemetry-policy";
 import { DEFAULT_ELECTRON_SENTRY_DSN } from "../shared/sentry-config";
 import { loadOrCreateTelemetryInstallId } from "../shared/telemetry";
@@ -35,12 +37,28 @@ const SAFE_FUNCTION = /^[A-Za-z_$][A-Za-z0-9_$.:<>]*$/;
 const DRAIN_TIMEOUT_MS = 2_000;
 let childProcessHookInstalled = false;
 
-function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, version: string, environment: string): Sentry.ErrorEvent {
+function isExpectedNoise(event: Sentry.ErrorEvent): boolean {
+	const values = [event.message, ...(event.exception?.values ?? []).flatMap((value) => [value.type, value.value])];
+	return values.some((value) => typeof value === "string" && (
+		/^AbortError$/i.test(value) ||
+		/\b(?:ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|ERR_NETWORK_IO_SUSPENDED|network changed|daemon not ready|DAEMON_NOT_READY|daemon_unavailable)\b/i.test(value)
+	));
+}
+
+function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, version: string, environment: string): Sentry.ErrorEvent | null {
+	if (isExpectedNoise(event)) return null;
 	const renderer = event.tags?.["ao.origin"] === "renderer";
 	const processReason = typeof event.message === "string"
 		? PROCESS_REASONS.find((reason) => event.message?.endsWith(`process exited with '${reason}'`))
 		: undefined;
-	const title = renderer ? "Renderer error" : processReason ? "Electron process failure" : "Electron main error";
+	const title = scrubTelemetryText(renderer ? "Renderer error" : processReason ? "Electron process failure" : "Electron main error");
+	const rendererKind = event.tags?.["ao.kind"];
+	const kind = renderer
+		? (rendererKind === "exception" || rendererKind === "message" ? rendererKind : "unknown")
+		: processReason ? "process_exit"
+		: event.exception?.values?.some((value) => value.mechanism?.type === "auto.node.onuncaughtexception") ? "uncaught_exception"
+		: event.exception?.values?.some((value) => value.mechanism?.type === "auto.node.onunhandledrejection") ? "unhandled_rejection"
+		: "main_error";
 	const category = event.tags?.["ao.category"];
 	const code = event.tags?.["ao.code"];
 	const safeCategory = typeof category === "string" && SAFE_CATEGORIES.has(category) ? category : "unknown";
@@ -54,8 +72,8 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 		timestamp: event.timestamp,
 		level: event.level === "fatal" || event.level === "error" || event.level === "warning" ? event.level : "error",
 		message: title,
-		fingerprint: renderer ? ["electron", "renderer", safeCategory, safeCode] : ["electron", processReason ?? "main", frames?.at(-1)?.function ?? "unknown"],
-		tags: { surface: renderer ? "renderer" : "electron-main", ...(renderer ? { category: safeCategory, code: safeCode } : {}), ...(processReason ? { reason: processReason } : {}) },
+		fingerprint: ["electron", kind, renderer ? safeCode : processReason ?? safeCode, renderer ? "renderer" : "electron-main"],
+		tags: { surface: renderer ? "renderer" : "electron-main", kind, ...(renderer ? { category: safeCategory, code: safeCode } : {}), ...(processReason ? { reason: processReason } : {}) },
 		user: { id: installId },
 		release: version,
 		environment,
@@ -63,16 +81,18 @@ function scrubMainSentryEvent(event: Sentry.ErrorEvent, installId: string, versi
 	};
 }
 
-export async function initMainSentry(version: string, dataDir: string, isPackaged: boolean): Promise<DesktopTelemetryTransport> {
+export async function initMainSentry(version: string, dataDir: string, cacheRoot: string, isPackaged: boolean): Promise<DesktopTelemetryTransport> {
 	const dsn = electronMainSentryDsn();
 	if (!dsn) return { capture: () => undefined, closeAndDrain: async () => undefined, clearCache: async () => undefined };
 	const installId = await loadOrCreateTelemetryInstallId(dataDir);
 	const environment = isPackaged ? "stable" : "development";
+	const queuePath = path.join(cacheRoot, "sentry", "queue");
 	Sentry.init({
 		dsn,
 		release: version,
 		environment,
-		transport: Sentry.makeElectronTransport,
+		transport: Sentry.makeElectronOfflineTransport(),
+		transportOptions: { queuePath },
 		ipcMode: 0 as Sentry.IPCMode,
 		defaultIntegrations: [],
 		integrations: [
@@ -94,7 +114,7 @@ export async function initMainSentry(version: string, dataDir: string, isPackage
 		capture(request) {
 			if (!accepting) return;
 			const safe = sanitizeRendererCapture(request);
-			if (!safe || safe.kind === "breadcrumb" || safe.tags?.category === "daemon_unavailable") return;
+			if (!safe || safe.kind === "breadcrumb" || safe.tags?.category === "daemon_unavailable" || /\b(?:AbortError|ERR_NETWORK_CHANGED|ERR_INTERNET_DISCONNECTED|DAEMON_NOT_READY)\b/i.test(safe.message)) return;
 			const category = safe.tags?.category;
 			const code = safe.tags?.code;
 			Sentry.captureEvent({
@@ -102,6 +122,7 @@ export async function initMainSentry(version: string, dataDir: string, isPackage
 				level: safe.level ?? "error",
 				tags: {
 					"ao.origin": "renderer",
+					"ao.kind": safe.kind,
 					"ao.category": category && SAFE_CATEGORIES.has(category) ? category : "unknown",
 					"ao.code": code && SAFE_CODES.has(code) ? code : "unknown",
 				},
@@ -112,8 +133,7 @@ export async function initMainSentry(version: string, dataDir: string, isPackage
 			if (!(await Sentry.close(DRAIN_TIMEOUT_MS))) throw new Error("Electron Sentry drain timed out");
 		},
 		async clearCache() {
-			// The online transport has no disk queue. Clear both SDK scopes after
-			// the controller has drained and closed its sender.
+			await rm(queuePath, { recursive: true, force: true });
 			Sentry.getCurrentScope().clear();
 			Sentry.getIsolationScope().clear();
 		},

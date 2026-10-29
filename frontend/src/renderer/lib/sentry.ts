@@ -22,10 +22,10 @@ function tagsFor(meta: CaptureMeta, triage: Triage): Record<string, string> {
 }
 export function captureExceptionToSentry(error: unknown, meta: CaptureMeta = {}): void {
 	const triage = classifyError(meta);
-	void aoBridge.telemetry.capture({ kind: triage.report ? "exception" : "breadcrumb", message: String((error as Error)?.message ?? error), level: triage.level, tags: tagsFor(meta, triage) });
+	void aoBridge.telemetry?.capture({ kind: triage.report ? "exception" : "breadcrumb", message: String((error as Error)?.message ?? error), level: triage.level, tags: tagsFor(meta, triage) });
 }
 export function captureApiErrorToSentry(operation: string, category: string, status?: number, code?: string, requestId?: string): void {
 	const meta: CaptureMeta = { operation, category, httpStatus: status, code, requestId, domain: domainOf(operation) };
 	const triage = classifyError(meta);
-	void aoBridge.telemetry.capture({ kind: triage.report ? "message" : "breadcrumb", message: `${operation} ${category}`, level: triage.level, tags: tagsFor(meta, triage) });
+	void aoBridge.telemetry?.capture({ kind: triage.report ? "message" : "breadcrumb", message: `${operation} ${category}`, level: triage.level, tags: tagsFor(meta, triage) });
 }

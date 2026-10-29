@@ -3545,7 +3545,7 @@ app.whenReady().then(async () => {
 	const policyController = new DesktopTelemetryController({
 		authority,
 		environmentAllowsEvents: rendererTelemetryEnabled(process.env, app.isPackaged),
-		transportFactory: () => initMainSentry(app.getVersion(), desktopDataDir, app.isPackaged),
+		transportFactory: () => initMainSentry(app.getVersion(), desktopDataDir, app.getPath("userData"), app.isPackaged),
 		clearRendererQueues: clearRendererTelemetryQueues,
 		broadcast: (view) => {
 			for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(TELEMETRY_POLICY_CHANGED_CHANNEL, view);
