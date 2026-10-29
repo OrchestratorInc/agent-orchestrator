@@ -2,6 +2,8 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,6 +12,58 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
+
+func TestUsageStandaloneMessageDoesNotBlockProjectDrain(t *testing.T) {
+	dir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dir)
+	ctx := context.Background()
+	seedProject(t, s, "project")
+	s.SetUsageTelemetryAllowed(func() bool { return true })
+	appendMessage := func(project, conversationID, messageID string) domain.SessionRecord {
+		t.Helper()
+		record := sampleRecord(project)
+		record.Mode = domain.SessionModeChat
+		session, err := s.CreateSession(ctx, record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conversation, err := s.CreateConversation(ctx, conversationID, domain.ConversationScopeSession,
+			session.ProjectID, session.ID, testNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, "generation",
+			domain.ConversationMessage{ID: messageID, Origin: domain.MessageOriginHuman,
+				Text: "private prompt", ClientMessageID: messageID}, "turn-"+messageID, testNow)
+		if err != nil || !created {
+			t.Fatalf("append %s: created=%v err=%v", messageID, created, err)
+		}
+		return session
+	}
+	standalone := appendMessage("", "standalone-conversation", "standalone-message")
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "ao.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	var pending int64
+	err = raw.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_message_summary WHERE session_id = ?`, standalone.ID).Scan(&pending)
+	if err != nil || pending != 0 {
+		t.Fatalf("new standalone summary rows = %d, err=%v", pending, err)
+	}
+	if _, err := raw.ExecContext(ctx, `INSERT INTO usage_message_summary (session_id, pending_count, first_at, last_at)
+		VALUES (?, 1, ?, ?)`, standalone.ID, testNow, testNow); err != nil {
+		t.Fatal(err)
+	}
+	appendMessage("project", "project-conversation", "project-message")
+	batches, err := s.DrainUsageMessages(ctx, 1, false, "install-one")
+	if err != nil || len(batches) != 1 || batches[0].ProjectID != "project" || batches[0].Count != 1 {
+		t.Fatalf("project batch behind legacy standalone row = %+v, err=%v", batches, err)
+	}
+	if more, err := s.DrainUsageMessages(ctx, 1, false, "install-one"); err != nil || len(more) != 0 {
+		t.Fatalf("remaining batches = %+v, err=%v", more, err)
+	}
+}
 
 func TestUsageProjectIDIsRandomStableAndInstallScoped(t *testing.T) {
 	s := newTestStore(t)
@@ -117,6 +171,11 @@ func TestUsageMessagesCountOnlyNewDirectHumanChatPrompts(t *testing.T) {
 	if !add("retry", "", domain.MessageOriginHuman, "", "turn-human") {
 		t.Fatal("retry not created")
 	}
+	if created, err := s.AppendUserMessage(ctx, conversation.ID, session.ID, "generation-root",
+		domain.ConversationMessage{ID: "opening", Text: "spawn task brief", Origin: domain.MessageOriginHuman,
+			SpawnOpeningPrompt: true}, "turn-opening", testNow.Add(time.Minute)); err != nil || !created {
+		t.Fatalf("opening prompt: created=%v err=%v", created, err)
+	}
 	batches, err := s.DrainUsageMessages(ctx, 10, false, "install-one")
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +237,11 @@ func TestUsagePRTracksWorkerAssociationAndMergedTransitionOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertPending(1)
+	pr.SessionID = orch.ID
+	if _, err := s.ClaimPR(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve, true); err != nil {
+		t.Fatal(err)
+	}
+	assertPending(1)
 	facts, _ := s.PendingWorkerPRUsage(ctx, 10)
 	if facts[0].Historical || !facts[0].AssociationPending || facts[0].MergePending {
 		t.Fatalf("association = %+v", facts[0])
@@ -209,4 +273,37 @@ func TestUsagePRTracksWorkerAssociationAndMergedTransitionOnce(t *testing.T) {
 	allowed = true
 	write()
 	assertPending(0)
+}
+
+func TestUsageWriteFailureDoesNotFailPROperations(t *testing.T) {
+	dir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dir)
+	ctx := context.Background()
+	seedProject(t, s, "repo")
+	worker, err := s.CreateSession(ctx, sampleRecord("repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "ao.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	if _, err := raw.ExecContext(ctx, `CREATE TRIGGER reject_usage BEFORE INSERT ON usage_pr_measurement
+		BEGIN SELECT RAISE(ABORT, 'usage write failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	pr := domain.PullRequest{URL: "https://github.com/org/repo/pull/88", SessionID: worker.ID,
+		Provider: "github", Host: "github.com", Repo: "org/repo", Number: 88, UpdatedAt: now}
+	if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatalf("pr observation failed because usage write failed: %v", err)
+	}
+	if err := s.MarkPRMerged(ctx, pr.URL, "merge-sha", now); err != nil {
+		t.Fatalf("merge record failed because usage write failed: %v", err)
+	}
+	got, found, err := s.GetPR(ctx, pr.URL)
+	if err != nil || !found || !got.Merged {
+		t.Fatalf("merged pr = %+v, found=%v err=%v", got, found, err)
+	}
 }

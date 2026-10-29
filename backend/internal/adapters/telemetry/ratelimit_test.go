@@ -60,7 +60,7 @@ func TestRateLimitedSinkLetsPreSummarizedNamesExceedTheMinuteCap(t *testing.T) {
 func TestRateLimitedSinkKeepsDurableUsageSummariesBeyondGenericCaps(t *testing.T) {
 	s := NewRateLimitedSink(&recordingSink{}, nil)
 	s.SkipMinuteWindow("ao.usage.messages_sent")
-	s.SkipDailyWindow("ao.usage.messages_sent")
+	s.UseUsageDailyWindow("ao.usage.messages_sent")
 	now := time.Now()
 	for i := 0; i < eventsPerNamePerDay+10; i++ {
 		if !s.reserve("ao.usage.messages_sent", now) {
@@ -69,6 +69,10 @@ func TestRateLimitedSinkKeepsDurableUsageSummariesBeyondGenericCaps(t *testing.T
 	}
 	if s.reserve("ao.http.5xx", now) == false {
 		t.Fatal("ordinary event cap changed")
+	}
+	s.days["ao.usage.messages_sent"].count = eventsPerNamePerDayUsage
+	if s.reserve("ao.usage.messages_sent", now) {
+		t.Fatal("usage emergency cap did not apply")
 	}
 }
 

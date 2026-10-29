@@ -128,9 +128,11 @@ value and the local session ID. It groups batches from one session on this
 installation without making the local session ID available remotely. The
 usual `install_id` and signed-in account attribution still apply.
 
-The message count covers Chat messages that have a human origin and no sending
-worker. It includes a newly queued prompt but excludes a repeated client
-request, a retry or replay of an existing prompt, reviewer Chat, worker
+The message count covers project Chat messages that have a human origin and no
+sending worker. Standalone sessions have no project grouping and are excluded.
+It includes a newly queued direct message but excludes opening prompts delivered
+during session creation, repeated client requests, retries or replays of an
+existing prompt, reviewer Chat, worker
 automation sent into another session, provider messages, tool calls, and
 terminal input in TUI sessions. Counts are stored per session without content.
 They flush about every 30 minutes, when a session is archived, when the
@@ -138,6 +140,10 @@ desktop app exits, and when the daemon stops. Pending counts survive a daemon
 restart. A summary is reserved before entering the existing best-effort
 remote queue, so a crash or export failure after reservation can lose that
 batch; it will not duplicate the count on restart.
+The remote sink has a 100,000 event per name per daemon process per rolling
+24-hour window emergency cap for these summaries. Events beyond that cap are
+dropped after reservation, so their counts cannot be recovered from the local
+summary.
 
 PR counts use the provider PR associated with a worker in AO's durable PR
 table, not a session spawn or provider poll. One local provider identity is
@@ -149,6 +155,11 @@ count. Both carry `historical: true`; newly observed associations and merges
 carry `historical: false`. Counts are grouped per project at each flush.
 PRs and messages accepted while product telemetry is off are not exported
 after a later opt-in.
+If events export is disabled in configuration when this version first runs,
+backfilled worker PR associations that have not been observed again remain
+eligible for historical export if events export is enabled later. An observation
+while export is disabled marks that association reported locally. Explicit
+product telemetry opt-out discards pending associations before export.
 
 ## Automation usage and creation
 

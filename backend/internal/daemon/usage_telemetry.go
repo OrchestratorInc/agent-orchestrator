@@ -22,10 +22,11 @@ type usageTelemetryFlusher struct {
 	sink     ports.EventSink
 	identity ports.TelemetryIdentityStore
 	log      *slog.Logger
+	archive  chan struct{}
 }
 
 func startUsageTelemetry(ctx context.Context, store *sqlite.Store, sink ports.EventSink, identity ports.TelemetryIdentityStore, log *slog.Logger) *usageTelemetryFlusher {
-	f := &usageTelemetryFlusher{store: store, sink: sink, identity: identity, log: log}
+	f := &usageTelemetryFlusher{store: store, sink: sink, identity: identity, log: log, archive: make(chan struct{}, 1)}
 	store.SetUsageTelemetryAllowed(func() bool { return identity != nil && !identity.Snapshot().OptedOut })
 	f.flush(context.Background(), false)
 	go func() {
@@ -41,10 +42,19 @@ func startUsageTelemetry(ctx context.Context, store *sqlite.Store, sink ports.Ev
 				f.flush(ctx, true)
 			case <-full.C:
 				f.flush(ctx, false)
+			case <-f.archive:
+				f.flush(ctx, true)
 			}
 		}
 	}()
 	return f
+}
+
+func (f *usageTelemetryFlusher) requestArchiveFlush() {
+	select {
+	case f.archive <- struct{}{}:
+	default:
+	}
 }
 
 func (f *usageTelemetryFlusher) flush(ctx context.Context, terminatedOnly bool) {

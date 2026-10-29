@@ -68,7 +68,8 @@ func (s *Store) DrainUsageMessages(ctx context.Context, limit int, terminatedOnl
 	out, err := func() ([]UsageMessageBatch, error) {
 		rows, err := tx.QueryContext(ctx, `SELECT m.session_id, s.project_id, m.pending_count, m.first_at, m.last_at
 		FROM usage_message_summary m JOIN sessions s ON s.id = m.session_id
-		WHERE m.pending_count > 0 AND (? = 0 OR s.is_terminated = 1)
+		WHERE m.pending_count > 0 AND s.project_id IS NOT NULL
+			AND (? = 0 OR s.is_terminated = 1)
 		ORDER BY m.session_id LIMIT ?`, terminatedOnly, limit)
 		if err != nil {
 			return nil, err
@@ -131,8 +132,7 @@ func (s *Store) PendingWorkerPRUsage(ctx context.Context, limit int) ([]UsagePRF
 		FROM usage_pr_measurement m
 		JOIN pr p ON m.pr_key = CASE WHEN p.provider_id <> '' AND p.provider <> ''
 			THEN p.provider || ':' || p.host || ':' || p.provider_id ELSE p.url END
-		JOIN sessions s ON s.id = p.session_id
-		WHERE s.kind = 'worker' AND (m.associated_reported = 0 OR
+		WHERE (m.associated_reported = 0 OR
 			(p.pr_state = 'merged' AND m.merged_reported = 0))
 		ORDER BY m.pr_key LIMIT ?`, limit)
 	if err != nil {
@@ -167,12 +167,23 @@ func (s *Store) MarkWorkerPRUsageReported(ctx context.Context, key string, assoc
 func (s *Store) DiscardPendingWorkerPRUsage(ctx context.Context) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	_, err := s.writeDB.ExecContext(ctx, `UPDATE usage_pr_measurement SET
-		associated_reported = 1,
-		merged_reported = CASE WHEN EXISTS (
-			SELECT 1 FROM pr WHERE pr.pr_state = 'merged'
-			AND usage_pr_measurement.pr_key = CASE WHEN pr.provider_id <> '' AND pr.provider <> ''
-				THEN pr.provider || ':' || pr.host || ':' || pr.provider_id ELSE pr.url END
-		) THEN 1 ELSE merged_reported END`)
-	return err
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `UPDATE usage_pr_measurement
+		SET associated_reported = 1 WHERE associated_reported = 0`); err != nil {
+		return err
+	}
+	// Scan merged PRs once, then use the measurement primary key for matching.
+	if _, err := tx.ExecContext(ctx, `UPDATE usage_pr_measurement SET merged_reported = 1
+		WHERE merged_reported = 0 AND pr_key IN (
+			SELECT CASE WHEN provider_id <> '' AND provider <> ''
+				THEN provider || ':' || host || ':' || provider_id ELSE url END
+			FROM pr WHERE pr_state = 'merged'
+		)`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

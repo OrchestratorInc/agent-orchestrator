@@ -2436,7 +2436,8 @@ func (s *Service) StartChatTurn(ctx context.Context, id domain.SessionID, text s
 		return "", err
 	}
 	turn, err := controller.Send(ctx, ports.ChatUserMessage{
-		Text: text,
+		Text:               text,
+		SpawnOpeningPrompt: true,
 		// The initial prompt is the user's task brief. Origin records who AUTHORED
 		// a message, not who delivered it — the daemon carrying it to the provider
 		// no more makes it the daemon's message than the network makes it the

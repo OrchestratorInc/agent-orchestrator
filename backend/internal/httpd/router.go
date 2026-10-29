@@ -91,7 +91,9 @@ func mountUsageFlush(r chi.Router, flush func(context.Context)) {
 	}
 	r.Post("/internal/telemetry/usage-flush", func(w http.ResponseWriter, req *http.Request) {
 		if !localControlRequest(req) {
-			w.WriteHeader(http.StatusForbidden)
+			envelope.WriteJSON(w, http.StatusForbidden, map[string]any{
+				"status": "forbidden", "service": daemonmeta.ServiceName,
+			})
 			return
 		}
 		flush(req.Context())

@@ -813,7 +813,8 @@ func (c chatLauncher) RelaySessionChatTurn(ctx context.Context, id domain.Sessio
 
 func (c chatLauncher) QueueChatPrompt(ctx context.Context, id domain.SessionID, text string) (string, error) {
 	turn, err := c.svc.QueueUserMessage(ctx, id, ports.ChatUserMessage{
-		Text: text,
+		Text:               text,
+		SpawnOpeningPrompt: true,
 		// The opening prompt is the user's own task brief, whatever carries it.
 		Origin: domain.MessageOriginHuman,
 	})

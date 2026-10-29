@@ -1430,7 +1430,7 @@ func (s *Store) appendUserMessage(
 		}); err != nil {
 			return err
 		}
-		if retryOfTurnID == "" && reviewID == "" && msg.Origin == domain.MessageOriginHuman &&
+		if retryOfTurnID == "" && reviewID == "" && !msg.SpawnOpeningPrompt && msg.Origin == domain.MessageOriginHuman &&
 			msg.SenderSessionID == "" && s.usageAllowed() {
 			if err := q.IncrementUsageMessageSummary(ctx, gen.IncrementUsageMessageSummaryParams{
 				SessionID: string(session), FirstAt: sql.NullTime{Time: now, Valid: true}, LastAt: sql.NullTime{Time: now, Valid: true},

@@ -931,7 +931,9 @@ func (q *Queries) HasPendingConversationInteractions(ctx context.Context, conver
 
 const incrementUsageMessageSummary = `-- name: IncrementUsageMessageSummary :exec
 INSERT INTO usage_message_summary (session_id, pending_count, first_at, last_at)
-VALUES (?, 1, ?, ?)
+SELECT ?1, 1, ?2, ?3 WHERE EXISTS (
+    SELECT 1 FROM sessions WHERE id = ?1 AND project_id IS NOT NULL
+)
 ON CONFLICT(session_id) DO UPDATE SET
     pending_count = MIN(usage_message_summary.pending_count + 1, 1000000000),
     first_at = COALESCE(usage_message_summary.first_at, excluded.first_at),

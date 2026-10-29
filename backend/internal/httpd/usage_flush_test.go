@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -32,6 +33,13 @@ func TestUsageFlushIsLoopbackControlOnly(t *testing.T) {
 			router.ServeHTTP(w, req)
 			if w.Code != tc.want {
 				t.Fatalf("status = %d, want %d", w.Code, tc.want)
+			}
+			if tc.want == http.StatusForbidden {
+				var body map[string]any
+				if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil ||
+					(body["status"] != "forbidden" && body["error"] != "forbidden") {
+					t.Fatalf("forbidden envelope = %q, err=%v", w.Body.String(), err)
+				}
 			}
 		})
 	}

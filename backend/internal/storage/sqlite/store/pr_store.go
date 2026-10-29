@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -69,7 +70,7 @@ func (s *Store) MarkPRMerged(ctx context.Context, prURL, mergeCommitSHA string, 
 		return fmt.Errorf("mark pr merged %s: updated %d rows", prURL, rows)
 	}
 	if err := s.qw.RecordWorkerPRUsage(ctx, gen.RecordWorkerPRUsageParams{PRURL: prURL, ExportAllowed: s.usageAllowed()}); err != nil {
-		return fmt.Errorf("record merged pr usage: %w", err)
+		slog.Warn("record merged pr usage failed", "error", err)
 	}
 	return nil
 }
@@ -155,10 +156,10 @@ func writePRRows(ctx context.Context, q *gen.Queries, pr domain.PullRequest, che
 		}
 	}
 	if err := q.UpgradeWorkerPRUsageIdentity(ctx, pr.URL); err != nil {
-		return fmt.Errorf("upgrade worker pr usage identity: %w", err)
+		slog.Warn("upgrade worker pr usage identity failed", "error", err)
 	}
 	if err := q.RecordWorkerPRUsage(ctx, gen.RecordWorkerPRUsageParams{PRURL: pr.URL, ExportAllowed: exportAllowed}); err != nil {
-		return fmt.Errorf("record worker pr usage: %w", err)
+		slog.Warn("record worker pr usage failed", "error", err)
 	}
 	for _, c := range checks {
 		if err := q.UpsertPRCheck(ctx, genCheckParams(pr.URL, c)); err != nil {

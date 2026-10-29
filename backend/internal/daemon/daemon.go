@@ -562,7 +562,7 @@ func Run(buildVersion string) error {
 		return fmt.Errorf("wire session service: %w", err)
 	}
 	if usage != nil {
-		sessionSvc.SetUsageArchiveFlush(func(ctx context.Context) { usage.flush(ctx, true) })
+		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
 	memoryReader := usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{
