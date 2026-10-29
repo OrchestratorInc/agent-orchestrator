@@ -3718,5 +3718,6 @@
 	"parallelPrompt.starter.tests.prompt": "Find an important code path that has no tests and add focused tests for it without changing its behavior.",
 	"newTask.startNext.hint": "{{shortcut}} starts this task and opens a new draft",
 	"newTask.startNext.started": "Task started",
-	"newTask.startNext.startedBody": "It's in the sidebar. Write the next one here."
+	"newTask.startNext.startedBody": "It's in the sidebar. Write the next one here.",
+	"shortcut.context.startNext": "Start a new task and open the next draft"
 }

@@ -3737,5 +3737,6 @@
 	"parallelPrompt.starter.tests.prompt": "テストのない重要なコードパスを見つけ、動作を変えずに的を絞ったテストを追加してください。",
 	"newTask.startNext.hint": "{{shortcut}} でこのタスクを開始し、新しい下書きを開きます",
 	"newTask.startNext.started": "タスクを開始しました",
-	"newTask.startNext.startedBody": "サイドバーに表示されています。次のタスクをここに書いてください。"
+	"newTask.startNext.startedBody": "サイドバーに表示されています。次のタスクをここに書いてください。",
+	"shortcut.context.startNext": "新しいタスクを開始して次の下書きを開く"
 }

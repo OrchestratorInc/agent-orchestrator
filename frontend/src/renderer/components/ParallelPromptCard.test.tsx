@@ -9,7 +9,7 @@ import { resetParallelPromptForTest, shouldOfferParallelPrompt } from "../lib/pa
 const { getMock, postMock, capture } = vi.hoisted(() => ({
 	getMock: vi.fn(),
 	postMock: vi.fn(),
-	capture: vi.fn(async () => true),
+	capture: vi.fn(async (_event: string, _properties?: Record<string, unknown>) => true),
 }));
 
 vi.mock("../lib/api-client", () => ({

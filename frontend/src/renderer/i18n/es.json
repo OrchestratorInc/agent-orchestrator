@@ -3806,5 +3806,6 @@
 	"parallelPrompt.starter.tests.prompt": "Encuentra una ruta de código importante sin pruebas y añade pruebas específicas sin cambiar su comportamiento.",
 	"newTask.startNext.hint": "{{shortcut}} inicia esta tarea y abre un borrador nuevo",
 	"newTask.startNext.started": "Tarea iniciada",
-	"newTask.startNext.startedBody": "Está en la barra lateral. Escribe aquí la siguiente."
+	"newTask.startNext.startedBody": "Está en la barra lateral. Escribe aquí la siguiente.",
+	"shortcut.context.startNext": "Iniciar una tarea nueva y abrir el siguiente borrador"
 }

@@ -598,6 +598,8 @@ export interface ChatWorkspaceProps {
 	/** Keep files the workspace cannot take yet in the composer, sent with the message. */
 	holdAttachments?: boolean;
 	onHeldAttachmentsChange?: ComponentProps<typeof ChatComposer>["onHeldAttachmentsChange"];
+	/** Cmd/Ctrl+Enter sends without steering: called just before that send. */
+	onModifierSend?: () => void;
 }
 
 type ChatWorkspaceActivation =
@@ -808,6 +810,7 @@ function ChatWorkspaceContent({
 	showSetupStep = true,
 	holdAttachments,
 	onHeldAttachmentsChange,
+	onModifierSend,
 	draftScope,
 	draftPersistenceAvailable,
 	onRetryDraftPersistence,
@@ -2059,6 +2062,7 @@ function ChatWorkspaceContent({
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
 										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
+										onModifierSend={onModifierSend}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}

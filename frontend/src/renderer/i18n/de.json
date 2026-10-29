@@ -3737,5 +3737,6 @@
 	"parallelPrompt.starter.tests.prompt": "Finde einen wichtigen Codepfad ohne Tests und füge gezielte Tests dafür hinzu, ohne sein Verhalten zu ändern.",
 	"newTask.startNext.hint": "{{shortcut}} startet diese Aufgabe und öffnet einen neuen Entwurf",
 	"newTask.startNext.started": "Aufgabe gestartet",
-	"newTask.startNext.startedBody": "Sie ist in der Seitenleiste. Schreib hier die nächste."
+	"newTask.startNext.startedBody": "Sie ist in der Seitenleiste. Schreib hier die nächste.",
+	"shortcut.context.startNext": "Neue Aufgabe starten und nächsten Entwurf öffnen"
 }

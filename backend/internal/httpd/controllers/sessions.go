@@ -387,6 +387,7 @@ func (c *SessionsController) spawn(w http.ResponseWriter, r *http.Request) {
 		keyless := in
 		keyless.ClientRequestID = ""
 		keyless.Attachments = nil
+		keyless.SpawnSource = ""
 		requestHash = clientRequestFingerprint("session", keyless, attachments)
 	}
 	sess, promptBytes, systemPromptBytes, err := c.Svc.Spawn(r.Context(), ports.SpawnConfig{ProjectID: in.ProjectID, IssueID: in.IssueID, ParentSessionID: in.ParentSessionID, TrackerProvider: in.TrackerProvider, Kind: in.Kind, Harness: in.Harness, Branch: in.Branch, RequestedMode: in.Mode, Prompt: in.Prompt, RequestedOutput: in.RequestedOutput, SpawnSource: in.SpawnSource, DisplayName: displayName, Attachments: attachments, AgentConfig: ports.AgentConfig{Model: in.Model, Effort: in.Effort, Permissions: in.ApprovalMode}, EffortOverride: strings.TrimSpace(in.Effort) != "", ClientRequestID: in.ClientRequestID, ClientRequestHash: requestHash})
@@ -2292,6 +2293,8 @@ func (c *SessionsController) delegateTask(w http.ResponseWriter, r *http.Request
 		keyless.ClientRequestID = ""
 		keyless.TaskPreparation = ""
 		keyless.Attachments = nil
+		// Telemetry-only: a retry from another surface is still the same task.
+		keyless.SpawnSource = ""
 		requestHash = clientRequestFingerprint("delegate", keyless, attachments)
 	}
 

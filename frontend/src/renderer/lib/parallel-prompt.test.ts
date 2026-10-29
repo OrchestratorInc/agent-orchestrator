@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const capture = vi.hoisted(() => vi.fn(async () => true));
+const capture = vi.hoisted(() => vi.fn(async (_event: string, _properties?: Record<string, unknown>) => true));
 vi.mock("./telemetry", () => ({ captureRendererEvent: capture }));
 
 import {
