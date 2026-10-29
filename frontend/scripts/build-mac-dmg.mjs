@@ -37,22 +37,27 @@ export const VOLUME_NAME = "Agent Orchestrator";
 export const APP_BUNDLE_NAME = `${VOLUME_NAME}.app`;
 
 // Window and icon geometry in Finder points. Positions are icon centres. The
-// background art (assets/dmg/background.svg) draws the arrow and the label
-// plates against these exact coordinates, so change both together.
+// window is the window FRAME (Finder's title bar takes ~32pt of it), so the
+// icons sit in the middle of the ~368pt that is actually visible. The
+// background art (assets/dmg/background.svg) draws the arrow between these
+// exact coordinates, so change both together.
 export const DMG_LAYOUT = Object.freeze({
 	window: Object.freeze({ width: 660, height: 400 }),
 	iconSize: 128,
 	iconTextSize: 12,
-	app: Object.freeze({ x: 170, y: 190 }),
-	applications: Object.freeze({ x: 490, y: 190 }),
+	app: Object.freeze({ x: 170, y: 172 }),
+	applications: Object.freeze({ x: 490, y: 172 }),
 });
 
 // The 1x file. electron-builder finds background@2x.png beside it and merges the
 // pair into one HiDPI TIFF, so Retina displays get the sharp version.
 export const BACKGROUND_IMAGE = path.join(frontendDir, "assets/dmg/background.png");
-// Becomes .VolumeIcon.icns: the mounted volume shows the app icon in Finder's
-// sidebar and on the desktop instead of a generic disk.
-export const VOLUME_ICON = path.join(frontendDir, "assets/icon.icns");
+// Becomes .VolumeIcon.icns: the mounted volume shows the app icon in the window
+// title bar, Finder's sidebar and on the desktop instead of a generic disk.
+// Generated from assets/icon.png by render-dmg-assets.mjs with iconutil, NOT
+// a copy of assets/icon.icns: that file stores its 16/32px sizes as PNG in the
+// legacy icp4/icp5 slots, which Finder decodes as noise at title-bar size.
+export const VOLUME_ICON = path.join(frontendDir, "assets/dmg/volume.icns");
 
 /**
  * electron-builder `dmg` options for the install window. Spread into the dmg
@@ -68,7 +73,7 @@ export function macDmgLayout() {
 		icon: VOLUME_ICON,
 		iconSize: DMG_LAYOUT.iconSize,
 		iconTextSize: DMG_LAYOUT.iconTextSize,
-		// The window takes the background image's size (660x400 points);
+		// The window frame takes the background image's size (660x400 points);
 		// electron-builder ignores `window.width/height` when a background is set.
 		contents: [
 			// No `path`: electron-builder substitutes the .app it was given.

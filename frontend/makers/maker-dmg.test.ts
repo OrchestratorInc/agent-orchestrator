@@ -159,8 +159,8 @@ describe("MakerDMG", () => {
 		expect(dmg.icon).toBe(VOLUME_ICON);
 		expect(existsSync(VOLUME_ICON)).toBe(true);
 		expect(dmg.contents).toEqual([
-			{ x: 170, y: 190, type: "file" },
-			{ x: 490, y: 190, type: "link", path: "/Applications" },
+			{ x: 170, y: 172, type: "file" },
+			{ x: 490, y: 172, type: "link", path: "/Applications" },
 		]);
 	});
 

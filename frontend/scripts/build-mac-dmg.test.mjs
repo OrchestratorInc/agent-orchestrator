@@ -55,18 +55,22 @@ describe("install window layout", () => {
 	});
 
 	// The art is drawn against the icon coordinates; moving one without the
-	// other leaves the arrow and label plates pointing at empty space.
-	it("draws the label plates under each icon and the arrow between them", () => {
-		const plates = [...svg.matchAll(/<rect x="(\d+)" y="(\d+)" width="(\d+)" height="\d+" rx="\d+" fill="#62788c"/g)].map(
-			([, x, y, w]) => ({ centre: Number(x) + Number(w) / 2, top: Number(y) }),
-		);
-		expect(plates.map((p) => p.centre)).toEqual([DMG_LAYOUT.app.x, DMG_LAYOUT.applications.x]);
-		for (const plate of plates) expect(plate.top).toBeGreaterThan(DMG_LAYOUT.app.y + DMG_LAYOUT.iconSize / 2);
+	// other leaves the arrow pointing at empty space.
+	it("draws the arrow between the icons, level with them", () => {
 		const arrow = /<path d="M(\d+) (\d+) H(\d+)"/.exec(svg);
 		expect(Number(arrow[2])).toBe(DMG_LAYOUT.app.y);
 		expect(Number(arrow[1])).toBeGreaterThan(DMG_LAYOUT.app.x + DMG_LAYOUT.iconSize / 2);
 		expect(Number(arrow[3])).toBeLessThan(DMG_LAYOUT.applications.x - DMG_LAYOUT.iconSize / 2);
 		expect(svg).toContain(">Drag to Applications</text>");
+	});
+
+	// The background sets the window FRAME size; Finder's title bar covers the
+	// bottom ~32pt, which once clipped a footer out of view.
+	it("keeps the icons, their labels and all text inside the visible area", () => {
+		const visible = DMG_LAYOUT.window.height - 32;
+		// 128pt icon plus a ~20pt label below it.
+		expect(DMG_LAYOUT.app.y + DMG_LAYOUT.iconSize / 2 + 20).toBeLessThan(visible);
+		for (const [, y] of svg.matchAll(/<text[^>]*\sy="(\d+)"/g)) expect(Number(y)).toBeLessThan(visible);
 	});
 });
 
