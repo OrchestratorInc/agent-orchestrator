@@ -855,7 +855,6 @@ func TestWiring_FreebuffLifecycleNudgeUsesOneNativePaste(t *testing.T) {
 		NewLaunchID: func() string { return "lifecycle-nudge" },
 	})
 	routed.Bind(sessionLifecycleMessenger{mgr})
-	stack.LCM.SetSessionInputLease(mgr)
 
 	const tail = "START_6553\nA harmless failing check with 中文 and 🚀.\nEND_6553"
 	obs := ports.SCMObservation{

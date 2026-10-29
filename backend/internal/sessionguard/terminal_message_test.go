@@ -36,7 +36,7 @@ func TestGuard_TerminalEncoderUsesFreshRecordUnderLease(t *testing.T) {
 		return "\x1b[200~" + body + "\x1b[201~", nil
 	})
 	postWrite := false
-	outcome, err := guard.DeliverWithPostWrite(context.Background(), "s1", message, func(context.Context) error {
+	outcome, err := guard.DeliverWithComposerCheck(context.Background(), "s1", message, nil, func(context.Context) error {
 		postWrite = true
 		if !leased || message != strings.Repeat("A complete semantic line.\n", 150)+"MESSAGE_END" {
 			t.Fatal("post-write callback lost admission or semantic input")
@@ -89,7 +89,7 @@ func TestGuard_TerminalEncoderFailureDoesNotWriteOrRecord(t *testing.T) {
 		return "partial unsafe frame", encodeErr
 	})
 	postWrite := false
-	outcome, err := guard.DeliverWithPostWrite(context.Background(), "s1", "semantic message", func(context.Context) error {
+	outcome, err := guard.DeliverWithComposerCheck(context.Background(), "s1", "semantic message", nil, func(context.Context) error {
 		postWrite = true
 		return nil
 	})
