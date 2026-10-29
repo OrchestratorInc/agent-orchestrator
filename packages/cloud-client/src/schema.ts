@@ -2880,6 +2880,8 @@ export interface components {
             source?: "worker" | "release";
             /** @description The harness CLI version the list is for. */
             cliVersion?: string;
+            /** @description On a session's list, true when its worker listed the models for the signed-in account rather than from the CLI's built-in list. Only such a list becomes the user's catalog. */
+            accountListed?: boolean;
         };
         SendMessageInput: {
             text: string;

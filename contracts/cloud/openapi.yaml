@@ -5224,6 +5224,12 @@ components:
         cliVersion:
           description: The harness CLI version the list is for.
           type: string
+        accountListed:
+          description: >-
+            On a session's list, true when its worker listed the models for
+            the signed-in account rather than from the CLI's built-in list.
+            Only such a list becomes the user's catalog.
+          type: boolean
     SendMessageInput:
       type: object
       additionalProperties: false
