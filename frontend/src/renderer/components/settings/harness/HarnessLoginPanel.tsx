@@ -428,7 +428,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, onPr
 			{running && operation?.nativePrompt === "menu" && nativeOptions.length > 0 && <div className="space-y-2 rounded-md border border-border bg-(--color-bg-secondary) p-3">
 				<p className="text-sm text-settings-label">{t("settings.harness.loginUi.nativeChoose")}</p>
 				<div className="flex flex-wrap gap-2">
-					{nativeOptions.map((option, index) => <Button key={option} type="button" size="sm" variant="outline" disabled={busy} onClick={() => void menuAction(String(index + 1) as MenuAction)}>{index + 1}. {option}</Button>)}
+					{nativeOptions.map((option, index) => <Button key={`${index}-${option}`} type="button" size="sm" variant="outline" disabled={busy} onClick={() => void menuAction(String(index + 1) as MenuAction)}>{index + 1}. {option}</Button>)}
 					<Button type="button" size="sm" disabled={busy} onClick={() => void menuAction("select")}>{t("settings.harness.loginUi.nativeSelect")}</Button>
 				</div>
 			</div>}

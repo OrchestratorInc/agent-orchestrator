@@ -64,7 +64,8 @@ var checkEndpoints = map[string]checkEndpoint{
 var checkClient = &http.Client{Timeout: 10 * time.Second}
 
 const (
-	maxCheckBody   = 4 << 20
+	// OpenRouter's full catalog alone runs to several megabytes.
+	maxCheckBody   = 32 << 20
 	maxCheckModels = 1000
 )
 

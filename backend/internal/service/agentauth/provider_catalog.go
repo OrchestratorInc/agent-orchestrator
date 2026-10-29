@@ -14,8 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
@@ -235,11 +233,11 @@ func catalogProvider(agentID, providerID string) (catalogEntry, error) {
 }
 
 // saveCatalogKey writes key for providerID to the harness's own store. The
-// caller holds the login reservation and s.mu.
-func (s *Service) saveCatalogKey(ctx context.Context, plan Plan, providerID, key string) (LoginSnapshot, error) {
+// caller holds the harness's login reservation.
+func (s *Service) saveCatalogKey(ctx context.Context, plan Plan, providerID, key string) error {
 	agentID := plan.AgentID
 	if _, err := catalogProvider(agentID, providerID); err != nil {
-		return LoginSnapshot{}, err
+		return err
 	}
 	harness := catalogHarness{command: s.commandContext}
 	if len(plan.command) > 0 {
@@ -250,14 +248,8 @@ func (s *Service) saveCatalogKey(ctx context.Context, plan Plan, providerID, key
 		// working directory never picks up a project's.
 		harness.workDir = filepath.Join(s.dataDir, authWorkspaceRootName, "ui-"+agentID)
 		if err := os.MkdirAll(harness.workDir, 0o700); err != nil {
-			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_WORKSPACE_UNAVAILABLE", "The login workspace could not be prepared.")
+			return apierr.Unavailable("AGENT_AUTH_WORKSPACE_UNAVAILABLE", "The login workspace could not be prepared.")
 		}
 	}
-	if err := providerCatalogs[agentID].save(ctx, harness, providerID, key); err != nil {
-		return LoginSnapshot{}, err
-	}
-	complete := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: catalogKeyMethod, Status: "succeeded", ExpiresAt: time.Now()}, done: make(chan struct{})}
-	close(complete.done)
-	s.operations[complete.snapshot.ID] = complete
-	return complete.snapshot, nil
+	return providerCatalogs[agentID].save(ctx, harness, providerID, key)
 }
