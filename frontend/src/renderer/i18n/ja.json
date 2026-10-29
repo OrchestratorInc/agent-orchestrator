@@ -3534,6 +3534,8 @@
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
 	"sessionImport.description": "このコンピューターの {{agent}} の会話をインポートします。まだプロジェクトではない Git フォルダーの会話は、そのフォルダーをプロジェクトとして追加します。",
+	"sessionImport.readOnlyComposer": "インポートされたこのチャットは読み取り専用です。",
+	"sessionImport.readOnlyNotice": "この {{agent}} チャットは読み取り専用としてインポートされました。{{agent}} はチャットを開始したフォルダーからのみ続行できます。",
 	"sessionImport.allProjects": "すべてのプロジェクトと単独の会話",
 	"sessionImport.selectionHelp": "過去30日間にアクティブだった会話が選択されています。古い会話も選択できます。インポート後、すべてのセッションは待機状態になります。",
 	"sessionImport.reading": "ローカルの履歴を読み取り中…",

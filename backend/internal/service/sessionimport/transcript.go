@@ -350,6 +350,10 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if len(paths) == 0 {
 		return t, errors.New("no transcript")
 	}
+	// Qwen's records differ from Claude's and Codex's; its parser lives in qwen.go.
+	if harness == domain.HarnessQwen {
+		return readQwenTranscript(ctx, root, paths...)
+	}
 	root = canonical(root)
 	providerRoot, err := os.OpenRoot(root)
 	if err != nil {
