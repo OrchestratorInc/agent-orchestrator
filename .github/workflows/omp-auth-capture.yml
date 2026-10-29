@@ -1,0 +1,70 @@
+name: OMP auth screen evidence
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/omp-auth-capture.yml
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: oven-sh/setup-bun@v2
+      - name: Install pinned OMP and terminal decoder on hosted runner
+        run: |
+          mkdir -p /tmp/omp-capture
+          cd /tmp/omp-capture
+          bun add @oh-my-pi/pi-coding-agent@18.13.3
+          pip install pyte==0.8.2
+      - name: Capture isolated fresh and configured terminals
+        run: |
+          python3 - <<'PY'
+          import fcntl, json, os, pathlib, pty, select, signal, struct, subprocess, tempfile, termios, time
+          import pyte
+
+          for configured in (False, True):
+              root = pathlib.Path(tempfile.mkdtemp(prefix='omp-auth-'))
+              agent = root / '.omp' / 'agent'
+              agent.mkdir(parents=True)
+              if configured:
+                  (agent / 'config.yml').write_text('setup:\n  version: 2\nstartup:\n  setupWizard: false\n  checkUpdate: false\n')
+              env = {k: v for k, v in os.environ.items() if not k.startswith(('XDG_', 'PI_', 'OMP_'))}
+              env.update(HOME=str(root), PI_CODING_AGENT_DIR=str(agent), TERM='xterm-256color')
+              master, slave = pty.openpty()
+              fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 40, 120, 0, 0))
+              proc = subprocess.Popen(['/tmp/omp-capture/node_modules/.bin/omp'], stdin=slave, stdout=slave, stderr=slave, cwd=root, env=env, start_new_session=True)
+              os.close(slave)
+              screen = pyte.Screen(120, 40)
+              stream = pyte.Stream(screen)
+              start = time.monotonic()
+              last = ''
+              sent = False
+              print('CONFIGURED', configured, flush=True)
+              try:
+                  while time.monotonic() - start < 25:
+                      if select.select([master], [], [], 0.1)[0]:
+                          try:
+                              data = os.read(master, 65536)
+                          except OSError:
+                              break
+                          if not data:
+                              break
+                          stream.feed(data.decode('utf-8', errors='replace'))
+                          text = '\n'.join(line.rstrip() for line in screen.display).strip()
+                          if text != last and time.monotonic() - start > 1:
+                              print(f'SCREEN {time.monotonic() - start:.2f}s\n{text}\nEND SCREEN', flush=True)
+                              last = text
+                      if configured and not sent and time.monotonic() - start > 18:
+                          os.write(master, b'/login')
+                          time.sleep(0.2)
+                          os.write(master, b'\r')
+                          sent = True
+              finally:
+                  os.killpg(proc.pid, signal.SIGKILL)
+                  proc.wait()
+                  os.close(master)
+          PY
