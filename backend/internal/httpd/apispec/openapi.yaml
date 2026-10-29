@@ -328,6 +328,92 @@ paths:
       summary: Submit a one-time Claude sign-in code to the existing native login
       tags:
       - agents
+  /api/v1/agents/{agent}/auth/providers:
+    get:
+      operationId: listAgentCatalogProviders
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCatalogProvidersResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the key-only providers in an agent's own provider catalog on this
+        device
+      tags:
+      - agents
+  /api/v1/agents/{agent}/auth/providers/{provider}/models:
+    get:
+      operationId: listAgentCatalogModels
+      parameters:
+      - description: Agent adapter identifier.
+        in: path
+        name: agent
+        required: true
+        schema:
+          description: Agent adapter identifier.
+          type: string
+      - description: Provider ID from the harness's catalog.
+        in: path
+        name: provider
+        required: true
+        schema:
+          description: Provider ID from the harness's catalog.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListCatalogModelsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the model IDs an agent's own catalog offers for one provider
+      tags:
+      - agents
   /api/v1/agents/{agent}/chat/prewarm:
     post:
       operationId: prewarmChatAgent
@@ -14724,6 +14810,21 @@ components:
       - ok
       - sessionId
       type: object
+    CatalogProvider:
+      properties:
+        env:
+          type: string
+        id:
+          type: string
+        models:
+          type: integer
+        name:
+          type: string
+      required:
+      - id
+      - name
+      - models
+      type: object
     ChatAgentPermissionModes:
       properties:
         agent:
@@ -17737,6 +17838,24 @@ components:
           type: string
       required:
       - automations
+      type: object
+    ListCatalogModelsResponse:
+      properties:
+        models:
+          items:
+            type: string
+          type: array
+      required:
+      - models
+      type: object
+    ListCatalogProvidersResponse:
+      properties:
+        providers:
+          items:
+            $ref: '#/components/schemas/CatalogProvider'
+          type: array
+      required:
+      - providers
       type: object
     ListCompactSessionUsageResponse:
       properties:
@@ -21125,6 +21244,8 @@ components:
         method:
           type: string
         model:
+          type: string
+        provider:
           type: string
         secret:
           type: string

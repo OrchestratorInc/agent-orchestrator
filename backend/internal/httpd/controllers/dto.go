@@ -158,6 +158,24 @@ type StartAgentUILoginRequest struct {
 	Model  string `json:"model,omitempty"`
 	// Device also publishes a provider key to the OS user environment.
 	Device bool `json:"device,omitempty"`
+	// Provider is the catalog provider a provider_key login configures.
+	Provider string `json:"provider,omitempty"`
+}
+
+// CatalogProviderParam names one provider in a harness's own catalog.
+type CatalogProviderParam struct {
+	Provider string `path:"provider" description:"Provider ID from the harness's catalog."`
+}
+
+// ListCatalogProvidersResponse lists the key-only providers in a harness's
+// own provider catalog.
+type ListCatalogProvidersResponse struct {
+	Providers []agentauth.CatalogProvider `json:"providers"`
+}
+
+// ListCatalogModelsResponse lists a catalog provider's model IDs.
+type ListCatalogModelsResponse struct {
+	Models []string `json:"models"`
 }
 
 // ProviderKeyNameParam names one reviewed provider environment variable.

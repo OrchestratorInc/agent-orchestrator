@@ -32,6 +32,17 @@ type LoginMethod struct {
 }
 
 func loginMethods(agentID string) []LoginMethod {
+	// A harness with a provider catalog on this device offers every provider
+	// in it through one picker instead of a fixed list of key methods.
+	if _, ok := catalogProviders(agentID); ok {
+		methods := []LoginMethod{{catalogKeyMethod, "Provider API key", true}}
+		for _, method := range nativeLoginMethods(agentID) {
+			if !method.Secret {
+				methods = append(methods, method)
+			}
+		}
+		return methods
+	}
 	methods := nativeLoginMethods(agentID)
 	return append(methods, providerEnvironment[agentID]...)
 }
@@ -116,12 +127,20 @@ type LoginOptions struct {
 	// Device also publishes the key to the OS user environment, for programs
 	// started outside AO. AO-launched sessions receive it either way.
 	Device bool
+	// Provider is the catalog provider a provider_key login configures.
+	Provider string
 }
 
 // StartLoginWithOptions is StartLogin with a model and device setting for
 // provider-key methods. An empty secret reuses the key AO already saved.
 func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, secret string, opts LoginOptions) (LoginSnapshot, error) {
 	model := opts.Model
+	if (method == catalogKeyMethod) != (opts.Provider != "") {
+		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_PROVIDER_INVALID", "Choose a provider for a provider key, and only for a provider key.", nil)
+	}
+	if method == catalogKeyMethod && (model != "" || opts.Device) {
+		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_PROVIDER_INVALID", "A provider key saved in the harness's own store takes no model or device setting.", nil)
+	}
 	if _, ok := environmentMethod(agentID, method); !ok && opts.Device {
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_DEVICE_INVALID", "Only provider keys can be added to the device environment.", nil)
 	}
@@ -175,6 +194,9 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		if op.snapshot.AgentID == agentID {
 			delete(s.operations, id)
 		}
+	}
+	if method == catalogKeyMethod {
+		return s.saveCatalogKey(ctx, agentID, opts.Provider, secret)
 	}
 	if writer, ok := directKeyWriter(agentID); ok && !strings.HasPrefix(method, "env_") {
 		if err := writer(ctx, method, secret); err != nil {
@@ -555,6 +577,11 @@ func (s *Service) SubmitLoginCode(ctx context.Context, agentID, id, code string)
 }
 
 func loginArgs(agentID, method string) ([]string, bool, error) {
+	if method == catalogKeyMethod {
+		if _, ok := providerCatalogs[agentID]; ok {
+			return nil, true, nil
+		}
+	}
 	if _, ok := environmentMethod(agentID, method); ok {
 		return nil, true, nil
 	}
