@@ -228,6 +228,7 @@ var shippedMigrations = map[int64]string{
 	20261023123504180: "20261023123504180_app_settings_computer_use.sql",
 	20261024194546592: "20261024194546592_conversation_messages_search.sql",
 	20261028124744441: "20261028124744441_telemetry_incremental_vacuum.sql",
+	20261028144134972: "20261028144134972_session_search.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

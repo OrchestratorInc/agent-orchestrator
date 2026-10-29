@@ -344,6 +344,8 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 export interface ChatWorkspaceProps {
 	onAddToSideChat?: (excerpt: ChatDraftExcerptReference) => void | Promise<void>;
 	annotationNavigationRequest?: { id: string; text: string; messageId?: string; revision?: number };
+	/** Floats over the top of the transcript, such as the in-session find bar. */
+	timelineOverlay?: ReactNode;
 	snapshot: ConversationSnapshot;
 	promptSuggestion?: ComposerPromptSuggestion;
 	/** Renderer-owned state identity; the snapshot's sessionId remains the daemon wire ID. */
@@ -686,6 +688,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 function ChatWorkspaceContent({
 	onAddToSideChat,
 	annotationNavigationRequest,
+	timelineOverlay,
 	snapshot,
 	promptSuggestion,
 	sessionTitle,
@@ -1882,6 +1885,7 @@ function ChatWorkspaceContent({
 
 								<Timeline
 							onAddToSideChat={onAddToSideChat}
+									overlay={timelineOverlay}
 									workerUpdates={sessionRole === "orchestrator"}
 									annotationNavigationRef={annotationNavigationRef}
 									key={draftScopeKey}
@@ -2645,6 +2649,7 @@ export function Timeline({
 	arriving = false,
 	workerUpdates = false,
 	openingStartedAt,
+	overlay,
 }: {
 	onAddToSideChat?: ChatWorkspaceProps["onAddToSideChat"];
 	/** Replaces the default "Add to chat" (write to this draft scope's composer). */
@@ -2687,6 +2692,8 @@ export function Timeline({
 	workerUpdates?: boolean;
 	/** When the brief that started this chat was sent; see ChatWorkspaceProps. */
 	openingStartedAt?: string;
+	/** Floats over the top of the transcript (the in-session find bar). */
+	overlay?: ReactNode;
 }) {
 	const hasTranscript = snapshot.items.length > 0;
 	const arrivedEmpty = useRef(false);
@@ -4142,6 +4149,7 @@ export function Timeline({
 			// cannot invalidate the complete mounted conversation history or shell.
 			style={{ contain: "layout paint" }}
 		>
+			{overlay}
 			{selectionAction ? (
 				<div
 					ref={selectionButton}

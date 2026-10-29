@@ -2273,6 +2273,16 @@ describe("Sidebar", () => {
 		expect(useUiStore.getState().isCommandPaletteOpen).toBe(true);
 	});
 
+	it("opens the past-sessions search page from its own row", async () => {
+		const user = userEvent.setup();
+		renderSidebar();
+		// The palette's Search row and the archive's Past sessions row are two
+		// destinations; the archive one must navigate, not open the palette.
+		await user.click(screen.getByRole("button", { name: /Past sessions/ }));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/search" });
+		expect(useUiStore.getState().isCommandPaletteOpen).toBe(false);
+	});
+
 	it("hides Search when the command palette feature is disabled", () => {
 		commandPaletteEnabled.current = false;
 		renderSidebar();

@@ -87,6 +87,9 @@ type APIDeps struct {
 	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
 	// leaves the route answering 501.
 	LinkPreview controllers.LinkPreviewService
+	// SessionSearch answers the ranked search over past sessions. Nil leaves
+	// the route answering 501; the index itself is built by the daemon.
+	SessionSearch controllers.SessionSearchService
 
 	// Presence tracks which mobile devices are currently running the app.
 	// Nil disables presence tracking (the roster then reports every device offline).
@@ -158,6 +161,7 @@ type API struct {
 	computerUse   *controllers.ComputerUseController
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
+	sessionSearch *controllers.SessionSearchController
 	github        *controllers.GitHubController
 	events        *EventsController
 }
@@ -222,6 +226,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
+		sessionSearch: &controllers.SessionSearchController{Svc: deps.SessionSearch},
 		github:        &controllers.GitHubController{Svc: deps.GitHub},
 		events:        &EventsController{Source: deps.CDC, Live: deps.Events},
 	}
@@ -345,6 +350,7 @@ func (a *API) Register(root chi.Router) {
 			a.computerUse.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
+			a.sessionSearch.Register(r)
 			a.github.Register(r)
 			// Sibling REST controllers plug in here.
 		})

@@ -2217,6 +2217,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/search/index-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report what the session search index covers */
+        get: operations["getSessionSearchIndexStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/search/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search past sessions by title, message text, tool output, and touched file paths */
+        get: operations["searchSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions": {
         parameters: {
             query?: never;
@@ -3778,6 +3812,23 @@ export interface paths {
         put?: never;
         /** Undo a partially-completed spawn (delete seed row, or kill if spawn output exists) */
         post: operations["rollbackSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/search/matches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List every indexed match for one session, in position order */
+        get: operations["listSessionSearchMatches"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7132,6 +7183,69 @@ export interface components {
         };
         SessionResponse: {
             session: components["schemas"]["ControllersSessionView"];
+        };
+        SessionSearchCoverage: {
+            /** Format: date-time */
+            backfilledAt?: string;
+            /** Format: int64 */
+            indexedDocs: number;
+            /** Format: int64 */
+            indexedSources: number;
+            /** Format: int64 */
+            pendingSources: number;
+            /** @enum {string} */
+            state: "ready" | "backfilling" | "unavailable";
+            /** Format: int64 */
+            unavailableSources: number;
+            unindexedHarnesses?: string[];
+            /** Format: int64 */
+            unsupportedSources: number;
+        };
+        SessionSearchHighlight: {
+            end: number;
+            start: number;
+        };
+        SessionSearchIndexStatusResponse: {
+            coverage: components["schemas"]["SessionSearchCoverage"];
+        };
+        SessionSearchMatchesResponse: {
+            matches: components["schemas"]["SessionSearchResult"][];
+        };
+        SessionSearchResponse: {
+            coverage: components["schemas"]["SessionSearchCoverage"];
+            /** @enum {string} */
+            group: "session" | "message";
+            limit: number;
+            offset: number;
+            query: string;
+            results: components["schemas"]["SessionSearchResult"][];
+            /** @enum {string} */
+            sort: "relevance" | "recent";
+            total: number;
+        };
+        SessionSearchResult: {
+            /** Format: date-time */
+            createdAt: string;
+            harness: string;
+            highlights?: components["schemas"]["SessionSearchHighlight"][];
+            /** @enum {string} */
+            kind: "title" | "user" | "assistant" | "tool" | "command" | "path";
+            machine?: string;
+            messageId?: string;
+            projectId: string;
+            projectName?: string;
+            /** Format: double */
+            rank: number;
+            resumeCommand?: string;
+            reviewId?: string;
+            /** Format: int64 */
+            seq: number;
+            sessionId: string;
+            sessionMatches?: number;
+            sessionName?: string;
+            sessionState?: string;
+            snippet: string;
+            title?: string;
         };
         SessionStaleBinary: {
             /** Format: date-time */
@@ -15576,6 +15690,125 @@ export interface operations {
             };
         };
     };
+    getSessionSearchIndexStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSearchIndexStatusResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    searchSessions: {
+        parameters: {
+            query: {
+                /** @description Words to search for, with optional operators such as harness:, project:, status:, before:, after:, path:, !exclude, "exact phrase", 'exact, ^prefix. */
+                q: string;
+                /** @description Restrict results to one project. Equivalent to project: in q. */
+                projectId?: string;
+                /** @description Restrict results to one agent harness, such as claude-code or codex. */
+                harness?: string;
+                /** @description Restrict results to one host. */
+                machine?: string;
+                /** @description Restrict to sessions that touched a path containing this text. */
+                path?: string;
+                /** @description Restrict to one session lifecycle state. */
+                status?: "killed" | "live" | "hibernated";
+                /** @description Earliest result time, as an RFC 3339 date or date-time. */
+                from?: string;
+                /** @description Latest result time, as an RFC 3339 date or date-time. */
+                to?: string;
+                /** @description Order by relevance (while typing) or recency (while browsing). Defaults to relevance, or to recent for a filter-only query. */
+                sort?: "relevance" | "recent";
+                /** @description One result per session at its best match, with sessionMatches counting the rest (session, the default), or one result per matching message (message). */
+                group?: "session" | "message";
+                /** @description Page size. Defaults to 20. */
+                limit?: number;
+                /** @description Page offset. */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSearchResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listSessions: {
         parameters: {
             query?: {
@@ -21951,6 +22184,59 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listSessionSearchMatches: {
+        parameters: {
+            query: {
+                /** @description The same words or operators used for the search that opened the session. */
+                q: string;
+            };
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSearchMatchesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };
