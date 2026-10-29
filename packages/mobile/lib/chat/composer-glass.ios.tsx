@@ -20,6 +20,11 @@ import { useTheme, useThemeState } from "../ThemeProvider";
  * is why it was pinned to a constant for a while. Filling needs no number at all:
  * the pill owns its height, the host fills the pill, and the material fills the
  * host, so the field can grow under a long message and the material grows with it.
+ *
+ * The host ignores every safe area. A hosting controller otherwise insets its
+ * content for the keyboard, and a dock lifted by a transform (the file comment
+ * composer's KeyboardStickyView) still lays out under the keyboard: SwiftUI took
+ * the whole pill as keyboard inset and drew the glass as a thin bar along its top.
  */
 export const composerGlassSupported = parseInt(String(Platform.Version), 10) >= 26;
 
@@ -29,7 +34,7 @@ export function ComposerGlass({ radius }: { radius: number }) {
 	if (!composerGlassSupported) return null;
 	return (
 		<View pointerEvents="none" style={StyleSheet.absoluteFill}>
-			<Host style={StyleSheet.absoluteFill} colorScheme={scheme} seedColor={t.accent}>
+			<Host ignoreSafeArea="all" style={StyleSheet.absoluteFill} colorScheme={scheme} seedColor={t.accent}>
 				{/* The frame comes first — the material is drawn in the space the frame
 				    claims — and the spacer is what gives that frame something to lay
 				    out: SwiftUI will not size an empty group. No height: the host already

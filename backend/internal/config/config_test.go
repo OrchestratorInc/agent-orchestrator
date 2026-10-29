@@ -3,7 +3,9 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,7 +14,7 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	// Clear every recognised var so we observe pure defaults regardless of the
 	// surrounding environment.
-	for _, k := range []string{"AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION", "AO_HARNESS_UPDATE_CHECKS", "AO_HARNESS_UPDATE_INTERVAL"} {
+	for _, k := range []string{"AO_TELEMETRY_RETENTION", "AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION", "AO_HARNESS_UPDATE_CHECKS", "AO_HARNESS_UPDATE_INTERVAL"} {
 		t.Setenv(k, "")
 	}
 
@@ -249,6 +251,21 @@ func TestLoadTelemetryDisabledEventsBlankIsInert(t *testing.T) {
 	}
 	if cfg.Telemetry.AppVersion != "" {
 		t.Fatalf("AppVersion = %q, want empty", cfg.Telemetry.AppVersion)
+	}
+}
+
+func TestLoadAppVersionOnlyFromEnvironment(t *testing.T) {
+	t.Setenv("AO_TELEMETRY_APP_VERSION", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Telemetry.AppVersion != "" {
+		t.Fatalf("AppVersion = %q, want empty without supervisor value", cfg.Telemetry.AppVersion)
+	}
+	t.Setenv("AO_TELEMETRY_APP_VERSION", "0.11.2")
+	if cfg, _ = Load(); cfg.Telemetry.AppVersion != "0.11.2" {
+		t.Fatalf("AppVersion = %q, want supervisor value", cfg.Telemetry.AppVersion)
 	}
 }
 
@@ -594,6 +611,76 @@ func TestLoadHarnessUpdateChecksToggle(t *testing.T) {
 	}
 }
 
+func TestLoadUpdateWhileRunningToggle(t *testing.T) {
+	t.Setenv("AO_UPDATE_WHILE_RUNNING", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.UpdateWhileRunning {
+		t.Fatal("update while running is off by default")
+	}
+	t.Setenv("AO_UPDATE_WHILE_RUNNING", "off")
+	if cfg, err = Load(); err != nil || cfg.UpdateWhileRunning {
+		t.Fatalf("AO_UPDATE_WHILE_RUNNING=off: enabled=%t err=%v", cfg.UpdateWhileRunning, err)
+	}
+	t.Setenv("AO_UPDATE_WHILE_RUNNING", "maybe")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid AO_UPDATE_WHILE_RUNNING value was accepted")
+	}
+}
+
+func TestLoadVersionRefreshSettings(t *testing.T) {
+	t.Setenv("AO_VERSION_REFRESH", "")
+	t.Setenv("AO_VERSION_REFRESH_IDLE", "")
+	cfg, err := Load()
+	if err != nil || !cfg.VersionRefresh || cfg.VersionRefreshIdle != DefaultVersionRefreshIdle {
+		t.Fatalf("defaults: refresh=%t idle=%s err=%v", cfg.VersionRefresh, cfg.VersionRefreshIdle, err)
+	}
+	t.Setenv("AO_VERSION_REFRESH", "off")
+	t.Setenv("AO_VERSION_REFRESH_IDLE", "30m")
+	if cfg, err = Load(); err != nil || cfg.VersionRefresh || cfg.VersionRefreshIdle != 30*time.Minute {
+		t.Fatalf("overrides: refresh=%t idle=%s err=%v", cfg.VersionRefresh, cfg.VersionRefreshIdle, err)
+	}
+	t.Setenv("AO_VERSION_REFRESH_IDLE", "soon")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid AO_VERSION_REFRESH_IDLE was accepted")
+	}
+}
+
+func TestLoadPhaseThreeToggles(t *testing.T) {
+	t.Setenv("AO_TUI_VERSION_REFRESH", "")
+	t.Setenv("AO_WINDOWS_UPDATE_WHEN_IDLE", "")
+	t.Setenv("AO_UPDATE_WHEN_IDLE", "")
+	cfg, err := Load()
+	if err != nil || !cfg.TUIVersionRefresh || !cfg.UpdateWhenIdle {
+		t.Fatalf("defaults: tui=%t idle=%t err=%v", cfg.TUIVersionRefresh, cfg.UpdateWhenIdle, err)
+	}
+	t.Setenv("AO_TUI_VERSION_REFRESH", "off")
+	t.Setenv("AO_UPDATE_WHEN_IDLE", "off")
+	if cfg, err = Load(); err != nil || cfg.TUIVersionRefresh || cfg.UpdateWhenIdle {
+		t.Fatalf("off: tui=%t idle=%t err=%v", cfg.TUIVersionRefresh, cfg.UpdateWhenIdle, err)
+	}
+	// The older Windows-only name still turns it off.
+	t.Setenv("AO_UPDATE_WHEN_IDLE", "")
+	t.Setenv("AO_WINDOWS_UPDATE_WHEN_IDLE", "off")
+	if cfg, err = Load(); err != nil || cfg.UpdateWhenIdle {
+		t.Fatalf("legacy off: idle=%t err=%v", cfg.UpdateWhenIdle, err)
+	}
+}
+
+func TestLoadManagedHarnessInstallsToggle(t *testing.T) {
+	t.Setenv("AO_MANAGED_HARNESS_INSTALLS", "")
+	cfg, err := Load()
+	if err != nil || !cfg.ManagedHarnessInstalls {
+		t.Fatalf("default managed installs = %t, %v", cfg.ManagedHarnessInstalls, err)
+	}
+	t.Setenv("AO_MANAGED_HARNESS_INSTALLS", "off")
+	if cfg, err = Load(); err != nil || cfg.ManagedHarnessInstalls {
+		t.Fatalf("off: managed installs = %t, %v", cfg.ManagedHarnessInstalls, err)
+	}
+}
+
 func TestLoadHarnessUpdateInterval(t *testing.T) {
 	t.Setenv("AO_HARNESS_UPDATE_INTERVAL", "")
 	cfg, err := Load()
@@ -609,5 +696,98 @@ func TestLoadHarnessUpdateInterval(t *testing.T) {
 		if _, err := Load(); err == nil {
 			t.Fatalf("AO_HARNESS_UPDATE_INTERVAL=%q was accepted", raw)
 		}
+	}
+}
+
+func TestScrubTelemetryEnvKeepsLoadedConfigAndClearsProcessEnv(t *testing.T) {
+	t.Setenv("AO_TELEMETRY_EVENTS", "on")
+	t.Setenv("AO_TELEMETRY_REMOTE", "posthog")
+	t.Setenv("AO_TELEMETRY_POSTHOG_KEY", "phc_test")
+	t.Setenv("AO_TELEMETRY_APP_VERSION", "0.13.7")
+	t.Setenv("AO_SENTRY_DSN", "https://k@o.ingest.sentry.io/1")
+	t.Setenv("AO_PORT", "3123")
+	// Desktop-only, documented opt-out the daemon never reads: must survive.
+	t.Setenv("AO_TELEMETRY_RENDERER", "off")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ScrubTelemetryEnv()
+
+	if cfg.Telemetry.Remote != TelemetryRemotePostHog || cfg.Telemetry.AppVersion != "0.13.7" || cfg.Telemetry.PostHogKey != "phc_test" || cfg.Telemetry.SentryDSN == "" {
+		t.Fatalf("loaded config lost telemetry settings: %+v", cfg.Telemetry)
+	}
+	for _, key := range telemetryEnvKeys {
+		if _, present := os.LookupEnv(key); present {
+			t.Fatalf("%s still set in process env after scrub", key)
+		}
+	}
+	// A child started from os.Environ() after the scrub sees none of the
+	// scrubbed keys, and still sees everything else.
+	for _, entry := range os.Environ() {
+		if isScrubbedTelemetryEntry(entry) {
+			t.Fatalf("child environment would inherit %q", entry)
+		}
+	}
+	if os.Getenv("AO_PORT") != "3123" || os.Getenv("AO_TELEMETRY_RENDERER") != "off" {
+		t.Fatal("scrub must leave variables outside telemetryEnvKeys alone")
+	}
+	// The real check: a child process started the way the daemon starts every
+	// child (exec with the inherited environment) must not see the settings.
+	if runtime.GOOS == "windows" {
+		return
+	}
+	out, err := exec.Command("env").Output()
+	if err != nil {
+		t.Fatalf("env: %v", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if isScrubbedTelemetryEntry(line) {
+			t.Fatalf("child process inherited %q after scrub", line)
+		}
+	}
+	if !strings.Contains(string(out), "AO_PORT=3123\n") || !strings.Contains(string(out), "AO_TELEMETRY_RENDERER=off\n") {
+		t.Fatal("child process should still inherit variables outside telemetryEnvKeys")
+	}
+}
+
+func isScrubbedTelemetryEntry(entry string) bool {
+	key, _, _ := strings.Cut(entry, "=")
+	for _, scrubbed := range telemetryEnvKeys {
+		if key == scrubbed {
+			return true
+		}
+	}
+	return false
+}
+
+func TestLoadTelemetryRetention(t *testing.T) {
+	for _, tc := range []struct {
+		raw     string
+		want    time.Duration
+		invalid bool
+	}{
+		{"", 0, false}, {"7", 7 * 24 * time.Hour, false}, {"720h", 30 * 24 * time.Hour, false},
+		{"24h", 24 * time.Hour, false}, {"0", 0, true}, {"-1", 0, true},
+		{"23h", 0, true}, {"one day", 0, true}, {"106752", 0, true},
+		{"213504", 0, true}, {"9223372036854775807", 0, true},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			t.Setenv("AO_TELEMETRY_RETENTION", tc.raw)
+			cfg, err := Load()
+			if tc.invalid {
+				if err == nil {
+					t.Fatal("expected invalid retention error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Telemetry.LocalRetention != tc.want {
+				t.Fatalf("retention = %v, want %v", cfg.Telemetry.LocalRetention, tc.want)
+			}
+		})
 	}
 }

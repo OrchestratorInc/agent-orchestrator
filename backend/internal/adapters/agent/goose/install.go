@@ -105,3 +105,11 @@ func cachedGooseBinaryStillValid(path string, cachedInfo os.FileInfo) bool {
 		cachedInfo.Mode().Perm() == currentInfo.Mode().Perm() &&
 		cachedInfo.ModTime().Equal(currentInfo.ModTime())
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}

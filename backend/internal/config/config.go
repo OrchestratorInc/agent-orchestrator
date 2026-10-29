@@ -17,6 +17,12 @@ import (
 	"time"
 )
 
+// EnvComputerUse is set to "1" on a chat session's `ao mcp` server when the
+// user had "Let agents use this computer" on as the session started; the
+// server then offers the computer-use tools. The session manager sets it and
+// the CLI reads it.
+const EnvComputerUse = "AO_COMPUTER_USE"
+
 const (
 	// LoopbackHost is the only host the daemon ever binds. There is deliberately
 	// no AO_HOST env var: the daemon has no auth/CORS/TLS and a stray
@@ -36,6 +42,10 @@ const (
 	// harnesses for updates after its startup check. A full pass probes each
 	// harness CLI, so it runs a few times a day rather than continuously.
 	DefaultHarnessUpdateInterval = 6 * time.Hour
+	// DefaultVersionRefreshIdle is how long an open session must be quiet before
+	// it moves to a newly installed harness release. Provider prompt caches
+	// expire well within it, so the move costs no cached context.
+	DefaultVersionRefreshIdle = 10 * time.Minute
 	// MinHarnessUpdateInterval is the shortest AO_HARNESS_UPDATE_INTERVAL accepted.
 	MinHarnessUpdateInterval = time.Hour
 	// DefaultAgent is the compatibility value used when AO_AGENT is unset. The
@@ -79,15 +89,17 @@ type TelemetryConfig struct {
 	// users to install a new build. Local storage still records everything.
 	DisabledEvents []string
 	// AppVersion is the desktop app version the daemon was launched by, stamped
-	// on remote events so failures can be attributed to a release. The daemon
-	// binary has no reliable version of its own (see cli.Version, which release
-	// tooling does not currently override), so the supervisor passes it in.
+	// on remote events so failures can be attributed to a release. The
+	// supervisor passes it in; the daemon applies its binary version if absent.
 	AppVersion string
 	// SentryDSN, when set (AO_SENTRY_DSN), enables daemon-side Sentry capture of
 	// genuine server faults (5xx and panics) with their Go stack. Blank keeps
 	// Sentry a no-op. Kept separate from the PostHog key: the two are different
 	// processors with different projects.
 	SentryDSN string
+	// LocalRetention controls how long local telemetry events are kept before
+	// pruning. Zero means use the default (30 days).
+	LocalRetention time.Duration
 }
 
 // GitLabConfig carries the self-managed GitLab host allowlist and per-host
@@ -106,9 +118,9 @@ type GitLabConfig struct {
 }
 
 // DefaultAllowedOrigins are the browser origins the daemon's CORS boundary
-// trusts. General routes additionally admit loopback-served content, while
-// credential-management routes accept only this exact list (plus native
-// callers without an Origin header). The daemon has no auth, so every default
+// trusts. Workspace previews and unrelated local servers are not trusted
+// API clients. Native callers remain unauthenticated; paired mobile callers
+// use the separately authenticated listener. Every default
 // entry must be an origin ordinary web content cannot present:
 // app://renderer is the packaged Electron renderer, served from a custom
 // scheme only the desktop app registers — no website can bear it. The opaque
@@ -159,6 +171,31 @@ type Config struct {
 	// harnesses after its startup check. AO_HARNESS_UPDATE_INTERVAL overrides
 	// it; values below MinHarnessUpdateInterval are rejected.
 	HarnessUpdateInterval time.Duration
+	// UpdateWhileRunning lets a harness update run while the harness's
+	// sessions stay open, when its installer keeps the running release usable
+	// and the user confirms. AO_UPDATE_WHILE_RUNNING=off makes every update
+	// wait for those sessions to end again.
+	UpdateWhileRunning bool
+	// VersionRefresh lets idle open sessions move to a harness release an
+	// update installed while they ran. AO_VERSION_REFRESH=off is the kill
+	// switch; the user's Settings toggle applies on top of it.
+	VersionRefresh bool
+	// VersionRefreshIdle is how long a session must be quiet before it moves,
+	// so a warm prompt cache is not thrown away (AO_VERSION_REFRESH_IDLE).
+	VersionRefreshIdle time.Duration
+	// TUIVersionRefresh also restarts idle terminal sessions on a newly
+	// installed release (AO_TUI_VERSION_REFRESH=off disables it).
+	TUIVersionRefresh bool
+	// UpdateWhenIdle lets a harness update that cannot run beside its sessions
+	// wait until they are idle, then stop them, update and resume them,
+	// instead of refusing while they run (AO_UPDATE_WHEN_IDLE=off disables it;
+	// the older AO_WINDOWS_UPDATE_WHEN_IDLE is still read).
+	UpdateWhenIdle bool
+	// ManagedHarnessInstalls installs npm, Bun, uv and pipx harness updates
+	// side by side under the AO data dir and switches to them atomically, so
+	// no update touches files a running session uses
+	// (AO_MANAGED_HARNESS_INSTALLS=off updates the installed copy in place).
+	ManagedHarnessInstalls bool
 	// StartupWorkingDirectory is the daemon process cwd before startup
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
@@ -222,6 +259,7 @@ func (c Config) Addr() string {
 //	AO_TELEMETRY_REMOTE  remote exporter off|posthog (default off)
 //	AO_TELEMETRY_POSTHOG_KEY   PostHog project key
 //	AO_TELEMETRY_POSTHOG_HOST  PostHog host (default DefaultTelemetryPostHogHost)
+//	AO_TELEMETRY_RETENTION     local event retention (Go duration or days, default 30 days, min 1 day)
 //	AO_GITLAB_ALLOWED_HOSTS    comma-separated self-managed GitLab hosts (each may include :port)
 //	AO_GITLAB_HOST_TOKENS      host=token,host=token per-host token overrides
 //	AO_CLIENT                  client identity reported to clients (trimmed, default empty)
@@ -244,9 +282,15 @@ func Load() (Config, error) {
 			Remote:      TelemetryRemoteOff,
 			PostHogHost: DefaultTelemetryPostHogHost,
 		},
-		LocalOffering:         true,
-		HarnessUpdateChecks:   true,
-		HarnessUpdateInterval: DefaultHarnessUpdateInterval,
+		LocalOffering:          true,
+		HarnessUpdateChecks:    true,
+		HarnessUpdateInterval:  DefaultHarnessUpdateInterval,
+		UpdateWhileRunning:     true,
+		VersionRefresh:         true,
+		VersionRefreshIdle:     DefaultVersionRefreshIdle,
+		TUIVersionRefresh:      true,
+		UpdateWhenIdle:         true,
+		ManagedHarnessInstalls: true,
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {
@@ -315,6 +359,50 @@ func Load() (Config, error) {
 		}
 		cfg.HarnessUpdateChecks = v
 	}
+	if raw, present := os.LookupEnv("AO_UPDATE_WHILE_RUNNING"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_UPDATE_WHILE_RUNNING", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.UpdateWhileRunning = v
+	}
+	if raw, present := os.LookupEnv("AO_VERSION_REFRESH"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_VERSION_REFRESH", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.VersionRefresh = v
+	}
+	if raw, present := os.LookupEnv("AO_TUI_VERSION_REFRESH"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_TUI_VERSION_REFRESH", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.TUIVersionRefresh = v
+	}
+	for _, name := range []string{"AO_WINDOWS_UPDATE_WHEN_IDLE", "AO_UPDATE_WHEN_IDLE"} {
+		if raw, present := os.LookupEnv(name); present && strings.TrimSpace(raw) != "" {
+			v, err := parseToggleEnv(name, raw)
+			if err != nil {
+				return Config{}, err
+			}
+			cfg.UpdateWhenIdle = v
+		}
+	}
+	if raw, present := os.LookupEnv("AO_MANAGED_HARNESS_INSTALLS"); present && strings.TrimSpace(raw) != "" {
+		v, err := parseToggleEnv("AO_MANAGED_HARNESS_INSTALLS", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.ManagedHarnessInstalls = v
+	}
+	if raw, present := os.LookupEnv("AO_VERSION_REFRESH_IDLE"); present && strings.TrimSpace(raw) != "" {
+		d, err := parsePositiveDuration("AO_VERSION_REFRESH_IDLE", strings.TrimSpace(raw))
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.VersionRefreshIdle = d
+	}
 	if raw, present := os.LookupEnv("AO_HARNESS_UPDATE_INTERVAL"); present && strings.TrimSpace(raw) != "" {
 		d, err := parsePositiveDuration("AO_HARNESS_UPDATE_INTERVAL", strings.TrimSpace(raw))
 		if err != nil {
@@ -361,6 +449,20 @@ func Load() (Config, error) {
 	}
 	if raw := os.Getenv("AO_SENTRY_DSN"); raw != "" {
 		cfg.Telemetry.SentryDSN = strings.TrimSpace(raw)
+	}
+	if raw := os.Getenv("AO_TELEMETRY_RETENTION"); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			days, derr := strconv.Atoi(raw)
+			if derr != nil || days < 1 || uint64(days) > uint64((1<<63-1)/(24*time.Hour)) {
+				return Config{}, fmt.Errorf("invalid AO_TELEMETRY_RETENTION %q: must be a Go duration (e.g. 720h) or a number of days", raw)
+			}
+			d = time.Duration(days) * 24 * time.Hour
+		}
+		if d < 24*time.Hour {
+			return Config{}, fmt.Errorf("invalid AO_TELEMETRY_RETENTION %q: minimum is 1 day (24h)", raw)
+		}
+		cfg.Telemetry.LocalRetention = d
 	}
 
 	if raw, ok := os.LookupEnv("AO_GITLAB_ALLOWED_HOSTS"); ok && raw != "" {
@@ -451,6 +553,33 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// telemetryEnvKeys are the variables the desktop stamps on the daemon so it
+// exports product telemetry. Load reads them once; nothing else in the daemon
+// does.
+var telemetryEnvKeys = []string{
+	"AO_TELEMETRY_EVENTS",
+	"AO_TELEMETRY_METRICS",
+	"AO_TELEMETRY_REMOTE",
+	"AO_TELEMETRY_POSTHOG_KEY",
+	"AO_TELEMETRY_POSTHOG_HOST",
+	"AO_TELEMETRY_DISABLED_EVENTS",
+	"AO_TELEMETRY_APP_VERSION",
+	"AO_SENTRY_DSN",
+}
+
+// ScrubTelemetryEnv removes the telemetry export variables from the process
+// environment after Load has consumed them. Every child the daemon starts
+// (tmux and pty shells, ACP agents, git) inherits os.Environ(), so without this
+// an agent working on the AO repo that boots a test daemon with a scratch
+// AO_DATA_DIR inherits the export settings and the host app's version, mints a
+// fresh install id, and reports to the production PostHog project as a new
+// install. The daemon keeps its own copy of the settings in Config.
+func ScrubTelemetryEnv() {
+	for _, key := range telemetryEnvKeys {
+		_ = os.Unsetenv(key)
+	}
 }
 
 func parseToggleEnv(name, raw string) (bool, error) {

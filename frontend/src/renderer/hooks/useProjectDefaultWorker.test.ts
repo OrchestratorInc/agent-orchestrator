@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useProjectDefaultWorker } from "./useProjectDefaultWorker";
+import { useProjectDefaultWorker, useProjectWorkerDefaults } from "./useProjectDefaultWorker";
 
 const get = vi.hoisted(() => vi.fn());
 vi.mock("../lib/api-client", () => ({
@@ -46,4 +46,29 @@ describe("useProjectDefaultWorker", () => {
 		expect(result.current).toBe("");
 		expect(get).not.toHaveBeenCalled();
 	});
+	it("exposes worker and base tuning from the shared project query", async () => {
+		get.mockResolvedValue({ data: { status: "ok", project: { agent: "codex", config: {
+			agentConfig: { model: "base-model", effort: "medium" },
+			worker: { agent: "codex", agentConfig: { model: "capable", effort: "low", mode: "" } },
+		} } } });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { result } = renderHook(() => useProjectWorkerDefaults("demo"), { wrapper: wrapper(client) });
+		expect(result.current.loaded).toBe(false);
+		await waitFor(() => expect(result.current.harness).toBe("codex"));
+		expect(result.current.loaded).toBe(true);
+		expect(result.current.agentConfig).toEqual({ model: "base-model", effort: "medium" });
+		expect(result.current.worker?.agentConfig).toEqual({ model: "capable", effort: "low", mode: "" });
+	});
+
+	it.each(["Unknown project", "Daemon unavailable"])("settles when project defaults return %s", async (message) => {
+		get.mockResolvedValue({ error: { error: { message } } });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { result } = renderHook(() => useProjectWorkerDefaults("missing"), { wrapper: wrapper(client) });
+		expect(result.current.loaded).toBe(false);
+		await waitFor(() => expect(result.current.loaded).toBe(true));
+		expect(result.current.harness).toBe("");
+		expect(result.current.agentConfig).toBeUndefined();
+		expect(result.current.worker).toBeUndefined();
+	});
+
 });

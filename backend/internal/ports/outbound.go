@@ -276,6 +276,16 @@ type ExactSupervisedProcessInspector interface {
 	IsExactSupervisedProcessAlive(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (bool, error)
 }
 
+// WorkloadCommandInspector counts the commands an agent is running in its
+// terminal: shells under the exact supervised agent of ref, and whatever runs
+// in them. A tool call, test run or dev server shows up here; an agent's own
+// helper processes (MCP servers, for example) do not. Restarting the agent
+// would kill those commands, so a restart waits while any run. An error means
+// the count could not be proved.
+type WorkloadCommandInspector interface {
+	RunningWorkloadCommands(ctx context.Context, handle RuntimeHandle, ref SupervisedProcessRef) (int, error)
+}
+
 // SupervisedProcessRecordInspector reports whether a runtime handle contains
 // any AO supervisor. Review liveness uses this to keep pre-supervisor reviewer
 // launches working while still requiring an exact launch match for supervised
@@ -521,18 +531,14 @@ var (
 	ErrRuntimeProbeInconclusive = errors.New("runtime: liveness probe inconclusive")
 )
 
-// WorkspaceTaskNamer finalizes an unlaunched task's branch and directory names.
-// Even on error, the returned info describes the current paths and branches.
+// WorkspaceTaskNamer renames a launched task's temporary branch. The checkout
+// never moves, so the returned info differs only in branch names, and on error
+// it still describes the branches Git holds, which may differ per repository.
+// RevertTaskBranch exactly undoes a rename the caller could not record, with
+// the same result contract.
 type WorkspaceTaskNamer interface {
-	NameTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo, branch, name string) (WorkspaceProjectInfo, error)
-	RepairTaskWorkspace(ctx context.Context, info WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
-}
-
-// WorkspaceTaskNamingRecovery keeps an interrupted rename recoverable until
-// the caller acknowledges that the resulting paths are durably stored.
-type WorkspaceTaskNamingRecovery interface {
-	RecoverTaskWorkspace(ctx context.Context, projectID domain.ProjectID, id domain.SessionID) (WorkspaceProjectInfo, bool, error)
-	CompleteTaskWorkspaceNaming(ctx context.Context, info WorkspaceProjectInfo) error
+	RenameTaskBranch(ctx context.Context, info WorkspaceProjectInfo, branch string) (WorkspaceProjectInfo, error)
+	RevertTaskBranch(ctx context.Context, renamed, original WorkspaceProjectInfo) (WorkspaceProjectInfo, error)
 }
 
 // WorkspaceConfig is the spec for creating or restoring a session's workspace.

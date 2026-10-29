@@ -25,13 +25,17 @@ func (shutdownLocalStore) PruneTelemetryEventsBefore(context.Context, time.Time,
 	return 0, nil
 }
 
+func (shutdownLocalStore) FreelistCount(context.Context) (int64, error) { return 0, nil }
+
+func (shutdownLocalStore) IncrementalVacuum(context.Context, int64) error { return nil }
+
 func newShutdownTestSink(t *testing.T, kind string, consume func(context.Context) error) (ports.EventSink, int) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	var sink ports.EventSink
 	bufferSize := localBufferSize
 	if kind == "local" {
-		sink = NewLocalSQLiteSink(shutdownLocalStore(consume), log)
+		sink = NewLocalSQLiteSink(shutdownLocalStore(consume), log, DefaultRetention)
 	} else {
 		var err error
 		sink, err = NewPostHogSink(t.TempDir(), "phc_test", "https://posthog.test", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {

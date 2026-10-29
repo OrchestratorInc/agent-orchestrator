@@ -182,15 +182,6 @@ describe("apiClient runtime base URL", () => {
 
 		expect(error).toEqual({ code: "exited", message: "AO daemon exited with code 1" });
 	});
-
-	it("leaves workspace and switch-history failures exclusively to visibility reporting", async () => {
-		vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify({ code: "unavailable", message: "nope", reporting_owner: "http" }), { status: 503, headers: { "Content-Type": "application/json" } }));
-		setApiBaseUrl("http://127.0.0.1:3001");
-		await apiClient.GET("/api/v1/projects");
-		await apiClient.GET("/api/v1/sessions");
-		await apiClient.GET("/api/v1/sessions/{sessionId}/agent-switches", { params: { path: { sessionId: "local-secret" } } });
-		expect(sentryCaptureMock).not.toHaveBeenCalled();
-	});
 });
 
 describe("subscribeApiBaseUrl", () => {
@@ -331,84 +322,58 @@ describe("api error telemetry", () => {
 		expect(sentryCaptureMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("does not send saga-owned API failures to generic Sentry capture", async () => {
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					error: "internal",
-					code: "AGENT_SWITCH_FAILED",
-					message: "Agent switch failed",
-					reporting_owner: "agent_switch_saga",
-				}),
-				{ status: 500, headers: { "Content-Type": "application/json" } },
-			),
-		);
+	it("reports a failed project or session list like any other request", async () => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("oops", { status: 500 }));
 		setApiBaseUrl("http://127.0.0.1:3037");
 
-		const { error } = await apiClient.GET("/api/v1/agents");
+		await apiClient.GET("/api/v1/projects");
+		await apiClient.GET("/api/v1/sessions");
 
-		expect(captureMock).toHaveBeenCalledTimes(1);
-		expect(sentryCaptureMock).not.toHaveBeenCalled();
-	expect(apiErrorMessage(error)).toBe("Agent switch failed");
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", { operation: "GET /api/v1/projects", error_category: "http_5xx", status: 500 });
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", { operation: "GET /api/v1/sessions", error_category: "http_5xx", status: 500 });
 	});
 
-	it("suppresses saga-owned 4xx responses without changing presentation", async () => {
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({
-					error: "conflict",
-					code: "AGENT_SWITCH_DELIVERY_UNCONFIRMED",
-					message: "The target agent accepted an unconfirmed continuation",
-					reporting_owner: "agent_switch_saga",
-				}),
-				{ status: 409, headers: { "Content-Type": "application/json" } },
-			),
-		);
+	it("drops expected Codex and closed-shell outcomes and still reports GitHub auth and other 401 and 404 responses", async () => {
+		const fetchMock = vi.spyOn(globalThis, "fetch");
 		setApiBaseUrl("http://127.0.0.1:3037");
-
-		const { error } = await apiClient.GET("/api/v1/agents");
-
-		expect(sentryCaptureMock).not.toHaveBeenCalled();
-		expect(apiErrorMessage(error)).toBe(
-		"The target agent accepted an unconfirmed continuation",
-		);
-	});
-
-	it("does not trust an unknown reporting owner", async () => {
-		vi.spyOn(globalThis, "fetch").mockResolvedValue(
-			new Response(
-				JSON.stringify({ code: "INTERNAL_ERROR", message: "Internal server error", reporting_owner: "renderer" }),
-				{ status: 500, headers: { "Content-Type": "application/json" } },
-			),
-		);
-		setApiBaseUrl("http://127.0.0.1:3037");
-
+		for (const code of ["CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "SHELL_TERMINAL_NOT_FOUND"]) {
+			fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code, message: "expected" }), {
+				status: code === "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE" ? 503 : 404,
+				headers: { "Content-Type": "application/json" },
+			}));
+			await apiClient.GET("/api/v1/agents");
+		}
+		expect(captureMock).not.toHaveBeenCalled();
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code: "GITHUB_AUTH_INVALID", message: "reconnect" }), {
+			status: 401,
+			headers: { "Content-Type": "application/json" },
+		}));
 		await apiClient.GET("/api/v1/agents");
-
-		expect(sentryCaptureMock).toHaveBeenCalledTimes(1);
-	});
-
-	it("does not let a saga-owned response dedupe a later HTTP-owned failure", async () => {
-		vi.spyOn(globalThis, "fetch")
-			.mockResolvedValueOnce(
-				new Response(JSON.stringify({ reporting_owner: "agent_switch_saga" }), {
-					status: 500,
-					headers: { "Content-Type": "application/json" },
-				}),
-			)
-			.mockResolvedValueOnce(
-				new Response(JSON.stringify({ reporting_owner: "http" }), {
-					status: 500,
-					headers: { "Content-Type": "application/json" },
-				}),
-			);
-		setApiBaseUrl("http://127.0.0.1:3037");
-
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({ status: 401, error_category: "http_4xx" }));
+		captureMock.mockClear();
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: "conflict" }), {
+			status: 409,
+			headers: { "Content-Type": "application/json" },
+		}));
+		await apiClient.GET("/api/v1/agents/{agent}/models", { params: { path: { agent: "codex" } } });
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({
+			operation: "GET /api/v1/agents/:id/models",
+			status: 409,
+			error_category: "http_4xx",
+		}));
+		captureMock.mockClear();
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: "not ready" }), {
+			status: 409,
+			headers: { "Content-Type": "application/json" },
+		}));
+		await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/skills", { params: { path: { sessionId: "session-1" } } });
+		expect(captureMock).not.toHaveBeenCalled();
+		fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ code: "SESSION_GONE", message: "missing" }), {
+			status: 404,
+			headers: { "Content-Type": "application/json" },
+		}));
 		await apiClient.GET("/api/v1/agents");
-		await apiClient.GET("/api/v1/agents");
-
-		expect(captureMock).toHaveBeenCalledTimes(2);
-		expect(sentryCaptureMock).toHaveBeenCalledTimes(1);
+		expect(captureMock).toHaveBeenCalledWith("ao.renderer.api_error", expect.objectContaining({ status: 404, error_category: "http_4xx" }));
 	});
 
 	it("reports http_4xx with ids stripped from the operation", async () => {

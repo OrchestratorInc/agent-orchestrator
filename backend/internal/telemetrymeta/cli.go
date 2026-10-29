@@ -25,13 +25,13 @@ var routineInternalCLICommands = []string{
 	"ao session ls",
 	"ao session top",
 	"ao session get",
-	"ao session agent-switch ls",
-	"ao session handoff",
+	"ao session history",
 	"ao project ls",
 	"ao project get",
 	"ao orchestrator ls",
 	"ao hooks",
 	"ao pty-host",
+	"ao browser-host",
 	"ao unreal-provider",
 	"ao codex-login",
 	"ao claude-login",
@@ -56,10 +56,6 @@ func CLIActorType(actorType, commandPath string) string {
 	if _, ok := legacyActorlessUserCLICommands[normalized]; ok {
 		return "user"
 	}
-	switch normalized {
-	case "ao session agent-switch", "ao session agent-switch ls", "ao session switch-agent":
-		return "user"
-	}
 	if normalized == "ao hooks" || normalized == "ao report" {
 		return "agent"
 	}
@@ -69,6 +65,7 @@ func CLIActorType(actorType, commandPath string) string {
 var legacyActorlessSystemCLICommands = map[string]struct{}{
 	"ao agent-process":           {},
 	"ao agent-process supervise": {},
+	"ao browser-host":            {},
 	"ao chat-host":               {},
 	"ao completion":              {},
 	"ao daemon":                  {},
@@ -128,6 +125,11 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao browser tab select":     {},
 	"ao browser status":         {},
 	"ao browser tabs":           {},
+	"ao browser target":         {},
+	"ao browser chrome":         {},
+	"ao browser chrome remove":  {},
+	"ao browser chrome setup":   {},
+	"ao browser chrome status":  {},
 	"ao browser type":           {},
 	"ao browser uncheck":        {},
 	"ao browser unhighlight":    {},
