@@ -144,6 +144,9 @@ the buffer is full. A crash, caller cancellation, or export failure after
 reservation can still lose a batch; it will not duplicate the count on restart.
 An identity persistence failure pauses draining without discarding pending
 counts. Only an actual user opt-out discards them.
+If remote events are configured but the PostHog sink cannot start, the daemon
+keeps new usage counts locally and leaves them pending until a later start with
+a working sink.
 The remote sink has a 100,000 event per name per daemon process per rolling
 24-hour window emergency cap for these summaries. Events beyond that cap are
 dropped after reservation, so their counts cannot be recovered from the local

@@ -11,6 +11,7 @@ import (
 
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
@@ -61,8 +62,9 @@ func TestNewTelemetrySink_MissingRemoteCredentialsDisablesRemoteUsage(t *testing
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	sink, identity, active := newTelemetrySink(config.Config{DataDir: dataDir,
-		Telemetry: config.TelemetryConfig{Events: true, Remote: config.TelemetryRemotePostHog}}, store, slog.Default())
+	cfg := config.Config{DataDir: dataDir,
+		Telemetry: config.TelemetryConfig{Events: true, Remote: config.TelemetryRemotePostHog}}
+	sink, identity, active := newTelemetrySink(cfg, store, slog.Default())
 	if active || identity == nil {
 		t.Fatalf("active = %v, identity = %T, want inactive local sink with identity", active, identity)
 	}
@@ -70,6 +72,29 @@ func TestNewTelemetrySink_MissingRemoteCredentialsDisablesRemoteUsage(t *testing
 		t.Fatalf("sink type = %T, want local sink", sink)
 	}
 	t.Cleanup(func() { _ = sink.Close(t.Context()) })
+	configureUsageRecording(cfg, store, identity)
+	now := time.Now().UTC()
+	if err := store.UpsertProject(t.Context(), domain.ProjectRecord{ID: "project", Path: dataDir, RegisteredAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.CreateSession(t.Context(), domain.SessionRecord{ProjectID: "project", Kind: domain.KindWorker,
+		Harness: domain.HarnessClaudeCode, Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: now},
+		CreatedAt: now, UpdatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := store.CreateConversation(t.Context(), "conversation", domain.ConversationScopeSession, "project", session.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created, err := store.AppendUserMessage(t.Context(), conversation.ID, session.ID, "generation",
+		domain.ConversationMessage{ID: "message", Text: "private", Origin: domain.MessageOriginHuman}, "turn", now); err != nil || !created {
+		t.Fatalf("message created = %v, err = %v", created, err)
+	}
+	batches, err := store.DrainUsageMessages(t.Context(), 10, false, identity.Snapshot().InstallID)
+	if err != nil || len(batches) != 1 || batches[0].Count != 1 {
+		t.Fatalf("pending usage with unavailable remote = %+v, err = %v", batches, err)
+	}
 }
 
 func TestNewTelemetrySink_FanoutIncludesPostHogWhenConfigured(t *testing.T) {

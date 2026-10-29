@@ -79,6 +79,15 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	return telemetryadapter.NewFanoutSink(local, denied), remote.Identity(), true
 }
 
+// Recording is independent of sink startup so a temporary remote setup
+// failure does not lose accepted local usage facts.
+func configureUsageRecording(cfg config.Config, store *sqlite.Store, identity ports.TelemetryIdentityStore) {
+	if !cfg.Telemetry.Events || cfg.Telemetry.Remote != config.TelemetryRemotePostHog || identity == nil {
+		return
+	}
+	store.SetUsageTelemetryAllowed(func() bool { return !identity.OptedOut() })
+}
+
 // standaloneIdentity serves the identity routes when nothing is exported, so the
 // phone still learns the opt-out state and the install ID.
 func standaloneIdentity(cfg config.Config, log *slog.Logger) ports.TelemetryIdentityStore {

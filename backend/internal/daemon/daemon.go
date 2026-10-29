@@ -223,6 +223,7 @@ func Run(buildVersion string) error {
 	eventsAllowed := telemetryPolicy.EventsAllowed(context.Background(), cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
 	sentryobs.SetPolicyEnabled(eventsAllowed)
 	telemetrySink, telemetryIdentity, remoteTelemetryActive := newTelemetrySink(cfg, store, log)
+	configureUsageRecording(cfg, store, telemetryIdentity)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	installID := ""
 	if telemetryIdentity != nil {

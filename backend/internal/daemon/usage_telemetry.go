@@ -27,7 +27,6 @@ type usageTelemetryFlusher struct {
 
 func startUsageTelemetry(ctx context.Context, store *sqlite.Store, sink ports.EventSink, identity ports.TelemetryIdentityStore, log *slog.Logger) *usageTelemetryFlusher {
 	f := &usageTelemetryFlusher{store: store, sink: sink, identity: identity, log: log, archive: make(chan struct{}, 1)}
-	store.SetUsageTelemetryAllowed(func() bool { return identity != nil && !identity.OptedOut() })
 	go func() {
 		f.flush(ctx, false)
 		minute := time.NewTicker(time.Minute)
