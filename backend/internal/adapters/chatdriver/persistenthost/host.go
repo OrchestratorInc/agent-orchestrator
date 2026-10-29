@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -22,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -197,8 +199,19 @@ func acquireHostLock(dataDir, sessionID string) (func(), error) {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // AO-owned capability directory.
 	if errors.Is(err, os.ErrExist) {
 		owner, readErr := os.ReadFile(path) //nolint:gosec // AO-owned path derived from validated session id.
-		pid, parseErr := strconv.Atoi(strings.TrimSpace(string(owner)))
-		if readErr != nil || parseErr != nil || pid <= 0 || processalive.Alive(pid) {
+		// "pid" from older hosts, "pid unixSeconds" from current ones.
+		fields := strings.Fields(string(owner))
+		pid, parseErr := 0, errors.New("empty host lock")
+		var since time.Time
+		if len(fields) > 0 {
+			pid, parseErr = strconv.Atoi(fields[0])
+		}
+		if len(fields) > 1 {
+			if sec, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+				since = time.Unix(sec, 0)
+			}
+		}
+		if readErr != nil || parseErr != nil || pid <= 0 || processalive.AliveSince(pid, since) {
 			return nil, ErrHostExists
 		}
 		// A host can die after atomically creating its launch lock but before it
@@ -215,7 +228,7 @@ func acquireHostLock(dataDir, sessionID string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := fmt.Fprintf(f, "%d\n", os.Getpid()); err != nil {
+	if _, err := fmt.Fprintf(f, "%d %d\n", os.Getpid(), time.Now().Unix()); err != nil {
 		_ = f.Close()
 		_ = os.Remove(path)
 		return nil, err
@@ -225,6 +238,31 @@ func acquireHostLock(dataDir, sessionID string) (func(), error) {
 		return nil, err
 	}
 	return func() { _ = os.Remove(path) }, nil
+}
+
+// alive reports whether the recorded host process is still the one that wrote
+// the descriptor, not an unrelated process that reused its pid.
+func (d Descriptor) alive() bool {
+	return processalive.AliveSince(d.PID, d.StartedAt)
+}
+
+// attachKind names why an attach failed, for diagnostics.
+func attachKind(err error) string {
+	var netErr net.Error
+	switch {
+	case errors.Is(err, ErrAttached):
+		return "attached"
+	case errors.Is(err, ErrUnauthorized):
+		return "unauthorized"
+	case errors.Is(err, ErrIncompatible):
+		return "incompatible"
+	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()):
+		return "timeout"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "refused"
+	default:
+		return "other"
+	}
 }
 
 func readDescriptor(dataDir, sessionID string) (Descriptor, error) {
@@ -300,7 +338,7 @@ func validateDescriptor(cfg Config, d Descriptor) error {
 // current AO executable. Failed/incompatible probes never terminate that host.
 func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 	if d, err := readDescriptor(cfg.DataDir, cfg.SessionID); err == nil {
-		if err := validateDescriptor(cfg, d); err != nil && processalive.Alive(d.PID) {
+		if err := validateDescriptor(cfg, d); err != nil && d.alive() {
 			return nil, err
 		}
 		transport, attachErr := attach(ctx, d, true)
@@ -311,8 +349,10 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 			// Desktop updater handoff can briefly start the replacement daemon
 			// before the old controller has detached. Wait for exclusive ownership;
 			// never turn that overlap into a competing provider process.
+			// Check identity once; polling it would spawn ps every 20ms.
+			hostAlive := d.alive()
 			deadline := time.Now().Add(startupTimeout)
-			for time.Now().Before(deadline) && processalive.Alive(d.PID) {
+			for hostAlive && time.Now().Before(deadline) && processalive.Alive(d.PID) {
 				timer := time.NewTimer(20 * time.Millisecond)
 				select {
 				case <-ctx.Done():
@@ -332,8 +372,14 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 		// A failed socket probe is not proof that a provider is dead. Only an OS
 		// process observation permits clearing the descriptor and falling back to
 		// native resume in a new host.
-		if processalive.Alive(d.PID) {
+		if d.alive() {
+			slog.Warn("chat host ownership inconclusive: attach failed but host process is alive",
+				"sessionID", cfg.SessionID, "pid", d.PID, "address", d.Address, "attachError", attachKind(attachErr), "error", attachErr)
 			return nil, fmt.Errorf("%w: %w", ErrOwnershipInconclusive, attachErr)
+		}
+		if processalive.Alive(d.PID) {
+			slog.Warn("chat host descriptor names a reused pid; treating the host as not running",
+				"sessionID", cfg.SessionID, "pid", d.PID, "address", d.Address, "startedAt", d.StartedAt, "attachError", attachKind(attachErr))
 		}
 		// Do not remove stale ownership files here. Another starter may have
 		// already reclaimed the dead lock and published a replacement descriptor
@@ -385,7 +431,7 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if d, readErr := readDescriptor(cfg.DataDir, cfg.SessionID); readErr == nil && processalive.Alive(d.PID) {
+	if d, readErr := readDescriptor(cfg.DataDir, cfg.SessionID); readErr == nil && d.alive() {
 		return nil, fmt.Errorf("%w: %w", ErrOwnershipInconclusive, lastErr)
 	}
 	return nil, fmt.Errorf("start chat host: %w", lastErr)
@@ -419,7 +465,7 @@ func Reconcile(ctx context.Context, dataDir string, keep map[string]struct{}) er
 		if d.Version != ProtocolVersion {
 			continue
 		}
-		if !processalive.Alive(d.PID) {
+		if !d.alive() {
 			// Claim the launch lock before cleaning a dead descriptor. If a new host
 			// already owns it, preserve its descriptor instead of deleting ownership
 			// state observed by a stale reconciler.
@@ -504,7 +550,7 @@ func bindConnToContext(ctx context.Context, conn net.Conn) func(error) error {
 // exited host reports false; nothing is ever started or stopped here.
 func HostPID(dataDir, sessionID string) (int, bool) {
 	d, err := readDescriptor(dataDir, sessionID)
-	if err != nil || d.PID <= 0 || !processalive.Alive(d.PID) {
+	if err != nil || d.PID <= 0 || !d.alive() {
 		return 0, false
 	}
 	return d.PID, true
@@ -538,7 +584,7 @@ func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error 
 	defer cancel()
 	conn, err := (&net.Dialer{}).DialContext(handshakeCtx, "tcp", d.Address)
 	if err != nil {
-		if !processalive.Alive(d.PID) {
+		if !d.alive() {
 			return nil
 		}
 		return err
