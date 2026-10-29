@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+	<!--
+		Source for the macOS install window background (background.png and
+		background@2x.png beside this file). Regenerate both after editing:
+		  node scripts/render-dmg-background.mjs
+		Geometry is coupled to DMG_LAYOUT in scripts/build-mac-dmg.mjs: the app
+		icon is centred at (170, 190), the Applications link at (490, 190), and
+		Finder draws each label just below its 128pt icon, over the plates here.
+	-->
+	<defs>
+		<radialGradient id="glow" cx="330" cy="170" r="380" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#16202b" />
+			<stop offset="1" stop-color="#0a0c0e" />
+		</radialGradient>
+		<radialGradient id="halo" cx="170" cy="190" r="110" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#38b6ff" stop-opacity="0.18" />
+			<stop offset="1" stop-color="#38b6ff" stop-opacity="0" />
+		</radialGradient>
+		<pattern id="dots" width="20" height="20" patternUnits="userSpaceOnUse">
+			<rect x="9" y="9" width="2" height="2" fill="#ffffff" fill-opacity="0.05" />
+		</pattern>
+		<radialGradient id="dots-fade" cx="330" cy="200" r="360" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#fff" stop-opacity="1" />
+			<stop offset="1" stop-color="#fff" stop-opacity="0" />
+		</radialGradient>
+		<mask id="dots-mask">
+			<rect width="660" height="400" fill="url(#dots-fade)" />
+		</mask>
+	</defs>
+
+	<rect width="660" height="400" fill="url(#glow)" />
+	<rect width="660" height="400" fill="url(#dots)" mask="url(#dots-mask)" />
+	<rect width="660" height="400" fill="url(#halo)" />
+
+	<!--
+		Label plates. Finder draws icon labels black in Light appearance and
+		white in Dark, so each label sits on a mid-tone plate (relative luminance
+		~0.18) that keeps both colours above 4.5:1 contrast.
+	-->
+	<rect x="92" y="258" width="156" height="22" rx="11" fill="#62788c" />
+	<rect x="428" y="258" width="124" height="22" rx="11" fill="#62788c" />
+
+	<!-- Drag hint: dashed arrow from the app towards Applications. -->
+	<g fill="none" stroke="#38b6ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+		<path d="M262 190 H388" stroke-dasharray="2 9" />
+		<path d="M380 180 L396 190 L380 200" />
+	</g>
+	<text
+		x="330"
+		y="164"
+		text-anchor="middle"
+		font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif"
+		font-size="13"
+		font-weight="600"
+		letter-spacing="0.2"
+		fill="#e6edf5"
+	>Drag to Applications</text>
+
+	<text
+		x="330"
+		y="372"
+		text-anchor="middle"
+		font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif"
+		font-size="11"
+		fill="#7d8896"
+	>orchestrator.inc</text>
+</svg>
