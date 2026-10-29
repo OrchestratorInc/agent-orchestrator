@@ -3470,23 +3470,34 @@ function ShowMoreRow({
 	);
 }
 
-/** A project's repository owner avatar as a 4px-radius squircle, or a folder
- *  when the project has no avatar or it fails to load. */
+/** A project's repository owner avatar as a 4px-radius squircle. The folder
+ *  shows until the image has loaded, and stays when there is no avatar or it
+ *  fails to load. */
 function ProjectIcon({ avatarUrl, expanded, className }: { avatarUrl?: string; expanded: boolean; className?: string }) {
+	const [loadedUrl, setLoadedUrl] = useState<string>();
 	const [failedUrl, setFailedUrl] = useState<string>();
-	if (avatarUrl && failedUrl !== avatarUrl) {
-		return (
-			<img
-				alt=""
-				className={cn(className ?? "size-icon-md", "rounded-[4px] object-cover")}
-				draggable={false}
-				onError={() => setFailedUrl(avatarUrl)}
-				src={avatarUrl}
-			/>
-		);
-	}
 	const Icon = expanded ? FolderOpen : Folder;
-	return <Icon className={className} strokeWidth={1.75} />;
+	const showAvatar = avatarUrl !== undefined && failedUrl !== avatarUrl;
+	const loaded = showAvatar && loadedUrl === avatarUrl;
+	return (
+		<span className={cn("relative inline-flex items-center justify-center", className ?? "size-icon-md")}>
+			{loaded ? null : <Icon className={className} strokeWidth={1.75} />}
+			{showAvatar ? (
+				<img
+					alt=""
+					className={cn("absolute inset-0 size-full rounded-[4px] object-cover", !loaded && "invisible")}
+					draggable={false}
+					onError={() => setFailedUrl(avatarUrl)}
+					onLoad={() => setLoadedUrl(avatarUrl)}
+					// A cached image can finish before React attaches onLoad.
+					ref={(node) => {
+						if (node?.complete && node.naturalWidth > 0 && loadedUrl !== avatarUrl) setLoadedUrl(avatarUrl);
+					}}
+					src={avatarUrl}
+				/>
+			) : null}
+		</span>
+	);
 }
 
 function SectionDisclosure({

@@ -1442,6 +1442,8 @@
 	"settings.renderMath": "Render math",
 	"settings.renderMathHint": "Show $…$, $$…$$, \\(…\\) and \\[…\\] as equations in chats and Markdown previews. A price written with $ can show as math.",
 	"settings.terminalCopyOnSelect": "Copy on select",
+	"settings.projectAvatars": "Project avatars",
+	"settings.projectAvatars.description": "Show the repository owner's avatar in place of each project's folder icon.",
 	"settings.general": "General",
 	"settings.appearance": "Appearance",
 	"settings.privacy": "Privacy",

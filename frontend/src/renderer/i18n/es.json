@@ -1466,6 +1466,8 @@
 	"settings.renderMath": "Mostrar fórmulas",
 	"settings.renderMathHint": "Muestra $…$, $$…$$, \\(…\\) y \\[…\\] como ecuaciones en chats y vistas previas de Markdown. Un precio escrito con $ puede mostrarse como fórmula.",
 	"settings.terminalCopyOnSelect": "Copiar al seleccionar",
+	"settings.projectAvatars": "Avatares de proyectos",
+	"settings.projectAvatars.description": "Muestra el avatar del propietario del repositorio en lugar del icono de carpeta.",
 	"settings.general": "General",
 	"settings.appearance": "Apariencia",
 	"settings.privacy": "Privacidad",

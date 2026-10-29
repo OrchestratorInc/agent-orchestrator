@@ -180,6 +180,8 @@ export type UiState = {
 	navigationGestures: boolean;
 	/** Typeset `$…$`, `$$…$$`, `\(…\)` and `\[…\]` in markdown. Default off: a lone `$` is also currency. */
 	renderMath: boolean;
+	/** Show each project's repository owner avatar in the sidebar instead of a folder. Default on. */
+	projectAvatars: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	// Projects whose initial orchestrator spawn (after import/clone) is still
 	// running in the background. The board renders a progress banner and gates
@@ -235,6 +237,7 @@ export type UiState = {
 	setTerminalCopyOnSelect: (enabled: boolean) => void;
 	setNavigationGestures: (enabled: boolean) => void;
 	setRenderMath: (enabled: boolean) => void;
+	setProjectAvatars: (enabled: boolean) => void;
 	/** True while the restart-to-update confirmation is open. */
 	updateInstallPromptOpen: boolean;
 	openUpdateInstallPrompt: () => void;
@@ -303,6 +306,7 @@ const sideChatsStorageKey = "ao.sideChats";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
 const navigationGesturesStorageKey = "ao.navigationGestures";
 const renderMathStorageKey = "ao.renderMath";
+const projectAvatarsStorageKey = "ao.projectAvatars";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -336,6 +340,10 @@ function initialWindowTranslucency() {
 
 function initialTerminalCopyOnSelect() {
 	return getLocalStorage()?.getItem(terminalCopyOnSelectStorageKey) !== "false";
+}
+
+function initialProjectAvatars() {
+	return getLocalStorage()?.getItem(projectAvatarsStorageKey) !== "false";
 }
 
 function syncDeveloperModeToUpdater(enabled: boolean): void {
@@ -398,6 +406,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
 	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) === "true",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
+	projectAvatars: initialProjectAvatars(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
@@ -472,6 +481,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setTerminalCopyOnSelect: (terminalCopyOnSelect) => {
 		getLocalStorage()?.setItem(terminalCopyOnSelectStorageKey, String(terminalCopyOnSelect));
 		set({ terminalCopyOnSelect });
+	},
+	setProjectAvatars: (projectAvatars) => {
+		getLocalStorage()?.setItem(projectAvatarsStorageKey, String(projectAvatars));
+		set({ projectAvatars });
 	},
 	updateInstallPromptOpen: false,
 	openUpdateInstallPrompt: () => set({ updateInstallPromptOpen: true }),
