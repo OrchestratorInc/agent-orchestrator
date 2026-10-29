@@ -216,6 +216,11 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	}
 
 	projectCountBefore := len(activeProjects)
+	// first_for_install must also see archived rows: Remove archives, so an
+	// install upgraded after removing its projects is not on its first project.
+	// A failed count only omits the durable flag; it never fails the add.
+	allProjectsBefore, countErr := m.store.CountProjectsIncludingArchived(ctx)
+	prior := priorProjects{none: countErr == nil && allProjectsBefore == 0, known: countErr == nil}
 
 	name := string(id)
 	if in.Name != nil {
@@ -315,7 +320,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		if in.ClonePreparationID != "" {
 			removeClonePreparationMarker(path)
 		}
-		m.emitProjectAdded(ctx, row, projectCountBefore == 0)
+		m.emitProjectAdded(ctx, row, projectCountBefore == 0, prior)
 		p := m.projectFromRow(ctx, row)
 		p.WorkspaceRepos = workspaceReposFromRecords(row.Path, repos)
 		return p, nil
@@ -363,7 +368,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if in.ClonePreparationID != "" {
 		removeClonePreparationMarker(path)
 	}
-	m.emitProjectAdded(ctx, row, projectCountBefore == 0)
+	m.emitProjectAdded(ctx, row, projectCountBefore == 0, prior)
 	return m.projectFromRow(ctx, row), nil
 }
 
@@ -574,9 +579,20 @@ func nestedGitRepositoryPaths(root string) ([]string, error) {
 	return nested, nil
 }
 
-func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord, firstProject bool) {
-	// Claimed even when telemetry is off: the marker describes the install.
-	firstForInstall, firstKnown := ports.FirstForInstall(m.milestones, "project_added", firstProject)
+// priorProjects is whether any project row, archived included, existed before
+// an add; known is false when that could not be read.
+type priorProjects struct{ none, known bool }
+
+// emitProjectAdded reports an add. firstProject (no active projects before)
+// drives the deprecated first_project_added event; prior drives the durable
+// first_for_install flag.
+func (m *Service) emitProjectAdded(ctx context.Context, row domain.ProjectRecord, firstProject bool, prior priorProjects) {
+	// Claimed even when telemetry is off: the marker describes the install. An
+	// unreadable prior count leaves the marker unclaimed and the flag omitted.
+	var firstForInstall, firstKnown bool
+	if prior.known {
+		firstForInstall, firstKnown = ports.FirstForInstall(m.milestones, "project_added", prior.none)
+	}
 	if m.telemetry == nil {
 		return
 	}
