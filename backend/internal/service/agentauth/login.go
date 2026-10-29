@@ -114,6 +114,31 @@ func (s *Service) StartLogin(ctx context.Context, agentID, method, secret string
 // StartLoginWithModel supplies the model identifier required by Qwen,
 // Continue, and OpenHands provider-key setup. Other methods reject it.
 func (s *Service) StartLoginWithModel(ctx context.Context, agentID, method, secret, model string) (LoginSnapshot, error) {
+	return s.StartLoginWithOptions(ctx, agentID, method, secret, LoginOptions{Model: model})
+}
+
+// LoginOptions carries the optional parts of a provider-key login.
+type LoginOptions struct {
+	// Model is required by Qwen, Continue, and OpenHands provider-key setup.
+	Model string
+	// Device also publishes the key to the OS user environment, for programs
+	// started outside AO. AO-launched sessions receive it either way.
+	Device bool
+}
+
+// StartLoginWithOptions is StartLogin with a model and device setting for
+// provider-key methods. An empty secret reuses the key AO already saved.
+func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, secret string, opts LoginOptions) (LoginSnapshot, error) {
+	model := opts.Model
+	if _, ok := environmentMethod(agentID, method); !ok && opts.Device {
+		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_DEVICE_INVALID", "Only provider keys can be added to the device environment.", nil)
+	}
+	if name, ok := environmentMethod(agentID, method); ok && strings.TrimSpace(secret) == "" {
+		// Reuse the saved key, for example to choose another model.
+		if keys, err := providerkeys.Load(s.dataDir); err == nil {
+			secret = keys[name]
+		}
+	}
 	needsModel := (agentID == "qwen" || agentID == "openhands" || agentID == "continue" && method != "env_CONTINUE_API_KEY") && strings.HasPrefix(method, "env_")
 	if model != "" && !needsModel {
 		return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "This login method does not accept a model.", nil)
@@ -181,9 +206,6 @@ func (s *Service) StartLoginWithModel(ctx context.Context, agentID, method, secr
 			if !providerModelID.MatchString(model) {
 				return LoginSnapshot{}, apierr.Invalid("AGENT_AUTH_MODEL_INVALID", "Enter a LiteLLM model ID for OpenHands.", nil)
 			}
-			if err := publishProviderKey(ctx, "LLM_MODEL", model); err != nil {
-				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_DEVICE_ENV_UNAVAILABLE", "The model could not be added to this device's user environment.")
-			}
 			if err := providerkeys.Save(ctx, s.dataDir, "LLM_MODEL", model); err != nil {
 				return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The OpenHands model could not be saved.")
 			}
@@ -200,16 +222,8 @@ func (s *Service) StartLoginWithModel(ctx context.Context, agentID, method, secr
 				return LoginSnapshot{}, err
 			}
 		}
-		if err := publishProviderKey(ctx, name, secret); err != nil {
-			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_DEVICE_ENV_UNAVAILABLE", "The provider key could not be added to this device's user environment.")
-		}
-		if err := providerkeys.Save(ctx, s.dataDir, name, secret); err != nil {
-			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The provider key could not be saved in AO's device credential store.")
-		}
-		// Make the new key visible to local authentication probes immediately.
-		// New session launches also read the durable store independently.
-		if err := os.Setenv(name, secret); err != nil {
-			return LoginSnapshot{}, apierr.Unavailable("AGENT_AUTH_STORE_UNAVAILABLE", "The provider key could not be activated.")
+		if err := s.storeProviderKey(ctx, name, secret, opts.Device); err != nil {
+			return LoginSnapshot{}, err
 		}
 		complete := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "succeeded", ExpiresAt: time.Now()}, done: make(chan struct{})}
 		close(complete.done)

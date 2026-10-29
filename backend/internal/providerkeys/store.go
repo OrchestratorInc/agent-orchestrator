@@ -9,11 +9,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
 
-const filename = "provider-api-keys.json"
+const (
+	filename = "provider-api-keys.json"
+	// deviceFilename lists the variable names (never values) that the user
+	// chose to publish to the OS user environment.
+	deviceFilename = "provider-api-keys-device.json"
+)
 
 var mu sync.Mutex
 
@@ -64,7 +70,105 @@ func Save(ctx context.Context, dataDir, name, value string) error {
 		return err
 	}
 	keys[name] = value
-	data, err := json.Marshal(keys)
+	return writeJSON(ctx, dataDir, filename, keys)
+}
+
+// Remove deletes one variable and its device-environment marker. Removing an
+// absent variable succeeds.
+func Remove(ctx context.Context, dataDir, name string) error {
+	if !validName(name) {
+		return errors.New("invalid provider credential")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	keys, err := Load(dataDir)
+	if err != nil {
+		return err
+	}
+	if _, ok := keys[name]; ok {
+		delete(keys, name)
+		if err := writeJSON(ctx, dataDir, filename, keys); err != nil {
+			return err
+		}
+	}
+	return setDeviceLocked(ctx, dataDir, name, false)
+}
+
+// DeviceNames returns the variables the user chose to publish to the OS user
+// environment, so they can be reapplied in a new login session.
+func DeviceNames(dataDir string) (map[string]bool, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	return loadDevice(dataDir)
+}
+
+// SetDevice records whether name is published to the OS user environment.
+// It never stores a credential value.
+func SetDevice(ctx context.Context, dataDir, name string, published bool) error {
+	if !validName(name) {
+		return errors.New("invalid provider credential")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	return setDeviceLocked(ctx, dataDir, name, published)
+}
+
+func setDeviceLocked(ctx context.Context, dataDir, name string, published bool) error {
+	names, err := loadDevice(dataDir)
+	if err != nil {
+		return err
+	}
+	if names[name] == published {
+		return nil
+	}
+	if published {
+		names[name] = true
+	} else {
+		delete(names, name)
+	}
+	list := make([]string, 0, len(names))
+	for n := range names {
+		list = append(list, n)
+	}
+	sort.Strings(list)
+	return writeJSON(ctx, dataDir, deviceFilename, list)
+}
+
+func loadDevice(dataDir string) (map[string]bool, error) {
+	if dataDir == "" {
+		return nil, errors.New("AO data directory is empty")
+	}
+	file := filepath.Join(dataDir, deviceFilename)
+	info, err := os.Lstat(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]bool{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("provider device list is not a regular file")
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	var list []string
+	if err := json.Unmarshal(data, &list); err != nil {
+		return nil, errors.New("provider device list is invalid")
+	}
+	names := make(map[string]bool, len(list))
+	for _, name := range list {
+		if !validName(name) {
+			return nil, errors.New("provider device list contains an invalid name")
+		}
+		names[name] = true
+	}
+	return names, nil
+}
+
+func writeJSON(ctx context.Context, dataDir, name string, value any) error {
+	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
@@ -93,7 +197,7 @@ func Save(ctx context.Context, dataDir, name, value string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp.Name(), path(dataDir)); err != nil {
+	if err := os.Rename(tmp.Name(), filepath.Join(dataDir, name)); err != nil {
 		return fmt.Errorf("replace provider key store: %w", err)
 	}
 	return nil

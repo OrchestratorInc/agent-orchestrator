@@ -1761,6 +1761,162 @@ paths:
       summary: Resolve the safe installation plan for every supported agent harness
       tags:
       - agents
+  /api/v1/agents/provider-keys:
+    get:
+      operationId: listProviderKeys
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListProviderKeysResponse'
+          description: OK
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: List reviewed provider keys with display-safe saved state; values are
+        never returned
+      tags:
+      - agents
+  /api/v1/agents/provider-keys/{name}:
+    delete:
+      operationId: removeProviderKey
+      parameters:
+      - description: Provider environment variable, such as ANTHROPIC_API_KEY.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Provider environment variable, such as ANTHROPIC_API_KEY.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKey'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Remove a provider key from AO and from the OS user environment when
+        AO published it
+      tags:
+      - agents
+    put:
+      operationId: saveProviderKey
+      parameters:
+      - description: Provider environment variable, such as ANTHROPIC_API_KEY.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Provider environment variable, such as ANTHROPIC_API_KEY.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveProviderKeyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKey'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Save a provider key for AO sessions and set whether it is published
+        to the OS user environment
+      tags:
+      - agents
+  /api/v1/agents/provider-keys/{name}/check:
+    post:
+      operationId: checkProviderKey
+      parameters:
+      - description: Provider environment variable, such as ANTHROPIC_API_KEY.
+        in: path
+        name: name
+        required: true
+        schema:
+          description: Provider environment variable, such as ANTHROPIC_API_KEY.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckProviderKeyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderKeyCheck'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Ask the provider whether it accepts a key and list the models it offers
+      tags:
+      - agents
   /api/v1/agents/readiness:
     get:
       operationId: getAgentReadiness
@@ -15047,6 +15203,11 @@ components:
       required:
       - agents
       type: object
+    CheckProviderKeyRequest:
+      properties:
+        secret:
+          type: string
+      type: object
     ClaimPRRequest:
       properties:
         allowTakeover:
@@ -18431,6 +18592,15 @@ components:
       required:
       - projects
       type: object
+    ListProviderKeysResponse:
+      properties:
+        keys:
+          items:
+            $ref: '#/components/schemas/ProviderKey'
+          type: array
+      required:
+      - keys
+      type: object
     ListReportsResponse:
       properties:
         reports:
@@ -19214,6 +19384,48 @@ components:
       - providerTurnId
       - activityId
       type: object
+    ProviderKey:
+      properties:
+        agents:
+          items:
+            type: string
+          type: array
+        checkable:
+          type: boolean
+        configured:
+          type: boolean
+        device:
+          type: boolean
+        hint:
+          type: string
+        label:
+          type: string
+        name:
+          type: string
+      required:
+      - name
+      - label
+      - configured
+      - device
+      - checkable
+      - agents
+      type: object
+    ProviderKeyCheck:
+      properties:
+        models:
+          items:
+            type: string
+          type: array
+        status:
+          enum:
+          - valid
+          - invalid
+          - unverified
+          - unreachable
+          type: string
+      required:
+      - status
+      type: object
     ProviderSwitchRequest:
       properties:
         autoCompactWindow:
@@ -19820,6 +20032,15 @@ components:
       required:
       - ok
       - sessionId
+      type: object
+    SaveProviderKeyRequest:
+      properties:
+        device:
+          type: boolean
+        secret:
+          type: string
+      required:
+      - device
       type: object
     SaveRenderArtifactRequest:
       properties:
@@ -21704,6 +21925,8 @@ components:
       type: object
     StartAgentUILoginRequest:
       properties:
+        device:
+          type: boolean
         method:
           type: string
         model:
