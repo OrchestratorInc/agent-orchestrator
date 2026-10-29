@@ -1,6 +1,6 @@
 import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
-import { RefreshControl, SectionList, StyleSheet, View } from "react-native";
+import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import { hostedProjectKey, hostedProjectSections } from "../../../lib/hostedRows";
 import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
@@ -16,7 +16,7 @@ import { useOrchestratorLauncher } from "../../../lib/useOrchestratorLauncher";
 import { useBoardFailure } from "../../../lib/useBoardFailure";
 import { TabPageScroll } from "../../../lib/TabPageScroll";
 import { space } from "../../../lib/tokens";
-import { Button, EmptyState, ListSectionHeader } from "../../../lib/ui";
+import { Button, EmptyState } from "../../../lib/ui";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
@@ -42,8 +42,11 @@ export default function ProjectsScreen() {
 		: notificationsUnread;
 	const [refreshing, setRefreshing] = useState(false);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
-	const sections = useMemo(
-		() => hostedProjectSections(hostStates),
+	// One list of rows, no status headers: each row already says how its
+	// orchestrator is doing. The sections' order is kept, so projects that need
+	// attention still come first.
+	const rows = useMemo(
+		() => hostedProjectSections(hostStates).flatMap((section) => section.data),
 		[hostStates],
 	);
 	const failure = useBoardFailure();
@@ -90,17 +93,13 @@ export default function ProjectsScreen() {
 					</View>
 				</TabPageScroll>
 			) : (
-				<SectionList
-					sections={sections}
+				<FlatList
+					data={rows}
 					keyExtractor={(row) => hostedProjectKey(row.project)}
 					contentInsetAdjustmentBehavior="automatic"
 					contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl }}
-					stickySectionHeadersEnabled={false}
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
 					ListHeaderComponent={staleBanner}
-					renderSectionHeader={({ section }) => (
-						<ListSectionHeader label={section.title} count={section.data.length} />
-					)}
 					renderItem={({ item }) => (
 						<ProjectCard
 							row={item}
