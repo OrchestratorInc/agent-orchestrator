@@ -7,7 +7,7 @@ import type { IpcMain, WebContents } from "electron";
 // auth-operation routes reach the local daemon immediately.
 
 export type AgentLoginRequest =
-	| { action: "start"; agentId: string; method: string; secret?: string; model?: string }
+	| { action: "start"; agentId: string; method: string; secret?: string; model?: string; device?: boolean }
 	| { action: "get" | "cancel"; agentId: string; operationId: string }
 	| { action: "code"; agentId: string; operationId: string; code: string };
 
@@ -39,7 +39,8 @@ export function parseAgentLoginRequest(input: unknown): AgentLoginRequest {
 		if (typeof value.method !== "string" || !METHOD_ID.test(value.method)) throw new Error("Invalid sign-in method.");
 		if (value.secret !== undefined && !text(value.secret, MAX_SECRET_LENGTH)) throw new Error("Invalid credential.");
 		if (value.model !== undefined && (typeof value.model !== "string" || !MODEL_ID.test(value.model))) throw new Error("Invalid model.");
-		return { action: "start", agentId: value.agentId, method: value.method, ...(value.secret ? { secret: value.secret } : {}), ...(value.model ? { model: value.model } : {}) };
+		if (value.device !== undefined && typeof value.device !== "boolean") throw new Error("Invalid device setting.");
+		return { action: "start", agentId: value.agentId, method: value.method, ...(value.secret ? { secret: value.secret } : {}), ...(value.model ? { model: value.model } : {}), ...(value.device ? { device: true } : {}) };
 	}
 	if (typeof value.operationId !== "string" || !OPERATION_ID.test(value.operationId)) throw new Error("Invalid sign-in operation.");
 	if (value.action === "get" || value.action === "cancel") return { action: value.action, agentId: value.agentId, operationId: value.operationId };
@@ -58,7 +59,7 @@ export async function requestAgentLogin(input: unknown, port: number | undefined
 	let method = "POST";
 	let body: unknown;
 	if (request.action === "start") {
-		body = { method: request.method, ...(request.secret ? { secret: request.secret } : {}), ...(request.model ? { model: request.model } : {}) };
+		body = { method: request.method, ...(request.secret ? { secret: request.secret } : {}), ...(request.model ? { model: request.model } : {}), ...(request.device ? { device: true } : {}) };
 	} else {
 		url = `${operations}/${encodeURIComponent(request.operationId)}`;
 		if (request.action === "get") method = "GET";

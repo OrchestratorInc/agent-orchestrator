@@ -13,6 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentauth"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
@@ -165,7 +166,7 @@ func (f *fakeAgentAuthService) Start(_ context.Context, agentID string) (agentau
 	return f.startResult, f.startErr
 }
 
-func newAgentAuthTestServer(t *testing.T, svc *fakeAgentAuthService) *httptest.Server {
+func newAgentAuthTestServer(t *testing.T, svc controllers.AgentAuthService) *httptest.Server {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	server := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{AgentAuth: svc}, httpd.ControlDeps{}))

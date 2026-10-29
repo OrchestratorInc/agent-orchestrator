@@ -17,3 +17,12 @@ func Publish(ctx context.Context, name, value string) error {
 	}
 	return process.CommandContext(ctx, "launchctl", "setenv", name, value).Run()
 }
+
+// Unpublish removes name from the current user's launchd environment.
+// Processes that already inherited it keep their copy.
+func Unpublish(ctx context.Context, name string) error {
+	if !validName(name) {
+		return errors.New("invalid provider credential")
+	}
+	return process.CommandContext(ctx, "launchctl", "unsetenv", name).Run()
+}

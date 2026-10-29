@@ -62,3 +62,34 @@ func TestLoadRejectsInvalidStoreWithoutOverwritingIt(t *testing.T) {
 		t.Fatal("overwrote invalid credential store")
 	}
 }
+
+func TestRemoveDeletesKeyAndDeviceMarker(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	for _, name := range []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY"} {
+		if err := Save(ctx, dir, name, "secret"); err != nil {
+			t.Fatal(err)
+		}
+		if err := SetDevice(ctx, dir, name, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Remove(ctx, dir, "OPENAI_API_KEY"); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := Load(dir)
+	if err != nil || len(keys) != 1 || keys["ANTHROPIC_API_KEY"] != "secret" {
+		t.Fatalf("Load after Remove = %v, %v", keys, err)
+	}
+	device, err := DeviceNames(dir)
+	if err != nil || len(device) != 1 || !device["ANTHROPIC_API_KEY"] {
+		t.Fatalf("DeviceNames after Remove = %v, %v", device, err)
+	}
+	if err := Remove(ctx, dir, "OPENAI_API_KEY"); err != nil {
+		t.Fatalf("removing an absent key = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, deviceFilename))
+	if err != nil || strings.Contains(string(data), "secret") {
+		t.Fatalf("device list holds a value or is missing: %s, %v", data, err)
+	}
+}

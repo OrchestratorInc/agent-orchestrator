@@ -157,6 +157,30 @@ type StartAgentUILoginRequest struct {
 	Method string `json:"method"`
 	Secret string `json:"secret,omitempty"`
 	Model  string `json:"model,omitempty"`
+	// Device also publishes a provider key to the OS user environment.
+	Device bool `json:"device,omitempty"`
+}
+
+// ProviderKeyNameParam names one reviewed provider environment variable.
+type ProviderKeyNameParam struct {
+	Name string `path:"name" description:"Provider environment variable, such as ANTHROPIC_API_KEY."`
+}
+
+// ListProviderKeysResponse lists display-safe provider key state.
+type ListProviderKeysResponse struct {
+	Keys []agentauth.ProviderKey `json:"keys"`
+}
+
+// SaveProviderKeyRequest stores a key, or keeps the saved one when secret is
+// omitted, and sets whether it is published to the OS user environment.
+type SaveProviderKeyRequest struct {
+	Secret string `json:"secret,omitempty"`
+	Device bool   `json:"device"`
+}
+
+// CheckProviderKeyRequest checks secret, or the saved key when omitted.
+type CheckProviderKeyRequest struct {
+	Secret string `json:"secret,omitempty"`
 }
 
 // AgentLoginActionRequest selects a fixed navigation action, or a digit 1-9

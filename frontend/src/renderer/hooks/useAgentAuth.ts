@@ -28,10 +28,13 @@ async function viaMain<T>(hostId: string | undefined, request: AgentLoginRequest
 }
 
 // Credentials stay out of React Query's mutation cache and terminal replay.
-export async function startAgentUILogin(agentId: string, method: string, secret: string, hostId?: string, model?: string): Promise<AgentLoginSnapshot> {
-	const { data, error } = await viaMain<AgentLoginSnapshot>(hostId, { action: "start", agentId, method, ...(secret ? { secret } : {}), ...(model ? { model } : {}) })
+// An empty secret on a provider-key method reuses the key AO already saved;
+// device also publishes the key to the OS user environment.
+export async function startAgentUILogin(agentId: string, method: string, secret: string, hostId?: string, model?: string, device?: boolean): Promise<AgentLoginSnapshot> {
+	const options = { ...(secret ? { secret } : {}), ...(model ? { model } : {}), ...(device ? { device: true } : {}) };
+	const { data, error } = await viaMain<AgentLoginSnapshot>(hostId, { action: "start", agentId, method, ...options })
 		?? await clientForSessionHost(hostId).POST("/api/v1/agents/{agent}/auth/operations", {
-			params: { path: { agent: agentId } }, body: { method, ...(secret ? { secret } : {}), ...(model ? { model } : {}) },
+			params: { path: { agent: agentId } }, body: { method, ...options },
 		});
 	// Recover a login whose dialog was lost on reload without starting a second
 	// native process against the same credential store.

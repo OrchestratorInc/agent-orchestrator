@@ -127,6 +127,7 @@ func rendererOnlyArea(path string) string {
 		{"agent credential management", []string{
 			"/api/v1/agents/codex/auth/operations",
 			"/api/v1/agents/claude-code/auth/operations",
+			"/api/v1/agents/provider-keys",
 		}},
 		// Cua Driver operates native apps with the user's OS permissions, and
 		// the settings toggle decides whether agents are told to use it.
