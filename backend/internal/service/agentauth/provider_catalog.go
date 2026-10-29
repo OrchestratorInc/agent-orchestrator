@@ -63,7 +63,10 @@ var providerCatalogs = map[string]providerCatalog{
 	"pi": {static: piCatalog, save: func(ctx context.Context, _ catalogHarness, providerID, key string) error {
 		return savePiProviderKey(ctx, providerID, key)
 	}},
-	"omp": {static: ompCatalog, save: saveOMPProviderKey},
+	"omp":       {static: ompCatalog, save: saveOMPProviderKey},
+	"kilocode":  {path: kiloCatalogPath, read: readModelsDevCatalog, save: saveKiloProviderKey},
+	"mimo-code": {path: mimoCatalogPath, read: readModelsDevCatalog, save: saveMiMoProviderKey},
+	"crush":     {path: crushCatalogPath, read: readCatwalkCatalog, save: saveCrushProviderKey},
 }
 
 var (
