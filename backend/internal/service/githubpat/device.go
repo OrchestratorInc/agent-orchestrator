@@ -1,6 +1,7 @@
 package githubpat
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -126,7 +127,7 @@ func (s *Service) requestDeviceCode(ctx context.Context) (pendingDeviceCode, err
 			ExpiresAt:       s.clock().Add(time.Duration(out.ExpiresIn) * time.Second),
 			deviceCode:      out.DeviceCode,
 		},
-		interval: time.Duration(max(out.Interval, 5)) * time.Second,
+		interval: time.Duration(cmp.Or(out.Interval, 5)) * time.Second,
 	}, nil
 }
 
