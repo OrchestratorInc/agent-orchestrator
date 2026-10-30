@@ -1,3 +1,4 @@
+import { isMacPlatform } from "../../lib/platform";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { captureFileReference } from "../../../shared/chat-file-reference";
 import { FileAnnotationPreview } from "./FileAnnotationPreview";
@@ -129,7 +130,7 @@ vi.mock("../TerminalPane", () => ({
 }));
 
 vi.mock("../../lib/platform", () => ({
-	isMacPlatform: () => true,
+	isMacPlatform: vi.fn(() => true),
 	isLinuxPlatform: () => false,
 	isWindowsPlatform: () => false,
 }));
@@ -1434,6 +1435,7 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges();
 		selection.addRange(range);
 		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([new DOMRect(40, 150, 100, 20)] as unknown as DOMRectList);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 150, 100, 20));
 		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
 		fireEvent.mouseUp(log);
 		const button = screen.getByRole("button", { name: "Add to chat" });
@@ -1448,6 +1450,35 @@ describe("ChatWorkspace timeline", () => {
 		selection.removeAllRanges();
 	});
 
+	it.each(["Win32", "Linux x86_64", "MacIntel"])("adds selected chat text with the platform shortcut on %s", (platform) => {
+		vi.mocked(isMacPlatform).mockReturnValue(platform === "MacIntel");
+		const count = () => readChatSessionDraft(chatFixtureSettled.sessionId).composer.excerpts?.length ?? 0;
+		render(<ChatWorkspace snapshot={chatFixtureSettled} excerptsEnabled />);
+		const log = screen.getByRole("log", { name: "Conversation" });
+		const source = log.querySelector("[data-chat-message-id] [data-chat-message-body]")!;
+		const range = document.createRange(); range.selectNodeContents(source);
+		window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range);
+		vi.spyOn(Range.prototype, "getClientRects").mockReturnValue([new DOMRect(40,150,100,20)] as unknown as DOMRectList);
+		vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40,150,100,20));
+		vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0,0,600,500));
+		fireEvent.mouseUp(log);
+		const chord = { key: "l", ctrlKey: platform !== "MacIntel", metaKey: platform === "MacIntel" };
+		expect(fireEvent.keyDown(log,{...chord, ctrlKey:!chord.ctrlKey,metaKey:!chord.metaKey})).toBe(true);
+		expect(count()).toBe(0);
+		const browserControl = document.createElement("button"); document.body.append(browserControl);
+		expect(fireEvent.keyDown(browserControl,chord)).toBe(true);
+		expect(count()).toBe(0); browserControl.remove();
+		const menu = document.createElement("div"); menu.setAttribute("role","menu"); document.body.append(menu);
+		expect(fireEvent.keyDown(log,chord)).toBe(true); expect(count()).toBe(0); menu.remove();
+		const input = document.createElement("input"); document.body.append(input);
+		expect(fireEvent.keyDown(input,chord)).toBe(true); expect(count()).toBe(0); input.remove();
+		expect(fireEvent.keyDown(log,{...chord,repeat:true})).toBe(false); expect(count()).toBe(0);
+		expect(fireEvent.keyDown(log,chord)).toBe(false);
+		fireEvent.keyDown(log,chord);
+		expect(count()).toBe(1);
+		expect(fireEvent.keyDown(log,chord)).toBe(true);
+		window.getSelection()!.removeAllRanges();
+	});
 	it("scrolls to and highlights a navigated message even when its text does not match the rendered body", async () => {
 		const { rerender } = render(<ChatWorkspace snapshot={chatFixtureSettled} />);
 		const log = screen.getByRole("log", { name: "Conversation" });

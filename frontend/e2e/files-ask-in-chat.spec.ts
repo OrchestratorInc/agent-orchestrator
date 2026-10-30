@@ -12,7 +12,7 @@ const test = process.env.AO_E2E_ELECTRON
 	? base.extend({
 		page: async ({}, use) => {
 			const app = await electron.launch({
-				executablePath: require("electron") as string,
+				executablePath: process.env.AO_E2E_ELECTRON_PATH ?? require("electron") as string,
 				args: [path.join(__dirname, "support/electron-shell.cjs")],
 			});
 			const page = await app.firstWindow();
@@ -90,7 +90,7 @@ async function stubWorkspace(page: Page, id: string, fullText = after, selectedP
 }
 
 /** A Chat-mode worker with one changed file, opened on its Files tab. */
-async function openChatSession(page: Page, fullText = after, selectedPath = filePath) {
+async function openChatSession(page: Page, fullText = after, selectedPath = filePath, text = "", files = true) {
 	await installFakeAgent(page, { projectId, projectName: projectId, workers: [{ id: chatSession, provider: "codex", title: "Add to chat", mode: "chat" }] });
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
 		if (route.request().headers().accept?.includes("text/event-stream")) return quietEventStream(route);
@@ -101,7 +101,7 @@ async function openChatSession(page: Page, fullText = after, selectedPath = file
   if (pathname === "/api/v1/agents/readiness" || pathname === "/api/v1/agents/readiness/ensure") return route.fulfill({ json: { agents: [agentReadiness("codex", "Codex")] } });
 		if (pathname === `/api/v1/projects/${projectId}`) return route.fulfill({ json: { status: "ok", project: { id: projectId, agent: "codex", config: { worker: { agent: "codex" } } } } });
 		if (pathname === `/api/v1/sessions/${chatSession}/conversation`) {
-			return route.fulfill({ json: { conversationId: "conversation-ask-in-chat", sessionId: chatSession, harness: "codex", mode: "chat", controller: "ready", supportsFileReferences: true, latestSequence: 0, oldestSequence: 0, hasMoreBefore: false, turns: [], messages: [], activities: [], settings: {} } });
+			return route.fulfill({ json: { conversationId: "conversation-ask-in-chat", sessionId: chatSession, harness: "codex", mode: "chat", controller: "ready", supportsFileReferences: true, latestSequence: 0, oldestSequence: 0, hasMoreBefore: false, turns: text ? [{ id: "parent-turn", state: "completed", requestedAt: "2026-10-27T00:00:00Z", completedAt: "2026-10-27T00:00:01Z" }] : [], messages: text ? [{ id: "parent-message", turnId: "parent-turn", sequence: 1, revision: 0, role: "assistant", text, streaming: false, createdAt: "2026-10-27T00:00:01Z" }] : [], activities: [], settings: {} } });
 		}
 		if (pathname === `/api/v1/sessions/${chatSession}/conversation/models`) return route.fulfill({ json: { models: [], selected: {} } });
 		if (pathname === `/api/v1/sessions/${chatSession}/conversation/skills`) return route.fulfill({ json: { skills: [] } });
@@ -109,7 +109,8 @@ async function openChatSession(page: Page, fullText = after, selectedPath = file
 		return route.fulfill({ json: { status: "ok" } });
 	});
 	const sentToChat = await stubWorkspace(page, chatSession, fullText, selectedPath);
-	const inspector = await openFilesTab(page, chatSession, projectId, selectedPath);
+	const inspector = files ? await openFilesTab(page, chatSession, projectId, selectedPath) : page.locator("#inspector");
+	if (!files) await page.goto(`${origin}/#/projects/${projectId}/sessions/${chatSession}`, { waitUntil: "domcontentloaded" });
 	const composer = page.getByRole("combobox", { name: "Message the agent" });
 	await expect(composer).toBeVisible();
 	return { inspector, composer, sentToChat };
@@ -494,4 +495,40 @@ test("changed annotations open the file without a highlight and missing files st
  await page.getByRole("dialog").locator("pre").click();
  await expect(page.getByRole("dialog")).toBeVisible();
  await expect(page.locator(CENTER)).not.toBeVisible();
+});
+
+
+test("chat selection toolbar follows its start, pins while scrolled, and supports the primary shortcut", { tag: "@P0" }, async ({ page }) => {
+ await openChatSession(page, after, filePath, Array.from({length:80},(_,i)=>`Selected context paragraph ${i+1}.`).join("\n\n"), false);
+ const pane=page.getByRole("log",{name:"Conversation"});
+ await expect(pane.locator("[data-chat-message-body] p").first()).toBeVisible();
+ await pane.focus();
+ await pane.evaluate(element=>{
+  element.scrollTop=0;
+  const paragraphs=element.querySelectorAll("[data-chat-message-body] p");
+  const range=document.createRange();range.setStart(paragraphs[3],0);range.setEndAfter(paragraphs[paragraphs.length-1]);
+  getSelection()!.removeAllRanges();getSelection()!.addRange(range);
+  element.dispatchEvent(new MouseEvent("mouseup",{bubbles:true}));
+ });
+ const toolbar=page.locator("[data-chat-selection-actions]");
+ await expect(toolbar).toBeVisible();
+ const follows=async()=>{
+  const first=await page.evaluate(()=>getSelection()!.getRangeAt(0).getClientRects()[0].top);
+  const box=(await toolbar.boundingBox())!;
+  expect(Math.abs(box.y+box.height+6-first)).toBeLessThan(2);
+ };
+ await expect(async()=>await follows()).toPass();
+ await page.screenshot({path:test.info().outputPath("chat-following.png")});
+ await pane.evaluate(element=>{element.scrollTop=500;});
+ await expect(async()=>{
+  const bounds=(await pane.boundingBox())!,box=(await toolbar.boundingBox())!;
+  expect(Math.abs(box.y-bounds.y-8)).toBeLessThan(2);
+ }).toPass();
+ await page.screenshot({path:test.info().outputPath("chat-pinned.png")});
+ await pane.evaluate(element=>{element.scrollTop=0;});
+ await expect(async()=>await follows()).toPass();
+ const mac=await page.evaluate(()=>/Mac/i.test(navigator.platform));
+ await page.keyboard.press(mac?"Meta+l":"Control+l");
+ await expect(page.getByRole("button",{name:"1 annotation"})).toBeVisible();
+ await expect(toolbar).toHaveCount(0);
 });
