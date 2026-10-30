@@ -145,9 +145,11 @@ Desktop and daemon events carry `days_since_install` when the persisted install
 ID file has a valid timestamp. The daemon reads it at export time; the desktop
 reads it during telemetry bootstrap. The daemon also reads `lifetime_sessions` from
 a SQLite counter that increases when a session is committed and survives its
-later deletion. The desktop reads that counter from the loopback daemon during
-bootstrap, and a paired phone receives it through the authenticated telemetry
-identity route. If the count cannot be read, it is omitted. Historical sessions
+later deletion. The daemon snapshots the count when an event enters its remote
+sink, before asynchronous export. The desktop reads that counter from the
+loopback daemon during bootstrap, and a paired phone receives it through the
+authenticated telemetry identity route. If the count cannot be read, it is
+omitted. Historical sessions
 deleted before this counter was introduced cannot be reconstructed.
 `is_signed_in` reflects the AO Cloud identity known on the emitting surface.
 It is omitted when the desktop or phone has not yet learned that state. These

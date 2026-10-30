@@ -290,7 +290,7 @@ type PostHogSink struct {
 	appVersion string
 	client     postHogClient
 	log        *slog.Logger
-	ch         chan ports.TelemetryEvent
+	ch         chan queuedPostHogEvent
 	wg         sync.WaitGroup
 	closeOnce  sync.Once
 	queueMu    sync.RWMutex
@@ -303,7 +303,12 @@ type PostHogSink struct {
 	cancel context.CancelFunc
 }
 
-// SetLifetimeSessions reads the durable counter at export time.
+type queuedPostHogEvent struct {
+	event            ports.TelemetryEvent
+	lifetimeSessions *int64
+}
+
+// SetLifetimeSessions reads the durable counter when an event enters the sink.
 func (s *PostHogSink) SetLifetimeSessions(read func(context.Context) (int64, error)) {
 	s.lifetimeSessions = read
 }
@@ -335,7 +340,7 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 		client:       client,
 		log:          telemetryLogger(log),
 		appVersion:   strings.TrimSpace(appVersion),
-		ch:           make(chan ports.TelemetryEvent, postHogBufferSize),
+		ch:           make(chan queuedPostHogEvent, postHogBufferSize),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
@@ -374,18 +379,19 @@ func (s *PostHogSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 		s.queueMu.RUnlock()
 		return
 	}
+	entry := queuedPostHogEvent{event: ev, lifetimeSessions: s.snapshotLifetimeSessions(ctx)}
 	queued := false
 	if strings.HasPrefix(ev.Name, "ao.usage.") {
 		// Usage summaries have already been reserved in SQLite. Wait for queue
 		// capacity so a burst cannot discard them behind the caller's back.
 		select {
-		case s.ch <- ev:
+		case s.ch <- entry:
 			queued = true
 		case <-ctx.Done():
 		}
 	} else {
 		select {
-		case s.ch <- ev:
+		case s.ch <- entry:
 			queued = true
 		default:
 		}
@@ -428,9 +434,20 @@ func (s *PostHogSink) Close(ctx context.Context) error {
 
 func (s *PostHogSink) loop() {
 	defer s.wg.Done()
-	for ev := range s.ch {
-		s.send(s.ctx, ev)
+	for entry := range s.ch {
+		s.sendQueued(s.ctx, entry)
 	}
+}
+
+func (s *PostHogSink) snapshotLifetimeSessions(ctx context.Context) *int64 {
+	if s.lifetimeSessions == nil {
+		return nil
+	}
+	count, err := s.lifetimeSessions(ctx)
+	if err != nil {
+		return nil
+	}
+	return &count
 }
 
 // Bounded retry for a single event. A dropped send is a permanent gap,
@@ -446,6 +463,11 @@ const (
 )
 
 func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
+	s.sendQueued(ctx, queuedPostHogEvent{event: ev, lifetimeSessions: s.snapshotLifetimeSessions(ctx)})
+}
+
+func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) {
+	ev := entry.event
 	eventName := remoteEventName(ev.Name)
 	// A stable per-event UUID, reused across every attempt, is PostHog's
 	// idempotency key. A transport error only means AO received no response;
@@ -454,7 +476,7 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 	// volume, breaking the "retries add no volume" guarantee). PostHog dedupes
 	// events that carry the same uuid.
 	eventUUID := uuid.NewString()
-	props := s.properties(ev)
+	props := s.propertiesWithCount(ev, entry.lifetimeSessions)
 	// A signed-in install reports as the AO Cloud user, so its events never
 	// depend on which account the anonymous install ID was once merged into.
 	// Signed out, the current anonymous install ID is used.
@@ -538,6 +560,10 @@ func (s *PostHogSink) sendOnce(ctx context.Context, payload []byte) (retryable b
 }
 
 func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
+	return s.propertiesWithCount(ev, s.snapshotLifetimeSessions(context.Background()))
+}
+
+func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessions *int64) map[string]any {
 	props := map[string]any{
 		"source":                   ev.Source,
 		"level":                    string(ev.Level),
@@ -585,10 +611,8 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 		s.env.stamp(props)
 	}
 	s.install.stamp(props)
-	if s.lifetimeSessions != nil {
-		if count, err := s.lifetimeSessions(context.Background()); err == nil {
-			props["lifetime_sessions"] = count
-		}
+	if lifetimeSessions != nil {
+		props["lifetime_sessions"] = *lifetimeSessions
 	}
 	if ev.RequestID != "" {
 		props["request_id"] = ev.RequestID
