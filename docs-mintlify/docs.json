@@ -35,123 +35,154 @@
     "x": "https://x.com/aoagents"
   },
   "navigation": {
-    "groups": [
+    "languages": [
       {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "installation",
-          "quickstart",
-          "platforms"
-        ]
-      },
-      {
-        "group": "Using Orchestrator",
-        "pages": [
-          "dashboard",
-          "examples",
+        "language": "en",
+        "groups": [
           {
-            "group": "Guides",
+            "group": "Getting Started",
             "pages": [
-              "guides/index",
-              "guides/per-role-agents",
-              "guides/parallel-issues",
-              "guides/ci-recovery",
-              "guides/review-loop",
-              "guides/reactions",
-              "guides/multi-project",
-              "guides/cloud"
+              "index",
+              "installation",
+              "quickstart",
+              "platforms"
             ]
-          }
-        ]
-      },
-      {
-        "group": "Built-in capabilities",
-        "pages": [
+          },
           {
-            "group": "Built-in capabilities",
+            "group": "Using Orchestrator",
             "pages": [
-              "plugins/index",
+              "dashboard",
+              "examples",
               {
-                "group": "Agents",
+                "group": "Guides",
                 "pages": [
-                  "plugins/agents/index",
-                  "plugins/agents/claude-code",
-                  "plugins/agents/codex",
-                  "plugins/agents/cursor",
-                  "plugins/agents/aider",
-                  "plugins/agents/opencode"
-                ]
-              },
-              {
-                "group": "Runtimes",
-                "pages": [
-                  "plugins/runtimes/index",
-                  "plugins/runtimes/tmux"
-                ]
-              },
-              {
-                "group": "Workspaces",
-                "pages": [
-                  "plugins/workspaces/index",
-                  "plugins/workspaces/worktree"
-                ]
-              },
-              {
-                "group": "Trackers",
-                "pages": [
-                  "plugins/trackers/index",
-                  "plugins/trackers/github"
-                ]
-              },
-              {
-                "group": "SCM",
-                "pages": [
-                  "plugins/scm/index",
-                  "plugins/scm/github"
-                ]
-              },
-              {
-                "group": "Notifications",
-                "pages": [
-                  "plugins/notifiers/index",
-                  "plugins/notifiers/dashboard"
-                ]
-              },
-              {
-                "group": "Terminals",
-                "pages": [
-                  "plugins/terminals/index",
-                  "plugins/terminals/web"
+                  "guides/index",
+                  "guides/per-role-agents",
+                  "guides/parallel-issues",
+                  "guides/ci-recovery",
+                  "guides/review-loop",
+                  "guides/reactions",
+                  "guides/multi-project",
+                  "guides/cloud"
                 ]
               }
             ]
+          },
+          {
+            "group": "Built-in capabilities",
+            "pages": [
+              {
+                "group": "Built-in capabilities",
+                "pages": [
+                  "plugins/index",
+                  {
+                    "group": "Agents",
+                    "pages": [
+                      "plugins/agents/index",
+                      "plugins/agents/claude-code",
+                      "plugins/agents/codex",
+                      "plugins/agents/cursor",
+                      "plugins/agents/aider",
+                      "plugins/agents/opencode"
+                    ]
+                  },
+                  {
+                    "group": "Runtimes",
+                    "pages": [
+                      "plugins/runtimes/index",
+                      "plugins/runtimes/tmux"
+                    ]
+                  },
+                  {
+                    "group": "Workspaces",
+                    "pages": [
+                      "plugins/workspaces/index",
+                      "plugins/workspaces/worktree"
+                    ]
+                  },
+                  {
+                    "group": "Trackers",
+                    "pages": [
+                      "plugins/trackers/index",
+                      "plugins/trackers/github"
+                    ]
+                  },
+                  {
+                    "group": "SCM",
+                    "pages": [
+                      "plugins/scm/index",
+                      "plugins/scm/github"
+                    ]
+                  },
+                  {
+                    "group": "Notifications",
+                    "pages": [
+                      "plugins/notifiers/index",
+                      "plugins/notifiers/dashboard"
+                    ]
+                  },
+                  {
+                    "group": "Terminals",
+                    "pages": [
+                      "plugins/terminals/index",
+                      "plugins/terminals/web"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "cli",
+              {
+                "group": "Configuration",
+                "root": "configuration/index",
+                "pages": [
+                  "configuration/projects",
+                  "configuration/lifecycle-automation",
+                  "configuration/remote-access"
+                ]
+              },
+              "architecture"
+            ]
+          },
+          {
+            "group": "Help",
+            "pages": [
+              "troubleshooting",
+              "faq",
+              "migration",
+              "changelog"
+            ]
           }
         ]
       },
       {
-        "group": "Reference",
-        "pages": [
-          "cli",
+        "language": "ja",
+        "groups": [
           {
-            "group": "Configuration",
-            "root": "configuration/index",
+            "group": "はじめに",
             "pages": [
-              "configuration/projects",
-              "configuration/lifecycle-automation",
-              "configuration/remote-access"
+              "ja/index",
+              "ja/installation",
+              "ja/quickstart"
             ]
-          },
-          "architecture"
+          }
         ]
       },
       {
-        "group": "Help",
-        "pages": [
-          "troubleshooting",
-          "faq",
-          "migration",
-          "changelog"
+        "language": "zh-CN",
+        "groups": [
+          {
+            "group": "入门",
+            "pages": [
+              "zh-CN/index",
+              "zh-CN/installation",
+              "zh-CN/quickstart"
+            ]
+          }
         ]
       }
     ]
