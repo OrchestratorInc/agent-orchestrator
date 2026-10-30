@@ -9,8 +9,11 @@ import { mergeEndpoints } from "./mergeEndpoints";
  * leaves the network. Asking again while the app is open picks the address up
  * as soon as the machine advertises it.
  */
-export const LEARN_REMOTE_EVERY_MS = 30_000;
-export const LEARN_REMOTE_FOR_MS = 5 * 60_000;
+// Measured: the address is ready 15-20 s after the code shows, so 5 s learns it
+// soon after, and 2 minutes covers a slow start. Each ask is one small request
+// over the local network.
+export const LEARN_REMOTE_EVERY_MS = 5_000;
+export const LEARN_REMOTE_FOR_MS = 2 * 60_000;
 
 /** Whether stored endpoints reach their machine from any network. */
 export function knowsRemoteAddress(endpoints: readonly Endpoint[]): boolean {

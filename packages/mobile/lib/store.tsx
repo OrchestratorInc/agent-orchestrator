@@ -680,7 +680,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// A code scanned before the machine's internet address was ready holds only
 	// this network's addresses. While connected, ask the machine every
 	// LEARN_REMOTE_EVERY_MS until the phone knows one that works from anywhere,
-	// so leaving the network keeps working without scanning again.
+	// so leaving the network keeps working without scanning again. A failed ask
+	// stops it: the request carries the password, so repeated refusals would
+	// count toward the machine's lockout, and off its network nothing answers.
 	useEffect(() => {
 		if (!config || !isConfigured(config) || !appActive) return;
 		let stopped = false;
@@ -702,7 +704,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				host.endpoints,
 				() => fetchAdvertisedEndpoints(config),
 				(endpoints) => updateHostEndpoints(host.id, endpoints),
-			).catch(() => false);
+			).catch(() => null);
+			if (learned === null) {
+				stop();
+				return;
+			}
 			if (!learned || stopped) return;
 			stop();
 			const hosts = await loadHosts().catch(() => null);
