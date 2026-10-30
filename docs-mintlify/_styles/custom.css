@@ -487,9 +487,28 @@ header [class*="assistant"], header button[id*="assistant"], header a[id*="assis
   backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--fd-border);
 }
-@media (min-width: 1024px) and (max-width: 1279px) {
-  #ao-toc-bar { top: 48px; }
+/* v36y: 1024-1279 band parity (original: bar in article column at top, sidebar search visible) */
+@media (min-width: 1024px) and (max-width: 1279.5px) {
+  #ao-toc-bar { top: 0 !important; margin-left: 268px !important; width: calc(100% - 268px) !important; }
+  header button#search-bar-entry {
+    position: fixed !important; top: 58px !important; left: 15px !important;
+    width: 236px !important; min-width: 236px !important; max-width: 236px !important; height: 36px !important;
+    padding: 0 0.75rem !important; justify-content: flex-start !important;
+    background-color: rgba(255, 255, 255, 0.04) !important; border: 1px solid var(--fd-border) !important;
+    border-radius: 8px !important; box-shadow: none !important; z-index: 40 !important;
+  }
+  header button#search-bar-entry * { display: inline-flex !important; visibility: visible !important; }
+  /* content column padding: original keeps 24px at this width (Mintlify lg: raises to 32) */
+  main div[class*="pt-6"][class*="px-6"] { padding-left: 24px !important; padding-right: 24px !important; }
+  /* tables span exactly the content width (no bleed) like the original */
+  .mdx-content > div[class*="--page-padding"] { margin-left: 0 !important; margin-right: 0 !important; width: 100% !important; }
+  .mdx-content > div[class*="--page-padding"] > div[class*="px-"] { padding-left: 0 !important; padding-right: 0 !important; }
+  /* h1 sat 7px low after the bar move */
+  header[class*="page-header"] { padding-top: 9px !important; }
 }
+/* v36y: table column dividers (original: 1px white/10 border-left on 2nd+ cells) */
+main .mdx-content table th:not(:first-child),
+main .mdx-content table td:not(:first-child) { border-left: 1px solid oklch(1 0 0 / 0.1) !important; }
 #ao-toc-trigger {
   display: flex; align-items: center; gap: 9.5px;
   width: 100%; height: 40px; padding: 0 24px 0 16.5px; box-sizing: border-box;
