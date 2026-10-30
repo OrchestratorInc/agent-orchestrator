@@ -926,10 +926,33 @@
         var si = document.querySelector('[data-component-part="search-modal"] input[data-component-part="search-input"]');
         needPh = si && si.placeholder !== "Search";
       }
+      var needChev = !!document.querySelector('nav#sidebar-content button svg use[href*="ChevronRight"]');
+      if (needChev) { try { fixGroupChevrons(); } catch (e) {} }
       if (needToc || needToggle || needActions || needDtoc || needKeys || kebabVisible) init();
       else if (needEsc || needPh) { try { buildSearchChrome(); } catch (e) {} }
     }, 400);
   });
+  /* ---------- Sidebar group chevrons: exact original lucide chevron ----------
+     Original renders lucide chevron-down (path m6 9 6 6 6-6) rotated -90deg,
+     i.e. pixels identical to lucide chevron-right. Mintlify uses its own
+     ChevronRight sprite with different stroke geometry. Swap path + attrs;
+     Mintlify's open-state rotation classes keep working. */
+  function fixGroupChevrons() {
+    var uses = document.querySelectorAll('nav#sidebar-content button svg use[href*="ChevronRight"]');
+    Array.prototype.forEach.call(uses, function (u) {
+      var svg = u.closest('svg');
+      if (!svg || svg.getAttribute('data-ao-chev')) return;
+      svg.setAttribute('data-ao-chev', '1');
+      svg.setAttribute('viewBox', '0 0 24 24');
+      svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor');
+      svg.setAttribute('stroke-width', '2');
+      svg.setAttribute('stroke-linecap', 'round');
+      svg.setAttribute('stroke-linejoin', 'round');
+      svg.innerHTML = '<path d="m9 18 6-6-6-6"></path>';
+    });
+  }
+
   mo.observe(document.body, { childList: true, subtree: true });
   document.addEventListener("mintlify:navigate", function () { setTimeout(init, 300); });
   var rt;
