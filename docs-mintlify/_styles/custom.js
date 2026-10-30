@@ -1036,6 +1036,51 @@
     });
     header.insertBefore(div, header.firstChild);
   }
+
+  /* ---------- Desktop article/table geometry vs original (Fumadocs).
+     Band 1024-1279.5px: original article container uses px-24 (content
+     x344 w852 at vw1271); Mintlify keeps lg:px-8 (32px). Tables: original
+     spans exactly the content column at every desktop width; Mintlify's
+     wrapper bleeds -20px/+40px via -mx + w-[calc(100%+40px)] and an inner
+     px-(--page-padding). Layered Tailwind importance beats CSS !important,
+     so set inline styles with priority. Mobile (<1024) untouched. ------- */
+  function fixBandArticle() {
+    var inBand = window.matchMedia("(min-width:1024px) and (max-width:1279.5px)").matches;
+    var desktop = window.innerWidth >= 1024;
+    var mc = document.querySelector(".mdx-content");
+    if (mc && mc.parentElement) {
+      var c = mc.parentElement;
+      if (inBand) {
+        c.style.setProperty("padding-left", "24px", "important");
+        c.style.setProperty("padding-right", "24px", "important");
+      } else {
+        c.style.removeProperty("padding-left");
+        c.style.removeProperty("padding-right");
+      }
+    }
+    var inners = document.querySelectorAll('.mdx-content div[class*="px-(--page-padding)"]');
+    Array.prototype.forEach.call(inners, function (w) {
+      if (desktop) {
+        w.style.setProperty("padding-left", "0", "important");
+        w.style.setProperty("padding-right", "0", "important");
+      } else {
+        w.style.removeProperty("padding-left");
+        w.style.removeProperty("padding-right");
+      }
+    });
+    var outers = document.querySelectorAll('.mdx-content div[class*="w-[calc(100%+(var(--page-padding)*2))]"]');
+    Array.prototype.forEach.call(outers, function (o) {
+      if (desktop) {
+        o.style.setProperty("width", "100%", "important");
+        o.style.setProperty("margin-left", "0", "important");
+        o.style.setProperty("margin-right", "0", "important");
+      } else {
+        o.style.removeProperty("width");
+        o.style.removeProperty("margin-left");
+        o.style.removeProperty("margin-right");
+      }
+    });
+  }
   function init() {
     try { TOC_STATE.headings = collectHeadings(); } catch (e) {}
     try { buildTocBar(); } catch (e) {}
@@ -1052,6 +1097,7 @@
     try { buildPager(); } catch (e) {}
     try { fixCopyIcons(); } catch (e) {}
     try { fixProseParity(); } catch (e) {}
+    try { fixBandArticle(); } catch (e) {}
     try { fixPlatformCards(); } catch (e) {}
     try { bindCopyFeedback(); } catch (e) {}
     try { spyAll(); } catch (e) {}
@@ -1087,6 +1133,7 @@
         needPh = si && si.placeholder !== "Search";
       }
       try { fixSearchTrigger(); } catch (e) {}
+      try { fixBandArticle(); } catch (e) {}
       try { fixTitle(); } catch (e) {}
       var needChev = !!document.querySelector('nav#sidebar-content button svg use[href*="ChevronRight"]');
       if (needChev) { try { fixGroupChevrons(); } catch (e) {} }
