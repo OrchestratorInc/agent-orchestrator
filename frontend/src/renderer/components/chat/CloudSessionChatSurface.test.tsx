@@ -21,8 +21,9 @@ const cloudMocks = vi.hoisted(() => ({
 	requestWorkspaceCheckout: vi.fn(),
 	chatProps: vi.fn(),
 }));
+const billing = vi.hoisted(() => ({ offering: { selfServeBilling: true, canManageBilling: true } }));
 vi.mock("../../hooks/useCloudBilling", () => ({
-	useCloudBilling: () => ({ data: { plan: "starter" }, offering: { selfServeBilling: true } }),
+	useCloudBilling: () => ({ data: { plan: "starter" }, offering: billing.offering }),
 }));
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, client: cloudMocks }),
@@ -1196,6 +1197,12 @@ describe("CloudSessionChatSurface", () => {
 		useUiStore.setState({ openGlobalSettings });
 		fireEvent.click(screen.getByRole("button", { name: "Upgrade your plan" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("billing");
+		// A member cannot buy a plan, so the notice sends them to an admin instead.
+		billing.offering = { selfServeBilling: true, canManageBilling: false };
+		rerender(view(session.id));
+		expect(screen.queryByRole("button", { name: "Upgrade your plan" })).toBeNull();
+		expect(screen.getByRole("alert").textContent).toContain("Contact your organization's admin to raise it.");
+		billing.offering = { selfServeBilling: true, canManageBilling: true };
 		// The same surface shows another chat and comes back: the old notice stays gone.
 		rerender(view("session-2"));
 		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());

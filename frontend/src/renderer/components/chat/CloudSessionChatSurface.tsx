@@ -210,7 +210,7 @@ function PlanLimitNotice({ code, onDismiss }: { code: string; onDismiss: () => v
 			title={appI18n.t("cloud.planLimit.title")}
 			message={reason + onPlan}
 			onDismiss={onDismiss}
-			action={offering.selfServeBilling ? (
+			action={offering.selfServeBilling && offering.canManageBilling ? (
 				<button
 					type="button"
 					className="mt-1 font-medium text-foreground underline underline-offset-2 hover:decoration-dashed"
@@ -1044,7 +1044,7 @@ export function CloudSessionChatSurface({
 		}
 		if (!code) return;
 		setPlanRefusal({ key, code });
-		reportPlanRefusal(code, true);
+		reportPlanRefusal(code, false);
 	}, [eventsQuery.dataUpdatedAt, refusalKey, snapshot]);
 	// While Setup runs, or once the checkout, Setup or the agent's start failed,
 	// the session reads as a local start does: the startup checklist in place of a
