@@ -983,6 +983,13 @@
       inner.appendChild(col);
       inner.insertBefore(letter, col);
     });
+    /* PlatformSupport note renders at 13px/22.75 muted in the original component */
+    var note = grid.nextElementSibling;
+    if (note && /Terminal UI sessions/.test(note.textContent)) {
+      note.style.setProperty("font-size", "13px", "important");
+      note.style.setProperty("line-height", "22.75px", "important");
+      note.style.setProperty("color", "rgba(255,255,255,0.7)", "important");
+    }
   }
   function init() {
     try { TOC_STATE.headings = collectHeadings(); } catch (e) {}
