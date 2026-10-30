@@ -5037,3 +5037,90 @@ func TestScopedPostAgentRefreshesIdleProofWithoutStateTransition(t *testing.T) {
 		})
 	}
 }
+
+// aoRunStore adds the worker's AO review passes to the lifecycle fake.
+type aoRunStore struct {
+	*fakeStore
+	runs []domain.ReviewRun
+}
+
+func (s *aoRunStore) ListReviewRunsBySession(_ context.Context, id domain.SessionID) ([]domain.ReviewRun, error) {
+	var out []domain.ReviewRun
+	for _, run := range s.runs {
+		if run.SessionID == id {
+			out = append(out, run)
+		}
+	}
+	return out, nil
+}
+
+// A review an AO review pass posted keeps its inline comments, thread IDs and
+// URLs in the batch, but not its summary: the reviewer's required changes are
+// its inline comments, and the summary's optional suggestions must not read as
+// required work. Another reviewer's body on the same PR still comes through.
+func TestPRObservation_AOReviewBatchLeavesOutItsSummary(t *testing.T) {
+	st := &aoRunStore{fakeStore: newFakeStore()}
+	msg := &fakeMessenger{}
+	m := New(st, msg)
+	st.sessions["mer-1"] = working("mer-1")
+	st.runs = []domain.ReviewRun{
+		{ID: "run-1", SessionID: "mer-1", PRURL: "pr1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested, GithubReviewID: "77"},
+		// Another PR's pass with the same database id must not match.
+		{ID: "run-2", SessionID: "mer-1", PRURL: "pr2", Status: domain.ReviewRunComplete, GithubReviewID: "88"},
+	}
+	st.reviews["pr1"] = []domain.PullRequestReview{
+		{ID: "PRR_ao", Author: "me", State: domain.ReviewChangesRequest, URL: "https://github.com/o/r/pull/1#pullrequestreview-77", Body: "Optional: rename x.", AutoInjectReview: true},
+		{ID: "PRR_human", Author: "alice", State: domain.ReviewNone, URL: "https://github.com/o/r/pull/1#pullrequestreview-88", Body: "Human summary.", AutoInjectReview: true},
+	}
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "c1", ThreadID: "T1", ReviewID: "77", Author: "me", File: "a.go", Line: 4, Body: "nil check", URL: "https://github.com/o/r/pull/1#discussion_r1", AutoInjectReview: true},
+		{ID: "c2", ThreadID: "T2", ReviewID: "88", Author: "alice", File: "b.go", Line: 9, Body: "typo", AutoInjectReview: true},
+	}
+	o := ports.PRObservation{Fetched: true, URL: "pr1", Review: domain.ReviewChangesRequest}
+	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want one batched message, got %d: %v", len(msg.msgs), msg.msgs)
+	}
+	got := msg.msgs[0]
+	for _, want := range []string{
+		"Review from @me (changes requested):",
+		"Review URL: https://github.com/o/r/pull/1#pullrequestreview-77",
+		"1. a.go:4 (@me):\nnil check",
+		"https://github.com/o/r/pull/1#discussion_r1",
+		"Thread ID: T1",
+		"Review from @alice:",
+		"Review body:\nHuman summary.",
+		"typo",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("batch missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Optional: rename x.") {
+		t.Fatalf("batch carried the AO review summary:\n%s", got)
+	}
+}
+
+// Without an AO pass behind it, the same review keeps its body.
+func TestPRObservation_ReviewBodyKeptWithoutAOPass(t *testing.T) {
+	st := &aoRunStore{fakeStore: newFakeStore()}
+	msg := &fakeMessenger{}
+	m := New(st, msg)
+	st.sessions["mer-1"] = working("mer-1")
+	// A cancelled pass has no provider review id.
+	st.runs = []domain.ReviewRun{{ID: "run-1", SessionID: "mer-1", PRURL: "pr1", Status: domain.ReviewRunCancelled}}
+	st.reviews["pr1"] = []domain.PullRequestReview{
+		{ID: "PRR_cr", Author: "alice", State: domain.ReviewChangesRequest, URL: "https://github.com/o/r/pull/1#pullrequestreview-77", Body: "Please rework this.", AutoInjectReview: true},
+	}
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "c1", ThreadID: "T1", ReviewID: "77", Author: "alice", File: "a.go", Line: 4, Body: "inline one", AutoInjectReview: true},
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{Fetched: true, URL: "pr1", Review: domain.ReviewChangesRequest}); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "Review body:\nPlease rework this.") {
+		t.Fatalf("want the human review body in the batch, got %v", msg.msgs)
+	}
+}

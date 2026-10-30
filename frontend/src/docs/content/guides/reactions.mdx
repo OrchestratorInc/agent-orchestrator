@@ -24,7 +24,7 @@ Orchestrator then routes failing checks, requested changes, unresolved comments,
 
 Orchestrator remembers the feedback it has already sent. It sends another message when the content changes, not on every poll. This prevents the same CI failure or review comment from being repeated to a long-running session.
 
-Review feedback for one pull request arrives as one message: the review body and every new unresolved inline comment, with file, line, and thread ID, plus the number of threads still open. The worker can fix the whole set, push once, and request at most one re-review instead of starting a new round for each comment.
+Review feedback for one pull request arrives as one message: the review body and every new unresolved inline comment, with file, line, and thread ID, plus the number of threads still open. A review posted by Orchestrator's own reviewer comes without its summary, because only its inline comments are required changes. The worker can fix the whole set, push once, and request at most one re-review instead of starting a new round for each comment.
 
 ## Know what requires a human
 

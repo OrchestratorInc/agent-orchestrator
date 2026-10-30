@@ -242,6 +242,7 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 			}
 		}
 		if len(feedback.items) > 0 {
+			feedback.aoReviewIDs = m.aoReviewIDs(ctx, id, o.URL)
 			nudges = append(nudges, pendingNudge{items: feedback.items, build: func(due []bool) string {
 				msg := feedback.format(due)
 				if ident != "your PR" {
@@ -854,6 +855,48 @@ type reviewFeedback struct {
 	reviews    []domain.PullRequestReview
 	allReviews []domain.PullRequestReview
 	items      []nudgeItem
+	// aoReviewIDs are the provider review ids posted by the worker's own AO
+	// review passes; see aoReviewIDs.
+	aoReviewIDs []string
+}
+
+// reviewRunLister reads a worker's AO review passes. It is optional on the
+// lifecycle store so stores without AO review support keep working.
+type reviewRunLister interface {
+	ListReviewRunsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error)
+}
+
+// aoReviewIDs returns the provider review ids that the worker's AO review
+// passes posted on prURL. A failed lookup is logged and returns none, so the
+// feedback reads as it would for any other reviewer.
+func (m *Manager) aoReviewIDs(ctx context.Context, id domain.SessionID, prURL string) []string {
+	store, ok := m.store.(reviewRunLister)
+	if !ok {
+		return nil
+	}
+	runs, err := store.ListReviewRunsBySession(ctx, id)
+	if err != nil {
+		slog.Default().WarnContext(ctx, "lifecycle: list AO review runs for review feedback", "session", id, "err", err)
+		return nil
+	}
+	var ids []string
+	for _, run := range runs {
+		if run.PRURL == prURL && strings.TrimSpace(run.GithubReviewID) != "" {
+			ids = append(ids, strings.TrimSpace(run.GithubReviewID))
+		}
+	}
+	return ids
+}
+
+// postedByAO reports whether review was posted by one of the worker's AO
+// review passes.
+func (f reviewFeedback) postedByAO(review domain.PullRequestReview) bool {
+	for _, id := range f.aoReviewIDs {
+		if reviewMatchesID(review, id) {
+			return true
+		}
+	}
+	return false
 }
 
 // format renders every due item as one message, grouping comments under the
@@ -912,7 +955,7 @@ func (f reviewFeedback) format(due []bool) string {
 	n := 0
 	for _, g := range groups {
 		if g.review != nil {
-			writeReviewHeader(&msg, *g.review)
+			writeReviewHeader(&msg, *g.review, !f.postedByAO(*g.review))
 		} else if len(groups) > 1 {
 			msg.WriteString("\n---\nOther review comments:\n")
 		}
@@ -930,7 +973,11 @@ func (f reviewFeedback) format(due []bool) string {
 	return msg.String()
 }
 
-func writeReviewHeader(msg *strings.Builder, review domain.PullRequestReview) {
+// writeReviewHeader writes one review's header. withBody is false for a review
+// an AO review pass posted: its required changes are its inline comments, and
+// its summary holds optional suggestions the worker must not take as required
+// work, so only the inline comments reach the worker.
+func writeReviewHeader(msg *strings.Builder, review domain.PullRequestReview, withBody bool) {
 	author := domain.SanitizeControlChars(review.Author)
 	if strings.TrimSpace(author) == "" {
 		author = "unknown reviewer"
@@ -949,7 +996,7 @@ func writeReviewHeader(msg *strings.Builder, review domain.PullRequestReview) {
 	// Review and comment bodies are attacker-influenced (anyone who can review
 	// the PR) and get pasted into the agent's live pane; strip control/escape
 	// chars before formatting them.
-	if body := domain.SanitizeControlChars(review.Body); strings.TrimSpace(body) != "" {
+	if body := domain.SanitizeControlChars(review.Body); withBody && strings.TrimSpace(body) != "" {
 		fmt.Fprintf(msg, "\nReview body:\n%s", body)
 	}
 	msg.WriteString("\n")
@@ -983,11 +1030,17 @@ func writeReviewComment(msg *strings.Builder, n int, c ports.PRCommentObservatio
 // anchor is the join; an exact id match covers providers that use one id.
 func findReview(reviews []domain.PullRequestReview, reviewID string) (domain.PullRequestReview, bool) {
 	for _, r := range reviews {
-		if r.ID == reviewID || strings.HasSuffix(r.URL, "#pullrequestreview-"+reviewID) {
+		if reviewMatchesID(r, reviewID) {
 			return r, true
 		}
 	}
 	return domain.PullRequestReview{}, false
+}
+
+// reviewMatchesID reports whether review is the one with the given provider
+// review id: its node id, or the numeric database id in its URL anchor.
+func reviewMatchesID(review domain.PullRequestReview, reviewID string) bool {
+	return review.ID == reviewID || strings.HasSuffix(review.URL, "#pullrequestreview-"+reviewID)
 }
 
 // countThreads counts distinct review threads among comments; a comment
