@@ -85,7 +85,7 @@
     var start = itF.top;
     var center = itL.top + itL.h - 6;
     track.hi.style.clipPath = "polygon(0 " + start + "px, 100% " + start + "px, 100% " + center + "px, 0 " + center + "px)";
-    if (track.dot) { track.dot.setAttribute("cx", String(itL.x)); track.dot.setAttribute("cy", String(center)); }
+    /* dot position is owned by glideDot (transform-based, eased) */
     track.thumb.style.left = (itL.x - 2) + "px";
     track.thumb.style.top = (center + 2) + "px";
     track.thumb.style.opacity = "1";
@@ -94,17 +94,27 @@
   /* continuous marker: original glides with scroll (measured live: fractional
      positions between rows), ours stepped between rows. Interpolate the dot
      along the item anchors by fractional heading index. */
+  /* Original semantics (measured live): the marker sits ON the current
+     section row and EASES (0.15s cubic-bezier) to the next row when the
+     reading line crosses into it. The visible marker is the SVG circle;
+     cx/cy attribute changes cannot transition, so position it with a
+     transform, which can. */
   function glideDot(track, F) {
     if (!track || F == null || !isFinite(F)) return;
     var n = track.items.length;
     if (!n) return;
     var i = Math.max(0, Math.min(n - 1, Math.floor(F)));
-    var j = Math.min(n - 1, i + 1);
-    var f = Math.max(0, Math.min(1, F - i));
-    var A = track.items[i], B = track.items[j];
-    var x = A.x + (B.x - A.x) * f;
-    var y = (A.cy != null ? A.cy : A.top + A.h / 2) + (((B.cy != null ? B.cy : B.top + B.h / 2)) - (A.cy != null ? A.cy : A.top + A.h / 2)) * f;
-    if (track.dot) { track.dot.setAttribute("cx", String(x)); track.dot.setAttribute("cy", String(y)); }
+    var A = track.items[i];
+    var x = A.x, y = (A.cy != null ? A.cy : A.top + A.h / 2);
+    if (track.dot) {
+      if (!track.dot._aoGlide) {
+        track.dot._aoGlide = true;
+        track.dot.setAttribute("cx", "0");
+        track.dot.setAttribute("cy", "0");
+        track.dot.style.transition = "transform 0.15s cubic-bezier(.4,0,.2,1)";
+      }
+      track.dot.style.transform = "translate(" + x + "px," + y + "px)";
+    }
     track.thumb.style.left = (x - 2) + "px";
     track.thumb.style.top = (y + 2) + "px";
     track.thumb.style.opacity = "1";
