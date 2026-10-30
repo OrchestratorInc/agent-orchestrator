@@ -75,12 +75,11 @@ describe("artifactViewKind", () => {
 		expect(canCopyArtifact({ path: "demo.mov", kind: "file" })).toBe(false);
 	});
 
-	it("takes a file as text by its extension, and an unknown extension as binary", () => {
-		expect(isTextArtifact({ path: "data.csv", kind: "file" })).toBe(true);
-		expect(isTextArtifact({ path: "src/app.tsx", kind: "file" })).toBe(true);
-		expect(isTextArtifact({ path: "LICENSE", kind: "file" })).toBe(true);
-		expect(isTextArtifact({ path: "deploy/.env", kind: "file" })).toBe(true);
-		for (const path of ["bundle.zip", "report.docx", "sheet.xlsx", "app.sqlite"]) {
+	it("takes any file as text unless its extension is a known binary format", () => {
+		for (const path of ["data.csv", "src/app.tsx", "LICENSE", "deploy/.env", "analysis.ipynb", "config.jsonc", "api.http", "model.jl", "shader.glsl", ".env.local", "Dockerfile.dev"]) {
+			expect(isTextArtifact({ path, kind: "file" })).toBe(true);
+		}
+		for (const path of ["bundle.zip", "report.docx", "sheet.xlsx", "app.sqlite", "data.parquet", "font.woff2"]) {
 			expect(isTextArtifact({ path, kind: "file" })).toBe(false);
 			expect(canCopyArtifact({ path, kind: "file" })).toBe(false);
 			expect(canShowArtifactHistory({ path, kind: "file" })).toBe(false);

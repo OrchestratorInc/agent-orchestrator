@@ -5,7 +5,7 @@ import { AccessibilityInfo, ActivityIndicator, Image, Keyboard, Platform, Pressa
 import { WebView } from "react-native-webview";
 import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, getArtifactText } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { artifactCommentTarget, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, isTextArtifact, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, type SessionArtifact } from "../../lib/artifacts";
+import { artifactCommentTarget, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { useRenderTheme } from "../../lib/chat/RenderFrame";
@@ -186,9 +186,6 @@ function ArtifactBody({ config, sessionId, artifact, versionOf, onAsk }: { confi
 	if (kind === "html") return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} page={{ sessionId, path: artifact.path }} />;
 	if (kind === "web-media" && !showsInWebView(artifact.path, Platform.OS)) {
 		return <Unavailable title="PDFs can't be shown on Android yet" message="Open it on the machine, or ask the agent about it from the ⋯ menu." />;
-	}
-	if (kind === "text" && !isTextArtifact(artifact)) {
-		return <Unavailable title="This file can't be shown on the phone" message={`It isn't text (${formatArtifactSize(artifact.size)}). Open it on the machine instead.`} />;
 	}
 	if (kind === "web-media" || ((kind === "markdown" || kind === "text") && tooLargeForText)) {
 		return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} />;

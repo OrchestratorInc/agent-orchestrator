@@ -45,9 +45,11 @@ const RASTER_IMAGE = /\.(apng|avif|bmp|gif|heic|heif|jpe?g|png|webp)$/i;
 // Formats React Native's Image cannot draw, or players it does not have.
 const WEB_MEDIA = /\.(svg|m4v|mov|mp4|ogv|webm|aac|flac|m4a|mp3|oga|ogg|opus|wav|pdf)$/i;
 const MARKDOWN = /\.(md|markdown)$/i;
-// Files read as text. Any other extension is taken as binary (an archive, an
-// office document, a database), which has no text to copy and no versions.
-const TEXT_EXTENSION = /\.(txt|text|log|out|csv|tsv|json|jsonl|ndjson|geojson|yaml|yml|toml|ini|cfg|conf|properties|env|xml|plist|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|rb|go|rs|java|kt|kts|swift|m|mm|c|h|cc|cpp|cxx|hpp|cs|php|sh|bash|zsh|fish|ps1|bat|sql|graphql|gql|proto|css|scss|sass|less|vue|svelte|astro|lua|pl|r|scala|dart|ex|exs|erl|hs|ml|clj|elm|zig|nim|tf|hcl|diff|patch|mdx|rst|tex|bib|adoc|org|gradle|lock|gitignore|dockerignore|editorconfig|dockerfile|makefile|mermaid|mmd|dot|srt|vtt)$/i;
+// Files known to be binary: archives, packages, office documents, databases,
+// data and model formats, fonts. They have no text to copy and no versions.
+// Any other extension counts as text; the viewer reads the file and shows it
+// unless it reads as binary, as desktop does.
+const BINARY_EXTENSION = /\.(zip|gz|tgz|tar|bz2|xz|zst|7z|rar|jar|war|apk|aab|ipa|dmg|iso|exe|dll|so|dylib|bin|o|a|class|wasm|pyc|doc|docx|xls|xlsx|ppt|pptx|odt|ods|odp|pages|numbers|key|epub|sqlite|sqlite3|db|parquet|avro|orc|feather|arrow|npy|npz|pkl|pickle|h5|hdf5|onnx|pt|pth|safetensors|ckpt|woff|woff2|ttf|otf|eot|psd|ai|sketch|fig|blend|glb|fbx)$/i;
 
 /** Reads the wire `artifactFiles`, dropping anything malformed. */
 export function parseArtifacts(raw: unknown): SessionArtifact[] {
@@ -87,15 +89,15 @@ export function artifactViewKind(artifact: Pick<SessionArtifact, "path" | "kind"
 }
 
 /**
- * Whether the phone reads the file as text: a page, a document, or a file with
- * a text extension. A file with no extension (`LICENSE`, `.env`) counts as text.
+ * Whether the file is taken as text, for Copy, Version history and a card's
+ * preview: a page, a document, or any file without a known binary extension
+ * (an archive, an office document, a database). The viewer still reads an
+ * unknown file and decides by its contents.
  */
 export function isTextArtifact(artifact: Pick<SessionArtifact, "path" | "kind">): boolean {
 	const kind = artifactViewKind(artifact);
 	if (kind === "html" || kind === "markdown") return true;
-	if (kind !== "text") return false;
-	const name = artifact.path.split("/").pop() ?? "";
-	return !name.slice(1).includes(".") || TEXT_EXTENSION.test(name);
+	return kind === "text" && !BINARY_EXTENSION.test(artifact.path);
 }
 
 /** Whether the file's contents can be copied as text. */
