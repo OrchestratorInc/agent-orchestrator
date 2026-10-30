@@ -1248,3 +1248,11 @@ html[data-current-path="/installation"] main span[data-as="p"]:has(+ table) + ta
 
 /* v36o: remove Mintlify's 150px td min-width (original has none) - it skewed column distribution */
 main table td { min-width: 0 !important; }
+
+/* v36p: accordion parity with original (Fumadocs) - joined container, no per-card chrome, no chevron */
+main details.accordion { border: none !important; border-radius: 0 !important; background: transparent !important; margin: 0 !important; }
+main .accordion-group { border: 1px solid oklch(1 0 0 / 0.1) !important; border-radius: 12px !important; background: transparent !important; margin-top: 0 !important; margin-bottom: 24px !important; overflow: hidden; }
+main .accordion-group > details + details { border-top: 1px solid oklch(1 0 0 / 0.1) !important; }
+main details.accordion summary { padding: 12px 16px !important; font-size: 14px !important; font-weight: 500 !important; color: rgba(255,255,255,0.7) !important; }
+main details.accordion summary svg { display: none !important; }
+html[data-current-path="/installation"] main details.accordion:not(.accordion-group details) summary { font-size: 16px !important; font-weight: 400 !important; padding: 0 !important; }
