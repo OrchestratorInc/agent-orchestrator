@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 // ErrInvalidCredentials reports that GitHub rejected the stored credential.
@@ -321,7 +322,7 @@ func (s *Service) ListRepos(ctx context.Context) ([]Repo, error) {
 			if errors.Is(rerr, ErrInvalidCredentials) {
 				return nil, ErrInvalidCredentials
 			}
-			return nil, fmt.Errorf("%w: %v", apierr.Unavailable("GITHUB_REFRESH_UNAVAILABLE", "GitHub credential refresh is temporarily unavailable"), rerr)
+			return nil, fmt.Errorf("%w: %w", apierr.Unavailable("GITHUB_REFRESH_UNAVAILABLE", "GitHub credential refresh is temporarily unavailable"), rerr)
 		}
 		repos, status, err = s.fetchRepos(ctx, newToken)
 		if err != nil {

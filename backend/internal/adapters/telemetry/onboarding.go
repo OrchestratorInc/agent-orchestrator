@@ -15,10 +15,12 @@ type OnboardingSink struct {
 	identity *Identity
 }
 
+// NewOnboardingSink wraps a sink with durable onboarding milestone reservations.
 func NewOnboardingSink(next ports.EventSink, identity *Identity) *OnboardingSink {
 	return &OnboardingSink{next: next, identity: identity}
 }
 
+// Emit forwards an event and records eligible milestones once per install.
 func (s *OnboardingSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 	if ev.Name == "ao.onboarding.second_session_spawned" {
 		if s.identity == nil || s.identity.ExportSuppressed() || !s.claim("telemetry_second_session_emitted") {
@@ -44,4 +46,5 @@ func (s *OnboardingSink) claim(name string) bool {
 	return true
 }
 
+// Close closes the wrapped sink.
 func (s *OnboardingSink) Close(ctx context.Context) error { return s.next.Close(ctx) }
