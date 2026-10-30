@@ -589,9 +589,16 @@ export function spawnedSessionIds(items: readonly ConversationItem[]): string[] 
 	return ids;
 }
 
+export function isDuplicateSpawnAction(item: ConversationItem, spawnedIds: ReadonlySet<string>): boolean {
+	return item.kind === "activity" && item.activityKind === "ao_action" && item.status === "completed"
+		&& item.detail?.action === "session.spawned"
+		&& typeof item.detail.targetSessionId === "string"
+		&& spawnedIds.has(item.detail.targetSessionId);
+}
+
 /** The workers a turn started, each showing where it is now. */
 export function SpawnedAgents({ sessionIds }: { sessionIds: readonly string[] }) {
-	const [open, setOpen] = useState(true);
+	const [open, setOpen] = useState(false);
 	return (
 		<div className="min-w-0 text-xs">
 			<button
@@ -633,6 +640,12 @@ function SpawnedAgentLine({ sessionId }: { sessionId: string }) {
 	} else if (latest?.state === "needs_input" || latest?.state === "stuck") {
 		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-needs-you" />;
 		status = <span className="text-status-needs-you">{latest.state === "stuck" ? "Stuck" : "Needs input"}</span>;
+	} else if (session?.status === "idle") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Idle";
+	} else if (session?.status === "exited" || session?.status === "terminated") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = session.status === "terminated" ? "Terminated" : "Exited";
 	} else {
 		lead = <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-status-working motion-reduce:animate-none" />;
 		status = latest ? splitHeadline(splitArtifacts(latest.body).text).headline : "Working";

@@ -45,7 +45,7 @@ function reply(turnId: string, minute: number, text: string): ConversationMessag
 }
 
 function snapshot(items: ConversationItem[]): ConversationSnapshot {
-	const turnIds = [...new Set(items.map((item) => item.turnId as string))];
+	const turnIds = [...new Set(items.map((item) => item.turnId).filter((id): id is string => Boolean(id)))];
 	return {
 		...chatFixtureEmpty,
 		latestSequence: Math.max(...items.map((item) => item.sequence)),
@@ -72,6 +72,43 @@ function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), wor
 }
 
 describe("orchestrator worker updates", () => {
+	it("shows one collapsed spawn group and an idle worker when the daemon also recorded the spawn", async () => {
+		const workspaces = [{
+			id: "proj", name: "proj", path: "/tmp/proj",
+			sessions: [{ id: "proj-288", workspaceId: "proj", title: "Audit usage", provider: "codex", kind: "worker", status: "idle", prs: [] }],
+		}] as unknown as WorkspaceSummary[];
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj --name 'Audit usage'"),
+			detail: { command: "ao spawn --project proj --name 'Audit usage'", output: 'spawned session proj-288 "Audit usage" (idle)' },
+		};
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 13, revision: 0,
+			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check current usage."), spawn, reply("t1", 1, "Worker started."), action], vi.fn(), workspaces);
+
+		const group = screen.getByRole("button", { name: "Spawned 1 agent" });
+		expect(group).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+		expect(screen.queryByText("Audit usage")).not.toBeInTheDocument();
+		await userEvent.click(group);
+		expect(group).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText("Audit usage")).toBeInTheDocument();
+		const idle = screen.getByText("Idle");
+		expect(idle.parentElement?.querySelector(".animate-spin")).toBeNull();
+	});
+
+	it("keeps a structured spawn action when no command group represents it", () => {
+		const action: ConversationActivity = {
+			kind: "activity", id: "action", sequence: 2, revision: 0, activityKind: "ao_action",
+			status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check current usage."), action]);
+		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+	});
+
 	it("draws a report as a row and an answer that asks nothing as one line that keeps copy and rollback", async () => {
 		const onRollback = renderOrchestrator([
 			report("t1", 1, "[done] [Check regressions](ao://sessions/proj/proj-288)\nOne strong candidate: #7043\nScreened 58 PRs."),

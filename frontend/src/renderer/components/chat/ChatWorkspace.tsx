@@ -136,6 +136,7 @@ import {
 	FromAgent,
 	isTaskTitleUpdate,
 	isWorkerLead,
+	isDuplicateSpawnAction,
 	OrchestratorReply,
 	piggybackedUpdates,
 	quietWorkerReply,
@@ -3529,12 +3530,18 @@ export function Timeline({
 		if (openingTurnId) hiddenTurns.delete(openingTurnId);
 		const firstTurn = snapshot.turns[0];
 		if (openingPending && firstTurn) hiddenTurns.delete(firstTurn.id);
-		return groupByTurn({ ...snapshot, items: timelineItems })
+		const groups = groupByTurn({ ...snapshot, items: timelineItems })
 			.filter((group) => !group.turnId || !hiddenTurns.has(group.turnId))
 			.map((group, index) => openingPending && (firstTurn ? group.turnId === firstTurn.id : index === 0 && group.turnId?.startsWith("local:"))
 				? { ...group, live: true, liveStartedAt: openingStartedAt }
 				: group);
-	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems]);
+		if (!workerUpdates) return groups;
+		const spawnedIds = new Set(groups.filter((group) => group.outcome).flatMap((group) => spawnedSessionIds(group.items)));
+		if (spawnedIds.size === 0) return groups;
+		return groups
+			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))
+			.filter((group) => group.items.length > 0);
+	}, [openingPending, openingStartedAt, openingTurnId, snapshot, timelineItems, workerUpdates]);
 	const groups = useStableList(grouped, groupKey, sameGroup);
 	const workerUpdateIndex = useWorkerUpdateIndex(workerUpdates ? snapshot.items : undefined);
 	// One slot carries the start-up row from the first frame: the opening turn's

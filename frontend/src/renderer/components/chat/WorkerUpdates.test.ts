@@ -3,6 +3,7 @@ import type { ConversationActivity, ConversationItem, ConversationMessage } from
 import {
 	asksUser,
 	isWorkerLead,
+	isDuplicateSpawnAction,
 	piggybackedUpdates,
 	quietWorkerReply,
 	renamedTitle,
@@ -111,6 +112,19 @@ describe("worker updates", () => {
 			command("ao status", "spawned session proj-1 (listing, not a spawn)"),
 		];
 		expect(spawnedSessionIds(items)).toEqual(["proj-288", "proj-285"]);
+	});
+
+	it("matches only the completed action for the worker shown by a spawn command", () => {
+		const spawned = new Set(spawnedSessionIds([command("ao spawn --prompt audit", 'spawned session proj-288 "Audit" (idle)')]));
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 3, revision: 0,
+			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt,
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		expect(isDuplicateSpawnAction(action, spawned)).toBe(true);
+		expect(isDuplicateSpawnAction({ ...action, detail: { ...action.detail, targetSessionId: "proj-285" } }, spawned)).toBe(false);
+		expect(isDuplicateSpawnAction({ ...action, status: "failed" }, spawned)).toBe(false);
+		expect(isDuplicateSpawnAction(command("ao spawn --prompt audit"), spawned)).toBe(false);
 	});
 
 	it("finds a worker turn's quiet reply only when it asks nothing", () => {
