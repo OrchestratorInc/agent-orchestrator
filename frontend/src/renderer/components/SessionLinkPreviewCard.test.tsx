@@ -159,34 +159,28 @@ describe("SessionLinkPreviewCard", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("No saved session is available.");
 	});
 
-	it("opens the session when a live card is clicked or activated with Enter", async () => {
+	it("opens the session when a live card is clicked", async () => {
 		mocks.source.mockReturnValue(source({ workspaces: [workspace(session())] }));
 		const onOpen = vi.fn();
 
-		render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" onOpen={onOpen} />);
-		const card = screen.getByRole("link");
-		expect(card).toHaveAttribute("tabindex", "0");
+		const { container } = render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" onOpen={onOpen} />);
+		const card = container.firstElementChild as HTMLElement;
 		expect(card).toHaveClass("cursor-pointer");
 
 		await userEvent.click(card);
 		expect(onOpen).toHaveBeenCalledTimes(1);
-		card.focus();
-		await userEvent.keyboard("{Enter}");
-		expect(onOpen).toHaveBeenCalledTimes(2);
-		await userEvent.keyboard(" ");
-		expect(onOpen).toHaveBeenCalledTimes(2);
 	});
 
 	it("keeps the card inert without a handler and keeps a terminated card's Resume button separate", async () => {
 		const worker = session();
 		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
 		const view = render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" />);
-		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+		expect(view.container.firstElementChild).not.toHaveClass("cursor-pointer");
 
 		const onOpen = vi.fn();
 		mocks.source.mockReturnValue(source({ workspaces: [workspace(session({ isTerminated: true, status: "terminated" }))] }));
 		view.rerender(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" onOpen={onOpen} />);
-		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+		expect(view.container.firstElementChild).not.toHaveClass("cursor-pointer");
 		await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
 		expect(onOpen).not.toHaveBeenCalled();
 	});

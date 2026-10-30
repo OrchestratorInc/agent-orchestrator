@@ -210,23 +210,15 @@ export function SessionLinkPreviewCard({
 	const restoreHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
 	if (session) {
 		const terminated = session.isTerminated === true || session.status === "terminated";
-		// A terminated card already holds its own Resume button, so only a live one is a link.
+		// A terminated card already holds its own Resume button, so only a live one opens on click.
+		// Pointer only: the card is portaled and closes when the link blurs, so the link is the keyboard path.
 		const openable = onOpen && !terminated;
 		return (
 			<HoverCardContent
 				collisionPadding={8}
 				sideOffset={6}
-				className={cn("max-h-48 overflow-y-auto p-3", openable && "cursor-pointer transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60")}
-				{...(openable && {
-					role: "link",
-					tabIndex: 0,
-					onClick: onOpen,
-					onKeyDown: (event: React.KeyboardEvent) => {
-						if (event.key !== "Enter") return;
-						event.preventDefault();
-						onOpen();
-					},
-				})}
+				className={cn("max-h-48 overflow-y-auto p-3", openable && "cursor-pointer transition-colors hover:bg-accent")}
+				onClick={openable ? onOpen : undefined}
 			>
 				{terminated ? <TerminatedCard session={session} hostId={restoreHostId} /> : <SessionCardBody session={session} />}
 			</HoverCardContent>
