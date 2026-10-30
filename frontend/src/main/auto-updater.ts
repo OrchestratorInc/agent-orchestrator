@@ -3061,7 +3061,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       if (!macRestartRequested) throw nativePreparationError ?? new Error("The installer could not restart AO.");
     } catch (err) {
       if (installAbandoned) {
-        await progress?.fail(errorMessage(err)).catch(() => undefined);
+        await progress?.fail(userFacingUpdateError(err, "install")).catch(() => undefined);
         return;
       }
       recordUpdateDiagnostic("install-preparation-failed", {}, err);
