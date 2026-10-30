@@ -5,6 +5,7 @@ import { Platform } from "react-native";
 import PostHog from "posthog-react-native";
 import { getTelemetryIdentity, type SessionMode } from "../api";
 import { cachedInstallId } from "../installId";
+import { setMobileSentryConsent, setMobileSentryPairedInstallId } from "../sentry";
 import { buildMobileContext } from "./context";
 import { type ActiveStorage } from "./dailyActive";
 import {
@@ -102,6 +103,7 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 		// Nothing is captured until loadMobileOptOut() has read the saved preference.
 		awaitPreference: true,
 		onOptOutChange: (optedOut) => {
+			setMobileSentryConsent(!optedOut);
 			void (optedOut
 				? AsyncStorage.setItem(OPT_OUT_STORAGE_KEY, "1")
 				: AsyncStorage.removeItem(OPT_OUT_STORAGE_KEY)
@@ -144,7 +146,10 @@ export async function loadMobileOptOut(): Promise<void> {
 
 /** Adopts the identity and opt-out of the connected desktops (see identitySync.ts). */
 export const syncDesktopTelemetryIdentity = createDesktopIdentitySync(getTelemetryIdentity, (identity) =>
-	telemetry?.adoptDesktopIdentity(identity),
+	{
+		telemetry?.adoptDesktopIdentity(identity);
+		setMobileSentryPairedInstallId(identity && !identity.optedOut ? identity.installId ?? null : null);
+	},
 );
 
 /** The capture facade, or null before init. Call sites no-op when null. */
