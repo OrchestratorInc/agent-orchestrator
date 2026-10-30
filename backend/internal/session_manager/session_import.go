@@ -135,6 +135,10 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		if claudeSessionLive(ctx, filepath.Join(source.ConfigDir, "sessions"), source.NativeID, rec.Metadata.WorkspacePath) {
 			return true
 		}
+	case domain.HarnessKimi:
+		// Kimi publishes a per-session lock file holding the live writer's pid;
+		// its transcript is append-open-close so it is never held open for lsof.
+		return kimiSessionLocked(ctx, source.ConfigDir, source.NativeID)
 	}
 	// A writer holds the plain file; Codex restores a compressed one on resume.
 	return writableTranscriptOwner(ctx, strings.TrimSuffix(rec.Metadata.NativeTranscriptPath, ".zst"))
@@ -155,10 +159,7 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	case domain.HarnessCodex:
 		return providerLockHeld(filepath.Join(source.ConfigDir, "thread-writer-locks", nativeID+".lock"))
 	case domain.HarnessKimi:
-		// Kimi keeps no per-session lock or live-session registry, so a running
-		// Kimi process holding the transcript open for writing is the best
-		// available evidence that the conversation is open elsewhere.
-		return writableTranscriptOwner(ctx, rec.Metadata.NativeTranscriptPath)
+		return kimiSessionLocked(ctx, source.ConfigDir, nativeID)
 	}
 	return false
 }
@@ -226,7 +227,7 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 		if strings.HasPrefix(line, "c") {
 			command = strings.ToLower(line[1:])
 		}
-		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex") || strings.Contains(command, "kimi")) {
+		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex")) {
 			return true
 		}
 	}
