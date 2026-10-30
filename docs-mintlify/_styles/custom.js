@@ -79,9 +79,8 @@
     if (!track || idx == null || idx < 0) return;
     var it = track.items[idx];
     if (!it) return;
-    /* original thumb ends at the active row's bottom boundary (next row's mid-gap), not text center */
-    var nx = track.items[idx + 1];
-    var center = nx ? (it.top + nx.top) / 2 : it.top + it.h;
+    /* original thumb ends at active row bottom minus its 6px padding (measured on live site) */
+    var center = it.top + it.h - 6;
     track.hi.style.clipPath = "polygon(0 0, 100% 0, 100% " + center + "px, 0 " + center + "px)";
     if (track.dot) { track.dot.setAttribute("cx", String(it.x)); track.dot.setAttribute("cy", String(center)); }
     track.thumb.style.left = (it.x - 2) + "px";
