@@ -12,38 +12,79 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-func TestCommandContextWrapsBatchShimWithComSpec(t *testing.T) {
+func TestCommandContextRunsBatchShim(t *testing.T) {
 	dir := t.TempDir()
-	shim := filepath.Join(dir, "agent tool.cmd")
+	shim := filepath.Join(dir, "agent-tool.cmd")
 	if err := os.WriteFile(shim, []byte("@echo off\r\necho %~1\r\n"), 0o600); err != nil {
 		t.Fatal(err)
-	}
-	comSpec := os.Getenv("ComSpec")
-	if comSpec == "" {
-		t.Fatal("ComSpec is not set")
 	}
 
 	cmd, err := commandContext(context.Background(), shim, "argument with spaces")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.EqualFold(cmd.Path, comSpec) {
-		t.Fatalf("Path = %q, want ComSpec", cmd.Path)
-	}
-	wantCommand := quoteWindowsBatchArg(shim) + " " + quoteWindowsBatchArg("argument with spaces")
-	if cmd.SysProcAttr == nil || !strings.Contains(cmd.SysProcAttr.CmdLine, wantCommand) {
-		t.Fatalf("CmdLine = %q, want quoted shim and argument", cmd.SysProcAttr.CmdLine)
-	}
 	aoprocess.ConfigureTreeCancellation(cmd)
-	if cmd.SysProcAttr.CmdLine == "" {
-		t.Fatal("configureProcessGroup discarded the batch command line")
-	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("run batch shim: %v\n%s", err, output)
 	}
 	if got := strings.TrimSpace(string(output)); got != "argument with spaces" {
 		t.Fatalf("output = %q, want batch argument preserved", got)
+	}
+}
+
+// An npm-shaped shim is unwrapped to its target, so its arguments never pass
+// through cmd.exe quoting (issue #7212).
+func TestCommandContextUnwrapsNPMLikeShim(t *testing.T) {
+	dir := t.TempDir()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := filepath.Join(dir, "node.exe")
+	content, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(node, content, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	entry := filepath.Join(dir, "node_modules", "@openai", "codex", "bin", "codex.js")
+	if err := os.MkdirAll(filepath.Dir(entry), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(entry, []byte("// entry"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shim := filepath.Join(dir, "codex.cmd")
+	shimContent := `@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@openai\codex\bin\codex.js" %*
+`
+	if err := os.WriteFile(shim, []byte(shimContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, err := commandContext(context.Background(), shim, "-c", `hooks.SessionStart=[{hooks=[{type="command",command="& \"C:\\ao\\ao.exe\" hooks codex session-start",timeout=5}]}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd.Path != node {
+		t.Fatalf("cmd.Path = %q, want the shim target %q (cmd.exe would re-parse the arguments)", cmd.Path, node)
 	}
 }
 
