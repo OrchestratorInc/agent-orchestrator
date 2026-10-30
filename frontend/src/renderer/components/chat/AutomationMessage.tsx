@@ -289,6 +289,7 @@ export function steeredBrowserFeedback(activity: ConversationActivity): ParsedBr
  * the card it had while queued instead of exposing the agent-facing transport.
  */
 export function SteeredBrowserFeedback({ annotations }: { annotations: ParsedBrowserAnnotationMessage }) {
+	const { t } = useTranslation();
 	return (
 		<div className="flex flex-col items-end gap-1" data-testid="steered-browser-feedback">
 			<div className={cn(humanBubbleClass(), "min-w-0")}>
@@ -296,7 +297,7 @@ export function SteeredBrowserFeedback({ annotations }: { annotations: ParsedBro
 			</div>
 			<span className="flex items-center gap-1 text-xs text-muted-foreground">
 				<CornerDownRight aria-hidden="true" className="size-3" />
-				Steered
+				{t("chat.automation.steered")}
 			</span>
 		</div>
 	);

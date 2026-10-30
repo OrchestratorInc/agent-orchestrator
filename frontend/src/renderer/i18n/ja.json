@@ -3471,6 +3471,7 @@
 	"chat.automation.visualChanges_other": "見た目の変更 {{count}} 件",
 	"chat.automation.screenshots_one": "参考スクリーンショット {{count}} 枚",
 	"chat.automation.screenshots_other": "参考スクリーンショット {{count}} 枚",
+	"chat.automation.steered": "誘導済み",
 	"sideChat.deleteConfirm": "サイドチャットを削除しますか？",
 	"sideChat.deleteExplanation": "このサイドチャットとメッセージが削除されます。",
 	"sideChat.delete": "削除",
