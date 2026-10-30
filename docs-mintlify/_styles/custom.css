@@ -1192,3 +1192,16 @@ button[aria-label="Ask Assistant"] { display: none !important; }
 @media (min-width: 1024px) {
   button.ao-side-toggle { margin-top: 4px !important; }
 }
+
+/* v36j: table caption + rounded corners like original */
+main table { border-radius: 8px; }
+main table caption {
+  caption-side: top;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 14px;
+  font-weight: 400;
+  padding: 0 12px;
+}
+main table:not(:has(> caption)) th:first-child { border-top-left-radius: 8px; }
+main table:not(:has(> caption)) th:last-child { border-top-right-radius: 8px; }
