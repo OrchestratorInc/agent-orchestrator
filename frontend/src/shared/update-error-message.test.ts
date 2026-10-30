@@ -137,10 +137,52 @@ describe("userFacingUpdateError", () => {
 		expect(userFacingUpdateError(own, "install")).toBe(own);
 	});
 
-	it("falls back to a generic line for a dump it does not recognize", () => {
-		const err = new Error("Something odd\n    at Object.<anonymous> (/Applications/Agent Orchestrator.app/Contents/Resources/app.asar/main.js:1:1)");
+	it("keeps a clean first line of a dump it does not recognize", () => {
+		const err = new Error("Error: Something odd\n    at Object.<anonymous> (/Applications/Agent Orchestrator.app/Contents/Resources/app.asar/main.js:1:1)");
+
+		expect(userFacingUpdateError(err, "download")).toBe("Download failed — Something odd");
+	});
+
+	it("falls back to a generic line when the dump's first line is a dump too", () => {
+		const err = new Error("Cannot open /Applications/AO.app/Contents/Resources/app.asar/main.js\n    at Object.<anonymous> (main.js:1:1)");
 
 		expect(userFacingUpdateError(err, "download")).toBe("Download failed. Try again in a few minutes.");
+		expect(userFacingUpdateError(new Error("x".repeat(1001)), "check")).toBe("Couldn't check for updates. Try again in a few minutes.");
+	});
+
+	// Retrying downloads the same build, so this must not say "try again".
+	it("explains a Windows signature rejection instead of asking for a retry", () => {
+		const err = Object.assign(
+			new Error(
+				`New version 2.0.0 is not signed by the application owner: publisherNames: Agent Orchestrator, raw info: {\n${'  "Status": 1,\n'.repeat(80)}}`,
+			),
+			{ code: "ERR_UPDATER_INVALID_SIGNATURE" },
+		);
+
+		expect(userFacingUpdateError(err, "download")).toBe(
+			"Download failed — the update's signature couldn't be verified, so it was not installed. Download the latest build manually and install it over this one.",
+		);
+	});
+
+	it.each([
+		["The request timed out.", "the update server timed out. Try again in a few minutes."],
+		["Could not connect to the server.", "the update server couldn't be reached. Check your connection and try again."],
+		["The Internet connection appears to be offline.", "the update server couldn't be reached. Check your connection and try again."],
+		["A server with the specified hostname could not be found.", "the update server couldn't be reached. Check your connection and try again."],
+	])("explains the macOS network failure %s", (cause, reason) => {
+		expect(userFacingUpdateError(new Error(cause), "install")).toBe(`Couldn't install the update — ${reason}`);
+	});
+
+	it("passes AO's own check deadline through", () => {
+		const own = "Update check timed out. The update service did not respond in time. Try again.";
+
+		expect(userFacingUpdateError(new Error(own), "check")).toBe(own);
+	});
+
+	it("names a failed return as a return", () => {
+		expect(userFacingUpdateError(releasesFeedDump("502 Bad Gateway"), "return")).toBe(
+			"Couldn't return to your update channel — the update server isn't available right now. Try again in a few minutes.",
+		);
 	});
 
 	it("falls back to a generic line when there is no message", () => {

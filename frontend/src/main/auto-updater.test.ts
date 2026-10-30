@@ -1942,6 +1942,21 @@ describe("startAutoUpdates", () => {
     expect(consoleError).toHaveBeenCalledWith("manual update check failed:", err);
   });
 
+  it("logs a manual failure once when the updater also emits it", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
+    const err = releasesFeedTimeout();
+    autoUpdater.checkForUpdates.mockImplementationOnce(() => {
+      updaterEvents.get("checking-for-update")?.();
+      updaterEvents.get("error")?.(err);
+      return Promise.reject(err);
+    });
+
+    await module.checkForUpdatesNow(stateDir);
+
+    expect(consoleError.mock.calls.filter((call) => call.includes(err))).toEqual([["manual update check failed:", err]]);
+  });
+
   it("keeps a raw automatic-check failure out of checkError (#5755)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const { module, autoUpdater, updaterEvents } = await importAutoUpdater();
@@ -3430,6 +3445,26 @@ describe("returnToHome", () => {
     expect(autoUpdater.checkForUpdates).toHaveBeenCalledTimes(1);
   });
 
+  it("names a failed return-home check as a failed return (#5755)", async () => {
+    const { module, autoUpdater } = await importAutoUpdater({
+      enabled: true,
+      channel: "latest",
+      nightlyAck: false,
+      feature: { pr: 7 },
+    });
+    autoUpdater.checkForUpdates.mockRejectedValueOnce(
+      Object.assign(new Error("503 Service Unavailable\nHeaders: {}"), { name: "HttpError", statusCode: 503 }),
+    );
+
+    await module.returnToHome(stateDir, "req-return");
+
+    expect(module.getUpdateStatus()).toMatchObject({
+      state: "error",
+      requestId: "req-return",
+      message: "Couldn't return to your update channel — the update server isn't available right now. Try again in a few minutes.",
+    });
+  });
+
   it("reports unsupported in dev (unpackaged) without touching settings", async () => {
     const { module, autoUpdater, updateUpdateSettings } =
       await importAutoUpdater(
@@ -3786,6 +3821,23 @@ describe("quitAndInstallUpdate", () => {
       expect(failed).toHaveBeenCalledOnce();
       const progress = await startMacUpdateProgress.mock.results[0].value;
       expect(progress.fail).toHaveBeenCalledWith("could not persist the installer request");
+    } finally { restore(); }
+  });
+
+  it("rewrites a raw native failure that ends a requested restart (#5755)", async () => {
+    const restore = stubProcess("darwin", "/usr/bin/node");
+    try {
+      const { module, updaterEvents, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater(undefined, { nativeReadyManually: true });
+      await module.startAutoUpdates(stateDir);
+      updaterEvents.get("update-downloaded")?.({ version: "2.1.0" });
+      nativeAutoUpdater.emit("update-downloaded");
+      module.setUpdateRestartFailureHandler(vi.fn());
+      await module.quitAndInstallUpdate();
+      nativeAutoUpdater.emit("error", new Error("The request timed out."));
+      const expected = "Couldn't install the update — the update server timed out. Try again in a few minutes.";
+      const progress = await startMacUpdateProgress.mock.results[0].value;
+      expect(progress.fail).toHaveBeenCalledWith(expected);
+      expect(module.getUpdateStatus()).toMatchObject({ state: "error", message: expected });
     } finally { restore(); }
   });
 

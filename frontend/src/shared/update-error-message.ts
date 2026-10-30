@@ -11,13 +11,17 @@
  * met yet still cannot fill the screen.
  */
 
-/** The operation that failed. It decides how the sentence starts. */
-export type UpdateErrorPhase = "check" | "download" | "install";
+/**
+ * The operation that failed. It decides how the sentence starts. "return" is
+ * the check that leaves a pinned PR build for the home channel.
+ */
+export type UpdateErrorPhase = "check" | "download" | "install" | "return";
 
 const LEAD: Record<UpdateErrorPhase, string> = {
 	check: "Couldn't check for updates",
 	download: "Download failed",
 	install: "Couldn't install the update",
+	return: "Couldn't return to your update channel",
 };
 
 // One wording for a missing manifest, a 404 and a feed with no release, so one
@@ -26,6 +30,7 @@ const NOT_FOUND: Record<UpdateErrorPhase, string> = {
 	check: "the update information was not found on the server.",
 	download: "the update file was not found on the server.",
 	install: "the update file was not found on the server.",
+	return: "the update information was not found on the server.",
 };
 
 const TRY_SOON = "Try again in a few minutes.";
@@ -33,10 +38,18 @@ const TIMED_OUT_REASON = `the update server timed out. ${TRY_SOON}`;
 const UNREACHABLE_REASON = "the update server couldn't be reached. Check your connection and try again.";
 
 // Failures below HTTP, bare or wrapped inside a provider's message: a socket
-// timeout from builder-util-runtime, Chromium's net:: codes and Node's socket
-// errors.
-const TIMED_OUT_PATTERN = /\b(?:Request timed out|ETIMEDOUT|ESOCKETTIMEDOUT)\b/;
-const UNREACHABLE_PATTERN = /\bnet::|\b(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ENETUNREACH|EHOSTUNREACH)\b|\bsocket hang up\b/;
+// timeout from builder-util-runtime, Chromium's net:: codes, Node's socket
+// errors and the NSURLError sentences Squirrel reports on macOS ("The request
+// timed out.", "Could not connect to the server."). AO's own "Update check
+// timed out" deadline message is not matched and passes through.
+const TIMED_OUT_PATTERN = /\b(?:request timed out|ETIMEDOUT|ESOCKETTIMEDOUT)\b/i;
+const UNREACHABLE_PATTERN =
+	/\bnet::|\b(?:ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ENETUNREACH|EHOSTUNREACH)\b|\bsocket hang up\b|\bcould not connect to the server\b|\bInternet connection appears to be offline\b|\bhostname could not be found\b|\bnetwork connection was lost\b/i;
+
+// A dump's first line is often the cause ("Something odd" above a stack). It is
+// shown when it is short and clean, so a failure that retrying will not fix
+// still says what went wrong.
+const MAX_FIRST_LINE_CHARS = 300;
 
 /**
  * Longest updater message shown as-is: the bound the restart dialog used to
@@ -61,6 +74,11 @@ const RAW_DUMP_PATTERNS = [
 const UNREADABLE_FEED_CODES = new Set(["ERR_UPDATER_INVALID_RELEASE_FEED", "ERR_UPDATER_INVALID_UPDATE_INFO"]);
 const MISSING_RELEASE_CODES = new Set(["ERR_UPDATER_LATEST_VERSION_NOT_FOUND", "ERR_UPDATER_NO_PUBLISHED_VERSIONS"]);
 
+// Windows refuses a build its publisher check rejects, and the message appends
+// the whole Authenticode result as JSON. Retrying fetches the same build.
+const INVALID_SIGNATURE_REASON =
+	"the update's signature couldn't be verified, so it was not installed. Download the latest build manually and install it over this one.";
+
 /** True when the text is an updater dump rather than a sentence for a person. */
 export function looksLikeRawUpdateError(text: string): boolean {
 	return text.length > MAX_DISPLAYABLE_CHARS || RAW_DUMP_PATTERNS.some((pattern) => pattern.test(text));
@@ -76,7 +94,7 @@ export function displayableUpdateError(text: string | undefined, fallback: strin
 // to users as an error dialog.
 export function isManifest404Error(err: unknown): boolean {
 	if (errorCode(err) === "ERR_UPDATER_CHANNEL_FILE_NOT_FOUND") return true;
-	const msg = errorText(err);
+	const msg = updateErrorText(err);
 	return msg.includes("HttpError: 404") && /\.yml\b/i.test(msg);
 }
 
@@ -90,7 +108,7 @@ export function isManifest404Error(err: unknown): boolean {
  * notice, a download and the restart dialog render the text itself.
  */
 export function userFacingUpdateError(err: unknown, phase: UpdateErrorPhase): string {
-	const raw = errorText(err);
+	const raw = updateErrorText(err);
 	const lead = LEAD[phase];
 	if (raw === "") return `${lead}. ${TRY_SOON}`;
 	if (isManifest404Error(err)) return `${lead} — ${NOT_FOUND[phase]}`;
@@ -110,16 +128,24 @@ export function userFacingUpdateError(err: unknown, phase: UpdateErrorPhase): st
 	if (TIMED_OUT_PATTERN.test(raw)) return `${lead} — ${TIMED_OUT_REASON}`;
 	if (UNREACHABLE_PATTERN.test(raw)) return `${lead} — ${UNREACHABLE_REASON}`;
 	const code = errorCode(err);
+	if (code === "ERR_UPDATER_INVALID_SIGNATURE" || /\bis not signed by the application owner\b/.test(raw)) {
+		return `${lead} — ${INVALID_SIGNATURE_REASON}`;
+	}
 	if (UNREADABLE_FEED_CODES.has(code) || /^Cannot parse (?:releases feed|update info)\b/.test(raw)) {
 		return `${lead} — the update information from the server couldn't be read. ${TRY_SOON}`;
 	}
 	if (MISSING_RELEASE_CODES.has(code) || /^(?:Unable to find latest version|No published versions)\b/.test(raw)) {
 		return `${lead} — ${NOT_FOUND[phase]}`;
 	}
-	return looksLikeRawUpdateError(raw) ? `${lead}. ${TRY_SOON}` : raw;
+	if (!looksLikeRawUpdateError(raw)) return raw;
+	const firstLine = raw.split("\n", 1)[0].replace(/^Error: /, "").trim().replace(/[:,]$/, "");
+	return firstLine && firstLine.length <= MAX_FIRST_LINE_CHARS && !looksLikeRawUpdateError(firstLine)
+		? `${lead} — ${firstLine}`
+		: `${lead}. ${TRY_SOON}`;
 }
 
-function errorText(err: unknown): string {
+/** An update error's text: its message, or "" when there is none. */
+export function updateErrorText(err: unknown): string {
 	if (err instanceof Error) return err.message;
 	return err == null ? "" : String(err);
 }

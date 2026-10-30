@@ -37,7 +37,13 @@ import {
   type UpdatePhase,
   type UpdateTrigger,
 } from "../shared/update-telemetry";
-import { isManifest404Error, userFacingUpdateError } from "../shared/update-error-message";
+import {
+  isManifest404Error,
+  looksLikeRawUpdateError,
+  updateErrorText,
+  userFacingUpdateError,
+  type UpdateErrorPhase,
+} from "../shared/update-error-message";
 
 // Current AO uses the stock full-ZIP path. A future compatible build explicitly
 // selects the v2 subclass; old clients never learn its metadata or map URLs.
@@ -323,7 +329,7 @@ function insufficientDiskForStaging(requiredBytes: number): boolean {
 // Rewrites only known extraction/verification failures to a short line; any
 // other error passes through so its own recovery and messaging stay intact.
 function shortStagingMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
+  const raw = updateErrorText(err);
   if (/no space left on device/i.test(raw)) return STAGE_DISK_MESSAGE;
   if (/ditto:|pkzip|code ?signature|codesign|failed to (?:extract|unzip)/i.test(raw)) return STAGE_STALL_MESSAGE;
   return raw;
@@ -722,8 +728,7 @@ function activeUpdateTrigger(): UpdateTrigger {
 
 function emitUpdateFailure(err: unknown): void {
   recordUpdateDiagnostic("update-failure", {}, err);
-  const message =
-    err instanceof Error ? err.message : err === undefined ? undefined : String(err);
+  const message = updateErrorText(err);
   emitUpdateOutcome(
     updateFailureOutcome(message, activeUpdaterPhase, activeUpdateTrigger(), pendingUpdateVersion),
   );
@@ -735,15 +740,22 @@ function broadcast(
   status: UpdateStatus,
   owner: "independent" | "automatic-operation" = "independent",
 ): void {
+  // Error paths rewrite their failure before broadcasting it. This catches one
+  // that builds its own message from updater text, so Settings never gets a
+  // dump (#5755).
+  const safeStatus: UpdateStatus =
+    status.state === "error" && status.message !== undefined && looksLikeRawUpdateError(status.message)
+      ? { ...status, message: userFacingUpdateError(status.message, failedUpdatePhase()) }
+      : status;
   const statusWithCheckTime: UpdateStatus =
-    lastCheckedAtMs === undefined || status.checkedAt !== undefined
-      ? status
-      : { ...status, checkedAt: lastCheckedAtMs };
+    lastCheckedAtMs === undefined || safeStatus.checkedAt !== undefined
+      ? safeStatus
+      : { ...safeStatus, checkedAt: lastCheckedAtMs };
   const { releaseNotes: _ignored, ...statusWithoutNotes } = statusWithCheckTime;
   const stamped: UpdateStatus = {
     ...statusWithoutNotes,
     ...stagedStamp(),
-    ...releaseNotesFor(status),
+    ...releaseNotesFor(safeStatus),
     ...(lastCheckError ? { checkError: lastCheckError } : {}),
     ...(consecutiveAutomaticNetFailures >= STALE_CHECK_NUDGE_THRESHOLD
       ? { staleCheckNudge: true }
@@ -1270,7 +1282,7 @@ const MAC_STAGING_FAILURE_MESSAGE =
 
 function handleMacStagingFailure(err: unknown, requestId = activeUpdaterRequestId): boolean {
   if (process.platform !== "darwin") return false;
-  const message = err instanceof Error ? err.message : String(err);
+  const message = updateErrorText(err);
   // Match the installer failure, not an unrelated ENOENT or download error.
   if (
     !/ditto:/i.test(message) ||
@@ -1602,9 +1614,7 @@ async function runRetirementPoll(stateDir: string): Promise<void> {
 // (net::ERR_*). When the network stack wedges, every updater request fails
 // this way until the app restarts (#3526).
 function isNetError(err: unknown): boolean {
-  return isNetErrorMessage(
-    err instanceof Error ? err.message : err === undefined ? undefined : String(err),
-  );
+  return isNetErrorMessage(updateErrorText(err));
 }
 
 // recordAutomaticNetFailure counts one net-level automatic-check failure,
@@ -1676,6 +1686,16 @@ function clearUnrecoverableRememberedBuild(): void {
   stagedEscalated = false;
   stagedRequestId = undefined;
   stopEscalationTimer();
+}
+
+// The operation a failure belongs to, as the person sees it. A restart that has
+// to fetch its build again fails mid-check or mid-download, but the person asked
+// to install, and the restart dialog says the install failed, so Settings says
+// the same. Likewise a failed return-home check is a failed return.
+function failedUpdatePhase(): UpdateErrorPhase {
+  if (activeUpdaterOperation === "manual-install") return "install";
+  if (activeUpdaterOperation === "return-home" && activeUpdaterPhase === "check") return "return";
+  return activeUpdaterPhase;
 }
 
 // The restart dialog renders a rejected install's message, so it gets the
@@ -1762,7 +1782,7 @@ function settleWithoutFailure(): void {
 }
 
 function isStagedInstallRejection(err: unknown): boolean {
-  return STAGED_INSTALL_REJECTION_PATTERN.test(err instanceof Error ? err.message : String(err));
+  return STAGED_INSTALL_REJECTION_PATTERN.test(updateErrorText(err));
 }
 
 /**
@@ -1974,8 +1994,11 @@ function wireUpdaterEvents(): void {
         macRestartRequested = false;
         macRestartPreparation = undefined;
         stagedInCurrentProcess = false;
-        void macRestartProgress?.fail(short.message).catch(() => undefined);
-        broadcast({ state: "error", message: short.message });
+        // shortStagingMessage passes an unrecognized failure through verbatim;
+        // the person asked to install, so they get the install sentence (#5755).
+        const message = userFacingUpdateError(short, "install");
+        void macRestartProgress?.fail(message).catch(() => undefined);
+        broadcast({ state: "error", message });
         // Squirrel can close the windows, then fail to persist its relaunch
         // request. Restore AO in that still-running process instead of leaving
         // the user with no app window and no possible automatic restart.
@@ -2285,11 +2308,12 @@ function wireUpdaterEvents(): void {
     // Chromium network-stack failures carry a netError flag so the renderer can
     // localize restart guidance instead of showing the raw net:: string (#3526).
     // The full error stays in the log; Settings gets one sentence (#5755).
-    // A restart that has to fetch its build again fails here mid-check or
-    // mid-download. The person asked to install, and the restart dialog says
-    // the install failed, so Settings says the same.
-    const failedAs = activeUpdaterOperation === "manual-install" ? "install" : activeUpdaterPhase;
-    console.error(`update ${failedAs} failed:`, err);
+    // A manual operation's own catch logs the same failure, so log here only
+    // for one nobody awaits.
+    const failedAs = failedUpdatePhase();
+    if (activeUpdaterOperation === undefined || activeUpdaterOperation === "automatic-check") {
+      console.error(`update ${failedAs} failed:`, err);
+    }
     const status: UpdateStatus = {
       state: "error",
       message: userFacingUpdateError(err, failedAs),
@@ -2741,7 +2765,7 @@ export async function returnToHome(
     console.error(`return home ${failed.phase} failed:`, err);
     broadcast({
       state: "error",
-      message: userFacingUpdateError(err, failed.phase),
+      message: userFacingUpdateError(err, failed.phase === "check" ? "return" : "download"),
       ...(requestId === undefined ? {} : { requestId }),
     });
   }
