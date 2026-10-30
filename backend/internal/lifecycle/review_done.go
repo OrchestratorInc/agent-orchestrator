@@ -104,6 +104,8 @@ func chatNoticeDeliveryState(ctx context.Context, chat reviewNoticeChatStore, id
 // across restarts too. A failed send records its error on the run and is
 // retried with backoff, at most domain.ReviewWorkerNoticeMaxAttempts times;
 // later passes wait behind a notice still retrying, not one that gave up.
+// A changes-requested notice whose inline comments were all forwarded already
+// is marked sent without a message: those comments are the result.
 func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.SessionID) error {
 	store, ok := m.store.(reviewNoticeStore)
 	if !ok || m.guard == nil {
@@ -149,12 +151,23 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 				return err
 			}
 		}
-		msg, ready, err := m.reviewDoneNotice(ctx, run, sessionRuns)
+		msg, ready, redundant, err := m.reviewDoneNotice(ctx, run, sessionRuns)
 		if err != nil {
 			return err
 		}
 		if !ready {
 			return nil
+		}
+		if redundant {
+			// Every inline comment of this changes-requested review already
+			// reached the worker as review feedback, and those comments are
+			// the result. A notice on top of them only reads as "nothing new".
+			slog.Default().InfoContext(ctx, "lifecycle: review done notice skipped; its inline comments were already forwarded", "session", id, "run", run.ID)
+			if _, err := store.MarkReviewRunNoticeSent(ctx, run.ID); err != nil {
+				return err
+			}
+			delete(m.reviewNoticeSeen, run.ID)
+			continue
 		}
 		sendCtx := ctx
 		if isChat {
@@ -320,25 +333,28 @@ func (m *Manager) StartReviewDoneSweep(ctx context.Context, interval time.Durati
 // now. A pass that posted a provider review waits (up to the grace) until the
 // SCM observer has recorded that review, so its inline comments are forwarded
 // first and the count is real. sessionRuns are the worker's review passes,
-// used to tell the worker when a newer pass exists. Caller holds
-// reviewNoticeMu.
-func (m *Manager) reviewDoneNotice(ctx context.Context, run domain.ReviewRun, sessionRuns []domain.ReviewRun) (string, bool, error) {
+// used to tell the worker when a newer pass exists. redundant reports a
+// changes-requested notice whose inline comments were all forwarded already:
+// it is marked sent without being delivered. Caller holds reviewNoticeMu.
+func (m *Manager) reviewDoneNotice(ctx context.Context, run domain.ReviewRun, sessionRuns []domain.ReviewRun) (msg string, ready, redundant bool, err error) {
 	posted := run.Status == domain.ReviewRunComplete && run.GithubReviewID != ""
 	inline, observed := 0, false
 	reviewURL := ""
+	var owned []domain.PullRequestComment
 	if posted {
 		comments, err := m.store.ListPRComments(ctx, run.PRURL)
 		if err != nil {
-			return "", false, fmt.Errorf("list comments for %s: %w", run.PRURL, err)
+			return "", false, false, fmt.Errorf("list comments for %s: %w", run.PRURL, err)
 		}
 		for _, c := range comments {
 			if strings.TrimSpace(c.ReviewID) == run.GithubReviewID {
-				inline++
+				owned = append(owned, c)
 			}
 		}
+		inline = len(owned)
 		reviews, err := m.store.ListPRReviews(ctx, run.PRURL)
 		if err != nil {
-			return "", false, fmt.Errorf("list reviews for %s: %w", run.PRURL, err)
+			return "", false, false, fmt.Errorf("list reviews for %s: %w", run.PRURL, err)
 		}
 		for _, r := range reviews {
 			if r.ID == run.GithubReviewID || strings.HasSuffix(r.URL, "#pullrequestreview-"+run.GithubReviewID) {
@@ -353,22 +369,59 @@ func (m *Manager) reviewDoneNotice(ctx context.Context, run domain.ReviewRun, se
 			wait, seen := m.reviewNoticeSeen[run.ID]
 			if !seen {
 				m.reviewNoticeSeen[run.ID] = reviewNoticeWait{session: run.SessionID, since: now}
-				return "", false, nil
+				return "", false, false, nil
 			}
 			if now.Sub(wait.since) < reviewNoticeObserveGrace {
-				return "", false, nil
+				return "", false, false, nil
 			}
 		}
 	}
 	later := reviewNoticeLater{newer: newerReviewRun(run, sessionRuns)}
 	pr, ok, err := m.store.GetPR(ctx, run.PRURL)
 	if err != nil {
-		return "", false, fmt.Errorf("get PR %s: %w", run.PRURL, err)
+		return "", false, false, fmt.Errorf("get PR %s: %w", run.PRURL, err)
 	}
 	if ok {
 		later.head = pr.HeadSHA
 	}
-	return formatReviewDoneNotice(run, reviewURL, inline, observed, later), true, nil
+	// A changes-requested review's result is its inline comments. Once each
+	// one reached the worker as review feedback, the notice adds nothing. A
+	// pass about an earlier commit or with a newer pass still gets its note.
+	if run.Verdict == domain.VerdictChangesRequested && posted && observed && inline > 0 && later.laterNote(run) == "" {
+		forwarded, err := m.reviewCommentsForwarded(ctx, run.PRURL, owned)
+		if err != nil {
+			return "", false, false, err
+		}
+		if forwarded {
+			return "", true, true, nil
+		}
+	}
+	return formatReviewDoneNotice(run, reviewURL, inline, observed, later), true, false, nil
+}
+
+// reviewCommentsForwarded reports whether every comment in comments already
+// reached the worker as review feedback: the reaction ledger (react.seen,
+// persisted in pr.last_nudge_signature) holds the per-comment entry that
+// forwarding records only after a send went through. Caller holds
+// reviewNoticeMu; forwarding never holds react.mu while it delivers notices,
+// so taking it here keeps the order reviewNoticeMu, then react.mu.
+func (m *Manager) reviewCommentsForwarded(ctx context.Context, prURL string, comments []domain.PullRequestComment) (bool, error) {
+	m.react.mu.Lock()
+	defer m.react.mu.Unlock()
+	if prURL != "" && !m.react.loaded[prURL] {
+		if err := m.loadPRSignaturesLocked(ctx, prURL); err != nil {
+			return false, fmt.Errorf("load review feedback ledger for %s: %w", prURL, err)
+		}
+		m.react.loaded[prURL] = true
+	}
+	for _, c := range comments {
+		obs := []ports.PRCommentObservation{{ID: c.ID, ThreadID: c.ThreadID}}
+		sig := reviewCommentsSignature(obs)
+		if sig == "" || m.react.seen[commentNudgeKey(prURL, obs[0])] != sig {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // reviewNoticeLater is what happened on the PR after a pass started: its

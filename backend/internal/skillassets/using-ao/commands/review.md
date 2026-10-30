@@ -150,9 +150,12 @@ just pushed and it still says already reviewed, wait a few seconds and retry. Th
 
 By default the command turns on the worker session's review auto-inject. The
 reviewer posts an inline GitHub comment for each change it requires, and AO
-forwards those comments to the worker like any other review comments. An
-approval adds no comments, so check the verdict with `ao review ls`. If a run
-shows `failed` or `cancelled`, trigger again; nothing else reports it.
+forwards those comments to the worker like any other review comments. When a
+run ends, AO sends the worker one "AO review done" message with the verdict
+(approved, changes requested, failed, or cancelled) and whether another review
+is worth requesting. A changes-requested review whose inline comments all
+reached the worker ends with those comments instead. With review feedback
+delivery off no message is sent; check the verdict with `ao review ls`.
 
 **Examples:**
 

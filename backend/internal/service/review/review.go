@@ -820,9 +820,10 @@ func (s *Service) SubmitMany(ctx context.Context, workerID domain.SessionID, rev
 	}
 	// The findings reach the worker through the PR itself: the reviewer posts
 	// its review on the provider, and the SCM observer forwards unresolved
-	// review comments to the worker like any other reviewer's. AO adds only a
-	// short "review done" notice per pass, so the worker knows the round ended
-	// even when there are no comments to forward.
+	// review comments to the worker like any other reviewer's. AO adds at most
+	// a short "review done" notice per pass, so the worker knows the round
+	// ended even when there are no comments to forward; a changes-requested
+	// pass whose comments all reached the worker needs none.
 	s.notifyReviewDone(ctx, workerID)
 	return runs, nil
 }

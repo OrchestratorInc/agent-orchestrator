@@ -186,33 +186,182 @@ func TestReviewDoneNotice_WaitsForObservedReview(t *testing.T) {
 	assertContains(t, msg.msgs[0], "AO review done: approved", "Inline comments: 0")
 }
 
-// Changes requested: the notice comes after the forwarded inline comments in
-// the same observation and names how many there are, without repeating the
-// summary.
-func TestReviewDoneNotice_ChangesRequestedFollowsInlineComments(t *testing.T) {
-	m, st, msg := newNoticeManager(t)
-	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary with optional ideas")}
-	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
-	st.comments[donePR] = []domain.PullRequestComment{
+func changesRequestedComments() []domain.PullRequestComment {
+	return []domain.PullRequestComment{
 		{ID: "c1", ThreadID: "T1", ReviewID: "777", Author: "me", File: "a.go", Line: 3, Body: "nil check", AutoInjectReview: true},
 		{ID: "c2", ThreadID: "T2", ReviewID: "777", Author: "me", File: "b.go", Line: 9, Body: "missing test", AutoInjectReview: true},
 	}
+}
+
+func countDoneNotices(msgs []string) int {
+	n := 0
+	for _, m := range msgs {
+		if strings.Contains(m, "AO review done") {
+			n++
+		}
+	}
+	return n
+}
+
+// Changes requested with inline comments: the forwarded comments are the
+// result. Once every comment of the review reached the worker, the notice is
+// marked sent without being delivered, so the worker does not get a second
+// message that reads as "nothing new". Later passes and a restarted daemon do
+// not send it either.
+func TestReviewDoneNotice_ChangesRequestedSkippedOnceAllCommentsForwarded(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary with optional ideas")}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = changesRequestedComments()
 
 	if err := m.ApplyPRObservation(ctx, "w-1", ports.PRObservation{Fetched: true, URL: donePR}); err != nil {
 		t.Fatal(err)
 	}
-	if len(msg.msgs) < 2 {
-		t.Fatalf("want comment feedback then done message, got %v", msg.msgs)
+	assertContains(t, strings.Join(msg.msgs, "\n"), "nil check", "missing test")
+	if n := countDoneNotices(msg.msgs); n != 0 {
+		t.Fatalf("done message sent after every comment was forwarded: %v", msg.msgs)
 	}
+	if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("notice = %q, want sent", got)
+	}
+
+	sent := len(msg.msgs)
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	New(st, msg).SweepReviewDoneNotices(ctx)
+	if len(msg.msgs) != sent {
+		t.Fatalf("messages after another pass and a restart: %v", msg.msgs[sent:])
+	}
+}
+
+// A comment of the review that was not forwarded (here: delivery was off when
+// it was observed) keeps the notice: it comes after the forwarded comments,
+// names how many there are, and does not repeat the summary.
+func TestReviewDoneNotice_ChangesRequestedSentWhileACommentWasNotForwarded(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary with optional ideas")}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = changesRequestedComments()
+	st.comments[donePR][1].AutoInjectReview = false
+
+	if err := m.ApplyPRObservation(ctx, "w-1", ports.PRObservation{Fetched: true, URL: donePR}); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) < 2 || countDoneNotices(msg.msgs) != 1 {
+		t.Fatalf("want the forwarded comment then the done message, got %v", msg.msgs)
+	}
+	assertContains(t, strings.Join(msg.msgs[:len(msg.msgs)-1], "\n"), "nil check")
 	last := msg.msgs[len(msg.msgs)-1]
 	assertContains(t, last, "AO review done: changes requested", "Inline comments: 2", "This review round is complete")
 	if strings.Contains(last, "optional ideas") {
 		t.Fatalf("done message repeated the review summary:\n%s", last)
 	}
-	for _, earlier := range msg.msgs[:len(msg.msgs)-1] {
-		if strings.Contains(earlier, "AO review done") {
-			t.Fatalf("done message was not last: %v", msg.msgs)
-		}
+}
+
+// Without any forwarded comment (the worker was busy, or the sweep ran before
+// the observation forwarded them), the notice goes out as before.
+func TestReviewDoneNotice_ChangesRequestedSentWhenNothingWasForwarded(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = changesRequestedComments()
+
+	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want the done message, got %v", msg.msgs)
+	}
+	assertContains(t, msg.msgs[0], "AO review done: changes requested", "Inline comments: 2", "delivered as separate review-feedback messages")
+}
+
+// The forwarding ledger is persisted on the PR row: comments forwarded before
+// a daemon restart still count, so the restarted daemon skips the notice.
+func TestReviewDoneNotice_SkipReadsPersistedLedgerAfterRestart(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = changesRequestedComments()
+	// The comments are forwarded while the pass has not recorded its result.
+	if err := m.ApplyPRObservation(ctx, "w-1", ports.PRObservation{Fetched: true, URL: donePR}); err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, strings.Join(msg.msgs, "\n"), "nil check", "missing test")
+
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+	New(st, msg).SweepReviewDoneNotices(ctx)
+	if n := countDoneNotices(msg.msgs); n != 0 {
+		t.Fatalf("restarted daemon sent the notice anyway: %v", msg.msgs)
+	}
+	if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("notice = %q, want sent", got)
+	}
+
+	// A fresh PR row without the ledger still gets the notice.
+	st.signatures = nil
+	st.runs = []domain.ReviewRun{doneRun("run-2", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+	New(st, msg).SweepReviewDoneNotices(ctx)
+	if n := countDoneNotices(msg.msgs); n != 1 {
+		t.Fatalf("want the notice without a persisted ledger, got %v", msg.msgs)
+	}
+}
+
+// Only a current changes-requested review is skipped. An approval, and a
+// changes-requested pass about an earlier commit or with a newer pass, still
+// get their notice after the forwarded comments.
+func TestReviewDoneNotice_OtherOutcomesStillSentAfterForwardedComments(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(st *noticeStore)
+		want  []string
+	}{
+		{
+			name: "approved",
+			setup: func(st *noticeStore) {
+				st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "777", "LGTM")}
+			},
+			want: []string{"AO review done: approved", "Inline comments: 2"},
+		},
+		{
+			name: "head moved",
+			setup: func(st *noticeStore) {
+				st.prs["w-1"] = []domain.PullRequest{{URL: donePR, HeadSHA: "def4567890"}}
+				st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+			},
+			want: []string{"AO review done: changes requested", "about an earlier commit"},
+		},
+		{
+			name: "newer pass",
+			setup: func(st *noticeStore) {
+				old := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")
+				old.CreatedAt = time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
+				newer := doneRun("run-2", domain.ReviewRunRunning, domain.VerdictNone, "", "")
+				newer.CreatedAt = old.CreatedAt.Add(time.Minute)
+				newer.WorkerNotice = domain.ReviewWorkerNoticeNone
+				st.runs = []domain.ReviewRun{old, newer}
+			},
+			want: []string{"AO review done: changes requested", "A newer review of this PR (run run-2"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, msg := newNoticeManager(t)
+			st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+			st.comments[donePR] = changesRequestedComments()
+			tc.setup(st)
+
+			if err := m.ApplyPRObservation(ctx, "w-1", ports.PRObservation{Fetched: true, URL: donePR}); err != nil {
+				t.Fatal(err)
+			}
+			if len(msg.msgs) < 2 || countDoneNotices(msg.msgs) != 1 {
+				t.Fatalf("want the forwarded comments then the done message, got %v", msg.msgs)
+			}
+			assertContains(t, strings.Join(msg.msgs[:len(msg.msgs)-1], "\n"), "nil check", "missing test")
+			assertContains(t, msg.msgs[len(msg.msgs)-1], tc.want...)
+			if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
+				t.Fatalf("notice = %q, want sent", got)
+			}
+		})
 	}
 }
 
