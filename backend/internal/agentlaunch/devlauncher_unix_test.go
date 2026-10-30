@@ -107,7 +107,8 @@ func TestRepointDevLaunchersRepointsOnlyAOsOwnLinks(t *testing.T) {
 	writeExecutableFixture(t, filepath.Join(copyDir, "ao"))
 
 	dirs := []string{localBin, localBin + "/", "relative/bin", foreignDir, copyDir, filepath.Join(root, "no-such-dir"), goBin}
-	repointed, err := RepointDevLaunchers(app, dirs, buildPaths)
+	owned := func(target string) bool { return slices.Contains(buildPaths, target) }
+	repointed, err := RepointDevLaunchers(app, dirs, owned)
 	if err != nil {
 		t.Fatalf("repoint: %v", err)
 	}
@@ -139,7 +140,7 @@ func TestRepointDevLaunchersRepointsOnlyAOsOwnLinks(t *testing.T) {
 	}
 
 	// A second start finds nothing left to repoint.
-	if again, err := RepointDevLaunchers(app, dirs, buildPaths); err != nil || len(again) != 0 {
+	if again, err := RepointDevLaunchers(app, dirs, owned); err != nil || len(again) != 0 {
 		t.Fatalf("second repoint = %q, %v; want nothing", again, err)
 	}
 }
@@ -158,7 +159,7 @@ func TestRepointDevLaunchersReportsAnUnwritableDirectory(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o750) }) //nolint:gosec // restore so TempDir cleanup can remove it
 
-	repointed, err := RepointDevLaunchers(app, []string{locked}, buildPaths)
+	repointed, err := RepointDevLaunchers(app, []string{locked}, func(target string) bool { return slices.Contains(buildPaths, target) })
 	if err == nil || !strings.Contains(err.Error(), filepath.Join(locked, "ao")) || len(repointed) != 0 {
 		t.Fatalf("repoint into read-only dir = %q, %v; want an error naming the link", repointed, err)
 	}

@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 )
 
 func TestDurableDesktopExecutable(t *testing.T) {
@@ -25,18 +27,22 @@ func TestDurableDesktopExecutable(t *testing.T) {
 		want bool
 	}{
 		{"installed macOS app", "darwin", macApp, nil, true},
-		{"macOS app in ~/Applications", "darwin", "/Users/me/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao", nil, true},
+		{"macOS app in ~/Applications", "darwin", "/Users/me/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao", map[string]string{"HOME": "/Users/me"}, true},
 		{"deb or rpm install", "linux", linuxPkg, nil, true},
+		{"package under /opt", "linux", "/opt/Agent Orchestrator/resources/daemon/ao", nil, true},
 		// Paths that do not survive a restart must never become link targets.
 		{"macOS app run from its disk image", "darwin", "/Volumes/Agent Orchestrator/Agent Orchestrator.app/Contents/Resources/daemon/ao", nil, false},
 		{"macOS App Translocation", "darwin", "/private/var/folders/x/T/AppTranslocation/ABC/d/Agent Orchestrator.app/Contents/Resources/daemon/ao", nil, false},
 		{"AppImage reported by the app", "linux", "/tmp/.mount_AgentO1/resources/daemon/ao", map[string]string{"AO_APPIMAGE": "/home/me/AO.AppImage"}, false},
 		{"AppImage reported by its runtime", "linux", linuxPkg, map[string]string{"APPIMAGE": "/home/me/AO.AppImage"}, false},
 		{"AppImage mount without the env", "linux", "/tmp/.mount_AgentO1/resources/daemon/ao", nil, false},
+		// A build packaged from a checkout is replaced or deleted by the next one.
+		{"macOS app packaged from a checkout", "darwin", "/Users/me/agent-orchestrator/frontend/out/Agent Orchestrator-darwin-arm64/Agent Orchestrator.app/Contents/Resources/daemon/ao", map[string]string{"HOME": "/Users/me"}, false},
+		{"Linux zip unpacked in home", "linux", "/home/me/Downloads/Agent Orchestrator-linux-x64/resources/daemon/ao", map[string]string{"HOME": "/home/me"}, false},
 		// Only the desktop's own layout counts as packaged.
 		{"dev daemon from npm run dev", "darwin", "/Users/me/agent-orchestrator/frontend/daemon/ao", nil, false},
 		{"go run or ao start", "linux", "/home/me/go/bin/ao", nil, false},
-		{"resources layout outside an app bundle", "darwin", "/opt/resources/daemon/ao", nil, false},
+		{"resources layout outside an app bundle", "darwin", "/Applications/resources/daemon/ao", nil, false},
 		{"binary not named ao", "darwin", "/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao-dev", nil, false},
 		{"relative path", "linux", "resources/daemon/ao", nil, false},
 		{"windows", "windows", `C:\Program Files\Agent Orchestrator\resources\daemon\ao.exe`, nil, false},
@@ -59,7 +65,7 @@ func devLauncherHome(t *testing.T) (app, link string, env map[string]string) {
 	t.Helper()
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
-	app = filepath.Join(root, "Applications", "Agent Orchestrator.app", "Contents", "Resources", "daemon", "ao")
+	app = filepath.Join(home, "Applications", "Agent Orchestrator.app", "Contents", "Resources", "daemon", "ao")
 	build := filepath.Join(home, ".cache", "aoagents", "agent-orchestrator", "bin", "ao")
 	link = filepath.Join(home, ".local", "bin", "ao")
 	for path, label := range map[string]string{app: "app", build: "stale"} {
@@ -78,7 +84,7 @@ func devLauncherHome(t *testing.T) (app, link string, env map[string]string) {
 	}
 	// The daemon's PATH, from the app's login-shell probe, omits ~/.local/bin
 	// here; the repair must still find the launcher.
-	return app, link, map[string]string{"HOME": home, "PATH": "/usr/bin:/bin"}
+	return app, link, map[string]string{"HOME": home, "PATH": "/usr/bin:/bin", envLoginShellEnv: "1"}
 }
 
 // TestRepointDevLaunchersFixesLoginShells is the #3562 reproduction end to end:
@@ -115,7 +121,7 @@ func TestRepointDevLaunchersFixesLoginShells(t *testing.T) {
 	if target, err := os.Readlink(link); err != nil || target != app {
 		t.Fatalf("%s -> %q (%v), want %q", link, target, err, app)
 	}
-	if !strings.Contains(logs.String(), "repointed") || !strings.Contains(logs.String(), envKeepDevLauncher+"=1") {
+	if !strings.Contains(logs.String(), "repointed") || !strings.Contains(logs.String(), agentlaunch.EnvKeepDevLauncher+"=1") {
 		t.Fatalf("log = %q, want the repoint and its opt-out", logs.String())
 	}
 }
@@ -127,7 +133,9 @@ func TestRepointDevLaunchersLeavesLinkAlone(t *testing.T) {
 		exe  func(app string) string
 		env  map[string]string
 	}{
-		{"developer opted out", "darwin", func(app string) string { return app }, map[string]string{envKeepDevLauncher: "1"}},
+		{"developer opted out", "darwin", func(app string) string { return app }, map[string]string{agentlaunch.EnvKeepDevLauncher: "1"}},
+		// A failed login-shell probe hides a profile's opt-out from the daemon.
+		{"login-shell env missing", "darwin", func(app string) string { return app }, map[string]string{envLoginShellEnv: ""}},
 		{"dev daemon", "darwin", func(app string) string { return filepath.Join(filepath.Dir(filepath.Dir(app)), "ao") }, nil},
 		{"AppImage", "linux", func(app string) string { return app }, map[string]string{"AO_APPIMAGE": "/home/me/AO.AppImage"}},
 	} {
@@ -144,6 +152,42 @@ func TestRepointDevLaunchersLeavesLinkAlone(t *testing.T) {
 			repointDevLaunchers(log, tc.goos, func() (string, error) { return tc.exe(app), nil }, func(key string) string { return env[key] })
 			if after, err := os.Readlink(link); err != nil || after != before {
 				t.Fatalf("%s -> %q (%v), want it kept at %q", link, after, err, before)
+			}
+		})
+	}
+}
+
+// TestRepointDevLaunchersFollowsAMovedInstall covers a link this repair made
+// earlier: once its install is gone, the next installed daemon takes it over,
+// while a link to another install that still exists is left alone.
+func TestRepointDevLaunchersFollowsAMovedInstall(t *testing.T) {
+	app, link, env := devLauncherHome(t)
+	home := env["HOME"]
+	moved := filepath.Join(home, "Applications", "Old", "Agent Orchestrator.app", "Contents", "Resources", "daemon", "ao")
+	other := filepath.Join(home, "Applications", "AO Beta.app", "Contents", "Resources", "daemon", "ao")
+	if err := os.MkdirAll(filepath.Dir(other), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0o755); err != nil { //nolint:gosec // test fixture must be executable
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, tc := range []struct {
+		name, target, want string
+	}{
+		{"install moved away", moved, app},
+		{"another install still present", other, other},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.Remove(link); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(tc.target, link); err != nil {
+				t.Fatal(err)
+			}
+			repointDevLaunchers(log, "darwin", func() (string, error) { return app, nil }, func(key string) string { return env[key] })
+			if got, err := os.Readlink(link); err != nil || got != tc.want {
+				t.Fatalf("%s -> %q (%v), want %q", link, got, err, tc.want)
 			}
 		})
 	}

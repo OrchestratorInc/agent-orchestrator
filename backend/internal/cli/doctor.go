@@ -209,7 +209,7 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 		c.checkTerminalRuntime(ctx),
 		c.checkAOBinary(daemonExe),
 	)
-	if check, ok := c.checkAOLoginShell(ctx, daemonExe); ok {
+	if check, ok := c.checkAOLoginShell(ctx, daemonExe, cfg.DataDir); ok {
 		checks = append(checks, check)
 	}
 	for _, ha := range registry.Harnessed() {
@@ -345,7 +345,9 @@ const loginShellProbeTimeout = 3 * time.Second
 // app's binary for it, which checkAOBinary cannot see from doctor's own PATH
 // (#3562). ok is false when there is nothing to probe: Windows, a shell this
 // probe does not speak, or a binary not named ao, which sessions never pin.
-func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe string) (check doctorCheck, ok bool) {
+// dataDir locates the ao shim sessions pin when the app's directory also holds
+// other tools.
+func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe, dataDir string) (check doctorCheck, ok bool) {
 	const name = "ao-login-shell"
 	if runtime.GOOS == "windows" {
 		return doctorCheck{}, false
@@ -381,7 +383,11 @@ func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe string
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	answerPath := filepath.Join(dir, "ao")
-	path := filepath.Dir(want)
+	pinned := agentlaunch.PinnedDir(func() (string, error) { return want, nil }, dataDir)
+	if pinned == "" {
+		pinned = filepath.Dir(want)
+	}
+	path := pinned
 	if current := os.Getenv("PATH"); current != "" {
 		path += string(os.PathListSeparator) + current
 	}
@@ -409,7 +415,7 @@ func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe string
 	var msg string
 	switch {
 	case resolved == "":
-		msg = fmt.Sprintf("a %s login shell finds no ao even with %s first on PATH: a startup file replaces PATH, so agent commands that run in a login shell (Codex's) and new terminals cannot run ao", shellName, filepath.Dir(want))
+		msg = fmt.Sprintf("a %s login shell finds no ao even with %s first on PATH: a startup file replaces PATH, so agent commands that run in a login shell (Codex's) and new terminals cannot run ao", shellName, pinned)
 	case !filepath.IsAbs(resolved):
 		msg = fmt.Sprintf("a %s login shell resolves ao to %q, not %s %s: an alias or function from a startup file shadows it in agent commands that run in a login shell (Codex's) and new terminals", shellName, resolved, wantLabel, want)
 	case sameBinary(want, resolved):
@@ -420,10 +426,23 @@ func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe string
 	default:
 		msg = fmt.Sprintf("a %s login shell runs %s, not %s %s: a startup file such as ~/.zprofile puts its directory first, so agent commands that run in a login shell (Codex's) and new terminals run that copy; remove it or stop prepending its directory", shellName, resolved, wantLabel, want)
 		if agentlaunch.IsDevLauncher(resolved, agentlaunch.DevLauncherBuildPaths(os.Getenv)) {
-			msg += fmt.Sprintf("; it is the launcher scripts/daemon-build.sh installs, which the desktop app repoints at its own ao when it starts unless %s=1, and `rm '%s'` removes it now", "AO_KEEP_DEV_LAUNCHER", strings.ReplaceAll(resolved, "'", `'\''`))
+			msg += devLauncherHint(resolved, want, runtime.GOOS, os.Getenv)
 		}
 	}
 	return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: name, Message: msg}, true
+}
+
+// devLauncherHint explains a scripts/daemon-build.sh launcher that shadows
+// want. It promises the desktop's repair only when want is an installed
+// desktop daemon, which is the only kind that makes it, and the developer has
+// not opted out.
+func devLauncherHint(launcher, want, goos string, getenv func(string) string) string {
+	rm := fmt.Sprintf("`rm '%s'`", strings.ReplaceAll(launcher, "'", `'\''`))
+	keep, _ := strconv.ParseBool(getenv(agentlaunch.EnvKeepDevLauncher))
+	if agentlaunch.IsDesktopDaemonPath(goos, want, getenv("HOME")) && !keep {
+		return fmt.Sprintf("; it is the launcher scripts/daemon-build.sh installs, which the desktop app repoints at its own ao when it next starts (%s=1 keeps it), and %s removes it now", agentlaunch.EnvKeepDevLauncher, rm)
+	}
+	return "; it is the launcher scripts/daemon-build.sh installs, and " + rm + " removes it"
 }
 
 func (c *commandContext) checkGit(ctx context.Context) doctorCheck {

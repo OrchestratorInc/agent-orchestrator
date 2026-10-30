@@ -10,14 +10,16 @@ dumps), must resolve under `~/.ao` (overridable via `AO_DATA_DIR`/`AO_RUN_FILE`)
 Never write AO state to `~/Library/Application Support` or any other OS-default
 app-data location. The sole read exception is an explicit user-initiated import
 from a validated Chrome, Firefox, or Safari profile: read known source files
-without modifying them and keep snapshots and results under `~/.ao`. The sole
-write exception is Chrome mode's native-messaging host manifest, which Chrome
-only reads from its own `NativeMessagingHosts` directory: written only by an
-explicit `ao browser chrome setup`, removed by `remove`, pointing at a wrapper
-under `~/.ao` and holding no AO state. Besides it, the packaged desktop daemon
-may repoint an `ao` symlink on `PATH` whose target is exactly the
-`scripts/daemon-build.sh` build at its own bundled `ao` (skipped with
-`AO_KEEP_DEV_LAUNCHER=1`); it touches no other file and holds no AO state.
+without modifying them and keep snapshots and results under `~/.ao`. There are
+two write exceptions. The first is Chrome mode's native-messaging host
+manifest, which Chrome only reads from its own `NativeMessagingHosts`
+directory: written only by an explicit `ao browser chrome setup`, removed by
+`remove`, pointing at a wrapper under `~/.ao` and holding no AO state. The second is automatic: an installed
+desktop daemon may repoint an `ao` symlink on `PATH` whose target is exactly
+the `scripts/daemon-build.sh` build (or a missing install it repointed earlier)
+at its own bundled `ao`, skipped with `AO_KEEP_DEV_LAUNCHER=1` or when the
+login-shell environment did not reach it; it touches no other file and holds
+no AO state.
 `frontend/src/main.ts` pins Electron's `userData` to
 `~/.ao/electron`; do not remove that override. See the hard rule in `AGENTS.md`.
 

@@ -201,6 +201,11 @@ export function buildDaemonEnv(
 	if (shellEnv?.SHELL) merged.SHELL = shellEnv.SHELL;
 	else if (configured && (!processShell || processShell === "/bin/sh")) merged.SHELL = configured;
 	merged.TERM = normalizeTerm(merged.TERM);
+	// Tells the daemon whether the user's startup-file exports reached it, so it
+	// can trust the absence of an opt-out such as AO_KEEP_DEV_LAUNCHER. Never
+	// inherited: a desktop launched from an AO terminal carries a stale value.
+	if (shellEnv) merged.AO_LOGIN_SHELL_ENV = "1";
+	else delete merged.AO_LOGIN_SHELL_ENV;
 	return { ...merged, ...overrides };
 }
 

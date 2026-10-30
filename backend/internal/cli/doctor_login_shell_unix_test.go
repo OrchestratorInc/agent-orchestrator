@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 )
 
 func writeLoginShellFixture(t *testing.T, path string) string {
@@ -66,7 +68,8 @@ func TestDoctorLoginShellReportsWhichAOItRuns(t *testing.T) {
 		{"app binary still wins", "", ptr(app + "\n"), nil, doctorPass, []string{"still runs this binary (" + app + ")"}, ""},
 		{"running daemon is the authority", daemon, ptr(daemon + "\n"), nil, doctorPass, []string{"the running daemon's binary (" + daemon + ")"}, ""},
 		{"startup file prepends another ao", "", ptr(other + "\n"), nil, doctorWarn, []string{"runs " + other + ", not this binary " + app, "Codex"}, "daemon-build.sh"},
-		{"AO dev launcher is named with its fix", "", ptr(devLink + "\n"), nil, doctorWarn, []string{"runs " + devLink, "scripts/daemon-build.sh", "AO_KEEP_DEV_LAUNCHER=1", "rm '" + devLink + "'"}, ""},
+		// This app is not an installed desktop, so nothing will repoint the link.
+		{"AO dev launcher is named with its fix", "", ptr(devLink + "\n"), nil, doctorWarn, []string{"runs " + devLink, "scripts/daemon-build.sh", "rm '" + devLink + "'"}, "repoints"},
 		// command -v exits 1 when nothing resolves.
 		{"startup file replaces PATH", "", ptr(""), errors.New("exit status 1"), doctorWarn, []string{"finds no ao even with " + filepath.Dir(app) + " first"}, ""},
 		{"alias shadows ao", "", ptr("alias ao=/opt/old/ao\n"), nil, doctorWarn, []string{`"alias ao=/opt/old/ao"`, "alias or function"}, ""},
@@ -94,7 +97,7 @@ func TestDoctorLoginShellReportsWhichAOItRuns(t *testing.T) {
 				ProcessAlive: func(int) bool { return false },
 			}
 			c := &commandContext{deps: deps.withDefaults()}
-			check, ok := c.checkAOLoginShell(context.Background(), tc.daemonExe)
+			check, ok := c.checkAOLoginShell(context.Background(), tc.daemonExe, t.TempDir())
 			if !ok {
 				t.Fatal("check skipped, want a result")
 			}
@@ -149,7 +152,7 @@ func TestDoctorLoginShellSkipsWhatItCannotProbe(t *testing.T) {
 				ProcessAlive: func(int) bool { return false },
 			}
 			c := &commandContext{deps: deps.withDefaults()}
-			if check, ok := c.checkAOLoginShell(context.Background(), ""); ok {
+			if check, ok := c.checkAOLoginShell(context.Background(), "", t.TempDir()); ok {
 				t.Fatalf("check = %+v, want skipped", check)
 			}
 		})
@@ -177,7 +180,7 @@ func TestDoctorLoginShellCatchesStartupFilePrepend(t *testing.T) {
 		ProcessAlive: func(int) bool { return false },
 	}.withDefaults()}
 
-	check, ok := c.checkAOLoginShell(context.Background(), "")
+	check, ok := c.checkAOLoginShell(context.Background(), "", filepath.Join(root, "data"))
 	if !ok {
 		t.Fatal("check skipped, want a result")
 	}
@@ -197,12 +200,67 @@ func TestDoctorLoginShellCatchesStartupFilePrepend(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now()
-	check, ok = c.checkAOLoginShell(context.Background(), "")
+	check, ok = c.checkAOLoginShell(context.Background(), "", filepath.Join(root, "data"))
 	if elapsed := time.Since(start); elapsed >= loginShellProbeTimeout {
 		t.Fatalf("probe took %s: a startup file's background process held doctor open", elapsed)
 	}
 	if !ok || check.Level != doctorWarn || !strings.Contains(check.Message, "runs "+devLink+", not this binary "+app) ||
 		!strings.Contains(check.Message, "scripts/daemon-build.sh") {
 		t.Fatalf("check after ~/.profile prepends the dev launcher = %+v (ok %v), want WARN naming %s", check, ok, devLink)
+	}
+}
+
+// TestDoctorLoginShellPinsWhatSessionsPin covers an app directory that also
+// holds other tools: sessions pin an ao shim under the data dir instead, and
+// the probe must start its shell the same way.
+func TestDoctorLoginShellPinsWhatSessionsPin(t *testing.T) {
+	root := t.TempDir()
+	app := writeLoginShellFixture(t, filepath.Join(root, "app", "ao"))
+	writeLoginShellFixture(t, filepath.Join(root, "app", "tmux"))
+	dataDir := filepath.Join(root, "data")
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("PATH", "/usr/bin:/bin")
+	var gotArgs []string
+	c := &commandContext{deps: Deps{
+		Executable: func() (string, error) { return app, nil },
+		CommandOutput: func(_ context.Context, _ string, args ...string) ([]byte, error) {
+			gotArgs = args
+			return nil, os.WriteFile(args[len(args)-1], []byte(app+"\n"), 0o600)
+		},
+		ProcessAlive: func(int) bool { return false },
+	}.withDefaults()}
+	if _, ok := c.checkAOLoginShell(context.Background(), "", dataDir); !ok {
+		t.Fatal("check skipped, want a result")
+	}
+	shim := agentlaunch.PinnedDir(func() (string, error) { return app, nil }, dataDir)
+	if shim == filepath.Dir(app) || !strings.HasPrefix(shim, dataDir) {
+		t.Fatalf("pinned dir = %q, want a shim under %s", shim, dataDir)
+	}
+	if !slices.Contains(gotArgs, "PATH="+shim+":/usr/bin:/bin") {
+		t.Fatalf("probe args = %q, want PATH starting with the shim %s", gotArgs, shim)
+	}
+}
+
+func TestDevLauncherHintPromisesTheRepairOnlyWhenItWillHappen(t *testing.T) {
+	const launcher = "/home/me/.local/bin/ao"
+	const installed = "/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"
+	for _, tc := range []struct {
+		name, goos, want string
+		env              map[string]string
+		repoints         bool
+	}{
+		{"installed desktop daemon", "darwin", installed, nil, true},
+		{"developer opted out", "darwin", installed, map[string]string{agentlaunch.EnvKeepDevLauncher: "1"}, false},
+		{"headless or dev daemon", "linux", "/home/me/go/bin/ao", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hint := devLauncherHint(launcher, tc.want, tc.goos, func(key string) string { return tc.env[key] })
+			if got := strings.Contains(hint, "repoints"); got != tc.repoints {
+				t.Fatalf("hint %q promises the repair = %v, want %v", hint, got, tc.repoints)
+			}
+			if !strings.Contains(hint, "`rm '"+launcher+"'`") {
+				t.Fatalf("hint %q missing the rm", hint)
+			}
+		})
 	}
 }

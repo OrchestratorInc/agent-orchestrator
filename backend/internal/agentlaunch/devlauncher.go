@@ -8,7 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
+
+// EnvKeepDevLauncher lets a developer who runs scripts/daemon-build.sh beside
+// the desktop app keep that build as the ao on PATH.
+const EnvKeepDevLauncher = "AO_KEEP_DEV_LAUNCHER"
 
 // devLauncherBuild is where scripts/daemon-build.sh builds ao for a source
 // checkout, relative to the user's cache directory.
@@ -29,28 +34,78 @@ func DevLauncherBuildPaths(getenv func(string) string) []string {
 	return paths
 }
 
+// IsDesktopDaemonPath reports whether exe is the daemon an installed desktop
+// app bundles: <name>.app/Contents/Resources/daemon/ao under /Applications or
+// ~/Applications on macOS, and <install>/resources/daemon/ao under /usr or
+// /opt on Linux, where the deb and rpm packages put it. An app packaged from a
+// checkout, run from a disk image or App Translocation, or unpacked from a zip
+// elsewhere is not an install and never qualifies.
+func IsDesktopDaemonPath(goos, exe, home string) bool {
+	if !filepath.IsAbs(exe) {
+		return false
+	}
+	exe = filepath.Clean(exe)
+	daemonDir := filepath.Dir(exe)
+	resources := filepath.Dir(daemonDir)
+	if filepath.Base(exe) != aoBinaryName || filepath.Base(daemonDir) != "daemon" {
+		return false
+	}
+	var roots []string
+	switch goos {
+	case "darwin":
+		contents := filepath.Dir(resources)
+		if filepath.Base(resources) != "Resources" || filepath.Base(contents) != "Contents" ||
+			filepath.Ext(filepath.Dir(contents)) != ".app" {
+			return false
+		}
+		roots = []string{"/Applications"}
+		if filepath.IsAbs(home) {
+			roots = append(roots, filepath.Join(filepath.Clean(home), "Applications"))
+		}
+	case "linux":
+		if filepath.Base(resources) != "resources" {
+			return false
+		}
+		roots = []string{"/usr", "/opt"}
+	default:
+		return false
+	}
+	for _, root := range roots {
+		if strings.HasPrefix(exe, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// launcherTarget returns the absolute target of the symlink at path.
+func launcherTarget(path string) (string, bool) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return "", false
+	}
+	target, err := os.Readlink(path)
+	if err != nil || !filepath.IsAbs(target) {
+		return "", false
+	}
+	return filepath.Clean(target), true
+}
+
 // IsDevLauncher reports whether path is the launcher scripts/daemon-build.sh
 // installs: a symlink whose own target is exactly one of buildPaths. Only that
 // link is provably AO's. A copied launcher, a package manager's shim, or any
 // regular file never matches.
 func IsDevLauncher(path string, buildPaths []string) bool {
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink == 0 {
-		return false
-	}
-	target, err := os.Readlink(path)
-	if err != nil || !filepath.IsAbs(target) {
-		return false
-	}
-	return slices.Contains(buildPaths, filepath.Clean(target))
+	target, ok := launcherTarget(path)
+	return ok && slices.Contains(buildPaths, target)
 }
 
-// RepointDevLaunchers points every dev launcher named ao in dirs at exe, so a
-// login shell whose startup files put one of those directories first runs exe
-// instead of an old source build. Each link is swapped atomically by a rename,
-// and anything that is not a dev launcher is left untouched. It returns the
-// links it repointed and every failure.
-func RepointDevLaunchers(exe string, dirs, buildPaths []string) ([]string, error) {
+// RepointDevLaunchers points every symlink named ao in dirs whose absolute
+// target owned accepts at exe, so a login shell whose startup files put one of
+// those directories first runs exe instead of an old source build. Each link
+// is swapped atomically by a rename, and every other ao is left untouched. It
+// returns the links it repointed and every failure.
+func RepointDevLaunchers(exe string, dirs []string, owned func(target string) bool) ([]string, error) {
 	var repointed []string
 	var errs []error
 	seen := map[string]bool{}
@@ -63,39 +118,31 @@ func RepointDevLaunchers(exe string, dirs, buildPaths []string) ([]string, error
 			continue
 		}
 		seen[link] = true
-		if !IsDevLauncher(link, buildPaths) {
+		if target, ok := launcherTarget(link); !ok || !owned(target) {
 			continue
 		}
-		swapped, err := swapSymlink(link, exe, buildPaths)
-		if err != nil {
+		if err := swapSymlink(link, exe); err != nil {
 			errs = append(errs, fmt.Errorf("repoint %s: %w", link, err))
 			continue
 		}
-		if swapped {
-			repointed = append(repointed, link)
-		}
+		repointed = append(repointed, link)
 	}
 	return repointed, errors.Join(errs...)
 }
 
-// swapSymlink replaces link with a symlink to target. It reports false, and
-// keeps link, when link stopped being a dev launcher after the scan.
-func swapSymlink(link, target string, buildPaths []string) (bool, error) {
+// swapSymlink replaces link with a symlink to target.
+func swapSymlink(link, target string) error {
 	suffix := make([]byte, 8)
 	if _, err := rand.Read(suffix); err != nil {
-		return false, err
+		return err
 	}
 	temp := filepath.Join(filepath.Dir(link), ".ao-launcher-"+hex.EncodeToString(suffix))
 	if err := os.Symlink(target, temp); err != nil {
-		return false, err
-	}
-	if !IsDevLauncher(link, buildPaths) {
-		_ = os.Remove(temp)
-		return false, nil
+		return err
 	}
 	if err := os.Rename(temp, link); err != nil {
 		_ = os.Remove(temp)
-		return false, err
+		return err
 	}
-	return true, nil
+	return nil
 }
