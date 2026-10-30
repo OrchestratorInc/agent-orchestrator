@@ -429,11 +429,18 @@ describe("SessionArtifactsView", () => {
 		await vi.waitFor(() => expect(deleteArtifactMock).toHaveBeenCalledWith({ path: "notes.md", sessionId: "sess-1", hostId: undefined }));
 	});
 
-	it("keeps cloud cards read-only without local file manager actions", () => {
+	it("lets a cloud card be deleted but not edited, without local file manager actions", async () => {
+		deleteCloudArtifactMock.mockReset().mockResolvedValue(undefined);
 		renderView(<SessionArtifactsView session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);
 		expect(screen.queryByRole("button", { name: /^Edit file:/ })).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: /^Delete artifact:/ })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /^More actions:/ })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Delete artifact: notes.md" }));
+		const dialog = screen.getByRole("dialog");
+		expect(dialog).toHaveTextContent("from the session's cloud storage and from its sandbox");
+		expect(deleteCloudArtifactMock).not.toHaveBeenCalled();
+		await userEvent.click(within(dialog).getByRole("button", { name: "Delete artifact" }));
+		await vi.waitFor(() => expect(deleteCloudArtifactMock).toHaveBeenCalledWith("org-1", "sess-1", "notes.md"));
+		expect(deleteArtifactMock).not.toHaveBeenCalled();
 	});
 
 	it("offers version history for a text file but not for a binary one", async () => {
