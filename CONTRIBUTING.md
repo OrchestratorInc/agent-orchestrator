@@ -72,6 +72,8 @@ Review the draft and attachments before submitting. A clear observation is usefu
 New PRs are prefilled from [`.github/pull_request_template.md`](.github/pull_request_template.md).
 Also follow **PR hygiene** in [AGENTS.md](AGENTS.md): branch from `main`, one issue per PR, conventional commits, explain intentional omissions, and keep CI green for the area you touched.
 
+The AO Cloud control plane (the hosted service behind Cloud Agents) is not in this repository and does not take outside contributions. Changes to the desktop's cloud features, the CLI, and the cloud contract in `contracts/cloud/` are welcome here.
+
 ### Weekly contributor call
 
 The weekly contributor call is open to everyone. Share your work, discuss PRs,

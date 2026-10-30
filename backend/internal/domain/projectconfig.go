@@ -32,9 +32,12 @@ type ProjectConfig struct {
 	Env map[string]string `json:"env,omitempty"`
 	// Symlinks are repo-relative paths symlinked into each session workspace.
 	Symlinks []string `json:"symlinks,omitempty"`
-	// PostCreate are shell commands run in the workspace after it is created.
+	// PostCreate are shell commands run in the workspace after it is created,
+	// each for at most its own time limit (ParseTimedScriptCommand) or
+	// DefaultScriptStepTimeoutMinutes.
 	PostCreate []string `json:"postCreate,omitempty"`
-	// PreRemove are shell commands run before an AO-managed Git worktree is permanently removed.
+	// PreRemove are shell commands run before an AO-managed Git worktree is
+	// permanently removed, each within its own time limit when it sets one.
 	PreRemove []string `json:"preRemove,omitempty"`
 
 	// AgentRules are project-specific standing instructions for worker sessions.
@@ -45,6 +48,9 @@ type ProjectConfig struct {
 	// OrchestratorRules are project-specific standing instructions for
 	// orchestrator sessions.
 	OrchestratorRules string `json:"orchestratorRules,omitempty"`
+	// OrchestratorRulesFile is a repo-relative Markdown/text file whose contents
+	// are appended to OrchestratorRules for orchestrator sessions.
+	OrchestratorRulesFile string `json:"orchestratorRulesFile,omitempty"`
 
 	// AgentConfig is the default agent config for the project.
 	AgentConfig AgentConfig `json:"agentConfig,omitempty"`
@@ -249,8 +255,17 @@ func (c ProjectConfig) Validate() error {
 			return fmt.Errorf("symlink %q: %w", s, err)
 		}
 	}
+	if err := validateScriptSteps("postCreate", c.PostCreate); err != nil {
+		return err
+	}
+	if err := validateScriptSteps("preRemove", c.PreRemove); err != nil {
+		return err
+	}
 	if err := validateRepoRelative(c.AgentRulesFile); err != nil {
 		return fmt.Errorf("agentRulesFile %q: %w", c.AgentRulesFile, err)
+	}
+	if err := validateRepoRelative(c.OrchestratorRulesFile); err != nil {
+		return fmt.Errorf("orchestratorRulesFile %q: %w", c.OrchestratorRulesFile, err)
 	}
 	for i, rv := range c.Reviewers {
 		if !rv.Harness.IsKnown() {

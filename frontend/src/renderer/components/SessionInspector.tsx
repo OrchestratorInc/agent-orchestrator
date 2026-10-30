@@ -1,3 +1,4 @@
+import { BrowserIcon } from "./icons";
 import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -29,7 +30,6 @@ import {
 	ArrowUpRight,
 	GitPullRequest,
 	GitMerge,
-	Globe,
 	Info,
 	Play,
 	Loader2,
@@ -37,6 +37,7 @@ import {
 	X,
 } from "lucide-react";
 import type { components } from "../../api/schema";
+import { interfaceTransitionIsActive, useSessionInterfaceTransitionStatus } from "../hooks/useSessionInterfaceTransition";
 import { reviewerConversationQueryKey } from "../hooks/useReviewerConversation";
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
@@ -44,7 +45,6 @@ import { sessionUiKey } from "../lib/hosts";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
-import { useOpenArtifactPreview } from "../hooks/useOpenArtifactPreview";
 import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
@@ -52,8 +52,12 @@ import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifac
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
+import { ScriptRunPanel } from "./ScriptRunPanel";
+import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
+import { latestScriptRun } from "../lib/cloud-script-runs";
 import { ResumeAgentControl } from "./ResumeAgentControl";
 import { SessionBranchSummary } from "./SessionBranchSummary";
+import { SessionAccountSummary } from "./SessionAccountSummary";
 import {
 	sessionScmSummaryQueryKey,
 	useSessionScmSummary,
@@ -62,9 +66,10 @@ import {
 } from "../hooks/useSessionScmSummary";
 import { sessionWorkspaceFilesQueryKey, sessionWorkspaceHistoryQueryOptions, useSessionWorkspaceFilesChangedCount } from "../hooks/useSessionWorkspaceFiles";
 import { useCloudCp } from "../hooks/useCloudCp";
+import { pendingMergeRequestFor, useMergeRequestActions, useProjectMergeRequests } from "../hooks/useProjectMergeRequests";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
 import { clearTerminateSessionState, useTerminateSession } from "../hooks/useTerminateSession";
-import { prBrowserUrl, prCanMerge, prCardPresentation, prNounKeys, sessionPRDisplaySummaries } from "../lib/pr-display";
+import { prBrowserUrl, prCanMerge, prCardPresentation, prNounKeys, prRepositoryFromUrl, prsSpanRepositories, sessionPRDisplaySummaries } from "../lib/pr-display";
 import type { SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import {
 	openPRs,
@@ -76,7 +81,7 @@ import {
 import { getAgentActivityView, getSessionTimelinePillView } from "../lib/session-presentation";
 import { BrowserPanelView, type BrowserAnnotationQueueModel } from "./BrowserPanel";
 import type { BrowserViewModel } from "../hooks/useBrowserView";
-import { FilesTopbarHostContext } from "./files-topbar-host";
+import { FilesActionsHostContext, FilesTopbarHostContext } from "./files-topbar-host";
 import { useUiStore } from "../stores/ui-store";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -137,13 +142,7 @@ const VIEW_DEFS: {
 	{
 		id: "browser",
 		labelKey: "inspector.browser",
-		icon: (
-			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-				<circle cx="12" cy="12" r="9" />
-				<line x1="3" y1="12" x2="21" y2="12" />
-				<path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18" />
-			</svg>
-		),
+		icon: <BrowserIcon aria-hidden="true" />,
 	},
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
 	{
@@ -215,6 +214,7 @@ export const SessionInspector = memo(function SessionInspector({
 	const [internalView, setInternalView] = useState<InspectorView>("summary");
 	const [browserTopbarHost, setBrowserTopbarHost] = useState<HTMLDivElement | null>(null);
 	const [filesTopbarHost, setFilesTopbarHost] = useState<HTMLDivElement | null>(null);
+	const [filesActionsHost, setFilesActionsHost] = useState<HTMLDivElement | null>(null);
 	const requestedView = viewProp ?? internalView;
 	// Badge the Browser tab when a preview target arrived without us opening it.
 	const browserUnseen = useUiStore((state) =>
@@ -262,8 +262,8 @@ export const SessionInspector = memo(function SessionInspector({
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
-			// The Artifacts tab shows only when the session has artifact files to list.
-			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
+			// The tab is contextual: an artifact click opens it; leaving it hides it.
+			&& (entry.id !== "artifacts" || requestedView === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)));
 	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
@@ -319,7 +319,9 @@ export const SessionInspector = memo(function SessionInspector({
 				filesView={
 					session ? (
 						<FilesTopbarHostContext.Provider value={filesTopbarHost}>
-							<FilesView filesView={filesView} onOpenFiles={onOpenFiles} />
+							<FilesActionsHostContext.Provider value={filesActionsHost}>
+								<FilesView filesView={filesView} onOpenFiles={onOpenFiles} />
+							</FilesActionsHostContext.Provider>
 						</FilesTopbarHostContext.Provider>
 					) : undefined
 				}
@@ -331,6 +333,7 @@ export const SessionInspector = memo(function SessionInspector({
 							<div className="files-panel__topbar-host min-w-0 flex-1" ref={setFilesTopbarHost} />
 						) : null}
 						<div className="session-inspector__trailing flex shrink-0 items-center">
+							{view === "files" && filesView ? <div className="session-inspector__files-actions flex items-center gap-1" ref={setFilesActionsHost} /> : null}
 							<span aria-hidden="true" className="session-inspector-actions-spacer" />
 						</div>
 					</>
@@ -424,11 +427,14 @@ const SummaryView = memo(function SummaryView({
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
 		session.kind === "orchestrator" && (session.cloud !== undefined || usePreviewData);
+	// Subscription accounts are a developer-mode preview.
+	const accountsPreview = useUiStore((state) => state.developerMode);
 	return (
 		<SessionInspectorSummaryView
 			activity={
 				<>
 					<ActivityTimeline hostId={hostId} prs={prSummaries} session={session} />
+					{hostId || !accountsPreview ? null : <SessionAccountSummary session={session} />}
 					<ResumeAgentControl
 						className="w-full"
 						containerClassName="mt-3 border-t border-(--color-border-settings-input) pt-3"
@@ -445,7 +451,6 @@ const SummaryView = memo(function SummaryView({
 							artifact={artifact}
 							key={artifact.path}
 							onOpenArtifact={onOpenArtifact}
-							session={session}
 						/>
 					))
 				) : undefined
@@ -462,11 +467,14 @@ const SummaryView = memo(function SummaryView({
 								<PRSummaryCard
 									canOpenReviews={canOpenReviews}
 									key={pr.url || pr.htmlUrl || pr.number}
+									showRepository={prsSpanRepositories(prSummaries)}
 									onOpenReviews={onOpenReviews}
 									pr={pr}
 									hostId={hostId}
 									sessionId={session.id}
 									cloudOrgId={session.cloud?.orgId}
+									guest={session.cloud?.shared === true}
+									projectId={session.workspaceId}
 								/>
 							))}
 							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
@@ -477,10 +485,38 @@ const SummaryView = memo(function SummaryView({
 				/>
 			}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
+			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>
 	);
 });
+
+/**
+ * The latest Setup and Cleanup runs, collapsed: a terminal session's agent
+ * covers the startup loader once it starts, and Cleanup only runs after the
+ * session is deleted, so this is where both stay reachable.
+ */
+function CloudScriptRunSections({ cloud, sessionId }: { cloud: NonNullable<WorkspaceSession["cloud"]>; sessionId: string }) {
+	const { t } = useTranslation();
+	const runs = useCloudScriptRuns(cloud.orgId, sessionId, { lifecycle: cloud });
+	const setup = latestScriptRun(runs, "setup");
+	const cleanup = latestScriptRun(runs, "cleanup");
+	if (!setup && !cleanup) return null;
+	return (
+		<>
+			{setup ? (
+				<Section defaultOpen={false} surface={false} title={t("scriptRun.setup")}>
+					<ScriptRunPanel run={setup} showTitle={false} />
+				</Section>
+			) : null}
+			{cleanup ? (
+				<Section defaultOpen={false} surface={false} title={t("scriptRun.cleanup")}>
+					<ScriptRunPanel run={cleanup} showTitle={false} />
+				</Section>
+			) : null}
+		</>
+	);
+}
 
 const ReviewsView = memo(function ReviewsView({
 	session,
@@ -825,7 +861,11 @@ function SessionControls({ session, hostId }: { session: WorkspaceSession; hostI
 	);
 
 	if (isStandaloneSession) {
-		return <Section title={t("inspector.sessionControls")}>{terminateAction}</Section>;
+		return (
+			<Section title={t("inspector.sessionControls")}>
+				{terminateAction}
+			</Section>
+		);
 	}
 
 	return (
@@ -870,20 +910,32 @@ function updateSessionMergePolicy(
 	}));
 }
 
-function PRSummaryCard({
+export function PRSummaryCard({
 	canOpenReviews,
 	hostId,
 	cloudOrgId,
+	guest = false,
 	onOpenReviews,
 	pr,
+	projectId,
+	liveSessionId,
 	sessionId,
+	showRepository = false,
 }: {
 	canOpenReviews: boolean;
 	hostId?: string;
 	cloudOrgId?: string;
+	/** Reached through a share: this person asks the project's owner to merge. */
+	guest?: boolean;
 	onOpenReviews: () => void;
 	pr: SessionPRSummary;
+	/** The cloud project, for a guest's merge requests. */
+	projectId?: string;
+	/** The session on screen, whose live stream says when merge requests change; the card's own by default. */
+	liveSessionId?: string;
 	sessionId: string;
+	/** Label the card with its repository: the session has PRs on several. */
+	showRepository?: boolean;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -898,25 +950,49 @@ function PRSummaryCard({
 				await cloudClient.mergePullRequest(cloudOrgId, sessionId, pr.number, pr.url, pr.headSha);
 				return;
 			}
-			const { error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/merge", {
+			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/prs/{id}/merge", {
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
 			});
 			if (error) throw new Error(apiErrorMessage(error, t("pr.merge.failed", { number: pr.number })));
+			return data;
 		},
-		onSuccess: async () => {
+		onSuccess: async (result) => {
+			if (!cloudOrgId && result?.state === "merged") {
+				queryClient.setQueryData<{ prs: SessionPRSummary[]; linkedPrs: SessionPRReference[] }>(
+					sessionScmSummaryQueryKey(sessionId, hostId),
+					(current) => current ? {
+						...current,
+						prs: current.prs.map((cached) => cached.url === pr.url ? {
+							...cached,
+							state: result.state,
+							stateChangedAt: result.stateChangedAt,
+							updatedAt: result.stateChangedAt,
+						} : cached),
+					} : current,
+				);
+				await queryClient.invalidateQueries({ queryKey: workspaceKey });
+				return;
+			}
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: cloudOrgId ? ["cloud-session-scm-summary", cloudBaseUrl, cloudOrgId, sessionId] : sessionScmSummaryQueryKey(sessionId, hostId) }),
 				queryClient.invalidateQueries({ queryKey: workspaceKey }),
 			]);
 		},
 	});
-	const mergeError = mergePr.error instanceof Error ? mergePr.error.message : null;
+	const asksToMerge = guest && Boolean(cloudOrgId);
+	const mergeRequests = useProjectMergeRequests(cloudOrgId, projectId, asksToMerge, liveSessionId ?? sessionId);
+	const mergeRequestActions = useMergeRequestActions(cloudOrgId, projectId);
+	const pendingRequest = pendingMergeRequestFor(mergeRequests.data, pr.url);
+	const requestMerge = mergeRequestActions.request;
+	const mergeFailure = asksToMerge ? requestMerge.error : mergePr.error;
+	const mergeError = mergeFailure instanceof Error ? mergeFailure.message : null;
 	const viewModel: InspectorPullRequest = {
 		...pr,
 		card: presentation,
 		href: prBrowserUrl(pr),
 		stateLabel: t(prStateLabelKeys[pr.state]),
+		repositoryLabel: showRepository ? pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url) : undefined,
 		reviewDetailsAction: canOpenReviews && pr.review.decision !== "none" ? (
 			<button className="whitespace-nowrap text-settings-muted underline-offset-2 hover:underline" onClick={onOpenReviews} type="button">
 				<span className="text-xs">{t("pr.review.viewDetails")} ↗</span>
@@ -929,10 +1005,28 @@ function PRSummaryCard({
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
 			mergeAction={
-				canMerge ? (
+				canMerge && asksToMerge ? (
+					<Button
+						aria-label={t("pr.merge.requestFor", { number: pr.number })}
+						className="gap-1 px-2 text-xs"
+						disabled={requestMerge.isPending || Boolean(pendingRequest)}
+						onClick={() => requestMerge.mutate({ sessionId, number: pr.number, prUrl: pr.url })}
+						size="sm"
+						type="button"
+						variant="secondary"
+						data-request-merge
+					>
+						{requestMerge.isPending ? (
+							<Loader2 className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<GitMerge className="size-icon-sm" aria-hidden="true" />
+						)}
+						{pendingRequest ? t("pr.merge.requested") : t("pr.merge.request")}
+					</Button>
+				) : canMerge ? (
 					<Button
 						aria-label={t("pr.merge.actionFor", { number: pr.number })}
-						className="gap-1 bg-success px-2 text-xs text-background hover:bg-success/80"
+						className="gap-1 bg-success px-2 text-xs text-on-foreground hover:bg-success/80"
 						disabled={mergePr.isPending}
 						onClick={() => mergePr.mutate()}
 						size="sm"
@@ -949,34 +1043,22 @@ function PRSummaryCard({
 			}
 			mergeError={mergeError}
 			openLabel={t("inspector.openPR", { number: pr.number })}
+			openedViaLabel={t("pr.openedVia")}
 			pr={viewModel}
 			pullRequestIcon={<GitPullRequest className="size-icon-sm shrink-0" aria-hidden="true" />}
 		/>
 	);
 }
 
-/**
- * One row in the Summary panel's Artifacts list. HTML artifacts open in the
- * Browser panel; markdown/file artifacts open in the inspector's Artifacts view,
- * since artifact files live outside the git workspace.
- */
+/** One Summary row opens its file in the inspector's contextual Artifacts tab. */
 function ArtifactSummaryCard({
 	artifact,
 	onOpenArtifact,
-	session,
 }: {
 	artifact: SessionArtifact;
 	onOpenArtifact?: (target: { feedback?: boolean; path: string }) => void;
-	session: WorkspaceSession;
 }) {
-	const openArtifactPreview = useOpenArtifactPreview(session.id, session.hostId);
-	const handleOpen = () => {
-		if (artifact.kind === "html" && artifact.previewUrl) {
-			openArtifactPreview(artifact.previewUrl);
-			return;
-		}
-		onOpenArtifact?.({ path: artifact.path });
-	};
+	const handleOpen = () => onOpenArtifact?.({ path: artifact.path });
 	return (
 		<div className="flex w-full min-w-0 items-center rounded-md border border-(--color-border-settings-input) text-sm transition-colors hover:bg-interactive-hover focus-within:bg-interactive-hover focus-within:ring-1 focus-within:ring-ring">
 			<button
@@ -985,7 +1067,7 @@ function ArtifactSummaryCard({
 				type="button"
 			>
 				{artifact.kind === "html" ? (
-					<Globe aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
+					<BrowserIcon aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				) : (
 					<FileText aria-hidden="true" className="size-icon-sm shrink-0 text-settings-muted" />
 				)}
@@ -1086,7 +1168,14 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		);
 	}
 
-	const activityView = getAgentActivityView(session.activity);
+	// An account move stops the old agent before the new one starts. That stop
+	// is not the session ending, so the move stands in for "Exited" meanwhile.
+	// The session's own host: a remote session's id means nothing to the local daemon.
+	const { transition } = useSessionInterfaceTransitionStatus(session.cloud ? undefined : session.id, hostId);
+	const accountMoving = Boolean(transition?.targetAccountId) && interfaceTransitionIsActive(transition);
+	const activityView = accountMoving
+		? { ...getAgentActivityView({ state: "active", lastActivityAt: transition?.updatedAt ?? "" }), label: appI18n.t("settings.agentAccounts.switchingAccount") }
+		: getAgentActivityView(session.activity);
 	const activityAt = session.activity?.lastActivityAt ?? session.updatedAt ?? session.createdAt;
 	pushEvent(
 		{
@@ -1094,7 +1183,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 			content: (
 				<span className="inline-flex flex-wrap items-center gap-1.5">
 					<span className="inline-flex align-middle">
-						<InspectorActivityPill activity={session.activity} />
+						{accountMoving ? <TimelinePill {...activityView} /> : <InspectorActivityPill activity={session.activity} />}
 					</span>
 					{session.status === "no_signal" ? (
 						<span className="inline-flex align-middle">
@@ -1810,15 +1899,28 @@ function MergedReviewsSection({
 	const runsByPR = runsByPRFrom(openReviewStates, runs);
 	const aoStates = triggeredReviewStatesFrom(openReviewStates, runs);
 
-	// Union by PR number, newest PR first. A PR can appear on either side alone.
-	const byNumber = new Map<number, { ao?: PRReviewState; github?: SessionPRSummary }>();
+	// Union by PR, newest PR first. A PR can appear on either side alone. A
+	// multi-repository session can have the same number in two repositories, so
+	// there a PR is its repository and number; a single-repository session
+	// matches by number alone, as before.
+	const prRepositories = new Set([
+		...aoStates.map((state) => prRepositoryFromUrl(state.prUrl)),
+		...githubPRs.map((pr) => pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url)),
+	].filter((repository): repository is string => Boolean(repository)).map((repository) => repository.toLowerCase()));
+	const keyByRepository = prRepositories.size > 1;
+	const prKey = (url: string | undefined, number: number, repo?: string) =>
+		keyByRepository ? `${(repo || prRepositoryFromUrl(url) || "").toLowerCase()}#${number}` : `#${number}`;
+	const byPR = new Map<string, { number: number; repository?: string; ao?: PRReviewState; github?: SessionPRSummary }>();
 	for (const state of aoStates) {
-		byNumber.set(state.prNumber, { ...byNumber.get(state.prNumber), ao: state });
+		const key = prKey(state.prUrl, state.prNumber);
+		byPR.set(key, { number: state.prNumber, repository: prRepositoryFromUrl(state.prUrl), ...byPR.get(key), ao: state });
 	}
 	for (const pr of githubPRs) {
-		byNumber.set(pr.number, { ...byNumber.get(pr.number), github: pr });
+		const key = prKey(pr.htmlUrl || pr.url, pr.number, pr.repo);
+		byPR.set(key, { number: pr.number, repository: pr.repo || prRepositoryFromUrl(pr.htmlUrl || pr.url), ...byPR.get(key), github: pr });
 	}
-	const rows = [...byNumber.entries()].sort(([a], [b]) => b - a);
+	const severalRepositories = keyByRepository;
+	const rows = [...byPR.entries()].sort(([, a], [, b]) => b.number - a.number);
 	const labels = reviewLabels(t);
 	const requestRereview = async (review: InspectorGithubReview) => {
 		const { error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/reviews/rerequest", {
@@ -1877,7 +1979,8 @@ function MergedReviewsSection({
 		await sendMessageToWorker(formatReviewSummaryMessage(summary), "Unable to send review summary to worker agent");
 		onWorkerMessageSent?.();
 	};
-	const groups: InspectorReviewGroup[] = rows.map(([number, { ao, github }]) => {
+	const groups: InspectorReviewGroup[] = rows.map(([key, { number, repository, ao, github }]) => {
+		const prLabel = severalRepositories && repository ? `${repository} #${number}` : `#${number}`;
 		const aoRuns = ao ? [...(runsByPR.get(ao.prUrl) ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)) : [];
 		const entries = (github?.review?.reviews ?? []).filter(
 			(entry) => !externalReviewActorMatchesPRAuthor(entry.reviewerId, github?.author),
@@ -1988,7 +2091,7 @@ function MergedReviewsSection({
 			externalEntries.push({
 				body: undefined,
 				canRequestRereview: canRequestPRRereview("changes_requested", github?.url),
-				id: `unresolved:${reviewer.reviewerId}:${number}`,
+				id: `unresolved:${reviewer.reviewerId}:${key}`,
 				pullRequestUrl: github?.url,
 				inlineComments: reviewer.links.map((link) => ({
 					autoInjectReview: link.autoInjectReview,
@@ -2019,7 +2122,7 @@ function MergedReviewsSection({
 			externalEntries.push({
 				body: undefined,
 				canRequestRereview: false,
-				id: `resolved:${reviewer.reviewerId}:${number}`,
+				id: `resolved:${reviewer.reviewerId}:${key}`,
 				pullRequestUrl: github?.url,
 				inlineComments: [],
 				resolvedComments: reviewer.links.map((link) => ({
@@ -2077,13 +2180,14 @@ function MergedReviewsSection({
 					}
 				: undefined,
 			meta: [
-				ao ? aoReviewMeta(ao) : `#${number}`,
+				ao ? aoReviewMeta(ao) : prLabel,
 				unresolved > 0 ? t("inspector.unresolvedCount", { count: unresolved }) : null,
 			]
 				.filter(Boolean)
 				.join(" · "),
 			number,
-			title: (ao?.title ?? github?.title)?.trim() || `PR #${number}`,
+			key,
+			title: (ao?.title ?? github?.title)?.trim() || `PR ${prLabel}`,
 			verdict: ao ? reviewVerdict(ao) : undefined,
 		};
 	}).filter((group) =>

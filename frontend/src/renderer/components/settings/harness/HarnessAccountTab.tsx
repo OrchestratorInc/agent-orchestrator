@@ -1,21 +1,26 @@
 import { BookOpen, Check, Copy, ExternalLink, LoaderCircle, LogOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { versionLabel, type InstallJob } from "../../../hooks/useHarnessUpdates";
+import { agentAccountProviderFor, followsSavedAccount } from "../../../hooks/useAgentAccounts";
+import { advisoryInUse, isWaitingForIdleJob, versionLabel, type HarnessInUse, type InstallJob } from "../../../hooks/useHarnessUpdates";
+import { IdleUpdateStatus } from "./HarnessSessionsDialog";
 import type { TerminalSessionState } from "../../../hooks/useTerminalSession";
 import { aoBridge } from "../../../lib/bridge";
 import { cn } from "../../../lib/utils";
+import { useUiStore } from "../../../stores/ui-store";
 import { MiddleTruncatedText } from "../../MiddleTruncatedText";
 import { Button } from "../../ui/button";
+import { AgentAccountsPanel } from "../AgentAccountsSection";
 import { SettingsOptionMenu } from "../SettingsOptionMenu";
-import type { HarnessDetails } from "./describe-harness";
+import { installStage, showsInstallProgress, type HarnessDetails } from "./describe-harness";
 import { HarnessAuthTerminalPanel } from "./HarnessAuthTerminalPanel";
+import { HarnessInstallProgress, useInstallJustFinished } from "./HarnessInstallProgress";
 import { HarnessDetailGroup, HarnessDetailRow, HarnessTimestamp } from "./harness-ui";
 
 const ACTION_CLASS = "h-8 min-w-20 px-3 focus-visible:ring-2 focus-visible:ring-ring";
 
 /** Install, update and login each own one row. While a job or login runs,
 	* the row that started it shows progress instead. */
-export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState }: {
+export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied, diagnosticsExpanded, onToggleDiagnostics, onCopyDiagnostics, onInstall, onSelectMethod, onCopyCommand, onUpdate, onLogin, onLogout, onVerify, onCloseAuth, onRetryAuth, onTerminalState, onViewSessions }: {
 	details: HarnessDetails;
 	hostId?: string;
 	/** A login or logout terminal is open for any harness. */
@@ -34,9 +39,22 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 	onCloseAuth: () => void;
 	onRetryAuth: () => void;
 	onTerminalState: (state: TerminalSessionState) => void;
+	/** Lists sessions an update waits for. */
+	onViewSessions?: (inUse: HarnessInUse) => void;
 }) {
 	const { t } = useTranslation();
 	const { plan, job, isInstalled, authPlan, rowAuthWorkflow, authBusy, installMethod, availableMethods, failed } = details;
+	// Sessions that must end first turn Update into a way to find them.
+	const blockedBy = advisoryInUse(details.advisory);
+	const updateBlocked = Boolean(blockedBy);
+	// Subscription accounts are a developer-mode preview, for local Claude Code
+	// and Codex. A saved account new tasks start on is listed even without it:
+	// readiness then speaks for that account, not for the CLI's own login.
+	const accountsPreview = useUiStore((state) => state.developerMode);
+	const accountProvider = (accountsPreview || followsSavedAccount(details.readinessAgent)) && !hostId && isInstalled ? agentAccountProviderFor(details.agentId) : null;
+	// The running job's steps stay in the Installation card until it finishes on Done.
+	const justFinished = useInstallJustFinished(job);
+	const stage = justFinished ? "done" : installStage(job);
 	// Progress reads as a solid state, not a greyed-out action.
 	const progressAction = <span role="status"><Button type="button" size="sm" variant="secondary" className={cn(ACTION_CLASS, "disabled:opacity-100")} aria-busy="true" disabled><LoaderCircle className="animate-spin" aria-hidden="true" />{details.progressLabel}</Button></span>;
 	const authBusyAction = <Button type="button" size="sm" className={ACTION_CLASS} disabled>
@@ -65,13 +83,14 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
 			</Button> : null
 		) : details.showUpdate && !details.needsLogin ? (
-			details.canUpdate ? <Button type="button" data-harness-primary-action="" size="sm" className={ACTION_CLASS} onClick={onUpdate}>
-				{t(failed && details.currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
+			details.canUpdate ? <Button type="button" data-harness-primary-action="" size="sm" variant={updateBlocked ? "outline" : undefined} className={ACTION_CLASS} onClick={onUpdate}>
+				{blockedBy ? t("settings.harness.viewSessions", { count: blockedBy.count })
+					: t(failed && details.currentOperation === "update" ? "settings.harness.retryUpdate" : "settings.harness.update")}
 			</Button> : plan?.documentationUrl ? <Button type="button" data-harness-primary-action="" size="sm" variant="outline" className={ACTION_CLASS} onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button> : null
 		) : null;
 	const accountAction = authBusy ? authBusyAction
 		: details.busy ? null
-		: details.needsLogin ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="sm" className={ACTION_CLASS} disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
+		: details.needsLogin || details.showSetup ? <Button type="button" data-harness-primary-action="" data-terminal-focus-handoff="true" size="sm" className={ACTION_CLASS} disabled={!authPlan?.available || authWorkflowActive} onClick={onLogin}>
 			{t(details.isDocumentationAction ? "settings.harness.viewDocumentation" : details.isSetupAction ? "settings.harness.setup" : details.authState?.error ? "settings.harness.retryLogin" : "settings.harness.login")}
 		</Button>
 		: details.canRelogin ? <Button type="button" data-terminal-focus-handoff="true" size="sm" variant="outline" className={ACTION_CLASS} disabled={authWorkflowActive} onClick={onLogin}>
@@ -89,16 +108,19 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				{isInstalled && !details.updateUnknown && !details.updateAvailable && !details.busy ? <span className="text-xs text-settings-muted">{t(details.advisory?.status === "ahead_of_latest" ? "settings.harness.aheadOfLatest" : "settings.harness.latest")}</span> : null}
 				{installationAction}
 			</HarnessDetailRow>
+			{job && (justFinished || showsInstallProgress(job)) ? <HarnessInstallProgress job={job} stage={stage} label={justFinished ? t("settings.harness.progress.done") : details.progressLabel} /> : null}
 			{isInstalled && details.updatedAt ? <HarnessDetailRow label={t("settings.harness.lastUpdated")}>
 				<span className="text-xs text-settings-label"><HarnessTimestamp value={details.updatedAt} /></span>
 			</HarnessDetailRow> : null}
 		</HarnessDetailGroup>
+		{job && isWaitingForIdleJob(job) ? <div className="-mt-3"><IdleUpdateStatus agentId={details.agentId} job={job} hostId={hostId} onViewSessions={(waiting) => onViewSessions?.(waiting)} /></div> : null}
 		{isInstalled && details.showUpdate && !details.canUpdate ? <p className="-mt-3 text-xs text-settings-muted">{details.updateReason}</p> : null}
 		{isInstalled && details.updateUnknown && !details.advisoryQuery?.isPending && !details.manualOnly ? <p className="-mt-3 text-xs text-settings-muted">{t("settings.harness.updateCheckUnavailable")}</p> : null}
 		{/* A harness with no installable method explains how it is maintained instead. */}
 		{isInstalled && details.manualOnly && plan?.reason && !(details.showUpdate && !details.canUpdate) ? <p className="-mt-3 text-xs text-settings-muted">{plan.reason}</p> : null}
 
-		{isInstalled || rowAuthWorkflow ? <HarnessDetailGroup title={t("settings.harness.account")}>
+		{/* With accounts listed, the CLI's own login is a row there, not a card of its own. */}
+		{(isInstalled || rowAuthWorkflow) && !accountProvider ? <HarnessDetailGroup title={t("settings.harness.account")}>
 			<HarnessDetailRow
 				label={authBusy && rowAuthWorkflow ? t(rowAuthWorkflow.action === "logout" ? "settings.harness.logoutInProgress" : "settings.harness.loginInProgress") : details.authSummary}
 				description={authBusy ? undefined : details.accountDescription}
@@ -107,6 +129,12 @@ export function HarnessAccountTab({ details, hostId, authWorkflowActive, copied,
 				{isInstalled && authPlan?.logoutCommand && authPlan.available && details.authStatus !== "unauthorized" ? <Button type="button" size="sm" variant="outline" disabled={details.busy || authWorkflowActive} onClick={onLogout}><LogOut aria-hidden="true" />{t("settings.harness.logout")}</Button> : null}
 			</HarnessDetailRow>
 		</HarnessDetailGroup> : null}
+		{accountProvider ? <AgentAccountsPanel provider={accountProvider} cliLogin={{
+			disabled: authBusy || authWorkflowActive || details.busy || !authPlan?.available || authPlan.action === "instructions",
+			canLogout: Boolean(authPlan?.logoutCommand),
+			onSignIn: onLogin,
+			onLogout,
+		}} /> : null}
 		{authPlan?.action === "instructions" && authPlan.documentationUrl ? <div><Button type="button" size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(authPlan.documentationUrl)}><BookOpen aria-hidden="true" />{t("settings.harness.instructions")}</Button></div> : null}
 		{rowAuthWorkflow ? <HarnessAuthTerminalPanel
 			workflow={rowAuthWorkflow}

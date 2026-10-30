@@ -148,7 +148,7 @@ function setupBridge() {
 		showProfileMenu: vi.fn(),
 		selectProfile: vi.fn(),
 		reconnectRuntime: vi.fn(async () => undefined),
-		getRuntimeState: vi.fn(async () => ({ connected: false })),
+		getRuntimeState: vi.fn(async () => ({ connected: false, connecting: false, rejected: false })),
 		historySuggestions: vi.fn(async () => []),
 		historyFavicon: vi.fn(async () => undefined),
 		captureScreenshot: vi.fn(async () => undefined),
@@ -271,15 +271,15 @@ describe("useBrowserView", () => {
 		expect(result.current.viewId).toBe("42:sess-1");
 	});
 
-	it("hydrates the runtime connection state for a late-mounted panel", async () => {
+	it("leaves the runtime link state to the Browser panel (#6466)", async () => {
 		const bridge = setupBridge();
-		bridge.getRuntimeState.mockResolvedValueOnce({ connected: false });
-		const slot = createSlot();
-		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		createSlot();
+		renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await act(async () => undefined);
 
-		await waitFor(() => expect(bridge.getRuntimeState).toHaveBeenCalled());
-		await waitFor(() => expect(result.current.browserRuntimeConnected).toBe(false));
-		expect(slot).toBeInTheDocument();
+		// SessionView owns this hook; a flapping link must not re-render it.
+		expect(bridge.onRuntimeState).not.toHaveBeenCalled();
+		expect(bridge.getRuntimeState).not.toHaveBeenCalled();
 	});
 
 	it("keeps bounds revisions increasing when the same native view remounts", async () => {
@@ -1994,6 +1994,61 @@ describe("useBrowserView", () => {
 		expect(bridge.clear).not.toHaveBeenCalled();
 	});
 
+	it("reopens an available artifact after daemon termination destroys its native target", async () => {
+		const bridge = setupBridge();
+		const { rerender } = renderHook(
+			({ sessionEnded }) => useBrowserView({
+				sessionId: "sess-1", active: true, poppedOut: false, terminated: false, sessionEnded,
+				previewUrl: "http://ao-preview-artifact.onwxg.localhost:3300/report.html", previewRevision: 1,
+			}),
+			{ initialProps: { sessionEnded: false } },
+		);
+		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(1));
+		rerender({ sessionEnded: true });
+		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(2));
+		expect(bridge.ensure).toHaveBeenCalledTimes(2);
+		expect(bridge.destroy).not.toHaveBeenCalled();
+	});
+
+	it("preserves manual navigation when revisiting an already-ended artifact session", async () => {
+		const bridge = setupBridge();
+		const options = {
+			sessionId: "sess-1", active: true, poppedOut: false, terminated: false, sessionEnded: true,
+			previewUrl: "http://ao-preview-artifact.onwxg.localhost:3300/report.html", previewRevision: 1,
+		};
+		const first = renderHook(() => useBrowserView(options));
+		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(1));
+		await act(() => first.result.current.navigate("https://example.com/manual"));
+		first.unmount();
+		const second = renderHook(() => useBrowserView(options));
+		await waitFor(() => expect(second.result.current.viewId).toBe("42:sess-1"));
+		expect(bridge.navigate).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not create a browser for an already terminated session", () => {
+		const bridge = setupBridge();
+		const { result } = renderHook(() => useBrowserView({
+			sessionId: "sess-1", active: true, poppedOut: false, terminated: true,
+		}));
+		expect(bridge.ensure).not.toHaveBeenCalled();
+		expect(result.current.viewId).toBe("");
+	});
+
+	it("destroys a browser that finishes creating after termination", async () => {
+		const bridge = setupBridge();
+		let finish!: (state: BrowserNavState) => void;
+		bridge.ensure.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+		const { result, rerender } = renderHook(
+			({ terminated }) => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false, terminated }),
+			{ initialProps: { terminated: false } },
+		);
+		rerender({ terminated: true });
+		await act(async () => finish(bridge.stateFor("42:sess-1")));
+		expect(bridge.destroy).toHaveBeenCalledWith("42:sess-1");
+		expect(result.current.viewId).toBe("");
+		expect(bridge.navigate).not.toHaveBeenCalled();
+	});
+
 	it("destroys the complete browser target when the session is terminated", async () => {
 		const bridge = setupBridge();
 		const { rerender, result } = renderHook(
@@ -2017,6 +2072,12 @@ describe("useBrowserView", () => {
 		expect(bridge.clear).not.toHaveBeenCalled();
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
 		expect(result.current.viewId).toBe("");
+
+		// Restoring re-creates the target without a route change or remount.
+		rerender({ terminated: false });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		expect(bridge.ensure).toHaveBeenCalledTimes(2);
+		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(2));
 	});
 
 	it("hides the native view while an element outside the slot is fullscreen, and restores it on exit", async () => {

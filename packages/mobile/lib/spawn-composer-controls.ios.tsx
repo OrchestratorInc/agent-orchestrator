@@ -56,7 +56,8 @@ export function SpawnComposerControls({
 	modelSelection,
 	modelLabel,
 	onSelectModel,
-	onAttach,
+	onChoosePhoto,
+	onChooseFile,
 	voice,
 	onSpawn,
 	busy,
@@ -125,18 +126,21 @@ export function SpawnComposerControls({
 						glassPanel(),
 					]}
 				>
-					<Button
-						label="Attach file"
+					<Menu
+						label="Attach"
 						systemImage="paperclip"
-						onPress={() => { haptics.tap(); onAttach(); }}
 						modifiers={[
 							buttonStyle("plain"),
 							labelStyle("iconOnly"),
+							menuOrder("fixed"),
 							frame({ width: 38, height: 38 }),
 							tint(t.textPrimary),
 							accessibilityIdentifier("spawn-attachment"),
 						]}
-					/>
+					>
+						<Button label="Choose Photo" systemImage="photo" onPress={() => { haptics.tap(); onChoosePhoto(); }} />
+						<Button label="Choose File" systemImage="doc" onPress={() => { haptics.tap(); onChooseFile(); }} />
+					</Menu>
 
 					<Menu
 						label={

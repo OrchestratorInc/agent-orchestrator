@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -34,6 +35,11 @@ const (
 	startupTimeout   = 10 * time.Second
 	// Host hello is local control-plane I/O and must not stall daemon recovery.
 	handshakeTimeout = time.Second
+	// A stopped provider gets providerStdinGrace (providerQuickGrace for a quick
+	// stop) to exit on stdin closing, then SIGTERM, then a kill at the deadline.
+	providerStdinGrace   = time.Second
+	providerQuickGrace   = 300 * time.Millisecond
+	providerStopDeadline = 3 * time.Second
 )
 
 // Protocol selects the provider-wire behavior owned by the host.
@@ -139,6 +145,8 @@ type hello struct {
 	Version int    `json:"version"`
 	Token   string `json:"token"`
 	Action  string `json:"action"`
+	// QuickStop on a shutdown: see ShutdownQuick.
+	QuickStop bool `json:"quickStop,omitempty"`
 }
 
 type helloResponse struct {
@@ -219,12 +227,17 @@ func acquireHostLock(dataDir, sessionID string) (func(), error) {
 	return func() { _ = os.Remove(path) }, nil
 }
 
-func readDescriptor(dataDir, sessionID string) (Descriptor, error) {
+func readDescriptorOnce(dataDir, sessionID string) (Descriptor, error) {
 	path, err := descriptorPath(dataDir, sessionID)
 	if err != nil {
 		return Descriptor{}, err
 	}
-	b, err := os.ReadFile(path) //nolint:gosec // AO-owned path derived from validated session id.
+	f, err := openHostFile(path)
+	if err != nil {
+		return Descriptor{}, err
+	}
+	b, err := io.ReadAll(f)
+	_ = f.Close()
 	if err != nil {
 		return Descriptor{}, err
 	}
@@ -375,7 +388,7 @@ func ConnectOrStart(ctx context.Context, cfg Config) (*Transport, error) {
 		} else {
 			lastErr = err
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 	if d, readErr := readDescriptor(cfg.DataDir, cfg.SessionID); readErr == nil && processalive.Alive(d.PID) {
 		return nil, fmt.Errorf("%w: %w", ErrOwnershipInconclusive, lastErr)
@@ -506,7 +519,49 @@ func HostPID(dataDir, sessionID string) (int, bool) {
 // Missing/dead hosts are harmless; unknown live owners fail closed.
 // The protocol acknowledgement only confirms that shutdown was requested.
 func Shutdown(ctx context.Context, dataDir, sessionID string) error {
-	d, err := readDescriptor(dataDir, sessionID)
+	return shutdown(ctx, dataDir, sessionID, false)
+}
+
+// ShutdownQuick is Shutdown for a provider that gains nothing from the stdin
+// grace (session closed, or deaf to stdin). An older host waits the full grace.
+func ShutdownQuick(ctx context.Context, dataDir, sessionID string) error {
+	return shutdown(ctx, dataDir, sessionID, true)
+}
+
+func readDescriptor(dataDir, sessionID string) (Descriptor, error) {
+	return readDescriptorContext(context.Background(), dataDir, sessionID)
+}
+
+func readDescriptorContext(ctx context.Context, dataDir, sessionID string) (Descriptor, error) {
+	d, err := readDescriptorOnce(dataDir, sessionID)
+	if !isDescriptorSharingViolation(err) {
+		return d, err
+	}
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return Descriptor{}, ctx.Err()
+		case <-timeout.C:
+			return Descriptor{}, err
+		case <-ticker.C:
+			d, err = readDescriptorOnce(dataDir, sessionID)
+			if !isDescriptorSharingViolation(err) {
+				return d, err
+			}
+		}
+	}
+}
+
+func readShutdownDescriptor(ctx context.Context, dataDir, sessionID string) (Descriptor, error) {
+	return readDescriptorContext(ctx, dataDir, sessionID)
+}
+
+func shutdown(ctx context.Context, dataDir, sessionID string, quick bool) error {
+	d, err := readShutdownDescriptor(ctx, dataDir, sessionID)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -527,7 +582,7 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	}
 	defer func() { _ = conn.Close() }()
 	finishHandshake := bindConnToContext(handshakeCtx, conn)
-	if err := json.NewEncoder(conn).Encode(hello{Version: ProtocolVersion, Token: d.Token, Action: "shutdown"}); err != nil {
+	if err := json.NewEncoder(conn).Encode(hello{Version: ProtocolVersion, Token: d.Token, Action: "shutdown", QuickStop: quick}); err != nil {
 		return finishHandshake(err)
 	}
 	var response helloResponse
@@ -540,12 +595,15 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 	if !response.OK {
 		return errors.New(response.Error)
 	}
-	waitCtx, stop := context.WithTimeout(ctx, 5*time.Second)
+	// The host's own shutdown can take about 6 s: 3 s for the provider to exit
+	// once stdin closes, a 1 s reap, and 2 s for its process group to exit on
+	// SIGTERM before SIGKILL. Wait past that, with room for a loaded machine.
+	waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
 	defer stop()
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		current, readErr := readDescriptor(dataDir, sessionID)
+		current, readErr := readShutdownDescriptor(waitCtx, dataDir, sessionID)
 		if readErr == nil && current.Token != d.Token {
 			return nil // A new owner could only publish after the old lock released.
 		}
@@ -556,7 +614,9 @@ func Shutdown(ctx context.Context, dataDir, sessionID string) error {
 			} else if lockErr != nil {
 				return lockErr
 			}
-		} else if readErr != nil {
+		} else if readErr != nil && !hostFileBusy(readErr) {
+			// A busy descriptor is the exiting host deleting it, or another
+			// reader; the next poll sees it gone.
 			return readErr
 		}
 		select {
@@ -644,21 +704,61 @@ func Run(ctx context.Context, cfg Config) error {
 	acceptDone := make(chan error, 1)
 	go func() { acceptDone <- h.accept() }()
 
+	wait := sync.OnceValue(child.Wait)
+	// reapProvider waits up to a second for the provider to exit once its
+	// output ended, so its zombie does not hold the process group open while
+	// the group is asked to exit. A provider still running is left to the kill.
+	reapProvider := func() {
+		reaped := make(chan struct{})
+		go func() { _ = wait(); close(reaped) }()
+		select {
+		case <-reaped:
+		case <-time.After(time.Second):
+		}
+	}
 	stopProvider := func() {
 		_ = stdin.Close()
+		deadline := time.After(providerStopDeadline)
+		grace := providerStdinGrace
+		if h.quickStop.Load() {
+			grace = providerQuickGrace
+		}
 		select {
 		case <-providerDone:
 			// Wrapper adapters may exit before their provider child. The hosted
 			// process tree is the ownership boundary, so explicit shutdown reaps
 			// any descendant that did not follow stdin closure.
+			reapProvider()
 			_ = killProviderProcess(context.WithoutCancel(ctx), child)
-		case <-time.After(3 * time.Second):
-			_ = killProviderProcess(context.WithoutCancel(ctx), child)
+			return
+		case <-time.After(grace):
 		}
+		// Some agents (Cursor) ignore stdin closing and only exit on a signal.
+		_ = terminateProviderProcess(child)
+		// The provider's output can stay open after it exits when a helper it
+		// started inherited the pipe, so its own exit also ends the wait.
+		exited := time.NewTicker(100 * time.Millisecond)
+		defer exited.Stop()
+	wait:
+		for {
+			select {
+			case <-providerDone:
+				break wait
+			case <-deadline:
+				break wait
+			case <-exited.C:
+				if child.Process != nil && !processalive.Alive(child.Process.Pid) {
+					break wait
+				}
+			}
+		}
+		reapProvider()
+		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	}
 	var runErr error
 	select {
 	case runErr = <-providerDone:
+		reapProvider()
 		_ = killProviderProcess(context.WithoutCancel(ctx), child)
 	case <-h.shutdown:
 		stopProvider()
@@ -672,7 +772,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	_ = listener.Close()
-	_ = child.Wait()
+	_ = wait()
 	return runErr
 }
 
@@ -695,6 +795,7 @@ type host struct {
 	maxRequestID     int64
 	shutdown         chan struct{}
 	shutdownOnce     sync.Once
+	quickStop        atomic.Bool // set before shutdown closes; see ShutdownQuick
 }
 
 type pendingRequest struct {
@@ -732,6 +833,9 @@ func (h *host) handle(conn net.Conn) {
 	if request.Action == "shutdown" {
 		_ = json.NewEncoder(conn).Encode(helloResponse{OK: true})
 		_ = conn.Close()
+		if request.QuickStop {
+			h.quickStop.Store(true)
+		}
 		h.shutdownOnce.Do(func() { close(h.shutdown) })
 		return
 	}

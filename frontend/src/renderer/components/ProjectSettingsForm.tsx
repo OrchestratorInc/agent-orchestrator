@@ -175,9 +175,6 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	useEnsureAgentReadiness({ hostId });
 	const persist = async (values: ProjectSettingsDraft): Promise<SettingsSaveResult> => {
 		const savedKey = JSON.stringify(values);
-		void captureRendererEvent("ao.renderer.settings_save_requested", {
-			project_id: projectId,
-		});
 		const displayName = values.displayName.trim();
 		const { model: _legacyModel, mode: _legacyMode, effort: _legacyEffort, permissions: _legacyPermissions, ...sharedAgentConfig } = config.agentConfig ?? {};
 		const existingReviewer = config.reviewers?.[0];
@@ -327,7 +324,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject }}
 		details={[{ label: t("settings.project.path"), value: project.path, href: hostId ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
 		workspaceRepos={project.kind === "workspace" ? project.workspaceRepos ?? [] : undefined} repository={project.repo}
-		modelScope={() => projectId} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}
+		modelScope={() => ""} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}
 		reviewerWarning={reviewerTrustWarning} save={save} saveUnchanged onSaveState={onSaveState}
 		modelHostId={hostId}
 		renderAgent={(props) => <LocalAgentPicker {...props} projectId={projectId} hostId={hostId} agentsQuery={agentsQuery} />} />;

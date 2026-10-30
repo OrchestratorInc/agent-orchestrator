@@ -83,9 +83,14 @@ const (
 	TargetDeepSeek    Target = "deepseek-harness"
 	TargetOpenHands   Target = "openhands"
 	TargetCommandCode Target = "command-code"
+	TargetMemcode     Target = "memcode"
+	TargetHermes      Target = "hermes"
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
+	// TargetCuaDriver is Cua Driver, the optional computer-use driver behind
+	// the agents' computer-use tools.
+	TargetCuaDriver Target = "cua-driver"
 )
 
 // agentTargets is the stable settings-page order.
@@ -96,7 +101,7 @@ var agentTargets = []Target{
 	TargetContinue, TargetDevin, TargetKiro, TargetKilocode, TargetVibe,
 	TargetMuse, TargetAgy, TargetAutohand, TargetKimchi, TargetPrimeAgent,
 	TargetOMP, TargetFX, TargetUnreal, TargetCodewhale, TargetMiMoCode, TargetDeepSeek, TargetOpenHands,
-	TargetCommandCode,
+	TargetCommandCode, TargetMemcode, TargetHermes,
 }
 
 var agentTargetSet = func() map[Target]bool {
@@ -120,7 +125,7 @@ func installNotice(target Target) string {
 // Agent-only targets use /agents/{agent}/install instead.
 var systemTargetSet = map[Target]bool{
 	TargetTmux: true, TargetGH: true, TargetClaude: true, TargetCloudflared: true,
-	TargetCodex: true, TargetOpencode: true, TargetOpencodeV2: true, TargetCopilot: true,
+	TargetCuaDriver: true, TargetCodex: true, TargetOpencode: true, TargetOpencodeV2: true, TargetCopilot: true,
 }
 
 // knownTargets is the exhaustive allowlist backing Valid.
@@ -195,6 +200,21 @@ type Plan struct {
 	Method              string
 	DocsURL             string
 	ExpectedDestination string
+	// UpdateWhileRunning is set on update plans: whether the update may run
+	// while sessions use the binary. Empty means blocked.
+	UpdateWhileRunning UpdateWhileRunning
+	// keepPreviousRelease asks the installer to leave the replaced release on
+	// disk because live sessions still run it.
+	keepPreviousRelease bool
+	// managed installs this update side by side in AO's versioned directory
+	// (see managed.go) instead of rewriting the installed copy.
+	managed bool
+	// managedPin is the release a managed reinstall installs again.
+	managedPin string
+	// sourceMethod/sourcePackage identify the existing owner during a planned
+	// migration. Method and Package always describe what the operation runs.
+	sourceMethod  string
+	sourcePackage string
 
 	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
 	// only for the daemon's own Node/npm or global prefix. An install runs
@@ -209,6 +229,13 @@ type Plan struct {
 	// ownerPrefixFound records that targetInstalledCopy located the npm prefix
 	// that owns the installed binary.
 	ownerPrefixFound bool
+}
+
+func (plan Plan) ownershipMethod() string {
+	if plan.sourceMethod != "" {
+		return plan.sourceMethod
+	}
+	return plan.Method
 }
 
 // AgentPlan is the display-safe plan returned to the settings page. Command is
@@ -266,14 +293,17 @@ type Status string
 
 // The full set of Job lifecycle states.
 const (
-	StatusIdle        Status = "idle"
-	StatusRunning     Status = "running"
-	StatusInstalling  Status = "installing"
-	StatusVerifying   Status = "verifying"
-	StatusSucceeded   Status = "succeeded"
-	StatusFailed      Status = "failed"
-	StatusUnsupported Status = "unsupported"
-	StatusInterrupted Status = "interrupted"
+	StatusIdle    Status = "idle"
+	StatusRunning Status = "running"
+	// StatusWaitingForIdle holds an update until every session using the
+	// harness is idle; it then stops them, updates and resumes them.
+	StatusWaitingForIdle Status = "waiting_for_idle"
+	StatusInstalling     Status = "installing"
+	StatusVerifying      Status = "verifying"
+	StatusSucceeded      Status = "succeeded"
+	StatusFailed         Status = "failed"
+	StatusUnsupported    Status = "unsupported"
+	StatusInterrupted    Status = "interrupted"
 )
 
 // maxOutputBytes bounds Job.Output so a chatty installer can't grow memory
@@ -297,22 +327,25 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one harness operation for a Target.
 type Job struct {
-	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,cloudflared" description:"Fixed install target this job ran (or is running) for."`
-	Status              Status `json:"status" enum:"idle,running,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job."`
-	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
-	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
-	ExpectedDestination string `json:"expectedDestination,omitempty" description:"Expected or adapter-resolved executable destination."`
-	Output              string `json:"output,omitempty" description:"Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes."`
-	Error               string `json:"error,omitempty" description:"Set on failure or when the target is unsupported on this machine: the exec error, the Unsupported reason, or a timeout message."`
-	Notice              string `json:"notice,omitempty" description:"Fixed user-visible consequence to acknowledge before running this install."`
+	Target              Target    `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
+	Status              Status    `json:"status" enum:"idle,running,waiting_for_idle,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job. waiting_for_idle: the update runs once every session using the harness is idle (Windows)."`
+	Method              string    `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
+	Command             string    `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
+	ExpectedDestination string    `json:"expectedDestination,omitempty" description:"Expected or adapter-resolved executable destination."`
+	Output              string    `json:"output,omitempty" description:"Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. Published while the command runs."`
+	Progress            *Progress `json:"progress,omitempty" description:"While installing, the phase and percentage the installer's output reports. Absent in every other status."`
+	Error               string    `json:"error,omitempty" description:"Set on failure or when the target is unsupported on this machine: the exec error, the Unsupported reason, or a timeout message."`
+	Notice              string    `json:"notice,omitempty" description:"Fixed user-visible consequence to acknowledge before running this install."`
 	// Pointers, not time.Time: omitempty has no effect on a struct, so a bare
 	// time.Time always serializes (as the zero value's "0001-01-01..."
 	// timestamp) even when nothing has happened yet. A nil pointer actually
 	// omits the field, matching FinishedAt's documented "zero until the job
 	// finishes" contract.
-	StartedAt  *time.Time `json:"startedAt,omitempty"`
-	FinishedAt *time.Time `json:"finishedAt,omitempty" description:"Absent until the job finishes."`
-	UpdatedAt  *time.Time `json:"updatedAt,omitempty"`
+	// WaitingOn lists the sessions a waiting_for_idle job still waits for.
+	WaitingOn  []domain.SessionWait `json:"waitingOn,omitempty" description:"While waiting_for_idle, the sessions the update still waits for and why."`
+	StartedAt  *time.Time           `json:"startedAt,omitempty"`
+	FinishedAt *time.Time           `json:"finishedAt,omitempty" description:"Absent until the job finishes."`
+	UpdatedAt  *time.Time           `json:"updatedAt,omitempty"`
 }
 
 // HarnessVerifier performs post-install binary verification without probing
@@ -344,7 +377,21 @@ type Deps struct {
 	// DisableUpdateChecks stops update advisories from reaching the network
 	// (AO_HARNESS_UPDATE_CHECKS=off).
 	DisableUpdateChecks bool
-	PrivateNPMPrefixes  map[Target]string
+	// DisableUpdateWhileRunning makes every update wait for the harness's
+	// sessions to end, as before update-while-running existed
+	// (AO_UPDATE_WHILE_RUNNING=off).
+	DisableUpdateWhileRunning bool
+	// ManagedRoot is where AO keeps versioned harness installs (under the AO
+	// data dir). Empty keeps every update in place.
+	ManagedRoot string
+	// Releases records which managed release each session launch runs, so a
+	// release is deleted only once no live session runs it.
+	Releases ManagedReleaseStore
+	// UpdateWhenIdle lets an update that cannot run beside sessions wait for
+	// them to be idle, stop them, update and resume them, instead of refusing
+	// while they run (AO_UPDATE_WHEN_IDLE).
+	UpdateWhenIdle     bool
+	PrivateNPMPrefixes map[Target]string
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -384,14 +431,42 @@ type Service struct {
 	ownsInstallation     func(context.Context, string, string, string, bool) (bool, error)
 	updateAdvisories     map[Target]UpdateAdvisory
 	updateChecksDisabled bool
-	derivedOwners        map[Target]derivedOwner
-	updateAdvisoryCalls  map[Target]*updateAdvisoryCall
+	// updateWhileRunningDisabled forces every update to wait for sessions.
+	updateWhileRunningDisabled bool
+	// managedRoot holds AO's versioned harness installs; "" turns them off.
+	managedRoot string
+	// releases tracks the managed release each session launch runs.
+	releases ManagedReleaseStore
+	// invalidateBinary makes a harness adapter resolve its executable again.
+	invalidateBinary func(Target)
+	// updateWhenIdle turns a blocked or warn level into update-when-idle.
+	updateWhenIdle bool
+	// changing marks harnesses whose installation is being changed, so a
+	// launch waits for the change instead of failing.
+	changing map[Target]bool
+	// idleUpdates are the waiting or running update-when-idle runs.
+	idleUpdates map[Target]*idleUpdateRun
+	// idleCoordinator stops and resumes a harness's sessions around such a run.
+	idleCoordinator IdleUpdateCoordinator
+	// telemetry receives update and version-move events; nil drops them.
+	telemetry ports.EventSink
+	// updateLevels remembers the level each running update was started under.
+	updateLevels map[Target]UpdateWhileRunning
+	// updateObserver marks sessions an update left on the replaced release.
+	updateObserver HarnessUpdateObserver
+	// deferredCleanups are Homebrew formulas whose old keg is kept until the
+	// sessions that run it have moved to the new release.
+	deferredCleanups    map[Target]string
+	derivedOwners       map[Target]derivedOwner
+	updateAdvisoryCalls map[Target]*updateAdvisoryCall
 	// updateCheckSlots bounds concurrent update checks to
 	// maxConcurrentUpdateChecks; created on first use.
 	updateCheckSlots chan struct{}
 	// officialVersion reads a vendor release channel when no package manager
 	// owns the harness binary.
 	officialVersion func(context.Context, Target) (string, error)
+	// systemResolvers find system targets installed outside the daemon's PATH.
+	systemResolvers map[Target]func(context.Context) (string, error)
 }
 
 // requestPlanner carries one immutable capability snapshot through all recipe
@@ -438,30 +513,34 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 	pathWritable, _ := executables.(ports.PathWritableProbe)
 	backgroundContext, stop := context.WithCancel(context.Background())
 	return &Service{
-		jobs:                 make(map[Target]*Job),
-		harnessGates:         make(map[domain.AgentHarness]*sync.RWMutex),
-		executables:          executables,
-		commands:             commands,
-		installCommands:      installCommands,
-		installScripts:       installScripts,
-		installCapabilities:  installCapabilities,
-		jobStore:             deps.JobStore,
-		verifier:             deps.Verifier,
-		sessions:             deps.Sessions,
-		reviewers:            deps.Reviewers,
-		updateChecksDisabled: deps.DisableUpdateChecks,
-		goos:                 runtime.GOOS,
-		installTimeout:       defaultInstallTimeout,
-		persistenceTimeout:   defaultPersistenceTimeout,
-		stop:                 stop,
-		backgroundContext:    backgroundContext,
-		managedVersion:       newManagedVersionChecker(commands, nil),
-		officialVersion:      officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
-		ownsInstallation:     managerOwnsBinary(commands),
-		updateAdvisories:     make(map[Target]UpdateAdvisory),
-		updateAdvisoryCalls:  make(map[Target]*updateAdvisoryCall),
-		pathWritable:         pathWritable,
-		privateNPMPrefixes:   deps.PrivateNPMPrefixes,
+		jobs:                       make(map[Target]*Job),
+		harnessGates:               make(map[domain.AgentHarness]*sync.RWMutex),
+		executables:                executables,
+		commands:                   commands,
+		installCommands:            installCommands,
+		installScripts:             installScripts,
+		installCapabilities:        installCapabilities,
+		jobStore:                   deps.JobStore,
+		verifier:                   deps.Verifier,
+		sessions:                   deps.Sessions,
+		reviewers:                  deps.Reviewers,
+		updateChecksDisabled:       deps.DisableUpdateChecks,
+		updateWhileRunningDisabled: deps.DisableUpdateWhileRunning,
+		updateWhenIdle:             deps.UpdateWhenIdle,
+		managedRoot:                deps.ManagedRoot,
+		releases:                   deps.Releases,
+		goos:                       runtime.GOOS,
+		installTimeout:             defaultInstallTimeout,
+		persistenceTimeout:         defaultPersistenceTimeout,
+		stop:                       stop,
+		backgroundContext:          backgroundContext,
+		managedVersion:             newManagedVersionChecker(commands, nil),
+		officialVersion:            officialReleaseVersion(runtime.GOOS, runtime.GOARCH),
+		ownsInstallation:           managerOwnsBinary(commands),
+		updateAdvisories:           make(map[Target]UpdateAdvisory),
+		updateAdvisoryCalls:        make(map[Target]*updateAdvisoryCall),
+		pathWritable:               pathWritable,
+		privateNPMPrefixes:         deps.PrivateNPMPrefixes,
 	}
 }
 
@@ -479,10 +558,7 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 	for _, target := range agentTargets {
 		plans := planner.agentMethodPlans(target, AgentOperationInstall)
 		reinstallPlans := planner.agentMethodPlans(target, AgentOperationReinstall)
-		reinstallByMethod := make(map[string]Plan, len(reinstallPlans))
-		for _, reinstallPlan := range reinstallPlans {
-			reinstallByMethod[reinstallPlan.Method] = reinstallPlan
-		}
+		reinstallByMethod := plansByMethod(reinstallPlans)
 		recommended := recommendedPlanIndex(plans)
 		plan := plans[recommended]
 		updateByMethod := plansByMethod(planner.agentMethodPlans(target, AgentOperationUpdate))
@@ -516,7 +592,7 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 func plansByMethod(plans []Plan) map[string]Plan {
 	out := make(map[string]Plan, len(plans))
 	for _, plan := range plans {
-		out[plan.Method] = plan
+		out[plan.ownershipMethod()] = plan
 	}
 	return out
 }
@@ -530,9 +606,14 @@ func operationPlanFor(plans map[string]Plan, method string) Plan {
 	return Plan{Method: method, Unsupported: true, Reason: "This installation method is no longer detected."}
 }
 
+// lastResortInstallers are official installers that clone a source repository
+// rather than fetch a release artifact, so an available package manager is
+// recommended ahead of them.
+var lastResortInstallers = map[Target]bool{TargetHermes: true}
+
 func recommendedPlanIndex(plans []Plan) int {
 	for index, plan := range plans {
-		if plan.Method == "official-installer" && !plan.Unsupported {
+		if plan.Method == "official-installer" && !plan.Unsupported && !lastResortInstallers[plan.Target] {
 			return index
 		}
 	}
@@ -622,7 +703,7 @@ func (s *Service) Start(ctx context.Context, target Target) (Job, error) {
 
 	go func() { //nolint:gosec // bounded daemon-owned worker intentionally outlives the request.
 		defer s.workers.Done()
-		s.run(s.backgroundContext, plan.Command, job)
+		s.run(s.backgroundContext, plan, job)
 	}()
 
 	return *job, nil
@@ -639,6 +720,8 @@ func (s *Service) StartAgent(ctx context.Context, target Target, method string) 
 // method ID and operation. An empty method chooses the recommended method
 // for an install or reinstall and the method that owns the installed copy for
 // an update. expected is the release the user approved for an update, or "".
+// An update runs alongside live sessions, which restart on the new release
+// once idle; see gateRunningSessions.
 func (s *Service) StartAgentOperation(ctx context.Context, target Target, method string, operation AgentOperation, expected string) (Job, error) {
 	if err := ctx.Err(); err != nil {
 		return Job{}, err
@@ -665,27 +748,23 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		s.mu.Unlock()
 		gate := s.harnessGate(domain.AgentHarness(target))
 		if !gate.TryLock() {
-			return Job{}, fmt.Errorf("%w: a %s session is starting", ErrHarnessActive, target)
+			return Job{}, &HarnessActiveError{Target: target, Starting: true, Level: UpdateWhileRunningBlocked}
 		}
-		releaseHarness = gate.Unlock
+		s.setHarnessChanging(target, true)
+		releaseHarness = func() {
+			s.setHarnessChanging(target, false)
+			gate.Unlock()
+		}
 		defer func() {
 			if releaseHarness != nil {
 				releaseHarness()
 			}
 		}()
-		if s.sessions != nil {
-			sessions, err := s.sessions.ListAllSessions(ctx)
-			if err != nil {
-				return Job{}, fmt.Errorf("systeminstall: list sessions before harness operation: %w", err)
+		if operation != AgentOperationUpdate {
+			// Only an update can run alongside sessions; anything else waits.
+			if _, err := s.gateRunningSessions(ctx, target, operation, Plan{}); err != nil {
+				return Job{}, err
 			}
-			for _, session := range sessions {
-				if session.Harness == domain.AgentHarness(target) && !session.IsTerminated {
-					return Job{}, fmt.Errorf("%w: end %s session %s before changing its installation", ErrHarnessActive, target, session.ID)
-				}
-			}
-		}
-		if err := s.requireNoLiveReviewer(ctx, target); err != nil {
-			return Job{}, err
 		}
 	}
 
@@ -715,23 +794,27 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if baseline, err = s.confirmInstalledOwner(ctx, target, plan); err != nil {
 			return Job{}, err
 		}
-		plannedPrefix := plan.PackagePrefix
-		if baseline != nil && baseline.path != "" {
-			plan = targetInstalledCopy(s.goos, plan, target, baseline.path)
-		}
-		if target == TargetKimi {
-			binaryPath := ""
-			if baseline != nil {
-				binaryPath = baseline.path
+		if !plan.managed {
+			// A managed update installs into AO's own directory, so the
+			// installed copy's prefix and its Node do not apply.
+			plannedPrefix := plan.PackagePrefix
+			if baseline != nil && baseline.path != "" {
+				plan = targetInstalledCopy(s.goos, plan, target, baseline.path)
 			}
-			home, _ := os.UserHomeDir()
-			plan = bindKimiInstallerUpdate(s.goos, plan, binaryPath, home, os.Getenv("PATH"))
+			if target == TargetKimi {
+				binaryPath := ""
+				if baseline != nil {
+					binaryPath = baseline.path
+				}
+				home, _ := os.UserHomeDir()
+				plan = bindKimiInstallerUpdate(s.goos, plan, binaryPath, home, os.Getenv("PATH"))
+			}
+			plan = s.validateNPMUpdateTarget(ctx, plan, plannedPrefix)
 		}
-		plan = s.validateNPMUpdateTarget(ctx, plan, plannedPrefix)
 	}
 	if operation == AgentOperationUpdate && expected != "" {
 		if baseline == nil {
-			baseline = &installedBaseline{scheme: versionSchemeFor(target)}
+			baseline = &installedBaseline{target: target, scheme: versionSchemeFor(target)}
 		}
 		// An update never moves the installed copy backwards.
 		if versionAtMost(baseline.scheme, expected, baseline.version) {
@@ -742,6 +825,11 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		baseline.expected = expected
 	}
 	if operation == AgentOperationUpdate && baseline != nil {
+		// A cached latest at or below the version just probed is stale (the
+		// harness was updated elsewhere); pinning it would move it backwards.
+		if baseline.latest != "" && versionAtMost(baseline.scheme, baseline.latest, baseline.version) {
+			baseline.latest = ""
+		}
 		// Install the release the user approved when it is one the advisory
 		// knows exists, else the one the advisory announced. The client value
 		// never reaches the command unless it lies between installed and latest.
@@ -749,7 +837,42 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if baseline.expected != "" && baseline.version != "" && versionAtMost(baseline.scheme, baseline.expected, baseline.latest) {
 			pin = baseline.expected
 		}
+		if pin != "" {
+			// The job succeeds once it reaches the release it installs, even
+			// if a newer one was announced meanwhile.
+			baseline.latest = pin
+		}
 		plan = pinVendorUpdate(plan, pin)
+	}
+	if operation == AgentOperationUpdate {
+		// Sessions are checked once the plan is final: whether an update may run
+		// alongside them depends on the method that owns the installed copy.
+		withSessions, err := s.gateRunningSessions(ctx, target, operation, plan)
+		var active *HarnessActiveError
+		switch {
+		case errors.Is(err, errUpdateWhenIdle) && !plan.Unsupported:
+			s.emitHarnessUpdate(target, UpdateWhileRunningIdle, "waiting", 0)
+			// Wait for idle sessions without holding the harness meanwhile.
+			return s.startIdleUpdate(ctx, plan, baseline)
+		case errors.As(err, &active):
+			result := "refused_sessions"
+			if active.Starting {
+				result = "refused_starting"
+			}
+			s.emitHarnessUpdate(target, active.Level, result, active.Count())
+		}
+		if err != nil {
+			return Job{}, err
+		}
+		// effectiveUpdateLevel takes s.mu itself, so it runs before the lock.
+		level := s.effectiveUpdateLevel(plan.UpdateWhileRunning)
+		s.mu.Lock()
+		if s.updateLevels == nil {
+			s.updateLevels = make(map[Target]UpdateWhileRunning)
+		}
+		s.updateLevels[target] = level
+		s.mu.Unlock()
+		plan.keepPreviousRelease = withSessions
 	}
 
 	now := time.Now().UTC()
@@ -826,7 +949,7 @@ func (s *Service) owningUpdatePlan(ctx context.Context, target Target, plans []P
 	s.mu.Unlock()
 	if hasAdvisory && advisory.MaintenanceMethod != "" {
 		for _, plan := range plans {
-			if plan.Method == advisory.MaintenanceMethod && !plan.Unsupported {
+			if plan.ownershipMethod() == advisory.MaintenanceMethod && !plan.Unsupported {
 				return plan, true
 			}
 		}
@@ -846,34 +969,6 @@ func (s *Service) owningUpdatePlan(ctx context.Context, target Target, plans []P
 	return Plan{}, false
 }
 
-// requireNoLiveReviewer refuses a harness operation while a reviewer runs on
-// that harness. Reviewer launches hold the harness gate until their handle is
-// recorded, so a reviewer that is still starting is refused at the gate.
-func (s *Service) requireNoLiveReviewer(ctx context.Context, target Target) error {
-	if s.reviewers == nil {
-		return nil
-	}
-	handles, err := s.reviewers.ListLiveReviewerHandles(ctx)
-	if err != nil {
-		return fmt.Errorf("systeminstall: list reviewers before harness operation: %w", err)
-	}
-	for _, handle := range handles {
-		if string(handle.Harness) == string(target) {
-			return fmt.Errorf("%w: close the %s reviewer for session %s before changing its installation", ErrHarnessActive, target, handle.SessionID)
-		}
-	}
-	chats, err := s.reviewers.ListRecoverableChatReviews(ctx)
-	if err != nil {
-		return fmt.Errorf("systeminstall: list reviewer chats before harness operation: %w", err)
-	}
-	for _, review := range chats {
-		if string(review.Harness) == string(target) && review.ControllerGeneration != "" {
-			return fmt.Errorf("%w: close the %s reviewer for session %s before changing its installation", ErrHarnessActive, target, review.SessionID)
-		}
-	}
-	return nil
-}
-
 func (s *Service) harnessGate(harness domain.AgentHarness) *sync.RWMutex {
 	s.harnessGatesMu.Lock()
 	defer s.harnessGatesMu.Unlock()
@@ -890,10 +985,15 @@ func (s *Service) harnessGate(harness domain.AgentHarness) *sync.RWMutex {
 
 // TryBeginHarnessUse prevents session launches from racing replacement of the
 // selected harness executable. The returned release must be called after launch.
+// A launch also notices a binary replaced outside AO and drops its stale
+// update advisory.
 func (s *Service) TryBeginHarnessUse(harness domain.AgentHarness) (func(), bool) {
 	gate := s.harnessGate(harness)
-	if !gate.TryRLock() {
+	if !gate.TryRLock() && !s.waitForHarnessChange(Target(harness), gate) {
 		return nil, false
+	}
+	if IsAgentTarget(Target(harness)) {
+		s.forgetReplacedBinary(Target(harness))
 	}
 	return gate.RUnlock, true
 }
@@ -993,6 +1093,9 @@ func (s *Service) AgentJobs(ctx context.Context) ([]Job, error) {
 // Recover marks unfinished durable jobs interrupted and hydrates the in-memory
 // coordination map before the HTTP server starts accepting requests.
 func (s *Service) Recover(ctx context.Context) error {
+	if err := s.ReconcileManagedReleases(ctx); err != nil {
+		return err
+	}
 	if s.jobStore == nil {
 		return nil
 	}
@@ -1089,31 +1192,46 @@ func (s *Service) Close(ctx context.Context) error {
 	}
 }
 
-// run executes argv in the background and records the outcome onto job. job
+// run executes plan in the background and records the outcome onto job. job
 // is only ever mutated here and read back through a copy under s.mu, so
 // concurrent Start/Status calls never race with this goroutine's writes.
 // The run is bounded by installTimeout so a stalled installer eventually
 // surfaces as a failure instead of pinning the target in StatusRunning.
-func (s *Service) run(parent context.Context, argv []string, job *Job) {
+func (s *Service) run(parent context.Context, plan Plan, job *Job) {
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 
 	out := &capturedOutput{max: maxOutputBytes}
-	var runErr error
-	if s.installCommands != nil {
-		runErr = s.installCommands.RunInstall(ctx, ports.InstallCommand{
-			Argv: argv,
-			Env: []string{
-				"CI=1",
-				"NONINTERACTIVE=1",
-				"HOMEBREW_NO_AUTO_UPDATE=1",
-				"NPM_CONFIG_AUDIT=false",
-				"NPM_CONFIG_FUND=false",
-			},
-		}, out, out)
-	} else {
-		runErr = s.commands.Run(ctx, argv, out, out)
+	env := []string{
+		"CI=1",
+		"NONINTERACTIVE=1",
+		"HOMEBREW_NO_AUTO_UPDATE=1",
+		"NPM_CONFIG_AUDIT=false",
+		"NPM_CONFIG_FUND=false",
 	}
+	var runErr error
+	switch {
+	case plan.Script != nil:
+		if s.installScripts == nil {
+			runErr = errors.New("remote installer runner is not configured")
+			break
+		}
+		command := *plan.Script
+		command.Env = append(append([]string(nil), env...), command.Env...)
+		var result ports.InstallScriptResult
+		result, runErr = s.installScripts.RunInstallScript(ctx, command, out, out)
+		if result.SHA256 != "" {
+			_, _ = fmt.Fprintf(out, "\nsource: %s\nsha256: %s\n", command.URL, result.SHA256)
+		}
+	case s.installCommands != nil:
+		runErr = s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: plan.Command, Env: env}, out, out)
+	default:
+		runErr = s.commands.Run(ctx, plan.Command, out, out)
+	}
+	// A clean run of a system target must leave its binary findable. Checked
+	// before taking s.mu: a resolver may probe the filesystem.
+	needsBinary := runErr == nil && ctx.Err() == nil && !IsAgentTarget(job.Target)
+	found := !needsBinary || s.systemTargetInstalled(ctx, job.Target)
 	now := time.Now()
 
 	s.mu.Lock()
@@ -1137,13 +1255,11 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 		s.mu.Unlock()
 		return
 	}
-	if !IsAgentTarget(job.Target) {
-		if path, err := s.executables.LookPath(string(job.Target)); err != nil || path == "" {
-			job.Status = StatusFailed
-			job.Error = fmt.Sprintf("install command finished but %s is still not in PATH", job.Target)
-			s.mu.Unlock()
-			return
-		}
+	if !found {
+		job.Status = StatusFailed
+		job.Error = fmt.Sprintf("install command finished but %s is still not in PATH", job.Target)
+		s.mu.Unlock()
+		return
 	}
 	job.Status = StatusSucceeded
 	callback := s.onSucceeded
@@ -1152,6 +1268,35 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 	if callback != nil {
 		callback(target)
 	}
+}
+
+// SetSystemTargetResolver registers how to find target's executable once it
+// is installed, for a tool whose installer puts it somewhere the daemon's own
+// PATH may not reach (a desktop app launched from the Dock does not inherit
+// the shell's ~/.local/bin).
+func (s *Service) SetSystemTargetResolver(target Target, resolve func(context.Context) (string, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.systemResolvers == nil {
+		s.systemResolvers = make(map[Target]func(context.Context) (string, error))
+	}
+	s.systemResolvers[target] = resolve
+}
+
+// systemTargetInstalled reports whether a system target's executable can now
+// be found: on PATH, or through its registered resolver.
+func (s *Service) systemTargetInstalled(ctx context.Context, target Target) bool {
+	if path, err := s.executables.LookPath(string(target)); err == nil && path != "" {
+		return true
+	}
+	s.mu.Lock()
+	resolve := s.systemResolvers[target]
+	s.mu.Unlock()
+	if resolve == nil {
+		return false
+	}
+	path, err := resolve(ctx)
+	return err == nil && path != ""
 }
 
 func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation AgentOperation, job *Job, baseline *installedBaseline) {
@@ -1168,15 +1313,24 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		"CI=1", "NONINTERACTIVE=1", "HOMEBREW_NO_AUTO_UPDATE=1",
 		"NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
 	}
+	if plan.keepPreviousRelease && plan.Method == "homebrew" && !plan.PackageCask {
+		// Live sessions still run the old keg; it is cleaned up after they move.
+		env = append(env, "HOMEBREW_NO_INSTALL_CLEANUP=1")
+		s.deferHomebrewCleanup(plan.Target, packageWithoutLatest(plan.Package))
+	}
+	progress := newProgressTracker(outputWriter)
+	stopProgress := s.publishAgentProgress(job, out, progress)
 	var runErr error
-	if plan.Script != nil {
+	if plan.managed {
+		runErr = s.runManagedInstall(ctx, plan, baseline, env, progress)
+	} else if plan.Script != nil {
 		if s.installScripts == nil {
 			runErr = errors.New("remote installer runner is not configured")
 		} else {
 			command := *plan.Script
 			command.Env = append(append([]string(nil), env...), command.Env...)
 			var result ports.InstallScriptResult
-			result, runErr = s.installScripts.RunInstallScript(ctx, command, outputWriter, outputWriter)
+			result, runErr = s.installScripts.RunInstallScript(ctx, command, progress, progress)
 			if result.SHA256 != "" {
 				_, _ = fmt.Fprintf(out, "\nsource: %s\nsha256: %s\n", command.URL, result.SHA256)
 			}
@@ -1187,9 +1341,9 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		}
 		runCommand := func(argv []string) error {
 			if s.installCommands != nil {
-				return s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: env}, out, out)
+				return s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: env}, progress, progress)
 			}
-			return s.commands.Run(ctx, argv, out, out)
+			return s.commands.Run(ctx, argv, progress, progress)
 		}
 		for _, argv := range plan.Prepare {
 			if err := runCommand(argv); err != nil && ctx.Err() == nil {
@@ -1200,6 +1354,7 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 			runErr = runCommand(plan.Command)
 		}
 	}
+	stopProgress()
 	if ctx.Err() == context.DeadlineExceeded {
 		s.finishAgentJob(job, StatusFailed, out.String(), fmt.Sprintf("%s timed out after %s", operation, s.installTimeout), "")
 		return
@@ -1220,7 +1375,7 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 		_, _ = io.WriteString(out, "\nAutohand CLI install will be verified. Computer control needs a separate repair: autohand computer install\n")
 	}
 	if runErr != nil && !installConfirmed && !autohandCLIInstalled {
-		message := runErr.Error()
+		message := failureSummary(runErr, out)
 		if plan.Target == TargetAutohand && plan.Method == "official-installer" &&
 			strings.Contains(out.String(), "Downloaded Autohand CLI failed to start") &&
 			strings.Contains(out.String(), "The existing installation was not changed.") {
@@ -1241,8 +1396,33 @@ func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation
 	s.runAgentVerification(s.backgroundContext, job, baseline, updaterReport)
 }
 
-// maxUpdaterReportRunes bounds the updater line quoted in a failed update.
-const maxUpdaterReportRunes = 200
+// maxUpdaterReportRunes keeps the updater line quoted in a failed update
+// short enough for the update notice.
+const maxUpdaterReportRunes = 80
+
+// installFailure is a failed operation with a short summary for the update
+// notice. err, which may name paths or quote output, goes to diagnostics.
+type installFailure struct {
+	summary string
+	err     error
+}
+
+func (e *installFailure) Error() string { return e.summary }
+func (e *installFailure) Unwrap() error { return e.err }
+
+func installFailed(summary string, err error) error {
+	return &installFailure{summary: summary, err: err}
+}
+
+// failureSummary is the job error for err. An installFailure's detail is
+// written to out, the job's diagnostics, so the notice keeps only the summary.
+func failureSummary(err error, out io.Writer) string {
+	var failure *installFailure
+	if errors.As(err, &failure) && failure.err != nil {
+		_, _ = fmt.Fprintf(out, "\n%s\n%v\n", failure.summary, failure.err)
+	}
+	return err.Error()
+}
 
 // terminalEscape matches ANSI CSI and OSC sequences that colour or retitle
 // terminal output.
@@ -1300,10 +1480,17 @@ func (s *Service) runAgentVerification(ctx context.Context, job *Job, baseline *
 	}
 	if failure != "" {
 		if updaterReport != "" {
-			failure = fmt.Sprintf("%s; the update command reported: %q", failure, updaterReport)
+			failure = fmt.Sprintf("%s The updater said: %q", failure, updaterReport)
 		}
 		s.finishAgentJob(job, StatusFailed, output, failure, result.ResolvedPath)
 		return
+	}
+	if baseline != nil {
+		// Only updates carry a baseline. Mark the sessions it left behind
+		// before reporting success, while launches still wait on this update.
+		if installed, ok := baseline.scheme.find(installedVersionText(job.Target, result.ResolvedPath, result.Output)); ok {
+			s.noteHarnessUpdated(job.Target, installed.display)
+		}
 	}
 	s.finishAgentJob(job, StatusSucceeded, output, "", result.ResolvedPath)
 }
@@ -1334,6 +1521,8 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 	}
 	job.FinishedAt = &now
 	job.UpdatedAt = &now
+	level, wasUpdate := s.updateLevels[job.Target]
+	delete(s.updateLevels, job.Target)
 	delete(s.updateAdvisories, job.Target)
 	delete(s.updateAdvisoryCalls, job.Target)
 	// The next advisory re-derives the owner of whatever binary now runs.
@@ -1348,6 +1537,9 @@ func (s *Service) finishAgentJob(job *Job, status Status, output, errorMessage, 
 		job.Error = fmt.Sprintf("persist terminal operation state: %v", err)
 		s.mu.Unlock()
 		return
+	}
+	if wasUpdate {
+		s.emitHarnessUpdate(target, level, string(status), 0)
 	}
 	if status == StatusSucceeded && callback != nil {
 		callback(target)
@@ -1395,7 +1587,7 @@ func jobFromRecord(record ports.AgentInstallJobRecord) Job {
 }
 
 func activeStatus(status Status) bool {
-	return status == StatusRunning || status == StatusInstalling || status == StatusVerifying
+	return status == StatusRunning || status == StatusWaitingForIdle || status == StatusInstalling || status == StatusVerifying
 }
 
 func combineOutput(existing, next string) string {
@@ -1419,7 +1611,11 @@ func (s *Service) resolvePlan(target Target) Plan {
 // "; " rather than "&&": a failed step is noted and Command still runs.
 func displayCommand(plan Plan) string {
 	if plan.Script != nil {
-		return fmt.Sprintf("%s <downloaded from %s>", strings.Join(plan.Script.Interpreter, " "), plan.Script.URL)
+		display := fmt.Sprintf("%s <downloaded from %s>", strings.Join(plan.Script.Interpreter, " "), plan.Script.URL)
+		if len(plan.Script.Args) > 0 {
+			display += " " + strings.Join(plan.Script.Args, " ")
+		}
+		return display
 	}
 	argv := plan.Command
 	if plan.NeedsRoot && len(argv) > 0 {
@@ -1517,6 +1713,8 @@ func (s *Service) planFor(target Target) Plan {
 		return s.planAgent(TargetOpencodeV2)
 	case TargetCloudflared:
 		return s.planCloudflared()
+	case TargetCuaDriver:
+		return s.planCuaDriver()
 	default:
 		return Plan{Target: target, Unsupported: true, Reason: "unknown install target"}
 	}
@@ -1579,6 +1777,37 @@ func (s *Service) planCloudflared() Plan {
 			Reason: "cloudflared installation is not supported on this platform.",
 		}
 	}
+}
+
+// Cua Driver's official installers. Both install per user without
+// administrator rights: macOS puts CuaDriver.app in /Applications, Linux and
+// macOS link the binary into ~/.local/bin, and Windows installs under
+// %LOCALAPPDATA%\Programs\Cua. Rerunning either installs the latest release,
+// so the same plan also updates.
+const (
+	cuaDriverUnixInstaller    = "https://cua.ai/driver/install.sh"
+	cuaDriverWindowsInstaller = "https://cua.ai/driver/install.ps1"
+	cuaDriverDocs             = "https://cua.ai/docs/how-to-guides/driver/install"
+)
+
+// planCuaDriver runs the official installer. When the shell AO would run it
+// with is missing from the daemon's PATH, the plan is unsupported but carries
+// Cua's own one-line install command, so Settings offers it to copy instead of
+// an Install button that fails the same way again.
+func (s *Service) planCuaDriver() Plan {
+	plan := s.officialByOS(TargetCuaDriver, cuaDriverUnixInstaller, "bash", cuaDriverWindowsInstaller, cuaDriverDocs)
+	if !plan.Unsupported || plan.Script != nil || len(plan.Command) > 0 {
+		return plan
+	}
+	switch s.goos {
+	case "windows":
+		plan.Command = []string{"irm", cuaDriverWindowsInstaller, "|", "iex"}
+		plan.Reason += " Copy the install command and run it in PowerShell, or follow " + cuaDriverDocs + "."
+	case "darwin", "linux":
+		plan.Command = []string{"curl", "-fsSL", cuaDriverUnixInstaller, "|", "bash"}
+		plan.Reason += " Copy the install command and run it in a terminal, or follow " + cuaDriverDocs + "."
+	}
+	return plan
 }
 
 func (s *Service) planNPM(target Target, pkg string) Plan {

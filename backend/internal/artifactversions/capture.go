@@ -45,6 +45,7 @@ type versionStore interface {
 	ListSessionArtifactVersions(ctx context.Context, id domain.SessionID, path string) ([]domain.SessionArtifactVersion, error)
 	CountSessionArtifactVersionsBySHA(ctx context.Context, id domain.SessionID, sha string) (int64, error)
 	DeleteSessionArtifactVersions(ctx context.Context, id domain.SessionID) error
+	DeleteSessionArtifactPathVersions(ctx context.Context, id domain.SessionID, path string) ([]string, error)
 }
 
 // writer says who a captured version is attributed to.
@@ -105,7 +106,7 @@ func (c *Capturer) CaptureSession(ctx context.Context, sess domain.SessionRecord
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	dir := cmp.Or(sess.Metadata.ArtifactDir, sessionartifacts.Dir(c.dataDir, sess.ID))
-	files, err := sessionartifacts.List(dir)
+	files, err := sessionartifacts.List(ctx, dir)
 	if err != nil {
 		return err
 	}

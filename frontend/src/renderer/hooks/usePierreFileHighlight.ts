@@ -5,6 +5,7 @@ import {
 	preloadHighlighter,
 	type SupportedLanguages,
 } from "@pierre/diffs";
+import { PIERRE_HIGHLIGHTER } from "../components/diffs/pierreTheme";
 
 const PIERRE_FILE_THEMES = { dark: "github-dark", light: "github-light" } as const;
 const PIERRE_FILE_THEME_NAMES = [PIERRE_FILE_THEMES.dark, PIERRE_FILE_THEMES.light] as const;
@@ -26,7 +27,7 @@ export function usePierreFileHighlightReady(path: string | null): boolean {
 		let active = true;
 		void preloadHighlighter({
 			langs: [language],
-			preferredHighlighter: "shiki-js",
+			preferredHighlighter: PIERRE_HIGHLIGHTER,
 			themes: [...PIERRE_FILE_THEME_NAMES],
 		})
 			.catch((error: unknown) => {

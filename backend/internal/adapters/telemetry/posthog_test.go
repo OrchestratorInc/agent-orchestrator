@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -62,6 +63,9 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		if props["kind"] != "worker" {
 			t.Fatalf("properties.kind = %#v, want worker", props["kind"])
 		}
+		if props["install_id"] != sink.Identity().InstallID() {
+			t.Fatalf("install_id = %#v, want persisted installation id", props["install_id"])
+		}
 		if props["project_id_hash"] == "" || props["session_id_hash"] == "" {
 			t.Fatalf("hashed ids missing from properties: %#v", props)
 		}
@@ -76,6 +80,101 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("PostHog sink did not send request")
+	}
+}
+
+func TestUsageEventWaitsForPostHogBufferCapacity(t *testing.T) {
+	sink := &PostHogSink{ch: make(chan ports.TelemetryEvent, 1), log: slog.Default()}
+	sink.ch <- ports.TelemetryEvent{Name: "queued"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		sink.Emit(ctx, ports.TelemetryEvent{Name: "ao.usage.messages_sent"})
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("usage event dropped while the queue was full")
+	case <-time.After(20 * time.Millisecond):
+	}
+	<-sink.ch
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("usage event did not enter the queue after capacity opened")
+	}
+	if event := <-sink.ch; event.Name != "ao.usage.messages_sent" {
+		t.Fatalf("queued event = %q", event.Name)
+	}
+}
+
+func TestUsageEventPayloadAllowlistRejectsContentAndInvalidIdentifiers(t *testing.T) {
+	projectID := "e484ce2d-1eb9-445a-ae52-a2e088870328"
+	sessionID := "0123456789abcdef0123456789abcdef"
+	for _, name := range []string{"ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged"} {
+		got := sanitizeRemotePayload(name, map[string]any{
+			"project_telemetry_id": projectID,
+			"session_telemetry_id": sessionID,
+			"count":                int64(3),
+			"historical":           true,
+			"repo":                 "private/repo",
+			"url":                  "https://github.com/private/repo/pull/1",
+			"title":                "private PR title",
+			"text":                 "private message",
+		})
+		if got["project_telemetry_id"] != projectID || got["count"] != int64(3) {
+			t.Fatalf("%s required payload = %#v", name, got)
+		}
+		for _, forbidden := range []string{"repo", "url", "title", "text"} {
+			if _, ok := got[forbidden]; ok {
+				t.Fatalf("%s leaked %s", name, forbidden)
+			}
+		}
+	}
+	if got := sanitizeRemotePayload("ao.usage.messages_sent", map[string]any{
+		"project_telemetry_id": "/private/repo", "session_telemetry_id": "worker-1",
+	}); len(got) != 0 {
+		t.Fatalf("invalid identifiers exported: %#v", got)
+	}
+}
+
+func TestPostHogSinkExportsForeignEventNames(t *testing.T) {
+	var names []string
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(req *http.Request) (*http.Response, error) {
+		defer req.Body.Close()
+		var body struct {
+			Event string `json:"event"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			return nil, err
+		}
+		names = append(names, body.Event)
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"to.open", "ddragon.event", "maestro.event", "tools.call", "ao.session.spawned"} {
+		sink.Emit(context.Background(), ports.TelemetryEvent{Name: name, OccurredAt: time.Now()})
+	}
+	if err := sink.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 5 {
+		t.Fatalf("exported names = %v", names)
+	}
+}
+
+func TestSampleRateIsNotARemoteProperty(t *testing.T) {
+	for _, name := range []string{"ao.http.5xx"} {
+		got := sanitizeRemotePayload(name, map[string]any{"sample_rate": 0.01, "count": 3, "raw_error": "/private/path"})
+		if _, kept := got["sample_rate"]; kept || got["count"] != int64(3) {
+			t.Fatalf("%s payload = %#v, want count without sample_rate", name, got)
+		}
+		if _, leaked := got["raw_error"]; leaked {
+			t.Fatalf("%s leaked raw error", name)
+		}
 	}
 }
 
@@ -282,7 +381,7 @@ func TestPostHogSinkStampsAppVersionWhenSupplied(t *testing.T) {
 // failure, and nothing ties the emit sites to this map at compile time.
 func TestReviewPayloadAllowlistCoversTheReviewFunnel(t *testing.T) {
 	want := map[string][]string{
-		"ao.review.triggered":      {"harness", "created_runs", "reused", "trigger", "rerun"},
+		"ao.review.triggered":      {"harness", "created_runs", "trigger", "rerun"},
 		"ao.review.trigger_failed": {"error_kind", "trigger"},
 		"ao.review.submitted":      {"harness", "verdict", "duration_ms", "posted_to_provider", "trigger", "body_bytes", "auto_inject"},
 		"ao.review.cancelled":      {"cancelled_runs"},
@@ -321,17 +420,50 @@ func TestReviewPayloadAllowlistRejectsIdentifyingKeys(t *testing.T) {
 	}
 }
 
+// The harness-update rollout dashboards read these keys; a key missing here
+// would export stripped.
+func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
+	want := map[string][]string{
+		"ao.harness.update":           {"harness", "level", "live_sessions", "result"},
+		"ao.harness.update_idle_wait": {"harness", "sessions", "wait_ms"},
+		"ao.harness.version_switch":   {"harness", "latency_ms", "mode", "result"},
+		"ao.harness.stale_sessions":   {"harness", "sessions"},
+	}
+	for name, keys := range want {
+		allowed, ok := remotePayloadAllowlist[name]
+		if !ok {
+			t.Errorf("%s has no allowlist entry", name)
+			continue
+		}
+		if len(allowed) != len(keys) {
+			t.Errorf("%s allowlist has %d keys, want %v", name, len(allowed), keys)
+		}
+		for _, key := range keys {
+			if _, ok := allowed[key]; !ok {
+				t.Errorf("%s is missing allowlisted key %q", name, key)
+			}
+		}
+	}
+}
+
 // properties is pure, so the person-property derivation is exercised directly
 // rather than through the HTTP fixture. When the sanitized payload carries the
 // operator's GitHub handle, the sink mirrors it into $set and flips this one
 // event to identified so a breakdown by github_actor is possible.
 func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
-	sink := &PostHogSink{}
-	props := sink.properties(ports.TelemetryEvent{
+	sink, err := NewPostHogSink(t.TempDir(), "phc_test", "https://us.i.posthog.com", "", "", roundTripClient(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sink.Close(context.Background()) }()
+	event := ports.TelemetryEvent{
 		Name:    "ao.session.spawned",
 		Source:  "session_service",
 		Payload: map[string]any{"kind": "worker", "github_actor": "octocat"},
-	})
+	}
+	props := sink.properties(event)
 	if props["github_actor"] != "octocat" {
 		t.Fatalf("properties.github_actor = %#v, want octocat", props["github_actor"])
 	}
@@ -346,14 +478,10 @@ func TestPropertiesDerivesPersonSetFromGithubActor(t *testing.T) {
 		t.Fatalf("$set.github_actor = %#v, want octocat", set["github_actor"])
 	}
 
-	// The handle is stable, so a second spawn keeps the event property but does
-	// not resend the identified person $set: only the first event per process
-	// pays the identified rate.
-	next := sink.properties(ports.TelemetryEvent{
-		Name:    "ao.session.spawned",
-		Source:  "session_service",
-		Payload: map[string]any{"kind": "worker", "github_actor": "octocat"},
-	})
+	// A successful send records the identity. The next event carries the
+	// handle but does not repeat its person properties.
+	sink.send(context.Background(), event)
+	next := sink.properties(event)
 	if next["github_actor"] != "octocat" {
 		t.Fatalf("second properties.github_actor = %#v, want octocat", next["github_actor"])
 	}

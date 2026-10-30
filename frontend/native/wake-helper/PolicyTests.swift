@@ -34,6 +34,55 @@ import Foundation
         assert(WakePolicy.safety(thermalCritical: false, onBattery: true, percent: 10) == nil)
         assert(WakePolicy.safety(thermalCritical: false, onBattery: false, percent: nil) == nil)
         assert(WakePolicy.safety(thermalCritical: false, onBattery: nil, percent: nil) == "battery_unknown")
+        // Default/mobile and explicit lid requests work without optional effects.
+        assert(lease(a).wantsLid && !lease(a).wantsEffects)
+        var desktop = lease(b)
+        desktop.lidClosed = true
+        assert(desktop.wantsLid && !desktop.wantsEffects)
+        desktop.lidClosed = false
+        desktop.muteAudio = true
+        assert(!desktop.wantsLid && !desktop.wantsEffects)
+        var finite = lease(a)
+        finite.expiresAt = 120
+        var finitePolicy = WakePolicy()
+        assert(finitePolicy.live([finite], now: 0, wall: 100, identity: identity).count == 1)
+        assert(finitePolicy.live([finite], now: 20, wall: 90, identity: identity).isEmpty)
+        // Go bounds an aggregate containing a session-bound lid contribution
+        // to 15s, or to the expiry of a finite lid request. A stalled loop must
+        // not be rescued by the independent 15s sequence-renewal loop, even
+        // when another idle-only owner is indefinite or lasts an hour.
+        for idleExpiry: Double? in [nil, 3700] {
+            for aggregateExpiry: Double in [115, 130] {
+                var overlapPolicy = WakePolicy()
+                for seconds in stride(from: 0, through: 120, by: 15) {
+                    let wall = 100 + Double(seconds)
+                    let sequence = UInt64(seconds / 15 + 1)
+                    var aggregate = lease(a, sequence: sequence, wall: wall)
+                    aggregate.lidClosed = true
+                    aggregate.expiresAt = aggregateExpiry
+                    // Separate idle control proves sequence renewals are live;
+                    // expiry, rather than dead-process detection, drops the lid.
+                    var idle = lease(b, sequence: sequence, wall: wall)
+                    idle.lidClosed = false
+                    idle.expiresAt = idleExpiry
+                    let live = overlapPolicy.live([aggregate, idle], now: Double(seconds),
+                                                  wall: wall, identity: identity)
+                    assert(live.count == (wall < aggregateExpiry ? 2 : 1))
+                    assert(live.contains(where: { $0.wantsLid }) == (wall < aggregateExpiry))
+                }
+            }
+        }
+        assert(WakePolicy.safety(thermalCritical: false, onBattery: true, percent: 29, minimumPercent: 30) == "low_battery")
+        assert(WakePolicy.safety(thermalCritical: false, onBattery: true, percent: 9, minimumPercent: 0) == "low_battery")
+        assert(!WakeLightPolicy.supportsOS(15))
+        assert(WakeLightPolicy.supportsOS(26) && WakeLightPolicy.supportsOS(27))
+        assert(!WakeLightPolicy.supportsOS(28))
+        assert(WakeLightPolicy.keyboardCompatible(WakeLightPolicy.keyboardSignatures))
+        var badABI = WakeLightPolicy.keyboardSignatures
+        badABI["brightnessForKeyboard:"] = "d@:Q"
+        assert(!WakeLightPolicy.keyboardCompatible(badABI))
+        badABI.removeValue(forKey: "brightnessForKeyboard:")
+        assert(!WakeLightPolicy.keyboardCompatible(badABI))
         var events: [String] = []
         var owner = WakeOwnership(journal: WakeJournal())
         let acquired = try owner.acquire(persist: { assert($0.owned); events.append("persist") },

@@ -231,7 +231,7 @@ func TestLANManagerIdentityEndpoint(t *testing.T) {
 // TestLANManagerBlocksLoopbackOnlyControlRoutes proves the LAN listener never
 // serves /shutdown, /internal/*, /api/v1/mobile*, /api/v1/dev*,
 // /api/v1/browser*, or the Codex credential routes under
-// /api/v1/agents/codex/accounts* and /api/v1/agents/codex/account-switches* —
+// /api/v1/agents/codex/accounts* —
 // even when the request carries a spoofed Host: 127.0.0.1
 // and valid LAN auth, since gating on Host alone (localControlRequest) is what
 // let a LAN client reach these routes.
@@ -249,10 +249,13 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 	defer m.Stop(context.Background())
 
 	blocked := []string{
+		"/api/v1/awake",
+		"/api/v1/awake/sessions",
+		"/api/v1/awake/settings",
+		"/api/v1/awake/low-power/revoke",
+		"/api/v1/awake/browser",
 		"/shutdown",
 		"/internal/telemetry/cli-invoked",
-		"/internal/agent-switch-observability/prepare-disable",
-		"/internal/agent-switch-observability/apply-policy",
 		"/api/v1/mobile/status",
 		"/api/v1/mobile/keep-awake",
 		"/api/v1/mobile/devices",
@@ -262,11 +265,14 @@ func TestLANManagerBlocksLoopbackOnlyControlRoutes(t *testing.T) {
 		"/api/v1/desktop/sessions/ao-1/workspace",
 		"/api/v1/desktop/sessions/ao-1/artifacts",
 		"/api/v1/system/install/tmux",
+		"/api/v1/system/install/cua-driver",
+		"/api/v1/computer-use/status",
+		"/api/v1/computer-use/call",
+		"/api/v1/settings/computer-use",
 		"/api/v1/sessions/ao-1/preview/server",
 		"/api/v1/agents/codex/accounts",
 		"/api/v1/agents/codex/accounts/login-terminal",
 		"/api/v1/agents/codex/accounts/login-operations/op-1/verify",
-		"/api/v1/agents/codex/account-switches",
 	}
 	for _, path := range blocked {
 		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", port, path), nil)
@@ -563,6 +569,28 @@ func TestLANListenerServesCodexModelRoutesFromRealRouter(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("%s: got %d want 404", path, resp.StatusCode)
+		}
+	}
+}
+
+// A paired phone must not turn on "Let agents use this computer": that hands
+// desktop control to every new chat on this machine. The block is the switch's
+// own route; the rest of settings stays reachable.
+func TestLANBlocksTheComputerUseSwitchOnly(t *testing.T) {
+	reached := false
+	handler := lanControlBlock(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+	for path, blocked := range map[string]bool{
+		"/api/v1/settings/computer-use":    true,
+		"/api/v1/settings/computer-use/":   true,
+		"/api/v1/settings":                 false,
+		"/api/v1/settings/version-refresh": false,
+		"/api/v1/settings/computer-user":   false,
+	} {
+		reached = false
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPatch, path, strings.NewReader(`{"enabled":true}`)))
+		if got := recorder.Code == http.StatusNotFound && !reached; got != blocked {
+			t.Fatalf("PATCH %s: status %d, reached %v; want blocked=%v", path, recorder.Code, reached, blocked)
 		}
 	}
 }

@@ -11,13 +11,14 @@
 // leaving every other package to resolve normally (a blanket
 // disableHierarchicalLookup instead breaks nested deps -> runtime errors).
 const { getDefaultConfig } = require("expo/metro-config");
+const { getSentryExpoConfig } = require("@sentry/react-native/metro");
 const path = require("path");
 
 const projectRoot = __dirname;
 const workspaceRoot = path.resolve(projectRoot, "../..");
 const localModules = path.resolve(projectRoot, "node_modules");
 
-const config = getDefaultConfig(projectRoot);
+const config = getSentryExpoConfig(projectRoot, { getDefaultConfig });
 
 config.watchFolders = [workspaceRoot];
 config.resolver.nodeModulesPaths = [localModules, path.resolve(workspaceRoot, "node_modules")];

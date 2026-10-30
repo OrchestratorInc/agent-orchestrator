@@ -5,6 +5,22 @@ import { openInspector } from "./support/open-inspector";
 // auto-collapse. Collapse belongs to the explicit controls only (⌘B / topbar
 // buttons). The clamp lives in useResizable (sidebar + inspector).
 
+test("@P0 sidebar content width stays fixed when opening a project and returning home", async ({ page }) => {
+	await page.goto("/");
+	const project = page.locator('[data-sidebar="menu-button"]').filter({ hasText: "ao-demo" }).first();
+	await expect(project).toBeVisible();
+	const content = page.locator('[data-slot="sidebar-inner"]');
+	const width = await content.evaluate((el) => el.getBoundingClientRect().width);
+
+	await project.click();
+	await expect(page).toHaveURL(/projects\/ao-demo/);
+	expect(await content.evaluate((el) => el.getBoundingClientRect().width)).toBe(width);
+
+	await page.goBack();
+	await expect(page).not.toHaveURL(/projects\//);
+	expect(await content.evaluate((el) => el.getBoundingClientRect().width)).toBe(width);
+});
+
 async function dragPointer(page: Page, from: { x: number; y: number }, to: { x: number; y: number }) {
 	await page.mouse.move(from.x, from.y);
 	await page.mouse.down();

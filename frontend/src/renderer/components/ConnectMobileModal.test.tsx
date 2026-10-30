@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { TooltipProvider } from "./ui/tooltip";
@@ -45,6 +45,13 @@ const { mobileStatus } = vi.hoisted(() => ({
 	},
 }));
 
+// This suite exercises the mobile UI; shared desktop/mobile ownership is
+// covered with the real useAwake hook in AwakeControl.test.tsx.
+vi.mock("../hooks/useAwake", () => ({
+	useAwake: () => ({ state: { sessions: [], rules: [], capabilities: [{ id: "idle", available: true }] }, actAsync: vi.fn().mockResolvedValue({ active: true }), busy: false }),
+	awakeCapability: () => ({ available: true }),
+}));
+
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
@@ -52,7 +59,7 @@ vi.mock("../lib/api-client", () => ({
 			path === "/api/v1/mobile/devices"
 				? { data: { devices: [] }, error: undefined }
 				: { data: mobileStatus, error: undefined },
-		POST: vi.fn(async () => ({ data: {}, error: undefined })),
+		POST: vi.fn(async () => ({ data: structuredClone(mobileStatus), error: undefined })),
 	},
 	apiErrorMessage: () => "failed",
 }));
@@ -62,6 +69,7 @@ import {
 	mobileStatusQueryKey,
 	mobileStatusRefetchInterval,
 	pairingPayload,
+	localOnlyReason,
 	qrIsReady,
 	qrValueFor,
 } from "./settings/ConnectMobileContent";
@@ -258,7 +266,7 @@ test.each([
 		mobileStatus.enabled = serverEnabled;
 		return failed
 			? { data: undefined, error: { message: "shutdown failed" } }
-			: { data: {}, error: undefined };
+			: { data: structuredClone(mobileStatus), error: undefined };
 	});
 
 	try {
@@ -296,15 +304,15 @@ test.skip("keeps the connection-method dropdown at its fixed width", async () =>
 	expect(screen.getByRole("menu")).toHaveClass("!w-44", "!min-w-0");
 });
 
-// The QR is withheld until the tunnel is ready, so a scannable code already
-// carries a tunnel endpoint and the phone need not be on this network. The
-// no-connector case is stated separately by remoteAccessUnavailable.
+// A code without a tunnel says so itself (localOnlyReason) and the
+// no-connector case is stated by remoteAccessUnavailable, so the generic
+// intro must not tell everyone to join the same Wi-Fi.
 test("does not tell LAN users to join the same Wi-Fi", async () => {
 	renderMobileSettings();
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
 
 	expect(screen.queryByText(/same Wi-Fi/i)).not.toBeInTheDocument();
-	expect(screen.getByText("Scan with the AO mobile app")).toBeInTheDocument();
+	expect(screen.getByText("Scan with the Orchestrator mobile app")).toBeInTheDocument();
 });
 
 // Both stores are listed in step one now. The platform dropdown that used to
@@ -315,6 +323,18 @@ test("offers both store links without a platform choice", async () => {
 	expect(await screen.findByRole("button", { name: "Open Agent Orchestrator on the App Store" })).toBeInTheDocument();
 	expect(screen.getByRole("button", { name: "Open Agent Orchestrator on Google Play" })).toBeInTheDocument();
 	expect(screen.queryByRole("button", { name: "Get the app" })).not.toBeInTheDocument();
+});
+
+// The store links used to be muted text links, easy to read past. They are a
+// filled segmented control now, next to "Get the app".
+test("shows the store links as one segmented control beside Get the app", async () => {
+	renderMobileSettings();
+
+	const ios = await screen.findByRole("button", { name: "Open Agent Orchestrator on the App Store" });
+	const android = screen.getByRole("button", { name: "Open Agent Orchestrator on Google Play" });
+	expect(ios.parentElement).toBe(android.parentElement);
+	expect(ios.parentElement).toHaveClass("bg-(--color-bg-settings-input)");
+	expect(ios.parentElement?.parentElement).toHaveTextContent("Get the app");
 });
 
 test("shows a square Google Play QR tooltip for Android", async () => {
@@ -629,6 +649,141 @@ test("shows the LAN QR before a supported tunnel starts", () => {
 	).toBe(true);
 });
 
+// The QR shows before the tunnel is up, so a code scanned or photographed in
+// that window carries no tunnel and fails away from home. Seen in the field: a
+// photographed code held only the LAN and Tailscale addresses, and the phone
+// reported "same Wi-Fi?" from mobile data with nothing on the desktop to warn.
+// The code refreshes itself once the tunnel is up; until then the note under
+// it says remote access is still being enabled.
+test("says remote access is enabling while the tunnel starts", async () => {
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	expect(screen.getByTestId("mobile-remote-access-starting")).toHaveTextContent("Enabling remote access");
+	expect(screen.getByTestId("mobile-remote-access-starting")).toHaveTextContent("Until then, works on this network only");
+	expect(screen.queryByTestId("mobile-remote-access-on")).not.toBeInTheDocument();
+	expect(screen.queryByTestId("mobile-local-only")).not.toBeInTheDocument();
+});
+
+// Tailscale reaches this machine from another network once both devices are
+// on the tailnet, so a code carrying one must not be called "this network only".
+test("keeps Tailscale as the remote path while the public tunnel is missing", async () => {
+	mobileStatus.endpoints = [
+		{ kind: "lan", host: "192.168.88.7", port: 3011, secure: false },
+		{ kind: "tailscale", host: "100.72.46.7", port: 3011, secure: false },
+	];
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	const note = screen.getByTestId("mobile-remote-access-starting");
+	expect(note).toHaveTextContent("Enabling remote access");
+	expect(note).toHaveTextContent(/only over Tailscale/);
+	expect(note).not.toHaveTextContent(/this network only/i);
+});
+
+// The note under the code comes and goes with the tunnel, but the code itself
+// must stay the same element: a remount would drop PairingQr's crossfade and
+// pop the next code in (or the last one out) with no transition.
+test("keeps the same code element as the remote access note changes", async () => {
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
+	};
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	renderMobileSettings(client);
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+	expect(screen.getByTestId("mobile-remote-access-starting")).toBeInTheDocument();
+	const square = screen.getByTestId("mobile-pairing-panel").firstElementChild;
+	const canvas = document.querySelector("[data-qr-value]");
+
+	// starting -> failed: the note goes, the code is unchanged.
+	act(() => {
+		client.setQueryData(mobileStatusQueryKey, {
+			...structuredClone(mobileStatus),
+			tunnel: { supported: true, running: false, ready: false, hostname: "", location: "", lastError: "connector exited" },
+		});
+	});
+	await waitFor(() => expect(screen.queryByTestId("mobile-remote-access-starting")).not.toBeInTheDocument());
+	expect(screen.getByTestId("mobile-local-only")).toBeInTheDocument();
+	expect(screen.getByTestId("mobile-pairing-panel").firstElementChild).toBe(square);
+	expect(document.querySelector("[data-qr-value]")).toBe(canvas);
+
+	// -> on: the code gains the tunnel and crossfades inside the same square.
+	act(() => {
+		client.setQueryData(mobileStatusQueryKey, {
+			...structuredClone(mobileStatus),
+			endpoints: [
+				{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
+				{ kind: "tunnel", host: "abc.trycloudflare.com", port: 443, secure: true },
+			],
+			tunnel: { supported: true, running: true, ready: true, hostname: "abc.trycloudflare.com", location: "", lastError: "" },
+		});
+	});
+	await waitFor(() => expect(screen.getByTestId("mobile-remote-access-on")).toBeInTheDocument());
+	expect(screen.getByTestId("mobile-pairing-panel").firstElementChild).toBe(square);
+});
+
+test("keeps Tailscale as the remote path when remote access failed", async () => {
+	mobileStatus.endpoints = [{ kind: "tailscale", host: "100.72.46.7", port: 3011, secure: false }];
+	mobileStatus.tunnel = {
+		supported: true, running: false, ready: false, hostname: "", location: "", lastError: "connector exited",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	expect(screen.getByTestId("mobile-local-only")).toHaveTextContent(/No public tunnel — remote access couldn't start.*only over Tailscale/);
+});
+
+test("drops the label once the code carries the tunnel", async () => {
+	mobileStatus.endpoints = [
+		{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
+		{ kind: "tunnel", host: "abc.trycloudflare.com", port: 443, secure: true },
+	];
+	mobileStatus.tunnel = {
+		supported: true, running: true, ready: true, hostname: "abc.trycloudflare.com", location: "", lastError: "",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	expect(screen.queryByTestId("mobile-local-only")).not.toBeInTheDocument();
+	expect(screen.getByTestId("mobile-remote-access-on")).toHaveTextContent("Remote access on");
+});
+
+test("does not claim remote access for a LAN-only code", async () => {
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	expect(screen.queryByTestId("mobile-remote-access-on")).not.toBeInTheDocument();
+});
+
+test("says a LAN-only code stays local when remote access failed", async () => {
+	mobileStatus.tunnel = {
+		supported: true, running: false, ready: false, hostname: "", location: "", lastError: "connector exited",
+	};
+	renderMobileSettings();
+	await waitFor(() => expect(qrPayload()).not.toBeNull());
+
+	expect(screen.getByTestId("mobile-local-only")).toHaveTextContent(/remote access couldn't start/i);
+});
+
+test("reports why a code has no public tunnel", () => {
+	const lan = [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }];
+	const starting = { supported: true, running: true, ready: false, lastError: "" };
+	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: starting })).toBe("starting");
+	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: { ...starting, running: false, lastError: "boom" } })).toBe("failed");
+	// Covered by remoteAccessUnavailable, or the user's own choice.
+	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: { ...starting, supported: false, running: false } })).toBeNull();
+	expect(localOnlyReason({ enabled: true, noPublicTunnel: true, endpoints: lan, tunnel: starting })).toBeNull();
+	// Nothing on screen to judge.
+	expect(localOnlyReason({ enabled: true, endpoints: [], tunnel: starting })).toBeNull();
+	expect(localOnlyReason({ enabled: false, endpoints: lan, tunnel: starting })).toBeNull();
+});
+
 test("holds the QR back when nothing is reachable yet", () => {
 	expect(qrIsReady({ enabled: true, endpoints: [], tunnel: undefined })).toBe(false);
 });
@@ -772,7 +927,7 @@ test("turns the keep-awake option on", async () => {
 	// The daemon persists the choice, so the refetch after the POST reads it back.
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
 		mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: false };
-		return { data: {}, error: undefined } as never;
+		return { data: structuredClone(mobileStatus), error: undefined } as never;
 	});
 	await userEvent.click(toggle);
 	expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: true, lidClosed: false } });
@@ -794,7 +949,7 @@ test("turning on closed-lid mode also enables idle wake in one request", async (
 	mobileStatus.keepAwake = { supported: true, enabled: false, active: false, hasBattery: true, lidSupported: true, lidClosed: false };
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
 		Object.assign(mobileStatus.keepAwake!, { enabled: true, lidClosed: true });
-		return { data: {}, error: undefined };
+		return { data: structuredClone(mobileStatus), error: undefined };
 	});
 	renderMobileSettings();
 	const toggle = await screen.findByRole("switch", { name: "Keep awake with lid closed" });
@@ -853,7 +1008,7 @@ test("turning off Keep awake clears closed-lid mode in the same request", async 
 	mobileStatus.keepAwake = { supported: true, enabled: true, active: true, hasBattery: true, lidSupported: true, lidClosed: true };
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
 		Object.assign(mobileStatus.keepAwake!, { enabled: false, active: false, lidClosed: false, lidActive: false });
-		return { data: {}, error: undefined };
+		return { data: structuredClone(mobileStatus), error: undefined };
 	});
 	renderMobileSettings();
 	await userEvent.click(await screen.findByRole("switch", { name: "Keep this Mac awake" }));
@@ -888,7 +1043,7 @@ test("enabling idle wake never restores an unchecked legacy lid choice", async (
 	vi.mocked(apiClient.POST).mockImplementationOnce(() => new Promise((resolve) => {
 		finishPost = () => {
 			Object.assign(mobileStatus.keepAwake!, { enabled: true, active: true, lidClosed: false });
-			resolve({ data: {}, error: undefined });
+			resolve({ data: structuredClone(mobileStatus), error: undefined });
 		};
 	}));
 	renderMobileSettings();
@@ -929,7 +1084,7 @@ test("renders cached state on first paint, with no transition on the code", asyn
 	const before = qrPayload();
 	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
 		mobileStatus.password = "regenerated-password";
-		return { data: {}, error: undefined } as never;
+		return { data: structuredClone(mobileStatus), error: undefined } as never;
 	});
 	await userEvent.click(screen.getByRole("button", { name: "Regenerate password" }));
 	await waitFor(() => expect(qrPayload()).not.toBe(before));
