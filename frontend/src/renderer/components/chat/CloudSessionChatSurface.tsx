@@ -1044,7 +1044,7 @@ export function CloudSessionChatSurface({
 		}
 		if (!code) return;
 		setPlanRefusal({ key, code });
-		reportPlanRefusal(code, false);
+		reportPlanRefusal(code, false, "chat");
 	}, [eventsQuery.dataUpdatedAt, refusalKey, snapshot]);
 	// While Setup runs, or once the checkout, Setup or the agent's start failed,
 	// the session reads as a local start does: the startup checklist in place of a
