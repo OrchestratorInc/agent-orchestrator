@@ -1140,7 +1140,7 @@ html::-webkit-scrollbar, body::-webkit-scrollbar { display: none !important; }
    mt-8 (32px) making it 58px - the accumulating downward drift. */
 @media (min-width: 1024px) {
   nav#sidebar-content ul[class*="space-y-px"] > * + * { margin-top: 2px !important; }
-  nav#sidebar-content div[class*="lg:mt-8"] { margin-top: 26px !important; }
+  nav#sidebar-content div[class*="lg:mt-8"] { margin-top: 25.5px !important; }
   /* first section label: +1px so all rows land on original positions */
   nav#sidebar-content div:not([class*="lg:mt-8"]) > .sidebar-group-header { margin-top: 25px !important; }
 }
