@@ -136,7 +136,7 @@ paths:
       tags: [Artifacts]
       description: >-
         Revokes a link: it stops serving at once, its stored file is deleted
-        at once and purged from the CDN, and it frees its slot for another
+        at once, and it frees its slot for another
         document. Publishing the same document again uploads it again and
         restores its URL when a slot is free. A link already revoked returns
         404.
