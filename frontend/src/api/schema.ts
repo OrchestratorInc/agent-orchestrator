@@ -7870,6 +7870,7 @@ export interface components {
         UsageLimitLogin: {
             accountId: string;
             email?: string;
+            plan?: string;
             /** @enum {string} */
             provider: "claude" | "codex";
             windows: components["schemas"]["UsageLimitSpan"][];

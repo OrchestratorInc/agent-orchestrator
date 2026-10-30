@@ -18,7 +18,7 @@ func TestAgentLimitReadingsRoundTripAndExpire(t *testing.T) {
 	resets := t0.Add(3 * time.Hour)
 	reading := func(at time.Time, used float64) domain.AgentLimitReading {
 		return domain.AgentLimitReading{
-			AccountID: "device-claude", Provider: domain.AgentAccountProviderClaude, Email: "a@example.com",
+			AccountID: "device-claude", Provider: domain.AgentAccountProviderClaude, Email: "a@example.com", Plan: "max",
 			WindowID: "five_hour", Label: "Session (5h)", DurationMinutes: 300, UsedPercent: used, ResetsAt: &resets, ReadAt: at,
 		}
 	}
@@ -34,7 +34,7 @@ func TestAgentLimitReadingsRoundTripAndExpire(t *testing.T) {
 		t.Fatalf("readings = %+v, want the Claude read once and the Codex read", got)
 	}
 	claude := got[0]
-	if claude.Email != "a@example.com" || claude.DurationMinutes != 300 || claude.UsedPercent != 12 || !claude.ReadAt.Equal(t0) ||
+	if claude.Email != "a@example.com" || claude.Plan != "max" || claude.DurationMinutes != 300 || claude.UsedPercent != 12 || !claude.ReadAt.Equal(t0) ||
 		claude.ResetsAt == nil || !claude.ResetsAt.Equal(resets) {
 		t.Fatalf("claude reading = %+v", claude)
 	}

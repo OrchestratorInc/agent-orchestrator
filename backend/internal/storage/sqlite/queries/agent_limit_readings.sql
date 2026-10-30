@@ -2,8 +2,8 @@
 
 -- name: InsertAgentLimitReading :exec
 INSERT INTO agent_limit_readings (
-    account_id, provider, email, window_id, label, duration_minutes, used_percent, resets_at_ms, read_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    account_id, provider, email, plan, window_id, label, duration_minutes, used_percent, resets_at_ms, read_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (account_id, window_id, read_at_ms) DO NOTHING;
 
 -- name: DeleteAgentLimitReadingsBefore :exec

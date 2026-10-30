@@ -22,8 +22,8 @@ func (q *Queries) DeleteAgentLimitReadingsBefore(ctx context.Context, readAtMs i
 const insertAgentLimitReading = `-- name: InsertAgentLimitReading :exec
 
 INSERT INTO agent_limit_readings (
-    account_id, provider, email, window_id, label, duration_minutes, used_percent, resets_at_ms, read_at_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    account_id, provider, email, plan, window_id, label, duration_minutes, used_percent, resets_at_ms, read_at_ms
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (account_id, window_id, read_at_ms) DO NOTHING
 `
 
@@ -31,6 +31,7 @@ type InsertAgentLimitReadingParams struct {
 	AccountID       string
 	Provider        string
 	Email           string
+	Plan            string
 	WindowID        string
 	Label           string
 	DurationMinutes int64
@@ -45,6 +46,7 @@ func (q *Queries) InsertAgentLimitReading(ctx context.Context, arg InsertAgentLi
 		arg.AccountID,
 		arg.Provider,
 		arg.Email,
+		arg.Plan,
 		arg.WindowID,
 		arg.Label,
 		arg.DurationMinutes,
@@ -56,7 +58,7 @@ func (q *Queries) InsertAgentLimitReading(ctx context.Context, arg InsertAgentLi
 }
 
 const listAgentLimitReadingsSince = `-- name: ListAgentLimitReadingsSince :many
-SELECT account_id, provider, email, window_id, label, duration_minutes, used_percent, resets_at_ms, read_at_ms FROM agent_limit_readings
+SELECT account_id, provider, email, "plan", window_id, label, duration_minutes, used_percent, resets_at_ms, read_at_ms FROM agent_limit_readings
 WHERE read_at_ms >= ?
 ORDER BY account_id, window_id, read_at_ms
 `
@@ -74,6 +76,7 @@ func (q *Queries) ListAgentLimitReadingsSince(ctx context.Context, readAtMs int6
 			&i.AccountID,
 			&i.Provider,
 			&i.Email,
+			&i.Plan,
 			&i.WindowID,
 			&i.Label,
 			&i.DurationMinutes,

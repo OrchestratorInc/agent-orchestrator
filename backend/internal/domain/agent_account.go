@@ -61,12 +61,13 @@ type AgentAccountLimitWindow struct {
 	DurationMinutes int `json:"durationMinutes,omitempty" minimum:"0"`
 }
 
-// AgentLimitReading is one limit window's value as read at one moment. Email is
-// the login the account was signed in as then.
+// AgentLimitReading is one limit window's value as read at one moment. Email
+// and Plan are the login the account was signed in as then.
 type AgentLimitReading struct {
 	AccountID       string
 	Provider        AgentAccountProvider
 	Email           string
+	Plan            string
 	WindowID        string
 	Label           string
 	DurationMinutes int

@@ -87,6 +87,10 @@ func limitLogins(readings []domain.AgentLimitReading, now time.Time) []domain.Us
 		sort.SliceStable(group, func(i, j int) bool { return group[i].ReadAt.Before(group[j].ReadAt) })
 		latest := group[len(group)-1]
 		login := domain.UsageLimitLogin{Provider: latest.Provider, Email: latest.Email, AccountID: latest.AccountID, Windows: []domain.UsageLimitSpan{}}
+		// The latest reading that names a plan says which plan the login is on now.
+		for i := len(group) - 1; i >= 0 && login.Plan == ""; i-- {
+			login.Plan = group[i].Plan
+		}
 		byWindow := map[string][]domain.AgentLimitReading{}
 		var order []string
 		for _, reading := range group {

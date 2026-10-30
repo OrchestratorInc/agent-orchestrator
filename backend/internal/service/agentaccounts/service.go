@@ -151,7 +151,7 @@ func (s *Service) KeepReadingLimits(ctx context.Context, every time.Duration) {
 
 // recordLimits keeps one read's windows. A failed write loses one point of
 // history, never the read itself.
-func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email string, limits domain.AgentAccountLimits) {
+func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email, plan string, limits domain.AgentAccountLimits) {
 	s.mu.Lock()
 	log := s.limitLog
 	s.mu.Unlock()
@@ -165,7 +165,7 @@ func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount,
 	readings := make([]domain.AgentLimitReading, 0, len(limits.Windows))
 	for _, w := range limits.Windows {
 		readings = append(readings, domain.AgentLimitReading{
-			AccountID: account.ID, Provider: account.Provider, Email: email, WindowID: w.ID, Label: w.Label,
+			AccountID: account.ID, Provider: account.Provider, Email: email, Plan: plan, WindowID: w.ID, Label: w.Label,
 			DurationMinutes: w.DurationMinutes, UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt, ReadAt: at,
 		})
 	}
@@ -269,11 +269,14 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 			r.limitsErr = limitsErr.Error()
 		} else {
 			r.limits = &limits
-			email := identity.Email
+			email, plan := identity.Email, identity.Plan
 			if email == "" {
 				email = account.Email
 			}
-			s.recordLimits(ctx, account, email, limits)
+			if plan == "" {
+				plan = account.Plan
+			}
+			s.recordLimits(ctx, account, email, plan, limits)
 		}
 	}
 	// A caller that went away (a closed request, a cancelled move) says nothing

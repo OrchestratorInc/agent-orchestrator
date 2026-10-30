@@ -17,6 +17,8 @@ type UsageLimitHistory struct {
 type UsageLimitLogin struct {
 	Provider AgentAccountProvider `json:"provider" enum:"claude,codex"`
 	Email    string               `json:"email,omitempty"`
+	// Plan is the plan the login was on at its latest reading, such as max or pro.
+	Plan string `json:"plan,omitempty"`
 	// AccountID is the account that read this login most recently.
 	AccountID string           `json:"accountId"`
 	Windows   []UsageLimitSpan `json:"windows"`

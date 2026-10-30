@@ -30,8 +30,12 @@ func TestLimitHistoryWindows(t *testing.T) {
 	at := func(h, m int) time.Time { return time.Date(2026, 10, 28, h, m, 0, 0, time.UTC) }
 	ptr := func(t time.Time) *time.Time { return &t }
 	read := func(account, email, window string, minutes int, used float64, reset *time.Time, readAt time.Time) domain.AgentLimitReading {
+		plan := "max"
+		if email != "max@example.com" {
+			plan = "team"
+		}
 		return domain.AgentLimitReading{
-			AccountID: account, Provider: domain.AgentAccountProviderClaude, Email: email, WindowID: window,
+			AccountID: account, Provider: domain.AgentAccountProviderClaude, Email: email, Plan: plan, WindowID: window,
 			Label: window, DurationMinutes: minutes, UsedPercent: used, ResetsAt: reset, ReadAt: readAt,
 		}
 	}
@@ -86,6 +90,9 @@ func TestLimitHistoryWindows(t *testing.T) {
 	}
 
 	team := history.Logins[1]
+	if history.Logins[0].Plan != "max" || team.Plan != "team" {
+		t.Fatalf("plans = %q, %q, want max and team", history.Logins[0].Plan, team.Plan)
+	}
 	if team.AccountID != "device-claude" {
 		t.Fatalf("team account = %s, want the most recent reader", team.AccountID)
 	}

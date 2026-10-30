@@ -43,6 +43,7 @@ type AgentLimitReading struct {
 	AccountID       string
 	Provider        string
 	Email           string
+	Plan            string
 	WindowID        string
 	Label           string
 	DurationMinutes int64

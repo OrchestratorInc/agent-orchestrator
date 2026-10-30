@@ -6,6 +6,7 @@ import { agentTone } from "../../lib/agent-tone";
 import { DAY_MINUTES, formatCountdown, weeklyPace, type UsageLimitLogin, type UsageLimitSpan, type UsageLimitWindows } from "../../lib/usage-limits";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
+import { formatPlanName } from "../settings/CodexAccountDetails";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 const PROVIDER_HARNESS = { codex: "codex", claude: "claude-code" } as const;
@@ -70,10 +71,15 @@ export function UsageWindows({ history, now }: { history: UsageLimitWindows; now
 }
 
 function LoginName({ login }: { login: UsageLimitLogin }) {
+	const { t } = useTranslation();
+	const plan = formatPlanName(login.plan);
 	return (
 		<span className="flex min-w-0 items-center gap-2">
 			<AgentAvatar provider={PROVIDER_HARNESS[login.provider]} decorative className="size-4 shrink-0" />
-			<span className="truncate text-xs text-foreground">{login.email || agentAccountProviderNames[login.provider]}</span>
+			<span className="flex min-w-0 flex-col">
+				<span className="truncate text-xs text-foreground">{login.email || agentAccountProviderNames[login.provider]}</span>
+				{plan ? <span className="truncate text-2xs text-muted-foreground">{t("settings.codexAccounts.planLabel", { name: plan })}</span> : null}
+			</span>
 		</span>
 	);
 }

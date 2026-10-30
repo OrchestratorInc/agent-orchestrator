@@ -22070,6 +22070,8 @@ components:
           type: string
         email:
           type: string
+        plan:
+          type: string
         provider:
           enum:
           - claude
