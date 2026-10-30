@@ -1120,7 +1120,9 @@
     });
     Array.prototype.forEach.call(document.querySelectorAll(".mdx-content :not(pre) > code"), function (c) {
       c.style.setProperty("box-decoration-break", "slice", "important");
-      c.style.setProperty("padding", "2.8px 5.6px", "important");
+      if (!c.closest("td, th")) {
+        c.style.setProperty("padding", "2.8px 5.6px", "important");
+      }
     });
     Array.prototype.forEach.call(document.querySelectorAll("ul.sidebar-group li.space-y-px > ul > li > a"), function (a) {
       a.style.setProperty("padding-left", "20px", "important");
