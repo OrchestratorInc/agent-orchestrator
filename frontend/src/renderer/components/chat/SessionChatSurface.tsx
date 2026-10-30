@@ -1,7 +1,6 @@
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { agentLabel, type AgentId } from "../../lib/agent-options";
-import { HISTORY_ONLY_IMPORT_AGENTS } from "../settings/harness/SessionImportPanel";
+import { agentLabel } from "../../lib/agent-options";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { useSideChatsAvailable } from "../../lib/side-chats";
@@ -51,7 +50,7 @@ import type { Theme } from "../../stores/ui-store";
 import { can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import type { WorkspaceSession } from "../../types/workspace";
+import { isHistoryOnlyImport, type WorkspaceSession } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
@@ -206,9 +205,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	const { t } = useTranslation();
 	const uiSessionId = sessionUiKey(session.id, hostId);
 	// A history-only import (e.g. Qwen) is shown but never resumed: the provider
-	// cannot reopen its native conversation from AO's worktree. It stays
-	// needsResume forever, so pairing that with the harness identifies it.
-	const importReadOnly = Boolean(session.needsResume && HISTORY_ONLY_IMPORT_AGENTS.has(session.provider as AgentId));
+	// cannot reopen its native conversation from AO's worktree.
+	const importReadOnly = isHistoryOnlyImport(session);
 	const {
 		snapshot: queriedSnapshot,
 		isLoading,

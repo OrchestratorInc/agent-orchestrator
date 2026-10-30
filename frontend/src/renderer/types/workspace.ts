@@ -407,6 +407,22 @@ export function sessionIsActive(session: WorkspaceSession): boolean {
 }
 
 /**
+ * Agents whose imports are history-only: AO shows the conversation but cannot
+ * resume it, because the provider keys its native resume to the folder the chat
+ * started in and cannot reopen it from AO's worktree.
+ */
+export const HISTORY_ONLY_IMPORT_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["qwen", "omp"]);
+
+/**
+ * A history-only import: an unopened import (needsResume) of a harness that
+ * cannot be resumed from AO's worktree. Such a session shows its archive but is
+ * never resumed, so it offers no Resume agent control and never auto-resumes.
+ */
+export function isHistoryOnlyImport(session: WorkspaceSession | undefined): boolean {
+	return Boolean(session?.needsResume && HISTORY_ONLY_IMPORT_AGENTS.has(session.provider as AgentId));
+}
+
+/**
  * Whether the agent PROCESS is gone while the session ROW is still alive —
  * Ctrl+C, `/exit`, a usage limit. Recovered with `resume-agent`, not `restore`.
  * Not `sessionIsActive`, which reports row liveness and calls this state alive.

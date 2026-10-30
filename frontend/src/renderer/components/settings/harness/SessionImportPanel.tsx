@@ -17,13 +17,9 @@ type ImportResult = components["schemas"]["SessionImportResult"];
 /** Agents whose local chats AO can import. */
 export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "qwen", "omp"]);
 
-/**
- * Agents whose imports are history-only: AO shows the conversation but cannot
- * resume it, because the provider keys its native resume to the folder the chat
- * started in and cannot reopen it from AO's worktree. Such a chat opens with its
- * history visible and the composer locked.
- */
-export const HISTORY_ONLY_IMPORT_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["qwen", "omp"]);
+// HISTORY_ONLY_IMPORT_AGENTS lives in types/workspace (so session predicates can
+// use it without importing this component); re-exported here for the import UI.
+export { HISTORY_ONLY_IMPORT_AGENTS } from "../../../types/workspace";
 
 const offerClosedKey = "ao.sessionImport.offerClosed";
 const offerListeners = new Set<() => void>();
