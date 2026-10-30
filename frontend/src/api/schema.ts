@@ -7734,6 +7734,7 @@ export interface components {
             distinctId: string;
             githubLogin?: string;
             installId?: string;
+            lifetimeSessions?: null | number;
             optedOut: boolean;
         };
         TrackerIntakeConfig: {

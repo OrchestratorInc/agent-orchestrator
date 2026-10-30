@@ -56,6 +56,7 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	if cfg.RunFilePath != "" {
 		remote.SetInstallStateDir(filepath.Dir(cfg.RunFilePath))
 	}
+	remote.SetLifetimeSessions(store.LifetimeSessions)
 	// Both wrap only the billed remote sink; local storage keeps every event
 	// unaggregated and unfiltered for debugging regardless of PostHog volume.
 	// Aggregation sits in front: burst-prone event names get folded into one
@@ -70,8 +71,8 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	rateLimited.SkipMinuteWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged", "ao.prs.closed")
 	rateLimited.UseUsageDailyWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged", "ao.prs.closed")
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
-	// Keep the full local error stream. Remote HTTP 5xx is not sampled: the
-	// minute rollup and the rate limit already bound it. CLI usage is one
+	// Keep the full local error stream. Remote HTTP 5xx carries only a count
+	// per minute; the rate limit is a backstop. CLI usage is one
 	// event per command path and error kind per completed UTC day.
 	daily := telemetryadapter.NewDailySummarySink(aggregated, filepath.Join(cfg.DataDir, "telemetry", "cli-usage-daily.json"))
 	remote.Identity().OnInstallRetired(daily.Discard)
@@ -82,7 +83,7 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.
 	denied := telemetryadapter.NewDenylistSink(gated, cfg.Telemetry.DisabledEvents)
-	return telemetryadapter.NewFanoutSink(local, denied), remote.Identity(), true
+	return telemetryadapter.NewOnboardingSink(telemetryadapter.NewFanoutSink(local, denied), remote.Identity()), remote.Identity(), true
 }
 
 // Recording is independent of sink startup so a temporary remote setup

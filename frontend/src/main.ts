@@ -2953,7 +2953,19 @@ ipcMain.handle("telemetry:getBootstrap", async () => {
 		env: process.env,
 		exists: existsSync,
 	});
-	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot(), install);
+	const bootstrap = buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot(), install);
+	if (!bootstrap || daemonStatus.state !== "ready" || !daemonStatus.port) return bootstrap;
+	try {
+		const response = await fetch(`http://127.0.0.1:${daemonStatus.port}/api/v1/telemetry/identity`, { signal: AbortSignal.timeout(1500) });
+		if (!response.ok) return bootstrap;
+		const identity = await response.json() as { lifetimeSessions?: unknown };
+		if (typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0) {
+			bootstrap.lifetimeSessions = identity.lifetimeSessions;
+		}
+	} catch {
+		// A missing daemon count stays absent.
+	}
+	return bootstrap;
 });
 ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
 async function flushDaemonUsage(): Promise<void> {

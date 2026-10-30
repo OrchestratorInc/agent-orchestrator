@@ -2588,11 +2588,12 @@ type IdentityResponse struct {
 // Without one, DistinctID is the desktop install ID and stays anonymous. The
 // phone honors OptedOut. This response carries no email.
 type TelemetryIdentityResponse struct {
-	DistinctID  string `json:"distinctId"`
-	InstallID   string `json:"installId,omitempty"`
-	CloudUserID string `json:"cloudUserId,omitempty"`
-	GitHubLogin string `json:"githubLogin,omitempty"`
-	OptedOut    bool   `json:"optedOut"`
+	DistinctID       string `json:"distinctId"`
+	InstallID        string `json:"installId,omitempty"`
+	CloudUserID      string `json:"cloudUserId,omitempty"`
+	GitHubLogin      string `json:"githubLogin,omitempty"`
+	OptedOut         bool   `json:"optedOut"`
+	LifetimeSessions *int64 `json:"lifetimeSessions,omitempty"`
 }
 
 // LinkPreviewQuery selects the external page to unfurl.

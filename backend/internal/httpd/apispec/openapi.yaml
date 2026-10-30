@@ -21667,6 +21667,10 @@ components:
           type: string
         installId:
           type: string
+        lifetimeSessions:
+          type:
+          - "null"
+          - integer
         optedOut:
           type: boolean
       required:

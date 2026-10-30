@@ -32,6 +32,7 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPostHogSink: %v", err)
 	}
+	sink.SetLifetimeSessions(func(context.Context) (int64, error) { return 2, nil })
 
 	projectID := domain.ProjectID("proj-1")
 	sessionID := domain.SessionID("sess-1")
@@ -69,6 +70,12 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		if props["project_id_hash"] == "" || props["session_id_hash"] == "" {
 			t.Fatalf("hashed ids missing from properties: %#v", props)
 		}
+		if props["project_id_hash"] == sha256String(string(projectID)) {
+			t.Fatal("project hash is guessable without the installation salt")
+		}
+		if props["lifetime_sessions"] != float64(2) || props["is_signed_in"] != false || props["days_since_install"] != float64(0) {
+			t.Fatalf("shared metadata missing or incorrect: %#v", props)
+		}
 		if props["$process_person_profile"] != false {
 			t.Fatalf("properties.$process_person_profile = %#v, want false", props["$process_person_profile"])
 		}
@@ -80,6 +87,24 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("PostHog sink did not send request")
+	}
+}
+
+func TestProjectHashIsInstallationScoped(t *testing.T) {
+	first, err := NewIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewIdentity(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := domain.ProjectID("ao")
+	event := ports.TelemetryEvent{Name: "ao.session.spawned", ProjectID: &projectID}
+	a := (&PostHogSink{ident: first}).properties(event)["project_id_hash"]
+	b := (&PostHogSink{ident: second}).properties(event)["project_id_hash"]
+	if a == b || a == sha256String(string(projectID)) {
+		t.Fatalf("project hash is not installation scoped: %v %v", a, b)
 	}
 }
 
@@ -461,7 +486,6 @@ func TestHarnessUpdatePayloadAllowlistCoversTheRolloutMetrics(t *testing.T) {
 		"ao.harness.update":           {"harness", "level", "live_sessions", "result"},
 		"ao.harness.update_idle_wait": {"harness", "sessions", "wait_ms"},
 		"ao.harness.version_switch":   {"harness", "latency_ms", "mode", "result"},
-		"ao.harness.stale_sessions":   {"harness", "sessions"},
 	}
 	for name, keys := range want {
 		allowed, ok := remotePayloadAllowlist[name]
