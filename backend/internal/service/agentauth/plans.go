@@ -16,7 +16,7 @@ import (
 const qwenAuthInput = "i\x7f/auth\r"
 
 var plans = []Plan{
-	loginMenuPlan("claude-code", "claude-login", nil, "Log in to Claude Code", []string{"claude", "auth", "login"}, "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation"),
+	loginMenuPlan("claude-code", "claude-login", nil, "Log in to Claude Code", []string{"claude", "auth", "login"}, "Choose Claude subscription, Anthropic Console, SSO, or setup token", "https://code.claude.com/docs/en/installation"),
 	loginMenuPlan("codex", "codex-login", []string{"--use-default-credential-store"}, "Log in to Codex", []string{"codex", "login"}, "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex"),
 	plan("cursor", ActionLogin, "Log in to Cursor", []string{"cursor-agent", "login"}, "Native browser flow", "https://docs.cursor.com/en/cli/installation"),
 	plan("opencode", ActionLogin, "Log in to OpenCode", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://github.com/anomalyco/opencode"),
@@ -46,7 +46,7 @@ var plans = []Plan{
 	plan("autohand", ActionLogin, "Log in to Autohand", []string{"autohand", "login"}, "Native Autohand account sign-in", "https://docs.autohand.ai/working-with-autohand-code/cli-reference"),
 	kimchiLoginPlan(),
 	terminalInputPlan("prime-agent", ActionLogin, "Log in to Prime Agent", []string{"prime-agent"}, "/login\r", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md"),
-	terminalInputPlan("omp", ActionLogin, "Log in to OMP", []string{"omp"}, "/login\r", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi"),
+	ompLoginPlan(),
 	plan("fx", ActionLogin, "Log in to fx", []string{"fx", "login"}, "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs"),
 	documentationPlan("unreal-agent", "View Unreal Agent documentation", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for AO's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md"),
 	// DeepSeek Harness has no login subcommand — credentials are records in its
@@ -147,6 +147,14 @@ func geminiSetupPlan() Plan {
 		},
 	}
 	return p
+}
+
+// ompLoginPlan uses OMP's native onboarding command, whose first scene is
+// provider sign-in even when setup is already complete. OMP paints its prompt
+// before opening first-run setup, so prompt markers cannot safely gate /login
+// injection. Let OMP own the picker without sending any terminal input.
+func ompLoginPlan() Plan {
+	return plan("omp", ActionLogin, "Log in to OMP", []string{"omp", "setup"}, "Sign in to a provider in OMP's setup wizard, then finish or skip the remaining setup steps", "https://github.com/can1357/oh-my-pi")
 }
 
 func documentationPlan(agentID, title, guidance, docs string) Plan {

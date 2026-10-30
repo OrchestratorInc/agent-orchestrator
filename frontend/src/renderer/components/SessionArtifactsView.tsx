@@ -349,7 +349,7 @@ export function SessionArtifactsView({
 	);
 	const livePreviewPaths = useMemo(() => new Set(
 		artifacts.filter((artifact) =>
-			(artifact.kind === "html" && artifact.inlineUrl && artifact.rawUrl)
+			(artifact.kind === "html" && (cloud || (artifact.inlineUrl && artifact.rawUrl)))
 			|| (!cloud && /\.pdf$/i.test(artifact.path) && artifact.rawUrl),
 		).slice(0, 4).map((artifact) => artifact.path),
 	), [artifacts, cloud]);

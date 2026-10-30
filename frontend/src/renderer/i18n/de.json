@@ -2855,7 +2855,6 @@
 	"newTask.phoneConnected_other": "{{count}} Telefone verbunden",
 	"newTask.modelNotice.signedOut": "{{agent}} ist auf diesem Computer nicht angemeldet, daher konnten die Modelle nicht geladen werden.",
 	"newTask.modelNotice.expired": "Die gespeicherte Anmeldung von {{agent}} ist abgelaufen. Sie wird beim nächsten Start von {{agent}} erneuert, oder Sie melden sich jetzt neu an.",
-	"newTask.modelNotice.cloud": "Es werden die Standardmodelle von {{agent}} angezeigt, weil dieser Computer nicht angemeldet ist. Cloud-Aufgaben nutzen Ihre Cloud-Verbindung und können trotzdem starten.",
 	"newTask.modelNotice.login": "Anmelden",
 	"newTask.modelNotice.loginAgain": "Erneut anmelden",
 	"newTask.modelNotice.retry": "Erneut versuchen",
@@ -3685,5 +3684,15 @@
 	"share.people.working": "arbeitet",
 	"share.people.waiting": "wartet",
 	"share.people.idle": "inaktiv",
-	"board.shared.working": "{{name}} arbeitet"
+	"board.shared.working": "{{name}} arbeitet",
+	"newTask.cloudConfiguredDefault": "Projekt- oder Agent-Standard",
+	"newTask.cloudCredentialModels": "Aus der Modellliste Ihres verbundenen Anbieters",
+	"newTask.cloudLegacyModels": "Dieser Cloud-Server kann seine Modelle nicht auflisten. Diese Vorschläge stammen von diesem Computer und laufen in der Cloud möglicherweise nicht.",
+	"newTask.cloudModelsCatalog": "Modelle für {{agent}} in der Cloud",
+	"newTask.cloudModelsFailed": "Die Cloud-Modelle für {{agent}} konnten nicht geladen werden. Nutzen Sie den Standard oder geben Sie eine Modell-ID ein.",
+	"newTask.cloudModelsRelease": "Modelle für {{agent}} {{version}}",
+	"newTask.cloudModelsUnavailable": "Die Cloud hat keine Modellliste für {{agent}}. Nutzen Sie den Standard oder geben Sie eine Modell-ID ein.",
+	"newTask.cloudModelsVerified": "Auf Ihren Cloud-Workern geprüft",
+	"newTask.cloudModelUnlisted": "{{model}} steht nicht in der Cloud-Modellliste für {{agent}} und läuft daher möglicherweise nicht.",
+	"settings.models.useConfiguredDefault": "Projekt- oder Agent-Standard verwenden"
 }

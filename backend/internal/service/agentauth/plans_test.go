@@ -19,7 +19,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		action                                               Action
 		argv                                                 []string
 	}{
-		{"claude-code", "Log in to Claude Code", "claude", "Choose Claude subscription, Anthropic Console, or SSO", "https://code.claude.com/docs/en/installation", "", ActionLogin, []string{"claude", "auth", "login"}},
+		{"claude-code", "Log in to Claude Code", "claude", "Choose Claude subscription, Anthropic Console, SSO, or setup token", "https://code.claude.com/docs/en/installation", "", ActionLogin, []string{"claude", "auth", "login"}},
 		{"codex", "Log in to Codex", "codex", "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex", "", ActionLogin, []string{"codex", "login"}},
 		{"cursor", "Log in to Cursor", "cursor-agent", "Native browser flow", "https://docs.cursor.com/en/cli/installation", "", ActionLogin, []string{"cursor-agent", "login"}},
 		{"opencode", "Log in to OpenCode", "opencode", "Native provider chooser", "https://github.com/anomalyco/opencode", "", ActionLogin, []string{"opencode", "auth", "login"}},
@@ -49,7 +49,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"autohand", "Log in to Autohand", "autohand", "Native Autohand account sign-in", "https://docs.autohand.ai/working-with-autohand-code/cli-reference", "", ActionLogin, []string{"autohand", "login"}},
 		{"kimchi", "Log in to Kimchi", "kimchi", "Kimchi opens the authentication method picker in the PTY", "https://docs.kimchi.dev/docs/service-keys", "", ActionLogin, []string{"kimchi"}},
 		{"prime-agent", "Log in to Prime Agent", "prime-agent", "Select Open login after Prime Agent finishes starting", "https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/quickstart.md", "/login\r", ActionLogin, []string{"prime-agent"}},
-		{"omp", "Log in to OMP", "omp", "Select Open login after OMP finishes starting", "https://github.com/can1357/oh-my-pi", "/login\r", ActionLogin, []string{"omp"}},
+		{"omp", "Log in to OMP", "omp", "Sign in to a provider in OMP's setup wizard, then finish or skip the remaining setup steps", "https://github.com/can1357/oh-my-pi", "", ActionLogin, []string{"omp", "setup"}},
 		{"fx", "Log in to fx", "fx", "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs", "", ActionLogin, []string{"fx", "login"}},
 		{"unreal-agent", "View Unreal Agent documentation", "", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for AO's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md", "", ActionSetup, nil},
 		{"deepseek-harness", "Set up DeepSeek", "dsh", "Opens DeepSeek's Models page to store an API key and pick a model route; leave it running until the key is saved", "https://github.com/deepseek-ai/deepseek-harness", "", ActionSetup, []string{"dsh", "--profile", "web"}},

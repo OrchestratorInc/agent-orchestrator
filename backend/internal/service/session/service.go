@@ -206,6 +206,7 @@ type Service struct {
 	clock               func() time.Time
 	dataDir             string
 	telemetry           ports.EventSink
+	usageArchiveFlush   func(context.Context)
 	logger              *slog.Logger
 	backgroundContext   context.Context
 	agentReadiness      ports.AgentReadinessProvider
@@ -329,6 +330,11 @@ func NewWithDeps(d Deps) *Service {
 	s.workspaceManifests.now = s.clock
 	s.commitSelections = newCommitSelectionCache(commitSelectionCacheSize)
 	return s
+}
+
+// SetUsageArchiveFlush sends pending session summaries after a user archive.
+func (s *Service) SetUsageArchiveFlush(flush func(context.Context)) {
+	s.usageArchiveFlush = flush
 }
 
 // Spawn creates a session and returns the API-facing read model plus
@@ -600,14 +606,17 @@ func (s *Service) emitSpawnFailed(ctx context.Context, cfg ports.SpawnConfig, er
 	})
 }
 
-// captureRelaunchError sends a relaunch failure's raw error to Sentry.
-var captureRelaunchError = sentryobs.CaptureHTTPError
+// captureRelaunchError sends a relaunch failure through the daemon's gated,
+// privacy-safe Sentry boundary.
+var captureRelaunchError = func(ctx context.Context, err error, tags map[string]string, fingerprint string) {
+	sentryobs.CaptureError(ctx, err, tags, fingerprint, telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+}
 
 // emitRelaunchFailed records a failed agent relaunch. These answer 409
 // AGENT_RESUME_FAILED rather than 500, so neither ao.http.5xx nor the request
 // logger's Sentry capture sees them any more. PostHog gets the operation, step
 // and the root error's Go type (never its text, which can carry paths and env);
-// Sentry, which scrubs events, gets the raw error the 500 used to carry.
+// Sentry receives only fixed diagnostics after scrubbing the raw error.
 func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id domain.SessionID, err, mapped error) {
 	var relaunchErr *sessionmanager.RelaunchError
 	var apiErr *apierr.Error
@@ -635,7 +644,7 @@ func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id d
 		payload["kind"] = string(rec.Kind)
 		projectID = &rec.ProjectID
 	}
-	tags := map[string]string{"request_id": reqid.FromContext(ctx)}
+	tags := map[string]string{"area": "agent"}
 	for key, value := range payload {
 		tags[key] = fmt.Sprint(value)
 	}
@@ -1005,6 +1014,9 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 		return freed, apiErr
 	}
 	s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	if s.usageArchiveFlush != nil {
+		s.usageArchiveFlush(ctx)
+	}
 	return freed, nil
 }
 
@@ -1021,6 +1033,9 @@ func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (session
 	// A later cleanup failure must not leave a completed action in chat.
 	if !result.CleanupPending {
 		s.recordTerminated(ctx, id, domain.ActivityStatusCompleted, nil)
+	}
+	if s.usageArchiveFlush != nil {
+		s.usageArchiveFlush(ctx)
 	}
 	return result, nil
 }

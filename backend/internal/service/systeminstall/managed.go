@@ -93,13 +93,22 @@ func (s *Service) managedTargetDir(target Target) string {
 	return filepath.Join(s.managedRoot, string(target))
 }
 
-// isManagedPath reports whether path is one of AO's managed launchers or
-// installs, which no package manager's ownership check recognises.
+// isManagedPath reports whether the executable lives in AO's managed root.
+// A launcher in bin may instead link to a user's external installation;
+// that installation keeps its own owner, regardless of the launcher's location.
 func (s *Service) isManagedPath(path string) bool {
 	if s.managedRoot == "" || path == "" {
 		return false
 	}
-	rel, err := filepath.Rel(s.managedRoot, path)
+	root, err := filepath.EvalSymlinks(s.managedRoot)
+	if err != nil {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, resolved)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 

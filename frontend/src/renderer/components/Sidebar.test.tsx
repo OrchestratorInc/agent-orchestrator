@@ -3729,6 +3729,21 @@ describe("Sidebar session switch rendering", () => {
 describe("Sidebar active-session reveal", () => {
 	const noop = () => vi.fn().mockResolvedValue(undefined);
 	const other: WorkspaceSession = { ...session, id: "proj-1-2", title: "second task" };
+	const orchestrator: WorkspaceSession = { ...session, id: "proj-1-orc", kind: "orchestrator", title: "Orchestrator" };
+	const scratch: WorkspaceSession = {
+		...session,
+		id: "adhoc-1",
+		title: "scratch note",
+		workspaceId: STANDALONE_WORKSPACE_ID,
+		workspaceName: "Scratchpad",
+	};
+	const scratchpad = {
+		id: STANDALONE_WORKSPACE_ID,
+		name: "Scratchpad",
+		kind: STANDALONE_PROJECT_KIND,
+		path: "",
+		sessions: [scratch],
+	};
 
 	function mount(expandedProjectIds: string[]) {
 		window.localStorage.setItem("ao.sidebar.expanded-projects", JSON.stringify(expandedProjectIds));
@@ -3738,7 +3753,7 @@ describe("Sidebar active-session reveal", () => {
 				<TooltipProvider>
 					<SidebarProvider>
 						<Sidebar
-							workspaces={[{ ...workspace, sessions: [session, other] }]}
+							workspaces={[{ ...workspace, sessions: [session, other, orchestrator] }, scratchpad]}
 							onCloneProject={noop()}
 							onCreateProject={noop()}
 							onInitializeProject={noop()}
@@ -3752,13 +3767,39 @@ describe("Sidebar active-session reveal", () => {
 		);
 		const view = render(tree());
 		return {
-			go: (sessionId: string | undefined) => {
-				mockParams.projectId = sessionId ? workspace.id : undefined;
+			// Pass null for a projectless route such as /sessions/$sessionId.
+			go: (sessionId: string | undefined, projectId: string | null = sessionId ? workspace.id : null) => {
+				mockParams.projectId = projectId ?? undefined;
 				mockParams.sessionId = sessionId;
 				view.rerender(tree());
 			},
 		};
 	}
+
+	it("keeps a closed Scratchpad closed when a project's orchestrator opens", async () => {
+		window.localStorage.setItem("ao.sidebar.sections", JSON.stringify({ scratchpad: false }));
+		const { go } = mount([workspace.id]);
+		expect(screen.getByRole("button", { name: "Scratchpad" })).toHaveAttribute("aria-expanded", "false");
+
+		go(orchestrator.id);
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		});
+
+		expect(screen.getByRole("button", { name: "Scratchpad" })).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByText("scratch note")).not.toBeInTheDocument();
+		expect(JSON.parse(window.localStorage.getItem("ao.sidebar.sections") ?? "null")).toMatchObject({ scratchpad: false });
+	});
+
+	it("reopens a closed Scratchpad, not Projects, to reveal an active Scratchpad session", async () => {
+		window.localStorage.setItem("ao.sidebar.sections", JSON.stringify({ projects: false, scratchpad: false }));
+		const { go } = mount([workspace.id]);
+
+		go(scratch.id, null);
+
+		expect(await screen.findByLabelText("Open scratch note")).toHaveAttribute("aria-current", "page");
+		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
+	});
 
 	it("expands the collapsed project and scrolls the active row into view when the session changes", async () => {
 		const scroll = vi.spyOn(Element.prototype, "scrollIntoView");

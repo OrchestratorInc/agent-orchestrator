@@ -3,6 +3,7 @@
 package httpd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -73,6 +74,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	mountTerminalMux(r, termMgr, log, cfg.AllowedOrigins)
 	mountControl(r, control)
 	mountTelemetry(r, cfg, deps.Telemetry)
+	mountUsageFlush(r, deps.UsageFlush)
 	mountTelemetryIdentity(r, deps.TelemetryIdentity)
 	mountMobile(r, deps.Mobile)
 	mountBrowserLive(r, deps.BrowserLive)
@@ -81,6 +83,22 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	api.Register(r)
 
 	return r
+}
+
+func mountUsageFlush(r chi.Router, flush func(context.Context)) {
+	if flush == nil {
+		return
+	}
+	r.Post("/internal/telemetry/usage-flush", func(w http.ResponseWriter, req *http.Request) {
+		if !localControlRequest(req) {
+			envelope.WriteJSON(w, http.StatusForbidden, map[string]any{
+				"status": "forbidden", "service": daemonmeta.ServiceName,
+			})
+			return
+		}
+		flush(req.Context())
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
 
 func previewOriginMiddleware(sessions *controllers.SessionsController) func(http.Handler) http.Handler {
