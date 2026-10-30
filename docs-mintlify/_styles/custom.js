@@ -1091,6 +1091,53 @@
       }
     });
   }
+  /* ---------- v37: fine chrome parity (parent review 20:24).
+     1) shiki .line spans carry px-4 (16px) on the original; Mintlify lines
+        have 0, so code text sat 16px left of original (x362 vs x378).
+     2) The original shows a ~5px bottom scrollbar strip on code blocks ONLY
+        when content horizontally overflows; the v36x CSS lost to layered
+        Tailwind, so apply conditionally via inline styles.
+     3) Inline code fragments: original box-decoration-break:slice with
+        2.8px/5.6px padding (deployed had clone + 2.45/4.9).
+     4) Sidebar nested children: original indents links 20px (deployed 8px).
+     5) Callout title paragraph (first child, strong-only): original mt0 mb4;
+        v36w gave every callout paragraph mt20/mb20. ---------- */
+  function fixChromeParity() {
+    Array.prototype.forEach.call(document.querySelectorAll(".mdx-content pre .line"), function (l) {
+      l.style.setProperty("padding-left", "16px", "important");
+      l.style.setProperty("padding-right", "32px", "important");
+    });
+    Array.prototype.forEach.call(document.querySelectorAll(".mdx-content .code-block div[class*=--scroll-area-fade-size]"), function (sc) {
+      var maxText = 0;
+      Array.prototype.forEach.call(sc.querySelectorAll(".line"), function (l) {
+        var r = document.createRange();
+        r.selectNodeContents(l);
+        var w = r.getBoundingClientRect().width;
+        if (w > maxText) maxText = w;
+      });
+      var over = maxText > 0 && (maxText + 82) > sc.clientWidth + 2;
+      sc.style.setProperty("padding-bottom", over ? "21px" : "16px", "important");
+    });
+    Array.prototype.forEach.call(document.querySelectorAll(".mdx-content :not(pre) > code"), function (c) {
+      c.style.setProperty("box-decoration-break", "slice", "important");
+      c.style.setProperty("padding", "2.8px 5.6px", "important");
+    });
+    Array.prototype.forEach.call(document.querySelectorAll("ul.sidebar-group li.space-y-px > ul > li > a"), function (a) {
+      a.style.setProperty("padding-left", "20px", "important");
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[class*="callout"] [class*="text-sm"]'), function (w) {
+      var kids = Array.prototype.filter.call(w.children, function (c) { return c.tagName === "P" || (c.tagName === "SPAN" && c.getAttribute("data-as") === "p"); });
+      kids.forEach(function (p, i) {
+        var st = p.querySelector("strong");
+        var isTitle = i === 0 && st && p.textContent.trim() === st.textContent.trim();
+        if (isTitle) {
+          p.style.setProperty("margin-top", "0", "important");
+          p.style.setProperty("margin-bottom", "4px", "important");
+        }
+      });
+    });
+  }
+
   function init() {
     try { TOC_STATE.headings = collectHeadings(); } catch (e) {}
     try { buildTocBar(); } catch (e) {}
@@ -1108,6 +1155,7 @@
     try { fixCopyIcons(); } catch (e) {}
     try { fixProseParity(); } catch (e) {}
     try { fixBandArticle(); } catch (e) {}
+    try { fixChromeParity(); } catch (e) {}
     try { fixPlatformCards(); } catch (e) {}
     try { bindCopyFeedback(); } catch (e) {}
     try { spyAll(); } catch (e) {}
@@ -1144,6 +1192,7 @@
       }
       try { fixSearchTrigger(); } catch (e) {}
       try { fixBandArticle(); } catch (e) {}
+      try { fixChromeParity(); } catch (e) {}
       try { fixTitle(); } catch (e) {}
       var needChev = !!document.querySelector('nav#sidebar-content button svg use[href*="ChevronRight"]');
       if (needChev) { try { fixGroupChevrons(); } catch (e) {} }
