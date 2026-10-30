@@ -18,7 +18,8 @@ function cached(key: string, build: () => Promise<string>): Promise<string> {
 	return pending;
 }
 
-function assetLoader(config: ServerConfig, sessionId: string): ArtifactAssetLoader {
+/** Reads the files a session's artifact pages link, with the Bearer header. */
+export function artifactAssetLoader(config: ServerConfig, sessionId: string): ArtifactAssetLoader {
 	return {
 		text: (path) => getArtifactText(config, sessionId, path).catch(() => undefined),
 		dataUri: async (path) => {
@@ -67,7 +68,7 @@ export function useInlinedArtifactPage({ enabled, config, sessionId, path, versi
 		cached(key, async () => {
 			// The page as the desktop frames it, with AO's theme written in.
 			const html = await getArtifactPage(config, sessionId, path);
-			return (await inlineArtifactPage(html, path, assetLoader(config, sessionId), sessionId)).html;
+			return (await inlineArtifactPage(html, path, artifactAssetLoader(config, sessionId), sessionId)).html;
 		})
 			.then((html) => { if (live) setState({ key, html, failed: false }); })
 			.catch(() => { if (live) setState({ key, failed: true }); });

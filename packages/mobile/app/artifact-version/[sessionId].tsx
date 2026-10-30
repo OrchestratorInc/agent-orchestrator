@@ -1,13 +1,17 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { WebView } from "react-native-webview";
 import { getArtifactVersion, restoreArtifactVersion } from "../../lib/api";
 import { artifactLanguage, artifactViewKind } from "../../lib/artifacts";
-import { formatVersionTime, type ArtifactVersion } from "../../lib/artifactVersions";
+import { inlineArtifactPage } from "../../lib/artifactPageInliner";
+import { formatVersionTime, versionPageHtml, type ArtifactVersion } from "../../lib/artifactVersions";
 import { backOr } from "../../lib/backNavigation";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
+import { useRenderTheme } from "../../lib/chat/RenderFrame";
+import type { ServerConfig } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
@@ -16,14 +20,16 @@ import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
+import { artifactAssetLoader } from "../../lib/useInlinedArtifactPage";
 
 // Past this, a version shows as plain text: a full grammar pass would stall the JS thread.
 const MAX_HIGHLIGHTED_CHARS = 100 * 1024;
 
 /**
  * One saved version of an artifact, read-only, with the two ways out: restore
- * it, or go back to the current file. Markdown renders; anything else, HTML
- * included, shows as source, as on desktop.
+ * it, or go back to the current file. Markdown renders and an HTML page shows
+ * as the page, as the viewer shows the current file, so a version can be told
+ * apart at a glance. A truncated page, and anything else, shows as source.
  */
 export default function ArtifactVersionScreen() {
 	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
@@ -88,6 +94,8 @@ function ArtifactVersionContent() {
 	if (!loaded) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 
 	const markdown = artifactViewKind({ path, kind: "file" }) === "markdown";
+	// Only the path is known here; the daemon calls .html and .htm files pages.
+	const page = /\.html?$/i.test(path) && !loaded.truncated;
 	return (
 		<View style={styles.screen}>
 			<View style={styles.banner}>
@@ -96,13 +104,17 @@ function ArtifactVersionContent() {
 			{loaded.truncated ? (
 				<View style={styles.truncated}><Text style={styles.truncatedText}>Showing the start of this version. Restoring it writes the whole file.</Text></View>
 			) : null}
-			<ScrollView style={styles.screen} contentContainerStyle={markdown ? styles.document : styles.code}>
-				{markdown ? (
-					<ChatMarkdown text={loaded.content} />
-				) : (
-					<HighlightedCodeText code={loaded.content} language={artifactLanguage(path)} streaming={loaded.content.length > MAX_HIGHLIGHTED_CHARS} style={styles.codeText} />
-				)}
-			</ScrollView>
+			{page && config ? (
+				<VersionPage config={config} sessionId={sessionId} path={path} version={loaded} />
+			) : (
+				<ScrollView style={styles.screen} contentContainerStyle={markdown ? styles.document : styles.code}>
+					{markdown ? (
+						<ChatMarkdown text={loaded.content} />
+					) : (
+						<HighlightedCodeText code={loaded.content} language={artifactLanguage(path)} streaming={loaded.content.length > MAX_HIGHLIGHTED_CHARS} style={styles.codeText} />
+					)}
+				</ScrollView>
+			)}
 			<View style={[styles.bar, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
 				{restoreError ? <Text accessibilityRole="alert" style={styles.error}>{restoreError}</Text> : null}
 				<View style={styles.actions}>
@@ -114,6 +126,40 @@ function ArtifactVersionContent() {
 	);
 }
 
+/**
+ * A saved HTML version drawn as a page. The version is stored raw, so AO's
+ * theme is written in here, and the files it links are inlined from the
+ * artifact folder as for the live page (they are today's files, not the
+ * version's). If inlining fails, the page shows without them.
+ */
+function VersionPage({ config, sessionId, path, version }: { config: ServerConfig; sessionId: string; path: string; version: ArtifactVersion }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const theme = useRenderTheme();
+	const themed = useMemo(() => versionPageHtml(version.content, theme), [theme, version.content]);
+	const [inlined, setInlined] = useState<{ from: string; html: string }>();
+	useEffect(() => {
+		let live = true;
+		inlineArtifactPage(themed, path, artifactAssetLoader(config, sessionId), sessionId)
+			.then((result) => { if (live) setInlined({ from: themed, html: result.html }); })
+			.catch(() => { if (live) setInlined({ from: themed, html: themed }); });
+		return () => { live = false; };
+	}, [config, path, sessionId, themed]);
+	const html = inlined?.from === themed ? inlined.html : undefined;
+	if (!html) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+	return (
+		<WebView
+			// Loaded from memory with no origin: it cannot reach the daemon.
+			source={{ html }}
+			style={styles.web}
+			setSupportMultipleWindows={false}
+			javaScriptCanOpenWindowsAutomatically={false}
+			// A version is read-only: links inside it do not navigate.
+			onShouldStartLoadWithRequest={(request) => request.isTopFrame === false || /^(about:|data:)/.test(request.url)}
+		/>
+	);
+}
+
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
@@ -121,6 +167,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	bannerText: { fontFamily: "Geist_500Medium", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 	truncated: { paddingHorizontal: space.lg, paddingVertical: space.sm, backgroundColor: t.tintAmber },
 	truncatedText: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
+	web: { flex: 1, backgroundColor: t.bgBase },
 	document: { paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.xxxl },
 	code: { padding: space.lg, paddingBottom: space.xxxl },
 	codeText: { fontFamily: t.fontMono, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },

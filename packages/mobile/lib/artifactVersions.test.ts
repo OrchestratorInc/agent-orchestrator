@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatVersionTime, parseVersion, parseVersionSummaries, restoredNote, versionAuthor, type ArtifactVersionSummary } from "./artifactVersions";
+import { formatVersionTime, parseVersion, parseVersionSummaries, restoredNote, versionAuthor, versionPageHtml, type ArtifactVersionSummary } from "./artifactVersions";
 
 describe("parseVersionSummaries", () => {
 	it("keeps well-formed versions in the daemon's order", () => {
@@ -63,5 +63,25 @@ describe("versionAuthor", () => {
 		expect(versionAuthor({ version: 1, size: 0, source: "user", createdAt: "" }, "codex")).toEqual({ kind: "user" });
 		expect(versionAuthor({ version: 1, size: 0, source: "agent", harness: "claude-code", createdAt: "" }, "codex")).toEqual({ kind: "agent", harness: "claude-code" });
 		expect(versionAuthor({ version: 1, size: 0, source: "agent", createdAt: "" }, "codex")).toEqual({ kind: "agent", harness: "codex" });
+	});
+});
+
+describe("versionPageHtml", () => {
+	const theme = { appearance: "dark" as const, variables: { "--background": "#000", "--foreground": "#fff" } };
+
+	it("writes AO's theme and base style in after the doctype", () => {
+		const page = versionPageHtml('<!doctype html><html><head><meta name="viewport" content="width=device-width"></head><body>b</body></html>', theme);
+		expect(page.startsWith('<!doctype html><style id="ao-theme">:root{color-scheme:dark;--background:#000;--foreground:#fff}</style><style>html{')).toBe(true);
+		expect(page.endsWith('</style><html><head><meta name="viewport" content="width=device-width"></head><body>b</body></html>')).toBe(true);
+	});
+
+	it("keeps a leading comment ahead of the doctype and adds a viewport to a page with none", () => {
+		const page = versionPageHtml("<!-- made by an agent -->\n<!DOCTYPE html><p>b</p>", theme);
+		expect(page.startsWith("<!-- made by an agent -->\n<!DOCTYPE html><style id=\"ao-theme\">")).toBe(true);
+		expect(page).toContain('<meta name="viewport" content="width=device-width, initial-scale=1"><p>b</p>');
+	});
+
+	it("gives a fragment a doctype", () => {
+		expect(versionPageHtml("<p>b</p>", theme)).toMatch(/^<!doctype html><style id="ao-theme">.*<p>b<\/p>$/);
 	});
 });
