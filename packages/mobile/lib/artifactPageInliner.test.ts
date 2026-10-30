@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { inlineArtifactPage as inline, MAX_INLINED_IMAGE_BYTES, resolveArtifactReference, type ArtifactAssetLoader } from "./artifactPageInliner";
+import { CARD_PAGE_LIMITS, FULL_PAGE_LIMITS, inlineArtifactPage as inline, resolveArtifactReference, type ArtifactAssetLoader } from "./artifactPageInliner";
 
 const inlineArtifactPage = (html: string, pagePath: string, load: ArtifactAssetLoader) => inline(html, pagePath, load, "ao-1");
 
@@ -40,10 +40,24 @@ describe("inlineArtifactPage", () => {
 	});
 
 	it("keeps an image over the render size limit as a reference", async () => {
-		const load = loader({}, { "huge.png": MAX_INLINED_IMAGE_BYTES + 1 });
+		const load = loader({}, { "huge.png": FULL_PAGE_LIMITS.imageBytes + 1 });
 		const page = await inlineArtifactPage('<img src="huge.png">', "index.html", load);
 		expect(page.html).toBe('<img src="huge.png">');
 		expect(page.skipped).toEqual(["huge.png"]);
+	});
+
+	it("holds a card's page to the card budget, asking the loader not to read a larger image", async () => {
+		const load = loader({}, { "logo.png": 20 << 10, "screenshot.png": 2 << 20 });
+		const page = await inline('<img src="logo.png"><img src="screenshot.png">', "index.html", load, "ao-1", CARD_PAGE_LIMITS);
+		expect(page.html).toBe('<img src="data:image/png;base64,logo.png"><img src="screenshot.png">');
+		expect(page.skipped).toEqual(["screenshot.png"]);
+		expect(load.dataUri).toHaveBeenCalledWith("screenshot.png", CARD_PAGE_LIMITS.imageBytes);
+	});
+
+	it("leaves an image the loader declined to read as written", async () => {
+		const load: ArtifactAssetLoader = { text: async () => undefined, dataUri: async () => ({ uri: "", bytes: 5 << 20 }) };
+		const page = await inline('<img src="big.png">', "index.html", load, "ao-1", CARD_PAGE_LIMITS);
+		expect(page.html).toBe('<img src="big.png">');
 	});
 });
 

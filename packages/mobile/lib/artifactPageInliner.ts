@@ -19,13 +19,34 @@ import { resolveArtifactAssetPath } from "./artifacts";
 export type ArtifactAssetLoader = {
 	/** The file as text, for a stylesheet or script. Undefined when it cannot be read. */
 	text(path: string): Promise<string | undefined>;
-	/** The file as a `data:` URI with its size in bytes, for an image. */
-	dataUri(path: string): Promise<{ uri: string; bytes: number } | undefined>;
+	/**
+	 * The file as a `data:` URI with its size in bytes, for an image. One over
+	 * `maxBytes` comes back with an empty URI and its size, without being read.
+	 */
+	dataUri(path: string, maxBytes: number): Promise<{ uri: string; bytes: number } | undefined>;
 };
 
-// The limits `ao render` holds a page to.
-export const MAX_INLINED_IMAGE_BYTES = 10 << 20;
-export const MAX_INLINED_PAGE_BYTES = 25 << 20;
+/** How much of the files a page links may be written into it. */
+export type InlineLimits = {
+	/** Names the limits in a cache key: one page inlined under two limits is two pages. */
+	name: string;
+	/** An image over this stays as written. */
+	imageBytes: number;
+	/** The whole page, its inlined files included, stays under this. */
+	pageBytes: number;
+};
+
+/** The limits `ao render` holds a page to: the viewer, where the page is read in full. */
+export const FULL_PAGE_LIMITS: InlineLimits = { name: "full", imageBytes: 10 << 20, pageBytes: 25 << 20 };
+
+/** A page in a chat turn: ordinary screenshots fit, while many frames share the app's memory. */
+export const FRAME_PAGE_LIMITS: InlineLimits = { name: "frame", imageBytes: 2 << 20, pageBytes: 6 << 20 };
+
+/**
+ * A page drawn small on a gallery card, where a dozen may load at once: small
+ * images (icons, logos, charts) come along, a full-size screenshot does not.
+ */
+export const CARD_PAGE_LIMITS: InlineLimits = { name: "card", imageBytes: 300 << 10, pageBytes: 2 << 20 };
 
 export type InlinedPage = {
 	html: string;
@@ -57,17 +78,17 @@ export function resolveArtifactReference(fromPath: string, ref: string, sessionI
 	return resolveArtifactAssetPath(fromPath, ref);
 }
 
-export async function inlineArtifactPage(html: string, pagePath: string, load: ArtifactAssetLoader, sessionId: string): Promise<InlinedPage> {
+export async function inlineArtifactPage(html: string, pagePath: string, load: ArtifactAssetLoader, sessionId: string, limits: InlineLimits = FULL_PAGE_LIMITS): Promise<InlinedPage> {
 	const skipped: string[] = [];
-	let budget = MAX_INLINED_PAGE_BYTES - html.length;
+	let budget = limits.pageBytes - html.length;
 	const images = new Map<string, string | undefined>();
 
 	const image = async (fromPath: string, ref: string): Promise<string | undefined> => {
 		const path = resolveArtifactReference(fromPath, ref, sessionId);
 		if (!path) return undefined;
 		if (images.has(path)) return images.get(path);
-		const loaded = await load.dataUri(path);
-		const fits = loaded && loaded.bytes <= MAX_INLINED_IMAGE_BYTES && loaded.uri.length <= budget;
+		const loaded = await load.dataUri(path, Math.min(limits.imageBytes, budget));
+		const fits = loaded && loaded.uri !== "" && loaded.bytes <= limits.imageBytes && loaded.uri.length <= budget;
 		if (fits) budget -= loaded.uri.length;
 		else skipped.push(ref);
 		images.set(path, fits ? loaded.uri : undefined);

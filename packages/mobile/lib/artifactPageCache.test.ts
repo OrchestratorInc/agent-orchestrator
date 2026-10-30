@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { cachedArtifactPage } from "./artifactPageCache";
+import { cachedArtifactPage, MAX_CACHED_CHARS } from "./artifactPageCache";
 
 describe("cachedArtifactPage", () => {
 	it("reads a page once per version of the file", async () => {
@@ -24,5 +24,24 @@ describe("cachedArtifactPage", () => {
 		await Promise.resolve();
 		const build = vi.fn(async () => "page");
 		expect(await cachedArtifactPage("s|b.html", "t1", build)).toBe("page");
+	});
+
+	it("holds the kept pages to a total size, dropping the oldest first", async () => {
+		const half = "x".repeat(MAX_CACHED_CHARS / 2 + 1);
+		const first = vi.fn(async () => half);
+		await cachedArtifactPage("s|first.html", "t1", first);
+		await cachedArtifactPage("s|second.html", "t1", async () => half);
+		await Promise.resolve();
+		// The two together are over the budget, so the first was let go.
+		await cachedArtifactPage("s|first.html", "t1", first);
+		expect(first).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not keep a page larger than the whole budget", async () => {
+		const huge = vi.fn(async () => "x".repeat(MAX_CACHED_CHARS + 1));
+		await cachedArtifactPage("s|huge.html", "t1", huge);
+		await Promise.resolve();
+		await cachedArtifactPage("s|huge.html", "t1", huge);
+		expect(huge).toHaveBeenCalledTimes(2);
 	});
 });

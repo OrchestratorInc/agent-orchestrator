@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { WebView } from "react-native-webview";
 import { artifactMarkdownImageSource, getArtifactText } from "./api";
+import { CARD_PAGE_LIMITS } from "./artifactPageInliner";
 import { artifactViewKind, looksBinary, type SessionArtifact } from "./artifacts";
 import { cachedThumbnailText, MAX_THUMBNAIL_TEXT_BYTES, THUMBNAIL_PAGE_WIDTH, THUMBNAIL_TEXT_CHARS, thumbnailPageHtml, thumbnailScale } from "./artifactThumbnailModel";
 import { ChatMarkdown } from "./chat/ChatMarkdown";
@@ -60,7 +61,8 @@ function PageThumbnail({ config, sessionId, artifact, visible, width, height, on
 	const web = useRef<WebView>(null);
 	const theme = useRenderTheme();
 	const [loaded, setLoaded] = useState(false);
-	const inlined = useInlinedArtifactPage({ enabled: visible, config, sessionId, path: artifact.path, version: artifact.updatedAt });
+	// Small images only: a dozen cards may load at once, and each is drawn small.
+	const inlined = useInlinedArtifactPage({ enabled: visible, config, sessionId, path: artifact.path, version: artifact.updatedAt, limits: CARD_PAGE_LIMITS });
 	const html = useMemo(() => inlined.html ? thumbnailPageHtml(inlined.html) : undefined, [inlined.html]);
 	// The page lays out in a 420-point window, drawn scaled down to the card.
 	const scale = thumbnailScale(width);

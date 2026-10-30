@@ -35,6 +35,7 @@ import {
 } from "./renderFrameModel";
 import { RenderSkeleton } from "./RenderSkeleton";
 import { startRenderHeightStore } from "./renderHeightStore";
+import { FRAME_PAGE_LIMITS } from "../artifactPageInliner";
 import { useInlinedArtifactPage } from "../useInlinedArtifactPage";
 
 startRenderHeightStore();
@@ -225,7 +226,7 @@ export const RenderFrame = memo(function RenderFrame({ render, artifact }: {
 	// An artifact page is read with the files it links inlined, and only
 	// while its frame is in range; the file's version re-reads a rewrite.
 	const version = artifact ? sessions?.find((session) => session.id === artifact.sessionId)?.artifacts?.find((file) => file.path === artifact.path)?.updatedAt : undefined;
-	const inlined = useInlinedArtifactPage({ enabled: Boolean(artifact) && live, config, sessionId: artifact?.sessionId ?? "", path: artifact?.path ?? "", version });
+	const inlined = useInlinedArtifactPage({ enabled: Boolean(artifact) && live, config, sessionId: artifact?.sessionId ?? "", path: artifact?.path ?? "", version, limits: FRAME_PAGE_LIMITS });
 	// The skeleton covers the frame until the inlined page is ready; if inlining
 	// fails the page loads from its URL instead.
 	const awaitingInline = Boolean(artifact) && !inlined.html && !inlined.failed;
