@@ -12,7 +12,10 @@ import type { CloudCpClient, CloudCpClientEvent, CloudCpSessionChatSettings } fr
 import { cloudStartupProblem, isWorkspaceStartupError, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import { promptPlanRefusal } from "../../lib/cloud-cp/renderer-client";
+import { reportPlanRefusal } from "../../lib/cloud-telemetry";
+import { useCloudBilling } from "../../hooks/useCloudBilling";
+import { useUiStore } from "../../stores/ui-store";
+import { ComposerErrorNotice } from "./AgentSwitchPicker";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, SystemEventDetail, TurnSettings } from "../../types/conversation";
@@ -194,6 +197,30 @@ export function planRefusalCode(item: ConversationItem): string | undefined {
 	if (item.kind !== "activity" || item.status !== "failed") return undefined;
 	if (item.activityKind !== "command" && item.activityKind !== "mcp_tool") return undefined;
 	return item.detail?.output ? PLAN_REFUSAL_PATTERN.exec(item.detail.output)?.[1] : undefined;
+}
+
+/** Why the agent's request was refused, with Upgrade for an org that can buy a plan. */
+function PlanLimitNotice({ code, onDismiss }: { code: string; onDismiss: () => void }) {
+	const { data, offering } = useCloudBilling();
+	const plan = data?.limits?.plan ?? data?.plan;
+	const reason = appI18n.t(code.endsWith("_SLOTS_FULL") ? "cloud.planLimit.slotsFull" : "cloud.planLimit.refused");
+	const onPlan = plan ? ` ${appI18n.t("cloud.planLimit.onPlan", { plan: plan.charAt(0).toUpperCase() + plan.slice(1) })}` : "";
+	return (
+		<ComposerErrorNotice
+			title={appI18n.t("cloud.planLimit.title")}
+			message={reason + onPlan}
+			onDismiss={onDismiss}
+			action={offering.selfServeBilling ? (
+				<button
+					type="button"
+					className="mt-1 font-medium text-foreground underline underline-offset-2 hover:decoration-dashed"
+					onClick={() => useUiStore.getState().openGlobalSettings("billing")}
+				>
+					{appI18n.t("cloud.planLimit.upgrade")}
+				</button>
+			) : <p className="text-muted-foreground">{appI18n.t("cloud.planLimit.contactAdmin")}</p>}
+		/>
+	);
 }
 
 function cloudTurnDiff(patch: string): (DiffFile & { patch: string })[] {
@@ -991,11 +1018,16 @@ export function CloudSessionChatSurface({
 		return { ...projected, items, controller, settings: { ...settings, approvalMode: shownApprovalMode } };
 	}, [eventsQuery.data, me, session, settings, shownApprovalMode, startFailed, startStopped]);
 	// Failed tools present when this chat opened are history; one that fails
-	// with a plan refusal while it is open offers Upgrade.
+	// with a plan refusal while it is open explains the limit above the composer.
+	const refusalKey = `${cloud?.orgId ?? ""}:${session.id}`;
 	const refusalBaseline = useRef<{ key: string; openedAt: number; seen?: Set<string> }>(undefined);
+	const [planRefusal, setPlanRefusal] = useState<{ key: string; code: string }>();
 	useEffect(() => {
-		const key = `${cloud?.orgId ?? ""}:${session.id}`;
-		if (refusalBaseline.current?.key !== key) refusalBaseline.current = { key, openedAt: Date.now() };
+		const key = refusalKey;
+		if (refusalBaseline.current?.key !== key) {
+			refusalBaseline.current = { key, openedAt: Date.now() };
+			setPlanRefusal(undefined);
+		}
 		const baseline = refusalBaseline.current;
 		// Events cached from an earlier opening are history too, until refetched.
 		if (eventsQuery.dataUpdatedAt < baseline.openedAt) return;
@@ -1010,8 +1042,10 @@ export function CloudSessionChatSurface({
 			baseline.seen.add(item.id);
 			code ??= planRefusalCode(item);
 		}
-		if (code) promptPlanRefusal(code);
-	}, [cloud?.orgId, eventsQuery.dataUpdatedAt, session.id, snapshot]);
+		if (!code) return;
+		setPlanRefusal({ key, code });
+		reportPlanRefusal(code, true);
+	}, [eventsQuery.dataUpdatedAt, refusalKey, snapshot]);
 	// While Setup runs, or once the checkout, Setup or the agent's start failed,
 	// the session reads as a local start does: the startup checklist in place of a
 	// working timer, and messages that send in order once the agent starts.
@@ -1152,7 +1186,12 @@ export function CloudSessionChatSurface({
 							: modelsError
 			}
 			headerActions={headerActions}
-			composerNotice={live ? <SharedComposerNotice live={live} lease={lease} userId={me} /> : undefined}
+			composerNotice={planRefusal?.key === refusalKey || live ? (
+				<>
+					{planRefusal?.key === refusalKey && <PlanLimitNotice code={planRefusal.code} onDismiss={() => setPlanRefusal(undefined)} />}
+					{live && <SharedComposerNotice live={live} lease={lease} userId={me} />}
+				</>
+			) : undefined}
 			composerLockedPlaceholder={readOnly
 				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")
 				// The attached notice already names the writer and the place in line.
