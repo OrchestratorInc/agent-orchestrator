@@ -201,6 +201,7 @@ nav#sidebar-content ul { border-left: none !important; border-right: none !impor
   background: oklab(0.30078 0.0000136644 0.00000602007 / 0.5);
   cursor: pointer;
 }
+.ao-lang-chev { margin-left: auto; }
 .ao-lang-menu {
   position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 100%;
   background: oklch(0.205 0.008 106.7); border: 1px solid var(--fd-border);
