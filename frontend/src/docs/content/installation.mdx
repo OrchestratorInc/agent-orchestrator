@@ -31,7 +31,7 @@ brew upgrade --cask agentwrapper/tap/agent-orchestrator
 | Tool | When you need it | Why |
 | --- | --- | --- |
 | Git | Repository projects | Creates and manages isolated worktrees and branches. |
-| GitHub CLI `gh` | GitHub projects | Uses your existing authentication for repository and pull-request operations. |
+| GitHub CLI `gh` | Optional | If you already use it, Orchestrator picks up its sign-in. Not needed when you sign in to GitHub from Orchestrator. |
 | External coding agent (called a harness in Orchestrator) | Agent sessions that use an installed CLI | Install a supported tool such as Claude Code, Codex, Cursor, Aider, or OpenCode. See the [agent catalog](/plugins/agents) for the current list and interface support. Unreal Agent is built into Orchestrator for Chat on macOS and Linux. |
 | tmux | macOS preflight and legacy/fallback terminal sessions | Desktop macOS/Linux packages include it. Source launches may need system tmux; see [Runtime](/plugins/runtimes). |
 
@@ -52,12 +52,9 @@ Choose the download for your platform above, install it, and open **Orchestrator
 
 ### Authenticate GitHub
 
-For a GitHub repository, [install GitHub CLI](https://cli.github.com/) if needed, then sign in:
+For a GitHub repository, click **Sign in with GitHub** on the home page. Orchestrator shows a short code. Click **Copy code and open GitHub**, paste the code, and approve Agent Orchestrator. One sign-in covers every repository your account can access. If an organization restricts third-party apps, an organization owner must approve Agent Orchestrator once.
 
-```bash
-gh auth login
-gh auth status
-```
+If you already signed in with GitHub CLI (`gh auth login`), Orchestrator uses that sign-in and you can skip this step.
 
 Use an account that can read the repository and perform the branch and pull-request actions you expect the agent to take.
 
@@ -123,7 +120,7 @@ All Orchestrator application state lives under `~/.ao` by default, including the
 		For an external harness, install it, run it once to authenticate, then restart Orchestrator so the desktop-launched daemon receives the updated login-shell environment. Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux; choose it directly instead of installing a CLI.
 	</Accordion>
 	<Accordion title="GitHub data is missing">
-		Run `gh auth status`. Confirm the active account can access the repository and its pull requests.
+		Sign in with GitHub from the home page, or run `gh auth status` if you use GitHub CLI. Confirm the account can access the repository and its pull requests. For an organization repository, check that the organization allows Agent Orchestrator.
 	</Accordion>
 	<Accordion title="Terminal UI cannot start on macOS or Linux">
 		Packaged builds include tmux. New sessions normally use native PTY hosts; macOS still checks tmux availability and older sessions may need it. See [runtime diagnostics](/plugins/runtimes/tmux) for source installs and fallback behavior.
