@@ -22,7 +22,7 @@ export type TelemetryPolicyView = TelemetryPolicySnapshot & {
 	state: TelemetryPolicyApplyState;
 	environmentVeto: boolean;
 	durabilitySupported: boolean;
-	reason?: "environment_veto" | "durability_unsupported" | "release_blocked" | "invalid_authority" | "daemon_cleanup_pending" | "cleanup_failed";
+	reason?: "environment_veto" | "durability_unsupported" | "release_blocked" | "invalid_authority" | "cleanup_failed";
 };
 
 export type RendererTelemetryCapture = {
@@ -31,6 +31,7 @@ export type RendererTelemetryCapture = {
 	message: string;
 	level?: "fatal" | "error" | "warning" | "info";
 	tags?: Record<string, string>;
+	exception?: { type: string; frames: Array<{ function: string; lineno?: number }> };
 };
 
 export type RendererTelemetryCaptureInput = Omit<RendererTelemetryCapture, "consentGeneration">;

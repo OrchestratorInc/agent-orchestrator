@@ -1,4 +1,5 @@
 export type ConversationMenuAction =
+	| "files"
 	| "shell"
 	| "preview"
 	| "pull_requests"
@@ -13,9 +14,9 @@ export type ConversationMenuAction =
 	| "delete";
 
 export type ConversationMenuSection = {
-	// Delete acts on the session, not the conversation, and is the one entry
-	// here that destroys something — so it sits in a section of its own,
-	// last, rather than among actions you can take back.
+	// Archive acts on the session, not the conversation, so it sits in a section
+	// of its own. The internal action id remains `delete` for compatibility with
+	// the existing sheet routing, but the operation is restorable.
 	title: "Workspace" | "Conversation" | "Agent" | "Session";
 	actions: ConversationMenuAction[];
 };
@@ -34,7 +35,7 @@ export function conversationMenuSections({
 	canDelete: boolean;
 }): ConversationMenuSection[] {
 	return [
-		{ title: "Workspace", actions: ["shell", "preview", "pull_requests"] },
+		{ title: "Workspace", actions: ["files", "shell", "preview", "pull_requests"] },
 		{
 			title: "Conversation",
 			actions: [

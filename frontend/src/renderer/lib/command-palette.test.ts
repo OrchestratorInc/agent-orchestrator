@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildCommands,
+	buildFileSessionCommands,
 	buildSessionActions,
+	buildWorkspaceFileCommands,
 	filterCommands,
+	matchScore,
 	groupCommands,
 	displayGroups,
+	titleHighlights,
 	findSession,
 	visibleForQuery,
 	MAX_ATTENTION_SEARCH_RESULTS,
@@ -21,6 +25,7 @@ import {
 	type WorkspaceSummary,
 } from "../types/workspace";
 import { appI18n } from "../i18n";
+import { sessionBranchPresentation } from "./session-branch";
 
 function session(overrides: Partial<WorkspaceSession> & { id: string }): WorkspaceSession {
 	return {
@@ -76,6 +81,47 @@ describe("findSession", () => {
 		expect(result?.workspace.id).toBe("proj-1");
 		expect(result?.session.id).toBe("w-pr");
 		expect(findSession(workspaces(), "missing")).toBeUndefined();
+	});
+});
+
+describe("workspace file commands", () => {
+	it("offers file search for a current worker session and excludes orchestrators", () => {
+		const items = buildCommands({ workspaces: workspaces(), currentProjectId: "proj-1", currentSessionId: "w-working" });
+		expect(byId(items).get("current-search-files")?.action).toEqual({
+			kind: "open-file-search",
+			projectId: "proj-1",
+			target: { projectId: "proj-1", sessionId: "w-working" },
+		});
+
+		const picker = buildFileSessionCommands(workspaces()[0]!);
+		expect(picker.some((item) => item.title === "orchestrate")).toBe(false);
+	});
+
+	it("sorts active worktrees before terminated ones and omits unready worktrees", () => {
+		const workspace: WorkspaceSummary = {
+			...workspaces()[0]!,
+			sessions: [
+				session({ id: "done", status: "terminated" }),
+				session({ id: "starting", provisionState: "provisioning" }),
+				session({ id: "live", status: "working" }),
+			],
+		};
+		expect(buildFileSessionCommands(workspace).map((item) => item.title)).toEqual(["live", "done"]);
+	});
+
+	it("uses basenames as titles, full paths as keywords, and ranks basename matches first", () => {
+		const target = { projectId: "proj-1", sessionId: "w-working" };
+		const items = buildWorkspaceFileCommands(target, [
+			{ path: "docs/app/guide.md" },
+			{ path: "src/App.tsx" },
+		]);
+		expect(items[1]).toMatchObject({
+			id: "file:local:w-working:src/App.tsx",
+			title: "App.tsx",
+			subtitle: "src",
+			keywords: expect.arrayContaining(["src/App.tsx"]),
+		});
+		expect(filterCommands(items, "app").map((item) => item.title)).toEqual(["App.tsx", "guide.md"]);
 	});
 });
 
@@ -137,6 +183,13 @@ describe("buildCommands grouping", () => {
 	});
 });
 
+describe("buildCommands global", () => {
+	it("offers a Go to home command that navigates to the root route", () => {
+		const home = buildCommands({ workspaces: [] }).find((item) => item.id === "global-home");
+		expect(home).toMatchObject({ group: "global", action: { kind: "navigate", target: { to: "/" } } });
+	});
+});
+
 describe("buildCommands attention", () => {
 	it("includes ready-to-merge AND attention-needing sessions, ordered merge-first", () => {
 		const items = buildCommands({ workspaces: workspaces() });
@@ -153,6 +206,18 @@ describe("buildCommands attention", () => {
 		const ids = new Set(items.map((item) => item.id));
 		expect(ids.has("attention:w-merge")).toBe(false);
 		expect(ids.has("attention:w-action")).toBe(true);
+	});
+
+	it("leaves archived sessions out of Needs attention", () => {
+		const rows = workspaces();
+		rows[0].sessions.push(
+			session({ id: "w-archived-action", status: "needs_input", isTerminated: true }),
+			session({ id: "w-archived-merge", status: "merged", isTerminated: true }),
+		);
+		const map = byId(buildCommands({ workspaces: rows }));
+		expect(map.has("attention:w-archived-action")).toBe(false);
+		expect(map.has("attention:w-archived-merge")).toBe(false);
+		expect(map.get("session:w-archived-action")?.searchOnly).toBe(true);
 	});
 });
 
@@ -597,11 +662,15 @@ describe("groupCommands", () => {
 	});
 });
 
-describe("session rows open the actions panel", () => {
-	it("emits open-session-actions for session rows while PR rows stay navigate", () => {
+describe("session rows jump to the session", () => {
+	it("navigates on Enter and keeps the actions panel as the Cmd+Enter alternative", () => {
 		const items = buildCommands({ workspaces: workspaces() });
 		const map = byId(items);
-		expect(map.get("attention:w-merge")?.action).toEqual({ kind: "open-session-actions", sessionId: "w-merge" });
+		expect(map.get("attention:w-merge")?.action).toEqual({
+			kind: "navigate",
+			target: { to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "proj-1", sessionId: "w-merge" } },
+		});
+		expect(map.get("attention:w-merge")?.secondaryAction).toEqual({ kind: "open-session-actions", sessionId: "w-merge" });
 		expect(map.get("pr:w-pr:42")?.action?.kind).toBe("navigate");
 		expect(map.get("project:proj-1")?.action?.kind).toBe("navigate");
 	});
@@ -670,5 +739,70 @@ describe("buildSessionActions", () => {
 	it("omits Copy branch for a synthetic branch", () => {
 		const items = buildSessionActions(workspace, session({ id: "syn", branch: "session/syn" }));
 		expect(items.some((i) => i.action?.kind === "copy-branch")).toBe(false);
+	});
+});
+
+
+describe("pending branch presentation", () => {
+	const pending = session({ id: "delegated", provisionState: "ready", provisionSteps: [{ id: "worktree", status: "running" }] });
+	it("keeps synchronous provisional names hidden while naming", () => {
+		expect(sessionBranchPresentation(pending)).toEqual({ branch: undefined, naming: true });
+	});
+	it.each([{ terminalHandleId: "terminal" }, { chatProviderPreserved: true }])("reveals a launched worker's branch despite stale progress: %j", (launched) => {
+		expect(sessionBranchPresentation({ ...pending, ...launched })).toEqual({ branch: pending.branch, naming: false });
+	});
+	it.each<Partial<WorkspaceSession>>([{ activity: { state: "exited", lastActivityAt: "2026-01-01T00:00:00Z" } }, { statusReadiness: "unavailable" }, { isTerminated: true }, { provisionState: "failed" }])("does not shimmer forever on a stopped or failed worker: %j", (stopped) => {
+		expect(sessionBranchPresentation({ ...pending, ...stopped })).toEqual({ branch: undefined, naming: false });
+	});
+	it("hides a task's branch while its generated name is on the way", () => {
+		const launched = session({ id: "mer-7", branch: "ao/mer-7/root", chatProviderPreserved: true, branchNaming: true });
+		expect(sessionBranchPresentation(launched)).toEqual({ branch: undefined, naming: true });
+		expect(sessionBranchPresentation({ ...launched, branch: "ao/login-redirect/root", branchNaming: false })).toEqual({ branch: "ao/login-redirect/root", naming: false });
+		expect(sessionBranchPresentation({ ...launched, isTerminated: true })).toEqual({ branch: "ao/mer-7/root", naming: false });
+		// A start that failed after launch has its worktree.
+		expect(sessionBranchPresentation({ ...launched, provisionState: "failed", provisionSteps: [{ id: "worktree", status: "done" }] })).toEqual({ branch: "ao/mer-7/root", naming: false });
+	});
+});
+
+describe("search groups", () => {
+	it("keep daemon results below local rows so Enter never moves to them", () => {
+		const local = buildCommands({ workspaces: workspaces() });
+		const file: CommandItem = { id: "file:x", group: "files", title: "app.ts", action: { kind: "toggle-theme" } };
+		const ids = displayGroups([...local, file], "app").map((group) => group.id);
+		expect(ids[ids.length - 1]).toBe("files");
+		expect(ids[0]).not.toBe("files");
+	});
+
+	it("are not cut by the local result cap", () => {
+		const projects: WorkspaceSummary[] = Array.from({ length: 50 }, (_, i) => ({
+			id: `p${i}`, name: `project-${i}`, path: `/repos/p${i}`, type: "main" as const, sessions: [],
+		}));
+		const local = buildCommands({ workspaces: projects });
+		const chats: CommandItem[] = Array.from({ length: 3 }, (_, index) => ({
+			id: `message:${index}`, group: "messages", title: `project chat ${index}`, contentMatch: true,
+		}));
+		const groups = displayGroups([...local, ...chats], "project");
+		expect(groups.find((group) => group.id === "messages")?.items).toHaveLength(3);
+	});
+});
+
+describe("titleHighlights", () => {
+	it("marks the typed text, then each word, then loose letters", () => {
+		expect(titleHighlights("side", "Toggle sidebar")).toEqual([{ start: 7, end: 11 }]);
+		expect(titleHighlights("toggle bar", "Toggle sidebar")).toEqual([{ start: 0, end: 6 }, { start: 11, end: 14 }]);
+		expect(titleHighlights("tgl", "Toggle")).toEqual([{ start: 0, end: 1 }, { start: 2, end: 3 }, { start: 4, end: 5 }]);
+		expect(titleHighlights("zz", "Toggle")).toEqual([]);
+	});
+});
+
+describe("loose keyword matches", () => {
+	const setting: CommandItem = { id: "setting:x", group: "settings", title: "Add account", keywords: ["subscriptions", "devices"] };
+
+	it("match a short query across keywords", () => {
+		expect(matchScore("sb", setting)).toBe(100);
+	});
+
+	it("do not match a longer query whose letters are only scattered across keywords", () => {
+		expect(matchScore("side", setting)).toBe(0);
 	});
 });

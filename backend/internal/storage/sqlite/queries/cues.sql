@@ -4,8 +4,8 @@
 
 -- name: InsertCue :exec
 INSERT INTO cues (
-    id, project_id, name, description, type, command, prompt, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+    id, project_id, name, type, command, prompt, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: SelectCueByID :one
 SELECT *
@@ -20,7 +20,7 @@ ORDER BY name;
 
 -- name: UpdateCue :one
 UPDATE cues
-SET name = ?, description = ?, type = ?, command = ?, prompt = ?, updated_at = ?
+SET name = ?, type = ?, command = ?, prompt = ?, updated_at = ?
 WHERE id = ?
 RETURNING *;
 

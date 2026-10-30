@@ -10,10 +10,14 @@ import {
 	type OrchestratorProjectRow,
 } from "./orchestratorView";
 import type { Theme } from "./theme";
+import type { HostedProjectRow } from "./hostedRows";
+import type { HostSnapshot } from "./otherHosts";
 import { rowDividerWidth } from "./divider";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { fontScaleCap, space, type } from "./tokens";
 import { Dot } from "./ui";
+import { MachineIdentity } from "./MachineIdentity";
+import { machineAppearance } from "./machineAppearance";
 
 /**
  * One project on the Projects page: who it is, how its fleet is doing, and the
@@ -31,7 +35,7 @@ export function ProjectCard({
 	onOpenProject,
 	onOrchestrator,
 }: {
-	row: OrchestratorProjectRow;
+	row: HostedProjectRow;
 	busy: boolean;
 	onOpenProject: (row: OrchestratorProjectRow) => void;
 	onOrchestrator: (row: OrchestratorProjectRow) => void;
@@ -46,7 +50,7 @@ export function ProjectCard({
 		<View style={styles.row}>
 			<Pressable
 				accessibilityRole="button"
-				accessibilityLabel={`${row.project.name}, ${status.label}, ${summary.workers}`}
+				accessibilityLabel={`${row.project.name}, ${row.project.hostName} machine, ${status.label}, ${summary.workers}`}
 				accessibilityHint="Opens the project"
 				onPress={() => onOpenProject(row)}
 				style={({ pressed }) => [styles.body, pressed && styles.pressed]}
@@ -55,6 +59,11 @@ export function ProjectCard({
 					<Text style={styles.project} numberOfLines={1}>
 						{row.project.name}
 					</Text>
+					<MachineIdentity
+						name={row.project.hostName}
+						appearance={machineAppearance({ id: row.project.hostId, name: row.project.hostName, appearance: row.project.hostAppearance })}
+						style={styles.machineIdentity}
+					/>
 					<Feather name="chevron-right" size={15} color={t.textFaint} />
 				</View>
 
@@ -130,6 +139,20 @@ function OrchestratorPill({
 			</Text>
 		</Pressable>
 	);
+}
+
+/** The machine owning a project route, shown as quiet context in its header. */
+export function ProjectMachineIndicator({
+	hostId,
+	hosts,
+}: {
+	hostId: string | undefined;
+	hosts: readonly Pick<HostSnapshot, "hostId" | "name" | "appearance">[];
+}) {
+	const styles = useThemedStyles(makeStyles);
+	const host = hosts.find((candidate) => candidate.hostId === hostId);
+	if (!host) return null;
+	return <MachineIdentity name={host.name} appearance={host.appearance} style={styles.projectMachineIdentity} testID="project-machine-identity" />;
 }
 
 /**
@@ -224,6 +247,8 @@ const makeStyles = (t: Theme) =>
 
 		titleRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
 		project: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
+		machineIdentity: { maxWidth: 120 },
+		projectMachineIdentity: { maxWidth: 132, flexShrink: 1 },
 		timestamp: { color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontVariant: ["tabular-nums"], fontFamily: t.fontMono },
 
 		summaryRow: { flexDirection: "row", alignItems: "center", minWidth: 0 },

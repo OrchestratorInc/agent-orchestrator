@@ -79,6 +79,14 @@ describe("classifyError — code overrides", () => {
 		});
 	});
 
+	it("a failed agent relaunch still reports although it answers 409", () => {
+		expect(classifyError({ category: "http_4xx", httpStatus: 409, code: "AGENT_RESUME_FAILED" })).toMatchObject({
+			severity: "P1",
+			owner: "ours",
+			report: true,
+		});
+	});
+
 	it("wrong pairing password is the user, not external", () => {
 		expect(classifyError({ category: "auth", code: "BAD_PASSWORD" })).toMatchObject({ owner: "user" });
 		expect(classifyError({ category: "auth" })).toMatchObject({ owner: "external" }); // default without code

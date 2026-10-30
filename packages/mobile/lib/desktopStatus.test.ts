@@ -37,12 +37,29 @@ describe("describeDesktopStatus", () => {
 		});
 	});
 
-	it("names the cause when the desktop answered with a rejection", () => {
+	it("names the cause when the machine answered with a rejection", () => {
 		const label = (failure: Parameters<typeof describeDesktopStatus>[0]["failure"]) =>
 			describeDesktopStatus({ configured: true, connection: "closed", failure }).label;
 		expect(label("auth")).toBe("Password rejected");
 		expect(label("rate-limited")).toBe("Locked out");
-		expect(label("server-error")).toBe("Desktop error");
+		expect(label("server-error")).toBe("Machine error");
 		expect(label("tunnel-rotated")).toBe("Address changed");
+	});
+
+	// The phone's own network is not the machine's fault.
+	it("says the phone is offline instead of blaming the machine", () => {
+		expect(describeDesktopStatus({ configured: true, connection: "closed", failure: "unreachable", link: "phone-offline" })).toEqual({
+			label: "Phone offline",
+			tone: "neutral",
+		});
+	});
+
+	it("reads one unanswered poll as reconnecting, not unreachable", () => {
+		expect(describeDesktopStatus({ configured: true, connection: "closed", failure: "unreachable", link: "reconnecting" })).toEqual({
+			label: "Reconnecting…",
+			tone: "neutral",
+		});
+		// A rejection is still a rejection.
+		expect(describeDesktopStatus({ configured: true, connection: "closed", failure: "auth", link: "reconnecting" }).label).toBe("Password rejected");
 	});
 });

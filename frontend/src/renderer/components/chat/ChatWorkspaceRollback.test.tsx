@@ -7,18 +7,13 @@
  * lost, and the turn id that reaches the daemon is the one that was clicked.
  */
 
-import { render as rtlRender, screen, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { chatFixture } from "../../lib/chat-fixture";
 import type { ConversationSnapshot } from "../../types/conversation";
-import { TooltipProvider } from "../ui/tooltip";
-
-function render(ui: ReactElement) {
-	return rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-}
+import { renderChat as render } from "../../test/render-chat";
 
 /** A conversation with nothing in flight, which is when an undo is offered. */
 function idleSnapshot(): ConversationSnapshot {
@@ -73,11 +68,11 @@ describe("ChatWorkspace rollback", () => {
 		expect(onRollback).not.toHaveBeenCalled();
 	});
 
-	// The daemon refuses a rollback mid-turn. A control that exists only to be
-	// refused is worse than one that waits for the agent to finish.
-	it("withholds the control while a turn is in flight", () => {
+	// Keep the action slot stable while a turn is in flight; it becomes available
+	// when the response settles without shifting the message footer.
+	it("keeps the rollback control mounted but disabled while a turn is in flight", () => {
 		render(<ChatWorkspace snapshot={chatFixture} onRollback={vi.fn()} />);
-		expect(screen.queryByRole("button", { name: "Roll back to here" })).toBeNull();
+		expect(screen.getAllByRole("button", { name: "Roll back to here" })[0]).toBeDisabled();
 	});
 
 	// Feature detection reaches the UI as an absent callback, following how the model

@@ -59,11 +59,14 @@ function useDiagramTheme(): DiagramTheme {
 export const MermaidBlock = memo(function MermaidBlock({
 	code,
 	streaming = false,
+	interactive = true,
 	onLinkOpen,
 }: {
 	code: string;
 	/** Text still arriving. A block that changes per delta is not worth laying out. */
 	streaming?: boolean;
+	/** Passive document thumbnails render the diagram without buttons or link actions. */
+	interactive?: boolean;
 	/**
 	 * Where a web link inside the diagram goes. Chat passes its AO Browser
 	 * handler; surfaces without one (file preview) leave it undefined and
@@ -142,10 +145,10 @@ export const MermaidBlock = memo(function MermaidBlock({
 	return (
 		<div className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface">
 			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
-				<span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+				<span className="text-caption text-muted-foreground">
 					mermaid
 				</span>
-				<div className="ml-auto flex items-center gap-1.5">
+				{interactive ? <div className="ml-auto flex items-center gap-1.5">
 					{svg !== undefined ? (
 						<div
 							role="group"
@@ -157,7 +160,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 								onClick={() => setShowSource(false)}
 								aria-pressed={!showSource}
 								className={cn(
-									"rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide transition-colors",
+									"rounded px-2 py-0.5 text-xs transition-colors",
 									showSource
 										? "text-muted-foreground hover:text-foreground"
 										: "bg-raised text-foreground",
@@ -170,7 +173,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 								onClick={() => setShowSource(true)}
 								aria-pressed={showSource}
 								className={cn(
-									"rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide transition-colors",
+									"rounded px-2 py-0.5 text-xs transition-colors",
 									showSource
 										? "bg-raised text-foreground"
 										: "text-muted-foreground hover:text-foreground",
@@ -183,7 +186,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 					<div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/code:opacity-100">
 						<CopyButton text={code} label="Copy diagram source" />
 					</div>
-				</div>
+				</div> : null}
 			</div>
 			{showingDiagram ? (
 				<div className="overflow-x-auto bg-background px-3 py-3">
@@ -197,8 +200,8 @@ export const MermaidBlock = memo(function MermaidBlock({
 						data-testid="mermaid-diagram"
 						role="img"
 						aria-label="Mermaid diagram"
-						onClick={onDiagramClick}
-						onAuxClick={onDiagramAuxClick}
+						onClick={interactive ? onDiagramClick : undefined}
+						onAuxClick={interactive ? onDiagramAuxClick : undefined}
 						// The theme already matches AO's: the diagram re-renders with
 						// mermaid's dark theme when AO is dark (see
 						// useDiagramTheme), so no CSS inversion is applied here.
@@ -208,11 +211,11 @@ export const MermaidBlock = memo(function MermaidBlock({
 				</div>
 			) : (
 				<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
-					<code className="font-mono text-[12px] leading-[1.6] text-foreground">{code}</code>
+					<code className="font-mono text-xs leading-[1.6] text-foreground">{code}</code>
 				</pre>
 			)}
 			{failed && !showSource ? (
-				<div className="border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground">
+				<div className="border-t border-border px-3 py-1.5 text-caption text-muted-foreground">
 					Couldn&apos;t render this diagram — showing its source.
 				</div>
 			) : null}

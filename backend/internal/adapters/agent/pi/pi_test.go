@@ -414,3 +414,18 @@ func TestResolvePiBinaryContextCanceled(t *testing.T) {
 		t.Fatalf("ResolvePiBinary err = %v, want context.Canceled", err)
 	}
 }
+
+func TestRestorePreservesThinkingLevel(t *testing.T) {
+	p := &Plugin{resolvedBinary: "pi"}
+	cmd, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Config:  ports.AgentConfig{Model: "anthropic/claude-sonnet-4", Effort: "high"},
+		Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "019e950e-52e0-7411-961b-d380ca7e610f"}},
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore = %v, %v", ok, err)
+	}
+	want := []string{"pi", "--model", "anthropic/claude-sonnet-4", "--thinking", "high", "--session", "019e950e-52e0-7411-961b-d380ca7e610f"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("argv = %q, want %q", cmd, want)
+	}
+}

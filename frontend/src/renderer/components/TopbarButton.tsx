@@ -40,7 +40,7 @@ export function TopbarButton({
 	variant,
 	type = "button",
 	...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof topbarButtonVariants>) {
+}: React.ComponentProps<"button"> & VariantProps<typeof topbarButtonVariants>) {
 	return <button className={cn(topbarButtonVariants({ variant }), className)} type={type} {...props} />;
 }
 

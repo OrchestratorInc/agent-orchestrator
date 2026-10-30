@@ -154,6 +154,10 @@ const (
 	// the person to answer. It is not an approval: accepting a tool and supplying
 	// form data have different response contracts and different UI.
 	ActivityKindUserInput ActivityKind = "user_input"
+	// ActivityKindAOAction is a daemon-confirmed product mutation. The neutral
+	// action name lives in detail, not in a new kind per operation, so Chat can
+	// label the outcome without reading command text or tool prose.
+	ActivityKindAOAction ActivityKind = "ao_action"
 )
 
 // ActivityStatus is the lifecycle of one activity. A provider may omit an item's
@@ -282,6 +286,10 @@ type ConversationBranch struct {
 	ProviderIDsScoped bool      `json:"-"`
 	Active            bool      `json:"active"`
 	CreatedAt         time.Time `json:"createdAt"`
+
+	// HandoffNote is the note a provider switch gave this branch's provider.
+	// It is re-applied when that provider restarts and never reaches a client.
+	HandoffNote string `json:"-"`
 }
 
 // ConversationBranchPoint describes the sibling continuations available at one
@@ -395,19 +403,22 @@ type ConversationModelReroute struct {
 }
 
 // ConversationAccount is the provider account a conversation runs under.
-//
-// ReauthRequiredAt is the load-bearing field. A long-lived chat session outlives
-// its credentials, and a provider that cannot refresh them stops answering for a
-// reason that has nothing to do with the request. Recording the moment the
-// provider asked for fresh credentials is what lets a client say "sign in again"
-// instead of showing an unexplained failed turn.
 type ConversationAccount struct {
+	// AuthenticationState is unknown until the provider supplies failure or success evidence.
+	AuthenticationState string     `json:"authenticationState,omitempty"`
+	AuthVerifiedAt      *time.Time `json:"authVerifiedAt,omitempty"`
+	// Failure evidence survives recovery; current credential demand is separate below.
+	LastAuthFailureAt     *time.Time `json:"lastAuthFailureAt,omitempty"`
+	LastAuthFailureReason string     `json:"lastAuthFailureReason,omitempty"`
+	AuthFailureID         string     `json:"authFailureId,omitempty"`
+	// AuthChangedAt fences success from a turn started before an account/auth-mode change.
+	AuthChangedAt *time.Time `json:"authChangedAt,omitempty"`
 	// AuthMode is the provider's name for how it authenticates (chatgpt, apikey...).
 	AuthMode string `json:"authMode,omitempty"`
 	// PlanLabel is the account tier the provider reports.
 	PlanLabel string `json:"planLabel,omitempty"`
 	// ReauthRequiredAt is when the provider last asked for credentials AO does not
-	// hold. Nil means it never has.
+	// hold. Nil means there is no current demand.
 	ReauthRequiredAt *time.Time `json:"reauthRequiredAt,omitempty"`
 	// ReauthReason is the provider's stated reason, e.g. "unauthorized".
 	ReauthReason string `json:"reauthReason,omitempty"`
@@ -480,6 +491,10 @@ type ConversationPlan struct {
 	// Explanation is the agent's note about the plan as a whole, when it gives one.
 	Explanation string                 `json:"explanation,omitempty"`
 	Steps       []ConversationPlanStep `json:"steps"`
+	// SpansTurns marks a list the agent keeps across turns, such as Claude's task
+	// list, rather than one plan per turn. A turn ending says nothing about its
+	// steps, and the copy each later turn receives is the same list, not a new plan.
+	SpansTurns bool `json:"spansTurns,omitempty"`
 }
 
 // ConversationPlanStep is one step of a plan.
@@ -499,11 +514,21 @@ type ConversationSettings struct {
 	Model string `json:"model,omitempty"`
 	// ReasoningEffort is how much thinking to spend, from the model's own list.
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	// FastMode asks for the provider's faster tier. It is held for the life of
+	// the controller and not stored: a restart returns to the standard tier,
+	// which is the cheaper way to be wrong.
+	FastMode bool `json:"fastMode,omitempty"`
+	// PlanMode asks the provider to plan rather than act, where AO sets that per
+	// turn. Like FastMode it is held for the life of the controller only.
+	PlanMode bool `json:"planMode,omitempty"`
 	// ApprovalMode is AO's permission vocabulary, applied per turn.
 	ApprovalMode PermissionMode `json:"approvalMode,omitempty"`
 	// OpenCodeMode is the provider-owned mode explicitly selected through ACP.
 	// It is separate from approval policy and restored before accepting turns.
 	OpenCodeMode string `json:"openCodeMode,omitempty"`
+	// AutoCompactWindow is where Claude Code compacts on its own: "200k" or
+	// "1m". Empty leaves it to Claude Code. It is read when the agent starts.
+	AutoCompactWindow string `json:"autoCompactWindow,omitempty"`
 }
 
 // ConversationTurn is one user or automation request plus the agent work it
@@ -523,18 +548,24 @@ type ConversationTurn struct {
 	HandledByReviewID string `json:"handledByReviewId,omitempty"`
 	// ProviderTurnID correlates back to the provider's own turn. Opaque.
 	ProviderTurnID string `json:"providerTurnId,omitempty"`
+	// ProviderInputText identifies a combined native prompt during history replay.
+	// The public transcript continues to use the individual message rows.
+	ProviderInputText string `json:"-"`
 	// RetryOfTurnID is the failed source whose durable prompt created this turn.
 	// It remains present after rollback so the source cannot offer a dead action.
 	RetryOfTurnID string `json:"retryOfTurnId,omitempty"`
 	// HasRetryAttempt is a snapshot-only fact derived from every durable retry
 	// relation, including attempts outside the active provider branch.
-	HasRetryAttempt bool      `json:"hasRetryAttempt,omitempty"`
-	State           TurnState `json:"state"`
+	HasRetryAttempt bool `json:"hasRetryAttempt,omitempty"`
+	// HasHumanPrompt is a snapshot-only fact independent of timeline pagination.
+	HasHumanPrompt bool      `json:"hasHumanPrompt,omitempty"`
+	State          TurnState `json:"state"`
 	// ErrorMessage is set for failed turns. Interrupted turns are not errors.
-	ErrorMessage string     `json:"errorMessage,omitempty"`
-	RequestedAt  time.Time  `json:"requestedAt"`
-	StartedAt    *time.Time `json:"startedAt,omitempty"`
-	CompletedAt  *time.Time `json:"completedAt,omitempty"`
+	ErrorMessage string                  `json:"errorMessage,omitempty"`
+	UsageLimit   *ConversationUsageLimit `json:"usageLimit,omitempty"`
+	RequestedAt  time.Time               `json:"requestedAt"`
+	StartedAt    *time.Time              `json:"startedAt,omitempty"`
+	CompletedAt  *time.Time              `json:"completedAt,omitempty"`
 	// RolledBackAt is set when a rollback discarded this turn provider-side. The
 	// row survives because AO does not destroy durable facts, but the agent no
 	// longer remembers the exchange, so its messages and activities are left out
@@ -602,8 +633,11 @@ type QueuedTurn struct {
 	Text   string
 	// ClientMessageID is carried through to the provider so a dispatch retried
 	// after a crash cannot produce a second provider turn.
-	ClientMessageID string
-	Origin          MessageOrigin
+	ClientMessageID   string
+	Origin            MessageOrigin
+	SenderSessionID   string
+	SenderProjectID   string
+	SenderDisplayName string
 	// DeliveryContentJSON carries provider-neutral native prompt blocks through
 	// the durable queue. It is not rendered and never contains provider DTOs.
 	DeliveryContentJSON string
@@ -613,7 +647,9 @@ type QueuedTurn struct {
 // be dispatched again. Unlike QueuedTurn, its source was already sent and
 // settled; ActiveLineage says whether it still belongs to the visible branch.
 type RetryPrompt struct {
+	Continuation        bool
 	Text                string
+	ProviderInputText   string
 	Origin              MessageOrigin
 	DeliveryContentJSON string
 	ActiveLineage       bool
@@ -621,30 +657,43 @@ type RetryPrompt struct {
 
 // ConversationMessage is one readable block of text.
 type ConversationMessage struct {
-	ID             string `json:"id"`
-	ConversationID string `json:"conversationId"`
-	TurnID         string `json:"turnId,omitempty"`
-	Sequence       int64  `json:"sequence"`
+	// InteractionAt is an internal write fact, independent of history CreatedAt.
+	InteractionAt  time.Time `json:"-"`
+	ID             string    `json:"id"`
+	ConversationID string    `json:"conversationId"`
+	TurnID         string    `json:"turnId,omitempty"`
+	Sequence       int64     `json:"sequence"`
 	// Revision increases each time streaming rewrites this message's text, so a
 	// client can detect a gap and resync instead of rendering stale text.
 	Revision int64         `json:"revision"`
 	Role     MessageRole   `json:"role"`
 	Origin   MessageOrigin `json:"origin"`
 	Text     string        `json:"text"`
+	// Continuation marks the user's one-click "continue" after stopping a turn.
+	// The agent receives Text like any message; the timeline shows a marker
+	// instead of a message bubble.
+	Continuation bool `json:"continuation,omitempty"`
 	// AuthoredByUser is an intake-only fact used to project user activity when
 	// AO delivered the message as automation. It is not part of the persisted
 	// delivery origin or the conversation API representation.
-	AuthoredByUser bool `json:"-"`
+	AuthoredByUser     bool `json:"-"`
+	SpawnOpeningPrompt bool `json:"-"`
 	// Streaming is true while more deltas are expected.
 	Streaming bool `json:"streaming"`
 	// ProviderItemID deduplicates provider observations of the same message.
 	ProviderItemID string `json:"providerItemId,omitempty"`
 	// ClientMessageID is the caller-supplied idempotency key for user messages.
 	// A retry carrying the same key must not create a second provider turn.
-	ClientMessageID     string    `json:"clientMessageId,omitempty"`
-	DeliveryContentJSON string    `json:"-"`
-	CreatedAt           time.Time `json:"createdAt"`
-	UpdatedAt           time.Time `json:"updatedAt"`
+	ClientMessageID     string `json:"clientMessageId,omitempty"`
+	ClientPayloadHash   string `json:"-"`
+	DeliveryContentJSON string `json:"-"`
+	// Sender metadata is presentation data for automation-origin messages. The
+	// display name is intentionally a send-time snapshot; the session id is stable.
+	SenderSessionID   string    `json:"senderSessionId,omitempty"`
+	SenderProjectID   string    `json:"senderProjectId,omitempty"`
+	SenderDisplayName string    `json:"senderDisplayName,omitempty"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
 // ConversationActivity is one non-message timeline entry: a command, a diff, a
@@ -709,10 +758,22 @@ var ErrNoQueuedTurn = errors.New("no queued turn")
 // ErrSessionNotProvisioning rejects a pre-controller turn after startup ended.
 var ErrSessionNotProvisioning = errors.New("session is not provisioning")
 
+// ErrConversationRebound rejects a pre-controller turn aimed at a conversation the
+// session no longer holds, such as an orchestrator's provisioning row after its
+// first controller moved the queue to the project conversation. The caller should
+// look the session's conversation up again.
+var ErrConversationRebound = errors.New("conversation is no longer bound to the session")
+
 // ErrNoConversationTurn reports a turn id that is not in the conversation it was
 // named against. It lives here rather than in the storage layer so a controller and
 // an HTTP handler can both recognize it without importing SQLite.
 var ErrNoConversationTurn = errors.New("conversation turn not found")
+
+// ErrClientMessageConflict refuses reuse of a delivery ID for different content.
+var ErrClientMessageConflict = errors.New("client message id belongs to a different message")
+
+// ErrConversationAutoResumeNotDue preserves consent when its deadline moved.
+var ErrConversationAutoResumeNotDue = errors.New("usage-limit reset time has not arrived")
 
 // ErrNoConversationBranch reports a branch id outside the named conversation.
 var ErrNoConversationBranch = errors.New("conversation branch not found")

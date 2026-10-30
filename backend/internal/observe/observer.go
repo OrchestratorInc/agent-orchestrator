@@ -24,6 +24,14 @@ import (
 // poll errors other than context.Canceled are logged via logger with name as a
 // prefix, e.g. name="scm observer" -> "scm observer: initial poll failed".
 func StartPollLoop(ctx context.Context, tick time.Duration, poll func(context.Context) error, logger *slog.Logger, name string) <-chan struct{} {
+	return StartTriggeredPollLoop(ctx, tick, nil, poll, logger, name)
+}
+
+// StartTriggeredPollLoop is StartPollLoop that also polls as soon as trigger
+// receives, so a caller that knows the provider just changed need not wait for
+// the next tick. A trigger arriving mid-poll runs one more poll right after it.
+// A nil trigger never fires.
+func StartTriggeredPollLoop(ctx context.Context, tick time.Duration, trigger <-chan struct{}, poll func(context.Context) error, logger *slog.Logger, name string) <-chan struct{} {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -40,9 +48,10 @@ func StartPollLoop(ctx context.Context, tick time.Duration, poll func(context.Co
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if err := poll(ctx); err != nil && !errors.Is(err, context.Canceled) {
-					logger.Error(name+": poll failed", "err", err)
-				}
+			case <-trigger:
+			}
+			if err := poll(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error(name+": poll failed", "err", err)
 			}
 		}
 	}()
@@ -55,22 +64,22 @@ func StartPollLoop(ctx context.Context, tick time.Duration, poll func(context.Co
 // should surface, and (true, nil) when credentials are available.
 type CredentialProbe func(ctx context.Context) (available bool, err error)
 
-// CheckCredentialsOnce runs probe at most once. The caller owns checked/disabled
-// state via pointer so the observer struct keeps a single source of truth.
+// CheckCredentialsOnce caches an available verdict but retries an unavailable
+// verdict on subsequent polls, so signing in later resumes observation. The
+// caller owns checked/disabled state via pointer.
 //
 // State transitions:
 //   - probe == nil           → *checked = true, returns (true, nil). No gate.
 //   - probe returns err      → state unchanged, returns (false, nil). Retried next tick.
-//   - probe returns false    → *checked = true, *disabled = true, returns (false, nil). Observer stays disabled.
-//   - probe returns true     → *checked = true, returns (true, nil). Subsequent calls bypass the probe.
+//   - probe returns false    → *checked = true, *disabled = true, returns (false, nil). Retried next tick.
+//   - probe returns true     → *checked = true, *disabled = false, returns (true, nil). Subsequent calls bypass the probe.
 //
-// Subsequent calls after the probe has run return (!*disabled, nil) so the
-// disabled verdict is honoured on every poll, not just the first one.
+// The unavailable warning is emitted only when entering disabled state.
 //
 // A context-cancellation before the probe returns (false, ctx.Err()).
 func CheckCredentialsOnce(ctx context.Context, probe CredentialProbe, checked, disabled *bool, logger *slog.Logger, name string) (bool, error) {
-	if *checked {
-		return !*disabled, nil
+	if *checked && !*disabled {
+		return true, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -80,19 +89,25 @@ func CheckCredentialsOnce(ctx context.Context, probe CredentialProbe, checked, d
 	}
 	if probe == nil {
 		*checked = true
+		*disabled = false
 		return true, nil
 	}
 	available, err := probe(ctx)
 	if err != nil {
-		logger.Warn(name+" credentials check failed; will retry", "err", err)
+		if !*checked {
+			logger.Warn(name+" credentials check failed; will retry", "err", err)
+		}
 		return false, nil
 	}
 	*checked = true
 	if !available {
+		if !*disabled {
+			logger.Warn(name + " disabled: provider credentials unavailable")
+		}
 		*disabled = true
-		logger.Warn(name + " disabled: provider credentials unavailable")
 		return false, nil
 	}
+	*disabled = false
 	return true, nil
 }
 

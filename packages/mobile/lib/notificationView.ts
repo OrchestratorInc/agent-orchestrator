@@ -2,6 +2,7 @@
 // or Expo imports — so the wording and the routing decision are unit-testable,
 // the same split as pushStatus.ts / push.ts.
 import type { Theme } from "./theme";
+import type { MachineAppearance } from "./machineAppearance";
 
 export type NotificationVisual = {
 	/** lucide icon names, drawn from the renderer's own path data. */
@@ -19,6 +20,34 @@ export type NotificationSection<T> = {
 	title?: "Needs attention";
 	data: T[];
 };
+
+export type HostedNotification<T> = T & {
+	hostId: string;
+	hostName: string;
+	hostAppearance?: MachineAppearance;
+};
+
+/** Stable identity for an item whose daemon-local id may exist on another host. */
+export function notificationIdentity(hostId: string, id: string): string {
+	return `${hostId}:${id}`;
+}
+
+/** Adds the owning machine to daemon records and produces one recent-first feed. */
+export function notificationsAcrossHosts<T extends { id: string; createdAt: string }>(
+	batches: readonly { hostId: string; hostName: string; hostAppearance?: MachineAppearance; items: readonly T[] }[],
+): HostedNotification<T>[] {
+	return batches
+		.flatMap(({ hostId, hostName, hostAppearance, items }) => items.map((item) => ({ ...item, hostId, hostName, hostAppearance })))
+		.sort((left, right) => {
+			const recentFirst = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+			if (Number.isFinite(recentFirst) && recentFirst !== 0) return recentFirst;
+			return `${left.hostId}:${left.id}`.localeCompare(`${right.hostId}:${right.id}`);
+		});
+}
+
+export function notificationRowsForHost<T>(items: readonly T[], itemsHostId: string | undefined, activeHostId: string | undefined): readonly T[] {
+	return activeHostId && itemsHostId === activeHostId ? items : [];
+}
 
 /**
  * Keeps actionable unread history ahead of settled items without disturbing
@@ -63,12 +92,17 @@ export function notificationVisual(t: Theme, type: string): NotificationVisual {
  * opening it from the tray agree — the rule lives here rather than being written
  * twice.
  */
-export function notificationTarget(n: { type: string; sessionId?: string; prUrl?: string }): string {
+export function notificationTarget(n: { type: string; sessionId?: string; hostId?: string; prUrl?: string }, knownHosts: string | ReadonlySet<string> | undefined): string {
+	// An older push has no machine identity. It cannot safely open (or mark read)
+	// a same-ID session on whichever machine is currently selected. History passes
+	// its current host; push taps can name any paired host.
+	if (!n.hostId || !(typeof knownHosts === "string" ? n.hostId === knownHosts : knownHosts?.has(n.hostId))) return "/";
 	const sessionId = n.sessionId?.trim();
+	const hostId = encodeURIComponent(n.hostId);
 	if ((n.type === "review_completed" || n.type === "review_changes_requested") && sessionId && n.prUrl) {
-		return `/review/${encodeURIComponent(sessionId)}?prUrl=${encodeURIComponent(n.prUrl)}`;
+		return `/review/${encodeURIComponent(sessionId)}?prUrl=${encodeURIComponent(n.prUrl)}&hostId=${hostId}`;
 	}
-	return n.type === "needs_input" && sessionId ? `/session/${encodeURIComponent(sessionId)}` : "/prs";
+	return n.type === "needs_input" && sessionId ? `/session/${encodeURIComponent(sessionId)}?hostId=${hostId}` : `/prs?hostId=${hostId}`;
 }
 
 /** Compact "3m" / "4h" / "2d" stamp. Returns "" for an unparseable timestamp. */

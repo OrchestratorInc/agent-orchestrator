@@ -3,6 +3,7 @@
 // the same split as orchestratorView.ts / projectFilter.ts.
 import type { DashboardSession, OrchestratorLink } from "../api";
 import { isSessionGone, shouldKeepPolling } from "../connectionError";
+import { hostRouteMatches } from "../hostRoute";
 import type { ConnStatus } from "../store";
 
 export type RouteSession = DashboardSession | OrchestratorLink;
@@ -19,11 +20,25 @@ export type KeyedSessionLookup = { key: string; lookup: SessionLookup };
 export type SessionRouteView =
 	| { kind: "screen"; session: RouteSession }
 	| { kind: "loading" }
+	| { kind: "wrongHost" }
 	| { kind: "unpaired" }
 	| { kind: "offline" }
 	| { kind: "ended" }
 	| { kind: "missing" }
 	| { kind: "failed" };
+
+/**
+ * Whether a session's runtime is gone, so its terminal screen should offer
+ * Restore instead of attaching.
+ *
+ * Decided on the runtime, not the outcome: a merged (or errored) session whose
+ * agent is still running keeps a live terminal. Same rule as the board's
+ * archive and the chat screen.
+ */
+export function isRuntimeGone(session: RouteSession): boolean {
+	if ("projectName" in session) return session.isTerminal === true || session.hasRuntime === false;
+	return session.isTerminated === true || session.status === "terminated";
+}
 
 const pending: SessionLookup = { state: "pending" };
 
@@ -93,13 +108,14 @@ export function sessionLookupDue(args: {
  * notification from one of those still routes here. So a miss is only a
  * question — the daemon answers it, and only a 404/410 is "not found".
  *
- * An unlisted session that has ended is reported as ended, not opened. Workers
- * are listed whether or not they have ended, so what reaches this is an
- * orchestrator the list dropped — and the session screens offer Restore on an
- * ended session. A restored old orchestrator would be the first live one in
+ * An unlisted orchestrator that has ended is reported as ended, not opened: it
+ * is one the list dropped, and the session screens offer Restore on an ended
+ * session. A restored old orchestrator would be the first live one in
  * session-number order, which is the one `bestByProject` keeps for the phone and
  * the one the daemon names as orchestrator in new workers' prompts
  * (`activeOrchestratorSessionID`), displacing the orchestrator that replaced it.
+ * An unlisted ended worker opens: a machine that pages its archive leaves
+ * archived workers out of the poll, and Restore is the way back for one of them.
  *
  * While the board is not connected, the route does not diagnose the link itself.
  * Telling a rotated tunnel from a rejected password from an unreachable machine
@@ -121,13 +137,19 @@ export function sessionRouteView(args: {
 	connection: ConnStatus;
 	loading: boolean;
 	lookup: SessionLookup;
+	routeHostId: string | undefined;
+	currentHostId: string | undefined;
 }): SessionRouteView {
-	if (args.configured === null) return { kind: "loading" };
+	if (args.configured === null && args.loading) return { kind: "loading" };
+	if (!hostRouteMatches(args.routeHostId, args.currentHostId)) return { kind: "wrongHost" };
+	if (args.configured === null) return args.connection === "connecting" ? { kind: "loading" } : { kind: "offline" };
 	if (!args.configured) return { kind: "unpaired" };
 	if (args.listed) return { kind: "screen", session: args.listed };
 	const { lookup } = args;
 	if (lookup.state === "found") {
-		return lookup.session.isTerminated ? { kind: "ended" } : { kind: "screen", session: lookup.session };
+		return lookup.session.isTerminated && lookup.session.kind === "orchestrator"
+			? { kind: "ended" }
+			: { kind: "screen", session: lookup.session };
 	}
 	if (lookup.state === "failed" && isSessionGone(lookup.status)) return { kind: "missing" };
 	if (args.connection !== "open") {

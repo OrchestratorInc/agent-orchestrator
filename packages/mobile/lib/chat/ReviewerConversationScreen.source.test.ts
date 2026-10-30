@@ -17,7 +17,7 @@ describe("reviewer conversation parity", () => {
 	});
 
 	it("stages reviewer attachments against the worker session", () => {
-		expect(source).toContain("useMobileConversation(config, workerSessionId, { reviewId, eventSessionId: workerSessionId }");
+		expect(source).toContain("useMobileConversation(hostMatches ? config : null, workerSessionId, { reviewId, eventSessionId: workerSessionId }");
 		expect(source).not.toContain("sessionId || reviewId");
 		expect(source).toContain("attachmentsEnabled={Boolean(workerSessionId)}");
 		expect(source).toContain("const workerSessionId = sessionId.trim()");
@@ -28,5 +28,16 @@ describe("reviewer conversation parity", () => {
 
 	it("does not offer ordinary-session rollback for a reviewer id", () => {
 		expect(source).not.toContain("onRollback=");
+	});
+
+	// The reviewer screen had React Native's avoider with no Android behaviour,
+	// so the keyboard covered the composer there.
+	it("shares the session chat's keyboard avoidance", () => {
+		expect(source).toContain("const chatKeyboard = useChatKeyboard();");
+		expect(source).toContain('from "react-native-keyboard-controller"');
+		expect(source).toContain("style={[styles.screen, chatKeyboard.rootStyle]}");
+		expect(source).toContain("restingInset={chatKeyboard.restingInset}");
+		expect(source).not.toContain("keyboardVerticalOffset={88}");
+		expect(readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8")).toContain("const chatKeyboard = useChatKeyboard();");
 	});
 });

@@ -9,21 +9,39 @@
 import { useQuery } from "@tanstack/react-query";
 import type { CloudCpOrgCoderConfig } from "../lib/cloud-cp";
 import { useCloudCp } from "./useCloudCp";
+import { useCloudOffering } from "./useCloudOffering";
 import { useCloudOrg } from "./useCloudOrg";
 
 export const orgCoderConfigQueryKey = ["cloud-org-coder-config"] as const;
 
-export function useOrgCoderConfig() {
+/**
+ * Read only for an org whose offering includes coder: the control plane
+ * answers 403 provider_forbidden for any other org. `enabled` lets a caller
+ * narrow it further. `orgId` reads that org's connection (for example the org
+ * a project belongs to) instead of the signed-in org's.
+ */
+export function useOrgCoderConfig(enabled = true, orgId?: string) {
 	const { client, ready } = useCloudCp();
 	const { org } = useCloudOrg();
-	const orgId = org?.id ?? "";
+	// The org's own Coder connection exists only for an org with the coder
+	// capability; the control plane refuses the read for everyone else.
+	const { customCoder } = useCloudOffering();
+	orgId = orgId?.trim() || (org?.id ?? "");
 	return useQuery({
 		queryKey: [...orgCoderConfigQueryKey, orgId],
-		enabled: ready && orgId !== "",
+		enabled: enabled && customCoder && ready && orgId !== "",
 		staleTime: 60_000,
-		queryFn: async (): Promise<CloudCpOrgCoderConfig | null> =>
+		queryFn: async (): Promise<CloudCpOrgCoderConfig | null> => {
+			const response = await client.getOrgCoderConfig(orgId);
 			// Default to null (never undefined) so React Query accepts the "no
-			// config yet" case — the common state for a newly-onboarded org.
-			(await client.getOrgCoderConfig(orgId)).coderConfig ?? null,
+			// config yet" case — the common state for a newly-onboarded org. A stored
+			// connection always carries a token (the PUT requires one) and the token
+			// itself is never returned, so surface its presence as tokenSet — the flag
+			// the templates catalog and the live template fetch unlock on. An older
+			// control plane answers only orgs that may save, so absent means editable.
+			return response.coderConfig
+				? { ...response.coderConfig, tokenSet: true, editable: response.editable !== false }
+				: null;
+		},
 	});
 }

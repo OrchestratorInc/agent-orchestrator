@@ -9,6 +9,10 @@
  * individual calls only when asked. The summary is not decoration: it counts what
  * the agent did by category, so a reader can tell "it looked around" from "it
  * changed something" without opening anything.
+ *
+ * While the turn is still running the run stays open, so a reader watching the
+ * agent sees each call as it happens and can steer before it goes off track; it
+ * folds back to its summary once the turn settles.
  */
 
 import { useState } from "react";
@@ -21,13 +25,35 @@ import {
 	commandCategory,
 	isNonzeroCommandExit,
 } from "./activity-command";
+import { aoActionName, summarizeAOActions } from "./activity-action";
 import { fileChangeFiles, type ConversationActivity } from "../../types/conversation";
 
-export function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
+export function ActivityRun({
+	activities,
+	disclosureKey,
+	disclosureOverrides,
+	onDisclosureChange,
+	live = false,
+}: {
+	activities: ConversationActivity[];
+	disclosureKey?: string;
+	disclosureOverrides?: Readonly<Record<string, boolean>>;
+	onDisclosureChange?: (key: string, open: boolean) => void;
+	/** The run belongs to a turn that is still running. */
+	live?: boolean;
+}) {
 	// null until someone decides, so a run holding a command that is printing right
 	// now can open itself and close again once everything settles. A click pins the
 	// choice either way.
-	const [override, setOverride] = useState<boolean | null>(null);
+	const [localOverride, setLocalOverride] = useState<boolean | null>(null);
+	const override = disclosureKey && disclosureOverrides
+		? disclosureOverrides[disclosureKey] ?? null
+		: localOverride;
+	const updateOverride = (key: string, open: boolean) => {
+		if (disclosureKey && onDisclosureChange) onDisclosureChange(key, open);
+		else setLocalOverride(open);
+	};
+	const overrides = disclosureOverrides ?? {};
 	const reducedMotion = useReducedMotion();
 	const running = activities.some((a) => a.status === "running");
 	const nonzeroExits = activities.filter(isNonzeroCommandExit).length;
@@ -58,10 +84,10 @@ export function ActivityRun({ activities }: { activities: ConversationActivity[]
 		return <ActivityRow activity={activities[0]!} />;
 	}
 
-	// Otherwise a command streaming output inside a run stays hidden behind this
-	// summary line, and the live output is live to nobody.
+	// Otherwise the calls of a running turn, and a command streaming output, stay
+	// hidden behind this summary line, and the live work is live to nobody.
 	const streamingOutput = activities.some((a) => a.status === "running" && Boolean(a.detail?.output));
-	const open = override ?? streamingOutput;
+	const open = override ?? (live || streamingOutput);
 
 	return (
 		<motion.div
@@ -72,30 +98,30 @@ export function ActivityRun({ activities }: { activities: ConversationActivity[]
 		>
 			<button
 				type="button"
-				onClick={() => setOverride(!open)}
+				onClick={() => updateOverride(disclosureKey ?? "", !open)}
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-run-toggle")}
 			>
-				<span className="activity-summary-label text-[11.5px] text-muted-foreground">
+				<span className="activity-summary-label text-xs text-muted-foreground">
 					<ActivityTransition value={summary} inline>{summary}</ActivityTransition>
 				</span>
 				{nonzeroExits > 0 ? (
-					<span className="text-[11px] text-muted-foreground/70">
+					<span className="text-caption text-muted-foreground/70">
 						{nonzeroExits} exited
 					</span>
 				) : null}
 				{failed > 0 ? (
-					<span className="text-[11px] text-destructive">
+					<span className="text-xs text-destructive">
 						{failed} failed
 					</span>
 				) : null}
 				{cancelled > 0 ? (
-					<span className="text-[11px] text-muted-foreground/70">
+					<span className="text-caption text-muted-foreground/70">
 						{cancelled} stopped
 					</span>
 				) : null}
 				{diffTotals.additions > 0 || diffTotals.deletions > 0 ? (
-					<span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
+					<span className="shrink-0 font-mono text-micro tabular-nums text-muted-foreground/70">
 						{diffTotals.additions > 0 ? (
 							<span className="text-success">+{diffTotals.additions}</span>
 						) : null}
@@ -133,13 +159,21 @@ export function ActivityRun({ activities }: { activities: ConversationActivity[]
 								? subgroups[0]!.activities.map((activity) => {
 										const node = nodesByActivityID.get(activity.id);
 										return node ? (
-											<ActivityTree key={activity.id} node={node} />
+											<ActivityTree key={activity.id} node={node} live={live} />
 										) : (
 											<ActivityRow key={activity.id} activity={activity} />
 										);
 								  })
 								: subgroups.map((group) => (
-										<ActivitySubgroup key={group.key} activities={group.activities} nodesByActivityID={nodesByActivityID} />
+										<ActivitySubgroup
+											key={group.activities.map((activity) => activity.id).join(":")}
+											disclosureKey={disclosureKey ? `${disclosureKey}:sub:${group.activities.map((activity) => activity.id).join(":")}` : undefined}
+											disclosureOverrides={overrides}
+											onDisclosureChange={updateOverride}
+											activities={group.activities}
+											nodesByActivityID={nodesByActivityID}
+											live={live}
+										/>
 								  ))}
 						</div>
 					</motion.div>
@@ -167,22 +201,39 @@ function activityGroupKey(activity: ConversationActivity): string {
 	if (activity.activityKind === "command") {
 		return `command:${commandCategory(activity.detail?.command ?? activity.summary)}${parentSuffix}`;
 	}
+	if (activity.activityKind === "ao_action") {
+		return `ao_action:${aoActionName(activity) || "unknown"}${parentSuffix}`;
+	}
 	return `${activity.activityKind}${parentSuffix}`;
 }
 
 function ActivitySubgroup({
 	activities,
 	nodesByActivityID,
+	disclosureKey,
+	disclosureOverrides,
+	onDisclosureChange,
+	live,
 }: {
 	activities: ConversationActivity[];
 	nodesByActivityID: ReadonlyMap<string, ActivityNode>;
+	disclosureKey?: string;
+	disclosureOverrides: Readonly<Record<string, boolean>>;
+	onDisclosureChange?: (key: string, open: boolean) => void;
+	live: boolean;
 }) {
-	const [override, setOverride] = useState<boolean | null>(null);
+	const [localOverride, setLocalOverride] = useState<boolean | null>(null);
 	const reducedMotion = useReducedMotion();
 	const streamingOutput = activities.some((activity) =>
 		activity.status === "running" && Boolean(activity.detail?.output),
 	);
-	const open = override ?? streamingOutput;
+	const open = disclosureKey
+		? disclosureOverrides[disclosureKey] ?? (live || streamingOutput)
+		: localOverride ?? (live || streamingOutput);
+	const updateOverride = (next: boolean) => {
+		if (disclosureKey && onDisclosureChange) onDisclosureChange(disclosureKey, next);
+		else setLocalOverride(next);
+	};
 	const hasNestedAgent = activities.some((activity) =>
 		nodesByActivityID.get(activity.id)?.children.length,
 	);
@@ -193,7 +244,7 @@ function ActivitySubgroup({
 				{activities.map((activity) => {
 					const node = nodesByActivityID.get(activity.id);
 					return node ? (
-						<ActivityTree key={activity.id} node={node} />
+						<ActivityTree key={activity.id} node={node} live={live} />
 					) : (
 						<ActivityRow key={activity.id} activity={activity} />
 					);
@@ -206,11 +257,11 @@ function ActivitySubgroup({
 		<div className="activity-subgroup">
 			<button
 				type="button"
-				onClick={() => setOverride(!open)}
+				onClick={() => updateOverride(!open)}
 				aria-expanded={open}
 				className={cn(ACTIVITY_SUMMARY_BUTTON_CLASS, "activity-subgroup-toggle")}
 			>
-				<span className="activity-summary-label text-[11px] text-muted-foreground">
+				<span className="activity-summary-label text-xs text-muted-foreground">
 					<ActivityTransition value={summarizeSubgroup(activities)} inline>
 						{summarizeSubgroup(activities)}
 					</ActivityTransition>
@@ -230,7 +281,7 @@ function ActivitySubgroup({
 							{activities.map((activity) => {
 								const node = nodesByActivityID.get(activity.id);
 								return node ? (
-									<ActivityTree key={activity.id} node={node} />
+									<ActivityTree key={activity.id} node={node} live={live} />
 								) : (
 									<ActivityRow key={activity.id} activity={activity} />
 								);
@@ -259,6 +310,7 @@ function summarizeSubgroup(activities: ConversationActivity[]): string {
 	if (first.activityKind === "auto_review") {
 		return `Checked ${activities.length} ${activities.length === 1 ? "decision" : "decisions"}`;
 	}
+	if (first.activityKind === "ao_action") return summarizeAOActions(activities);
 	if (first.activityKind === "plan") return "Updated plan";
 	const category = commandCategory(first.detail?.command ?? first.summary);
 	const verb = category === "read" || category === "search" ? "Explored" : "Ran";
@@ -267,28 +319,31 @@ function summarizeSubgroup(activities: ConversationActivity[]): string {
 
 type ActivityNode = { activity: ConversationActivity; children: ActivityNode[] };
 
-function ActivityTree({ node }: { node: ActivityNode }) {
+function ActivityTree({ node, live }: { node: ActivityNode; live: boolean }) {
 	return (
 		<div className="flex flex-col">
 			<ActivityRow activity={node.activity} />
-			{node.children.length > 0 ? <NestedAgentRun nodes={node.children} /> : null}
+			{node.children.length > 0 ? <NestedAgentRun nodes={node.children} live={live} /> : null}
 		</div>
 	);
 }
 
-function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
-	const [open, setOpen] = useState(false);
+function NestedAgentRun({ nodes, live }: { nodes: ActivityNode[]; live: boolean }) {
+	// null until someone clicks, so a subagent still working in a running turn
+	// shows its steps and folds away once it finishes.
+	const [override, setOverride] = useState<boolean | null>(null);
 	const reducedMotion = useReducedMotion();
 	const count = countNodes(nodes);
 	const running = nodes.some(nodeRunning);
+	const open = override ?? (live && running);
 	return (
 		<div className="mb-2 overflow-hidden bg-background/40">
 			<button
 				type="button"
-				onClick={() => setOpen((current) => !current)}
+				onClick={() => setOverride(!open)}
 				aria-label={`Subagent ${count} ${count === 1 ? "step" : "steps"}`}
 				aria-expanded={open}
-				className="activity-row-toggle flex min-h-8 w-full select-none items-center gap-2 text-left text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:outline-none"
+				className="activity-row-toggle flex min-h-8 w-full select-none items-center gap-2 text-left text-xs text-muted-foreground outline-none hover:text-foreground focus-visible:outline-none"
 			>
 				<span className="font-medium text-foreground/80">Subagent</span>
 				<span>{count} {count === 1 ? "step" : "steps"}</span>
@@ -304,7 +359,7 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 						transition={{ duration: reducedMotion ? 0 : 0.16, ease: [0.22, 1, 0.36, 1] }}
 						className="border-t border-border/70"
 					>
-					{nodes.map((node) => <ActivityTree key={node.activity.id} node={node} />)}
+					{nodes.map((node) => <ActivityTree key={node.activity.id} node={node} live={live} />)}
 					</motion.div>
 				) : null}
 			</AnimatePresence>
@@ -355,6 +410,7 @@ function nodeRunning(node: ActivityNode): boolean {
 
 function summarize(activities: ConversationActivity[]): string {
 	let toolCalls = 0;
+	let aoActions = 0;
 	let changedFiles = 0;
 	let exploratory = true;
 	let hasPlan = false;
@@ -362,6 +418,11 @@ function summarize(activities: ConversationActivity[]): string {
 	for (const activity of activities) {
 		if (activity.activityKind === "plan") {
 			hasPlan = true;
+			continue;
+		}
+		if (activity.activityKind === "ao_action") {
+			aoActions += 1;
+			exploratory = false;
 			continue;
 		}
 		toolCalls += 1;
@@ -377,12 +438,16 @@ function summarize(activities: ConversationActivity[]): string {
 		}
 	}
 
-	if (toolCalls === 0) return hasPlan ? "Updated plan" : `${activities.length} steps`;
+	if (toolCalls === 0) {
+		if (aoActions > 0) return summarizeAOActions(activities.filter((activity) => activity.activityKind === "ao_action"));
+		return hasPlan ? "Updated plan" : `${activities.length} steps`;
+	}
 	const label = `${exploratory ? "Explored" : "Ran"} ${toolCalls} ${toolCalls === 1 ? "tool call" : "tool calls"}`;
 	const details = [
 		changedFiles > 0
 			? `${changedFiles} ${changedFiles === 1 ? "file changed" : "files changed"}`
 			: undefined,
+		aoActions > 0 ? summarizeAOActions(activities.filter((activity) => activity.activityKind === "ao_action")) : undefined,
 		hasPlan ? "updated plan" : undefined,
 	].filter(Boolean);
 	return details.length ? `${label} · ${details.join(" · ")}` : label;

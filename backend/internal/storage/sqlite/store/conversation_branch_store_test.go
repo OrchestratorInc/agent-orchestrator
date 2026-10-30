@@ -715,6 +715,12 @@ func TestConversationBranchSnapshotFollowsOnlyActiveLineage(t *testing.T) {
 	activateTestBranch(t, s, session, conversation, child.ID, child.ProviderConversationID, "generation-child")
 	appendBranchPrompt(t, s, session, conversation, "generation-child", "b-edited", "B edited")
 	appendBranchPrompt(t, s, session, conversation, "generation-child", "c-edited", "C edited")
+	if err := s.SettleTurnByID(ctx, "turn-c-edited", domain.TurnStateCompleted, "", testNow); err != nil {
+		t.Fatal(err)
+	}
+	if settled, err := s.LatestVisibleUserTurnSettled(ctx, conversation.ID, session.ID); err != nil || !settled {
+		t.Fatalf("latest turn on child branch settled = %v, %v", settled, err)
+	}
 
 	childSnapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
 	if err != nil {
@@ -723,6 +729,9 @@ func TestConversationBranchSnapshotFollowsOnlyActiveLineage(t *testing.T) {
 	assertMessageTexts(t, childSnapshot.Messages, []string{"A", "B edited", "C edited"})
 
 	activateTestBranch(t, s, session, conversation, rootID, "thread-root", "generation-root-2")
+	if settled, err := s.LatestVisibleUserTurnSettled(ctx, conversation.ID, session.ID); err != nil || settled {
+		t.Fatalf("latest turn on root branch settled = %v, %v", settled, err)
+	}
 	rootSnapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
 	if err != nil {
 		t.Fatalf("LoadConversationSnapshot root: %v", err)
@@ -1054,6 +1063,68 @@ func TestCommitChatSpawnAtomicallyPublishesProviderBoundaryAndOwner(t *testing.T
 		gotSession.Metadata.ControllerGeneration != session.Metadata.ControllerGeneration {
 		t.Fatalf("committed provider owner = handle %q generation %q",
 			gotSession.Metadata.ProviderConversationID, gotSession.Metadata.ControllerGeneration)
+	}
+}
+
+// Queued intake runs on the fresh provider, so it must share that provider's
+// replay scope. Work the previous provider already received keeps its branch.
+func TestCommitChatSpawnMovesOnlyUndispatchedIntakeToProviderBoundary(t *testing.T) {
+	ctx := context.Background()
+	s, session, conversation := seededChatConversation(t)
+	rootID := conversation.ActiveBranchID
+	appendTurn := func(owner domain.SessionID, generation, turnID, text string) {
+		t.Helper()
+		created, err := s.AppendUserMessage(ctx, conversation.ID, owner, generation, domain.ConversationMessage{
+			ID: "message-" + turnID, Origin: domain.MessageOriginHuman, Text: text, ClientMessageID: "client-" + turnID,
+		}, turnID, testNow)
+		if err != nil || !created {
+			t.Fatalf("AppendUserMessage %s: created=%v err=%v", turnID, created, err)
+		}
+	}
+	appendTurn(session.ID, "generation-root", "turn-dispatched", "already sent")
+	if err := s.BindTurnToProvider(ctx, "turn-dispatched", "provider-turn-root", testNow); err != nil {
+		t.Fatalf("BindTurnToProvider: %v", err)
+	}
+	// A provisioning retry queues intake before its fresh controller exists.
+	if _, err := s.SetSessionProvisionState(ctx, session.ID, domain.SessionProvisionProvisioning, "", testNow); err != nil {
+		t.Fatalf("SetSessionProvisionState: %v", err)
+	}
+	appendTurn(session.ID, "", "turn-intake", "opening brief")
+
+	committedAt := testNow.Add(time.Minute)
+	session.ProvisionState = domain.SessionProvisionReady
+	session.Metadata.ProviderConversationID = "thread-fresh"
+	session.Metadata.ControllerGeneration = "generation-fresh"
+	session.UpdatedAt = committedAt
+	boundary := domain.ConversationBranch{
+		ID: "fresh-provider-boundary", ConversationID: conversation.ID, SessionID: session.ID,
+		ProviderConversationID: "thread-fresh", ParentBranchID: rootID,
+		ForkAfterSequence: 3, ProviderScopeID: "fresh-provider-boundary", CreatedAt: committedAt,
+	}
+	if err := s.CommitChatSpawn(ctx, session, boundary); err != nil {
+		t.Fatalf("CommitChatSpawn: %v", err)
+	}
+
+	snapshot, err := s.LoadConversationSnapshot(ctx, conversation.ID)
+	if err != nil {
+		t.Fatalf("LoadConversationSnapshot: %v", err)
+	}
+	want := map[string]string{"turn-dispatched": rootID, "turn-intake": boundary.ID}
+	for _, turn := range snapshot.Turns {
+		if branch, ok := want[turn.ID]; ok && turn.BranchID != branch {
+			t.Fatalf("turn %s branch = %q, want %q", turn.ID, turn.BranchID, branch)
+		}
+		delete(want, turn.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("turns missing from the active timeline: %v", want)
+	}
+	visible := false
+	for _, message := range snapshot.Messages {
+		visible = visible || message.TurnID == "turn-intake"
+	}
+	if !visible {
+		t.Fatalf("intake prompt hidden after the move: %+v", snapshot.Messages)
 	}
 }
 

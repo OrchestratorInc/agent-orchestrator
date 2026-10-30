@@ -14,6 +14,7 @@ import {
 } from "../types/workspace";
 import { ShellTopbar, TopbarArchiveButton } from "./ShellTopbar";
 import { TooltipProvider } from "./ui/tooltip";
+import { appShortcutBus } from "../test/app-shortcut-bus";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 
@@ -21,7 +22,7 @@ const { locationMock, navigateMock, onKilledMock, paramsMock, postMock, spawnMoc
 	locationMock: { pathname: "/" },
 	navigateMock: vi.fn(),
 	onKilledMock: vi.fn(),
-	paramsMock: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
+	paramsMock: { hostId: undefined as string | undefined, projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
 	postMock: vi.fn(),
 	spawnMock: vi.fn(),
 	useWorkspaceQueryMock: vi.fn(),
@@ -56,6 +57,8 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 		};
 	},
 	workspaceQueryKey: ["workspaces"],
+	remoteWorkspaceQueryKey: (hostId: string) => ["remote-workspaces", hostId],
+	workspaceQueryKeyForHost: (hostId?: string) => hostId ? ["remote-workspaces", hostId] : ["workspaces"],
 }));
 
 vi.mock("../lib/api-client", () => ({
@@ -78,12 +81,15 @@ vi.mock("../lib/spawn-orchestrator", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/spawn-orchestrator")>(),
 	spawnOrchestrator: spawnMock,
 }));
+vi.mock("../hooks/useHostConnection", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useHostConnection")>(),
+	useConnectedHosts: () => ["box-a"],
+}));
 vi.mock("../lib/telemetry", () => ({
 	addRendererExceptionStep: vi.fn(),
 	captureRendererEvent: vi.fn(),
 	captureRendererException: vi.fn(),
 }));
-vi.mock("./NewTaskDialog", () => ({ NewTaskDialog: () => null }));
 vi.mock("./NotificationCenter", () => ({
 	NotificationCenter: () => <button aria-label="Notifications" type="button" />,
 }));
@@ -125,19 +131,6 @@ function sessionWith(overrides: Partial<WorkspaceSession> = {}): WorkspaceSessio
 	return {
 		...worker,
 		activity: { state: "active", lastActivityAt: "2026-06-10T00:00:00Z" },
-		...overrides,
-	};
-}
-
-function activeAgentSwitch(
-	overrides: Partial<NonNullable<WorkspaceSession["activeAgentSwitch"]>> = {},
-): NonNullable<WorkspaceSession["activeAgentSwitch"]> {
-	return {
-		agentHandoffStatus: "received",
-		fromHarness: "claude-code",
-		id: "switch-1",
-		state: "starting_target",
-		targetHarness: "codex",
 		...overrides,
 	};
 }
@@ -217,11 +210,26 @@ beforeEach(() => {
 	onKilledMock.mockReset();
 	paramsMock.projectId = undefined;
 	paramsMock.sessionId = undefined;
+	paramsMock.hostId = undefined;
 	postMock.mockReset();
 	postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1" }, error: undefined });
 	useWorkspaceQueryMock.mockReset();
 	useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
-	useUiStore.setState({ inspectorSessions: {}, settingsModal: null });
+	useUiStore.setState({ inspectorSessions: {}, settingsModal: null, newTaskRequest: null });
+});
+
+describe("optimistic orchestrator topbar", () => {
+	it("uses the actual orchestrator actions before a session exists", () => {
+		useWorkspaceQueryMock.mockReturnValue({ data: [], isError: false, isLoading: false, isSuccess: true });
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider><ShellTopbar embedded startingOrchestrator /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByRole("button", { name: "New task" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Open Kanban" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Notifications" })).not.toBeInTheDocument();
+	});
 });
 
 describe("ShellTopbar route identity", () => {
@@ -237,6 +245,22 @@ describe("ShellTopbar route identity", () => {
 
 		const identity = screen.getByTestId("automations-topbar-label");
 		expect(identity).toHaveTextContent("Automations");
+		expect(screen.queryByTestId("board-topbar-label")).not.toBeInTheDocument();
+	});
+});
+
+describe("ShellTopbar Artifacts identity", () => {
+	it("identifies the Artifacts route instead of presenting it as the board", () => {
+		locationMock.pathname = "/artifacts";
+		render(
+			<QueryClientProvider client={new QueryClient()}>
+				<TooltipProvider>
+					<ShellTopbar />
+				</TooltipProvider>
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByTestId("artifacts-topbar-label")).toHaveTextContent("Artifacts");
 		expect(screen.queryByTestId("board-topbar-label")).not.toBeInTheDocument();
 	});
 });
@@ -295,7 +319,7 @@ describe("ShellTopbar status pill", () => {
 			true,
 			<>
 				<button type="button">New terminal</button>
-				<button type="button">Switch agent</button>
+				<button type="button">Session option</button>
 				<button type="button">Switch to chat UI</button>
 			</>,
 		);
@@ -306,10 +330,23 @@ describe("ShellTopbar status pill", () => {
 		expect(localActions).toHaveClass("gap-1");
 		expect(localActions).not.toHaveClass("gap-px", "mr-0.5");
 		expect(localActions.contains(screen.getByRole("button", { name: "New terminal" }))).toBe(true);
-		expect(localActions.contains(screen.getByRole("button", { name: "Switch agent" }))).toBe(true);
+		expect(localActions.contains(screen.getByRole("button", { name: "Session option" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Switch to chat UI" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Archive session" }))).toBe(true);
 		expect(localActions.contains(screen.getByRole("button", { name: "Open orchestrator" }))).toBe(false);
+	});
+
+	it("uses the same embedded actions for a remote session, routed to its host", async () => {
+		paramsMock.hostId = "box-a";
+		const view = renderTopbarSessions([{ ...worker, hostId: "box-a" }, { ...orchestrator, hostId: "box-a" }], worker.id, true);
+		expect(screen.getByRole("button", { name: "Archive session" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: /open in.*editor/i })).not.toBeInTheDocument();
+		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
+		expect(navigateMock).toHaveBeenCalledWith({ to: "/host/$hostId/project/$projectId/session/$sessionId", params: { hostId: "box-a", projectId: "proj-1", sessionId: "orch-1" } });
+		view.unmount();
+		renderTopbarSessions([{ ...orchestrator, hostId: "box-a" }], orchestrator.id, true);
+		await userEvent.click(screen.getByRole("button", { name: "New task" }));
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: "proj-1", hostId: "box-a" });
 	});
 
 	it("marks embedded session actions compact when requested", () => {
@@ -367,22 +404,6 @@ describe("ShellTopbar status pill", () => {
 		expect(screen.queryByText("session/sess-1")).not.toBeInTheDocument();
 		expect(screen.getByText("Working")).toBeInTheDocument();
 	});
-
-	it("shows switch progress instead of the exited source in the status pill", () => {
-		renderTopbar(sessionWith({
-			status: "exited",
-			activity: {
-				state: "exited",
-				lastActivityAt: "2026-06-10T00:00:00Z",
-			},
-			activeAgentSwitch: activeAgentSwitch(),
-		}));
-
-		const pill = screen.getByText("Switching to Codex").closest("span") as HTMLElement;
-		expect(pill).toHaveStyle({ color: "var(--color-status-working)" });
-		expect(pill.querySelector("span")).toHaveClass("animate-status-pulse");
-		expect(screen.queryByText("Exited")).not.toBeInTheDocument();
-	});
 });
 
 describe("ShellTopbar orchestrator actions", () => {
@@ -393,18 +414,19 @@ describe("ShellTopbar orchestrator actions", () => {
 		},
 	);
 
-	it.each([CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, "unknown"] as const)(
+	it.each(["single_repo", "multi_repo", CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, "unknown"] as const)(
 		"hides the board cue runner for %s projects", (kind) => {
 			renderTopbarSessions([orchestrator], "", false, undefined, kind as WorkspaceSummary["kind"]);
 			expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 		},
 	);
 
-	it("shows the play-icon cue runner for a worker session", () => {
-		renderTopbar(sessionWith());
+	it.each(["worker", "orchestrator"] as const)("shows the play-icon cue runner for a %s session", (kind) => {
+		renderTopbar(sessionWith({ kind }));
 
 		const runner = screen.getByRole("button", { name: "Run a cue" });
 		expect(runner.querySelector(".lucide-play")).not.toBeNull();
+		expect(runner).toBeEnabled();
 		expect(screen.getByTestId("workspace-topbar-actions")).toContainElement(runner);
 	});
 
@@ -423,7 +445,7 @@ describe("ShellTopbar orchestrator actions", () => {
 
 		const actions = screen.getByTestId("workspace-topbar-actions");
 		expect(actions.closest("header")).toHaveClass("workspace-topbar-container");
-		expect(screen.getByRole("button", { name: "Run a cue" }).querySelector(".lucide-play")).not.toBeNull();
+		expect(screen.queryByRole("button", { name: "Run a cue" })).not.toBeInTheDocument();
 	});
 
 	it.each([
@@ -448,7 +470,7 @@ describe("ShellTopbar orchestrator actions", () => {
 		if (!pulses) expect(indicator).not.toHaveClass("animate-status-pulse");
 	});
 
-	it("shows a rejected orchestrator resume request", async () => {
+	it("opens an exited orchestrator at once and shows a rejected resume request", async () => {
 		postMock.mockRejectedValueOnce(new Error("resume request failed"));
 		const exitedOrchestrator = {
 			...orchestrator,
@@ -460,7 +482,7 @@ describe("ShellTopbar orchestrator actions", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Orchestrator, Exited" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("resume request failed");
-		expect(navigateMock).not.toHaveBeenCalled();
+		expect(navigateMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("shows a clear Kanban button on embedded orchestrator sessions", async () => {
@@ -521,16 +543,10 @@ describe("ShellTopbar orchestrator actions", () => {
 		expect(spawnMock).not.toHaveBeenCalled();
 	});
 
-	it("opens an exited orchestrator without resuming while its agent switch is active", async () => {
-		const switchingOrchestrator = {
-			...orchestrator,
-			activeAgentSwitch: activeAgentSwitch(),
-			activity: { state: "exited", lastActivityAt: "2026-06-10T00:00:00Z" },
-			status: "exited",
-		} satisfies WorkspaceSession;
-		renderTopbarSessions([worker, switchingOrchestrator], worker.id);
+	it("opens the project orchestrator from the open-orchestrator shortcut", () => {
+		renderTopbarSessions([worker, orchestrator], worker.id);
 
-		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
+		act(() => appShortcutBus.emit({ id: "open-orchestrator" }));
 
 		expect(postMock).not.toHaveBeenCalled();
 		expect(navigateMock).toHaveBeenCalledWith({
@@ -670,6 +686,21 @@ describe("ShellTopbar open-in-editor control", () => {
 });
 
 describe("TopbarArchiveButton", () => {
+	it("opens the same confirmation from the archive shortcut, and archives only after Confirm", async () => {
+		renderKill();
+
+		act(() => appShortcutBus.emit({ id: "archive-session" }));
+
+		const dialog = await screen.findByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		expect(postMock).not.toHaveBeenCalled();
+		await userEvent.click(within(dialog).getByRole("button", { name: "No" }));
+		expect(postMock).not.toHaveBeenCalled();
+
+		act(() => appShortcutBus.emit({ id: "archive-session" }));
+		await clickKillDialogConfirm();
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+	});
+
 	it("asks for confirmation in the shared modal before archiving", async () => {
 		renderKill();
 
@@ -678,7 +709,7 @@ describe("TopbarArchiveButton", () => {
 		await userEvent.click(archiveButton);
 		expect(postMock).not.toHaveBeenCalled();
 		const confirmation = screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
-		expect(confirmation).toHaveClass("left-[50%]", "top-[50%]", "bg-popover", "p-0");
+		expect(confirmation).toHaveClass("left-[50%]", "top-[50%]", "bg-overlay", "p-0");
 		expect(confirmation).toHaveTextContent("You can always restore it from the Archive section later.");
 		expect(within(confirmation).getByRole("button", { name: "No" })).toBeInTheDocument();
 		expect(within(confirmation).getByRole("button", { name: "Confirm, archive session" })).toHaveTextContent("Confirm");
@@ -690,6 +721,103 @@ describe("TopbarArchiveButton", () => {
 			params: { path: { sessionId: "sess-1" } },
 		});
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	describe("with artifacts", () => {
+		const artifact = (name: string): NonNullable<WorkspaceSession["artifactFiles"]>[number] => ({
+			kind: "markdown",
+			name,
+			path: name,
+			size: 1,
+			updatedAt: "2026-10-01T00:00:00Z",
+		});
+		const withArtifacts = (names: string[], outputType: WorkspaceSession["outputType"] = "artifact") =>
+			({ ...worker, outputType, artifactFiles: names.map(artifact) }) as WorkspaceSession;
+		const openDialog = async () => {
+			await userEvent.click(screen.getByRole("button", { name: "Archive session" }));
+			return screen.getByRole("dialog", { name: "Are you sure you want to archive this session?" });
+		};
+
+		it("offers an unchecked delete box and keeps the artifacts by default", async () => {
+			renderKill(withArtifacts(["report.md", "notes.md"]));
+
+			const dialog = await openDialog();
+			const box = within(dialog).getByRole("checkbox", { name: "Delete 2 artifacts" });
+			expect(box).not.toBeChecked();
+			expect(dialog).toHaveTextContent("Delete 2 artifactsThis can't be undone, and a restored session starts without them.");
+			expect(dialog).not.toHaveTextContent("report.md");
+
+			await clickKillDialogConfirm();
+
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+			expect(postMock.mock.calls[0]?.[1]).toEqual({ params: { path: { sessionId: "sess-1" } }, body: undefined });
+		});
+
+		it("asks the daemon to delete the artifacts when the box is checked", async () => {
+			renderKill(withArtifacts(["report.md"]));
+
+			const dialog = await openDialog();
+			expect(dialog).toHaveTextContent("This can't be undone, and a restored session starts without it.");
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			expect(within(dialog).getByRole("button", { name: "Confirm, archive session" })).toHaveClass("bg-danger-strong");
+			await clickKillDialogConfirm();
+
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+			expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/kill", {
+				params: { path: { sessionId: "sess-1" } },
+				body: { deleteArtifacts: true },
+			});
+			expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		});
+
+		it("unchecks the box when the dialog opens again", async () => {
+			renderKill(withArtifacts(["report.md"]));
+
+			let dialog = await openDialog();
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			await userEvent.click(within(dialog).getByRole("button", { name: "No" }));
+
+			dialog = await openDialog();
+			expect(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" })).not.toBeChecked();
+			expect(postMock).not.toHaveBeenCalled();
+		});
+
+		it("warns when the daemon does not confirm the delete", async () => {
+			useUiStore.setState({ globalToasts: [] });
+			// A failed delete and an older daemon both answer without artifactsDeleted.
+			postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1" }, error: undefined });
+			renderKill(withArtifacts(["report.md"]));
+
+			const dialog = await openDialog();
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			await clickKillDialogConfirm();
+
+			await waitFor(() =>
+				expect(useUiStore.getState().globalToasts).toEqual([
+					expect.objectContaining({
+						title: "Session archived, artifacts kept",
+						body: "Its artifact files could not be deleted and are still on disk.",
+						tone: "error",
+					}),
+				]),
+			);
+		});
+
+		it("does not warn once the daemon confirms the delete", async () => {
+			useUiStore.setState({ globalToasts: [] });
+			postMock.mockResolvedValue({ data: { ok: true, sessionId: "sess-1", artifactsDeleted: true }, error: undefined });
+			const { queryClient } = renderKill(withArtifacts(["report.md"]));
+
+			const dialog = await openDialog();
+			await userEvent.click(within(dialog).getByRole("checkbox", { name: "Delete 1 artifact" }));
+			await clickKillDialogConfirm();
+
+			await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+			await waitFor(() =>
+				expect(queryClient.getMutationCache().getAll().map((mutation) => mutation.state.status)).toEqual(["success"]),
+			);
+			expect(useUiStore.getState().globalToasts).toEqual([]);
+		});
 	});
 
 	it("can back out of the confirmation without killing", async () => {
@@ -771,7 +899,9 @@ describe("TopbarArchiveButton", () => {
 			response: { status: 500 },
 		});
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("do the thing: runtime teardown failed");
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("runtime teardown failed");
+		expect(alert).toHaveAttribute("title", "do the thing: runtime teardown failed");
 	});
 
 	it("falls back to the project board when no orchestrator is available", async () => {

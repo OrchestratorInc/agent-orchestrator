@@ -7,6 +7,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -104,6 +105,15 @@ type SCMIdentity struct {
 	Human bool
 }
 
+// Authored reports whether author is this account: a human account whose
+// login matches, ignoring case and surrounding space. AO attaches a PR to a
+// session automatically only when the account authored it, so another
+// developer's PR on a matching branch is never attached.
+func (id SCMIdentity) Authored(author string) bool {
+	login := strings.TrimSpace(id.Login)
+	return id.Human && login != "" && strings.EqualFold(strings.TrimSpace(author), login)
+}
+
 // ScopedIdentityResolver resolves the authenticated identity for a specific
 // provider key and host. Multi-provider implementations use this to delegate
 // to the matching sub-provider's identity method, passing host through so
@@ -138,6 +148,8 @@ type SCMPRObservation struct {
 	// branch lives in. It matches the base repo for same-repo PRs and differs
 	// for PRs opened from a fork, so branch-prefix attribution can ignore forks.
 	HeadRepo string
+	// BaseRepo is the provider's current full name of the base repository.
+	BaseRepo string
 	// TargetBranch is the PR base/target branch name.
 	TargetBranch string
 	// HeadSHA is the current head commit SHA for the PR.

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -31,7 +32,7 @@ func TestDelegateTaskSpawnsWorkerAndRefinesTitleThroughBackgroundHarness(t *test
 				effort = &tt.effort
 			}
 			st := newFakeStore()
-			st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+			st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 			cmd := &fakeCommander{backgroundResult: "Fix renderer"}
 			cmd.spawnFunc = func(cfg ports.SpawnConfig) domain.SessionRecord {
 				rec := domain.SessionRecord{
@@ -83,6 +84,98 @@ func TestDelegateTaskSpawnsWorkerAndRefinesTitleThroughBackgroundHarness(t *test
 	}
 }
 
+func TestDelegateTaskClientRequestReplaysAndConflictsBeforeSpawn(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", ProjectID: "ao", Kind: domain.KindWorker, ClientRequestID: "draft-1", ClientRequestHash: "v1:original", ClientRequestCommitted: true}
+	cmd := &fakeCommander{}
+	svc := &Service{store: st, manager: cmd}
+	input := DelegateTaskInput{ProjectID: "ao", Brief: "Fix it", ClientRequestID: "draft-1", ClientRequestHash: "v1:original"}
+	out, err := svc.DelegateTask(context.Background(), input)
+	if err != nil || out.WorkerID != "ao-1" || cmd.spawnCalls != 0 {
+		t.Fatalf("replay = %+v, spawnCalls=%d, err=%v", out, cmd.spawnCalls, err)
+	}
+	input.ClientRequestHash = "v1:changed"
+	_, err = svc.DelegateTask(context.Background(), input)
+	var apiError *apierr.Error
+	if !errors.As(err, &apiError) || apiError.Kind != apierr.KindConflict || apiError.Code != "CLIENT_REQUEST_CONFLICT" || cmd.spawnCalls != 0 {
+		t.Fatalf("changed payload: spawnCalls=%d, err=%v", cmd.spawnCalls, err)
+	}
+	rec := st.sessions["ao-1"]
+	rec.ClientRequestCommitted = false
+	st.sessions["ao-1"] = rec
+	input.ClientRequestHash = "v1:original"
+	_, err = svc.DelegateTask(context.Background(), input)
+	if !errors.As(err, &apiError) || apiError.Code != "CLIENT_REQUEST_INCOMPLETE" || cmd.spawnCalls != 0 {
+		t.Fatalf("incomplete retry: spawnCalls=%d, err=%v", cmd.spawnCalls, err)
+	}
+}
+
+func TestDelegateTaskNamesGitWorkspaceDuringSpawn(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	cmd := &fakeCommander{}
+	_, err := (&Service{store: st, manager: cmd}).DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", Brief: "Fix login redirect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cmd.spawnedCfg.NameFromPrompt || len(cmd.backgroundCalls) != 0 {
+		t.Fatal("Git task must use one provisioning-time naming call")
+	}
+}
+
+func TestDelegateTaskEmitsSpawnTelemetryOnce(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", ProjectID: "ao", Kind: domain.KindWorker, ClientRequestID: "draft-1", ClientRequestHash: "v1", ClientRequestCommitted: true}
+	sink := &fakeTelemetrySink{}
+	cmd := &fakeCommander{}
+	cmd.spawnFunc = func(cfg ports.SpawnConfig) domain.SessionRecord {
+		return domain.SessionRecord{ID: "ao-2", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: domain.HarnessCodex}
+	}
+	svc := NewWithDeps(Deps{Manager: cmd, Store: st, Telemetry: sink})
+
+	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", ClientRequestID: "draft-1", ClientRequestHash: "v1"}); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+	if len(sink.events) != 0 {
+		t.Fatalf("replay events = %#v, want none", sink.events)
+	}
+	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", TaskPreparation: "prep-token"}); err != nil {
+		t.Fatalf("DelegateTask: %v", err)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("events = %#v, want one spawned", sink.events)
+	}
+	ev := sink.events[0]
+	if ev.Name != "ao.session.spawned" || ev.SessionID == nil || *ev.SessionID != "ao-2" || ev.Payload["kind"] != "worker" || ev.Payload["harness"] != "codex" {
+		t.Fatalf("spawned event = %#v", ev)
+	}
+
+	sink.events = nil
+	cmd.spawnErr = errors.New("boom")
+	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", RequestedAgent: domain.HarnessCodex}); err == nil {
+		t.Fatal("DelegateTask should fail")
+	}
+	if len(sink.events) != 1 || sink.events[0].Name != "ao.session.spawn_failed" || sink.events[0].Payload["harness"] != "codex" {
+		t.Fatalf("events = %#v, want one spawn_failed", sink.events)
+	}
+}
+
+func TestDelegateTaskEmitsFirstSessionOnboarding(t *testing.T) {
+	st := newFakeStore()
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.sessions["ao-1"] = domain.SessionRecord{ID: "ao-1", ProjectID: "ao", Kind: domain.KindWorker, IsTaskPreparation: true}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink})
+
+	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", TaskPreparation: "ao-1"}); err != nil {
+		t.Fatalf("DelegateTask: %v", err)
+	}
+	if len(sink.events) != 2 || sink.events[0].Name != "ao.session.spawned" || sink.events[1].Name != "ao.onboarding.first_session_spawned" {
+		t.Fatalf("events = %#v, want spawned + first_session", sink.events)
+	}
+}
+
 func TestDelegatedTaskTitles(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -121,7 +214,7 @@ func TestDelegatedTaskTitles(t *testing.T) {
 
 func TestDelegateTaskStartsPromptlessWorkerWithoutGeneratingTitle(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	cmd := &fakeCommander{}
 
 	out, err := (&Service{store: st, manager: cmd, runBackground: runInline}).DelegateTask(
@@ -143,7 +236,7 @@ func TestDelegateTaskStartsPromptlessWorkerWithoutGeneratingTitle(t *testing.T) 
 
 func TestGeneratedTaskTitleDoesNotOverwriteManualRename(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	cmd := &fakeCommander{backgroundResult: "Generated title"}
 	cmd.spawnFunc = func(cfg ports.SpawnConfig) domain.SessionRecord {
 		rec := domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, DisplayName: "Mine now"}
@@ -163,7 +256,7 @@ func TestGeneratedTaskTitleDoesNotOverwriteManualRename(t *testing.T) {
 
 func TestDelegateTaskKeepsSpawnSuccessWhenBackgroundTitleFails(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	cmd := &fakeCommander{backgroundErr: errors.New("provider unavailable")}
 
 	out, err := (&Service{store: st, manager: cmd, runBackground: runInline}).DelegateTask(
@@ -176,7 +269,7 @@ func TestDelegateTaskKeepsSpawnSuccessWhenBackgroundTitleFails(t *testing.T) {
 
 func TestDelegateTaskReturnsBeforeBackgroundTitleCompletes(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	started := make(chan struct{})
 	release := make(chan struct{})
 	finished := make(chan struct{})
@@ -214,7 +307,7 @@ func TestDelegateTaskReturnsBeforeBackgroundTitleCompletes(t *testing.T) {
 
 func TestDelegateTaskSkipsTitleWhenCapacityIsFull(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	cmd := &fakeCommander{}
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
@@ -229,7 +322,7 @@ func TestDelegateTaskSkipsTitleWhenCapacityIsFull(t *testing.T) {
 
 func TestKillCancelsBackgroundTitle(t *testing.T) {
 	st := newFakeStore()
-	st.projects["ao"] = domain.ProjectRecord{ID: "ao"}
+	st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: domain.ProjectKindScratch}
 	started := make(chan struct{})
 	finished := make(chan struct{})
 	cmd := &fakeCommander{backgroundFunc: func(call backgroundTaskCall) (string, error) {
@@ -259,3 +352,40 @@ func TestKillCancelsBackgroundTitle(t *testing.T) {
 }
 
 func runInline(work func()) { work() }
+
+// ao spawn, including orchestrator-owned workers, uses generic Spawn rather than
+// the desktop's DelegateTask route. Both must enable the same naming pipeline.
+func TestSpawnNamesImplicitWorkerBranchesFromEveryEntryPoint(t *testing.T) {
+	for _, tt := range []struct {
+		name                    string
+		kind                    domain.ProjectKind
+		cfg                     ports.SpawnConfig
+		wantName, wantKeepTitle bool
+	}{
+		{name: "CLI worker", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, Prompt: "Fix login redirect"}, wantName: true},
+		{name: "orchestrator Chat worker", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, ParentSessionID: "ao-orch", RequestedMode: domain.SessionModeChat, DisplayName: "Review: login", Prompt: "Review login redirect"}, wantName: true, wantKeepTitle: true},
+		{name: "orchestrator TUI worker", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, ParentSessionID: "ao-orch", RequestedMode: domain.SessionModeTUI, Prompt: "Review login redirect"}, wantName: true},
+		{name: "workspace project", kind: domain.ProjectKindWorkspace, cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, Prompt: "Fix login redirect"}, wantName: true},
+		{name: "explicit branch", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, Branch: "review/login", Prompt: "Review login"}},
+		{name: "no prompt", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, Prompt: " \n "}},
+		{name: "orchestrator", cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindOrchestrator, Prompt: "Coordinate reviews"}},
+		{name: "scratch", kind: domain.ProjectKindScratch, cfg: ports.SpawnConfig{ProjectID: "ao", Kind: domain.KindWorker, Prompt: "Review login"}},
+		{name: "standalone", cfg: ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex, Prompt: "Review login"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["ao"] = domain.ProjectRecord{ID: "ao", Kind: tt.kind}
+			cmd := &fakeCommander{spawnRecord: domain.SessionRecord{ID: "ao-1", ProjectID: tt.cfg.ProjectID, Kind: tt.cfg.Kind, Harness: domain.HarnessCodex}}
+			_, _, _, err := (&Service{store: st, manager: cmd}).Spawn(t.Context(), tt.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cmd.spawnedCfg.NameFromPrompt != tt.wantName || cmd.spawnedCfg.KeepDisplayName != tt.wantKeepTitle {
+				t.Fatalf("naming=%v keepTitle=%v; want %v/%v", cmd.spawnedCfg.NameFromPrompt, cmd.spawnedCfg.KeepDisplayName, tt.wantName, tt.wantKeepTitle)
+			}
+			if cmd.spawnedCfg.ParentSessionID != tt.cfg.ParentSessionID || cmd.spawnedCfg.Branch != tt.cfg.Branch || cmd.spawnedCfg.DisplayName != tt.cfg.DisplayName {
+				t.Fatal("spawn ownership or explicit names changed")
+			}
+		})
+	}
+}

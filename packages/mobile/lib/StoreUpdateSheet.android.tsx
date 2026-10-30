@@ -25,7 +25,7 @@ export function StoreUpdateSheet({
 					<Feather name="download-cloud" size={iconSize.xl} color={t.accent} />
 				</View>
 				<View style={styles.copy}>
-					<Text style={[styles.title, { color: t.textPrimary }]}>A newer AO is ready</Text>
+					<Text style={[styles.title, { color: t.textPrimary }]}>A newer version of Orchestrator is ready</Text>
 					<Text style={[styles.message, { color: t.textSecondary }]}>Update the native app for the latest compatibility, fixes, and system integrations.</Text>
 				</View>
 				<View style={styles.actions}>

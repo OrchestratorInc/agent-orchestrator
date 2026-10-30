@@ -1,9 +1,9 @@
 // The warnings above the spawn controls, decided in one place so a single cause
 // produces a single line. Pure, so it is unit-testable.
 
-export const SPAWN_OFFLINE_NOTICE = "Not connected to your desktop. You can start a worker once it reconnects.";
+export const SPAWN_OFFLINE_NOTICE = "This machine is offline. You can start a worker once it reconnects.";
 export const NO_CHAT_AGENT_NOTICE =
-	"No installed agent on this AO host currently supports Chat. Choose Terminal UI or install/authenticate a Chat-capable agent.";
+	"No installed agent on this Orchestrator host currently supports Chat. Choose Terminal UI or install/authenticate a Chat-capable agent.";
 
 export type SpawnNoticeInput = {
 	/** The board's poll has lost the desktop. */

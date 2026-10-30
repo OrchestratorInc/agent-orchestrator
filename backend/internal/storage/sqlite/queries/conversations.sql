@@ -19,8 +19,124 @@ VALUES (?, 'review', ?, ?, ?, 0, ?, ?, ?);
 -- name: SelectConversationByReview :one
 SELECT * FROM conversations WHERE current_review_id = ? LIMIT 1;
 
+-- An orchestrator's first controller moves the prompts queued during provisioning
+-- into the project row and detaches the session-scoped row in one transaction
+-- (#6523). Migration 0197 detached the rows older builds left bound to both. If a
+-- session is still bound to two rows, the project row is the live one.
 -- name: SelectConversationBySession :one
-SELECT * FROM conversations WHERE current_session_id = ? LIMIT 1;
+SELECT * FROM conversations WHERE current_session_id = ?
+ORDER BY scope = 'project' DESC, created_at DESC, id DESC
+LIMIT 1;
+
+-- Sessions in the batch whose latest Chat turn the person interrupted. The
+-- conversation is the one SelectConversationBySession picks. A cancelled turn is
+-- a queued prompt the user withdrew, so it never counts as the latest turn.
+-- name: ListInterruptedSessions :many
+WITH wanted_session AS (
+    SELECT CAST(j.value AS TEXT) AS session_id
+    FROM json_each(?) AS j
+),
+session_conversation AS (
+    SELECT wanted_session.session_id, (
+        SELECT conversations.id FROM conversations
+        WHERE conversations.current_session_id = wanted_session.session_id
+        ORDER BY conversations.scope = 'project' DESC, conversations.created_at DESC, conversations.id DESC
+        LIMIT 1
+    ) AS conversation_id
+    FROM wanted_session
+)
+SELECT CAST(session_conversation.session_id AS TEXT) AS session_id
+FROM session_conversation
+WHERE (
+    SELECT conversation_turns.state FROM conversation_turns
+    WHERE conversation_turns.conversation_id = session_conversation.conversation_id
+      AND conversation_turns.promoted_to_turn_id IS NULL
+      AND conversation_turns.rolled_back_at IS NULL
+      AND conversation_turns.state <> 'cancelled'
+    ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+    LIMIT 1
+) = 'interrupted';
+
+-- The session-scoped rows a session is bound to besides the given conversation:
+-- where an orchestrator's provisioning-time prompts wait for its project row.
+-- name: SelectProvisioningConversationsForSession :many
+SELECT id, latest_sequence FROM conversations
+WHERE current_session_id = ? AND scope = 'session' AND id <> ?
+ORDER BY created_at, id;
+
+-- Delivery content that may hold excerpt references to the conversation it is
+-- moving out of.
+-- name: SelectConversationDeliveryContent :many
+SELECT id, delivery_content_json FROM conversation_messages
+WHERE conversation_id = ? AND delivery_content_json <> '';
+
+-- name: SetConversationMessageDeliveryContent :exec
+UPDATE conversation_messages SET delivery_content_json = ? WHERE id = ?;
+
+-- Move a provisioning row's turns into the conversation that adopts them. IDs and
+-- requested_at stay, so queue order and every turn id a client holds still work.
+-- A turn whose prompt already reached the target under the same client message id
+-- stays behind: it would break the target's unique client id.
+-- name: MoveConversationTurns :exec
+UPDATE conversation_turns
+SET conversation_id = sqlc.arg(target_id), branch_id = sqlc.arg(branch_id)
+WHERE conversation_turns.conversation_id = sqlc.arg(source_id)
+  AND conversation_turns.id NOT IN (
+      SELECT moved.turn_id FROM conversation_messages AS moved
+      JOIN conversation_messages AS delivered
+        ON delivered.conversation_id = sqlc.arg(target_id)
+       AND delivered.client_message_id = moved.client_message_id
+      WHERE moved.conversation_id = sqlc.arg(source_id)
+        AND moved.client_message_id <> ''
+        AND moved.turn_id IS NOT NULL
+  );
+
+-- Messages and activities follow their turns. Offsetting every sequence by the
+-- target's latest keeps their order and places them after the target's history.
+-- name: MoveConversationMessages :exec
+UPDATE conversation_messages
+SET conversation_id = sqlc.arg(target_id), branch_id = sqlc.arg(branch_id),
+    sequence = sequence + sqlc.arg(sequence_offset)
+WHERE conversation_messages.conversation_id = sqlc.arg(source_id)
+  AND (conversation_messages.turn_id IS NULL OR conversation_messages.turn_id IN (
+      SELECT id FROM conversation_turns WHERE conversation_turns.conversation_id = sqlc.arg(target_id)
+  ));
+
+-- name: MoveConversationActivities :exec
+UPDATE conversation_activities
+SET conversation_id = sqlc.arg(target_id), branch_id = sqlc.arg(branch_id),
+    sequence = sequence + sqlc.arg(sequence_offset)
+WHERE conversation_activities.conversation_id = sqlc.arg(source_id)
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id IN (
+      SELECT id FROM conversation_turns WHERE conversation_turns.conversation_id = sqlc.arg(target_id)
+  ));
+
+-- Queued-edit receipts keep a retried edit idempotent after the move.
+-- name: MoveConversationQueuedEditDeliveries :exec
+UPDATE conversation_queued_edit_deliveries
+SET conversation_id = sqlc.arg(target_id)
+WHERE conversation_queued_edit_deliveries.conversation_id = sqlc.arg(source_id)
+  AND conversation_queued_edit_deliveries.client_message_id NOT IN (
+      SELECT existing.client_message_id FROM conversation_queued_edit_deliveries AS existing
+      WHERE existing.conversation_id = sqlc.arg(target_id)
+  );
+
+-- name: AdvanceConversationSequence :exec
+UPDATE conversations SET latest_sequence = latest_sequence + ?, updated_at = ?
+WHERE id = ?;
+
+-- name: DetachSessionConversation :exec
+UPDATE conversations SET current_session_id = NULL, updated_at = ?
+WHERE id = ? AND scope = 'session' AND current_session_id = ?;
+
+-- name: SelectSessionForActivityProviderItem :one
+SELECT current_session_id
+FROM conversations
+JOIN conversation_activities ON conversation_activities.conversation_id = conversations.id
+WHERE conversation_activities.provider_item_id = ?
+  AND conversation_activities.provider_item_id <> ''
+  AND current_session_id IS NOT NULL
+LIMIT 1;
 
 -- name: SelectProjectConversation :one
 SELECT * FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1;
@@ -35,13 +151,74 @@ SELECT * FROM conversations WHERE id = ? LIMIT 1;
 -- name: HasConversationTurns :one
 SELECT EXISTS (SELECT 1 FROM conversation_turns WHERE conversation_id = ?);
 
+-- Hibernation only needs the latest visible user prompt's outcome. Match the
+-- active-branch and discarded-turn filters used by SelectConversationMessages
+-- without loading the entire conversation timeline.
+-- name: LatestVisibleUserTurnSettled :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+), latest_user AS (
+    SELECT turn.handled_by_session_id, turn.state, turn.completed_at
+    FROM conversation_messages AS message
+    JOIN active_path AS path ON path.branch_id = message.branch_id
+    LEFT JOIN conversation_turns AS turn ON turn.id = message.turn_id
+    WHERE message.conversation_id = sqlc.arg(conversation_id)
+      AND message.role = 'user'
+      AND (path.max_sequence IS NULL OR message.sequence <= path.max_sequence)
+      AND (message.turn_id IS NULL OR turn.id IS NULL OR (
+          turn.rolled_back_at IS NULL AND turn.promoted_to_turn_id IS NULL AND turn.state <> 'cancelled'
+      ))
+    ORDER BY message.sequence DESC
+    LIMIT 1
+)
+SELECT EXISTS (
+    SELECT 1 FROM latest_user
+    WHERE handled_by_session_id = sqlc.arg(session_id)
+      AND completed_at IS NOT NULL
+      AND state IN ('completed', 'failed', 'interrupted', 'recovered')
+);
+
 -- name: ReleaseUntouchedConversationProvider :execrows
+-- The conversation's current session is the owner. A project conversation
+-- (orchestrator) has no owning session_id, and its root branch's session_id
+-- records the orchestrator that created it, not the one that holds it now.
 UPDATE conversation_branches
 SET provider_conversation_id = '', provider_scope_id = sqlc.arg(provider_scope_id)
-WHERE conversation_branches.session_id = sqlc.arg(session_id) AND parent_branch_id IS NULL
+WHERE parent_branch_id IS NULL
   AND conversation_branches.id = (
       SELECT c.active_branch_id FROM conversations AS c
-      WHERE c.session_id = sqlc.arg(session_id) AND c.current_session_id = sqlc.arg(session_id)
+      WHERE c.current_session_id = sqlc.arg(session_id)
+        AND (c.session_id = sqlc.arg(session_id) OR (c.scope = 'project' AND c.session_id IS NULL))
+        AND c.latest_sequence = 0
+        AND NOT EXISTS (
+            SELECT 1 FROM conversation_turns WHERE conversation_id = c.id
+        )
+  );
+
+-- name: ReplaceUntouchedConversationProvider :execrows
+-- Same proof as ReleaseUntouchedConversationProvider, but rebinds the empty
+-- root to a fresh provider id and keeps its provider scope, which is part of
+-- the persistent provider host's identity.
+UPDATE conversation_branches
+SET provider_conversation_id = sqlc.arg(provider_conversation_id)
+WHERE parent_branch_id IS NULL
+  AND conversation_branches.provider_conversation_id = sqlc.arg(expected_provider_conversation_id)
+  AND conversation_branches.id = (
+      SELECT c.active_branch_id FROM conversations AS c
+      WHERE c.current_session_id = sqlc.arg(session_id)
+        AND (c.session_id = sqlc.arg(session_id) OR (c.scope = 'project' AND c.session_id IS NULL))
         AND c.latest_sequence = 0
         AND NOT EXISTS (
             SELECT 1 FROM conversation_turns WHERE conversation_id = c.id
@@ -53,13 +230,13 @@ INSERT INTO conversation_branches (
     id, conversation_id, session_id, provider_conversation_id,
     parent_branch_id, fork_after_turn_id, replaced_turn_id,
     replacement_turn_id, fork_after_sequence, strategy, replay_cutoff_sequence,
-    replay_truncated, provider_scope_id, provider_ids_scoped, created_at
+    replay_truncated, provider_scope_id, provider_ids_scoped, created_at, handoff_note
 ) VALUES (
     sqlc.arg(id), sqlc.arg(conversation_id), sqlc.narg(session_id),
     sqlc.arg(provider_conversation_id), sqlc.narg(parent_branch_id),
     sqlc.narg(fork_after_turn_id), sqlc.narg(replaced_turn_id),
     sqlc.narg(replacement_turn_id), sqlc.arg(fork_after_sequence), sqlc.arg(strategy),
-    sqlc.arg(replay_cutoff_sequence), sqlc.arg(replay_truncated), sqlc.arg(provider_scope_id), sqlc.arg(provider_ids_scoped), sqlc.arg(created_at)
+    sqlc.arg(replay_cutoff_sequence), sqlc.arg(replay_truncated), sqlc.arg(provider_scope_id), sqlc.arg(provider_ids_scoped), sqlc.arg(created_at), sqlc.arg(handoff_note)
 );
 
 -- name: InsertReviewConversationBranch :exec
@@ -347,21 +524,51 @@ UPDATE conversations
 SET active_branch_id = ?, updated_at = ?
 WHERE id = ?;
 
+-- Intake a session queued before its fresh provider existed belongs to that
+-- provider's scope, so native replay can correlate it after a restart. Rows
+-- move with their turn; dispatched or rolled-back turns stay where they are.
+-- name: MoveUndispatchedTurnMessagesToBranch :exec
+UPDATE conversation_messages
+SET branch_id = sqlc.arg(branch_id)
+WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_messages.branch_id = sqlc.arg(parent_branch_id)
+  AND conversation_messages.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = sqlc.arg(conversation_id)
+        AND intake.branch_id = sqlc.arg(parent_branch_id)
+        AND intake.handled_by_session_id = sqlc.arg(session_id)
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  );
+
+-- name: MoveUndispatchedTurnActivitiesToBranch :exec
+UPDATE conversation_activities
+SET branch_id = sqlc.arg(branch_id)
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_activities.branch_id = sqlc.arg(parent_branch_id)
+  AND conversation_activities.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = sqlc.arg(conversation_id)
+        AND intake.branch_id = sqlc.arg(parent_branch_id)
+        AND intake.handled_by_session_id = sqlc.arg(session_id)
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  );
+
+-- name: MoveUndispatchedTurnsToBranch :exec
+UPDATE conversation_turns
+SET branch_id = sqlc.arg(branch_id)
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND branch_id = sqlc.arg(parent_branch_id)
+  AND handled_by_session_id = sqlc.arg(session_id)
+  AND state = 'queued' AND provider_turn_id = '' AND rolled_back_at IS NULL;
+
 -- The next turn's provider choices. Written only when the user picks something,
 -- so NULL keeps meaning "use whatever the conversation was started with".
 -- NOTE: keep these comments ASCII. sqlc locates its star-expansion edits by byte
 -- offset, so a multi-byte character here silently corrupts later queries.
 -- name: UpdateConversationTurnSettings :exec
 UPDATE conversations
-SET model = ?, reasoning_effort = ?, approval_mode = ?, opencode_mode = ?, updated_at = ?
+SET model = ?, reasoning_effort = ?, approval_mode = ?, opencode_mode = ?, auto_compact_window = ?, updated_at = ?
 WHERE id = ?;
-
--- An agent switch starts a new provider/model scope. Clear only the source
--- harness choices; approval posture is AO-owned and remains applicable.
--- name: ResetConversationAgentOverridesForSession :exec
-UPDATE conversations
-SET model = NULL, reasoning_effort = NULL, updated_at = ?
-WHERE current_session_id = ?;
 
 -- Token position for the conversation, latest wins.
 --
@@ -578,6 +785,29 @@ SET state = 'failed',
     completed_at = ?
 WHERE handled_by_session_id = ? AND state IN ('queued', 'running');
 
+-- Reviewer Chat has its own controller generation on review, separate from
+-- the worker session. Settle only turns owned by that review conversation.
+-- name: FailOrphanedReviewActivities :exec
+UPDATE conversation_activities
+SET status = 'failed', revision = revision + 1, updated_at = sqlc.arg(updated_at)
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND status = 'running'
+  AND conversation_activities.turn_id IN (
+      SELECT conversation_turns.id FROM conversation_turns
+      WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+        AND conversation_turns.handled_by_review_id = sqlc.arg(review_id)
+        AND conversation_turns.state IN ('queued', 'running')
+  );
+
+-- name: SettleOrphanedReviewTurns :exec
+UPDATE conversation_turns
+SET state = 'failed',
+    error_message = 'controller ended before the turn completed',
+    completed_at = sqlc.arg(completed_at)
+WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_turns.handled_by_review_id = sqlc.arg(review_id)
+  AND conversation_turns.state IN ('queued', 'running');
+
 -- The running turns visible on the active branch, in the same order as the
 -- snapshot. Interrupt uses this exact projection when in-memory turn tracking
 -- has lost what the UI is showing; nested provider turns mean more than one row
@@ -606,10 +836,12 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
@@ -667,13 +899,52 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
+
+-- The latest non-discarded turn uses the same active lineage and ordering as
+-- SelectConversationTurns, independently of where late timeline items occur.
+-- name: SelectLatestConversationTurn :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_turns.* FROM conversation_turns
+JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
+WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_turns.promoted_to_turn_id IS NULL
+  AND conversation_turns.rolled_back_at IS NULL
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
+        AND lineage_message.sequence <= path.max_sequence
+      UNION ALL
+      SELECT 1 FROM conversation_activities AS lineage_activity
+      WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
+        AND lineage_activity.sequence <= path.max_sequence
+  ))
+ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+LIMIT 1;
 
 -- Turns represented by one bounded timeline page. Active turns are included
 -- even before their first item arrives, so the live-turn controls never vanish.
@@ -700,10 +971,12 @@ WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
   AND (
@@ -737,8 +1010,17 @@ UPDATE conversation_turns
 SET rolled_back_at = ?
 WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.rolled_back_at IS NULL
-  AND conversation_turns.rowid >= (
-      SELECT anchor.rowid FROM conversation_turns AS anchor WHERE anchor.id = ?
+  AND (
+      conversation_turns.rowid >= (
+          SELECT anchor.rowid FROM conversation_turns AS anchor WHERE anchor.id = sqlc.arg(anchor_turn_id)
+      )
+      OR conversation_turns.promoted_to_turn_id IN (
+          SELECT target.id FROM conversation_turns AS target
+          WHERE target.conversation_id = conversation_turns.conversation_id
+            AND target.rowid >= (
+                SELECT anchor.rowid FROM conversation_turns AS anchor WHERE anchor.id = sqlc.arg(anchor_turn_id)
+            )
+      )
   );
 
 -- A discarded turn that never reached the provider settles as interrupted rather
@@ -817,7 +1099,10 @@ SELECT conversation_turns.id,
        conversation_messages.text,
        conversation_messages.client_message_id,
        conversation_messages.origin,
-       conversation_messages.delivery_content_json
+       conversation_messages.delivery_content_json,
+       conversation_messages.sender_session_id,
+       conversation_messages.sender_project_id,
+       conversation_messages.sender_display_name
 FROM conversation_turns
 JOIN conversation_messages
     ON conversation_messages.turn_id = conversation_turns.id
@@ -827,6 +1112,24 @@ WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.promotion_started_at IS NULL
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid
 LIMIT 1;
+
+-- name: SelectQueuedConversationBatch :many
+SELECT conversation_turns.id,
+       conversation_messages.text,
+       conversation_messages.client_message_id,
+       conversation_messages.origin,
+       conversation_messages.delivery_content_json,
+       conversation_messages.sender_session_id,
+       conversation_messages.sender_project_id,
+       conversation_messages.sender_display_name
+FROM conversation_turns
+JOIN conversation_messages
+    ON conversation_messages.turn_id = conversation_turns.id
+    AND conversation_messages.role = 'user'
+WHERE conversation_turns.conversation_id = ?
+  AND conversation_turns.state = 'queued'
+  AND conversation_turns.promotion_started_at IS NULL
+ORDER BY conversation_turns.requested_at, conversation_turns.rowid;
 
 -- Claim one selected queue item before contacting the provider. execrows is the
 -- compare-and-set result: zero means the turn is absent, settled, or already being
@@ -867,6 +1170,17 @@ WHERE id = sqlc.arg(id)
   AND state = 'queued'
   AND promotion_started_at IS NOT NULL;
 
+-- A detached controller may have crossed the provider boundary before its
+-- batch receipt was recorded. Keep the source visible and fail closed on resume.
+-- name: FailReservedQueuedConversationTurns :exec
+UPDATE conversation_turns
+SET state = 'failed',
+    error_message = 'queued delivery outcome is uncertain after controller reconnect',
+    completed_at = ?
+WHERE conversation_id = ?
+  AND state = 'queued'
+  AND promotion_started_at IS NOT NULL;
+
 -- The provider has accepted the guidance. Link the durable source to the AO turn
 -- that absorbed it and take it out of the queue in the same transaction that
 -- inserts the visible steer activity.
@@ -880,6 +1194,26 @@ WHERE id = sqlc.arg(id)
   AND conversation_id = sqlc.arg(conversation_id)
   AND state = 'queued'
   AND promotion_started_at IS NOT NULL;
+
+-- A batched source joins one provider input but remains its own visible message.
+-- name: CompleteQueuedConversationBatchMember :execrows
+UPDATE conversation_turns
+SET state = 'completed',
+    completed_at = sqlc.arg(completed_at),
+    promotion_started_at = NULL,
+    promoted_to_turn_id = sqlc.arg(promoted_to_turn_id),
+    batched_input = 1
+WHERE id = sqlc.arg(id)
+  AND conversation_id = sqlc.arg(conversation_id)
+  AND state = 'queued'
+  AND promotion_started_at IS NOT NULL;
+
+-- Remember the exact combined input so native history replay can identify it
+-- without replacing the separate AO transcript messages.
+-- name: SetConversationProviderInputText :execrows
+UPDATE conversation_turns
+SET provider_input_text = ?
+WHERE id = ? AND state IN ('queued', 'running', 'completed') AND provider_input_text = '';
 
 -- Stopping the agent stops the queue with it: a brake that starts new work
 -- instead of ending it would be the wrong shape for the button the user pressed.
@@ -961,17 +1295,33 @@ WHERE id = ?
 -- name: InsertConversationMessage :exec
 INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
-    text, streaming, provider_item_id, client_message_id, delivery_content_json,
+    text, streaming, provider_item_id, client_message_id, client_payload_hash,
+    delivery_content_json, continuation, sender_session_id, sender_project_id, sender_display_name,
     created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: IncrementUsageMessageSummary :exec
+INSERT INTO usage_message_summary (session_id, pending_count, first_at, last_at)
+SELECT sqlc.arg(session_id), 1, sqlc.arg(first_at), sqlc.arg(last_at) WHERE EXISTS (
+    SELECT 1 FROM sessions WHERE id = sqlc.arg(session_id) AND project_id IS NOT NULL
+)
+ON CONFLICT(session_id) DO UPDATE SET
+    pending_count = MIN(usage_message_summary.pending_count + 1, 1000000000),
+    first_at = COALESCE(usage_message_summary.first_at, excluded.first_at),
+    last_at = excluded.last_at;
 
 -- Folding a streaming delta: append to the existing text and bump the revision
 -- so a client can detect a gap. The provider item id is the correlation key
 -- because AO does not know the message id the provider will use.
 -- name: AppendConversationMessageDelta :exec
 UPDATE conversation_messages
-SET text = text || ?, revision = revision + 1, streaming = 1, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ?;
+SET text = text || ?, revision = revision + 1,
+    streaming = NOT EXISTS (
+        SELECT 1 FROM conversation_turns
+        WHERE conversation_turns.id = conversation_messages.turn_id
+          AND conversation_turns.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+    ), updated_at = ?
+WHERE conversation_messages.conversation_id = ? AND conversation_messages.provider_item_id = ?;
 
 -- name: SettleConversationMessage :exec
 UPDATE conversation_messages
@@ -1037,7 +1387,7 @@ WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
       WHERE discarded.conversation_id = sqlc.arg(conversation_id)
         AND (
           discarded.rolled_back_at IS NOT NULL
-          OR discarded.promoted_to_turn_id IS NOT NULL
+          OR (discarded.promoted_to_turn_id IS NOT NULL AND discarded.batched_input = 0)
           OR discarded.state = 'cancelled'
         )
   ))
@@ -1069,7 +1419,7 @@ WHERE conversation_messages.conversation_id = sqlc.arg(conversation_id)
       WHERE discarded.conversation_id = sqlc.arg(conversation_id)
         AND (
           discarded.rolled_back_at IS NOT NULL
-          OR discarded.promoted_to_turn_id IS NOT NULL
+          OR (discarded.promoted_to_turn_id IS NOT NULL AND discarded.batched_input = 0)
           OR discarded.state = 'cancelled'
         )
   ))
@@ -1139,6 +1489,18 @@ WHERE conversation_activities.conversation_id = sqlc.arg(target_conversation_id)
     FROM conversation_turns
     WHERE conversation_turns.conversation_id = sqlc.arg(target_conversation_id)
       AND handled_by_session_id = sqlc.arg(handled_by_session_id)
+  );
+
+-- name: FailPendingReviewRequests :exec
+UPDATE conversation_activities
+SET status = 'failed', revision = revision + 1, updated_at = sqlc.arg(updated_at)
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND kind IN ('approval', 'user_input')
+  AND status = 'pending'
+  AND conversation_activities.turn_id IN (
+    SELECT conversation_turns.id FROM conversation_turns
+    WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+      AND conversation_turns.handled_by_review_id = sqlc.arg(review_id)
   );
 
 -- Append streamed command output, capped in one statement.
@@ -1325,10 +1687,21 @@ WHERE id = ?
 
 -- The raw provider event archive. Append-only, and the only way to answer "what
 -- did the provider actually say" once a projection turns out to be wrong.
+--
+-- branch_id is the conversation's active branch, written by the INSERT itself:
+-- conversation_provider_events_branch_insert only acts on a row that arrives with
+-- an empty branch_id, and would otherwise UPDATE every row it has just written.
+-- The COALESCE keeps a conversation that does not exist failing on its foreign key,
+-- as before; a NULL here would be a NOT NULL violation, which INSERT OR IGNORE skips
+-- without an error.
 -- name: InsertConversationProviderEvent :execrows
 INSERT OR IGNORE INTO conversation_provider_events (
-    conversation_id, session_id, provider_event_id, method, payload_json, received_at
-) VALUES (?, ?, ?, ?, ?, ?);
+    conversation_id, session_id, provider_event_id, method, payload_json, received_at, branch_id
+) VALUES (
+    sqlc.arg(conversation_id), sqlc.arg(session_id), sqlc.arg(provider_event_id), sqlc.arg(method),
+    sqlc.arg(payload_json), sqlc.arg(received_at),
+    COALESCE((SELECT active_branch_id FROM conversations WHERE id = sqlc.arg(conversation_id)), '')
+);
 
 -- name: SelectConversationProviderEvents :many
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
@@ -1373,7 +1746,9 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
 )
 SELECT conversation_messages.text,
        conversation_messages.origin,
+       conversation_messages.continuation,
        conversation_messages.delivery_content_json,
+       conversation_turns.provider_input_text,
        EXISTS (
            SELECT 1
            FROM active_path AS path
@@ -1389,6 +1764,29 @@ WHERE conversation_turns.id = sqlc.arg(id)
   AND conversation_turns.state = 'failed'
 LIMIT 1;
 
+-- Content blocks for every message absorbed by a failed provider turn.
+-- Row order matches the original batch, including steer fallback batches.
+-- name: SelectConversationProviderInputContent :many
+SELECT conversation_turns.id AS source_turn_id, conversation_messages.delivery_content_json
+FROM conversation_turns
+JOIN conversation_messages ON conversation_messages.turn_id = conversation_turns.id
+    AND conversation_messages.role = 'user'
+WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+  AND (conversation_turns.id = sqlc.arg(turn_id)
+       OR conversation_turns.promoted_to_turn_id = sqlc.arg(turn_id))
+ORDER BY conversation_turns.rowid;
+
+-- Accepted steering inputs are separate provider inputs on the same turn.
+-- Their detail rows retain the exact content sent to the provider.
+-- name: SelectConversationSteerRetryInputs :many
+SELECT detail_json FROM conversation_activities
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND turn_id = sqlc.arg(turn_id)
+  AND kind = 'system'
+  AND status = 'completed'
+  AND json_extract(detail_json, '$.event') = 'steer'
+ORDER BY sequence;
+
 -- A replayed retry request returns the attempt already linked to its source.
 -- The relation is daemon-owned rather than inferred from caller-controlled text.
 -- name: SelectConversationRetryTurnIDBySource :one
@@ -1397,12 +1795,56 @@ WHERE conversation_id = sqlc.arg(conversation_id)
   AND retry_of_turn_id = sqlc.arg(retry_of_turn_id)
 LIMIT 1;
 
+-- name: SetConversationTurnAutoResume :execrows
+UPDATE conversation_turns
+SET usage_limit_resets_at = COALESCE(sqlc.narg(resets_at), usage_limit_resets_at),
+    usage_limit_auto_resume = sqlc.arg(enabled),
+    usage_limit_resume_error = sqlc.arg(resume_error)
+WHERE id = sqlc.arg(id) AND conversation_id = sqlc.arg(conversation_id);
+
+-- name: PostponeConversationTurnAutoResume :execrows
+UPDATE conversation_turns
+SET usage_limit_resets_at = sqlc.arg(resets_at)
+WHERE id = sqlc.arg(id) AND conversation_id = sqlc.arg(conversation_id)
+  AND usage_limit_auto_resume = 1;
+
+-- Consent and its due deadline are checked in the transaction creating a retry.
+-- name: ConsumeConversationTurnAutoResume :execrows
+UPDATE conversation_turns
+SET usage_limit_auto_resume = 0, usage_limit_resume_error = ''
+WHERE id = sqlc.arg(id) AND conversation_id = sqlc.arg(conversation_id)
+  AND handled_by_session_id = sqlc.arg(session_id)
+  AND state = 'failed' AND rolled_back_at IS NULL
+  AND usage_limit_auto_resume = 1 AND usage_limit_resets_at <= sqlc.arg(now);
+
+-- name: SelectAutoResumeConversationTurns :many
+SELECT * FROM conversation_turns
+WHERE usage_limit_auto_resume = 1
+ORDER BY usage_limit_resets_at, id;
+
 -- Retry attempts outside the active branch still consume their source action.
 -- name: SelectConversationRetriedSourceTurnIDs :many
 SELECT CAST(retry_of_turn_id AS TEXT) AS retry_of_turn_id
 FROM conversation_turns
 WHERE conversation_id = sqlc.arg(conversation_id)
   AND retry_of_turn_id IS NOT NULL;
+
+-- Prompt eligibility must survive the original message falling outside a page.
+-- name: SelectConversationHumanPromptTurnIDs :many
+SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id
+FROM conversation_messages
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND turn_id IS NOT NULL AND role = 'user' AND origin = 'human';
+
+-- Earliest prompt of the named turns. A page that ends among interleaved turns
+-- (a prompt queued while another turn runs) reaches back to it, so a turn is not
+-- shown without its prompt. Zero when none of the turns has a prompt.
+-- name: SelectConversationEarliestTurnPrompt :one
+SELECT CAST(COALESCE(MIN(sequence), 0) AS INTEGER) AS first_sequence
+FROM conversation_messages
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND role = 'user'
+  AND turn_id IN (sqlc.slice('turn_ids'));
 
 -- name: SelectConversationQueuedEditDelivery :one
 SELECT request_hash FROM conversation_queued_edit_deliveries
@@ -1514,3 +1956,67 @@ SET state = 'rejected',
 WHERE conversation_id = ?
   AND client_message_id = ?
   AND state = 'reserved';
+
+-- A completed turn proves usable authentication only for the current controller
+-- and active provider branch, after the last rejection/account change.
+-- name: SelectVerifiedAuthenticationTurn :one
+SELECT t.* FROM conversation_turns t
+JOIN conversations c ON c.id = t.conversation_id
+WHERE t.conversation_id = sqlc.arg(conversation_id)
+  AND t.controller_generation = COALESCE(
+    (SELECT controller_generation FROM review WHERE id = c.current_review_id),
+    (SELECT controller_generation FROM sessions WHERE id = c.current_session_id))
+  AND (sqlc.arg(generation) = '' OR t.controller_generation = sqlc.arg(generation))
+  AND t.branch_id = c.active_branch_id
+  AND t.state = 'completed' AND t.rolled_back_at IS NULL
+  AND t.provider_turn_id <> ''
+  AND EXISTS (
+    SELECT 1 FROM conversation_provider_events e
+    JOIN conversation_branches b ON b.id = c.active_branch_id
+    WHERE e.conversation_id = c.id AND e.branch_id = c.active_branch_id
+      AND e.method = 'turn.completed'
+      AND json_extract(e.payload_json, '$.providerTurnId') = t.provider_turn_id
+      AND json_extract(e.payload_json, '$.turnState') = 'completed'
+      AND json_extract(e.payload_json, '$.error') IS NULL
+      AND COALESCE(json_extract(e.payload_json, '$.providerConversationId'), '') IN ('', b.provider_conversation_id)
+  )
+  AND (sqlc.arg(provider_turn_id) = '' OR t.provider_turn_id = sqlc.arg(provider_turn_id))
+  AND t.started_at > sqlc.arg(after_at)
+  AND t.completed_at > sqlc.arg(after_at)
+ORDER BY t.completed_at DESC LIMIT 1;
+
+
+-- Queued work stays held behind a failed source until its retry succeeds.
+-- name: SelectLatestAutoResumeConversationTurn :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = sqlc.arg(conversation_id)
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_turns.* FROM conversation_turns
+JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
+WHERE conversation_turns.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_turns.state NOT IN ('queued', 'cancelled')
+  AND conversation_turns.promoted_to_turn_id IS NULL
+  AND conversation_turns.rolled_back_at IS NULL
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.sequence <= path.max_sequence
+      UNION ALL
+      SELECT 1 FROM conversation_activities AS lineage_activity
+      WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.sequence <= path.max_sequence
+  ))
+ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+LIMIT 1;

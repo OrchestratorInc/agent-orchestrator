@@ -11,7 +11,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
 )
@@ -26,11 +25,10 @@ type fakeStore struct {
 	prReviews               map[string][]domain.PullRequestReview
 	prComments              map[string][]domain.PullRequestComment
 	sessionAutoInjectReview *bool
+	autoInjectSets          []bool
 
 	updateCalls        int
 	activityUpdates    int
-	markCalls          int
-	markedIDs          []string
 	resolvedCommentIDs []string
 }
 
@@ -93,6 +91,12 @@ func (f *fakeStore) GetSession(_ context.Context, id domain.SessionID) (domain.S
 	return domain.SessionRecord{ID: id, AutoInjectReview: enabled}, true, nil
 }
 
+func (f *fakeStore) SetSessionAutoInjectReview(_ context.Context, _ domain.SessionID, autoInject bool, _ time.Time) (bool, error) {
+	f.autoInjectSets = append(f.autoInjectSets, autoInject)
+	f.sessionAutoInjectReview = &autoInject
+	return true, nil
+}
+
 func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
 	for i := range f.batchRuns {
 		if f.batchRuns[i].ID == id {
@@ -120,26 +124,6 @@ func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status d
 	f.run.Body = body
 	f.run.GithubReviewID = githubReviewID
 	f.run.AutoInjectReview = autoInjectReview
-	return true, nil
-}
-
-func (f *fakeStore) MarkReviewRunDelivered(_ context.Context, id string, deliveredAt time.Time) (bool, error) {
-	f.markCalls++
-	f.markedIDs = append(f.markedIDs, id)
-	if f.run.ID == id && f.run.Status == domain.ReviewRunComplete && f.run.DeliveredAt == nil {
-		f.run.Status = domain.ReviewRunDelivered
-		f.run.DeliveredAt = &deliveredAt
-	}
-	for i := range f.batchRuns {
-		if f.batchRuns[i].ID == id && f.batchRuns[i].Status == domain.ReviewRunComplete && f.batchRuns[i].DeliveredAt == nil {
-			f.batchRuns[i].Status = domain.ReviewRunDelivered
-			f.batchRuns[i].DeliveredAt = &deliveredAt
-			return true, nil
-		}
-	}
-	if f.run.ID != id || f.run.Status != domain.ReviewRunDelivered {
-		return false, nil
-	}
 	return true, nil
 }
 
@@ -283,43 +267,26 @@ func TestRequestRereviewRejectsUnknownReviewer(t *testing.T) {
 	}
 }
 
-type fakeReducer struct {
-	outcome    lifecycle.ReviewDeliveryOutcome
-	err        error
-	batchCalls int
-	gotBatchID string
-	gotBatch   []lifecycle.ReviewResult
-}
-
-func (f *fakeReducer) ApplyReviewBatch(_ context.Context, _ domain.SessionID, batchID string, results []lifecycle.ReviewResult) (lifecycle.ReviewDeliveryOutcome, error) {
-	f.batchCalls++
-	f.gotBatchID = batchID
-	f.gotBatch = append([]lifecycle.ReviewResult(nil), results...)
-	return f.outcome, f.err
-}
-
-func TestSubmitPersistsThenAppliesThenStampsDelivered(t *testing.T) {
-	now := time.Unix(100, 0).UTC()
+// AO never sends the worker a separate verdict message: the reviewer's posted
+// review reaches the worker through the SCM observer like any other review. A
+// submitted result is recorded and stays complete.
+func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 	st := &fakeStore{
 		ok:  true,
 		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
 		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
 	}
-	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
-	svc := New(nil, st, WithLifecycleReducer(reducer), WithClock(func() time.Time { return now }))
+	svc := New(nil, st)
 
-	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987")
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-	if st.updateCalls != 1 || reducer.batchCalls != 1 || st.markCalls != 1 {
-		t.Fatalf("calls update/reducer/mark = %d/%d/%d", st.updateCalls, reducer.batchCalls, st.markCalls)
-	}
-	if reducer.gotBatch[0].Verdict != domain.VerdictChangesRequested || reducer.gotBatch[0].Body != "fix it" || reducer.gotBatch[0].GithubReviewID != "987" {
-		t.Fatalf("reducer saw wrong result: %+v", reducer.gotBatch)
-	}
-	if run.Status != domain.ReviewRunDelivered || run.DeliveredAt == nil || !run.DeliveredAt.Equal(now) {
-		t.Fatalf("run not stamped delivered: %+v", run)
+	for _, verdict := range []domain.ReviewVerdict{domain.VerdictChangesRequested, domain.VerdictApproved} {
+		st.run.Status, st.run.Verdict, st.run.Body = domain.ReviewRunRunning, domain.VerdictNone, ""
+		run, err := svc.Submit(context.Background(), "mer-1", "run-1", verdict, "body", "987")
+		if err != nil {
+			t.Fatalf("%s: Submit: %v", verdict, err)
+		}
+		if run.Status != domain.ReviewRunComplete || run.DeliveredAt != nil {
+			t.Fatalf("%s: run = %+v, want complete and never stamped delivered", verdict, run)
+		}
 	}
 }
 
@@ -437,15 +404,14 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 		},
 		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
 	}
-	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
-	svc := New(nil, st, WithLifecycleReducer(reducer))
+	svc := New(nil, st)
 
 	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview || reducer.batchCalls != 0 || st.markCalls != 0 {
-		t.Fatalf("disabled review = %+v reducerCalls=%d markCalls=%d", run, reducer.batchCalls, st.markCalls)
+	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
+		t.Fatalf("disabled review = %+v", run)
 	}
 
 	enabled := true
@@ -454,8 +420,8 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview || reducer.batchCalls != 0 || st.markCalls != 0 {
-		t.Fatalf("retry rewrote or delivered disabled review = %+v reducerCalls=%d markCalls=%d", run, reducer.batchCalls, st.markCalls)
+	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
+		t.Fatalf("retry rewrote disabled review = %+v", run)
 	}
 }
 
@@ -498,78 +464,7 @@ func TestSubmitEmitsChangesRequestedNotification(t *testing.T) {
 	}
 }
 
-func TestSubmitBatchRunDoesNotWaitForOtherRunningRuns(t *testing.T) {
-	now := time.Unix(100, 0).UTC()
-	st := &fakeStore{
-		ok:  true,
-		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
-		batchRuns: []domain.ReviewRun{
-			{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
-			{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
-		},
-		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}, {URL: "pr2", HeadSHA: "sha2"}},
-	}
-	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
-	svc := New(nil, st, WithLifecycleReducer(reducer), WithClock(func() time.Time { return now }))
-
-	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix pr1", "101")
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-	if run.Status != domain.ReviewRunDelivered || run.DeliveredAt == nil || !run.DeliveredAt.Equal(now) {
-		t.Fatalf("first submit status = %+v, want delivered", run)
-	}
-	if reducer.batchCalls != 1 || len(reducer.gotBatch) != 1 || reducer.gotBatch[0].RunID != "run-1" || st.markCalls != 1 {
-		t.Fatalf("submitted run should deliver independently: batchCalls=%d got=%+v markCalls=%d", reducer.batchCalls, reducer.gotBatch, st.markCalls)
-	}
-}
-
-func TestSubmitManySendsCombinedChangesRequested(t *testing.T) {
-	now := time.Unix(100, 0).UTC()
-	st := &fakeStore{
-		ok: true,
-		batchRuns: []domain.ReviewRun{
-			{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
-			{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
-			{ID: "run-3", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr3", TargetSHA: "sha3", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved},
-			{ID: "run-4", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr4", TargetSHA: "old", Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested, Body: "stale"},
-			{ID: "run-5", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr5", TargetSHA: "sha5", Status: domain.ReviewRunFailed},
-		},
-		prs: []domain.PullRequest{
-			{URL: "pr1", HeadSHA: "sha1"},
-			{URL: "pr2", HeadSHA: "sha2"},
-			{URL: "pr3", HeadSHA: "sha3"},
-			{URL: "pr4", HeadSHA: "new"},
-			{URL: "pr5", HeadSHA: "sha5"},
-		},
-	}
-	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
-	svc := New(nil, st, WithLifecycleReducer(reducer), WithClock(func() time.Time { return now }))
-
-	runs, err := svc.SubmitMany(context.Background(), "mer-1", []SubmittedReview{
-		{RunID: "run-1", Verdict: domain.VerdictChangesRequested, Body: "fix pr1", GithubReviewID: "101"},
-		{RunID: "run-2", Verdict: domain.VerdictChangesRequested, Body: "fix pr2", GithubReviewID: "102"},
-		{RunID: "run-3", Verdict: domain.VerdictApproved},
-	})
-	if err != nil {
-		t.Fatalf("SubmitMany: %v", err)
-	}
-	if reducer.batchCalls != 1 || reducer.gotBatchID != "batch-1" {
-		t.Fatalf("batch delivery calls/id = %d/%q", reducer.batchCalls, reducer.gotBatchID)
-	}
-	if len(reducer.gotBatch) != 2 || reducer.gotBatch[0].RunID != "run-1" || reducer.gotBatch[1].RunID != "run-2" {
-		t.Fatalf("delivered batch = %+v, want run-1 and run-2 only", reducer.gotBatch)
-	}
-	if st.markCalls != 2 {
-		t.Fatalf("markCalls = %d, want 2", st.markCalls)
-	}
-	if runs[0].Status != domain.ReviewRunDelivered || runs[0].DeliveredAt == nil || !runs[0].DeliveredAt.Equal(now) ||
-		runs[1].Status != domain.ReviewRunDelivered || runs[1].DeliveredAt == nil || !runs[1].DeliveredAt.Equal(now) {
-		t.Fatalf("submitted runs not stamped delivered: %+v", runs)
-	}
-}
-
-func TestSubmitManySkipsSupersededRunAndDeliversSiblings(t *testing.T) {
+func TestSubmitManySkipsSupersededRunAndRecordsSiblings(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	st := &fakeStore{
 		ok: true,
@@ -581,21 +476,17 @@ func TestSubmitManySkipsSupersededRunAndDeliversSiblings(t *testing.T) {
 		},
 		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}, {URL: "pr2", HeadSHA: "sha2-new"}},
 	}
-	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
-	svc := New(nil, st, WithLifecycleReducer(reducer), WithClock(func() time.Time { return now }))
+	svc := New(nil, st, WithClock(func() time.Time { return now }))
 
 	runs, err := svc.SubmitMany(context.Background(), "mer-1", []SubmittedReview{
 		{RunID: "run-1", Verdict: domain.VerdictChangesRequested, Body: "fix pr1"},
 		{RunID: "run-2", Verdict: domain.VerdictChangesRequested, Body: "fix pr2"},
 	})
 	if err != nil {
-		t.Fatalf("SubmitMany must deliver valid siblings when one run was superseded: %v", err)
+		t.Fatalf("SubmitMany must record valid siblings when one run was superseded: %v", err)
 	}
-	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunDelivered {
-		t.Fatalf("want only run-1 delivered, got %+v", runs)
-	}
-	if reducer.batchCalls != 1 || len(reducer.gotBatch) != 1 || reducer.gotBatch[0].RunID != "run-1" {
-		t.Fatalf("want run-1 delivered independently; batchCalls=%d got=%+v", reducer.batchCalls, reducer.gotBatch)
+	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunComplete {
+		t.Fatalf("want only run-1 recorded, got %+v", runs)
 	}
 }
 
@@ -606,8 +497,7 @@ func TestSubmitManyRejectsOnlySupersededRuns(t *testing.T) {
 			ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunCancelled,
 		}},
 	}
-	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
-	svc := New(nil, st, WithLifecycleReducer(reducer))
+	svc := New(nil, st)
 
 	if _, err := svc.SubmitMany(context.Background(), "mer-1", []SubmittedReview{{
 		RunID: "run-1", Verdict: domain.VerdictApproved,
@@ -615,57 +505,6 @@ func TestSubmitManyRejectsOnlySupersededRuns(t *testing.T) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
 	} else if !strings.Contains(err.Error(), "superseded: run-1") {
 		t.Fatalf("err = %v, want rejected run id", err)
-	}
-	if reducer.batchCalls != 0 {
-		t.Fatalf("only superseded runs must not trigger delivery: batchCalls=%d", reducer.batchCalls)
-	}
-}
-
-func TestSubmitBatchApprovedOnlySendsNothing(t *testing.T) {
-	st := &fakeStore{
-		ok:  true,
-		run: domain.ReviewRun{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
-		batchRuns: []domain.ReviewRun{
-			{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved},
-			{ID: "run-2", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
-		},
-		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}, {URL: "pr2", HeadSHA: "sha2"}},
-	}
-	reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
-	svc := New(nil, st, WithLifecycleReducer(reducer))
-
-	if _, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictApproved, "", "102"); err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-	if reducer.batchCalls != 0 || st.markCalls != 0 {
-		t.Fatalf("approved-only batch should not deliver: batchCalls=%d markCalls=%d", reducer.batchCalls, st.markCalls)
-	}
-}
-
-func TestSubmitDeliveryFailureLeavesCompletedUndeliveredForRetry(t *testing.T) {
-	sendErr := errors.New("dead pane")
-	st := &fakeStore{
-		ok:  true,
-		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
-		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
-	}
-	reducer := &fakeReducer{err: sendErr}
-	svc := New(nil, st, WithLifecycleReducer(reducer))
-
-	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987"); !errors.Is(err, sendErr) {
-		t.Fatalf("err = %v, want sendErr", err)
-	}
-	if st.run.Status != domain.ReviewRunComplete || st.run.DeliveredAt != nil || st.markCalls != 0 {
-		t.Fatalf("failed delivery should leave completed/undelivered without stamp: %+v markCalls=%d", st.run, st.markCalls)
-	}
-
-	reducer.err = nil
-	reducer.outcome = lifecycle.ReviewDeliverySent
-	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, "fix it", "987"); err != nil {
-		t.Fatalf("retry Submit: %v", err)
-	}
-	if st.updateCalls != 1 || reducer.batchCalls != 2 || st.run.Status != domain.ReviewRunDelivered || st.run.DeliveredAt == nil {
-		t.Fatalf("retry should not rewrite result and should stamp delivery: update=%d reducer=%d run=%+v", st.updateCalls, reducer.batchCalls, st.run)
 	}
 }
 
@@ -685,14 +524,13 @@ func TestSubmitCompletedRetryRejectsDifferentRecordedFields(t *testing.T) {
 				Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
 				Body: "fix it", GithubReviewID: "987",
 			}}
-			reducer := &fakeReducer{outcome: lifecycle.ReviewDeliverySent}
-			svc := New(nil, st, WithLifecycleReducer(reducer))
+			svc := New(nil, st)
 
 			if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictChangesRequested, tt.body, tt.githubReviewID); !errors.Is(err, ErrInvalid) {
 				t.Fatalf("err = %v, want ErrInvalid", err)
 			}
-			if st.updateCalls != 0 || st.markCalls != 0 || reducer.batchCalls != 0 {
-				t.Fatalf("mismatched retry should not rewrite or deliver: update=%d mark=%d reducer=%d", st.updateCalls, st.markCalls, reducer.batchCalls)
+			if st.updateCalls != 0 {
+				t.Fatalf("mismatched retry should not rewrite: update=%d", st.updateCalls)
 			}
 		})
 	}
@@ -878,7 +716,7 @@ func TestTriggerReportsWhoStartedThePass(t *testing.T) {
 		want string
 	}{
 		{"manual", func(s *Service) error {
-			_, err := s.Trigger(context.Background(), "worker-1", "", domain.AgentConfig{})
+			_, err := s.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{}})
 			return err
 		}, "manual"},
 		{"auto", func(s *Service) error {
@@ -891,7 +729,7 @@ func TestTriggerReportsWhoStartedThePass(t *testing.T) {
 			sink := &recordingSink{}
 			svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 			svc.engineTrigger = func(
-				_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+				_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 			) (reviewcore.TriggerResult, error) {
 				return reviewcore.TriggerResult{
 					Run:         domain.ReviewRun{Harness: "claude-code"},
@@ -908,8 +746,8 @@ func TestTriggerReportsWhoStartedThePass(t *testing.T) {
 			if got[0].Payload["trigger"] != c.want {
 				t.Fatalf("trigger = %#v, want %q", got[0].Payload["trigger"], c.want)
 			}
-			if got[0].Payload["reused"] != false {
-				t.Fatalf("reused = %#v, want false", got[0].Payload["reused"])
+			if _, ok := got[0].Payload["reused"]; ok {
+				t.Fatalf("reused is still present: %#v", got[0].Payload["reused"])
 			}
 		})
 	}
@@ -919,7 +757,7 @@ func TestTriggerFailureReportsWhichPassFailed(t *testing.T) {
 	sink := &recordingSink{}
 	svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 	svc.engineTrigger = func(
-		_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+		_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 	) (reviewcore.TriggerResult, error) {
 		return reviewcore.TriggerResult{}, fmt.Errorf("%w: no PR", reviewcore.ErrInvalid)
 	}
@@ -927,10 +765,8 @@ func TestTriggerFailureReportsWhichPassFailed(t *testing.T) {
 	if _, err := svc.TriggerAuto(context.Background(), "worker-1", "codex"); err == nil {
 		t.Fatal("TriggerAuto: want error")
 	}
-	if got := sink.named("ao.review.triggered"); len(got) != 1 {
-		t.Fatalf("ao.review.triggered count = %d, want 1 even on failure", len(got))
-	} else if got[0].Payload["trigger"] != "auto" {
-		t.Fatalf("triggered payload = %#v, want trigger=auto", got[0].Payload)
+	if got := sink.named("ao.review.triggered"); len(got) != 0 {
+		t.Fatalf("ao.review.triggered count = %d, want 0 on failure", len(got))
 	}
 	got := sink.named("ao.review.trigger_failed")
 	if len(got) != 1 {
@@ -946,13 +782,13 @@ func TestTriggerRejectsInvalidReviewerConfigBeforeEngine(t *testing.T) {
 	svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 	called := false
 	svc.engineTrigger = func(
-		_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+		_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 	) (reviewcore.TriggerResult, error) {
 		called = true
 		return reviewcore.TriggerResult{}, nil
 	}
 
-	if _, err := svc.Trigger(context.Background(), "worker-1", "", domain.AgentConfig{Mode: "turbo"}); !errors.Is(err, ErrInvalid) {
+	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{Mode: "turbo"}}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("err = %v, want ErrInvalid", err)
 	}
 	if called {
@@ -1002,51 +838,47 @@ func TestRestartedManualPassIsNotReportedAsReused(t *testing.T) {
 	sink := &recordingSink{}
 	svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 	svc.engineTrigger = func(
-		_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+		_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 	) (reviewcore.TriggerResult, error) {
 		return reviewcore.TriggerResult{Run: domain.ReviewRun{Harness: "codex"}, Created: true, CreatedRuns: nil}, nil
 	}
 
-	if _, err := svc.Trigger(context.Background(), "worker-1", "", domain.AgentConfig{Model: "gpt-5-mini"}); err != nil {
+	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{Model: "gpt-5-mini"}}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	got := sink.named("ao.review.triggered")
 	if len(got) != 1 {
 		t.Fatalf("ao.review.triggered count = %d, want 1", len(got))
 	}
-	if got[0].Payload["reused"] != false || got[0].Payload["created_runs"] != 0 {
+	if _, ok := got[0].Payload["reused"]; ok || got[0].Payload["created_runs"] != 0 {
 		t.Fatalf("payload = %#v, want reused=false created_runs=0 for a restart", got[0].Payload)
 	}
 }
 
-func TestReusedManualPassStaysATrigger(t *testing.T) {
+func TestReusedManualPassDoesNotReportNewReview(t *testing.T) {
 	sink := &recordingSink{}
 	svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 	svc.engineTrigger = func(
-		_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+		_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 	) (reviewcore.TriggerResult, error) {
 		return reviewcore.TriggerResult{Run: domain.ReviewRun{Harness: "codex"}, CreatedRuns: nil}, nil
 	}
 
-	if _, err := svc.Trigger(context.Background(), "worker-1", "", domain.AgentConfig{}); err != nil {
+	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{}}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
 	got := sink.named("ao.review.triggered")
-	if len(got) != 1 {
-		t.Fatalf("ao.review.triggered count = %d, want 1", len(got))
+	if len(got) != 0 {
+		t.Fatalf("ao.review.triggered count = %d, want 0 for reuse", len(got))
 	}
-	if got[0].Payload["reused"] != true || got[0].Payload["trigger"] != "manual" {
-		t.Fatalf("payload = %#v, want reused=true trigger=manual", got[0].Payload)
-	}
-	if n := len(sink.events); n != 1 {
-		t.Fatalf("emitted %d events, want only the trigger for a manual reuse", n)
+	if n := len(sink.events); n != 0 {
+		t.Fatalf("emitted %d events, want none for a manual reuse", n)
 	}
 }
 
-// ao.review.triggered now counts every attempt, including automatic no-op
-// sweeps. created_runs and reused distinguish real work from an already
-// running or skipped pass.
-func TestReusedOrSkippedAutoPassStillCountsAsTriggered(t *testing.T) {
+// An automatic sweep with an existing review or a skipped session is not a
+// newly triggered review.
+func TestReusedOrSkippedAutoPassDoesNotCountAsTriggered(t *testing.T) {
 	cases := []struct {
 		name    string
 		result  reviewcore.TriggerResult
@@ -1064,7 +896,7 @@ func TestReusedOrSkippedAutoPassStillCountsAsTriggered(t *testing.T) {
 			sink := &recordingSink{}
 			svc := New(nil, &fakeStore{}, WithTelemetry(sink))
 			svc.engineTrigger = func(
-				_ context.Context, _ domain.SessionID, _ domain.ReviewerHarness, _ domain.AgentConfig, _ domain.ReviewTriggerSource,
+				_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions,
 			) (reviewcore.TriggerResult, error) {
 				return c.result, nil
 			}
@@ -1075,20 +907,392 @@ func TestReusedOrSkippedAutoPassStillCountsAsTriggered(t *testing.T) {
 				}
 			}
 			got := sink.named("ao.review.triggered")
-			if len(got) != 6 {
-				t.Fatalf("ao.review.triggered count = %d, want 6", len(got))
-			}
-			for i, ev := range got {
-				if ev.Payload["trigger"] != "auto" || ev.Payload["created_runs"] != 0 || ev.Payload["reused"] != true {
-					t.Fatalf("event %d payload = %#v, want trigger=auto created_runs=0 reused=true", i, ev.Payload)
-				}
-				if ev.Payload["harness"] != c.harness {
-					t.Fatalf("event %d harness = %#v, want %#v", i, ev.Payload["harness"], c.harness)
-				}
+			if len(got) != 0 {
+				t.Fatalf("ao.review.triggered count = %d, want 0", len(got))
 			}
 			if failed := sink.named("ao.review.trigger_failed"); len(failed) != 0 {
 				t.Fatalf("ao.review.trigger_failed count = %d, want 0", len(failed))
 			}
 		})
+	}
+}
+
+func TestTriggerRequestedEnablesAutoInjectOnlyAfterAPassStarts(t *testing.T) {
+	off := false
+	st := &fakeStore{sessionAutoInjectReview: &off}
+	sink := &recordingSink{}
+	svc := New(nil, st, WithTelemetry(sink))
+	var gotOpts reviewcore.TriggerOptions
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		gotOpts = opts
+		return reviewcore.TriggerResult{Created: true, CreatedRuns: []domain.ReviewRun{{ID: "run-1"}}}, nil
+	}
+
+	out, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{
+		Harness: domain.ReviewerCodex, Source: domain.ReviewTriggerAgent, RejectReviewedHead: true, EnableAutoInject: true,
+	})
+	if err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if !out.AutoInjectEnabled || len(st.autoInjectSets) != 1 || !st.autoInjectSets[0] {
+		t.Fatalf("outcome=%+v sets=%v, want auto-inject turned on once", out, st.autoInjectSets)
+	}
+	if gotOpts.Source != domain.ReviewTriggerAgent || !gotOpts.RejectReviewedHead || gotOpts.Harness != domain.ReviewerCodex {
+		t.Fatalf("engine opts = %+v, want the request forwarded", gotOpts)
+	}
+	if got := sink.named("ao.review.triggered"); len(got) != 1 || got[0].Payload["trigger"] != "agent" {
+		t.Fatalf("triggered events = %+v, want one agent trigger", got)
+	}
+
+	// Already on: nothing to change and nothing to report.
+	out, err = svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Source: domain.ReviewTriggerAgent, EnableAutoInject: true})
+	if err != nil {
+		t.Fatalf("second TriggerRequested: %v", err)
+	}
+	if out.AutoInjectEnabled || len(st.autoInjectSets) != 1 {
+		t.Fatalf("outcome=%+v sets=%v, want no second write", out, st.autoInjectSets)
+	}
+}
+
+func TestTriggerRequestedLeavesAutoInjectWhenTheTriggerIsRejected(t *testing.T) {
+	off := false
+	st := &fakeStore{sessionAutoInjectReview: &off}
+	svc := New(nil, st)
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		return reviewcore.TriggerResult{}, fmt.Errorf("%w: PR #1 head abc was already reviewed", reviewcore.ErrHeadAlreadyReviewed)
+	}
+
+	_, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true, EnableAutoInject: true})
+	if !errors.Is(err, ErrHeadAlreadyReviewed) || !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrHeadAlreadyReviewed", err)
+	}
+	if len(st.autoInjectSets) != 0 {
+		t.Fatalf("a rejected trigger changed auto-inject: %v", st.autoInjectSets)
+	}
+	if kind := reviewErrorKind(err); kind != "conflict" {
+		t.Fatalf("error kind = %q, want conflict", kind)
+	}
+}
+
+func TestTriggerRequestedRejectsDaemonOnlySourceAndContradictoryPolicy(t *testing.T) {
+	svc := New(nil, &fakeStore{})
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		t.Fatal("engine must not run")
+		return reviewcore.TriggerResult{}, nil
+	}
+	for _, req := range []TriggerRequest{
+		{Source: domain.ReviewTriggerAuto},
+		{Source: "robot"},
+		{Rerun: true, RejectReviewedHead: true},
+	} {
+		if _, err := svc.TriggerRequested(context.Background(), "worker-1", req); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("req %+v: err = %v, want ErrInvalid", req, err)
+		}
+	}
+}
+
+type fakePRRefresher struct {
+	calls []string
+	err   map[string]error
+	// order records refreshes relative to the engine trigger.
+	order *[]string
+	// branchPRs, otherAuthorPRs, and findErr answer FindBranchPRs; finds
+	// counts the lookups.
+	branchPRs      []string
+	otherAuthorPRs []string
+	findErr        error
+	finds          int
+}
+
+func (f *fakePRRefresher) FindBranchPRs(context.Context, domain.SessionID) (BranchPRs, error) {
+	f.finds++
+	return BranchPRs{Own: f.branchPRs, OtherAuthor: f.otherAuthorPRs}, f.findErr
+}
+
+func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL string) error {
+	f.calls = append(f.calls, prURL)
+	if f.order != nil {
+		*f.order = append(*f.order, "refresh "+prURL)
+	}
+	return f.err[prURL]
+}
+
+// A requested review fetches the worker's open PRs fresh first, so it reviews
+// the commit really on the PR, and only then plans the pass.
+func TestTriggerRequestedRefreshesOpenPRsBeforePlanning(t *testing.T) {
+	var order []string
+	st := &fakeStore{prs: []domain.PullRequest{
+		{URL: "https://api/pr/1", HTMLURL: "https://github.com/o/r/pull/1"},
+		{URL: "https://api/pr/2", HTMLURL: "https://github.com/o/r/pull/2", Merged: true},
+	}}
+	refresher := &fakePRRefresher{order: &order, err: map[string]error{"https://github.com/o/r/pull/1": errors.New("provider down")}}
+	svc := New(nil, st, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true}); err != nil {
+		t.Fatalf("a failed best-effort refresh must fall back to stored facts: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh https://github.com/o/r/pull/1,trigger" {
+		t.Fatalf("order = %v, want the open PR refreshed (merged one skipped) before planning", order)
+	}
+
+	order = nil
+	if _, err := svc.TriggerAuto(context.Background(), "mer-1", "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(order, ",") != "trigger" {
+		t.Fatalf("auto-review must not refresh (the observer just ran): %v", order)
+	}
+}
+
+// Naming a PR AO does not track yet attaches it and reviews only it. If it
+// cannot be fetched there is nothing to review, so that is an error.
+func TestTriggerRequestedNamedPRAttachesItAndTargetsIt(t *testing.T) {
+	st := &fakeStore{}
+	refresher := &fakePRRefresher{}
+	svc := New(nil, st, WithPRRefresher(refresher))
+	var got reviewcore.TriggerOptions
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		got = opts
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	url := "https://github.com/o/r/pull/9"
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, PRURL: " " + url + " "}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if len(refresher.calls) != 1 || refresher.calls[0] != url || got.PRURL != url {
+		t.Fatalf("refresh=%v target=%q, want the named PR attached then targeted", refresher.calls, got.PRURL)
+	}
+
+	refresher.err = map[string]error{url: fmt.Errorf("%w: owned", reviewcore.ErrPROwnedElsewhere)}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{PRURL: url}); !errors.Is(err, ErrPROwnedElsewhere) {
+		t.Fatalf("err = %v, want the attach failure for an untracked PR", err)
+	}
+}
+
+type recordingReviewRefresher struct{ prURLs []string }
+
+func (r *recordingReviewRefresher) RequestReviewRefresh(prURL string) {
+	r.prURLs = append(r.prURLs, prURL)
+}
+
+func TestSubmitRequestsReviewRefreshForProviderPostedReview(t *testing.T) {
+	const prURL = "https://github.com/acme/app/pull/42"
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", PRURL: prURL, Status: domain.ReviewRunRunning},
+		prs: []domain.PullRequest{{URL: prURL, Number: 42}},
+	}
+	refresher := &recordingReviewRefresher{}
+	svc := New(nil, st, WithThreadRefresher(refresher))
+
+	for range 2 {
+		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "looks good", "987"); err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+	}
+	if len(refresher.prURLs) != 1 || refresher.prURLs[0] != prURL {
+		t.Fatalf("refresh requests = %v, want one for %s", refresher.prURLs, prURL)
+	}
+
+	st.run = domain.ReviewRun{ID: "run-2", SessionID: "mer-1", PRURL: prURL, Status: domain.ReviewRunRunning}
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-2", domain.VerdictApproved, "looks good", ""); err != nil {
+		t.Fatalf("Submit without provider review: %v", err)
+	}
+	if len(refresher.prURLs) != 1 {
+		t.Fatalf("a review not posted to the provider requested a refresh: %v", refresher.prURLs)
+	}
+}
+
+// A review requested right after opening a PR, before the SCM observer has
+// discovered it, attaches the one open PR from the worker's branch and
+// reviews it instead of failing.
+func TestTriggerRequestedAttachesTheBranchPRWhenNoneIsTracked(t *testing.T) {
+	var order []string
+	url := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{order: &order, branchPRs: []string{url}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+url+",trigger" {
+		t.Fatalf("order = %v, want the branch PR attached before planning", order)
+	}
+
+	// A failed lookup says so, with the exact retry, instead of claiming the
+	// branch has no PR.
+	order = nil
+	refresher.branchPRs, refresher.findErr = nil, errors.New("provider down")
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "could not look up open PRs") || !strings.Contains(err.Error(), "`ao review trigger mer-1 --pr <url>`") {
+		t.Fatalf("err = %v, want a lookup failure with the exact retry", err)
+	}
+	if len(order) != 0 {
+		t.Fatalf("order = %v, want no attach and no planning", order)
+	}
+}
+
+// A branch PR that cannot be attached right after the lookup found it (closed
+// in between) is reported as found but not attached, keeping the claim's
+// error class, and no review starts.
+func TestTriggerRequestedReportsABranchPRThatCouldNotBeAttached(t *testing.T) {
+	url := "https://github.com/o/r/pull/9"
+	claimErr := fmt.Errorf("%w: pull request %s was not found on the provider", ErrNotFound, url)
+	refresher := &fakePRRefresher{branchPRs: []string{url}, err: map[string]error{url: claimErr}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		t.Fatal("a PR that could not be attached must not start a review")
+		return reviewcore.TriggerResult{}, nil
+	}
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want the claim's ErrNotFound kept", err)
+	}
+	for _, want := range []string{"found PR " + url + " on worker \"mer-1\"'s branch but could not attach it", "`ao review trigger mer-1 --pr " + url + "`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to contain %s", err, want)
+		}
+	}
+}
+
+// The engine may say the worker's branch has no open PR only when a lookup
+// ran and found none, not when it was skipped.
+func TestTriggerRequestedTellsTheEngineWhetherTheBranchLookupFoundNone(t *testing.T) {
+	var got []bool
+	trigger := func(_ context.Context, _ domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		got = append(got, opts.BranchPRLookupFoundNone)
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	open := &fakeStore{prs: []domain.PullRequest{{URL: "https://github.com/o/r/pull/8"}}}
+	for _, svc := range []*Service{
+		New(nil, &fakeStore{}, WithPRRefresher(&fakePRRefresher{})),
+		New(nil, &fakeStore{}, WithPRRefresher(namedPRRefresher{})),
+		New(nil, open, WithPRRefresher(&fakePRRefresher{})),
+		New(nil, &fakeStore{}),
+	} {
+		svc.engineTrigger = trigger
+		if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
+			t.Fatalf("TriggerRequested: %v", err)
+		}
+	}
+	if fmt.Sprint(got) != "[true false false false]" {
+		t.Fatalf("lookup found none = %v, want true only after a lookup that found nothing", got)
+	}
+}
+
+// namedPRRefresher refreshes named PRs but cannot look up a branch's PRs.
+type namedPRRefresher struct{}
+
+func (namedPRRefresher) RefreshPR(context.Context, domain.SessionID, string) error { return nil }
+
+// A session whose tracked PR was closed or merged may have opened a new PR on
+// the same branch. With no open tracked PR, the branch lookup still runs and
+// attaches it.
+func TestTriggerRequestedAttachesTheBranchPRWhenOnlyAClosedPRIsTracked(t *testing.T) {
+	var order []string
+	url := "https://github.com/o/r/pull/9"
+	st := &fakeStore{prs: []domain.PullRequest{{URL: "https://api/pr/8", HTMLURL: "https://github.com/o/r/pull/8", Closed: true}}}
+	refresher := &fakePRRefresher{order: &order, branchPRs: []string{url}}
+	svc := New(nil, st, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, RejectReviewedHead: true}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+url+",trigger" {
+		t.Fatalf("order = %v, want the open branch PR attached before planning", order)
+	}
+}
+
+func TestTriggerRequestedNamesEachBranchPRWhenSeveralAreOpen(t *testing.T) {
+	refresher := &fakePRRefresher{branchPRs: []string{"https://github.com/o/r/pull/9", "https://github.com/o/r/pull/10"}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		t.Fatal("ambiguous branch PRs must not start a review")
+		return reviewcore.TriggerResult{}, nil
+	}
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{"`ao review trigger mer-1 --pr https://github.com/o/r/pull/9`", "`ao review trigger mer-1 --pr https://github.com/o/r/pull/10`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to contain %s", err, want)
+		}
+	}
+	if len(refresher.calls) != 0 {
+		t.Fatalf("attached %v, want nothing attached", refresher.calls)
+	}
+}
+
+// A PR another developer opened on a branch of the same name is not attached
+// on its own, the rule the SCM observer follows; the error says a PR from
+// another author was found and gives the --pr override.
+func TestTriggerRequestedDoesNotAttachAnotherAuthorsBranchPR(t *testing.T) {
+	url := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{otherAuthorPRs: []string{url}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		t.Fatal("another author's PR must not start a review")
+		return reviewcore.TriggerResult{}, nil
+	}
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{"found a PR from another author on its branch", "`ao review trigger mer-1 --pr " + url + "`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to contain %s", err, want)
+		}
+	}
+	if len(refresher.calls) != 0 {
+		t.Fatalf("attached %v, want nothing attached", refresher.calls)
+	}
+}
+
+// The worker's own PR is still attached when another author also has one on
+// a branch of the same name.
+func TestTriggerRequestedAttachesTheOwnBranchPRBesideAnotherAuthors(t *testing.T) {
+	var order []string
+	own := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{order: &order, branchPRs: []string{own}, otherAuthorPRs: []string{"https://github.com/o/r/pull/10"}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+own+",trigger" {
+		t.Fatalf("order = %v, want only the worker's own PR attached", order)
+	}
+}
+
+// Naming a PR with --pr stays the override: it is attached as named, without
+// a branch lookup or an authorship check.
+func TestTriggerRequestedNamedPRSkipsTheBranchLookup(t *testing.T) {
+	var order []string
+	url := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{order: &order, otherAuthorPRs: []string{url}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger "+opts.PRURL)
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, PRURL: url}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+url+",trigger "+url || refresher.finds != 0 {
+		t.Fatalf("order = %v finds = %d, want the named PR attached and reviewed without a branch lookup", order, refresher.finds)
 	}
 }

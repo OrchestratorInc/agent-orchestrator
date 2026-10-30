@@ -25,6 +25,7 @@ import {
 } from "../../lib/api";
 import { AgentLogo } from "../../lib/AgentLogo";
 import { haptics } from "../../lib/haptics";
+import { hostRouteMatches } from "../../lib/hostRoute";
 import { openGitHub } from "../../lib/openGitHub";
 import { formatExternalReviewMessage, formatInlineReviewCommentMessage } from "../../lib/reviewFeedback";
 import { ItemActionsMenu } from "../../lib/item-actions-menu";
@@ -32,7 +33,7 @@ import type { ItemAction } from "../../lib/item-actions-menu.types";
 import { ReviewerPicker } from "../../lib/reviewer-picker";
 import { defaultReviewerHarness, reviewerChoices, reviewerSelectionChanged, reviewerSwitchSelection, reviewerSwitchWarning } from "../../lib/reviewerControls";
 import { pullRequestSummaryForURL } from "../../lib/reviewView";
-import { useApp } from "../../lib/store";
+import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { SHEET_SCROLL_CONTENT, SheetHeader } from "../../lib/ui";
@@ -44,9 +45,15 @@ type ReviewPolicies = Record<PolicyKey, boolean>;
 type BusyAction = { kind: "reviewer" | "rerequest" | "resolve" | "send"; id: string } | { kind: "policy"; id: PolicyKey };
 
 export default function ReviewActionsSheet() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	return hostId ? <HostScope key={hostId} hostId={hostId}><ReviewActionsContent /></HostScope> : <ReviewActionsContent />;
+}
+
+function ReviewActionsContent() {
 	const styles = useThemedStyles(makeStyles);
-	const { config } = useApp();
-	const { sessionId = "", prUrl = "" } = useLocalSearchParams<{ sessionId?: string; prUrl?: string; reviewer?: string }>();
+	const { config, currentHostId } = useApp();
+	const { sessionId = "", prUrl = "", hostId: routeHostId } = useLocalSearchParams<{ sessionId?: string; prUrl?: string; reviewer?: string; hostId?: string }>();
+	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const [agents, setAgents] = useState<ReturnType<typeof reviewerChoices>>([]);
 	const [models, setModels] = useState<AgentModelCatalog>();
 	const [reviewerConfig, setReviewerConfig] = useState<ReviewerAgentConfig>({});
@@ -65,7 +72,7 @@ export default function ReviewActionsSheet() {
 	const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
 
 	const load = useCallback(async () => {
-		if (!config || !sessionId) return;
+		if (!hostMatches || !config || !sessionId) return;
 		setError("");
 		try {
 			const [catalog, prs, session, reviewState] = await Promise.all([getAgents(config), getSessionPR(config, sessionId), getSession(config, sessionId), getSessionReviews(config, sessionId)]);
@@ -86,17 +93,19 @@ export default function ReviewActionsSheet() {
 		} catch (cause) {
 			setError(cause instanceof Error ? cause.message : "Could not load review actions.");
 		}
-	}, [config, prUrl, sessionId]);
+	}, [config, hostMatches, prUrl, sessionId]);
 
 	useEffect(() => { void load(); }, [load]);
 	useEffect(() => {
 		const request = ++modelRequest.current;
 		setModels(undefined);
-		if (!config || !effectiveReviewer) return;
-		void getAgentModels(config, effectiveReviewer)
+		if (!hostMatches || !config || !effectiveReviewer) return;
+		const polling = new AbortController();
+		void getAgentModels(config, effectiveReviewer, undefined, polling.signal)
 			.then((result) => { if (request === modelRequest.current) setModels(result); })
 			.catch(() => { if (request === modelRequest.current) setModels(undefined); });
-	}, [config, effectiveReviewer]);
+		return () => polling.abort();
+	}, [config, effectiveReviewer, hostMatches]);
 	const aoReviewIds = useMemo(() => new Set((reviews?.runs ?? []).filter((run) => run.prUrl === pr?.url).map((run) => run.githubReviewId).filter(Boolean)), [pr?.url, reviews?.runs]);
 	const externalReviewers = useMemo(() => uniqueReviewers(pr, aoReviewIds), [aoReviewIds, pr]);
 	// Like the spawn sheet, only offer reviewers that can run now. A saved
@@ -220,7 +229,7 @@ export default function ReviewActionsSheet() {
 		setBusy({ kind: "send", id });
 		setError("");
 		try {
-			await sendMessage(config, sessionId, message);
+			await sendMessage(config, sessionId, message, { userAuthored: true });
 			setSent((current) => new Set(current).add(id));
 			haptics.success();
 		} catch (cause) {
@@ -230,6 +239,7 @@ export default function ReviewActionsSheet() {
 		}
 	}
 
+	if (!hostMatches) return <View style={styles.screen}><SheetHeader title="Review actions" subtitle="Review belongs to another machine" /></View>;
 	return <ScrollView style={styles.screen} contentContainerStyle={SHEET_SCROLL_CONTENT} nestedScrollEnabled keyboardShouldPersistTaps="handled">
 		<SheetHeader title="Review actions" subtitle={pr ? `PR #${pr.number} · ${pr.title}` : "Reviewer and GitHub feedback"} />
 		{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
@@ -260,7 +270,7 @@ export default function ReviewActionsSheet() {
 				onChange={(value) => void updatePolicy("autoInjectCI", value)}
 			/>
 		</Section>
-		<Section title="AO REVIEWER" subtitle="Choose who runs the next AO review and which model it uses.">
+		<Section title="ORCHESTRATOR REVIEWER" subtitle="Choose who runs the next Orchestrator review and which model it uses.">
 			{availableReviewers.length || reviewerOverride ? <ReviewerPicker
 				reviewers={availableReviewers}
 				selectedReviewer={reviewerOverride}
@@ -294,7 +304,7 @@ export default function ReviewActionsSheet() {
 		{comments.length ? <Section title="UNRESOLVED COMMENTS" subtitle="Use ⋯ to open the exact GitHub file and line, send feedback to the worker, or resolve it once addressed.">
 			{comments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} sent={sent.has(item.comment.url || `${item.reviewerId}:${item.comment.file}`)} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && void openGitHub(item.comment.url, { fromSheet: true })} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => confirmResolve(item.comment)} />)}
 		</Section> : null}
-		{resolvedComments.length ? <Section title="RESOLVED COMMENTS" subtitle="Previously addressed AO and GitHub feedback.">
+		{resolvedComments.length ? <Section title="RESOLVED COMMENTS" subtitle="Previously addressed Orchestrator and GitHub feedback.">
 			{resolvedComments.map((item) => <FeedbackCard key={item.comment.url || `${item.reviewerId}:${item.comment.file}`} item={item} resolved aoOwned={Boolean(item.comment.reviewId && aoReviewIds.has(item.comment.reviewId))} sent={sent.has(item.comment.url || `${item.reviewerId}:${item.comment.file}`)} busy={busy} disabled={Boolean(busy)} onOpen={() => item.comment.url && void openGitHub(item.comment.url, { fromSheet: true })} onSend={() => void send(item.comment.url || `${item.reviewerId}:${item.comment.file}`, formatInlineReviewCommentMessage(item.comment, item.reviewerId))} onResolve={() => undefined} />)}
 		</Section> : null}
 		{!pr && !error && !prMissing ? <Text style={styles.empty}>No GitHub feedback is available for this pull request yet.</Text> : null}
@@ -345,7 +355,7 @@ function FeedbackCard({ item, resolved = false, aoOwned, sent, busy, disabled, o
 	];
 	const working = (busy?.kind === "send" && busy.id === id) || (busy?.kind === "resolve" && busy.id === comment.url);
 	return <View style={styles.feedbackCard}>
-		<View style={styles.feedbackHeading}><Text style={styles.feedbackAuthor}>{reviewerId}</Text><Text style={styles.feedbackVerdict}>{aoOwned ? "AO review" : "GitHub"} · {resolved ? "resolved" : "open"}</Text><ItemActionsMenu accessibilityLabel={`Actions for ${reviewerId}'s comment`} actions={actions} disabled={disabled} loading={working} /></View>
+		<View style={styles.feedbackHeading}><Text style={styles.feedbackAuthor}>{reviewerId}</Text><Text style={styles.feedbackVerdict}>{aoOwned ? "Orchestrator review" : "GitHub"} · {resolved ? "resolved" : "open"}</Text><ItemActionsMenu accessibilityLabel={`Actions for ${reviewerId}'s comment`} actions={actions} disabled={disabled} loading={working} /></View>
 		{comment.autoInjectReview === false ? <Text style={styles.notInjected}>Not automatically sent to the worker</Text> : null}
 		<Text style={styles.feedbackLocation}>{comment.file ? `${comment.file}${comment.line ? `:${comment.line}` : ""}` : "Inline comment"}</Text>
 		<Text style={styles.feedbackBody}>{comment.body || "No comment text."}</Text>

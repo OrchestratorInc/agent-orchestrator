@@ -58,15 +58,6 @@ export function selectedPrimarySidebarDestination(
 	return active === "settings" ? previous : active;
 }
 
-function normalizedPath(pathname: string): string {
-	const path = pathname.replace(/^\/\(tabs\)/, "") || "/";
-	return path.length > 1 ? path.replace(/\/$/, "") : path;
-}
-
-export function sidebarNavigationSettled(pendingPath: string | null, pathname: string): boolean {
-	return pendingPath !== null && normalizedPath(pendingPath) === normalizedPath(pathname);
-}
-
 type ScrollableSidebarRef = {
 	scrollTo?: (options: { y: number; animated: boolean }) => void;
 	getScrollResponder?: () => {

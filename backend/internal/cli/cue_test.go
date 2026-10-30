@@ -125,6 +125,13 @@ func TestCueCommandExposesCreateAndReadOnlyList(t *testing.T) {
 	}
 }
 
+func TestCueCreateHasNoDescriptionFlag(t *testing.T) {
+	cmd := newCueCreateCommand(&commandContext{})
+	if cmd.Flags().Lookup("description") != nil {
+		t.Fatal("description flag is still available")
+	}
+}
+
 func TestCueListReadsProjectDefinitions(t *testing.T) {
 	cfg := setConfigEnv(t)
 	var listed bool

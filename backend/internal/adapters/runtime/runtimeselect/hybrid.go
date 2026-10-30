@@ -25,6 +25,7 @@ type routedBackend interface {
 	ports.StyledTerminalOutputReader
 	ports.SupervisedProcessInspector
 	ports.ExactSupervisedProcessInspector
+	ports.RuntimeProcessRootInspector
 	ports.SupervisedProcessRecordInspector
 }
 
@@ -40,6 +41,7 @@ var _ ports.RuntimeRestarter = (*hybridRuntime)(nil)
 var _ ports.StyledTerminalOutputReader = (*hybridRuntime)(nil)
 var _ ports.SupervisedProcessInspector = (*hybridRuntime)(nil)
 var _ ports.ExactSupervisedProcessInspector = (*hybridRuntime)(nil)
+var _ ports.RuntimeProcessRootInspector = (*hybridRuntime)(nil)
 var _ ports.SupervisedProcessRecordInspector = (*hybridRuntime)(nil)
 
 func newHybridRuntime(legacy, direct routedBackend, log *slog.Logger, platform string) *hybridRuntime {
@@ -131,6 +133,12 @@ func (r *hybridRuntime) GetOutput(ctx context.Context, handle ports.RuntimeHandl
 	return backend.GetOutput(ctx, raw, lines)
 }
 
+// ServerPID always asks the legacy (tmux) backend: it's the one shared
+// detached server, regardless of which backend owns any given session.
+func (r *hybridRuntime) ServerPID(ctx context.Context) (int, bool) {
+	return r.legacy.ServerPID(ctx)
+}
+
 func (r *hybridRuntime) GetStyledOutput(ctx context.Context, handle ports.RuntimeHandle, lines int) (string, error) {
 	backend, raw := r.route(handle)
 	return backend.GetStyledOutput(ctx, raw, lines)
@@ -146,6 +154,15 @@ func (r *hybridRuntime) IsExactSupervisedProcessAlive(ctx context.Context, handl
 	backend, raw := r.route(handle)
 	ref = normalizeProcessRef(handle, raw, ref)
 	return backend.IsExactSupervisedProcessAlive(ctx, raw, ref)
+}
+
+func (r *hybridRuntime) RunningWorkloadCommands(ctx context.Context, handle ports.RuntimeHandle, ref ports.SupervisedProcessRef) (int, error) {
+	backend, raw := r.route(handle)
+	inspector, ok := backend.(ports.WorkloadCommandInspector)
+	if !ok {
+		return 0, errors.New("runtime cannot inspect the commands an agent is running")
+	}
+	return inspector.RunningWorkloadCommands(ctx, raw, normalizeProcessRef(handle, raw, ref))
 }
 
 func normalizeProcessRef(handle, raw ports.RuntimeHandle, ref ports.SupervisedProcessRef) ports.SupervisedProcessRef {
@@ -178,6 +195,11 @@ func (r *hybridRuntime) Restart(ctx context.Context, handle ports.RuntimeHandle,
 	// Re-enter the normal creation policy so an unavailable replacement host
 	// can still recover the session on tmux and return its unprefixed handle.
 	return r.Create(ctx, cfg)
+}
+
+func (r *hybridRuntime) ProcessRootPIDs(ctx context.Context, handle ports.RuntimeHandle) ([]int, error) {
+	backend, raw := r.route(handle)
+	return backend.ProcessRootPIDs(ctx, raw)
 }
 
 func (r *hybridRuntime) route(handle ports.RuntimeHandle) (routedBackend, ports.RuntimeHandle) {

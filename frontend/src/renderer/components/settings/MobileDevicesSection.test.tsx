@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "../../lib/api-client";
 import { appI18n } from "../../i18n";
-import { MobileDevicesSection, mobileDevicesQueryKey } from "./MobileDevicesSection";
+import { MobileDevicesSection, REMOVE_UNDO_MS, mobileDevicesQueryKey } from "./MobileDevicesSection";
 
 function renderSection() {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -20,12 +20,12 @@ const twoDevices = {
 		devices: [
 			{
 				installId: "i1", token: "ExponentPushToken[a]", deviceName: "iPhone", platform: "ios",
-				muted: false, live: true, notificationsEnabled: true,
+				live: true, notificationsEnabled: true,
 				createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
 			},
 			{
 				installId: "i2", token: "ExponentPushToken[b]", deviceName: "M31s", platform: "android",
-				muted: true, live: false, notificationsEnabled: true, createdAt: new Date().toISOString(),
+				live: false, notificationsEnabled: true, createdAt: new Date().toISOString(),
 				lastSeenAt: new Date(Date.now() - 7200_000).toISOString(),
 			},
 		],
@@ -34,6 +34,7 @@ const twoDevices = {
 
 describe("MobileDevicesSection", () => {
 	afterEach(async () => {
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 		await appI18n.changeLanguage("en");
 	});
@@ -44,43 +45,121 @@ describe("MobileDevicesSection", () => {
 
 		expect(await screen.findByText("iPhone")).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Connected devices" })).toBeInTheDocument();
-		const deviceList = screen.getByRole("list");
-		expect(deviceList).toHaveClass("divide-y");
-		expect(deviceList).not.toHaveClass("rounded-md", "border");
-		expect(screen.getAllByRole("listitem")[0]).not.toHaveClass("rounded-lg", "border", "px-3", "bg-[var(--color-bg-settings-input)]");
+		// Devices are rows of one grouped settings card, in a list for screen readers.
+		const iphoneRow = screen.getByText("iPhone").closest(".settings-row-bar");
+		expect(iphoneRow).not.toBeNull();
+		expect(iphoneRow).toHaveAttribute("role", "listitem");
+		expect(iphoneRow?.parentElement).toHaveAttribute("role", "list");
+		expect(iphoneRow?.closest(".settings-grouped-rows")).not.toBeNull();
+		expect(iphoneRow).not.toHaveClass("rounded-lg", "border", "bg-[var(--color-bg-settings-input)]");
 		expect(screen.getByText("M31s")).toBeInTheDocument();
 		expect(screen.queryByText("Live")).not.toBeInTheDocument();
-		expect(screen.getAllByTestId("bell")).toHaveLength(2);
+		// Push notifications are managed on the phone, so rows have no per-device switch.
+		expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 		expect(screen.queryByText(/2 hours ago/)).not.toBeInTheDocument();
 	});
 
-	it("mutes a device", async () => {
-		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
-		const patch = vi.spyOn(apiClient, "PATCH").mockResolvedValue({ data: { muted: true } } as never);
-		renderSection();
-
-		const toggle = await screen.findByRole("switch", { name: /notifications for iPhone/i });
-		fireEvent.click(toggle);
-
-		await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
-		expect(patch.mock.calls[0][1]).toMatchObject({
-			params: { path: { installId: "i1" } },
-			body: { muted: true },
-		});
-	});
-
-	it("removes a device only after confirmation", async () => {
-		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
+	it("removes a device in one click and sends the DELETE once the undo window ends", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
 		const del = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		// Once deleted, the daemon stops listing the phone.
+		vi.spyOn(apiClient, "GET").mockImplementation((async () =>
+			del.mock.calls.length === 0
+				? twoDevices
+				: { data: { devices: [twoDevices.data.devices[1]] } }) as never);
 		renderSection();
 
 		const removeButton = await screen.findByRole("button", { name: /remove iPhone/i });
 		expect(removeButton.querySelector(".lucide-trash-2")).toBeInTheDocument();
 		fireEvent.click(removeButton);
+
+		// The row turns into a "removed · Undo" row right away; nothing is sent yet.
+		expect(screen.getByText("iPhone removed")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /undo removing iPhone/i })).toHaveFocus();
+		expect(screen.queryByRole("button", { name: /confirm remove/i })).not.toBeInTheDocument();
 		expect(del).not.toHaveBeenCalled();
 
-		fireEvent.click(screen.getByRole("button", { name: /confirm remove/i }));
+		await act(async () => {
+			vi.advanceTimersByTime(REMOVE_UNDO_MS);
+		});
 		await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
+		expect(del.mock.calls[0][1]).toMatchObject({ params: { path: { installId: "i1" } } });
+		await waitFor(() => expect(screen.queryByText("iPhone removed")).not.toBeInTheDocument());
+		expect(screen.queryByText("iPhone")).not.toBeInTheDocument();
+		expect(screen.getByText("M31s")).toBeInTheDocument();
+	});
+
+	it("undo restores the row and never sends the DELETE", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
+		const del = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		renderSection();
+
+		fireEvent.click(await screen.findByRole("button", { name: /remove iPhone/i }));
+		fireEvent.click(screen.getByRole("button", { name: /undo removing iPhone/i }));
+
+		expect(screen.getByText("iPhone")).toBeInTheDocument();
+		await act(async () => {
+			vi.advanceTimersByTime(REMOVE_UNDO_MS * 2);
+		});
+		expect(del).not.toHaveBeenCalled();
+		await waitFor(() => expect(screen.getByRole("button", { name: /remove iPhone/i })).toHaveFocus());
+	});
+
+	it("commits a pending removal when settings closes mid-countdown", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
+		const del = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		const { unmount } = renderSection();
+
+		fireEvent.click(await screen.findByRole("button", { name: /remove iPhone/i }));
+		unmount();
+
+		await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
+	});
+
+	it("keeps Undo disabled for a removal whose DELETE has started, even after another removal starts", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
+		// Neither DELETE settles, so both stay in flight.
+		const del = vi.spyOn(apiClient, "DELETE").mockReturnValue(new Promise(() => {}) as never);
+		renderSection();
+
+		fireEvent.click(await screen.findByRole("button", { name: /remove iPhone/i }));
+		await act(async () => {
+			vi.advanceTimersByTime(REMOVE_UNDO_MS);
+		});
+		await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
+
+		fireEvent.click(screen.getByRole("button", { name: /remove M31s/i }));
+		await act(async () => {
+			vi.advanceTimersByTime(REMOVE_UNDO_MS);
+		});
+		await waitFor(() => expect(del).toHaveBeenCalledTimes(2));
+
+		const iphoneUndo = screen.getByRole("button", { name: /undo removing iPhone/i });
+		expect(iphoneUndo).toBeDisabled();
+		fireEvent.click(iphoneUndo);
+		expect(screen.getByText("iPhone removed")).toBeInTheDocument();
+	});
+
+	it("shows a removed phone again once a later poll lists it (it re-registered)", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		// The daemon keeps listing iPhone: it re-registered right after removal.
+		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
+		const del = vi.spyOn(apiClient, "DELETE").mockResolvedValue({ data: undefined } as never);
+		const { client } = renderSection();
+
+		fireEvent.click(await screen.findByRole("button", { name: /remove iPhone/i }));
+		await act(async () => {
+			vi.advanceTimersByTime(REMOVE_UNDO_MS);
+		});
+		await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
+
+		await act(async () => {
+			await client.refetchQueries({ queryKey: mobileDevicesQueryKey });
+		});
+		expect(await screen.findByRole("button", { name: /remove iPhone/i })).toBeInTheDocument();
 	});
 
 	it("renders nothing when no devices are paired", async () => {
@@ -136,20 +215,6 @@ describe("MobileDevicesSection", () => {
 		expect(screen.queryByText(/No devices paired yet/i)).not.toBeInTheDocument();
 	});
 
-	it("surfaces a failed mute instead of silently reverting with no explanation", async () => {
-		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
-		vi.spyOn(apiClient, "PATCH").mockResolvedValue({
-			data: undefined,
-			error: { error: "device not found", code: "DEVICE_NOT_FOUND", message: "Device not found", requestId: "req-3" },
-		} as never);
-		renderSection();
-
-		const toggle = await screen.findByRole("switch", { name: /notifications for iPhone/i });
-		fireEvent.click(toggle);
-
-		expect(await screen.findByText(/Device not found/i)).toBeInTheDocument();
-	});
-
 	it("surfaces a failed remove instead of silently reverting with no explanation", async () => {
 		vi.spyOn(apiClient, "GET").mockResolvedValue(twoDevices as never);
 		vi.spyOn(apiClient, "DELETE").mockResolvedValue({
@@ -158,10 +223,15 @@ describe("MobileDevicesSection", () => {
 		} as never);
 		renderSection();
 
+		vi.useFakeTimers({ shouldAdvanceTime: true });
 		fireEvent.click(await screen.findByRole("button", { name: /remove iPhone/i }));
-		fireEvent.click(screen.getByRole("button", { name: /confirm remove/i }));
+		await act(async () => {
+			vi.advanceTimersByTime(REMOVE_UNDO_MS);
+		});
 
 		expect(await screen.findByText(/Device not found/i)).toBeInTheDocument();
+		// The row comes back so the device is still manageable.
+		expect(screen.getByRole("button", { name: /remove iPhone/i })).toBeInTheDocument();
 	});
 
 	it("keeps row order stable across polls instead of following server re-sorts", async () => {
@@ -181,13 +251,13 @@ describe("MobileDevicesSection", () => {
 		expect(names).toEqual(["iPhone", "M31s"]);
 	});
 
-	it("keeps a device without a push token manageable without extra status copy", async () => {
+	it("keeps a device without a push token removable without extra status copy", async () => {
 		const noToken = {
 			data: {
 				devices: [
 					{
 						installId: "i3", deviceName: "Pixel Announce", platform: "android",
-						muted: false, live: true, notificationsEnabled: false,
+						live: true, notificationsEnabled: false,
 						createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(),
 					},
 				],
@@ -201,12 +271,13 @@ describe("MobileDevicesSection", () => {
 		expect(screen.queryByText("Live")).not.toBeInTheDocument();
 		expect(screen.queryByText(/Notifications not enabled on this device/i)).not.toBeInTheDocument();
 
-		const toggle = screen.getByRole("switch", { name: /notifications for Pixel Announce/i });
-		expect(toggle).toBeDisabled();
+		expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 
-		// Still removable.
+		vi.useFakeTimers({ shouldAdvanceTime: true });
 		fireEvent.click(screen.getByRole("button", { name: /remove Pixel Announce/i }));
-		fireEvent.click(screen.getByRole("button", { name: /confirm remove/i }));
+		await act(async () => {
+			vi.advanceTimersByTime(REMOVE_UNDO_MS);
+		});
 		await waitFor(() => expect(del).toHaveBeenCalledTimes(1));
 	});
 

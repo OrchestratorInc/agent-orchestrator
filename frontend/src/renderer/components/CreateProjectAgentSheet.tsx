@@ -3,6 +3,7 @@ import {
 	ProjectSetupFormView,
 	ProjectSetupHeaderView,
 } from "@aoagents/product-ui";
+import { useUiStore } from "../stores/ui-store";
 import { useTranslation } from "react-i18next";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useQuery } from "@tanstack/react-query";
@@ -46,8 +47,12 @@ export type CreateProjectAgentSelection = {
 const EMPTY_INTAKE: IntakeForm = { enabled: false, repo: "", assignee: "" };
 const AGENT_MENU_WIDTH = "w-56! min-w-56! max-w-56!";
 type CreateProjectAgentSheetProps = {
+	preparedClonePath?: string;
+	onKeepCheckout?: () => void;
 	error?: string | null;
 	action?: "create" | "clone";
+	connected?: boolean;
+	hostId?: string;
 	isCreating: boolean;
 	isInitializing?: boolean;
 	kind: ProjectKind;
@@ -106,8 +111,12 @@ function projectSheetError(error: string, action: "create" | "clone"): SheetErro
 }
 
 export function CreateProjectAgentSheet({
+	preparedClonePath,
+	onKeepCheckout,
 	action = "create",
+	connected = true,
 	error,
+	hostId,
 	isCreating,
 	isInitializing = false,
 	kind,
@@ -121,6 +130,8 @@ export function CreateProjectAgentSheet({
 	shake = false,
 }: CreateProjectAgentSheetProps) {
 	const { t } = useTranslation();
+	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
+	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
 	const [isExiting, setIsExiting] = useState(false);
 	const contentOpen = open || isExiting;
 	const displayedAction = useRef(action);
@@ -131,46 +142,49 @@ export function CreateProjectAgentSheet({
 		displayedError.current = error;
 		displayedOnBack.current = onBack;
 	}
-	const agentsQuery = useAgentReadinessQuery(contentOpen);
-	useEnsureAgentReadiness({ enabled: contentOpen });
+	const agentsQuery = useAgentReadinessQuery(contentOpen && connected, hostId);
+	useEnsureAgentReadiness({ enabled: contentOpen && connected, hostId });
 	const agents = agentsQuery.data;
 	const agentOptions = useMemo(() => agents?.agents ?? [], [agents]);
+	const selectableAgents = useMemo(() => hostId ? agentOptions.filter(isLaunchableAgent) : agentOptions, [agentOptions, hostId]);
 	// "configured" belongs here even though it is not a verified credential.
 	// This picks the default preselection, not a gate — every agent stays
 	// selectable — and excluding it would silently stop preselecting an agent
 	// whose credentials AO simply cannot validate, which is most of them.
 	const authorizedAgents = useMemo(
 		() =>
-			agentOptions.filter((agent) =>
+			selectableAgents.filter((agent) =>
 				["authorized", "not_applicable", "configured"].includes(agent.authentication.state),
 			),
-		[agentOptions],
+		[selectableAgents],
 	);
-	// This sheet creates local projects only (cloud uses CloudProjectCard),
-	// so local session history is the inference signal.
-	const workspacesQuery = useQuery({ ...workspaceQueryOptions, enabled: open });
+	// Local history is an inference signal only for local projects. A remote
+	// project must never infer its agent from this laptop's sessions.
+	const workspacesQuery = useQuery({ ...workspaceQueryOptions, enabled: open && !hostId });
 	const sessionHistory = useMemo(
 		() => (workspacesQuery.data ?? []).flatMap((workspace) => workspace.sessions),
 		[workspacesQuery.data],
 	);
-	const isLoadingAgents = agents === undefined && agentsQuery.isFetching;
-	const agentsError = agentsQuery.isError
+	const isLoadingAgents = connected && agents === undefined && agentsQuery.isFetching;
+	const agentsError = !connected ? t("remote.connectBeforeStart") : agentsQuery.isError
 		? agentsQuery.error instanceof Error
 			? agentsQuery.error.message
 			: t("createProject.couldNotLoadAgents")
 		: null;
-	const displayError = agentsError;
+	const displayError = agentsError ?? (hostId && agents && selectableAgents.length === 0 ? t("agentSelector.noneReady") : null);
 	const [workerAgent, setWorkerAgent] = useState("");
 	const [orchestratorAgent, setOrchestratorAgent] = useState("");
 	const [workerAgentTouched, setWorkerAgentTouched] = useState(false);
 	const [orchestratorAgentTouched, setOrchestratorAgentTouched] = useState(false);
 	useEnsureAgentReadiness({
 		agentIds: [workerAgent, orchestratorAgent],
-		enabled: contentOpen && (workerAgent !== "" || orchestratorAgent !== ""),
+		enabled: contentOpen && connected && (workerAgent !== "" || orchestratorAgent !== ""),
+		hostId,
+		purpose: hostId ? "launch" : "display",
 	});
 	const isBusy = isCreating || isInitializing;
 	const [intake, setIntake] = useState<IntakeForm>(EMPTY_INTAKE);
-	const { settings } = useSettings();
+	const { settings } = useSettings(hostId);
 	const intakeVisible = !!settings?.trackerIntakeEnabled;
 	const intakeIncomplete = intakeVisible && intakeNeedsRule(intake);
 	const canSubmit =
@@ -182,7 +196,9 @@ export function CreateProjectAgentSheet({
 		}) &&
 		!intakeIncomplete &&
 		!isBusy &&
-		!isLoadingAgents;
+		!isLoadingAgents && connected && (!hostId || (
+			agents !== undefined && selectableAgents.some((agent) => agent.id === workerAgent) && selectableAgents.some((agent) => agent.id === orchestratorAgent)
+		));
 	const sheetError = displayedError.current
 		? projectSheetError(displayedError.current, displayedAction.current)
 		: null;
@@ -209,9 +225,11 @@ export function CreateProjectAgentSheet({
 		}
 	}, [authorizedAgents, open, orchestratorAgentTouched, sessionHistory, workerAgentTouched]);
 
+	if (isBusy) return null;
+
 	return (
 		<Dialog.Root
-			open={open}
+			open={open && !settingsOpen}
 			onOpenChange={(next) => {
 				if (isBusy) return;
 				setIsExiting(!next);
@@ -220,7 +238,7 @@ export function CreateProjectAgentSheet({
 		>
 			<Dialog.Portal>
 				<Dialog.Content
-					className={cn("fixed left-1/2 top-1/2 z-overlay w-dialog-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-border bg-popover p-0 text-popover-foreground shadow-xl data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none", shake && "modal-shake")}
+					className={cn("fixed left-1/2 top-1/2 z-overlay w-dialog-lg -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-lg border border-(--color-border-overlay) bg-popover p-0 text-popover-foreground shadow-(--shadow-popover) data-[state=open]:animate-modal-in data-[state=closed]:animate-modal-out motion-reduce:animate-none", shake && "modal-shake")}
 					onAnimationEnd={(event) => {
 						if (!open && event.target === event.currentTarget) setIsExiting(false);
 					}}
@@ -254,6 +272,7 @@ export function CreateProjectAgentSheet({
 								: t("createProject.setupProject")
 						}
 					/>
+					{preparedClonePath ? <p className="px-4 pt-3 text-[12px] text-muted-foreground">{t("createProject.cloneReady", { path: preparedClonePath })}</p> : null}
 					<ProjectSetupFormView
 						agentControls={{
 							worker: (
@@ -262,11 +281,12 @@ export function CreateProjectAgentSheet({
 									label={t("createProject.workerAgent")}
 									placeholder={t("createProject.selectWorker")}
 									value={workerAgent}
-									agents={agentOptions}
+									agents={selectableAgents}
 									disabled={isLoadingAgents}
 									labelClassName="agents-sheet-label"
 									triggerClassName="agents-sheet-control"
 									contentClassName="agents-sheet-menu"
+									hostId={hostId}
 									onChange={(value) => {
 										setWorkerAgent(value);
 										setWorkerAgentTouched(true);
@@ -279,11 +299,12 @@ export function CreateProjectAgentSheet({
 									label={t("createProject.orchestratorAgent")}
 									placeholder={t("createProject.selectOrchestrator")}
 									value={orchestratorAgent}
-									agents={agentOptions}
+									agents={selectableAgents}
 									disabled={isLoadingAgents}
 									labelClassName="agents-sheet-label"
 									triggerClassName="agents-sheet-control"
 									contentClassName="agents-sheet-menu"
+									hostId={hostId}
 									onChange={(value) => {
 										setOrchestratorAgent(value);
 										setOrchestratorAgentTouched(true);
@@ -339,7 +360,7 @@ export function CreateProjectAgentSheet({
 								: null
 						}
 						submitLabel={
-							isInitializing
+							preparedClonePath && error && !isBusy ? t("createProject.cloneRetrySetup") : isInitializing
 								? t("createProject.settingUp")
 								: isCreating
 									? action === "clone"
@@ -356,6 +377,7 @@ export function CreateProjectAgentSheet({
 							(isCreating || isInitializing) && "before:size-3.5 before:shrink-0 before:animate-spin before:rounded-full before:border-2 before:border-current before:border-r-transparent before:content-['']",
 						)}
 					/>
+					{onKeepCheckout ? <div className="px-4 pb-4"><Button type="button" variant="outline" disabled={isBusy} onClick={onKeepCheckout}>{t("createProject.cloneKeepCheckout")}</Button></div> : null}
 				</Dialog.Content>
 			</Dialog.Portal>
 		</Dialog.Root>
@@ -395,9 +417,11 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	label,
 	onChange,
 	placeholder,
+	hostId,
 	manageAgents = true,
 	manageView = "local",
 	triggerClassName,
+	managementLabel: managementLabelOverride,
 	labelClassName,
 	contentClassName,
 	value,
@@ -413,11 +437,14 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	label: string;
 	onChange: (value: string) => void;
 	placeholder: string;
+	hostId?: string;
 	/** Cloud tasks use remote availability, not this computer's Harness settings. */
 	manageAgents?: boolean;
 	/** Which Harness settings view "manage" opens: local logins or cloud connections. */
 	manageView?: "local" | "cloud";
 	triggerClassName?: string;
+	/** Optional shorter action copy for compact selectors. */
+	managementLabel?: string;
 	labelClassName?: string;
 	contentClassName?: string;
 	value: string;
@@ -436,8 +463,8 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 	const needsSetup = manageAgents && hasReadinessSnapshot && Boolean(selectedOption && !isLaunchableAgent(selectedOption));
 	const visibleOptions = manageAgents && hasReadinessSnapshot ? options.filter(isLaunchableAgent) : options;
 	// Local is Harness settings' default view, so only cloud needs to ask for one.
-	const management = useAgentManagementMenu(needsSetup ? value : undefined, manageView === "cloud" ? "cloud" : undefined);
-	const manageLabel = manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage");
+	const management = useAgentManagementMenu(needsSetup ? value : undefined, hostId, manageView === "cloud" ? "cloud" : undefined);
+	const manageLabel = managementLabelOverride ?? (manageView === "cloud" ? t("agentSelector.manageCloud") : t("agentSelector.manage"));
 	const managementAction = manageAgents ? { label: manageLabel, onSelect: management.requestManagement } : undefined;
 	const setupHint = needsSetup ? <span className="text-xs text-muted-foreground">{t("agentSelector.needsSetup")}</span> : null;
 
@@ -460,7 +487,7 @@ export const RequiredAgentField = memo(function RequiredAgentField({
 					onCloseAutoFocus={management.onCloseAutoFocus}
 					disabled={disabled}
 					onChange={onChange}
-					triggerClassName={cn(variant === "settings-control" && "w-full justify-between", invalid && "text-error")}
+					triggerClassName={cn(variant === "settings-control" && "w-fit", invalid && "text-error")}
 					menuClassName={cn("settings-agent-menu-surface", AGENT_MENU_WIDTH)}
 					menuItemClassName="settings-agent-menu-item"
 					renderTrigger={() => (

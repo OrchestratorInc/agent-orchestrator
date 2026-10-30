@@ -54,21 +54,58 @@ export type PullRequestFacts = {
 	updatedAt: string;
 };
 
+/** What kind of durable output a session has produced, when known. */
+export type SessionOutputType = "none" | "pr" | "artifact" | "pr_artifact";
+
+/** One kind of file a worker can leave in its session-owned artifact directory. */
+export type ArtifactKind = "html" | "markdown" | "file";
+
+/**
+ * One file present in a session's artifact directory, mirroring the daemon's
+ * SessionArtifact wire shape. `previewUrl` is only set for `html` artifacts,
+ * which route through the existing Browser preview flow; `markdown`/`file`
+ * artifacts have no preview URL and open in the Files inspector instead.
+ * `rawUrl` is set for every kind: it is the artifact preview origin's raw
+ * byte fetch, a distinct host from the workspace preview origin, so it can
+ * never resolve to a workspace-relative file of the same path.
+ */
+export type SessionArtifact = {
+	kind: ArtifactKind;
+	name: string;
+	path: string;
+	previewUrl?: string;
+	rawUrl?: string;
+	/**
+	 * The page on its own inline origin, for framing it in the chat thread: its
+	 * files load same-origin there, and the daemon refuses that origin. html only.
+	 */
+	inlineUrl?: string;
+	size: number;
+	updatedAt: string;
+};
+
 /** The daemon-committed controller currently responsible for the session. */
 export type SessionMode = "chat" | "tui";
 
-export type AgentSwitchSummary = {
-	agentHandoffStatus: string;
-	errorCode?: string;
-	fromHarness: string;
-	id: string;
-	state: string;
-	targetHarness: string;
-	updatedAt?: string;
+/** One stage of an asynchronous Chat start. */
+export type SessionProvisionStep = {
+	id: "fetch" | "worktree" | "setup" | "agent";
+	status: "pending" | "running" | "done";
+	startedAt?: string;
+	endedAt?: string;
 };
 
+/** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
+export type SessionBranchState = { commits: number; remoteBranch?: string; unpushed: number };
+
+/** The session's current launch still runs a harness release an update has replaced. */
+export type SessionStaleBinary = { version: string; since: string; switchFailedAt?: string };
+
 export type WorkspaceSession = {
+	workspaceCleanup?: "pending" | "removed" | "preserved_dirty" | "failed" | "not_applicable";
 	id: string;
+	/** Installation ID of the daemon that owns this session; absent for local and Cloud. */
+	hostId?: string;
 	terminalHandleId?: string;
 	/** Opaque controller generation; changes even when a restarted PTY reuses its handle. */
 	terminalGeneration?: string;
@@ -129,6 +166,17 @@ export type WorkspaceSession = {
 	provisionState?: "provisioning" | "ready" | "failed";
 	/** Why a failed start stopped, in the daemon's words. */
 	provisionError?: string;
+	/**
+	 * The checklist an asynchronous start works through, in order. A step still
+	 * "running" on a failed session is the step that failed.
+	 */
+	provisionSteps?: SessionProvisionStep[];
+	/** The daemon's observed branch facts: commits on top of the base and whether they reached the remote. */
+	branchState?: SessionBranchState;
+	/** Set while the task's generated branch name is on the way; keep `branch` private meanwhile. */
+	branchNaming?: boolean;
+	/** Set while this launch runs a harness release an update replaced; it moves to `version` when idle. */
+	staleBinary?: SessionStaleBinary;
 	/** Durable runtime fact from the daemon; independent of the derived SCM-aware status. */
 	isTerminated?: boolean;
 	/** Whether the cloud worker has a current control-plane connection. */
@@ -146,11 +194,12 @@ export type WorkspaceSession = {
 	updatedAt: string;
 	/** ISO timestamp of the latest real user-authored message, when known. */
 	lastUserMessageAt?: string;
+	/** ISO timestamp of human direction or deliberate same-project orchestrator direction. */
+	lastInteractionAt?: string;
 	isPinned?: boolean;
 	pinnedAt?: string;
 	/** Raw agent lifecycle activity from the daemon. */
 	activity?: SessionActivity;
-	activeAgentSwitch?: AgentSwitchSummary;
 	/**
 	 * Live preview target set by the daemon (via `ao preview`) and streamed over
 	 * CDC. When non-empty, the browser panel opens and navigates here.
@@ -172,6 +221,15 @@ export type WorkspaceSession = {
 	 * done server-side, so {@link status} already reflects all of these.
 	 */
 	prs: PullRequestFacts[];
+	/** What kind of durable output this session has produced, when known. */
+	outputType?: SessionOutputType;
+	/** The deliverable requested at spawn; "artifact" for sessions started from Create artifact. */
+	requestedOutput?: "artifact";
+	/**
+	 * Files present in this session's artifact directory, when {@link outputType}
+	 * is `"artifact"`. Empty/absent for sessions whose output is a PR or nothing.
+	 */
+	artifactFiles?: SessionArtifact[];
 	/**
 	 * Present only for sessions that run in a control-plane sandbox. Carries the
 	 * org the session is scoped to so its terminal can be opened against the CP;
@@ -179,11 +237,22 @@ export type WorkspaceSession = {
 	 */
 	cloud?: {
 		orgId: string;
+		/** Reached through a share link: what this person may do comes from its grant. */
+		shared?: boolean;
+		/** The guest the session was started for, when someone the project was shared with asked for it. */
+		requestedBy?: { userId: string; name: string };
 		/** Maximum permission mode for Cloud turns in this session. */
 		permissionMode?: "read-only" | "standard" | "trusted";
 		sandboxProvider?: string;
 		desiredState?: string;
 		observedState?: string;
+		/** Sandbox runtime state; "terminated" means AO stopped retrying startup. */
+		runtimeState?: string;
+		runtimeError?: string;
+		/** Why the worker has not started; cleared once it connects. */
+		startupError?: { code: string; message: string; at: string; detail?: string };
+		/** Bring-your-own Coder workspace page; absent for managed compute. */
+		coderWorkspaceUrl?: string;
 	};
 };
 
@@ -246,6 +315,12 @@ export function primaryPR(session: WorkspaceSession): PullRequestFacts | undefin
 	return sortedPRs(session)[0];
 }
 
+/** Artifact files to show in the Summary panel, for sessions whose output includes artifacts. */
+export function sessionArtifacts(session: WorkspaceSession): SessionArtifact[] {
+	if (session.outputType !== "artifact" && session.outputType !== "pr_artifact") return [];
+	return session.artifactFiles ?? [];
+}
+
 export function isOrchestratorSession(session: Pick<WorkspaceSession, "id" | "kind">): boolean {
 	return session.kind === "orchestrator" || session.id.endsWith("-orchestrator");
 }
@@ -294,9 +369,14 @@ function sessionRecentlyMessagedNewer(a: WorkspaceSession, b: WorkspaceSession):
 	return a.id > b.id;
 }
 
-/** The sidebar's message-age label reads lastUserMessageAt, so the sort must too. */
+/** The sidebar's direction-age label and sort share the same timestamp. */
 function sessionLastMessageTimestamp(session: WorkspaceSession): number {
-	return validTimestamp(session.lastUserMessageAt) ?? validTimestamp(session.createdAt) ?? 0;
+	return (
+		validTimestamp(session.lastInteractionAt) ??
+		validTimestamp(session.lastUserMessageAt) ??
+		validTimestamp(session.createdAt) ??
+		0
+	);
 }
 
 function timestamp(value?: string): number {
@@ -348,6 +428,15 @@ export type { AttentionZone } from "../lib/session-presentation";
 
 export type WorkspaceSummary = {
 	id: string;
+	cloudOrgId?: string;
+	/**
+	 * Set on a cloud project someone in another organization shared with this
+	 * person. It carries no role: each shared session has its own grant, which
+	 * the session's live state reports.
+	 */
+	shared?: { byName?: string };
+	/** Installation ID of the daemon that owns this project; absent for local and Cloud. */
+	hostId?: string;
 	name: string;
 	/**
 	 * Discriminator for where the project lives. Local projects carry the

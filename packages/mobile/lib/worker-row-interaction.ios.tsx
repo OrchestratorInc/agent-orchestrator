@@ -7,8 +7,8 @@ import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 import { WorkerRowContextMenu } from "./worker-rename-context-menu";
 import type { WorkerRowInteractionProps } from "./worker-row-interaction.types";
 
-// Keep the established native iOS menu and swipe implementation untouched.
-// Android supplies its own interaction surface so its handlers cannot race each other.
+// Keep native iOS menus/glass controls, but don't build a SwiftUI hosting tree
+// behind every resting row. Android owns its separate interaction surface.
 export function WorkerRowInteraction({
 	sessionId,
 	enabled,
@@ -31,6 +31,7 @@ export function WorkerRowInteraction({
 	const swipeableRef = useRef<Swipeable>(null);
 	const renameGestureRef = useRef<GestureType | undefined>(undefined);
 	const [actionsOpen, setActionsOpen] = useState(false);
+	const [actionsMounted, setActionsMounted] = useState(false);
 	const close = () => swipeableRef.current?.close();
 
 	useEffect(() => {
@@ -52,16 +53,26 @@ export function WorkerRowInteraction({
 			simultaneousHandlers={renameGestureRef}
 			rightThreshold={WORKER_ACTION_REVEAL_WIDTH / 2}
 			overshootRight={false}
+			onSwipeableOpenStartDrag={() => setActionsMounted(true)}
 			onSwipeableWillOpen={() => {
+				setActionsMounted(true);
 				setActionsOpen(true);
 				onSwipeOpen(sessionId, close);
 				haptics.select();
 			}}
 			onSwipeableClose={() => {
+				// Also fires when a short/cancelled drag settles back at zero.
+				setActionsMounted(false);
 				setActionsOpen(false);
 				onSwipeClose(sessionId);
 			}}
-			renderRightActions={() => rightActions}
+			renderRightActions={() => (
+				// Width is present even before controls mount: Swipeable measures it
+				// to resolve the very first drag. Keep controls through close motion.
+				<View style={{ width: WORKER_ACTION_REVEAL_WIDTH }}>
+					{actionsMounted ? rightActions : null}
+				</View>
+			)}
 		>
 			{enabled ? (
 				<WorkerRowContextMenu

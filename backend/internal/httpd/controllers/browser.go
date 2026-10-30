@@ -10,11 +10,21 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/browserruntime"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 )
 
 const browserCapabilityHeader = "X-AO-Browser-Capability"
+
+var browserTelemetryActions = map[string]struct{}{
+	"open": {}, "snapshot": {}, "act": {}, "click": {}, "dblclick": {}, "focus": {}, "fill": {}, "type": {}, "press": {},
+	"hover": {}, "highlight": {}, "unhighlight": {}, "scrollintoview": {}, "drag": {}, "tabs": {}, "tab-new": {},
+	"tab-select": {}, "tab-close": {}, "scroll": {}, "select": {}, "check": {}, "uncheck": {}, "get": {}, "wait": {},
+	"screenshot": {}, "network-start": {}, "network-status": {}, "network-list": {}, "network-stop": {}, "network-clear": {},
+	"console": {}, "errors": {}, "frame": {}, "dialog": {}, "devtools-open": {}, "devtools-close": {},
+	"target": {},
+}
 
 // BrowserService authorizes and executes session-scoped browser operations.
 type BrowserService interface {
@@ -22,15 +32,61 @@ type BrowserService interface {
 	Execute(ctx context.Context, sessionID domain.SessionID, capability, action string, args map[string]interface{}) (browserruntime.Result, string, error)
 }
 
-// BrowserController exposes the loopback-only browser command API.
-type BrowserController struct {
-	Svc BrowserService
+// BrowserChromeService installs and reports Chrome mode: the native host
+// registration and extension bundle that let sessions use the user's Chrome.
+type BrowserChromeService interface {
+	ChromeStatus() BrowserChromeStatusResponse
+	SetupChrome() (BrowserChromeStatusResponse, error)
+	RemoveChrome() (BrowserChromeStatusResponse, error)
 }
 
-// Register adds browser status and command routes to the API router.
+// BrowserController exposes the loopback-only browser command API.
+type BrowserController struct {
+	Svc    BrowserService
+	Chrome BrowserChromeService
+}
+
+// Register adds browser status, command, and Chrome-mode routes to the API router.
 func (c *BrowserController) Register(r chi.Router) {
 	r.Get("/browser/status", c.status)
 	r.Post("/browser/commands", c.execute)
+	r.Get("/browser/chrome", c.chromeStatus)
+	r.Post("/browser/chrome", c.chromeSetup)
+	r.Delete("/browser/chrome", c.chromeRemove)
+}
+
+func (c *BrowserController) chromeStatus(w http.ResponseWriter, r *http.Request) {
+	if c.Chrome == nil {
+		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/browser/chrome")
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.Chrome.ChromeStatus())
+}
+
+func (c *BrowserController) chromeSetup(w http.ResponseWriter, r *http.Request) {
+	if c.Chrome == nil {
+		apispec.NotImplemented(w, r, http.MethodPost, "/api/v1/browser/chrome")
+		return
+	}
+	status, err := c.Chrome.SetupChrome()
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "BROWSER_CHROME_SETUP_FAILED", err.Error(), nil)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, status)
+}
+
+func (c *BrowserController) chromeRemove(w http.ResponseWriter, r *http.Request) {
+	if c.Chrome == nil {
+		apispec.NotImplemented(w, r, http.MethodDelete, "/api/v1/browser/chrome")
+		return
+	}
+	status, err := c.Chrome.RemoveChrome()
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "BROWSER_CHROME_REMOVE_FAILED", err.Error(), nil)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, status)
 }
 
 func (c *BrowserController) status(w http.ResponseWriter, r *http.Request) {
@@ -48,11 +104,18 @@ func (c *BrowserController) status(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
+	transport := status.Transport
+	if transport == "" {
+		transport = browserruntime.TransportElectron
+	}
 	envelope.WriteJSON(w, http.StatusOK, BrowserStatusResponse{
-		SessionID:   sessionID,
-		Connected:   status.Connected,
-		ConnectedAt: status.ConnectedAt,
-		Transport:   "electron-webcontents-debugger",
+		SessionID:     sessionID,
+		Connected:     status.Connected,
+		ConnectedAt:   status.ConnectedAt,
+		Transport:     transport,
+		Target:        status.Target,
+		Client:        status.Client,
+		ClientVersion: status.ClientVersion,
 	})
 }
 
@@ -69,6 +132,16 @@ func (c *BrowserController) execute(w http.ResponseWriter, r *http.Request) {
 	if in.SessionID == "" {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "SESSION_ID_REQUIRED", "sessionId is required", nil)
 		return
+	}
+	envelope.SetTelemetryField(r, "browser_command", browserTelemetryAction(in.Action))
+	if status, statusErr := c.Svc.Status(r.Context(), in.SessionID, r.Header.Get(browserCapabilityHeader)); statusErr == nil {
+		if status.Connected {
+			envelope.SetTelemetryField(r, "runtime_link_state", "connected")
+		} else {
+			envelope.SetTelemetryField(r, "runtime_link_state", "disconnected")
+		}
+	} else {
+		envelope.SetTelemetryField(r, "runtime_link_state", "unknown")
 	}
 	result, action, err := c.Svc.Execute(
 		r.Context(),
@@ -89,9 +162,30 @@ func (c *BrowserController) execute(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func browserTelemetryAction(action string) string {
+	action = strings.ToLower(strings.TrimSpace(action))
+	if len(action) > 64 {
+		return "invalid"
+	}
+	if _, ok := browserTelemetryActions[action]; !ok {
+		return "invalid"
+	}
+	return action
+}
+
 func writeBrowserError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, browserruntime.ErrReconnecting) {
+		captureBrowserFailure(r, apierr.KindUnavailable, "BROWSER_RUNTIME_RECONNECTING")
+		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "BROWSER_RUNTIME_RECONNECTING", "Desktop browser runtime is reconnecting; retry shortly", nil)
+		return
+	}
 	if errors.Is(err, browserruntime.ErrUnavailable) {
+		captureBrowserFailure(r, apierr.KindUnavailable, "BROWSER_RUNTIME_UNAVAILABLE")
 		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "BROWSER_RUNTIME_UNAVAILABLE", "Desktop browser runtime is not connected", nil)
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		envelope.WriteAPIError(w, r, http.StatusGatewayTimeout, "timeout", "BROWSER_COMMAND_TIMEOUT", "Browser command timed out waiting for the desktop browser runtime", nil)
 		return
 	}
 	var commandErr browserruntime.CommandError
@@ -103,16 +197,34 @@ func writeBrowserError(w http.ResponseWriter, r *http.Request, err error) {
 			"AGENT_BROWSER_COMMAND_BLOCKED":
 			status = http.StatusBadRequest
 			typeName = "bad_request"
-		case "STALE_REFERENCE", "TAB_NOT_FOUND":
+		case "STALE_REFERENCE", "TAB_NOT_FOUND", "BROWSER_TARGET_MISMATCH":
 			status = http.StatusConflict
 			typeName = "conflict"
+		case "AGENT_BROWSER_TIMEOUT":
+			status = http.StatusGatewayTimeout
+			typeName = "timeout"
 		case "BROWSER_TARGET_UNAVAILABLE", "BROWSER_AUTOMATION_UNAVAILABLE", "AGENT_BROWSER_NOT_INSTALLED",
-			"AGENT_BROWSER_START_FAILED", "BROWSER_DEVTOOLS_UNAVAILABLE":
+			"AGENT_BROWSER_START_FAILED", "BROWSER_DEVTOOLS_UNAVAILABLE", "BROWSER_RUNTIME_PROTOCOL_ERROR":
 			status = http.StatusServiceUnavailable
 			typeName = "unavailable"
+		}
+		if status >= http.StatusInternalServerError {
+			captureBrowserFailure(r, apierr.KindUnavailable, commandErr.Code)
 		}
 		envelope.WriteAPIError(w, r, status, typeName, commandErr.Code, commandErr.Message, nil)
 		return
 	}
-	envelope.WriteError(w, r, err)
+	var apiErr *apierr.Error
+	if errors.As(err, &apiErr) {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	captureBrowserFailure(r, apierr.KindInternal, "BROWSER_COMMAND_FAILED")
+	envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "BROWSER_COMMAND_FAILED", "Browser command failed; retry the action", nil)
+}
+
+func captureBrowserFailure(r *http.Request, kind apierr.Kind, code string) {
+	// Keep the captured error message generic: command errors can contain
+	// provider/page details, while telemetry only needs the stable code.
+	envelope.CaptureError(r, apierr.New(kind, code, "browser command failed", nil))
 }

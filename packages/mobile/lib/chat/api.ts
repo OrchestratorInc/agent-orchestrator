@@ -1,12 +1,14 @@
 import { fetch as expoFetch } from "expo/fetch";
 import { ApiError, ATTACHMENT_REQUEST_TIMEOUT_MS, apiRequest } from "../api";
 import { authHeaders, httpBase, type ServerConfig } from "../config";
+import { resolveDefaultChoices } from "./turnSettingsModel";
 import type {
 	ActivityDetail,
 	ActivityKind,
 	ActivityStatus,
 	ApprovalMode,
 	ChatConfigOption,
+	ChatExcerpt,
 	ChatImage,
 	ChatModel,
 	ChatResource,
@@ -117,7 +119,7 @@ type WireSnapshot = Omit<ConversationSnapshot, "items" | "controller"> & {
 	activities?: Array<Omit<ConversationActivity, "detail" | "decisions"> & { detail?: Record<string, unknown> }>;
 };
 
-export type SendMessageInput = { text: string; clientMessageId: string; attachments?: ChatImage[]; resources?: ChatResource[] };
+export type SendMessageInput = { text: string; clientMessageId: string; attachments?: ChatImage[]; resources?: ChatResource[]; excerpts?: ChatExcerpt[] };
 export type SendMessageResult = { turnId?: string; providerTurnId?: string; state?: string; duplicate: boolean };
 
 export async function getConversationPage(
@@ -152,11 +154,21 @@ export async function getReviewerConversationPage(
 	};
 }
 
+/** Probe before any quoted-send side effect, including attachment staging. */
+export async function requireConversationExcerptSupport(cfg: ServerConfig, sessionId: string): Promise<void> {
+	// Older daemons accept messages but silently ignore the excerpts field.
+	const snapshot = await getConversationPage(cfg, sessionId);
+	if (!snapshot.supportsExcerpts) {
+		throw new Error("Update Orchestrator on this machine to send quoted responses. Your draft is saved.");
+	}
+}
+
 export async function sendConversationMessage(
 	cfg: ServerConfig,
 	sessionId: string,
 	input: SendMessageInput,
 ): Promise<SendMessageResult> {
+	if (input.excerpts?.length) await requireConversationExcerptSupport(cfg, sessionId);
 	const res = await apiRequest(cfg, conversationPath(sessionId, "/messages"), {
 		method: "POST",
 		headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
@@ -175,6 +187,16 @@ export async function sendReviewerConversationMessage(
 		body: JSON.stringify(input),
 	});
 	return (await res.json()) as SendMessageResult;
+}
+
+/** Check an uncertain attachment send without re-sending a partial payload. */
+export async function recoverSentConversationMessage(cfg: ServerConfig, sessionId: string, clientMessageId: string): Promise<void> {
+	const res = await apiRequest(cfg, conversationPath(sessionId, "/steer-or-send"), {
+		method: "POST",
+		body: JSON.stringify({ clientMessageId, recoverOnly: true }),
+	});
+	const result = (await res.json()) as { outcome: "sent" | "steered" };
+	if (result.outcome !== "sent") throw new Error("Could not confirm this message was delivered. Check history, then discard and reattach the files before sending again.");
 }
 
 export async function steerConversation(cfg: ServerConfig, sessionId: string, text: string, clientMessageId: string) {
@@ -263,6 +285,20 @@ export async function rollbackConversation(cfg: ServerConfig, sessionId: string,
 	return body.turnsDiscarded ?? 0;
 }
 
+/** Branches before an earlier human prompt and resends it with new text; the daemon keeps its attachments. */
+export async function editConversationMessage(
+	cfg: ServerConfig,
+	sessionId: string,
+	turnId: string,
+	text: string,
+	clientMessageId: string,
+): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/edit`), {
+		method: "POST",
+		body: JSON.stringify({ text, clientMessageId }),
+	});
+}
+
 export async function setConversationTitle(cfg: ServerConfig, sessionId: string, title: string): Promise<void> {
 	await apiRequest(cfg, conversationPath(sessionId, "/title"), { method: "PUT", body: JSON.stringify({ title }) });
 }
@@ -280,7 +316,7 @@ export async function setConversationSettings(cfg: ServerConfig, sessionId: stri
 export async function getConversationConfigOptions(cfg: ServerConfig, sessionId: string): Promise<ChatConfigOption[]> {
 	const res = await apiRequest(cfg, conversationPath(sessionId, "/config-options"));
 	const body = (await res.json()) as { options?: ChatConfigOption[] };
-	return body.options ?? [];
+	return resolveDefaultChoices(body.options ?? []);
 }
 
 export async function setConversationConfigOption(
@@ -294,7 +330,7 @@ export async function setConversationConfigOption(
 		body: JSON.stringify(value),
 	});
 	const body = (await res.json()) as { options?: ChatConfigOption[] };
-	return body.options ?? [];
+	return resolveDefaultChoices(body.options ?? []);
 }
 
 export async function getConversationSkills(cfg: ServerConfig, sessionId: string): Promise<ChatSkill[]> {
@@ -400,7 +436,7 @@ export async function streamGlobalConversationEvents(
 		signal,
 	});
 	if (!res.ok) throw await streamError(res);
-	if (!res.body) throw new Error("Couldn't open live updates from your desktop.");
+	if (!res.body) throw new Error("Couldn't open live updates from your machine.");
 	const advertisedAfterHeader = res.headers.get("X-AO-Event-After");
 	const advertisedAfter = advertisedAfterHeader === null ? Number.NaN : Number(advertisedAfterHeader);
 	const effectiveAfter = Number.isSafeInteger(advertisedAfter) && advertisedAfter >= 0

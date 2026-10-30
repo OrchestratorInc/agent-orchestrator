@@ -24,6 +24,55 @@ func (s *Store) CreateSession(ctx context.Context, rec domain.SessionRecord) (do
 	return created, err
 }
 
+// CreateClientRequestSession atomically decides which session owns a request
+// key. The caller launches only when fresh is true.
+func (s *Store) CreateClientRequestSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
+	if rec.ClientRequestID == "" || rec.ClientRequestHash == "" {
+		return domain.SessionRecord{}, false, fmt.Errorf("client request id and hash are required")
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.createSessionLocked(ctx, rec)
+}
+
+// GetSessionByClientRequestID finds the session created for a retryable request.
+func (s *Store) GetSessionByClientRequestID(ctx context.Context, key string) (domain.SessionRecord, bool, error) {
+	return s.getSessionByClientRequestID(ctx, s.qr, key)
+}
+
+func (s *Store) getSessionByClientRequestID(ctx context.Context, q *gen.Queries, key string) (domain.SessionRecord, bool, error) {
+	row, err := q.GetClientRequestSession(ctx, key)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.SessionRecord{}, false, nil
+	}
+	if err != nil {
+		return domain.SessionRecord{}, false, fmt.Errorf("find client request %s: %w", key, err)
+	}
+	session, err := q.GetSession(ctx, row.ID)
+	if err != nil {
+		return domain.SessionRecord{}, false, fmt.Errorf("load client request session %s: %w", row.ID, err)
+	}
+	rec := rowToRecord(session)
+	rec.ClientRequestID = key
+	rec.ClientRequestHash = row.ClientRequestHash
+	rec.ClientRequestCommitted = row.ClientRequestCommitted
+	return rec, true, nil
+}
+
+// CommitClientRequestSession marks a successfully launched session replayable.
+func (s *Store) CommitClientRequestSession(ctx context.Context, id domain.SessionID) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.CommitClientRequestSession(ctx, id)
+	if err != nil {
+		return fmt.Errorf("commit client request session %s: %w", id, err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("client request session %s is missing", id)
+	}
+	return nil
+}
+
 // CreateAutomationSession reports whether it inserted the seed. Callers must
 // not continue launching when fresh=false unless the returned row carries the
 // durable launch-complete marker.
@@ -37,6 +86,12 @@ func (s *Store) CreateAutomationSession(ctx context.Context, rec domain.SessionR
 }
 
 func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error) {
+	if rec.ClientRequestID != "" {
+		existing, found, err := s.getSessionByClientRequestID(ctx, s.qw, rec.ClientRequestID)
+		if err != nil || found {
+			return existing, false, err
+		}
+	}
 	if rec.AutomationRunID != nil {
 		existing, err := s.qw.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
 		if err == nil {
@@ -71,6 +126,12 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 		num++
 	}
 	if err := s.qw.InsertSession(ctx, recordToInsert(rec, num)); err != nil {
+		if rec.ClientRequestID != "" {
+			existing, found, reloadErr := s.getSessionByClientRequestID(ctx, s.qw, rec.ClientRequestID)
+			if reloadErr == nil && found {
+				return existing, false, nil
+			}
+		}
 		if rec.AutomationRunID != nil {
 			existing, reloadErr := s.qw.GetSessionByAutomationRunID(ctx, rec.AutomationRunID)
 			if reloadErr == nil {
@@ -103,6 +164,50 @@ func (s *Store) SetSessionProvisionedWorkspace(
 		return false, fmt.Errorf("record provisioned workspace for %s: %w", id, err)
 	}
 	return rows > 0, nil
+}
+
+// SetSessionTaskBranch records a background task branch rename on the session
+// and its repository rows together. repoBranches maps each repository row to
+// the branch its checkout holds, which after a failed undo can differ.
+func (s *Store) SetSessionTaskBranch(ctx context.Context, id domain.SessionID, expectedBranch, branch string, repoBranches map[string]string, now time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var rows int64
+	err := s.inTx(ctx, fmt.Sprintf("record task branch for %s", id), func(q *gen.Queries) error {
+		var err error
+		rows, err = q.SetSessionTaskBranch(ctx, gen.SetSessionTaskBranchParams{
+			ID: id, ExpectedBranch: expectedBranch, Branch: branch, UpdatedAt: now,
+		})
+		for repo, repoBranch := range repoBranches {
+			if err != nil || rows == 0 {
+				return err
+			}
+			err = q.SetSessionWorktreeBranch(ctx, gen.SetSessionWorktreeBranchParams{SessionID: id, RepoName: repo, Branch: repoBranch})
+		}
+		return err
+	})
+	return err == nil && rows > 0, err
+}
+
+// SetSessionBranchNaming marks whether a task's generated branch name is still
+// on the way.
+func (s *Store) SetSessionBranchNaming(ctx context.Context, id domain.SessionID, naming bool) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetSessionBranchNaming(ctx, gen.SetSessionBranchNamingParams{ID: id, BranchNaming: naming}); err != nil {
+		return fmt.Errorf("record branch naming for %s: %w", id, err)
+	}
+	return nil
+}
+
+// ClearSessionBranchNaming ends every branch naming a restart interrupted.
+func (s *Store) ClearSessionBranchNaming(ctx context.Context) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.ClearSessionBranchNaming(ctx); err != nil {
+		return fmt.Errorf("clear interrupted branch naming: %w", err)
+	}
+	return nil
 }
 
 // SetTaskPreparationBase records the immutable base only while the row is hidden.
@@ -144,6 +249,49 @@ func (s *Store) SetSessionProvisionState(
 	return rows > 0, nil
 }
 
+// SetSessionProvisionSteps publishes start progress and the pre-launch setup
+// checkpoint. Like SetSessionProvisionState it writes only its own column.
+func (s *Store) SetSessionProvisionSteps(
+	ctx context.Context,
+	id domain.SessionID,
+	steps []domain.SessionProvisionStep,
+	now time.Time,
+) error {
+	raw, err := json.Marshal(steps)
+	if err != nil {
+		return fmt.Errorf("encode provision steps for %s: %w", id, err)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.qw.SetSessionProvisionSteps(ctx, gen.SetSessionProvisionStepsParams{
+		ProvisionSteps: string(raw),
+		UpdatedAt:      now,
+		ID:             id,
+	}); err != nil {
+		return fmt.Errorf("set provision steps for %s: %w", id, err)
+	}
+	return nil
+}
+
+// SetSessionBranchState records the branch-state reconcile's latest facts. It writes
+// only its own column, so a stale session read cannot replay other fields.
+func (s *Store) SetSessionBranchState(ctx context.Context, id domain.SessionID, state domain.SessionBranchState) (bool, error) {
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return false, fmt.Errorf("encode branch state for %s: %w", id, err)
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionBranchState(ctx, gen.SetSessionBranchStateParams{
+		BranchState: string(raw),
+		ID:          id,
+	})
+	if err != nil {
+		return false, fmt.Errorf("set branch state for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // PromoteTaskPreparation makes a hidden speculative row visible without
 // touching workspace facts that may be published by the preparation goroutine.
 func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID, rec domain.SessionRecord) (bool, error) {
@@ -162,11 +310,14 @@ func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID,
 		Model:              rec.Metadata.Model,
 		Effort:             rec.Metadata.Effort,
 		SessionPermissions: string(rec.Metadata.Permissions),
+		RequestedOutput:    string(rec.RequestedOutput),
 		CreatedAt:          rec.CreatedAt,
 		UpdatedAt:          rec.UpdatedAt,
 		AutoInjectReview:   rec.AutoInjectReview,
 		AutoInjectCI:       rec.AutoInjectCI,
 		ProvisionState:     rec.ProvisionState.WithDefault(),
+		ClientRequestID:    rec.ClientRequestID,
+		ClientRequestHash:  rec.ClientRequestHash,
 		ID:                 id,
 	})
 	if err != nil {
@@ -213,6 +364,95 @@ func (s *Store) UpdateSession(ctx context.Context, rec domain.SessionRecord) err
 	return s.qw.UpdateSession(ctx, recordToUpdate(rec))
 }
 
+// SetSessionHibernated changes only the durable sleep marker if the caller's
+// session snapshot is still current. Passing nil clears the marker on wake.
+func (s *Store) SetSessionHibernated(ctx context.Context, id domain.SessionID, expectedRevision int64, at *time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionHibernated(ctx, gen.SetSessionHibernatedParams{
+		HibernatedAt:     timePtrToNullTime(at),
+		ID:               id,
+		ExpectedRevision: expectedRevision,
+	})
+	if err != nil {
+		return false, fmt.Errorf("set session hibernation for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// MarkHarnessSessionsStale marks the live launches of harness as running a
+// release that version replaced, and returns how many it marked.
+func (s *Store) MarkHarnessSessionsStale(ctx context.Context, harness domain.AgentHarness, version string, at time.Time) (int64, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.MarkHarnessSessionsStale(ctx, gen.MarkHarnessSessionsStaleParams{
+		Since: sql.NullTime{Time: at, Valid: true}, Version: version, Harness: harness,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("mark %s sessions stale: %w", harness, err)
+	}
+	return rows, nil
+}
+
+// SetSessionVersionSwitchFailed records that moving the session's current
+// launch to version failed.
+func (s *Store) SetSessionVersionSwitchFailed(ctx context.Context, id domain.SessionID, version string, at time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if _, err := s.qw.SetSessionVersionSwitchFailed(ctx, gen.SetSessionVersionSwitchFailedParams{
+		FailedAt: sql.NullTime{Time: at, Valid: true}, Version: version, ID: id,
+	}); err != nil {
+		return fmt.Errorf("record version switch failure for %s: %w", id, err)
+	}
+	return nil
+}
+
+// ListVersionRefreshChatCandidates lists idle Chat sessions, quiet since
+// idleBefore, whose current launch runs a replaced harness release.
+func (s *Store) ListVersionRefreshChatCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
+	ids, err := s.qr.ListVersionRefreshChatCandidates(ctx, idleBefore)
+	if err != nil {
+		return nil, fmt.Errorf("list chats for version refresh: %w", err)
+	}
+	return ids, nil
+}
+
+// ListVersionRefreshTerminalCandidates lists idle, natively resumable terminal
+// sessions, quiet since idleBefore, whose current launch runs a replaced release.
+func (s *Store) ListVersionRefreshTerminalCandidates(ctx context.Context, idleBefore time.Time) ([]domain.SessionID, error) {
+	ids, err := s.qr.ListVersionRefreshTerminalCandidates(ctx, idleBefore)
+	if err != nil {
+		return nil, fmt.Errorf("list terminals for version refresh: %w", err)
+	}
+	return ids, nil
+}
+
+// CountStaleBinarySessions counts live launches still on a replaced release, per harness.
+func (s *Store) CountStaleBinarySessions(ctx context.Context) (map[domain.AgentHarness]int64, error) {
+	rows, err := s.qr.CountStaleBinarySessions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("count stale-binary sessions: %w", err)
+	}
+	out := make(map[domain.AgentHarness]int64, len(rows))
+	for _, row := range rows {
+		out[row.Harness] = row.Sessions
+	}
+	return out, nil
+}
+
+// SetSessionRuntimeReleased records that AO destroys launchID's terminal on
+// purpose, keeping the session. It writes nothing unless launchID is still the
+// session's current launch.
+func (s *Store) SetSessionRuntimeReleased(ctx context.Context, id domain.SessionID, launchID string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.SetSessionRuntimeReleased(ctx, gen.SetSessionRuntimeReleasedParams{ID: id, LaunchID: launchID})
+	if err != nil {
+		return false, fmt.Errorf("set session runtime release for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
 // UpdateSessionModel changes only the selected model, leaving concurrent
 // lifecycle and controller ownership updates intact.
 func (s *Store) UpdateSessionModel(ctx context.Context, id domain.SessionID, model string) (bool, error) {
@@ -224,6 +464,27 @@ func (s *Store) UpdateSessionModel(ctx context.Context, id domain.SessionID, mod
 	})
 	if err != nil {
 		return false, fmt.Errorf("update session model for %s: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// UpdateSessionArtifactOutput changes only artifact_dir and
+// session_output_type, leaving concurrent lifecycle/controller/activity
+// writes intact. lifecycle.Manager.ReconcileSessionOutputType uses this
+// instead of a read-modify-write UpdateSession so a stale in-memory
+// SessionRecord read before a concurrent termination (or other update) can
+// never replay is_terminated, activity, runtime identity, or preview state
+// backwards over that newer write.
+func (s *Store) UpdateSessionArtifactOutput(ctx context.Context, id domain.SessionID, artifactDir string, outputType domain.SessionOutputType) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.UpdateSessionArtifactOutput(ctx, gen.UpdateSessionArtifactOutputParams{
+		ID:                id,
+		ArtifactDir:       artifactDir,
+		SessionOutputType: string(outputType),
+	})
+	if err != nil {
+		return false, fmt.Errorf("update session artifact output for %s: %w", id, err)
 	}
 	return rows > 0, nil
 }
@@ -285,6 +546,8 @@ func (s *Store) UpdateSessionFromActivitySignal(
 		NativeCheckpointEvidence:         rec.Metadata.NativeCheckpointEvidence,
 		ConversationCheckpointUnsettled:  rec.Metadata.ConversationCheckpointUnsettled,
 		NativeTranscriptPath:             rec.Metadata.NativeTranscriptPath,
+		ClaudeActivityFacts:              rec.Metadata.ClaudeActivityFacts,
+		CodexActivityFacts:               rec.Metadata.CodexActivityFacts,
 		UpdatedAt:                        rec.UpdatedAt,
 		ID:                               rec.ID,
 		ExpectedRevision:                 expectedRevision,
@@ -642,6 +905,38 @@ func (s *Store) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, er
 	return mapListAllSessionsRows(rows), nil
 }
 
+// ListChatHibernationCandidates avoids decoding inactive sessions and activity JSON.
+func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.SessionID, error) {
+	ids, err := s.qr.ListChatHibernationCandidates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list chat hibernation candidates: %w", err)
+	}
+	return ids, nil
+}
+
+// ListTurnFailureCandidates returns the harness's live terminal sessions that
+// are in a turn and have a native transcript path, reading only the columns
+// the failed-turn observer needs.
+func (s *Store) ListTurnFailureCandidates(ctx context.Context, harness domain.AgentHarness) ([]domain.TurnFailureCandidate, error) {
+	rows, err := s.qr.ListTurnFailureCandidates(ctx, harness)
+	if err != nil {
+		return nil, fmt.Errorf("list turn failure candidates: %w", err)
+	}
+	out := make([]domain.TurnFailureCandidate, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, domain.TurnFailureCandidate{
+			ID:                   r.ID,
+			Harness:              r.Harness,
+			Activity:             domain.Activity{State: r.ActivityState, LastActivityAt: r.ActivityLastAt},
+			LatestUserPromptAt:   nullTimeToTime(r.LatestUserPromptAt),
+			Revision:             r.Revision,
+			RuntimeLaunchID:      r.RuntimeLaunchID,
+			NativeTranscriptPath: r.NativeTranscriptPath,
+		})
+	}
+	return out, nil
+}
+
 func mapListSessionsByProjectRows(rows []gen.ListSessionsByProjectRow) []domain.SessionRecord {
 	out := make([]domain.SessionRecord, 0, len(rows))
 	for _, r := range rows {
@@ -662,6 +957,9 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 	return domain.SessionRecord{
 		Revision:                  row.Revision,
 		ID:                        row.ID,
+		ClientRequestID:           row.ClientRequestID,
+		ClientRequestHash:         row.ClientRequestHash,
+		ClientRequestCommitted:    row.ClientRequestCommitted,
 		ProjectID:                 projectIDValue(row.ProjectID),
 		AutomationRunID:           row.AutomationRunID,
 		AutomationLaunchCompleted: row.AutomationLaunchCompleted,
@@ -679,11 +977,14 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		},
 		FirstSignalAt:      nullTimeToTime(row.FirstSignalAt),
 		IsTerminated:       row.IsTerminated,
+		HibernatedAt:       nullTimeToTimePtr(row.HibernatedAt),
+		StaleBinary:        staleBinaryFromRow(row),
 		IsPinned:           row.IsPinned,
 		PinnedAt:           nullTimeToTimePtr(row.PinnedAt),
 		TerminateOnPRMerge: row.TerminateOnPRMerge,
 		AutoInjectReview:   row.AutoInjectReview,
 		AutoInjectCI:       row.AutoInjectCI,
+		OutputType:         normalizeSessionOutputType(domain.SessionOutputType(row.SessionOutputType)),
 		Metadata: domain.SessionMetadata{
 			Branch:                           row.Branch,
 			WorkspacePath:                    row.WorkspacePath,
@@ -692,12 +993,14 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 			DiffBaseRef:                      row.DiffBaseRef,
 			RuntimeHandleID:                  row.RuntimeHandleID,
 			RuntimeLaunchID:                  row.RuntimeLaunchID,
+			RuntimeReleasedLaunchID:          row.RuntimeReleasedLaunchID,
 			AgentSessionID:                   row.AgentSessionID,
 			AgentSessionIDLaunchID:           row.AgentSessionIDLaunchID,
 			NativeIdentityObservedAt:         nullTimeToTime(row.NativeIdentityObservedAt),
 			Prompt:                           row.Prompt,
 			LatestUserPrompt:                 row.LatestUserPrompt,
 			LatestUserPromptAt:               nullTimeToTime(row.LatestUserPromptAt),
+			LatestInteractionAt:              nullTimeToTime(row.LatestInteractionAt),
 			LatestAssistantUpdate:            row.LatestAssistantUpdate,
 			LatestAssistantUpdateAt:          nullTimeToTime(row.LatestAssistantUpdateAt),
 			ConversationCheckpointState:      row.ConversationCheckpointState,
@@ -707,8 +1010,11 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 			NativeCheckpointEvidence:         row.NativeCheckpointEvidence,
 			ConversationCheckpointUnsettled:  row.ConversationCheckpointUnsettled,
 			NativeTranscriptPath:             row.NativeTranscriptPath,
+			ClaudeActivityFacts:              row.ClaudeActivityFacts,
+			CodexActivityFacts:               row.CodexActivityFacts,
 			PreviewURL:                       row.PreviewURL,
 			PreviewRevision:                  row.PreviewRevision,
+			ArtifactDir:                      row.ArtifactDir,
 			BrowserCapabilityVerifier:        row.BrowserCapabilityVerifier,
 			ProviderConversationID:           row.ProviderConversationID,
 			ControllerGeneration:             row.ControllerGeneration,
@@ -716,13 +1022,65 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 			Effort:                           row.Effort,
 			Permissions:                      domain.PermissionMode(row.SessionPermissions),
 		},
+		RequestedOutput:   domain.RequestedOutput(row.RequestedOutput),
 		CleanupGeneration: row.CleanupGeneration,
 		CreatedAt:         row.CreatedAt,
 		UpdatedAt:         row.UpdatedAt,
 		ProvisionState:    row.ProvisionState.WithDefault(),
 		ProvisionError:    row.ProvisionError,
+		ProvisionSteps:    decodeProvisionSteps(row.ProvisionSteps),
+		BranchState:       decodeBranchState(row.BranchState),
+		BranchNaming:      row.BranchNaming,
+		TemporaryBranch:   row.TemporaryBranch,
 		IsTaskPreparation: row.IsTaskPreparation,
 	}
+}
+
+// staleBinaryFromRow reports a stale-binary mark only for the launch it was
+// taken on: the Chat controller generation or the terminal launch id.
+func staleBinaryFromRow(row gen.GetSessionRow) *domain.SessionStaleBinary {
+	if !row.StaleBinarySince.Valid {
+		return nil
+	}
+	current := row.RuntimeLaunchID
+	if domain.NormalizeSessionMode(row.SessionMode) == domain.SessionModeChat {
+		current = row.ControllerGeneration
+	}
+	if row.StaleBinaryLaunch != current {
+		return nil
+	}
+	return &domain.SessionStaleBinary{
+		Version:        row.StaleBinaryVersion,
+		Since:          row.StaleBinarySince.Time,
+		SwitchFailedAt: nullTimeToTimePtr(row.StaleBinarySwitchFailedAt),
+	}
+}
+
+// decodeProvisionSteps reads the start-up checklist. A malformed value reads as
+// no checklist. Missing setup evidence never authorizes interrupted-request
+// cleanup, and ProvisionState stays the start's authoritative outcome.
+func decodeProvisionSteps(raw string) []domain.SessionProvisionStep {
+	if raw == "" {
+		return nil
+	}
+	var steps []domain.SessionProvisionStep
+	if err := json.Unmarshal([]byte(raw), &steps); err != nil {
+		return nil
+	}
+	return steps
+}
+
+// decodeBranchState reads the observed branch facts. A missing or malformed
+// value reads as not yet observed, never as a branch with no commits.
+func decodeBranchState(raw string) *domain.SessionBranchState {
+	if raw == "" {
+		return nil
+	}
+	var state domain.SessionBranchState
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return nil
+	}
+	return &state
 }
 
 func getSessionRowToRecord(row gen.GetSessionRow) domain.SessionRecord {
@@ -785,12 +1143,15 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 		AutoInjectCI:                     rec.AutoInjectCI,
 		CleanupGeneration:                rec.CleanupGeneration,
 		BrowserCapabilityVerifier:        rec.Metadata.BrowserCapabilityVerifier,
+		ArtifactDir:                      rec.Metadata.ArtifactDir,
+		SessionOutputType:                string(normalizeSessionOutputType(rec.OutputType)),
 		SessionMode:                      domain.NormalizeSessionMode(rec.Mode),
 		ProviderConversationID:           rec.Metadata.ProviderConversationID,
 		ControllerGeneration:             rec.Metadata.ControllerGeneration,
 		Model:                            rec.Metadata.Model,
 		Effort:                           rec.Metadata.Effort,
 		SessionPermissions:               string(rec.Metadata.Permissions),
+		RequestedOutput:                  string(rec.RequestedOutput),
 		CreatedAt:                        rec.CreatedAt,
 		UpdatedAt:                        rec.UpdatedAt,
 		ProvisionState:                   rec.ProvisionState.WithDefault(),
@@ -798,6 +1159,8 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 		IsTaskPreparation:                rec.IsTaskPreparation,
 		AutomationRunID:                  rec.AutomationRunID,
 		AutomationLaunchCompleted:        rec.AutomationLaunchCompleted,
+		ClientRequestID:                  rec.ClientRequestID,
+		ClientRequestHash:                rec.ClientRequestHash,
 	}
 }
 
@@ -813,13 +1176,13 @@ func recordToUpdate(rec domain.SessionRecord) gen.UpdateSessionParams {
 		ReviewerHarness:                  rec.ReviewerHarness,
 		ReviewerAgentConfig:              mustMarshalAgentConfig(rec.ReviewerConfig),
 		AutoReviewEnabled:                rec.AutoReviewEnabled,
-		DisplayName:                      rec.DisplayName,
 		ActivityState:                    activity.State,
 		ActivityLastAt:                   activity.LastActivityAt,
 		FirstSignalAt:                    timeToNullTime(rec.FirstSignalAt),
 		IsTerminated:                     rec.IsTerminated,
 		IsPinned:                         rec.IsPinned,
 		PinnedAt:                         timePtrToNullTime(rec.PinnedAt),
+		TemporaryBranch:                  rec.Metadata.Branch,
 		Branch:                           rec.Metadata.Branch,
 		WorkspacePath:                    rec.Metadata.WorkspacePath,
 		WorkspaceRepoPath:                rec.Metadata.WorkspaceRepoPath,
@@ -898,6 +1261,13 @@ func normalizedConversationCheckpointState(metadata domain.SessionMetadata) doma
 	return domain.ConversationCheckpointEmpty
 }
 
+func normalizeSessionOutputType(v domain.SessionOutputType) domain.SessionOutputType {
+	if v == "" {
+		return domain.SessionOutputNone
+	}
+	return v
+}
+
 // nullTimeToTime / timeToNullTime bridge the nullable first_signal_at column
 // to the domain's zero-time convention (zero = no signal received yet).
 func nullTimeToTime(t sql.NullTime) time.Time {
@@ -942,8 +1312,8 @@ func normalActivity(a domain.Activity, fallback time.Time) domain.Activity {
 	// monotonic reading survive into the column. Rows written from a local-zone
 	// clock ("… +0700 +07 m=+995.1") then stop comparing as timestamps against
 	// UTC rows, and activity_last_at is compared directly in SQL — the
-	// agent-switch source-stop predicate is one such comparison, and a mismatched
-	// row silently matches zero rows there. Normalize every writer's value here
+	// activity predicates are one such comparison, and a mismatched row silently
+	// matches zero rows there. Normalize every writer's value here
 	// rather than trusting each caller's clock.
 	a.LastActivityAt = a.LastActivityAt.UTC()
 	return a

@@ -52,6 +52,27 @@ func TestCueCommandOpensNewNormalProjectShellForEveryInvocation(t *testing.T) {
 	}
 }
 
+func TestCueCommandReceivesProjectEnvironment(t *testing.T) {
+	root := t.TempDir()
+	rt := newFakeShellRuntime()
+	rt.cueReady = true
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{
+		roots: map[domain.ProjectID]string{"portfolio": root},
+		envs:  map[domain.ProjectID]map[string]string{"portfolio": {"PROJECT_TOKEN": "cue-value", "AO_CUE_READY_FILE": "untrusted"}},
+	})
+	svc.dataDir = t.TempDir()
+	_, err := svc.RunCueCommand(context.Background(), RunCueCommandInput{ProjectID: "portfolio", Shell: cueTestShell(t), Command: "pwd"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rt.created[0].Env["PROJECT_TOKEN"]; got != "cue-value" {
+		t.Fatalf("cue environment token = %q", got)
+	}
+	if got := rt.created[0].Env["AO_CUE_READY_FILE"]; got == "untrusted" || got == "" {
+		t.Fatalf("cue readiness marker = %q", got)
+	}
+}
+
 func TestCueCommandDoesNotSendToExistingTerminals(t *testing.T) {
 	root, workspace := t.TempDir(), t.TempDir()
 	rt := newFakeShellRuntime()
@@ -211,6 +232,8 @@ func TestCueCommandDoesNotSendWhenCanceledDuringReadiness(t *testing.T) {
 	root := t.TempDir()
 	rt := newFakeShellRuntime()
 	rt.childProbeCh = make(chan struct{}, 1)
+	// Let cancellation close both readiness contexts before the probe returns.
+	rt.childProbeWaitForCancellation = true
 	st := &fakeShellTerminalStore{}
 	svc := newTestService(rt, st, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"portfolio": root}})
 	svc.dataDir = t.TempDir()

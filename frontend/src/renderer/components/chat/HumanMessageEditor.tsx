@@ -81,7 +81,7 @@ export function HumanMessageEditor({
 	}
 
 	return (
-		<div className="cursor-chat-composer relative flex w-full max-w-3xl flex-col gap-1.5 border px-4 py-3">
+		<div className="cursor-chat-composer relative flex w-full max-w-3xl flex-col gap-1.5 px-4 py-3">
 		<textarea
 			ref={textarea}
 			value={draft}
@@ -104,17 +104,17 @@ export function HumanMessageEditor({
 			className="mt-2"
 		/>
 		{reconstructedContext ? (
-			<p id={reconstructedContextId} className="px-1.5 text-pretty text-[11px] text-muted-foreground">
+			<p id={reconstructedContextId} className="px-1.5 text-pretty text-xs text-muted-foreground">
 				{t("chat.edit.reconstructedContext")}
 			</p>
 		) : null}
 		<div className="mt-2 flex min-h-7 items-center justify-end gap-1.5">
 			{error ? (
-				<span role="alert" className="mr-auto text-[11px] text-destructive">
+				<span role="alert" className="mr-auto text-xs text-destructive">
 					{error}
 				</span>
 			) : busyMessage ? (
-				<span className="mr-auto text-[11px] text-muted-foreground">{busyMessage}</span>
+				<span className="mr-auto text-xs text-muted-foreground">{busyMessage}</span>
 			) : null}
 			{onAbandonRecovery ? (
 				<Button
@@ -158,7 +158,7 @@ export function HumanMessageEditor({
 								"size-7 rounded-full border-transparent",
 								sendDisabled
 									? "bg-primary text-primary-foreground"
-									: "bg-foreground text-background hover:bg-foreground/90 hover:text-background dark:hover:bg-foreground/90 dark:hover:text-background",
+									: "bg-foreground text-on-foreground hover:bg-foreground/90 hover:text-on-foreground dark:hover:bg-foreground/90 dark:hover:text-on-foreground",
 							)}
 						>
 							{pending ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin" /> : <ArrowUp aria-hidden="true" className="size-3.5" />}

@@ -1,10 +1,12 @@
 import { Feather } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { cancelSessionReview, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, triggerSessionReview, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { haptics } from "../../lib/haptics";
+import { hostRouteMatches } from "../../lib/hostRoute";
 import { ItemActionsMenu } from "../../lib/item-actions-menu";
 import type { ItemAction } from "../../lib/item-actions-menu.types";
 import { openGitHub } from "../../lib/openGitHub";
@@ -12,24 +14,32 @@ import { useOpenPage } from "../../lib/pageNavigation";
 import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
 import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
-import { useApp } from "../../lib/store";
-import type { Theme } from "../../lib/theme";
+import { HostScope, useApp } from "../../lib/store";
+import { statusVisual, type Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { AgentLogo } from "../../lib/AgentLogo";
 import { rowDividerWidth } from "../../lib/divider";
+import { SwipeToMerge } from "../../lib/SwipeToMerge";
 import { space, type } from "../../lib/tokens";
 import { Button, Dot, EmptyState, ListSectionHeader } from "../../lib/ui";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 export default function ReviewDetailScreen() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	return hostId ? <HostScope key={hostId} hostId={hostId}><ReviewDetailContent /></HostScope> : <ReviewDetailContent />;
+}
+
+function ReviewDetailContent() {
 	const t = useTheme();
+	const insets = useSafeAreaInsets();
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
 	const router = useRouter();
 	const openPage = useOpenPage();
-	const { sessionId, prUrl, prNumber } = useLocalSearchParams<{ sessionId: string; prUrl?: string; prNumber?: string }>();
-	const { config, sessions } = useApp();
+	const { sessionId, prUrl, prNumber, hostId: routeHostId } = useLocalSearchParams<{ sessionId: string; prUrl?: string; prNumber?: string; hostId?: string }>();
+	const { config, sessions, currentHostId } = useApp();
+	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const autoReviewEnabled = sessions.find((session) => session.id === sessionId)?.autoReviewEnabled === true;
 	const [data, setData] = useState<SessionReviews>();
 	const [prs, setPRs] = useState<SessionPRSummary[]>([]);
@@ -45,7 +55,7 @@ export default function ReviewDetailScreen() {
 	const latestLoad = useRef(0);
 
 	const load = useCallback(async (quiet = false) => {
-		if (!config || !sessionId) return;
+		if (!hostMatches || !config || !sessionId) return;
 		const request = ++latestLoad.current;
 		if (!quiet) setError("");
 		try {
@@ -58,7 +68,7 @@ export default function ReviewDetailScreen() {
 		} catch (value) {
 			if (!quiet && request === latestLoad.current) setError(value instanceof Error ? value.message : "Could not load this review.");
 		}
-	}, [config, sessionId]);
+	}, [config, hostMatches, sessionId]);
 
 	useFocusEffect(useCallback(() => { void load(); }, [load]));
 	const review = reviewForPullRequest(data?.reviews ?? [], prUrl, Number(prNumber) || undefined);
@@ -74,11 +84,11 @@ export default function ReviewDetailScreen() {
 		headerTitleStyle: { color: t.textPrimary, fontFamily: "Geist_600SemiBold", fontWeight: "600" },
 	}), [navigation, review?.title, t.textPrimary]);
 	useLayoutEffect(() => navigation.setOptions({
-		headerRight: review?.prUrl ? () => <View style={styles.headerActions}>
+		headerRight: hostMatches && review?.prUrl ? () => <View style={styles.headerActions}>
 			<Pressable accessibilityRole="link" accessibilityLabel={`Open pull request ${review.prNumber} in GitHub`} hitSlop={8} style={styles.headerAction} onPress={() => { haptics.tap(); void openGitHub(review.prUrl); }}><Feather name="external-link" size={19} color={t.textSecondary} /></Pressable>
-			<Pressable accessibilityRole="button" accessibilityLabel="More review actions" hitSlop={8} style={styles.headerAction} onPress={() => { haptics.tap(); router.push({ pathname: "/sheets/review-actions", params: { sessionId, prUrl: review.prUrl, reviewer: data?.reviewerHarness ?? "" } }); }}><Feather name="more-horizontal" size={21} color={t.textSecondary} /></Pressable>
+			<Pressable accessibilityRole="button" accessibilityLabel="More review actions" hitSlop={8} style={styles.headerAction} onPress={() => { haptics.tap(); router.push({ pathname: "/sheets/review-actions", params: { sessionId, prUrl: review.prUrl, reviewer: data?.reviewerHarness ?? "", hostId: routeHostId } }); }}><Feather name="more-horizontal" size={21} color={t.textSecondary} /></Pressable>
 		</View> : undefined,
-	}), [data?.reviewerHarness, navigation, review?.prNumber, review?.prUrl, router, sessionId, styles.headerAction, styles.headerActions, t.textSecondary]);
+	}), [data?.reviewerHarness, hostMatches, navigation, review?.prNumber, review?.prUrl, routeHostId, router, sessionId, styles.headerAction, styles.headerActions, t.textSecondary]);
 	const observedPR = review ? pullRequestSummaryForURL(prs, review.prUrl) : undefined;
 	const awaitingMerge = Boolean(mergedURL && observedPR && observedPR.url === mergedURL && observedPR.state !== "merged");
 	useEffect(() => {
@@ -100,13 +110,14 @@ export default function ReviewDetailScreen() {
 		setRefreshing(false);
 	};
 
+	if (!hostMatches) return <View style={styles.center}><EmptyState icon="git-pull-request" title="Review belongs to another machine" message="Open it from that machine's session." /></View>;
 	if (!data && !error) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-	if (!data || !review) return <EmptyState icon={error ? "alert-triangle" : "git-pull-request"} title={error ? "Could not load review" : "No review found"} message={error || "AO has no review state for this pull request yet."} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void load()} />} />;
+	if (!data || !review) return <EmptyState icon={error ? "alert-triangle" : "git-pull-request"} title={error ? "Could not load review" : "No review found"} message={error || "Orchestrator has no review state for this pull request yet."} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void load()} />} />;
 	const primaryAction = reviewBatchAction(review, data.reviews);
 	const runs = reviewRunsForPullRequest([...(data.runs ?? []), ...(review.latestRun ? [review.latestRun] : []), ...(review.previousRun ? [review.previousRun] : [])], review.prUrl);
 	const multiplePullRequests = data.reviews.length > 1;
 	const openReviewer = () => {
-		const destination = reviewerDestination(data, review, sessionId);
+		const destination = reviewerDestination(data, review, sessionId, routeHostId);
 		if (!destination) return;
 		haptics.tap();
 		openPage(destination);
@@ -161,7 +172,7 @@ export default function ReviewDetailScreen() {
 		setMutation(`send:${run.id}`);
 		setError("");
 		try {
-			await sendMessage(config, sessionId, formatReviewSummaryMessage(run));
+			await sendMessage(config, sessionId, formatReviewSummaryMessage(run), { userAuthored: true });
 			setSentRuns((current) => new Set(current).add(run.id));
 			haptics.success();
 		} catch (value) {
@@ -175,22 +186,26 @@ export default function ReviewDetailScreen() {
 	const pr = observedPR && awaitingMerge ? { ...observedPR, state: "merged" as const } : observedPR;
 	const merge = pr ? mergeReadiness(pr) : undefined;
 	const closedPR = pr?.state === "merged" || pr?.state === "closed";
+	const merging = mutation === "merge";
+	// The swipe itself is the confirmation; only the screen reader path asks again.
+	const runMerge = async (): Promise<boolean> => {
+		if (!config || !pr || !merge?.canMerge || (mutation && !merging)) return false;
+		setMutation("merge"); setError("");
+		try { await mergeSessionPR(config, pr); setMergedURL(pr.url); haptics.success(); await load(true); return true; }
+		catch (value) { setError(value instanceof Error ? value.message : `Could not merge PR #${pr.number}.`); return false; }
+		finally { setMutation(undefined); }
+	};
 	const confirmMerge = () => {
 		if (!config || !pr || !merge?.canMerge || mutation) return;
 		Alert.alert(`Merge PR #${pr.number}?`, `This will squash-merge PR #${pr.number} in the remote repository.`, [
 			{ text: "Cancel", style: "cancel" },
-			{ text: "Merge", onPress: () => void (async () => {
-				setMutation("merge"); setError("");
-				try { await mergeSessionPR(config, pr); setMergedURL(pr.url); haptics.success(); await load(true); }
-				catch (value) { setError(value instanceof Error ? value.message : `Could not merge PR #${pr.number}.`); }
-				finally { setMutation(undefined); }
-			})() },
+			{ text: "Merge", onPress: () => void runMerge() },
 		]);
 	};
 
 	const reviewerHarness = data.reviewerSurface?.harness || data.reviewerHarness || "";
 	const activity = data.reviewerActivityState;
-	const activityColor = activity === "active" ? t.orange : activity === "exited" ? t.red : t.textTertiary;
+	const activityColor = activity === "active" ? t.orange : activity === "exited" ? statusVisual(t, "exited").color : t.textTertiary;
 	const stopActions: ItemAction[] = controls.stop && !autoReviewEnabled
 		? [{ id: "stop", label: "Stop reviewer session", systemImage: "power", destructive: true, onPress: confirmKillReviewer }]
 		: [];
@@ -204,7 +219,8 @@ export default function ReviewDetailScreen() {
 		: primaryAction !== "none" && multiplePullRequests ? "Applies to every eligible pull request in this session." : undefined;
 
 	return (
-		<ScrollView style={styles.screen} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.accent} />}>
+		<View style={styles.screen}>
+		<ScrollView style={styles.scroll} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.accent} />}>
 			{/* Flat rows under section labels, like the worker board and project pages. */}
 			<ListSectionHeader label="Pull request" />
 			<View style={styles.row}>
@@ -220,7 +236,6 @@ export default function ReviewDetailScreen() {
 					</View> : null}
 					{merge?.reason ? <Text style={styles.detail}>{merge.reason}</Text> : null}
 				</View>
-				{merge?.canMerge ? <RowPill label={mutation === "merge" ? "Merging…" : "Merge"} icon="git-merge" tone="merge" busy={mutation === "merge"} disabled={Boolean(mutation)} onPress={confirmMerge} /> : null}
 			</View>
 
 			<ListSectionHeader label="Reviewer" />
@@ -232,7 +247,7 @@ export default function ReviewDetailScreen() {
 				<View style={styles.main}>
 					<View style={styles.eyebrow}>
 						{reviewerHarness ? <AgentLogo harness={reviewerHarness} size={14} /> : <Feather name="user" size={13} color={t.textSecondary} />}
-						<Text style={styles.eyebrowText} numberOfLines={1}>AO reviewer</Text>
+						<Text style={styles.eyebrowText} numberOfLines={1}>Orchestrator reviewer</Text>
 					</View>
 					<Text style={styles.title} numberOfLines={1}>{reviewerName(reviewerHarness)}</Text>
 					<View style={styles.statusLine}>
@@ -254,7 +269,7 @@ export default function ReviewDetailScreen() {
 			{controls.stop && autoReviewEnabled ? <Text style={styles.note}>Turn off automatic review before stopping its reviewer session.</Text> : null}
 			{data.reviewerSurface?.controllerError ? <Text accessibilityRole="alert" style={[styles.note, styles.noteError]}>{data.reviewerSurface.controllerError}</Text> : null}
 
-			<ListSectionHeader label="AO review" />
+			<ListSectionHeader label="Orchestrator review" />
 			<View style={styles.row}>
 				<View style={styles.main}>
 					<View style={styles.eyebrow}>
@@ -281,19 +296,25 @@ export default function ReviewDetailScreen() {
 			<ListSectionHeader label="History" count={runs.length} />
 			{runs.length
 				? runs.map((run) => <RunRow key={run.id} run={run} sent={sentRuns.has(run.id)} sending={mutation === `send:${run.id}`} disabled={Boolean(mutation)} onSend={() => void sendRun(run)} />)
-				: <Text style={styles.note}>No AO review for this pull request yet.</Text>}
+				: <Text style={styles.note}>No Orchestrator review for this pull request yet.</Text>}
 		</ScrollView>
+		{/* Docked under the scroll, within thumb reach, like a checkout's slide-to-pay.
+		    It stays after the merge as a purple "Merged" bar rather than vanishing. */}
+		{pr && (merge?.canMerge || pr.state === "merged") ? <View style={[styles.mergeFooter, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
+			<SwipeToMerge label={`Swipe to merge PR #${pr.number}`} busyLabel="Merging…" merged={pr.state === "merged"} mergedLabel={`Merged PR #${pr.number}`} busy={merging} disabled={Boolean(mutation) && !merging} onMerge={runMerge} onAccessibilityActivate={confirmMerge} />
+		</View> : null}
+		</View>
 	);
 }
 
-type PillTone = "solid" | "outline" | "danger" | "merge";
+type PillTone = "solid" | "outline" | "danger";
 
 /** The board's row pill: solid for the live action, outlined for the rest. */
 function RowPill({ label, icon, tone, busy = false, disabled = false, onPress }: { label: string; icon: keyof typeof Feather.glyphMap; tone: PillTone; busy?: boolean; disabled?: boolean; onPress: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const filled = tone === "solid" || tone === "merge";
-	const ink = tone === "solid" ? t.bgBase : tone === "merge" ? t.bgBase : tone === "danger" ? t.red : t.textPrimary;
+	const filled = tone === "solid";
+	const ink = tone === "solid" ? t.bgBase : tone === "danger" ? t.red : t.textPrimary;
 	return <Pressable
 		accessibilityRole="button"
 		accessibilityLabel={label}
@@ -301,7 +322,7 @@ function RowPill({ label, icon, tone, busy = false, disabled = false, onPress }:
 		disabled={disabled || busy}
 		hitSlop={8}
 		onPress={() => { haptics.tap(); onPress(); }}
-		style={({ pressed }) => [styles.pill, tone === "solid" && styles.pillSolid, tone === "merge" && styles.pillMerge, !filled && styles.pillOutline, tone === "danger" && styles.pillDanger, (disabled && !busy) && styles.pillDisabled, pressed && styles.pillPressed]}
+		style={({ pressed }) => [styles.pill, tone === "solid" && styles.pillSolid, !filled && styles.pillOutline, tone === "danger" && styles.pillDanger, (disabled && !busy) && styles.pillDisabled, pressed && styles.pillPressed]}
 	>
 		{busy ? <ActivityIndicator size="small" color={ink} /> : <Feather name={icon} size={14} color={ink} />}
 		<Text style={[styles.pillLabel, { color: ink }]} numberOfLines={1}>{label}</Text>
@@ -354,10 +375,12 @@ function toneColor(t: Theme, tone: MergeTone, tint = false): string {
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
+	scroll: { flex: 1 },
 	content: { paddingBottom: space.huge },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	// A worker row's metrics: eyebrow, title, status line, divider underneath.
 	row: { minHeight: 76, flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgBase },
+	mergeFooter: { paddingHorizontal: space.lg, paddingTop: space.md, backgroundColor: t.bgBase, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderDefault },
 	rowPressed: { backgroundColor: t.bgSubtle },
 	// Room for the pill and menu laid over the row's trailing edge.
 	rowWithOverlay: { paddingRight: 150 },
@@ -383,7 +406,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	markdown: { marginTop: space.xs },
 	pill: { flexDirection: "row", alignItems: "center", gap: space.xs, height: 28, paddingHorizontal: space.md, borderRadius: 12 },
 	pillSolid: { backgroundColor: t.textPrimary },
-	pillMerge: { backgroundColor: t.green },
 	pillOutline: { borderWidth: 1, borderColor: t.borderStrong },
 	pillDanger: { borderColor: t.red },
 	pillDisabled: { opacity: 0.45 },

@@ -113,13 +113,18 @@ describe("reviewer control integration", () => {
 	// terminal: closing it as one answered 404 "No such shell terminal".
 	it("stops the reviewer, not a shell, when its terminal is closed", () => {
 		expect(terminal).toContain('const reviewerPane = params.kind === "reviewer" && Boolean(params.sessionId);');
-		expect(terminal).toContain("if (reviewerPane) await killSessionReviewer(config, String(params.sessionId));");
+		expect(terminal).toContain("if (reviewerPane) await killSessionReviewer(activeConfig, String(params.sessionId));");
+		expect(terminal).not.toContain("await loadConfig()");
 	});
 
 	// A native menu nested in the row's Pressable lost its tap to the row, which
 	// opened the reviewer instead of the menu.
 	it("lays the reviewer's pill and menu over its row instead of nesting them", () => {
-		const row = detail.slice(detail.indexOf("onPress={openReviewer} style="), detail.indexOf('<ListSectionHeader label="AO review" />'));
+		const start = detail.indexOf("onPress={openReviewer} style=");
+		const end = detail.indexOf('<ListSectionHeader label="Orchestrator review" />');
+		expect(start).toBeGreaterThanOrEqual(0);
+		expect(end).toBeGreaterThan(start);
+		const row = detail.slice(start, end);
 		expect(row.indexOf("</Pressable>")).toBeLessThan(row.indexOf("<ItemActionsMenu"));
 		expect(detail).toContain('<View style={styles.overlaySlot} pointerEvents="box-none">');
 	});

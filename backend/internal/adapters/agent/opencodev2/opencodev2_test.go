@@ -2,8 +2,10 @@ package opencodev2
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -66,6 +69,7 @@ func TestLaunchAndRestoreV2ArgumentsAndOverlay(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				cmd = withoutDataHome(cmd)
 				if len(cmd) < 4 || cmd[0] != "env" || !strings.HasPrefix(cmd[1], "OPENCODE_CONFIG_CONTENT=") || cmd[2] != binary {
 					t.Fatalf("command = %#v", cmd)
 				}
@@ -132,6 +136,7 @@ func TestV2PromptFileAndNoOverlay(t *testing.T) {
 	binary := fakeBinary(t, "2.0.0")
 	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
 	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{})
+	cmd = withoutDataHome(cmd)
 	if err != nil || !reflect.DeepEqual(cmd, []string{binary, "--standalone"}) {
 		t.Fatalf("empty launch=%#v %v", cmd, err)
 	}
@@ -140,6 +145,7 @@ func TestV2PromptFileAndNoOverlay(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd, err = New().GetLaunchCommand(context.Background(), ports.LaunchConfig{SystemPromptFile: file, SessionID: "sess"})
+	cmd = withoutDataHome(cmd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,6 +162,7 @@ func TestV2ClearsPreviousAOAgentModelAndPermissions(t *testing.T) {
 	fakeBinary(t, "2.0.0")
 	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"agents":{"ao-sess":{"model":"old/model","permissions":[{"action":"*","resource":"*","effect":"allow"}],"description":"preserved"}}}`)
 	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{SessionID: "sess", SystemPrompt: "new rules"})
+	cmd = withoutDataHome(cmd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,6 +291,7 @@ func TestV2ResolvesAgainBetweenAttempts(t *testing.T) {
 	first := fakeBinary(t, "2.0.0")
 	plugin := New()
 	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{})
+	cmd = withoutDataHome(cmd)
 	if err != nil || cmd[0] != first {
 		t.Fatalf("first=%#v %v", cmd, err)
 	}
@@ -317,10 +325,97 @@ func TestV2AuthStatusUsesPrivateServerAndConnections(t *testing.T) {
 	}
 }
 
+func TestV2AuthStatusAllowsMigrationBeyondCommandTimeout(t *testing.T) {
+	parent := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", parent)
+	t.Setenv("HOME", t.TempDir())
+	legacy := filepath.Join(parent, "opencode")
+	if err := os.MkdirAll(legacy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(legacy, "opencode.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, statement := range []string{"CREATE TABLE sessions (id TEXT PRIMARY KEY)", "BEGIN EXCLUSIVE"} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { _, _ = db.Exec("ROLLBACK") }()
+	binary := fakeBinary(t, "2.0.0")
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 2.0.0; exit; fi\n" +
+		"[ \"$*\" = 'auth list --standalone --format json' ] || exit 99\n" +
+		"printf '%s\\n' '[{\"connections\":[{\"type\":\"credential\"}]}]'\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		status, err := New().AuthStatus(ctx)
+		if err == nil && status != ports.AgentAuthStatusAuthorized {
+			err = fmt.Errorf("auth status = %q, want authorized", status)
+		}
+		done <- err
+	}()
+	for {
+		staging, _ := filepath.Glob(filepath.Join(parent, "opencode-v2-home", ".opencode-migration-*"))
+		if len(staging) > 0 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("auth returned before migration started: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		default:
+		}
+		time.Sleep(time.Millisecond)
+	}
+	timer := time.NewTimer(3200 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		t.Fatalf("auth returned before the legacy database was released: %v", err)
+	case <-timer.C:
+	}
+	if _, err := db.Exec("ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
 func TestSemanticMessageAcceptanceIsNotAdvertised(t *testing.T) {
 	var agent ports.Agent = New()
 	signaler, ok := agent.(ports.SemanticMessageAcceptanceSignaler)
 	if !ok || signaler.EmitsSemanticMessageAcceptance() {
 		t.Fatal("OpenCode 2 must not advertise semantic acceptance without a post-admission signal")
 	}
+}
+
+// withoutDataHome drops the XDG_DATA_HOME isolation entry (covered in
+// datahome_test.go) so these tests can assert the rest of the launch argv.
+func withoutDataHome(cmd []string) []string {
+	out := make([]string, 0, len(cmd))
+	for _, arg := range cmd {
+		if !strings.HasPrefix(arg, "XDG_DATA_HOME=") {
+			out = append(out, arg)
+		}
+	}
+	if len(out) > 1 && out[0] == "env" && !strings.Contains(out[1], "=") {
+		out = out[1:]
+	}
+	return out
 }

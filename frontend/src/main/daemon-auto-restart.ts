@@ -36,12 +36,13 @@ export type DaemonExitFacts = {
  * removes it, a crash leaves it behind. But the surviving file must belong to
  * *our* dead child — a file naming a different PID is a successor daemon (e.g. a
  * manual `ao start` during the backoff), not our crash, and must be left alone.
- * When no file is attributable, only a terminating signal proves a crash; a
+ * When the file is known to be absent, only a terminating signal proves a crash; a
  * non-zero exit code alone is not enough, because a requested `ao stop` that
  * outlives its drain deadline exits non-zero while still stopping cleanly.
  */
 export function daemonExitWasUngraceful(facts: DaemonExitFacts): boolean {
-	if (facts.runFilePresent && facts.runFilePid !== null && facts.childPid !== null) {
+	if (facts.childPid === null || !Number.isSafeInteger(facts.childPid) || facts.childPid <= 1) return false;
+	if (facts.runFilePresent) {
 		return facts.runFilePid === facts.childPid;
 	}
 	return facts.signal !== null;

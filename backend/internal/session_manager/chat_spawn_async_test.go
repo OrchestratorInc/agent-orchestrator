@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -74,17 +75,26 @@ func (s *blockingWorkspacePublishStore) SetSessionProvisionedWorkspace(
 // before the expensive work starts, and the opening prompt is already in the
 // durable queue rather than waiting on a controller that does not exist.
 func TestSpawnAsyncChat_AnswersBeforeWorkspaceAndController(t *testing.T) {
+	testAsyncChatAnswersBeforeWorkspaceAndController(t, domain.KindWorker)
+}
+
+func testAsyncChatAnswersBeforeWorkspaceAndController(t *testing.T, kind domain.SessionKind) {
 	launcher := &recordingLauncher{}
 	m, st, rt := newChatManager(launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
 	deferred := deferredBackground(m)
 	ws := m.workspace.(*fakeWorkspace)
 
-	rec, _, _, err := m.Spawn(context.Background(), asyncChatSpawnConfig("do the thing"))
+	cfg := asyncChatSpawnConfig("do the thing")
+	cfg.Kind = kind
+	if kind == domain.KindOrchestrator {
+		cfg.RequestedMode = ""
+	}
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("spawn: %v", err)
 	}
-	if rec.ProvisionState != domain.SessionProvisionProvisioning {
+	if rec.Mode != domain.SessionModeChat || rec.ProvisionState != domain.SessionProvisionProvisioning {
 		t.Fatalf("provision state = %q, want provisioning", rec.ProvisionState)
 	}
 	if rec.Metadata.WorkspacePath != "" {
@@ -127,7 +137,7 @@ func TestSpawnAsyncChat_AnswersBeforeWorkspaceAndController(t *testing.T) {
 	}
 }
 
-func TestSpawnAsyncChatSeedsEffortBeforeBackgroundTitle(t *testing.T) {
+func TestSpawnAsyncChatPreservesForegroundEffortDuringBackgroundTitle(t *testing.T) {
 	for _, prepared := range []bool{false, true} {
 		name := "fresh"
 		if prepared {
@@ -162,8 +172,11 @@ func TestSpawnAsyncChatSeedsEffortBeforeBackgroundTitle(t *testing.T) {
 			if _, err := m.RunBackgroundTask(context.Background(), rec.ID, "title only", "do the thing"); err != nil {
 				t.Fatal(err)
 			}
-			if len(launcher.background) != 1 || launcher.background[0].Effort != "high" {
-				t.Fatalf("background title task = %#v, want high effort", launcher.background)
+			if len(launcher.background) != 1 || launcher.background[0].Effort != "" {
+				t.Fatalf("background title task = %#v, want provider-advertised effort", launcher.background)
+			}
+			if st.sessions[rec.ID].Metadata.Effort != "high" {
+				t.Fatal("background task changed the foreground effort")
 			}
 		})
 	}
@@ -237,9 +250,196 @@ func TestSpawnAsyncChat_DrainFailureLeavesRetryableSession(t *testing.T) {
 	if len(launcher.stopped) != 1 || launcher.stopped[0] != rec.ID {
 		t.Fatalf("stopped controllers = %v, want failed controller stopped", launcher.stopped)
 	}
+	if got := runningProvisionStep(stored.ProvisionSteps); got != domain.SessionProvisionStepAgent {
+		t.Fatalf("failed step = %q, want agent", got)
+	}
 }
 
 func TestResumeFailedAsyncChatSpawnRetriesSameSessionAndQueue(t *testing.T) {
+	testResumeFailedAsyncChatSpawn(t, domain.KindWorker)
+}
+
+func TestResumeFailedAsyncChatSpawnPreservesResolvedEffort(t *testing.T) {
+	for _, selection := range []struct {
+		name          string
+		effort        string
+		projectEffort string
+		wantEffort    string
+	}{
+		{name: "high", effort: "high", wantEffort: "high"},
+		{name: "extra_high", effort: "xhigh", wantEffort: "xhigh"},
+		{name: "omitted_without_project_default"},
+		{name: "omitted_with_project_default", projectEffort: "medium", wantEffort: "medium"},
+	} {
+		for _, projectDefault := range []struct {
+			name   string
+			change bool
+		}{
+			{name: "unchanged_defaults"},
+			{name: "changed_defaults", change: true},
+		} {
+			t.Run(selection.name+"/"+projectDefault.name, func(t *testing.T) {
+				launcher := &recordingLauncher{}
+				m, st, _ := newChatManager(launcher)
+				m.dataDir = t.TempDir()
+				m.browserCapabilities = browsersvc.NewAuthority()
+				m.modelCatalog = tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+					{ID: "gpt-test", Efforts: []string{"low", "medium", "high", "xhigh"}},
+				}}}
+				deferred := deferredBackground(m)
+				ws := m.workspace.(*fakeWorkspace)
+				ws.createErr = errors.New("temporary git failure")
+				project := st.projects[string(chatTestProject)]
+				project.Config.AgentConfig.Effort = selection.projectEffort
+				st.projects[string(chatTestProject)] = project
+				cfg := asyncChatSpawnConfig("do the thing")
+				cfg.AgentConfig = ports.AgentConfig{Model: "gpt-test", Effort: selection.effort}
+				cfg.EffortOverride = selection.effort != ""
+				rec, _, _, err := m.Spawn(context.Background(), cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				(*deferred)[0]()
+				failed := st.sessions[rec.ID]
+				if failed.ProvisionState != domain.SessionProvisionFailed {
+					t.Fatalf("initial provision state = %q, want failed", failed.ProvisionState)
+				}
+				if failed.Metadata.Effort != selection.wantEffort {
+					t.Fatalf("saved effort = %q, want %q", failed.Metadata.Effort, selection.wantEffort)
+				}
+
+				if projectDefault.change {
+					project.Config.AgentConfig.Effort = "low"
+					st.projects[string(chatTestProject)] = project
+				}
+				ws.createErr = nil
+				retried, err := m.ResumeAgentWithMode(context.Background(), rec.ID)
+				if err != nil {
+					t.Fatalf("retry failed start: %v", err)
+				}
+				if retried.Session.ID != rec.ID || len(*deferred) != 2 {
+					t.Fatal("retry did not reuse the failed session with one background start")
+				}
+				(*deferred)[1]()
+				if len(launcher.started) != 1 {
+					t.Fatalf("controllers started = %d, want 1", len(launcher.started))
+				}
+				if got := launcher.started[0]; got.Model != "gpt-test" || got.Effort != selection.wantEffort {
+					t.Fatalf("retried model/effort = %q/%q, want gpt-test/%q", got.Model, got.Effort, selection.wantEffort)
+				}
+				ready := st.sessions[rec.ID]
+				if ready.ProvisionState != domain.SessionProvisionReady || ready.Metadata.Effort != selection.wantEffort {
+					t.Fatalf("retry state/effort = %q/%q, want ready/%q", ready.ProvisionState, ready.Metadata.Effort, selection.wantEffort)
+				}
+				if len(launcher.queued) != 1 || len(launcher.drained) != 1 {
+					t.Fatalf("prompts queued = %d, queues drained = %d, want 1 each", len(launcher.queued), len(launcher.drained))
+				}
+			})
+		}
+	}
+}
+
+func TestResumeFailedAsyncChatSpawnRevalidatesSavedTuning(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		model        string
+		chatModel    string
+		catalogDrift bool
+		catalogError bool
+		wantModel    string
+		wantEffort   string
+	}{
+		{name: "empty_saved_model_ignores_changed_project_model", model: "", wantEffort: "xhigh"},
+		{name: "provider_default_capabilities_changed", model: "", catalogDrift: true},
+		{name: "empty_saved_model_then_chat_model_lacks_effort", model: "", chatModel: "small", wantModel: "small"},
+		{name: "empty_saved_model_then_chat_model_supports_effort", model: "", chatModel: "large", wantModel: "large", wantEffort: "xhigh"},
+		{name: "chat_model_lacks_saved_effort", model: "original", chatModel: "small", wantModel: "small"},
+		{name: "chat_model_supports_saved_effort", model: "original", chatModel: "large", wantModel: "large", wantEffort: "xhigh"},
+		{name: "saved_model_capabilities_changed", model: "original", catalogDrift: true, wantModel: "original"},
+		{name: "catalog_unavailable", model: "original", catalogError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			launcher := &recordingLauncher{}
+			m, st, _ := newChatManager(launcher)
+			m.dataDir = t.TempDir()
+			m.browserCapabilities = browsersvc.NewAuthority()
+			catalog := ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+				{ID: "original", IsDefault: true, Efforts: []string{"high", "xhigh"}},
+				{ID: "small", Efforts: []string{"low", "medium"}},
+				{ID: "large", Efforts: []string{"high", "xhigh"}},
+			}}
+			m.modelCatalog = tuningCatalog{catalog: catalog}
+			deferred := deferredBackground(m)
+			ws := m.workspace.(*fakeWorkspace)
+			ws.createErr = errors.New("temporary git failure")
+			cfg := asyncChatSpawnConfig("do the thing")
+			cfg.AgentConfig = ports.AgentConfig{Model: tc.model, Effort: "xhigh"}
+			cfg.EffortOverride = true
+			rec, _, _, err := m.Spawn(context.Background(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			(*deferred)[0]()
+			failed := st.sessions[rec.ID]
+			if failed.ProvisionState != domain.SessionProvisionFailed || failed.Metadata.ProviderConversationID != "" {
+				t.Fatalf("initial failure = %+v, want failed before provider start", failed)
+			}
+			if failed.Metadata.Model != tc.model || failed.Metadata.Effort != "xhigh" {
+				t.Fatalf("saved model/effort = %q/%q, want %q/xhigh", failed.Metadata.Model, failed.Metadata.Effort, tc.model)
+			}
+			project := st.projects[string(chatTestProject)]
+			project.Config.AgentConfig = domain.AgentConfig{Model: "small", Effort: "low"}
+			st.projects[string(chatTestProject)] = project
+			if tc.chatModel != "" {
+				if err := m.PersistChatModel(context.Background(), rec.ID, tc.chatModel); err != nil {
+					t.Fatal(err)
+				}
+				updated := st.sessions[rec.ID]
+				if updated.Metadata.Model != tc.chatModel || updated.Metadata.Effort != "xhigh" {
+					t.Fatalf("saved pair before Retry = %q/%q, want %q/xhigh", updated.Metadata.Model, updated.Metadata.Effort, tc.chatModel)
+				}
+			}
+			if tc.catalogDrift {
+				catalog.Models[0].Efforts = []string{"low", "medium"}
+			}
+			var refreshes []bool
+			m.modelCatalog = refreshRecordingCatalog{saved: catalog, fresh: catalog, refreshes: &refreshes}
+			if tc.catalogError {
+				m.modelCatalog = tuningCatalog{err: errors.New("catalog offline")}
+			}
+			ws.createErr = nil
+			_, err = m.ResumeAgentWithMode(context.Background(), rec.ID)
+			if tc.catalogError {
+				if !errors.Is(err, ports.ErrModelCapabilitiesUnavailable) || len(*deferred) != 1 || len(launcher.started) != 0 || st.sessions[rec.ID].ProvisionState != domain.SessionProvisionFailed {
+					t.Fatalf("catalog error = %v, starts = %d, want early error preserving failed session", err, len(launcher.started))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			(*deferred)[1]()
+			if len(launcher.started) != 1 {
+				t.Fatalf("controllers started = %d, want 1", len(launcher.started))
+			}
+			if got := launcher.started[0]; got.Model != tc.wantModel || got.Effort != tc.wantEffort {
+				t.Fatalf("launch model/effort = %q/%q, want %q/%q", got.Model, got.Effort, tc.wantModel, tc.wantEffort)
+			}
+			ready := st.sessions[rec.ID]
+			if ready.ProvisionState != domain.SessionProvisionReady || ready.Metadata.Model != tc.wantModel || ready.Metadata.Effort != tc.wantEffort {
+				t.Fatalf("persisted retry = %+v, want ready with launched tuning", ready)
+			}
+			if len(refreshes) == 0 || (tc.catalogDrift && (len(refreshes) < 2 || !refreshes[1])) {
+				t.Fatalf("catalog reads = %v, want validation and refresh on drift", refreshes)
+			}
+			if len(launcher.queued) != 1 || len(launcher.drained) != 1 {
+				t.Fatalf("opening prompts = %d, drains = %d, want 1 each", len(launcher.queued), len(launcher.drained))
+			}
+		})
+	}
+}
+
+func testResumeFailedAsyncChatSpawn(t *testing.T, kind domain.SessionKind) {
 	launcher := &recordingLauncher{}
 	m, st, _ := newChatManager(launcher)
 	m.browserCapabilities = browsersvc.NewAuthority()
@@ -248,12 +448,17 @@ func TestResumeFailedAsyncChatSpawnRetriesSameSessionAndQueue(t *testing.T) {
 	m.SetHarnessUseGate(gate)
 	ws := m.workspace.(*fakeWorkspace)
 	ws.createErr = errors.New("temporary git failure")
-	rec, _, _, err := m.Spawn(context.Background(), asyncChatSpawnConfig("do the thing"))
+	cfg := asyncChatSpawnConfig("do the thing")
+	cfg.Kind = kind
+	if kind == domain.KindOrchestrator {
+		cfg.RequestedMode = ""
+	}
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	(*deferred)[0]()
-	if st.sessions[rec.ID].ProvisionState != domain.SessionProvisionFailed {
+	if st.sessions[rec.ID].ProvisionState != domain.SessionProvisionFailed || st.sessions[rec.ID].IsTerminated {
 		t.Fatal("initial start did not fail")
 	}
 
@@ -435,6 +640,79 @@ func TestResumeFailedAsyncChatSpawnAdoptsLiveController(t *testing.T) {
 	if result.Session.ProvisionState != domain.SessionProvisionReady || len(launcher.started) != 0 || len(launcher.drained) != 1 {
 		t.Fatalf("adoption = %+v, controllers started = %d, queues drained = %d", result.Session, len(launcher.started), len(launcher.drained))
 	}
+	if len(result.Session.ProvisionSteps) != 1 || result.Session.ProvisionSteps[0].ID != domain.SessionProvisionStepAgent || result.Session.ProvisionSteps[0].Status != domain.SessionProvisionStepDone {
+		t.Fatalf("retry steps = %+v, want completed agent step", result.Session.ProvisionSteps)
+	}
+}
+
+func TestResumeFailedAsyncChatSpawnExistingConversationBypassesLaunchTuning(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	m.dataDir = t.TempDir()
+	var catalogCalls int
+	m.modelCatalog = tuningCatalog{err: errors.New("catalog offline"), calls: &catalogCalls}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
+		Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		ProvisionState: domain.SessionProvisionFailed,
+		Metadata: domain.SessionMetadata{
+			WorkspacePath: t.TempDir(), Branch: "ao/mer-1",
+			ProviderConversationID: "thread-existing", Model: "small", Effort: "xhigh",
+		},
+	}
+	result, err := m.ResumeAgentWithMode(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Session.ProvisionState != domain.SessionProvisionReady || catalogCalls != 0 {
+		t.Fatalf("existing conversation retry state = %q, catalog calls = %d, want ready without new-launch validation", result.Session.ProvisionState, catalogCalls)
+	}
+	if result.Session.Metadata.Effort != "xhigh" || len(launcher.started) != 1 || launcher.started[0].ProviderConversationID != "thread-existing" {
+		t.Fatalf("retry did not resume the existing provider conversation: %+v", launcher.started)
+	}
+	if len(launcher.queued) != 0 || len(launcher.drained) != 1 {
+		t.Fatalf("prompts queued = %d, queues drained = %d, want 0 and 1", len(launcher.queued), len(launcher.drained))
+	}
+}
+
+func TestResumeFailedAsyncChatSpawnResetsChecklist(t *testing.T) {
+	for _, live := range []bool{false, true} {
+		for _, failure := range []string{"", "drain", "ready"} {
+			name := "provider/" + failure
+			if live {
+				name = "live/" + failure
+			}
+			t.Run(name, func(t *testing.T) {
+				launcher := &recordingLauncher{live: live}
+				if failure == "drain" {
+					launcher.drainErr = errors.New("drain failed")
+				}
+				m, st, _ := newChatManager(launcher)
+				if failure == "ready" {
+					m.store = &failReadyProvisionStore{fakeStore: st}
+				}
+				st.sessions["mer-1"] = domain.SessionRecord{
+					ID: "mer-1", ProjectID: chatTestProject, Kind: domain.KindWorker,
+					Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+					ProvisionState: domain.SessionProvisionFailed,
+					ProvisionSteps: []domain.SessionProvisionStep{{ID: domain.SessionProvisionStepWorktree, Status: domain.SessionProvisionStepDone}},
+					Metadata:       domain.SessionMetadata{WorkspacePath: t.TempDir(), Branch: "ao/mer-1", ProviderConversationID: "thread-existing"},
+				}
+				result, err := m.ResumeAgentWithMode(context.Background(), "mer-1")
+				stored := st.sessions["mer-1"]
+				if len(stored.ProvisionSteps) != 1 || stored.ProvisionSteps[0].ID != domain.SessionProvisionStepAgent {
+					t.Fatalf("retry retained stale checklist: %+v", stored.ProvisionSteps)
+				}
+				if failure != "" {
+					if err == nil || stored.ProvisionState != domain.SessionProvisionFailed || runningProvisionStep(stored.ProvisionSteps) != domain.SessionProvisionStepAgent {
+						t.Fatalf("failed retry = %+v, error = %v", stored, err)
+					}
+				} else if err != nil || result.Session.ProvisionState != domain.SessionProvisionReady || result.Session.ProvisionSteps[0].Status != domain.SessionProvisionStepDone {
+					t.Fatalf("successful retry = %+v, error = %v", result.Session, err)
+				}
+			})
+		}
+	}
 }
 
 func TestCancelAsyncChatSpawnClearsStaleStartingState(t *testing.T) {
@@ -556,6 +834,9 @@ func TestSpawnAsyncChat_ReadyWriteFailureMarksSessionFailed(t *testing.T) {
 	stored := st.sessions[rec.ID]
 	if stored.ProvisionState != domain.SessionProvisionFailed || !strings.Contains(stored.ProvisionError, "ready write failed") {
 		t.Fatalf("ready write failure left session %+v", stored)
+	}
+	if got := runningProvisionStep(stored.ProvisionSteps); got != domain.SessionProvisionStepAgent {
+		t.Fatalf("failed step = %q, want agent", got)
 	}
 }
 
@@ -867,4 +1148,158 @@ func TestStageAttachments_AtWorkspacePublicationLandsInTheWorktree(t *testing.T)
 	if _, err := os.Stat(filepath.Join(workspaceDir, filepath.FromSlash(refs[0]))); err != nil {
 		t.Fatalf("attachment staged at publication is missing from worktree: %v", err)
 	}
+}
+
+// recordingProvisionStepsStore keeps every checklist the start publishes.
+type recordingProvisionStepsStore struct {
+	*fakeStore
+	published [][]domain.SessionProvisionStep
+}
+
+func (s *recordingProvisionStepsStore) SetSessionProvisionSteps(ctx context.Context, id domain.SessionID, steps []domain.SessionProvisionStep, now time.Time) error {
+	s.published = append(s.published, append([]domain.SessionProvisionStep(nil), steps...))
+	return s.fakeStore.SetSessionProvisionSteps(ctx, id, steps, now)
+}
+
+func provisionStepIDs(steps []domain.SessionProvisionStep) []domain.SessionProvisionStepID {
+	ids := make([]domain.SessionProvisionStepID, len(steps))
+	for i, step := range steps {
+		ids[i] = step.ID
+	}
+	return ids
+}
+
+func runningProvisionStep(steps []domain.SessionProvisionStep) domain.SessionProvisionStepID {
+	for _, step := range steps {
+		if step.Status == domain.SessionProvisionStepRunning {
+			return step.ID
+		}
+	}
+	return ""
+}
+
+// The chat surface draws a start as a checklist. Each stage must run in order,
+// hand over to the next in the same write, and end done with both times set.
+func TestSpawnAsyncChat_PublishesStartChecklist(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	recorder := &recordingProvisionStepsStore{fakeStore: st}
+	m.store = recorder
+	m.browserCapabilities = browsersvc.NewAuthority()
+	m.workspace.(*fakeWorkspace).path = t.TempDir()
+	project := st.projects[string(chatTestProject)]
+	project.Config.PostCreate = []string{"true"}
+	st.projects[string(chatTestProject)] = project
+	deferred := deferredBackground(m)
+
+	rec, _, _, err := m.Spawn(context.Background(), asyncChatSpawnConfig("do the thing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	(*deferred)[0]()
+
+	want := []domain.SessionProvisionStepID{
+		domain.SessionProvisionStepFetch, domain.SessionProvisionStepWorktree,
+		domain.SessionProvisionStepSetup, domain.SessionProvisionStepAgent,
+	}
+	var running []domain.SessionProvisionStepID
+	for _, steps := range recorder.published {
+		running = append(running, runningProvisionStep(steps))
+	}
+	if !slices.Equal(running, append(want, "")) {
+		t.Fatalf("running step per write = %q, want %q then none", running, want)
+	}
+	stored := st.sessions[rec.ID]
+	if got := provisionStepIDs(stored.ProvisionSteps); !slices.Equal(got, want) {
+		t.Fatalf("steps = %q, want %q", got, want)
+	}
+	for _, step := range stored.ProvisionSteps {
+		if step.Status != domain.SessionProvisionStepDone || step.StartedAt == nil || step.EndedAt == nil || step.EndedAt.Before(*step.StartedAt) {
+			t.Fatalf("step %q = %+v, want done with start and end", step.ID, step)
+		}
+	}
+	if stored.ProvisionState != domain.SessionProvisionReady {
+		t.Fatalf("provision state = %q, want ready", stored.ProvisionState)
+	}
+}
+
+// A failed start leaves the stage it stopped in running; the session's failed
+// state is what marks that stage as the one that failed.
+func TestSpawnAsyncChat_FailedStartLeavesItsStageRunning(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	m.browserCapabilities = browsersvc.NewAuthority()
+	m.workspace.(*fakeWorkspace).createErr = errors.New("branch already checked out")
+	deferred := deferredBackground(m)
+
+	rec, _, _, err := m.Spawn(context.Background(), asyncChatSpawnConfig("do the thing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	(*deferred)[0]()
+
+	stored := st.sessions[rec.ID]
+	if stored.ProvisionState != domain.SessionProvisionFailed {
+		t.Fatalf("provision state = %q, want failed", stored.ProvisionState)
+	}
+	if got := runningProvisionStep(stored.ProvisionSteps); got != domain.SessionProvisionStepWorktree {
+		t.Fatalf("running step = %q, want the worktree stage that failed (steps %+v)", got, stored.ProvisionSteps)
+	}
+	if agent := stored.ProvisionSteps[len(stored.ProvisionSteps)-1]; agent.Status != domain.SessionProvisionStepPending {
+		t.Fatalf("agent step = %+v, want pending", agent)
+	}
+}
+
+// A worktree prepared while the task was written has no fetch of its own, and
+// a project without post-create commands has no setup stage.
+func TestSpawnAsyncChat_PreparedWorktreeChecklistSkipsFetch(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	m.browserCapabilities = browsersvc.NewAuthority()
+	m.workspace.(*fakeWorkspace).path = t.TempDir()
+	m.runBackground = func(work func()) { work() }
+	token, err := m.PrepareTaskWorkspace(context.Background(), st.projects[string(chatTestProject)])
+	if err != nil {
+		t.Fatal(err)
+	}
+	deferred := deferredBackground(m)
+	cfg := asyncChatSpawnConfig("do the thing")
+	cfg.TaskPreparation = token
+
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	(*deferred)[0]()
+
+	want := []domain.SessionProvisionStepID{domain.SessionProvisionStepWorktree, domain.SessionProvisionStepAgent}
+	if got := provisionStepIDs(st.sessions[rec.ID].ProvisionSteps); !slices.Equal(got, want) {
+		t.Fatalf("steps = %q, want %q", got, want)
+	}
+}
+
+func TestSpawnOrchestratorPrefersAsyncChat(t *testing.T) {
+	testAsyncChatAnswersBeforeWorkspaceAndController(t, domain.KindOrchestrator)
+}
+
+func TestSpawnOrchestratorFallsBackToTerminalWhenChatUnsupported(t *testing.T) {
+	launcher := &recordingLauncher{preflightErr: ports.ErrChatUnsupported}
+	m, _, rt := newChatManager(launcher)
+	cfg := asyncChatSpawnConfig("")
+	cfg.Kind = domain.KindOrchestrator
+	cfg.RequestedMode = ""
+	rec, _, _, err := m.Spawn(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Mode != domain.SessionModeTUI || rt.created != 1 {
+		t.Fatalf("mode/runtime = %s/%d", rec.Mode, rt.created)
+	}
+	if len(launcher.started) != 0 {
+		t.Fatal("unsupported Chat launched a controller")
+	}
+}
+
+func TestSpawnOrchestratorAsyncFailurePreservesSessionForRetry(t *testing.T) {
+	testResumeFailedAsyncChatSpawn(t, domain.KindOrchestrator)
 }

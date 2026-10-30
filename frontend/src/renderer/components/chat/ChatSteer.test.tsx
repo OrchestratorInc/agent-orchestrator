@@ -1,21 +1,12 @@
-import { act, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChatComposer } from "./ChatComposer";
 import { ChatWorkspace } from "./ChatWorkspace";
 import { QueuedMessageDock } from "./QueuedMessageDock";
 import { chatFixture } from "../../lib/chat-fixture";
 import { typeInLexicalEditor } from "../../test/lexical";
-import { TooltipProvider } from "../ui/tooltip";
-
-function render(ui: ReactElement) {
-	const result = rtlRender(<TooltipProvider>{ui}</TooltipProvider>);
-	return {
-		...result,
-		rerender: (nextUi: ReactElement) => result.rerender(<TooltipProvider>{nextUi}</TooltipProvider>),
-	};
-}
+import { renderChat as render } from "../../test/render-chat";
 
 const png = (name = "shot.png") =>
 	new File([new Uint8Array([137, 80, 78, 71])], name, { type: "image/png" });
@@ -232,7 +223,7 @@ describe("ChatComposer steering", () => {
 		expect(onSteer).not.toHaveBeenCalled();
 		expect(field).toHaveTextContent("inspect this");
 		expect(field).toHaveAttribute("aria-disabled", "true");
-		expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Steer message" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Attach a file" })).toBeDisabled();
 
 		await act(async () => finishRead());
@@ -604,7 +595,7 @@ describe("ChatWorkspace steering", () => {
 
 	it("renders a landed steer as the user's own words", () => {
 		render(<ChatWorkspace snapshot={chatFixture} />);
-		expect(screen.getByText(/Steered into the running turn/)).toBeInTheDocument();
+		expect(screen.getByText(/Steered/)).toBeInTheDocument();
 	});
 
 	it("renders a staged image reference on a landed steer in chat history", () => {
@@ -625,7 +616,7 @@ describe("ChatWorkspace steering", () => {
 		};
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		const image = screen.getByRole("img", { name: "attachment-steer123.png" });
+		const image = screen.getByRole("img", { name: "Image 1" });
 		expect(image).toBeInTheDocument();
 		expect(image).toHaveAttribute(
 			"src",
@@ -658,7 +649,7 @@ describe("ChatWorkspace steering", () => {
 		};
 		render(<ChatWorkspace snapshot={snapshot} />);
 
-		expect(screen.getAllByRole("img", { name: "attachment-steer123.png" })).toHaveLength(1);
+		expect(screen.getAllByRole("img", { name: "Image 1" })).toHaveLength(1);
 		expect(screen.getByRole("img", { name: "Steered attachment 1" })).toHaveAttribute(
 			"src",
 			"data:image/png;base64,c2Vjb25k",

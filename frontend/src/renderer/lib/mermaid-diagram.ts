@@ -10,9 +10,10 @@
  *   - The bundle stays lean. Mermaid is ~2MB, so it is dynamically imported on
  *     first use, the same lazy-chunk pattern as `code-highlight-engine.ts`.
  *     A conversation without a diagram never downloads or parses it.
- *   - The renderer's CSP is `script-src 'self'` with no `wasm-unsafe-eval`.
- *     Mermaid is plain JS (no WASM), and its output is inline SVG — no
- *     external fetch, no worker — so it renders inside the policy.
+ *   - The renderer's CSP is `script-src 'self' 'wasm-unsafe-eval'` (WASM only,
+ *     for the file/diff highlighter; no JS eval). Mermaid is plain JS, and its
+ *     output is inline SVG — no external fetch, no worker — so it renders
+ *     inside the policy.
  *   - Agent output is only as trustworthy as the files the agent just read,
  *     so the SVG string is sanitized before injection. Mermaid runs with
  *     `securityLevel: 'strict'` (no JS callbacks, no `javascript:` links),

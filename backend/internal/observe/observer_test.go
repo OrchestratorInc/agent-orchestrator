@@ -122,7 +122,7 @@ func TestCheckCredentialsOnce_ProbeAvailable(t *testing.T) {
 	}
 }
 
-func TestCheckCredentialsOnce_ProbeUnavailableDisables(t *testing.T) {
+func TestCheckCredentialsOnce_ProbeUnavailableRetries(t *testing.T) {
 	var checked, disabled bool
 	calls := 0
 	probe := func(context.Context) (bool, error) { calls++; return false, nil }
@@ -133,17 +133,16 @@ func TestCheckCredentialsOnce_ProbeUnavailableDisables(t *testing.T) {
 	if !checked || !disabled {
 		t.Fatalf("after unavailable: checked=%v disabled=%v", checked, disabled)
 	}
-	// Subsequent calls must keep reporting (false, nil) — the short-circuit
-	// on *checked still has to honour *disabled, otherwise a disabled
-	// observer's Poll path silently flips back to "credentials available".
+	// Subsequent calls must keep reporting unavailable, while checking again
+	// so credentials added after startup can resume observation.
 	for i := 0; i < 3; i++ {
 		ok, err := CheckCredentialsOnce(context.Background(), probe, &checked, &disabled, quietLogger(), "test")
 		if err != nil || ok {
 			t.Fatalf("repeat call %d: ok=%v err=%v, want (false, nil)", i, ok, err)
 		}
 	}
-	if calls != 1 {
-		t.Fatalf("probe should run exactly once even when disabled, ran %d times", calls)
+	if calls != 4 {
+		t.Fatalf("probe should retry while disabled, ran %d times", calls)
 	}
 }
 
@@ -226,5 +225,27 @@ func TestStartPollLoop_LogsPollErrorWithoutPanic(t *testing.T) {
 	}
 	if ran.Load() < 2 {
 		t.Fatalf("expected at least 2 polls under error path, got %d", ran.Load())
+	}
+}
+
+func TestStartTriggeredPollLoopPollsOnTriggerBeforeTick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	polls := make(chan struct{}, 4)
+	trigger := make(chan struct{}, 1)
+	done := StartTriggeredPollLoop(ctx, time.Hour, trigger, func(context.Context) error {
+		polls <- struct{}{}
+		return nil
+	}, nil, "test")
+	defer func() { cancel(); <-done }()
+
+	for i, step := range []string{"initial poll", "triggered poll"} {
+		if i == 1 {
+			trigger <- struct{}{}
+		}
+		select {
+		case <-polls:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s did not run", step)
+		}
 	}
 }

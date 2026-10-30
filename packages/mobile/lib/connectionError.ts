@@ -8,11 +8,13 @@
 // debug the wrong thing.
 
 // Type-only, so erased at runtime: this module stays free of native imports.
+import type { Endpoint } from "./endpoints";
 import type { FeatherIconName } from "./icons";
 
 export type ConnectionFailure =
 	| "not-ao-qr" // the scanned code wasn't an AO pairing payload
 	| "outdated-desktop" // a v1 code: AO on the computer is too old to pair with
+	| "incompatible-host" // the host reported an API version this phone cannot use
 	| "tunnel-rotated" // nothing answered, and the only remote path was a tunnel
 	| "unreachable" // nothing answered (DNS failure, refused, timeout)
 	| "auth" // 401/403 — the password is wrong or was rotated
@@ -25,6 +27,7 @@ export type ConnectionFailure =
  */
 export function classifyConnectionFailure(status: number | undefined): ConnectionFailure {
 	if (status === undefined) return "unreachable";
+	if (status === 426) return "incompatible-host";
 	if (status === 401 || status === 403) return "auth";
 	if (status === 429) return "rate-limited";
 	return "server-error";
@@ -47,7 +50,7 @@ export function classifyConnectionFailure(status: number | undefined): Connectio
  */
 export function shouldKeepPolling(status: number | undefined): boolean {
 	const failure = classifyConnectionFailure(status);
-	return failure !== "auth" && failure !== "rate-limited";
+	return failure !== "auth" && failure !== "rate-limited" && failure !== "incompatible-host";
 }
 
 /**
@@ -146,42 +149,49 @@ export function describeConnectionFailure(
 		reason === "unreachable" && target.platform === "ios" && isLocalNetworkHost(target.host);
 
 	switch (reason) {
+		case "incompatible-host":
+			return {
+				title: "Orchestrator versions are incompatible",
+				icon: "download-cloud",
+				message: "Update Orchestrator on this phone and the machine, then reconnect.",
+				showLocalNetworkHint: false,
+			};
 		case "tunnel-rotated":
 			return {
-				title: "Your desktop's address changed",
+				title: "Your machine's address changed",
 				icon: "route-off",
 				message:
-					"AO restarted on your desktop, so it has a new address. Open AO \u2192 Settings \u2192 Connect Mobile there and scan the new code.",
+					"Orchestrator restarted on that machine, so it has a new address. Open Orchestrator \u2192 Settings \u2192 Connect Mobile there and scan the new code.",
 				showLocalNetworkHint: false,
 			};
 		case "outdated-desktop":
 			return {
-				title: "Update AO on your desktop",
+				title: "Update Orchestrator on your machine",
 				icon: "download-cloud",
 				message:
-					"That code came from an older version of AO. Update the desktop app, then generate a new code.",
+					"That code came from an older version of Orchestrator. Update Orchestrator on that machine, then generate a new code.",
 				showLocalNetworkHint: false,
 			};
 		case "not-ao-qr":
 			return {
-				title: "Not an AO pairing code",
+				title: "Not an Orchestrator pairing code",
 				icon: "alert-circle",
-				message: "That QR code isn't an AO pairing code.",
+				message: "That QR code isn't an Orchestrator pairing code.",
 				showLocalNetworkHint: false,
 			};
 		case "unreachable": {
 			// Build the address string only when we have both host and port
 			const address = target.host && target.port ? `${target.host}:${target.port}` : target.host || "";
-			const messagePrefix = address ? `Reached nothing at ${address}. ` : "Couldn't reach your desktop. ";
+			const messagePrefix = address ? `Reached nothing at ${address}. ` : "Couldn't reach your machine. ";
 			return {
-				title: "Your desktop disconnected",
+				title: "Your machine is offline",
 				icon: "unplug",
 				hint: isTailscaleHost(target.host)
 					? "Check Tailscale is on for both devices."
 					: "Check you're on the same Wi-Fi.",
 				message: isTailscaleHost(target.host)
 					? messagePrefix +
-						"Make sure Tailscale is connected on this phone and your desktop, and that your desktop is awake."
+						"Make sure Tailscale is connected on this phone and that machine, and that Orchestrator is running there."
 					: messagePrefix +
 						"Is Connect Mobile still on, and is your phone on the same Wi-Fi?",
 				showLocalNetworkHint,
@@ -191,9 +201,9 @@ export function describeConnectionFailure(
 			// The connection itself worked, so "disconnected" would be wrong here —
 			// and re-scanning is the actual fix, not retrying the same password.
 			return {
-				title: "Your desktop rejected the password",
+				title: "Your machine rejected the password",
 				icon: "monitor-off",
-				message: "That password was rotated. Re-scan the code on your desktop.",
+				message: "That password was rotated. Re-scan the code on that machine.",
 				showLocalNetworkHint: false,
 			};
 		case "rate-limited":
@@ -204,23 +214,75 @@ export function describeConnectionFailure(
 				title: "Too many attempts",
 				icon: "timer",
 				message:
-					"Your desktop locked this device out after too many failed attempts. " +
+					"Your machine locked this device out after too many failed attempts. " +
 					"It clears on its own in about a minute — check the password, then try again.",
 				showLocalNetworkHint: false,
 			};
 		case "server-error":
 			return {
-				title: "Your desktop returned an error",
+				title: "Your machine returned an error",
 				icon: "monitor-cog",
-				message: `${target.host}:${target.port} answered, but with an error. Check the AO logs on your desktop.`,
+				message: `${target.host}:${target.port} answered, but with an error. Check the Orchestrator logs on that machine.`,
 				showLocalNetworkHint: false,
 			};
 	}
 }
 
+/**
+ * Copy for a scanned code none of whose endpoints answered.
+ *
+ * The phone races every endpoint the code carries, so the copy speaks to the
+ * code as a whole rather than naming one address. And a code with no tunnel
+ * in it — shown by the desktop before remote access was ready — can only ever
+ * work on the machine's own network: telling someone on mobile data to check
+ * their Wi-Fi, without saying the code itself is the limit, sends them to
+ * debug the wrong thing. Seen in the field from a photographed code.
+ */
+export function describeUnreachableCode(
+	endpoints: readonly Endpoint[],
+	platform: "ios" | "android" | string,
+): ConnectionErrorCopy {
+	const local = endpoints.find((e) => e.kind === "lan") ?? endpoints[0];
+	const base = describeConnectionFailure("unreachable", {
+		host: local?.host ?? "",
+		port: local ? String(local.port) : "",
+		platform,
+	});
+	// Shown under the scanner, so each message is the fix in one line; the
+	// address that failed is left out because it does not change what to do.
+	const rescan = "scan a new code once remote access is on.";
+	if (endpoints.some((e) => e.kind === "tunnel" || e.kind === "relay")) {
+		// Every path failed, the internet one included, so this is not a Wi-Fi
+		// problem. The Local Network hint stays (base keeps it for an iOS code
+		// with a LAN address): a tunnel that is briefly down plus a denied
+		// permission fails both probes, and granting the permission recovers.
+		return {
+			...base,
+			hint: "Make sure Orchestrator is running on that machine.",
+			message: "Make sure Orchestrator is running there with Connect Mobile on.",
+		};
+	}
+	// Tailscale is a remote path too, just not a public one: it works from any
+	// network once both devices are on the tailnet. What the code lacks is the
+	// public tunnel, which is the only path that needs nothing on the phone.
+	if (endpoints.some((e) => e.kind === "tailscale")) {
+		return {
+			...base,
+			title: "Turn on Tailscale",
+			hint: "Connect Tailscale on both devices, or scan a new code.",
+			message: `Connect Tailscale on this phone and that machine, or ${rescan}`,
+		};
+	}
+	return {
+		...base,
+		title: "This code only works nearby",
+		hint: "Scan a new code once remote access has started.",
+		message: `Join the same Wi-Fi as that machine, or ${rescan}`,
+	};
+}
+
 /** The extra line shown when {@link ConnectionErrorCopy.showLocalNetworkHint} is set. */
-export const LOCAL_NETWORK_HINT =
-	"If you denied the Local Network prompt, enable it in Settings › Privacy & Security › Local Network › AO.";
+export const LOCAL_NETWORK_HINT = "If Local Network access is off, turn it on in Settings.";
 
 // ---- Failed actions ----------------------------------------------------------
 
@@ -235,18 +297,18 @@ export class UnreachableError extends Error {
 		readonly reason: "timeout" | "offline",
 		options?: { cause?: unknown },
 	) {
-		super(reason === "timeout" ? "Your desktop didn't respond in time." : "Couldn't reach your desktop.", options);
+		super(reason === "timeout" ? "Your machine didn't respond in time." : "Couldn't reach your machine.", options);
 		this.name = "UnreachableError";
 	}
 }
 
 /** Shown when a request never reached the desktop. */
 export const UNREACHABLE_ACTION_COPY =
-	"Couldn't reach your desktop. Make sure it's awake and AO is running, then try again.";
+	"Couldn't reach your machine. Make sure Orchestrator is running there, then try again.";
 
 /** Shown in place of a missing server config ("No AO server configured"). */
 export const NOT_PAIRED_ACTION_COPY =
-	"This phone isn't paired with a desktop. Scan the pairing code from AO → Settings → Connect Mobile.";
+	"This phone isn't paired with a machine. Scan its Orchestrator pairing code.";
 
 // The fields an ApiError carries, read structurally so this module stays free of
 // `api.ts` (and with it AsyncStorage) and remains unit-testable.
@@ -309,18 +371,18 @@ export function userFacingError(error: unknown, fallback = "Something went wrong
 	const failure = answeredFailure(error);
 	if (failure) {
 		const { status } = failure;
-		if (status === 401 || status === 403) return "Your desktop rejected this phone's password. Re-scan the pairing code on your desktop.";
-		if (status === 429) return "Your desktop locked this device out after too many failed attempts. It clears on its own in about a minute.";
+		if (status === 401 || status === 403) return "Your machine rejected this phone's password. Re-scan the pairing code on that machine.";
+		if (status === 429) return "Your machine locked this device out after too many failed attempts. It clears on its own in about a minute.";
 		if (status >= 500) {
-			if (status === 503) return "Your desktop is busy or still starting up. Try again in a moment.";
+			if (status === 503) return "Your machine is busy or still starting up. Try again in a moment.";
 			const ref = typeof failure.requestId === "string" && failure.requestId ? ` (Reference: ${failure.requestId})` : "";
-			return `Something went wrong on your desktop. Try again, or check the AO logs there.${ref}`;
+			return `Something went wrong on your machine. Try again, or check the Orchestrator logs there.${ref}`;
 		}
 		const detail = daemonDetail(error);
 		if (detail) return sentence(detail);
-		if (status === 404 || status === 410) return "That's no longer on your desktop. Refresh and try again.";
-		if (status === 409) return "That changed on your desktop in the meantime. Refresh and try again.";
-		return "Your desktop couldn't complete that. Refresh and try again.";
+		if (status === 404 || status === 410) return "That's no longer on your machine. Refresh and try again.";
+		if (status === 409) return "That changed on your machine in the meantime. Refresh and try again.";
+		return "Your machine couldn't complete that. Refresh and try again.";
 	}
 	if (error instanceof Error && !isEngineError(error) && error.message.trim()) return error.message.trim();
 	return fallback;
