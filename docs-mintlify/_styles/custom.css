@@ -1276,3 +1276,6 @@ main .accordion-group details div.prose > :last-child { margin-bottom: 0 !import
 main details.accordion:not(.accordion-group details) div.prose { padding: 0 !important; margin: 0 !important; font-size: 16px !important; line-height: 28px !important; }
 html[data-current-path="/installation"] main details.accordion:not(.accordion-group details) summary p::before { content: "\25B8\0020"; font-size: 13px; }
 html[data-current-path="/installation"] main details.accordion:not(.accordion-group details)[open] summary p::before { content: "\25BE\0020"; }
+
+/* v36t: table cell inline code at 0.875em like the original (prevents extra wraps) */
+main table :is(th, td) code { font-size: 0.875em !important; }
