@@ -816,6 +816,7 @@ type SessionTelemetry struct {
 	SessionID         string
 	CreatedBy         string
 	WaitingInputCount int64
+	EndClaimed        int64
 }
 
 type SessionTerminalTurn struct {
