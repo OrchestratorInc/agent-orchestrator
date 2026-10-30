@@ -69,6 +69,18 @@ var ErrSessionOpenElsewhere = errors.New("this is open elsewhere; close it there
 // setting even the default path logs a keychain user out, and an AO account's
 // folder links the computer's history, so replacing it would run the chat
 // under another login than the session's account.
+//
+// Kimi Code stores every session strictly under its home (KIMI_CODE_HOME, else
+// ~/.kimi-code); KIMI_SHARE_DIR is only the legacy kimi-cli migration source and
+// there is no sessions-dir or session-path override, so an imported Kimi chat
+// has to launch in the source home to be found. This stays equivalent to a
+// managed Kimi chat: AO's managed Kimi home only mirrors that same login
+// (ShareCredentials symlinks the managed credentials to it and seeds its config
+// from it), and standing instructions reach the ACP session through the
+// workspace .kimi-code/AGENTS.md and the first-prompt preamble, both independent
+// of the home. The config.toml lifecycle hooks are a TUI-only mechanism the ACP
+// chat driver does not use, so pointing at the source home drops nothing a chat
+// relied on.
 func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.SessionRecord, env map[string]string) {
 	source := rec.Metadata.ImportSource
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
