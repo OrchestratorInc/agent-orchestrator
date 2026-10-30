@@ -69,9 +69,10 @@
       '<svg viewBox="0 0 24.5 ' + H + '" style="width:24.5px;height:' + H + 'px" fill="none">' +
         '<path d="' + d + '" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>' +
         '<path class="ao-track-hi" d="' + d + '" stroke="rgb(232,232,227)" stroke-width="1"/>' +
+        '<circle class="ao-track-dot" r="2" fill="rgb(232,232,227)"/>' +
       '</svg><div class="ao-thumb"></div>';
     container.insertBefore(wrap, container.firstChild);
-    return { wrap: wrap, items: items, H: H, hi: wrap.querySelector(".ao-track-hi"), thumb: wrap.querySelector(".ao-thumb") };
+    return { wrap: wrap, items: items, H: H, hi: wrap.querySelector(".ao-track-hi"), dot: wrap.querySelector(".ao-track-dot"), thumb: wrap.querySelector(".ao-thumb") };
   }
 
   function updateTrack(track, idx) {
@@ -80,6 +81,7 @@
     if (!it) return;
     var center = it.top + it.h / 2;
     track.hi.style.clipPath = "polygon(0 0, 100% 0, 100% " + center + "px, 0 " + center + "px)";
+    if (track.dot) { track.dot.setAttribute("cx", String(it.x)); track.dot.setAttribute("cy", String(center)); }
     track.thumb.style.left = (it.x - 2) + "px";
     track.thumb.style.top = (center + 2) + "px";
     track.thumb.style.opacity = "1";
@@ -902,7 +904,9 @@
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initAll);
   } else { initAll(); }
-  [400, 1200, 2500, 5000].forEach(function (t) { setTimeout(initAll, t); });
+  [150, 350, 700, 1200, 2500, 5000].forEach(function (t) { setTimeout(initAll, t); });
+  window.addEventListener("load", function () { spyAll(); setTimeout(spyAll, 300); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { spyAll(); });
   window.addEventListener("scroll", spyAll, { passive: true });
   document.addEventListener("scroll", function (e) { if (e.target !== document) spyAll(); }, { passive: true, capture: true });
   var mo = new MutationObserver(function () {
