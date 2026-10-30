@@ -366,6 +366,32 @@ describe("telemetry sanitizers", () => {
 		});
 	});
 
+	it("stamps the install context with the daemon's property names", () => {
+		const context = buildTelemetryContext("1.2.3", "darwin", "stable", {
+			arch: "arm64",
+			osVersion: "15.1.2",
+			installSource: "brew-cask",
+			installedAt: "2026-10-20",
+			isCi: false,
+		});
+		expect(context).toMatchObject({
+			arch: "arm64",
+			$os_version: "15.1.2",
+			install_source: "brew-cask",
+			installed_at: "2026-10-20",
+			is_ci: false,
+			release_channel: "stable",
+			client: "desktop",
+		});
+		expect(context).not.toHaveProperty("ci_signal");
+		expect(buildTelemetryContext("1.2.3", "linux", "unknown", { arch: "x64", installSource: "unknown", isCi: true, ciSignal: "container" })).toMatchObject({
+			is_ci: true,
+			ci_signal: "container",
+		});
+		// Without a context (older main process) nothing is invented.
+		expect(buildTelemetryContext("1.2.3", "linux")).not.toHaveProperty("install_source");
+	});
+
 	it("uses v2 PostHog event names for streams that have noisy legacy producers", () => {
 		expect(postHogEventName("ao.app.active")).toBe("ao.v2.app.active");
 		expect(postHogEventName("ao.renderer.route_viewed")).toBe("ao.v2.renderer.route_viewed");

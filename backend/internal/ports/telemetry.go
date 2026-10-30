@@ -84,5 +84,31 @@ type TelemetryIdentityStore interface {
 	SetCloudUserID(ctx context.Context, id string) error
 	// MarkInstalledEvent reserves the one install event before queueing it.
 	MarkInstalledEvent(ctx context.Context) (bool, error)
+	// MarkFirstOpenEvent reserves ao.app.first_open once per install ID.
+	MarkFirstOpenEvent(ctx context.Context) (bool, error)
 	SetGitHubLogin(login string)
+}
+
+// InstallMilestones claims install-lifetime "firsts" durably (marker files in
+// the data dir), so a "first" telemetry flag fires once per install instead of
+// whenever a table happens to be empty. known is false when the marker could
+// not be read or written.
+type InstallMilestones interface {
+	Claim(name string) (first bool, known bool)
+}
+
+// FirstForInstall resolves first_for_install for a milestone. The marker alone
+// would misreport an install upgraded from a build without markers, whose
+// first post-upgrade session is not its first ever, so the caller's "no prior
+// rows" check must agree too. ok is false when the answer is unknown and the
+// property should be omitted.
+func FirstForInstall(m InstallMilestones, name string, noPriorRows bool) (first, ok bool) {
+	if m == nil {
+		return false, false
+	}
+	claimed, known := m.Claim(name)
+	if !known {
+		return false, false
+	}
+	return claimed && noPriorRows, true
 }

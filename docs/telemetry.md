@@ -67,7 +67,20 @@ Orchestrator.inc sends structured events in a few broad categories:
   stack trace after path redaction, an HTTP status, or an agent waiting for
   input
 - Basic environment information, such as the Orchestrator.inc version, operating system,
-  release channel, and which supported agent types are available
+  release channel, and which supported agent types are available. Desktop and
+  daemon events carry the operating system name (`$os`) and version
+  (`$os_version`), `platform`, CPU architecture (`arch`), and the update
+  channel you chose (`release_channel`)
+- How Orchestrator.inc was installed, on every desktop and daemon event:
+  `install_source` is one of `npm-bootstrap` (`ao start`), `dmg`, `brew-cask`,
+  `exe`, `appimage`, `deb`, `rpm`, `dev`, `unknown`, or `other`, and
+  `installed_at` is the UTC day the app first ran. Both come from
+  `~/.ao/app-state.json`; no download path or file name is sent
+- Whether the app is running in CI or a container (`is_ci`, plus `ci_signal`
+  of `ci_env` or `container`), detected from well-known CI environment
+  variables and container marker files. Only the boolean and the category are
+  sent, never the variables themselves, so automated runs can be excluded from
+  usage counts
 - If you are signed in to AO Cloud: your AO Cloud user ID on every
   desktop and daemon event, and a PostHog person profile holding your email
   address, AO Cloud user ID, and GitHub username. The email is set at sign-in
@@ -79,6 +92,18 @@ Orchestrator.inc sends structured events in a few broad categories:
   session-start events)
 - Desktop onboarding progress, such as viewing, completing, or leaving the
   welcome and GitHub sign-in steps, and a one-time install event on first run
+- One-time lifecycle markers: `ao.app.first_open` is sent once per
+  installation identifier on any build, including installations that predate
+  the install event, and `ao.app.installed` and `ao.app.first_open` say
+  whether the desktop app or the CLI started the daemon (`launcher`).
+  `ao.session.spawned` and `ao.projects.created` carry `first_for_install`,
+  true only for the installation's first session or project. These are
+  recorded by marker files under `~/.ao/data` (`telemetry_first_open_emitted`,
+  `telemetry_first_session_spawned`, `telemetry_first_project_added`). The
+  older `ao.onboarding.first_session_spawned` and
+  `ao.onboarding.first_project_added` events are deprecated: they fire again
+  whenever the session or project list is empty, and are kept only so
+  existing dashboards continue
 - The Orchestrator.inc version on every daemon event
 - A random `install_id` on every desktop and daemon event, the phone's own
   stored `install_id` when available, and a `paired_install_id` on phone events

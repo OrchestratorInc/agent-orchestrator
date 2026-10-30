@@ -225,6 +225,8 @@ type officialManagedCask struct {
 // codexInstallScriptURL is Codex's official macOS and Linux installer.
 const codexInstallScriptURL = "https://chatgpt.com/codex/install.sh"
 
+const ompInstallScriptURL = "https://omp.sh/install"
+
 // officialManagedCasks: Codex's cask also ships codex-resources, which an
 // upgrade removes while sessions may still read it.
 var officialManagedCasks = map[Target]officialManagedCask{

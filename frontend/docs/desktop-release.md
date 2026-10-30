@@ -86,7 +86,7 @@ channels omit the first-install DMG.
 
 AO writes updater decisions to `logs/updater.jsonl` beside `staged-update.json`
 (normally `~/.ao/logs/updater.jsonl`, using the configured run-file directory).
-These local records survive Retry and app restarts even when a packaged GUI
+These local records survive relaunches even when a packaged GUI
 launch discards stdout/stderr. They are not sent through renderer telemetry.
 The log retains one rotated file, `updater.jsonl.1`, with each file capped at
 1 MiB and created with mode `0600` on macOS/POSIX. Network URLs and authorization
@@ -101,9 +101,18 @@ timeout branch and last progress sample; `native-error` preserves an original
 native error before its message is rewritten for the UI. Preparation samples
 include elapsed/inactive time, bytes, free space, and update-directory creation
 time. Probe records include read errors and traversal-budget exhaustion. Late
-native completion is recorded even when AO ignores it after a timeout.
+native completion records whether AO accepted it.
 `power-suspend` / `power-resume` and process uptime help correlate a timeout
-with laptop sleep or a wall-clock change; watchdog timing behavior is unchanged.
+with laptop sleep or a wall-clock change. The macOS preparation watchdog pauses
+on suspend, excludes sleep from its elapsed-time caps, and grants a fresh
+inactivity window on resume. Its active-time limits remain unchanged.
+
+A watchdog timeout does not cancel Squirrel's native staging. A later native
+success for the same owned target and channel clears that timeout and restores
+the install confirmation. It never resumes an install request that already
+failed. A native error or discarded target invalidates this recovery. If native
+staging remains blocked, the dialog offers **Relaunch AO**, which starts a fresh
+process rather than trying to reset Squirrel in place.
 
 ## Isolated macOS differential v2
 

@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, Code2, Eye, FolderOpen, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal } from "lucide-react";
-import { isAgentActivityWorking } from "@aoagents/product-ui";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
@@ -390,7 +389,6 @@ export function SessionArtifactsView({
 		sessionId: session.id,
 		sessionTitle: session.title ?? "",
 		cloud: session.cloud,
-		generating: isAgentActivityWorking(session.activity),
 	});
 	const openArtifact = (artifact: Pick<SessionArtifact, "path">) => {
 		setEditingPath(null);

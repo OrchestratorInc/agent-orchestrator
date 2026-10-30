@@ -22,8 +22,9 @@ import { haptics } from "../haptics";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { MascotLamp, Spinning } from "../ui";
+import { MascotLamp } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
+import { LatticeLoader } from "./LatticeLoader";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { RenderFrame } from "./RenderFrame";
 import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
@@ -776,9 +777,10 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 }
 
 /**
- * The turn's status row, which sits between the prompt and the work: a ticking
- * "Working · 12s" while the turn runs, then "Worked for 20s" once it settles. When
- * there is folded work the settled row is the toggle that reveals it.
+ * The turn's status row, which sits between the prompt and the work: the lattice
+ * and a ticking "12s" while the turn runs (no "Working", like the desktop: the
+ * lattice is the liveness), then "Worked for 20s" once it settles. When there is
+ * folded work the settled row is the toggle that reveals it.
  */
 function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationTurn; foldable: boolean; open: boolean; onToggle(): void }) {
 	const t = useTheme();
@@ -801,8 +803,11 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 				? duration ? `Failed after ${duration}` : "Turn failed"
 				: turn.state === "interrupted"
 					? duration ? `Stopped after ${duration}` : "Turn stopped"
-					: workingDuration ? `Working · ${workingDuration}` : "Working";
-	const text = <Text style={[styles.turnState, turn.state === "failed" && { color: t.red }]}>{label}</Text>;
+					: workingDuration ?? "";
+	const text = <Text
+		accessibilityLabel={running ? (workingDuration ? `Working for ${workingDuration}` : "Working") : undefined}
+		style={[styles.turnState, running && styles.turnTimer, turn.state === "failed" && { color: t.red }]}
+	>{label}</Text>;
 	// One element throughout, so the spinner can leave and the label slide into
 	// its place when the turn settles instead of the whole row remounting.
 	return <Pressable
@@ -812,8 +817,8 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		onPress={() => { haptics.tap(); onToggle(); }}
 		style={styles.statusRow}
 	>
-		{/* Spinning holds the glyph still under Reduce Motion; loader still reads as in progress. */}
-		{running ? <StatusSpinner><Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning></StatusSpinner> : null}
+		{/* The desktop's lattice; it holds still under Reduce Motion, where the ticking label still reads as in progress. */}
+		{running ? <StatusSpinner><LatticeLoader color={t.textTertiary} /></StatusSpinner> : null}
 		<StatusLabel>{text}</StatusLabel>
 		{foldable ? <FoldChevron open={open} color={t.textFaint} /> : null}
 	</Pressable>;
@@ -1242,6 +1247,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// rows and the setup checklist header, so the line holds through the handoff.
 	statusRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
 	turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
+	// Even-width digits, so the ticking timer doesn't shift as it counts.
+	turnTimer: { fontVariant: ["tabular-nums"] },
 	turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "right" },
 	rollbackConfirm: { marginTop: space.xxs, backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 12, padding: space.md, gap: space.xs },
 	rollbackTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontWeight: "600", fontSize: type.footnote.fontSize },

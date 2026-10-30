@@ -156,7 +156,8 @@ import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
 import { daemonSentryDsn } from "./shared/sentry-config";
-import { buildTelemetryBootstrap, rendererTelemetryEnabled } from "./shared/telemetry";
+import { buildTelemetryBootstrap, readTelemetryInstallContext, rendererTelemetryEnabled } from "./shared/telemetry";
+import { detectInstallSource } from "./shared/install-environment";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
 	TELEMETRY_POLICY_CHANGED_CHANNEL,
@@ -2838,11 +2839,19 @@ ipcMain.handle("menu:action", (_event, action: string) => {
 			return;
 	}
 });
-ipcMain.handle("telemetry:getBootstrap", () => {
+ipcMain.handle("telemetry:getBootstrap", async () => {
 	if (!telemetryPolicyController) return null;
 	// Opted out: no bootstrap, so the renderer never constructs a PostHog client.
 	if (telemetryIdentity.isOptedOut()) return null;
-	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot());
+	const runFile = runFilePath();
+	const install = await readTelemetryInstallContext({
+		stateDir: runFile ? path.dirname(runFile) : null,
+		arch: process.arch,
+		osVersion: process.getSystemVersion(),
+		env: process.env,
+		exists: existsSync,
+	});
+	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot(), install);
 });
 ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
 async function flushDaemonUsage(): Promise<void> {
@@ -3538,6 +3547,13 @@ async function writeAppStateOnLaunch(): Promise<void> {
 		appPath: resolveBundlePath(),
 		version: app.getVersion(),
 		installedVia: parseInstalledVia(process.argv),
+		detectedInstallSource: detectInstallSource({
+			platform: process.platform,
+			isPackaged: app.isPackaged,
+			execPath: process.execPath,
+			env: process.env,
+			exists: existsSync,
+		}),
 		now: () => new Date(),
 	});
 }
