@@ -83,8 +83,13 @@ func devLauncherHome(t *testing.T) (app, link string, env map[string]string) {
 		t.Fatal(err)
 	}
 	// The daemon's PATH, from the app's login-shell probe, omits ~/.local/bin
-	// here; the repair must still find the launcher.
-	return app, link, map[string]string{"HOME": home, "PATH": "/usr/bin:/bin", envLoginShellEnv: "1"}
+	// here; the repair must still find the launcher. It holds only a directory
+	// of this test's own, so the repair never reaches a real ao on this machine.
+	emptyBin := filepath.Join(root, "empty-bin")
+	if err := os.MkdirAll(emptyBin, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	return app, link, map[string]string{"HOME": home, "PATH": emptyBin, envLoginShellEnv: "1"}
 }
 
 // TestRepointDevLaunchersFixesLoginShells is the #3562 reproduction end to end:
@@ -113,7 +118,7 @@ func TestRepointDevLaunchersFixesLoginShells(t *testing.T) {
 
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
-	repointDevLaunchers(log, "darwin", func() (string, error) { return app, nil }, func(key string) string { return env[key] })
+	repointDevLaunchers(log, "darwin", func() (string, error) { return app, nil }, func(key string) string { return env[key] }, nil)
 
 	if got := loginShellAO(); got != "app" {
 		t.Fatalf("after the repair a login shell ran %q, want the app's ao", got)
@@ -149,7 +154,7 @@ func TestRepointDevLaunchersLeavesLinkAlone(t *testing.T) {
 				t.Fatal(err)
 			}
 			log := slog.New(slog.NewTextHandler(io.Discard, nil))
-			repointDevLaunchers(log, tc.goos, func() (string, error) { return tc.exe(app), nil }, func(key string) string { return env[key] })
+			repointDevLaunchers(log, tc.goos, func() (string, error) { return tc.exe(app), nil }, func(key string) string { return env[key] }, nil)
 			if after, err := os.Readlink(link); err != nil || after != before {
 				t.Fatalf("%s -> %q (%v), want it kept at %q", link, after, err, before)
 			}
@@ -185,7 +190,7 @@ func TestRepointDevLaunchersFollowsAMovedInstall(t *testing.T) {
 			if err := os.Symlink(tc.target, link); err != nil {
 				t.Fatal(err)
 			}
-			repointDevLaunchers(log, "darwin", func() (string, error) { return app, nil }, func(key string) string { return env[key] })
+			repointDevLaunchers(log, "darwin", func() (string, error) { return app, nil }, func(key string) string { return env[key] }, nil)
 			if got, err := os.Readlink(link); err != nil || got != tc.want {
 				t.Fatalf("%s -> %q (%v), want %q", link, got, err, tc.want)
 			}

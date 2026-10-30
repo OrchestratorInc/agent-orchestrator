@@ -218,7 +218,7 @@ func Run(buildVersion string) error {
 	}
 	// Before any session starts, so login shells in it reach this binary rather
 	// than an old scripts/daemon-build.sh build. Non-fatal.
-	repointDevLaunchers(log, runtime.GOOS, os.Executable, os.Getenv)
+	repointDevLaunchers(log, runtime.GOOS, os.Executable, os.Getenv, launcherSystemDirs)
 
 	// The app owns the user's "Share error events" choice and writes it to the
 	// policy file. It gates Sentry capture only: product telemetry answers to

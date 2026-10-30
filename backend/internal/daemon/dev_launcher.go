@@ -17,6 +17,10 @@ import (
 // AO_KEEP_DEV_LAUNCHER=1 from a shell profile, so it leaves launchers alone.
 const envLoginShellEnv = "AO_LOGIN_SHELL_ENV"
 
+// launcherSystemDirs are the system directories scripts/daemon-build.sh may
+// install into, scanned even when the daemon's PATH omits them.
+var launcherSystemDirs = []string{"/usr/local/bin", "/opt/homebrew/bin"}
+
 // repointDevLaunchers points the ao launcher scripts/daemon-build.sh leaves on
 // PATH at this packaged daemon. Login shells apply the user's startup files
 // after AO's session PATH pin: Codex runs every agent command through one, and
@@ -24,8 +28,10 @@ const envLoginShellEnv = "AO_LOGIN_SHELL_ENV"
 // agents and users that launcher's old source build (#3562). Only an installed
 // desktop daemon acts, and only on a symlink whose target is exactly that
 // build, or a link it made earlier to an install that no longer exists; any
-// other ao is left for `ao doctor` to report.
-func repointDevLaunchers(log *slog.Logger, goos string, executable func() (string, error), getenv func(string) string) {
+// other ao is left for `ao doctor` to report. systemDirs are scanned beside
+// PATH and the user's own install directories; tests pass none so they never
+// reach a real system link.
+func repointDevLaunchers(log *slog.Logger, goos string, executable func() (string, error), getenv func(string) string, systemDirs []string) {
 	exe, ok := durableDesktopExecutable(goos, executable, getenv)
 	if !ok {
 		return
@@ -48,7 +54,7 @@ func repointDevLaunchers(log *slog.Logger, goos string, executable func() (strin
 	for _, gopath := range filepath.SplitList(getenv("GOPATH")) {
 		dirs = append(dirs, filepath.Join(gopath, "bin"))
 	}
-	dirs = append(dirs, "/usr/local/bin", "/opt/homebrew/bin")
+	dirs = append(dirs, systemDirs...)
 	buildPaths := agentlaunch.DevLauncherBuildPaths(getenv)
 	owned := func(target string) bool {
 		if slices.Contains(buildPaths, target) {
