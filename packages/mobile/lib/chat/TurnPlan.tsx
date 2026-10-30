@@ -163,7 +163,7 @@ export function TurnPlan({
 									}}
 									style={styles.step}
 								>
-									<StepMark status={step.status} />
+									<StepMark status={step.status} live={Boolean(live)} />
 									<Text
 										style={[
 											styles.stepText,
@@ -218,7 +218,7 @@ function PlanMark({ done }: { done: boolean }) {
  * The mark for one step, in a fixed-size slot the height of one text line, so a
  * spinner that turns into a tick never nudges the lines below it.
  */
-function StepMark({ status }: { status: PlanStep["status"] }) {
+function StepMark({ status, live }: { status: PlanStep["status"]; live: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	return (
@@ -230,8 +230,11 @@ function StepMark({ status }: { status: PlanStep["status"] }) {
 				</Svg>
 			) : status === "in_progress" ? (
 				// In progress: a faint ring with an arc turning round it, neutral like the
-				// turn's own Working spinner. Held still under Reduce Motion.
-				<Spinning enabled>
+				// turn's own Working indicator. It turns only while the turn runs: a turn
+				// that is stopped or fails, and a plan the agent keeps across turns, leave a
+				// step in progress, and a spinner there would say the agent is still at it.
+				// Held still under Reduce Motion too.
+				<Spinning enabled={live}>
 					<Svg width={16} height={16} viewBox="0 0 16 16">
 						<Circle cx={8} cy={8} r={6.75} fill="none" stroke={t.textPrimary} strokeOpacity={0.18} strokeWidth={1.5} />
 						<Circle cx={8} cy={8} r={6.75} fill="none" stroke={t.textPrimary} strokeWidth={1.5} strokeLinecap="round" strokeDasharray="12 43" />
