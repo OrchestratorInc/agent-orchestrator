@@ -396,6 +396,7 @@ header [class*="assistant"], header button[id*="assistant"], header a[id*="assis
   border-radius: 6px;
   cursor: pointer; text-decoration: none !important;
 }
+.ao-action span, .ao-action svg { font-weight: 500 !important; }
 .ao-action:hover { background: oklch(0.32 0.018 107.4); }
 .ao-action svg { width: 14px; height: 14px; flex: none; }
 .ao-action .ao-caret { width: 14px; height: 14px; }
