@@ -69,7 +69,6 @@ import {
 	type WorkspaceSummary,
 	sortedWorkerSessions,
 	isOrchestratorSession,
-	canRenameSession,
 	resolveNextNavigationAfterSessionKill,
 	workerSessions,
 	CLOUD_PROJECT_KIND,
@@ -2474,8 +2473,8 @@ const SessionRow = memo(function SessionRow({
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(session.hostId) }),
 		[queryClient, session.hostId],
 	);
-	const canRename = canRenameSession(session);
-	const rename = useSessionRename(canRename ? session : undefined, refreshWorkspaces);
+	const rename = useSessionRename(session, refreshWorkspaces);
+	const canRename = rename.canRename;
 	const lastTouchAtRef = useRef(0);
 	const suppressTouchOpenRef = useRef(false);
 	const hoverTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);

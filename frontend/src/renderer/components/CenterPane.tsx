@@ -32,7 +32,7 @@ import { handleTerminalTabListKeyDown } from "../lib/terminal-tabs";
 import { cn } from "../lib/utils";
 import { sidebarOccupiesLayout, useUiStore, type Theme } from "../stores/ui-store";
 import type { TerminalTarget } from "../types/terminal";
-import { canRenameSession, isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
+import { isOrchestratorSession, type WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TerminalTabFrame } from "./TerminalTabFrame";
@@ -715,9 +715,9 @@ export function SessionPaneTab({
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
 	// persist a title without updating their query cache. The project
 	// orchestrator's tab shows its role, not a name, and a Cloud session has no
-	// rename route, so neither is renamable.
-	const renameSession = onRenamed && session && canRenameSession(session) ? session : undefined;
-	const rename = useSessionRename(renameSession, onRenamed);
+	// rename route, so the hook refuses both.
+	const rename = useSessionRename(onRenamed ? session : undefined, onRenamed);
+	const renameSession = rename.canRename ? session : undefined;
 	const editingContent = renameSession && rename.isEditing ? (
 		<input
 			aria-label={t("shell.renameSession", { title: renameSession.title })}
