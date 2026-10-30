@@ -13,12 +13,12 @@ import {
 	textFieldStyle,
 	tint,
 } from "@expo/ui/swift-ui/modifiers";
-import { useEffect } from "react";
 import { glassPanel } from "../glass";
 import { haptics } from "../haptics";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import type { ElicitationActionProps, ElicitationChoiceListProps, ElicitationTextFieldProps } from "./elicitation-native-controls";
 import { iconSize, type } from "../tokens";
+import { useNativeTextInput } from "../useNativeTextInput";
 
 export function ElicitationChoiceList({ choices, selected, multi, onChange }: ElicitationChoiceListProps) {
 	const t = useTheme();
@@ -51,17 +51,18 @@ export function ElicitationChoiceList({ choices, selected, multi, onChange }: El
 export function ElicitationTextField({ value, label, numeric, maxLength, onChange }: ElicitationTextFieldProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	const text = useNativeState(value === undefined ? "" : String(value));
-	useEffect(() => {
-		const next = value === undefined ? "" : String(value);
-		if (text.get() !== next) text.set(next);
-	}, [text, value]);
+	const controlledText = value === undefined ? "" : String(value);
+	const text = useNativeState(controlledText);
+	const changeText = useNativeTextInput(controlledText, text, onChange);
 	return <Host style={{ width: "100%", height: 46 }} colorScheme={scheme} seedColor={t.accent}>
 		<TextField
 			text={text}
 			placeholder={label}
 			maxLength={maxLength}
-			onTextChange={(next) => onChange(numeric ? (next === "" ? "" : Number(next)) : next)}
+			onTextChange={(next) => {
+				const changed = numeric ? (next === "" ? "" : Number(next)) : next;
+				changeText(changed);
+			}}
 			modifiers={[
 				textFieldStyle("plain"),
 				frame({ maxWidth: 1000, height: 44, alignment: "leading" }),

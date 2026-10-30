@@ -1,6 +1,7 @@
-import { Eraser, Import, MoreHorizontal, Pencil, Plus, Trash2, UserRound } from "lucide-react";
+import { Eraser, Import, MoreHorizontal, Pencil, Plus, Star, Trash2, UserRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { BrowserProfileUsage } from "../../../shared/browser-profiles";
 import type { AoBridge } from "../../../preload";
 import { aoBridge } from "../../lib/bridge";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -18,12 +19,19 @@ import { BrowserImportDialog } from "./BrowserImportDialog";
 
 type ProfileBridge = AoBridge["browserProfiles"];
 type Profile = Awaited<ReturnType<ProfileBridge["list"]>>["profiles"][number];
+function profileError(reason: unknown, fallback: string): string {
+	// Electron wraps thrown main-process exceptions in raw IPC diagnostics.
+	return reason instanceof Error && !/Error invoking remote method|\b(?:BrowserProfileStoreError|Error):/.test(reason.message)
+		? reason.message : fallback;
+}
+
 type DestructiveAction = { kind: "clear" | "delete"; profile: Profile };
 
 export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
 	const bridge = (aoBridge as Partial<AoBridge>).browserProfiles as ProfileBridge | undefined;
 	const [profiles, setProfiles] = useState<Profile[]>([]);
+	const [defaultProfileId, setDefaultProfileIdState] = useState<string | null>(null);
 	const [loading, setLoading] = useState(Boolean(bridge));
 	const [error, setError] = useState("");
 	const [name, setName] = useState("");
@@ -31,6 +39,10 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 	const [pendingAction, setPendingAction] = useState<DestructiveAction | null>(null);
 	const [actionBusy, setActionBusy] = useState(false);
 	const [actionError, setActionError] = useState("");
+	const [usage, setUsage] = useState<BrowserProfileUsage[]>([]);
+	const [usageLoading, setUsageLoading] = useState(false);
+	const [usageError, setUsageError] = useState("");
+	const [usageRevision, setUsageRevision] = useState(0);
 	const [importOpen, setImportOpen] = useState(false);
 
 	const refresh = async () => {
@@ -39,9 +51,10 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 		try {
 			const result = await bridge.list();
 			setProfiles(result.profiles);
+			setDefaultProfileIdState(result.defaultProfileId ?? null);
 			setError(result.error?.message ?? "");
 		} catch (reason) {
-			setError(reason instanceof Error ? reason.message : t("settings.browserProfiles.loadFailed"));
+			setError(profileError(reason, t("settings.browserProfiles.loadFailed")));
 		} finally {
 			setLoading(false);
 		}
@@ -54,6 +67,41 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [bridge]);
 
+	useEffect(() => {
+		if (!bridge || pendingAction?.kind !== "delete" || actionBusy) return;
+		let cancelled = false;
+		let timer: ReturnType<typeof setTimeout>;
+		const check = async () => {
+			try {
+				const result = await bridge.usage(pendingAction.profile.id);
+				if (cancelled) return;
+				setUsage(result.sessions);
+				setUsageError(result.error ?? "");
+			} catch {
+				if (!cancelled) setUsageError(t("settings.browserProfiles.usageFailed"));
+			} finally {
+				if (!cancelled) {
+					setUsageLoading(false);
+					timer = setTimeout(() => void check(), 1500);
+				}
+			}
+		};
+		void check();
+		return () => { cancelled = true; clearTimeout(timer); };
+	}, [bridge, pendingAction, actionBusy, usageRevision, t]);
+
+	const toggleDefault = async (profile: Profile) => {
+		if (!bridge) return;
+		const nextId = defaultProfileId === profile.id ? null : profile.id;
+		try {
+			await bridge.setDefault(nextId);
+			setDefaultProfileIdState(nextId);
+			setError("");
+		} catch (reason) {
+			setError(profileError(reason, t("settings.browserProfiles.saveDefaultFailed")));
+		}
+	};
+
 	const create = async () => {
 		if (!bridge || !name.trim()) return;
 		try {
@@ -62,7 +110,7 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 			setName("");
 			setError("");
 		} catch (reason) {
-			setError(reason instanceof Error ? reason.message : t("settings.browserProfiles.saveFailed"));
+			setError(profileError(reason, t("settings.browserProfiles.saveFailed")));
 		}
 	};
 
@@ -75,38 +123,40 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 			setProfiles((current) => current.map((entry) => (entry.id === profile.id ? updated : entry)));
 			setError("");
 		} catch (reason) {
-			setError(reason instanceof Error ? reason.message : t("settings.browserProfiles.saveFailed"));
+			setError(profileError(reason, t("settings.browserProfiles.saveFailed")));
 		}
 	};
 
 	const requestAction = (kind: DestructiveAction["kind"], profile: Profile) => {
 		setActionError("");
+		setUsage([]);
+		setUsageError("");
+		setUsageLoading(kind === "delete");
 		setPendingAction({ kind, profile });
 	};
 
 	const confirmAction = async () => {
-		if (!bridge || !pendingAction) return;
+		if (!bridge || !pendingAction || actionBusy || (pendingAction.kind === "delete" && (usageLoading || usageError || usage.some((session) => session.blocker)))) return;
 		setActionBusy(true);
 		setActionError("");
 		try {
 			if (pendingAction.kind === "clear") {
 				await bridge.clear(pendingAction.profile.id);
 			} else {
-				await bridge.delete(pendingAction.profile.id);
+				const result = await bridge.delete(pendingAction.profile.id, usage.map((session) => session.viewId));
+				if (result.error) throw new Error(result.error);
 				setProfiles((current) => current.filter((profile) => profile.id !== pendingAction.profile.id));
+				setDefaultProfileIdState((current) => (current === pendingAction.profile.id ? null : current));
 			}
 			setError("");
 			setPendingAction(null);
 		} catch (reason) {
-			setActionError(
-				reason instanceof Error
-					? reason.message
-					: t(
-							pendingAction.kind === "clear"
-								? "settings.browserProfiles.clearFailed"
-								: "settings.browserProfiles.deleteFailed",
-						),
-			);
+			setActionError(profileError(reason, t(pendingAction.kind === "clear"
+				? "settings.browserProfiles.clearFailed" : "settings.browserProfiles.deleteFailed")));
+			if (pendingAction.kind === "delete") {
+				setUsageLoading(true);
+				setUsageRevision((current) => current + 1);
+			}
 		} finally {
 			setActionBusy(false);
 		}
@@ -121,12 +171,22 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 				grouped
 			>
 				<SettingsRow label={t("settings.browserImport.rowLabel")}>
-					<Button disabled={!bridge} onClick={() => setImportOpen(true)} type="button" variant="secondary">
+					<Button
+						className="text-settings-muted hover:text-settings-label"
+						disabled={!bridge}
+						onClick={() => setImportOpen(true)}
+						size="sm"
+						type="button"
+						variant="ghost"
+					>
 						<Import aria-hidden="true" className="size-icon-base" />
 						{t("settings.browserImport.action")}
 					</Button>
 				</SettingsRow>
-				<SettingsRow label={t("settings.browserProfiles.create")}>
+				<SettingsRow
+					label={t("settings.browserProfiles.create")}
+					description={t("settings.browserProfiles.description")}
+				>
 					{/* One field with its submit embedded at the trailing edge. */}
 					<form
 						className="flex h-control-form w-52 min-w-0 items-center gap-1 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) pl-3 pr-1"
@@ -157,29 +217,28 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 					</form>
 				</SettingsRow>
 			</SettingsSection>
-			<SettingsSection title={t("settings.browserProfiles.profiles")}>
-				{error ? <p className="text-xs text-destructive" role="alert">{error}</p> : null}
+			<SettingsSection title={t("settings.browserProfiles.profiles")} grouped>
+				{error ? <div className="settings-row-bar text-xs text-error" role="alert">{error}</div> : null}
 				{loading ? (
-					<p className="py-2 text-xs text-settings-muted">{t("settings.browserProfiles.loading")}</p>
+					<div className="settings-row-bar text-sm text-settings-muted">{t("settings.browserProfiles.loading")}</div>
 				) : profiles.length === 0 ? (
-					<p className="py-2 text-xs text-settings-muted">{t("settings.browserProfiles.empty")}</p>
+					<div className="settings-row-bar text-sm text-settings-muted">{t("settings.browserProfiles.empty")}</div>
 				) : (
-					<ul className="flex flex-col divide-y divide-border">
-						{profiles.map((profile) => (
-							<BrowserProfileRow
-								key={profile.id}
-								profile={profile}
-								renaming={renamingId === profile.id}
-								onRenameStart={() => setRenamingId(profile.id)}
-								onRenameEnd={(value) => void rename(profile, value)}
-								onRenameCancel={() => setRenamingId(null)}
-								onClear={() => requestAction("clear", profile)}
-								onDelete={() => requestAction("delete", profile)}
-							/>
-						))}
-					</ul>
+					profiles.map((profile) => (
+						<BrowserProfileRow
+							key={profile.id}
+							profile={profile}
+							isDefault={defaultProfileId === profile.id}
+							onToggleDefault={() => void toggleDefault(profile)}
+							renaming={renamingId === profile.id}
+							onRenameStart={() => setRenamingId(profile.id)}
+							onRenameEnd={(value) => void rename(profile, value)}
+							onRenameCancel={() => setRenamingId(null)}
+							onClear={() => requestAction("clear", profile)}
+							onDelete={() => requestAction("delete", profile)}
+						/>
+					))
 				)}
-				<p className="text-xs leading-relaxed text-settings-muted">{t("settings.browserProfiles.description")}</p>
 			</SettingsSection>
 			<ConfirmDialog
 				open={pendingAction !== null}
@@ -205,12 +264,30 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 					: ""}
 				confirmLabel={pendingAction?.kind === "clear"
 					? t("settings.browserProfiles.clearConfirm")
-					: t("settings.browserProfiles.deleteConfirm")}
+					: t(usage.length ? "settings.browserProfiles.deleteAndSwitch" : "settings.browserProfiles.deleteConfirm")}
+				confirmDisabled={pendingAction?.kind === "delete" && (usageLoading || Boolean(usageError) || usage.some((session) => session.blocker !== null))}
 				destructive
 				busy={actionBusy}
-				error={actionError || null}
+				error={actionError || usageError || null}
 				onConfirm={() => void confirmAction()}
-			/>
+			>
+				{pendingAction?.kind === "delete" ? (
+					<div className="space-y-3 text-sm text-settings-muted" aria-live="polite">
+						{usageLoading ? <p>{t("settings.browserProfiles.checkingUsage")}</p> : null}
+						{usage.length > 0 ? <>
+							<p>{t("settings.browserProfiles.deleteSwitchDescription")}</p>
+							<ul className="max-h-40 space-y-2 overflow-y-auto" aria-label={t("settings.browserProfiles.affectedSessions")}>
+								{usage.map((session) => <li key={session.viewId}>
+									<span className="break-all font-medium text-settings-label">{session.sessionId}</span>
+									<span className="block">{t(session.blocker === "agent-active"
+										? "settings.browserProfiles.agentBlocker" : session.blocker === "switching"
+											? "settings.browserProfiles.switchBlocker" : "settings.browserProfiles.idleSession")}</span>
+								</li>)}
+							</ul>
+						</> : null}
+					</div>
+				) : null}
+			</ConfirmDialog>
 			<BrowserImportDialog
 				onImported={() => void refresh()}
 				onOpenChange={setImportOpen}
@@ -227,6 +304,8 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
  */
 function BrowserProfileRow({
 	profile,
+	isDefault,
+	onToggleDefault,
 	renaming,
 	onRenameStart,
 	onRenameEnd,
@@ -235,6 +314,8 @@ function BrowserProfileRow({
 	onDelete,
 }: {
 	profile: Profile;
+	isDefault: boolean;
+	onToggleDefault: () => void;
 	renaming: boolean;
 	onRenameStart: () => void;
 	onRenameEnd: (value: string) => void;
@@ -253,8 +334,8 @@ function BrowserProfileRow({
 	const cancelOnBlur = useRef(false);
 
 	return (
-		<li className="flex min-h-11 min-w-0 items-center gap-3 py-1.5">
-			<UserRound aria-hidden="true" className="size-4 shrink-0 text-settings-muted" />
+		<div className="settings-row-bar min-w-0">
+			<UserRound aria-hidden="true" className="size-icon-lg shrink-0 text-settings-muted" />
 			{/* The name slot keeps the row's width whether it shows the name or the
 			    field, so the menu button never moves while renaming. */}
 			<div className="min-w-0 flex-1">
@@ -286,7 +367,7 @@ function BrowserProfileRow({
 					/>
 				) : (
 					<span className="block truncate text-sm text-settings-label" title={profile.name}>
-						{profile.name}
+						{isDefault ? `${profile.name} (${t("settings.browserProfiles.defaultBadge")})` : profile.name}
 					</span>
 				)}
 			</div>
@@ -322,6 +403,12 @@ function BrowserProfileRow({
 						<Pencil aria-hidden="true" />
 						{t("shell.rename")}
 					</DropdownMenuItem>
+					<DropdownMenuItem onSelect={onToggleDefault}>
+						<Star aria-hidden="true" className={isDefault ? "fill-current" : undefined} />
+						{t(isDefault ? "settings.browserProfiles.unsetDefault" : "settings.browserProfiles.setDefault", {
+							profile: profile.name,
+						})}
+					</DropdownMenuItem>
 					<DropdownMenuItem onSelect={onClear}>
 						<Eraser aria-hidden="true" />
 						{t("settings.browserProfiles.clearConfirm")}
@@ -336,6 +423,6 @@ function BrowserProfileRow({
 					</DropdownMenuItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
-		</li>
+		</div>
 	);
 }

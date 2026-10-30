@@ -65,14 +65,11 @@ addresses change on restart.
 | `ao cue create/list`                | `POST/GET /api/v1/projects/{id}/cues`         |
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
 | `ao session ls`                     | `GET /api/v1/sessions` plus per-session PR summaries; shows branch, PR, CI, review, unresolved threads, activity, and age. |
-| `ao session get <id>`               | `GET /api/v1/sessions/{id}`                    |
+| `ao session get <id>`               | `GET /api/v1/sessions/{id}`. `--transcript N` also reads `GET /api/v1/sessions/{id}/conversation` for chat sessions on the local daemon. |
 | `ao session kill <id>`              | `POST /api/v1/sessions/{id}/kill`              |
 | `ao session restore <id>`           | `POST /api/v1/sessions/{id}/restore`           |
 | `ao session exit-agent <id>`        | `POST /api/v1/sessions/{id}/exit-agent`        |
 | `ao session resume-agent <id>`      | `POST /api/v1/sessions/{id}/resume-agent`      |
-| `ao session switch-agent <id> <target-harness>` | `POST /api/v1/sessions/{id}/switch-agent` |
-| `ao session agent-switch ls <session-id>` | `GET /api/v1/sessions/{id}/agent-switches` |
-| `ao session handoff submit`         | `POST /api/v1/sessions/{id}/agent-switches/{switchId}/handoff` |
 | `ao session rename <id> <name>`     | `PATCH /api/v1/sessions/{id}`                  |
 | `ao session cleanup`                | `POST /api/v1/sessions/cleanup`                |
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
@@ -82,6 +79,7 @@ addresses change on restart.
 | `ao preview [url]`                  | `POST /api/v1/sessions/{id}/preview`           |
 | `ao preview start/status/stop`      | `POST/GET/DELETE /api/v1/sessions/{id}/preview/server` |
 | `ao browser ...`                    | `GET /api/v1/browser/status`, `POST /api/v1/browser/commands` |
+| `ao browser chrome status\|setup\|remove` | `GET`, `POST`, `DELETE /api/v1/browser/chrome` |
 | `ao hooks <agent> <event>`          | `POST /api/v1/sessions/{id}/activity` (hidden) |
 
 `ao agent ls` asks the daemon to ensure display readiness, then prints the
@@ -97,39 +95,6 @@ paths. If `AO_SESSION_ID` is set but the session cannot be fetched, pass
 <name>` to launch a worker in an AO-managed plain directory without resolving
 or registering a project. Standalone sessions do not support orchestrator,
 branch, issue, or PR-claim options.
-
-Agent switching is initially available only for worker sessions whose source
-and target harnesses are Claude Code or Codex. The main command
-accepts an idempotency key:
-
-```bash
-ao session switch-agent ao-7 codex \
-  --idempotency-key switch-ao-7-to-codex
-
-ao session agent-switch ls ao-7 --json
-```
-
-`switch-agent` and `agent-switch ls` both support `--json`.
-The `agent-switch` command also has the `agent-switches` alias, and `ls` has the
-`list` alias.
-
-`ao session handoff submit` is the internal source-agent path for optional
-semantic enrichment, not a required human step in a normal switch. It requires
-the switch ID, exact source launch generation, and a regular file containing
-one JSON object no larger than 64 KiB. `--session` defaults to
-`AO_SESSION_ID`:
-
-```bash
-AO_SESSION_ID=ao-7 ao session handoff submit \
-  --switch switch-123 \
-  --source-generation generation-456 \
-  --file /tmp/ao-handoff.json \
-  --json
-```
-
-Switching preserves the AO worker session and worktree. It does not translate,
-clip, or rewrite provider transcript files; providers continue to own their
-native history and compaction.
 
 `ao session claim-pr <pr-ref>` attaches a PR to the current worker by reading
 `AO_SESSION_ID`. From an orchestrator or external shell, pass the target
@@ -176,6 +141,14 @@ daemon validation.
 
 Standalone spawns require `--agent` because there is no project configuration
 from which to resolve a default harness.
+
+`ao spawn --output artifact` marks a worker whose deliverable is a file rather
+than a pull request. The daemon persists the kind with the session and adds an
+artifact-delivery section to the worker's system prompt, including after
+restore and agent switching. It does not change derived status or the Kanban
+column: the session shows artifact output once a file exists in its artifact
+directory. Any other value exits 2; the API rejects unknown `requestedOutput` values
+with `400 INVALID_REQUESTED_OUTPUT`.
 
 `ao preview` resolves its session from the `AO_SESSION_ID` environment variable
 (it is meant to run inside a session), not a flag. With no argument it
@@ -245,7 +218,7 @@ The CLI and daemon share the same environment-driven config:
 | `AO_RUN_FILE`         | `~/.ao/running.json` | PID/port handshake.                                                                            |
 | `AO_DATA_DIR`         | `~/.ao/data`         | SQLite data directory.                                                                         |
 | `AO_REQUEST_TIMEOUT`  | `60s`                | REST request timeout.                                                                          |
-| `AO_SHUTDOWN_TIMEOUT` | `10s`                | Graceful shutdown cap.                                                                         |
+| `AO_SHUTDOWN_TIMEOUT` | `10s`                | Graceful shutdown cap. Also scales how long a new daemon waits for the data dir (9x + 18s).    |
 | `AO_KEEP_DAEMON`      | unset (off)          | Keep the desktop app's daemon running after the window closes; stop only via `ao stop`. (fork) |
 | `AO_DISABLE_GPU`      | unset (off)          | Skip Chromium hardware acceleration; escape hatch for broken Linux GPU drivers.                |
 

@@ -12,7 +12,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     number = excluded.number,
+    -- A successful merge is authoritative and irreversible. A poll that
+    -- fetched the old open state before that merge must not roll it back.
     state_changed_at = CASE
+        WHEN pr.pr_state = 'merged' AND excluded.pr_state != 'merged' THEN pr.state_changed_at
         WHEN pr.pr_state != excluded.pr_state THEN
             CASE
                 WHEN excluded.pr_state = 'merged' THEN COALESCE(excluded.merged_at_provider, excluded.updated_at_provider, excluded.observed_at, excluded.updated_at)
@@ -22,11 +25,11 @@ ON CONFLICT (url) DO UPDATE SET
         WHEN pr.state_changed_at IS NULL THEN excluded.state_changed_at
         ELSE pr.state_changed_at
     END,
-    pr_state = excluded.pr_state,
+    pr_state = CASE WHEN pr.pr_state = 'merged' THEN 'merged' ELSE excluded.pr_state END,
     review_decision = excluded.review_decision,
     ci_state = excluded.ci_state,
     mergeability = excluded.mergeability,
-    updated_at = excluded.updated_at,
+    updated_at = CASE WHEN pr.pr_state = 'merged' AND excluded.pr_state != 'merged' THEN pr.updated_at ELSE excluded.updated_at END,
     provider = excluded.provider,
     host = excluded.host,
     repo = excluded.repo,
@@ -41,10 +44,13 @@ ON CONFLICT (url) DO UPDATE SET
     author = excluded.author,
     author_avatar_url = excluded.author_avatar_url,
     base_sha = excluded.base_sha,
-    merge_commit_sha = excluded.merge_commit_sha,
-    is_draft = excluded.is_draft,
-    is_merged = excluded.is_merged,
-    is_closed = excluded.is_closed,
+    merge_commit_sha = CASE
+        WHEN pr.pr_state = 'merged' AND excluded.merge_commit_sha = '' THEN pr.merge_commit_sha
+        ELSE excluded.merge_commit_sha
+    END,
+    is_draft = CASE WHEN pr.pr_state = 'merged' THEN FALSE ELSE excluded.is_draft END,
+    is_merged = CASE WHEN pr.pr_state = 'merged' THEN TRUE ELSE excluded.is_merged END,
+    is_closed = CASE WHEN pr.pr_state = 'merged' THEN FALSE ELSE excluded.is_closed END,
     provider_state = excluded.provider_state,
     provider_mergeable = excluded.provider_mergeable,
     provider_merge_state_status = excluded.provider_merge_state_status,
@@ -56,7 +62,7 @@ ON CONFLICT (url) DO UPDATE SET
     metadata_hash = excluded.metadata_hash,
     ci_hash = excluded.ci_hash,
     review_hash = excluded.review_hash,
-    observed_at = excluded.observed_at,
+    observed_at = CASE WHEN pr.pr_state = 'merged' AND excluded.pr_state != 'merged' THEN pr.observed_at ELSE excluded.observed_at END,
     ci_observed_at = excluded.ci_observed_at,
     -- The review completeness pair travels together: a writer that did not
     -- fetch review threads passes a NULL review_observed_at, and must keep the
@@ -77,19 +83,21 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     number = excluded.number,
+    -- Keep legacy writers from regressing the same irreversible transition.
     state_changed_at = CASE
+        WHEN pr.pr_state = 'merged' AND excluded.pr_state != 'merged' THEN pr.state_changed_at
         WHEN pr.pr_state != excluded.pr_state THEN excluded.updated_at
         WHEN pr.state_changed_at IS NULL THEN excluded.state_changed_at
         ELSE pr.state_changed_at
     END,
-    pr_state = excluded.pr_state,
+    pr_state = CASE WHEN pr.pr_state = 'merged' THEN 'merged' ELSE excluded.pr_state END,
     review_decision = excluded.review_decision,
     ci_state = excluded.ci_state,
     mergeability = excluded.mergeability,
-    updated_at = excluded.updated_at,
-    is_draft = excluded.is_draft,
-    is_merged = excluded.is_merged,
-    is_closed = excluded.is_closed,
+    updated_at = CASE WHEN pr.pr_state = 'merged' AND excluded.pr_state != 'merged' THEN pr.updated_at ELSE excluded.updated_at END,
+    is_draft = CASE WHEN pr.pr_state = 'merged' THEN FALSE ELSE excluded.is_draft END,
+    is_merged = CASE WHEN pr.pr_state = 'merged' THEN TRUE ELSE excluded.is_merged END,
+    is_closed = CASE WHEN pr.pr_state = 'merged' THEN FALSE ELSE excluded.is_closed END,
     -- Same completeness-pair contract as UpsertPR: a writer without a review
     -- observation (NULL timestamp) keeps the stored pair.
     review_observed_at = COALESCE(excluded.review_observed_at, pr.review_observed_at),
@@ -507,3 +515,28 @@ SELECT pr.session_id, sessions.is_terminated
 FROM pr
 JOIN sessions ON sessions.id = pr.session_id
 WHERE pr.url = ?;
+-- name: RecordWorkerPRUsage :exec
+INSERT INTO usage_pr_measurement (pr_key, project_id, associated_reported, merged_reported)
+SELECT CASE WHEN pr.provider_id <> '' AND pr.provider <> ''
+        THEN pr.provider || ':' || pr.host || ':' || pr.provider_id
+        ELSE pr.url END,
+    sessions.project_id,
+    CASE WHEN sqlc.arg(export_allowed) = 0 THEN 1 ELSE 0 END,
+    CASE WHEN sqlc.arg(export_allowed) = 0 AND pr.pr_state = 'merged' THEN 1 ELSE 0 END
+FROM pr JOIN sessions ON sessions.id = pr.session_id
+WHERE pr.url = sqlc.arg(pr_url) AND sessions.kind = 'worker' AND sessions.project_id IS NOT NULL
+ON CONFLICT(pr_key) DO UPDATE SET
+    associated_reported = CASE WHEN ?1 = 0 THEN 1 ELSE usage_pr_measurement.associated_reported END,
+    merged_reported = CASE WHEN ?1 = 0 AND
+        (SELECT pr_state FROM pr WHERE url = ?2) = 'merged'
+        THEN 1 ELSE usage_pr_measurement.merged_reported END;
+
+-- name: UpgradeWorkerPRUsageIdentity :exec
+UPDATE OR IGNORE usage_pr_measurement
+SET pr_key = (SELECT pr.provider || ':' || pr.host || ':' || pr.provider_id FROM pr WHERE pr.url = sqlc.arg(pr_url))
+WHERE pr_key IN (
+    SELECT alias_url FROM pr_url_alias WHERE canonical_url = sqlc.arg(pr_url)
+    UNION SELECT sqlc.arg(pr_url)
+)
+AND EXISTS (SELECT 1 FROM pr WHERE pr.url = sqlc.arg(pr_url)
+    AND pr.provider <> '' AND pr.provider_id <> '');

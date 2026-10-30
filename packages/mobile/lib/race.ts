@@ -7,7 +7,7 @@ export type ProbeFn = (endpoint: Endpoint, signal: AbortSignal) => Promise<Probe
 
 export class IncompatibleHostVersionError extends Error {
 	constructor(readonly hostId: string) {
-		super("AO versions are incompatible. Update AO on this phone and the machine.");
+		super("Orchestrator versions are incompatible. Update Orchestrator on this phone and the machine.");
 		this.name = "IncompatibleHostVersionError";
 	}
 }

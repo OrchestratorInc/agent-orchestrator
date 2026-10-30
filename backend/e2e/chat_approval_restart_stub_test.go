@@ -22,7 +22,16 @@ func TestFakeApprovalACP(t *testing.T) {
 		return
 	}
 	logPath := os.Getenv("AO_E2E_ACP_CALLS")
+	var pending []string
+	classified, background := false, false
 	record := func(method string) {
+		if !classified {
+			pending = append(pending, method)
+			return
+		}
+		if background {
+			return
+		}
 		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
 			os.Exit(2)
@@ -37,6 +46,9 @@ func TestFakeApprovalACP(t *testing.T) {
 		var frame struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
+			Params struct {
+				Cwd string `json:"cwd"`
+			} `json:"params"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &frame) != nil {
 			continue
@@ -47,6 +59,16 @@ func TestFakeApprovalACP(t *testing.T) {
 			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}`+"\n", promptID)
 			continue
 		}
+		if frame.Method == "session/new" {
+			// Cosmetic naming uses a disposable background workspace. The restart
+			// assertions below count only the durable worker's provider calls.
+			classified = true
+			background = strings.Contains(filepath.ToSlash(frame.Params.Cwd), "/background-tasks/")
+			for _, method := range pending {
+				record(method)
+			}
+			pending = nil
+		}
 		record(frame.Method)
 		switch frame.Method {
 		case "initialize":
@@ -54,6 +76,11 @@ func TestFakeApprovalACP(t *testing.T) {
 		case "session/new", "session/load", "session/resume":
 			_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"fake-provider-session"}}`+"\n", frame.ID)
 		case "session/prompt":
+			if background {
+				_, _ = fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"fake-provider-session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"{\"title\":\"Request approval\",\"slug\":\"approval-restart\"}"}}}}`)
+				_, _ = fmt.Fprintf(os.Stdout, `{"jsonrpc":"2.0","id":%s,"result":{"stopReason":"end_turn"}}`+"\n", frame.ID)
+				continue
+			}
 			promptID = append(promptID[:0], frame.ID...)
 			record("session/request_permission")
 			_, _ = fmt.Fprintln(os.Stdout, `{"jsonrpc":"2.0","id":"permission-1","method":"session/request_permission","params":{"sessionId":"fake-provider-session","toolCall":{"toolCallId":"tool-1","title":"Approve restart","kind":"edit"},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"},{"optionId":"reject","name":"Reject","kind":"reject_once"}]}}`)
@@ -97,7 +124,7 @@ func TestPendingACPApprovalSurvivesDaemonSIGKILL(t *testing.T) {
 		return ok
 	})
 	approval, _ := before.pendingApproval()
-	if approval.RequestID == "" || len(approval.decisions()) != 2 || len(before.Turns) != 1 || len(before.Activities) != 1 {
+	if approval.RequestID == "" || len(approval.decisions()) != 2 || len(before.Turns) != 1 || len(providerActivities(before)) != 1 {
 		t.Fatalf("invalid pending approval before restart:\n%s", describe(before))
 	}
 	var read struct {
@@ -118,7 +145,7 @@ func TestPendingACPApprovalSurvivesDaemonSIGKILL(t *testing.T) {
 	restarted.awaitLiveController(session, 30*time.Second)
 	after := restarted.conversation(session)
 	replayed, pending := after.pendingApproval()
-	if !pending || replayed.RequestID != approval.RequestID || len(after.Turns) != 1 || len(after.Activities) != 1 ||
+	if !pending || replayed.RequestID != approval.RequestID || len(after.Turns) != 1 || len(providerActivities(after)) != 1 ||
 		after.Turns[0].ID != before.Turns[0].ID || terminal(after.Turns[0].State) {
 		t.Fatalf("pending approval changed across restart:\n%s", describe(after))
 	}
@@ -132,8 +159,9 @@ func TestPendingACPApprovalSurvivesDaemonSIGKILL(t *testing.T) {
 		return len(s.Turns) == 1 && terminal(s.Turns[0].State) &&
 			(s.Turns[0].State != "completed" || contains(s.assistantText(), "approved once"))
 	})
+	resolved := providerActivities(finished)
 	if finished.Turns[0].State != "completed" || !contains(finished.assistantText(), "approved once") ||
-		len(finished.Activities) != 1 || finished.Activities[0].Status != "resolved" {
+		len(resolved) != 1 || resolved[0].Status != "resolved" {
 		t.Fatalf("approved turn failed:\n%s", describe(finished))
 	}
 	if got := persistentHostPID(t, dataDir, session); got != hostPID {
@@ -149,6 +177,17 @@ func TestPendingACPApprovalSurvivesDaemonSIGKILL(t *testing.T) {
 		}
 	}
 	restarted.mustCall("POST", "/sessions/"+session+"/kill", http.StatusOK, nil, nil)
+}
+
+func providerActivities(s snapshot) []activity {
+	out := make([]activity, 0, len(s.Activities))
+	for _, item := range s.Activities {
+		if item.Kind == "ao_action" {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 // An unacknowledged first task can be retried with the same clientRequestId
@@ -214,10 +253,30 @@ func TestFirstTaskStartupRetryAfterDaemonSIGKILL(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"sessions"`
 	}
-	var retry spawned
-	status, err := restarted.call("POST", "/sessions", req, &retry)
-	if err != nil || status != http.StatusCreated || retry.Session.ID == "" {
-		t.Fatalf("first-start retry did not create a session: status=%d err=%v session=%q\n%s", status, err, retry.Session.ID, restarted.tailLog())
+	var retry struct {
+		spawned
+		Error   json.RawMessage `json:"error"`
+		Code    string          `json:"code"`
+		Message string          `json:"message"`
+	}
+	// Workspace cleanup runs after the listener binds. An incomplete-key 409
+	// may briefly precede cleanup. A 500 or 503 in that same window is the
+	// retry hitting the killed workspace before cleanup finishes. Retrying the
+	// same key must eventually succeed.
+	deadline = time.Now().Add(30 * time.Second)
+	for {
+		status, err := restarted.call("POST", "/sessions", req, &retry)
+		if err == nil && status == http.StatusCreated && retry.Session.ID != "" {
+			break
+		}
+		settling := status == http.StatusConflict ||
+			status == http.StatusInternalServerError ||
+			status == http.StatusServiceUnavailable
+		if err != nil || !settling || time.Now().After(deadline) {
+			t.Fatalf("first-start retry did not create a session: status=%d err=%v apiError=%s code=%s message=%s session=%q\n%s",
+				status, err, retry.Error, retry.Code, retry.Message, retry.Session.ID, restarted.tailLog())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	restarted.mustCall("GET", "/sessions", http.StatusOK, nil, &sessions)
 	if len(sessions.Sessions) != 1 || sessions.Sessions[0].ID != retry.Session.ID {

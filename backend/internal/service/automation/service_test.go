@@ -232,6 +232,137 @@ func TestUpdateDisablePreservesNextOccurrence(t *testing.T) {
 	}
 }
 
+func TestUpdateTimezonePreservesWallClockSchedule(t *testing.T) {
+	for _, tc := range []struct {
+		name, from, to, now, next, following string
+	}{
+		{"UTC to named", "UTC", "America/New_York", "2026-10-06T16:00:00Z", "2026-10-07T13:00:00Z", "2026-10-08T13:00:00Z"},
+		{"named to UTC", "America/New_York", "UTC", "2026-10-06T16:00:00Z", "2026-10-07T09:00:00Z", "2026-10-08T09:00:00Z"},
+		{"named to named", "America/New_York", "Europe/London", "2026-10-06T16:00:00Z", "2026-10-07T08:00:00Z", "2026-10-08T08:00:00Z"},
+		{"spring DST", "UTC", "America/New_York", "2026-03-06T16:00:00Z", "2026-03-07T14:00:00Z", "2026-03-08T13:00:00Z"},
+		{"autumn DST", "Europe/London", "America/New_York", "2026-10-30T16:00:00Z", "2026-10-31T13:00:00Z", "2026-11-01T14:00:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, replaceCron := range []bool{false, true} {
+				now, err := time.Parse(time.RFC3339, tc.now)
+				if err != nil {
+					t.Fatal(err)
+				}
+				store := newFakeStore()
+				svc := New(Deps{Store: store, Clock: func() time.Time { return now }})
+				disabled := false
+				created, err := svc.Create(context.Background(), CreateInput{
+					ProjectID: "scheduled", DisplayName: "Daily", Prompt: "Review", Kind: domain.KindWorker,
+					Cron: "0 9 * * *", Timezone: tc.from, Enabled: &disabled,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				input := UpdateInput{Timezone: &tc.to}
+				cron := "0 9 * * *"
+				if replaceCron {
+					input.Cron = &cron
+				}
+				got, err := svc.Update(context.Background(), created.ID, input)
+				if err != nil {
+					t.Fatalf("Update (cron=%v): %v", replaceCron, err)
+				}
+				if got.Enabled || got.Timezone != tc.to || got.NextRunAt.Format(time.RFC3339) != tc.next {
+					t.Fatalf("Update (cron=%v) = %#v, want disabled in %s, next %s", replaceCron, got, tc.to, tc.next)
+				}
+				persisted := store.automations[created.ID]
+				following, err := NextOccurrence(persisted.RRuleText, persisted.Timezone, persisted.NextRunAt)
+				if err != nil || following.Format(time.RFC3339) != tc.following {
+					t.Fatalf("persisted following = %s, %v; want %s", following, err, tc.following)
+				}
+			}
+		})
+	}
+}
+
+func TestUpdateTimezonePreservesIntervalAnchor(t *testing.T) {
+	now := time.Date(2026, time.October, 6, 16, 0, 0, 0, time.UTC)
+	store := newFakeStore()
+	svc := New(Deps{Store: store, Clock: func() time.Time { return now }})
+	disabled := false
+	created, err := svc.Create(context.Background(), CreateInput{
+		ProjectID: "scheduled", DisplayName: "Alternate days", Prompt: "Review", Kind: domain.KindWorker,
+		RRule: "DTSTART:20261001T093000Z\nRRULE:FREQ=DAILY;INTERVAL=2", Timezone: "UTC", Enabled: &disabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	zone := "America/New_York"
+	got, err := svc.Update(context.Background(), created.ID, UpdateInput{Timezone: &zone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Enabled || got.NextRunAt.Format(time.RFC3339) != "2026-10-07T13:30:00Z" || !strings.Contains(got.RRuleText, "DTSTART;TZID=America/New_York:20261001T093000") {
+		t.Fatalf("updated interval schedule = %#v", got)
+	}
+}
+
+// A timezone-only edit must not delay a schedule that has already started:
+// re-anchoring a recent DTSTART in a zone further west would otherwise put it
+// in the future and skip every occurrence before it.
+func TestUpdateTimezoneDoesNotDelayStartedSchedule(t *testing.T) {
+	for _, tc := range []struct {
+		name, cron, rrule, to, next string
+	}{
+		{"hourly keeps cadence", "", "FREQ=HOURLY", "America/Los_Angeles", "2026-10-06T13:01:00Z"},
+		{"daily runs today", "0 9 * * *", "", "America/Los_Angeles", "2026-10-06T16:00:00Z"},
+		{"weekly runs today", "0 9 * * 2,4", "", "America/Los_Angeles", "2026-10-06T16:00:00Z"},
+		{"future anchor stays put", "", "DTSTART:20261101T093000Z\nRRULE:FREQ=DAILY;INTERVAL=2", "America/New_York", "2026-11-01T14:30:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, time.October, 6, 12, 0, 0, 0, time.UTC)
+			store := newFakeStore()
+			svc := New(Deps{Store: store, Clock: func() time.Time { return now }})
+			disabled := false
+			created, err := svc.Create(context.Background(), CreateInput{
+				ProjectID: "scheduled", DisplayName: "Recent", Prompt: "Review", Kind: domain.KindWorker,
+				Cron: tc.cron, RRule: tc.rrule, Timezone: "UTC", Enabled: &disabled,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(5 * time.Minute)
+			got, err := svc.Update(context.Background(), created.ID, UpdateInput{Timezone: &tc.to})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Timezone != tc.to || got.NextRunAt.Format(time.RFC3339) != tc.next {
+				t.Fatalf("Update = %#v, want next %s in %s", got, tc.next, tc.to)
+			}
+		})
+	}
+}
+
+func TestUpdateTimezoneRejectsExplicitConflictingRule(t *testing.T) {
+	now := time.Date(2026, time.October, 6, 16, 0, 0, 0, time.UTC)
+	store := newFakeStore()
+	svc := New(Deps{Store: store, Clock: func() time.Time { return now }})
+	disabled := false
+	created, err := svc.Create(context.Background(), CreateInput{
+		ProjectID: "scheduled", DisplayName: "Daily", Prompt: "Review", Kind: domain.KindWorker,
+		Cron: "0 9 * * *", Timezone: "America/New_York", Enabled: &disabled,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, zone := range []string{"UTC", "Europe/London"} {
+		_, err := svc.Update(context.Background(), created.ID, UpdateInput{RRule: &created.RRuleText, Timezone: &zone})
+		var apiError *apierr.Error
+		if !errors.As(err, &apiError) || apiError.Code != "INVALID_AUTOMATION_SCHEDULE" || !strings.Contains(apiError.Message, "conflicts") {
+			t.Fatalf("Update error = %v, want timezone conflict", err)
+		}
+		got := store.automations[created.ID]
+		if got.Enabled || got.RRuleText != created.RRuleText || got.Timezone != created.Timezone || !got.NextRunAt.Equal(created.NextRunAt) {
+			t.Fatalf("failed update changed stored definition: %#v", got)
+		}
+	}
+}
+
 func TestCRUDReturnsNotFoundAndDeleteRemovesDefinition(t *testing.T) {
 	store := newFakeStore()
 	store.automations["automation-1"] = domain.Automation{ID: "automation-1"}
@@ -254,4 +385,70 @@ func TestCRUDReturnsNotFoundAndDeleteRemovesDefinition(t *testing.T) {
 func isAPIError(err error, kind apierr.Kind) bool {
 	var apiError *apierr.Error
 	return errors.As(err, &apiError) && apiError.Kind == kind
+}
+
+func TestAutomationModelSettingsUpdateAndClear(t *testing.T) {
+	ctx := context.Background()
+	svc := New(Deps{Store: newFakeStore()})
+	created, err := svc.Create(ctx, CreateInput{ProjectID: "scheduled", DisplayName: "Review", Prompt: "Review", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Model: "gpt-5", Effort: "high", RRule: "FREQ=DAILY", Timezone: "UTC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Model != "gpt-5" || created.Effort != "high" {
+		t.Fatalf("created = %#v", created)
+	}
+	name := "Renamed"
+	updated, err := svc.Update(ctx, created.ID, UpdateInput{DisplayName: &name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Model != "gpt-5" || updated.Effort != "high" {
+		t.Fatalf("updated = %#v", updated)
+	}
+	empty := ""
+	updated, err = svc.Update(ctx, created.ID, UpdateInput{Model: &empty, Effort: &empty, Mode: &empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Model != "" || updated.Effort != "" || updated.Mode != "" {
+		t.Fatalf("cleared = %#v", updated)
+	}
+}
+
+func TestUpdateHarnessResetsOnlyOmittedTuning(t *testing.T) {
+	amp, claude, codex, projectDefault := domain.HarnessAmp, domain.HarnessClaudeCode, domain.HarnessCodex, domain.AgentHarness("")
+	model, mode, effort := "claude-sonnet-4-5", "smart", "low"
+	tests := []struct {
+		name                            string
+		input                           UpdateInput
+		wantHarness                     domain.AgentHarness
+		wantModel, wantMode, wantEffort string
+	}{
+		{name: "switch to Amp", input: UpdateInput{Harness: &amp}, wantHarness: amp},
+		{name: "switch to Claude", input: UpdateInput{Harness: &claude}, wantHarness: claude},
+		{name: "switch to project default", input: UpdateInput{Harness: &projectDefault}},
+		{name: "same harness preserves tuning", input: UpdateInput{Harness: &codex}, wantHarness: codex, wantModel: "gpt-5", wantMode: "old-mode", wantEffort: "high"},
+		{name: "omitted harness preserves tuning", input: UpdateInput{}, wantHarness: codex, wantModel: "gpt-5", wantMode: "old-mode", wantEffort: "high"},
+		{name: "explicit model replaces old model", input: UpdateInput{Harness: &claude, Model: &model}, wantHarness: claude, wantModel: model},
+		{name: "explicit mode replaces old mode", input: UpdateInput{Harness: &amp, Mode: &mode}, wantHarness: amp, wantMode: mode},
+		{name: "explicit effort replaces old effort", input: UpdateInput{Harness: &claude, Effort: &effort}, wantHarness: claude, wantEffort: effort},
+		{name: "explicit model and effort preserved", input: UpdateInput{Harness: &claude, Model: &model, Effort: &effort}, wantHarness: claude, wantModel: model, wantEffort: effort},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			svc := New(Deps{Store: newFakeStore()})
+			created, err := svc.Create(ctx, CreateInput{ProjectID: "scheduled", DisplayName: "Review", Prompt: "Review", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Model: "gpt-5", Mode: "old-mode", Effort: "high", RRule: "FREQ=DAILY", Timezone: "UTC"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			updated, err := svc.Update(ctx, created.ID, tt.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated.Harness != tt.wantHarness || updated.Model != tt.wantModel || updated.Mode != tt.wantMode || updated.Effort != tt.wantEffort {
+				t.Fatalf("updated tuning = (%q, %q, %q, %q), want (%q, %q, %q, %q)", updated.Harness, updated.Model, updated.Mode, updated.Effort, tt.wantHarness, tt.wantModel, tt.wantMode, tt.wantEffort)
+			}
+		})
+	}
 }

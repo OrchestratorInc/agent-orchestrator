@@ -44,6 +44,9 @@ type fakeShellRuntime struct {
 	outputMu     sync.RWMutex
 	outputErr    error
 	outputReady  <-chan struct{}
+	onGetOutput  func(context.Context) (string, error)
+	styledOutput string
+	styledErr    error
 	// aliveByHandle answers IsAlive; a handle absent from the map is dead.
 	aliveByHandle map[string]bool
 	aliveErr      error
@@ -119,7 +122,10 @@ func (f *fakeShellRuntime) SendMessage(ctx context.Context, handle ports.Runtime
 	return f.SendInput(ctx, handle, input)
 }
 
-func (f *fakeShellRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
+func (f *fakeShellRuntime) GetOutput(ctx context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
+	if f.onGetOutput != nil {
+		return f.onGetOutput(ctx)
+	}
 	if f.outputReady != nil {
 		select {
 		case <-f.outputReady:
@@ -130,6 +136,10 @@ func (f *fakeShellRuntime) GetOutput(_ context.Context, _ ports.RuntimeHandle, _
 	f.outputMu.RLock()
 	defer f.outputMu.RUnlock()
 	return f.output, f.outputErr
+}
+
+func (f *fakeShellRuntime) GetStyledOutput(_ context.Context, _ ports.RuntimeHandle, _ int) (string, error) {
+	return f.styledOutput, f.styledErr
 }
 
 func (f *fakeShellRuntime) setOutput(output string) {
@@ -462,6 +472,109 @@ func TestOpenCommandTerminalWaitsForReadinessMarkerBeforeSendingInitialInput(t *
 	}
 }
 
+func TestOpenCommandTerminalSendsInitialInputOnReadyTimeoutWhenOptedIn(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "pi prompt without any reviewed marker"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                           []string{"pi"},
+		Title:                          "Log in to Pi",
+		InitialInput:                   "/login",
+		InitialInputReadyStates:        readyStates("0.0%/"),
+		SendInitialInputOnReadyTimeout: true,
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/login"}); got != want {
+			t.Errorf("sent = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial input was not sent after the ready wait expired")
+	}
+}
+
+func TestOpenCommandTerminalSkipsInitialInputOnReadyTimeoutByDefault(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "no reviewed marker"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                    []string{"kimi"},
+		Title:                   "Log in to Kimi",
+		InitialInput:            "/login",
+		InitialInputReadyStates: readyStates("Run /login or /provider to get started."),
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent without a ready marker or opt-in: %#v", got)
+	case <-time.After(svc.initialInputTimeout + 4*initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalSkipsReadyTimeoutFallbackForExitedTerminal(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "no reviewed marker"
+	rt.aliveErr = errors.New("runtime gone")
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                           []string{"pi"},
+		Title:                          "Log in to Pi",
+		InitialInput:                   "/login",
+		InitialInputReadyStates:        readyStates("0.0%/"),
+		SendInitialInputOnReadyTimeout: true,
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent to an exited terminal: %#v", got)
+	case <-time.After(svc.initialInputTimeout + 4*initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalFindsReadinessMarkerInRenderedTerminalSurface(t *testing.T) {
+	rt := newFakeShellRuntime()
+	// Full-screen TUIs can keep their current footer out of the raw line ring,
+	// and rendered styling may split a visible marker with SGR sequences.
+	rt.output = "startup bytes without the current footer"
+	rt.styledOutput = "Interactive · Manual Approval · \x1b[1m/\x1b[m commands · ? help"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:                    []string{"copilot"},
+		Title:                   "Log in to GitHub Copilot",
+		InitialInput:            "/login",
+		InitialInputReadyStates: readyStates("/ commands"),
+	}); err != nil {
+		t.Fatalf("OpenCommandTerminal: %v", err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/login"}); got != want {
+			t.Fatalf("sent = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("automatic login input was not sent after the rendered terminal became ready")
+	}
+}
+
 func TestOpenCommandTerminalEntersQwenVimInsertModeBeforeAuth(t *testing.T) {
 	rt := newFakeShellRuntime()
 	rt.output = "-- NORMAL --"
@@ -492,6 +605,135 @@ func TestOpenCommandTerminalEntersQwenVimInsertModeBeforeAuth(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatalf("automatic Qwen input %q was not sent", want.input)
 		}
+	}
+}
+
+func TestOpenCommandTerminalWaitsForCompletionBeforeSubmittingPrefix(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "Type your message or @path/to/file"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:  []string{"gemini"},
+		Title: "Set up Gemini CLI",
+		InitialInputReadyStates: []InitialInputReadyState{{
+			Text:            "Type your message or @path/to/file",
+			RawPrefix:       "/auth",
+			SubmitReadyText: "Manage authentication",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/auth"}); got != want {
+			t.Fatalf("prefix = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Gemini auth prefix was not entered")
+	}
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("auth command submitted before completion appeared: %#v", got)
+	case <-time.After(2 * initialInputPollInterval):
+	}
+
+	rt.setOutput("auth   Manage authentication")
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: ""}); got != want {
+			t.Fatalf("submission = %#v, want Enter-only %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Gemini auth command was not submitted after completion appeared")
+	}
+}
+
+func TestOpenCommandTerminalGivesCompletionItsOwnTimeout(t *testing.T) {
+	rt := newFakeShellRuntime()
+	var readyDeadline time.Time
+	completionDeadline := make(chan time.Time, 1)
+	rt.onGetOutput = func(ctx context.Context) (string, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			return "", errors.New("initial input wait has no deadline")
+		}
+		if readyDeadline.IsZero() {
+			readyDeadline = deadline
+			// Consume part of the startup budget before the editor renders.
+			select {
+			case <-time.After(2 * initialInputPollInterval):
+				return "Type your message or @path/to/file", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		completionDeadline <- deadline
+		return "auth   Manage authentication", nil
+	}
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = time.Second
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv: []string{"gemini"}, Title: "Set up Gemini CLI",
+		InitialInputReadyStates: []InitialInputReadyState{{
+			Text: "Type your message or @path/to/file", RawPrefix: "/auth", SubmitReadyText: "Manage authentication",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case deadline := <-completionDeadline:
+		if deadline.Sub(readyDeadline) < initialInputPollInterval {
+			t.Fatalf("completion deadline %v reused startup deadline %v", deadline, readyDeadline)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("completion wait did not start")
+	}
+	for _, want := range []string{"/auth", ""} {
+		select {
+		case got := <-rt.sentCh:
+			if got.input != want {
+				t.Fatalf("input = %q, want %q", got.input, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("missing input %q", want)
+		}
+	}
+}
+
+func TestOpenCommandTerminalLeavesPrefixUnsubmittedWithoutCompletion(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "Type your message or @path/to/file"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	svc.initialInputTimeout = 3 * initialInputPollInterval
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv: []string{"gemini"}, Title: "Set up Gemini CLI",
+		InitialInputReadyStates: []InitialInputReadyState{{
+			Text: "Type your message or @path/to/file", RawPrefix: "/auth", SubmitReadyText: "Manage authentication",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		if want := (sentInput{handleID: "shellterm-test1", input: "/auth"}); got != want {
+			t.Fatalf("prefix = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Gemini auth prefix was not entered")
+	}
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("auth command submitted without completion: %#v", got)
+	case <-time.After(svc.initialInputTimeout + 4*initialInputPollInterval):
 	}
 }
 
@@ -2142,5 +2384,56 @@ func TestShellReconciliationPreservesUncertainChildOrHost(t *testing.T) {
 				t.Fatalf("retry list = %v, %v; rows = %v", listed, err, st.records)
 			}
 		})
+	}
+}
+
+func TestOpenCommandTerminalSkipsInitialInputWhenReadyStateAlreadyShowsAction(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "Select authentication method: / for commands"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:         []string{"kimchi"},
+		Title:        "Log in to Kimchi",
+		InitialInput: "/login",
+		InitialInputReadyStates: []InitialInputReadyState{
+			{Text: "Select authentication method:", SkipInput: true},
+			{Text: "/ for commands"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent while authentication picker is already open: %#v", got)
+	case <-time.After(2 * initialInputPollInterval):
+	}
+}
+
+func TestOpenCommandTerminalRenderedSkipStateOverridesStaleRawMarker(t *testing.T) {
+	rt := newFakeShellRuntime()
+	rt.output = "/ for commands"
+	rt.styledOutput = "Select authentication method:"
+	svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+
+	if _, err := svc.OpenCommandTerminal(context.Background(), OpenCommandTerminalInput{
+		Argv:         []string{"kimchi"},
+		Title:        "Log in to Kimchi",
+		InitialInput: "/login",
+		InitialInputReadyStates: []InitialInputReadyState{
+			{Text: "Select authentication method:", SkipInput: true},
+			{Text: "/ for commands"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-rt.sentCh:
+		t.Fatalf("initial input sent while rendered authentication picker is open: %#v", got)
+	case <-time.After(2 * initialInputPollInterval):
 	}
 }

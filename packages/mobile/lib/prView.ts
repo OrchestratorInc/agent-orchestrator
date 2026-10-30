@@ -24,9 +24,9 @@ import type { Theme } from "./theme";
  * projects that each had a PR #12 silently dropped one of them. Deduping still
  * matters: several sessions in one project can point at the same PR.
  */
-export function collectPRs(sessions: DashboardSession[]): { pr: DashboardPR; session: DashboardSession }[] {
+export function collectPRs<T extends DashboardSession>(sessions: T[]): { pr: DashboardPR; session: T }[] {
 	const seen = new Set<string>();
-	const out: { pr: DashboardPR; session: DashboardSession }[] = [];
+	const out: { pr: DashboardPR; session: T }[] = [];
 	for (const s of sessions) {
 		const list = s.prs && s.prs.length ? s.prs : s.pr ? [s.pr] : [];
 		for (const pr of list) {

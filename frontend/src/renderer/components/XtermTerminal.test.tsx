@@ -35,6 +35,7 @@ const state = vi.hoisted(() => ({
 	lastTerminal: null as null | {
 		write(data: Uint8Array, done?: () => void): void;
 		cols: number;
+		screenElement: HTMLElement;
 		keyHandler?: (event: KeyboardEvent) => boolean;
 		wheelHandler?: (event: WheelEvent) => boolean;
 		selection: string;
@@ -112,6 +113,9 @@ vi.mock("@xterm/xterm", () => ({
 	Terminal: class FakeTerminal {
 		options: Record<string, unknown>;
 		cols = 80;
+		screenElement = Object.assign(document.createElement("div"), {
+			getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 240 }) as DOMRect,
+		});
 		rows = 24;
 		dimensions?: { css: { cell: { width: number; height: number } } };
 		resize = vi.fn((cols: number, rows: number) => { this.cols = cols; this.rows = rows; });
@@ -803,11 +807,6 @@ describe("XtermTerminal", () => {
 				--color-text-terminal: #d7d7d2;
 				--color-working: #60a5fa;
 			}
-			:root[data-style-theme="github"] {
-				--background: #0d1117;
-				--foreground: #ccd3d8;
-				--primary: #58a6ff;
-			}
 		`;
 		document.head.appendChild(style);
 		delete document.documentElement.dataset.styleTheme;
@@ -819,15 +818,58 @@ describe("XtermTerminal", () => {
 
 			act(() => useUiStore.getState().setThemeStyle("github"));
 
+			// Named palettes come from the injected theme catalog stylesheet.
 			expect(state.lastTerminal!.options.theme).toMatchObject({
 				background: "#0d1117",
-				cursor: "#58a6ff",
-				foreground: "#ccd3d8",
+				cursor: "#4493f8",
+				foreground: "#e6edf3",
+				red: "#f85149",
 			});
 		} finally {
 			style.remove();
 			delete document.documentElement.dataset.styleTheme;
 			act(() => useUiStore.setState({ themeStyle: "orchestrate" }));
+		}
+	});
+
+	it.each(["dark", "light"] as const)("toggles transparency on a retained %s terminal", (theme) => {
+		setNavigatorPlatform("MacIntel");
+		useUiStore.setState({ windowTranslucency: true, themeStyle: "github" });
+		const view = render(<XtermTerminal theme={theme} />);
+		const terminal = state.lastTerminal!;
+		const background = theme === "dark" ? "#0d1117" : "#ffffff";
+		try {
+			expect(terminal.options.allowTransparency).toBe(true);
+			expect(terminal.options.theme).toMatchObject({
+				background: "#00000000",
+				black: background,
+				cursorAccent: background,
+			});
+
+			act(() => useUiStore.getState().setWindowTranslucency(false));
+			expect(terminal.options.theme).toMatchObject({ background });
+			act(() => useUiStore.getState().setWindowTranslucency(true));
+			expect(terminal.options.theme).toMatchObject({ background: "#00000000" });
+			act(() => useUiStore.getState().setThemeStyle("orchestrate"));
+			expect(terminal.options.theme).toMatchObject({ background: "#00000000" });
+			expect(state.lastTerminal).toBe(terminal);
+			expect(terminal.dispose).not.toHaveBeenCalled();
+			expect(terminal.clear).not.toHaveBeenCalled();
+		} finally {
+			view.unmount();
+			act(() => useUiStore.setState({ windowTranslucency: false, themeStyle: "orchestrate" }));
+		}
+	});
+
+	it("keeps terminals opaque outside macOS even with a saved transparency preference", () => {
+		useUiStore.setState({ windowTranslucency: true, themeStyle: "github" });
+		const view = render(<XtermTerminal theme="dark" />);
+		try {
+			expect(state.lastTerminal!.options.allowTransparency).toBe(false);
+			expect(state.lastTerminal!.options.theme).toMatchObject({ background: "#0d1117" });
+		} finally {
+			view.unmount();
+			act(() => useUiStore.setState({ windowTranslucency: false, themeStyle: "orchestrate" }));
 		}
 	});
 
@@ -875,14 +917,26 @@ describe("XtermTerminal", () => {
 		expect(container.querySelector(".terminal-scrollbar")).not.toBeNull();
 	});
 
-	it("fades the macOS scrollbar after scrolling goes idle", () => {
+	function renderScrollableMacTerminal() {
 		setNavigatorPlatform("MacIntel");
+		vi.useFakeTimers();
 		const { container } = render(<XtermTerminal theme="dark" />);
 		const scrollbar = container.querySelector<HTMLElement>(".terminal-scrollbar")!;
-		scrollbar.dataset.scrollable = "true";
-		vi.useFakeTimers();
+		Object.defineProperty(scrollbar, "clientHeight", { configurable: true, value: 400 });
+		state.lastTerminal!.buffer.active.baseY = 100;
+		// Settle mount-time frames and timers so the test starts idle.
+		act(() => vi.runOnlyPendingTimers());
+		// The scrollbar follows scrolling once per frame, not once per line feed.
+		const scroll = () => act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
+		const nextFrame = () => act(() => vi.advanceTimersToNextFrame());
+		return { scrollbar, scroll, nextFrame };
+	}
 
-		act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
+	it("fades the macOS scrollbar after scrolling goes idle", () => {
+		const { scrollbar, scroll, nextFrame } = renderScrollableMacTerminal();
+
+		scroll();
+		nextFrame();
 		expect(scrollbar.dataset.active).toBe("true");
 
 		act(() => vi.advanceTimersByTime(699));
@@ -894,21 +948,25 @@ describe("XtermTerminal", () => {
 	});
 
 	// Streaming output scrolls continuously; the scrollbar stays up until the
-	// last scroll goes idle, and per-scroll work stays cheap (one pending timer).
+	// last scroll goes idle, and per-scroll work stays cheap (one frame, then
+	// one pending timer).
 	it("keeps the macOS scrollbar up through continuous scrolling with one pending timer", () => {
-		setNavigatorPlatform("MacIntel");
-		const { container } = render(<XtermTerminal theme="dark" />);
-		const scrollbar = container.querySelector<HTMLElement>(".terminal-scrollbar")!;
-		scrollbar.dataset.scrollable = "true";
-		vi.useFakeTimers();
-		const scroll = () => act(() => state.lastTerminal!.scrollListeners.forEach((listener) => listener()));
+		const { scrollbar, scroll, nextFrame } = renderScrollableMacTerminal();
 
+		const idleTimers = vi.getTimerCount();
 		for (let i = 0; i < 50; i++) scroll();
-		expect(vi.getTimerCount()).toBe(1);
+		expect(vi.getTimerCount()).toBe(idleTimers + 1);
+		nextFrame();
+		expect(scrollbar.dataset.active).toBe("true");
+		for (let i = 0; i < 50; i++) scroll();
+		nextFrame();
+		expect(vi.getTimerCount()).toBe(idleTimers + 1);
 		act(() => vi.advanceTimersByTime(400));
 		scroll();
+		nextFrame();
 		act(() => vi.advanceTimersByTime(400));
 		scroll();
+		nextFrame();
 		act(() => vi.advanceTimersByTime(699));
 		expect(scrollbar.dataset.active).toBe("true");
 		act(() => vi.advanceTimersByTime(1));
@@ -984,17 +1042,23 @@ describe("XtermTerminal", () => {
 		const textarea = container.querySelector("textarea")!;
 
 		textarea.focus();
-		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true);
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true, true);
 		fontSizeShortcut?.(1);
 		expect(onChangeFontSize).toHaveBeenCalledWith(1);
 
 		const outside = document.createElement("button");
 		document.body.appendChild(outside);
 		outside.focus();
-		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(false);
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(false, false);
 		fontSizeShortcut?.(-1);
 		expect(onChangeFontSize).toHaveBeenCalledTimes(1);
 		outside.remove();
+	});
+
+	it("reports focus for a terminal that does not resize its font, without claiming the zoom chords", () => {
+		const { container } = render(<XtermTerminal theme="dark" />);
+		container.querySelector("textarea")!.focus();
+		expect(window.ao!.terminal.setFocused).toHaveBeenLastCalledWith(true, false);
 	});
 
 	it("handles native copy events from inside the terminal", () => {
@@ -2356,6 +2420,17 @@ describe("XtermTerminal", () => {
 		expect(sendInputs[index]).not.toHaveBeenCalled();
 	});
 
+	it("does not forward colour replies xterm makes while parsing a replayed scrollback", () => {
+		const onInput = vi.fn();
+		let terminal: AttachableTerminal | undefined;
+		render(<XtermTerminal theme="dark" onReady={(handle) => { terminal = handle; handle.onUserInput(onInput); }} />);
+		// The replay is still being parsed: its write has not called back yet.
+		vi.spyOn(state.lastTerminal!, "write").mockImplementation(() => {});
+		terminal!.write(new TextEncoder().encode("old output\x1b]11;?\x07"), undefined, "replay");
+		state.lastTerminal!.dataListeners.forEach((listener) => listener("\x1b]11;rgb:f5f5/f5f5/f4f4\x07"));
+		expect(onInput).not.toHaveBeenCalled();
+	});
+
 	it("does not forward an unsolicited cursor-position-shaped input", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
@@ -2526,10 +2601,36 @@ describe("XtermTerminal", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 		// rowHeight = fontSize(12) * lineHeight(1.35) = 16.2px; -50px => 3 lines up.
-		const suppressed = state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent);
+		const suppressed = state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent);
 
 		expect(suppressed).toBe(false);
 		expect(onInput).toHaveBeenCalledWith("\x1b[<64;1;1M\x1b[<64;1;1M\x1b[<64;1;1M", "wheel");
+	});
+
+	it.each([
+		["transcript body", 180, 70, 5, 2],
+		["pinned header", 180, 50, 5, 1],
+		["outside top-left", 90, 40, 1, 1],
+		["outside bottom-right", 2000, 2000, 80, 24],
+	])("reports actual one-based wheel coordinates over %s", (_name, clientX, clientY, column, row) => {
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+		// Offset grid with 20px cells: models a moved and CSS-scaled terminal.
+		vi.spyOn(state.lastTerminal!.screenElement, "getBoundingClientRect").mockReturnValue({
+			left: 100, top: 50, width: 1600, height: 480,
+		} as DOMRect);
+		for (const [deltaY, button] of [[-1, 64], [1, 65]]) {
+			state.lastTerminal!.wheelHandler!({ clientX, clientY, deltaY, deltaMode: 1 } as WheelEvent);
+			expect(onInput).toHaveBeenLastCalledWith(`\x1b[<${button};${column};${row}M`, "wheel");
+		}
+	});
+
+	it("does not invent mouse coordinates for an unmeasured terminal", () => {
+		const onInput = vi.fn();
+		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
+		vi.spyOn(state.lastTerminal!.screenElement, "getBoundingClientRect").mockReturnValue({ width: 0, height: 0 } as DOMRect);
+		state.lastTerminal!.wheelHandler!({ clientX: 100, clientY: 100, deltaY: -1, deltaMode: 1 } as WheelEvent);
+		expect(onInput).not.toHaveBeenCalled();
 	});
 
 	it("handles line- and page-mode wheels (Linux/Windows mice), not just pixel deltas", () => {
@@ -2537,12 +2638,12 @@ describe("XtermTerminal", () => {
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
 		// DOM_DELTA_LINE: deltaY is already in lines, so one notch up => one report.
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -1, deltaMode: 1 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -1, deltaMode: 1 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<64;1;1M", "wheel");
 
 		// DOM_DELTA_PAGE: one page down => rows (24) line reports down.
 		onInput.mockClear();
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 1, deltaMode: 2 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 1, deltaMode: 2 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<65;1;1M".repeat(24), "wheel");
 	});
 
@@ -2550,11 +2651,11 @@ describe("XtermTerminal", () => {
 		const onInput = vi.fn();
 		render(<XtermTerminal theme="dark" onReady={(terminal) => terminal.onUserInput(onInput)} />);
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenCalledWith("\x1b[<65;1;1M", "wheel");
 
 		onInput.mockClear();
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50, ctrlKey: true } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50, ctrlKey: true } as WheelEvent)).toBe(false);
 		expect(onInput).not.toHaveBeenCalled();
 	});
 
@@ -2566,11 +2667,11 @@ describe("XtermTerminal", () => {
 
 		// rowHeight = 16.2px; -50px => 3 lines up. The pane never sees these bytes;
 		// we scroll the terminal's retained scrollback locally instead.
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(state.lastTerminal!.scrollLines).toHaveBeenLastCalledWith(-3);
 		expect(onInput).not.toHaveBeenCalled();
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(state.lastTerminal!.scrollLines).toHaveBeenLastCalledWith(1);
 		expect(onInput).not.toHaveBeenCalled();
 	});
@@ -2583,11 +2684,11 @@ describe("XtermTerminal", () => {
 		// page key per notch is the best fallback.
 		state.lastTerminal!.buffer.active.type = "alternate";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[5~", "wheel");
 		expect(state.lastTerminal!.scrollLines).not.toHaveBeenCalled();
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: 20 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: 20 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[6~", "wheel");
 	});
 
@@ -2600,7 +2701,7 @@ describe("XtermTerminal", () => {
 		// via the paneScrollsByKeyboard hint, tested separately.
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[<64;1;1M".repeat(3), "wheel");
 	});
 
@@ -2611,7 +2712,7 @@ describe("XtermTerminal", () => {
 		// hint this would send SGR reports; the hint forces page keys.
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 
-		expect(state.lastTerminal!.wheelHandler!({ deltaY: -50 } as WheelEvent)).toBe(false);
+		expect(state.lastTerminal!.wheelHandler!({ clientX: 0, clientY: 0, deltaY: -50 } as WheelEvent)).toBe(false);
 		expect(onInput).toHaveBeenLastCalledWith("\x1b[5~", "wheel");
 	});
 
@@ -2664,17 +2765,15 @@ describe("XtermTerminal", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
-	it("requires Ctrl for a session link while an application captures mouse input", () => {
+	it("opens a session link on a plain click while an application captures mouse input", () => {
 		const onSessionLinkOpen = vi.fn();
 		render(<XtermTerminal onSessionLinkOpen={onSessionLinkOpen} theme="dark" />);
 		state.lastTerminal!.modes.mouseTrackingMode = "any";
 		const handler = (state.lastTerminal!.options.linkHandler as {
 			activate: (event: MouseEvent, uri: string) => void;
 		}).activate;
-		handler({ ctrlKey: false } as MouseEvent, "ao://sessions/project/session");
-		expect(onSessionLinkOpen).not.toHaveBeenCalled();
-		handler({ ctrlKey: true } as MouseEvent, "ao://sessions/project/session");
-		expect(onSessionLinkOpen).toHaveBeenCalledTimes(1);
+		handler({ ctrlKey: false, metaKey: false } as MouseEvent, "ao://sessions/project/session");
+		expect(onSessionLinkOpen).toHaveBeenCalledWith("ao://sessions/project/session");
 	});
 
 	it("routes malformed AO OSC links to in-app feedback without external dispatch", () => {

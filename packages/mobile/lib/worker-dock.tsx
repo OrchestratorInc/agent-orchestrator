@@ -2,8 +2,10 @@ import { Button, Host, TextInput, useNativeState } from "@expo/ui";
 import { memo, useEffect } from "react";
 import { StyleSheet, View } from "react-native";
 import { useTheme, useThemeState } from "./ThemeProvider";
+import { textSelectionColors } from "./textSelection";
 import { workerDockVisibility } from "./worker-dock-layout";
 import { space, type } from "./tokens";
+import type { WorkerEnvironment } from "./worker-controls";
 
 export type WorkerDockProps = {
 	query: string;
@@ -14,6 +16,9 @@ export type WorkerDockProps = {
 	onSearchClose: () => void;
 	onOpenControls: () => void;
 	projectFiltered: boolean;
+	environments: readonly WorkerEnvironment[];
+	selectedEnvironmentId: string;
+	onSelectEnvironment: (environmentId: string) => void;
 	projects: readonly { id: string; name: string; hostId?: string; hostName?: string }[];
 	selectedProjectId: string;
 	onSelectProject: (projectId: string) => void;
@@ -54,6 +59,7 @@ export const WorkerDock = memo(function WorkerDock({
 						value={value}
 						onChangeText={onQueryChange}
 						placeholder="Search workers"
+						{...textSelectionColors(t)}
 						autoFocus
 						autoCapitalize="none"
 						autoCorrect={false}

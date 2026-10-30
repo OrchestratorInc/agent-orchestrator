@@ -52,11 +52,15 @@ type OpenShellTerminalInput struct {
 	Title string `json:"title,omitempty"`
 }
 
-// InitialInputReadyState describes a terminal state that is ready to receive
-// the command's initial input.
+// InitialInputReadyState describes a terminal state relevant to the command's
+// initial input. SkipInput marks a state where the requested action is already
+// open, so the command should not be sent. SubmitReadyText can require a
+// completion marker before submitting a RawPrefix.
 type InitialInputReadyState struct {
-	Text      string
-	RawPrefix string
+	Text            string
+	RawPrefix       string
+	SubmitReadyText string
+	SkipInput       bool
 }
 
 // OpenCommandTerminalInput is a daemon-trusted command terminal request. It
@@ -72,6 +76,10 @@ type OpenCommandTerminalInput struct {
 	Title                   string
 	InitialInput            string
 	InitialInputReadyStates []InitialInputReadyState
+	// SendInitialInputOnReadyTimeout sends InitialInput once the ready wait
+	// expires without a marker, provided the terminal is still alive. Only for
+	// harnesses whose input is harmless at any point after startup.
+	SendInitialInputOnReadyTimeout bool
 }
 
 // RunCueCommandInput is the trusted, project-scoped command request

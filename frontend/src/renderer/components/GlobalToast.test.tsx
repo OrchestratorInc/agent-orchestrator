@@ -22,6 +22,24 @@ describe("GlobalToast", () => {
 		expect(screen.getByText("Second")).toBeInTheDocument();
 	});
 
+	it("pauses auto-dismiss while hovered and keeps errors up longer", () => {
+		vi.useFakeTimers();
+		const store = useUiStore.getState();
+		store.showGlobalToast("Plain");
+		store.showGlobalToast("Broken", undefined, "error");
+		render(<GlobalToast />);
+
+		fireEvent.mouseEnter(screen.getByRole("status"));
+		act(() => { vi.advanceTimersByTime(4_000); });
+		expect(screen.getByText("Plain")).toBeInTheDocument();
+		expect(screen.getByText("Broken")).toBeInTheDocument();
+
+		fireEvent.mouseLeave(screen.getByRole("status"));
+		act(() => { vi.advanceTimersByTime(3_600); });
+		expect(screen.queryByText("Plain")).not.toBeInTheDocument();
+		expect(screen.getByText("Broken")).toBeInTheDocument();
+	});
+
 	it("keeps toast keys unique after dismissing the newest toast", () => {
 		const store = useUiStore.getState();
 		store.showGlobalToast("First");

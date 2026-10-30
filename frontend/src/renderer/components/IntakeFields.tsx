@@ -280,7 +280,7 @@ function IntakeSettingsFields({
 								ref={inputRef}
 								id="intakeAssignee"
 								aria-label={t("settings.project.assignee")}
-								className="settings-inline-edit-input w-full max-w-md"
+								className="settings-inline-edit-input w-80 max-w-full"
 								value={form.assignee}
 								onChange={(event) => onChange({ assignee: event.target.value })}
 								onBlur={finishAssigneeEditing}
@@ -295,8 +295,8 @@ function IntakeSettingsFields({
 								<Button
 									type="button"
 									size="sm"
-									variant="outline"
-									className="shrink-0"
+									variant="ghost"
+									className="shrink-0 text-settings-muted hover:text-settings-label"
 									aria-label={t("settings.field.edit", { label: t("settings.project.assignee") })}
 									onClick={() => setAssigneeEditing(true)}
 								>
@@ -305,7 +305,7 @@ function IntakeSettingsFields({
 								</Button>
 							</div>
 						) : (
-							<Button type="button" size="sm" variant="outline" onClick={() => setAssigneeEditing(true)}>
+							<Button type="button" variant="ghost" size="sm" className="text-settings-muted hover:text-settings-label" onClick={() => setAssigneeEditing(true)}>
 								<Plus className="size-3.5" aria-hidden="true" />
 								{t("settings.project.addAssignee")}
 							</Button>
