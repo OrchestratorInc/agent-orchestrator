@@ -926,6 +926,7 @@
         var si = document.querySelector('[data-component-part="search-modal"] input[data-component-part="search-input"]');
         needPh = si && si.placeholder !== "Search";
       }
+      try { fixSearchTrigger(); } catch (e) {}
       var needChev = !!document.querySelector('nav#sidebar-content button svg use[href*="ChevronRight"]');
       if (needChev) { try { fixGroupChevrons(); } catch (e) {} }
       if (needToc || needToggle || needActions || needDtoc || needKeys || kebabVisible) init();
@@ -951,6 +952,21 @@
       svg.setAttribute('stroke-linejoin', 'round');
       svg.innerHTML = '<path d="m9 18 6-6-6-6"></path>';
     });
+  }
+
+  /* ---------- Search trigger: original inner layout ----------
+     Mintlify's layered important utilities (p-0!) beat unlayered CSS
+     !important, so set inline important styles. Original: ps-2 pe-1.5,
+     muted rgb(184) text, search icon stroke-width 2. */
+  function fixSearchTrigger() {
+    var b = document.getElementById('search-bar-entry');
+    if (!b || b.getAttribute('data-ao-search')) return;
+    b.setAttribute('data-ao-search', '1');
+    b.style.setProperty('padding-left', '8px', 'important');
+    b.style.setProperty('padding-right', '6px', 'important');
+    b.style.setProperty('color', 'rgb(184, 184, 184)', 'important');
+    var icon = b.querySelector('svg');
+    if (icon) icon.style.setProperty('stroke-width', '2', 'important');
   }
 
   mo.observe(document.body, { childList: true, subtree: true });
