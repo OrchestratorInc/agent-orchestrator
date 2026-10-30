@@ -72,7 +72,7 @@ function isSimpleMonthly(parts: Record<string, string>): boolean {
 	const keys = Object.keys(parts).sort().join(",");
 	return (
 		parts.FREQ === "MONTHLY" &&
-		parts.BYMONTHDAY !== undefined &&
+		/^(?:[1-9]|[12]\d|3[01])$/.test(parts.BYMONTHDAY ?? "") &&
 		parts.BYHOUR !== undefined &&
 		parts.BYMINUTE !== undefined &&
 		parts.BYSECOND === "0" &&
@@ -123,6 +123,9 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 	const hour = parts.BYHOUR ?? defaultHour;
 	const minute = parts.BYMINUTE ?? defaultMinute;
 	const time = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
+	// Every simple form represents exactly one clock time. Lists and other
+	// unsupported values must retain the raw rule and valid fallback fields.
+	if (!parseTimeValue(time)) return emptyCustom();
 
 	if (isSimpleDaily(parts)) {
 		return {
