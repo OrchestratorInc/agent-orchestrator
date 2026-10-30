@@ -1058,6 +1058,16 @@
         c.style.removeProperty("padding-right");
       }
     }
+    var hdr = document.getElementById("header");
+    if (hdr) {
+      if (inBand) { hdr.style.setProperty("padding-top", "7px", "important"); }
+      else { hdr.style.removeProperty("padding-top"); }
+    }
+    var h1el = hdr ? hdr.querySelector("h1") : null;
+    if (h1el && h1el.parentElement) {
+      if (inBand) { h1el.parentElement.style.setProperty("margin-top", "0", "important"); }
+      else { h1el.parentElement.style.removeProperty("margin-top"); }
+    }
     var inners = document.querySelectorAll('.mdx-content div[class*="px-(--page-padding)"]');
     Array.prototype.forEach.call(inners, function (w) {
       if (desktop) {
