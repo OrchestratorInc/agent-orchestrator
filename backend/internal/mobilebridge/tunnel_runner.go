@@ -469,10 +469,10 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 		}
 		named, err := t.Fixed.TunnelFor(ctx, t.HostID, false)
 		// A new link is written here before it lands at AO Cloud, which
-		// refuses it until then. A proxy in front of AO Cloud can answer 404
-		// for a while, as during a deploy, so that must last too.
+		// refuses it until then, and a machine waking from sleep can ask
+		// before its network is back: either is asked again for a while.
 		relink := cmp.Or(t.relinkWait, relinkGrace)
-		for deadline := time.Now().Add(relink); unlinked(err) && time.Now().Before(deadline); {
+		for deadline := time.Now().Add(relink); err != nil && time.Now().Before(deadline); {
 			select {
 			case <-ctx.Done():
 				return

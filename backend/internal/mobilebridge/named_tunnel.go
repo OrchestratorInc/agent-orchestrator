@@ -179,11 +179,13 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		code := errorCode(resp)
+		// A bare 404 is an AO Cloud that predates the route, or a proxy in
+		// front of one, as during a deploy. Like an unreachable AO Cloud, it
+		// keeps a cached tunnel: its tunnel and record are still there.
 		switch {
 		case resp.StatusCode == http.StatusUnauthorized && code == "unauthorized":
 			return NamedTunnel{}, errHostRefused
-		case resp.StatusCode == http.StatusNotFound,
-			resp.StatusCode == http.StatusServiceUnavailable && code == "fixed_addresses_unavailable",
+		case resp.StatusCode == http.StatusServiceUnavailable && code == "fixed_addresses_unavailable",
 			resp.StatusCode == http.StatusConflict && code == "fixed_address_limit_reached":
 			return NamedTunnel{}, errNoFixedAddresses
 		}

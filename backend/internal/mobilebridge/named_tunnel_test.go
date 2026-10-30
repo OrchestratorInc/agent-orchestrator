@@ -120,14 +120,12 @@ func knownTunnel(t *testing.T, cloud *fakeAOCloud, src *FixedTunnelSource) {
 }
 
 // AO Cloud's answers that leave the machine on a quick tunnel: no fixed
-// addresses there, an AO Cloud that predates them, or an account that already
-// uses all of its fixed addresses.
+// addresses there, or an account that already uses all of its fixed addresses.
 func TestFixedTunnelReadsAOCloudsNoFixedAddressAnswers(t *testing.T) {
 	for _, tc := range []struct {
 		status int
 		body   string
 	}{
-		{http.StatusNotFound, ""},
 		{http.StatusServiceUnavailable, `{"code":"fixed_addresses_unavailable"}`},
 		{http.StatusConflict, `{"code":"fixed_address_limit_reached"}`},
 	} {
@@ -145,6 +143,21 @@ func TestFixedTunnelReadsAOCloudsNoFixedAddressAnswers(t *testing.T) {
 			t.Errorf("%d %s: err = %v", tc.status, tc.body, err)
 		}
 		srv.Close()
+	}
+}
+
+// A bare 404, from an AO Cloud that predates the route or a proxy in front of
+// one, keeps the cached tunnel, as an unreachable AO Cloud does.
+func TestFixedTunnelKeepsTheCacheOnABare404(t *testing.T) {
+	cloud, src := newFixedSource(t)
+	knownTunnel(t, cloud, src)
+	cloud.set(http.StatusNotFound)
+	got, err := src.TunnelFor(context.Background(), "host-uuid", false)
+	if err == nil || unlinked(err) || got.RunToken != "run-token-tun-1" {
+		t.Fatalf("bare 404 = %+v, %v", got, err)
+	}
+	if _, err := os.Stat(src.CachePath); err != nil {
+		t.Fatalf("cache: %v", err)
 	}
 }
 
