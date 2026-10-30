@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import { TooltipProvider } from "./ui/tooltip";
 import { apiClient } from "../lib/api-client";
+import { useUiStore } from "../stores/ui-store";
 
 // vi.mock is hoisted above module-level consts, so the shared double has to be
 // created inside vi.hoisted to exist by the time the factory runs.
@@ -662,6 +663,25 @@ test("shows the LAN QR before a supported tunnel starts", () => {
 // reported "same Wi-Fi?" from mobile data with nothing on the desktop to warn.
 // The code refreshes itself once the tunnel is up; until then the note under
 // it says remote access is still being enabled.
+// Connect mobile in the sidebar asks to pair a phone, so Connect Mobile turns
+// on as the page opens. Browsing to the page from Settings turns nothing on.
+test("turns Connect Mobile on when opened to pair a phone", async () => {
+	mobileStatus.enabled = false;
+	act(() => useUiStore.getState().openGlobalSettings("mobile", { startPairing: true }));
+	renderMobileSettings();
+	await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/enable"));
+	act(() => useUiStore.getState().closeSettings());
+});
+
+test("does not turn Connect Mobile on when browsed to", async () => {
+	mobileStatus.enabled = false;
+	act(() => useUiStore.getState().openGlobalSettings("mobile"));
+	renderMobileSettings();
+	await screen.findByRole("button", { name: "Generate" });
+	expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/mobile/enable");
+	act(() => useUiStore.getState().closeSettings());
+});
+
 test("says remote access is enabling while the tunnel starts", async () => {
 	mobileStatus.tunnel = {
 		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",

@@ -6,6 +6,7 @@ import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
 import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
+import { useUiStore } from "../../stores/ui-store";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
 import { AccountHostSyncError, deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
@@ -652,6 +653,18 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			onError: () => reportToggle(true, "failed"),
 		});
 	};
+
+	// Opened from the sidebar's Connect mobile, the user asked to pair a phone,
+	// so Connect Mobile turns on without a second click, once per opening.
+	// Browsing to this page from Settings turns nothing on.
+	const startPairing = useUiStore((state) => state.settingsModal?.scope === "global" && state.settingsModal.startPairing === true);
+	const pairingStarted = useRef(false);
+	useEffect(() => {
+		if (!startPairing) pairingStarted.current = false;
+		if (!startPairing || pairingStarted.current || !active || !hasStatus || serverEnabled !== false || busy) return;
+		pairingStarted.current = true;
+		startBridge();
+	});
 
 	const actionError =
 		(enable.error instanceof Error && enable.error.message) ||
