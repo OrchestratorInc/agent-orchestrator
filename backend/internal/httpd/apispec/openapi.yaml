@@ -17493,6 +17493,9 @@ components:
       type: object
     GitHubLoginResponse:
       properties:
+        avatarUrl:
+          description: GitHub avatar image URL, once signed in.
+          type: string
         error:
           description: Why the sign-in failed.
           type: string

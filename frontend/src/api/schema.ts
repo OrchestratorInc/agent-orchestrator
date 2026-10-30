@@ -6113,6 +6113,8 @@ export interface components {
             path: string;
         };
         GitHubLoginResponse: {
+            /** @description GitHub avatar image URL, once signed in. */
+            avatarUrl?: string;
             /** @description Why the sign-in failed. */
             error?: string;
             /**

@@ -84,7 +84,7 @@ describe("GitHubSignInGate", () => {
 				return { data: { id: "github-auth", label: "GitHub access", satisfied: signedIn, required: false } };
 			}
 			if (path === "/api/v1/github/login") {
-				return { data: signedIn ? { state: "succeeded", login: "octocat" } : { state: "pending", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device" } };
+				return { data: signedIn ? { state: "succeeded", login: "octocat", avatarUrl: "https://avatars.example/octocat" } : { state: "pending", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device" } };
 			}
 			return { data: undefined, error: new Error(`unexpected GET ${path}`) };
 		});
@@ -95,6 +95,7 @@ describe("GitHubSignInGate", () => {
 		signedIn = true;
 		expect(await screen.findByText("You're all set", {}, { timeout: 5000 })).toBeInTheDocument();
 		expect(screen.getByText("Signed in as @octocat.")).toBeInTheDocument();
+		expect(screen.getByTestId("github-sign-in-gate").querySelector('img[src="https://avatars.example/octocat"]')).not.toBeNull();
 		expect(screen.getByText(/disconnect GitHub anytime in Settings/)).toBeInTheDocument();
 
 		await user.click(screen.getByRole("button", { name: "Get started" }));

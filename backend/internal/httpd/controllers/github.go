@@ -44,6 +44,7 @@ type GitHubLoginResponse struct {
 	VerificationURI string     `json:"verificationUri,omitempty" description:"GitHub page where the user enters the code."`
 	ExpiresAt       *time.Time `json:"expiresAt,omitempty" description:"When the code stops working."`
 	Login           string     `json:"login,omitempty" description:"GitHub username, once signed in."`
+	AvatarURL       string     `json:"avatarUrl,omitempty" description:"GitHub avatar image URL, once signed in."`
 	Error           string     `json:"error,omitempty" description:"Why the sign-in failed."`
 }
 
@@ -53,6 +54,7 @@ func gitHubLoginResponse(login githubpat.DeviceLogin) GitHubLoginResponse {
 		UserCode:        login.UserCode,
 		VerificationURI: login.VerificationURI,
 		Login:           login.Login,
+		AvatarURL:       login.AvatarURL,
 		Error:           login.Error,
 	}
 	if login.State == githubpat.DeviceLoginPending {

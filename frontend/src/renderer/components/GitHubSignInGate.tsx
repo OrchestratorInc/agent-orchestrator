@@ -20,7 +20,8 @@ export function GitHubSignInGate({ enabled }: { enabled: boolean }) {
 	const login = device.login;
 	// Set once sign-in finishes here, so the success step stays up after the
 	// credential check turns satisfied, until the user moves on.
-	const [connectedAs, setConnectedAs] = useState<string | null>(null);
+	const [connected, setConnected] = useState<{ login: string; avatarUrl?: string } | null>(null);
+	const [avatarLoaded, setAvatarLoaded] = useState(false);
 	const pending = login?.state === "pending";
 	const sawPendingRef = useRef(false);
 	const refetchAuth = auth.refetch;
@@ -32,12 +33,12 @@ export function GitHubSignInGate({ enabled }: { enabled: boolean }) {
 		}
 		if (login?.state !== "succeeded" || !sawPendingRef.current) return;
 		sawPendingRef.current = false;
-		setConnectedAs(login?.login ?? "");
+		setConnected({ login: login?.login ?? "", avatarUrl: login?.avatarUrl });
 		void refetchAuth();
-	}, [login?.state, login?.login, pending, refetchAuth]);
+	}, [login?.state, login?.login, login?.avatarUrl, pending, refetchAuth]);
 
 	if (!enabled) return null;
-	if (connectedAs === null && auth.data?.satisfied !== false) return null;
+	if (connected === null && auth.data?.satisfied !== false) return null;
 
 	const openVerification = async () => {
 		if (!login?.userCode || !login.verificationUri) return;
@@ -57,17 +58,34 @@ export function GitHubSignInGate({ enabled }: { enabled: boolean }) {
 				data-testid="github-sign-in-gate"
 			>
 				<div className="flex flex-col items-center px-6 pb-5 pt-8 text-center">
-					<span className="grid size-14 place-items-center rounded-2xl bg-[var(--color-bg-import-chip)] text-[var(--color-text-import-title)]">
-						<GitHubIcon className="size-7" />
+					<span className="relative grid size-14 place-items-center overflow-hidden rounded-2xl bg-[var(--color-bg-import-chip)] text-[var(--color-text-import-title)]">
+						<GitHubIcon
+							className={cn("size-7 transition-[opacity,filter] duration-500 ease-out motion-reduce:transition-none", avatarLoaded && "opacity-0 blur-sm")}
+						/>
+						{connected?.avatarUrl ? (
+							<img
+								src={connected.avatarUrl}
+								alt=""
+								onLoad={() => setAvatarLoaded(true)}
+								className={cn(
+									"absolute inset-0 size-full object-cover transition-[opacity,filter,transform] duration-500 ease-out motion-reduce:transition-none",
+									avatarLoaded ? "scale-100 opacity-100 blur-0" : "scale-110 opacity-0 blur-md",
+								)}
+							/>
+						) : null}
 					</span>
 					<DialogTitle className="mt-4 text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">
-						{connectedAs !== null ? t("startup.githubConnectedTitle") : t("startup.githubSetupTitle")}
+						{connected ? t("startup.githubConnectedTitle") : t("startup.githubSetupTitle")}
 					</DialogTitle>
 					<DialogDescription className="mt-1.5 text-pretty text-[13px] leading-5 text-muted-foreground">
-						{connectedAs ? t("startup.githubConnectedAs", { login: connectedAs }) : connectedAs === "" ? t("startup.githubConnectedNoLogin") : t("startup.githubSetupSignedOut")}
+						{connected?.login
+							? t("startup.githubConnectedAs", { login: connected.login })
+							: connected
+								? t("startup.githubConnectedNoLogin")
+								: t("startup.githubSetupSignedOut")}
 					</DialogDescription>
 
-					{connectedAs !== null ? (
+					{connected ? (
 						<>
 							<ul className="mt-5 flex w-full flex-col gap-2 rounded-lg bg-[var(--color-bg-import-chip)] px-4 py-3 text-left text-[13px] leading-5 text-[var(--color-text-import-title)]">
 								{(["startup.githubCanOpenPrs", "startup.githubCanReadIssues", "startup.githubCanTrackPrs"] as const).map((key) => (
@@ -78,7 +96,10 @@ export function GitHubSignInGate({ enabled }: { enabled: boolean }) {
 								))}
 							</ul>
 							<p className={cn(onboardingFieldHintClass, "mt-3")}>{t("startup.githubDisconnectHint")}</p>
-							<Button type="button" variant="footer-primary" className={cn(buttonClass, "mt-5")} onClick={() => setConnectedAs(null)}>
+							<Button type="button" variant="footer-primary" className={cn(buttonClass, "mt-5")} onClick={() => {
+									setConnected(null);
+									setAvatarLoaded(false);
+								}}>
 								{t("startup.githubGetStarted")}
 							</Button>
 						</>

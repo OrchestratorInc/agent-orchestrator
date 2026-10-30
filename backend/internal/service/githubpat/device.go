@@ -42,6 +42,7 @@ type DeviceLogin struct {
 	VerificationURI string
 	ExpiresAt       time.Time
 	Login           string
+	AvatarURL       string
 	Error           string
 
 	deviceCode string
@@ -139,7 +140,7 @@ func (s *Service) pollDeviceLogin(ctx context.Context, deviceCode string, interv
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				s.finishDeviceLogin(deviceCode, DeviceLoginIdle, "", "")
+				s.finishDeviceLogin(deviceCode, DeviceLoginIdle, "", "", "")
 			}
 			return
 		case <-time.After(interval):
@@ -170,14 +171,14 @@ func (s *Service) pollDeviceLogin(ctx context.Context, deviceCode string, interv
 		case "access_denied", "expired_token":
 			// Declining on GitHub or letting the code run out is not a failure:
 			// the user simply starts again.
-			s.finishDeviceLogin(deviceCode, DeviceLoginIdle, "", "")
+			s.finishDeviceLogin(deviceCode, DeviceLoginIdle, "", "", "")
 			return
 		default:
-			s.finishDeviceLogin(deviceCode, DeviceLoginFailed, "", firstNonEmpty(out.ErrorDesc, out.Error))
+			s.finishDeviceLogin(deviceCode, DeviceLoginFailed, "", "", firstNonEmpty(out.ErrorDesc, out.Error))
 			return
 		}
 		if out.AccessToken == "" {
-			s.finishDeviceLogin(deviceCode, DeviceLoginFailed, "", "GitHub did not return an access token.")
+			s.finishDeviceLogin(deviceCode, DeviceLoginFailed, "", "", "GitHub did not return an access token.")
 			return
 		}
 		var err error
@@ -189,16 +190,17 @@ func (s *Service) pollDeviceLogin(ctx context.Context, deviceCode string, interv
 			err = s.StorePAT(ctx, out.AccessToken)
 		}
 		if err != nil {
-			s.finishDeviceLogin(deviceCode, DeviceLoginFailed, "", "Could not save the GitHub token: "+err.Error())
+			s.finishDeviceLogin(deviceCode, DeviceLoginFailed, "", "", "Could not save the GitHub token: "+err.Error())
 			return
 		}
-		s.finishDeviceLogin(deviceCode, DeviceLoginSucceeded, s.fetchLogin(ctx, out.AccessToken), "")
+		login, avatarURL := s.fetchUser(ctx, out.AccessToken)
+		s.finishDeviceLogin(deviceCode, DeviceLoginSucceeded, login, avatarURL, "")
 		return
 	}
 }
 
 // finishDeviceLogin records the outcome unless a newer sign-in replaced it.
-func (s *Service) finishDeviceLogin(deviceCode string, state DeviceLoginState, login, message string) {
+func (s *Service) finishDeviceLogin(deviceCode string, state DeviceLoginState, login, avatarURL, message string) {
 	s.deviceMu.Lock()
 	defer s.deviceMu.Unlock()
 	if s.device.deviceCode != deviceCode {
@@ -206,6 +208,7 @@ func (s *Service) finishDeviceLogin(deviceCode string, state DeviceLoginState, l
 	}
 	s.device.State = state
 	s.device.Login = login
+	s.device.AvatarURL = avatarURL
 	s.device.Error = message
 	s.device.UserCode = ""
 	if s.deviceCancel != nil {
@@ -232,24 +235,26 @@ func (s *Service) postOAuthForm(ctx context.Context, path string, form url.Value
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// fetchLogin returns the GitHub username for token, or "" when it cannot be read.
-func (s *Service) fetchLogin(ctx context.Context, token string) string {
+// fetchUser returns the GitHub username and avatar for token, or empty strings
+// when they cannot be read.
+func (s *Service) fetchUser(ctx context.Context, token string) (login, avatarURL string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.apiURL+"/user", http.NoBody)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var user struct {
-		Login string `json:"login"`
+		Login     string `json:"login"`
+		AvatarURL string `json:"avatar_url"`
 	}
 	if resp.StatusCode != http.StatusOK || json.NewDecoder(resp.Body).Decode(&user) != nil {
-		return ""
+		return "", ""
 	}
-	return user.Login
+	return user.Login, user.AvatarURL
 }

@@ -28,7 +28,7 @@ func deviceFlowClient(t *testing.T, polls ...string) *http.Client {
 			polls = polls[1:]
 			return jsonResp(http.StatusOK, body), nil
 		case "/user":
-			return jsonResp(http.StatusOK, `{"login":"octocat"}`), nil
+			return jsonResp(http.StatusOK, `{"login":"octocat","avatar_url":"https://avatars.example/octocat"}`), nil
 		}
 		t.Errorf("unexpected request %s", request.URL)
 		return jsonResp(http.StatusNotFound, `{}`), nil
@@ -75,7 +75,7 @@ func TestDeviceLoginStoresTokenOnceApproved(t *testing.T) {
 	}
 
 	done := waitForDeviceLogin(t, service, DeviceLoginSucceeded)
-	if done.Login != "octocat" || done.UserCode != "" {
+	if done.Login != "octocat" || done.AvatarURL != "https://avatars.example/octocat" || done.UserCode != "" {
 		t.Fatalf("finished = %+v", done)
 	}
 	token, err := service.GetToken(context.Background())
