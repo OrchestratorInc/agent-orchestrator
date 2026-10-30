@@ -53,7 +53,7 @@ export function GitHubAccountRow() {
 		<>
 			<SettingsRow label={t("settings.github.account")} description={description}>
 				{signedInHere ? (
-					<Button type="button" variant="footer" disabled={busy} onClick={() => setConfirmOpen(true)}>
+					<Button type="button" size="sm" variant="ghost" className="text-settings-muted hover:text-settings-label" disabled={busy} onClick={() => setConfirmOpen(true)}>
 						{t("settings.github.disconnect")}
 					</Button>
 				) : null}
