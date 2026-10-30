@@ -144,3 +144,52 @@ func TestKimiStateIdentityMismatchRejected(t *testing.T) {
 		t.Fatal("expected a state.json id mismatch to be rejected")
 	}
 }
+
+// context.clear resets the conversation, so a /clear-and-restart imports only
+// what followed, and the title fallback cannot reach a pre-clear prompt.
+func TestKimiContextClearResetsHistory(t *testing.T) {
+	root := t.TempDir()
+	wire := `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"first idea"}],"origin":{"kind":"user"}},"time":1700000001000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"ok first"}},"time":1700000002000}
+{"type":"context.clear","agentId":"main","time":1700000003000}
+{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"second idea"}],"origin":{"kind":"user"}},"time":1700000004000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"ok second"}},"time":1700000005000}
+`
+	path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, "", wire)
+	got, err := readTranscript(context.Background(), domain.HarnessKimi, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: second idea", "assistant: ok second")
+	if got.title != "second idea" {
+		t.Fatalf("title = %q, want post-clear prompt", got.title)
+	}
+}
+
+// context.undo count=N retracts the last N typed-prompt turns (prompt plus the
+// assistant text after it); undoing every turn leaves no conversation.
+func TestKimiContextUndoRetractsTurns(t *testing.T) {
+	twoTurns := `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"idea one"}],"origin":{"kind":"user"}},"time":1700000001000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"reply one"}},"time":1700000002000}
+{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"idea two"}],"origin":{"kind":"user"}},"time":1700000003000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"reply two"}},"time":1700000004000}
+`
+	t.Run("drops the last turn", func(t *testing.T) {
+		root := t.TempDir()
+		wire := twoTurns + `{"type":"context.undo","agentId":"main","count":1,"time":1700000005000}` + "\n"
+		path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, "", wire)
+		got, err := readTranscript(context.Background(), domain.HarnessKimi, root, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantTexts(t, got.messages, "user: idea one", "assistant: reply one")
+	})
+	t.Run("undoing every turn leaves no conversation", func(t *testing.T) {
+		root := t.TempDir()
+		wire := twoTurns + `{"type":"context.undo","agentId":"main","count":2,"time":1700000005000}` + "\n"
+		path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, "", wire)
+		if _, err := readTranscript(context.Background(), domain.HarnessKimi, root, path); err == nil {
+			t.Fatal("expected a fully undone session to be rejected")
+		}
+	})
+}

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -47,8 +48,10 @@ type kimiState struct {
 // of type text) are display messages; everything else is tool noise, reasoning,
 // injected context, or provider bookkeeping.
 type kimiRecord struct {
-	Type    string `json:"type"`
-	Time    int64  `json:"time"`
+	Type string `json:"type"`
+	Time int64  `json:"time"`
+	// Count is the retracted typed-prompt turn count on a context.undo record.
+	Count   int `json:"count"`
 	Message struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
@@ -152,7 +155,6 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 	now := time.Now()
 	var (
 		items       []tagged
-		prompted    bool
 		pendingText strings.Builder
 		pending     bool
 		pendingAt   time.Time
@@ -203,11 +205,7 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 				return nil
 			}
 			flushAssistant()
-			text := visibleText(r.Message.Content)
-			if strings.TrimSpace(text) != "" {
-				prompted = true
-			}
-			appendMessage("user", text, at)
+			appendMessage("user", visibleText(r.Message.Content), at)
 		case "context.append_loop_event":
 			if r.Event.Type != "content.part" || r.Event.Part.Type != "text" {
 				// Reasoning ("think"), tool calls and tool results are not messages.
@@ -217,6 +215,18 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 				pending, pendingAt = true, at
 			}
 			pendingText.WriteString(r.Event.Part.Text)
+		case "context.clear":
+			// Kimi resets the conversation here (its reducer sets clearFloor to the
+			// current length); a user who ran /clear and started over must import
+			// only what followed, so its session/load replay and this history agree.
+			flushAssistant()
+			items = items[:0]
+		case "context.undo":
+			// Kimi retracts the last `count` typed-prompt turns (injected messages
+			// do not count toward it). items holds only typed prompts and their
+			// replies, so dropping the last count user-anchored turns matches it.
+			flushAssistant()
+			items = dropLastKimiTurns(items, r.Count)
 		}
 		return nil
 	}
@@ -232,7 +242,9 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		t.messages = append(t.messages, item.Message)
 	}
 
-	if !prompted || len(t.messages) == 0 {
+	// A conversation needs at least one surviving typed prompt; a session that
+	// was fully cleared or undone, or held only injected context, is not one.
+	if !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
 		return t, errors.New("no readable native conversation")
 	}
 	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
@@ -291,6 +303,25 @@ func kimiOriginKind(raw json.RawMessage) string {
 		return obj.Kind
 	}
 	return ""
+}
+
+// dropLastKimiTurns retracts the last n typed-prompt turns, each being a user
+// prompt and the assistant text that followed it, matching Kimi's undo anchors.
+// Fewer than n surviving prompts means the undo cleared the whole conversation.
+func dropLastKimiTurns(items []tagged, n int) []tagged {
+	if n <= 0 {
+		return items
+	}
+	seen := 0
+	for i := len(items) - 1; i >= 0; i-- {
+		if items[i].Role == domain.MessageRoleUser {
+			seen++
+			if seen == n {
+				return items[:i]
+			}
+		}
+	}
+	return items[:0]
 }
 
 // kimiTitle prefers the session's own title, falling back to the opening prompt.
