@@ -359,9 +359,13 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 func (s *Service) probeManagedVersion(ctx context.Context, target Target, cli, binary string) (string, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, defaultVerifyTimeout)
 	defer cancel()
-	var output strings.Builder
-	if err := s.commands.Run(probeCtx, []string{binary, "--version"}, &output, &output); err != nil {
-		return "", installFailed(fmt.Sprintf("The new %s did not start.", cli), fmt.Errorf("the new copy did not start: %w", err))
+	output := &capturedOutput{max: maxOutputBytes}
+	if err := s.commands.Run(probeCtx, []string{binary, "--version"}, output, output); err != nil {
+		detail := fmt.Errorf("the new copy did not start: %w", err)
+		if text := strings.TrimSpace(output.String()); text != "" {
+			detail = fmt.Errorf("%w\n%s", detail, text)
+		}
+		return "", installFailed(fmt.Sprintf("The new %s did not start.", cli), detail)
 	}
 	version, ok := versionSchemeFor(target).find(output.String())
 	if !ok {
