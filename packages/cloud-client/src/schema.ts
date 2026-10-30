@@ -61,10 +61,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt so they can be published again; they serve nothing and use no slot, so used counts only active links. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt so they can be published again; they serve nothing and use no slot, so used counts only active links. unlimited is true when the user is an active member of a paid, contract or otherwise entitled organization: the limit then does not apply. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
         get: operations["listArtifactShares"];
         put?: never;
-        /** @description Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link under a random 26-character link ID (lowercase a-z and 2-7) that names neither the file nor its owner. Publishing a document that already has a link replaces the version that link serves: the URL stays, the earlier version is no longer served, and the response is 200 with replaced true. An active link keeps its slot; a revoked link is restored the same way when a slot is free. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document, or restoring a revoked one, would exceed the user's limit of active links. */
+        /** @description Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link under a random 26-character link ID (lowercase a-z and 2-7) that names neither the file nor its owner. Publishing a document that already has a link replaces the version that link serves: the URL stays, the earlier version is no longer served, and the response is 200 with replaced true. An active link keeps its slot; a revoked link is restored the same way when a slot is free. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document, or restoring a revoked one, would exceed the user's limit of active links. A user whose list shows unlimited has no limit. */
         post: operations["createArtifactShare"];
         delete?: never;
         options?: never;
@@ -3424,7 +3424,10 @@ export interface components {
         };
         ArtifactShareList: {
             shares: components["schemas"]["ArtifactShare"][];
+            /** @description The free plan's limit of active links; it does not apply when unlimited is true. */
             limit: number;
+            /** @description True when the user's plan has no limit of active links. Absent or false means limit applies. */
+            unlimited?: boolean;
             /** @description How many active links the user holds; revoked links do not count. */
             used: number;
         };
