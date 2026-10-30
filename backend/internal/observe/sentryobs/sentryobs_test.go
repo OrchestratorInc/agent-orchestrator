@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -104,10 +103,7 @@ func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
 }
 
 func TestCaptureChecksDurableConsentAtEachCapture(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows policy files cannot satisfy the owner-only permission check")
-	}
-	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
+	transport := &recordingTransport{events: make(chan *sentry.Event, 4)}
 	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
@@ -126,22 +122,22 @@ func TestCaptureChecksDurableConsentAtEachCapture(t *testing.T) {
 		CaptureError(context.Background(), errString("synthetic"), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	}
 	capture()
-	if len(transport.events) != 0 {
-		t.Fatal("missing consent reached transport")
+	if len(transport.events) != 1 {
+		t.Fatal("missing policy did not use default on")
 	}
 	writePolicy(true, false)
 	capture()
-	if len(transport.events) != 0 {
-		t.Fatal("unanswered renewal reached transport")
+	if len(transport.events) != 2 {
+		t.Fatal("legacy production flag vetoed opt-in")
 	}
 	writePolicy(true, true)
 	capture()
-	if len(transport.events) != 1 {
-		t.Fatal("renewed consent did not reach transport")
+	if len(transport.events) != 3 {
+		t.Fatal("opt-in did not reach transport")
 	}
 	writePolicy(false, true)
 	capture()
-	if len(transport.events) != 1 {
+	if len(transport.events) != 3 {
 		t.Fatal("durable opt-out reached transport")
 	}
 }

@@ -1,10 +1,9 @@
 export const AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED = true;
 
 export type TelemetryPolicyDiskRecord = {
-	schema_version: 2;
+	schema_version: 1;
 	events_enabled: boolean;
 	consent_generation: string;
-	consent_production_enabled: boolean;
 	updated_at: string;
 };
 
@@ -13,7 +12,6 @@ export type TelemetryPolicySnapshot = {
 	consentGeneration: string;
 	updatedAt: string;
 	acknowledged: boolean;
-	consentRenewalRequired: boolean;
 };
 
 export type TelemetryPolicyApplyState = "applied" | "cleanup_pending" | "cleanup_failed";
@@ -79,10 +77,9 @@ export function parseTelemetryPolicyDiskRecord(raw: string): TelemetryPolicyPars
 		return { ok: false, reason: "invalid_record" };
 	}
 	return { ok: true, record: {
-		schema_version: 2,
+		schema_version: 1,
 		events_enabled: record.events_enabled,
 		consent_generation: record.consent_generation,
-		consent_production_enabled: record.schema_version === 2 ? record.consent_production_enabled as boolean : false,
 		updated_at: record.updated_at,
 	} };
 }
@@ -92,10 +89,9 @@ function isCanonicalTimestamp(value: string): boolean {
 	return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
-export function telemetryPolicySnapshot(record: TelemetryPolicyDiskRecord, acknowledged: boolean, productionEnabled: boolean): TelemetryPolicySnapshot {
+export function telemetryPolicySnapshot(record: TelemetryPolicyDiskRecord, acknowledged: boolean): TelemetryPolicySnapshot {
 	return {
-		eventsEnabled: record.events_enabled && (!productionEnabled || record.consent_production_enabled),
-		consentRenewalRequired: record.events_enabled && productionEnabled && !record.consent_production_enabled,
+		eventsEnabled: record.events_enabled,
 		consentGeneration: record.consent_generation,
 		updatedAt: record.updated_at,
 		acknowledged,
