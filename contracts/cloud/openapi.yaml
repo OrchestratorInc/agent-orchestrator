@@ -3080,6 +3080,8 @@ paths:
       tags: [Remote Hosts]
       security:
         - hostDigest: []
+          hostSignature: []
+        - hostDigest: []
       description: |
         The machine publishes the address it serves now to every account that
         lists it under this credential.
@@ -3095,7 +3097,7 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          description: "`unauthorized`: the credential is missing or malformed, or no account lists the machine under it."
+          description: "`unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired."
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
@@ -3106,6 +3108,8 @@ paths:
       operationId: ensureRemoteHostTunnel
       tags: [Remote Hosts]
       security:
+        - hostDigest: []
+          hostSignature: []
         - hostDigest: []
       description: |
         The machine fetches the run token of the fixed tunnel an account gives
@@ -3134,7 +3138,7 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          description: "`unauthorized`: the credential is missing or malformed, or no account lists the machine under it."
+          description: "`unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired."
           $ref: "#/components/responses/Error"
         "409":
           description: "`fixed_address_limit_reached`: the account uses all of its fixed addresses."
@@ -3160,7 +3164,19 @@ components:
         of its 64-character hex form), the credential the account lists the
         machine under. It is a bearer credential with no expiry, as strong on
         these routes as the account token itself. It is not an account
-        session.
+        session. A listing with a host key also needs `hostSignature`.
+    hostSignature:
+      type: apiKey
+      in: header
+      name: X-AO-Host-Signature
+      description: |
+        `<t>.<signature>`: `t` is the Unix time in seconds, and `signature`
+        is the unpadded base64url Ed25519 signature, by the listing's host key,
+        of `ao-host-v1`, the method, the path, `t` and the lowercase hex
+        SHA-256 of the request body, each followed by a newline. Required,
+        with `hostDigest`, on a listing that has a host key, and accepted
+        within 5 minutes of `t`. Only the machine holds the private key, so a
+        device that has the account token cannot act as the machine.
     bearerAuth:
       type: http
       scheme: bearer
@@ -3424,6 +3440,10 @@ components:
         token:
           type: string
           pattern: "^[0-9a-f]{64}$"
+        hostKey:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{43}$"
+          description: The machine's Ed25519 public key, unpadded base64url. Stored on the listing; from then on the machine's own requests need `hostSignature`. A registration without it keeps the listing's key, and removing the machine clears it.
     RemoteHostAddress:
       type: object
       additionalProperties: false

@@ -2070,6 +2070,8 @@ export interface components {
             /** @description The machine's address, an http or https origin with no path, query, fragment or user info. Omit it, or send it empty, to list the machine at a fixed address the deployment makes. */
             url?: string;
             token: string;
+            /** @description The machine's Ed25519 public key, unpadded base64url. Stored on the listing; from then on the machine's own requests need `hostSignature`. A registration without it keeps the listing's key, and removing the machine clears it. */
+            hostKey?: string;
         };
         RemoteHostAddress: {
             /**
@@ -7545,7 +7547,7 @@ export interface operations {
                 content?: never;
             };
             400: components["responses"]["BadRequest"];
-            /** @description `unauthorized`: the credential is missing or malformed, or no account lists the machine under it. */
+            /** @description `unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired. */
             401: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
@@ -7577,7 +7579,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
-            /** @description `unauthorized`: the credential is missing or malformed, or no account lists the machine under it. */
+            /** @description `unauthorized`: the credential is missing or malformed, no account lists the machine under it, or the listing has a host key and the request's `X-AO-Host-Signature` is missing, invalid or expired. */
             401: components["responses"]["Error"];
             /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. */
             409: components["responses"]["Error"];
