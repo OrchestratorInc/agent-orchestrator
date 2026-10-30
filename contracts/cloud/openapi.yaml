@@ -3425,6 +3425,9 @@ components:
         fixedAddresses:
           type: boolean
           description: Whether this deployment gives machines fixed addresses; absent means false. Only then may a registration omit `url`.
+        hostKeys:
+          type: boolean
+          description: Whether this deployment takes `hostKey` on a registration; absent means false, and such a deployment refuses a registration that carries one.
     RemoteHostRegistration:
       type: object
       additionalProperties: false
