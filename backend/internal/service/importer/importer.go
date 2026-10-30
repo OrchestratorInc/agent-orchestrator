@@ -146,12 +146,22 @@ type Deps struct {
 	Store Store
 	// Root overrides the legacy AO root to read. Empty -> the default.
 	Root string
+	// GitHub creates repositories and supplies the token for the first push
+	// when an import asks AO to create its GitHub repository.
+	GitHub GitHubRepositories
+}
+
+// GitHubRepositories is the GitHub access a project import needs.
+type GitHubRepositories interface {
+	Token(ctx context.Context) (string, error)
+	CreateRepository(ctx context.Context, owner, name string, private bool) error
 }
 
 // Manager implements Service over the daemon's store.
 type Manager struct {
-	store Store
-	root  string
+	store  Store
+	root   string
+	github GitHubRepositories
 }
 
 var _ Service = (*Manager)(nil)
@@ -162,7 +172,7 @@ func New(deps Deps) *Manager {
 	if root == "" {
 		root = legacyimport.DefaultLegacyRootDir()
 	}
-	return &Manager{store: deps.Store, root: root}
+	return &Manager{store: deps.Store, root: root, github: deps.GitHub}
 }
 
 // Status reports availability only: legacy data present at the root. It never
@@ -328,7 +338,7 @@ preparation:
 				GitPreparationEvent{RepoPath: target.Status.RepoPath, Action: action, State: GitPreparationEventPending},
 				GitPreparationEvent{RepoPath: target.Status.RepoPath, Action: action, State: GitPreparationEventRunning},
 			)
-			if actionErr := runGitPreparationAction(ctx, target.Status.RepoPath, action, target.Input); actionErr != nil {
+			if actionErr := runGitPreparationAction(ctx, m.github, target.Status.RepoPath, action, target.Input); actionErr != nil {
 				events = append(events, GitPreparationEvent{RepoPath: target.Status.RepoPath, Action: action, State: GitPreparationEventError, Error: actionErr.Error()})
 				latest, _ := m.Validate(ctx, ImportValidationInput{ImportKind: importKind, Path: validation.Root.RepoPath})
 				if importKind == ImportKindProject && action == GitPreparationActionCreateRemoteRepository && target.Input.GitHubRepository != nil {
@@ -533,7 +543,7 @@ func directChildImportStatuses(ctx context.Context, root string) ([]RepoGitStatu
 	return repos, nil
 }
 
-func runGitPreparationAction(ctx context.Context, path, action string, in GitRepositoryPreparationInput) error {
+func runGitPreparationAction(ctx context.Context, github GitHubRepositories, path, action string, in GitRepositoryPreparationInput) error {
 	switch action {
 	case GitPreparationActionInit:
 		_, err := importGitOutput(ctx, path, "init", "-b", domain.DefaultBranchName)
@@ -576,12 +586,12 @@ func runGitPreparationAction(ctx context.Context, path, action string, in GitRep
 			}
 			repository := owner + "/" + name
 			remoteURL := "https://github.com/" + repository + ".git"
+			if github == nil {
+				return errors.New("GitHub is not connected")
+			}
 			if currentRemoteURL := resolveImportOriginURL(path); currentRemoteURL == "" {
-				visibility := "--private"
-				if in.GitHubRepository.Private != nil && !*in.GitHubRepository.Private {
-					visibility = "--public"
-				}
-				if _, err := importGhOutputFunc(ctx, path, "repo", "create", repository, visibility); err != nil {
+				private := in.GitHubRepository.Private == nil || *in.GitHubRepository.Private
+				if err := github.CreateRepository(ctx, owner, name, private); err != nil {
 					return fmt.Errorf("create GitHub repository: %w", err)
 				}
 				if err := setImportOriginURL(ctx, path, remoteURL); err != nil {
@@ -593,7 +603,11 @@ func runGitPreparationAction(ctx context.Context, path, action string, in GitRep
 			if _, err := importGitOutputFunc(ctx, path, "config", "--local", importGitHubRepositoryConfigKey, repository); err != nil {
 				return fmt.Errorf("record GitHub repository preparation: %w", err)
 			}
-			if _, err := importGitOutputFunc(ctx, path, "push", "-u", "origin", "HEAD"); err != nil {
+			token, err := github.Token(ctx)
+			if err != nil {
+				return fmt.Errorf("push initial commit: %w", err)
+			}
+			if err := importGitPushFunc(ctx, path, token); err != nil {
 				return fmt.Errorf("push initial commit: %w", err)
 			}
 			return nil
@@ -777,17 +791,22 @@ func invalidImportRemoteURL() error {
 	return apierr.Invalid("INVALID_GIT_URL", "Enter a valid HTTPS, SSH, Git, or file repository URL.", nil)
 }
 
-var importGhOutputFunc = importGhOutput
 var importGitOutputFunc = importGitOutput
+var importGitPushFunc = importGitPush
 
-func importGhOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := aoprocess.CommandContext(ctx, "gh", args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+// importGitPush pushes the first commit to a repository AO just created, with
+// AO's GitHub token supplied through a one-off credential helper. Clearing the
+// configured helpers first keeps a stale keychain entry from answering instead.
+func importGitPush(ctx context.Context, dir, token string) error {
+	cmd := aoprocess.CommandContext(ctx, "git", "-C", dir,
+		"-c", "credential.https://github.com.helper=",
+		"-c", `credential.https://github.com.helper=!f() { test "$1" = get && echo username=x-access-token && echo "password=$AO_GITHUB_PUSH_TOKEN"; }; f`,
+		"push", "-u", "origin", "HEAD")
+	cmd.Env = append(os.Environ(), "AO_GITHUB_PUSH_TOKEN="+token)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git push: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	return string(out), nil
+	return nil
 }
 
 func importRemoteExists(path, name string) bool {

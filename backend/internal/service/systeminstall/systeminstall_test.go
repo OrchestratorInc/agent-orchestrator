@@ -258,26 +258,6 @@ func TestPlanFor(t *testing.T) {
 			wantCommand: []string{"apt-get", "install", "-y", "cloudflared"},
 		},
 		{
-			name: "gh windows uses winget", target: TargetGH, goos: "windows", found: []string{"winget"},
-			wantCommand: []string{"winget", "install", "-e", "--id", "GitHub.cli"},
-		},
-		{
-			name: "gh windows without winget is unsupported", target: TargetGH, goos: "windows",
-			wantUnsupported: true, wantReasonHas: "winget was not found",
-		},
-		{
-			name: "gh darwin uses brew", target: TargetGH, goos: "darwin", found: []string{"brew"},
-			wantCommand: []string{"brew", "install", "gh"},
-		},
-		{
-			name: "gh linux apt-get is unsupported with instructions for the gh package", target: TargetGH, goos: "linux", found: []string{"apt-get"},
-			wantUnsupported: true, wantReasonHas: "administrator password",
-		},
-		{
-			name: "gh linux pacman is unsupported with instructions for the github-cli package", target: TargetGH, goos: "linux", found: []string{"pacman"},
-			wantUnsupported: true, wantReasonHas: "administrator password",
-		},
-		{
 			name: "claude uses npm on every platform", target: TargetClaude, goos: "darwin", found: []string{"npm"},
 			wantCommand: []string{"npm", "install", "-g", "@anthropic-ai/claude-code"},
 		},
@@ -337,7 +317,7 @@ func TestPlanFor(t *testing.T) {
 }
 
 func TestValid(t *testing.T) {
-	for _, target := range []Target{TargetTmux, TargetGH, TargetClaude, TargetCodex, TargetOpencode, TargetOpencodeV2, TargetCopilot} {
+	for _, target := range []Target{TargetTmux, TargetClaude, TargetCodex, TargetOpencode, TargetOpencodeV2, TargetCopilot} {
 		if !Valid(target) {
 			t.Errorf("Valid(%q) = false, want true", target)
 		}
@@ -488,17 +468,17 @@ func TestStatus_UnknownTarget(t *testing.T) {
 
 func TestStatus_NeverStartedIsIdle(t *testing.T) {
 	s := newTestService("darwin", "brew")
-	job, err := s.Status(context.Background(), TargetGH)
+	job, err := s.Status(context.Background(), TargetTmux)
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
 	if job.Status != StatusIdle {
 		t.Fatalf("Status = %q, want %q", job.Status, StatusIdle)
 	}
-	if job.Target != TargetGH {
-		t.Fatalf("Target = %q, want %q", job.Target, TargetGH)
+	if job.Target != TargetTmux {
+		t.Fatalf("Target = %q, want %q", job.Target, TargetTmux)
 	}
-	if job.Command != "brew install gh" {
+	if job.Command != "brew install tmux" {
 		t.Fatalf("Command = %q, want install preview", job.Command)
 	}
 }

@@ -690,8 +690,9 @@ func Run(buildVersion string) error {
 
 	hostCommands := systemexec.New(cfg.DataDir)
 	systemChecks := systemcheck.NewWithCommandRunner(agentSvc, hostCommands, hostCommands)
-	githubAccount := githubpat.New(cfg.DataDir)
-	systemChecks.SetSavedGitHubLogin(githubAccount)
+	githubSignIn := githubpat.New(cfg.DataDir)
+	githubAccount := githubpat.NewAccount(githubTokens(cfg.DataDir).Token)
+	systemChecks.SetSavedGitHubLogin(githubSignIn)
 	privateNPMPrefixes := map[systeminstall.Target]string{}
 	if prefix, err := opencode.V2NPMPrefix(); err == nil {
 		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix
@@ -787,7 +788,6 @@ func Run(buildVersion string) error {
 	// terminal mux) as session panes, but keep their own ids, storage, and
 	// lifetime — see internal/service/shellterm.
 	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
-	systemChecks.SetGitHubAuthTerminalOpener(shellTermSvc)
 	agentAuthSvc := agentauth.NewWithAgentResolver(hostCommands, agentSvc, shellTermSvc, cfg.DataDir)
 	agentSvc.SetCodexAccountLoginTerminalOpener(shellTermSvc)
 	agentAccountSvc.SetTerminals(shellTermSvc)
@@ -1052,12 +1052,12 @@ func Run(buildVersion string) error {
 		Presence:           presenceTracker,
 		DeviceRoster:       deviceRoster,
 		DeviceLive:         presenceTracker,
-		Import:             importsvc.New(importsvc.Deps{Store: store}),
+		Import:             importsvc.New(importsvc.Deps{Store: store, GitHub: githubAccount}),
 		Directories:        fsbrowsersvc.New(),
 		ShellTerminals:     shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
 		AgentAuth:          agentAuthSvc,
-		GitHub:             newGitHubStatusService(githubAccount, prReader),
+		GitHub:             newGitHubStatusService(githubSignIn, githubAccount, prReader),
 		Conversations:      chatSvc,
 		ConversationSearch: store,
 		Settings:           settingsSvc,

@@ -1324,6 +1324,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/github/owners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the GitHub user and organizations a new repository can be created under */
+        get: operations["listGitHubOwners"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/github/pat": {
         parameters: {
             query?: never;
@@ -1332,8 +1349,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Store a GitHub personal access token locally */
-        put: operations["putGitHubPAT"];
+        put?: never;
         post?: never;
         /** Remove the stored GitHub personal access token */
         delete: operations["deleteGitHubPAT"];
@@ -1351,6 +1367,23 @@ export interface paths {
         };
         /** List repositories accessible with the stored GitHub token */
         get: operations["listGitHubRepos"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/github/repository-availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report whether a GitHub repository name is free */
+        get: operations["getGitHubRepositoryAvailability"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4296,23 +4329,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/system/github-auth/terminal": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Open a trusted terminal running the GitHub CLI login flow */
-        post: operations["openGitHubAuthTerminal"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/system/install/{target}": {
         parameters: {
             query?: never;
@@ -6116,12 +6132,22 @@ export interface components {
             /** @description GitHub page where the user enters the code. */
             verificationUri?: string;
         };
+        GitHubOwner: {
+            avatarUrl: string;
+            login: string;
+        };
+        GitHubOwnersResponse: {
+            owners: components["schemas"]["GitHubOwner"][];
+        };
         GitHubRepo: {
             clone_url: string;
             default_branch: string;
             full_name: string;
             name: string;
             private: boolean;
+        };
+        GitHubRepositoryAvailabilityResponse: {
+            available: boolean;
         };
         GitHubRepositoryPreparation: {
             name?: string;
@@ -6234,7 +6260,7 @@ export interface components {
              * @description Fixed install target this job ran (or is running) for.
              * @enum {string}
              */
-            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes" | "cloudflared" | "cua-driver";
+            target: "tmux" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes" | "cloudflared" | "cua-driver";
             /** Format: date-time */
             updatedAt?: null | string;
             /** @description While waiting_for_idle, the sessions the update still waits for and why. */
@@ -6679,12 +6705,6 @@ export interface components {
             lastSeenAt: string;
             platform?: string;
             token?: string;
-        };
-        PutGitHubPATRequest: {
-            expiresIn?: number;
-            pat: string;
-            refreshToken?: string;
-            refreshTokenExpiresIn?: number;
         };
         RegisterPushDeviceRequest: {
             /** @description Human-friendly device label. */
@@ -7736,7 +7756,7 @@ export interface components {
              * @description Stable requirement identifier.
              * @enum {string}
              */
-            id: "git" | "tmux" | "harness" | "gh" | "github-auth";
+            id: "git" | "tmux" | "harness" | "github-auth";
             /** @description Human-readable requirement name. */
             label: string;
             /** @description Whether this requirement blocks the overall Ready state. */
@@ -7745,7 +7765,7 @@ export interface components {
             satisfied: boolean;
         };
         SystemRequirementsResponse: {
-            /** @description True iff every requirement with Required=true is satisfied. Requirements with Required=false (e.g. gh) are advisory and never block readiness. */
+            /** @description True iff every requirement with Required=true is satisfied. Requirements with Required=false (e.g. github-auth) are advisory and never block readiness. */
             ready: boolean;
             /** @description Individual checks in stable order for the selected probe. */
             requirements: components["schemas"]["SystemRequirement"][];
@@ -12551,18 +12571,14 @@ export interface operations {
             };
         };
     };
-    putGitHubPAT: {
+    listGitHubOwners: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PutGitHubPATRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description OK */
             200: {
@@ -12570,22 +12586,11 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["GitHubOwnersResponse"];
                 };
             };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
+            /** @description Bad Gateway */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12657,6 +12662,49 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getGitHubRepositoryAvailability: {
+        parameters: {
+            query?: {
+                /** @description Account or organization that would own the repository. */
+                owner?: string;
+                /** @description Repository name. */
+                name?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubRepositoryAvailabilityResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -23960,60 +24008,13 @@ export interface operations {
             };
         };
     };
-    openGitHubAuthTerminal: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Created */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ShellTerminalEnvelope"];
-                };
-            };
-            /** @description Bad Request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
     getSystemInstallStatus: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, cloudflared, or cua-driver. */
-                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared" | "cua-driver";
+                /** @description Install target identifier: tmux, claude, codex, opencode, opencode-v2, copilot, cloudflared, or cua-driver. */
+                target: "tmux" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared" | "cua-driver";
             };
             cookie?: never;
         };
@@ -24062,8 +24063,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, cloudflared, or cua-driver. */
-                target: "tmux" | "gh" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared" | "cua-driver";
+                /** @description Install target identifier: tmux, claude, codex, opencode, opencode-v2, copilot, cloudflared, or cua-driver. */
+                target: "tmux" | "claude" | "codex" | "opencode" | "opencode-v2" | "copilot" | "cloudflared" | "cua-driver";
             };
             cookie?: never;
         };

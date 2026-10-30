@@ -1,6 +1,6 @@
 // Package systemcheck reports lightweight executable prerequisites the desktop
-// app checks before showing the board: git, tmux (macOS/Linux only), one agent
-// executable, and the advisory GitHub CLI. It also supports a deeper,
+// app checks before showing the board: git, tmux (macOS/Linux only), and one
+// agent executable, plus the GitHub sign-in check. It also supports a deeper,
 // user-triggered agent-harness inventory check, which is intentionally
 // excluded from first-render startup.
 package systemcheck
@@ -15,16 +15,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
 
 // Requirement is one named startup gate check.
 type Requirement struct {
-	ID        string `json:"id" enum:"git,tmux,harness,gh,github-auth" description:"Stable requirement identifier."`
+	ID        string `json:"id" enum:"git,tmux,harness,github-auth" description:"Stable requirement identifier."`
 	Label     string `json:"label" description:"Human-readable requirement name."`
 	Satisfied bool   `json:"satisfied" description:"Whether this requirement is currently met."`
 	Required  bool   `json:"required" description:"Whether this requirement blocks the overall Ready state."`
@@ -34,7 +32,7 @@ type Requirement struct {
 // Report is a requirements result suitable for either the lightweight startup
 // preflight or a deeper, user-triggered environment check.
 type Report struct {
-	Ready        bool          `json:"ready" description:"True iff every requirement with Required=true is satisfied. Requirements with Required=false (e.g. gh) are advisory and never block readiness."`
+	Ready        bool          `json:"ready" description:"True iff every requirement with Required=true is satisfied. Requirements with Required=false (e.g. github-auth) are advisory and never block readiness."`
 	Requirements []Requirement `json:"requirements" description:"Individual checks in stable order for the selected probe."`
 }
 
@@ -43,12 +41,6 @@ type Report struct {
 type HarnessCatalog interface {
 	RefreshFresh(ctx context.Context) (agentsvc.Inventory, error)
 	FindInstalledBinary(ctx context.Context) (agentsvc.Info, bool)
-}
-
-// GitHubAuthTerminalOpener starts the reviewed GitHub CLI login command in a
-// daemon-owned PTY. The renderer never supplies command arguments.
-type GitHubAuthTerminalOpener interface {
-	OpenCommandTerminal(context.Context, shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error)
 }
 
 // SavedGitHubLogin reports whether AO's own GitHub sign-in stored a token.
@@ -61,7 +53,6 @@ type Service struct {
 	harnesses   HarnessCatalog
 	executables ports.ExecutableFinder
 	commands    ports.CommandRunner
-	terminals   GitHubAuthTerminalOpener
 	savedGitHub SavedGitHubLogin
 }
 
@@ -69,12 +60,6 @@ type Service struct {
 // check, so users signed in through AO never need the gh CLI.
 func (s *Service) SetSavedGitHubLogin(saved SavedGitHubLogin) {
 	s.savedGitHub = saved
-}
-
-// SetGitHubAuthTerminalOpener late-binds the shell terminal service, which is
-// created after startup checks during daemon assembly.
-func (s *Service) SetGitHubAuthTerminalOpener(terminals GitHubAuthTerminalOpener) {
-	s.terminals = terminals
 }
 
 // New returns a Service backed by the supplied host executable adapter and
@@ -111,7 +96,6 @@ func (s *Service) CheckStartup(ctx context.Context) (Report, error) {
 		s.checkGit(),
 		s.checkTmux(),
 		s.checkStartupHarness(ctx),
-		s.checkGH(),
 	}), nil
 }
 
@@ -122,30 +106,6 @@ func (s *Service) CheckGitHubAuth(ctx context.Context) (Requirement, error) {
 		return Requirement{}, err
 	}
 	return s.checkGitHubAuth(ctx), nil
-}
-
-// OpenGitHubAuthTerminal starts the fixed GitHub CLI login flow. Executable
-// resolution remains daemon-owned so callers cannot choose an arbitrary
-// command or binary.
-func (s *Service) OpenGitHubAuthTerminal(ctx context.Context) (shellterm.ShellTerminal, error) {
-	if err := ctx.Err(); err != nil {
-		return shellterm.ShellTerminal{}, err
-	}
-	path, err := s.executables.LookPath("gh")
-	if err != nil || path == "" {
-		return shellterm.ShellTerminal{}, apierr.Invalid("GITHUB_CLI_UNAVAILABLE", "GitHub CLI was not found on PATH.", nil)
-	}
-	if s.terminals == nil {
-		return shellterm.ShellTerminal{}, apierr.Internal("GITHUB_AUTH_TERMINAL_UNAVAILABLE", "GitHub authentication terminal service is unavailable.")
-	}
-	return s.terminals.OpenCommandTerminal(ctx, shellterm.OpenCommandTerminalInput{
-		// Keep the native interactive flow so users can choose GitHub.com or
-		// Enterprise, HTTPS or SSH, and any authentication mode supported by their
-		// installed gh version. The renderer forwards the terminal protocol replies
-		// these prompts require.
-		Argv:  []string{path, "auth", "login"},
-		Title: "Connect GitHub",
-	})
 }
 
 // Check runs the complete, user-triggered requirements probe, including a
@@ -159,7 +119,6 @@ func (s *Service) Check(ctx context.Context) (Report, error) {
 		s.checkGit(),
 		s.checkTmux(),
 		s.checkHarness(ctx),
-		s.checkGH(),
 		s.checkGitHubAuth(ctx),
 	}
 
@@ -243,25 +202,16 @@ func (s *Service) checkStartupHarness(ctx context.Context) Requirement {
 	return Requirement{ID: "harness", Label: label, Satisfied: true, Required: true, Detail: info.Label}
 }
 
-// checkGH probes for the GitHub CLI. It is advisory only (Required: false):
-// agent sessions use it to open pull requests and read issues, but AO itself
-// never depends on it, so its absence must never block Ready.
-func (s *Service) checkGH() Requirement {
-	path, err := s.executables.LookPath("gh")
-	if err != nil || path == "" {
-		return Requirement{
-			ID: "gh", Label: "gh",
-			Detail: "gh was not found on PATH. It lets agent sessions open pull requests and read issues, but AO runs fine without it.",
-		}
-	}
-	return Requirement{ID: "gh", Label: "gh", Satisfied: true, Detail: path}
-}
-
-// checkGitHubAuth is advisory: local work remains available when GitHub is
-// not configured, but onboarding should surface the missing capability before
-// an agent first tries to open a pull request. Token bytes are never captured.
+// checkGitHubAuth reports whether AO has a GitHub credential: an environment
+// token, AO's own sign-in, or a signed-in gh CLI. The desktop app blocks until
+// it is satisfied. Token bytes are never captured.
 func (s *Service) checkGitHubAuth(ctx context.Context) Requirement {
 	const detail = "Sign in to GitHub so agent sessions can open pull requests and read issues."
+	for _, name := range []string{"AO_GITHUB_TOKEN", "GITHUB_TOKEN"} {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return Requirement{ID: "github-auth", Label: "GitHub access", Satisfied: true, Detail: "Using " + name + "."}
+		}
+	}
 	if s.savedGitHub != nil && s.savedGitHub.HasPAT(ctx) {
 		return Requirement{ID: "github-auth", Label: "GitHub access", Satisfied: true, Detail: "Signed in to GitHub through AO."}
 	}

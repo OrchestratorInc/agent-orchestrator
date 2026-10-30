@@ -2144,7 +2144,7 @@ type GitHubAuthRequirementResponse = systemcheck.Requirement
 
 // InstallTargetParam is the {target} path parameter for /system/install routes.
 type InstallTargetParam struct {
-	Target string `path:"target" enum:"tmux,gh,claude,codex,opencode,opencode-v2,copilot,cloudflared,cua-driver" description:"Install target identifier: tmux, gh, claude, codex, opencode, opencode-v2, copilot, cloudflared, or cua-driver."`
+	Target string `path:"target" enum:"tmux,claude,codex,opencode,opencode-v2,copilot,cloudflared,cua-driver" description:"Install target identifier: tmux, claude, codex, opencode, opencode-v2, copilot, cloudflared, or cua-driver."`
 }
 
 // ComputerUseStatusResponse is the body of GET /api/v1/computer-use/status and

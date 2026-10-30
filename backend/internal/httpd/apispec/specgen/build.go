@@ -384,6 +384,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateArtifactFileRequest":                "UpdateArtifactFileRequest",
 	"ControllersGitHubStatusResponse":                     "GitHubStatusResponse",
 	"ControllersGitHubLoginResponse":                      "GitHubLoginResponse",
+	"ControllersGitHubOwnersResponse":                     "GitHubOwnersResponse",
+	"GithubpatOwner":                                      "GitHubOwner",
+	"ControllersGitHubRepositoryAvailabilityQuery":        "GitHubRepositoryAvailabilityQuery",
+	"ControllersGitHubRepositoryAvailabilityResponse":     "GitHubRepositoryAvailabilityResponse",
 	"ControllersArtifactVersionQuery":                     "ArtifactVersionQuery",
 	"ControllersArtifactVersionSummary":                   "ArtifactVersionSummary",
 	"ControllersListArtifactVersionsResponse":             "ListArtifactVersionsResponse",
@@ -653,8 +657,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ProjectWorkspaceRepo":              "WorkspaceRepo",
 	"SessionWorkspaceFileStatus":        "WorkspaceFileStatus",
 	// httpd/controllers: GitHub PAT wire envelopes
-	"ControllersPutGitHubPATRequest": "PutGitHubPATRequest",
-	"GithubpatRepo":                  "GitHubRepo",
+	"GithubpatRepo": "GitHubRepo",
 }
 
 // markRequestBodyRequired sets requestBody.required: true on the operation's
@@ -905,16 +908,6 @@ func systemOperations() []operation {
 			summary: "Check advisory GitHub CLI authentication without blocking startup",
 			resps: []respUnit{
 				{http.StatusOK, controllers.GitHubAuthRequirementResponse{}},
-				{http.StatusInternalServerError, envelope.APIError{}},
-				{http.StatusNotImplemented, envelope.APIError{}},
-			},
-		},
-		{
-			method: http.MethodPost, path: "/api/v1/system/github-auth/terminal", id: "openGitHubAuthTerminal", tag: "system",
-			summary: "Open a trusted terminal running the GitHub CLI login flow",
-			resps: []respUnit{
-				{http.StatusCreated, controllers.ShellTerminalEnvelope{}},
-				{http.StatusBadRequest, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
@@ -3823,12 +3816,6 @@ func prOperations() []operation {
 		},
 		// GitHub PAT + repos (local daemon storage)
 		{
-			method: http.MethodPut, path: "/api/v1/github/pat", id: "putGitHubPAT", tag: "github",
-			summary: "Store a GitHub personal access token locally",
-			reqBody: controllers.PutGitHubPATRequest{},
-			resps:   []respUnit{{http.StatusOK, map[string]string{"status": "ok"}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}},
-		},
-		{
 			method: http.MethodDelete, path: "/api/v1/github/pat", id: "deleteGitHubPAT", tag: "github",
 			summary: "Remove the stored GitHub personal access token",
 			resps:   []respUnit{{http.StatusOK, map[string]string{"status": "ok"}}, {http.StatusInternalServerError, envelope.APIError{}}},
@@ -3857,6 +3844,17 @@ func prOperations() []operation {
 			method: http.MethodDelete, path: "/api/v1/github/login", id: "cancelGitHubLogin", tag: "github",
 			summary: "Cancel a pending GitHub device-flow sign-in",
 			resps:   []respUnit{{http.StatusOK, controllers.GitHubLoginResponse{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/github/owners", id: "listGitHubOwners", tag: "github",
+			summary: "List the GitHub user and organizations a new repository can be created under",
+			resps:   []respUnit{{http.StatusOK, controllers.GitHubOwnersResponse{}}, {http.StatusBadGateway, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/github/repository-availability", id: "getGitHubRepositoryAvailability", tag: "github",
+			summary:    "Report whether a GitHub repository name is free",
+			pathParams: []any{controllers.GitHubRepositoryAvailabilityQuery{}},
+			resps:      []respUnit{{http.StatusOK, controllers.GitHubRepositoryAvailabilityResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusBadGateway, envelope.APIError{}}},
 		},
 	}
 }

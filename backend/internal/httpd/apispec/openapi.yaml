@@ -3310,6 +3310,26 @@ paths:
       summary: Start a GitHub device-flow sign-in, or return the one already pending
       tags:
       - github
+  /api/v1/github/owners:
+    get:
+      operationId: listGitHubOwners
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitHubOwnersResponse'
+          description: OK
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Gateway
+      summary: List the GitHub user and organizations a new repository can be created
+        under
+      tags:
+      - github
   /api/v1/github/pat:
     delete:
       operationId: deleteGitHubPAT
@@ -3329,38 +3349,6 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
       summary: Remove the stored GitHub personal access token
-      tags:
-      - github
-    put:
-      operationId: putGitHubPAT
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/PutGitHubPATRequest'
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                additionalProperties:
-                  type: string
-                type: object
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-      summary: Store a GitHub personal access token locally
       tags:
       - github
   /api/v1/github/repos:
@@ -3390,6 +3378,44 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Internal Server Error
       summary: List repositories accessible with the stored GitHub token
+      tags:
+      - github
+  /api/v1/github/repository-availability:
+    get:
+      operationId: getGitHubRepositoryAvailability
+      parameters:
+      - description: Account or organization that would own the repository.
+        in: query
+        name: owner
+        schema:
+          description: Account or organization that would own the repository.
+          type: string
+      - description: Repository name.
+        in: query
+        name: name
+        schema:
+          description: Repository name.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitHubRepositoryAvailabilityResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Gateway
+      summary: Report whether a GitHub repository name is free
       tags:
       - github
   /api/v1/github/status:
@@ -12829,52 +12855,20 @@ paths:
       summary: Check advisory GitHub CLI authentication without blocking startup
       tags:
       - system
-  /api/v1/system/github-auth/terminal:
-    post:
-      operationId: openGitHubAuthTerminal
-      responses:
-        "201":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ShellTerminalEnvelope'
-          description: Created
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Bad Request
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/APIError'
-          description: Not Implemented
-      summary: Open a trusted terminal running the GitHub CLI login flow
-      tags:
-      - system
   /api/v1/system/install/{target}:
     get:
       operationId: getSystemInstallStatus
       parameters:
-      - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          opencode-v2, copilot, cloudflared, or cua-driver.'
+      - description: 'Install target identifier: tmux, claude, codex, opencode, opencode-v2,
+          copilot, cloudflared, or cua-driver.'
         in: path
         name: target
         required: true
         schema:
-          description: 'Install target identifier: tmux, gh, claude, codex, opencode,
+          description: 'Install target identifier: tmux, claude, codex, opencode,
             opencode-v2, copilot, cloudflared, or cua-driver.'
           enum:
           - tmux
-          - gh
           - claude
           - codex
           - opencode
@@ -12914,17 +12908,16 @@ paths:
     post:
       operationId: startSystemInstall
       parameters:
-      - description: 'Install target identifier: tmux, gh, claude, codex, opencode,
-          opencode-v2, copilot, cloudflared, or cua-driver.'
+      - description: 'Install target identifier: tmux, claude, codex, opencode, opencode-v2,
+          copilot, cloudflared, or cua-driver.'
         in: path
         name: target
         required: true
         schema:
-          description: 'Install target identifier: tmux, gh, claude, codex, opencode,
+          description: 'Install target identifier: tmux, claude, codex, opencode,
             opencode-v2, copilot, cloudflared, or cua-driver.'
           enum:
           - tmux
-          - gh
           - claude
           - codex
           - opencode
@@ -17529,6 +17522,25 @@ components:
       required:
       - state
       type: object
+    GitHubOwner:
+      properties:
+        avatarUrl:
+          type: string
+        login:
+          type: string
+      required:
+      - login
+      - avatarUrl
+      type: object
+    GitHubOwnersResponse:
+      properties:
+        owners:
+          items:
+            $ref: '#/components/schemas/GitHubOwner'
+          type: array
+      required:
+      - owners
+      type: object
     GitHubRepo:
       properties:
         clone_url:
@@ -17547,6 +17559,13 @@ components:
       - private
       - default_branch
       - clone_url
+      type: object
+    GitHubRepositoryAvailabilityResponse:
+      properties:
+        available:
+          type: boolean
+      required:
+      - available
       type: object
     GitHubRepositoryPreparation:
       properties:
@@ -17826,7 +17845,6 @@ components:
           description: Fixed install target this job ran (or is running) for.
           enum:
           - tmux
-          - gh
           - claude
           - claude-code
           - codex
@@ -19008,19 +19026,6 @@ components:
       required:
       - createdAt
       - lastSeenAt
-      type: object
-    PutGitHubPATRequest:
-      properties:
-        expiresIn:
-          type: integer
-        pat:
-          type: string
-        refreshToken:
-          type: string
-        refreshTokenExpiresIn:
-          type: integer
-      required:
-      - pat
       type: object
     RegisterPushDeviceRequest:
       properties:
@@ -21664,7 +21669,6 @@ components:
           - git
           - tmux
           - harness
-          - gh
           - github-auth
           type: string
         label:
@@ -21686,8 +21690,8 @@ components:
       properties:
         ready:
           description: True iff every requirement with Required=true is satisfied.
-            Requirements with Required=false (e.g. gh) are advisory and never block
-            readiness.
+            Requirements with Required=false (e.g. github-auth) are advisory and never
+            block readiness.
           type: boolean
         requirements:
           description: Individual checks in stable order for the selected probe.

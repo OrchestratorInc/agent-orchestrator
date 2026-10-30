@@ -444,30 +444,9 @@ func TestPrepareGitProjectImportCreatesPublicGitHubRepository(t *testing.T) {
 	if out, err := exec.Command("git", "-C", root, "-c", "user.email=ao@example.com", "-c", "user.name=AO Test", "commit", "--allow-empty", "-m", "initial").CombinedOutput(); err != nil {
 		t.Fatalf("git commit: %v (%s)", err, out)
 	}
-	var gotDir string
-	var gotArgs []string
-	originalGhOutput := importGhOutputFunc
-	importGhOutputFunc = func(_ context.Context, dir string, args ...string) (string, error) {
-		gotDir = dir
-		gotArgs = append([]string(nil), args...)
-		return "", nil
-	}
-	var gitCalls [][]string
-	originalGitOutput := importGitOutputFunc
-	importGitOutputFunc = func(ctx context.Context, dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "push" {
-			gitCalls = append(gitCalls, append([]string(nil), args...))
-			setTestUpstream(t, dir)
-			return "", nil
-		}
-		if isImportGitMutation(args) {
-			gitCalls = append(gitCalls, append([]string(nil), args...))
-		}
-		return originalGitOutput(ctx, dir, args...)
-	}
-	t.Cleanup(func() { importGhOutputFunc = originalGhOutput })
-	t.Cleanup(func() { importGitOutputFunc = originalGitOutput })
-	svc := New(Deps{Store: newFakeStore()})
+	github := &fakeGitHubRepositories{}
+	gitCalls := recordImportGit(t, nil)
+	svc := New(Deps{Store: newFakeStore(), GitHub: github})
 
 	private := false
 	result, err := svc.PrepareGit(ctx, GitPreparationInput{
@@ -486,18 +465,14 @@ func TestPrepareGitProjectImportCreatesPublicGitHubRepository(t *testing.T) {
 	if result.Validation.NextStep != ImportNextStepContinue || !result.Validation.Root.HasOrigin {
 		t.Fatalf("validation = %#v, want ready repository", result.Validation)
 	}
-	if gotDir != root {
-		t.Fatalf("gh dir = %q, want %q", gotDir, root)
-	}
-	wantArgs := []string{"repo", "create", "octo/project", "--public"}
-	wantActions(t, gotArgs, wantArgs)
+	wantActions(t, github.created, []string{"octo/project public"})
 	wantGitCalls := [][]string{
 		{"remote", "add", "origin", "https://github.com/octo/project.git"},
 		{"config", "--local", importGitHubRepositoryConfigKey, "octo/project"},
 		{"push", "-u", "origin", "HEAD"},
 	}
-	if !reflect.DeepEqual(gitCalls, wantGitCalls) {
-		t.Fatalf("git calls = %#v, want %#v", gitCalls, wantGitCalls)
+	if !reflect.DeepEqual(*gitCalls, wantGitCalls) {
+		t.Fatalf("git calls = %#v, want %#v", *gitCalls, wantGitCalls)
 	}
 }
 
@@ -697,28 +672,9 @@ func TestPrepareGitGitHubRepositoryRepairsExistingOriginWithoutURL(t *testing.T)
 	if out, err := exec.Command("git", "-C", repo, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*").CombinedOutput(); err != nil {
 		t.Fatalf("create origin without URL: %v (%s)", err, out)
 	}
-	var ghArgs []string
-	originalGhOutput := importGhOutputFunc
-	importGhOutputFunc = func(_ context.Context, _ string, args ...string) (string, error) {
-		ghArgs = append([]string(nil), args...)
-		return "", nil
-	}
-	var gitCalls [][]string
-	originalGitOutput := importGitOutputFunc
-	importGitOutputFunc = func(ctx context.Context, dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "push" {
-			gitCalls = append(gitCalls, append([]string(nil), args...))
-			setTestUpstream(t, dir)
-			return "", nil
-		}
-		if isImportGitMutation(args) {
-			gitCalls = append(gitCalls, append([]string(nil), args...))
-		}
-		return originalGitOutput(ctx, dir, args...)
-	}
-	t.Cleanup(func() { importGhOutputFunc = originalGhOutput })
-	t.Cleanup(func() { importGitOutputFunc = originalGitOutput })
-	svc := New(Deps{Store: newFakeStore()})
+	github := &fakeGitHubRepositories{}
+	gitCalls := recordImportGit(t, nil)
+	svc := New(Deps{Store: newFakeStore(), GitHub: github})
 
 	result, err := svc.PrepareGit(ctx, GitPreparationInput{
 		ImportKind:      ImportKindProject,
@@ -735,14 +691,14 @@ func TestPrepareGitGitHubRepositoryRepairsExistingOriginWithoutURL(t *testing.T)
 	if result.Validation.NextStep != ImportNextStepContinue {
 		t.Fatalf("validation = %#v, want continue", result.Validation)
 	}
-	wantActions(t, ghArgs, []string{"repo", "create", "octo/repaired", "--private"})
+	wantActions(t, github.created, []string{"octo/repaired private"})
 	wantGitCalls := [][]string{
 		{"remote", "set-url", "origin", "https://github.com/octo/repaired.git"},
 		{"config", "--local", importGitHubRepositoryConfigKey, "octo/repaired"},
 		{"push", "-u", "origin", "HEAD"},
 	}
-	if !reflect.DeepEqual(gitCalls, wantGitCalls) {
-		t.Fatalf("git calls = %#v, want %#v", gitCalls, wantGitCalls)
+	if !reflect.DeepEqual(*gitCalls, wantGitCalls) {
+		t.Fatalf("git calls = %#v, want %#v", *gitCalls, wantGitCalls)
 	}
 	if out, err := exec.Command("git", "-C", repo, "remote", "get-url", "origin").CombinedOutput(); err != nil || string(out) != "https://github.com/octo/repaired.git\n" {
 		t.Fatalf("origin = %q, %v", out, err)
@@ -752,33 +708,16 @@ func TestPrepareGitGitHubRepositoryRepairsExistingOriginWithoutURL(t *testing.T)
 func TestPrepareGitGitHubRepositoryRetriesPushAfterPartialSuccess(t *testing.T) {
 	ctx := context.Background()
 	repo := gitRepoWithCommitWithOrigin(t, t.TempDir(), "")
-	var ghCalls [][]string
-	originalGhOutput := importGhOutputFunc
-	importGhOutputFunc = func(_ context.Context, _ string, args ...string) (string, error) {
-		ghCalls = append(ghCalls, append([]string(nil), args...))
-		return "", nil
-	}
-	var gitCalls [][]string
+	github := &fakeGitHubRepositories{}
 	pushAttempts := 0
-	originalGitOutput := importGitOutputFunc
-	importGitOutputFunc = func(ctx context.Context, dir string, args ...string) (string, error) {
-		if len(args) > 0 && args[0] == "push" {
-			gitCalls = append(gitCalls, append([]string(nil), args...))
-			pushAttempts++
-			if pushAttempts == 1 {
-				return "", errors.New("network failed")
-			}
-			setTestUpstream(t, dir)
-			return "", nil
+	gitCalls := recordImportGit(t, func() error {
+		pushAttempts++
+		if pushAttempts == 1 {
+			return errors.New("network failed")
 		}
-		if isImportGitMutation(args) {
-			gitCalls = append(gitCalls, append([]string(nil), args...))
-		}
-		return originalGitOutput(ctx, dir, args...)
-	}
-	t.Cleanup(func() { importGhOutputFunc = originalGhOutput })
-	t.Cleanup(func() { importGitOutputFunc = originalGitOutput })
-	svc := New(Deps{Store: newFakeStore()})
+		return nil
+	})
+	svc := New(Deps{Store: newFakeStore(), GitHub: github})
 	request := GitPreparationInput{
 		ImportKind:      ImportKindProject,
 		Path:            repo,
@@ -813,10 +752,7 @@ func TestPrepareGitGitHubRepositoryRetriesPushAfterPartialSuccess(t *testing.T) 
 	if second.Validation.NextStep != ImportNextStepContinue {
 		t.Fatalf("second validation = %#v, want continue", second.Validation)
 	}
-	if len(ghCalls) != 1 {
-		t.Fatalf("gh calls = %#v, want repo creation only once", ghCalls)
-	}
-	wantActions(t, ghCalls[0], []string{"repo", "create", "octo/partial", "--private"})
+	wantActions(t, github.created, []string{"octo/partial private"})
 	wantGitCalls := [][]string{
 		{"remote", "add", "origin", "https://github.com/octo/partial.git"},
 		{"config", "--local", importGitHubRepositoryConfigKey, "octo/partial"},
@@ -824,8 +760,8 @@ func TestPrepareGitGitHubRepositoryRetriesPushAfterPartialSuccess(t *testing.T) 
 		{"config", "--local", importGitHubRepositoryConfigKey, "octo/partial"},
 		{"push", "-u", "origin", "HEAD"},
 	}
-	if !reflect.DeepEqual(gitCalls, wantGitCalls) {
-		t.Fatalf("git calls = %#v, want %#v", gitCalls, wantGitCalls)
+	if !reflect.DeepEqual(*gitCalls, wantGitCalls) {
+		t.Fatalf("git calls = %#v, want %#v", *gitCalls, wantGitCalls)
 	}
 }
 
@@ -1186,4 +1122,52 @@ func TestPrepareGitEmptyCloneRecordsInitialBranchForWorkspaceResolution(t *testi
 			}
 		})
 	}
+}
+
+type fakeGitHubRepositories struct {
+	created []string
+}
+
+func (f *fakeGitHubRepositories) Token(context.Context) (string, error) { return "test-token", nil }
+
+func (f *fakeGitHubRepositories) CreateRepository(_ context.Context, owner, name string, private bool) error {
+	visibility := "public"
+	if private {
+		visibility = "private"
+	}
+	f.created = append(f.created, owner+"/"+name+" "+visibility)
+	return nil
+}
+
+// recordImportGit records mutating git calls and the push, which it fakes:
+// push fails with pushErr's result, or succeeds and sets the upstream.
+func recordImportGit(t *testing.T, pushErr func() error) *[][]string {
+	t.Helper()
+	calls := &[][]string{}
+	originalGitOutput := importGitOutputFunc
+	importGitOutputFunc = func(ctx context.Context, dir string, args ...string) (string, error) {
+		if isImportGitMutation(args) {
+			*calls = append(*calls, append([]string(nil), args...))
+		}
+		return originalGitOutput(ctx, dir, args...)
+	}
+	originalGitPush := importGitPushFunc
+	importGitPushFunc = func(_ context.Context, dir, token string) error {
+		if token != "test-token" {
+			t.Errorf("push token = %q, want test-token", token)
+		}
+		*calls = append(*calls, []string{"push", "-u", "origin", "HEAD"})
+		if pushErr != nil {
+			if err := pushErr(); err != nil {
+				return err
+			}
+		}
+		setTestUpstream(t, dir)
+		return nil
+	}
+	t.Cleanup(func() {
+		importGitOutputFunc = originalGitOutput
+		importGitPushFunc = originalGitPush
+	})
+	return calls
 }

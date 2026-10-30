@@ -27,6 +27,7 @@ const (
 // the gh CLI), so a user signed in through gh has one without storing a token.
 type githubStatusService struct {
 	*githubpat.Service
+	*githubpat.Account
 	identity ports.ScopedIdentityResolver
 	now      func() time.Time
 
@@ -34,8 +35,8 @@ type githubStatusService struct {
 	missUntil time.Time
 }
 
-func newGitHubStatusService(svc *githubpat.Service, provider *multi.Provider) *githubStatusService {
-	s := &githubStatusService{Service: svc, now: time.Now}
+func newGitHubStatusService(svc *githubpat.Service, account *githubpat.Account, provider *multi.Provider) *githubStatusService {
+	s := &githubStatusService{Service: svc, Account: account, now: time.Now}
 	if provider != nil {
 		s.identity = provider
 	}

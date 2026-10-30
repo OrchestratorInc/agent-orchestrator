@@ -2,9 +2,9 @@ package controllers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -16,8 +16,6 @@ import (
 
 // GitHubPATService is the controller-facing contract for local GitHub PAT management.
 type GitHubPATService interface {
-	StorePAT(ctx context.Context, token string) error
-	StoreOAuthToken(ctx context.Context, token, refreshToken string, expiresAt, refreshTokenExpiresAt time.Time) error
 	HasPAT(ctx context.Context) bool
 	// Login is the GitHub username AO is signed in as (a stored token or the
 	// gh CLI), or "" when unknown.
@@ -27,6 +25,8 @@ type GitHubPATService interface {
 	StartDeviceLogin(ctx context.Context) (githubpat.DeviceLogin, error)
 	DeviceLoginStatus() githubpat.DeviceLogin
 	CancelDeviceLogin()
+	Owners(ctx context.Context) ([]githubpat.Owner, error)
+	RepositoryAvailable(ctx context.Context, owner, name string) (bool, error)
 }
 
 // GitHubStatusResponse reports whether a token is stored and whom AO is signed
@@ -62,6 +62,23 @@ func gitHubLoginResponse(login githubpat.DeviceLogin) GitHubLoginResponse {
 	return out
 }
 
+// GitHubOwnersResponse lists where a new repository can be created: the
+// signed-in user first, then their organizations.
+type GitHubOwnersResponse struct {
+	Owners []githubpat.Owner `json:"owners"`
+}
+
+// GitHubRepositoryAvailabilityQuery names the repository to check.
+type GitHubRepositoryAvailabilityQuery struct {
+	Owner string `query:"owner" description:"Account or organization that would own the repository."`
+	Name  string `query:"name" description:"Repository name."`
+}
+
+// GitHubRepositoryAvailabilityResponse reports whether owner/name is free.
+type GitHubRepositoryAvailabilityResponse struct {
+	Available bool `json:"available"`
+}
+
 // GitHubController owns the local GitHub PAT + repos routes.
 type GitHubController struct {
 	Svc GitHubPATService
@@ -69,13 +86,46 @@ type GitHubController struct {
 
 // Register mounts the GitHub routes on the supplied router.
 func (c *GitHubController) Register(r chi.Router) {
-	r.Put("/github/pat", c.putPAT)
 	r.Delete("/github/pat", c.deletePAT)
 	r.Get("/github/status", c.status)
 	r.Get("/github/repos", c.listRepos)
 	r.Post("/github/login", c.startLogin)
 	r.Get("/github/login", c.loginStatus)
 	r.Delete("/github/login", c.cancelLogin)
+	r.Get("/github/owners", c.owners)
+	r.Get("/github/repository-availability", c.repositoryAvailability)
+}
+
+func (c *GitHubController) owners(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/github/owners")
+		return
+	}
+	owners, err := c.Svc.Owners(r.Context())
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "GITHUB_OWNERS_FAILED", "Could not load your GitHub accounts.", nil)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, GitHubOwnersResponse{Owners: owners})
+}
+
+func (c *GitHubController) repositoryAvailability(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, http.MethodGet, "/api/v1/github/repository-availability")
+		return
+	}
+	owner := strings.TrimSpace(r.URL.Query().Get("owner"))
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if owner == "" || name == "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_REQUEST", "Owner and repository name are required.", nil)
+		return
+	}
+	available, err := c.Svc.RepositoryAvailable(r.Context(), owner, name)
+	if err != nil {
+		envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "GITHUB_REPOSITORY_CHECK_FAILED", "Could not check this repository name on GitHub.", nil)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, GitHubRepositoryAvailabilityResponse{Available: available})
 }
 
 func (c *GitHubController) startLogin(w http.ResponseWriter, r *http.Request) {
@@ -110,50 +160,6 @@ func (c *GitHubController) cancelLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	c.Svc.CancelDeviceLogin()
 	envelope.WriteJSON(w, http.StatusOK, gitHubLoginResponse(c.Svc.DeviceLoginStatus()))
-}
-
-// PutGitHubPATRequest is the request body for storing a GitHub PAT. For an
-// expiring GitHub App OAuth token, the optional refresh fields let the daemon
-// renew the token without a manual reconnect; a plain PAT sends only 'pat'.
-type PutGitHubPATRequest struct {
-	PAT string `json:"pat"`
-	// Optional OAuth refresh material. RefreshToken empty => stored as a plain,
-	// non-refreshable credential. ExpiresIn / RefreshTokenExpiresIn are seconds
-	// from now, as returned by GitHub's token exchange.
-	RefreshToken          string `json:"refreshToken,omitempty"`
-	ExpiresIn             int    `json:"expiresIn,omitempty"`
-	RefreshTokenExpiresIn int    `json:"refreshTokenExpiresIn,omitempty"`
-}
-
-func (c *GitHubController) putPAT(w http.ResponseWriter, r *http.Request) {
-	if c.Svc == nil {
-		apispec.NotImplemented(w, r, http.MethodPut, "/api/v1/github/pat")
-		return
-	}
-	var body PutGitHubPATRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PAT == "" {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_REQUEST", "A non-empty 'pat' field is required.", nil)
-		return
-	}
-	var err error
-	if body.RefreshToken != "" {
-		now := time.Now().UTC()
-		var expiresAt, refreshExpiresAt time.Time
-		if body.ExpiresIn > 0 {
-			expiresAt = now.Add(time.Duration(body.ExpiresIn) * time.Second)
-		}
-		if body.RefreshTokenExpiresIn > 0 {
-			refreshExpiresAt = now.Add(time.Duration(body.RefreshTokenExpiresIn) * time.Second)
-		}
-		err = c.Svc.StoreOAuthToken(r.Context(), body.PAT, body.RefreshToken, expiresAt, refreshExpiresAt)
-	} else {
-		err = c.Svc.StorePAT(r.Context(), body.PAT)
-	}
-	if err != nil {
-		envelope.WriteError(w, r, err)
-		return
-	}
-	envelope.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (c *GitHubController) deletePAT(w http.ResponseWriter, r *http.Request) {

@@ -497,6 +497,14 @@ func (c *commandContext) checkCodexLaunchFlags(ctx context.Context) doctorCheck 
 func (c *commandContext) checkGitHubToken(ctx context.Context) doctorCheck {
 	token, source, err := c.githubToken(ctx)
 	if err != nil {
+		// The token from AO's own GitHub sign-in stays with the daemon; ask it.
+		var auth struct {
+			Satisfied bool   `json:"satisfied"`
+			Detail    string `json:"detail"`
+		}
+		if c.getJSON(ctx, "system/github-auth", &auth) == nil && auth.Satisfied {
+			return doctorCheck{Level: doctorPass, Section: doctorSectionGitHub, Name: "github-token", Message: auth.Detail}
+		}
 		return doctorCheck{Level: doctorWarn, Section: doctorSectionGitHub, Name: "github-token", Message: err.Error()}
 	}
 
@@ -552,7 +560,7 @@ func (c *commandContext) githubToken(ctx context.Context) (token, source string,
 	}
 	path, lookErr := c.deps.LookPath("gh")
 	if lookErr != nil || path == "" {
-		return "", "", errors.New("no GitHub token found (set AO_GITHUB_TOKEN/GITHUB_TOKEN or run `gh auth login`)")
+		return "", "", errors.New("no GitHub token found (sign in to GitHub in the AO app, or set AO_GITHUB_TOKEN)")
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()

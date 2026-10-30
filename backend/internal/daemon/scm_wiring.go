@@ -48,15 +48,18 @@ func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.M
 	return observer.Start(ctx)
 }
 
-// newGitHubSCMProvider resolves the GitHub token from the environment, then
-// AO's own GitHub sign-in stored under dataDir, then the gh CLI.
-func newGitHubSCMProvider(dataDir string, logger *slog.Logger) (*scmgithub.Provider, error) {
-	tokens := scmgithub.FallbackTokenSource{
+// githubTokens is the GitHub credential order every daemon caller uses: the
+// environment, then AO's own GitHub sign-in stored under dataDir, then the gh CLI.
+func githubTokens(dataDir string) scmgithub.FallbackTokenSource {
+	return scmgithub.FallbackTokenSource{
 		scmgithub.EnvTokenSource{EnvVars: []string{"AO_GITHUB_TOKEN"}},
 		savedGitHubToken{svc: githubpat.New(dataDir), noToken: scmgithub.ErrNoToken},
 		&scmgithub.GHTokenSource{},
 	}
-	return scmgithub.NewProvider(scmgithub.ProviderOptions{Token: tokens, SkipTokenPreflight: true, Logger: logger})
+}
+
+func newGitHubSCMProvider(dataDir string, logger *slog.Logger) (*scmgithub.Provider, error) {
+	return scmgithub.NewProvider(scmgithub.ProviderOptions{Token: githubTokens(dataDir), SkipTokenPreflight: true, Logger: logger})
 }
 
 func newGitLabSCMProvider(gitlabCfg config.GitLabConfig, logger *slog.Logger) (*scmgitlab.Provider, error) {

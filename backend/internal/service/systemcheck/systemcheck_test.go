@@ -5,13 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"runtime"
 	"slices"
 	"testing"
 
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
-	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
+
+// TestMain clears GitHub token variables a developer or CI shell may export, so
+// the GitHub auth checks below exercise the sign-in and gh paths.
+func TestMain(m *testing.M) {
+	_ = os.Unsetenv("AO_GITHUB_TOKEN")
+	_ = os.Unsetenv("GITHUB_TOKEN")
+	os.Exit(m.Run())
+}
 
 type fakeHarnessCatalog struct {
 	inventory   agentsvc.Inventory
@@ -29,15 +37,6 @@ type fakeCommandRunner struct {
 	argv    []string
 	argvLog [][]string
 	run     func(context.Context) error
-}
-
-type fakeGitHubAuthTerminalOpener struct {
-	input shellterm.OpenCommandTerminalInput
-}
-
-func (f *fakeGitHubAuthTerminalOpener) OpenCommandTerminal(_ context.Context, input shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error) {
-	f.input = input
-	return shellterm.ShellTerminal{HandleID: "shellterm-github"}, nil
 }
 
 func (f *fakeCommandRunner) Run(ctx context.Context, argv []string, stdout, _ io.Writer) error {
@@ -89,11 +88,11 @@ func TestCheck_AllSatisfied(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("Ready = false, want true; requirements=%+v", report.Requirements)
 	}
-	if len(report.Requirements) != 5 {
-		t.Fatalf("len(Requirements) = %d, want 5", len(report.Requirements))
+	if len(report.Requirements) != 4 {
+		t.Fatalf("len(Requirements) = %d, want 4", len(report.Requirements))
 	}
-	wantOrder := []string{"git", "tmux", "harness", "gh", "github-auth"}
-	wantRequired := map[string]bool{"git": true, "tmux": true, "harness": true, "gh": false, "github-auth": false}
+	wantOrder := []string{"git", "tmux", "harness", "github-auth"}
+	wantRequired := map[string]bool{"git": true, "tmux": true, "harness": true, "github-auth": false}
 	for i, id := range wantOrder {
 		if report.Requirements[i].ID != id {
 			t.Fatalf("Requirements[%d].ID = %q, want %q", i, report.Requirements[i].ID, id)
@@ -136,10 +135,10 @@ func TestCheckStartup_SkipsAgentInventory(t *testing.T) {
 	if runner.argv != nil {
 		t.Fatalf("startup auth probe argv = %#v, want no command", runner.argv)
 	}
-	if len(report.Requirements) != 4 {
-		t.Fatalf("len(Requirements) = %d, want 4", len(report.Requirements))
+	if len(report.Requirements) != 3 {
+		t.Fatalf("len(Requirements) = %d, want 3", len(report.Requirements))
 	}
-	for i, want := range []string{"git", "tmux", "harness", "gh"} {
+	for i, want := range []string{"git", "tmux", "harness"} {
 		if report.Requirements[i].ID != want {
 			t.Fatalf("Requirements[%d].ID = %q, want %q", i, report.Requirements[i].ID, want)
 		}
@@ -294,67 +293,6 @@ func TestCheck_HarnessCatalogError(t *testing.T) {
 	}
 }
 
-func TestCheck_GHPresent(t *testing.T) {
-	catalog := &fakeHarnessCatalog{inventory: agentsvc.Inventory{
-		Installed: []agentsvc.Info{{ID: "claude-code", Label: "Claude Code"}},
-	}}
-	svc := NewWithLookPath(catalog, lookPathFound(map[string]string{
-		"git":  "/usr/bin/git",
-		"tmux": "/usr/bin/tmux",
-		"gh":   "/usr/bin/gh",
-	}))
-
-	report, err := svc.Check(context.Background())
-	if err != nil {
-		t.Fatalf("Check() error = %v", err)
-	}
-	if !report.Ready {
-		t.Fatalf("Ready = false, want true")
-	}
-	gh := requirementByID(t, report, "gh")
-	if !gh.Satisfied {
-		t.Fatalf("gh.Satisfied = false, want true")
-	}
-	if gh.Required {
-		t.Fatalf("gh.Required = true, want false (gh is advisory)")
-	}
-	if gh.Detail == "" {
-		t.Fatalf("gh.Detail is empty, want the resolved path")
-	}
-}
-
-// TestCheck_GHMissing confirms gh being absent neither fails the requirement's
-// sibling checks nor flips Ready — this is the whole point of gh being
-// Required: false. Since git/tmux/harness are all satisfied here, this is
-// also the "Ready stays true when ONLY gh is unsatisfied" case.
-func TestCheck_GHMissing(t *testing.T) {
-	catalog := &fakeHarnessCatalog{inventory: agentsvc.Inventory{
-		Installed: []agentsvc.Info{{ID: "claude-code", Label: "Claude Code"}},
-	}}
-	svc := NewWithLookPath(catalog, lookPathFound(map[string]string{
-		"git":  "/usr/bin/git",
-		"tmux": "/usr/bin/tmux",
-	}))
-
-	report, err := svc.Check(context.Background())
-	if err != nil {
-		t.Fatalf("Check() error = %v", err)
-	}
-	if !report.Ready {
-		t.Fatalf("Ready = false, want true (gh is advisory and must not block readiness); requirements=%+v", report.Requirements)
-	}
-	gh := requirementByID(t, report, "gh")
-	if gh.Satisfied {
-		t.Fatalf("gh.Satisfied = true, want false")
-	}
-	if gh.Required {
-		t.Fatalf("gh.Required = true, want false")
-	}
-	if gh.Detail == "" {
-		t.Fatalf("gh.Detail is empty, want a not-found message")
-	}
-}
-
 func TestCheckGitHubAuth_IsAdvisory(t *testing.T) {
 	catalog := &fakeHarnessCatalog{binary: agentsvc.Info{ID: "claude-code", Label: "Claude Code"}, binaryOK: true}
 	runner := &fakeCommandRunner{err: errors.New("not logged in")}
@@ -463,26 +401,6 @@ func TestCheckGitHubAuth_MissingCommandRunnerDoesNotReportAuthenticated(t *testi
 	}
 }
 
-func TestOpenGitHubAuthTerminalUsesTrustedCommand(t *testing.T) {
-	svc := NewWithLookPath(&fakeHarnessCatalog{}, lookPathFound(map[string]string{"gh": "/usr/local/bin/gh"}))
-	opener := &fakeGitHubAuthTerminalOpener{}
-	svc.SetGitHubAuthTerminalOpener(opener)
-
-	terminal, err := svc.OpenGitHubAuthTerminal(context.Background())
-	if err != nil {
-		t.Fatalf("OpenGitHubAuthTerminal() error = %v", err)
-	}
-	if terminal.HandleID != "shellterm-github" {
-		t.Fatalf("terminal handle = %q, want shellterm-github", terminal.HandleID)
-	}
-	if got, want := opener.input.Argv, []string{"/usr/local/bin/gh", "auth", "login"}; !slices.Equal(got, want) {
-		t.Fatalf("terminal argv = %#v, want %#v", got, want)
-	}
-	if opener.input.Title != "Connect GitHub" {
-		t.Fatalf("terminal title = %q, want Connect GitHub", opener.input.Title)
-	}
-}
-
 func TestCheck_ContextAlreadyDone(t *testing.T) {
 	catalog := &fakeHarnessCatalog{}
 	svc := NewWithLookPath(catalog, lookPathFound(nil))
@@ -540,5 +458,27 @@ func TestCheckGitHubAuth_EmptyHostsIsSignedOut(t *testing.T) {
 	}
 	if len(runner.argvLog) != 1 {
 		t.Fatalf("unexpected token fallback: %v", runner.argvLog)
+	}
+}
+
+func TestCheckGitHubAuth_EnvTokenCounts(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "env-token")
+	svc := NewWithCommandRunner(&fakeHarnessCatalog{}, executableFinderFunc(lookPathFound(nil)), &fakeCommandRunner{err: errors.New("gh must not run")})
+	auth, err := svc.CheckGitHubAuth(context.Background())
+	if err != nil || !auth.Satisfied {
+		t.Fatalf("auth = %+v, err = %v, want satisfied by GITHUB_TOKEN", auth, err)
+	}
+}
+
+type savedGitHubLogin bool
+
+func (s savedGitHubLogin) HasPAT(context.Context) bool { return bool(s) }
+
+func TestCheckGitHubAuth_SavedSignInCounts(t *testing.T) {
+	svc := NewWithCommandRunner(&fakeHarnessCatalog{}, executableFinderFunc(lookPathFound(nil)), &fakeCommandRunner{err: errors.New("gh must not run")})
+	svc.SetSavedGitHubLogin(savedGitHubLogin(true))
+	auth, err := svc.CheckGitHubAuth(context.Background())
+	if err != nil || !auth.Satisfied {
+		t.Fatalf("auth = %+v, err = %v, want satisfied by AO sign-in", auth, err)
 	}
 }

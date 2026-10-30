@@ -45,7 +45,6 @@ type Target string
 // The exhaustive set of installable targets. No other value is ever accepted.
 const (
 	TargetTmux        Target = "tmux"
-	TargetGH          Target = "gh"
 	TargetClaude      Target = "claude"
 	TargetClaudeCode  Target = "claude-code"
 	TargetCodex       Target = "codex"
@@ -124,7 +123,7 @@ func installNotice(target Target) string {
 // systemTargetSet is the stable contract of the legacy /system/install route.
 // Agent-only targets use /agents/{agent}/install instead.
 var systemTargetSet = map[Target]bool{
-	TargetTmux: true, TargetGH: true, TargetClaude: true, TargetCloudflared: true,
+	TargetTmux: true, TargetClaude: true, TargetCloudflared: true,
 	TargetCuaDriver: true, TargetCodex: true, TargetOpencode: true, TargetOpencodeV2: true, TargetCopilot: true,
 }
 
@@ -316,7 +315,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one harness operation for a Target.
 type Job struct {
-	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target `json:"target" enum:"tmux,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status `json:"status" enum:"idle,running,waiting_for_idle,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job. waiting_for_idle: the update runs once every session using the harness is idle (Windows)."`
 	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
@@ -1687,8 +1686,6 @@ func (s *Service) planFor(target Target) Plan {
 	switch target {
 	case TargetTmux:
 		return s.planTmux()
-	case TargetGH:
-		return s.planGH()
 	case TargetClaude:
 		return s.planNPM(TargetClaude, "@anthropic-ai/claude-code")
 	case TargetCodex:
@@ -1724,25 +1721,7 @@ func (s *Service) planTmux() Plan {
 	}
 }
 
-func (s *Service) planGH() Plan {
-	switch s.goos {
-	case "windows":
-		return s.planWinget(TargetGH, "GitHub.cli")
-	case "darwin":
-		return s.planBrew(TargetGH, "gh")
-	case "linux":
-		return s.planLinuxPackage(TargetGH, func(mgr string) string {
-			if mgr == "pacman" {
-				return "github-cli"
-			}
-			return "gh"
-		})
-	default:
-		return Plan{Target: TargetGH, Unsupported: true, Reason: "gh installation is not supported on this platform."}
-	}
-}
-
-// planCloudflared mirrors planGH: Cloudflare publishes cloudflared through
+// planCloudflared: Cloudflare publishes cloudflared through
 // Homebrew and winget, and Linux distributions package it too.
 //
 // Deliberately not a downloaded binary. Fetching a release archive ourselves
@@ -2073,7 +2052,7 @@ var linuxPackageManagers = []string{"apt-get", "dnf", "pacman", "zypper", "apk"}
 
 // planLinuxPackage resolves a Linux install command for target via the first
 // available package manager. pkgFor lets a target use a different package
-// name on a given manager (e.g. gh is "github-cli" on pacman).
+// name on a given manager (for example, a package named differently on pacman).
 //
 // AO deliberately never elevates privileges on the user's behalf (no auto
 // sudo, no pkexec): every one of apt-get/dnf/pacman/zypper install requires

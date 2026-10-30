@@ -237,20 +237,20 @@ func TestAgentInstallHarnessActiveDetails(t *testing.T) {
 func TestPostSystemInstall(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	installer := &fakeInstaller{startJob: systeminstall.Job{
-		Target:  systeminstall.TargetGH,
+		Target:  systeminstall.TargetTmux,
 		Status:  systeminstall.StatusRunning,
-		Command: "brew install gh",
+		Command: "brew install tmux",
 	}}
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{
 		Installer: installer,
 	}, httpd.ControlDeps{}))
 	defer srv.Close()
 
-	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/system/install/gh", "")
+	body, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/system/install/tmux", "")
 	if status != http.StatusAccepted {
-		t.Fatalf("POST /system/install/gh = %d, body=%s", status, body)
+		t.Fatalf("POST /system/install/tmux = %d, body=%s", status, body)
 	}
-	for _, want := range []string{`"target":"gh"`, `"status":"running"`, `"command":"brew install gh"`} {
+	for _, want := range []string{`"target":"tmux"`, `"status":"running"`, `"command":"brew install tmux"`} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("body missing %s: %s", want, body)
 		}
@@ -328,9 +328,9 @@ func TestPostSystemInstall_NotImplemented(t *testing.T) {
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{}, httpd.ControlDeps{}))
 	defer srv.Close()
 
-	_, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/system/install/gh", "")
+	_, status, _ := doRequest(t, srv, http.MethodPost, "/api/v1/system/install/tmux", "")
 	if status != http.StatusNotImplemented {
-		t.Fatalf("POST /system/install/gh = %d, want %d", status, http.StatusNotImplemented)
+		t.Fatalf("POST /system/install/tmux = %d, want %d", status, http.StatusNotImplemented)
 	}
 }
 
@@ -376,9 +376,9 @@ func TestGetSystemInstallStatus_NotImplemented(t *testing.T) {
 	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{}, httpd.ControlDeps{}))
 	defer srv.Close()
 
-	_, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/system/install/gh", "")
+	_, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/system/install/tmux", "")
 	if status != http.StatusNotImplemented {
-		t.Fatalf("GET /system/install/gh = %d, want %d", status, http.StatusNotImplemented)
+		t.Fatalf("GET /system/install/tmux = %d, want %d", status, http.StatusNotImplemented)
 	}
 }
 
