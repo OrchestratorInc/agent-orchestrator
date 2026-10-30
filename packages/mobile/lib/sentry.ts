@@ -134,6 +134,9 @@ async function initialize(configuredDsn: string, generation: number): Promise<vo
 		tracesSampleRate: 0,
 		maxBreadcrumbs: 0,
 		maxQueueSize: 1,
+		// TelemetryManager owns uncaught JS capture so it can attach the consent
+		// generation before Sentry's duplicate-event guard sees the exception.
+		integrations: (defaults) => defaults.filter((integration) => integration.name !== "ReactNativeErrorHandlers"),
 		// The native transport persists offline envelopes without a consent-aware
 		// purge. The fetch transport discards failed sends and checks consent again.
 		transport: (options) => {

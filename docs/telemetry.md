@@ -69,8 +69,9 @@ after unpairing or a failed identity refresh. The phone retains its separate
 PostHog identity across those changes. A paired Sentry error can therefore be
 associated with the desktop installation. The Sentry package and Expo plugin
 require a native prebuild before a mobile binary can include this change.
-Source map upload also requires build credentials for the existing Sentry
-project.
+All EAS profiles disable automatic Sentry source map and debug file upload,
+so builds do not require Sentry credentials. Mobile Sentry stack traces use
+generic frame names and line numbers; source maps are not available for them.
 
 For workspace file streams, a deleted worktree or a linked worktree whose
 owning Git repository disappeared returns a missing-workspace or

@@ -4,6 +4,7 @@ import * as Device from "expo-device";
 import { Platform } from "react-native";
 import PostHog from "posthog-react-native";
 import { getTelemetryIdentity, type SessionMode } from "../api";
+import type { ServerConfig } from "../config";
 import { cachedInstallId } from "../installId";
 import { setMobileSentryConsent, setMobileSentryPairedInstallId } from "../sentry";
 import { buildMobileContext } from "./context";
@@ -24,6 +25,7 @@ import { createMobileTelemetry, type MobileTelemetry } from "./telemetry";
 // verified on a device via an EAS build, not in unit tests.
 
 let telemetry: MobileTelemetry | null = null;
+let connectedConfigs: ServerConfig[] = [];
 
 /**
  * Builds the PostHog client once and returns the capture facade.
@@ -104,6 +106,7 @@ export function initMobileTelemetry(): MobileTelemetry | null {
 		awaitPreference: true,
 		onOptOutChange: (optedOut) => {
 			setMobileSentryConsent(!optedOut);
+			if (!optedOut && connectedConfigs.length) void syncDesktopTelemetryIdentity(connectedConfigs).catch(() => {});
 			void (optedOut
 				? AsyncStorage.setItem(OPT_OUT_STORAGE_KEY, "1")
 				: AsyncStorage.removeItem(OPT_OUT_STORAGE_KEY)
@@ -145,12 +148,17 @@ export async function loadMobileOptOut(): Promise<void> {
 }
 
 /** Adopts the identity and opt-out of the connected desktops (see identitySync.ts). */
-export const syncDesktopTelemetryIdentity = createDesktopIdentitySync(getTelemetryIdentity, (identity) =>
+const desktopIdentitySync = createDesktopIdentitySync(getTelemetryIdentity, (identity) =>
 	{
 		telemetry?.adoptDesktopIdentity(identity);
 		setMobileSentryPairedInstallId(identity && !identity.optedOut ? identity.installId ?? null : null);
 	},
 );
+
+export function syncDesktopTelemetryIdentity(configs: ServerConfig[]): Promise<void> {
+	connectedConfigs = configs;
+	return desktopIdentitySync(configs);
+}
 
 /** The capture facade, or null before init. Call sites no-op when null. */
 export function mobileTelemetry(): MobileTelemetry | null {

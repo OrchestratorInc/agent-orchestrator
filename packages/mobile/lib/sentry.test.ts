@@ -47,6 +47,20 @@ describe("mobile Sentry consent and payload", () => {
 		}));
 	});
 
+	it("lets the consent-tagged global handler capture uncaught errors once", async () => {
+		const sentry = await import("./sentry");
+		sentry.setMobileSentryConsent(true);
+		await sentry.initMobileSentry();
+		const options = sdk.init.mock.calls[0]?.[0];
+		expect(options.integrations([
+			{ name: "ReactNativeErrorHandlers" },
+			{ name: "InboundFilters" },
+		])).toEqual([{ name: "InboundFilters" }]);
+		sentry.captureMobileException(new Error("private uncaught error"), { category: "native_crash", unhandled: true });
+		const event = options.beforeSend({ event_id: "uncaught-1", tags: sdk.captureException.mock.calls[0]?.[1]?.tags });
+		expect(event).toMatchObject({ event_id: "uncaught-1", message: "Mobile error" });
+	});
+
 	it("drops captures and queued sends after opt-out", async () => {
 		const sentry = await import("./sentry");
 		sentry.setMobileSentryContext({ release: "2.2.0@42" });
