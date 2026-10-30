@@ -37,7 +37,8 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 	const mermaid = isMermaidPath(row.path);
 	const isMarkdown = row.kind === "markdown" || isMarkdownPreviewPath(row.path);
 	const textPreview = isMarkdown || plainText || table || mermaid;
-	const cloudPreviewable = imagePath || (row.kind === "html" ? previewLive : textPreview && CLOUD_TEXT_ARTIFACT.test(row.path));
+	const pdfPath = /\.pdf$/i.test(row.path);
+	const cloudPreviewable = imagePath || (row.kind === "html" || pdfPath ? previewLive : textPreview && CLOUD_TEXT_ARTIFACT.test(row.path));
 	const access = useCloudArtifactAccess({ id: row.sessionId, cloud: row.cloud }, cloud && visible && cloudPreviewable);
 	const rawUrl = cloud ? access.data ? cloudArtifactFileUrl(access.data, row.path, row.updatedAt) : undefined : row.rawUrl;
 	const contentUrl = artifactContentUrl(row.sessionId, row.path, rawUrl);
@@ -45,7 +46,7 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 		? cloud ? contentUrl : row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined
 		: undefined;
 	const image = imagePath ? contentUrl : undefined;
-	const pdf = previewLive && !cloud && /\.pdf$/i.test(row.path) ? contentUrl : undefined;
+	const pdf = previewLive && pdfPath ? contentUrl : undefined;
 	const readText = visible && Boolean(contentUrl) && textPreview && (!cloud || (cloudPreviewable && !imagePath));
 	const fileOptions = sessionArtifactFileQueryOptions(row.sessionId, row.path, rawUrl, undefined, cloud);
 	const file = useQuery({
@@ -164,7 +165,8 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 				) : null
 			) : pdf ? (
 				<div className="flex h-full min-h-0 flex-col overflow-hidden">
-					<PdfPreview firstPageOnly onError={() => setFailed(true)} path={row.path} src={`${pdf}${pdf.includes("?") ? "&" : "?"}v=${encodeURIComponent(row.updatedAt)}`} />
+					{/* A cloud file's URL already carries its version. */}
+					<PdfPreview cloud={cloud} firstPageOnly onError={() => setFailed(true)} path={row.path} src={cloud ? pdf : `${pdf}${pdf.includes("?") ? "&" : "?"}v=${encodeURIComponent(row.updatedAt)}`} />
 				</div>
 			) : table ? (
 				<TableFileView content={content.slice(0, 4000)} path={row.path} />

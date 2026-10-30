@@ -18,6 +18,9 @@ vi.mock("../hooks/useCloudCp", () => ({
 	}),
 }));
 vi.mock("../lib/cloud-cp/renderer-client", () => ({ cloudCpFetch: mocks.fetch }));
+vi.mock("./PdfPreview", () => ({
+	PdfPreview: ({ cloud, src }: { cloud?: boolean; src: string }) => <div data-cloud={String(cloud)} data-src={src} data-testid="pdf-thumbnail" />,
+}));
 
 const ROOT = "https://cp.test/api/cloud/v1/artifact-files/token/";
 const VERSION = "2026-10-28T10:00:00Z";
@@ -214,11 +217,21 @@ describe("cloud artifact thumbnails", () => {
 		expect(mocks.fetch).not.toHaveBeenCalled();
 	});
 
+	it("renders a cloud PDF's first page from its signed link through the main process", async () => {
+		renderThumbnails([artifact("report.pdf")]);
+
+		const preview = await screen.findByTestId("pdf-thumbnail");
+		expect(preview).toHaveAttribute("data-src", `${ROOT}report.pdf?v=${encodeURIComponent(VERSION)}`);
+		expect(preview).toHaveAttribute("data-cloud", "true");
+		expect(mocks.access).toHaveBeenCalledTimes(1);
+		expect(mocks.fetch).not.toHaveBeenCalled();
+	});
+
 	it("does not request access for unsupported cloud file types", async () => {
-		const { client } = renderThumbnails([artifact("report.pdf"), artifact("events.jsonl"), artifact("archive.zip")]);
+		const { client } = renderThumbnails([artifact("events.jsonl"), artifact("archive.zip")]);
 
 		await act(async () => {});
-		expect(screen.getAllByTitle("No preview available")).toHaveLength(3);
+		expect(screen.getAllByTitle("No preview available")).toHaveLength(2);
 		expect(client.isFetching()).toBe(0);
 		expect(mocks.access).not.toHaveBeenCalled();
 		expect(mocks.fetch).not.toHaveBeenCalled();
