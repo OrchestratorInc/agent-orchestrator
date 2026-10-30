@@ -195,23 +195,43 @@ export function SessionLinkPreviewCard({
 	href,
 	sourceHostId,
 	sourceKind,
+	onOpen,
 }: {
 	href: string;
 	sourceHostId?: string;
 	sourceKind?: "cloud";
+	/** Opens the session through the same path as clicking the link itself. */
+	onOpen?: () => void;
 }) {
 	const target = parseSessionLink(href);
 	const source = useSessionLinkSource(sourceHostId, sourceKind);
 	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
 	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
 	const restoreHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
-	if (session) return (
-		<HoverCardContent collisionPadding={8} sideOffset={6} className="max-h-48 overflow-y-auto p-3">
-			{session.isTerminated === true || session.status === "terminated"
-				? <TerminatedCard session={session} hostId={restoreHostId} />
-				: <SessionCardBody session={session} />}
-		</HoverCardContent>
-	);
+	if (session) {
+		const terminated = session.isTerminated === true || session.status === "terminated";
+		// A terminated card already holds its own Resume button, so only a live one is a link.
+		const openable = onOpen && !terminated;
+		return (
+			<HoverCardContent
+				collisionPadding={8}
+				sideOffset={6}
+				className={cn("max-h-48 overflow-y-auto p-3", openable && "cursor-pointer transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/60")}
+				{...(openable && {
+					role: "link",
+					tabIndex: 0,
+					onClick: onOpen,
+					onKeyDown: (event: React.KeyboardEvent) => {
+						if (event.key !== "Enter") return;
+						event.preventDefault();
+						onOpen();
+					},
+				})}
+			>
+				{terminated ? <TerminatedCard session={session} hostId={restoreHostId} /> : <SessionCardBody session={session} />}
+			</HoverCardContent>
+		);
+	}
 	if (source.isLoading) return <LoadingCard />;
 	if (source.isError) return <ErrorCard />;
 	return <UnavailableCard />;
