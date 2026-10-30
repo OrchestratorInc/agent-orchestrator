@@ -125,6 +125,11 @@ function ArtifactCard({ artifact, config, sessionId, visible, thumbnail, onOpen,
 	// The URI carries the file's modified time, so a rewrite loads afresh.
 	const [failedUri, setFailedUri] = useState<string>();
 	const picture = thumbnail && failedUri !== thumbnail.uri ? thumbnail : undefined;
+	// A card that previews its contents shows a plain tile while the preview
+	// loads, and its icon only if the preview cannot load.
+	const [previewFailedAt, setPreviewFailedAt] = useState<string>();
+	const preview = Boolean(config && hasContentThumbnail(artifact)) && previewFailedAt !== artifact.updatedAt;
+	const onPreviewFailed = useCallback(() => setPreviewFailedAt(artifact.updatedAt), [artifact.updatedAt]);
 	const visual = cardVisual(artifact, t);
 	const age = relativeTime(artifact.updatedAt);
 	const meta = [age, formatArtifactSize(artifact.size)].filter(Boolean).join(" · ");
@@ -138,27 +143,33 @@ function ArtifactCard({ artifact, config, sessionId, visible, thumbnail, onOpen,
 			onPress={onOpen}
 			onLongPress={onMenu}
 			delayLongPress={350}
-			style={({ pressed }) => [styles.card, pressed && { opacity: press.opacity }]}
+			style={styles.card}
 		>
-			<View style={[styles.poster, { backgroundColor: visual.tint }]}>
-				<Feather name={visual.icon} size={28} color={visual.color} />
-				<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.extension, { color: visual.color }]}>{artifactExtensionLabel(artifact.path)}</Text>
-				{/* Over the tile, so the icon shows while it loads and if it cannot. */}
-				{config && hasContentThumbnail(artifact) ? <ArtifactThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} /> : null}
-				{picture ? (
-					<Image
-						accessibilityIgnoresInvertColors
-						source={imageSourceForPlatform(picture)}
-						resizeMode="cover"
-						onError={() => setFailedUri(picture.uri)}
-						style={StyleSheet.absoluteFill}
-					/>
-				) : null}
-			</View>
-			<View style={styles.label}>
-				<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.name}>{artifact.name}</Text>
-				{meta ? <Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.meta}>{meta}</Text> : null}
-			</View>
+			{({ pressed }) => (<>
+				<View style={[styles.poster, { backgroundColor: preview ? t.bgSubtle : visual.tint }]}>
+					{preview ? null : <>
+						<Feather name={visual.icon} size={28} color={visual.color} />
+						<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.extension, { color: visual.color }]}>{artifactExtensionLabel(artifact.path)}</Text>
+					</>}
+					{preview && config ? <ArtifactThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} onFailed={onPreviewFailed} /> : null}
+					{picture ? (
+						<Image
+							accessibilityIgnoresInvertColors
+							source={imageSourceForPlatform(picture)}
+							resizeMode="cover"
+							onError={() => setFailedUri(picture.uri)}
+							style={StyleSheet.absoluteFill}
+						/>
+					) : null}
+				</View>
+				<View style={styles.label}>
+					<Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.name}>{artifact.name}</Text>
+					{meta ? <Text maxFontSizeMultiplier={fontScaleCap.body} numberOfLines={1} style={styles.meta}>{meta}</Text> : null}
+				</View>
+				{/* Pressed, the card dims under a veil: an Android WebView does not fade
+				    with a parent's opacity, and fading one can blank it for a frame. */}
+				{pressed ? <View pointerEvents="none" style={styles.pressed} /> : null}
+			</>)}
 		</Pressable>
 	);
 }
@@ -183,6 +194,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	center: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: space.xxxl, backgroundColor: t.bgBase },
 	card: { overflow: "hidden", borderRadius: radius.lg, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
 	poster: { aspectRatio: 4 / 3, alignItems: "center", justifyContent: "center", gap: space.xs, overflow: "hidden" },
+	pressed: { ...StyleSheet.absoluteFill, backgroundColor: t.bgBase, opacity: 1 - press.opacity },
 	extension: { fontFamily: t.fontMono, fontSize: type.caption2.fontSize, fontWeight: "600", letterSpacing: 0.4 },
 	label: { paddingHorizontal: space.md, paddingVertical: space.sm, gap: space.hair },
 	name: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: "500" },

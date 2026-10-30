@@ -38,11 +38,19 @@ export function hasContentThumbnail(artifact: Pick<SessionArtifact, "path" | "ki
 /**
  * A peek at an artifact's contents on its gallery card, as the desktop gallery
  * shows it: an HTML page drawn small, a markdown document drawn small, or a
- * text file's opening lines. It loads only while `visible`, draws over the
- * card's icon tile once it has something to show, and takes no touches, so the
- * card's own tap and long-press still work.
+ * text file's opening lines. It loads only while `visible`, shows once it has
+ * something to show (the card draws a plain tile until then), calls `onFailed`
+ * when it cannot, and takes no touches, so the card's own tap and long-press
+ * still work.
  */
-export function ArtifactThumbnail({ config, sessionId, artifact, visible }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean }) {
+export function ArtifactThumbnail({ config, sessionId, artifact, visible, onFailed }: {
+	config: ServerConfig;
+	sessionId: string;
+	artifact: SessionArtifact;
+	visible: boolean;
+	/** The preview cannot load; the card shows its icon instead. */
+	onFailed(): void;
+}) {
 	const styles = useThemedStyles(makeStyles);
 	const [size, setSize] = useState({ width: 0, height: 0 });
 	const onLayout = (event: LayoutChangeEvent) => {
@@ -53,14 +61,14 @@ export function ArtifactThumbnail({ config, sessionId, artifact, visible }: { co
 	const kind = artifactViewKind(artifact);
 	return (
 		<View pointerEvents="none" style={styles.fill} onLayout={onLayout} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
-			{width > 0 && kind === "html" ? <PageThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} height={height} />
-				: width > 0 && (kind === "markdown" || kind === "text") ? <TextThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} markdown={kind === "markdown"} styles={styles} />
+			{width > 0 && kind === "html" ? <PageThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} height={height} onFailed={onFailed} />
+				: width > 0 && (kind === "markdown" || kind === "text") ? <TextThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} markdown={kind === "markdown"} styles={styles} onFailed={onFailed} />
 				: null}
 		</View>
 	);
 }
 
-function PageThumbnail({ config, sessionId, artifact, visible, width, height }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean; width: number; height: number }) {
+function PageThumbnail({ config, sessionId, artifact, visible, width, height, onFailed }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean; width: number; height: number; onFailed(): void }) {
 	const styles = useThemedStyles(makeStyles);
 	const web = useRef<WebView>(null);
 	const theme = useRenderTheme();
@@ -71,6 +79,8 @@ function PageThumbnail({ config, sessionId, artifact, visible, width, height }: 
 	const scale = thumbnailScale(width);
 	const frame = { width: THUMBNAIL_PAGE_WIDTH, height: Math.ceil(height / scale), transform: [{ scale }] };
 	useEffect(() => setLoaded(false), [html]);
+	const failed = inlined.failed;
+	useEffect(() => { if (failed) onFailed(); }, [failed, onFailed]);
 	// Off screen, the page lets its WebView go; the inlined page stays cached.
 	if (!visible || !html) return null;
 	return (
@@ -93,11 +103,12 @@ function PageThumbnail({ config, sessionId, artifact, visible, width, height }: 
 				web.current?.injectJavaScript(renderThemeScript(theme));
 				setLoaded(true);
 			}}
+			onError={onFailed}
 		/>
 	);
 }
 
-function TextThumbnail({ config, sessionId, artifact, visible, width, markdown, styles }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean; width: number; markdown: boolean; styles: ReturnType<typeof makeStyles> }) {
+function TextThumbnail({ config, sessionId, artifact, visible, width, markdown, styles, onFailed }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean; width: number; markdown: boolean; styles: ReturnType<typeof makeStyles>; onFailed(): void }) {
 	const key = `${config.host}:${config.httpPort}|${sessionId}|${artifact.path}|${artifact.updatedAt}`;
 	const [text, setText] = useState<{ key: string; value?: string }>();
 	useEffect(() => {
@@ -110,6 +121,9 @@ function TextThumbnail({ config, sessionId, artifact, visible, width, markdown, 
 		return () => { live = false; };
 	}, [artifact.path, config, key, sessionId, text?.key, visible]);
 	const value = text?.key === key ? text.value?.trim() : undefined;
+	// Read, and nothing to show: unreadable, binary, or empty.
+	const empty = text?.key === key && !value;
+	useEffect(() => { if (empty) onFailed(); }, [empty, onFailed]);
 	// The document's own images, as the viewer shows them.
 	const resolveImage = useCallback((url: string) => artifactMarkdownImageSource(config, sessionId, artifact.path, url), [artifact.path, config, sessionId]);
 	if (!value) return null;
