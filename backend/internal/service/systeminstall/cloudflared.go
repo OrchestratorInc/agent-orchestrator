@@ -64,7 +64,8 @@ var cloudflaredDownloadWaits = []time.Duration{5 * time.Second, 30 * time.Second
 // binary has landed. Later calls do nothing while that download runs or once
 // it landed, so a connector that keeps resolving as missing cannot become a
 // download loop. A download that failed every try is started again by the
-// next call, which only a user action or a daemon start makes.
+// next call, which only a user action or a daemon start makes, unless it got
+// the wrong bytes.
 func (s *Service) DownloadCloudflaredInBackground(onInstalled func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -151,7 +152,9 @@ func (s *Service) runCloudflaredDownload(parent context.Context, download ports.
 	}
 	if err != nil {
 		s.cloudflaredDownloadFailed.Store(true)
-		s.cloudflaredAutoStarted = false
+		// Wrong bytes would be the same again, so remote access does not
+		// download them again; the user's Install offers the package manager.
+		s.cloudflaredAutoStarted = errors.Is(err, ports.ErrDownloadRejected)
 		job.Status = StatusFailed
 		job.Error = fmt.Sprintf("Could not download cloudflared %s: %v", cloudflaredVersion, err)
 		s.mu.Unlock()

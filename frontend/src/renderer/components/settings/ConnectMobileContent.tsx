@@ -8,7 +8,7 @@ import { useSettings } from "../../hooks/useSettings";
 import { useStayAwake } from "../../hooks/useStayAwake";
 import { aoBridge } from "../../lib/bridge";
 import { useCloudSession } from "../../lib/cloud-session";
-import { deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
+import { AccountHostSyncError, deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "./ConnectMobileGetApp";
@@ -128,7 +128,8 @@ function pairingIsPending(status: PairingReadinessStatus | undefined): boolean {
 	if (status.noPublicTunnel === true) return false;
 	const tunnel = status.tunnel;
 	if (!tunnel || tunnel.ready || tunnel.lastError) return false;
-	return tunnel.supported === true || tunnel.running;
+	// A cloudflared download counts: the connector starts when it lands.
+	return tunnel.supported === true || tunnel.running || tunnel.installing === true;
 }
 
 export function mobileStatusRefetchInterval(status: PairingReadinessStatus | undefined): number | false {
@@ -397,6 +398,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		return linkThisComputer(cloudBaseUrl, accountId, hostId, password, options).then(
 			(linked) => ({ linked: linked.hostId, added: linked.added ? linked.hostId : "", failed: false }),
 			(cause: unknown) => {
+				// An account that uses all of its fixed addresses keeps this
+				// computer at its quick tunnel's address, as without them.
+				if (cause instanceof AccountHostSyncError && cause.status === 409) return { linked: "", added: "", failed: false };
 				reportLinkError(cause);
 				return { linked: "", added: "", failed: true };
 			},
@@ -463,6 +467,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			}
 			const { data, error } = await apiClient.POST("/api/v1/mobile/enable-lan-only");
 			if (error) throw new Error(apiErrorMessage(error));
+			invalidate(); // the LAN code shows while the computer is linked
 			return linkAndStartRemoteAccess(data?.password ?? "", data?.hostId ?? "");
 		},
 		// The first call can turn the bridge on before the second fails, so read back what is actually on.
@@ -487,6 +492,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		mutationFn: async () => {
 			const { data, error } = await apiClient.POST("/api/v1/mobile/regenerate");
 			if (error) throw new Error(apiErrorMessage(error));
+			invalidate(); // the new password shows at once; linking can take a minute
 			// A new password revokes the account link with the old one; link
 			// again so the fixed address survives the next restart. Only while
 			// remote access is on and the account still lists this computer:
@@ -496,8 +502,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			// password-paired devices.
 			if (data && !data.noPublicTunnel) {
 				const { linked, failed } = await linkIfSignedIn(data.password ?? "", data.hostId ?? "", { ifListed: true });
-				// An AO Cloud without fixed addresses links nothing without a url, and the
-				// account would keep the old token: it lists the tunnel's address instead.
+				// An AO Cloud without fixed addresses, or an account that uses all of them,
+				// links nothing without a url, and the account would keep the old token:
+				// it lists the tunnel's address instead.
 				if (signedIn && !linked && !failed) {
 					void waitForTunnel(t("remote.shareThisComputerTimeout"))
 						.then((ready) => ready && linkThisComputer(cloudBaseUrl, accountId, data.hostId ?? "", data.password ?? "", { ifListed: true, url: ready.url }))

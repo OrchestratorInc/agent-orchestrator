@@ -19,6 +19,8 @@ type fakeAOCloud struct {
 	repairs []bool
 	digests []string
 	status  int // 0 answers 200
+	// repairStatus answers repair requests instead, when set.
+	repairStatus int
 	// tokens are handed out in turn, the last one from then on; empty means
 	// run-token-tun-1 every time.
 	tokens []string
@@ -39,9 +41,13 @@ func (f *fakeAOCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	f.repairs = append(f.repairs, in.Repair)
 	f.digests = append(f.digests, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-	if f.status != 0 {
-		w.WriteHeader(f.status)
-		if f.status == http.StatusUnauthorized { // as AO Cloud words a refusal
+	status := f.status
+	if in.Repair && f.repairStatus != 0 {
+		status = f.repairStatus
+	}
+	if status != 0 {
+		w.WriteHeader(status)
+		if status == http.StatusUnauthorized { // as AO Cloud words a refusal
 			_, _ = w.Write([]byte(`{"error":"Unauthorized","code":"unauthorized","message":"Invalid host credential."}`))
 		}
 		return

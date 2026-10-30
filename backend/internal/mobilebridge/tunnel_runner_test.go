@@ -303,17 +303,50 @@ func TestTunnelRunnerServesAQuickTunnelWhileARepairGoesUnheard(t *testing.T) {
 	if err := <-done; !errors.Is(err, errFixedTunnelReady) {
 		t.Fatalf("runOnce = %v, want the switch to the fixed address", err)
 	}
-	if !r.repair {
-		t.Fatal("a repair AO Cloud never heard was dropped")
+	cloud.mu.Lock()
+	repaired, asked := cloud.repairs[len(cloud.repairs)-1], len(cloud.repairs)
+	cloud.mu.Unlock()
+	if !repaired || r.repair {
+		t.Fatalf("the switch back asked for a repair = %v; repair still owed = %v", repaired, r.repair)
 	}
 	bin, _ = fakeCloudflared(t, registeredLine)
 	r.Binary = bin
-	advertisedHostname(t, r)
+	if got := advertisedHostname(t, r); got != "h-test.example.dev" {
+		t.Fatalf("advertised %q", got)
+	}
+	if n := cloud.requests(); n != asked {
+		t.Fatalf("asked AO Cloud %d more times for a tunnel it had just made", n-asked)
+	}
+}
+
+// AO Cloud still hands out the failed tunnel while it cannot replace it, as
+// when Cloudflare's API is down: the quick tunnel keeps serving instead of
+// switching back to the failed one every check.
+func TestTunnelRunnerKeepsTheQuickTunnelUntilAReplacementIsMade(t *testing.T) {
+	cloud, src := newFixedSource(t)
+	knownTunnel(t, cloud, src)
 	cloud.mu.Lock()
-	repaired := cloud.repairs[len(cloud.repairs)-1]
+	cloud.repairStatus = http.StatusBadGateway
 	cloud.mu.Unlock()
-	if !repaired || r.repair {
-		t.Fatalf("last request repair = %v; repair still owed = %v", repaired, r.repair)
+	bin, argsFile := fakeCloudflared(t, "")
+	r := namedRunner(t, bin, src)
+	r.repair = true
+	r.upgradeEvery = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan error, 1)
+	go func() { done <- r.runOnce(ctx) }()
+	for deadline := time.Now().Add(10 * time.Second); cloud.requests() < 4; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("asked AO Cloud %d times", cloud.requests())
+		}
+	}
+	cancel()
+	if err := <-done; errors.Is(err, errFixedTunnelReady) {
+		t.Fatal("switched back to the tunnel AO Cloud could not replace")
+	}
+	if argv, token := readArgs(t, argsFile); strings.HasSuffix(argv, " run") || token != "" {
+		t.Fatalf("not a quick tunnel: argv %q, token %q", argv, token)
 	}
 }
 

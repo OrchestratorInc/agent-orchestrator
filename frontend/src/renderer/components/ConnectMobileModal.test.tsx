@@ -851,6 +851,17 @@ test("does not poll when there is no tunnel to wait for", () => {
 	expect(mobileStatusRefetchInterval(undefined)).toBe(false);
 });
 
+test("polls while the daemon downloads cloudflared, so the connector shows when it lands", () => {
+	const endpoints = [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }];
+	expect(
+		mobileStatusRefetchInterval({
+			enabled: true,
+			endpoints,
+			tunnel: { supported: false, installing: true, running: false, ready: false },
+		}),
+	).toBeGreaterThan(0);
+});
+
 test("polls LAN-only mode for network recovery but not for a disabled public tunnel", () => {
 	const status = {
 		enabled: true,

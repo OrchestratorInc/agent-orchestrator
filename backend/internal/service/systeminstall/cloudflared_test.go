@@ -140,7 +140,9 @@ func TestCloudflaredDownloadDoesNotRetryWrongBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitForStatus(t, s, TargetCloudflared, StatusFailed)
-	if calls.Load() != 1 {
+	// Nor does remote access fetch them again when it next finds no connector.
+	s.DownloadCloudflaredInBackground(nil)
+	if s.CloudflaredInstalling() || calls.Load() != 1 {
 		t.Fatalf("download attempts = %d, want 1", calls.Load())
 	}
 }

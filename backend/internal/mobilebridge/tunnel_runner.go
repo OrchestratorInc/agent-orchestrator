@@ -129,6 +129,11 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		case unlinked(err):
 			t.repair = false
 		}
+		// This start has just asked AO Cloud, so a nudge from before it says nothing new.
+		select {
+		case <-t.nudge:
+		default:
+		}
 		switch {
 		case named.RunToken != "" && err != nil && t.repair:
 			// The cached tunnel just failed to serve and AO Cloud cannot replace
@@ -207,7 +212,11 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	if fixed && time.Since(named.Since) >= t.settleDelay() {
 		t.Runtime.Settled()
 	} else {
-		go t.awaitSettled(runCtx)
+		delay := t.settleDelay()
+		if fixed {
+			delay -= time.Since(named.Since) // what is left of the record's wait
+		}
+		go t.awaitSettled(runCtx, delay)
 	}
 
 	var upgraded, withdrawn atomic.Bool
@@ -226,7 +235,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		go t.watchConnector(runCtx, health, markUnserved)
 		go t.watchFixedTunnel(runCtx, named, health, func(n *NamedTunnel) { next.Store(n); withdrawn.Store(true); stopRun() })
 	case t.Fixed != nil:
-		go t.awaitFixedTunnel(runCtx, func(n NamedTunnel) { next.Store(&n); upgraded.Store(true); stopRun() })
+		go t.awaitFixedTunnel(runCtx, t.repair, func(n NamedTunnel) { next.Store(&n); upgraded.Store(true); stopRun() })
 	}
 
 	scanner := bufio.NewScanner(stderr)
@@ -242,6 +251,9 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 
 	waitErr := cmd.Wait()
 	t.next = next.Load()
+	if t.next != nil && t.next.Repaired {
+		t.repair, t.repairedAt = false, time.Now()
+	}
 	// A tunnel that served is not owed the replacement asked for before.
 	if health != nil && health.servedOnce() {
 		t.repair = false
@@ -389,8 +401,9 @@ const (
 // while a quick tunnel serves the machine: a signed-in device linked it since
 // the connector started. Waiting for a link only reads a local file; asking
 // AO Cloud backs off, except that a new link (a new account token) is tried
-// at once.
-func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func(NamedTunnel)) {
+// at once. With repair set, the quick tunnel stands in for a fixed one that
+// failed, and only a replacement AO Cloud made takes over from it.
+func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, repair bool, ready func(NamedTunnel)) {
 	every := cmp.Or(t.upgradeEvery, fixedUpgradeInterval)
 	wait, tried, triedAt := every, "", time.Time{}
 	for {
@@ -405,8 +418,8 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, ready func(NamedTun
 		if digest == "" || (digest == tried && time.Since(triedAt) < wait) {
 			continue
 		}
-		named, err := t.Fixed.TunnelFor(ctx, t.HostID, false)
-		if err == nil && named.RunToken != "" {
+		named, err := t.Fixed.TunnelFor(ctx, t.HostID, repair)
+		if err == nil && named.RunToken != "" && (!repair || named.Repaired) {
 			ready(named)
 			return
 		}
@@ -456,9 +469,10 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 		}
 		named, err := t.Fixed.TunnelFor(ctx, t.HostID, false)
 		// A new link is written here before it lands at AO Cloud, which
-		// refuses it until then.
+		// refuses it until then. A proxy in front of AO Cloud can answer 404
+		// for a while, as during a deploy, so that must last too.
 		relink := cmp.Or(t.relinkWait, relinkGrace)
-		for deadline := time.Now().Add(relink); (errors.Is(err, errNotLinked) || errors.Is(err, errHostRefused)) && time.Now().Before(deadline); {
+		for deadline := time.Now().Add(relink); unlinked(err) && time.Now().Before(deadline); {
 			select {
 			case <-ctx.Done():
 				return
@@ -503,7 +517,7 @@ const (
 // outlived propagation, leaving curl on this machine still failing thirty
 // seconds after dig had started succeeding. A probe would also be testing the
 // daemon's resolver rather than the phone's, which is the one that matters.
-func (t *TunnelRunner) awaitSettled(ctx context.Context) {
+func (t *TunnelRunner) awaitSettled(ctx context.Context, delay time.Duration) {
 	for ctx.Err() == nil {
 		if t.Runtime.UnsettledHostname() != "" {
 			break
@@ -520,7 +534,7 @@ func (t *TunnelRunner) awaitSettled(ctx context.Context) {
 	select {
 	case <-ctx.Done():
 		return
-	case <-time.After(t.settleDelay()):
+	case <-time.After(delay):
 	}
 	t.Runtime.Settled()
 	t.logger().Info("mobile tunnel advertisable", "hostname", t.Runtime.Snapshot().Hostname)
