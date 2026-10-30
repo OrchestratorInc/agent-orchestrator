@@ -125,8 +125,14 @@ export function describeHarness(input: HarnessDescribeInput) {
 		: authPlan && !authPlan.available ? (authPlan.reason ?? t("settings.harness.authFailed"))
 		: authStatus === "unauthorized" ? t(isSetupAction ? "settings.harness.notConfigured" : "settings.harness.loginRequired")
 		: t(isSetupAction ? "settings.harness.configurationUnknown" : "settings.harness.loginUnknown");
+	// Once the installer reports progress, the label names its step, with a
+	// percentage only when its output stated one.
+	const stage = installStage(job);
+	const percent = installPercent(job);
 	const progressLabel = job?.status === "waiting_for_idle" ? t("settings.harness.waitingForIdle")
 		: job?.status === "verifying" ? t("settings.harness.verifying")
+		: stage === "downloading" ? (percent === undefined ? t("settings.harness.progress.downloadingNow") : t("settings.harness.progress.downloadingPercent", { percent }))
+		: stage === "installing" ? (percent === undefined ? t("settings.harness.installing") : t("settings.harness.progress.installingPercent", { percent }))
 		: currentOperation === "update" ? t("settings.harness.updating")
 		: currentOperation === "install" ? t("settings.harness.installing") : t("settings.harness.working");
 	const rowError = actionError ?? authState?.error ?? (jobFailed ? job?.error ?? t("settings.harness.installFailed") : undefined);
@@ -156,3 +162,28 @@ export function describeHarness(input: HarnessDescribeInput) {
 }
 
 export type HarnessDetails = ReturnType<typeof describeHarness>;
+
+export type InstallStage = "downloading" | "installing" | "verifying" | "done";
+
+/** The step a running job is on. The daemon reads download and install from the
+ * installer's own output, so a job that has not reported progress yet is on no
+ * step; it reports verification itself. */
+export function installStage(job?: Pick<InstallJob, "status" | "progress">): InstallStage | undefined {
+	if (job?.status === "verifying") return "verifying";
+	if (job?.status === "installing" || job?.status === "running") return job.progress?.phase;
+	return undefined;
+}
+
+/** An install or update is running its command or verifying, not waiting for idle sessions. */
+export function showsInstallProgress(job?: Pick<InstallJob, "status">): boolean {
+	return job?.status === "installing" || job?.status === "running" || job?.status === "verifying";
+}
+
+/** The percentage the installer's output stated while its command runs. A bar
+ * with no named phase (a script printing only "45%") still fills; the label
+ * then stays generic. */
+export function installPercent(job?: Pick<InstallJob, "status" | "progress">): number | undefined {
+	const percent = job?.progress?.percent;
+	return (job?.status === "installing" || job?.status === "running") && typeof percent === "number" ? Math.max(0, Math.min(100, Math.round(percent))) : undefined;
+}
+

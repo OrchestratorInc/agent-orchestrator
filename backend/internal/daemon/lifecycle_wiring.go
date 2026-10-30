@@ -351,6 +351,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		DataDir:           cfg.DataDir,
 		Tracker:           tracker,
 		Telemetry:         telemetry,
+		Milestones:        installMilestones(cfg),
 		Logger:            log,
 		BackgroundContext: ctx,
 		AgentReadiness:    agentReadiness,

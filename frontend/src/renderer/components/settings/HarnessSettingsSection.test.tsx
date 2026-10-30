@@ -2489,6 +2489,49 @@ describe("HarnessSettingsSection", () => {
 		expect(within(aiderRow).getAllByText("Installing…")).toHaveLength(1);
 	});
 
+	it("shows the installer's percentage and latest line while an install runs", async () => {
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") {
+				return { data: { jobs: [{
+					target: "codex", status: "installing", method: "npm", startedAt: new Date().toISOString(),
+					progress: { phase: "downloading", percent: 45, detail: "Downloading codex (60.0MiB)" },
+				}] } } as never;
+			}
+			return { data: undefined } as never;
+		});
+		renderSection();
+		const page = await findAgentRow("codex");
+		expect(await within(page).findByRole("status")).toHaveTextContent("Downloading 45%");
+		expect(within(page).getByRole("progressbar", { name: "Downloading 45%" })).toHaveAttribute("aria-valuenow", "45");
+		expect(within(page).getByText("Downloading codex (60.0MiB)")).toBeInTheDocument();
+		backToList();
+		const listStatus = within(await findListRow("codex")).getByRole("status");
+		expect(listStatus).toHaveTextContent("Downloading 45%");
+	});
+
+	it("fills the bar from a percentage that names no phase and keeps the generic label", async () => {
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") {
+				return { data: { jobs: [{
+					target: "codex", status: "installing", method: "official-installer", startedAt: new Date().toISOString(),
+					progress: { percent: 45, detail: "############                45.0%" },
+				}] } } as never;
+			}
+			return { data: undefined } as never;
+		});
+		renderSection();
+		const page = await findAgentRow("codex");
+		// No phase named, so the label stays the generic one for a job this page did not start.
+		expect(await within(page).findByRole("status")).toHaveTextContent("Working…");
+		const bar = within(page).getByRole("progressbar", { name: "Working…" });
+		expect(bar).toHaveAttribute("aria-valuenow", "45");
+		expect(bar.firstElementChild).toHaveStyle({ width: "45%" });
+	});
+
 	it("hydrates interrupted jobs and offers verification", async () => {
 		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
 			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;

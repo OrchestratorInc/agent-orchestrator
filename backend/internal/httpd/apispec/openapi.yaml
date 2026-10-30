@@ -17721,8 +17721,12 @@ components:
           type: string
         output:
           description: Combined stdout+stderr from the install command, tail-capped
-            to the last ~4000 bytes.
+            to the last ~4000 bytes. Published while the command runs.
           type: string
+        progress:
+          $ref: '#/components/schemas/InstallProgress'
+          description: While installing, the phase and percentage the installer's
+            output reports. Absent in every other status.
         startedAt:
           format: date-time
           type:
@@ -17803,6 +17807,27 @@ components:
       required:
       - target
       - status
+      type: object
+    InstallProgress:
+      properties:
+        detail:
+          description: The installer's latest output line.
+          type: string
+        percent:
+          description: Progress through the current phase, present only when the installer's
+            output states sizes or counts.
+          maximum: 100
+          minimum: 0
+          type:
+          - "null"
+          - integer
+        phase:
+          description: Installer phase the output names. Absent until a line names
+            one.
+          enum:
+          - downloading
+          - installing
+          type: string
       type: object
     InvokeCueRequest:
       properties:
@@ -18728,6 +18753,8 @@ components:
         orchestrator:
           $ref: '#/components/schemas/RoleOverride'
         orchestratorRules:
+          type: string
+        orchestratorRulesFile:
           type: string
         postCreate:
           items:

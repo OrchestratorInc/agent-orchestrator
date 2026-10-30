@@ -6182,8 +6182,10 @@ export interface components {
             method?: string;
             /** @description Fixed user-visible consequence to acknowledge before running this install. */
             notice?: string;
-            /** @description Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. */
+            /** @description Combined stdout+stderr from the install command, tail-capped to the last ~4000 bytes. Published while the command runs. */
             output?: string;
+            /** @description While installing, the phase and percentage the installer's output reports. Absent in every other status. */
+            progress?: components["schemas"]["InstallProgress"];
             /** Format: date-time */
             startedAt?: null | string;
             /**
@@ -6200,6 +6202,17 @@ export interface components {
             updatedAt?: null | string;
             /** @description While waiting_for_idle, the sessions the update still waits for and why. */
             waitingOn?: components["schemas"]["SessionWait"][];
+        };
+        InstallProgress: {
+            /** @description The installer's latest output line. */
+            detail?: string;
+            /** @description Progress through the current phase, present only when the installer's output states sizes or counts. */
+            percent?: null | number;
+            /**
+             * @description Installer phase the output names. Absent until a line names one.
+             * @enum {string}
+             */
+            phase?: "downloading" | "installing";
         };
         InvokeCueRequest: {
             /** @description Optional exact session target. Agent cues message it; command cues use its worktree. Omit it to spawn an agent worker or run a command in the project root. A supplied id must be non-blank and compatible, and never falls back to a replacement worker. Invocation body limit: 4 KiB. */
@@ -6559,6 +6572,7 @@ export interface components {
             };
             orchestrator?: components["schemas"]["RoleOverride"];
             orchestratorRules?: string;
+            orchestratorRulesFile?: string;
             postCreate?: string[];
             preRemove?: string[];
             reviewers?: components["schemas"]["DomainReviewerConfig"][];

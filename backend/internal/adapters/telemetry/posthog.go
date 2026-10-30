@@ -145,6 +145,15 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"window_start":      {},
 		"window_end":        {},
 	},
+	// Install lifecycle anchors. Segmentation (install_source, installed_at,
+	// $os, arch, is_ci, ...) rides every event as a common property; launcher
+	// says whether the desktop app or the CLI started the daemon that sent it.
+	"ao.app.installed": {
+		"launcher": {},
+	},
+	"ao.app.first_open": {
+		"launcher": {},
+	},
 	"ao.daemon.started": {
 		"agent": {},
 		"port":  {},
@@ -201,10 +210,11 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"cancelled_runs": {},
 	},
 	"ao.projects.created": {
-		"has_git_remote": {},
-		"kind":           {},
-		"github_org":     {},
-		"scm_provider":   {},
+		"first_for_install": {},
+		"has_git_remote":    {},
+		"kind":              {},
+		"github_org":        {},
+		"scm_provider":      {},
 	},
 	"ao.session.spawn_failed": {
 		"component":   {},
@@ -227,10 +237,11 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"step":        {},
 	},
 	"ao.session.spawned": {
-		"duration_ms":  {},
-		"harness":      {},
-		"kind":         {},
-		"github_actor": {},
+		"duration_ms":       {},
+		"first_for_install": {},
+		"harness":           {},
+		"kind":              {},
+		"github_actor":      {},
 	},
 	"ao.session.waiting_input_entered": {
 		"state": {},
@@ -273,6 +284,10 @@ type PostHogSink struct {
 	host         string
 	defaultAgent string
 	tenure       *tenureTracker
+	// env and install carry the segmentation context (OS, arch, CI, install
+	// source, release channel) stamped on every event. See environment.go.
+	env     staticEnvironment
+	install *installContext
 	// ident carries the opt-out switch and the signed-in user attributes. Nil
 	// (zero-value sinks in tests) behaves as anonymous and opted in.
 	ident *Identity
@@ -322,6 +337,8 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 		ident:        ident,
 		defaultAgent: safeAgentSlug(defaultAgent),
 		tenure:       newTenureTracker(dataDir, time.Now),
+		env:          detectStaticEnvironment(),
+		install:      newInstallContext("", time.Now),
 		client:       client,
 		log:          telemetryLogger(log),
 		appVersion:   strings.TrimSpace(appVersion),
@@ -332,6 +349,19 @@ func NewPostHogSink(dataDir, apiKey, host, appVersion, defaultAgent string, clie
 	s.wg.Add(1)
 	go s.loop()
 	return s, nil
+}
+
+// SetInstallStateDir points the sink at the directory holding the desktop
+// app's app-state.json and update-settings.json (dirname of running.json).
+// Unset, install_source and release_channel report "unknown".
+func (s *PostHogSink) SetInstallStateDir(dir string) {
+	if s.install == nil {
+		return
+	}
+	s.install.mu.Lock()
+	s.install.stateDir = dir
+	s.install.loadedAt = time.Time{}
+	s.install.mu.Unlock()
 }
 
 // Identity returns the live identity (install ID, signed-in user, opt-out).
@@ -558,6 +588,10 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 		props["active_days"] = activeDays
 		props["tenure"] = string(bucket)
 	}
+	if s.env.platform != "" {
+		s.env.stamp(props)
+	}
+	s.install.stamp(props)
 	if ev.RequestID != "" {
 		props["request_id"] = ev.RequestID
 	}

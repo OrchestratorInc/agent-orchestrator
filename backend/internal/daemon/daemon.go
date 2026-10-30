@@ -251,19 +251,7 @@ func Run(buildVersion string) error {
 			"agent": cfg.Agent,
 		},
 	})
-	if telemetryIdentity != nil && cfg.Telemetry.Events {
-		marked, err := telemetryIdentity.MarkInstalledEvent(context.Background())
-		if err != nil {
-			log.Warn("record telemetry install event", "error", err)
-		} else if marked {
-			telemetrySink.Emit(context.Background(), ports.TelemetryEvent{
-				Name:       "ao.app.installed",
-				Source:     "daemon",
-				OccurredAt: time.Now().UTC(),
-				Level:      ports.TelemetryLevelInfo,
-			})
-		}
-	}
+	emitInstallLifecycleEvents(cfg, telemetryIdentity, telemetrySink, log)
 
 	// signal.NotifyContext cancels ctx on SIGINT/SIGTERM, which drives the
 	// graceful shutdown inside Server.Run and stops the background goroutines.
@@ -666,7 +654,7 @@ func Run(buildVersion string) error {
 	// Chat session, because waking it waits for admitted input to drain.
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
-	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log})
+	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log})
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
