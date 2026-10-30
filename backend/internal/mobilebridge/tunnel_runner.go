@@ -100,8 +100,11 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
-		t.Runtime.Line(line)
+		change, changed := t.Runtime.Line(line)
 		t.logger().Debug("cloudflared", "line", line)
+		if changed {
+			t.logEdge(change)
+		}
 	}
 
 	waitErr := cmd.Wait()
@@ -170,6 +173,20 @@ const (
 	DefaultTunnelSettleDelay = 12 * time.Second
 	settlePollInterval       = 500 * time.Millisecond
 )
+
+// logEdge records an edge connection coming up or going down. The connector's
+// own lines are debug output, so without this a tunnel that drops and
+// re-registers leaves no trace in a normal log.
+func (t *TunnelRunner) logEdge(c EdgeChange) {
+	hostname := t.Runtime.Snapshot().Hostname
+	if c.Up {
+		t.logger().Info("mobile tunnel edge connected",
+			"hostname", hostname, "connIndex", c.ConnIndex, "location", c.Location, "protocol", c.Protocol)
+		return
+	}
+	t.logger().Info("mobile tunnel edge disconnected",
+		"hostname", hostname, "connIndex", c.ConnIndex, "reason", c.Reason)
+}
 
 func (t *TunnelRunner) logger() *slog.Logger {
 	if t.Log != nil {
