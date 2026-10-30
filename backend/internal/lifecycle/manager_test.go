@@ -5124,3 +5124,32 @@ func TestPRObservation_ReviewBodyKeptWithoutAOPass(t *testing.T) {
 		t.Fatalf("want the human review body in the batch, got %v", msg.msgs)
 	}
 }
+
+// A comment still eligible for injection does not carry the body of a parent
+// review whose own delivery is off; the comment and the review header stay.
+func TestPRObservation_ReviewBodyFollowsItsOwnDeliverySetting(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.reviews["pr1"] = []domain.PullRequestReview{{
+		ID: "PRR_off", Author: "alice", State: domain.ReviewNone,
+		URL: "https://github.com/o/r/pull/1#pullrequestreview-55", Body: "Body not to deliver.", AutoInjectReview: false,
+	}}
+	st.comments["pr1"] = []domain.PullRequestComment{
+		{ID: "c1", ThreadID: "T1", ReviewID: "55", Author: "alice", File: "a.go", Line: 1, Body: "inline still on", AutoInjectReview: true},
+	}
+	if err := m.ApplyPRObservation(ctx, "mer-1", ports.PRObservation{Fetched: true, URL: "pr1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("want one batched message, got %d: %v", len(msg.msgs), msg.msgs)
+	}
+	got := msg.msgs[0]
+	for _, want := range []string{"Review from @alice:", "inline still on", "Thread ID: T1"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("batch missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Body not to deliver.") {
+		t.Fatalf("batch carried the body of a review with delivery off:\n%s", got)
+	}
+}

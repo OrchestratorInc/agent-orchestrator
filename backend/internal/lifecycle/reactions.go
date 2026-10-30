@@ -955,7 +955,10 @@ func (f reviewFeedback) format(due []bool) string {
 	n := 0
 	for _, g := range groups {
 		if g.review != nil {
-			writeReviewHeader(&msg, *g.review, !f.postedByAO(*g.review))
+			// The body follows the review's own delivery setting: a comment
+			// still eligible for injection must not carry the body of a review
+			// whose delivery is off.
+			writeReviewHeader(&msg, *g.review, g.review.AutoInjectReview && !f.postedByAO(*g.review))
 		} else if len(groups) > 1 {
 			msg.WriteString("\n---\nOther review comments:\n")
 		}
@@ -974,9 +977,10 @@ func (f reviewFeedback) format(due []bool) string {
 }
 
 // writeReviewHeader writes one review's header. withBody is false for a review
-// an AO review pass posted: its required changes are its inline comments, and
-// its summary holds optional suggestions the worker must not take as required
-// work, so only the inline comments reach the worker.
+// whose delivery is off, and for a review an AO review pass posted: its
+// required changes are its inline comments, and its summary holds optional
+// suggestions the worker must not take as required work, so only the inline
+// comments reach the worker.
 func writeReviewHeader(msg *strings.Builder, review domain.PullRequestReview, withBody bool) {
 	author := domain.SanitizeControlChars(review.Author)
 	if strings.TrimSpace(author) == "" {
