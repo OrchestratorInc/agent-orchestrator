@@ -1481,6 +1481,14 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 		>
 			<button
 				type="button"
+				onKeyDown={(event) => {
+					// Esc is the keyboard answer to the click that opened the row:
+					// collapse the one row under focus, leave the rest alone.
+					if (event.key === "Escape" && open) {
+						event.stopPropagation();
+						setOverride(false);
+					}
+				}}
 				onClick={() => setOverride(!open)}
 				disabled={!hasBody}
 				aria-expanded={hasBody ? open : undefined}
@@ -1600,8 +1608,9 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						{files.length > 1 ? <FileChangeList files={files} /> : null}
 						{!isFileChange && detail?.command ? (
 							// The body repeats the command verbatim, independent of the
-							// possibly truncated collapsed label above.
-							<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
+							// possibly truncated collapsed label above. It wraps rather
+							// than scrolls, for the same reason the explore body does.
+							<pre className="scrollbar-none select-text whitespace-pre-wrap break-words border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
 								{detail.command}
 							</pre>
 						) : null}
@@ -1662,9 +1671,11 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 			) : null}
 
 			{command ? (
+				// The command wraps instead of scrolling: a long invocation must be
+				// readable — and selectable — without a horizontal hunt.
 				<pre
 					className={cn(
-						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
+						"cursor-chat-explore-command select-text whitespace-pre-wrap break-words px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
 						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
 					)}
 				>

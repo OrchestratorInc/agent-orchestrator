@@ -708,3 +708,67 @@ describe("ProviderSwitchMarker", () => {
 		expect(screen.getByText("GPT Six")).toBeInTheDocument();
 	});
 });
+
+describe("expand/collapse affordances", () => {
+	const commandActivity = {
+		kind: "activity" as const,
+		id: "cmd-1",
+		sequence: 1,
+		revision: 0,
+		createdAt: "2026-08-23T00:00:00Z",
+		activityKind: "command" as const,
+		status: "completed" as const,
+		summary: "Ran command",
+		detail: {
+			command: "npm run build -- --mode production --sourcemap true",
+			output: "built in 4.2s",
+		},
+	};
+
+	it("collapses an expanded command row on Escape", async () => {
+		render(<ActivityRow activity={commandActivity} />);
+		const toggle = screen.getByRole("button");
+		fireEvent.click(toggle);
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText("built in 4.2s")).toBeInTheDocument();
+
+		fireEvent.keyDown(toggle, { key: "Escape" });
+		expect(toggle).toHaveAttribute("aria-expanded", "false");
+		// The exit animation unmounts the body a frame later.
+		await waitFor(() => expect(screen.queryByText("built in 4.2s")).not.toBeInTheDocument());
+	});
+
+	it("wraps and exposes the full command instead of scrolling it", () => {
+		render(<ActivityRow activity={commandActivity} />);
+		const toggle = screen.getByRole("button");
+		fireEvent.click(toggle);
+
+		const body = document.querySelector("pre.cursor-chat-explore-command");
+		expect(body).not.toBeNull();
+		expect(body?.className).toContain("whitespace-pre-wrap");
+		expect(body?.className).toContain("select-text");
+		expect(body?.className).not.toContain("overflow-x-auto");
+	});
+
+	it("keeps a failed row's destructive styling in both states", () => {
+		render(
+			<ActivityRow
+				activity={{
+					...commandActivity,
+					id: "cmd-failed",
+					status: "failed",
+					detail: { command: "cargo build --release", output: "error: could not compile" },
+				}}
+			/>,
+		);
+		const toggle = screen.getByRole("button");
+		const chip = () => toggle.querySelector(".text-destructive");
+		expect(chip()).not.toBeNull();
+		expect(chip()).toHaveTextContent("failed");
+
+		fireEvent.click(toggle);
+		expect(toggle).toHaveAttribute("aria-expanded", "true");
+		expect(chip()).not.toBeNull();
+		expect(chip()).toHaveTextContent("failed");
+	});
+});
