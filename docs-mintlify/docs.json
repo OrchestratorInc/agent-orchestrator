@@ -1,0 +1,188 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Orchestrator",
+  "theme": "luma",
+  "logo": {
+    "light": "/logo/ao-logo.svg",
+    "dark": "/logo/ao-logo.svg",
+    "href": "https://orchestrator.inc"
+  },
+  "favicon": "/logo/ao-logo.svg",
+  "colors": {
+    "primary": "#e8e8e3",
+    "light": "#e8e8e3",
+    "dark": "#e8e8e3"
+  },
+  "fonts": {
+    "heading": {
+      "family": "Geist",
+      "weight": 700
+    },
+    "body": {
+      "family": "Geist",
+      "weight": 400
+    }
+  },
+  "appearance": {
+    "default": "dark",
+    "strict": true
+  },
+  "search": {
+    "prompt": "Search Orchestrator docs..."
+  },
+  "footerSocials": {
+    "github": "https://github.com/OrchestratorInc/agent-orchestrator",
+    "x": "https://x.com/aoagents"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Getting Started",
+        "pages": [
+          "index",
+          "installation",
+          "quickstart",
+          "platforms"
+        ]
+      },
+      {
+        "group": "Using Orchestrator",
+        "pages": [
+          "dashboard",
+          "examples",
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/index",
+              "guides/per-role-agents",
+              "guides/parallel-issues",
+              "guides/ci-recovery",
+              "guides/review-loop",
+              "guides/reactions",
+              "guides/multi-project",
+              "guides/cloud"
+            ]
+          }
+        ]
+      },
+      {
+        "group": "Built-in capabilities",
+        "pages": [
+          {
+            "group": "Built-in capabilities",
+            "pages": [
+              "plugins/index",
+              {
+                "group": "Agents",
+                "pages": [
+                  "plugins/agents/index",
+                  "plugins/agents/claude-code",
+                  "plugins/agents/codex",
+                  "plugins/agents/cursor",
+                  "plugins/agents/aider",
+                  "plugins/agents/opencode"
+                ]
+              },
+              {
+                "group": "Runtimes",
+                "pages": [
+                  "plugins/runtimes/index",
+                  "plugins/runtimes/tmux"
+                ]
+              },
+              {
+                "group": "Workspaces",
+                "pages": [
+                  "plugins/workspaces/index",
+                  "plugins/workspaces/worktree"
+                ]
+              },
+              {
+                "group": "Trackers",
+                "pages": [
+                  "plugins/trackers/index",
+                  "plugins/trackers/github"
+                ]
+              },
+              {
+                "group": "SCM",
+                "pages": [
+                  "plugins/scm/index",
+                  "plugins/scm/github"
+                ]
+              },
+              {
+                "group": "Notifications",
+                "pages": [
+                  "plugins/notifiers/index",
+                  "plugins/notifiers/dashboard"
+                ]
+              },
+              {
+                "group": "Terminals",
+                "pages": [
+                  "plugins/terminals/index",
+                  "plugins/terminals/web"
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "cli",
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/index",
+              "configuration/projects",
+              "configuration/lifecycle-automation",
+              "configuration/remote-access"
+            ]
+          },
+          "architecture"
+        ]
+      },
+      {
+        "group": "Help",
+        "pages": [
+          "troubleshooting",
+          "faq",
+          "migration",
+          "changelog"
+        ]
+      }
+    ]
+  },
+  "styles": [
+    {
+      "path": "_styles/custom.css"
+    }
+  ],
+  "navbar": {
+    "links": [
+      {
+        "label": "Main site",
+        "href": "https://orchestrator.inc"
+      },
+      {
+        "label": "GitHub",
+        "href": "https://github.com/OrchestratorInc/agent-orchestrator"
+      }
+    ]
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "chatgpt"
+    ]
+  },
+  "styling": {
+    "codeblocks": {
+      "theme": "github-dark"
+    }
+  }
+}
