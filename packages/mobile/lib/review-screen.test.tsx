@@ -5,8 +5,7 @@ import type { DashboardSession, SessionReviews } from "./api";
 const fixtures = vi.hoisted(() => ({
 	config: { host: "dev.local", httpPort: "3011", muxPort: "3012", secure: false, password: "secret", hostId: "dev" },
 	sessions: [] as DashboardSession[],
-	read: undefined as DashboardSession | null | undefined,
-	readSession: vi.fn(),
+	getSession: vi.fn(),
 	restore: vi.fn(async (_id: string, _hostId?: string) => {}),
 	theme: new Proxy({}, { get: () => "#000000" }),
 }));
@@ -39,10 +38,10 @@ vi.mock("./api", () => ({
 		runs: [],
 	} as unknown as SessionReviews)),
 	getSessionPR: vi.fn(async () => []),
+	getSession: fixtures.getSession,
 	sessionTitle: (session: DashboardSession) => session.displayName ?? session.id,
 	cancelSessionReview: vi.fn(), killSessionReviewer: vi.fn(), mergeSessionPR: vi.fn(), restoreSessionReviewer: vi.fn(), sendMessage: vi.fn(), triggerSessionReview: vi.fn(),
 }));
-vi.mock("./chat/sessionLookup", () => ({ readSession: fixtures.readSession }));
 vi.mock("./store", () => ({
 	HostScope: ({ children }: { children: unknown }) => children,
 	useApp: () => ({ config: fixtures.config, sessions: fixtures.sessions, currentHostId: "dev", restore: fixtures.restore }),
@@ -68,7 +67,7 @@ let renderer: ReactTestRenderer | undefined;
 beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixtures.sessions = [];
-	fixtures.readSession.mockReset();
+	fixtures.getSession.mockReset();
 	fixtures.restore.mockClear();
 	const error = console.error;
 	vi.spyOn(console, "error").mockImplementation((...args) => {
@@ -92,10 +91,10 @@ const pill = (label: string) => renderer!.root.findAll((node) => (node.type as u
 const workerRow = () => renderer!.root.findAll((node) => (node.type as unknown) === "Pressable" && String(node.props.accessibilityLabel).startsWith("Open worker"));
 
 it("reads an archived worker the board poll leaves out and offers Restore", async () => {
-	fixtures.readSession.mockResolvedValue(worker({ status: "terminated", isTerminated: true }));
+	fixtures.getSession.mockResolvedValue(worker({ status: "terminated", isTerminated: true }));
 	await render();
 
-	expect(fixtures.readSession).toHaveBeenCalledExactlyOnceWith(fixtures.config, "worker-1");
+	expect(fixtures.getSession).toHaveBeenCalledExactlyOnceWith(fixtures.config, "worker-1");
 	expect(workerRow()).toHaveLength(1);
 	expect(pill("Restore")).toHaveLength(1);
 	await act(async () => { pill("Restore")[0].props.onPress(); });
@@ -106,7 +105,7 @@ it("uses the board's copy of a live worker without reading it again", async () =
 	fixtures.sessions = [worker({ status: "working" })];
 	await render();
 
-	expect(fixtures.readSession).not.toHaveBeenCalled();
+	expect(fixtures.getSession).not.toHaveBeenCalled();
 	expect(workerRow()).toHaveLength(1);
 	expect(pill("Restore")).toHaveLength(0);
 	// The worker's Open; the reviewer row has none without a reviewer surface.
@@ -114,9 +113,31 @@ it("uses the board's copy of a live worker without reading it again", async () =
 });
 
 it("leaves the Worker section out when the worker cannot be read", async () => {
-	fixtures.readSession.mockResolvedValue(null);
+	fixtures.getSession.mockRejectedValue(new Error("not found"));
 	await render();
 
 	expect(workerRow()).toHaveLength(0);
 	expect(renderer!.root.findAll((node) => (node.type as unknown) === "ListSectionHeader" && node.props.label === "Worker")).toHaveLength(0);
+});
+
+it("reads the worker again when it leaves the poll, not an earlier live answer", async () => {
+	// Cold start: the page mounts before the first poll, and reads the worker live.
+	fixtures.getSession.mockResolvedValueOnce(worker({ status: "working" }));
+	await render();
+	expect(pill("Open")).toHaveLength(1);
+
+	// The poll lands with the worker listed.
+	fixtures.sessions = [worker({ status: "working" })];
+	await act(async () => { renderer!.update(<ReviewDetailScreen />); });
+	expect(fixtures.getSession).toHaveBeenCalledTimes(1);
+
+	// Later the worker is archived and drops out of the poll.
+	fixtures.sessions = [];
+	fixtures.getSession.mockResolvedValueOnce(worker({ status: "terminated", isTerminated: true }));
+	await act(async () => { renderer!.update(<ReviewDetailScreen />); });
+	await act(async () => { await Promise.resolve(); });
+
+	expect(fixtures.getSession).toHaveBeenCalledTimes(2);
+	expect(pill("Restore")).toHaveLength(1);
+	expect(pill("Open")).toHaveLength(0);
 });

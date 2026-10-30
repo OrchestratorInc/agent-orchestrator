@@ -3,7 +3,7 @@ import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { cancelSessionReview, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, sessionTitle, triggerSessionReview, type DashboardSession, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
+import { cancelSessionReview, getSession, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, sessionTitle, triggerSessionReview, type DashboardSession, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
@@ -14,7 +14,6 @@ import { useOpenPage } from "../../lib/pageNavigation";
 import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
 import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit, workerRouteForSession } from "../../lib/reviewView";
-import { readSession } from "../../lib/chat/sessionLookup";
 import { HostScope, useApp } from "../../lib/store";
 import { statusVisual, type Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -44,13 +43,16 @@ function ReviewDetailContent() {
 	const listedWorker = sessions.find((session) => session.id === sessionId);
 	// The board poll holds live workers only on a daemon that pages its archive,
 	// so an archived worker is read from its machine. The listed copy wins, so the
-	// row flips to Open once a restore refreshes the host.
+	// row flips to Open once a restore refreshes the host. The read is fresh each
+	// time the worker leaves the poll, not readSession's cached answer: a worker
+	// first read while live and later archived would otherwise keep its old status.
 	const [readWorker, setReadWorker] = useState<DashboardSession | null>();
 	const listed = Boolean(listedWorker);
 	useEffect(() => {
-		if (listed || !hostMatches || !config || !sessionId) return;
+		if (listed) { setReadWorker(undefined); return; }
+		if (!hostMatches || !config || !sessionId) return;
 		let current = true;
-		void readSession(config, sessionId).then((read) => { if (current) setReadWorker(read); });
+		void getSession(config, sessionId).then((read) => read, () => null).then((read) => { if (current) setReadWorker(read); });
 		return () => { current = false; };
 	}, [config, hostMatches, listed, sessionId]);
 	const worker = listedWorker ?? readWorker ?? undefined;
