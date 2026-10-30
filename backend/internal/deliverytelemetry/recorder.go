@@ -107,7 +107,11 @@ func (r *Recorder) SessionEnded(ctx context.Context, rec domain.SessionRecord, r
 	if !r.enabled() || rec.ID == "" {
 		return
 	}
-	prs, err := r.store.ListPRsBySession(ctx, rec.ID)
+	// Teardown can outlive the request that started it. Give the fact reads a
+	// bounded context that keeps request values without inheriting cancellation.
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	prs, err := r.store.ListPRsBySession(readCtx, rec.ID)
 	if err != nil {
 		return
 	}
@@ -119,7 +123,7 @@ func (r *Recorder) SessionEnded(ctx context.Context, rec domain.SessionRecord, r
 		}
 	}
 	doneReported := false
-	if reports, err := r.store.ListReportsBySession(ctx, rec.ID); err == nil {
+	if reports, err := r.store.ListReportsBySession(readCtx, rec.ID); err == nil {
 		for _, report := range reports {
 			if report.State == domain.ReportDone {
 				doneReported = true
@@ -127,7 +131,7 @@ func (r *Recorder) SessionEnded(ctx context.Context, rec domain.SessionRecord, r
 			}
 		}
 	}
-	facts, _ := r.store.GetSessionTelemetry(ctx, rec.ID)
+	facts, _ := r.store.GetSessionTelemetry(readCtx, rec.ID)
 	payload := map[string]any{
 		"kind":                telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
 		"harness":             string(rec.Harness),
@@ -141,7 +145,7 @@ func (r *Recorder) SessionEnded(ctx context.Context, rec domain.SessionRecord, r
 	if facts.CreatedBy.Valid() {
 		payload["created_by"] = string(facts.CreatedBy)
 	}
-	r.stampUsageGrouping(ctx, rec, payload)
+	r.stampUsageGrouping(readCtx, rec, payload)
 	r.emit(ctx, "ao.sessions.ended", rec, payload)
 }
 

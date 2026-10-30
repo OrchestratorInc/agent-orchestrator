@@ -45,25 +45,48 @@ type fakeStore struct {
 	projectIDs map[string]string
 	projectErr error
 	lookups    int
+	checkCtx   bool
 }
 
-func (f *fakeStore) UsageProjectID(_ context.Context, projectID, installID string) (string, error) {
+func (f *fakeStore) readContextError(ctx context.Context) error {
+	if !f.checkCtx {
+		return nil
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return errors.New("fact read has no deadline")
+	}
+	return ctx.Err()
+}
+
+func (f *fakeStore) UsageProjectID(ctx context.Context, projectID, installID string) (string, error) {
 	f.lookups++
+	if err := f.readContextError(ctx); err != nil {
+		return "", err
+	}
 	if f.projectErr != nil {
 		return "", f.projectErr
 	}
 	return f.projectIDs[projectID+"|"+installID], nil
 }
 
-func (f *fakeStore) GetSessionTelemetry(_ context.Context, id domain.SessionID) (domain.SessionTelemetryFacts, error) {
+func (f *fakeStore) GetSessionTelemetry(ctx context.Context, id domain.SessionID) (domain.SessionTelemetryFacts, error) {
+	if err := f.readContextError(ctx); err != nil {
+		return domain.SessionTelemetryFacts{}, err
+	}
 	return f.facts[id], nil
 }
 
-func (f *fakeStore) ListPRsBySession(_ context.Context, id domain.SessionID) ([]domain.PullRequest, error) {
+func (f *fakeStore) ListPRsBySession(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error) {
+	if err := f.readContextError(ctx); err != nil {
+		return nil, err
+	}
 	return f.prs[id], nil
 }
 
-func (f *fakeStore) ListReportsBySession(_ context.Context, id domain.SessionID) ([]domain.ReportRecord, error) {
+func (f *fakeStore) ListReportsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReportRecord, error) {
+	if err := f.readContextError(ctx); err != nil {
+		return nil, err
+	}
 	return f.reports[id], nil
 }
 
@@ -130,6 +153,28 @@ func TestSessionEndedPayload(t *testing.T) {
 	}
 	if ev.SessionID == nil || *ev.SessionID != "w-1" || ev.ProjectID == nil || *ev.ProjectID != "proj" {
 		t.Errorf("event ids = %v/%v", ev.SessionID, ev.ProjectID)
+	}
+}
+
+func TestSessionEndedReadsFactsAfterRequestCancellation(t *testing.T) {
+	const projectTelemetryID = "0b1c2d3e-4f50-4617-8293-a4b5c6d7e8f9"
+	store := &fakeStore{
+		checkCtx:   true,
+		prs:        map[domain.SessionID][]domain.PullRequest{"w-1": {{Number: 4}}},
+		reports:    map[domain.SessionID][]domain.ReportRecord{"w-1": {{State: domain.ReportDone}}},
+		facts:      map[domain.SessionID]domain.SessionTelemetryFacts{"w-1": {CreatedBy: domain.SessionCreatedByUser, WaitingInputCount: 2}},
+		projectIDs: map[string]string{"proj|ins_1": projectTelemetryID},
+	}
+	r, sink := newRecorder(store)
+	r.SetInstallID(func() string { return "ins_1" })
+	requestCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r.SessionEnded(requestCtx, domain.SessionRecord{ID: "w-1", ProjectID: "proj", Kind: domain.KindWorker}, EndKilled)
+
+	p := sink.only(t, "ao.sessions.ended").Payload
+	if p["outcome"] != OutcomePROpened || p["had_pr"] != true || p["created_by"] != "user" ||
+		p["waiting_input_count"] != int64(2) || p["project_telemetry_id"] != projectTelemetryID {
+		t.Fatalf("ended payload after request cancellation = %#v", p)
 	}
 }
 
