@@ -1266,3 +1266,13 @@ main details.accordion summary div { line-height: 21px !important; }
 main details.accordion summary p { font-size: 14px !important; line-height: 21px !important; font-weight: 500 !important; }
 html[data-current-path="/installation"] main details.accordion:not(.accordion-group details) summary { padding: 2.5px 0 !important; }
 html[data-current-path="/installation"] main details.accordion:not(.accordion-group details) summary p { font-size: 16px !important; line-height: 24px !important; font-weight: 400 !important; }
+
+
+/* v36s: accordion expanded content parity with original */
+main .accordion-group details div.prose { padding: 0 !important; margin: 12px 0 0 !important; font-size: 14px !important; line-height: 20px !important; }
+main .accordion-group details div.prose :is(p, span[data-as="p"]) { font-size: 14px !important; line-height: 1.75 !important; margin: 0 0 20px !important; }
+main .accordion-group details div.prose > :last-child { margin-bottom: 0 !important; }
+/* legacy standalone accordion: flush content, native-style marker */
+main details.accordion:not(.accordion-group details) div.prose { padding: 0 !important; margin: 0 !important; font-size: 16px !important; line-height: 28px !important; }
+html[data-current-path="/installation"] main details.accordion:not(.accordion-group details) summary p::before { content: "\25B8\0020"; font-size: 13px; }
+html[data-current-path="/installation"] main details.accordion:not(.accordion-group details)[open] summary p::before { content: "\25BE\0020"; }
