@@ -16,6 +16,35 @@ packaged desktop release also enables telemetry for the daemon it starts.
 Development builds and daemons started directly do not send remote telemetry by
 default.
 
+## Sentry projects
+
+The packaged desktop app gives its spawned Go daemon the daemon Sentry project
+DSN through `AO_SENTRY_DSN`. An explicit `AO_SENTRY_DSN` value takes precedence;
+without one, development builds hand the daemon an empty value. Daemon error
+reporting remains subject to the existing Share error events control.
+
+Electron main and the renderer have a separate desktop Sentry project. Their
+default DSN is distinct from the daemon project; Electron main uses
+`AO_ELECTRON_SENTRY_DSN` for an explicit override. Without one, development
+builds use an empty Electron DSN. The renderer uses this main-owned sender
+and has no independent DSN override. The production release gate remains
+closed until the privacy policy names Sentry and its data categories.
+Once that gate opens, Electron main sends consented error events through its
+own Sentry transport.
+Renderer diagnostics pass through the existing main-owned consent boundary;
+the renderer has no direct Sentry transport. The mobile app keeps its own
+Sentry project and DSN. A desktop opt-in recorded while the Electron release
+gate was closed requires a fresh opt-in before this sender starts.
+Once enabled, renderer exceptions go to Electron Sentry rather than PostHog. Failed
+Sentry sends can wait in an offline queue under AO's Electron data directory.
+Error events can include a standard exception type and allowlisted in-app
+function names and line numbers. Stack paths and raw exception messages are
+removed before sending.
+Turning off Share error events drains the sender and removes that queue before
+the opt-out is complete. If the app exits during that cleanup, startup purges
+the leftover queue while sharing is off, before a later opt-in can start the
+sender.
+
 ## What Orchestrator.inc sends
 
 Orchestrator.inc sends structured events in a few broad categories:
@@ -78,6 +107,68 @@ group events for the same project or session without sending those identifiers
 in plain text. These identifiers are distinct from the explicit GitHub account
 attribution on session-start events, but events that share an installation
 identifier can still be associated with that attribution in PostHog.
+
+## Usage counts by project
+
+The daemon sends three usage summaries when remote product telemetry is enabled:
+
+| Event | What is counted |
+| --- | --- |
+| `ao.usage.messages_sent` | New, direct human Chat messages accepted into a session. One count per accepted message. |
+| `ao.usage.worker_pr_associated` | A provider PR first associated with an AO worker session. This is not proof the worker created the PR. |
+| `ao.usage.worker_pr_merged` | An associated worker PR first observed as merged. |
+
+The project grouping value, `project_telemetry_id`, is a random UUID persisted
+locally for each project and installation. It is not a hash of a repository,
+project name, path, or content. A different installation gets a different value
+for the same repository. The daemon does not send the local project ID, PR URL,
+PR title, repository, branch, or message content in these events. Message
+summaries also carry a `session_telemetry_id` derived from the random project
+value and the local session ID. It groups batches from one session on this
+installation without making the local session ID available remotely. The
+usual `install_id` and signed-in account attribution still apply.
+
+The message count covers project Chat messages that have a human origin and no
+sending worker. Standalone sessions have no project grouping and are excluded.
+It includes a newly queued direct message but excludes opening prompts delivered
+during session creation, repeated client requests, retries or replays of an
+existing prompt, reviewer Chat, worker
+automation sent into another session, provider messages, tool calls, and
+terminal input in TUI sessions. Counts are stored per session without content.
+They flush about every 30 minutes, when a session is archived, when the
+desktop app exits, and when the daemon stops. The first flush runs in the
+background after daemon startup. Pending counts survive a daemon restart.
+A summary is reserved before entering the existing best-effort remote queue.
+Usage events wait for PostHog queue capacity rather than being dropped when
+the buffer is full. A crash, caller cancellation, or export failure after
+reservation can still lose a batch; it will not duplicate the count on restart.
+An identity persistence failure pauses draining without discarding pending
+counts. Only an actual user opt-out discards them.
+If remote events are configured but the PostHog sink cannot start, the daemon
+keeps new usage counts locally and leaves them pending until a later start with
+a working sink.
+The remote sink has a 100,000 event per name per daemon process per rolling
+24-hour window emergency cap for these summaries. Events beyond that cap are
+dropped after reservation, so their counts cannot be recovered from the local
+summary.
+
+PR counts use the provider PR associated with a worker in AO's durable PR
+table, not a session spawn or provider poll. One local provider identity is
+counted once even if ownership moves between workers. Orchestrator-owned PRs
+are excluded. Repeated observations do not add counts. A PR already associated
+with a worker when this measurement is first installed contributes one
+association count, and an already merged PR also contributes one merged
+count. Both carry `historical: true`; newly observed associations and merges
+carry `historical: false`. Counts are grouped per project at each full flush,
+about every 30 minutes and at daemon or desktop shutdown. The one-minute
+archive pass skips the PR scan.
+PRs and messages accepted while product telemetry is off are not exported
+after a later opt-in.
+If events export is disabled in configuration when this version first runs,
+backfilled worker PR associations that have not been observed again remain
+eligible for historical export if events export is enabled later. An observation
+while export is disabled marks that association reported locally. Explicit
+product telemetry opt-out discards pending associations before export.
 
 ## Automation usage and creation
 
@@ -232,8 +323,18 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
 
 Separately from remote telemetry, the daemon can keep a local copy of
 operational events in Orchestrator.inc's SQLite database. While local telemetry is active, Orchestrator.inc
-periodically prunes records older than 30 days. This data stays under `~/.ao` on
-your machine.
+periodically prunes records older than 30 days by default. Set
+`AO_TELEMETRY_RETENTION` on the daemon to a Go duration such as `168h`, or a
+whole number of days such as `7`, to change this window (minimum 24 hours).
+Expired records are deleted in 5,000-row batches with pauses between batches.
+After each hourly sweep, incremental vacuum reclaims free database pages in
+256-page batches with pauses, stopping when fewer than 256 remain or SQLite
+cannot make further progress. This data stays under `~/.ao` on your
+machine; this setting does not change remote telemetry retention.
+
+The upgrade that enables incremental vacuum performs a one-time full database
+rewrite. Large databases can take longer to upgrade and require temporary free
+disk space for the rewrite.
 
 ## Signing in to AO Cloud
 
@@ -291,13 +392,31 @@ interface uses a fresh anonymous identifier until the next restart. Data already
 sent to PostHog is not deleted.
 
 The **Share error events** control on the same page covers error diagnostics
-only: the daemon's Sentry capture of 5xx errors, failed agent relaunches
-(answered as 409 `AGENT_RESUME_FAILED`), and panics. The
-daemon tags these error events with the same `install_id` when the installation
-identifier is available. If it cannot be read, consented error reporting
-continues without that tag. The tag does not include email or local paths. The
-environment-variable controls below also govern the desktop/daemon
-product-telemetry paths, for example in managed environments. Set all three variables in the environment used to launch Orchestrator.inc:
+only: the daemon's Sentry capture of reportable 5xx errors, failed agent
+relaunches answered as 409 `AGENT_RESUME_FAILED`, and handler or background
+goroutine panics; and Electron main capture of process crashes, uncaught
+exceptions, unhandled rejections, and reportable renderer errors. Sentry
+receives fixed failure or panic labels and allowlisted error codes instead of
+raw error messages. It groups HTTP faults by registered route and error code,
+while retaining the AO function that recorded the failure as the culprit.
+Agent relaunches group by operation and failure step, with a fixed step tag
+and no HTTP route tag.
+An event may include a bounded `git`, `db`, `agent`, or `network` area when the
+error provides evidence. It keeps stack function and line information, but
+removes stack paths, request data, project, session, repository and branch
+names, and panic text. Electron events use fixed titles and scrubbed exception
+values with the same installation ID as Sentry `user.id`.
+Canceled requests, transient 503 responses, and expected upstream link-preview
+502 responses do not create Sentry issues. Registered route templates remain
+available for diagnosis. Unmatched URLs are reported as `unmatched` instead of
+their raw path. Every daemon Sentry event has release and environment values.
+The daemon tags these error events with the same `install_id` and sets Sentry
+`user.id` to that identifier when available. If it cannot be read, consented
+error reporting continues without either identity field. These fields do not
+include email or local paths. The environment-variable controls below also
+govern the desktop/daemon product-telemetry paths, for example in managed
+environments. Set all three variables in the environment used to launch
+Orchestrator.inc:
 
 ```bash
 export AO_TELEMETRY_RENDERER=off
@@ -323,8 +442,8 @@ has no in-app opt-out. Turning
 desktop or daemon product telemetry off does not
 delete events already sent to PostHog, remove the local installation identifier,
 or delete existing local product-telemetry records. Automatic deletion of those
-local records older than 30 days resumes if daemon event capture is enabled
-again.
+local records older than the configured retention window (30 days by default)
+resumes if daemon event capture is enabled again.
 
 ## Questions or corrections
 

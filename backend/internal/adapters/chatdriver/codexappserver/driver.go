@@ -471,6 +471,10 @@ func codexThreadMissing(err error) bool {
 		(strings.Contains(message, "rollout") && strings.Contains(message, "is empty"))
 }
 
+// aoToolTimeoutSec is past the daemon's two-minute computer-use call budget,
+// so the daemon's own answer reaches the agent first.
+const aoToolTimeoutSec = 150
+
 // threadConfig is the config override sent with thread/start and
 // thread/resume. Codex layers it above config.toml for this thread only.
 //
@@ -479,6 +483,10 @@ func codexThreadMissing(err error) bool {
 // Verified live on codex-cli 0.160.1: a tool not marked read-only raised that
 // request under on-request and was refused under never/read-only, and
 // default_tools_approval_mode "approve" removed both.
+//
+// Codex gives an MCP tool call 60 s by default, under a computer-use
+// run_steps batch, which may run the driver's full 60 s before its report and
+// closing read; the daemon allows that call two minutes.
 func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string]any {
 	config := map[string]any{}
 	if effort != "" {
@@ -492,6 +500,7 @@ func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string
 		entry := map[string]any{}
 		if server.Name == "ao" {
 			entry["default_tools_approval_mode"] = "approve"
+			entry["tool_timeout_sec"] = aoToolTimeoutSec
 		}
 		if server.Type == "http" {
 			entry["url"] = server.URL

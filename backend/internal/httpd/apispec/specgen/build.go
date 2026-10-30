@@ -96,6 +96,8 @@ func Build() ([]byte, error) {
 			"Read-only filesystem browsing for remote clients"),
 		*(&openapi31.Tag{Name: "system"}).WithDescription(
 			"Local machine readiness checks the desktop app runs before showing the board"),
+		*(&openapi31.Tag{Name: "computer-use"}).WithDescription(
+			"Cua Driver computer-use integration behind Settings and the agents' computer-use tools (loopback only)"),
 		*(&openapi31.Tag{Name: "link-preview"}).WithDescription(
 			"Server-side unfurl of external links for the CSP-locked renderer"),
 		*(&openapi31.Tag{Name: "github"}).WithDescription(
@@ -193,6 +195,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersExtendAwakeRequest":                        "ExtendAwakeRequest",
 	"ControllersAwakeRulesRequest":                         "AwakeRulesRequest",
 	"ControllersAwakeDownloadsRequest":                     "AwakeDownloadsRequest",
+	"ControllersResolveFileReferenceResponse":              "ResolveFileReferenceResponse",
+	"ControllersConversationFileReferenceRequest":          "ConversationFileReferenceRequest",
+	"PortsChatFileReferenceSource":                         "ChatFileReferenceSource",
+	"PortsChatFileReferenceLine":                           "ChatFileReferenceLine",
 	"DomainHarnessDefault":                                 "HarnessDefault",
 	"ControllersUpdateHarnessDefaultRequest":               "UpdateHarnessDefaultRequest",
 	"ControllersSettingsResponse":                          "SettingsResponse",
@@ -201,6 +207,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersUpdateSessionInterfaceRequest":             "UpdateSessionInterfaceRequest",
 	"ControllersUpdateChatHibernationRequest":              "UpdateChatHibernationRequest",
 	"ControllersUpdateVersionRefreshRequest":               "UpdateVersionRefreshRequest",
+	"ControllersUpdateComputerUseRequest":                  "UpdateComputerUseRequest",
 	"ControllersConversationSnapshotResponse":              "ConversationSnapshotResponse",
 	"ControllersConversationTurnResponse":                  "ConversationTurnResponse",
 	"ControllersConversationUsageLimitResponse":            "ConversationUsageLimitResponse",
@@ -494,6 +501,15 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"SystemcheckReport":             "SystemRequirementsResponse",
 	"SystemcheckRequirement":        "SystemRequirement",
 	"ControllersInstallTargetParam": "InstallTargetParam",
+	// service/computeruse: the Cua Driver integration behind Settings and the computer-use tools.
+	"ComputeruseStatus":                        "ComputerUseStatus",
+	"ComputerusePermissions":                   "ComputerUsePermissions",
+	"ComputeruseCallRequest":                   "ComputerUseCallRequest",
+	"ComputeruseCallResult":                    "ComputerUseCallResult",
+	"ComputeruseImage":                         "ComputerUseImage",
+	"ControllersComputerUseDoctorResponse":     "ComputerUseDoctorResponse",
+	"ComputeruseAgentTool":                     "ComputerUseAgentTool",
+	"ControllersComputerUseAgentToolsResponse": "ComputerUseAgentToolsResponse",
 	// service/systeminstall: Job backs both StartInstallResponse and
 	// InstallStatusResponse (they're the same Go type), so it reflects to one
 	// shared component — name it after the domain concept, not either alias.
@@ -750,6 +766,7 @@ func operations() []operation {
 	ops = append(ops, shellTerminalOperations()...)
 	ops = append(ops, cueOperations()...)
 	ops = append(ops, systemOperations()...)
+	ops = append(ops, computerUseOperations()...)
 	ops = append(ops, identityOperations()...)
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, telemetryIdentityOperations()...)
@@ -926,6 +943,77 @@ func systemOperations() []operation {
 	}
 }
 
+// computerUseOperations declares the Cua Driver integration: the status and
+// actions Settings shows, and the tool calls a chat session's `ao mcp` server
+// makes. Every image a call produces is saved to a file; responses carry
+// paths, never base64.
+func computerUseOperations() []operation {
+	statusResps := []respUnit{
+		{http.StatusOK, controllers.ComputerUseStatusResponse{}},
+		{http.StatusConflict, envelope.APIError{}},
+		{http.StatusInternalServerError, envelope.APIError{}},
+		{http.StatusNotImplemented, envelope.APIError{}},
+		{http.StatusServiceUnavailable, envelope.APIError{}},
+	}
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/computer-use/status", id: "getComputerUseStatus", tag: "computer-use",
+			summary: "Report whether Cua Driver is installed, its version and update, its background service, and macOS permissions",
+			resps:   statusResps,
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/computer-use/daemon/start", id: "startComputerUseDaemon", tag: "computer-use",
+			summary: "Start Cua Driver's background service and wait briefly for it to answer",
+			resps:   statusResps,
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/computer-use/permissions/grant", id: "grantComputerUsePermissions", tag: "computer-use",
+			summary: "Ask macOS for Cua Driver's Accessibility and Screen Recording permissions; progress shows in status",
+			resps: []respUnit{
+				{http.StatusAccepted, controllers.ComputerUseStatusResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/computer-use/doctor", id: "getComputerUseDoctor", tag: "computer-use",
+			summary: "Run Cua Driver's environment report",
+			resps: []respUnit{
+				{http.StatusOK, controllers.ComputerUseDoctorResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/computer-use/agent-tools", id: "listComputerUseAgentTools", tag: "computer-use",
+			summary: "List the Cua Driver tools AO offers agents as MCP tools, with their input schemas",
+			resps: []respUnit{
+				{http.StatusOK, controllers.ComputerUseAgentToolsResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/computer-use/call", id: "callComputerUseTool", tag: "computer-use",
+			summary: "Run one Cua Driver tool; screenshots are saved to files and returned as paths",
+			reqBody: controllers.ComputerUseCallRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ComputerUseCallResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+				{http.StatusServiceUnavailable, envelope.APIError{}},
+			},
+		},
+	}
+}
+
 func browserOperations() []operation {
 	return []operation{
 		{
@@ -938,6 +1026,32 @@ func browserOperations() []operation {
 				{http.StatusForbidden, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/browser/chrome", id: "getBrowserChrome", tag: "browser",
+			summary: "Report Chrome mode: native host registration, extension bundle, and connection",
+			resps: []respUnit{
+				{http.StatusOK, controllers.BrowserChromeStatusResponse{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/browser/chrome", id: "setupBrowserChrome", tag: "browser",
+			summary: "Enable Chrome mode: install the AO extension bundle and register AO's native host with Chrome",
+			resps: []respUnit{
+				{http.StatusOK, controllers.BrowserChromeStatusResponse{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/browser/chrome", id: "removeBrowserChrome", tag: "browser",
+			summary: "Disable Chrome mode: unregister AO's native host and remove the installed extension bundle",
+			resps: []respUnit{
+				{http.StatusOK, controllers.BrowserChromeStatusResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},
@@ -1083,6 +1197,18 @@ func shellTerminalOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.SettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/settings/computer-use", id: "updateComputerUse", tag: "settings",
+			summary: "Choose whether new chat sessions get tools to drive desktop apps through Cua Driver",
+			reqBody: controllers.UpdateComputerUseRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SettingsResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
@@ -3157,6 +3283,13 @@ func sessionOperations() []operation {
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 			contentTypes: map[int]string{http.StatusOK: "text/event-stream"},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/file-references/resolve", id: "resolveFileReference", tag: "sessions",
+			summary:    "Resolve the current source of a captured file annotation without modifying it",
+			pathParams: []any{controllers.SessionIDParam{}},
+			reqBody:    controllers.ConversationFileReferenceRequest{},
+			resps:      []respUnit{{http.StatusOK, controllers.ResolveFileReferenceResponse{}}, {http.StatusBadRequest, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}, {http.StatusNotImplemented, envelope.APIError{}}},
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/workspace/file", id: "getSessionWorkspaceFile", tag: "sessions",

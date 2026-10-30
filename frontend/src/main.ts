@@ -1,3 +1,5 @@
+import { SideCloseRecovery } from "./main/side-close";
+import { SideLaunchRecovery } from "./main/side-launch-recovery";
 import { syncMacWindowButtons } from "./main/window-chrome";
 import { MAC_TITLEBAR_HEIGHT, MAC_WINDOW_BUTTON_X, MAC_WINDOW_BUTTON_RADIUS } from "./shared/window-chrome";
 import { finishUpdateQuit } from "./main/update-quit";
@@ -35,13 +37,14 @@ import {
 	isUpdateRestartRequested,
 	setUpdateRestartFailureHandler,
 	getUpdateStatus,
+	recordUpdateDiagnostic,
 	setUpdateSettings,
 	setMacDifferentialUpdates,
 	returnToHome,
 	type UpdateCheckOptions,
 } from "./main/auto-updater";
 import { listFeatureBuilds, getActiveFeatureBuild } from "./main/feature-builds";
-import { initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
+import { clearMainSentryCache, initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
 import { TelemetryIdentityController } from "./main/telemetry-identity";
@@ -84,6 +87,7 @@ import {
 	slowDaemonStartupStatus,
 } from "./shared/daemon-startup-status";
 import { toggleAppDevTools } from "./main/app-devtools";
+import { acceptLanguages, applyBrowserIdentity } from "./main/browser-identity";
 import { attachAppShortcuts } from "./main/app-shortcuts";
 import { relayScrollPhases } from "./main/scroll-phase";
 import {
@@ -151,7 +155,7 @@ import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
-import { DEFAULT_SENTRY_DSN } from "./shared/sentry-config";
+import { daemonSentryDsn } from "./shared/sentry-config";
 import { buildTelemetryBootstrap, rendererTelemetryEnabled } from "./shared/telemetry";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
@@ -608,13 +612,12 @@ function annotatePreloadPath(): string {
 	return path.join(__dirname, "annotate-preload.js");
 }
 
-// Runtime window/taskbar icon for Linux and Windows. macOS ignores this and
-// uses the .app bundle's .icns instead. Packaged: shipped via extraResource to
-// resources/icon.png.
-// Unpackaged runs return undefined so the dev window keeps Electron's default
-// icon and never impersonates the installed app's taskbar/dock icon (#3642).
+// Runtime window/taskbar icon for Linux and Windows, and the macOS dock icon.
+// Packaged: shipped via extraResource to resources/icon.png. Unpackaged runs use
+// the orange "DEV" variant so they are recognisable and never impersonate the
+// installed app's taskbar/dock icon (#3642).
 function windowIconPath(): string | undefined {
-	if (!app.isPackaged) return undefined;
+	if (!app.isPackaged) return path.join(__dirname, "../../assets/icon-dev.png");
 	const iconFile = process.platform === "win32" ? "icon.ico" : "icon.png";
 	const candidate = path.join(process.resourcesPath, iconFile);
 	if (existsSync(candidate)) return candidate;
@@ -632,9 +635,6 @@ function writeClipboardImage(image: Electron.NativeImage): Promise<void> {
 
 function applyRuntimeAppIcon(): void {
 	if (process.platform !== "darwin") return;
-	// Unpackaged runs keep Electron's default dock icon so the dev window is
-	// visually distinct from the installed app (#3642).
-	if (!app.isPackaged) return;
 	const iconPath = windowIconPath();
 	if (!iconPath) return;
 	const icon = nativeImage.createFromPath(iconPath);
@@ -673,29 +673,41 @@ function focusMainWindow(): void {
 	mainWindow.focus();
 }
 
-let sideClaimedDaemonPID: number | undefined;
 let sideLaunchState: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> } | undefined;
 const SIDE_STATE_BACKSTOP_MS = 5_000;
 let sideStateTimer: ReturnType<typeof setInterval> | undefined;
-let sideStatePolling = false;
-let sideStateRequest = 0;
-let sideStateApplied = 0;
-const closedSideChats = new Set<string>();
-function rememberSideLaunchState(state: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> }): void {
-	sideLaunchState = {
-		...state,
-		sides: state.sides.filter((record) => {
-			const id = (record as { side?: { id?: string } })?.side?.id;
-			return typeof id === "string" && ((record as { cleanupOnly?: boolean }).cleanupOnly || !closedSideChats.has(id));
-		}),
-	};
+const sideCloseRecovery = new SideCloseRecovery();
+function publishPendingSideCloses(): void {
+	getShellWebContents()?.send("sideChats:pendingClosesChanged");
 }
+function rememberSideLaunchState(state: { appRunId: string; sides: unknown[]; numbers?: Record<string, number> }): void {
+	sideCloseRecovery.remember(state);
+	sideLaunchState = sideCloseRecovery.state;
+	publishPendingSideCloses();
+}
+
+const sideLaunchRecovery = new SideLaunchRecovery({
+	snapshot: () => sideLaunchState,
+	onRestore: () => sideCloseRecovery.markRestoreAttempt(),
+	onSnapshot: rememberSideLaunchState,
+	onError: error => console.warn("AO: side chat recovery or capture failed", error),
+	onReady: () => {
+		const capture = () => sideLaunchRecovery.captureInBackground();
+		capture();
+		if (sideStateTimer) clearInterval(sideStateTimer);
+		sideStateTimer = setInterval(capture, SIDE_STATE_BACKSTOP_MS);
+	},
+});
+app.once("will-quit", () => {
+	sideLaunchRecovery.setAttachment(undefined);
+	if (sideStateTimer) clearInterval(sideStateTimer);
+	sideStateTimer = undefined;
+});
 
 function setDaemonStatus(nextStatus: DaemonStatus): void {
 	if (nextStatus.state !== "ready" || daemonStatus.state !== "ready" || nextStatus.port !== daemonStatus.port || nextStatus.pid !== daemonStatus.pid) daemonAttachmentGeneration++;
 	if (nextStatus.state !== "ready") disposeBrowserRuntimeLink();
 	if (nextStatus.state !== "ready") {
-		sideClaimedDaemonPID = undefined;
 		if (sideStateTimer) clearInterval(sideStateTimer);
 		sideStateTimer = undefined;
 		disposeBrowserStreamLink();
@@ -709,41 +721,11 @@ function setDaemonStatus(nextStatus: DaemonStatus): void {
 		establishBrowserStreamLink();
 	}
 	const daemonIdentity = nextStatus.pid ?? daemonProcess?.pid;
-	if (nextStatus.state === "ready" && nextStatus.port && daemonIdentity && sideClaimedDaemonPID !== daemonIdentity) {
-		sideClaimedDaemonPID = daemonIdentity;
-		const sideBase = `http://127.0.0.1:${nextStatus.port}/api/v1/side-chats/launch`;
-		void fetch(`${sideBase}/claim`, {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ appRunId }),
-		}).then(async (response) => {
-			if (!response.ok) throw new Error(`side launch claim failed: ${response.status}`);
-			if (sideLaunchState?.appRunId === appRunId && (sideLaunchState.sides.length > 0 || Object.keys(sideLaunchState.numbers ?? {}).length > 0)) {
-				const restored = await fetch(`${sideBase}/state`, {
-					method: "POST", headers: { "content-type": "application/json" },
-					body: JSON.stringify(sideLaunchState),
-				});
-				if (!restored.ok) throw new Error(`side chat recovery failed: ${restored.status}`);
-			}
-			const readState = async () => {
-				if (sideStatePolling || sideClaimedDaemonPID !== daemonIdentity) return;
-				sideStatePolling = true;
-				const request = ++sideStateRequest;
-				try {
-					const result = await fetch(`${sideBase}/state?appRunId=${encodeURIComponent(appRunId)}`);
-					if (result.ok) {
-						const state = await result.json() as { appRunId: string; sides: unknown[]; numbers?: Record<string, number> };
-						if (sideClaimedDaemonPID === daemonIdentity && state.appRunId === appRunId && request > sideStateApplied) { sideStateApplied = request; rememberSideLaunchState(state); }
-					}
-				} catch (error) { console.warn("AO: side chat memory snapshot failed", error); }
-				finally { sideStatePolling = false; }
-			};
-			await readState();
-			// Backstop only: the renderer captures this state after every side chat
-			// change (sideChats:capture). Polling at 500ms cost ~7,200 daemon
-			// requests an hour for the whole app lifetime.
-			if (sideClaimedDaemonPID === daemonIdentity) sideStateTimer = setInterval(() => void readState(), SIDE_STATE_BACKSTOP_MS);
-		}).catch((error) => { if (sideClaimedDaemonPID === daemonIdentity) sideClaimedDaemonPID = undefined; console.warn("AO: side chat launch claim failed", error); });
+	if (sideLaunchRecovery.setAttachment(nextStatus.state === "ready" && nextStatus.port && daemonIdentity
+		? { generation: daemonAttachmentGeneration, pid: daemonIdentity, port: nextStatus.port, appRunId }
+		: undefined)) {
+		if (sideStateTimer) clearInterval(sideStateTimer);
+		sideStateTimer = undefined;
 	}
 }
 
@@ -1092,6 +1074,12 @@ async function createWindowInternal(): Promise<void> {
 			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
+		prepareBrowserPartition: (partition) =>
+			applyBrowserIdentity(session.fromPartition(partition), {
+				chromeVersion: process.versions.chrome,
+				platform: process.platform,
+				languages: acceptLanguages(app.getLocale(), app.getPreferredSystemLanguages()),
+			}),
 		clipboard: { writeImage: writeClipboardImage },
 		onNativeViewAdded: () => windowComposition?.restackShell(),
 	});
@@ -1377,7 +1365,7 @@ function telemetryOverrides(): Record<string, string> {
 		// env so the spawned daemon inherits the DSN; off in dev to match the
 		// PostHog remote gate, and an explicit env always wins. A blank value
 		// leaves the daemon's Sentry a no-op.
-		AO_SENTRY_DSN: process.env.AO_SENTRY_DSN ?? (isDev ? "" : DEFAULT_SENTRY_DSN),
+		AO_SENTRY_DSN: daemonSentryDsn(process.env.AO_SENTRY_DSN, isDev),
 		// The daemon binary has no version of its own that release tooling sets,
 		// so without this every daemon event lands unattributable to a release.
 		AO_TELEMETRY_APP_VERSION: process.env.AO_TELEMETRY_APP_VERSION ?? app.getVersion(),
@@ -2599,23 +2587,32 @@ ipcMain.handle("daemon:restart", async () => {
 		return reportDaemonRestartFailure(error);
 	}
 });
-async function captureSideChatState(closedSideId?: string, cancelClose = false): Promise<void> {
-	if (closedSideId) {
-		if (cancelClose) closedSideChats.delete(closedSideId); else closedSideChats.add(closedSideId);
-		if (sideLaunchState) rememberSideLaunchState(sideLaunchState);
+async function captureSideChatState(closedSideId?: string, cancelClose = false, alreadyClosedId?: string): Promise<void> {
+	// Pin known ownership immediately, even while an older restore is in flight.
+	// A second daemon crash must not lose this close intent while capture waits.
+	if (closedSideId && !cancelClose && sideLaunchState?.sides.some((record) => (record as { side?: { id?: string } }).side?.id === closedSideId)) {
+		sideCloseRecovery.begin(closedSideId);
+		sideLaunchState = sideCloseRecovery.state;
+		publishPendingSideCloses();
 	}
-	if (daemonStatus.state !== "ready" || !daemonStatus.port) return;
-	const daemonIdentity = sideClaimedDaemonPID;
-	const request = ++sideStateRequest;
-	const result = await fetch(
-		`http://127.0.0.1:${daemonStatus.port}/api/v1/side-chats/launch/state?appRunId=${encodeURIComponent(appRunId)}`,
-		{ signal: AbortSignal.timeout(5000) },
-	);
-	if (!result.ok) throw new Error(`side chat capture failed: ${result.status}`);
-	const state = await result.json() as { appRunId: string; sides: unknown[]; numbers?: Record<string, number> };
-	if (daemonIdentity === sideClaimedDaemonPID && state.appRunId === appRunId && request > sideStateApplied) {
-		sideStateApplied = request;
-		rememberSideLaunchState(state);
+	await sideLaunchRecovery.ensureReady();
+	if (closedSideId) {
+		if (cancelClose) sideCloseRecovery.cancel(closedSideId);
+		else {
+			// Capture missing ownership before allowing DELETE. Once pinned, later
+			// snapshot failures must retain the cleanup record.
+			if (!sideLaunchState?.sides.some((record) => (record as { side?: { id?: string } }).side?.id === closedSideId)) await captureSideChatState();
+			sideCloseRecovery.begin(closedSideId);
+		}
+		sideLaunchState = sideCloseRecovery.state;
+		publishPendingSideCloses();
+	}
+	const { attachment, state } = await sideLaunchRecovery.capture();
+	if (!sideLaunchRecovery.matches(attachment)) throw new Error("Side chat daemon attachment changed. Retry after reconnecting.");
+	if (alreadyClosedId) {
+		sideCloseRecovery.reconcileMissing(alreadyClosedId, state);
+		sideLaunchState = sideCloseRecovery.state;
+		publishPendingSideCloses();
 	}
 }
 
@@ -2627,10 +2624,30 @@ ipcMain.handle("sideChats:capture", async (event, closedSideId?: string, cancelC
 	if (typeof cancelClose !== "boolean") throw new Error("Invalid close cancellation.");
 	return captureSideChatState(closedSideId, cancelClose);
 });
+ipcMain.handle("sideChats:confirmClose", async (event, sideId: string, alreadyClosed = false) => {
+	if (event.sender !== getShellWebContents() || typeof sideId !== "string" || !sideId || sideId.length > 255 || typeof alreadyClosed !== "boolean") throw new Error("Invalid side close confirmation.");
+	if (alreadyClosed) { await captureSideChatState(undefined, false, sideId); return; }
+	sideCloseRecovery.confirm(sideId);
+	publishPendingSideCloses();
+	// DELETE already established success. Keep cleanup in RAM while refreshing.
+	sideLaunchRecovery.captureInBackground();
+});
+ipcMain.handle("sideChats:pendingCloses", (event, sessionId: string) => {
+	if (event.sender !== getShellWebContents() || typeof sessionId !== "string" || sessionId.length > 255) throw new Error("Invalid side close query.");
+	return sideCloseRecovery.pending(sessionId);
+});
 
 ipcMain.handle("editorHandoff:getState", (event, sessionId: string, options) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
 	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "", { refreshTerminals: options?.refreshTerminals === true });
+});
+ipcMain.handle("editorHandoff:getEditors", (event) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.getEditors();
+});
+ipcMain.handle("editorHandoff:setPreferredEditor", (event, editorId: unknown) => {
+	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	return editorHandoff.setPreferredEditor(editorId);
 });
 ipcMain.handle("editorHandoff:open", (event, input) => {
 	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
@@ -2828,10 +2845,21 @@ ipcMain.handle("telemetry:getBootstrap", () => {
 	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot());
 });
 ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
-ipcMain.handle("telemetry:setAnalyticsOptOut", (event, optedOut: unknown) => {
+async function flushDaemonUsage(): Promise<void> {
+	if (daemonStatus.state !== "ready" || !daemonStatus.port) return;
+	try {
+		await fetch(`http://127.0.0.1:${daemonStatus.port}/internal/telemetry/usage-flush`, {
+			method: "POST", signal: AbortSignal.timeout(3000),
+		});
+	} catch (error) { console.warn("AO: usage telemetry flush failed", error); }
+}
+
+ipcMain.handle("telemetry:setAnalyticsOptOut", async (event, optedOut: unknown) => {
 	const trustedSender = trustedShellWebContents.get(event.sender.id);
 	if (trustedSender !== event.sender || typeof optedOut !== "boolean") throw new Error("invalid analytics opt-out request");
-	return telemetryIdentity.setOptedOut(optedOut);
+	const result = await telemetryIdentity.setOptedOut(optedOut);
+	if (optedOut) void flushDaemonUsage();
+	return result;
 });
 ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 	const trustedSender = trustedShellWebContents.get(event.sender.id);
@@ -3124,6 +3152,7 @@ ipcMain.handle("updates:install", (_event, confirmedVersion?: string) => quitAnd
 // in-process, so restart AO like a manual quit-and-reopen. install-on-quit is
 // already off on the failed path, so quitting can't apply a half-prepared build.
 ipcMain.handle("updates:relaunch", () => {
+	recordUpdateDiagnostic("retry-relaunch-requested");
 	app.relaunch();
 	desktopQuit.quitCompletely();
 });
@@ -3514,6 +3543,8 @@ async function writeAppStateOnLaunch(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+	powerMonitor.on("suspend", () => recordUpdateDiagnostic("power-suspend"));
+	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
 	if (app.isPackaged) {
 		const { checkDesktopVersionFloor } = await import("./main/desktop-version-floor");
 		await checkDesktopVersionFloor().catch((err) =>
@@ -3525,7 +3556,8 @@ app.whenReady().then(async () => {
 	const policyController = new DesktopTelemetryController({
 		authority,
 		environmentAllowsEvents: rendererTelemetryEnabled(process.env, app.isPackaged),
-		transportFactory: () => initMainSentry(app.getVersion(), app.getPath("userData")),
+		transportFactory: () => initMainSentry(app.getVersion(), desktopDataDir, app.getPath("userData"), isDev),
+		clearTransportCache: () => clearMainSentryCache(app.getPath("userData")),
 		clearRendererQueues: clearRendererTelemetryQueues,
 		broadcast: (view) => {
 			for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(TELEMETRY_POLICY_CHANGED_CHANNEL, view);
@@ -3737,6 +3769,7 @@ app.on("before-quit", (event) => {
 				cloudAgentProxy.close(),
 				telemetryPolicyController?.close() ?? Promise.resolve(),
 				retireSides(),
+				flushDaemonUsage(),
 			]);
 			const finishQuit = () => {
 				browserCleanupComplete = true;

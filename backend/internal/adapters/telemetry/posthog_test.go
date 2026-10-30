@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -79,6 +80,62 @@ func TestPostHogSinkCapturesEvent(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("PostHog sink did not send request")
+	}
+}
+
+func TestUsageEventWaitsForPostHogBufferCapacity(t *testing.T) {
+	sink := &PostHogSink{ch: make(chan ports.TelemetryEvent, 1), log: slog.Default()}
+	sink.ch <- ports.TelemetryEvent{Name: "queued"}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		sink.Emit(ctx, ports.TelemetryEvent{Name: "ao.usage.messages_sent"})
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("usage event dropped while the queue was full")
+	case <-time.After(20 * time.Millisecond):
+	}
+	<-sink.ch
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("usage event did not enter the queue after capacity opened")
+	}
+	if event := <-sink.ch; event.Name != "ao.usage.messages_sent" {
+		t.Fatalf("queued event = %q", event.Name)
+	}
+}
+
+func TestUsageEventPayloadAllowlistRejectsContentAndInvalidIdentifiers(t *testing.T) {
+	projectID := "e484ce2d-1eb9-445a-ae52-a2e088870328"
+	sessionID := "0123456789abcdef0123456789abcdef"
+	for _, name := range []string{"ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged"} {
+		got := sanitizeRemotePayload(name, map[string]any{
+			"project_telemetry_id": projectID,
+			"session_telemetry_id": sessionID,
+			"count":                int64(3),
+			"historical":           true,
+			"repo":                 "private/repo",
+			"url":                  "https://github.com/private/repo/pull/1",
+			"title":                "private PR title",
+			"text":                 "private message",
+		})
+		if got["project_telemetry_id"] != projectID || got["count"] != int64(3) {
+			t.Fatalf("%s required payload = %#v", name, got)
+		}
+		for _, forbidden := range []string{"repo", "url", "title", "text"} {
+			if _, ok := got[forbidden]; ok {
+				t.Fatalf("%s leaked %s", name, forbidden)
+			}
+		}
+	}
+	if got := sanitizeRemotePayload("ao.usage.messages_sent", map[string]any{
+		"project_telemetry_id": "/private/repo", "session_telemetry_id": "worker-1",
+	}); len(got) != 0 {
+		t.Fatalf("invalid identifiers exported: %#v", got)
 	}
 }
 

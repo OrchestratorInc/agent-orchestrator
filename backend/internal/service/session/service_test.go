@@ -18,7 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
@@ -5931,6 +5930,20 @@ func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (s
 	return sessionmanager.KillResult{Freed: freed}, err
 }
 
+func TestArchiveFlushesPendingUsageSummary(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st})
+	flushed := 0
+	svc.SetUsageArchiveFlush(func(context.Context) { flushed++ })
+	if _, err := svc.RequestKill(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if flushed != 1 {
+		t.Fatalf("usage flushes = %d, want 1 after archive", flushed)
+	}
+}
+
 func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTerminated: true, CleanupGeneration: 2}
@@ -6059,11 +6072,12 @@ func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
 func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
 	var sentryErrs []error
 	var sentryTags []map[string]string
+	originalCapture := captureRelaunchError
 	captureRelaunchError = func(_ context.Context, err error, tags map[string]string, _ string) {
 		sentryErrs = append(sentryErrs, err)
 		sentryTags = append(sentryTags, tags)
 	}
-	t.Cleanup(func() { captureRelaunchError = sentryobs.CaptureHTTPError })
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
 	cause := sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("tmux: secret-token failed")}
 	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", &cause)}
 	sink := &fakeTelemetrySink{}
@@ -6109,7 +6123,7 @@ func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("a client that left mid-relaunch is not a failure to count; events = %#v", sink.events)
 	}
-	// Sentry keeps the raw error the 500 used to carry, once per relaunch failure.
+	// The capture boundary receives the error, then removes its text before send.
 	if len(sentryErrs) != 2 || !strings.Contains(sentryErrs[0].Error(), "secret-token") ||
 		sentryTags[1]["operation"] != "restore_session" || sentryTags[1]["step"] != "runtime" {
 		t.Fatalf("sentry captures = %v / %v, want the raw error for both operations", sentryErrs, sentryTags)

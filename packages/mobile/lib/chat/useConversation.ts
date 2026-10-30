@@ -38,14 +38,15 @@ import { conversationPollIntervalFor } from "./conversationPoll";
 import { createAsyncValueCache } from "./asyncValueCache";
 import { createRequestGate } from "./requestGate";
 import { withAttachmentReferences } from "./messageAttachments";
-import { loadTurnOptionCatalog } from "./turnOptionsCatalog";
+import { isEmptyTurnOptionCatalog, loadTurnOptionCatalog } from "./turnOptionsCatalog";
+import { rememberedTurnOptions, rememberTurnOptions, type TurnOptions } from "./lastTurnOptions";
 import { NOT_PAIRED_ACTION_COPY } from "../connectionError";
 import { excerptDraftText } from "./responseQuotes";
 import { clearPendingSend, needsAttachmentRecovery, pendingSendKey, readPendingSend, reservePendingSend } from "./pendingSend";
 
 const REFRESH_DEBOUNCE_MS = 120;
 const conversationPageCache = createMobileConversationPageCache();
-const turnOptionsCache = createAsyncValueCache<string, { models: ChatModel[]; configOptions: ChatConfigOption[] }>(16, 30_000);
+const turnOptionsCache = createAsyncValueCache<string, TurnOptions>(16, 30_000);
 const skillsCache = createAsyncValueCache<string, ChatSkill[]>(16, 30_000);
 
 export type PendingSend = {
@@ -94,7 +95,11 @@ export type MobileConversation = {
 	actionCodes: Partial<Record<ConversationAction, string>>;
 	refresh(): Promise<void>;
 	loadOlder(): Promise<void>;
-	loadTurnOptions(options?: { refresh?: boolean }): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }>;
+	/**
+	 * `ifMissing` loads only when this chat has no catalog of its own yet: the
+	 * last load failed or came back empty, so what shows is remembered or nothing.
+	 */
+	loadTurnOptions(options?: { refresh?: boolean; ifMissing?: boolean }): Promise<{ models: ChatModel[]; configOptions: ChatConfigOption[] }>;
 	loadSkills(): Promise<ChatSkill[]>;
 	send(text: string, attachments?: ChatImage[], resources?: ChatResource[], excerpts?: ChatExcerpt[]): Promise<string>;
 	retrySend(id: string): Promise<void>;
@@ -132,8 +137,8 @@ export function useMobileConversation(
 	const [loadingOlder, setLoadingOlder] = useState(false);
 	const [error, setError] = useState<string>();
 	const [unavailable, setUnavailable] = useState<{ code?: string; message: string }>();
-	const [models, setModels] = useState<ChatModel[]>([]);
-	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>([]);
+	const [models, setModels] = useState<ChatModel[]>(() => rememberedTurnOptions(cacheKey)?.models ?? []);
+	const [configOptions, setConfigOptions] = useState<ChatConfigOption[]>(() => rememberedTurnOptions(cacheKey)?.configOptions ?? []);
 	const [skills, setSkills] = useState<ChatSkill[]>([]);
 	const [pendingSends, setPendingSends] = useState<PendingSend[]>([]);
 	const [completedRetry, setCompletedRetry] = useState<{ id: string; draftText: string }>();
@@ -142,12 +147,17 @@ export function useMobileConversation(
 	const [actionErrors, setActionErrors] = useState<Partial<Record<ConversationAction, string>>>({});
 	const [actionCodes, setActionCodes] = useState<Partial<Record<ConversationAction, string>>>({});
 	const mounted = useRef(true);
+	// Whether the catalog shown came from a load of this chat, not from memory.
+	const turnOptionsLoaded = useRef(false);
+	// Only the newest catalog load decides what shows: an older one that fails or
+	// lands late must not undo it. `ifMissing` waits on the one in flight.
+	const turnOptionsRequest = useRef(0);
+	const turnOptionsInFlight = useRef<Promise<unknown> | undefined>(undefined);
 	const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const refreshGate = useRef(createRequestGate()).current;
 
 	const snapshot = useMemo(() => mergeConversationPages(pages), [pages]);
 	const hasConversation = Boolean(snapshot);
-	const hasProviderConfig = Boolean(snapshot?.capabilities?.includes("config_options"));
 
 	const refresh = useCallback(async () => {
 		if (!cfg) return;
@@ -230,22 +240,43 @@ export function useMobileConversation(
 		return () => { active = false; };
 	}, [pendingKey, options?.reviewId]);
 
-	const loadTurnOptions = useCallback(async (options?: { refresh?: boolean }) => {
+	const loadTurnOptions = useCallback(async (options?: { refresh?: boolean; ifMissing?: boolean }) => {
 		if (!cfg || unavailable || !hasConversation) return { models, configOptions };
+		if (options?.ifMissing) {
+			await turnOptionsInFlight.current?.catch(() => {});
+			if (turnOptionsLoaded.current) return rememberedTurnOptions(cacheKey) ?? { models, configOptions };
+		}
+		const request = ++turnOptionsRequest.current;
 		if (options?.refresh) turnOptionsCache.delete(cacheKey);
-		const catalog = await turnOptionsCache.load(cacheKey, async () => {
+		// An empty catalog is usually a provider that is not up yet: it is not
+		// cached, so the next load asks again, and what it offered before stays.
+		const loading = turnOptionsCache.load(cacheKey, async () => {
 			return loadTurnOptionCatalog({
-				hasProviderConfig,
 				loadModels: () => getConversationModels(cfg, sessionId),
 				loadConfigOptions: () => getConversationConfigOptions(cfg, sessionId),
 			});
-		});
-		if (mounted.current) {
-			setModels(catalog.models);
-			setConfigOptions(catalog.configOptions);
+		}, (loaded) => !isEmptyTurnOptionCatalog(loaded));
+		turnOptionsInFlight.current = loading;
+		let catalog: TurnOptions;
+		try {
+			catalog = await loading;
+		} catch (cause) {
+			if (request === turnOptionsRequest.current) turnOptionsLoaded.current = false;
+			throw cause;
+		} finally {
+			if (turnOptionsInFlight.current === loading) turnOptionsInFlight.current = undefined;
 		}
-		return catalog;
-	}, [cacheKey, cfg, configOptions, hasConversation, hasProviderConfig, models, sessionId, unavailable]);
+		const empty = isEmptyTurnOptionCatalog(catalog);
+		const shown = empty ? rememberedTurnOptions(cacheKey) ?? catalog : catalog;
+		if (request !== turnOptionsRequest.current) return shown;
+		turnOptionsLoaded.current = !empty;
+		if (!empty) rememberTurnOptions(cacheKey, catalog);
+		if (mounted.current) {
+			setModels(shown.models);
+			setConfigOptions(shown.configOptions);
+		}
+		return shown;
+	}, [cacheKey, cfg, configOptions, hasConversation, models, sessionId, unavailable]);
 
 	const loadSkills = useCallback(async () => {
 		if (!cfg || unavailable || !hasConversation) return skills;
@@ -448,8 +479,12 @@ export function useMobileConversation(
 		(optionId: string, value: { value: string } | { enabled: boolean }) =>
 			runAction("config", async () => {
 				const options = await requireConfig(cfg, (c) => setConversationConfigOption(c, sessionId, optionId, value));
+				// The provider's own post-change catalog: a load still in flight is older.
+				turnOptionsRequest.current++;
 				setConfigOptions(options);
 				turnOptionsCache.set(cacheKey, { models, configOptions: options });
+				rememberTurnOptions(cacheKey, { models, configOptions: options });
+				if (options.length) turnOptionsLoaded.current = true;
 				return options;
 			}),
 		[cacheKey, cfg, models, runAction, sessionId],

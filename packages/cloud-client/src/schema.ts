@@ -92,6 +92,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/providers/{agent}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        /** @description The models and reasoning efforts a new Cloud task for this agent runs with, for the authenticated user in this organization. The list is what the next task's worker runs, not a suggestion, and needs no live worker: `source` says whether a Cloud worker running the same CLI version with the user's current credential reported it, or it is the list the control plane's pinned CLI version supports. A task that names no model keeps the project's or the agent's default. A listed model without `efforts` takes no reasoning effort; every model that takes one lists its levels. */
+        get: operations["listUserAgentModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/github/user": {
         parameters: {
             query?: never;
@@ -1932,10 +1952,149 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/hosts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listRemoteHosts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/hosts/{hostId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Lists a machine in the account, or updates its listing. A new `token`,
+         *     or listing a removed machine again, retires its standing fixed tunnel:
+         *     a run token fetched with the old credential stops working, and the
+         *     machine gets a new tunnel at the same address. A registration that
+         *     makes a tunnel can take more than a minute.
+         *      */
+        put: operations["putRemoteHost"];
+        post?: never;
+        /** @description Removes the machine from the account and deletes its fixed tunnel;
+         *     when Cloudflare fails, a later cleanup deletes it. The fixed address
+         *     counts against the account's limit until that cleanup, usually within
+         *     15 minutes.
+         *      */
+        delete: operations["deleteRemoteHost"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/remote-hosts/{hostId}/address": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The machine publishes the address it serves now to every account that
+         *     lists it under this credential.
+         *      */
+        post: operations["publishRemoteHostAddress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/remote-hosts/{hostId}/tunnel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The machine fetches the run token of the fixed tunnel an account gives
+         *     it: the account that lists the machine under the credential it
+         *     presents. If several do, one with a standing tunnel is preferred. The
+         *     deployment makes the tunnel when there is none. A deployment that
+         *     predates this route answers 404 without an error envelope.
+         *      */
+        post: operations["ensureRemoteHostTunnel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        RemoteHost: {
+            hostId: string;
+            label: string;
+            /** @description The address devices reach the machine at. */
+            url: string;
+            /** @description The credential a device presents to the machine. */
+            token: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        RemoteHostList: {
+            hosts: components["schemas"]["RemoteHost"][];
+            /** @description Whether this deployment gives machines fixed addresses; absent means false. Only then may a registration omit `url`. */
+            fixedAddresses?: boolean;
+        };
+        RemoteHostRegistration: {
+            /** @description At most 64 bytes, after surrounding whitespace is trimmed. */
+            label: string;
+            /** @description The machine's address, an http or https origin with no path, query, fragment or user info. Omit it, or send it empty, to list the machine at a fixed address the deployment makes. */
+            url?: string;
+            token: string;
+        };
+        RemoteHostAddress: {
+            /**
+             * Format: uri
+             * @description An https origin with no path, query, fragment or user info.
+             */
+            url: string;
+        };
+        RemoteHostTunnelRequest: {
+            /** @description Replace the tunnel under the same address. A repair within a minute of the tunnel's last change returns the current tunnel with `repaired` unset. */
+            repair?: boolean;
+        };
+        RemoteHostTunnel: {
+            /** @description The fixed address's host name. */
+            hostname: string;
+            /** @description The Cloudflare run token for the machine's connector. */
+            runToken: string;
+            /**
+             * Format: date-time
+             * @description When the address was made; it may not resolve for a short time after.
+             */
+            since: string;
+            /** @description Set when a repair request got a new tunnel. */
+            repaired?: boolean;
+        };
         EmptyObject: Record<string, never>;
         AgentNotificationEvent: {
             eventId: string;
@@ -2853,6 +3012,15 @@ export interface components {
         };
         ChatModelsResponse: {
             models: components["schemas"]["ChatModel"][];
+            /**
+             * @description Where the list came from. worker: reported by a Cloud worker running this CLI version with the user's current credential. release: the models the control plane's pinned CLI version supports.
+             * @enum {string}
+             */
+            source?: "worker" | "release";
+            /** @description The harness CLI version the list is for. */
+            cliVersion?: string;
+            /** @description On a session's list, true when its worker listed the models for the signed-in account rather than from the CLI's built-in list. Only such a list becomes the user's catalog. */
+            accountListed?: boolean;
         };
         SendMessageInput: {
             text: string;
@@ -3065,6 +3233,8 @@ export interface components {
                 /** @constant */
                 desiredState: "deleted";
             };
+            /** @description Whether the session's artifact files were deleted. */
+            artifactsDeleted?: boolean;
         };
         SessionResponse: {
             session: components["schemas"]["Session"];
@@ -3961,6 +4131,8 @@ export interface components {
         };
     };
     parameters: {
+        /** @description The machine's stable identity, `h_` followed by a UUID. */
+        RemoteHostId: string;
         /** @description The file name, without a directory. */
         ArtifactShareName: string;
         /** @description Lowercase hex SHA-256 of the body. */
@@ -4204,6 +4376,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listUserAgentModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                agent: "claude-code" | "codex" | "cursor" | "opencode";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The model catalog for the next task. It lists at least one model. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatModelsResponse"];
+                };
+            };
+            /** @description MODEL_CATALOG_UNAVAILABLE. This agent has no Cloud model catalog. Clients keep the agent's own model discovery where it has one, or offer the native default and manual model entry. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
             };
             default: components["responses"]["Error"];
         };
@@ -4823,7 +5028,10 @@ export interface operations {
     };
     deleteSession: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Also delete the session's artifact files. A restored session comes back without them. */
+                deleteArtifacts?: boolean;
+            };
             header?: never;
             path: {
                 orgId: components["parameters"]["OrgId"];
@@ -7230,6 +7438,155 @@ export interface operations {
                 };
                 content?: never;
             };
+            default: components["responses"]["Error"];
+        };
+    };
+    listRemoteHosts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The account's machines. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteHostList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putRemoteHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostRegistration"];
+            };
+        };
+        responses: {
+            /** @description Listed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. A registration with `url` still succeeds. */
+            409: components["responses"]["Error"];
+            /** @description `validation_error`: the label or token is missing or invalid, `url` is invalid, or `url` is missing on a deployment that gives no fixed addresses. */
+            422: components["responses"]["ValidationError"];
+            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. Also for a new `token` on a machine with a fixed tunnel, with or without `url`. */
+            429: components["responses"]["Error"];
+            /** @description `tunnel_unavailable`: the fixed address could not be made, or a new `token` could not retire the standing tunnel, with or without `url`. The listing is unchanged, and registering again retries. The machine's current run token may already have stopped working. */
+            502: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteRemoteHost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            default: components["responses"]["Error"];
+        };
+    };
+    publishRemoteHostAddress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostAddress"];
+            };
+        };
+        responses: {
+            /** @description Published. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `unauthorized`: the credential is missing or malformed, or no account lists the machine under it. */
+            401: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    ensureRemoteHostTunnel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The machine's stable identity, `h_` followed by a UUID. */
+                hostId: components["parameters"]["RemoteHostId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteHostTunnelRequest"];
+            };
+        };
+        responses: {
+            /** @description The machine's fixed tunnel. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteHostTunnel"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            /** @description `unauthorized`: the credential is missing or malformed, or no account lists the machine under it. */
+            401: components["responses"]["Error"];
+            /** @description `fixed_address_limit_reached`: the account uses all of its fixed addresses. */
+            409: components["responses"]["Error"];
+            /** @description `tunnel_rate_limited`: the account made too many fixed-address writes; try later. */
+            429: components["responses"]["Error"];
+            /** @description `tunnel_unavailable`: the tunnel could not be made or replaced. A repair that could not delete the standing tunnel leaves it in place. */
+            502: components["responses"]["Error"];
+            /** @description `fixed_addresses_unavailable`: this deployment gives no fixed addresses. */
+            503: components["responses"]["Error"];
             default: components["responses"]["Error"];
         };
     };

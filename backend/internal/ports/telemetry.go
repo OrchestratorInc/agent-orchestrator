@@ -75,6 +75,8 @@ var ErrInvalidCloudUserID = errors.New("invalid cloud user id")
 // TelemetryIdentityStore holds the live telemetry identity for the daemon.
 type TelemetryIdentityStore interface {
 	Snapshot() TelemetryIdentity
+	OptedOut() bool
+	ExportSuppressed() bool
 	// SetCloudUserID records the signed-in AO Cloud user ("" on sign-out). It
 	// returns ErrInvalidCloudUserID when the id is not a plausible AO Cloud user id,
 	// and another error when the identity state could not be made durable, in

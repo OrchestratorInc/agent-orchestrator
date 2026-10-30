@@ -7752,7 +7752,7 @@ func TestSpawn_RejectsMissingTmuxBeforeSessionRow(t *testing.T) {
 	rt := &fakeRuntime{}
 	ws := &fakeWorkspace{}
 	lookPath := func(name string) (string, error) {
-		if name == "tmux" {
+		if filepath.Base(name) == "tmux" {
 			return "", fmt.Errorf("exec: %q: not found", name)
 		}
 		return "/bin/true", nil
@@ -7791,6 +7791,37 @@ func TestValidateRuntimePrerequisites_AllowsConfiguredBundledTmux(t *testing.T) 
 	}
 	if err := m.validateRuntimePrerequisites(); err != nil {
 		t.Fatalf("validateRuntimePrerequisites() = %v, want configured bundled tmux accepted", err)
+	}
+}
+
+// A daemon started by launchd, cron, or a minimal-env shell inherits a PATH
+// without Homebrew's bin directory; the spawn must still find Homebrew tmux.
+func TestSpawn_FindsHomebrewTmuxMissingFromDaemonPATH(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("only macOS gates spawns on tmux")
+	}
+	t.Setenv("AO_TMUX_BINARY", "")
+	const homebrewTmux = "/opt/homebrew/bin/tmux"
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rt := &fakeRuntime{}
+	ws := &fakeWorkspace{}
+	lookPath := func(name string) (string, error) {
+		if name == homebrewTmux {
+			return homebrewTmux, nil
+		}
+		if filepath.Base(name) == "tmux" {
+			return "", fmt.Errorf("exec: %q: not found", name)
+		}
+		return "/bin/true", nil
+	}
+	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatalf("Spawn() = %v, want Homebrew tmux accepted", err)
+	}
+	if rt.created != 1 {
+		t.Fatalf("runtime.Create calls = %d, want 1", rt.created)
 	}
 }
 

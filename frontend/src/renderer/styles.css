@@ -3,6 +3,7 @@
 @import "../styles/tokens.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
+@import "./components/artifact-document.css";
 @source "../../../packages/product-ui/src";
 
 @custom-variant dark (&:is(.dark *, :root:not([data-theme="light"]) *));
@@ -171,7 +172,6 @@
 	--size-icon-sm: var(--size-icon-sm);
 	--size-icon-md: var(--size-icon-md);
 	--size-icon-base: var(--size-icon-base);
-	--size-terminal-agent-icon: var(--size-terminal-agent-icon);
 	--size-icon-lg: var(--size-icon-lg);
 	--size-icon-xl: var(--size-icon-xl);
 
@@ -233,7 +233,6 @@
 	--spacing-content-max: var(--size-content-max);
 	--spacing-flex-min: var(--size-flex-min);
 	--spacing-shell-tab-min: var(--size-shell-tab-min);
-	--spacing-shell-tab-connected: var(--size-shell-tab-connected);
 	--spacing-shell-tab-max: var(--size-shell-tab-max);
 	--spacing-board-empty: var(--size-board-empty);
 	--spacing-preview-content: var(--size-preview-content);
@@ -340,6 +339,35 @@
 	background-color: var(--color-scrim);
 	-webkit-backdrop-filter: blur(var(--blur-overlay));
 	backdrop-filter: blur(var(--blur-overlay));
+}
+
+/* In a translucent window, Chromium's backdrop blur cannot see content drawn
+ * over the transparent window base, so text behind would show through sharp.
+ * There the surface turns nearly solid instead. */
+html[data-window-translucent="true"] .overlay-glass {
+	background-color: color-mix(in oklch, var(--popover) 96%, transparent);
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+/* See-through modal surface: the app shows through, blurred and slightly
+ * saturated so colour behind it reads as depth rather than noise. */
+@utility overlay-glass {
+	background-color: var(--color-bg-overlay-glass);
+	-webkit-backdrop-filter: blur(var(--blur-overlay-glass)) saturate(1.6);
+	backdrop-filter: blur(var(--blur-overlay-glass)) saturate(1.6);
+	@media (prefers-reduced-transparency: reduce) {
+		background-color: var(--popover);
+		-webkit-backdrop-filter: none;
+		backdrop-filter: none;
+	}
+}
+
+/* While one modal hands the screen to the next (lib/modal-handoff.ts), the
+ * backdrops appear and leave at full strength so the dim never dips. */
+html[data-modal-handoff] .dialog-overlay,
+.dialog-overlay[data-modal-handoff]:not([data-state="closed"]) {
+	animation: none !important;
 }
 
 @utility modal-shake {
@@ -649,24 +677,6 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * missing slice instead of applying the full off-canvas navigation clearance. */
 .session-topbar-terminal-region {
 	transition: padding-left 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-
-/* Preserve the established tab chrome while preventing flex pressure from
- * erasing the agent icon. This class controls sizing only. */
-.session-tab-icon-floor {
-	min-width: calc(var(--size-icon-base) + var(--space-6));
-}
-
-.session-tab-icon-floor--closable {
-	width: auto;
-	min-width: var(--size-shell-tab-min);
-	max-width: var(--size-shell-tab-connected);
-}
-
-.session-tab-icon-floor[data-editing="true"] {
-	flex-shrink: 0;
-	width: var(--size-shell-tab-connected);
-	min-width: var(--size-shell-tab-connected);
 }
 
 .session-topbar-traffic-light-clearance-mac {
@@ -1892,10 +1902,9 @@ textarea,
 	to { background-position: -400px center; }
 }
 
-/* Live "Working for" label: solid muted text with a soft brighter band sweeping across it.
-   The muted layer keeps every glyph painted; the band fades in and out so it has no hard edge.
-   The band's strength is a registered property so it can fade out when the turn settles
-   without the text ever switching paint technique (which would blink). */
+/* Live status label (the chat's current step, a board card's working state): solid
+   muted text with a soft brighter band sweeping across it. The muted layer keeps every
+   glyph painted; the band fades in and out so it has no hard edge. */
 @property --working-shimmer {
 	syntax: "<number>";
 	inherits: false;
@@ -1916,27 +1925,55 @@ textarea,
 	will-change: transform;
 }
 
-/* Settling: the highlight fades, the label slides over the spinner's footprint, the
-   spinner shrinks away. Keyframes (not transitions) so a row that first mounts
-   already settled still plays them. */
-.chat-working-shimmer[data-settling] {
-	animation:
-		chat-working-shimmer 2.4s ease-in-out infinite,
-		chat-working-shift 400ms cubic-bezier(0.22, 1, 0.36, 1) both,
-		chat-working-fade 300ms ease-out both;
+/* The live row's label (current step, retry chip, setup label) fades in once when the
+   row changes what it is showing; the text inside then updates in place. */
+.chat-live-label {
+	animation: chat-live-label-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.chat-working-spinner-slot {
-	will-change: transform, opacity;
+@keyframes chat-live-label-in {
+	from { opacity: 0; transform: translateY(2px); }
 }
 
-.chat-working-spinner-slot[data-settling] {
-	animation: chat-working-close 400ms cubic-bezier(0.22, 1, 0.36, 1) both;
+@media (prefers-reduced-motion: reduce) {
+	.chat-live-label {
+		animation: none;
+	}
 }
 
-@keyframes chat-working-close {
-	from { opacity: 1; transform: scale(1); }
-	to { opacity: 0; transform: scale(0); }
+/* The live row's working mark (components/chat/LatticeLoader.tsx): sixteen 2.5px
+   dots on a 3.5px pitch, 13px across and centred in the 20px slot, so every dot
+   lands on whole device pixels on a 2x display. The outer twelve share one beat,
+   staggered inline. */
+.chat-lattice {
+	display: grid;
+	grid-template-columns: repeat(4, 2.5px);
+	grid-auto-rows: 2.5px;
+	gap: 1px;
+}
+
+.chat-lattice-dot {
+	border-radius: 9999px;
+	background: currentColor;
+	opacity: 0.1;
+}
+
+.chat-lattice-dot[data-trail-step] {
+	opacity: 0.2;
+	animation: chat-lattice-trail 1200ms cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+@keyframes chat-lattice-trail {
+	0%, 100% { opacity: 0.2; }
+	12%, 22% { opacity: 1; }
+	40% { opacity: 0.2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-lattice-dot[data-trail-step] {
+		animation: none;
+		opacity: 0.45;
+	}
 }
 
 /* Streamed prose: each newly revealed character fades in once, on mount (see
@@ -1951,35 +1988,60 @@ textarea,
 	from { opacity: 0; }
 }
 
-@keyframes chat-working-shift {
-	from { transform: translateX(0); }
-	to { transform: translateX(-18px); }
-}
-
-@keyframes chat-working-fade {
-	from { --working-shimmer: 1; }
-	to { --working-shimmer: 0; }
-}
-
 @keyframes chat-working-shimmer {
 	from { background-position: -10% center, 0 0; }
 	to { background-position: 110% center, 0 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.chat-working-shimmer,
-	.chat-working-shimmer[data-settling] {
+	.chat-working-shimmer {
 		animation: none;
 		background: none;
 		color: var(--color-muted-foreground);
 	}
-	.chat-working-shimmer[data-settling] {
-		transform: translateX(-18px);
-	}
-	.chat-working-spinner-slot[data-settling] {
-		animation: none;
-		opacity: 0;
-		transform: scale(0);
+}
+
+/* Chat scroll windows (the plan, a live turn's activity): content fades out at
+   whichever edge still has more to scroll to, so a long list reads as continuing
+   rather than cut off. syncEdgeFade (chat/edge-fade.ts) sets the data attributes
+   from the scroll position; the lengths are registered so the fade eases in and out
+   instead of snapping. */
+@property --edge-fade-top {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+@property --edge-fade-bottom {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+.edge-fade-viewport {
+	mask-image: linear-gradient(
+		to bottom,
+		transparent,
+		#000 var(--edge-fade-top),
+		#000 calc(100% - var(--edge-fade-bottom)),
+		transparent
+	);
+	transition:
+		--edge-fade-top 150ms ease-out,
+		--edge-fade-bottom 150ms ease-out;
+}
+
+.edge-fade-viewport[data-fade-top] {
+	--edge-fade-top: 24px;
+}
+
+.edge-fade-viewport[data-fade-bottom] {
+	--edge-fade-bottom: 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.edge-fade-viewport {
+		transition: none;
 	}
 }
 

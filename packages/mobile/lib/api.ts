@@ -651,14 +651,17 @@ export function previewFilePath(sessionId: string, path: string): string {
 	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
+/** The daemon's route for a file in a session's artifact folder, each segment escaped. */
+export function previewArtifactPath(sessionId: string, entry: string): string {
+	return `${API}/sessions/${encodeURIComponent(sessionId)}/preview/artifacts/${entry.split("/").map(encodeURIComponent).join("/")}`;
+}
+
 export async function getPreview(cfg: ServerConfig, id: string): Promise<{ entry: string; url: string; authenticated: boolean } | null> {
 	const res = await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/preview`);
 	const data = await res.json();
 	const entry = typeof data?.entry === "string" ? data.entry.trim() : "";
 	if (entry) {
-		const path = data?.source === "artifact"
-			? `${API}/sessions/${encodeURIComponent(id)}/preview/artifacts/${entry.split("/").map(encodeURIComponent).join("/")}`
-			: previewFilePath(id, entry);
+		const path = data?.source === "artifact" ? previewArtifactPath(id, entry) : previewFilePath(id, entry);
 		const url = `${httpBase(cfg)}${path}`;
 		return { entry, url, authenticated: true };
 	}
@@ -1222,10 +1225,17 @@ export async function resumeSessionAgent(cfg: ServerConfig, id: string): Promise
 	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/resume-agent`, { method: "POST" }, RESUME_REQUEST_TIMEOUT_MS);
 }
 
-export async function sendMessage(cfg: ServerConfig, id: string, message: string): Promise<void> {
+/**
+ * Without `userAuthored`, the daemon treats the text as AO coordination (an
+ * `ao send` from another session) and types it into the agent wrapped in an
+ * `<ao-session-delivery>` envelope. Anything the user chose to send (typed text,
+ * or a review they forwarded) must set it, the way desktop does, so the agent
+ * sees it as a plain user prompt.
+ */
+export async function sendMessage(cfg: ServerConfig, id: string, message: string, options?: { userAuthored?: boolean }): Promise<void> {
 	await req(cfg, `${API}/sessions/${encodeURIComponent(id)}/send`, {
 		method: "POST",
-		body: JSON.stringify({ message }),
+		body: JSON.stringify(options?.userAuthored ? { message, userAuthored: true } : { message }),
 	});
 }
 

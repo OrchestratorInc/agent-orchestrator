@@ -69,6 +69,57 @@ jobs:
           xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/update-helper/tests" native/update-helper/UpdateProgressState.swift native/update-helper/StateTests.swift -o "$HOME/.ao/build-cache/update-helper/state-tests"
           "$HOME/.ao/build-cache/update-helper/state-tests"
 
+  mac-dmg-layout:
+    # The macOS install window. Builds a real dmg with scripts/build-mac-dmg.mjs
+    # (the builder the release conductor runs on the stapled app), mounts it
+    # read-only and asserts the .DS_Store, background and icon positions are
+    # there. The control proves the check still catches what shipped through
+    # v0.14.7: a bare `hdiutil create -srcfolder` image with no layout at all.
+    runs-on: macos-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        # Only app-builder-lib (pure JS) is needed; skip Electron's download.
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build and check a dmg around a fixture app
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/dmg-layout"
+          app="$work/Agent Orchestrator.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp assets/icon.icns "$app/Contents/Resources/icon.icns"
+          printf '#!/bin/sh\n' > "$app/Contents/MacOS/agent-orchestrator"
+          chmod +x "$app/Contents/MacOS/agent-orchestrator"
+          plutil -create xml1 "$app/Contents/Info.plist"
+          plutil -insert CFBundleExecutable -string agent-orchestrator "$app/Contents/Info.plist"
+          plutil -insert CFBundleIconFile -string icon.icns "$app/Contents/Info.plist"
+          plutil -insert CFBundlePackageType -string APPL "$app/Contents/Info.plist"
+          # Builds, then runs --check itself and exits non-zero on any problem.
+          node scripts/build-mac-dmg.mjs --app "$app" --arch arm64 --output "$work/agent-orchestrator-darwin-arm64.dmg"
+          test ! -e "$work/agent-orchestrator-darwin-arm64.dmg.blockmap"
+          node scripts/build-mac-dmg.mjs --check "$work/agent-orchestrator-darwin-arm64.dmg"
+
+          stage="$work/bare"
+          mkdir -p "$stage"
+          ditto "$app" "$stage/Agent Orchestrator.app"
+          ln -s /Applications "$stage/Applications"
+          hdiutil create -volname "Agent Orchestrator" -srcfolder "$stage" -ov -format UDZO "$work/bare.dmg"
+          if node scripts/build-mac-dmg.mjs --check "$work/bare.dmg"; then
+            echo "::error::the layout check accepted a dmg with no layout"
+            exit 1
+          fi
+          # Nothing may stay mounted after either check.
+          ! hdiutil info | grep -q ao-dmg-check
+
   checks:
     runs-on: ubuntu-latest
     defaults:
@@ -266,11 +317,12 @@ jobs:
   # Keep the existing check name as the gate for the split frontend jobs.
   test:
     if: always()
-    needs: [checks, typecheck, vitest]
+    needs: [checks, typecheck, vitest, mac-dmg-layout]
     runs-on: ubuntu-latest
     steps:
       - name: Check frontend results
         run: |
+          test '${{ needs.mac-dmg-layout.result }}' = success
           test '${{ needs.checks.result }}' = success
           test '${{ needs.typecheck.result }}' = success
           test '${{ needs.vitest.result }}' = success

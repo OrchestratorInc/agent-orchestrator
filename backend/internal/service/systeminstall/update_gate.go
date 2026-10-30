@@ -70,17 +70,17 @@ func liveSession(session domain.SessionRecord) bool {
 // release in its own directory, and Homebrew formulas with cleanup deferred,
 // leave the running release in place (safe). Casks, other self-updaters and
 // package managers that rewrite a shared tree replace it (warn): the update
-// is blocked while any live process depends on those files. Managed package
+// waits until those sessions are idle and restarts them around the install. Managed package
 // installs are promoted to safe only after selecting the side-by-side plan.
 // Windows cannot replace a running executable at all, so its updates
 // wait for idle sessions and restart them around the install.
-func updateWhileRunningLevel(goos string, target Target, method string, cask bool) UpdateWhileRunning {
+func updateWhileRunningLevel(goos string, target Target, method string, cask bool, pkg string) UpdateWhileRunning {
 	if goos == "windows" {
 		return UpdateWhileRunningBlocked
 	}
 	switch method {
 	case "homebrew":
-		if cask {
+		if cask && (pkg == "" || singleBinaryCasks[target] != pkg) {
 			return UpdateWhileRunningWarn
 		}
 		return UpdateWhileRunningSafe
@@ -96,6 +96,19 @@ func updateWhileRunningLevel(goos string, target Target, method string, cask boo
 	}
 }
 
+// singleBinaryCasks names, per target, the one cask whose layout was checked
+// to ship a single self-contained executable. A cask upgrade deletes the old
+// version's folder, but a running process keeps the file it already opened
+// and loads nothing else from that folder. Any other cask owning the target
+// (another tap, a channel cask) has a layout nobody checked and stays warn.
+// Codex's cask also ships codex-resources, which a running session can load
+// later, so it stays out.
+var singleBinaryCasks = map[Target]string{
+	TargetClaudeCode: "claude-code",
+	TargetCopilot:    "copilot-cli",
+	TargetDroid:      "droid",
+}
+
 // versionedVendorInstalls keep every release in its own file or directory and
 // switch a launcher link, so an update never touches the running release.
 var versionedVendorInstalls = map[Target]bool{
@@ -104,15 +117,19 @@ var versionedVendorInstalls = map[Target]bool{
 	TargetGrok:       true,
 }
 
-// effectiveUpdateLevel applies AO_UPDATE_WHILE_RUNNING, blocks installers
-// that cannot retain live releases, and applies AO_WINDOWS_UPDATE_WHEN_IDLE
-// on Windows, which waits instead of refusing.
+// effectiveUpdateLevel applies AO_UPDATE_WHILE_RUNNING and AO_UPDATE_WHEN_IDLE.
+// An installer that cannot retain live releases waits for idle sessions,
+// stops them, updates and resumes them; already idle sessions are stopped
+// right away. Without update-when-idle it is refused while sessions run.
 func (s *Service) effectiveUpdateLevel(level UpdateWhileRunning) UpdateWhileRunning {
-	if s.updateWhileRunningDisabled || level == "" || level == UpdateWhileRunningWarn {
+	if s.updateWhileRunningDisabled || level == "" {
 		return UpdateWhileRunningBlocked
 	}
-	if level == UpdateWhileRunningBlocked && s.goos == "windows" && s.windowsUpdateWhenIdle && s.idleCoordinatorReady() {
-		return UpdateWhileRunningIdle
+	if level == UpdateWhileRunningWarn || level == UpdateWhileRunningBlocked {
+		if s.updateWhenIdle && s.idleCoordinatorReady() {
+			return UpdateWhileRunningIdle
+		}
+		return UpdateWhileRunningBlocked
 	}
 	return level
 }
@@ -216,8 +233,13 @@ func (s *Service) updateInUse(ctx context.Context, target Target, advisory Updat
 	for _, id := range uniqueSessionIDs(append(slices.Clone(sessions), reviewers...)) {
 		ids = append(ids, string(id))
 	}
-	level := updateWhileRunningLevel(s.goos, target, advisory.MaintenanceMethod, advisory.maintenanceCask)
-	if managedMethods[advisory.MaintenanceMethod] && s.managedRoot != "" {
+	level := updateWhileRunningLevel(s.goos, target, advisory.MaintenanceMethod, advisory.maintenanceCask, advisory.maintenancePackage)
+	_, officialRecipe := officialManagedRecipes[target]
+	officialManaged := advisory.MaintenanceMethod == "official-installer" && officialRecipe && (s.goos == "darwin" || s.goos == "linux")
+	if _, ok := officialManagedCaskFor(s.goos, Plan{Target: target, Method: advisory.MaintenanceMethod, PackageCask: advisory.maintenanceCask, Package: advisory.maintenancePackage}); ok {
+		officialManaged = true
+	}
+	if (managedMethods[advisory.MaintenanceMethod] || officialManaged) && s.managedRoot != "" {
 		// MaintenanceMethod is the ownership-checked source of this advisory.
 		// Use the same update recipe as StartAgentOperation: the raw method
 		// overwrites files, but its eligible managed recipe keeps them intact.

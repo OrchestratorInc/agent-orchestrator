@@ -10,6 +10,9 @@ import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
+import { openChromeAgentsSettings } from "./BrowserChromeSection";
+import { Button } from "../ui/button";
+import { ArrowRight } from "lucide-react";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
@@ -19,6 +22,9 @@ import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
 import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
+import { TargetIcon } from "../TopbarOpenEditorButton";
+import type { EditorId } from "../../../shared/editor-handoff";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
@@ -55,6 +61,50 @@ function SessionInterfaceRow() {
 				options={interfaceOptions}
 				onChange={(mode) => update(mode)}
 				disabled={isLoading || saving || !chatAvailable}
+			/>
+		</SettingsRow>
+	);
+}
+
+/**
+ * The editor that "Open in editor" uses from the session top bar and session
+ * menus. Electron main stores it; opening a session in another editor from the
+ * top bar changes it too.
+ */
+function DefaultEditorRow() {
+	const { t } = useTranslation();
+	const preference = useEditorPreference();
+	const setPreferredEditor = useSetPreferredEditor();
+	const editors = preference.data?.editors ?? [];
+	const preferredEditorId = preference.data?.preferredEditorId;
+	const options: SettingsOption<string>[] = editors.map((editor) => ({
+		value: editor.id,
+		label: editor.name,
+		icon: <TargetIcon target={editor} className="size-icon-sm shrink-0" />,
+	}));
+	const failed = setPreferredEditor.isError || preference.isError;
+	const note = setPreferredEditor.isError
+		? t("settings.defaultEditor.saveFailed")
+		: preference.isError
+			? t("settings.defaultEditor.loadFailed")
+			: preference.data && editors.length === 0
+				? t("editor.noEditorInstalled")
+				: preference.data && !editors.some((editor) => editor.id === preferredEditorId)
+					? t("settings.defaultEditor.notInstalled")
+					: null;
+
+	return (
+		<SettingsRow
+			label={t("settings.defaultEditor.label")}
+			description={note ? <span className={cn(failed && "text-error")} role={failed ? "alert" : undefined}>{note}</span> : undefined}
+		>
+			<SettingsOptionMenu
+				aria-label={t("settings.defaultEditor.label")}
+				value={preferredEditorId ?? ""}
+				options={options}
+				placeholder={t("editor.chooseEditor")}
+				onChange={(editorId) => setPreferredEditor.mutate(editorId as EditorId)}
+				disabled={preference.isPending || setPreferredEditor.isPending || editors.length === 0}
 			/>
 		</SettingsRow>
 	);
@@ -258,6 +308,7 @@ export function GeneralSettingsSection({
 			{/* Sessions */}
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
+				<DefaultEditorRow />
 				<VersionRefreshRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
@@ -302,6 +353,7 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
+				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
 		</>
 	);
@@ -401,6 +453,23 @@ function SideChatsRow() {
 	return (
 		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
 			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * Developer Mode-only entry to Chrome mode. Setup lives with the rest of the
+ * browser settings, so this row only takes the user there.
+ */
+function ChromeAgentsRow() {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	return (
+		<SettingsRow label={t("settings.chromeAgents.label")} description={t("settings.chromeAgents.hint")}>
+			<Button onClick={() => openChromeAgentsSettings(openGlobalSettings)} size="sm" type="button" variant="ghost">
+				{t("settings.chromeAgents.goTo")}
+				<ArrowRight aria-hidden="true" className="size-icon-sm" />
+			</Button>
 		</SettingsRow>
 	);
 }

@@ -37,6 +37,8 @@ export interface Settings {
 	trackerIntakeEnabled: boolean;
 	/** Idle open sessions move to a harness release installed while they ran. */
 	versionRefresh?: boolean;
+	/** New chat sessions get tools to drive desktop apps through Cua Driver. */
+	computerUse?: boolean;
 }
 
 export function useSettings(hostId?: string, enabled = true) {
@@ -67,6 +69,8 @@ export function useSettings(hostId?: string, enabled = true) {
 				trackerIntakeEnabled: data?.trackerIntakeEnabled ?? false,
 				// A daemon that predates the setting never moves sessions.
 				versionRefresh: data?.versionRefresh ?? false,
+				// A daemon that predates the setting never adds the instruction.
+				computerUse: data?.computerUse ?? false,
 			};
 		},
 	});
@@ -154,6 +158,27 @@ export function useUpdateVersionRefresh() {
 		},
 		// Refetch rather than writing the value in locally: the daemon is the source
 		// of truth, and the control must not claim a change it did not persist.
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (enabled: boolean) => mutation.mutate(enabled),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+export function useUpdateComputerUse() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (enabled: boolean) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/computer-use", {
+				body: { enabled },
+			});
+			if (error) throw error;
+			return data;
+		},
+		// The daemon is the source of truth: refetch instead of assuming the write.
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
 	});
 

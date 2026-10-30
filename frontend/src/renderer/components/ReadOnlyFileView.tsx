@@ -1,5 +1,8 @@
 import { mediaCrossOrigin } from "../lib/file-media";
+import { fileReferenceSource } from "../lib/file-reference-source";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { FileAnnotationRange } from "../../shared/chat-file-reference";
+import { useFileAnnotationReveal } from "./diffs/useFileAnnotationReveal";
 import { useTranslation } from "react-i18next";
 import { type FileContents, type LineAnnotation } from "@pierre/diffs";
 import { File } from "@pierre/diffs/react";
@@ -10,7 +13,7 @@ import { sessionUiKey } from "../lib/hosts";
 import type { WorkspaceDiffScope, WorkspaceFileDetail } from "../hooks/useSessionWorkspaceFiles";
 import { useUiStore } from "../stores/ui-store";
 import { FileAnnotationComposer, LineFeedbackButtonControl, PanelMessage, type FileAnnotationModel } from "./WorkspaceDiffView";
-import { AO_PIERRE_SURFACE_CSS } from "./diffs/pierreTheme";
+import { AO_PIERRE_SURFACE_CSS, PIERRE_HIGHLIGHTER } from "./diffs/pierreTheme";
 import { SelectionAskButton } from "./diffs/SelectionAskButton";
 import { codeReference, useCodeSelection } from "./diffs/useCodeSelection";
 import { usePersistentGutterUtility } from "./diffs/usePersistentGutterUtility";
@@ -36,6 +39,8 @@ function workspaceRawImageUrl(sessionId: string, path: string, side: "before" | 
 // oversized files short-circuit before any tokenization is attempted.
 export function ReadOnlyFileView({
 	annotation,
+	annotationRange,
+ annotationReady = true,
 	detail,
 	editing = false,
 	onContentReady,
@@ -43,12 +48,16 @@ export function ReadOnlyFileView({
 	onRevealLineConsumed,
 	revealLine,
 	scope = "combined",
+	source = { kind: "workspace" },
+	commitSha,
 	sessionId,
 	hostId,
 	imageUrl,
 	side = "after",
 }: {
 	annotation: FileAnnotationModel;
+	annotationRange?: FileAnnotationRange;
+ annotationReady?: boolean;
 	detail: WorkspaceFileDetail;
 	editing?: boolean;
 	onContentReady?: () => void;
@@ -56,6 +65,8 @@ export function ReadOnlyFileView({
 	onRevealLineConsumed?: (requestKey: number) => void;
 	revealLine?: { line: number; requestKey: number };
 	scope?: WorkspaceDiffScope;
+	source?: import("../hooks/useSessionWorkspaceFiles").FilesSource;
+	commitSha?: string;
 	sessionId: string;
 	hostId?: string;
 	/** Where to load an image file from, when not the workspace blob route (an artifact's raw URL). */
@@ -66,6 +77,7 @@ export function ReadOnlyFileView({
 	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const annotationReveal=useFileAnnotationReveal(containerRef,editing ? undefined : annotationRange, {ready:annotationReady,contentKey:detail.content});
 	const pendingRevealRef = useRef(revealLine);
 	const consumedRevealRequestKeysRef = useRef(new Set<number>());
 	// The line a reveal brought into view, marked briefly so the eye lands on it.
@@ -105,7 +117,8 @@ export function ReadOnlyFileView({
 	// Highlighted code gets an "Ask in chat" button (or Cmd/Ctrl+L) while the
 	// session has a Chat composer; in edit mode a selection belongs to the editor.
 	const askInChat = useAskInChat(sessionId, hostId);
-	const codeSelection = useCodeSelection(containerRef, (selection) => askInChat?.(codeReference(detail.path, selection, false)), askInChat !== undefined && !editing);
+	const captureSource = fileReferenceSource(source, commitSha);
+	const codeSelection = useCodeSelection(containerRef, (selection) => captureSource ? askInChat?.({ ...codeReference(detail.path, selection, false), side: side === "before" ? "old" : "file", endSide: side === "before" ? "old" : "file", ...captureSource, scope: source.kind === "snapshot" ? "committed" : scope, previousPath: detail.previousPath, fileFingerprint: detail.fileFingerprint, workspaceVersion: detail.workspaceVersion }) ?? false : false, askInChat !== undefined && captureSource !== undefined && !editing);
 	if (detail.binary) {
 		if (detail.imageMediaType) {
 			return (
@@ -167,7 +180,7 @@ export function ReadOnlyFileView({
 				}}
 				file={file}
 				lineAnnotations={lineAnnotations}
-				selectedLines={highlightedLine === null ? null : { start: highlightedLine, end: highlightedLine }}
+				selectedLines={annotationRange ? annotationReveal.selectedLines : highlightedLine === null ? null : { start: highlightedLine, end: highlightedLine }}
 				options={{
 					disableFileHeader: true,
 					enableGutterUtility: true,
@@ -176,8 +189,10 @@ export function ReadOnlyFileView({
 						gutterHover.restoreAfterRender();
 						onContentReady?.();
 						revealRequestedLine();
+						annotationReveal.reveal();
 					},
 					overflow: "wrap",
+					preferredHighlighter: PIERRE_HIGHLIGHTER,
 					theme: { dark: "github-dark", light: "github-light" },
 					themeType: resolvedTheme,
 					tokenizeMaxLength: 200_000,
@@ -197,6 +212,8 @@ export function ReadOnlyFileView({
 					}} />
 				)}
 			/>
+			{annotationReveal.loading ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationLoading")}</p>
+			: annotationReveal.changed || annotationReveal.unverified ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationChangedDuringOpen")}</p> : null}
 			<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />
 		</div>
 	);

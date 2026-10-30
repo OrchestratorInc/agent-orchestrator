@@ -1,5 +1,8 @@
+import { FileAnnotationContext } from "./FileAnnotationPreview";
+import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
+import { cloudChatStartingInPlace } from "../../lib/cloud-lifecycle";
 import { isSettingsPageOpen } from "../../hooks/useAppShortcut";
 import { useLatestCallback, useStableSet } from "../../hooks/useStable";
 import { useTabListTabStop } from "../../hooks/useTabListTabStop";
@@ -36,7 +39,7 @@ import {
 	type WheelEvent as ReactWheelEvent,
 } from "react";
 import { ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, MessageSquarePlus, NotebookPen, Presentation, Route, ScanSearch, TriangleAlert, Undo2, WandSparkles } from "lucide-react";
-import { AnimatePresence, motion, Reorder, useDragControls, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { actionMenuContentClass, actionMenuItemClass } from "../ui/menu-styles";
@@ -103,7 +106,7 @@ import {
 	type SessionProvisionStep,
 } from "../../types/workspace";
 import { AgentAvatar } from "../AgentAvatar";
-import { SessionPaneTab } from "../CenterPane";
+import { DraggableWorkspaceTab, SessionPaneTab } from "../CenterPane";
 import { Button } from "../ui/button";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { SessionTopbarPortal } from "../SessionTopbarPortal";
@@ -120,9 +123,12 @@ import {
 	humanVisibleText,
 	OriginMessage,
 	SteerMessage,
+	TurnActions,
 	TurnChangedFiles,
 	TurnOutcome,
 	LiveResponseStatus,
+	liveTaskLabel,
+	reconnectCopy,
 	type TurnOutcomeRetryControl,
 	ChatHostId,
 } from "./ChatTimelineItems";
@@ -133,6 +139,7 @@ import {
 	OrchestratorReply,
 	piggybackedUpdates,
 	quietWorkerReply,
+	relayedVia,
 	renamedTitle,
 	SpawnedAgents,
 	spawnedSessionIds,
@@ -155,6 +162,7 @@ import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
+import { LiveActivityWindow } from "./LiveActivityWindow";
 import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
@@ -257,30 +265,6 @@ type ChatAuxiliaryTab =
 	| { key: string; kind: "shell"; terminal: ShellTerminal }
 	| { key: string; kind: "workspace"; tab: WorkspaceTab };
 
-function DraggableChatTab({ children, value }: { children: ReactNode; value: string }) {
-	const dragControls = useDragControls();
-	return (
-		<Reorder.Item
-			as="div"
-			className="flex shrink-0 self-stretch touch-pan-y"
-			data-terminal-tab-key={value}
-			drag="x"
-			dragControls={dragControls}
-			dragListener={false}
-			onPointerDown={(event: ReactPointerEvent<HTMLDivElement>) => {
-				if ((event.target as HTMLElement).closest("[data-terminal-tab-action],input,a")) return;
-				dragControls.start(event);
-			}}
-			// Reorder needs layout measurement, but tabs should snap into place
-			// when a sibling opens or closes rather than slide.
-			transition={{ layout: { duration: 0 } }}
-			value={value}
-		>
-			{children}
-		</Reorder.Item>
-	);
-}
-
 // The tab strip re-renders with every session view update. A shell tab only
 // changes with its shell or selection, so it skips the rest; with a dozen
 // tabs this is most of the strip's render work.
@@ -300,7 +284,7 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 	onRename?: (handleId: string, title: string) => void;
 }) {
 	return (
-		<DraggableChatTab value={tabKey}>
+		<DraggableWorkspaceTab value={tabKey}>
 			<ShellTerminalTab
 				appearance="connected"
 				isActive={isActive}
@@ -309,7 +293,7 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 				onSelect={() => onSelect(shell.handleId)}
 				shell={shell}
 			/>
-		</DraggableChatTab>
+		</DraggableWorkspaceTab>
 	);
 });
 
@@ -379,7 +363,7 @@ export interface ChatWorkspaceProps {
 	/** Agent-session actions on the primary chat tab (interface switch, handoff). */
 	sessionTabAction?: ReactNode;
 	/** Widen the primary tab action slot only while an interface switch spinner is showing. */
-	sessionTabActionWide?: boolean;
+	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	/** File tabs coordinated by SessionView, appended to the native chat tab strip. */
@@ -410,6 +394,12 @@ export interface ChatWorkspaceProps {
 	agentInputDisabled?: boolean;
 	/** Fence new agent work without blocking decisions required by the current turn. */
 	newWorkDisabled?: boolean;
+	/**
+	 * A Freestyle cloud orchestrator being created, before its session exists:
+	 * drawn as that session's in-place start (prompt suggestions and the queue
+	 * placeholder) so the handoff to it changes nothing on screen.
+	 */
+	pendingInPlaceStart?: boolean;
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
 	reviewerChat?: { reviewId: string; harness: string };
@@ -426,11 +416,14 @@ export interface ChatWorkspaceProps {
 	/** The surface's onSend forwards transcript excerpts. Without it, "Add to
 	 * chat" is hidden so a selection cannot be cleared from the draft unsent. */
 	excerptsEnabled?: boolean;
+	fileReferencesEnabled?: boolean;
+	fileReferenceDelivery?: import("../../../shared/chat-file-reference").FileReferenceDelivery;
 	onSend?: (
 		text: string,
 		attachments?: { mimeType: string; data: string }[],
 		clientMessageId?: string,
 		excerpts?: ChatDraftExcerptReference[],
+		fileReferences?: ChatFileReference[],
 	) => void | Promise<unknown>;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
@@ -531,6 +524,7 @@ export interface ChatWorkspaceProps {
 	onOpenFiles?: () => void;
 	/** Opens the Files inspector focused on one changed path. */
 	onOpenFile?: (path: string, line?: number) => void;
+	onOpenFileAnnotation?: OpenFileAnnotation;
 	/**
 	 * Re-dispatch a failed turn's durable prompt as a new turn. Offered only for
 	 * eligible failed human turns, so the affordance is drawn on the failed-turn
@@ -604,8 +598,9 @@ export interface ChatWorkspaceProps {
 	centerInWindow?: boolean;
 	/** The project has a setup script, so the start-up checklist lists that step. */
 	showSetupStep?: boolean;
-	/** Show the attach control, disabled, before there is a workspace to attach into. */
-	attachLater?: boolean;
+	/** Keep files the workspace cannot take yet in the composer, sent with the message. */
+	holdAttachments?: boolean;
+	onHeldAttachmentsChange?: ComponentProps<typeof ChatComposer>["onHeldAttachmentsChange"];
 }
 
 type ChatWorkspaceActivation =
@@ -699,7 +694,7 @@ function ChatWorkspaceContent({
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
+	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -716,6 +711,7 @@ function ChatWorkspaceContent({
 	lastModel,
 	agentInputDisabled = false,
 	newWorkDisabled = false,
+	pendingInPlaceStart = false,
 	reviewerTerminal,
 	onOpenReviewerTerminal,
 	reviewerChat,
@@ -738,6 +734,8 @@ function ChatWorkspaceContent({
 	loadingOlder,
 	onLoadOlder,
 	excerptsEnabled = false,
+	fileReferencesEnabled = false,
+	fileReferenceDelivery,
 	onSend,
 	onDecide,
 	onResolveInput,
@@ -779,6 +777,7 @@ function ChatWorkspaceContent({
 	rollbackError,
 	onOpenFiles,
 	onOpenFile,
+	onOpenFileAnnotation,
 	retryControl,
 	onEditMessage,
 	editMessagePending,
@@ -810,7 +809,8 @@ function ChatWorkspaceContent({
 	composerTray,
 	centerInWindow = false,
 	showSetupStep = true,
-	attachLater,
+	holdAttachments,
+	onHeldAttachmentsChange,
 	draftScope,
 	draftPersistenceAvailable,
 	onRetryDraftPersistence,
@@ -822,6 +822,8 @@ function ChatWorkspaceContent({
 	const draftScopeKey = chatDraftScopeKey(draftScope);
 	const uiSessionId = draftScope.sessionId;
 	const activeRemoteHostId = remoteHostId ?? session?.hostId;
+ const fileNavigationGeneration=useRef(0);
+ useEffect(()=>{fileNavigationGeneration.current++;return ()=>{fileNavigationGeneration.current++}},[snapshot.sessionId,activeRemoteHostId,workspaceActiveTabKey]);
 	const remoteCreateMux = useMemo(
 		() => assetBaseUrl ? () => createTerminalMux(muxUrlFromApiBase(assetBaseUrl)) : undefined,
 		[assetBaseUrl],
@@ -1141,7 +1143,7 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[]) => {
+		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[]) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -1192,7 +1194,7 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
-			return onSend?.(text, attachments, clientMessageId, excerpts);
+			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -1491,7 +1493,8 @@ function ChatWorkspaceContent({
 							)) ||
 							settingsLoading ||
 							session?.provisionState === "provisioning" ||
-							controllerTransitioning || configOptionPending || newWorkDisabled || settingsLocked
+							// A save in flight is not here: the bar holds back what cannot overlap one.
+							controllerTransitioning || newWorkDisabled || settingsLocked
 						}
 				/>
 			) : null,
@@ -1598,6 +1601,13 @@ function ChatWorkspaceContent({
 		startupState === "provisioning" || agentResuming ||
 		(!loadingQuietly && (snapshot.controller.state === "connecting" || snapshot.controller.state === "recovering"))
 	);
+	// A Freestyle Chat session starting or waking stays on its conversation:
+	// the composer shimmers and its messages wait in the control plane's turn
+	// queue until the worker connects (cloudChatStartingInPlace).
+	const cloudStarting = cloudChatStartingInPlace(session);
+	// A local or other-provider orchestrator opens its composer once it is up.
+	const startupQueues = cloudStarting || (session?.provisionState === "provisioning" && sessionRole !== "orchestrator");
+	const orchestratorBlocksComposer = orchestratorStarting && !startupQueues;
 	const currentSetupStep = provisionSteps?.find((step) => step.status === "running")?.id;
 	const setupPlaceholder = currentSetupStep === "fetch" ? "Getting the latest code"
 		: currentSetupStep === "worktree" ? "Preparing your workspace"
@@ -1719,6 +1729,7 @@ function ChatWorkspaceContent({
 	}, [conversationEmpty]);
 
 	return (
+ <FileAnnotationContext.Provider value={fileReferenceDelivery === "text" ? undefined : { sessionId: snapshot.sessionId, hostId: activeRemoteHostId, onOpen: onOpenFileAnnotation, generation: fileNavigationGeneration }}>
 		<section
 			ref={surfaceRef}
 			onKeyDown={handleChatKeyDown}
@@ -1750,7 +1761,7 @@ function ChatWorkspaceContent({
 				session={session}
 				onSessionRenamed={onSessionRenamed}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionWide={sessionTabActionWide}
+				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabActions={workspaceTabActions}
 				workspaceActiveTabKey={workspaceActiveTabKey}
@@ -1935,9 +1946,9 @@ function ChatWorkspaceContent({
 									</h1>
 								) : null}
 								<WelcomePromptSuggestions
-									open={conversationEmpty && !newWorkDisabled && composerEmpty}
+									open={conversationEmpty && composerEmpty && (!newWorkDisabled || pendingInPlaceStart)}
 									artifact={artifactSession}
-									onPick={(text) => composerFocusRef.current?.setDraft(text)}
+									onPick={(text) => { if (!pendingInPlaceStart) composerFocusRef.current?.setDraft(text); }}
 								/>
 								<div ref={composerBoxRef} className="relative z-10" data-composer-tray={conversationEmpty && composerTray ? "" : undefined}>
 									{welcomeLeaving ? (
@@ -1965,6 +1976,8 @@ function ChatWorkspaceContent({
 										approval={composerApproval}
 										elicitation={composerElicitation}
 										onSend={handleComposerSend}
+						fileReferencesEnabled={fileReferencesEnabled && Boolean(snapshot.supportsFileReferences)}
+						fileReferenceDelivery={fileReferenceDelivery}
 										sentMessages={sentMessages}
 										sentMessagesScope={`${snapshot.conversationId}:${snapshot.activeBranchId ?? ""}`}
 										draftSeed={composerDraftSeed}
@@ -2005,23 +2018,23 @@ function ChatWorkspaceContent({
 											/>
 										) : undefined}
 										busy={busy}
-										willQueue={Boolean(turn) || (sessionRole !== "orchestrator" && session?.provisionState === "provisioning")}
+										willQueue={Boolean(turn) || startupQueues}
 										queuePlaceholder={
-											session?.provisionState === "provisioning"
+											session?.provisionState === "provisioning" || cloudStarting
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
 												: undefined
 										}
-										starting={orchestratorStarting || arrivingInChat}
-										disabled={(orchestratorStarting || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
+										starting={orchestratorStarting || arrivingInChat || cloudStarting}
+										disabled={(orchestratorBlocksComposer || (openingStarting && !session) || loadingQuietly || (snapshot.controller.state === "stopped" && !suppressStopped && (!resumingAgent || session?.provisionState === "failed")) || controllerTransitioning || newWorkDisabled || composerLockedPlaceholder !== undefined) && !queueEdit?.clientMessageId}
 										disabledPlaceholder={
 											composerLockedPlaceholder !== undefined
 												? composerLockedPlaceholder
 												: arrivingInChat
 												? arrivingPlaceholder
-												: openingStarting && !session
+												: (openingStarting && !session) || pendingInPlaceStart
 												// Same words the session shows once it can queue, so nothing changes on handoff.
 												? t("chat.startup.queuePlaceholder", { agent: agentLabel(snapshot.harness) })
-												: orchestratorStarting
+												: orchestratorBlocksComposer
 												? setupPlaceholder
 												: controllerTransitioning || newWorkDisabled
 												? ""
@@ -2040,7 +2053,8 @@ function ChatWorkspaceContent({
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
-										attachLater={attachLater}
+										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
+										onHeldAttachmentsChange={onHeldAttachmentsChange}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}
@@ -2107,6 +2121,7 @@ function ChatWorkspaceContent({
 				}}
 			/>
 		</section>
+ </FileAnnotationContext.Provider>
 	);
 }
 
@@ -2244,7 +2259,7 @@ function ChatHeader({
 	onTabsKeyDown,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionWide = false,
+	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabActions,
 	workspaceActiveTabKey,
@@ -2272,7 +2287,7 @@ function ChatHeader({
 	onTabsKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionWide?: boolean;
+	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
@@ -2285,7 +2300,6 @@ function ChatHeader({
 	slideIn?: boolean;
 }) {
 	const { t } = useTranslation();
-	const providerLabel = agentLabel(snapshot.harness);
 	const sessionIsOrchestrator = session
 		? isOrchestratorSession(session)
 		: sessionRole === "orchestrator";
@@ -2338,41 +2352,33 @@ function ChatHeader({
 						ref={tabListRef}
 						role="tablist"
 					>
-						{session ? (
-							<SessionPaneTab
-								isActive={timelineActive}
-								label={label}
-								onSelect={timelineActive ? undefined : onSelectChat}
-								onRenamed={onSessionRenamed}
-								session={session}
-								tabAction={sessionTabAction}
-								tabActionWide={sessionTabActionWide}
-							/>
-						) : (
-							<button
-								aria-current={timelineActive ? true : undefined}
-								aria-label={`${label} · ${providerLabel}`}
-								aria-selected={timelineActive}
-								data-terminal-role="primary"
-								className={cn(
-									"group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max shrink-0 self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
-									timelineActive
-										? "bg-overlay text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground/80"
-										: "text-muted-foreground hover:bg-raised hover:text-foreground",
-								)}
-								onClick={timelineActive ? undefined : onSelectChat}
-								role="tab"
-								tabIndex={timelineActive || orderedAuxiliaryTabs.length === 0 ? 0 : -1}
-								title={label}
-								type="button"
-							>
-								<AgentAvatar className="size-icon-base" decorative provider={snapshot.harness} />
-								<span className="truncate">{label}</span>
-							</button>
-						)}
 						<div className="relative min-w-0 flex-1 self-stretch overflow-hidden">
-							<motion.div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" layoutScroll>
-								<div className="flex w-max items-stretch">
+							<motion.div ref={tabsOverflowRef} className="scrollbar-none flex h-full min-w-flex-min min-w-0 items-stretch overflow-x-auto" data-tab-scroll-region layoutScroll>
+								{/* The macOS header is a window drag region outside its controls; the
+								    whole tab row opts out so separators and tab edges still take
+								    wheel scrolling and clicks. */}
+								<div className="flex w-max items-stretch [-webkit-app-region:no-drag]">
+								<div className="flex shrink-0 self-stretch">
+									{session ? (
+										<SessionPaneTab
+											isActive={timelineActive}
+											label={label}
+											onSelect={timelineActive ? undefined : onSelectChat}
+											onRenamed={onSessionRenamed}
+											session={session}
+											tabAction={sessionTabAction}
+											tabActionPinned={sessionTabActionPinned}
+										/>
+									) : (
+										<SessionPaneTab
+											isActive={timelineActive}
+											label={label}
+											onSelect={timelineActive ? undefined : onSelectChat}
+											provider={snapshot.harness}
+											title={label}
+										/>
+									)}
+								</div>
 								<Reorder.Group
 									as="div"
 									axis="x"
@@ -2391,31 +2397,19 @@ function ChatHeader({
 											tabKey={tab.key}
 										/>
 									) : (
-										<DraggableChatTab key={tab.key} value={tab.key}>
+										<DraggableWorkspaceTab key={tab.key} value={tab.key}>
 											{tab.kind === "reviewer" || tab.kind === "reviewer-chat" ? (
-												<button
-													aria-current={reviewerActive && !workspaceActiveTabKey ? true : undefined}
-													aria-label="Reviewer"
-													aria-selected={Boolean(reviewerActive && !workspaceActiveTabKey)}
-													className={cn(
-														"group relative inline-flex min-w-shell-tab-min max-w-shell-tab-max self-stretch cursor-pointer items-center gap-1.5 border-r border-border px-3 text-control font-medium leading-none transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent/50",
-														reviewerActive && !workspaceActiveTabKey
-															? "bg-overlay text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-foreground/80"
-															: "text-muted-foreground hover:bg-raised hover:text-foreground",
-													)}
-													onClick={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
-													role="tab"
-													tabIndex={reviewerActive && !workspaceActiveTabKey ? 0 : -1}
+												<SessionPaneTab
+													icon={<AgentAvatar className="size-icon-sm!" decorative provider={tab.terminal.harness} />}
+													isActive={Boolean(reviewerActive && !workspaceActiveTabKey)}
+													label={t("terminal.reviewer")}
+													onSelect={() => tab.kind === "reviewer" ? onOpenReviewerTerminal?.(tab.terminal) : onOpenReviewerChat?.(tab.terminal)}
 													title={tab.terminal.harness}
-													type="button"
-												>
-													<AgentAvatar className="size-icon-base" decorative provider={tab.terminal.harness} />
-													<span className="truncate">Reviewer</span>
-												</button>
+												/>
 											) : (
 												tab.tab.content
 											)}
-										</DraggableChatTab>
+										</DraggableWorkspaceTab>
 									))}
 								</Reorder.Group>
 								{workspaceTabActions}
@@ -2430,7 +2424,7 @@ function ChatHeader({
 					className="ml-auto flex shrink-0 items-center gap-1 pl-2 pr-3"
 					data-testid="session-action-region"
 				>
-					{tabStripAction ? <div data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
+					{tabStripAction ? <div className="workspace-topbar-actions" data-testid="session-tab-strip-action">{tabStripAction}</div> : null}
 					{headerActions}
 				</div>
 			</div>
@@ -2597,6 +2591,16 @@ const WELCOME_FADE_MS = 150;
 const INITIAL_SNAP_MS = 1000;
 /** Wheel, key and touch intent pause the follow this long so the resulting scroll decides. */
 const READER_INTENT_HOLD_MS = 250;
+/**
+ * A reader who nudges the view up a little and then stops has paused, not left.
+ * After this long with no further input, while the turn is still live and they are
+ * still within `relatchBand` of the end, the follow resumes from where they are.
+ */
+const RELATCH_AFTER_MS = 1800;
+/** A scroll this soon after the reader's own input counts as theirs. */
+const RELATCH_INTENT_MS = 400;
+/** How far above the end still counts as a pause rather than reading back. */
+const relatchBand = (node: HTMLElement) => Math.min(320, Math.round(node.clientHeight * 0.4));
 const CHAT_ESTIMATED_TURN_HEIGHT = 600;
 const CHAT_TURN_GAP = 18;
 const CHAT_INITIAL_VIEWPORT_HEIGHT = 800;
@@ -2901,7 +2905,9 @@ export function Timeline({
 				item.revision === selectionAction.excerpt.revision &&
 				item.text === selectionAction.excerpt.text,
 		);
-		const next = duplicate ? current : [...current, selectionAction.excerpt].slice(-8);
+		if (!duplicate && current.length + (composer.fileReferences?.length ?? 0) >= 8) { setDraftPersistenceError("chat.draft.annotationLimit"); return; }
+  const order = Math.max(Date.now(), ...current.map(item => (item.order ?? 0) + 1), ...(composer.fileReferences ?? []).map(item => item.order + 1));
+  const next = duplicate ? current : [...current, { ...selectionAction.excerpt, order }];
 		const result = writeChatExcerptReferences(draftScope, next);
 		setDraftPersistenceError(result.ok ? undefined : "chat.draft.saveFailed");
 		setSelectionAction(null);
@@ -2941,6 +2947,8 @@ export function Timeline({
 		top: 0,
 		height: 40,
 		percent: 0,
+		/** Nothing below the viewport: there is no "latest" left to jump to. */
+		atEnd: true,
 		markers: [] as Array<{
 			top: number;
 			scrollTop: number;
@@ -3437,13 +3445,14 @@ export function Timeline({
 				origin: "human",
 				text: echo.text,
 				continuation: echo.continuation,
-				content: echo.excerpts?.map((excerpt) => ({
+				content: [...(echo.excerpts?.map((excerpt) => ({
+					annotationId: excerpt.id, annotationOrder: excerpt.order,
 					type: "excerpt",
 					text: excerpt.text,
 					sourceConversationId: excerpt.conversationId,
 					sourceMessageId: excerpt.messageId,
 					sourceRevision: excerpt.revision,
-				})),
+				})) ?? []), ...(echo.fileReferences ?? []).map(fileReference => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order }))],
 				streaming: false,
 				delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
 				createdAt: echo.createdAt,
@@ -3745,10 +3754,12 @@ export function Timeline({
 			top: travel * fraction,
 			height,
 			percent: Math.round(fraction * 100),
+			atEnd: maxScroll - node.scrollTop <= 2,
 			markers,
 		};
 		setScrollbar((current) =>
 			current.visible === next.visible &&
+			current.atEnd === next.atEnd &&
 			Math.abs(current.top - next.top) < 0.5 &&
 			Math.abs(current.height - next.height) < 0.5 &&
 			current.percent === next.percent &&
@@ -3843,11 +3854,22 @@ export function Timeline({
 	const syncStreamedGrowth = useCallback(() => {
 		if (!pinnedRef.current || !initialLayoutDone.current) return;
 		anchorGeometry.current = null;
-		syncPromptSpacer();
 		const node = scroller.current;
+		// Something at the end shrank on its own (a finished plan folding away). The
+		// browser has already clamped scrollTop by the time this observer runs, before
+		// the spacer could grow back, so put the view back now, before paint, instead
+		// of gliding back from the clamped spot. Without a spacer the clamp is already
+		// the end and this writes nothing.
+		const clampedFrom = node && node.scrollTop < lastScrollTop.current - 1 ? lastScrollTop.current : undefined;
+		syncPromptSpacer();
+		if (node && clampedFrom !== undefined) {
+			node.scrollTop = Math.min(clampedFrom, Math.max(0, node.scrollHeight - node.clientHeight));
+			markWritten(node.scrollTop);
+			lastScrollTop.current = node.scrollTop;
+		}
 		if (node) followOrSnapToEnd(node);
 		updateScrollbar();
-	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar]);
+	}, [syncPromptSpacer, followOrSnapToEnd, updateScrollbar, markWritten]);
 
 	// A disclosure animation changes the content box but is not new conversation
 	// content. Re-measure it without re-pinning the viewport to the bottom; doing
@@ -3904,6 +3926,37 @@ export function Timeline({
 		return () => observer.disconnect();
 	}, [groups.length]);
 
+	// The pause-then-resume for a reader who only nudged up a little: armed by their
+	// scroll, re-armed by each further scroll, dropped once they go past the band or
+	// open something to read. Only the reader's own scrolling arms it, so streamed
+	// growth while unpinned (which moves nothing) never does.
+	const relatchTimer = useRef<number | undefined>(undefined);
+	// Set by the reader's own wheel, touch, key and scrollbar-drag input. A jump to a
+	// marker or a prompt moves the view without it, and must not be pulled back.
+	const readerIntentAt = useRef(0);
+	const noteReaderIntent = useCallback(() => {
+		readerIntentAt.current = performance.now();
+	}, []);
+	const liveTurnRef = useRef(false);
+	liveTurnRef.current = turn?.state === "running";
+	const clearRelatch = useCallback(() => {
+		if (relatchTimer.current === undefined) return;
+		window.clearTimeout(relatchTimer.current);
+		relatchTimer.current = undefined;
+	}, []);
+	const scheduleRelatch = useCallback(() => {
+		clearRelatch();
+		relatchTimer.current = window.setTimeout(() => {
+			relatchTimer.current = undefined;
+			const node = scroller.current;
+			if (!node || pinnedRef.current || !liveTurnRef.current) return;
+			const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
+			if (distance > relatchBand(node)) return;
+			requestGlideToEnd();
+		}, RELATCH_AFTER_MS);
+	}, [clearRelatch, requestGlideToEnd]);
+	useEffect(() => clearRelatch, [clearRelatch]);
+
 	function onScroll() {
 		const node = scroller.current;
 		if (!node) return;
@@ -3920,9 +3973,15 @@ export function Timeline({
 			// Ours: no change.
 		} else if (distance >= 64 || (movedUp && distance > 2)) {
 			if (pinnedRef.current) releaseFollow();
+			// Armed by the reader's input, then kept alive by each further scroll (touch
+			// momentum scrolls after the finger lifts).
+			const reading = relatchTimer.current !== undefined || performance.now() - readerIntentAt.current < RELATCH_INTENT_MS;
+			if (reading && distance <= relatchBand(node)) scheduleRelatch();
+			else clearRelatch();
 		} else if (!pinnedRef.current && !movedUp) {
 			// The reader is already here: the follow layout this re-pin triggers must not
 			// snap the last few pixels under their scroll, which reads as a jitter.
+			clearRelatch();
 			skipRelatchFollow.current = true;
 			setPinnedNow(true);
 		}
@@ -3938,13 +3997,17 @@ export function Timeline({
 		// concurrent stream commit cannot pull the reader back, and let the scroll
 		// itself decide: a wheel consumed by a nested scroller (a code block) never
 		// moves the log, so it must not unpin it.
-		if (event.deltaY < 0) holdScrollFollow(READER_INTENT_HOLD_MS);
+		if (event.deltaY < 0) {
+			noteReaderIntent();
+			holdScrollFollow(READER_INTENT_HOLD_MS);
+		}
 	}
 
 	function onViewportKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
 		const target = event.target as HTMLElement;
 		if (event.defaultPrevented || target.closest("input, textarea, select, [contenteditable='true'], [contenteditable=''], [role='menu'], [role='listbox'], [role='textbox']")) return;
 		if (event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey)) {
+			noteReaderIntent();
 			holdScrollFollow(READER_INTENT_HOLD_MS);
 		}
 	}
@@ -3954,6 +4017,7 @@ export function Timeline({
 		// under them. Menu triggers (aria-haspopup) open a popup, not content, so they
 		// keep the follow; so do clicks on empty margins.
 		if ((event.target as HTMLElement).closest("[aria-expanded]:not([aria-haspopup])")) {
+			clearRelatch();
 			releaseFollow();
 		}
 	}
@@ -3987,6 +4051,7 @@ export function Timeline({
 			onScroll();
 			return;
 		}
+		noteReaderIntent();
 		setScrollFromTrack(event.clientY);
 		drag.current = {
 			pointerId: event.pointerId,
@@ -4017,6 +4082,7 @@ export function Timeline({
 			return;
 		}
 		if (active.pointerId !== event.pointerId) return;
+		noteReaderIntent();
 		const travel = Math.max(1, track.clientHeight - scrollbar.height);
 		const maxScroll = Math.max(0, node.scrollHeight - node.clientHeight);
 		node.scrollTop = active.startScrollTop + ((event.clientY - active.startY) / travel) * maxScroll;
@@ -4096,7 +4162,10 @@ export function Timeline({
 				onScroll={onScroll}
 				onScrollEnd={endFlight}
 				onWheel={onViewportWheel}
-				onTouchMove={() => holdScrollFollow(READER_INTENT_HOLD_MS)}
+				onTouchMove={() => {
+					noteReaderIntent();
+					holdScrollFollow(READER_INTENT_HOLD_MS);
+				}}
 				onKeyDown={onViewportKeyDown}
 				onPointerDown={onViewportPointerDown}
 				className="chat-scroll-viewport cursor-chat-timeline h-full min-w-0 select-text overflow-x-hidden overflow-y-auto px-4 pt-5 pb-0"
@@ -4354,7 +4423,10 @@ export function Timeline({
 				) : null}
 			</div>
 
-			{!pinned ? (
+			{/* Released is not the same as away: folding a panel at the end releases the
+			    follow but leaves the reader at the bottom, where a jump has nowhere to go
+			    and no scroll could bring the follow back to retire it. */}
+			{!pinned && !scrollbar.atEnd ? (
 				<Button
 					type="button"
 					size="icon-sm"
@@ -4458,6 +4530,7 @@ const TurnGroup = memo(function TurnGroup({
 	tight?: boolean;
 }) {
 	const { t } = useTranslation();
+	const reducedMotion = useReducedMotion();
 	const hasTerminalFailure =
 		group.outcome?.state === "failed" && Boolean(group.outcome.error);
 	const runs = useMemo(
@@ -4486,6 +4559,16 @@ const TurnGroup = memo(function TurnGroup({
 		: group.live && group.items.at(-1)?.id === lastAssistantId
 			? lastAssistantId
 			: undefined;
+	// A turn that stopped or failed closes on its outcome, so the answer above it
+	// hands its copy and undo down to the outcome's action row: one row per turn.
+	// An account switch shows its own marker instead of an outcome, so its turn keeps
+	// the answer's row (or the tool-only fallback) like a finished one.
+	const endsWithOutcome = Boolean(group.outcome && group.outcome.state !== "completed" && !group.accountSwitched);
+	const copyableMessage = endsWithOutcome && copyableMessageId
+		? group.items.find(
+				(item): item is ConversationMessage => item.kind === "message" && item.id === copyableMessageId,
+			)
+		: undefined;
 	let finalAssistantRunIndex = -1;
 	if (group.outcome) {
 		for (let index = runs.length - 1; index >= 0; index -= 1) {
@@ -4513,16 +4596,27 @@ const TurnGroup = memo(function TurnGroup({
 		? workedRuns.filter((run) => isHumanRun(run.items[0]) || isNoticeRun(run))
 		: [];
 	const foldedRuns = workedRuns.filter((run) => !noticeRuns.includes(run) && !rendersNothing(run));
-	// Keep the live row mounted while its spinner animates out, then hand over to the settled row.
-	const [showSettledStatus, setShowSettledStatus] = useState(!group.live);
-	useEffect(() => {
-		if (group.live) {
-			setShowSettledStatus(false);
-			return;
-		}
-		const timer = window.setTimeout(() => setShowSettledStatus(true), 440);
-		return () => window.clearTimeout(timer);
-	}, [group.live]);
+	// A worker turn the orchestrator only read has nothing to unfold; its duration alone is noise.
+	const onlyRead = workerUpdates && foldedRuns.length === 0 && !finalRun && isWorkerLead(group.items[0]);
+	// "Worked for" names the turn's duration only when there is work to fold. With
+	// nothing to fold the time moves to the turn's action row, so a quick answer
+	// still says how long it took.
+	const unfoldedDurationMs = group.outcome && foldedRuns.length === 0 && !onlyRead ? group.outcome.durationMs : undefined;
+	// What the live row names: the step the agent is on right now. Items the user acts
+	// on (approvals, questions) are not work, and a provider retry has its own slot.
+	const currentTask = group.live
+		? [...group.items]
+				.reverse()
+				.find(
+					(item): item is ConversationActivity =>
+						item.kind === "activity" &&
+						item.status === "running" &&
+						item.activityKind !== "plan" &&
+						item.activityKind !== "approval" &&
+						item.activityKind !== "user_input" &&
+						item.detail?.event !== "provider.failure",
+				)
+		: undefined;
 	// Only the run the agent is working in stays open while the turn runs; earlier
 	// runs fold to their summary, so a long turn does not keep every call mounted.
 	const liveRunKey = group.live ? runs.findLast((run) => run.kind === "activities")?.key : undefined;
@@ -4565,10 +4659,11 @@ const TurnGroup = memo(function TurnGroup({
 				busy={busy}
 				queued={queued}
 				newHumanMessageIds={newHumanMessageIds}
-				showCopy={run.items[0]?.id === copyableMessageId}
+				showCopy={!endsWithOutcome && run.items[0]?.id === copyableMessageId}
+				durationMs={!endsWithOutcome && run.items[0]?.id === copyableMessageId ? unfoldedDurationMs : undefined}
 				live={group.live}
 				onRollback={
-					canRollback && run.items[0]?.id === copyableMessageId
+					canRollback && !endsWithOutcome && run.items[0]?.id === copyableMessageId
 						? () => onRollback(group.turnId as string)
 						: undefined
 				}
@@ -4594,43 +4689,101 @@ const TurnGroup = memo(function TurnGroup({
 		return [<WorkerUpdateRows key={`${run.key}:reports`} updates={piggybacked} />, renderRun(run)];
 	};
 	const body: ReactNode[] = humanRuns.flatMap(renderWorkerRun);
-	// A live provider failure replaces the Working row with its reconnect card, and a
-	// turn that stops without an outcome (cancelled) has no settled row to hand over to.
-	// The setup checklist sits exactly where the Working row will, so the handoff
-	// does not move anything.
-	if (startup || (!group.liveProviderFailure && (group.live || (group.outcome && !showSettledStatus)))) {
-		body.push(
+	// The live row sits at the end of the turn, under what the agent has written so
+	// far, where the reader is already looking: orb, current step, timer. A provider
+	// retry shows in the same row. The setup checklist shares it too, so the handoff
+	// from setup to work does not move anything.
+	const workingRow =
+		startup || group.live ? (
 			<LiveResponseStatus
-				key="turn-working"
 				startedAt={group.liveStartedAt}
-				settling={!startup && !group.live}
 				startupLabel={startup ? t(startup.failed ? "chat.startup.failed" : "chat.startup.running") : undefined}
 				failed={startup?.failed}
+				task={currentTask ? liveTaskLabel(currentTask) : undefined}
+				reconnect={group.liveProviderFailure ? reconnectCopy(group.liveProviderFailure) : undefined}
 			>
 				{startup && (startup.steps.length > 0 || startup.failed) ? <SessionStartup {...startup} /> : null}
-			</LiveResponseStatus>,
-		);
-	}
-	const outcome = showSettledStatus ? group.outcome : undefined;
+			</LiveResponseStatus>
+		) : null;
+	const outcome = group.outcome;
 	// A settled worker turn whose answer asks the user nothing draws that answer as
 	// one line under the rows, with the work folded into it instead of "Worked for".
 	const quietReply = workerUpdates && outcome?.state === "completed" ? quietWorkerReply(group.items) : undefined;
-	// A worker turn the orchestrator only read has nothing to unfold; its duration alone is noise.
-	const onlyRead = workerUpdates && foldedRuns.length === 0 && !finalRun && isWorkerLead(group.items[0]);
+	// "Worked for" is the fold for the turn's work, so it appears only when there is
+	// work to fold: a turn that went straight to its answer has nothing to open and
+	// shows the answer alone. It opens where the live window was, over the same beat
+	// the window folds, so the top of the turn reads as the work collapsing into its
+	// summary rather than one line appearing while another vanishes. A settled turn
+	// loaded from history mounts it without the animation. The wrapper's own gutter
+	// keeps the summary's hover wash, which overhangs by 4px, inside the clip.
 	const disclosureKey = `${group.key}:worked`;
+	body.push(
+		<AnimatePresence key="turn-worked" initial={false}>
+			{outcome && foldedRuns.length > 0 && !quietReply ? (
+				<motion.div
+					key="turn-worked-summary"
+					initial={{ height: 0, opacity: 0 }}
+					animate={{ height: "auto", opacity: 1 }}
+					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
+					className="-mx-1 overflow-hidden px-1"
+				>
+					<TurnWorkSummary
+						durationMs={outcome.durationMs}
+						open={Boolean(activityDisclosureOverrides[disclosureKey])}
+						onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
+					>
+						{foldedRuns.flatMap(renderWorkerRun)}
+					</TurnWorkSummary>
+				</motion.div>
+			) : null}
+		</AnimatePresence>,
+	);
+	// While the agent works, its steps scroll in a window that follows the newest one.
+	// The reply being written stays outside at full size, so streaming text is never
+	// squeezed into the window. Once the turn settles the window folds away beneath
+	// "Worked for", which holds the same work.
+	const windowed = group.live;
+	const tail = workedRuns.at(-1);
+	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
+	const windowRuns = windowed ? (tailIsReply ? workedRuns.slice(0, -1) : workedRuns) : [];
+	body.push(
+		<AnimatePresence key="live-activity" initial={false}>
+			{windowRuns.length > 0 ? (
+				<motion.div
+					key="live-activity-window"
+					initial={{ height: 0, opacity: 0 }}
+					animate={{ height: "auto", opacity: 1 }}
+					exit={{ height: 0, opacity: 0 }}
+					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
+					className="overflow-hidden"
+				>
+					<LiveActivityWindow>{windowRuns.flatMap(renderWorkerRun)}</LiveActivityWindow>
+				</motion.div>
+			) : null}
+		</AnimatePresence>,
+	);
 	if (!outcome) {
-		body.push(...workedRuns.flatMap(renderWorkerRun));
-	} else if (!quietReply && !onlyRead) {
-		body.push(
-			<TurnWorkSummary
-				key="turn-worked"
-				durationMs={outcome.durationMs}
-				open={Boolean(activityDisclosureOverrides[disclosureKey])}
-				onOpenChange={(open) => onActivityDisclosureChange(disclosureKey, open)}
-			>
-				{foldedRuns.length > 0 ? foldedRuns.flatMap(renderWorkerRun) : undefined}
-			</TurnWorkSummary>,
-		);
+		if (!windowed) body.push(...workedRuns.flatMap(renderWorkerRun));
+		else {
+			// The first chunks of a reply open a row where there was none. Growing it
+			// from zero keeps the live row under it (and the transcript's end) gliding
+			// down instead of jumping by a line. Clipped only while it opens; a reply
+			// already streaming when the chat opens mounts at full height.
+			body.push(
+				<AnimatePresence key="live-reply" initial={false}>
+					{tailIsReply ? (
+						<motion.div
+							key={tail.key}
+							initial={{ height: 0, opacity: 0, overflow: "hidden" }}
+							animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
+							transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
+						>
+							{renderRun(tail)}
+						</motion.div>
+					) : null}
+				</AnimatePresence>,
+			);
+		}
 	}
 	if (outcome) body.push(...noticeRuns.map(renderRun));
 	if (quietReply && finalRun) {
@@ -4668,25 +4821,34 @@ const TurnGroup = memo(function TurnGroup({
 					onOpenFile={onOpenFile}
 				/>
 			) : null}
-			{group.live ? <TurnLiveStatus blocked={group.blocked} providerFailure={group.liveProviderFailure} /> : null}
-			{/* No assistant prose to hang the undo / duration on — still offer them
-			    before the outcome divider so a tool-only turn is not stuck without a
-			    way back or a record of how long it took. */}
-			{!copyableMessageId && !group.live && canRollback ? (
-				<div className="flex h-7 items-center gap-0.5">
-					{canRollback ? (
-						<button
-							type="button"
-							onClick={() => onRollback(group.turnId as string)}
-							disabled={rollbackDisabled}
-							aria-label="Roll back to here"
-							title="Roll back to here"
-							className="flex items-center rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-						>
-							<Undo2 aria-hidden="true" className="size-3" />
-						</button>
-					) : null}
-				</div>
+			{/* Once the turn settles the row fades away and "Worked for" takes over at
+			    the top of the turn. */}
+			{/* popLayout lifts the leaving row out of the flow at once, so the action row
+			    that takes its place sits where it was instead of waiting for a collapse. */}
+			<AnimatePresence initial={false} mode="popLayout">
+				{workingRow ? (
+					<motion.div
+						key="turn-working"
+						exit={{ opacity: 0 }}
+						transition={{ duration: reducedMotion ? 0 : 0.12, ease: [0.22, 1, 0.36, 1] }}
+						// Under a reply, sit where that reply's action row will (its 4px
+						// gap, not the turn's 10px).
+						className={cn("overflow-hidden", tailIsReply && "-mt-1.5")}
+					>
+						{workingRow}
+					</motion.div>
+				) : null}
+			</AnimatePresence>
+			{group.live ? <TurnLiveStatus blocked={group.blocked} /> : null}
+			{/* No assistant prose to hang the undo on — still offer it so a tool-only
+			    turn is not stuck without a way back. A stopped or failed turn carries
+			    it on its outcome's row instead. */}
+			{!copyableMessageId && !group.live && !endsWithOutcome && canRollback ? (
+				<TurnActions
+					durationMs={unfoldedDurationMs}
+					onRollback={() => onRollback(group.turnId as string)}
+					rollbackDisabled={rollbackDisabled}
+				/>
 			) : null}
 			{group.outcome && group.outcome.state !== "completed" && !group.accountSwitched ? (
 				<TurnOutcome
@@ -4694,53 +4856,25 @@ const TurnGroup = memo(function TurnGroup({
 					error={group.outcome.error}
 					usageLimit={group.outcome.usageLimit}
 					retry={group.outcome.state === "failed" ? retry : undefined}
+					copyText={copyableMessage?.text}
+					onRollback={canRollback ? () => onRollback(group.turnId as string) : undefined}
+					rollbackDisabled={rollbackDisabled}
+					timestamp={copyableMessage?.createdAt}
+					durationMs={unfoldedDurationMs}
 				/>
 			) : null}
 		</div>
 	);
 });
 
-function TurnLiveStatus({
-	blocked,
-	providerFailure,
-}: {
-	blocked?: boolean;
-	providerFailure?: ConversationActivity;
-}) {
-	if (blocked) {
-		return (
-			<span role="alert" className="sr-only">
-				The agent is waiting for your decision.
-			</span>
-		);
-	}
-	if (providerFailure) {
-		return (
-			<div
-				role="status"
-				aria-live="polite"
-				className="flex min-h-8 items-start gap-2 px-1 py-1"
-				data-testid="live-turn-status"
-			>
-				<TriangleAlert
-					aria-hidden="true"
-					className="mt-0.5 size-3.5 shrink-0 text-warning"
-				/>
-				<span className="flex min-w-0 flex-col gap-0.5">
-					<strong className="text-xs font-medium text-warning">
-						{providerFailure.summary}
-					</strong>
-					{providerFailure.detail?.text ? (
-						<span className="text-xs leading-snug text-muted-foreground">
-							{providerFailure.detail.text}
-						</span>
-					) : null}
-				</span>
-			</div>
-		);
-	}
-
-	return null;
+/** The one live state that has no row of its own: a decision the reader has to make. */
+function TurnLiveStatus({ blocked }: { blocked?: boolean }) {
+	if (!blocked) return null;
+	return (
+		<span role="alert" className="sr-only">
+			The agent is waiting for your decision.
+		</span>
+	);
 }
 
 function TimelineItem({
@@ -4769,6 +4903,7 @@ function TimelineItem({
 	queued,
 	newHumanMessageIds,
 	showCopy,
+	durationMs,
 	live,
 	onRollback,
 	rollbackDisabled,
@@ -4804,6 +4939,8 @@ function TimelineItem({
 	newHumanMessageIds: ReadonlySet<string>;
 	/** This is the final assistant response of a turn that has finished. */
 	showCopy?: boolean;
+	/** How long that turn ran, when no "Worked for" fold above the answer says so. */
+	durationMs?: number;
 	live?: boolean;
 	/** Undo this finished turn from the answer that owns its copy action. */
 	onRollback?: () => void;
@@ -4819,6 +4956,7 @@ function TimelineItem({
 				<AssistantMessage
 					message={item}
 					showCopy={showCopy}
+					durationMs={durationMs}
 					live={live}
 					onRollback={onRollback}
 					rollbackDisabled={rollbackDisabled}
@@ -4829,8 +4967,9 @@ function TimelineItem({
 		// not write it: mark where the turn picked back up instead of a bubble.
 		if (item.origin === "human" && item.continuation) return <ContinuedMarker />;
 		// A user-role message that did not come from this human is an automation or
-		// worker relay, and is attributed differently.
-		if (item.origin === "human") {
+		// worker relay, and is attributed differently. So is one an outside tool
+		// sent through the API, which AO can store as the human's.
+		if (item.origin === "human" && !relayedVia(item)) {
 			const editAvailable = Boolean(
 				item.editAvailable && item.turnId && editableTurns.has(item.turnId) && onEditHumanMessage,
 			);
@@ -4864,7 +5003,7 @@ function TimelineItem({
 			);
 		}
 		return (
-			<FromAgent item={item}>
+			<FromAgent item={item} queued={queued}>
 				<AutomationMessage message={item} queued={queued} fallback={<OriginMessage message={item} />} />
 			</FromAgent>
 		);

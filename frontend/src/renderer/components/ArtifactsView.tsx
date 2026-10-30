@@ -91,7 +91,7 @@ export function ArtifactsView() {
 		];
 		for (const section of sections) {
 			for (const row of section.rows) {
-				const page = row.kind === "html" && row.inlineUrl && row.rawUrl;
+				const page = row.kind === "html" && (row.cloud || (row.inlineUrl && row.rawUrl));
 				const pdf = !row.cloud && /\.pdf$/i.test(row.path) && row.rawUrl;
 				if (!page && !pdf) continue;
 				const key = artifactKey(row);

@@ -411,6 +411,8 @@ const ChatExcerptResourceURIPrefix = "ao://conversation-excerpt/"
 // message. Revision makes stale selections fail closed when streaming updates
 // replace the source text before the user sends their draft.
 type ChatExcerptReference struct {
+	ID             string `json:"id,omitempty"`
+	Order          int64  `json:"order,omitempty"`
 	ConversationID string `json:"conversationId"`
 	MessageID      string `json:"messageId"`
 	Revision       int64  `json:"revision"`
@@ -431,13 +433,14 @@ type ChatExcerptContext struct {
 // the durable transcript has an ordinary readable message; these blocks enrich
 // what the provider receives without leaking protocol DTOs above the adapter.
 type ChatContent struct {
-	Type     string              `json:"type"`
-	Data     string              `json:"data,omitempty"`
-	MIMEType string              `json:"mimeType,omitempty"`
-	URI      string              `json:"uri,omitempty"`
-	Name     string              `json:"name,omitempty"`
-	Text     string              `json:"text,omitempty"`
-	Excerpt  *ChatExcerptContext `json:"excerpt,omitempty"`
+	Type          string              `json:"type"`
+	Data          string              `json:"data,omitempty"`
+	MIMEType      string              `json:"mimeType,omitempty"`
+	URI           string              `json:"uri,omitempty"`
+	Name          string              `json:"name,omitempty"`
+	Text          string              `json:"text,omitempty"`
+	Excerpt       *ChatExcerptContext `json:"excerpt,omitempty"`
+	FileReference *ChatFileReference  `json:"fileReference,omitempty"`
 	// Internal distinguishes AO-owned prompt context from a user attachment.
 	// Public request DTOs never expose this bit; it is durable so edit/retry and
 	// snapshot reconstruction can hide only content AO actually synthesized.
@@ -455,6 +458,9 @@ type ChatUserMessage struct {
 	// InteractionAt preserves initial acceptance across transition outbox replay.
 	InteractionAt time.Time
 	Text          string
+	// SpawnOpeningPrompt excludes the task brief delivered during session creation
+	// from direct Chat message usage, regardless of who requested the spawn.
+	SpawnOpeningPrompt bool
 	// SenderSessionID identifies the AO session that authored an automation steer.
 	// It is presentation metadata only and is never sent to the provider.
 	SenderSessionID string

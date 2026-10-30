@@ -1,0 +1,28 @@
+name: Public boundary
+
+# The AO Cloud control plane is private (OrchestratorInc/ao-control-plane).
+# Everything in this repository must build from public code alone, and reach
+# the control plane only through contracts/cloud/openapi.yaml. This keeps a
+# private path, import or script from creeping back in.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+
+      - name: Check the public boundary
+        run: scripts/check-public-boundary.sh

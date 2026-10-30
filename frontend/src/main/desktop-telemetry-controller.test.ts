@@ -7,6 +7,49 @@ import { DesktopTelemetryController, telemetryRetryDelayMs } from "./desktop-tel
 import { nodeTelemetryPolicyFileSystem, TelemetryPolicyAuthority } from "./telemetry-policy-file";
 
 describe("DesktopTelemetryController", () => {
+	it("blocks a later opt-in until a failed startup queue purge succeeds", async () => {
+		const authority = new AuthorityFake(false, "generation-off");
+		const clearTransportCache = vi.fn().mockRejectedValueOnce(new Error("queue purge failed")).mockRejectedValueOnce(new Error("queue purge failed")).mockResolvedValue(undefined);
+		const transportFactory = vi.fn().mockResolvedValue({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} });
+		const controller = new DesktopTelemetryController({ authority, clearTransportCache, transportFactory, environmentAllowsEvents: true, productionEnabled: true });
+
+		await controller.initialize();
+		expect(controller.snapshot()).toMatchObject({ eventsEnabled: false, state: "cleanup_pending", acknowledged: false });
+		await expect(controller.setEventsEnabled(true, "generation-off")).rejects.toThrow("prior desktop telemetry purge is incomplete");
+		expect(authority.writes).toEqual([]);
+		expect(transportFactory).not.toHaveBeenCalled();
+		await controller.setEventsEnabled(true, "generation-off");
+		expect(clearTransportCache).toHaveBeenCalledTimes(3);
+		expect(transportFactory).toHaveBeenCalledOnce();
+	});
+
+	it("keeps a failed startup purge when the user confirms sharing stays off", async () => {
+		const authority = new AuthorityFake(false, "generation-off");
+		const clearTransportCache = vi.fn().mockRejectedValueOnce(new Error("queue purge failed")).mockResolvedValue(undefined);
+		const controller = new DesktopTelemetryController({
+			authority,
+			clearTransportCache,
+			transportFactory: vi.fn(),
+			environmentAllowsEvents: true,
+			productionEnabled: true,
+		});
+		await controller.initialize();
+		expect(controller.snapshot().state).toBe("cleanup_pending");
+		const result = await controller.setEventsEnabled(false, "generation-off");
+		expect(result).toMatchObject({ eventsEnabled: false, acknowledged: true, state: "applied" });
+		expect(clearTransportCache).toHaveBeenCalledTimes(3);
+	});
+
+	it("keeps an enabled policy's offline queue available to its sender at startup", async () => {
+		const authority = new AuthorityFake(true, "generation-on");
+		const clearTransportCache = vi.fn();
+		const transportFactory = vi.fn().mockResolvedValue({ closeAndDrain: async () => {}, capture: () => {}, clearCache: async () => {} });
+		const controller = new DesktopTelemetryController({ authority, clearTransportCache, transportFactory, environmentAllowsEvents: true, productionEnabled: true });
+		await controller.initialize();
+		expect(clearTransportCache).not.toHaveBeenCalled();
+		expect(transportFactory).toHaveBeenCalledOnce();
+	});
+
 	it("keeps opt-out cleanup pending when any desktop purge fails", async () => {
 		const authority = new AuthorityFake(true, "generation-on");
 		const transport = { closeAndDrain: vi.fn(), capture: vi.fn(), clearCache: vi.fn().mockRejectedValue(new Error("cache purge failed")) };
@@ -30,9 +73,10 @@ describe("DesktopTelemetryController", () => {
 		try {
 			const enabledGeneration = "7f80c8a9-ec67-4a16-a067-a444ffcc5cca";
 			await writeFile(path.join(dataDir, "telemetry_policy.json"), `${JSON.stringify({
-				schema_version: 1,
+				schema_version: 2,
 				events_enabled: true,
 				consent_generation: enabledGeneration,
+				consent_production_enabled: true,
 				updated_at: "2026-08-28T10:15:30.000Z",
 			})}\n`, { mode: 0o600 });
 			let failDirectorySync = false;

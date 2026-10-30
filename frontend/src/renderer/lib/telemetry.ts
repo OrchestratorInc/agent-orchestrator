@@ -35,11 +35,11 @@ let fallbackActiveDate = "";
 let fallbackRouteViewDate = "";
 let fallbackRouteViewSurfaces = new Set<string>();
 
-// Bounds how many captures of a single event (or exception) name reach
-// PostHog. Mirrors the daemon-side RateLimitedSink: a re-render loop or
-// repeatedly-thrown exception must not turn into an unbounded PostHog bill.
-// A per-minute cap alone doesn't bound the daily total — a loop paced just
-// under it would sit under the ceiling forever — so this pairs a small burst
+// Bounds how many captures of a single event or exception name leave the
+// renderer. Mirrors the daemon-side RateLimitedSink: a re-render loop or
+// repeatedly-thrown exception must not create an unbounded error stream.
+// A per-minute cap alone doesn't bound the daily total. A loop paced just
+// under it would sit under the ceiling forever, so this pairs a small burst
 // allowance with a hard daily ceiling per name.
 const EVENTS_PER_NAME_PER_MINUTE = 5;
 const EVENTS_PER_NAME_PER_DAY = 200;
@@ -1099,7 +1099,7 @@ export async function sanitizeRendererExceptionProperties(
 	return { ...safe, ...(await sanitizeRendererContextProperties(properties)) };
 }
 
-function bindErrorHandlers() {
+export function bindRendererErrorHandlers() {
 	if (errorHandlersBound) return;
 	errorHandlersBound = true;
 	window.addEventListener("error", (event) => {
@@ -1208,7 +1208,7 @@ export async function initTelemetry(): Promise<boolean> {
 			platform: bootstrap.platform,
 			distinctId: bootstrap.distinctId,
 		});
-		bindErrorHandlers();
+		bindRendererErrorHandlers();
 		startDailyActiveHeartbeat({
 			storage: telemetryStorage(),
 			window,
@@ -1321,15 +1321,15 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 }
 
 export async function captureRendererException(error: unknown, properties?: Record<string, unknown>): Promise<void> {
-	// "$exception" is the name this lands under in PostHog, so that is what an
-	// operator would type to silence a crash loop.
+	try {
+		await initTelemetry();
+	} catch {
+		// The main-owned Sentry gate can still accept a crash when analytics cannot initialize.
+	}
 	if (isDeniedEvent("$exception")) return;
 	if (!reserveCapture(`exception:${exceptionName(error)}`)) return;
-	if (!(await initTelemetry())) return;
-	const safeProperties = withTelemetryContext(await sanitizeRendererExceptionProperties(error, properties));
-	posthog.captureException(normalizeException(error), safeProperties);
-	// Mirror into Sentry (no-op unless a DSN is configured). Source drives the
-	// category so a boundary crash classifies as render_crash.
+	// The main-owned policy gate decides whether this reaches Sentry. Renderer
+	// exceptions no longer enter the PostHog product-analytics path.
 	const source = typeof properties?.source === "string" ? properties.source : undefined;
 	captureExceptionToSentry(normalizeException(error), {
 		category: source === "react-error-boundary" ? "render_crash" : undefined,

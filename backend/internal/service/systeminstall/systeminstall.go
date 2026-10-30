@@ -88,6 +88,9 @@ const (
 	// TargetCloudflared is the optional connector that makes a paired phone
 	// reachable from outside the local network.
 	TargetCloudflared Target = "cloudflared"
+	// TargetCuaDriver is Cua Driver, the optional computer-use driver behind
+	// the agents' computer-use tools.
+	TargetCuaDriver Target = "cua-driver"
 )
 
 // agentTargets is the stable settings-page order.
@@ -122,7 +125,7 @@ func installNotice(target Target) string {
 // Agent-only targets use /agents/{agent}/install instead.
 var systemTargetSet = map[Target]bool{
 	TargetTmux: true, TargetGH: true, TargetClaude: true, TargetCloudflared: true,
-	TargetCodex: true, TargetOpencode: true, TargetOpencodeV2: true, TargetCopilot: true,
+	TargetCuaDriver: true, TargetCodex: true, TargetOpencode: true, TargetOpencodeV2: true, TargetCopilot: true,
 }
 
 // knownTargets is the exhaustive allowlist backing Valid.
@@ -313,7 +316,7 @@ var devinInstalledLine = regexp.MustCompile(`Installed devin v\S+ to [^\r\n]+/de
 
 // Job is the tracked state of one harness operation for a Target.
 type Job struct {
-	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,cloudflared" description:"Fixed install target this job ran (or is running) for."`
+	Target              Target `json:"target" enum:"tmux,gh,claude,claude-code,codex,cursor,opencode,opencode-v2,aider,copilot,grok,kimi,pi,amp,auggie,droid,crush,cline,goose,qwen,gemini,continue,devin,kiro,kilocode,vibe,muse,agy,autohand,kimchi,prime-agent,omp,fx,unreal-agent,codewhale,mimo-code,deepseek-harness,openhands,command-code,memcode,hermes,cloudflared,cua-driver" description:"Fixed install target this job ran (or is running) for."`
 	Status              Status `json:"status" enum:"idle,running,waiting_for_idle,installing,verifying,succeeded,failed,unsupported,interrupted" description:"Current lifecycle state of the job. waiting_for_idle: the update runs once every session using the harness is idle (Windows)."`
 	Method              string `json:"method,omitempty" description:"Server-owned installation method selected for this harness job."`
 	Command             string `json:"command,omitempty" description:"Human-readable install command, e.g. \"brew install tmux\", for display even before/without output."`
@@ -372,11 +375,11 @@ type Deps struct {
 	// Releases records which managed release each session launch runs, so a
 	// release is deleted only once no live session runs it.
 	Releases ManagedReleaseStore
-	// WindowsUpdateWhenIdle lets a Windows update wait for idle sessions, stop
-	// them, update and resume them, instead of refusing while they run
-	// (AO_WINDOWS_UPDATE_WHEN_IDLE).
-	WindowsUpdateWhenIdle bool
-	PrivateNPMPrefixes    map[Target]string
+	// UpdateWhenIdle lets an update that cannot run beside sessions wait for
+	// them to be idle, stop them, update and resume them, instead of refusing
+	// while they run (AO_UPDATE_WHEN_IDLE).
+	UpdateWhenIdle     bool
+	PrivateNPMPrefixes map[Target]string
 }
 
 // Service runs real install commands for the fixed Target allowlist.
@@ -424,8 +427,8 @@ type Service struct {
 	releases ManagedReleaseStore
 	// invalidateBinary makes a harness adapter resolve its executable again.
 	invalidateBinary func(Target)
-	// windowsUpdateWhenIdle turns Windows' blocked level into update-when-idle.
-	windowsUpdateWhenIdle bool
+	// updateWhenIdle turns a blocked or warn level into update-when-idle.
+	updateWhenIdle bool
 	// changing marks harnesses whose installation is being changed, so a
 	// launch waits for the change instead of failing.
 	changing map[Target]bool
@@ -450,6 +453,8 @@ type Service struct {
 	// officialVersion reads a vendor release channel when no package manager
 	// owns the harness binary.
 	officialVersion func(context.Context, Target) (string, error)
+	// systemResolvers find system targets installed outside the daemon's PATH.
+	systemResolvers map[Target]func(context.Context) (string, error)
 }
 
 // requestPlanner carries one immutable capability snapshot through all recipe
@@ -509,7 +514,7 @@ func NewWithDeps(executables ports.ExecutableFinder, commands ports.CommandRunne
 		reviewers:                  deps.Reviewers,
 		updateChecksDisabled:       deps.DisableUpdateChecks,
 		updateWhileRunningDisabled: deps.DisableUpdateWhileRunning,
-		windowsUpdateWhenIdle:      deps.WindowsUpdateWhenIdle,
+		updateWhenIdle:             deps.UpdateWhenIdle,
 		managedRoot:                deps.ManagedRoot,
 		releases:                   deps.Releases,
 		goos:                       runtime.GOOS,
@@ -689,7 +694,7 @@ func (s *Service) Start(ctx context.Context, target Target) (Job, error) {
 
 	go func() { //nolint:gosec // bounded daemon-owned worker intentionally outlives the request.
 		defer s.workers.Done()
-		s.run(s.backgroundContext, plan.Command, job)
+		s.run(s.backgroundContext, plan, job)
 	}()
 
 	return *job, nil
@@ -850,11 +855,13 @@ func (s *Service) StartAgentOperation(ctx context.Context, target Target, method
 		if err != nil {
 			return Job{}, err
 		}
+		// effectiveUpdateLevel takes s.mu itself, so it runs before the lock.
+		level := s.effectiveUpdateLevel(plan.UpdateWhileRunning)
 		s.mu.Lock()
 		if s.updateLevels == nil {
 			s.updateLevels = make(map[Target]UpdateWhileRunning)
 		}
-		s.updateLevels[target] = s.effectiveUpdateLevel(plan.UpdateWhileRunning)
+		s.updateLevels[target] = level
 		s.mu.Unlock()
 		plan.keepPreviousRelease = withSessions
 	}
@@ -1176,31 +1183,46 @@ func (s *Service) Close(ctx context.Context) error {
 	}
 }
 
-// run executes argv in the background and records the outcome onto job. job
+// run executes plan in the background and records the outcome onto job. job
 // is only ever mutated here and read back through a copy under s.mu, so
 // concurrent Start/Status calls never race with this goroutine's writes.
 // The run is bounded by installTimeout so a stalled installer eventually
 // surfaces as a failure instead of pinning the target in StatusRunning.
-func (s *Service) run(parent context.Context, argv []string, job *Job) {
+func (s *Service) run(parent context.Context, plan Plan, job *Job) {
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
 
 	out := &capturedOutput{max: maxOutputBytes}
-	var runErr error
-	if s.installCommands != nil {
-		runErr = s.installCommands.RunInstall(ctx, ports.InstallCommand{
-			Argv: argv,
-			Env: []string{
-				"CI=1",
-				"NONINTERACTIVE=1",
-				"HOMEBREW_NO_AUTO_UPDATE=1",
-				"NPM_CONFIG_AUDIT=false",
-				"NPM_CONFIG_FUND=false",
-			},
-		}, out, out)
-	} else {
-		runErr = s.commands.Run(ctx, argv, out, out)
+	env := []string{
+		"CI=1",
+		"NONINTERACTIVE=1",
+		"HOMEBREW_NO_AUTO_UPDATE=1",
+		"NPM_CONFIG_AUDIT=false",
+		"NPM_CONFIG_FUND=false",
 	}
+	var runErr error
+	switch {
+	case plan.Script != nil:
+		if s.installScripts == nil {
+			runErr = errors.New("remote installer runner is not configured")
+			break
+		}
+		command := *plan.Script
+		command.Env = append(append([]string(nil), env...), command.Env...)
+		var result ports.InstallScriptResult
+		result, runErr = s.installScripts.RunInstallScript(ctx, command, out, out)
+		if result.SHA256 != "" {
+			_, _ = fmt.Fprintf(out, "\nsource: %s\nsha256: %s\n", command.URL, result.SHA256)
+		}
+	case s.installCommands != nil:
+		runErr = s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: plan.Command, Env: env}, out, out)
+	default:
+		runErr = s.commands.Run(ctx, plan.Command, out, out)
+	}
+	// A clean run of a system target must leave its binary findable. Checked
+	// before taking s.mu: a resolver may probe the filesystem.
+	needsBinary := runErr == nil && ctx.Err() == nil && !IsAgentTarget(job.Target)
+	found := !needsBinary || s.systemTargetInstalled(ctx, job.Target)
 	now := time.Now()
 
 	s.mu.Lock()
@@ -1224,13 +1246,11 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 		s.mu.Unlock()
 		return
 	}
-	if !IsAgentTarget(job.Target) {
-		if path, err := s.executables.LookPath(string(job.Target)); err != nil || path == "" {
-			job.Status = StatusFailed
-			job.Error = fmt.Sprintf("install command finished but %s is still not in PATH", job.Target)
-			s.mu.Unlock()
-			return
-		}
+	if !found {
+		job.Status = StatusFailed
+		job.Error = fmt.Sprintf("install command finished but %s is still not in PATH", job.Target)
+		s.mu.Unlock()
+		return
 	}
 	job.Status = StatusSucceeded
 	callback := s.onSucceeded
@@ -1239,6 +1259,35 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 	if callback != nil {
 		callback(target)
 	}
+}
+
+// SetSystemTargetResolver registers how to find target's executable once it
+// is installed, for a tool whose installer puts it somewhere the daemon's own
+// PATH may not reach (a desktop app launched from the Dock does not inherit
+// the shell's ~/.local/bin).
+func (s *Service) SetSystemTargetResolver(target Target, resolve func(context.Context) (string, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.systemResolvers == nil {
+		s.systemResolvers = make(map[Target]func(context.Context) (string, error))
+	}
+	s.systemResolvers[target] = resolve
+}
+
+// systemTargetInstalled reports whether a system target's executable can now
+// be found: on PATH, or through its registered resolver.
+func (s *Service) systemTargetInstalled(ctx context.Context, target Target) bool {
+	if path, err := s.executables.LookPath(string(target)); err == nil && path != "" {
+		return true
+	}
+	s.mu.Lock()
+	resolve := s.systemResolvers[target]
+	s.mu.Unlock()
+	if resolve == nil {
+		return false
+	}
+	path, err := resolve(ctx)
+	return err == nil && path != ""
 }
 
 func (s *Service) runAgentOperation(parent context.Context, plan Plan, operation AgentOperation, job *Job, baseline *installedBaseline) {
@@ -1652,6 +1701,8 @@ func (s *Service) planFor(target Target) Plan {
 		return s.planAgent(TargetOpencodeV2)
 	case TargetCloudflared:
 		return s.planCloudflared()
+	case TargetCuaDriver:
+		return s.planCuaDriver()
 	default:
 		return Plan{Target: target, Unsupported: true, Reason: "unknown install target"}
 	}
@@ -1714,6 +1765,37 @@ func (s *Service) planCloudflared() Plan {
 			Reason: "cloudflared installation is not supported on this platform.",
 		}
 	}
+}
+
+// Cua Driver's official installers. Both install per user without
+// administrator rights: macOS puts CuaDriver.app in /Applications, Linux and
+// macOS link the binary into ~/.local/bin, and Windows installs under
+// %LOCALAPPDATA%\Programs\Cua. Rerunning either installs the latest release,
+// so the same plan also updates.
+const (
+	cuaDriverUnixInstaller    = "https://cua.ai/driver/install.sh"
+	cuaDriverWindowsInstaller = "https://cua.ai/driver/install.ps1"
+	cuaDriverDocs             = "https://cua.ai/docs/how-to-guides/driver/install"
+)
+
+// planCuaDriver runs the official installer. When the shell AO would run it
+// with is missing from the daemon's PATH, the plan is unsupported but carries
+// Cua's own one-line install command, so Settings offers it to copy instead of
+// an Install button that fails the same way again.
+func (s *Service) planCuaDriver() Plan {
+	plan := s.officialByOS(TargetCuaDriver, cuaDriverUnixInstaller, "bash", cuaDriverWindowsInstaller, cuaDriverDocs)
+	if !plan.Unsupported || plan.Script != nil || len(plan.Command) > 0 {
+		return plan
+	}
+	switch s.goos {
+	case "windows":
+		plan.Command = []string{"irm", cuaDriverWindowsInstaller, "|", "iex"}
+		plan.Reason += " Copy the install command and run it in PowerShell, or follow " + cuaDriverDocs + "."
+	case "darwin", "linux":
+		plan.Command = []string{"curl", "-fsSL", cuaDriverUnixInstaller, "|", "bash"}
+		plan.Reason += " Copy the install command and run it in a terminal, or follow " + cuaDriverDocs + "."
+	}
+	return plan
 }
 
 func (s *Service) planNPM(target Target, pkg string) Plan {
