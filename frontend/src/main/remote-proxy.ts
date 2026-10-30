@@ -538,7 +538,12 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			}
 		}
 		delete headers["x-ao-preview-api-sandbox"];
-		Object.assign(headers, corsHeaders);
+		// CORS adds an Origin variant; it must not replace the host's encoding
+		// (or other) variants, including on cache revalidation responses.
+		const vary = (Array.isArray(headers.vary) ? headers.vary.join(", ") : String(headers.vary ?? ""))
+			.split(",").map((value) => value.trim()).filter(Boolean);
+		if (!vary.some((value) => value === "*" || value.toLowerCase() === "origin")) vary.push("origin");
+		Object.assign(headers, corsHeaders, { vary: vary.join(", ") });
 		if (kind !== undefined && kind !== "app") delete headers["set-cookie"];
 		res.writeHead(status, headers);
 		// Node holds the header block until the first body byte or an explicit

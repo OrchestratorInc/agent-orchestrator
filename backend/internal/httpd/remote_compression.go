@@ -26,6 +26,9 @@ func remoteJSONCompression(next http.Handler) http.Handler {
 		return writer
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Apply Vary at the final header boundary, including identity responses
+		// and 304s that bypass chi's encoder.
+		w = &remoteJSONResponseWriter{ResponseWriter: w}
 		encoding := preferredRemoteEncoding(r.Header.Values("Accept-Encoding"))
 		if encoding == "" || r.Header.Get("Range") != "" {
 			next.ServeHTTP(w, r)
@@ -44,6 +47,8 @@ func remoteJSONCompression(next http.Handler) http.Handler {
 
 // Decide before chi commits headers: a partial response must bypass its encoder,
 // and a strong validator cannot describe both the original and encoded bytes.
+// The outer instance has no uncompressed writer and preserves Vary after any
+// handler or encoder header changes; the inner instance enforces encoding rules.
 type remoteJSONResponseWriter struct {
 	http.ResponseWriter
 	uncompressed http.ResponseWriter
@@ -53,7 +58,20 @@ type remoteJSONResponseWriter struct {
 func (w *remoteJSONResponseWriter) WriteHeader(status int) {
 	if !w.wroteHeader {
 		w.wroteHeader = true
-		if status == http.StatusPartialContent {
+		if w.uncompressed == nil {
+			var variesByEncoding bool
+			for _, field := range w.Header().Values("Vary") {
+				for _, token := range strings.Split(field, ",") {
+					token = strings.TrimSpace(token)
+					if token == "*" || strings.EqualFold(token, "Accept-Encoding") {
+						variesByEncoding = true
+					}
+				}
+			}
+			if !variesByEncoding {
+				w.Header().Add("Vary", "Accept-Encoding")
+			}
+		} else if status == http.StatusPartialContent {
 			w.ResponseWriter = w.uncompressed
 		} else {
 			contentType, _, _ := strings.Cut(w.Header().Get("Content-Type"), ";")

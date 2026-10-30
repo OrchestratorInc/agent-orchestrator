@@ -93,6 +93,9 @@ func TestArtifactFileRemoteCompressionPreservesRangesAndValidators(t *testing.T)
 					t.Errorf("%s=%q, want %q", name, got, want)
 				}
 			}
+			if !strings.Contains(strings.ToLower(strings.Join(response.Header.Values("Vary"), ",")), "accept-encoding") {
+				t.Errorf("Vary=%q, missing Accept-Encoding", response.Header.Values("Vary"))
+			}
 			if tc.status == http.StatusPartialContent && response.ContentLength != 100 {
 				t.Errorf("partial Content-Length=%d, want100", response.ContentLength)
 			}

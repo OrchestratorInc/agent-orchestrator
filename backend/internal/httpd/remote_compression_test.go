@@ -246,3 +246,38 @@ func TestRemoteJSONCompressionNotModified(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoteJSONCompressionVary(t *testing.T) {
+	for _, accept := range []string{"gzip", "deflate", "identity", "gzip;q=0", ""} {
+		for _, status := range []int{http.StatusOK, http.StatusPartialContent, http.StatusNotModified} {
+			t.Run(accept+"/"+http.StatusText(status), func(t *testing.T) {
+				handler := remoteJSONCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Vary", "Origin")
+					w.Header().Add("Vary", "Accept-Language")
+					w.WriteHeader(status)
+				}))
+				req := httptest.NewRequest(http.MethodGet, "/file.json", nil)
+				req.Header.Set("Accept-Encoding", accept)
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, req)
+				if got := strings.Join(recorder.Result().Header.Values("Vary"), ", "); got != "Origin, Accept-Language, Accept-Encoding" {
+					t.Errorf("Vary=%q, want all three request variants", got)
+				}
+			})
+		}
+	}
+	for _, vary := range []string{"aCcEpT-EnCoDiNg, Origin", "*"} {
+		t.Run(vary, func(t *testing.T) {
+			handler := remoteJSONCompression(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Vary", vary)
+				w.WriteHeader(http.StatusNotModified)
+			}))
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/file.json", nil))
+			if got := strings.Join(recorder.Result().Header.Values("Vary"), ", "); got != vary {
+				t.Errorf("Vary=%q, want existing %q", got, vary)
+			}
+		})
+	}
+}
