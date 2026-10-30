@@ -21,7 +21,6 @@ import {
 } from "../types/workspace";
 import { CreateProjectFlow } from "./CreateProjectFlow";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
-import { GitHubOnboardingNotice } from "./GitHubOnboardingNotice";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
 import { Badge } from "./ui/badge";
 
@@ -280,8 +279,6 @@ export function HomePage() {
 							</div>
 						)}
 					</section>
-
-					<GitHubOnboardingNotice />
 				</div>
 
 				<CreateProjectFlow

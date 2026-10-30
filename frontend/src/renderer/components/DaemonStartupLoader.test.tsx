@@ -8,7 +8,6 @@ vi.mock("../hooks/useSystemRequirementsGate", () => ({
 		requirements: [
 			{ id: "git", label: "git", satisfied: true, required: true, detail: "/usr/bin/git" },
 			{ id: "tmux", label: "tmux", satisfied: true, required: true, detail: "/usr/bin/tmux" },
-			{ id: "gh", label: "gh", satisfied: true, required: false, detail: "/usr/bin/gh" },
 		],
 		blocked: false,
 		requirementsBlocked: false,

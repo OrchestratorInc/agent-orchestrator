@@ -63,13 +63,13 @@ ao doctor --json
 
 <Accordions>
 	<Accordion title="Repository or pull-request data is missing">
-		Run `gh auth status` and confirm the active account can access the repository. GitHub authentication is lazy so an auth failure does not need to block unrelated local session work. For GitLab check token/`glab` authentication and self-managed-host configuration in [SCM setup](/plugins/scm).
+		Run `ao doctor` to see which GitHub account Orchestrator uses, and confirm it can access the repository. For an organization repository, check that the organization allows Agent Orchestrator. For GitLab check token/`glab` authentication and self-managed-host configuration in [SCM setup](/plugins/scm).
 	</Accordion>
 	<Accordion title="The agent opened a PR but Orchestrator did not link it">
 		Claim it from the session UI or, inside the worker, run `ao session claim-pr <pr-number-or-url>`; Orchestrator reads the worker from `AO_SESSION_ID`. From another shell, use `ao session claim-pr <session-id> <pr-number-or-url>`.
 	</Accordion>
 	<Accordion title="CI or review data is delayed">
-		The SCM observer polls GitHub and respects rate limits and ETags. Check `gh auth status`, wait for another observation cycle, and open the pull request directly for full raw logs or comment bodies.
+		The SCM observer polls GitHub and respects rate limits and ETags. Run `ao doctor` to confirm GitHub access, wait for another observation cycle, and open the pull request directly for full raw logs or comment bodies.
 	</Accordion>
 	<Accordion title="Review findings were not sent to the worker">
 		Open the review run and use its send action. Reviewer execution and delivery are separate operations so you can inspect findings before changing the worker conversation.

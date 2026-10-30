@@ -198,11 +198,6 @@ const api = {
 			ipcRenderer.invoke("app:checkAncestorRepo", path) as Promise<string | undefined>,
 		getRepositoryBranch: (path: string) =>
 			ipcRenderer.invoke("app:getRepositoryBranch", path) as Promise<string | undefined>,
-		getGitHubLogin: (repoPath?: string) => ipcRenderer.invoke("app:getGitHubLogin", repoPath) as Promise<string>,
-		getCachedGitHubOwners: () => ipcRenderer.invoke("app:getCachedGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,
-		refreshGitHubOwners: () => ipcRenderer.invoke("app:refreshGitHubOwners") as Promise<Array<{ login: string; avatarUrl: string }>>,
-		checkGitHubRepositoryAvailability: (input: { owner: string; name: string }) =>
-			ipcRenderer.invoke("app:checkGitHubRepositoryAvailability", input) as Promise<{ available: boolean; message?: string }>,
 		// Resolves a dropped File's real filesystem path. Synchronous passthrough
 		// (not ipcRenderer.invoke — a File can't cross that boundary) so it must be
 		// called directly on the File from a drop event, in the same tick, per
@@ -799,11 +794,7 @@ const api = {
 		signOut: () => ipcRenderer.invoke("cloud:signOut") as Promise<void>,
 		cancelProviderAuth: () => ipcRenderer.invoke("cloud:cancelProviderAuth") as Promise<void>,
 		connectProviderAuth: (input: { baseUrl: string; provider: string; persistLocalClaudeToken?: boolean }) =>
-			ipcRenderer.invoke("cloud:connectProviderAuth", input) as Promise<
-				| string
-				| { secret: string; refreshToken?: string; expiresIn?: number; refreshTokenExpiresIn?: number }
-				| void
-			>,
+			ipcRenderer.invoke("cloud:connectProviderAuth", input) as Promise<void>,
 		// Dev-only local (email/password) sign-in against a loopback Docker CP.
 		// Whether the surface is offered is decided in main (unpackaged/dev +
 		// loopback); the renderer only mirrors it for UI visibility.

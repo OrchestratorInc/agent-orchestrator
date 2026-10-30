@@ -2269,8 +2269,9 @@ function ProjectImportDialog({
 				}
 			}
 		};
-		void aoBridge.app.getCachedGitHubOwners().then(applyOwners).catch(() => undefined);
-		void aoBridge.app.refreshGitHubOwners().then(applyOwners).catch(() => undefined);
+		void apiClient.GET("/api/v1/github/owners")
+			.then(({ data }) => { if (data) applyOwners(data.owners); })
+			.catch(() => undefined);
 		return () => { cancelled = true; };
 	}, [customGitHubOwner, githubRepository, needsRemote, onChangeGitHubRepository, onChangeRemote, open, remote]);
 	useEffect(() => {
@@ -2285,10 +2286,10 @@ function ProjectImportDialog({
 		setAvailability({ state: "checking" });
 		let cancelled = false;
 		const timer = window.setTimeout(() => {
-			void aoBridge.app.checkGitHubRepositoryAvailability({ owner: githubOwner, name: githubName })
-				.then((result) => {
+			void apiClient.GET("/api/v1/github/repository-availability", { params: { query: { owner: githubOwner, name: githubName } } })
+				.then(({ data, error }) => {
 					if (cancelled) return;
-					setAvailability(result.available ? { state: "available" } : { state: "unavailable", message: result.message });
+					setAvailability(!error && data?.available ? { state: "available" } : { state: "unavailable", message: t("createProject.githubRepoUnavailable") });
 				})
 				.catch(() => {
 					if (!cancelled) setAvailability({ state: "unavailable", message: t("createProject.githubRepoUnavailable") });

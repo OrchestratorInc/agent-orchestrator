@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { StrictMode, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { TooltipProvider } from "../../components/ui/tooltip";
 
 function render(ui: ReactNode) {
@@ -103,12 +103,7 @@ import { useUiStore } from "../../stores/ui-store";
 type Project = { id: string; name: string; path: string; orchestratorAgent?: string };
 type Session = Record<string, unknown>;
 
-function respondWith(
-	projects: Project[],
-	sessions: Session[],
-	githubAuthenticated = true,
-	githubCliSatisfied: boolean | null = true,
-) {
+function respondWith(projects: Project[], sessions: Session[]) {
 	getMock.mockImplementation(async (url: string) => {
 		if (url === "/api/v1/projects") return { data: { projects }, error: undefined };
 		if (url === "/api/v1/sessions") return { data: { sessions }, error: undefined };
@@ -120,23 +115,7 @@ function respondWith(
 						{ id: "git", label: "git", satisfied: true, required: true, detail: "/usr/bin/git" },
 						{ id: "tmux", label: "tmux", satisfied: true, required: true, detail: "/usr/bin/tmux" },
 						{ id: "harness", label: "agent harness", satisfied: true, required: true, detail: "Claude Code" },
-						...(githubCliSatisfied === null
-							? []
-							: [{ id: "gh", label: "gh", satisfied: githubCliSatisfied, required: false, detail: githubCliSatisfied ? "/usr/bin/gh" : "Not found" }]),
 					],
-				},
-				error: undefined,
-			};
-		}
-		if (url === "/api/v1/github/login") return { data: { state: "idle" }, error: undefined };
-		if (url === "/api/v1/system/github-auth") {
-			return {
-				data: {
-					id: "github-auth",
-					label: "GitHub access",
-					satisfied: githubAuthenticated,
-					required: false,
-					detail: githubAuthenticated ? "GitHub CLI is signed in." : "Sign in to GitHub so agent sessions can open pull requests and read issues.",
 				},
 				error: undefined,
 			};
@@ -214,17 +193,7 @@ beforeEach(() => {
 	createProjectMock.mockResolvedValue(undefined);
 	initializeProjectRepositoryMock.mockResolvedValue(undefined);
 	clipboardWriteMock.mockResolvedValue(undefined);
-	postMock.mockResolvedValue({
-		data: {
-			shellTerminal: {
-				handleId: "shellterm-github",
-				workingDir: "/tmp/auth",
-				title: "Connect GitHub",
-				createdAt: "2026-07-04T10:00:00Z",
-			},
-		},
-		error: undefined,
-	});
+	postMock.mockResolvedValue({ data: undefined, error: undefined });
 	deleteMock.mockResolvedValue({ error: undefined });
 	useUiStore.setState({
 		orchestratorReplacementErrors: {},
@@ -283,144 +252,6 @@ describe("global board first launch", () => {
 		expect(columnCount()).toBe(0);
 		// The welcome carries its own orientation — no dangling "Board" header.
 		expect(screen.queryByText("Board")).not.toBeInTheDocument();
-	});
-
-	it("offers GitHub sign-in without opening a terminal when signed out", async () => {
-		respondWith([], [], false);
-		renderBoard(
-			<StrictMode>
-				<SessionsBoard />
-			</StrictMode>,
-		);
-
-		expect(await screen.findByText("Connect GitHub for pull requests")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Use GitHub CLI" })).toBeInTheDocument();
-		expect(postMock).not.toHaveBeenCalled();
-		expect(screen.queryByTestId("github-auth-terminal")).not.toBeInTheDocument();
-	});
-
-	it("shows the device code and opens GitHub with it copied", async () => {
-		respondWith([], [], false);
-		postMock.mockImplementation(async (url: string) => url === "/api/v1/github/login"
-			? { data: { state: "pending", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device", expiresAt: "2026-07-04T10:15:00Z" }, error: undefined }
-			: { data: undefined, error: undefined });
-		renderBoard(<SessionsBoard />);
-
-		await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
-		expect(postMock).toHaveBeenCalledWith("/api/v1/github/login");
-		expect(await screen.findByText("ABCD-1234")).toBeInTheDocument();
-
-		await userEvent.click(screen.getByRole("button", { name: "Copy code and open GitHub" }));
-		expect(clipboardWriteMock).toHaveBeenCalledWith("ABCD-1234");
-		const { aoBridge } = await import("../../lib/bridge");
-		expect(aoBridge.app.openExternal).toHaveBeenCalledWith("https://github.com/login/device");
-	});
-
-	it("shows why GitHub sign-in could not start", async () => {
-		respondWith([], [], false);
-		postMock.mockResolvedValue({ data: undefined, error: new Error("GitHub sign-in is not configured in this build.") });
-		renderBoard(<SessionsBoard />);
-
-		await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
-		expect(await screen.findByRole("alert")).toHaveTextContent("GitHub sign-in is not configured in this build.");
-		expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
-	});
-
-	it("adopts a daemon-owned CLI login after renderer state is lost", async () => {
-		respondWith([], [], false);
-		const originalGet = getMock.getMockImplementation()!;
-		getMock.mockImplementation(async (url: string) => url === "/api/v1/shell-terminals"
-			? { data: { shellTerminals: [{ handleId: "surviving-login", title: "Connect GitHub", workingDir: "/tmp/auth", createdAt: "2026-07-04T10:00:00Z" }] } }
-			: originalGet(url));
-		const first = renderBoard(<SessionsBoard />);
-		await userEvent.click(await screen.findByRole("button", { name: "Use GitHub CLI" }));
-		await waitFor(() => expect(terminalPanePropsMock).toHaveBeenCalledWith(expect.objectContaining({ terminalTarget: expect.objectContaining({ handleId: "surviving-login" }) })));
-		first.unmount();
-		terminalPanePropsMock.mockClear();
-		renderBoard(<SessionsBoard />);
-		await userEvent.click(await screen.findByRole("button", { name: "Use GitHub CLI" }));
-		await waitFor(() => expect(terminalPanePropsMock).toHaveBeenCalledWith(expect.objectContaining({ terminalTarget: expect.objectContaining({ handleId: "surviving-login" }) })));
-		expect(postMock).not.toHaveBeenCalled();
-	});
-
-	it("does not spawn when daemon terminal reconciliation fails", async () => {
-		respondWith([], [], false);
-		const originalGet = getMock.getMockImplementation()!;
-		getMock.mockImplementation(async (url: string) => url === "/api/v1/shell-terminals"
-			? { error: new Error("Terminal list unavailable") }
-			: originalGet(url));
-		renderBoard(<SessionsBoard />);
-		await userEvent.click(await screen.findByRole("button", { name: "Use GitHub CLI" }));
-		expect(await screen.findByRole("alert", {}, { timeout: 5000 })).toHaveTextContent("Terminal list unavailable");
-		expect(postMock).not.toHaveBeenCalled();
-	});
-
-	it("does not offer GitHub sign-in when the initial auth check succeeds", async () => {
-		respondWith([], []);
-		renderBoard(<SessionsBoard />);
-
-		expect(await screen.findByText("Add a project")).toBeInTheDocument();
-		expect(screen.queryByText("Connect GitHub for pull requests")).not.toBeInTheDocument();
-		expect(postMock).not.toHaveBeenCalled();
-	});
-
-	it("hides the CLI option when gh is not installed", async () => {
-		respondWith([], [], false, false);
-		renderBoard(<SessionsBoard />);
-
-		expect(await screen.findByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Use GitHub CLI" })).not.toBeInTheDocument();
-	});
-
-	it.each(["Close", "Use GitHub CLI"])("retains the CLI login handle when %s cannot close its PTY", async (action) => {
-		respondWith([], [], false);
-		renderBoard(<SessionsBoard />);
-		await userEvent.click(await screen.findByRole("button", { name: "Use GitHub CLI" }));
-		await screen.findByTestId("github-auth-terminal");
-		if (action === "Use GitHub CLI") {
-			act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("exited"));
-		}
-		deleteMock.mockResolvedValue({ error: new Error("Close failed") });
-		await userEvent.click(await screen.findByRole("button", { name: action }));
-		await waitFor(() => {
-			expect(deleteMock).toHaveBeenCalledTimes(1);
-			expect(lastQueryClient!.isMutating()).toBe(0);
-		});
-		expect(screen.getByTestId("github-auth-terminal")).toBeInTheDocument();
-		expect(postMock).toHaveBeenCalledTimes(1);
-	});
-
-	it("offers recovery instead of treating an exited CLI login terminal as active", async () => {
-		respondWith([], [], false);
-		renderBoard(<SessionsBoard />);
-		await userEvent.click(await screen.findByRole("button", { name: "Use GitHub CLI" }));
-		await screen.findByTestId("github-auth-terminal");
-
-		act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("attached"));
-		expect(screen.getByTestId("terminal-pane")).toHaveAttribute("data-focus-requested", "true");
-		act(() => terminalPanePropsMock.mock.lastCall?.[0].onTerminalStateChange?.("exited"));
-
-		expect(await screen.findByText("Sign-in stopped before GitHub was connected")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Use GitHub CLI" })).toBeEnabled();
-		expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
-
-		await userEvent.click(screen.getByRole("button", { name: "Use GitHub CLI" }));
-		await waitFor(() => expect(deleteMock).toHaveBeenCalledWith("/api/v1/shell-terminals/{handleId}", {
-			params: { path: { handleId: "shellterm-github" } },
-		}));
-		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
-	});
-
-	it("keeps the CLI option when GitHub CLI readiness is unknown", async () => {
-		respondWith([], [], false, null);
-		renderBoard(<SessionsBoard />);
-
-		expect(await screen.findByText("Connect GitHub for pull requests")).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: "Check again" })).toBeInTheDocument();
-		await userEvent.click(screen.getByRole("button", { name: "Use GitHub CLI" }));
-		await screen.findByTestId("github-auth-terminal");
 	});
 
 	it("opens the native folder picker from the Project card", async () => {

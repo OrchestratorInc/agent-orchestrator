@@ -564,7 +564,6 @@ beforeEach(() => {
 		path,
 		repos: [],
 	}));
-	window.ao!.app.getGitHubLogin = vi.fn().mockResolvedValue("test-user");
 	window.ao!.app.getRepositoryBranch = vi.fn().mockResolvedValue(undefined);
 	navigateMock.mockReset();
 	renameSessionMock.mockReset().mockResolvedValue(undefined);

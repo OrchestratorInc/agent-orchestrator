@@ -12,6 +12,7 @@ import { CommandPalette } from "../components/CommandPalette";
 import { CenterPanelShell } from "../components/CenterPanelShell";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { DaemonStartupLoader } from "../components/DaemonStartupLoader";
+import { GitHubSignInGate } from "../components/GitHubSignInGate";
 import { NotificationRuntime } from "../components/NotificationCenter";
 import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
@@ -1456,6 +1457,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<SessionTopbarProvider>
 				<NotificationRuntime />
 				<HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />
+				<GitHubSignInGate enabled={daemonStatus.state === "ready"} />
 				<TrayRuntime />
 				{isDragActive ? (
 					<div

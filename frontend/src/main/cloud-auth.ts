@@ -762,18 +762,6 @@ export function installCloudIPC(
 
     if (credential.provider !== provider) throw new Error("Cloud provider login returned an unexpected provider.");
 
-    if (provider === "github") {
-      // Returned to the renderer, which saves it via the daemon's
-      // PUT /api/v1/github/pat endpoint. Include the OAuth refresh material so
-      // the daemon can renew an expiring GitHub App token without a reconnect.
-      return {
-        secret: credential.secret,
-        refreshToken: credential.refreshToken,
-        expiresIn: credential.expiresIn,
-        refreshTokenExpiresIn: credential.refreshTokenExpiresIn,
-      };
-    }
-
     const basePath = base.pathname.replace(/\/+$/, "");
     // Cloud agent credentials are always personal: the caller's own connection,
     // usable in every org they belong to.

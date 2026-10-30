@@ -19,7 +19,6 @@ const MISSING_DETAIL_KEYS: Record<string, MessageKey> = {
 	git: "startup.detailGitMissing",
 	tmux: "startup.detailTmuxMissing",
 	harness: "startup.detailHarnessMissing",
-	gh: "startup.detailGhMissing",
 };
 
 // requirement.detail is backend-authoritative (systemcheck.go) and hardcoded

@@ -13,18 +13,21 @@ import { CloudCpError } from "../lib/cloud-cp";
 const bridgeMocks = vi.hoisted(() => ({
 	checkAncestorRepo: vi.fn(),
 	checkGitRepository: vi.fn(),
-	checkGitHubRepositoryAvailability: vi.fn(),
 	chooseDirectory: vi.fn(),
-	getGitHubLogin: vi.fn(),
-	getCachedGitHubOwners: vi.fn(),
-	refreshGitHubOwners: vi.fn(),
 	getRepositoryBranch: vi.fn(),
 	scanImportFolder: vi.fn(),
 	connectProviderAuth: vi.fn(),
 	openExternal: vi.fn(),
 }));
 
+// The daemon's GitHub owner and repository-name routes, reached through apiClient.GET.
+const githubApiMocks = vi.hoisted(() => ({
+	owners: vi.fn(),
+	availability: vi.fn(),
+}));
+
 const apiMocks = vi.hoisted(() => ({
+	GET: vi.fn(),
 	POST: vi.fn(),
 	apiErrorMessage: vi.fn((error: unknown, fallback = "Request failed") =>
 		typeof error === "object" && error !== null && "message" in error ? String((error as { message?: unknown }).message) : fallback,
@@ -36,11 +39,7 @@ vi.mock("../lib/bridge", () => ({
 		app: {
 			checkAncestorRepo: bridgeMocks.checkAncestorRepo,
 			checkGitRepository: bridgeMocks.checkGitRepository,
-			checkGitHubRepositoryAvailability: bridgeMocks.checkGitHubRepositoryAvailability,
 		chooseDirectory: bridgeMocks.chooseDirectory,
-		getGitHubLogin: bridgeMocks.getGitHubLogin,
-		getCachedGitHubOwners: bridgeMocks.getCachedGitHubOwners,
-		refreshGitHubOwners: bridgeMocks.refreshGitHubOwners,
 		getRepositoryBranch: bridgeMocks.getRepositoryBranch,
 			scanImportFolder: bridgeMocks.scanImportFolder,
 			openExternal: bridgeMocks.openExternal,
@@ -53,6 +52,7 @@ vi.mock("../lib/bridge", () => ({
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: {
+		GET: apiMocks.GET,
 		POST: apiMocks.POST,
 	},
 	apiErrorCode: (error: unknown) =>
@@ -360,11 +360,14 @@ beforeEach(() => {
 	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], sessionOrders: {} });
 	bridgeMocks.checkAncestorRepo.mockReset().mockResolvedValue(undefined);
 	bridgeMocks.checkGitRepository.mockReset().mockResolvedValue(true);
-	bridgeMocks.checkGitHubRepositoryAvailability.mockReset().mockResolvedValue({ available: true });
+	githubApiMocks.availability.mockReset().mockResolvedValue({ available: true });
+	githubApiMocks.owners.mockReset().mockResolvedValue([{ login: "username", avatarUrl: "https://avatars.example/username" }, { login: "acme", avatarUrl: "https://avatars.example/acme" }]);
+	apiMocks.GET.mockReset().mockImplementation(async (path: string, init?: { params?: { query?: { owner: string; name: string } } }) => {
+		if (path === "/api/v1/github/owners") return { data: { owners: await githubApiMocks.owners() } };
+		if (path === "/api/v1/github/repository-availability") return { data: await githubApiMocks.availability(init?.params?.query) };
+		return { data: undefined, error: new Error(`unexpected GET ${path}`) };
+	});
 	bridgeMocks.chooseDirectory.mockReset();
-	bridgeMocks.getGitHubLogin.mockReset().mockResolvedValue("");
-	bridgeMocks.getCachedGitHubOwners.mockReset().mockResolvedValue([{ login: "username", avatarUrl: "https://avatars.example/username" }, { login: "acme", avatarUrl: "https://avatars.example/acme" }]);
-	bridgeMocks.refreshGitHubOwners.mockReset().mockResolvedValue([{ login: "username", avatarUrl: "https://avatars.example/username" }, { login: "acme", avatarUrl: "https://avatars.example/acme" }]);
 	bridgeMocks.getRepositoryBranch.mockReset().mockResolvedValue(undefined);
 	bridgeMocks.scanImportFolder.mockReset().mockImplementation(async ({ path }: { path: string }) => okScan(path));
 	bridgeMocks.connectProviderAuth.mockReset().mockRejectedValue(new Error("No browser auth flow for github in tests"));
@@ -1370,7 +1373,7 @@ describe("CreateProjectFlow project import validation", () => {
 	it("requires an available GitHub repository name", async () => {
 		const user = userEvent.setup();
 		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
-		bridgeMocks.checkGitHubRepositoryAvailability.mockResolvedValue({ available: false, message: "Repository name is already in use for this owner." });
+		githubApiMocks.availability.mockResolvedValue({ available: false });
 		apiMocks.POST.mockResolvedValueOnce({
 			data: projectValidation("/repo/project", {
 				nextStep: "prepare_git",
@@ -1385,15 +1388,15 @@ describe("CreateProjectFlow project import validation", () => {
 
 		await openSource(user, "Open a local folder");
 
-		expect(await screen.findByRole("alert")).toHaveTextContent("Repository name is already in use for this owner.");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Repository name is not available.");
 			expect(screen.getByRole("button", { name: "Create repository and continue" })).toBeDisabled();
 	});
 
 	it("checks repository availability again when the repository name changes", async () => {
 		const user = userEvent.setup();
 		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
-		bridgeMocks.checkGitHubRepositoryAvailability
-			.mockResolvedValueOnce({ available: false, message: "Repository name is already in use for this owner." })
+		githubApiMocks.availability
+			.mockResolvedValueOnce({ available: false })
 			.mockResolvedValueOnce({ available: true });
 		apiMocks.POST.mockResolvedValueOnce({
 			data: projectValidation("/repo/project", {
@@ -1409,12 +1412,12 @@ describe("CreateProjectFlow project import validation", () => {
 
 		await openSource(user, "Open a local folder");
 
-		expect(await screen.findByText("Repository name is already in use for this owner.")).toBeInTheDocument();
+		expect(await screen.findByText("Repository name is not available.")).toBeInTheDocument();
 		const repoNameInput = screen.getByLabelText("Repository name");
 		await user.clear(repoNameInput);
 		await user.type(repoNameInput, "project-new");
 
-		await waitFor(() => expect(bridgeMocks.checkGitHubRepositoryAvailability).toHaveBeenLastCalledWith({ owner: "username", name: "project-new" }));
+		await waitFor(() => expect(githubApiMocks.availability).toHaveBeenLastCalledWith({ owner: "username", name: "project-new" }));
 		expect(screen.getByText("project")).toBeInTheDocument();
 		expect(screen.queryByText("Repository name is available.")).not.toBeInTheDocument();
 			expect(screen.getByRole("button", { name: "Create repository and continue" })).toBeEnabled();
@@ -1445,7 +1448,7 @@ describe("CreateProjectFlow project import validation", () => {
 
 		expect(await screen.findByLabelText("Repository name")).toHaveValue("AO Desktop App");
 		expect(screen.getByText("Will create `AO-Desktop-App`")).toBeInTheDocument();
-		await waitFor(() => expect(bridgeMocks.checkGitHubRepositoryAvailability).toHaveBeenCalledWith({
+		await waitFor(() => expect(githubApiMocks.availability).toHaveBeenCalledWith({
 			owner: "username",
 			name: "AO-Desktop-App",
 		}));
@@ -1594,7 +1597,7 @@ describe("CreateProjectFlow project import validation", () => {
 	it("blocks an unavailable GitHub repository before Git preparation", async () => {
 		const user = userEvent.setup();
 		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
-		bridgeMocks.checkGitHubRepositoryAvailability.mockResolvedValue({ available: false, message: "Repository name is already in use for this owner." });
+		githubApiMocks.availability.mockResolvedValue({ available: false });
 		apiMocks.POST.mockResolvedValueOnce({
 			data: projectValidation("/repo/project", {
 				nextStep: "prepare_git",
@@ -1606,9 +1609,9 @@ describe("CreateProjectFlow project import validation", () => {
 
 		await openSource(user, "Open a local folder");
 
-		await waitFor(() => expect(bridgeMocks.checkGitHubRepositoryAvailability).toHaveBeenCalledWith({ owner: "username", name: "project" }));
+		await waitFor(() => expect(githubApiMocks.availability).toHaveBeenCalledWith({ owner: "username", name: "project" }));
 		expect(apiMocks.POST).toHaveBeenCalledTimes(1);
-		expect(screen.getByText("Repository name is already in use for this owner.")).toBeInTheDocument();
+		expect(screen.getByText("Repository name is not available.")).toBeInTheDocument();
 			expect(screen.getByRole("button", { name: "Create repository and continue" })).toBeDisabled();
 		expect(screen.queryByTestId("agent-sheet")).not.toBeInTheDocument();
 	});
