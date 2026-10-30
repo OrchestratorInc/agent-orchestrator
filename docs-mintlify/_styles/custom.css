@@ -1339,3 +1339,10 @@ ul.sidebar-group li.space-y-px > ul::before {
 /* v39: original parity - ordered-list items get 6px marker-text gap; table cells are vertically centered */
 main ol > li { padding-left: 6px !important; }
 main td, main th { vertical-align: middle !important; }
+
+/* v40: mobile table wrappers — original keeps tables at content width (no +40px bleed);
+   the inner px wrapper sits at depth 3, not a direct child */
+@media (max-width: 1023px) {
+  .mdx-content > div[class*="--page-padding"] { margin-left: 0 !important; margin-right: 0 !important; width: 100% !important; }
+  .mdx-content > div[class*="--page-padding"] div[class*="px-("] { padding-left: 0 !important; padding-right: 0 !important; }
+}
