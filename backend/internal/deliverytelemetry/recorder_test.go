@@ -46,6 +46,8 @@ type fakeStore struct {
 	projectErr error
 	lookups    int
 	checkCtx   bool
+	claimMu    sync.Mutex
+	claimed    bool
 }
 
 func (f *fakeStore) readContextError(ctx context.Context) error {
@@ -88,6 +90,19 @@ func (f *fakeStore) ListReportsBySession(ctx context.Context, id domain.SessionI
 		return nil, err
 	}
 	return f.reports[id], nil
+}
+
+func (f *fakeStore) ClaimSessionEndTelemetry(ctx context.Context, _ domain.SessionID) (bool, error) {
+	if err := f.readContextError(ctx); err != nil {
+		return false, err
+	}
+	f.claimMu.Lock()
+	defer f.claimMu.Unlock()
+	if f.claimed {
+		return false, nil
+	}
+	f.claimed = true
+	return true, nil
 }
 
 var t0 = time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
@@ -176,6 +191,21 @@ func TestSessionEndedReadsFactsAfterRequestCancellation(t *testing.T) {
 		p["waiting_input_count"] != int64(2) || p["project_telemetry_id"] != projectTelemetryID {
 		t.Fatalf("ended payload after request cancellation = %#v", p)
 	}
+}
+
+func TestSessionEndedConcurrentCallersEmitOnce(t *testing.T) {
+	r, sink := newRecorder(&fakeStore{})
+	rec := domain.SessionRecord{ID: "w-1", ProjectID: "proj", Kind: domain.KindWorker}
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.SessionEnded(context.Background(), rec, EndKilled)
+		}()
+	}
+	wg.Wait()
+	sink.only(t, "ao.sessions.ended")
 }
 
 func TestSessionEndedOmitsUnknownCreator(t *testing.T) {

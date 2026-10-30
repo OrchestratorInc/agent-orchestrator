@@ -42,3 +42,20 @@ func (s *Store) GetSessionTelemetry(ctx context.Context, id domain.SessionID) (d
 	}
 	return domain.SessionTelemetryFacts{CreatedBy: domain.SessionCreator(row.CreatedBy), WaitingInputCount: row.WaitingInputCount}, nil
 }
+
+// ClaimSessionEndTelemetry reserves the single outcome event for a session.
+// The unique session row makes concurrent end paths and later retries no-ops.
+func (s *Store) ClaimSessionEndTelemetry(ctx context.Context, id domain.SessionID) (bool, error) {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
+	defer s.writeMu.Unlock()
+	_, err := s.qw.ClaimSessionEndTelemetry(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("claim end telemetry for session %s: %w", id, err)
+	}
+	return true, nil
+}

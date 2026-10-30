@@ -29,6 +29,7 @@ type Store interface {
 	GetSessionTelemetry(ctx context.Context, id domain.SessionID) (domain.SessionTelemetryFacts, error)
 	ListPRsBySession(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error)
 	ListReportsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReportRecord, error)
+	ClaimSessionEndTelemetry(ctx context.Context, id domain.SessionID) (bool, error)
 }
 
 // EndReason is what ended a session, as known by the code that ended it.
@@ -146,6 +147,10 @@ func (r *Recorder) SessionEnded(ctx context.Context, rec domain.SessionRecord, r
 		payload["created_by"] = string(facts.CreatedBy)
 	}
 	r.stampUsageGrouping(readCtx, rec, payload)
+	claimed, err := r.store.ClaimSessionEndTelemetry(readCtx, rec.ID)
+	if err != nil || !claimed {
+		return
+	}
 	r.emit(ctx, "ao.sessions.ended", rec, payload)
 }
 

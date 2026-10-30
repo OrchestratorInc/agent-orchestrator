@@ -7,7 +7,23 @@ package gen
 
 import (
 	"context"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+const claimSessionEndTelemetry = `-- name: ClaimSessionEndTelemetry :one
+INSERT INTO session_telemetry (session_id, end_claimed)
+SELECT id, 1 FROM sessions WHERE id = ? AND is_terminated = 1
+ON CONFLICT(session_id) DO UPDATE SET end_claimed = 1 WHERE session_telemetry.end_claimed = 0
+RETURNING session_id
+`
+
+func (q *Queries) ClaimSessionEndTelemetry(ctx context.Context, id domain.SessionID) (string, error) {
+	row := q.db.QueryRowContext(ctx, claimSessionEndTelemetry, id)
+	var session_id string
+	err := row.Scan(&session_id)
+	return session_id, err
+}
 
 const getSessionTelemetry = `-- name: GetSessionTelemetry :one
 SELECT created_by, waiting_input_count FROM session_telemetry WHERE session_id = ?

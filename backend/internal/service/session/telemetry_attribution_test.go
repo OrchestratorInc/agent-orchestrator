@@ -169,6 +169,9 @@ func (d deliveryFakeStore) ListPRsBySession(context.Context, domain.SessionID) (
 func (deliveryFakeStore) ListReportsBySession(context.Context, domain.SessionID) ([]domain.ReportRecord, error) {
 	return nil, nil
 }
+func (deliveryFakeStore) ClaimSessionEndTelemetry(context.Context, domain.SessionID) (bool, error) {
+	return true, nil
+}
 
 func TestKillReportsSessionEndedOnce(t *testing.T) {
 	st := newFakeStore()
@@ -195,5 +198,50 @@ func TestKillReportsSessionEndedOnce(t *testing.T) {
 	}
 	if len(sink.events) != before {
 		t.Fatalf("killing an already terminated session reported again: %#v", sink.events[before:])
+	}
+}
+
+func TestOrchestratorReplacementReportsTerminatedOldSession(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		retireErr  error
+		terminated bool
+	}{
+		{name: "successful retirement", terminated: true},
+		{name: "cleanup fails after termination", retireErr: errors.New("cleanup failed"), terminated: true},
+		{name: "retirement fails before termination", retireErr: errors.New("retirement failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+			st.sessions["mer-1"] = domain.SessionRecord{
+				ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator,
+				Harness: domain.HarnessCodex, Activity: domain.Activity{State: domain.ActivityActive},
+			}
+			sink := &fakeTelemetrySink{}
+			fc := &fakeCommander{retireFunc: func(_ context.Context, id domain.SessionID) error {
+				if tc.terminated {
+					rec := st.sessions[id]
+					rec.IsTerminated = true
+					st.sessions[id] = rec
+				}
+				return tc.retireErr
+			}}
+			svc := &Service{manager: fc, store: st, delivery: deliverytelemetry.New(sink, deliveryFakeStore{})}
+			_, err := svc.SpawnOrchestrator(context.Background(), "mer", true, "", "")
+			if (err != nil) != (tc.retireErr != nil) {
+				t.Fatalf("SpawnOrchestrator error = %v, retirement error = %v", err, tc.retireErr)
+			}
+			if !tc.terminated {
+				if len(sink.events) != 0 {
+					t.Fatalf("nonterminal retirement emitted %#v", sink.events)
+				}
+				return
+			}
+			ev := lastEvent(t, sink, "ao.sessions.ended")
+			if ev.Payload["kind"] != "orchestrator" || ev.Payload["outcome"] != "killed" {
+				t.Fatalf("replacement outcome = %#v", ev.Payload)
+			}
+		})
 	}
 }

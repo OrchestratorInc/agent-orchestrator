@@ -245,7 +245,7 @@ New (`historical: false`) PR outcomes add:
 | Event | When it is sent | Properties |
 | --- | --- | --- |
 | `ao.session.spawned` | A session starts (existing event) | adds `created_by` and, for sessions a request started, `surface` |
-| `ao.sessions.ended` | A session is killed, torn down after its pull requests merged or its issue closed, or its runtime dies | `kind` (`standalone`, `worker`, or `orchestrator`), `harness`, `outcome`, `duration_ms`, `had_pr`, `waiting_input_count`, `created_by`, and for project sessions the same `project_telemetry_id` and `session_telemetry_id` as the usage counts |
+| `ao.sessions.ended` | A session is killed, replaced, torn down after its pull requests merged or its issue closed, or its runtime dies | `kind` (`standalone`, `worker`, or `orchestrator`), `harness`, `outcome`, `duration_ms`, `had_pr`, `waiting_input_count`, `created_by`, and for project sessions the same `project_telemetry_id` and `session_telemetry_id` as the usage counts |
 
 - `surface` is `desktop`, `mobile`, or `cli`, as above.
 - `created_by` is `user`, `orchestrator` (an orchestrator ran `ao spawn`),
@@ -259,6 +259,8 @@ New (`historical: false`) PR outcomes add:
   waiting on you, with nothing delivered), or `failed` (its runtime died).
 - `waiting_input_count` is how many times the session stopped to wait for
   you.
+- An ended event claims its session once in local storage after the terminal
+  state is durable. Concurrent end paths cannot export duplicate outcomes.
 
 ## Automation usage and creation
 

@@ -784,9 +784,20 @@ func (s *Service) SpawnOrchestrator(
 		}
 		retireCtx := context.WithoutCancel(ctx)
 		for _, orch := range existing {
+			before, live := s.liveSessionBeforeEnd(retireCtx, orch.ID)
 			_ = s.sendRetireNotice(retireCtx, orch.ID)
-			if err := s.manager.RetireForReplacement(retireCtx, orch.ID); err != nil {
-				return domain.Session{}, toAPIError(err)
+			retireErr := s.manager.RetireForReplacement(retireCtx, orch.ID)
+			if live {
+				// A failed cleanup can follow a successful terminal transition.
+				// On that path, read the row before reporting the outcome.
+				if retireErr == nil {
+					s.recordKilled(retireCtx, before, true)
+				} else if after, ok, err := s.store.GetSession(retireCtx, orch.ID); err == nil && ok && after.IsTerminated {
+					s.recordKilled(retireCtx, before, true)
+				}
+			}
+			if retireErr != nil {
+				return domain.Session{}, toAPIError(retireErr)
 			}
 		}
 	} else {

@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,7 +15,9 @@ import (
 // to the lifecycle fake.
 type deliveryStore struct {
 	*fakeStore
-	waits map[domain.SessionID]int64
+	waits   map[domain.SessionID]int64
+	claimMu sync.Mutex
+	claimed map[domain.SessionID]bool
 }
 
 func (d *deliveryStore) IncrementSessionWaitingInputCount(_ context.Context, id domain.SessionID) error {
@@ -29,6 +32,18 @@ func (*deliveryStore) ListReportsBySession(context.Context, domain.SessionID) ([
 }
 func (*deliveryStore) UsageProjectID(context.Context, string, string) (string, error) {
 	return "", nil
+}
+func (d *deliveryStore) ClaimSessionEndTelemetry(_ context.Context, id domain.SessionID) (bool, error) {
+	d.claimMu.Lock()
+	defer d.claimMu.Unlock()
+	if d.claimed == nil {
+		d.claimed = map[domain.SessionID]bool{}
+	}
+	if d.claimed[id] {
+		return false, nil
+	}
+	d.claimed[id] = true
+	return true, nil
 }
 
 func newDeliveryManager() (*Manager, *deliveryStore, *telemetrySink) {
