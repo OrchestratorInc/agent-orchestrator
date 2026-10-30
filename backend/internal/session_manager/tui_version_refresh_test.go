@@ -380,7 +380,7 @@ func TestRefreshCapableHarnessLaunchesAreSupervised(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			mgr, _, _ := newExitedResumeManager(t, &fakeRuntime{}, agent)
 			env := map[string]string{}
-			argv, launchID, err := mgr.superviseAgentProcess(agent, "mer-1", env, []string{name, "--native-resume"})
+			argv, launchID, err := mgr.superviseAgentProcess(agent, "mer-1", env, []string{name, "--native-resume"}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}

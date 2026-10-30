@@ -13,31 +13,31 @@ import (
 
 // snapshotSelection uses the same validated comparison as the review, including
 // synthetic trees produced by combining non-adjacent commits. No worktree reads.
-func (s *Service) snapshotSelection(ctx context.Context, id domain.SessionID, input WorkspaceSelectionRevisionInput) (WorkspaceCommitSelection, error) {
+func (s *Service) snapshotSelection(ctx context.Context, id domain.SessionID, input WorkspaceSelectionRevisionInput) (context.Context, WorkspaceCommitSelection, error) {
 	shas, err := selectionCommitSHAs(input.CommitSHA, input.CommitSHAs)
 	if err != nil {
-		return WorkspaceCommitSelection{}, err
+		return ctx, WorkspaceCommitSelection{}, err
 	}
 	var selection WorkspaceCommitSelection
 	if input.View.ExpectedTipSHA != "" {
-		selection, err = s.pinnedSnapshotSelection(ctx, id, input.View, shas)
+		ctx, selection, err = s.pinnedSnapshotSelection(ctx, id, input.View, shas)
 	} else {
-		selection, _, err = s.workspaceSelection(ctx, id, input.View, shas, "", false)
+		ctx, selection, _, err = s.workspaceSelection(ctx, id, input.View, shas, "", false)
 	}
 	if err != nil {
-		return WorkspaceCommitSelection{}, err
+		return ctx, WorkspaceCommitSelection{}, err
 	}
 	if !selection.Combinable {
-		return WorkspaceCommitSelection{}, commitsNotCombinable(selection.Conflict)
+		return ctx, WorkspaceCommitSelection{}, commitsNotCombinable(selection.Conflict)
 	}
 	// An empty comparison still has a complete repository at its tip.
 	if selection.after == "" {
 		selection.after = selection.View.TipSHA
 	}
 	if selection.root == "" || selection.after == "" {
-		return WorkspaceCommitSelection{}, apierr.NotFound("WORKSPACE_SNAPSHOT_UNAVAILABLE", "This session has no repository snapshot")
+		return ctx, WorkspaceCommitSelection{}, apierr.NotFound("WORKSPACE_SNAPSHOT_UNAVAILABLE", "This session has no repository snapshot")
 	}
-	return selection, nil
+	return ctx, selection, nil
 }
 
 // ListWorkspaceSnapshotTree lists tracked paths at the review's after revision.
@@ -49,7 +49,7 @@ func (s *Service) ListWorkspaceSnapshotTree(ctx context.Context, id domain.Sessi
 	if err != nil {
 		return WorkspaceTree{}, err
 	}
-	selection, err := s.snapshotSelection(ctx, id, input)
+	ctx, selection, err := s.snapshotSelection(ctx, id, input)
 	if err != nil {
 		return WorkspaceTree{}, err
 	}
@@ -123,7 +123,7 @@ func (s *Service) GetWorkspaceSnapshotFile(ctx context.Context, id domain.Sessio
 	if err != nil {
 		return WorkspaceFileDetail{}, err
 	}
-	selection, err := s.snapshotSelection(ctx, id, input)
+	ctx, selection, err := s.snapshotSelection(ctx, id, input)
 	if err != nil {
 		return WorkspaceFileDetail{}, err
 	}
@@ -183,7 +183,7 @@ func (s *Service) GetWorkspaceSnapshotBlob(ctx context.Context, id domain.Sessio
 	if err != nil {
 		return WorkspaceFileBlob{}, err
 	}
-	selection, err := s.snapshotSelection(ctx, id, input)
+	ctx, selection, err := s.snapshotSelection(ctx, id, input)
 	if err != nil {
 		return WorkspaceFileBlob{}, err
 	}
@@ -214,26 +214,26 @@ func (s *Service) GetWorkspaceSnapshotBlob(ctx context.Context, id domain.Sessio
 // pinnedSnapshotSelection preserves a snapshot across ordinary branch advances.
 // Its anchor must still belong to the selected source; a force-push that removes
 // it fails explicitly rather than substituting a new revision or live bytes.
-func (s *Service) pinnedSnapshotSelection(ctx context.Context, id domain.SessionID, input WorkspaceView, shas []string) (WorkspaceCommitSelection, error) {
+func (s *Service) pinnedSnapshotSelection(ctx context.Context, id domain.SessionID, input WorkspaceView, shas []string) (context.Context, WorkspaceCommitSelection, error) {
 	if !fullCommitSHA.MatchString(input.ExpectedTipSHA) || (input.ExpectedBaseSHA != "" && !fullCommitSHA.MatchString(input.ExpectedBaseSHA)) {
-		return WorkspaceCommitSelection{}, apierr.Invalid("INVALID_WORKSPACE_SNAPSHOT", "Snapshot anchors must be full commit SHAs", nil)
+		return ctx, WorkspaceCommitSelection{}, apierr.Invalid("INVALID_WORKSPACE_SNAPSHOT", "Snapshot anchors must be full commit SHAs", nil)
 	}
 	current := input
 	current.ExpectedTipSHA = ""
 	current.ExpectedBaseSHA = ""
-	view, err := s.resolveWorkspaceView(ctx, id, current)
+	ctx, view, err := s.resolveWorkspaceView(ctx, id, current)
 	if err != nil {
-		return WorkspaceCommitSelection{}, err
+		return ctx, WorkspaceCommitSelection{}, err
 	}
 	if view.root == "" || !gitIsAncestor(ctx, view.root, input.ExpectedTipSHA, view.TipSHA) {
-		return WorkspaceCommitSelection{}, apierr.Conflict("WORKSPACE_REF_MOVED", "This revision is no longer reachable from the selected source; reload the selected revision", nil)
+		return ctx, WorkspaceCommitSelection{}, apierr.Conflict("WORKSPACE_REF_MOVED", "This revision is no longer reachable from the selected source; reload the selected revision", nil)
 	}
 	base := input.ExpectedBaseSHA
 	if base == "" && view.RangeMode == WorkspaceRangeSinceBase {
 		base = view.BaseSHA
 	}
 	if base != "" && !gitIsAncestor(ctx, view.root, base, input.ExpectedTipSHA) {
-		return WorkspaceCommitSelection{}, apierr.Invalid("INVALID_WORKSPACE_SNAPSHOT", "Snapshot base must be an ancestor of its tip", nil)
+		return ctx, WorkspaceCommitSelection{}, apierr.Invalid("INVALID_WORKSPACE_SNAPSHOT", "Snapshot base must be an ancestor of its tip", nil)
 	}
 	view.TipSHA = input.ExpectedTipSHA
 	view.BaseSHA = base
@@ -246,7 +246,7 @@ func (s *Service) pinnedSnapshotSelection(ctx context.Context, id domain.Session
 	} else if view.Kind == WorkspaceViewBranch {
 		view.rangeBefore, err = recentRangeBefore(ctx, view.root, view.TipSHA)
 		if err != nil {
-			return WorkspaceCommitSelection{}, err
+			return ctx, WorkspaceCommitSelection{}, err
 		}
 		view.logArgs = []string{"--first-parent", view.TipSHA}
 		view.RangeMode = WorkspaceRangeRecent
@@ -254,9 +254,9 @@ func (s *Service) pinnedSnapshotSelection(ctx context.Context, id domain.Session
 	}
 	selection, err := s.commitSelection(ctx, view, shas)
 	if err != nil {
-		return WorkspaceCommitSelection{}, err
+		return ctx, WorkspaceCommitSelection{}, err
 	}
 	selection.SessionID = id
 	selection.View = view.WorkspaceViewInfo
-	return selection, nil
+	return ctx, selection, nil
 }

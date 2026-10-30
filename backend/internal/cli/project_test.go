@@ -451,3 +451,27 @@ func TestProjectRemove_YesSkipsConfirmationAndSupportsBackendRemoveEnvelope(t *t
 		t.Fatalf("--yes output should skip prompt and print removal:\n%s", out)
 	}
 }
+
+func TestProjectSetConfig_SandboxJSONIsForwarded(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo","path":"/repo/demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--config-json",
+		`{"sandbox":{"mode":"shared","image":"node:22","memory":"4g"},"orchestrator":{"sandbox":{"mode":"off"}}}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	var got setConfigRequest
+	if err := json.Unmarshal(capture.body, &got); err != nil {
+		t.Fatalf("decode request: %v\nbody=%s", err, capture.body)
+	}
+	if got.Config.Sandbox == nil || got.Config.Sandbox.Mode != "shared" || got.Config.Sandbox.Image != "node:22" || got.Config.Sandbox.Memory != "4g" {
+		t.Fatalf("sandbox = %#v", got.Config.Sandbox)
+	}
+	if got.Config.Orchestrator.Sandbox == nil || got.Config.Orchestrator.Sandbox.Mode != "off" {
+		t.Fatalf("orchestrator sandbox = %#v", got.Config.Orchestrator.Sandbox)
+	}
+}

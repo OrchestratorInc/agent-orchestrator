@@ -1,6 +1,9 @@
 package gitworktree
 
-import "strings"
+import (
+	"os"
+	"strings"
+)
 
 func checkRefFormatBranchArgs(repo, branch string) []string {
 	return []string{"-C", repo, "check-ref-format", "--branch", branch}
@@ -68,11 +71,46 @@ func worktreePruneArgs(repo string) []string {
 	return []string{"-C", repo, "worktree", "prune"}
 }
 
+// sandboxedGitConfig is prefixed to every host git call that reads a
+// sandboxed session's worktree (#6663). The agent controls that worktree and,
+// in per-agent mode, its index, so it can commit a nested repository as a
+// gitlink and give it a core.fsmonitor or filter.*.clean command. Host git
+// that recurses into the "submodule" obeys the nested config and runs it.
+// These settings stop recursion and fsmonitor; status and diff also need
+// --ignore-submodules=all, because a .gitmodules `ignore = none` overrides a
+// config-level diff.ignoreSubmodules (verified against git 2.54).
+//
+// Host sessions keep plain git: there --ignore-submodules=all would hide real
+// submodule changes from Destroy's dirty check.
+var sandboxedGitConfig = []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "submodule.recurse=false"}
+
+// ignoreSubmodulesAll is the status/diff flag that stops recursion into
+// nested repositories. See sandboxedGitConfig.
+const ignoreSubmodulesAll = "--ignore-submodules=all"
+
+// hostGitArgs prefixes args with sandboxedGitConfig for a sandboxed session.
+func hostGitArgs(sandboxed bool, args ...string) []string {
+	if !sandboxed {
+		return args
+	}
+	return append(append(make([]string, 0, len(sandboxedGitConfig)+len(args)), sandboxedGitConfig...), args...)
+}
+
 // statusPorcelainArgs probes the worktree at path for uncommitted changes or
 // untracked files — the condition `git worktree remove` (without --force)
 // refuses on — so Destroy can classify a refusal as ports.ErrWorkspaceDirty.
-func statusPorcelainArgs(path string) []string {
-	return []string{"-C", path, "status", "--porcelain"}
+func statusPorcelainArgs(path string, sandboxed bool) []string {
+	args := hostGitArgs(sandboxed, "-C", path, "status", "--porcelain")
+	if sandboxed {
+		args = append(args, ignoreSubmodulesAll)
+	}
+	return args
+}
+
+// gitlinkStageArgs lists index entries with their modes, so a sandboxed
+// session's dirty check can find gitlinks without recursing into them.
+func gitlinkStageArgs(path string) []string {
+	return hostGitArgs(true, "-C", path, "ls-files", "--stage", "-z")
 }
 
 func worktreeListPorcelainArgs(repo string) []string {
@@ -132,8 +170,12 @@ func cherryPickNoCommitArgs(worktree, commitSHA string) []string {
 }
 
 // ignoredCountArgs lists files skipped because of .gitignore (dry-run, no mutation).
-func ignoredCountArgs(worktree string) []string {
-	return []string{"-C", worktree, "status", "--ignored", "--porcelain"}
+func ignoredCountArgs(worktree string, sandboxed bool) []string {
+	args := hostGitArgs(sandboxed, "-C", worktree, "status", "--ignored", "--porcelain")
+	if sandboxed {
+		args = append(args, ignoreSubmodulesAll)
+	}
+	return args
 }
 
 func configuredBaseRefCandidates(defaultBranch string) []string {

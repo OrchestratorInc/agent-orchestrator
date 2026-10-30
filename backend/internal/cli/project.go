@@ -82,8 +82,9 @@ type agentConfig struct {
 
 // roleOverride mirrors domain.RoleOverride.
 type roleOverride struct {
-	Agent       string      `json:"agent,omitempty"`
-	AgentConfig agentConfig `json:"agentConfig,omitempty"`
+	Agent       string         `json:"agent,omitempty"`
+	AgentConfig agentConfig    `json:"agentConfig,omitempty"`
+	Sandbox     *sandboxConfig `json:"sandbox,omitempty"`
 }
 
 // trackerIntakeConfig mirrors domain.TrackerIntakeConfig.
@@ -104,11 +105,21 @@ type containerReapConfig struct {
 	Disabled bool `json:"disabled,omitempty"`
 }
 
+// sandboxConfig mirrors domain.SandboxConfig.
+type sandboxConfig struct {
+	Mode      string `json:"mode,omitempty"`
+	Image     string `json:"image,omitempty"`
+	CPUs      string `json:"cpus,omitempty"`
+	Memory    string `json:"memory,omitempty"`
+	PidsLimit int    `json:"pidsLimit,omitempty"`
+}
+
 // projectConfig mirrors the daemon's typed domain.ProjectConfig for the CLI
 // client. The CLI sets common fields via flags and the whole object via
 // --config-json.
 type projectConfig struct {
 	ContainerReap     *containerReapConfig `json:"containerReap,omitempty"`
+	Sandbox           *sandboxConfig       `json:"sandbox,omitempty"`
 	CanonicalRepoURL  string               `json:"canonicalRepoURL,omitempty"`
 	DefaultBranch     string               `json:"defaultBranch,omitempty"`
 	SessionPrefix     string               `json:"sessionPrefix,omitempty"`

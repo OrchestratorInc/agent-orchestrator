@@ -1,0 +1,12 @@
+#!/bin/sh
+# Entry point for sandboxed agent launches (#6663): load the session env the
+# host wrote, put the relay `ao` first on PATH, then exec the harness.
+set -eu
+envfile="$1"
+shift
+set -a
+. "$envfile"
+set +a
+PATH="$(cd "$(dirname "$0")" && pwd):$PATH"
+export PATH
+exec "$@"

@@ -38,7 +38,7 @@ type WorkspacePathResolution struct {
 // files by absolute path, but the renderer is never told where a session's
 // worktree lives, so it asks here instead of guessing from the file catalog.
 func (s *Service) ResolveWorkspacePath(ctx context.Context, id domain.SessionID, rawPath string) (WorkspacePathResolution, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	_, rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
 		return WorkspacePathResolution{}, err
 	}

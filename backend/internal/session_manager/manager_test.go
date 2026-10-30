@@ -57,6 +57,7 @@ type fakeStore struct {
 	deleteErr                          error
 	upsertWTErr                        error
 	listAllErr                         error
+	listSessionsErr                    error
 	getProjectErr                      error
 	getSessionErr                      error
 	updateSessionErr                   error
@@ -377,6 +378,9 @@ func (f *fakeStore) ConversationForSession(_ context.Context, id domain.SessionI
 	return conversation, nil
 }
 func (f *fakeStore) ListSessions(_ context.Context, p domain.ProjectID) ([]domain.SessionRecord, error) {
+	if f.listSessionsErr != nil {
+		return nil, f.listSessionsErr
+	}
 	var out []domain.SessionRecord
 	for _, r := range f.sessions {
 		if r.ProjectID == p {
@@ -641,6 +645,7 @@ type fakeRuntime struct {
 	destroyErr         error
 	destroyErrSequence []error
 	onDestroy          func(call int, handle ports.RuntimeHandle)
+	onCreate           func()
 	created, destroyed int
 	lastCfg            ports.RuntimeConfig
 	outputs            []string
@@ -763,6 +768,9 @@ func (r *blockingRestartRuntime) Destroy(ctx context.Context, handle ports.Runti
 }
 
 func (r *fakeRuntime) Create(_ context.Context, cfg ports.RuntimeConfig) (ports.RuntimeHandle, error) {
+	if r.onCreate != nil {
+		r.onCreate()
+	}
 	createErr := r.createErr
 	if len(r.createErrSequence) > 0 {
 		createErr = r.createErrSequence[0]

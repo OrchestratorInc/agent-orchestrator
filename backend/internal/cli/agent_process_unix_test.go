@@ -5,6 +5,7 @@ package cli
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -98,5 +99,31 @@ func TestAgentProcessSuperviseReportsReviewExitWithSessionIdentity(t *testing.T)
 	}
 	if capture.path != "/api/v1/reviews/review-7/activity" {
 		t.Fatalf("exit report path = %q, want review activity endpoint", capture.path)
+	}
+}
+
+// A relay that cannot start must stop the launch; otherwise every
+// in-container ao call, each hook included, hangs until its timeout.
+func TestAgentProcessSuperviseRefusesUnusableSandboxRelay(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	missing := filepath.Join(t.TempDir(), "sessions", "s1", "relay")
+
+	out, errOut, err := executeCLI(t, Deps{
+		In:           strings.NewReader(""),
+		ProcessAlive: func(int) bool { return true },
+	}, "agent-process", "supervise", "--session", "ao-7", "--launch", "launch-3", "--sandbox-relay", missing, "--", "sh", "-c", "printf started")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "" {
+		t.Fatalf("stdout = %q, want the agent not started", out)
+	}
+	if !strings.Contains(errOut, "sandbox relay unavailable") {
+		t.Fatalf("stderr = %q, want a sandbox relay error line", errOut)
+	}
+	if capture.path != "/api/v1/sessions/ao-7/activity" || !strings.Contains(capture.body, `"process-exited"`) {
+		t.Fatalf("exit report = %s %s, want the launch reported as exited", capture.path, capture.body)
 	}
 }

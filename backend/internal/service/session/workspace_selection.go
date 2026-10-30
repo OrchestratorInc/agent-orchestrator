@@ -106,7 +106,7 @@ func (s *Service) GetWorkspaceCommitSelection(ctx context.Context, id domain.Ses
 	if err != nil {
 		return WorkspaceCommitSelection{}, err
 	}
-	selection, _, err := s.workspaceSelection(ctx, id, v, shas, workspaceVersion, false)
+	_, selection, _, err := s.workspaceSelection(ctx, id, v, shas, workspaceVersion, false)
 	if err != nil {
 		return WorkspaceCommitSelection{}, err
 	}
@@ -137,10 +137,10 @@ func (s *Service) GetWorkspaceSelectionFileRevision(ctx context.Context, id doma
 	var selection WorkspaceCommitSelection
 	var version string
 	if input.Snapshot {
-		selection, err = s.snapshotSelection(ctx, id, input)
+		ctx, selection, err = s.snapshotSelection(ctx, id, input)
 		version = hashWorkspaceReviewValue(selection.root, selection.before, selection.after)
 	} else {
-		selection, version, err = s.workspaceSelection(ctx, id, input.View, shas, input.WorkspaceVersion, true)
+		ctx, selection, version, err = s.workspaceSelection(ctx, id, input.View, shas, input.WorkspaceVersion, true)
 	}
 	if err != nil {
 		return WorkspaceFileRevision{}, err
@@ -203,7 +203,7 @@ func (s *Service) getSelectionDiffs(ctx context.Context, id domain.SessionID, in
 		seen[clean] = struct{}{}
 		paths = append(paths, clean)
 	}
-	selection, version, err := s.workspaceSelection(ctx, id, input.View, shas, input.WorkspaceVersion, true)
+	ctx, selection, version, err := s.workspaceSelection(ctx, id, input.View, shas, input.WorkspaceVersion, true)
 	if err != nil {
 		return WorkspaceDiffs{}, err
 	}
@@ -244,32 +244,32 @@ func (s *Service) getSelectionDiffs(ctx context.Context, id domain.SessionID, in
 // with the workspaceVersion reads of it report. A checked-out selection
 // reports, and is fenced by, the manifest version when withVersion is set or
 // a version was sent; a view reports its revision pair's hash instead.
-func (s *Service) workspaceSelection(ctx context.Context, id domain.SessionID, v WorkspaceView, shas []string, workspaceVersion string, withVersion bool) (WorkspaceCommitSelection, string, error) {
+func (s *Service) workspaceSelection(ctx context.Context, id domain.SessionID, v WorkspaceView, shas []string, workspaceVersion string, withVersion bool) (context.Context, WorkspaceCommitSelection, string, error) {
 	var version string
 	if v.checkedOut() && (withVersion || workspaceVersion != "") {
 		current, err := s.workspaceDiffManifest(ctx, id, workspaceVersion)
 		if err != nil {
-			return WorkspaceCommitSelection{}, "", err
+			return ctx, WorkspaceCommitSelection{}, "", err
 		}
 		if workspaceVersion != "" && workspaceVersion != current.WorkspaceVersion {
-			return WorkspaceCommitSelection{}, "", apierr.Conflict("WORKSPACE_SNAPSHOT_STALE", "Workspace changed while the commits were loading", map[string]any{"workspaceVersion": current.WorkspaceVersion})
+			return ctx, WorkspaceCommitSelection{}, "", apierr.Conflict("WORKSPACE_SNAPSHOT_STALE", "Workspace changed while the commits were loading", map[string]any{"workspaceVersion": current.WorkspaceVersion})
 		}
 		version = current.WorkspaceVersion
 	}
-	view, err := s.resolveWorkspaceView(ctx, id, v)
+	ctx, view, err := s.resolveWorkspaceView(ctx, id, v)
 	if err != nil {
-		return WorkspaceCommitSelection{}, "", err
+		return ctx, WorkspaceCommitSelection{}, "", err
 	}
 	selection, err := s.commitSelection(ctx, view, shas)
 	if err != nil {
-		return WorkspaceCommitSelection{}, "", err
+		return ctx, WorkspaceCommitSelection{}, "", err
 	}
 	selection.SessionID = id
 	selection.View = view.WorkspaceViewInfo
 	if !v.checkedOut() {
 		version = hashWorkspaceReviewValue(selection.root, selection.before, selection.after)
 	}
-	return selection, version, nil
+	return ctx, selection, version, nil
 }
 
 // selectionCommitSHAs validates a selection's SHAs, trimmed and deduplicated

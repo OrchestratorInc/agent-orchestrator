@@ -84,41 +84,41 @@ type resolvedWorkspaceView struct {
 // resolveWorkspaceView validates v and resolves it to revisions. Branch and
 // pull request views are fenced by v's expected SHAs; the checked-out view
 // keeps the workspaceVersion fence its callers already apply.
-func (s *Service) resolveWorkspaceView(ctx context.Context, id domain.SessionID, v WorkspaceView) (resolvedWorkspaceView, error) {
+func (s *Service) resolveWorkspaceView(ctx context.Context, id domain.SessionID, v WorkspaceView) (context.Context, resolvedWorkspaceView, error) {
 	if err := validateWorkspaceView(v); err != nil {
-		return resolvedWorkspaceView{}, err
+		return ctx, resolvedWorkspaceView{}, err
 	}
 	if v.PRNumber > 0 {
-		view, err := s.resolvePRView(ctx, id, v.PRNumber, v.SourceURL)
+		ctx, view, err := s.resolvePRView(ctx, id, v.PRNumber, v.SourceURL)
 		if err != nil {
-			return resolvedWorkspaceView{}, err
+			return ctx, resolvedWorkspaceView{}, err
 		}
-		return view, fenceWorkspaceView(view, v)
+		return ctx, view, fenceWorkspaceView(view, v)
 	}
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	ctx, rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
-		return resolvedWorkspaceView{}, err
+		return ctx, resolvedWorkspaceView{}, err
 	}
 	project, projectOK, err := s.sessionProject(ctx, rec)
 	if err != nil {
-		return resolvedWorkspaceView{}, err
+		return ctx, resolvedWorkspaceView{}, err
 	}
 	singleRepo := !isStandaloneScratchWorkspace(rec) && (!projectOK || project.Kind.WithDefault() == domain.ProjectKindSingleRepo)
 	if v.Branch == "" {
 		view, err := s.resolveCheckedOutView(ctx, rec, project, projectOK, singleRepo)
 		if err != nil {
-			return resolvedWorkspaceView{}, err
+			return ctx, resolvedWorkspaceView{}, err
 		}
-		return view, fenceWorkspaceView(view, v)
+		return ctx, view, fenceWorkspaceView(view, v)
 	}
 	if !singleRepo {
-		return resolvedWorkspaceView{}, apierr.Invalid("WORKSPACE_VIEW_UNSUPPORTED", "Only single-repository sessions can review another branch", nil)
+		return ctx, resolvedWorkspaceView{}, apierr.Invalid("WORKSPACE_VIEW_UNSUPPORTED", "Only single-repository sessions can review another branch", nil)
 	}
 	view, err := resolveBranchView(ctx, rec.Metadata.WorkspacePath, v.Branch, project, projectOK)
 	if err != nil {
-		return resolvedWorkspaceView{}, err
+		return ctx, resolvedWorkspaceView{}, err
 	}
-	return view, fenceWorkspaceView(view, v)
+	return ctx, view, fenceWorkspaceView(view, v)
 }
 
 func validateWorkspaceView(v WorkspaceView) error {
@@ -300,17 +300,17 @@ func recentRangeBefore(ctx context.Context, root, tip string) (string, error) {
 // merge base of its base and head to its head: the commits ListPRFiles lists.
 // prFileSource picks the matching repository and fetches the PR's revisions
 // only when they are missing; HEAD, the index and the worktree are untouched.
-func (s *Service) resolvePRView(ctx context.Context, id domain.SessionID, number int, sourceURL string) (resolvedWorkspaceView, error) {
-	rec, pr, err := s.prFileSource(ctx, id, number, sourceURL)
+func (s *Service) resolvePRView(ctx context.Context, id domain.SessionID, number int, sourceURL string) (context.Context, resolvedWorkspaceView, error) {
+	ctx, rec, pr, err := s.prFileSource(ctx, id, number, sourceURL)
 	if err != nil {
-		return resolvedWorkspaceView{}, err
+		return ctx, resolvedWorkspaceView{}, err
 	}
 	root := rec.Metadata.WorkspacePath
 	base, ok := gitMergeBaseOf(ctx, root, pr.BaseSHA, pr.HeadSHA)
 	if !ok {
-		return resolvedWorkspaceView{}, unavailablePRSource()
+		return ctx, resolvedWorkspaceView{}, unavailablePRSource()
 	}
-	return resolvedWorkspaceView{
+	return ctx, resolvedWorkspaceView{
 		WorkspaceViewInfo: WorkspaceViewInfo{Kind: WorkspaceViewPullRequest, Name: pr.SourceBranch, TipSHA: pr.HeadSHA, BaseSHA: base, BaseRef: pr.TargetBranch, RangeMode: WorkspaceRangeSinceBase},
 		root:              root,
 		rangeBefore:       base,

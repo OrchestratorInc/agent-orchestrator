@@ -40,7 +40,11 @@ func TestCommandArgs(t *testing.T) {
 		{"remove", worktreeRemoveArgs(repo, path), []string{"-C", repo, "worktree", "remove", path}},
 		{"prune", worktreePruneArgs(repo), []string{"-C", repo, "worktree", "prune"}},
 		{"list", worktreeListPorcelainArgs(repo), []string{"-C", repo, "worktree", "list", "--porcelain"}},
-		{"status", statusPorcelainArgs(path), []string{"-C", path, "status", "--porcelain"}},
+		{"status", statusPorcelainArgs(path, false), []string{"-C", path, "status", "--porcelain"}},
+		// A sandboxed agent controls nested repositories in its worktree, so
+		// host git must neither recurse into them nor honour fsmonitor/hooks.
+		{"status sandboxed", statusPorcelainArgs(path, true), []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "submodule.recurse=false", "-C", path, "status", "--porcelain", "--ignore-submodules=all"}},
+		{"ignored sandboxed", ignoredCountArgs(path, true), []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "submodule.recurse=false", "-C", path, "status", "--ignored", "--porcelain", "--ignore-submodules=all"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

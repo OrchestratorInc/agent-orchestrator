@@ -66,7 +66,7 @@ func (s *Service) SearchWorkspaceContent(ctx context.Context, id domain.SessionI
 // set the Files browser lists: one worktree, each repository of a workspace
 // project, or a scratch folder (no Git index).
 func (s *Service) workspaceGrepRoots(ctx context.Context, id domain.SessionID) ([]workspaceGrepRoot, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	ctx, rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
 		return nil, err
 	}

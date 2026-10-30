@@ -130,8 +130,8 @@ func (w *Workspace) worktreeRegistration(ctx context.Context, repo, path string)
 // worktreeRegistration: an unreadable status is not a clean status. It takes a
 // path rather than the worktree's registered location because the fast path
 // asks about the directory after it has been moved aside.
-func (w *Workspace) worktreeDirty(ctx context.Context, path string) (dirty, conclusive bool) {
-	dirty, err := w.isDirty(ctx, path)
+func (w *Workspace) worktreeDirty(ctx context.Context, path string, sandboxed bool) (dirty, conclusive bool) {
+	dirty, err := w.isDirty(ctx, path, sandboxed)
 	if err != nil {
 		return false, false
 	}
@@ -146,7 +146,7 @@ func (w *Workspace) worktreeDirty(ctx context.Context, path string) (dirty, conc
 // inconclusive probe routes there so git stays the authority on refusals and
 // their messages. A refusal discovered after the move restores the directory
 // first, because a refused teardown must leave the worktree exactly as it was.
-func (w *Workspace) discardWorktree(ctx context.Context, repo, path string) (bool, error) {
+func (w *Workspace) discardWorktree(ctx context.Context, repo, path string, sandboxed bool) (bool, error) {
 	registered, locked, conclusive := w.worktreeRegistration(ctx, repo, path)
 	if !conclusive || locked {
 		return false, nil
@@ -165,7 +165,7 @@ func (w *Workspace) discardWorktree(ctx context.Context, repo, path string) (boo
 	// worktree stays registered until the prune below, which is what keeps
 	// `git status` answerable at the new location.
 	if registered {
-		dirty, conclusive := w.worktreeDirty(ctx, discarded)
+		dirty, conclusive := w.worktreeDirty(ctx, discarded, sandboxed)
 		if !conclusive {
 			w.undiscard(discarded, path)
 			return false, nil

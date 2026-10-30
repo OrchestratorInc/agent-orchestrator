@@ -65,7 +65,7 @@ type WorkspaceBranches struct {
 // single repository can review another branch. Everything is read, nothing
 // is checked out.
 func (s *Service) ListWorkspaceBranches(ctx context.Context, id domain.SessionID) (WorkspaceBranches, error) {
-	rec, err := s.sessionWorkspaceRecord(ctx, id)
+	ctx, rec, err := s.sessionWorkspaceRecord(ctx, id)
 	if err != nil {
 		return WorkspaceBranches{}, err
 	}

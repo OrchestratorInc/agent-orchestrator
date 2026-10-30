@@ -890,12 +890,16 @@ func (m *Manager) preflightInterfaceTarget(
 	transition domain.SessionInterfaceTransition,
 ) error {
 	if transition.TargetMode == domain.SessionModeChat {
-		if m.chat == nil {
-			return ports.ErrChatUnsupported
-		}
 		project, err := m.loadProject(ctx, rec.ProjectID)
 		if err != nil {
 			return err
+		}
+		// A chat controller runs the harness on the host (#6663).
+		if sandboxFor(rec.Kind, project.Config).Enabled() {
+			return fmt.Errorf("%w: chat sessions cannot run in a sandbox yet", ports.ErrSandboxMisconfigured)
+		}
+		if m.chat == nil {
+			return ports.ErrChatUnsupported
 		}
 		permissions := effectiveAgentConfig(rec.Harness, rec.Kind, project.Config).Permissions
 		return m.chat.PreflightChat(ctx, rec.Harness, permissions)
@@ -952,10 +956,13 @@ func (m *Manager) preflightTerminalLaunch(
 	}
 	config := restoredAgentConfig(rec, project.Config)
 	config.Launch = m.sessionLaunchOptions(ctx, rec.ID)
+	// A sandboxed role runs the harness from its image, which the host PATH
+	// cannot vouch for; restore's Ensure checks the image instead (#6663).
+	sandboxed := sandboxFor(rec.Kind, project.Config).Enabled()
 	var cmd []string
 	if nativeConversationID == "" {
 		cmd, _, _, err = freshLaunchArgv(ctx, agent, rec.ID, rec.Metadata.WorkspacePath,
-			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "")
+			rec.Metadata, systemPrompt, "", config, rec.Kind, m.dataDir, true, "", sandboxed)
 	} else {
 		var resumable bool
 		cmd, resumable, err = agent.GetRestoreCommand(ctx, ports.RestoreConfig{
@@ -964,7 +971,7 @@ func (m *Manager) preflightTerminalLaunch(
 				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeConversationID},
 			},
 			Kind: rec.Kind, DataDir: m.dataDir, SystemPrompt: systemPrompt,
-			Config: config, Permissions: config.Permissions,
+			Config: config, Permissions: config.Permissions, Sandboxed: sandboxed,
 		})
 		if err == nil && !resumable {
 			return ErrNativeConversationMissing
@@ -972,6 +979,9 @@ func (m *Manager) preflightTerminalLaunch(
 	}
 	if err != nil {
 		return err
+	}
+	if sandboxed {
+		return nil
 	}
 	return m.validateAgentBinary(cmd)
 }

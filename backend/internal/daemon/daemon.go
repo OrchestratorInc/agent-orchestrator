@@ -545,6 +545,9 @@ func Run(buildVersion string) error {
 
 	persistentHostsReconciled := make(chan struct{})
 	reviewerChatsRecovered := make(chan struct{})
+	// The sandbox probes the port the listener actually binds (below), which
+	// may be an ephemeral fallback.
+	daemonPort := newDaemonPort(cfg.Port)
 	reviewers, err := reviewer.NewResolver()
 	if err != nil {
 		stop()
@@ -557,7 +560,7 @@ func Run(buildVersion string) error {
 	// The review service starts before the SCM observer it asks for review
 	// refreshes, so it holds a late-bound handle.
 	reviewRefresher := &scmReviewRefresher{}
-	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserLifecycle, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, tracker, codexOperationGate, reviewers, reviewRefresher, log)
+	sessionSvc, reviewSvc, wiredSessMgr, err := startSession(ctx, cfg, daemonPort.get, runtimeAdapter, store, lcStack.LCM, lcStack.ArtifactVersions, messenger, telemetrySink, notificationWriter, agents, agentSvc, managedPreview, browserLifecycle, browserAuthority, chatLauncher{svc: chatSvc, persistentHostReconcileDone: persistentHostsReconciled}, reviewerChatsRecovered, settingsSvc, tracker, codexOperationGate, reviewers, reviewRefresher, log)
 	if err != nil {
 		stop()
 		lcStack.Stop()
@@ -659,6 +662,7 @@ func Run(buildVersion string) error {
 	sessMgr.SetTerminalInputGate(termMgr)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
+	lcStack.LCM.SetTerminationHook(sessMgr.CleanupTerminatedSandbox)
 	// Lifecycle reactions deliberately do not hold Session Manager's input
 	// lease: they reach the agent through sessMgr.Send, which leases its own
 	// pane writes. Holding it here deadlocked every reaction to a hibernated
@@ -1098,6 +1102,7 @@ func Run(buildVersion string) error {
 		}
 		return err
 	}
+	daemonPort.bound(srv.Addr())
 	browserLive.SetLoopbackBaseURL("http://" + srv.Addr().String())
 	previewDone := preview.NewPoller(store, sessionSvc, "http://"+srv.Addr().String(), preview.PollerConfig{Logger: log}).Start(ctx)
 	_ = os.Unsetenv(browserruntime.RuntimeAddressEnv)
@@ -1477,6 +1482,7 @@ func invalidateHarnessBinary(readiness ports.AgentReadinessProvider, harness str
 func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 	return []string{
 		roots.ClaudeProjects,
+		roots.ClaudeSandboxProjects,
 		roots.CodexSessions,
 		roots.CodexArchived,
 		roots.KimiHome,

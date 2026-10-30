@@ -1,0 +1,146 @@
+---
+title: Sandbox
+description: Run Claude Code agents inside Docker containers while Orchestrator, worktrees, and the UI stay on the host.
+---
+
+The sandbox runs an agent inside a Docker container. Orchestrator, your worktrees, and the desktop app stay on the host. The container gets the agent's worktree, the repository's git data, and its own sandbox state. It does not see the rest of your home directory.
+
+The sandbox protects your files and credentials from accidental damage by the agent, and it keeps the agent away from Orchestrator's local API (see [Network](#network)). Don't treat it as a complete security boundary against a deliberately hostile agent: `shared` mode lets sessions tamper with each other's git metadata, git you run yourself in an agent's worktree can run code the agent planted there, internet access is unrestricted, and the isolation is only as strong as Docker itself. See [Limits](#limits).
+
+The sandbox is off by default and is configured per project.
+
+## Requirements
+
+- Docker Desktop or Docker Engine on macOS or Linux. Windows is not supported yet.
+- An image that provides `/bin/sh`, `git`, and `claude` on `PATH`.
+- Claude Code as the agent harness. Other harnesses are refused with `SANDBOX_MISCONFIGURED`.
+
+A minimal image:
+
+```dockerfile
+FROM node:22-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+RUN npm install -g @anthropic-ai/claude-code
+```
+
+There is no Docker access inside the sandbox.
+
+The first start pulls a small helper image (`alpine:3.22`), which Orchestrator uses to block the container's routes to services on your computer's loopback. See [Network](#network).
+
+## Configuration
+
+| Field | Purpose |
+| --- | --- |
+| `mode` | `off`, `per-agent`, or `shared`. |
+| `image` | Docker image to run. |
+| `cpus` | CPU limit for the container. |
+| `memory` | Memory limit, for example `8g`. |
+| `pidsLimit` | Maximum number of processes in the container. |
+
+The project-level `sandbox` block applies to workers. A `sandbox` block under `worker` replaces it for workers; it does not merge field by field. The orchestrator ignores the project-level block and runs on the host unless you set `orchestrator.sandbox` explicitly, which is not recommended in this version (see below).
+
+| Mode | Behavior |
+| --- | --- |
+| `off` | The agent runs on the host. |
+| `per-agent` | Each session gets its own container, with its own env files and system prompts. The home directory and Claude config are shared read-write by every session in the project, as are the repository's git objects and refs. |
+| `shared` | All sessions in the project share one container. |
+
+In `shared` mode, sessions can see each other's sandbox state: the home directory, Claude config, env files, and system prompts. Use `per-agent` to keep each session's env and system prompts separate. Per-agent mode does not isolate sessions from each other: a session can change the shared home or Claude config, for example by adding hooks to `settings.json`, and those changes run in every other session of the project. Shared mode also requires the workspace to be an Orchestrator-managed worktree.
+
+Set the config with `ao project set-config`. It replaces the whole project config, so read the [full-config warning](/configuration/projects#update-from-the-cli) first.
+
+```bash
+ao project set-config <id> --config-json '{"sandbox":{"mode":"shared","image":"ghcr.io/acme/dev:latest","memory":"8g"}}'
+```
+
+Keep the orchestrator unsandboxed, which is the default. Inside the sandbox the agent can't run the `ao` commands an orchestrator needs.
+
+### Applying changes
+
+A running per-agent container keeps its old settings until it stops. New settings apply on the next fresh start. Shared containers are created per config, and the old one is removed when the project's last session ends.
+
+Turning sandboxing on or off does not move existing conversations. Claude keeps a sandboxed session's conversation in the sandbox's own config dir, so a session started on the host can't resume inside a sandbox, and the other way round. Restoring such a session fails with `SANDBOX_MISCONFIGURED`; set `sandbox.mode` back to resume it, or start a new session.
+
+## Git inside the sandbox
+
+The agent can commit, create branches, check out, rebase, and fetch inside the sandbox. Commits use the `user.name` and `user.email` that git on the host has for the repository.
+
+The repository's git directory is read-only inside the container. Only its objects and refs are writable, plus worktree metadata: the session's own in `per-agent` mode, every worktree's in `shared` mode. Commits and branches reach the host normally. Reflogs written inside the sandbox stay in the container and are lost when it stops, so `git reflog` on the host doesn't show the agent's moves. The stash list is a reflog too, so a stash made inside the sandbox may be missing from `git stash list` on the host. The stash itself stays reachable as `refs/stash`, but a `git stash pop` or `git stash drop` on the host can discard it.
+
+- **`per-agent`:** the container can't change the repository's git config or hooks, or other worktrees' git metadata. Deleting branches or tags, dropping the last stash, and `git gc` fail inside the sandbox, so do those on the host. Commands that change the git config, such as `git remote add` or `git push -u`, fail too.
+- **`shared`:** the same read-only top level, but sessions in a shared container can modify the git metadata of every worktree in the project, including its reflogs and worktrees you create yourself. If you mix modes in one project, for example with a `shared` override under `worker`, that includes the metadata of `per-agent` sessions. Use `per-agent` mode for every role when you don't trust the agents.
+
+Each commit inside the sandbox also prints `Unable to create '.../packed-refs.lock': Read-only file system`. The commit still succeeds.
+
+## Network
+
+Sandboxes run on a dedicated Docker network, `ao-sandbox`, which Orchestrator creates on first use. Each time a sandbox starts, Orchestrator:
+
+- blocks the container's routes to the host addresses that `host.docker.internal`, `gateway.docker.internal`, `host.internal` (OrbStack) and `host.lima.internal` (Colima) resolve to. This also blocks Docker Desktop's built-in HTTP proxy, which can otherwise forward requests to services on your computer.
+- probes Orchestrator's local API port through those addresses, the container's default gateway, and Docker Desktop's proxy. If any probe connects, the session doesn't start.
+- refuses to start on Docker Desktop or OrbStack if it can't resolve the host address it needs to block.
+
+This is tested on Docker Desktop for macOS. On other engines the blocking is best effort, but the probe still refuses to start a sandbox that can reach Orchestrator's API.
+
+This blocks services bound to your computer's loopback (localhost), including Orchestrator's local API. Services listening on all interfaces stay reachable through your computer's network address. That includes dev servers bound to `0.0.0.0`, ports published by other containers, and Connect Mobile when it is enabled (it requires its password). Bind local services to `127.0.0.1` if the sandbox must not reach them.
+
+Internet access is unrestricted.
+
+If you restart a sandbox container yourself with `docker restart`, the block is gone until Orchestrator next starts a session in it. Agents don't survive that restart, and Orchestrator reapplies the block before it runs anything there again.
+
+## Authentication
+
+The macOS keychain login is not visible inside the container. Set one of these in the project `env`:
+
+- `ANTHROPIC_API_KEY`
+- `CLAUDE_CODE_OAUTH_TOKEN`, which you can create with `claude setup-token`
+
+The Claude token that Orchestrator saved from the desktop cloud login also works.
+
+## What the agent can do with `ao`
+
+Inside the sandbox, only these commands work:
+
+- `ao hooks`
+- `ao report`
+- `ao status`
+- `ao version`
+- `ao preview <http(s)-url>`
+
+Everything else (spawn, send, session, render, review, browser, project, and so on) is refused, so the agent can't use these commands to act on the host. `ao mcp` is not available either.
+
+## Limits
+
+- Only services bound to your computer's loopback are blocked. Services listening on all interfaces stay reachable, and only Docker Desktop on macOS is tested. See [Network](#network).
+- Internet access is unrestricted, so the agent can send anything it can read to the internet.
+- The isolation relies on Docker. A flaw in Docker or a misconfigured Docker host weakens it.
+- Running git yourself in a sandboxed session's worktree can run code the agent planted there, for example through a nested repository whose config runs a command. Review the worktree before you run git in it, or use Orchestrator's changes panel. Orchestrator's own git calls in sandboxed worktrees skip nested repositories, so the changes panel doesn't show changes inside them, and a worktree that contains one is kept rather than removed when the session ends.
+- `per-agent` mode keeps the repository's git config and hooks, and other worktrees' git metadata, away from the agent. A role in `shared` mode can rewrite the git metadata of every worktree in the project, including that of `per-agent` sessions. That can make git on your computer run the agent's commands, both git you run yourself and Orchestrator's own git operations, such as the changes panel and session cleanup. Use `per-agent` mode for every role when you don't trust the agents.
+- Only single-repository projects can be sandboxed. Multi-repo workspace projects are refused.
+- `preRemove` cleanup commands run on your computer, in the agent's worktree, so anything they start (git, npm scripts, make) can run code the agent planted there.
+- An agent can lock its own worktree, which stops Orchestrator from removing it when the session ends. Run `git worktree unlock <path>`, then remove it.
+- Terminal sessions only. Chat-mode sessions are refused for sandboxed roles, and so is restoring an existing chat session. Switch the session to terminal mode first.
+- Agent switching is not supported for sandboxed sessions.
+- Session-title generation still runs the harness briefly on the host, outside the sandbox.
+- Review agents (reviewers) run on your computer, outside the sandbox, inside the agent's worktree. They can run code the agent planted there, such as a nested repository, project hooks, or MCP config. Don't run reviewers, or leave `autoReview` on, for sandboxed sessions you don't trust.
+- Some git commands fail inside the sandbox. See [Git inside the sandbox](#git-inside-the-sandbox).
+- In `shared` mode the orchestrator's worktree is hidden from the container, but sessions in the same container can read each other's worktrees and system prompts.
+
+## Troubleshooting
+
+`SANDBOX_UNAVAILABLE` means Docker is missing, not running, or its socket isn't accessible. On Linux, add your user to the `docker` group.
+
+`SANDBOX_MISCONFIGURED` means one of these:
+
+- The image, or the `alpine:3.22` helper image, can't be pulled.
+- The container can still reach Orchestrator's local API after the network block was applied.
+- Orchestrator couldn't resolve the Docker host address it needs to block, or couldn't create the `ao-sandbox` network.
+- The image lacks `/bin/sh` or `claude`.
+- Credentials are missing.
+- The shared-mode workspace isn't an Orchestrator-managed worktree.
+- A `per-agent` session runs in the repository's main checkout. Start it in an Orchestrator-managed worktree instead.
+- The project has no repository path.
+- The project is a multi-repo workspace project. The sandbox supports single-repository projects only, so set `sandbox.mode` to `off` for it.
+- The worktree's git metadata doesn't point at the project's repository, for example because it was modified.
+- A stopped sandbox container can't be started again. Remove it with `docker rm -f <name>` and Orchestrator creates a new one.
+- A chat session or an agent switch was requested for a sandboxed session.

@@ -172,7 +172,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, fmt.Errorf("claude-code: %w", err)
 	}
 
-	binary, err := p.claudeBinary(ctx)
+	binary, err := p.launchBinary(ctx, cfg.Sandboxed)
 	if err != nil {
 		return nil, err
 	}
@@ -401,7 +401,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, nil
 	}
 
-	binary, err := p.claudeBinary(ctx)
+	binary, err := p.launchBinary(ctx, cfg.Sandboxed)
 	if err != nil {
 		return nil, false, err
 	}
@@ -670,6 +670,9 @@ func ensureClaudeLaunchConfigForOS(configPath, workspacePath string, markAutoDef
 		if err := json.Unmarshal(data, &root); err != nil {
 			return fmt.Errorf("claude-code: parse %s: %w", configPath, err)
 		}
+		if root == nil { // a literal `null` config
+			root = map[string]any{}
+		}
 	case os.IsNotExist(err):
 		// Treat as empty config; we'll create it.
 	default:
@@ -733,6 +736,26 @@ func ensureClaudeLaunchConfigForOS(configPath, workspacePath string, markAutoDef
 		return fmt.Errorf("claude-code: replace config: %w", err)
 	}
 	return nil
+}
+
+// markWorkspaceTrusted sets projects[workspacePath].hasTrustDialogAccepted in
+// cfg, keeping every other key. It reports whether cfg changed.
+func markWorkspaceTrusted(cfg map[string]any, workspacePath string) bool {
+	projects, _ := cfg["projects"].(map[string]any)
+	if projects == nil {
+		projects = map[string]any{}
+		cfg["projects"] = projects
+	}
+	entry, _ := projects[workspacePath].(map[string]any)
+	if entry == nil {
+		entry = map[string]any{}
+		projects[workspacePath] = entry
+	}
+	if trusted, ok := entry["hasTrustDialogAccepted"].(bool); ok && trusted {
+		return false
+	}
+	entry["hasTrustDialogAccepted"] = true
+	return true
 }
 
 // InvalidateBinaryResolution forgets the cached executable path, so the next

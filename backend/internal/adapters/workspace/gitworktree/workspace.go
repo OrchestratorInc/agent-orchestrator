@@ -107,6 +107,12 @@ type Options struct {
 	// Logger receives the failures background removal cannot return to a
 	// caller. Optional; nil silences them.
 	Logger *slog.Logger
+	// SandboxedSession reports whether info's session runs its agent in a
+	// sandbox. Host git calls that read such a worktree are hardened (see
+	// sandboxedGitConfig). The daemon derives it from the session record and
+	// project config, never from anything inside the worktree. Optional; nil
+	// treats every session as a host session.
+	SandboxedSession func(ctx context.Context, info ports.WorkspaceInfo) bool
 }
 
 // Workspace creates per-session git worktrees under a managed root. It
@@ -117,6 +123,7 @@ type Workspace struct {
 	repos       RepoResolver
 	run         commandRunner
 	logger      *slog.Logger
+	sandboxedFn func(ctx context.Context, info ports.WorkspaceInfo) bool
 	// discards tracks background worktree removals so tests can wait for them.
 	// Production never waits: that deferral is the point (see discard.go).
 	discards sync.WaitGroup
@@ -154,6 +161,7 @@ func New(opts Options) (*Workspace, error) {
 		repos:       opts.RepoResolver,
 		run:         runCommand,
 		logger:      opts.Logger,
+		sandboxedFn: opts.SandboxedSession,
 	}
 	// A daemon that died mid-removal leaves directories under the discard root
 	// that nothing else will ever look at again. Sweeping at construction is
@@ -929,10 +937,13 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 	// Move the directory aside rather than waiting out `git worktree remove`'s
 	// walk of an ignored-file mountain; falls through to the git-driven path
 	// below whenever the move is not clearly safe.
-	if handled, err := w.discardWorktree(ctx, repo, path); handled {
+	sandboxed := w.sandboxed(ctx, info)
+	if handled, err := w.discardWorktree(ctx, repo, path, sandboxed); handled {
 		return reclaim, err
 	}
-	_, removeErr := w.run(ctx, w.binary, worktreeRemoveArgs(repo, path)...)
+	// `git worktree remove` runs its own status in the worktree; the -c
+	// settings reach that child through GIT_CONFIG_PARAMETERS.
+	_, removeErr := w.run(ctx, w.binary, hostGitArgs(sandboxed, worktreeRemoveArgs(repo, path)...)...)
 	if _, err := w.run(ctx, w.binary, worktreePruneArgs(repo)...); err != nil {
 		return reclaim, fmt.Errorf("gitworktree: worktree prune: %w", err)
 	}
@@ -948,7 +959,7 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 			// Distinguish the dirty-worktree refusal (uncommitted agent work)
 			// from other registration leftovers (e.g. a locked worktree) so the
 			// Session Manager can preserve the workspace without erroring.
-			dirty, statusErr := w.isDirty(ctx, path)
+			dirty, statusErr := w.isDirty(ctx, path, sandboxed)
 			if statusErr == nil && dirty {
 				return reclaim, fmt.Errorf("gitworktree: refusing to remove %q: %w (worktree remove: %w)", path, ports.ErrWorkspaceDirty, removeErr)
 			}
@@ -1017,7 +1028,7 @@ func (w *Workspace) ForceDestroy(ctx context.Context, info ports.WorkspaceInfo) 
 	}
 	// --force bypasses git's dirty check; errors here are advisory (the path may
 	// already be gone). We proceed to prune regardless.
-	_, _ = w.run(ctx, w.binary, worktreeForceRemoveArgs(repo, path)...)
+	_, _ = w.run(ctx, w.binary, hostGitArgs(w.sandboxed(ctx, info), worktreeForceRemoveArgs(repo, path)...)...)
 	if _, err := w.run(ctx, w.binary, worktreePruneArgs(repo)...); err != nil {
 		return fmt.Errorf("gitworktree: worktree prune: %w", err)
 	}
@@ -1070,7 +1081,8 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 	}
 
 	// Early exit for clean worktrees: nothing to preserve.
-	dirty, err := w.isDirty(ctx, path)
+	sandboxed := w.sandboxed(ctx, info)
+	dirty, err := w.isDirty(ctx, path, sandboxed)
 	if err != nil {
 		if isNotGitRepositoryError(err) {
 			return "", fmt.Errorf("gitworktree: stale worktree %q: %w", path, ports.ErrWorkspaceStale)
@@ -1082,7 +1094,7 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 	}
 
 	// Log the count of ignored paths that will be skipped.
-	if skipCount, err := w.countIgnoredPaths(ctx, path); err == nil {
+	if skipCount, err := w.countIgnoredPaths(ctx, path, sandboxed); err == nil {
 		slog.InfoContext(ctx, "gitworktree: StashUncommitted skipping ignored paths",
 			"session", string(info.SessionID),
 			"skipped_count", skipCount,
@@ -1106,10 +1118,11 @@ func (w *Workspace) StashUncommitted(ctx context.Context, info ports.WorkspaceIn
 
 	// Stage all tracked and non-ignored untracked files into the temp index.
 	// GIT_INDEX_FILE overrides the index so the real index is never touched.
-	addCmd := aoprocess.CommandContext(ctx, w.binary, addAllTempIndexArgs(path)...)
+	addArgs := hostGitArgs(sandboxed, addAllTempIndexArgs(path)...)
+	addCmd := aoprocess.CommandContext(ctx, w.binary, addArgs...)
 	addCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tmpIdxPath)
 	if out, err := addCmd.CombinedOutput(); err != nil {
-		return "", commandError{args: append([]string{w.binary}, addAllTempIndexArgs(path)...), output: string(out), err: err}
+		return "", commandError{args: append([]string{w.binary}, addArgs...), output: string(out), err: err}
 	}
 
 	// Write the staged tree to get a tree SHA.
@@ -1165,8 +1178,8 @@ func isNotGitRepositoryError(err error) bool {
 
 // countIgnoredPaths returns the number of entries listed by
 // "git status --ignored --porcelain" that start with "!!" (ignored).
-func (w *Workspace) countIgnoredPaths(ctx context.Context, worktree string) (int, error) {
-	out, err := w.run(ctx, w.binary, ignoredCountArgs(worktree)...)
+func (w *Workspace) countIgnoredPaths(ctx context.Context, worktree string, sandboxed bool) (int, error) {
+	out, err := w.run(ctx, w.binary, ignoredCountArgs(worktree, sandboxed)...)
 	if err != nil {
 		return 0, fmt.Errorf("gitworktree: count ignored: %w", err)
 	}
@@ -1207,7 +1220,7 @@ func (w *Workspace) ApplyPreserved(ctx context.Context, info ports.WorkspaceInfo
 	// On conflict it leaves textual conflict markers in the affected files and
 	// exits non-zero WITHOUT committing or moving HEAD. Conflict detection uses
 	// the exit code only (not output text) to stay locale-independent.
-	applyErr := w.runCherryPickNoCommit(ctx, info.Path, commitSHA)
+	applyErr := w.runCherryPickNoCommit(ctx, info.Path, commitSHA, w.sandboxed(ctx, info))
 	if applyErr != nil {
 		// Any non-zero exit from the merge step is a conflict: keep the ref,
 		// leave conflict markers in place, and surface the sentinel.
@@ -1309,7 +1322,11 @@ func (w *Workspace) ObserveWorkspace(ctx context.Context, info ports.WorkspaceIn
 			branch = current
 		}
 	}
-	statusOut, err := w.run(ctx, w.binary, "-C", path, "status", "--porcelain=v1", "--untracked-files=all")
+	statusArgs := hostGitArgs(w.sandboxed(ctx, info), "-C", path, "status", "--porcelain=v1", "--untracked-files=all")
+	if w.sandboxed(ctx, info) {
+		statusArgs = append(statusArgs, ignoreSubmodulesAll)
+	}
+	statusOut, err := w.run(ctx, w.binary, statusArgs...)
 	if err != nil {
 		return ports.WorkspaceObservation{}, fmt.Errorf("gitworktree: observe status: %w", err)
 	}
@@ -1383,8 +1400,8 @@ func parseObservedWorkspaceCommits(output string) []ports.WorkspaceCommit {
 // runCherryPickNoCommit runs "git -C <worktree> cherry-pick --no-commit <sha>"
 // and captures combined output so any conflict details are available in the
 // returned commandError. Exit code detection happens in the caller.
-func (w *Workspace) runCherryPickNoCommit(ctx context.Context, worktree, commitSHA string) error {
-	args := cherryPickNoCommitArgs(worktree, commitSHA)
+func (w *Workspace) runCherryPickNoCommit(ctx context.Context, worktree, commitSHA string, sandboxed bool) error {
+	args := hostGitArgs(sandboxed, cherryPickNoCommitArgs(worktree, commitSHA)...)
 	cmd := aoprocess.CommandContext(ctx, w.binary, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1979,12 +1996,47 @@ func (w *Workspace) refExists(ctx context.Context, repo, ref string) (bool, erro
 // isDirty reports whether the worktree at path has uncommitted changes or
 // untracked files — the same check `git worktree remove` performs before
 // refusing without --force.
-func (w *Workspace) isDirty(ctx context.Context, path string) (bool, error) {
-	out, err := w.run(ctx, w.binary, statusPorcelainArgs(path)...)
+//
+// For a sandboxed session the status skips submodules (see
+// sandboxedGitConfig), so it cannot see uncommitted work inside a nested
+// repository. Any populated gitlink therefore counts as dirty: the worktree
+// is kept for the user rather than deleted on an unverifiable "clean".
+func (w *Workspace) isDirty(ctx context.Context, path string, sandboxed bool) (bool, error) {
+	out, err := w.run(ctx, w.binary, statusPorcelainArgs(path, sandboxed)...)
 	if err != nil {
 		return false, fmt.Errorf("gitworktree: status %q: %w", path, err)
 	}
-	return strings.TrimSpace(string(out)) != "", nil
+	if strings.TrimSpace(string(out)) != "" || !sandboxed {
+		return strings.TrimSpace(string(out)) != "", nil
+	}
+	return w.hasPopulatedGitlink(ctx, path)
+}
+
+// hasPopulatedGitlink reports whether any gitlink in the worktree's index has
+// a checked-out repository (a .git file or directory) at its path. It reads
+// only the index and Lstat results, never the nested repository's config.
+func (w *Workspace) hasPopulatedGitlink(ctx context.Context, path string) (bool, error) {
+	out, err := w.run(ctx, w.binary, gitlinkStageArgs(path)...)
+	if err != nil {
+		return false, fmt.Errorf("gitworktree: list gitlinks %q: %w", path, err)
+	}
+	for _, entry := range strings.Split(string(out), "\x00") {
+		// "<mode> <sha> <stage>\t<path>"
+		meta, name, ok := strings.Cut(entry, "\t")
+		if !ok || !strings.HasPrefix(meta, "160000 ") {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(path, filepath.FromSlash(name), ".git")); err == nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// sandboxed reports whether info's session runs sandboxed. See
+// Options.SandboxedSession.
+func (w *Workspace) sandboxed(ctx context.Context, info ports.WorkspaceInfo) bool {
+	return w.sandboxedFn != nil && w.sandboxedFn(ctx, info)
 }
 
 func (w *Workspace) listRecords(ctx context.Context, repo string) ([]worktreeRecord, error) {

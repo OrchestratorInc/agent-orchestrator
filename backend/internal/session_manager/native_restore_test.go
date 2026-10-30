@@ -111,7 +111,7 @@ func TestMemcodeNativeLaunchUsesProcessSupervisor(t *testing.T) {
 		Executable: func() (string, error) { return "/opt/ao", nil },
 	})
 	env := map[string]string{}
-	argv, err := m.wrapAgentProcessWithLaunchID(memcode.New(), "mer-1", env, []string{"memcode", "run"}, "launch-1", false)
+	argv, err := m.wrapAgentProcessWithLaunchID(memcode.New(), "mer-1", env, []string{"memcode", "run"}, "launch-1", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
