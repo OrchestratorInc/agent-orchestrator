@@ -418,7 +418,9 @@ func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe, dataD
 		msg = fmt.Sprintf("a %s login shell finds no ao even with %s first on PATH: a startup file replaces PATH, so agent commands that run in a login shell (Codex's) and new terminals cannot run ao", shellName, pinned)
 	case !filepath.IsAbs(resolved):
 		msg = fmt.Sprintf("a %s login shell resolves ao to %q, not %s %s: an alias or function from a startup file shadows it in agent commands that run in a login shell (Codex's) and new terminals", shellName, resolved, wantLabel, want)
-	case sameBinary(want, resolved):
+	case sameBinary(want, resolved) || (pinned != filepath.Dir(want) && sameBinary(filepath.Join(pinned, "ao"), resolved)):
+		// The second form is the shim sessions pin when want's directory holds
+		// other tools; it execs want.
 		return doctorCheck{
 			Level: doctorPass, Section: doctorSectionTools, Name: name,
 			Message: fmt.Sprintf("a %s login shell still runs %s (%s)", shellName, wantLabel, want),

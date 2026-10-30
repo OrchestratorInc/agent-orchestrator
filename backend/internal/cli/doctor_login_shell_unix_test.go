@@ -220,24 +220,59 @@ func TestDoctorLoginShellPinsWhatSessionsPin(t *testing.T) {
 	dataDir := filepath.Join(root, "data")
 	t.Setenv("SHELL", "/bin/zsh")
 	t.Setenv("PATH", "/usr/bin:/bin")
+	shim := agentlaunch.PinnedDir(func() (string, error) { return app, nil }, dataDir)
+	if shim == filepath.Dir(app) || !strings.HasPrefix(shim, dataDir) {
+		t.Fatalf("pinned dir = %q, want a shim under %s", shim, dataDir)
+	}
 	var gotArgs []string
 	c := &commandContext{deps: Deps{
 		Executable: func() (string, error) { return app, nil },
 		CommandOutput: func(_ context.Context, _ string, args ...string) ([]byte, error) {
 			gotArgs = args
-			return nil, os.WriteFile(args[len(args)-1], []byte(app+"\n"), 0o600)
+			// With nothing reordering PATH, the shell finds the shim itself.
+			return nil, os.WriteFile(args[len(args)-1], []byte(filepath.Join(shim, "ao")+"\n"), 0o600)
 		},
 		ProcessAlive: func(int) bool { return false },
 	}.withDefaults()}
-	if _, ok := c.checkAOLoginShell(context.Background(), "", dataDir); !ok {
-		t.Fatal("check skipped, want a result")
-	}
-	shim := agentlaunch.PinnedDir(func() (string, error) { return app, nil }, dataDir)
-	if shim == filepath.Dir(app) || !strings.HasPrefix(shim, dataDir) {
-		t.Fatalf("pinned dir = %q, want a shim under %s", shim, dataDir)
+	check, ok := c.checkAOLoginShell(context.Background(), "", dataDir)
+	if !ok || check.Level != doctorPass {
+		t.Fatalf("check = %+v (ok %v), want PASS: the shim runs this binary", check, ok)
 	}
 	if !slices.Contains(gotArgs, "PATH="+shim+":/usr/bin:/bin") {
 		t.Fatalf("probe args = %q, want PATH starting with the shim %s", gotArgs, shim)
+	}
+}
+
+// TestDoctorLoginShellPassesThroughTheShim runs a real login shell for an ao
+// that shares its directory with other tools, as Homebrew, npm and go install
+// leave it: the shell finds the shim sessions pin, which is still this binary.
+func TestDoctorLoginShellPassesThroughTheShim(t *testing.T) {
+	root := t.TempDir()
+	app := writeLoginShellFixture(t, filepath.Join(root, "bin", "ao"))
+	writeLoginShellFixture(t, filepath.Join(root, "bin", "gopls"))
+	home := filepath.Join(root, "home")
+	if err := os.MkdirAll(home, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("ENV", "")
+	t.Setenv("PATH", "/usr/bin:/bin")
+	c := &commandContext{deps: Deps{
+		Executable:   func() (string, error) { return app, nil },
+		ProcessAlive: func(int) bool { return false },
+	}.withDefaults()}
+	check, ok := c.checkAOLoginShell(context.Background(), "", filepath.Join(root, "data"))
+	if !ok {
+		t.Fatal("check skipped, want a result")
+	}
+	if check.Level != doctorPass {
+		// See TestDoctorLoginShellCatchesStartupFilePrepend: an ao in the
+		// system login PATH already shadows the app on this machine.
+		if strings.Contains(check.Message, root) || !strings.Contains(check.Message, " runs /") {
+			t.Fatalf("check through the shim = %+v, want PASS", check)
+		}
+		t.Skipf("system login PATH already holds an ao: %s", check.Message)
 	}
 }
 
