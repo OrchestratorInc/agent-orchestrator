@@ -221,8 +221,11 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 }
 
 // ListOpenPRsByBranch lists the open merge requests whose source branch is
-// branch. GitLab filters on the server, so a project's other MRs are never
-// paged through.
+// branch in repo itself, so MRs from forks are not returned, matching the
+// GitHub listing. GitLab filters by branch on the server, so a project's
+// other MRs are never paged through; a fork MR (source project differs from
+// the target project) is dropped here, and each returned MR carries repo as
+// both head and base.
 func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
 	q := url.Values{
 		"state":         {"opened"},
@@ -241,7 +244,12 @@ func (p *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, 
 			return fmt.Errorf("gitlab scm: unmarshal branch MR list: %w", err)
 		}
 		for i := range mrs {
-			result = append(result, mrToSCMPRObservation(repo, &mrs[i]))
+			if mrs[i].SourceProjectID != 0 && mrs[i].SourceProjectID != mrs[i].TargetProjectID {
+				continue
+			}
+			obs := mrToSCMPRObservation(repo, &mrs[i])
+			obs.BaseRepo = repo.Repo
+			result = append(result, obs)
 		}
 		return nil
 	})
