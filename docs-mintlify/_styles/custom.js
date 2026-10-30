@@ -1107,16 +1107,11 @@
       l.style.setProperty("padding-left", "16px", "important");
       l.style.setProperty("padding-right", "32px", "important");
     });
+    /* original shows a real 5px horizontal scrollbar on overflowing code blocks:
+       undo Base UI's scrollbar suppression (class + layered scrollbar-width:none) */
     Array.prototype.forEach.call(document.querySelectorAll(".mdx-content .code-block div[class*=--scroll-area-fade-size]"), function (sc) {
-      var maxText = 0;
-      Array.prototype.forEach.call(sc.querySelectorAll(".line"), function (l) {
-        var r = document.createRange();
-        r.selectNodeContents(l);
-        var w = r.getBoundingClientRect().width;
-        if (w > maxText) maxText = w;
-      });
-      var over = maxText > 0 && (maxText + 82) > sc.clientWidth + 2;
-      sc.style.setProperty("padding-bottom", over ? "21px" : "16px", "important");
+      sc.classList.remove("base-ui-disable-scrollbar");
+      sc.style.setProperty("scrollbar-width", "auto", "important");
     });
     Array.prototype.forEach.call(document.querySelectorAll(".mdx-content :not(pre) > code"), function (c) {
       c.style.setProperty("box-decoration-break", "slice", "important");
