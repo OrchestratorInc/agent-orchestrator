@@ -43,6 +43,7 @@ describe("GitHubAccountRow", () => {
 		renderRow();
 
 		expect(await screen.findByText("Connected as @octocat")).toBeInTheDocument();
+		expect(document.querySelector('img[src="https://avatars.githubusercontent.com/octocat?size=64"]')).not.toBeNull();
 		await user.click(screen.getByRole("button", { name: "Disconnect" }));
 		expect(await screen.findByText("Disconnect GitHub?")).toBeInTheDocument();
 		await user.click(screen.getAllByRole("button", { name: "Disconnect" }).at(-1)!);

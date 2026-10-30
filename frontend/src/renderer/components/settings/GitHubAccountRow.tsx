@@ -1,3 +1,4 @@
+import { scmUserAvatarUrl, UserAvatar } from "@aoagents/product-ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -6,6 +7,7 @@ import { apiClient } from "../../lib/api-client";
 import { getGitHubStatus } from "../../lib/github-daemon";
 import { useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { GitHubIcon } from "../GitHubIcon";
 import { Button } from "../ui/button";
 import { SettingsRow } from "./SettingsRow";
 
@@ -33,6 +35,15 @@ export function GitHubAccountRow() {
 			? t("settings.github.connectedElsewhere")
 			: t("settings.github.notConnected");
 
+	const connected = signedInHere || auth.data?.satisfied === true;
+	const leading = connected && login ? (
+		<UserAvatar className="size-7" name={login} imageUrl={scmUserAvatarUrl("github", "https://github.com", login)} />
+	) : (
+		<span className="grid size-7 place-items-center rounded-full bg-muted text-muted-foreground">
+			<GitHubIcon className="size-4" />
+		</span>
+	);
+
 	const disconnect = async () => {
 		setBusy(true);
 		setError(null);
@@ -56,7 +67,7 @@ export function GitHubAccountRow() {
 
 	return (
 		<>
-			<SettingsRow label={t("settings.github.account")} description={description}>
+			<SettingsRow leading={leading} label={t("settings.github.account")} description={description}>
 				{signedInHere ? (
 					<Button type="button" size="sm" variant="ghost" className="text-settings-muted hover:text-settings-label" disabled={busy} onClick={() => setConfirmOpen(true)}>
 						{t("settings.github.disconnect")}
