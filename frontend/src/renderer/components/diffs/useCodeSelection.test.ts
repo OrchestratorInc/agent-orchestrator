@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { codeReference, readCodeSelection } from "./useCodeSelection";
+import { codeReference, readCodeSelection, restoreCodeSelection } from "./useCodeSelection";
 
 type Row = [line: number, type: string, text: string, alt?: number];
 
@@ -32,7 +32,7 @@ function surface(columns: Array<{ side?: "deletions" | "additions"; rows: Row[] 
 // of one row's text to `endOffset` characters into another's. Like Electron's,
 // it calls itself collapsed and hands out a range on the host: only its anchor
 // and focus points can be trusted.
-function select(host: HTMLElement, from: Element, to: Element, endOffset: number) {
+function select(host: HTMLElement, from: Element, to: Element, endOffset: number, setBaseAndExtent?: (base: Node, baseOffset: number, extent: Node, extentOffset: number) => void) {
 	const hostRange = document.createRange();
 	hostRange.selectNode(host);
 	Object.assign(host.shadowRoot!, {
@@ -45,6 +45,7 @@ function select(host: HTMLElement, from: Element, to: Element, endOffset: number
 			focusOffset: endOffset,
 			toString: () => "",
 			getRangeAt: () => hostRange,
+			...(setBaseAndExtent ? { setBaseAndExtent } : {}),
 		}),
 	});
 }
@@ -93,6 +94,50 @@ describe("readCodeSelection", () => {
 		const host = surface([{ rows: [[1, "context", "one", 1], [2, "context", "two", 2], [3, "context", "three", 3]] }]);
 		select(host, rowAt(host, 0, 0), rowAt(host, 0, 2), 0);
 		expect(readCodeSelection(host)?.range).toMatchObject({ start: 1, end: 2 });
+	});
+});
+
+describe("restoreCodeSelection", () => {
+	const rebuild = (host: HTMLElement) => {
+		// Pierre's redraws swap every row for a fresh copy of the same content.
+		for (const column of host.shadowRoot!.querySelectorAll("[data-content]")) {
+			column.replaceChildren(...[...column.children].map((child) => child.cloneNode(true)));
+		}
+	};
+
+	it("puts a selection back onto rebuilt rows at the same characters", () => {
+		const host = surface([{ rows: [[1, "context", "one", 1], [2, "context", "two", 2], [3, "context", "three", 3]] }]);
+		const placed: Array<[Node, number, Node, number]> = [];
+		const recordPlacement = (base: Node, baseOffset: number, extent: Node, extentOffset: number) => { placed.push([base, baseOffset, extent, extentOffset]); };
+		select(host, rowAt(host, 0, 0), rowAt(host, 0, 2), 2, recordPlacement);
+		const selection = readCodeSelection(host)!;
+		expect(selection.range).toMatchObject({ start: 1, end: 3 });
+		expect(selection.snapshot).toMatchObject({ anchor: { offset: 0 }, focus: { offset: 2 } });
+
+		rebuild(host);
+		expect(selection.snapshot.anchor.row.isConnected).toBe(false);
+		expect(restoreCodeSelection(host, selection.snapshot)).toBe(true);
+		// The restored ends land on the new copies of the first and last rows.
+		expect(placed).toEqual([
+			[rowAt(host, 0, 0).firstChild, 0, rowAt(host, 0, 2).firstChild, 2],
+		]);
+	});
+
+	it("leaves a live selection alone: only a rebuild restores", () => {
+		const host = surface([{ rows: [[1, "context", "one", 1], [2, "context", "two", 2]] }]);
+		select(host, rowAt(host, 0, 0), rowAt(host, 0, 1), 2);
+		const selection = readCodeSelection(host)!;
+		// Escape or a click elsewhere also collapses the selection, but its rows
+		// are still connected — restoring would resurrect a cleared selection.
+		expect(restoreCodeSelection(host, selection.snapshot)).toBe(false);
+	});
+
+	it("gives up when the rebuild took the column with it", () => {
+		const host = surface([{ rows: [[1, "context", "one", 1], [2, "context", "two", 2]] }]);
+		select(host, rowAt(host, 0, 0), rowAt(host, 0, 1), 2);
+		const selection = readCodeSelection(host)!;
+		host.remove();
+		expect(restoreCodeSelection(host, selection.snapshot)).toBe(false);
 	});
 });
 

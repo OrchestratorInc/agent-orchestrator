@@ -4,6 +4,15 @@ import type { FileCodeReference } from "../../../shared/file-annotations";
 import type { SelectedLineRange } from "@pierre/diffs";
 import type { DiffRow } from "../../lib/diff-parser";
 
+/**
+ * One end of a selection: the row it sits on (by index in its column), and how
+ * many characters of that row's text are behind it.
+ */
+export type SelectionEnd = { column: Element; row: Element; rowIndex: number; offset: number };
+
+/** Both ends of a selection, in row-relative coordinates a rebuild can resolve. */
+export type SelectionSnapshot = { anchor: SelectionEnd; focus: SelectionEnd };
+
 /** Code highlighted with the mouse, read back as the rows it covers. */
 export type CodeSelection = {
 	/** The Pierre surface (one per file) the selection is in. */
@@ -16,6 +25,8 @@ export type CodeSelection = {
 	point: { x: number; y: number };
 	/** True while the mouse button is still down: the selection is still being made. */
 	dragging: boolean;
+	/** Where the selection's ends sit, so a row rebuild can put it back. */
+	snapshot: SelectionSnapshot;
 };
 
 type ShadowRootWithSelection = ShadowRoot & { getSelection?: () => Selection | null };
@@ -64,6 +75,69 @@ function selectionRange(selection: Selection): Range | null {
 	range.setStart(forward ? anchorNode : focusNode, forward ? anchorOffset : focusOffset);
 	range.setEnd(forward ? focusNode : anchorNode, forward ? focusOffset : anchorOffset);
 	return range;
+}
+
+// Character offset of node:offset within its row's text, across the token
+// spans syntax highlighting splits a line into.
+function textOffsetIn(row: Element, node: Node, offset: number): number {
+	let total = 0;
+	const walk = (current: Node): boolean => {
+		if (current === node) {
+			total += offset;
+			return true;
+		}
+		if (current.nodeType === Node.TEXT_NODE) total += current.textContent?.length ?? 0;
+		for (const child of current.childNodes) if (walk(child)) return true;
+		return false;
+	};
+	return walk(row) ? total : 0;
+}
+
+// The inverse: the text node carrying the offset-th character of a row. A line
+// whose text changed under the selection clamps to its end.
+function locateText(row: Element, offset: number): { node: Text; offset: number } | null {
+	const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+	let last: Text | null = null;
+	let remaining = offset;
+	for (let current = walker.nextNode(); current; current = walker.nextNode()) {
+		const text = current as Text;
+		if (remaining <= text.length) return { node: text, offset: remaining };
+		remaining -= text.length;
+		last = text;
+	}
+	return last ? { node: last, offset: last.length } : null;
+}
+
+function selectionEnd(node: Node, offset: number): SelectionEnd | null {
+	const row = rowElement(node);
+	const column = row?.parentElement;
+	if (!row || !column) return null;
+	const rows = [...column.children].filter((child): child is Element => child instanceof Element && child.matches(ROW_SELECTOR));
+	return { column, row, rowIndex: rows.indexOf(row), offset: textOffsetIn(row, node, offset) };
+}
+
+/**
+ * Puts a selection back after Pierre rebuilt its rows (a loaded highlighter
+ * re-tokenizing, a workspace snapshot refreshing), which drops the browser's
+ * selection and with it the drag or shift+click anchor. Only a rebuild
+ * restores: ends whose rows are still connected mean the selection was cleared
+ * on purpose (Escape, a click elsewhere) and must stay cleared.
+ */
+export function restoreCodeSelection(host: HTMLElement, snapshot: SelectionSnapshot): boolean {
+	if (snapshot.anchor.row.isConnected || snapshot.focus.row.isConnected) return false;
+	const root = host.shadowRoot as ShadowRootWithSelection | null;
+	if (!root) return false;
+	const place = (end: SelectionEnd) => {
+		if (!end.column.isConnected) return null;
+		const rows = [...end.column.children].filter((child): child is Element => child instanceof Element && child.matches(ROW_SELECTOR));
+		const row = rows[end.rowIndex];
+		return row ? locateText(row, end.offset) : null;
+	};
+	const anchor = place(snapshot.anchor);
+	const focus = place(snapshot.focus);
+	if (!anchor || !focus) return false;
+	root.getSelection?.()?.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
+	return true;
 }
 
 /** The highlighted lines as a chat reference: old-side diff lines keep old numbers. */
@@ -117,6 +191,11 @@ export function readCodeSelection(host: HTMLElement, dragging = false): CodeSele
 		range: { start: Number(first.getAttribute("data-line")), side: rowSide(first), end: Number(last.getAttribute("data-line")), endSide: rowSide(last) },
 		point: { x: edge, y: lastBox.top + lastBox.height / 2 },
 		dragging,
+		snapshot: {
+			// The anchor/focus rows were validated above, so their ends resolve.
+			anchor: selectionEnd(selection.anchorNode!, selection.anchorOffset)!,
+			focus: selectionEnd(selection.focusNode!, selection.focusOffset)!,
+		},
 	};
 }
 
@@ -181,6 +260,10 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 		// The button follows the selection while it is being dragged out, and
 		// becomes clickable once the mouse button is released.
 		let pressed = false;
+		// One restore attempt per snapshot: if the engine refuses to apply it,
+		// retrying every frame would spin; the next real selection resets it.
+		let restoredFor: SelectionSnapshot | null = null;
+		let current: CodeSelection | null = null;
 		const redraws = new MutationObserver(() => schedule());
 		const update = () => {
 			frame = null;
@@ -192,12 +275,22 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 			// A redraw that replaces the selected rows does not always announce a
 			// selection change, so watch the surfaces' rows while one is shown.
 			redraws.disconnect();
-			if (next) for (const host of hosts()) if (host.shadowRoot) redraws.observe(host.shadowRoot, { childList: true, subtree: true });
+			if (next || current) for (const host of hosts()) if (host.shadowRoot) redraws.observe(host.shadowRoot, { childList: true, subtree: true });
 			// Off screen (scrolled away), the button hides; the selection stays.
 			if (next) {
 				const view = scrollParent(next.host).getBoundingClientRect();
 				if (next.point.y < Math.max(view.top, 0) || next.point.y > Math.min(view.bottom, window.innerHeight)) next = null;
 			}
+			// A rebuild that replaced the selected rows drops the browser's
+			// selection (and the drag or shift+click anchor with it); put it
+			// back and read it again next frame.
+			if (!next && current && restoredFor !== current.snapshot && restoreCodeSelection(current.host, current.snapshot)) {
+				restoredFor = current.snapshot;
+				schedule();
+				return;
+			}
+			restoredFor = null;
+			current = next;
 			publish(next);
 		};
 		const schedule = () => {
