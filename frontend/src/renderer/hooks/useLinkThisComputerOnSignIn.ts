@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { fetchMobileStatus, tunnelUrl } from "../components/settings/ConnectMobileContent";
+import { apiClient } from "../lib/api-client";
 import { useCloudSession } from "../lib/cloud-session";
 import { linkThisComputer } from "../lib/link-this-computer";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
@@ -33,7 +34,11 @@ export function useLinkThisComputerOnSignIn(): void {
 			const link = (url?: string) => linkThisComputer(cloudBaseUrl, accountId, status.hostId ?? "", status.password, { ifUnlisted: true, url });
 			// An AO Cloud without fixed addresses lists it at the tunnel's address instead, as Allow access does.
 			const url = tunnelUrl(status);
-			if (!(await link()).hostId && url) await link(url);
+			let { hostId, added } = await link();
+			if (!hostId && url) ({ hostId, added } = await link(url));
+			// The connector asked AO Cloud when the link began, before the listing
+			// landed; asked again now, it moves at once instead of at its next try.
+			if (added) await apiClient.POST("/api/v1/mobile/remote-access");
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: mobileStatusQueryKey }),
 				queryClient.invalidateQueries({ queryKey: ["account-remote-hosts", cloudBaseUrl] }),
