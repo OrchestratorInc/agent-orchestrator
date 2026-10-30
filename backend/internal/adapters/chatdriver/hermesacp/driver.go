@@ -154,7 +154,8 @@ const (
 // resolveProviderPrefixedChoice); the launch carries no model flag because
 // models are session-owned.
 //
-// Effort is not sent. Hermes' session advertises only `model` and `mode`, and
+// Effort is not sent. Hermes' session advertises `model`, `mode` and effort
+// surfaces, and
 // like Copilot an effort carried over from another harness's settings must not
 // fail the session: rejecting it would also fail every Resume, and AO's Hermes
 // composer has no effort control to clear it with.

@@ -95,11 +95,13 @@ type Config struct {
 	// SessionMode maps AO's approval vocabulary onto this ACP agent's mode ids.
 	// Empty means "leave the provider/user default unchanged".
 	SessionMode func(ports.PermissionMode) string
-	// SuppressSessionModes drops the agent's legacy session-mode list from the
-	// config-option catalog. It is for agents whose modes are pure approval
-	// policies AO already maps onto its own permission picker — surfacing both
-	// renders one setting twice, and the provider copy then looks like a mode
-	// that flips under the user whenever the approval choice moves.
+	// SuppressSessionModes drops the agent's mode surfaces from the
+	// config-option catalog: the legacy session-mode list and any
+	// mode-category config option. It is for agents whose modes are pure
+	// approval policies AO already maps onto its own permission picker —
+	// surfacing either surface renders one setting twice, and the provider
+	// copy then looks like a mode that flips under the user whenever the
+	// approval choice moves.
 	SuppressSessionModes bool
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
@@ -264,7 +266,7 @@ func (d *Driver) discoverConfigOptions(ctx context.Context, workingDir string) (
 	// Normalize exactly like the live session path: agents that list models
 	// only in the legacy `models` response field (Hermes) or modes only in
 	// `modes` must surface those in discovery, not just in a launched session.
-	return normalizeSessionOptions(resp.ConfigOptions, conv.legacyWire.modelState(), d.sessionModes(resp.Modes)), nil
+	return normalizeSessionOptions(d.suppressedModeOptions(resp.ConfigOptions), conv.legacyWire.modelState(), d.sessionModes(resp.Modes)), nil
 }
 
 // sessionModes drops a legacy session-mode list whose catalog the binding
@@ -274,6 +276,32 @@ func (d *Driver) sessionModes(modes *acpsdk.SessionModeState) *acpsdk.SessionMod
 		return nil
 	}
 	return modes
+}
+
+// suppressedModeOptions drops mode-category config options when the binding
+// suppresses its session-mode surfaces. Agents advertise the same approval
+// policy on both channels — the legacy session-mode list and a mode-category
+// config option (Hermes' `edit_approval_policy`) — and SuppressSessionModes
+// must cover both: either one renders a provider mode picker beside AO's
+// permission picker, and the two disagree (Hermes offers three provider
+// policies where AO offers four permission modes).
+func (d *Driver) suppressedModeOptions(options []acpsdk.SessionConfigOption) []acpsdk.SessionConfigOption {
+	if !d.cfg.SuppressSessionModes {
+		return options
+	}
+	out := make([]acpsdk.SessionConfigOption, 0, len(options))
+	for _, option := range options {
+		if option.Select != nil && option.Select.Category != nil &&
+			*option.Select.Category == acpsdk.SessionConfigOptionCategoryMode {
+			continue
+		}
+		if option.Boolean != nil && option.Boolean.Category != nil &&
+			*option.Boolean.Category == acpsdk.SessionConfigOptionCategoryMode {
+			continue
+		}
+		out = append(out, option)
+	}
+	return out
 }
 
 // Harness identifies the AO harness this ACP transport adapts.
@@ -398,7 +426,7 @@ func (d *Driver) openNewSession(
 	conv.start(
 		string(resp.SessionId), conversationCapabilities(d.cfg.Capabilities, init),
 		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
-		settings.Approval, d.cfg.ValidateTurnSettings, resp.ConfigOptions,
+		settings.Approval, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(resp.ConfigOptions),
 		conv.legacyWire.modelState(), d.sessionModes(resp.Modes),
 	)
 	if d.cfg.EncodeProviderConversationID != nil {
@@ -531,7 +559,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 		conv.start(
 			cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 			d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
-			cfg.Permissions, d.cfg.ValidateTurnSettings, setup.ConfigOptions,
+			cfg.Permissions, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(setup.ConfigOptions),
 			setup.Models, d.sessionModes(setup.Modes),
 		)
 		conv.setReportedProviderConversationID(reportedProviderConversationID)
@@ -624,7 +652,7 @@ func (d *Driver) resumeSession(
 	conv.start(
 		cfg.ProviderConversationID, conversationCapabilities(d.cfg.Capabilities, init),
 		d.cfg.SessionMode, d.cfg.SessionOptions, d.cfg.PermissionPolicy,
-		cfg.Permissions, d.cfg.ValidateTurnSettings, configOptions,
+		cfg.Permissions, d.cfg.ValidateTurnSettings, d.suppressedModeOptions(configOptions),
 		conv.legacyWire.modelState(), d.sessionModes(modes),
 	)
 	conv.setReportedProviderConversationID(reportedProviderConversationID)

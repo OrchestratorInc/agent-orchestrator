@@ -3745,6 +3745,36 @@ func TestACPDriverSuppressSessionModesDropsLegacyModeOption(t *testing.T) {
 	}
 }
 
+// The same approval policy often rides a proper config option too — current
+// Hermes sends `edit_approval_policy` under category "mode" beside its legacy
+// session-mode list — so the suppression must cover that surface as well, or
+// the composer still renders the provider's three policies beside AO's four
+// permission modes.
+func TestDriverSuppressSessionModesDropsModeCategoryConfigOptions(t *testing.T) {
+	mode := acpsdk.SessionConfigOptionCategoryMode
+	model := acpsdk.SessionConfigOptionCategoryModel
+	thought := acpsdk.SessionConfigOptionCategoryThoughtLevel
+	catalog := []acpsdk.SessionConfigOption{
+		{Select: &acpsdk.SessionConfigOptionSelect{
+			Category: &mode, Id: "edit_approval_policy", Name: "Edits", CurrentValue: "ask",
+		}},
+		{Select: &acpsdk.SessionConfigOptionSelect{
+			Category: &model, Id: "model", Name: "Model", CurrentValue: "zai:glm-5.3-flash",
+		}},
+		{Boolean: &acpsdk.SessionConfigOptionBoolean{
+			Category: &thought, Id: "reasoning", Name: "Reasoning", CurrentValue: false,
+		}},
+	}
+	driver := New(Config{SuppressSessionModes: true}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	got := driver.suppressedModeOptions(catalog)
+	if len(got) != 2 || got[0].Select == nil || got[0].Select.Id != "model" || got[1].Boolean == nil {
+		t.Fatalf("suppressed catalog = %#v, want the mode-category select dropped and the rest kept", got)
+	}
+	if kept := New(Config{}, slog.New(slog.NewTextHandler(io.Discard, nil))).suppressedModeOptions(catalog); len(kept) != 3 {
+		t.Fatalf("unsuppressed catalog = %#v, want every option kept", kept)
+	}
+}
+
 func TestACPDriverResolvesCLIModelToAdvertisedParameterizedLegacyChoice(t *testing.T) {
 	agent := &legacyKimiAgent{
 		currentModel: "auto",
