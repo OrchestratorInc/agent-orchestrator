@@ -33,7 +33,7 @@ import { LongPressMenu, type LongPressMenuAction } from "./long-press-menu";
 type Id = "worker" | "pr" | "github";
 const ACTIONS: LongPressMenuAction<Id>[] = [
 	{ id: "worker", title: "Open worker", icon: "message-square", systemImage: "bubble.left" },
-	{ id: "pr", title: "Open pull request", icon: "git-pull-request", systemImage: "arrow.triangle.pull" },
+	{ id: "pr", title: "Open pull request", icon: "git-pull-request", systemImage: "point.topleft.down.to.point.bottomright.curvepath" },
 	{ id: "github", title: "Open on GitHub", icon: "external-link", systemImage: "arrow.up.right.square" },
 ];
 

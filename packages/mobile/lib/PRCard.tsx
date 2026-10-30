@@ -25,9 +25,11 @@ import { iconSize, space, type } from "./tokens";
 type PRCardAction = "worker" | "pr" | "github";
 
 // A tap opens the PR page; the long-press skips it for the worker or GitHub.
+// iOS menus take SF Symbols only, and none matches the Feather pull-request
+// glyph; two joined points is the nearest to its two-circle shape.
 const PR_CARD_ACTIONS: readonly LongPressMenuAction<PRCardAction>[] = [
 	{ id: "worker", title: "Open worker", icon: "message-square", systemImage: "bubble.left" },
-	{ id: "pr", title: "Open pull request", icon: "git-pull-request", systemImage: "arrow.triangle.pull" },
+	{ id: "pr", title: "Open pull request", icon: "git-pull-request", systemImage: "point.topleft.down.to.point.bottomright.curvepath" },
 	{ id: "github", title: "Open on GitHub", icon: "external-link", systemImage: "arrow.up.right.square" },
 ];
 
