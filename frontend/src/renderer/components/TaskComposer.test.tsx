@@ -2477,9 +2477,12 @@ describe("TaskComposer", () => {
 			h.cloudProjects.push({ id: "cloud-missing-cli", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "codex" } } });
 			h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { installation: "not_installed", authentication: "unknown" })] };
 			h.get.mockResolvedValue({ data: catalog });
+			h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.5", displayName: "GPT-5.5", default: true }]));
 			h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
 			render(<Wrap><TaskComposer projectId="cloud-missing-cli" onCreated={vi.fn()} /></Wrap>);
-			expect(await screen.findByTestId("model-catalog-notice")).toHaveTextContent("Cloud tasks use your cloud connection and can still start.");
+			await waitForTaskReady();
+			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
+			expect(h.get.mock.calls.filter(([path]) => String(path).includes("/models"))).toEqual([]);
 			fireEvent.change(task(), { target: { value: "Do the work" } });
 			await waitForTaskReady();
 			fireEvent.click(startTask());
