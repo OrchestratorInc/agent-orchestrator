@@ -1284,9 +1284,13 @@ main table :is(th, td) code { font-size: 0.875em !important; }
 main ol > li { list-style-type: decimal !important; }
 main li::marker { color: rgba(255,255,255,0.5); }
 main :is(ol, ul) { padding-left: 24px !important; }
-main div[class*="--scroll-area-fade-size"] { overflow-x: auto !important; scrollbar-width: thin; }
-main div[class*="--scroll-area-fade-size"]::-webkit-scrollbar { height: 5px !important; }
-main div[class*="--scroll-area-fade-size"]::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+main .code-block div[class*="--scroll-area-fade-size"] { overflow-x: auto !important; scrollbar-width: thin; }
+main .code-block div[class*="--scroll-area-fade-size"]::-webkit-scrollbar { height: 5px !important; }
+main .code-block div[class*="--scroll-area-fade-size"]::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
 
 /* v36v: pages whose first content block is an h2 sat 20px low vs the original */
 main .mdx-content > h2:first-child { margin-top: 20px !important; }
+
+/* v36w: callout content margins match original (p carries 20px top+bottom there) */
+[class*="callout"] { padding-bottom: 12px !important; }
+[class*="callout"] [class*="text-sm"] :is(p, span[data-as="p"]) { display: block !important; margin-top: 20px !important; margin-bottom: 20px !important; }
