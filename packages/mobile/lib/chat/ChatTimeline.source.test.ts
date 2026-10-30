@@ -20,9 +20,16 @@ describe("chat turn summary styling", () => {
 		expect(turnSummarySource).toContain("accessibilityState={foldable ? { expanded: open } : undefined}");
 	});
 
-	it("holds the working indicator still under Reduce Motion", () => {
-		expect(turnSummarySource).toContain('<Spinning enabled><Feather name="loader"');
+	it("draws the desktop's lattice as the working indicator", () => {
+		expect(turnSummarySource).toContain("<LatticeLoader color={t.textTertiary} />");
+		expect(turnSummarySource).not.toContain('<Feather name="loader"');
 		expect(turnSummarySource).not.toContain("<ActivityIndicator");
+	});
+
+	it("shows only the ticking timer while running, like the desktop, and still says Working to screen readers", () => {
+		expect(turnSummarySource).toContain(': workingDuration ?? "";');
+		expect(turnSummarySource).not.toContain("`Working · ${workingDuration}`");
+		expect(turnSummarySource).toContain("`Working for ${workingDuration}`");
 	});
 });
 
