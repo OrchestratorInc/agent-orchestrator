@@ -77,6 +77,30 @@ describe("GitHubSignInGate", () => {
 		expect(mocks.openExternal).toHaveBeenCalledWith("https://github.com/login/device");
 	});
 
+	it("shows what is possible once GitHub is connected, then lets the user in", async () => {
+		let signedIn = false;
+		mocks.GET.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/system/github-auth") {
+				return { data: { id: "github-auth", label: "GitHub access", satisfied: signedIn, required: false } };
+			}
+			if (path === "/api/v1/github/login") {
+				return { data: signedIn ? { state: "succeeded", login: "octocat" } : { state: "pending", userCode: "ABCD-1234", verificationUri: "https://github.com/login/device" } };
+			}
+			return { data: undefined, error: new Error(`unexpected GET ${path}`) };
+		});
+		const user = userEvent.setup();
+		renderGate(<GitHubSignInGate enabled />);
+		expect(await screen.findByText("ABCD-1234")).toBeInTheDocument();
+
+		signedIn = true;
+		expect(await screen.findByText("You're all set", {}, { timeout: 5000 })).toBeInTheDocument();
+		expect(screen.getByText("Signed in as @octocat.")).toBeInTheDocument();
+		expect(screen.getByText(/disconnect GitHub anytime in Settings/)).toBeInTheDocument();
+
+		await user.click(screen.getByRole("button", { name: "Get started" }));
+		await waitFor(() => expect(screen.queryByTestId("github-sign-in-gate")).not.toBeInTheDocument());
+	});
+
 	it("shows why sign-in could not start", async () => {
 		respond(false);
 		mocks.POST.mockResolvedValue({ data: undefined, error: new Error("GitHub sign-in is not configured in this build.") });

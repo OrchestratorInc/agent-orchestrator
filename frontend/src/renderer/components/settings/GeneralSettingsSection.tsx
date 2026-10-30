@@ -10,6 +10,7 @@ import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
+import { GitHubAccountRow } from "./GitHubAccountRow";
 import { openChromeAgentsSettings } from "./BrowserChromeSection";
 import { Button } from "../ui/button";
 import { ArrowRight } from "lucide-react";
@@ -303,6 +304,10 @@ export function GeneralSettingsSection({
 						onCheckedChange={setNavigationGestures}
 					/>
 				</SettingsRow>
+			</SettingsSection>
+
+			<SettingsSection title={t("settings.github")} grouped>
+				<GitHubAccountRow />
 			</SettingsSection>
 
 			{/* Sessions */}

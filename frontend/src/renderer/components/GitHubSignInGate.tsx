@@ -1,11 +1,10 @@
-import { LoaderCircle } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { Check, LoaderCircle } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { useGitHubAuthRequirement, useGitHubDeviceLogin } from "../hooks/useSystemRequirementsGate";
 import { aoBridge } from "../lib/bridge";
 import { centeredOnboardingDialogClass, onboardingFieldErrorClass, onboardingFieldHintClass } from "../lib/onboarding-ui";
-import { useUiStore } from "../stores/ui-store";
 import { GitHubIcon } from "./GitHubIcon";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
@@ -18,8 +17,10 @@ export function GitHubSignInGate({ enabled }: { enabled: boolean }) {
 	const { t } = useTranslation();
 	const auth = useGitHubAuthRequirement(enabled);
 	const device = useGitHubDeviceLogin();
-	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
 	const login = device.login;
+	// Set once sign-in finishes here, so the success step stays up after the
+	// credential check turns satisfied, until the user moves on.
+	const [connectedAs, setConnectedAs] = useState<string | null>(null);
 	const pending = login?.state === "pending";
 	const sawPendingRef = useRef(false);
 	const refetchAuth = auth.refetch;
@@ -31,11 +32,12 @@ export function GitHubSignInGate({ enabled }: { enabled: boolean }) {
 		}
 		if (login?.state !== "succeeded" || !sawPendingRef.current) return;
 		sawPendingRef.current = false;
-		showGlobalToast(t("startup.githubConnected"));
+		setConnectedAs(login?.login ?? "");
 		void refetchAuth();
-	}, [login?.state, pending, refetchAuth, showGlobalToast, t]);
+	}, [login?.state, login?.login, pending, refetchAuth]);
 
-	if (!enabled || auth.data?.satisfied !== false) return null;
+	if (!enabled) return null;
+	if (connectedAs === null && auth.data?.satisfied !== false) return null;
 
 	const openVerification = async () => {
 		if (!login?.userCode || !login.verificationUri) return;
@@ -59,13 +61,28 @@ export function GitHubSignInGate({ enabled }: { enabled: boolean }) {
 						<GitHubIcon className="size-7" />
 					</span>
 					<DialogTitle className="mt-4 text-balance text-[18px] font-semibold text-[var(--color-text-import-title)]">
-						{t("startup.githubSetupTitle")}
+						{connectedAs !== null ? t("startup.githubConnectedTitle") : t("startup.githubSetupTitle")}
 					</DialogTitle>
 					<DialogDescription className="mt-1.5 text-pretty text-[13px] leading-5 text-muted-foreground">
-						{t("startup.githubSetupSignedOut")}
+						{connectedAs ? t("startup.githubConnectedAs", { login: connectedAs }) : connectedAs === "" ? t("startup.githubConnectedNoLogin") : t("startup.githubSetupSignedOut")}
 					</DialogDescription>
 
-					{pending ? (
+					{connectedAs !== null ? (
+						<>
+							<ul className="mt-5 flex w-full flex-col gap-2 rounded-lg bg-[var(--color-bg-import-chip)] px-4 py-3 text-left text-[13px] leading-5 text-[var(--color-text-import-title)]">
+								{(["startup.githubCanOpenPrs", "startup.githubCanReadIssues", "startup.githubCanTrackPrs"] as const).map((key) => (
+									<li key={key} className="flex items-start gap-2">
+										<Check className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+										{t(key)}
+									</li>
+								))}
+							</ul>
+							<p className={cn(onboardingFieldHintClass, "mt-3")}>{t("startup.githubDisconnectHint")}</p>
+							<Button type="button" variant="footer-primary" className={cn(buttonClass, "mt-5")} onClick={() => setConnectedAs(null)}>
+								{t("startup.githubGetStarted")}
+							</Button>
+						</>
+					) : pending ? (
 						<>
 							<div className="mt-5 w-full rounded-lg bg-[var(--color-bg-import-chip)] px-4 py-3">
 								<p className="text-[12px] text-muted-foreground">{t("startup.githubDeviceCodeHint")}</p>
