@@ -631,16 +631,17 @@ function SpawnedAgentLine({ sessionId }: { sessionId: string }) {
 	const href = session?.workspaceId ? sessionHref({ sessionId, projectId: session.workspaceId }) : latest ? sessionHref(latest) : undefined;
 	let lead: ReactNode;
 	let status: ReactNode;
-	if (pr) {
+	if (latest?.state === "needs_input" || latest?.state === "stuck"
+		|| session?.status === "needs_input" || session?.activity?.state === "waiting_input" || session?.activity?.state === "blocked") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-needs-you" />;
+		status = <span className="text-status-needs-you">{latest?.state === "stuck" ? "Stuck" : "Needs input"}</span>;
+	} else if (pr) {
 		const ready = readyToMerge(pr);
 		lead = <GitPullRequest aria-hidden="true" className={cn("size-3.5 shrink-0", ready ? "text-status-ready" : "text-muted-foreground")} />;
 		status = ready ? `#${pr.number} · ready to merge` : `#${pr.number}`;
 	} else if (latest?.state === "done") {
 		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-ready" />;
 		status = "Done";
-	} else if (latest?.state === "needs_input" || latest?.state === "stuck") {
-		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-needs-you" />;
-		status = <span className="text-status-needs-you">{latest.state === "stuck" ? "Stuck" : "Needs input"}</span>;
 	} else if (session?.isTerminated || session?.status === "terminated") {
 		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
 		status = "Terminated";
@@ -653,7 +654,10 @@ function SpawnedAgentLine({ sessionId }: { sessionId: string }) {
 	} else if (session?.activity?.state === "exited" || session?.status === "exited") {
 		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
 		status = "Exited";
-	} else if (!session || session.statusReadiness === "unavailable" || session.statusReadiness === "checking"
+	} else if (session?.statusReadiness === "checking") {
+		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
+		status = "Checking status";
+	} else if (!session || session.statusReadiness === "unavailable"
 		|| session.activity?.state === "unknown" || session.status === "unknown" || session.status === "no_signal") {
 		lead = <span aria-hidden="true" className="mx-[3.5px] size-[7px] shrink-0 rounded-full bg-status-idle" />;
 		status = "Status unavailable";

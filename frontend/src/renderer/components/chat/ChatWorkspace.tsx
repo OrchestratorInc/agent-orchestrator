@@ -3536,7 +3536,7 @@ export function Timeline({
 				? { ...group, live: true, liveStartedAt: openingStartedAt }
 				: group);
 		if (!workerUpdates) return groups;
-		const spawnedIds = new Set(groups.filter((group) => group.outcome).flatMap((group) => spawnedSessionIds(group.items)));
+		const spawnedIds = new Set(groups.flatMap((group) => spawnedSessionIds(group.items)));
 		if (spawnedIds.size === 0) return groups;
 		return groups
 			.map((group) => ({ ...group, items: group.items.filter((item) => !isDuplicateSpawnAction(item, spawnedIds)) }))

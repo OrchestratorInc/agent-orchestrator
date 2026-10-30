@@ -44,27 +44,27 @@ function reply(turnId: string, minute: number, text: string): ConversationMessag
 	};
 }
 
-function snapshot(items: ConversationItem[]): ConversationSnapshot {
+function snapshot(items: ConversationItem[], turnState: "completed" | "running" = "completed"): ConversationSnapshot {
 	const turnIds = [...new Set(items.map((item) => item.turnId).filter((id): id is string => Boolean(id)))];
 	return {
 		...chatFixtureEmpty,
 		latestSequence: Math.max(...items.map((item) => item.sequence)),
 		turns: turnIds.map((id) => ({
-			id, state: "completed" as const, providerTurnId: `provider-${id}`,
+			id, state: turnState, providerTurnId: `provider-${id}`,
 			requestedAt: items.find((item) => item.turnId === id)!.createdAt,
-			completedAt: items.filter((item) => item.turnId === id).at(-1)!.createdAt,
+			completedAt: turnState === "completed" ? items.filter((item) => item.turnId === id).at(-1)!.createdAt : undefined,
 		})),
 		items,
 	};
 }
 
-function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = [], sessionRole: "orchestrator" | "worker" = "orchestrator") {
+function renderOrchestrator(items: ConversationItem[], onRollback = vi.fn(), workspaces: WorkspaceSummary[] = [], sessionRole: "orchestrator" | "worker" = "orchestrator", turnState: "completed" | "running" = "completed") {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	queryClient.setQueryData(workspaceQueryKey, workspaces);
 	render(
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
-				<ChatWorkspace snapshot={snapshot(items)} sessionRole={sessionRole} onRollback={onRollback} />
+				<ChatWorkspace snapshot={snapshot(items, turnState)} sessionRole={sessionRole} onRollback={onRollback} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -109,6 +109,20 @@ describe("orchestrator worker updates", () => {
 		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
 	});
 
+	it("hides the matching action as soon as the command completes during a running turn", () => {
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj"),
+			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
+		};
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-288", sequence: 13, revision: 0,
+			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-288", targetSessionId: "proj-288" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, action], vi.fn(), [], "orchestrator", "running");
+		expect(screen.queryByText("Spawned an agent")).not.toBeInTheDocument();
+	});
+
 	it("keeps a distinct structured spawn next to the command spawn group", () => {
 		const spawn = {
 			...command("t1", 1, "ao spawn --project proj"),
@@ -131,6 +145,11 @@ describe("orchestrator worker updates", () => {
 		["exited", { status: "exited", activity: { state: "exited" } }, "Exited", false],
 		["terminated", { status: "terminated", isTerminated: true }, "Terminated", false],
 		["failed start", { provisionState: "failed" }, "Start failed", false],
+		["status needs input", { status: "needs_input" }, "Needs input", false],
+		["PR waiting input", { status: "needs_input", prs: [{ number: 94, state: "open", ci: "pending", review: "pending", mergeability: "unknown" }] }, "Needs input", false],
+		["activity waiting input", { activity: { state: "waiting_input" } }, "Needs input", false],
+		["activity blocked", { activity: { state: "blocked" } }, "Needs input", false],
+		["checking", { statusReadiness: "checking" }, "Checking status", false],
 		["unavailable", { statusReadiness: "unavailable" }, "Status unavailable", false],
 		["missing", null, "Status unavailable", false],
 	] as const)("shows %s child state without a false spinner", async (_case, child, label, spinning) => {
