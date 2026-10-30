@@ -909,6 +909,81 @@
       c.style.setProperty("font-size", "0.875em", "important");
     });
   }
+  /* ---------- /platforms support cards: replicate original PlatformSupport ----------
+     Original: flex row, 3 compact cards (66px, radius 12, hairline border),
+     letter glyph + name (13/600/28) over status (12/16, transparent dot + gap). */
+  function fixPlatformCards() {
+    if (location.pathname.replace(/\/+$/g, "") !== "/platforms") return;
+    var grid = document.querySelector("main div.columns");
+    if (!grid || grid.getAttribute("data-ao-pc")) return;
+    var cards = grid.querySelectorAll(":scope > div.card");
+    if (cards.length !== 3) return;
+    grid.setAttribute("data-ao-pc", "1");
+    grid.style.setProperty("display", "flex", "important");
+    grid.style.setProperty("flex-wrap", "wrap", "important");
+    grid.style.setProperty("gap", "8px", "important");
+    grid.style.setProperty("margin", "0", "important");
+    var letters = { "macos": "a", "linux": "l", "windows": "w" };
+    Array.prototype.forEach.call(cards, function (card) {
+      var title = card.querySelector("h1, h2, h3");
+      if (!title) return;
+      var key = title.textContent.trim().toLowerCase();
+      card.style.setProperty("display", "flex", "important");
+      card.style.setProperty("align-items", "center", "important");
+      card.style.setProperty("gap", "8px", "important");
+      card.style.setProperty("padding", "10px 12px", "important");
+      card.style.setProperty("border-radius", "12px", "important");
+      card.style.setProperty("border", "1px solid rgba(255,255,255,0.1)", "important");
+      card.style.setProperty("background", "transparent", "important");
+      card.style.setProperty("margin", "0", "important");
+      card.style.setProperty("flex", "1 1 0", "important");
+      card.style.setProperty("min-width", "0", "important");
+      card.style.setProperty("height", "auto", "important");
+      card.style.setProperty("box-shadow", "none", "important");
+      var inner = card.querySelector(":scope > div");
+      if (!inner) return;
+      inner.style.setProperty("padding", "0", "important");
+      inner.style.setProperty("display", "flex", "important");
+      inner.style.setProperty("align-items", "center", "important");
+      inner.style.setProperty("gap", "8px", "important");
+      inner.style.setProperty("width", "100%", "important");
+      var svg = card.querySelector("svg");
+      if (svg) { var iw = svg.closest("div") || svg; iw.style.setProperty("display", "none", "important"); }
+      var letter = document.createElement("span");
+      letter.textContent = letters[key] || key.charAt(0);
+      letter.style.cssText = "display:inline-block;width:18px;height:18px;font-size:16px;font-weight:700;text-transform:uppercase;color:rgba(255,255,255,0.7);line-height:18px;text-align:center;flex:none;";
+      title.style.setProperty("font-size", "13px", "important");
+      title.style.setProperty("font-weight", "600", "important");
+      title.style.setProperty("line-height", "28px", "important");
+      title.style.setProperty("color", "rgba(255,255,255,0.7)", "important");
+      title.style.setProperty("margin", "0", "important");
+      title.style.setProperty("padding", "0", "important");
+      var status = card.querySelector("p");
+      var col = document.createElement("div");
+      col.style.cssText = "display:flex;flex-direction:column;min-width:0;";
+      if (status) {
+        status.textContent = "";
+        var dot = document.createElement("span");
+        dot.style.cssText = "display:inline-block;width:6px;height:6px;border-radius:9999px;background:transparent;flex:none;";
+        status.appendChild(dot);
+        status.appendChild(document.createTextNode("Supported"));
+        status.style.setProperty("font-size", "12px", "important");
+        status.style.setProperty("line-height", "16px", "important");
+        status.style.setProperty("color", "rgba(255,255,255,0.7)", "important");
+        status.style.setProperty("margin", "0", "important");
+        status.style.setProperty("padding", "0", "important");
+        status.style.setProperty("display", "inline-flex", "important");
+        status.style.setProperty("align-items", "center", "important");
+        status.style.setProperty("gap", "6px", "important");
+        col.appendChild(title);
+        col.appendChild(status);
+      } else {
+        col.appendChild(title);
+      }
+      inner.appendChild(col);
+      inner.insertBefore(letter, col);
+    });
+  }
   function init() {
     try { TOC_STATE.headings = collectHeadings(); } catch (e) {}
     try { buildTocBar(); } catch (e) {}
@@ -924,6 +999,7 @@
     try { buildPager(); } catch (e) {}
     try { fixCopyIcons(); } catch (e) {}
     try { fixProseParity(); } catch (e) {}
+    try { fixPlatformCards(); } catch (e) {}
     try { bindCopyFeedback(); } catch (e) {}
     try { spyAll(); } catch (e) {}
   }
