@@ -18,6 +18,7 @@ vi.mock("../../lib/api-client", () => ({
 
 vi.mock("../../lib/github-daemon", () => ({ getGitHubStatus: mocks.getGitHubStatus }));
 
+import { useUiStore } from "../../stores/ui-store";
 import { GitHubAccountRow } from "./GitHubAccountRow";
 
 function renderRow() {
@@ -47,6 +48,22 @@ describe("GitHubAccountRow", () => {
 		await user.click(screen.getAllByRole("button", { name: "Disconnect" }).at(-1)!);
 
 		await waitFor(() => expect(mocks.DELETE).toHaveBeenCalledWith("/api/v1/github/pat"));
+	});
+
+	it("closes Settings so the GitHub sign-in shows again when nothing else connects GitHub", async () => {
+		mocks.getGitHubStatus.mockResolvedValue({ connected: true, login: "octocat" });
+		mocks.DELETE.mockImplementation(async () => {
+			mocks.GET.mockResolvedValue({ data: { id: "github-auth", label: "GitHub access", satisfied: false, required: false } });
+			return { data: { status: "ok" } };
+		});
+		useUiStore.getState().openGlobalSettings("general");
+		const user = userEvent.setup();
+		renderRow();
+
+		await user.click(await screen.findByRole("button", { name: "Disconnect" }));
+		await user.click(screen.getAllByRole("button", { name: "Disconnect" }).at(-1)!);
+
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toBeNull());
 	});
 
 	it("offers no disconnect for a sign-in AO does not own", async () => {

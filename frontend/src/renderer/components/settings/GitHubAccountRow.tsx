@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { githubAuthRequirementQueryOptions } from "../../hooks/useSystemRequirementsGate";
 import { apiClient } from "../../lib/api-client";
 import { getGitHubStatus } from "../../lib/github-daemon";
+import { useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { Button } from "../ui/button";
 import { SettingsRow } from "./SettingsRow";
@@ -17,6 +18,7 @@ export function GitHubAccountRow() {
 	const queryClient = useQueryClient();
 	const status = useQuery({ queryKey: githubStatusQueryKey, queryFn: getGitHubStatus });
 	const auth = useQuery(githubAuthRequirementQueryOptions);
+	const closeSettings = useUiStore((state) => state.closeSettings);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -41,12 +43,15 @@ export function GitHubAccountRow() {
 			return;
 		}
 		setConfirmOpen(false);
-		// Refreshing the credential check brings the GitHub sign-in back up when
-		// nothing else connects AO to GitHub.
-		await Promise.all([
-			queryClient.invalidateQueries({ queryKey: githubStatusQueryKey }),
-			queryClient.invalidateQueries({ queryKey: githubAuthRequirementQueryOptions.queryKey }),
-		]);
+		void queryClient.invalidateQueries({ queryKey: githubStatusQueryKey });
+		// The fresh credential check brings the GitHub sign-in back up when nothing
+		// else connects AO to GitHub. Close Settings so it is in front; the second
+		// call also closes project settings that General may return to.
+		const next = await queryClient.fetchQuery({ ...githubAuthRequirementQueryOptions, staleTime: 0 }).catch(() => null);
+		if (next?.satisfied === false) {
+			closeSettings();
+			closeSettings();
+		}
 	};
 
 	return (
