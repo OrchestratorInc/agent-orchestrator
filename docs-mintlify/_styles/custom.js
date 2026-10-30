@@ -68,7 +68,7 @@
     wrap.innerHTML =
       '<svg viewBox="0 0 24.5 ' + H + '" style="width:24.5px;height:' + H + 'px" fill="none">' +
         '<path d="' + d + '" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>' +
-        '<path class="ao-track-hi" d="' + d + '" pathLength="1" stroke-linecap="round" stroke="rgb(232,232,227)" stroke-width="1"/>' +
+        '<path class="ao-track-hi" d="' + d + '" stroke="rgb(232,232,227)" stroke-width="1"/>' +
       '</svg><div class="ao-thumb"></div>';
     container.insertBefore(wrap, container.firstChild);
     return { wrap: wrap, items: items, H: H, hi: wrap.querySelector(".ao-track-hi"), thumb: wrap.querySelector(".ao-thumb") };
@@ -79,7 +79,7 @@
     var it = track.items[idx];
     if (!it) return;
     var center = it.top + it.h / 2;
-    track.hi.style.strokeDasharray = (center / track.H) + " 1";
+    track.hi.style.clipPath = "polygon(0 0, 100% 0, 100% " + center + "px, 0 " + center + "px)";
     track.thumb.style.left = (it.x - 2) + "px";
     track.thumb.style.top = (center + 2) + "px";
     track.thumb.style.opacity = "1";
