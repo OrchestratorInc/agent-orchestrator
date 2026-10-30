@@ -136,7 +136,6 @@
           {
             "group": "Configuration",
             "pages": [
-              "configuration/index",
               "configuration/projects",
               "configuration/lifecycle-automation",
               "configuration/remote-access"
