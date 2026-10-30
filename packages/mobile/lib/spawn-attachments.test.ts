@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { appendSpawnAttachments, photoPickerAttachment, readSpawnAttachments, sniffImageMimeType, spawnAttachmentPreview } from "./spawn-attachments";
+import { appendSpawnAttachments, photoPickerAttachment, readSpawnAttachments, spawnAttachmentPreview } from "./spawn-attachments";
 
 describe("appendSpawnAttachments", () => {
 	it("keeps accepted files and reports files that exceed the per-file limit", () => {
@@ -86,16 +86,6 @@ describe("spawnAttachmentPreview", () => {
 // The first bytes of each format, base64-encoded.
 const JPEG = "/9j/4AAQSkZJRgAB";
 const PNG = "iVBORw0KGgoAAAANSUhEUg==";
-const GIF = "R0lGODlhAQABAIAA";
-const WEBP = "UklGRiQAAABXRUJQVlA4IA==";
-const HEIC = "AAAAGGZ0eXBoZWljAAAAAA==";
-
-describe("sniffImageMimeType", () => {
-	it("names the format from the bytes", () => {
-		expect([JPEG, PNG, GIF, WEBP, HEIC].map(sniffImageMimeType)).toEqual(["image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"]);
-		expect(sniffImageMimeType("aGVsbG8gd29ybGQ=")).toBeUndefined();
-	});
-});
 
 describe("photoPickerAttachment", () => {
 	it("labels an Android WebP pick exported as JPEG by its bytes and exported size", async () => {

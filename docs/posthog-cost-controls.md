@@ -62,7 +62,8 @@ followed by a space:
 4. Keep legacy `ao.app.active` where `channel = 'renderer'` so old desktop-only
    installs still contribute to DAU until they update.
 5. Keep low-volume reliability events such as `ao.session.spawned`,
-   `ao.session.spawn_failed`, `ao.session.waiting_input_entered`,
+   `ao.session.spawn_failed`, `ao.session.relaunch_failed`,
+   `ao.session.waiting_input_entered`,
    `ao.session.waiting_input_exited`, `ao.http.5xx`, and `ao.daemon.panic`,
    and the harness-update rollout events `ao.harness.update`,
    `ao.harness.update_idle_wait`, `ao.harness.version_switch` and
@@ -172,6 +173,8 @@ Use layered controls:
    - renderer captures are bounded per event name per minute and per day
    - daemon remote exports are bounded per event name per minute and per day
    - burst-prone daemon failures are aggregated before export
+   - `ao.usage.*` summaries skip the minute cap and use a 100,000 per-name
+     daily emergency cap, rather than the standard 200 per-name cap
 5. Use the AO kill switch for a stream that turns out to be noisy. Setting
    `AO_TELEMETRY_DISABLED_EVENTS` silences named streams (with `*` prefix
    matching) on installs that already exist, without shipping a release. Local

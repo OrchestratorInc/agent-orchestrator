@@ -276,9 +276,9 @@ it("shows a normal inspector and reads its changed files from the remote host on
 	await userEvent.click(await screen.findByRole("button", { name: "Open full file" }));
 	expect(screen.getByRole("tab", { name: "page.tsx" })).toBeInTheDocument();
 	expect(screen.getByTestId("session-file-workspace")).toBeInTheDocument();
-	await userEvent.click(screen.getByRole("button", { name: "Maximize files" }));
+	await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
 	expect(screen.getByTestId("files-popout-topbar")).toBeInTheDocument();
-	await userEvent.click(screen.getByRole("button", { name: "Minimize files" }));
+	await userEvent.click(screen.getByRole("button", { name: "Return to panel" }));
 	expect(requests).toContain("http://127.0.0.1:4000/api/v1/sessions/session-1/workspace/manifest");
 	expect(requests).toContain("http://127.0.0.1:4000/api/v1/sessions/session-1/workspace/diffs");
 	await waitFor(() => expect(requests.some((url) => url.startsWith("http://127.0.0.1:4000/api/v1/sessions/session-1/workspace/file?path="))).toBe(true));
@@ -446,8 +446,7 @@ it("automatically reveals a remote preview after session data finishes loading",
 	await waitFor(() => expect(resolvePreview).toHaveBeenCalledWith("box-a", "session-1", "http://127.0.0.1:4600/"));
 	await waitFor(() => expect(screen.getByRole("textbox", { name: "Browser URL" })).toHaveValue("ao-preview.localhost"));
 	await waitFor(() => expect(within(screen.getByRole("tablist", { name: "Browser tabs" })).getByRole("tab", { name: "QA preview" })).toBeVisible());
-	await userEvent.click(screen.getByRole("button", { name: "Browser controls" }));
-	await userEvent.click(screen.getByRole("menuitem", { name: "Pop out" }));
+	await userEvent.click(screen.getByRole("button", { name: "Maximize" }));
 	expect(screen.getByTestId("browser-popout-topbar")).toBeInTheDocument();
 	await userEvent.click(within(document.querySelector(".browser-popout-overlay") as HTMLElement).getByRole("button", { name: "Return to panel" }));
 	expect(screen.queryByTestId("browser-popout-topbar")).not.toBeInTheDocument();

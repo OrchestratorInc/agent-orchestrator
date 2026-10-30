@@ -27,6 +27,11 @@ vi.mock("./settings/DefaultCloudSandboxRow", () => ({
 	DefaultCloudSandboxSection: () => <div data-testid="default-cloud-sandbox-section" />,
 }));
 
+// The real section polls the daemon's /computer-use routes; ComputerUseSection.test covers it.
+vi.mock("./settings/ComputerUseSection", () => ({
+	ComputerUseSection: () => <div data-testid="computer-use-section" />,
+}));
+
 const {
 	getUpdate,
 	setUpdate,
@@ -56,6 +61,8 @@ const {
 	setAnalyticsOptOut,
 	isMacPlatform,
 	isWindowsPlatform,
+	getEditors,
+	setPreferredEditor,
 } = vi.hoisted(() => ({
 	getUpdate: vi.fn(),
 	setUpdate: vi.fn(),
@@ -87,6 +94,8 @@ const {
 	setAnalyticsOptOut: vi.fn(),
 	isMacPlatform: vi.fn(() => false),
 	isWindowsPlatform: vi.fn(() => true),
+	getEditors: vi.fn(),
+	setPreferredEditor: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -134,6 +143,7 @@ vi.mock("../lib/bridge", () => ({
 			onStatus: updOnStatus,
 		},
 		featureBuilds: { list: featListBuilds, getActive: featGetActive },
+		editorHandoff: { getEditors, setPreferredEditor },
 		telemetry: { getPolicy: getTelemetryPolicy, setEventsEnabled: setTelemetryEvents, onPolicy: onTelemetryPolicy, getBootstrap: vi.fn(), capture: vi.fn(), getAnalyticsOptOut, setAnalyticsOptOut },
 	},
 }));
@@ -185,6 +195,8 @@ beforeEach(async () => {
 		setAnalyticsOptOut,
 		isMacPlatform,
 		isWindowsPlatform,
+		getEditors,
+		setPreferredEditor,
 	]) {
 		m.mockReset();
 	}
@@ -219,6 +231,14 @@ beforeEach(async () => {
 	onTelemetryPolicy.mockReturnValue(() => undefined);
 	getAnalyticsOptOut.mockResolvedValue(false);
 	setAnalyticsOptOut.mockImplementation(async (optedOut: boolean) => optedOut);
+	getEditors.mockResolvedValue({
+		editors: [
+			{ id: "cursor", name: "Cursor", kind: "editor" },
+			{ id: "vscode", name: "VS Code", kind: "editor" },
+		],
+		preferredEditorId: "cursor",
+	});
+	setPreferredEditor.mockImplementation(async (editorId: string) => editorId);
 	// Locale defaults to English so existing copy assertions stay green.
 	await appI18n.changeLanguage("en");
 	useLocaleStore.setState({ locale: "en", loaded: false, saving: false, saveError: false });
@@ -229,13 +249,26 @@ beforeEach(async () => {
 		saving: false,
 		saveError: false,
 	});
-	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false });
+	useUiStore.setState({ developerMode: false, remoteHosts: false, diagnostics: false, sideChats: false, windowTranslucency: false, navigationGestures: false });
 	useTelemetryPolicyStore.setState({ view: { eventsEnabled: false, consentGeneration: "generation-off", updatedAt: "2026-08-28T10:15:30.000Z", acknowledged: true, consentRenewalRequired: false, state: "applied", environmentVeto: false, durabilitySupported: true }, loaded: true, saving: false, saveError: false });
 	useAnalyticsOptOutStore.setState({ optedOut: false, loaded: false, saving: false, loadError: false, saveError: false });
 	document.documentElement.lang = "en";
 });
 
 describe("GlobalSettingsForm", () => {
+	it("offers navigation gestures off by default and saves the switch", async () => {
+		const user = userEvent.setup();
+		renderForm("general");
+		const toggle = screen.getByRole("switch", { name: "Navigation gestures" });
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+		await user.click(toggle);
+		expect(toggle).toHaveAttribute("aria-checked", "true");
+		expect(useUiStore.getState().navigationGestures).toBe(true);
+		expect(window.localStorage.getItem("ao.navigationGestures")).toBe("true");
+		await user.click(toggle);
+		expect(toggle).toHaveAttribute("aria-checked", "false");
+	});
+
 	it("keeps window transparency in Appearance when Developer Mode changes", async () => {
 		isMacPlatform.mockReturnValue(true);
 		const user = userEvent.setup();
@@ -330,6 +363,21 @@ describe("GlobalSettingsForm", () => {
 		expect(useUiStore.getState().sideChats).toBe(true);
 	});
 
+	it("offers Chrome mode only in Developer mode, as a link to the Browser settings", async () => {
+		const user = userEvent.setup();
+		const openGlobalSettings = vi.fn();
+		useUiStore.setState({ openGlobalSettings });
+		renderForm("general");
+		await screen.findByRole("switch", { name: "Developer mode" });
+		expect(screen.queryByText("Use agents in my Chrome")).not.toBeInTheDocument();
+
+		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
+		expect(await screen.findByText("Use agents in my Chrome")).toBeInTheDocument();
+		expect(screen.queryByRole("switch", { name: "Use agents in my Chrome" })).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Go to" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("browserProfiles");
+	});
+
 	it("reveals the Diagnostics toggle only in Developer mode and persists it", async () => {
 		const user = userEvent.setup();
 		renderForm("general");
@@ -347,7 +395,6 @@ describe("GlobalSettingsForm", () => {
 
 	it("keeps Remote hosts in its own page and persists the enable switch", async () => {
 		const user = userEvent.setup();
-		useUiStore.getState().setDeveloperMode(true);
 		renderForm("remoteHosts");
 		const remoteHosts = await screen.findByRole("switch", { name: "Connect to remote hosts" });
 		expect(remoteHosts).toHaveAttribute("aria-checked", "false");
@@ -459,6 +506,45 @@ describe("GlobalSettingsForm", () => {
 		await user.click(await screen.findByRole("menuitem", { name: "Git Bash" }));
 
 		await waitFor(() => expect(setUiSettings).toHaveBeenCalledWith({ terminalShell: { kind: "git-bash" } }));
+	});
+
+	it("picks the default editor from the installed editors and updates every session's cached state", async () => {
+		const user = userEvent.setup();
+		const qc = renderForm("general");
+		qc.setQueryData(["editor-handoff", "sess-1"], { targets: [], preferredEditorId: "cursor", workspaceAvailable: true });
+		const selector = await screen.findByLabelText("Default editor");
+		await waitFor(() => expect(selector).toHaveTextContent("Cursor"));
+
+		await user.click(selector);
+		await user.click(await screen.findByRole("menuitem", { name: "VS Code" }));
+
+		await waitFor(() => expect(setPreferredEditor).toHaveBeenCalledWith("vscode"));
+		await waitFor(() => expect(selector).toHaveTextContent("VS Code"));
+		expect(qc.getQueryData(["editor-handoff", "sess-1"])).toMatchObject({ preferredEditorId: "vscode" });
+	});
+
+	it("says when the stored default editor is not installed instead of showing another one", async () => {
+		getEditors.mockResolvedValue({ editors: [{ id: "vscode", name: "VS Code", kind: "editor" }], preferredEditorId: "cursor" });
+		renderForm("general");
+
+		expect(await screen.findByText("The default editor is not installed on this computer. Choose another one.")).toBeInTheDocument();
+		expect(screen.getByLabelText("Default editor")).toHaveTextContent("Choose editor");
+	});
+
+	it("keeps the current default editor and reports a save failure", async () => {
+		setPreferredEditor.mockRejectedValue(
+			new Error("Error invoking remote method 'editorHandoff:setPreferredEditor': Error: That editor is not installed. Choose another option."),
+		);
+		const user = userEvent.setup();
+		renderForm("general");
+		const selector = await screen.findByLabelText("Default editor");
+		await waitFor(() => expect(selector).toHaveTextContent("Cursor"));
+
+		await user.click(selector);
+		await user.click(await screen.findByRole("menuitem", { name: "VS Code" }));
+
+		expect(await screen.findByRole("alert")).toHaveTextContent("Could not save the default editor.");
+		expect(selector).toHaveTextContent("Cursor");
 	});
 
 	it("discards an uncommitted custom shell path when editing is cancelled", async () => {

@@ -1,12 +1,15 @@
-import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
+import { BrowserIcon, type AppIcon } from "../icons";
+import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
 import { BillingSection } from "./BillingSection";
+import { BrowserChromeSection } from "./BrowserChromeSection";
 import { BrowserDownloadsSection } from "./BrowserDownloadsSection";
 import { BrowserProfilesSection } from "./BrowserProfilesSection";
 import { CoderSettingsSection } from "./CoderSettingsSection";
 import { CodexAccountsSection } from "./CodexAccountsSection";
+import { ComputerUseSection } from "./ComputerUseSection";
 import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
@@ -49,7 +52,7 @@ type CatalogContext = {
 
 export type SettingsCatalogItem = {
 	id: GlobalSettingsSection;
-	icon: LucideIcon;
+	icon: AppIcon;
 	label: (t: TFunction) => string;
 	visible?: (context: CatalogContext) => boolean;
 	/** Left out of the single-page "all" view; it has its own page in the nav.
@@ -90,14 +93,21 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 	},
 	{
 		id: "browserProfiles",
-		icon: Globe2,
+		icon: BrowserIcon,
 		label: (t) => t("settings.browserProfiles"),
 		render: (_t, titleHidden) => (
 			<>
 				<BrowserProfilesSection titleHidden={titleHidden} />
 				<BrowserDownloadsSection />
+				<BrowserChromeSection />
 			</>
 		),
+	},
+	{
+		id: "computerUse",
+		icon: MousePointerClick,
+		label: (t) => t("settings.computerUse"),
+		render: (_t, titleHidden) => <ComputerUseSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "coder",
@@ -110,7 +120,6 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "remoteHosts",
 		icon: Server,
 		label: (t) => t("settings.remoteHosts"),
-		visible: ({ developerMode }) => developerMode,
 		render: (_t, titleHidden) => <RemoteHostsSettings titleHidden={titleHidden} />,
 	},
 	{
@@ -132,7 +141,7 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		id: "shortcuts",
 		icon: Keyboard,
 		label: (t) => t("settings.shortcuts"),
-		render: (_t, titleHidden, { singlePage }) => <KeyboardShortcutsContent active titleHidden={titleHidden || Boolean(singlePage)} />,
+		render: (_t, titleHidden, { singlePage }) => <KeyboardShortcutsContent active bounded={Boolean(singlePage)} titleHidden={titleHidden || Boolean(singlePage)} />,
 	},
 	{
 		id: "diagnostics",
