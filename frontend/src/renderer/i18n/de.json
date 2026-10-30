@@ -986,7 +986,6 @@
 	"mobile.checkingStatus": "Status wird geprüft…",
 	"mobile.connectionMethod": "Verbindungsmethode",
 	"mobile.copyPassword": "Passwort kopieren",
-	"mobile.disable": "Mobile-Verbindung deaktivieren",
 	"mobile.keepAwake.label": "Diesen Mac wach halten",
 	"mobile.keepAwake.help": "Bleibt von deinem Telefon aus erreichbar, während du weg bist.",
 	"mobile.keepAwake.laptopNote": "Beim Zuklappen geht ein MacBook trotzdem in den Ruhezustand, außer es ist am Strom und mit einem externen Display verbunden.",

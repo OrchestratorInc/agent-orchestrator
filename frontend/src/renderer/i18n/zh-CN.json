@@ -986,7 +986,6 @@
 	"mobile.checkingStatus": "正在检查状态…",
 	"mobile.connectionMethod": "连接方式",
 	"mobile.copyPassword": "复制密码",
-	"mobile.disable": "关闭移动连接",
 	"mobile.keepAwake.label": "保持这台 Mac 唤醒",
 	"mobile.keepAwake.help": "离开时仍可从手机访问。",
 	"mobile.keepAwake.laptopNote": "除非 MacBook 接通电源并连接外接显示器，否则合上盖子仍会让它进入睡眠。",

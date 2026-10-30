@@ -249,9 +249,10 @@ test("shows a quiet preparing state while startup is incomplete", async () => {
 
 test("can turn off the generated mobile connection", async () => {
 	renderMobileSettings();
-	const button = await screen.findByRole("button", { name: "Turn off mobile connection" });
+	const toggle = await screen.findByRole("switch", { name: "Connect mobile" });
+	expect(toggle).toBeChecked();
 
-	await userEvent.click(button);
+	await userEvent.click(toggle);
 	expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/disable");
 });
 
@@ -279,15 +280,15 @@ test.each([
 
 	try {
 		renderMobileSettings();
-		await userEvent.click(await screen.findByRole("button", { name: "Turn off mobile connection" }));
+		await userEvent.click(await screen.findByRole("switch", { name: "Connect mobile" }));
 		await waitFor(() => expect(statusReads).toBeGreaterThan(1));
 		await waitFor(() => {
-			const disableButton = screen.queryByRole("button", { name: "Turn off mobile connection" });
+			const toggle = screen.getByRole("switch", { name: "Connect mobile" });
 			if (serverEnabled) {
-				expect(disableButton).toBeVisible();
+				expect(toggle).toBeChecked();
 				expect(qrPayload()).not.toBeNull();
 			} else {
-				expect(disableButton).not.toBeInTheDocument();
+				expect(toggle).not.toBeChecked();
 				expect(screen.getByRole("button", { name: "Generate" })).toBeVisible();
 			}
 		});
@@ -943,7 +944,7 @@ test.each([
 ])("hides the keep-awake option when it is $name", async ({ keepAwake }) => {
 	mobileStatus.keepAwake = keepAwake;
 	renderMobileSettings();
-	await screen.findByRole("button", { name: "Turn off mobile connection" });
+	await screen.findByRole("switch", { name: "Connect mobile" });
 	expect(screen.queryByTestId("mobile-keep-awake")).not.toBeInTheDocument();
 });
 

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Check, Coffee, Copy, Globe, Loader2, MonitorSmartphone, QrCode, RotateCcw, TriangleAlert } from "lucide-react";
+import { Check, Coffee, Copy, Globe, Loader2, MonitorSmartphone, QrCode, RotateCcw, Smartphone, TriangleAlert } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../../lib/api-client";
 import { mobileStatusQueryKey } from "../../lib/mobile-status-key";
 import { useSettings } from "../../hooks/useSettings";
@@ -916,26 +916,17 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				)}
 				{actionError && <p className="mt-3 text-xs text-error">{actionError}</p>}
 
-				{/* Bottom of the details column, level with the code's bottom edge:
-				    the off switch belongs to the connection the details describe,
-				    not to the code, and here it costs no extra row. Pulled left by its
-				    padding plus its 1px transparent border so the label starts on the
-				    column's text edge. */}
-				{enabled && (
-					<div className="mt-auto pt-4">
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							className="-ml-[calc(--spacing(2.5)+1px)] text-settings-muted hover:text-settings-label"
-							disabled={busy}
-							onClick={turnOff}
-						>
-							{t("mobile.disable", "Turn off mobile connection")}
-						</Button>
-					</div>
-				)}
 			</PairingLayout>
+
+			{/* The mobile connection's on and off, as one switch beside the code it makes. */}
+			<SettingsRow icon={Smartphone} label={t("settings.connectMobile", "Connect mobile")} data-testid="mobile-connection">
+				<Switch
+					aria-label={t("settings.connectMobile", "Connect mobile")}
+					disabled={busy}
+					checked={enabled}
+					onCheckedChange={(next) => (next ? startBridge() : turnOff())}
+				/>
+			</SettingsRow>
 
 			{/* macOS only — the daemon reports it unsupported elsewhere. Shown
 			    whether or not the bridge is on: the choice is remembered and takes

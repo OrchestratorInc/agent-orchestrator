@@ -986,7 +986,6 @@
 	"mobile.checkingStatus": "ステータスを確認中…",
 	"mobile.connectionMethod": "接続方法",
 	"mobile.copyPassword": "パスワードをコピー",
-	"mobile.disable": "モバイル接続をオフにする",
 	"mobile.keepAwake.label": "この Mac をスリープさせない",
 	"mobile.keepAwake.help": "離席中もスマートフォンから接続できます。",
 	"mobile.keepAwake.laptopNote": "MacBook は、電源と外部ディスプレイに接続していない限り、蓋を閉じるとスリープします。",

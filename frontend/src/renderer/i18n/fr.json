@@ -995,7 +995,6 @@
 	"mobile.checkingStatus": "Vérification de l'état…",
 	"mobile.connectionMethod": "Méthode de connexion",
 	"mobile.copyPassword": "Copier le mot de passe",
-	"mobile.disable": "Désactiver la connexion mobile",
 	"mobile.keepAwake.label": "Garder ce Mac éveillé",
 	"mobile.keepAwake.help": "Reste joignable depuis votre téléphone pendant votre absence.",
 	"mobile.keepAwake.laptopNote": "Fermer l'écran met quand même un MacBook en veille, sauf s'il est branché sur secteur avec un écran externe.",
