@@ -30,6 +30,7 @@ export type DesktopTelemetryIdentity = {
 	cloudUserId?: string;
 	githubLogin?: string;
 	optedOut: boolean;
+	lifetimeSessions?: number;
 };
 
 export type MobileTelemetry = {
@@ -90,6 +91,8 @@ export function createMobileTelemetry(
 	let pairedInstallId: string | null = null;
 	let cloudUserId: string | null = null;
 	let githubActor: string | null = null;
+	let lifetimeSessions: number | null = null;
+	let signInKnown = false;
 	void client.unregister("ao_cloud_user_id");
 	void client.unregister("github_actor");
 	const clearPairedAttribution = (): void => {
@@ -97,6 +100,8 @@ export function createMobileTelemetry(
 		pairedInstallId = null;
 		cloudUserId = null;
 		githubActor = null;
+		lifetimeSessions = null;
+		signInKnown = false;
 		void client.unregister("paired_install_id");
 		void client.unregister("github_actor");
 		void client.unregister("ao_cloud_user_id");
@@ -124,6 +129,8 @@ export function createMobileTelemetry(
 			pairedInstallId = null;
 			cloudUserId = null;
 			githubActor = null;
+			lifetimeSessions = null;
+			signInKnown = false;
 			return;
 		}
 		void client.optIn();
@@ -145,6 +152,8 @@ export function createMobileTelemetry(
 			...sanitizeMobileProperties(event, properties),
 			...(phoneInstallId ? { install_id: phoneInstallId } : {}),
 			...(pairedInstallId ? { paired_install_id: pairedInstallId } : {}),
+			...(lifetimeSessions !== null ? { lifetime_sessions: lifetimeSessions } : {}),
+			...(signInKnown ? { is_signed_in: cloudUserId !== null } : {}),
 			ao_cloud_user_id: cloudUserId,
 			github_actor: githubActor,
 			$process_person_profile: false,
@@ -171,6 +180,8 @@ export function createMobileTelemetry(
 			return;
 		}
 		pairedInstallId = typeof identity.installId === "string" && /^ins_[0-9a-f-]{36}$/.test(identity.installId) ? identity.installId : null;
+		lifetimeSessions = typeof identity.lifetimeSessions === "number" && Number.isSafeInteger(identity.lifetimeSessions) && identity.lifetimeSessions >= 0 ? identity.lifetimeSessions : null;
+		signInKnown = true;
 		const key = JSON.stringify([identity.distinctId, identity.cloudUserId, identity.githubLogin, pairedInstallId]);
 		if (key === adoptedKey) return;
 		adoptedKey = key;

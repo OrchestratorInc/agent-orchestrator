@@ -237,6 +237,43 @@ describe("PostHog identity and opt-out", () => {
 		vi.clearAllMocks();
 	});
 
+	it("reserves app open and next-day return once across renderer restarts", async () => {
+		localStorage.clear();
+		mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 0, lifetimeSessions: 2 }));
+		const first = await import("./telemetry");
+		await first.initTelemetry();
+		const names = posthogStub.capture.mock.calls.map(([name]) => name);
+		expect(names.filter((name) => name === "ao.onboarding.app_opened")).toHaveLength(1);
+		expect(names.filter((name) => name === "ao.onboarding.next_day_return")).toHaveLength(0);
+		expect(posthogStub.capture).toHaveBeenCalledWith("ao.onboarding.app_opened", expect.objectContaining({ lifetime_sessions: 2, days_since_install: 0 }));
+		vi.resetModules();
+		posthogStub.capture.mockClear();
+		const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+		localStorage.setItem("ao.telemetry.activeSlotsByDate", JSON.stringify({ date: yesterday }));
+		mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 1, lifetimeSessions: 2 }));
+		const second = await import("./telemetry");
+		await second.initTelemetry();
+		expect(posthogStub.capture.mock.calls.filter(([name]) => name === "ao.onboarding.next_day_return")).toHaveLength(1);
+		vi.resetModules();
+		posthogStub.capture.mockClear();
+		mockBridge(async () => ({ ...bootstrap, daysSinceInstall: 1, lifetimeSessions: 2 }));
+		const third = await import("./telemetry");
+		await third.initTelemetry();
+		expect(posthogStub.capture.mock.calls.some(([name]) => name === "ao.onboarding.app_opened" || name === "ao.onboarding.next_day_return")).toBe(false);
+	});
+
+	it("stamps sign-in only after the renderer learns the account state", async () => {
+		localStorage.clear();
+		mockBridge(async () => bootstrap);
+		const { initTelemetry, identifyCloudUser, clearCloudUser, withTelemetryContext } = await import("./telemetry");
+		await initTelemetry();
+		expect(withTelemetryContext({})).not.toHaveProperty("is_signed_in");
+		await identifyCloudUser({ id: "user_01H", email: "dev@example.com" });
+		expect(withTelemetryContext({})).toHaveProperty("is_signed_in", true);
+		clearCloudUser();
+		expect(withTelemetryContext({})).toHaveProperty("is_signed_in", false);
+	});
+
 	it("identifies the WorkOS user once with email as a person property, never as a super property", async () => {
 		const captureToMain = mockBridge(async () => bootstrap);
 		const { identifyCloudUser, captureRendererEvent, captureRendererException } = await import("./telemetry");

@@ -183,6 +183,15 @@ func (i *Identity) InstallID() string {
 	return i.installID
 }
 
+// DaysSinceInstall uses the durable install ID file modification timestamp.
+func (i *Identity) DaysSinceInstall(now time.Time) (int, bool) {
+	info, err := os.Stat(filepath.Join(i.dataDir, installIDFile))
+	if err != nil || info.ModTime().After(now) {
+		return 0, false
+	}
+	return int(now.UTC().Sub(info.ModTime().UTC()).Hours() / 24), true
+}
+
 // AnonymousID is the distinct ID used when no Cloud user is bound.
 func (i *Identity) AnonymousID() string {
 	i.mu.RLock()

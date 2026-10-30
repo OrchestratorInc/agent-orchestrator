@@ -1,11 +1,10 @@
 import { useEffect, useRef } from "react";
 
-import { buildAgentInventory } from "../lib/agent-inventory-telemetry";
 import { captureRendererEvent } from "../lib/telemetry";
 import { useAgentReadinessQuery } from "./useAgentReadinessQuery";
 
 /**
- * Reports the install's agent inventory once per app launch.
+ * Logs the install's agent inventory once per app launch.
  *
  * Mounted from the shell so it runs once, and reads the cached agents query, so
  * it adds no request of its own. Reported a single time per launch because the
@@ -20,6 +19,8 @@ export function useAgentInventoryTelemetry(): void {
   useEffect(() => {
     if (!data || reported.current) return;
     reported.current = true;
-    void captureRendererEvent("ao.renderer.agents_available", buildAgentInventory(data));
+    const installed = data.agents.filter((agent) => agent.installation.state === "installed").length;
+    console.info("AO agent inventory", { installed, supported: data.agents.length });
+    if (installed === 0) void captureRendererEvent("ao.setup.agent_missing", { reason: "none_installed" });
   }, [data]);
 }

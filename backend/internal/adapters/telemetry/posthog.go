@@ -195,21 +195,9 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"port":  {},
 	},
 	"ao.http.5xx": {
-		"component":          {},
-		"duration":           {},
-		"error_code":         {},
-		"error_kind":         {},
-		"fingerprint":        {},
-		"method":             {},
-		"operation":          {},
-		"path":               {},
-		"status":             {},
-		"status_family":      {},
-		"browser_command":    {},
-		"runtime_link_state": {},
-		"count":              {},
-		"window_start":       {},
-		"window_end":         {},
+		"count":        {},
+		"window_start": {},
+		"window_end":   {},
 	},
 	"ao.onboarding.first_project_added": {
 		"has_git_remote": {},
@@ -222,6 +210,13 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"kind":                   {},
 		"since_first_project_ms": {},
 	},
+	"ao.onboarding.second_session_spawned": {
+		"harness": {},
+		"kind":    {},
+	},
+	"ao.onboarding.app_opened":      {},
+	"ao.onboarding.cli_detected":    {},
+	"ao.onboarding.next_day_return": {},
 	"ao.review.triggered": {
 		"created_runs": {},
 		"harness":      {},
@@ -314,10 +309,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"mode":       {},
 		"result":     {},
 	},
-	"ao.harness.stale_sessions": {
-		"harness":  {},
-		"sessions": {},
-	},
 	"ao.session.waiting_input_exited": {
 		"dwell_ms":  {},
 		"exited_to": {},
@@ -331,10 +322,11 @@ type postHogClient interface {
 
 // PostHogSink exports allowlisted telemetry events to PostHog.
 type PostHogSink struct {
-	apiKey       string
-	host         string
-	defaultAgent string
-	tenure       *tenureTracker
+	apiKey           string
+	host             string
+	defaultAgent     string
+	tenure           *tenureTracker
+	lifetimeSessions func(context.Context) (int64, error)
 	// env and install carry the segmentation context (OS, arch, CI, install
 	// source, release channel) stamped on every event. See environment.go.
 	env     staticEnvironment
@@ -368,6 +360,11 @@ type PostHogSink struct {
 	// long HTTP timeout.
 	ctx    context.Context
 	cancel context.CancelFunc
+}
+
+// SetLifetimeSessions reads the durable counter at export time.
+func (s *PostHogSink) SetLifetimeSessions(read func(context.Context) (int64, error)) {
+	s.lifetimeSessions = read
 }
 
 // NewPostHogSink starts a buffered PostHog exporter with a stable install ID.
@@ -650,12 +647,17 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 	s.install.stamp(props)
 	if s.hasExperimentCohort {
 		props["experiment_cohort"] = s.experimentCohort
+ 	}
+	if s.lifetimeSessions != nil {
+		if count, err := s.lifetimeSessions(context.Background()); err == nil {
+			props["lifetime_sessions"] = count
+		}
 	}
 	if ev.RequestID != "" {
 		props["request_id"] = ev.RequestID
 	}
-	if ev.ProjectID != nil {
-		props["project_id_hash"] = sha256String(string(*ev.ProjectID))
+	if ev.ProjectID != nil && s.ident != nil {
+		props["project_id_hash"] = sha256String(s.ident.InstallID() + ":" + string(*ev.ProjectID))
 	}
 	if ev.SessionID != nil {
 		props["session_id_hash"] = sha256String(string(*ev.SessionID))
@@ -666,6 +668,10 @@ func (s *PostHogSink) properties(ev ports.TelemetryEvent) map[string]any {
 	s.stampIdentity(props)
 	if s.ident != nil {
 		props["install_id"] = s.ident.InstallID()
+		if age, ok := s.ident.DaysSinceInstall(time.Now()); ok {
+			props["days_since_install"] = age
+		}
+		props["is_signed_in"] = s.ident.Snapshot().CloudUserID != ""
 	}
 	return props
 }

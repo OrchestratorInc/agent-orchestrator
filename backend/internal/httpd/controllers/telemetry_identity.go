@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -14,7 +15,8 @@ import (
 // identity and opt-out. Like EndpointsController it sits outside /api/v1/mobile
 // (404 on the LAN socket) and is authenticated: the identity names a person.
 type TelemetryIdentityController struct {
-	Source ports.TelemetryIdentityStore
+	Source           ports.TelemetryIdentityStore
+	LifetimeSessions func(context.Context) (int64, error)
 }
 
 // Register mounts the telemetry identity route on the supplied router.
@@ -33,6 +35,11 @@ func (c *TelemetryIdentityController) get(w http.ResponseWriter, r *http.Request
 		resp.DistinctID = snap.DistinctID()
 		resp.InstallID = snap.InstallID
 		resp.CloudUserID, resp.GitHubLogin = snap.CloudUserID, snap.GitHubLogin
+		if c.LifetimeSessions != nil {
+			if count, err := c.LifetimeSessions(r.Context()); err == nil {
+				resp.LifetimeSessions = &count
+			}
+		}
 	}
 	envelope.WriteJSON(w, http.StatusOK, resp)
 }

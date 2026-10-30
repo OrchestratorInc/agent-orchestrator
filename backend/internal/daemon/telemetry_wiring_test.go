@@ -119,9 +119,9 @@ func TestNewTelemetrySink_FanoutIncludesPostHogWhenConfigured(t *testing.T) {
 	if !active {
 		t.Fatal("remote export inactive with PostHog sink")
 	}
-	fanout, ok := sink.(*telemetryadapter.FanoutSink)
+	fanout, ok := sink.(*telemetryadapter.OnboardingSink)
 	if !ok {
-		t.Fatalf("sink type = %T, want *telemetry.FanoutSink", sink)
+		t.Fatalf("sink type = %T, want *telemetry.OnboardingSink", sink)
 	}
 	t.Cleanup(func() { _ = fanout.Close(t.Context()) })
 }

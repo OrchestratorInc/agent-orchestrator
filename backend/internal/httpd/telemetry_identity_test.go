@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,7 +20,10 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := NewRouterWithControl(config.Config{DataDir: dir}, discardLogger(), nil, APIDeps{TelemetryIdentity: ident}, ControlDeps{})
+	r := NewRouterWithControl(config.Config{DataDir: dir}, discardLogger(), nil, APIDeps{
+		TelemetryIdentity: ident,
+		LifetimeSessions:  func(context.Context) (int64, error) { return 3, nil },
+	}, ControlDeps{})
 
 	post := func(host, origin, body string) int {
 		req := httptest.NewRequest(http.MethodPost, "http://"+host+"/internal/telemetry/identity", strings.NewReader(body))
@@ -46,7 +50,7 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 	}
 
 	// Install ID until someone signs in.
-	if got := get(); got["distinctId"] != ident.Snapshot().InstallID || got["installId"] != ident.InstallID() || got["optedOut"] != false {
+	if got := get(); got["distinctId"] != ident.Snapshot().InstallID || got["installId"] != ident.InstallID() || got["optedOut"] != false || got["lifetimeSessions"] != float64(3) {
 		t.Fatalf("anonymous identity = %#v", got)
 	}
 
@@ -79,7 +83,7 @@ func TestTelemetryIdentityRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = get()
-	if got["optedOut"] != true || got["distinctId"] != "" || got["installId"] != nil {
+	if got["optedOut"] != true || got["distinctId"] != "" || got["installId"] != nil || got["lifetimeSessions"] != nil {
 		t.Fatalf("opted-out identity = %#v", got)
 	}
 }
