@@ -1316,3 +1316,10 @@ main .mdx-content > h2:first-child { margin-top: 20px !important; }
 /* v36w: callout content margins match original (p carries 20px top+bottom there) */
 [class*="callout"] { padding-bottom: 12px !important; }
 [class*="callout"] [class*="text-sm"] :is(p, span[data-as="p"]) { display: block !important; margin-top: 20px !important; margin-bottom: 20px !important; }
+
+/* v37: sidebar nested group guide line (original: absolute 1px, left 10px, inset-y 4px) */
+ul.sidebar-group li.space-y-px > ul { position: relative; }
+ul.sidebar-group li.space-y-px > ul::before {
+  content: ""; position: absolute; left: 10px; top: 4px; bottom: 4px; width: 1px;
+  background: oklch(1 0 0 / 0.1);
+}
