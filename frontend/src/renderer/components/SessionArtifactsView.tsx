@@ -92,7 +92,7 @@ const FULLSCREEN_FRAME_CLASS =
 	"fixed inset-0 z-overlay flex flex-col bg-background outline-none";
 // The window's macOS traffic lights sit over the overlay's header unless the
 // window itself is full screen.
-const FULLSCREEN_MAC_HEADER_CLASS = "pl-(--size-titlebar-cluster-left) [html:has(.native-fullscreen)_&]:pl-1";
+const FULLSCREEN_MAC_HEADER_CLASS = "min-h-traffic-light-clearance pl-(--size-titlebar-cluster-left) [html:has(.native-fullscreen)_&]:min-h-9 [html:has(.native-fullscreen)_&]:pl-1";
 const INLINE_FRAME_CLASS = "flex h-full min-h-0 flex-col outline-none";
 
 /**

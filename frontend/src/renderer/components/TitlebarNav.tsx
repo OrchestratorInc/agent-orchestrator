@@ -82,7 +82,7 @@ export function TitlebarNav({
   // top-0 plus the traffic-light row height puts this row on the native
   // buttons' centreline; fullscreen has no frame, so it uses the flush row.
   const topClass = isMac ? "top-0" : "top-0.75";
-  const heightClass = isMac && isFullScreen ? "h-toolbar" : "h-traffic-light-clearance";
+  const heightClass = isMac && !isFullScreen ? "h-traffic-light-clearance" : "h-toolbar";
 
   // With the sidebar open the brand sits where the history arrows would be;
   // collapsed, the arrows take its place.

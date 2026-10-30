@@ -331,6 +331,13 @@
 	--size-traffic-light-clearance: calc(var(--size-toolbar) + 2 * (var(--size-center-panel-inset-mac) + 1px));
 	/* Fullscreen drops the panel frame, so the row matches the flush topbar. */
 	--size-traffic-light-clearance-fullscreen: var(--size-toolbar);
+	/* Bottom edge of the framed panel's header row: window chrome (drag strips)
+	 * that overlaps the panel must stop here so it never covers panel content. */
+	--size-mac-panel-header-bottom: calc(var(--size-traffic-light-clearance) - var(--size-center-panel-inset-mac) - 1px);
+	/* The same cluster clearance, measured from the framed panel's inner edge. */
+	--size-titlebar-content-offset-mac-panel: calc(
+		var(--size-titlebar-content-offset) - var(--size-center-panel-inset-mac) - 1px
+	);
 	/* Resize handle straddles the sidebar-panel boundary: offset = half the width
 	 * so the hairline lands exactly at the junction and the drag zone covers 6px
 	 * on each side of it. */
