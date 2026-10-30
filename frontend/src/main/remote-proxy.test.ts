@@ -1291,7 +1291,8 @@ describe("startRemoteProxy when the upstream fails", () => {
 
 	it.each([200, 304])("preserves upstream Vary on HTTP/2 status %s", async (status) => {
 		const port = await startH2Daemon((_req, res) => {
-			res.writeHead(status, { vary: ["Accept-Encoding", "Accept-Language"], etag: 'W/"scratch"' });
+			res.setHeader("Vary", ["Accept-Encoding", "Accept-Language"]);
+			res.writeHead(status, { etag: 'W/"scratch"' });
 			res.end();
 		});
 		proxy = await startRemoteProxy(daemonEntry(`http://127.0.0.1:${port}`));
