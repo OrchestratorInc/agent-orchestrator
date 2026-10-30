@@ -8,7 +8,6 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
@@ -27,7 +26,7 @@ type versionRefreshSettings interface {
 // release to the installed one, and removes Homebrew kegs kept for sessions
 // that have all moved. It runs whether or not idle hibernation is on, and a
 // moved chat is always started again right away on the new release.
-func runVersionRefreshSweep(ctx context.Context, cfg config.Config, settings versionRefreshSettings, sessions sessionLifecycle, installs *systeminstall.Service, telemetry ports.EventSink, log *slog.Logger) {
+func runVersionRefreshSweep(ctx context.Context, cfg config.Config, settings versionRefreshSettings, sessions sessionLifecycle, installs *systeminstall.Service, log *slog.Logger) {
 	ticker := time.NewTicker(versionRefreshSweepTick)
 	defer ticker.Stop()
 	gauge := staleSessionsGauge{log: log}
