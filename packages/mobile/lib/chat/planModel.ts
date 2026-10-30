@@ -1,4 +1,4 @@
-import type { PlanStep } from "./types";
+import type { ConversationPlan, PlanStep } from "./types";
 
 /**
  * The plan panel's window: about six one-line steps, so a long plan reads as a
@@ -42,6 +42,24 @@ export function planEdgeFades(offset: number, viewportHeight: number, contentHei
 		top: offset > 1,
 		bottom: contentHeight - viewportHeight - offset > 1,
 	};
+}
+
+/** Whether the steps are taller than the window, so it has anything to scroll. */
+export function planOverflows(viewportHeight: number, contentHeight: number): boolean {
+	return viewportHeight > 0 && contentHeight - viewportHeight > 1;
+}
+
+/** Whether two renders of the panel would draw the same plan in the same state. */
+export function samePlanProps(
+	previous: { plan: ConversationPlan; live?: boolean },
+	next: { plan: ConversationPlan; live?: boolean },
+): boolean {
+	if (Boolean(previous.live) !== Boolean(next.live)) return false;
+	const a = previous.plan;
+	const b = next.plan;
+	if (a === b) return true;
+	if (a.explanation !== b.explanation || a.steps.length !== b.steps.length) return false;
+	return a.steps.every((step, index) => step.text === b.steps[index].text && step.status === b.steps[index].status);
 }
 
 /** The plan in a sentence, for the header's accessibility label. */

@@ -15,8 +15,8 @@
  * the tone, not by a label beside every row.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from "react-native-svg";
 
@@ -25,7 +25,7 @@ import { Feather } from "../icons";
 import { LAYOUT_MS } from "../motion";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { font, press, radius, space, type } from "../tokens";
+import { font, fontScaleCap, press, radius, space, type } from "../tokens";
 import { Spinning } from "../ui";
 import { useReducedMotion } from "../useReducedMotion";
 import {
@@ -36,35 +36,52 @@ import {
 	planAccessibilityLabel,
 	planEdgeFades,
 	planFollowOffset,
+	planOverflows,
+	samePlanProps,
 } from "./planModel";
 import { FoldBody } from "./TurnFoldMotion";
 import type { ConversationPlan, PlanStep } from "./types";
 
-export function TurnPlan({
-	plan,
-	live,
-}: {
+type TurnPlanProps = {
 	plan: ConversationPlan;
 	/** The turn is still running, so the plan can still change. */
 	live?: boolean;
-}) {
+};
+
+// Every step draws its own SVG and the timeline re-renders while text streams in,
+// so skip renders the plan itself did not cause. Compared by value: a poll can hand
+// over the same plan as a new object.
+export const TurnPlan = memo(TurnPlanPanel, samePlanProps);
+
+function TurnPlanPanel({ plan, live }: TurnPlanProps) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const reduceMotion = useReducedMotion();
 	const steps = plan.steps;
 	const done = steps.filter((step) => step.status === "completed").length;
 	const allDone = steps.length > 0 && done === steps.length;
-	const [expanded, setExpanded] = useState(() => !allDone);
-	const wasAllDone = useRef(allDone);
+	// Open only while the turn runs and has steps left. A settled turn starts folded
+	// even with a step still in progress: a stopped or failed turn keeps one, and on a
+	// phone an open panel on every past turn costs most of a screen each.
+	const openByDefault = Boolean(live) && !allDone;
+	const [expanded, setExpanded] = useState(openByDefault);
+	const wasOpenByDefault = useRef(openByDefault);
 	const activeStep = activePlanStep(steps);
+	// Steps keep the reader's text size up to the body cap; the mark slot and the
+	// window grow with it, so marks stay level with the first line and the window
+	// still shows about as many steps.
+	const textScale = Math.max(1, Math.min(useWindowDimensions().fontScale, fontScaleCap.body));
+	const windowHeight = PLAN_WINDOW_HEIGHT * textScale;
+	const markSlotHeight = type.subheadline.lineHeight * textScale;
 
-	// Fold when the last step is ticked, open again if the agent re-plans. Only on
-	// the change, so a reader who reopens a finished plan keeps it open.
+	// Fold when the last step is ticked or the turn stops, open again if the agent
+	// re-plans in a running turn. Only on the change, so a reader who opens or folds
+	// a plan keeps it that way.
 	useEffect(() => {
-		if (wasAllDone.current === allDone) return;
-		wasAllDone.current = allDone;
-		setExpanded(!allDone);
-	}, [allDone]);
+		if (wasOpenByDefault.current === openByDefault) return;
+		wasOpenByDefault.current = openByDefault;
+		setExpanded(openByDefault);
+	}, [openByDefault]);
 
 	const scrollRef = useRef<ScrollView>(null);
 	const rows = useRef(new Map<number, { y: number; height: number }>());
@@ -73,10 +90,18 @@ export function TurnPlan({
 	const offset = useRef(0);
 	const followed = useRef(false);
 	const [fades, setFades] = useState({ top: false, bottom: false });
+	// Scroll only a list that overflows: on iOS a scroll view that cannot move still
+	// catches the drag, so a short plan would stop the transcript scrolling under it.
+	const [scrollable, setScrollable] = useState(false);
 
 	const syncFades = useCallback(() => {
 		const next = planEdgeFades(offset.current, viewportHeight.current, contentHeight.current);
 		setFades((current) => (current.top === next.top && current.bottom === next.bottom ? current : next));
+	}, []);
+
+	const syncScrollable = useCallback(() => {
+		const next = planOverflows(viewportHeight.current, contentHeight.current);
+		setScrollable((current) => (current === next ? current : next));
 	}, []);
 
 	// Keep the step being worked on in view, centred so the finished step before it
@@ -94,8 +119,16 @@ export function TurnPlan({
 
 	useEffect(() => {
 		if (!expanded) {
+			// The next open mounts a fresh scroll view at the top, so forget every
+			// measurement of this one: stale heights or fades would show a frame of
+			// the old position, or glide from it.
 			followed.current = false;
 			rows.current.clear();
+			viewportHeight.current = 0;
+			contentHeight.current = 0;
+			offset.current = 0;
+			setFades({ top: false, bottom: false });
+			setScrollable(false);
 			return;
 		}
 		follow();
@@ -106,11 +139,13 @@ export function TurnPlan({
 	const currentStep = !expanded && !allDone ? steps[activeStep]?.text : undefined;
 
 	return (
-		<View style={styles.card} accessibilityState={{ busy: Boolean(live) && !allDone }}>
+		<View style={styles.card}>
 			{/* The whole header is the toggle, so the target is the row rather than an icon. */}
 			<Pressable
 				accessibilityRole="button"
-				accessibilityState={{ expanded }}
+				// Busy on the header, the element a screen reader focuses: the list can still
+				// change while the turn runs.
+				accessibilityState={{ expanded, busy: Boolean(live) && !allDone }}
 				accessibilityLabel={planAccessibilityLabel(steps)}
 				accessibilityHint={expanded ? "Collapses the plan" : "Expands the plan"}
 				onPress={() => {
@@ -120,30 +155,34 @@ export function TurnPlan({
 				style={({ pressed }) => [styles.header, pressed && { opacity: press.opacity }]}
 			>
 				<PlanMark done={allDone} />
-				<Text numberOfLines={1} style={styles.title}>Plan</Text>
-				<Text numberOfLines={1} style={styles.current}>{currentStep}</Text>
+				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.title}>Plan</Text>
+				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.current}>{currentStep}</Text>
 				{/* Tabular so the count does not jitter the header as it climbs. */}
-				<Text style={styles.count}>{done}/{steps.length}</Text>
+				<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.count}>{done}/{steps.length}</Text>
 				<HeaderChevron open={expanded} color={t.textFaint} />
 			</Pressable>
 
 			{expanded ? (
 				<FoldBody>
-					{plan.explanation ? <Text style={styles.explanation}>{plan.explanation}</Text> : null}
+					{plan.explanation ? <Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.explanation}>{plan.explanation}</Text> : null}
 					<View style={styles.window}>
 						<ScrollView
 							ref={scrollRef}
 							nestedScrollEnabled
+							scrollEnabled={scrollable}
+							alwaysBounceVertical={false}
 							scrollEventThrottle={16}
 							showsVerticalScrollIndicator={false}
-							style={{ maxHeight: PLAN_WINDOW_HEIGHT }}
+							style={{ maxHeight: windowHeight }}
 							contentContainerStyle={styles.list}
 							onLayout={(event: LayoutChangeEvent) => {
 								viewportHeight.current = event.nativeEvent.layout.height;
+								syncScrollable();
 								follow();
 							}}
 							onContentSizeChange={(_, height) => {
 								contentHeight.current = height;
+								syncScrollable();
 								follow();
 							}}
 							onScroll={(event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -163,8 +202,9 @@ export function TurnPlan({
 									}}
 									style={styles.step}
 								>
-									<StepMark status={step.status} live={Boolean(live)} />
+									<StepMark status={step.status} live={Boolean(live)} slotHeight={markSlotHeight} />
 									<Text
+										maxFontSizeMultiplier={fontScaleCap.body}
 										style={[
 											styles.stepText,
 											step.status === "completed" && styles.stepDone,
@@ -218,11 +258,11 @@ function PlanMark({ done }: { done: boolean }) {
  * The mark for one step, in a fixed-size slot the height of one text line, so a
  * spinner that turns into a tick never nudges the lines below it.
  */
-function StepMark({ status, live }: { status: PlanStep["status"]; live: boolean }) {
+function StepMark({ status, live, slotHeight }: { status: PlanStep["status"]; live: boolean; slotHeight: number }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	return (
-		<View style={styles.markSlot}>
+		<View style={[styles.markSlot, { height: slotHeight }]}>
 			{status === "pending" ? (
 				// Not started: a dashed ring, present but quiet.
 				<Svg width={16} height={16} viewBox="0 0 16 16">
@@ -293,7 +333,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	window: { position: "relative" },
 	list: { paddingHorizontal: space.md + 2, paddingBottom: space.md },
 	step: { flexDirection: "row", alignItems: "flex-start", gap: space.sm + 2, paddingVertical: 5 },
-	markSlot: { width: 16, height: type.subheadline.lineHeight, alignItems: "center", justifyContent: "center" },
+	markSlot: { width: 16, alignItems: "center", justifyContent: "center" },
 	stepText: { ...type.subheadline, flex: 1, color: t.textSecondary },
 	stepActive: { color: t.textPrimary },
 	stepDone: { color: t.textTertiary, textDecorationLine: "line-through" },

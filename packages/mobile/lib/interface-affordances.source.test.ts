@@ -60,7 +60,7 @@ describe("Interface affordances", () => {
 			// The plan panel lives in its own file and its header says so too.
 			const plan = source("./chat/TurnPlan.tsx");
 			expect(plan).toContain('accessibilityRole="button"');
-			expect(plan).toContain("accessibilityState={{ expanded }}");
+			expect(plan).toContain("accessibilityState={{ expanded, ");
 		});
 	});
 

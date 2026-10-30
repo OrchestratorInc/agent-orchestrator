@@ -58,6 +58,7 @@ import type {
 	ConversationActivity,
 	ConversationItem,
 	ConversationMessage,
+	ConversationPlan,
 	ConversationSnapshot,
 	ConversationTurn,
 	FileChange,
@@ -378,7 +379,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
 	const WorkBody = editing ? View : FoldBody;
 	const BelowFold = editing ? View : FoldLayout;
-	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
+	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
@@ -713,9 +714,10 @@ function PlanActivity({ activity }: { activity: ConversationActivity }) {
 	const styles = useThemedStyles(makeStyles);
 	const [open, setOpen] = useState(activity.status === "running");
 	const steps = activity.detail?.steps ?? [];
-	// Older daemons report the plan as an activity rather than on the turn; with
-	// steps it is the same checklist, so it gets the same panel, drawn as the
-	// desktop draws it. Not the summary as a title: for Codex it is "Plan 3/7:
+	// A plan activity is hidden when its turn carries a turn-level plan, so this row
+	// shows a plan whose turn has none: one AO could not match to a turn, such as a
+	// plan from before the controller started. With steps it is the same checklist,
+	// so it gets the same panel, drawn as the desktop draws it. Not the summary as a title: for Codex it is "Plan 3/7:
 	// <step>", which repeats the header's count and current step. Not `live`
 	// either: the row is "running" while any step is unfinished, not while the
 	// turn runs, so an interrupted turn's plan would stay busy for good.
@@ -832,7 +834,7 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 	</Pressable>;
 }
 
-function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?(turnId: string): Promise<number> }) {
+function TurnSummary({ turn, plan, onRollback }: { turn: ConversationTurn; plan?: ConversationPlan; onRollback?(turnId: string): Promise<number> }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const [confirming, setConfirming] = useState(false);
@@ -842,7 +844,7 @@ function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?
 	const canRollBack = Boolean(onRollback && settled && turn.providerTurnId && !turn.rolledBack);
 	return (
 		<View style={styles.turnWrap}>
-			{turn.plan?.steps.length ? <TurnPlan plan={turn.plan} live={turn.state === "running"} /> : null}
+			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
 			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
 			{canRollBack ? <View style={styles.turnLine}>
 				<Pressable accessibilityLabel="Roll back to before this turn" hitSlop={8} onPress={() => { haptics.warning(); setConfirming(true); }}>
@@ -1239,7 +1241,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	changedReviewText: { fontFamily: "Geist_500Medium", fontSize: type.caption1.fontSize, color: t.textPrimary },
 	planTitle: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, fontWeight: "600" },
 	planLive: { fontFamily: "Geist_600SemiBold", color: t.orange, fontSize: type.caption2.fontSize, letterSpacing: 0.7, fontWeight: "600" },
-	planCount: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
 	planBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xs },
 	fileBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xxs },
 	fileRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
