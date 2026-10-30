@@ -2063,6 +2063,8 @@ export interface components {
             hosts: components["schemas"]["RemoteHost"][];
             /** @description Whether this deployment gives machines fixed addresses; absent means false. Only then may a registration omit `url`. */
             fixedAddresses?: boolean;
+            /** @description Whether this deployment takes `hostKey` on a registration; absent means false, and such a deployment refuses a registration that carries one. */
+            hostKeys?: boolean;
         };
         RemoteHostRegistration: {
             /** @description At most 64 bytes, after surrounding whitespace is trimmed. */
