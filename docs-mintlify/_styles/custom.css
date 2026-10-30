@@ -4,11 +4,11 @@
    All values measured from the live original, 2026-10-30.
    ========================================================================== */
 
-/* v36n: original body font - GeistSans variable webfont from docs.orchestrator.inc (CORS *).
+/* v36n: original body font - GeistSans variable webfont served from this repo (OFL 1.1, Vercel).
    Deployed previously fell back to system-ui, shifting all text metrics/wrapping. */
 @font-face {
   font-family: 'GeistSans';
-  src: url('https://docs.orchestrator.inc/_next/static/media/27834908180db20f-s.p.woff2') format('woff2');
+  src: url('/fonts/1-GeistSans.woff2') format('woff2');
   font-display: swap;
   font-weight: 100 900;
 }
