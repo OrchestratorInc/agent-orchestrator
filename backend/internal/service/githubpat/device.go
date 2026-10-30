@@ -15,7 +15,7 @@ import (
 // defaultOAuthClientID is the public client ID of the Agent Orchestrator
 // GitHub OAuth App. Device flow needs no client secret, so shipping the ID in
 // the binary is safe. AO_GITHUB_OAUTH_CLIENT_ID overrides it.
-const defaultOAuthClientID = ""
+const defaultOAuthClientID = "Ov23lieqORSXeDaVaJ7D"
 
 // deviceLoginScopes match what agents need: repo for clone/push/PRs/issues,
 // read:org for org repos, workflow so pushes may touch .github/workflows.
