@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { SessionFileWorkspace } from "./SessionFileWorkspace";
 import type { FileAnnotationModel } from "./WorkspaceDiffView";
@@ -8,11 +8,11 @@ vi.mock("./FileContentPane", () => ({
 }));
 
 const annotation: FileAnnotationModel = {
-	target: null,
-	draft: "",
+	targets: [],
 	status: "idle",
 	error: "",
 	begin: vi.fn(),
+	draftFor: () => "", statusFor: () => "idle",
 	setDraft: vi.fn(),
 	cancel: vi.fn(),
 	submit: vi.fn(),
@@ -32,7 +32,7 @@ describe("SessionFileWorkspace", () => {
 	it("leaves whole-file feedback rendering to the focused file pane", () => {
 		const activeAnnotation: FileAnnotationModel = {
 			...annotation,
-			target: { path: "src/App.tsx", side: "file", surface: "focused" },
+			targets: [{ path: "src/App.tsx", side: "file", surface: "focused" }],
 		};
 		render(<SessionFileWorkspace annotation={activeAnnotation} path="src/App.tsx" sessionId="sess-1" split={false} />);
 
@@ -153,4 +153,13 @@ describe("SessionFileWorkspace", () => {
 		rerender(<SessionFileWorkspace annotation={annotation} path="src/Shorter.tsx" sessionId="shorter-scroll-session" split={false} />);
 		expect(scroll.scrollTop).toBe(100);
 	});
+});
+
+it("moves keyboard focus into an activated read-only file without focusing an inactive pane", async () => {
+	const pane = (active: boolean) => <SessionFileWorkspace active={active} annotation={annotation} path="focus-target.ts" sessionId="focus-test" split={false} />;
+	const view = render(pane(false));
+	const region = screen.getByRole("region", { name: "focus-target.ts" });
+	expect(region).not.toHaveFocus();
+	view.rerender(pane(true));
+	await waitFor(() => expect(region).toHaveFocus());
 });

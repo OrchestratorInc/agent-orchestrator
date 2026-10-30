@@ -1,8 +1,21 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
-import { catalogFor, type MessageKey, type PluralMessageKey } from "../renderer/i18n/messages";
+// A tray-only catalog: importing the renderer's catalogs put every locale file
+// (1.3 MB) into main.js. Regenerate with `node scripts/sync-tray-catalog.mjs`.
+import { trayCatalogs, type TrayMessageKey } from "./tray-catalog.generated";
 import type { AppLocale } from "../shared/ui-locale";
+
+type MessageKey = TrayMessageKey;
+type PluralMessageKey = TrayMessageKey extends infer Key extends string
+	? Key extends `${infer Base}_${"one" | "other"}`
+		? Base
+		: never
+	: never;
+
+function catalogFor(locale: AppLocale): Record<TrayMessageKey, string> {
+	return trayCatalogs[locale] ?? trayCatalogs.en;
+}
 import type { TrayAttentionState, TrayAttentionZone, TrayOpenSessionTarget, TraySessionEntry } from "../shared/tray";
 
 const MAX_MENU_SESSIONS = 8;
@@ -32,6 +45,7 @@ export type TrayController = {
 export type TrayControllerOptions = {
 	focusWindow: () => void;
 	openSession: (target: TrayOpenSessionTarget) => void;
+	quitCompletely: () => void;
 	locale: AppLocale;
 };
 
@@ -95,7 +109,7 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 		}
 		items.push({ type: "separator" });
 		items.push({ label: t("tray.show"), click: () => options.focusWindow() });
-		items.push({ label: t("tray.quit"), role: "quit" });
+		items.push({ label: t("tray.quit"), click: () => options.quitCompletely() });
 		tray.setContextMenu(Menu.buildFromTemplate(items));
 	};
 

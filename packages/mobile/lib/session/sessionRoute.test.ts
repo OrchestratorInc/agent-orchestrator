@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: vi.fn(), setItem: vi.fn(), removeItem: vi.fn() } }));
 vi.mock("expo-secure-store", () => ({ getItemAsync: vi.fn(), setItemAsync: vi.fn(), deleteItemAsync: vi.fn() }));
 
-import { getSessions, type DashboardSession, type OrchestratorLink } from "../api";
+import { getSessions, type DashboardSession, type OrchestratorLink, resetArchivePagingProbes } from "../api";
 import type { ServerConfig } from "../config";
 import { lookUpSession } from "./sessionLookup";
 import {
 	currentSessionLookup,
+	isRuntimeGone,
 	sessionLookupDue,
 	sessionLookupKey,
 	sessionLookupSettled,
@@ -15,6 +16,8 @@ import {
 	type SessionLookup,
 } from "./sessionRoute";
 
+// A daemon that pages its archive answers the live-only poll with its size.
+const NO_ARCHIVE = { total: 0, byProject: {} };
 const worker = (over: Partial<DashboardSession> = {}): DashboardSession =>
 	({ id: "proj-1", projectId: "proj", mode: "chat", isTerminated: false, ...over }) as DashboardSession;
 
@@ -67,8 +70,18 @@ describe("sessionRouteView", () => {
 		}
 	});
 
-	it("reports an unlisted session that has ended as ended, not as not found", () => {
-		expect(view({ lookup: found(worker({ isTerminated: true })) })).toEqual({ kind: "ended" });
+	it("reports an unlisted orchestrator that has ended as ended, not as not found", () => {
+		expect(view({ lookup: found(worker({ isTerminated: true, kind: "orchestrator" })) })).toEqual({ kind: "ended" });
+	});
+
+	// A machine that pages its archive leaves archived workers out of the poll.
+	// Opening one (from a notification, say) shows its screen, which offers
+	// Restore, rather than a dead end.
+	it("opens an unlisted worker that has ended", () => {
+		const archived = worker({ isTerminated: true, kind: "worker" });
+		expect(view({ lookup: found(archived) })).toEqual({ kind: "screen", session: archived });
+		const kindless = worker({ isTerminated: true });
+		expect(view({ lookup: found(kindless) })).toEqual({ kind: "screen", session: kindless });
 	});
 
 	it("opens an unlisted session that is still live", () => {
@@ -88,7 +101,7 @@ describe("sessionRouteView", () => {
 
 	// An answer the daemon gave is not withdrawn because the link dropped after.
 	it("keeps a settled answer while the board is disconnected", () => {
-		expect(view({ connection: "closed", lookup: found(worker({ isTerminated: true })) })).toEqual({ kind: "ended" });
+		expect(view({ connection: "closed", lookup: found(worker({ isTerminated: true, kind: "orchestrator" })) })).toEqual({ kind: "ended" });
 		expect(view({ connection: "closed", lookup: failed(404) })).toEqual({ kind: "missing" });
 	});
 
@@ -234,12 +247,15 @@ function response(body: unknown, status = 200): Response {
 }
 
 describe("lookUpSession, the request the route sends", () => {
-	beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+	beforeEach(() => {
+		resetArchivePagingProbes();
+		vi.stubGlobal("fetch", vi.fn());
+	});
 	afterEach(() => vi.unstubAllGlobals());
 
 	it("finds the orchestrator the board's lists dropped, and reports it ended", async () => {
 		vi.mocked(fetch)
-			.mockResolvedValueOnce(response({ sessions: [scratch1, scratch2] }))
+			.mockResolvedValueOnce(response({ archived: NO_ARCHIVE, sessions: [scratch1, scratch2] }))
 			.mockResolvedValueOnce(response({ sessions: [scratch1, scratch2] }))
 			.mockResolvedValueOnce(response({ projects: [{ id: "scratch", name: "Scratch", kind: "scratch", sessionPrefix: "scratch" }] }))
 			.mockResolvedValueOnce(response({ session: scratch1 }));
@@ -268,5 +284,24 @@ describe("lookUpSession, the request the route sends", () => {
 		const lookup = await lookUpSession(cfg, "scratch-1");
 		expect(lookup).toEqual(failed(undefined));
 		expect(view({ lookup })).toEqual({ kind: "failed" });
+	});
+});
+
+describe("isRuntimeGone", () => {
+	it("keeps the terminal for a merged or errored worker whose runtime is still live", () => {
+		expect(isRuntimeGone(worker({ status: "merged" }))).toBe(false);
+		expect(isRuntimeGone(worker({ status: "errored" }))).toBe(false);
+		expect(isRuntimeGone(worker({ status: "working" }))).toBe(false);
+	});
+
+	it("treats a terminated worker as gone", () => {
+		expect(isRuntimeGone(worker({ isTerminated: true, status: "merged" }))).toBe(true);
+		expect(isRuntimeGone(worker({ status: "terminated" }))).toBe(true);
+	});
+
+	it("reads an orchestrator's runtime flags, never a missing field", () => {
+		expect(isRuntimeGone(orchestrator({ status: "merged" }))).toBe(false);
+		expect(isRuntimeGone(orchestrator({ isTerminal: true }))).toBe(true);
+		expect(isRuntimeGone(orchestrator({ hasRuntime: false }))).toBe(true);
 	});
 });

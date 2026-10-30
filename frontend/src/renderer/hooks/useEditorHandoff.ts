@@ -1,11 +1,19 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
-import { isEditorId, type EditorHandoffState, type OpenTargetId } from "../../shared/editor-handoff";
+import {
+	isEditorId,
+	type EditorHandoffState,
+	type EditorId,
+	type EditorPreferenceState,
+	type OpenSessionArtifactsInput,
+	type OpenTargetId,
+} from "../../shared/editor-handoff";
 import { aoBridge } from "../lib/bridge";
 import { captureRendererEvent } from "../lib/telemetry";
 
 export const editorHandoffQueryKey = (sessionId: string) => ["editor-handoff", sessionId] as const;
 export const editorHandoffQueryRoot = ["editor-handoff"] as const;
+export const editorPreferenceQueryKey = ["editor-preference"] as const;
 
 const NEW_SESSION_READINESS_WINDOW_MS = 30_000;
 const WORKSPACE_READINESS_RETRY_MS = 500;
@@ -65,7 +73,8 @@ export function workspaceCheckFailed(state: EditorHandoffState | undefined): boo
 export function useEditorHandoffState(sessionId: string, readiness: EditorHandoffReadiness = {}) {
 	const awaitWorkspace = shouldAwaitWorkspace(readiness);
 	const failedChecks = useRef(0);
-	return useQuery<EditorHandoffState>({
+	const queryClient = useQueryClient();
+	const query = useQuery<EditorHandoffState>({
 		queryKey: editorHandoffQueryKey(sessionId),
 		enabled: Boolean(sessionId),
 		staleTime: 10_000,
@@ -91,6 +100,48 @@ export function useEditorHandoffState(sessionId: string, readiness: EditorHandof
 			}
 		},
 	});
+	return {
+		...query,
+		async refreshTargets() {
+			await queryClient.cancelQueries({ queryKey: editorHandoffQueryKey(sessionId), exact: true });
+			const state = await aoBridge.editorHandoff.getState(sessionId, { refreshTerminals: true });
+			queryClient.setQueryData(editorHandoffQueryKey(sessionId), state);
+		},
+	};
+}
+
+// Every session's cached state and Settings share the one stored preference.
+function cachePreferredEditor(queryClient: QueryClient, preferredEditorId: EditorId) {
+	queryClient.setQueriesData<EditorHandoffState>({ queryKey: editorHandoffQueryRoot }, (state) =>
+		state ? { ...state, preferredEditorId } : state,
+	);
+	queryClient.setQueryData<EditorPreferenceState>(editorPreferenceQueryKey, (state) =>
+		state ? { ...state, preferredEditorId } : state,
+	);
+}
+
+/** The installed editors and the stored default, for Settings. */
+export function useEditorPreference() {
+	return useQuery({
+		queryKey: editorPreferenceQueryKey,
+		queryFn: () => aoBridge.editorHandoff.getEditors(),
+	});
+}
+
+export function useSetPreferredEditor() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async (editorId: EditorId) => {
+			try {
+				return await aoBridge.editorHandoff.setPreferredEditor(editorId);
+			} catch (error) {
+				throw new Error(editorHandoffErrorMessage(error) ?? String(error));
+			}
+		},
+		onSuccess: (editorId) => cachePreferredEditor(queryClient, editorId),
+		// The usual cause is the editor being uninstalled since the list was read.
+		onError: () => void queryClient.invalidateQueries({ queryKey: editorPreferenceQueryKey }),
+	});
 }
 
 export type OpenSessionTargetMutationInput = {
@@ -102,12 +153,7 @@ export type OpenSessionTargetMutationInput = {
 export function useOpenSessionTarget() {
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: async ({ sessionId, projectId, targetId }: OpenSessionTargetMutationInput) => {
-			void captureRendererEvent("ao.renderer.open_in_editor_requested", {
-				project_id: projectId,
-				target_kind: targetId === "file-manager" ? "file_manager" : targetId === "terminal" ? "terminal" : "editor",
-				...(targetId && isEditorId(targetId) ? { editor_id: targetId } : {}),
-			});
+		mutationFn: async ({ sessionId, targetId }: OpenSessionTargetMutationInput) => {
 			try {
 				return await aoBridge.editorHandoff.open({ sessionId, ...(targetId ? { targetId } : {}) });
 			} catch (error) {
@@ -118,11 +164,7 @@ export function useOpenSessionTarget() {
 			}
 		},
 		onSuccess: (result, input) => {
-			if (result.kind === "editor" && isEditorId(result.id)) {
-				queryClient.setQueryData<EditorHandoffState>(editorHandoffQueryKey(input.sessionId), (state) =>
-					state ? { ...state, preferredEditorId: result.id as typeof state.preferredEditorId } : state,
-				);
-			}
+			if (result.kind === "editor" && isEditorId(result.id)) cachePreferredEditor(queryClient, result.id);
 			void captureRendererEvent("ao.renderer.open_in_editor_succeeded", {
 				project_id: input.projectId,
 				target_kind: result.kind,
@@ -135,6 +177,19 @@ export function useOpenSessionTarget() {
 			// disables itself instead of inviting the same failing click again.
 			void queryClient.invalidateQueries({ queryKey: editorHandoffQueryKey(input.sessionId) });
 			void captureRendererEvent("ao.renderer.open_in_editor_failed", { project_id: input.projectId });
+		},
+	});
+}
+
+/** Opens a session's artifact directory, or reveals one artifact, in the file manager or a terminal. */
+export function useOpenSessionArtifacts() {
+	return useMutation({
+		mutationFn: async (input: OpenSessionArtifactsInput) => {
+			try {
+				return await aoBridge.editorHandoff.openArtifacts(input);
+			} catch (error) {
+				throw new Error(editorHandoffErrorMessage(error) ?? String(error));
+			}
 		},
 	});
 }

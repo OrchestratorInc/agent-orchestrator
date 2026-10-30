@@ -160,7 +160,7 @@ export function CloudHarnessLoginPanel({ agent, onClose }: { agent: CloudHarness
 	);
 
 	return (
-		<div ref={panelRef} className="flex scroll-my-3 flex-col gap-2 pb-1" data-testid="cloud-harness-login">
+		<div ref={panelRef} className="flex scroll-my-3 flex-col gap-2 pb-1" data-settings-inline-edit="" data-testid="cloud-harness-login">
 			{needsSecret ? (
 				<>
 					{selectedMethod.kind === "apiKey" ? (

@@ -8,6 +8,7 @@ import type {
 	ActivityStatus,
 	ApprovalMode,
 	ChatConfigOption,
+	ChatExcerpt,
 	ChatImage,
 	ChatModel,
 	ChatResource,
@@ -118,7 +119,7 @@ type WireSnapshot = Omit<ConversationSnapshot, "items" | "controller"> & {
 	activities?: Array<Omit<ConversationActivity, "detail" | "decisions"> & { detail?: Record<string, unknown> }>;
 };
 
-export type SendMessageInput = { text: string; clientMessageId: string; attachments?: ChatImage[]; resources?: ChatResource[] };
+export type SendMessageInput = { text: string; clientMessageId: string; attachments?: ChatImage[]; resources?: ChatResource[]; excerpts?: ChatExcerpt[] };
 export type SendMessageResult = { turnId?: string; providerTurnId?: string; state?: string; duplicate: boolean };
 
 export async function getConversationPage(
@@ -153,11 +154,21 @@ export async function getReviewerConversationPage(
 	};
 }
 
+/** Probe before any quoted-send side effect, including attachment staging. */
+export async function requireConversationExcerptSupport(cfg: ServerConfig, sessionId: string): Promise<void> {
+	// Older daemons accept messages but silently ignore the excerpts field.
+	const snapshot = await getConversationPage(cfg, sessionId);
+	if (!snapshot.supportsExcerpts) {
+		throw new Error("Update Orchestrator on this machine to send quoted responses. Your draft is saved.");
+	}
+}
+
 export async function sendConversationMessage(
 	cfg: ServerConfig,
 	sessionId: string,
 	input: SendMessageInput,
 ): Promise<SendMessageResult> {
+	if (input.excerpts?.length) await requireConversationExcerptSupport(cfg, sessionId);
 	const res = await apiRequest(cfg, conversationPath(sessionId, "/messages"), {
 		method: "POST",
 		headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
@@ -272,6 +283,20 @@ export async function rollbackConversation(cfg: ServerConfig, sessionId: string,
 	});
 	const body = (await res.json()) as { turnsDiscarded?: number };
 	return body.turnsDiscarded ?? 0;
+}
+
+/** Branches before an earlier human prompt and resends it with new text; the daemon keeps its attachments. */
+export async function editConversationMessage(
+	cfg: ServerConfig,
+	sessionId: string,
+	turnId: string,
+	text: string,
+	clientMessageId: string,
+): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/edit`), {
+		method: "POST",
+		body: JSON.stringify({ text, clientMessageId }),
+	});
 }
 
 export async function setConversationTitle(cfg: ServerConfig, sessionId: string, title: string): Promise<void> {

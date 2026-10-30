@@ -16,7 +16,7 @@ const releaseNoteComponents: Components = {
 	strong: ({ children }) => <strong className="font-medium text-foreground">{children}</strong>,
 	p: ({ children }) => <p className="mt-2 first:mt-0">{children}</p>,
 	ul: ({ children }) => <ul className="mt-2 list-disc space-y-1 pl-5">{children}</ul>,
-	ol: ({ children }) => <ol className="mt-2 list-decimal space-y-1 pl-5">{children}</ol>,
+	ol: ({ children, start }) => <ol start={start} className="mt-2 list-decimal space-y-1 pl-5">{children}</ol>,
 	blockquote: ({ children }) => (
 		<blockquote className="mt-3 border-l-2 border-settings-muted pl-3 text-settings-muted">
 			{children}

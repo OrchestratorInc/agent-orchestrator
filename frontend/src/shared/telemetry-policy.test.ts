@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseTelemetryPolicyDiskRecord, telemetryPolicyRetryable, telemetryPolicySnapshot, type TelemetryPolicyDiskRecord, type TelemetryPolicyView } from "./telemetry-policy";
+import { AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED, parseTelemetryPolicyDiskRecord, telemetryPolicyRetryable, telemetryPolicySnapshot, type TelemetryPolicyDiskRecord, type TelemetryPolicyView } from "./telemetry-policy";
 
 describe("telemetry policy wire record", () => {
+	it("keeps the release gate closed until the privacy policy ships", () => {
+		expect(AGENT_SWITCH_FAILURE_PRODUCTION_ENABLED).toBe(false);
+	});
 	it("accepts only the exact snake_case versioned record", () => {
 		expect(parseTelemetryPolicyDiskRecord(JSON.stringify({
 			schema_version: 2,
@@ -99,8 +102,8 @@ describe("telemetryPolicyRetryable", () => {
 		expect(telemetryPolicyRetryable({ ...base, state: "applied", reason: "release_blocked" })).toBe(false);
 	});
 
-	it("retries transient daemon and cleanup failures", () => {
-		expect(telemetryPolicyRetryable({ ...base, state: "cleanup_pending", reason: "daemon_cleanup_pending" })).toBe(true);
+	it("retries pending and failed cleanup", () => {
+		expect(telemetryPolicyRetryable({ ...base, state: "cleanup_pending", reason: "cleanup_failed" })).toBe(true);
 		expect(telemetryPolicyRetryable({ ...base, state: "cleanup_failed", reason: "cleanup_failed" })).toBe(true);
 	});
 

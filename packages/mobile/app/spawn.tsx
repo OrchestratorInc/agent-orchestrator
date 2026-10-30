@@ -2,13 +2,13 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "../lib/icons";
 import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
 	InteractionManager,
 	Platform,
 	Pressable,
-	ScrollView,
 	StyleSheet,
 	Text,
 	View,
@@ -20,14 +20,15 @@ import { ApiError, getAgentModels, getAgents, getProject, getSettings, type Agen
 import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
-import { openingHostId, spawnHostMatches } from "../lib/hostRoute";
+import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
 import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
-import { appendSpawnAttachments, readSpawnAttachments, type SpawnAttachment } from "../lib/spawn-attachments";
+import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
+import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
 import { SpawnPromptInput } from "../lib/spawn-prompt-input";
-import { HostScope, useApp } from "../lib/store";
+import { useApp } from "../lib/store";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
@@ -38,8 +39,7 @@ import { backOr } from "../lib/backNavigation";
 export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
 export default function SpawnModal() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
-	return hostId ? <HostScope key={hostId} hostId={hostId}><SpawnModalContent /></HostScope> : <SpawnModalContent />;
+	return <SpawnModalContent />;
 }
 
 function SpawnModalContent() {
@@ -47,12 +47,30 @@ function SpawnModalContent() {
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
-	const { projects, projectsKnown, activeProjectId, config, currentHostId, connection, unreachable, setActiveProject, spawn } = useApp();
-	const [openedHostId, setOpenedHostId] = useState(() => openingHostId(routeHostId, currentHostId ?? undefined));
-	const hostMatches = spawnHostMatches({ openedHostId, currentHostId: currentHostId ?? undefined, routeProjectId, routeHostId });
+	const { hostStates, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
+	const connectedHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
+	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
+	const hostSelectionInitialized = useRef(false);
+	const catalogGeneration = useRef(0);
+	const selectedHost = hostStates.find((host) => host.hostId === selectedHostId);
+	const config = selectedHostId ? configForHost(selectedHostId) : null;
+	const projects = selectedHost?.projects ?? [];
+	const projectsKnown = selectedHost?.projectsKnown ?? false;
+	const connection = selectedHost?.connection ?? "closed";
+	const unreachable = Boolean(selectedHost && selectedHost.connection === "closed");
+	const hostOptions = useMemo(() => {
+		if (!selectedHostId || connectedHosts.some((host) => host.id === selectedHostId)) return connectedHosts;
+		const selected = hostStates.find((host) => host.hostId === selectedHostId);
+		return selected ? [{ id: selected.hostId, label: selected.name }, ...connectedHosts] : connectedHosts;
+	}, [connectedHosts, hostStates, selectedHostId]);
+
 	useEffect(() => {
-		if (!openedHostId && currentHostId) setOpenedHostId(currentHostId);
-	}, [openedHostId, currentHostId]);
+		if (hostSelectionInitialized.current) return;
+		const routed = routeHostId ? hostStates.find((host) => host.hostId === routeHostId) : undefined;
+		if ((routeHostId && routed?.loading) || (!routeHostId && connectedHosts.length === 0 && hostStates.some((host) => host.loading))) return;
+		hostSelectionInitialized.current = true;
+		setSelectedHostId(initialSpawnHostId({ routeHostId, currentHostId: currentHostId ?? undefined, hosts: connectedHosts }));
+	}, [connectedHosts, currentHostId, hostStates, routeHostId]);
 
 	const [projectId, setProjectId] = useState<string | null>(null);
 	const [harness, setHarness] = useState("");
@@ -93,28 +111,28 @@ function SpawnModalContent() {
 
 
 
-	// Seed from the active project, or the only project. Mirrors the store's
-	// `targetProject()`; kept here because the screen needs it as UI state to
-	// drive the picker's value and the button's disabled state.
+	// Seed from this machine's routed project, or the selected machine's active
+	// project. A project id is never carried across machines.
 	useEffect(() => {
-		if (!hostMatches) return;
 		const nextProjectId = resolveSpawnProject(
 			projectId,
-			routeProjectId,
-			activeProjectId,
+			routeHostId === selectedHostId ? routeProjectId : undefined,
+			selectedHostId === currentHostId ? activeProjectId : ALL_PROJECTS,
 			projects,
 			projectsKnown,
 		);
 		if (nextProjectId !== projectId) changeProject(nextProjectId);
-	}, [activeProjectId, hostMatches, projects, projectsKnown, projectId, routeProjectId]);
+	}, [activeProjectId, currentHostId, projects, projectsKnown, projectId, routeHostId, routeProjectId, selectedHostId]);
 
 	useEffect(() => {
-		if (!config || !hostMatches) return;
+		const requestedHostId = selectedHostId;
+		if (!config || !requestedHostId) { setCatalog(null); setChatHarnesses([]); setLoading(false); return; }
 		let cancelled = false;
+		const generation = catalogGeneration.current;
 		setLoading(true);
 		Promise.all([getAgents(config), getSettings(config)])
 			.then(([c, settings]) => {
-				if (cancelled) return;
+				if (cancelled || !spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) return;
 				setCatalog(c);
 				setChatHarnesses(settings.chatHarnesses);
 				setCatalogError(null);
@@ -122,15 +140,15 @@ function SpawnModalContent() {
 			.catch((e) => {
 				// Previously swallowed into `catalog = null`, which left an empty
 				// picker and no way to tell the daemon was unreachable.
-				if (!cancelled) setCatalogError(agentErrorCopy(e));
+				if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setCatalogError(agentErrorCopy(e));
 			})
 			.finally(() => {
-				if (!cancelled) setLoading(false);
+				if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setLoading(false);
 			});
 		return () => {
 			cancelled = true;
 		};
-	}, [config, hostMatches, reloadKey]);
+	}, [config, reloadKey, selectedHostId]);
 
 	// Refreshing the catalog moved into the agent sheet route, which owns its own
 	// copy of it — see app/sheets/agent.tsx.
@@ -144,7 +162,10 @@ function SpawnModalContent() {
 	// provider picks, and naming a model here promised one the session never ran.
 	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Automatic";
 	const modelSelection = modelTouched ? model : "__auto__";
-	const notices = spawnNotices({
+	const hostNotices = selectedHostId === null && hostSelectionInitialized.current
+		? [routeHostId ? "That machine is not connected." : "No connected machines are available."]
+		: [];
+	const notices = [...hostNotices, ...spawnNotices({
 		// Only when a reconnect can fix it: a rejected password stops the poll for
 		// good, and its catalog error already says to re-scan the pairing code.
 		offline: unreachable,
@@ -154,27 +175,28 @@ function SpawnModalContent() {
 		catalogError,
 		agentCount: agents.length,
 		modelError,
-	});
+	})];
 	const hasComposerMessage = Boolean(
 		notices.length > 0
 		|| attachmentError
 		|| (Platform.OS === "android" && listening)
 		|| voice.error
 		|| error
-		|| offerTUI
-		|| (Boolean(openedHostId) && !hostMatches),
+		|| offerTUI,
 	);
 
 	useEffect(() => {
-		if (!config || !hostMatches || !projectId || projectId === STANDALONE_PROJECT) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
+		const requestedHostId = selectedHostId;
+		if (!config || !requestedHostId || !projectId || projectId === STANDALONE_PROJECT) { setProjectDetail(undefined); setProjectDetailLoadedFor(null); return; }
 		let cancelled = false;
+		const generation = catalogGeneration.current;
 		setProjectDetailLoadedFor(null);
 		getProject(config, projectId)
-			.then((nextProject) => { if (!cancelled) setProjectDetail(nextProject); })
-			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
-			.finally(() => { if (!cancelled) setProjectDetailLoadedFor(projectId); });
+			.then((nextProject) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setProjectDetail(nextProject); })
+			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
+			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setProjectDetailLoadedFor(projectId); });
 		return () => { cancelled = true; };
-	}, [config, hostMatches, projectId, reloadKey]);
+	}, [config, projectId, reloadKey, selectedHostId]);
 
 	useEffect(() => {
 		if (agentTouched || loading || !catalog) return;
@@ -188,15 +210,18 @@ function SpawnModalContent() {
 	}, [agentTouched, agents, catalog, loading, projectDetail, projectDetailLoadedFor, projectId]);
 
 	useEffect(() => {
-		if (!config || !hostMatches || !projectId || !harness) { setModelCatalog(undefined); return; }
+		const requestedHostId = selectedHostId;
+		if (!config || !requestedHostId || !projectId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
 		let cancelled = false;
+		const generation = catalogGeneration.current;
 		setModelLoading(true);
-		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId)
-			.then((nextCatalog) => { if (!cancelled) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
-			.catch((cause) => { if (!cancelled) setModelError(userFacingError(cause)); })
-			.finally(() => { if (!cancelled) setModelLoading(false); });
-		return () => { cancelled = true; };
-	}, [config, hostMatches, harness, projectId, reloadKey]);
+		const polling = new AbortController();
+		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId, polling.signal)
+			.then((nextCatalog) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
+			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
+			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelLoading(false); });
+		return () => { cancelled = true; polling.abort(); };
+	}, [config, harness, projectId, reloadKey, selectedHostId]);
 
 	// Loads that failed while the desktop was unreachable run again once the
 	// board's poll reconnects. Keyed on the reconnect, not on the errors, so an
@@ -211,6 +236,25 @@ function SpawnModalContent() {
 
 	const clearModelOverride = () => { setModel(""); setModelTouched(false); };
 	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
+	const chooseHost = (nextHostId: string) => {
+		if (nextHostId === selectedHostId) return;
+		catalogGeneration.current += 1;
+		setProjectId(null);
+		setHarness("");
+		setAgentTouched(false);
+		setCatalog(null);
+		setCatalogError(null);
+		setChatHarnesses([]);
+		setProjectDetail(undefined);
+		setProjectDetailLoadedFor(null);
+		setModelLoading(false);
+		resetModelSource();
+		setError(null);
+		setOfferTUI(false);
+		requestRef.current = undefined;
+		void selectSpawnHost(nextHostId, { select: setSelectedHostId, persistDefault: switchHost })
+			.catch(() => setError("Could not make that machine the default. Try again."));
+	};
 	const changeProject = (nextProjectId: string | null) => {
 		if (!spawnModelSourceChanged({ projectId, agentId: harness }, { projectId: nextProjectId, agentId: harness })) return;
 		resetModelSource();
@@ -253,26 +297,13 @@ function SpawnModalContent() {
 			</Text>
 		</View>
 	) : null;
-	const pickAttachments = async () => {
+	const addAttachments = async (pick: () => Promise<PickedSpawnAttachment[] | null>, fallback: string) => {
 		if (pickingAttachments.current) return;
 		pickingAttachments.current = true;
 		setAttachmentError(undefined);
 		try {
-			const result = await DocumentPicker.getDocumentAsync({
-				multiple: true,
-				copyToCacheDirectory: true,
-				type: "*/*",
-			});
-			if (result.canceled) return;
-			const picked = result.assets.map((asset) => {
-				const file = new File(asset.uri);
-				return {
-					name: asset.name,
-					mimeType: asset.mimeType || "application/octet-stream",
-					bytes: asset.size ?? file.size,
-					readData: () => file.base64(),
-				};
-			});
+			const picked = await pick();
+			if (!picked) return;
 			const before = attachmentsRef.current;
 			const next = await readSpawnAttachments(before, picked);
 			const merged = appendSpawnAttachments(attachmentsRef.current, next.attachments.slice(before.length));
@@ -280,16 +311,48 @@ function SpawnModalContent() {
 			setAttachments(merged.attachments);
 			setAttachmentError(next.error ?? merged.error);
 		} catch (cause) {
-			setAttachmentError(userFacingError(cause, "Couldn't read that file."));
+			setAttachmentError(userFacingError(cause, fallback));
 		} finally {
 			pickingAttachments.current = false;
-
 		}
 	};
+	const pickFiles = () => addAttachments(async () => {
+		const result = await DocumentPicker.getDocumentAsync({
+			multiple: true,
+			copyToCacheDirectory: true,
+			type: "*/*",
+		});
+		if (result.canceled) return null;
+		return result.assets.map((asset) => {
+			const file = new File(asset.uri);
+			return {
+				name: asset.name,
+				mimeType: asset.mimeType || "application/octet-stream",
+				bytes: asset.size ?? file.size,
+				previewUri: asset.uri,
+				readData: () => file.base64(),
+			};
+		});
+	}, "Couldn't read that file.");
+	const pickPhotos = () => addAttachments(async () => {
+		const remaining = MAX_SPAWN_ATTACHMENTS - attachmentsRef.current.length;
+		if (remaining <= 0) throw new Error(`You can attach up to ${MAX_SPAWN_ATTACHMENTS} files.`);
+		// "compatible" asks iOS for a JPEG rather than the library's HEIC
+		// original, which most agents can't open.
+		const result = await ImagePicker.launchImageLibraryAsync({
+			mediaTypes: ["images"],
+			quality: 0.82,
+			allowsMultipleSelection: true,
+			selectionLimit: remaining,
+			preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+		});
+		if (result.canceled) return null;
+		return result.assets.map((asset, index) => photoPickerAttachment(asset, index, new File(asset.uri)));
+	}, "Couldn't open your photo library.");
 
 	const onSpawn = async () => {
-		if (!openedHostId || !spawnHostMatches({ openedHostId, currentHostId: currentHostId ?? undefined, routeProjectId, routeHostId })) {
-			setError("Machine changed. Close and reopen this task composer.");
+		if (!selectedHostId || !config) {
+			setError("Choose a connected machine before starting this task.");
 			return;
 		}
 		if (pickingAttachments.current) {
@@ -304,7 +367,7 @@ function SpawnModalContent() {
 		setOfferTUI(false);
 		try {
 			const request = {
-				hostId: openedHostId,
+				hostId: selectedHostId,
 				projectId: projectId ?? undefined,
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
@@ -331,7 +394,7 @@ function SpawnModalContent() {
 			InteractionManager.runAfterInteractions(() => {
 				router.push({
 					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId, hostId: openedHostId },
+					params: { id: session.id, projectId: session.projectId, hostId: selectedHostId },
 				});
 			});
 		} catch (e) {
@@ -355,29 +418,15 @@ function SpawnModalContent() {
 					<SpawnPromptInput value={prompt} onChangeText={setPrompt} height={Platform.OS === "ios" ? promptRoom : undefined} />
 				</View>
 
-				{attachments.length ? (
-					<ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.attachments}>
-						{attachments.map((item, index) => (
-							<View key={`${item.name}-${index}`} style={styles.attachment}>
-								<Feather name="file-text" size={iconSize.sm} color={t.accent} />
-								<Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text>
-								<Pressable
-									hitSlop={8}
-									accessibilityLabel={`Remove ${item.name}`}
-									onPress={() => {
-										attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
-										setAttachments(attachmentsRef.current);
-									}}
-								>
-									<Feather name="x" size={iconSize.xs} color={t.textTertiary} />
-								</Pressable>
-							</View>
-						))}
-					</ScrollView>
-				) : null}
+				<SpawnAttachmentRow
+					attachments={attachments}
+					onRemove={(item) => {
+						attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
+						setAttachments(attachmentsRef.current);
+					}}
+				/>
 
 		{hasComposerMessage ? <View style={styles.messages}>
-					{openedHostId && !hostMatches ? <Text accessibilityRole="alert" style={styles.warn}>Machine changed or disconnected. Close and reopen this task composer.</Text> : null}
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
 					{Platform.OS === "android" ? voiceFeedback : null}
@@ -404,6 +453,9 @@ function SpawnModalContent() {
 				<KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
 				{Platform.OS === "ios" ? voiceFeedback : null}
 				<SpawnComposerControls
+					hosts={hostOptions}
+					hostId={selectedHostId}
+					onSelectHost={chooseHost}
 					projects={[...projects.map((item) => ({ id: item.id, label: item.name, icon: "folder" as const })), { id: STANDALONE_PROJECT, label: "Standalone agent", icon: "message-square-plus" as const, sectionBreakBefore: true }]}
 					projectId={projectId}
 					onSelectProject={changeProject}
@@ -414,11 +466,12 @@ function SpawnModalContent() {
 					modelSelection={modelSelection}
 					modelLabel={displayedModelLabel}
 					onSelectModel={selectModel}
-					onAttach={() => { void pickAttachments(); }}
+					onChoosePhoto={() => { void pickPhotos(); }}
+					onChooseFile={() => { void pickFiles(); }}
 					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut }}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
-					disabled={!hostMatches || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
+					disabled={!selectedHostId || !config || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
 				/>
 				</KeyboardStickyView>
 		</View>
@@ -475,9 +528,6 @@ const makeStyles = (t: Theme) =>
 		voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
 		promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT },
 		promptHostFill: { height: undefined, flex: 1, minHeight: 0 },
-		attachments: { gap: space.sm },
-		attachment: { maxWidth: 190, height: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.sm, borderRadius: 12, borderCurve: "continuous", backgroundColor: t.bgElevated, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderSubtle },
-		attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize },
 		warn: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	});
