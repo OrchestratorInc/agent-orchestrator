@@ -1109,3 +1109,27 @@ html::-webkit-scrollbar, body::-webkit-scrollbar { display: none !important; }
 @media (min-width: 1024px) {
   nav#sidebar-content [class*="--scroll-area-fade-size"] { padding-left: 11px !important; }
 }
+
+/* ── v36d: sidebar collapsible-group chevron parity ──────────────────────
+   Original (Fumadocs) group rows are 244px wide with a 16px chevron at the
+   row's right edge in the same tone as the label (rgb 184). Mintlify renders
+   an 8px chevron in dim gray right after the label text. */
+@media (min-width: 1024px) {
+  /* rows 244px wide: container right padding 12px (orig: 12px at x=-1) */
+  nav#sidebar-content [class*="--scroll-area-fade-size"] { padding-right: 12px !important; }
+  /* group trigger: same 36px row, label at 19px like plain items, chevron
+     pushed to the row's right edge */
+  nav#sidebar-content button.group {
+    align-items: center !important;
+    height: 36px !important;
+    padding: 0 8px !important;
+    justify-content: space-between !important;
+    gap: 8px !important;
+    color: rgb(184, 184, 184) !important;
+  }
+  nav#sidebar-content button.group svg {
+    width: 16px !important;
+    height: 16px !important;
+    color: rgb(184, 184, 184) !important;
+  }
+}
