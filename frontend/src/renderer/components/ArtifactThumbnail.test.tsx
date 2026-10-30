@@ -31,7 +31,6 @@ function artifact(path: string, kind: ArtifactRow["kind"] = "file"): ArtifactRow
 		sessionId: "session-1",
 		sessionTitle: "Cloud output",
 		cloud: { orgId: "org-1" },
-		generating: false,
 	};
 }
 
