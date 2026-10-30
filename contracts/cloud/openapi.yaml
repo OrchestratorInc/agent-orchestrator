@@ -123,60 +123,6 @@ paths:
                 $ref: "#/components/schemas/ArtifactShareList"
         default:
           $ref: "#/components/responses/Error"
-    post:
-      operationId: createArtifactShare
-      tags: [Artifacts]
-      deprecated: true
-      description: >-
-        Deprecated: publish through createArtifactShareUpload and
-        finalizeArtifactShare, which upload straight to storage and have no
-        size cap on paid plans. This route keeps the free plan's size cap.
-        Publishes the request body, one file from a local session, as the
-        link of the document named by project, feature and name. A new
-        document gets a new public link under a random 26-character link ID
-        (lowercase a-z and 2-7) that names neither the file nor its owner.
-        Publishing a document that already has a link replaces the version
-        that link serves: the URL stays, the earlier version is no longer
-        served, and the response is 200 with replaced true. An active link
-        keeps its slot; a revoked link is restored the same way when a slot
-        is free.
-        Content-Length and X-AO-Artifact-SHA256 are required. Returns 409
-        artifact_share_limit_reached when a new document, or restoring a
-        revoked one, would exceed the user's limit of active links. A user
-        whose list shows unlimited has no limit.
-      parameters:
-        - $ref: "#/components/parameters/ArtifactShareName"
-        - name: project
-          in: query
-          schema:
-            type: string
-        - name: feature
-          in: query
-          schema:
-            type: string
-        - $ref: "#/components/parameters/ArtifactShareSHA256"
-      requestBody:
-        required: true
-        content:
-          application/octet-stream:
-            schema:
-              type: string
-              format: binary
-      responses:
-        "200":
-          description: The document's existing link, now serving the new version.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ArtifactSharePublishResult"
-        "201":
-          description: The new share link.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ArtifactSharePublishResult"
-        default:
-          $ref: "#/components/responses/Error"
   /api/cloud/v1/me/artifact-shares/{shareId}:
     parameters:
       - name: shareId
@@ -185,36 +131,6 @@ paths:
         schema:
           type: string
           format: uuid
-    put:
-      operationId: updateArtifactShare
-      tags: [Artifacts]
-      deprecated: true
-      description: >-
-        Deprecated: update through createArtifactShareUpload with shareId.
-        Replaces the file an existing link serves. The link keeps its URL and
-        does not count against the limit again. name must match the link's
-        file name, which is part of its document; another name returns 409
-        artifact_share_name_changed, and the renamed file is published as a
-        new link with POST.
-      parameters:
-        - $ref: "#/components/parameters/ArtifactShareName"
-        - $ref: "#/components/parameters/ArtifactShareSHA256"
-      requestBody:
-        required: true
-        content:
-          application/octet-stream:
-            schema:
-              type: string
-              format: binary
-      responses:
-        "200":
-          description: The updated share link.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ArtifactShareEnvelope"
-        default:
-          $ref: "#/components/responses/Error"
     delete:
       operationId: deleteArtifactShare
       tags: [Artifacts]
@@ -239,12 +155,12 @@ paths:
         restore, or an update of an active link (shareId, same name). The
         file goes in partCount parts of partSize bytes, the last one shorter:
         presign them with presignArtifactShareParts, PUT each, then
-        finalizeArtifactShare. Nothing reaches storage when the upload is
-        refused: 413 artifact_share_too_large for a file over the free plan's
-        maxBytes, 415 artifact_share_type_unsupported for video, 409
+        finalizeArtifactShare. There is no file size limit. Nothing reaches
+        storage when the upload is refused: 415
+        artifact_share_type_unsupported for video, 409
         artifact_share_limit_reached for a new or restored document over the
         free plan's link limit, 409 artifact_share_name_changed for an update
-        with another name. Paid plans have no size or link limit.
+        with another name. Paid plans have no link limit.
       requestBody:
         required: true
         content:
@@ -3353,22 +3269,6 @@ components:
       schema:
         type: string
         pattern: "^h_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-    ArtifactShareName:
-      name: name
-      in: query
-      required: true
-      description: The file name, without a directory.
-      schema:
-        type: string
-        maxLength: 255
-    ArtifactShareSHA256:
-      name: X-AO-Artifact-SHA256
-      in: header
-      required: true
-      description: Lowercase hex SHA-256 of the body.
-      schema:
-        type: string
-        pattern: "^[0-9a-f]{64}$"
     OrgId:
       name: orgId
       in: path
@@ -6380,13 +6280,6 @@ components:
           type: string
           format: date-time
           description: When the link was revoked. A revoked link serves nothing and uses no slot.
-    ArtifactShareEnvelope:
-      type: object
-      additionalProperties: false
-      required: [share]
-      properties:
-        share:
-          $ref: "#/components/schemas/ArtifactShare"
     ArtifactSharePublishResult:
       type: object
       additionalProperties: false
@@ -6419,11 +6312,6 @@ components:
           type: integer
           minimum: 0
           description: How many active links the user holds; revoked links do not count.
-        maxBytes:
-          type: integer
-          format: int64
-          minimum: 1
-          description: The largest file the user may share; absent when their plan has no size limit.
     ArtifactShareUploadInput:
       type: object
       additionalProperties: false

@@ -64,11 +64,7 @@ export interface paths {
         /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt so they can be published again; they serve nothing and use no slot, so used counts only active links. unlimited is true when the user is an active member of a paid, contract or otherwise entitled organization: the limit then does not apply. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
         get: operations["listArtifactShares"];
         put?: never;
-        /**
-         * @deprecated
-         * @description Deprecated: publish through createArtifactShareUpload and finalizeArtifactShare, which upload straight to storage and have no size cap on paid plans. This route keeps the free plan's size cap. Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link under a random 26-character link ID (lowercase a-z and 2-7) that names neither the file nor its owner. Publishing a document that already has a link replaces the version that link serves: the URL stays, the earlier version is no longer served, and the response is 200 with replaced true. An active link keeps its slot; a revoked link is restored the same way when a slot is free. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document, or restoring a revoked one, would exceed the user's limit of active links. A user whose list shows unlimited has no limit.
-         */
-        post: operations["createArtifactShare"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -85,11 +81,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /**
-         * @deprecated
-         * @description Deprecated: update through createArtifactShareUpload with shareId. Replaces the file an existing link serves. The link keeps its URL and does not count against the limit again. name must match the link's file name, which is part of its document; another name returns 409 artifact_share_name_changed, and the renamed file is published as a new link with POST.
-         */
-        put: operations["updateArtifactShare"];
+        put?: never;
         post?: never;
         /** @description Revokes a link: it stops serving at once, its stored file is deleted at once and purged from the CDN, and it frees its slot for another document. Publishing the same document again uploads it again and restores its URL when a slot is free. A link already revoked returns 404. */
         delete: operations["deleteArtifactShare"];
@@ -107,7 +99,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId, same name). The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. Nothing reaches storage when the upload is refused: 413 artifact_share_too_large for a file over the free plan's maxBytes, 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit, 409 artifact_share_name_changed for an update with another name. Paid plans have no size or link limit. */
+        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId, same name). The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. There is no file size limit. Nothing reaches storage when the upload is refused: 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit, 409 artifact_share_name_changed for an update with another name. Paid plans have no link limit. */
         post: operations["createArtifactShareUpload"];
         delete?: never;
         options?: never;
@@ -3492,9 +3484,6 @@ export interface components {
              */
             revokedAt?: string;
         };
-        ArtifactShareEnvelope: {
-            share: components["schemas"]["ArtifactShare"];
-        };
         ArtifactSharePublishResult: {
             share: components["schemas"]["ArtifactShare"];
             /** @description True when publishing replaced the version of the document's existing link. */
@@ -3508,11 +3497,6 @@ export interface components {
             unlimited?: boolean;
             /** @description How many active links the user holds; revoked links do not count. */
             used: number;
-            /**
-             * Format: int64
-             * @description The largest file the user may share; absent when their plan has no size limit.
-             */
-            maxBytes?: number;
         };
         ArtifactShareUploadInput: {
             /** @description The file name, without a directory. */
@@ -4323,10 +4307,6 @@ export interface components {
     parameters: {
         /** @description The machine's stable identity, `h_` followed by a UUID. */
         RemoteHostId: string;
-        /** @description The file name, without a directory. */
-        ArtifactShareName: string;
-        /** @description Lowercase hex SHA-256 of the body. */
-        ArtifactShareSHA256: string;
         OrgId: string;
         ProjectId: string;
         SessionId: string;
@@ -4469,81 +4449,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArtifactShareList"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    createArtifactShare: {
-        parameters: {
-            query: {
-                /** @description The file name, without a directory. */
-                name: components["parameters"]["ArtifactShareName"];
-                project?: string;
-                feature?: string;
-            };
-            header: {
-                /** @description Lowercase hex SHA-256 of the body. */
-                "X-AO-Artifact-SHA256": components["parameters"]["ArtifactShareSHA256"];
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/octet-stream": string;
-            };
-        };
-        responses: {
-            /** @description The document's existing link, now serving the new version. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
-                };
-            };
-            /** @description The new share link. */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    updateArtifactShare: {
-        parameters: {
-            query: {
-                /** @description The file name, without a directory. */
-                name: components["parameters"]["ArtifactShareName"];
-            };
-            header: {
-                /** @description Lowercase hex SHA-256 of the body. */
-                "X-AO-Artifact-SHA256": components["parameters"]["ArtifactShareSHA256"];
-            };
-            path: {
-                shareId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/octet-stream": string;
-            };
-        };
-        responses: {
-            /** @description The updated share link. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ArtifactShareEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
