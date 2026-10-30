@@ -1,0 +1,1062 @@
+/* ==========================================================================
+   Agent Orchestrator Docs — Custom Styles
+   Pixel/interaction parity with docs.orchestrator.inc (Fumadocs).
+   All values measured from the live original, 2026-10-30.
+   ========================================================================== */
+
+:root {
+  --fd-bg:        rgb(12, 12, 9);             /* page */
+  --fd-bg-raised: rgb(29, 29, 22);            /* sidebar */
+  --fd-fg:        oklch(0.988 0.003 106.5);
+  --fd-fg-2:      oklch(0.93 0.007 106.5);    /* active item */
+  --fd-muted:     oklch(0.737 0.021 106.9);
+  --fd-btn-bg:    oklch(0.286 0.016 107.4);
+  --fd-border:    rgba(255, 255, 255, 0.10);
+  --fd-line:      rgb(232, 232, 227);         /* toc tree line + dot */
+}
+
+@font-face {
+  font-family: "GeistSans";
+  src: url("/fonts/GeistSans-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ── Global ─────────────────────────────────────────────────────────────── */
+html, body, #__next, [data-theme="dark"], .dark {
+  background-color: var(--fd-bg) !important;
+  color: var(--fd-fg) !important;
+  font-family: "GeistSans", "GeistSans Fallback", ui-sans-serif, system-ui, -apple-system, sans-serif !important;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11" !important;
+}
+body { letter-spacing: -0.5px; }
+
+::selection { background: rgba(255, 255, 255, 0.16); }
+
+/* ── Desktop layout: sidebar column owns the full height ────────────────── */
+@media (min-width: 1024px) {
+  :root { --sidebar-width: 16.75rem !important; }
+  /* content column: original article x302 w836 (container 270..1170, px32) */
+  #content-area, div[class*="lg:max-w"][class*="mx-auto"] {
+    flex: none !important;
+    width: 900px !important;
+    max-width: 900px !important;
+    margin-left: 2px !important;
+    margin-right: 0 !important;
+    padding-left: 32px !important;
+    padding-right: 32px !important;
+  }
+  nav#sidebar-content {
+    top: 0 !important;
+    height: 100vh !important;
+    width: 16.75rem !important;               /* 268px */
+    background-color: var(--fd-bg-raised) !important;
+    border-right: 1px solid var(--fd-border) !important;
+    padding-top: 10.75rem !important;         /* nav items start below search */
+  }
+
+  header#navbar {
+    position: fixed !important;
+    width: 16.75rem !important;
+    background: transparent !important;
+    border-bottom: none !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+  header > div[class*="border-b"] { display: none !important; }
+  header > div[class*="bg-background"] { display: none !important; }
+
+  /* logo + "Docs" wordmark at the original position: logo x15 y21 20x20, text x43 fs14 fw500 */
+  header a:has(img.nav-logo) {
+    display: flex !important; align-items: center !important;
+    position: fixed !important; top: 21px !important; left: 15px !important;
+    height: 20px !important; padding: 0 !important; margin: 0 !important;
+  }
+  header a:has(img.nav-logo) img.nav-logo { width: 20px !important; height: 20px !important; }
+  header a:has(img.nav-logo)::after {
+    content: "Docs";
+    color: var(--fd-fg) !important;
+    font-weight: 500 !important;
+    font-size: 14px !important;
+    line-height: 20px !important;
+    margin-left: 8px !important;
+    letter-spacing: -0.01em;
+  }
+
+  /* Search trigger: full-width field under the logo at x15 y58 w236 h36 */
+  header button[class*="group/search"][class*="w-9"] {
+    position: fixed !important;
+    top: 58px !important;
+    left: 15px !important;
+    width: 236px !important;
+    min-width: 236px !important;
+    max-width: 236px !important;
+    height: 36px !important;
+    padding: 0 0.75rem !important;
+    justify-content: flex-start !important;
+    background-color: rgba(255, 255, 255, 0.04) !important;
+    border: 1px solid var(--fd-border) !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
+  }
+  header button[class*="group/search"][class*="w-9"] * { display: inline-flex !important; visibility: visible !important; }
+  header button[class*="group/search"] span,
+  header button[class*="group/search"] span * {
+    color: var(--fd-muted) !important;
+    font-size: 0.875rem !important;
+    background: transparent !important;
+    text-decoration: none !important;
+  }
+
+  /* navbar links (Main site / GitHub) stacked in the sidebar under search */
+  [class*="topbar-right-container"] ul {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 0.125rem !important;
+    position: fixed !important;
+    top: 6.9rem !important;
+    left: 0.9rem !important;
+    width: 14.75rem !important;
+    z-index: 40 !important;
+  }
+  [class*="topbar-right-container"] ul li.navbar-link a {
+    color: var(--fd-muted) !important;
+    font-weight: 400 !important;
+    font-size: 0.875rem !important;
+    height: 1.75rem !important;
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+  [class*="topbar-right-container"] ul li.navbar-link a:hover { color: var(--fd-fg) !important; }
+  header [class*="topbar-right-container"] { border: none !important; }
+  header button[class*="size-9"] { display: none !important; }
+}
+
+/* ── Sidebar items (both desktop column and mobile drawer) ──────────────── */
+nav#sidebar-content a,
+nav#sidebar-content [class*="sidebar"] a {
+  display: flex !important;
+  align-items: center !important;
+  height: 36px !important;
+  padding-left: 8px !important;
+  border-radius: 8px !important;
+  font-size: 14px !important;
+  line-height: 20px !important;
+  font-weight: 400 !important;
+  color: rgb(184, 184, 184) !important;
+  border-left: none !important;
+  transition: color 0.15s ease, background-color 0.15s ease !important;
+}
+nav#sidebar-content a:hover { color: var(--fd-fg-2) !important; background-color: rgba(255, 255, 255, 0.05) !important; }
+nav#sidebar-content a[aria-current="page"],
+nav#sidebar-content a[data-active="true"],
+nav#sidebar-content a[class*="active"] {
+  color: var(--fd-fg-2) !important;
+  background-color: rgba(255, 255, 255, 0.10) !important;
+  font-weight: 400 !important;
+}
+
+/* group headers: 14/400 #fafaf8, mt24 mb4, no surface */
+.sidebar-group-header,
+nav#sidebar-content [class*="group-label"],
+nav#sidebar-content [class*="sidebar-title"],
+nav#sidebar-content [class*="sidebar-title"] > * {
+  background: transparent !important;
+  background-color: transparent !important;
+  color: #fafaf8 !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+}
+.sidebar-group-header {
+  height: auto !important;
+  margin-top: 24px !important;
+  margin-bottom: 4px !important;
+  padding-left: 8px !important;
+  line-height: 22.5px !important;
+}
+nav#sidebar-content [class*="group"],
+nav#sidebar-content li,
+nav#sidebar-content ul { border-left: none !important; border-right: none !important; }
+
+/* ── Sidebar chrome: panel toggle + English selector ────────────────────── */
+.ao-side-toggle {
+  position: absolute; top: 12px; right: 8px; z-index: 5;
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  color: var(--fd-muted); background: transparent; border: none; cursor: pointer;
+}
+/* English: x15 y838 w236 h38 at 900px viewport */
+.ao-lang-wrap { position: absolute; left: 15px; bottom: 24px; width: 236px; margin: 0; z-index: 5; }
+.ao-lang {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; height: 38px; padding: 8px;
+  border: 1px solid var(--fd-border); border-radius: 6px;
+  font-size: 14px; color: var(--fd-fg);
+  background: oklab(0.30078 0.0000136644 0.00000602007 / 0.5);
+  cursor: pointer;
+}
+.ao-lang-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 100%;
+  background: oklch(0.205 0.008 106.7); border: 1px solid var(--fd-border);
+  border-radius: 8px; padding: 4px; z-index: 50; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.ao-lang-item { display: block; padding: 6px 10px; font-size: 14px; color: var(--fd-muted); text-decoration: none; border-radius: 6px; cursor: pointer; }
+.ao-lang-item:hover { background: rgba(255,255,255,0.06); color: var(--fd-fg-2); }
+.ao-lang-item[aria-current="true"] { color: var(--fd-fg-2); }
+/* keep the nav list clear of the English control */
+@media (min-width: 1024px) {
+  /* nav list scrolls in its own band that ends above the English control */
+  #navigation-items {
+    height: calc(100vh - 234px) !important;
+    max-height: calc(100vh - 234px) !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+}
+
+/* logo + "Docs" wordmark (both mobile and desktop headers) */
+header a:has(img.nav-logo) { display: flex !important; align-items: center !important; }
+header a:has(img.nav-logo)::after {
+  content: "Docs";
+  color: var(--fd-fg) !important;
+  font-weight: 600 !important;
+  font-size: 0.95rem !important;
+  margin-left: 0.5rem !important;
+  letter-spacing: -0.01em;
+}
+
+/* ── Content column typography (measured) ───────────────────────────────── */
+main, #content-container { background-color: var(--fd-bg) !important; }
+main article h1, article h1, #page-title, main h2:not([data-layout-item]), main h3:not([data-layout-item]) {
+  font-family: "GeistSans", "GeistSans Fallback", ui-sans-serif, system-ui, sans-serif !important;
+}
+main article h1, article h1, #page-title {
+  font-size: 28px !important; line-height: 42px !important; font-weight: 600 !important;
+  letter-spacing: -0.5px !important; color: var(--fd-fg) !important;
+  margin-top: 0 !important; margin-bottom: 0 !important;
+}
+/* original title->description gap is exactly 16px (Mintlify's space-y-2.5 is 10px) */
+header[class*="page-header"] .space-y-2\.5 > * + * { margin-top: 16px !important; }
+/* description under the title: 18px muted lh28 */
+header[class*="page-header"] p,
+header[class*="leading-none"] p {
+  font-size: 18px !important; line-height: 28px !important; color: var(--fd-muted) !important;
+  margin: 0 0 48px 0 !important;
+}
+header[class*="page-header"] .mt-0\.5 { margin-top: 0 !important; }
+/* original h1 y: 56 desktop / 120 mobile (preview was 40 / 136) */
+@media (min-width: 1024px) {
+  header[class*="page-header"] { padding-top: 16px !important; }
+}
+@media (max-width: 1023.5px) {
+  header[class*="page-header"] { margin-top: -16px !important; }
+}
+/* original title->description gap is 16px; the desc wrapper carries mt-2 (8px) */
+header[class*="page-header"] .mt-2 { margin-top: 16px !important; }
+main h2:not([data-layout-item]), .mdx-content h2 {
+  font-size: 24px !important; line-height: 32px !important; font-weight: 600 !important;
+  letter-spacing: -0.5px !important; color: #ffffff !important;
+  margin-top: 40px !important; margin-bottom: 16px !important; border-bottom: none !important; padding-bottom: 0 !important;
+}
+main h3:not([data-layout-item]), .mdx-content h3 {
+  font-size: 20px !important; line-height: 28px !important; font-weight: 600 !important;
+  letter-spacing: -0.5px !important; color: #ffffff !important;
+  margin-top: 32px !important; margin-bottom: 12px !important;
+}
+/* body paragraphs: 16px white/70 lh28 (only the description is 18px) */
+/* Mintlify renders MDX body text as block spans inside .mdx-content */
+.mdx-content {
+  font-size: 16px !important; line-height: 28px !important; letter-spacing: -0.5px !important;
+  color: rgba(255, 255, 255, 0.7) !important;
+  margin-top: 36px !important;
+}
+.mdx-content > span { display: block; }
+.mdx-content > * + * { margin-top: 20px; }
+.mdx-content p {
+  font-size: 16px !important; line-height: 28px !important; letter-spacing: -0.5px !important;
+  color: rgba(255, 255, 255, 0.7) !important;
+  margin-top: 0 !important; margin-bottom: 0 !important;
+}
+.mdx-content li {
+  font-size: 16px !important; line-height: 28px !important; letter-spacing: -0.5px !important;
+  color: rgba(255, 255, 255, 0.7) !important; margin-top: 8px !important; margin-bottom: 8px !important;
+}
+.mdx-content strong, main header strong { color: #ffffff !important; font-weight: 500 !important; }
+
+/* content links: blue-400, subtle underline */
+.mdx-content a {
+  color: rgb(96, 165, 250) !important;
+  text-decoration: underline !important;
+  text-decoration-color: rgba(255, 255, 255, 0.3) !important;
+  text-underline-offset: 2px !important;
+  border-bottom: none !important;
+}
+.mdx-content a:hover { text-decoration-color: rgb(96, 165, 250) !important; }
+
+/* inline code chip: white/5 bg, white/10 border, r4, ui-monospace 12.25px */
+.mdx-content code:not(pre code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+  font-size: 12.25px !important; font-weight: 400 !important;
+  padding: 2.45px 4.9px !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  border-radius: 4px !important;
+  color: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* code blocks: original = outer figure (white/4, 1px white/4, r12, my16)
+   wrapping a visible inner box = pre (white/5, 1px white/10, r8, pad16,
+   code 14/23.8 mono). Mintlify nests an extra box: flatten to the original
+   two-layer structure. */
+.code-block, [class*="code-block"], [class*="codeblock"] {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(255, 255, 255, 0.04) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+  margin: 16px 0 !important;
+  padding: 0 !important;
+}
+/* inner box -> the original pre look */
+.code-block div[class*="bg-codeblock"], [class*="codeblock"] div[class*="bg-codeblock"] {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  border-radius: 8px !important;
+  margin: 0 !important;
+}
+.code-block div[class*="bg-codeblock"] > div[class*="scroll-area"],
+.code-block div[class*="bg-codeblock"] > div.py-3\.5,
+.code-block div[class*="bg-codeblock"] [data-component-part*="scroll-area-viewport"] {
+  padding: 16px !important;
+}
+.code-block pre, .code-block pre.shiki {
+  background: transparent !important; border: none !important; margin: 0 !important;
+  box-shadow: none !important; padding: 0 !important;
+  font-size: 14px !important; line-height: 23.8px !important;
+}
+.code-block pre * { line-height: 23.8px !important; }
+pre, pre.shiki { background: transparent !important; border: none !important; margin: 0 !important; box-shadow: none !important; }
+
+/* callout: transparent bg, 1px white/10 border, r12, p12/16, my24 */
+[class*="callout"] {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  border-radius: 12px !important;
+  padding: 12px 16px 33px !important;
+  margin: 24px 0 !important;
+}
+[class*="callout"] [class*="icon"], [class*="callout"] > svg,
+[class*="callout"] > div:has(> svg:only-child), [class*="callout"] > .w-4 { display: none !important; }
+[class*="callout"] p, [class*="callout"] li, [class*="callout"] span {
+  font-size: 14px !important; line-height: 24.5px !important; letter-spacing: -0.5px !important;
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+[class*="callout"] p { margin-bottom: 8px !important; }
+/* original callout title (span>strong): lh20 with a 20px gap to the body */
+[class*="callout"] span:has(> strong:only-child) { line-height: 20px !important; display: block !important; margin-bottom: 20px !important; }
+[class*="callout"] p:last-child { margin-bottom: 0 !important; }
+[class*="callout"] a {
+  color: rgb(96, 165, 250) !important;
+  text-decoration: underline !important;
+  text-decoration-color: rgba(255, 255, 255, 0.3) !important;
+  text-underline-offset: 2px !important;
+}
+[class*="callout"] code { background: rgba(255, 255, 255, 0.05) !important; }
+[class*="callout"] strong { color: rgba(255, 255, 255, 0.7) !important; font-weight: 600 !important; }
+
+/* tables, misc neutral */
+td, th { border-color: var(--fd-border) !important; }
+hr { border-color: var(--fd-border) !important; }
+.eyebrow, [class*="eyebrow"] { display: none !important; }
+
+/* hide Mintlify-only chrome: page context menu, assistant, floating copy */
+#page-context-menu { display: none !important; }
+.chat-assistant-floating-input, [class*="chat-assistant"] { display: none !important; }
+header [class*="assistant"], header button[id*="assistant"], header a[id*="assistant"], [id*="assistant-entry"] { display: none !important; }
+
+/* ── Page actions: Copy Markdown / Open in / View on GitHub ─────────────── */
+#ao-page-actions {
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--fd-border);
+  padding-bottom: 0;
+}
+.ao-action {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 6px 8px;
+  font-size: 12px; font-weight: 500; letter-spacing: -0.5px;
+  color: var(--fd-fg) !important;
+  background: var(--fd-btn-bg);
+  border: 1px solid var(--fd-border);
+  border-radius: 6px;
+  cursor: pointer; text-decoration: none !important;
+}
+.ao-action:hover { background: oklch(0.32 0.018 107.4); }
+.ao-action svg { width: 14px; height: 14px; flex: none; }
+.ao-action .ao-caret { width: 12px; height: 12px; }
+.ao-openin { position: relative; }
+.ao-openin-menu {
+  position: absolute; top: calc(100% + 6px); left: 0; min-width: 100%;
+  background: oklch(0.205 0.008 106.7); border: 1px solid var(--fd-border);
+  border-radius: 8px; padding: 4px; z-index: 50; box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+.ao-openin-menu a { display: block; padding: 6px 10px; font-size: 12px; color: var(--fd-muted); text-decoration: none; border-radius: 6px; white-space: nowrap; }
+.ao-openin-menu a:hover, .ao-openin-menu a:focus-visible { background: rgba(255,255,255,0.06); color: var(--fd-fg-2); }
+
+/* ── Desktop right rail: "On this page" at x1172 y48, tree line + dot ───── */
+@media (min-width: 1280px) {
+  #table-of-contents {
+    margin-top: -56px !important;             /* title lands at y48 */
+    margin-left: -12px !important;            /* rail lands at x1172 */
+    width: 252px !important;
+  }
+  [data-layout-item="toc-title"] {
+    font-size: 14px !important; line-height: 20px !important; font-weight: 400 !important;
+    letter-spacing: -0.5px !important; color: var(--fd-muted) !important;
+    height: 20px !important; margin: 0 0 12px 0 !important; padding: 0 !important;
+    display: flex !important; align-items: center !important; gap: 8px !important;
+  }
+  [data-layout-item="toc-title"] button {
+    font: inherit; color: inherit; letter-spacing: inherit;
+    background: none; border: none; padding: 0; margin: 0;
+    display: inline-flex; align-items: center; cursor: pointer; height: 20px;
+  }
+  [data-layout-item="toc-title"] .ao-toc-title-icon { display: inline-flex; flex: none; }
+  [data-layout-item="toc-title"] .ao-toc-title-icon svg { width: 16px; height: 16px; }
+  #table-of-contents ul, #table-of-contents li { padding: 0 !important; margin: 0 !important; }
+  #table-of-contents [class*="pl-"], #table-of-contents [class*="px-"] { padding-left: 0 !important; }
+  .ao-dtoc-a {
+    display: block !important;
+    padding: 6px 0 6px 20px !important;       /* h2 rows: pl20, h32 */
+    margin: 0 !important;
+    font-size: 14px !important; line-height: 20px !important; font-weight: 400 !important;
+    letter-spacing: -0.5px !important;
+    color: var(--fd-muted) !important;
+    text-decoration: none !important;
+    border: none !important;
+    background: transparent !important;
+  }
+  .ao-dtoc-a.ao-dtoc-h3 { padding-left: 32px !important; }
+  .ao-dtoc-a.ao-dtoc-first { padding-top: 0 !important; }   /* first row h26 */
+  .ao-dtoc-a.ao-dtoc-active { color: var(--fd-fg-2) !important; }
+  [class*="toc"], aside:not([class*="sidebar"]) { border-left: none !important; }
+  /* hide Mintlify's own toc active marker (orange) - we draw the Fumadocs one */
+  #table-of-contents li::before, #table-of-contents li::after,
+  #table-of-contents a::before, #table-of-contents a::after { content: none !important; display: none !important; }
+  #table-of-contents li > span:empty { display: none !important; }
+}
+
+/* tree track + dot (JS-built) */
+.ao-trackwrap { position: absolute; left: 0; top: 0; pointer-events: none; }
+.ao-thumb {
+  position: absolute; width: 4px; height: 4px; border-radius: 9999px;
+  background: var(--fd-line); opacity: 0; transition: top 0.2s, left 0.2s;
+}
+
+/* ── Mobile "On this page" bar (pill) ───────────────────────────────────── */
+#ao-toc-bar {
+  position: sticky; top: 56px; z-index: 30; width: 100%;
+  margin-top: 0;
+  background: oklab(0.153 -0.00176424 0.00573476 / 0.8);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--fd-border);
+}
+@media (min-width: 1024px) and (max-width: 1279px) {
+  #ao-toc-bar { top: 48px; }
+}
+#ao-toc-trigger {
+  display: flex; align-items: center; gap: 9.5px;
+  width: 100%; height: 40px; padding: 0 24px 0 16.5px; box-sizing: border-box;
+  font-size: 14px; letter-spacing: -0.5px; color: var(--fd-muted);
+  background: transparent; border: none; cursor: pointer; text-align: left;
+}
+#ao-toc-trigger .ao-ring { flex: none; }
+#ao-toc-trigger .ao-ring-bg { stroke: currentColor; opacity: 0.25; }
+#ao-toc-trigger .ao-ring-fg { stroke: var(--fd-fg-2); transition: stroke-dashoffset 0.3s; }
+#ao-toc-trigger .ao-toc-labels { display: grid; flex: 1; min-width: 0; }
+#ao-toc-trigger .ao-toc-labels > span {
+  grid-area: 1 / 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+/* closed: show active section; open: show page title */
+#ao-toc-trigger .ao-toc-title { opacity: 0; transform: translateY(-8px); }
+#ao-toc-trigger .ao-toc-active { opacity: 1; transform: none; }
+#ao-toc-trigger[aria-expanded="true"] .ao-toc-title { opacity: 1; transform: none; }
+#ao-toc-trigger[aria-expanded="true"] .ao-toc-active { opacity: 0; transform: translateY(8px); }
+#ao-toc-trigger .ao-toc-chevron { flex: none; width: 16px; height: 16px; transition: transform 0.2s; }
+#ao-toc-trigger[aria-expanded="true"] .ao-toc-chevron { transform: rotate(180deg); }
+
+#ao-toc-panel {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 30;
+  background: rgba(20, 20, 15, 0.8);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--fd-border);
+}
+#ao-toc-panel .ao-toc-scroll { max-height: 60vh; overflow-y: auto; padding: 12px 16px; }
+#ao-toc-panel ul { position: relative; list-style: none; margin: 0; padding: 0; }
+#ao-toc-panel li { margin: 0; }
+#ao-toc-panel a {
+  display: block; position: relative;
+  padding: 6px 16px 6px 20px !important;      /* h32 rows, pl20 */
+  font-size: 14px; line-height: 20px; letter-spacing: -0.5px;
+  color: var(--fd-muted); text-decoration: none; border: none !important;
+}
+#ao-toc-panel li.ao-toc-h3 a { padding-left: 32px !important; }
+#ao-toc-panel li:first-child a { padding-top: 0 !important; }
+#ao-toc-panel li:last-child a { padding-bottom: 0 !important; }
+#ao-toc-panel a.ao-read { color: var(--fd-fg-2) !important; }
+#ao-toc-panel a:hover { color: var(--fd-fg); }
+#ao-toc-backdrop { position: fixed; inset: 0; z-index: 20; background: transparent; }
+
+@media (min-width: 1280px) {
+  #ao-toc-bar, #ao-toc-backdrop { display: none !important; }
+}
+
+/* ── Search keycaps ─────────────────────────────────────────────────────── */
+.ao-kbd-group { display: inline-flex !important; gap: 2px; margin-left: auto; flex: none; background: transparent !important; padding: 0 !important; }
+.ao-kbd {
+  font-family: inherit; font-size: 12px; line-height: 1; padding: 3px 6px;
+  border: 1px solid var(--fd-border); border-radius: 6px;
+  background: var(--fd-bg); color: var(--fd-muted); font-weight: 400;
+}
+
+/* ── Mobile chrome ──────────────────────────────────────────────────────── */
+@media (max-width: 1023px) {
+  header button[aria-label="More actions"] { display: none !important; }
+}
+@media (max-width: 1023px) {
+  /* original mobile: content starts right under the 96px header+bar zone + 24px */
+  [class*="pt-26"] { padding-top: 96px !important; }
+  /* drawer items: 15px/22.5 p8 h38.5 like the original */
+  nav#sidebar-content a,
+  nav#sidebar-content [class*="sidebar"] a {
+    height: auto !important; min-height: 38.5px !important;
+    padding: 8px !important;
+    font-size: 15px !important; line-height: 22.5px !important;
+  }
+  .sidebar-group-header, nav#sidebar-content [class*="sidebar-title"], nav#sidebar-content [class*="sidebar-title"] > * {
+    font-size: 15px !important; line-height: 22.5px !important;
+  }
+}
+@media (max-width: 767px) {
+  main { padding-left: 16px !important; padding-right: 16px !important; }
+  main [class*="px-6"], main article, main [class*="mdx-content"] { padding-left: 0 !important; padding-right: 0 !important; }
+  main article h1 { margin-top: 0 !important; }
+}
+
+/* scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
+
+/* original Fumadocs renders <Steps> as plain h3 headings - hide Mintlify step chrome */
+[data-component-part="step-line"], [data-component-part="step-number"] { display: none !important; }
+.steps { margin: 0 !important; }
+.step { padding-bottom: 0 !important; }
+.step > div[class*="pl-8"] { padding-left: 0 !important; padding-right: 0 !important; }
+
+/* original step/section h3 (fs20 lh32) and body tracking (-0.5px): must live in
+   the base layer - Mintlify's layered !important beats unlayered !important */
+@layer base {
+  main h3 { line-height: 32px !important; }
+  /* original has no global footer; Mintlify's renders empty after badge hide */
+footer:has(a[href*="mintlify"]) { display: none !important; }
+/* original cards: no min-height, content top-aligned with 16px padding, h98 */
+.card { min-height: 0 !important; padding: 0 !important; }
+.card > div { padding: 16px !important; border: none !important; }
+.mdx-content > .columns { margin-top: 16px !important; }
+.mdx-content > .columns { grid-template-columns: repeat(1, minmax(0, 1fr)) !important; }
+/* original gap cards->pager is 16 and ~24 below pager */
+div.mdx-content.mdx-content { margin-bottom: 0 !important; }
+.mdx-content > :last-child { margin-bottom: 16px !important; }
+nav.grid { margin-bottom: 24px !important; }
+
+/* original Steps spacing: flex items kill margin collapse, so split explicitly (h3 mb12 + body mt8 = 20; body mb0 + next h3 mt32 = 32; first h3 mt16 + h2 mb16 = 32) */
+    /* original inline code: 14px (0.875em of 16px body), em-based pad 2.8/5.6 */
+  .mdx-content :not(pre) > code, .steps .prose code { font-size: 14px !important; }
+  /* Mintlify zeroes the margin of a paragraph-span right after a heading; original keeps p mt20 */
+  .mdx-content h2 + span, .mdx-content h3 + span { margin-top: 20px !important; }
+  .steps .step-container .prose { margin-top: 20px !important; margin-bottom: 0 !important; }
+  .steps .step-container h3 { margin-top: 32px !important; }
+  .steps .step-container:first-child h3 { margin-top: 16px !important; }
+  main p, main li, main td, main th, main span, .mdx-content,
+  .mdx-content a:has(> div.w-full > h2.not-prose) * {
+    letter-spacing: -0.5px !important;
+  }
+  main pre, main pre *, main code, main code * { letter-spacing: normal !important; }
+}
+
+/* original body lists: disc markers, ul x300 (ml -2) pl24 mt20, li lh28 pl0, text x324 */
+.mdx-content ul {
+  margin-top: 20px !important; margin-bottom: 20px !important;
+  margin-left: 0 !important; padding-left: 24px !important;
+  list-style: disc !important;
+}
+@media (min-width: 1024px) {
+  .mdx-content ul { margin-left: -2px !important; }  /* orig desktop: ul x300 = article x302 - 2 */
+}
+/* must live in the base layer: layered !important beats unlayered !important, and base precedes Mintlify's components layer */
+@layer base {
+  .mdx-content ul li, .mdx-content ol li, main .prose li {
+    line-height: 28px !important;
+    padding-left: 0 !important;
+    list-style: disc !important;
+  }
+}
+.mdx-content li::before, .mdx-content li::after { content: none !important; }
+.mdx-content li > p:first-child, .mdx-content li > span:first-child { margin-top: 0 !important; }
+
+/* ── Search dialog: replicate the original Fumadocs dialog ────────────────
+   Original measurements (live site, 1440x900): dialog x400 y200 w640 (top:
+   calc(50vh-250px), 16px on mobile), bg oklch(0.228 0.013 107.4), 1px
+   white/10 border, radius 12, shadow black/50. Header: flat p-3, 20px icon,
+   input 18/28, ESC kbd right. Rows: px10 py8 radius8, selected
+   bg oklch(0.286 0.016 107.4); breadcrumb (12/16 muted, "Docs > Section")
+   ABOVE the title (14/20 fw500, match underlined). No assistant UI, no
+   footer. */
+[data-component-part="search-backdrop"] {
+  background-color: rgba(0, 0, 0, 0.2) !important;
+  backdrop-filter: blur(4px) !important; -webkit-backdrop-filter: blur(4px) !important;
+}
+[data-component-part="search-modal"] {
+  position: fixed !important;
+  left: 50% !important;
+  top: 16px !important;
+  transform: translateX(-50%) !important;
+  margin: 0 !important;
+  width: calc(100% - 1rem) !important;
+  max-width: 640px !important;
+  background-color: oklch(0.228 0.013 107.4) !important;
+  border: 1px solid var(--fd-border) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5) !important;
+  outline: none !important;
+}
+@media (min-width: 768px) {
+  [data-component-part="search-modal"] { top: calc(50vh - 250px) !important; }
+}
+/* header: flat row, no inner boxed input */
+[data-component-part="search-header"] {
+  padding: 12px !important;
+  height: auto !important;
+  border-bottom: 1px solid var(--fd-border) !important;
+}
+[data-component-part="search-input-container"],
+[data-component-part="search-cli-state"] {
+  border: none !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  height: auto !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+[data-component-part="search-input-container"] > svg[data-search-item="header-icon"],
+[data-component-part="search-cli-state"] > svg[data-search-item="header-icon"] {
+  width: 20px !important;
+  height: 20px !important;
+  position: static !important;
+  transform: none !important;
+  color: var(--fd-muted) !important;
+  flex: none !important;
+}
+[data-component-part="search-input"] {
+  font-size: 18px !important;
+  font-weight: 400 !important;
+  line-height: 28px !important;
+  height: 28px !important;
+  color: var(--fd-fg) !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+[data-component-part="search-input"]::placeholder { color: var(--fd-muted) !important; }
+/* hide the AI-assistant affordances the original does not have */
+[data-component-part="search-ask-ai-button"],
+[data-component-part="search-modal"] [data-search-item="group"][data-variant="ask-ai"] {
+  display: none !important;
+}
+/* ESC keycap (injected by custom.js) */
+.ao-search-esc {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  padding: 6px 8px !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  line-height: 16px !important;
+  color: var(--fd-muted) !important;
+  background: transparent !important;
+  border: 1px solid var(--fd-border) !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  flex: none !important;
+}
+/* results area */
+[data-component-part="search-modal"] [data-component-part="scroll-area-viewport"] {
+  max-height: 460px !important;
+}
+[data-component-part="search-list"] {
+  padding: 4px !important;
+}
+/* rows: breadcrumb above title, no leading icon, original paddings */
+[data-component-part="search-item"] {
+  display: flex !important;
+  align-items: flex-start !important;
+  padding: 8px 10px !important;
+  border-radius: 8px !important;
+  font-size: 14px !important;
+  line-height: 20px !important;
+  color: var(--fd-fg) !important;
+  text-decoration: none !important;
+}
+[data-component-part="search-item"][data-highlighted],
+[data-component-part="search-item"][aria-selected="true"] {
+  background-color: oklch(0.286 0.016 107.4) !important;
+}
+[data-component-part="search-item-icon"] { display: none !important; }
+[data-component-part="search-item"] > div {
+  display: flex !important;
+  flex-direction: column-reverse !important;
+  gap: 4px !important;
+  min-width: 0 !important;
+}
+[data-component-part="search-item-title"] {
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  line-height: 20px !important;
+  color: var(--fd-fg) !important;
+}
+[data-component-part="search-item-breadcrumbs"] {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  font-size: 12px !important;
+  font-weight: 400 !important;
+  line-height: 16px !important;
+  color: var(--fd-muted) !important;
+}
+[data-component-part="search-item-breadcrumbs"]::before {
+  content: "Docs \203A\00A0 ";
+  color: var(--fd-muted) !important;
+}
+[data-component-part="search-item"] mark,
+[data-component-part="search-item"] mark b {
+  background: transparent !important;
+  color: var(--fd-fg-2) !important;
+  text-decoration: underline !important;
+  font-weight: inherit !important;
+}
+/* no footer on the original */
+[data-component-part="search-footer"] { display: none !important; }
+
+
+/* ── Next steps cards: original compact link-cards ────────────────────────
+   Original (mobile): box pad16 br12 border white/10 bg transparent, ALL text
+   blue rgb(96,165,250) underlined; title 14/20 fw600, desc 14/20 fw500 mt4.
+   Grid: gap 12, margin 24 0. */
+.mdx-content div.columns.grid {
+  gap: 12px !important;
+  margin: 24px 0 !important;
+}
+.mdx-content div.columns.grid > * { margin: 0 !important; }
+.mdx-content div.px-6.py-5:has(> a > div.w-full > h2.not-prose) {
+  padding: 16px !important;
+  border: 1px solid var(--fd-border) !important;
+  border-radius: 12px !important;
+  background: transparent !important;
+}
+.mdx-content a:has(> div.w-full > h2.not-prose) {
+  color: rgb(96, 165, 250) !important;
+  text-decoration: underline !important;
+  display: block !important;
+}
+.mdx-content a > div.w-full > h2.not-prose {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  line-height: 20px !important;
+  letter-spacing: -0.5px !important;
+  color: rgb(96, 165, 250) !important;
+  margin: 0 !important;
+}
+.mdx-content a > div.w-full > h2.not-prose + div {
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  line-height: 20px !important;
+  letter-spacing: -0.5px !important;
+  color: rgb(96, 165, 250) !important;
+  margin-top: 4px !important;
+}
+.mdx-content a:has(> div.w-full > h2.not-prose) > div.absolute { display: none !important; }
+
+/* ── Prev/next pager: original bordered boxes with chevron+title+desc ──────
+   Original: pad16 br8 border white/10, title 14/20 fw500 fg, desc 14/20 muted
+   nowrap ellipsis; next link right-aligned. Chevron moved + desc injected by
+   custom.js. */
+nav.grid:has(> a > div.space-y-1) { gap: 16px !important; }
+nav.grid > a:has(> div.space-y-1) {
+  padding: 16px !important;
+  border: 1px solid var(--fd-border) !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 8px !important;
+}
+nav.grid > a:has(> div.space-y-1) div.space-y-1 { display: contents !important; }
+nav.grid > a:has(> div.space-y-1) div.truncate {
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  line-height: 20px !important;
+  color: var(--fd-fg) !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  white-space: nowrap !important;
+}
+.ao-pager-chev { margin: 0 -4px !important; color: inherit !important; }
+.ao-pager-chev svg { width: 16px !important; height: 16px !important; display: block; }
+nav.grid > a.ao-pager-next div.truncate { justify-content: flex-end !important; }
+.ao-pager-desc {
+  display: block !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  line-height: 20px !important;
+  letter-spacing: -0.5px !important;
+  color: var(--fd-muted) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  margin: 0 !important;
+}
+nav.grid > a.ao-pager-next { justify-content: flex-end !important; text-align: right !important; }
+nav.grid > a.ao-pager-next .ao-pager-desc { text-align: right !important; }
+
+/* the original has no 'Powered by Mintlify' badge */
+a[href*="mintlify.com?utm_campaign=poweredBy"] { display: none !important; }
+
+/* ── Mobile drawer: original anchors right at 332px with pill on active page ── */
+@layer base {
+  [role="dialog"][class*="--bleed"] a[data-active="true"],
+  [role="dialog"][class*="--bleed"] a[aria-current="page"] {
+    background-color: rgba(255, 255, 255, 0.07) !important;
+    border-radius: 8px !important;
+  }
+}
+
+/* ── Mobile navigation drawer (Fumadocs parity) ────────────────────────── */
+.ao-dr-panel, .ao-dr-panel * { text-shadow: none !important; }
+.ao-dr-backdrop {
+  position: fixed; inset: 0; z-index: 99;
+  background: transparent;
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  opacity: 0; transition: opacity 0.2s ease-out;
+}
+.ao-dr-backdrop.ao-dr-in { opacity: 1; }
+.ao-dr-panel {
+  position: fixed; top: 0; right: 0; z-index: 100;
+  width: 331.5px; max-width: 100vw; height: 100dvh;
+  background: oklch(0.153 0.006 107.1);
+  color: oklch(0.737 0.021 106.9);
+  font-size: 15px;
+  display: flex; flex-direction: column;
+  transform: translateX(100%); transition: transform 0.2s ease-out;
+}
+.ao-dr-panel.ao-dr-in { transform: translateX(0); }
+.ao-dr-head {
+  flex: none; display: flex; align-items: center; justify-content: flex-end;
+  gap: 6px; height: 60px; padding: 16px 16px 8px;
+}
+.ao-dr-lang-wrap { position: relative; }
+.ao-dr-lang {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 36px; padding: 0 8px; border: none; border-radius: 6px;
+  background: transparent; color: oklch(0.737 0.021 106.9);
+  font-size: 14px; font-weight: 500; cursor: pointer;
+}
+.ao-dr-lang:hover { background: rgba(255, 255, 255, 0.05); }
+.ao-dr-lang-menu {
+  position: absolute; top: 40px; right: 0; z-index: 101; min-width: 140px;
+  background: oklch(0.205 0.01 107.2); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.ao-dr-lang-item {
+  display: block; padding: 6px 10px; border-radius: 5px;
+  color: oklch(0.737 0.021 106.9); font-size: 14px; text-decoration: none;
+}
+.ao-dr-lang-item:hover { background: rgba(255,255,255,0.06); color: oklch(0.93 0.007 106.5); }
+.ao-dr-lang-item[aria-current="true"] { color: oklch(0.93 0.007 106.5); cursor: default; }
+.ao-dr-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border: none; border-radius: 6px;
+  background: transparent; color: oklch(0.737 0.021 106.9); cursor: pointer;
+}
+.ao-dr-close:hover { background: rgba(255, 255, 255, 0.05); }
+.ao-dr-nav {
+  flex: 1 1 0; min-height: 0; overflow-y: auto;
+  margin-left: 1px;
+  padding: 0 12px 16px;
+}
+.ao-dr-nav ul { list-style: none; margin: 0; padding: 0; }
+.ao-dr-nav li { margin: 0; padding: 0; }
+.ao-dr-nav a {
+  display: flex; align-items: center; gap: 6px;
+  min-height: 38.5px; padding-left: 8px !important;
+  font-size: 15px; font-weight: 400; line-height: 1.4;
+  color: oklch(0.737 0.021 106.9); text-decoration: none;
+  border-radius: 8px;
+}
+.ao-dr-toplinks a:first-child { margin-top: 0 !important; }
+.ao-dr-nav a:hover { background: oklab(0.93 -0.002 0.007 / 0.05); }
+.ao-dr-nav a.ao-dr-active {
+  background: oklab(0.93 -0.00198811 0.00671174 / 0.1);
+  color: oklch(0.93 0.007 106.5);
+}
+.ao-dr-nav a svg, .ao-dr-nav button svg { margin-left: auto; flex: none; width: 16px; height: 16px; }
+.ao-dr-nav li > button { padding-left: 8px !important; padding-right: 8px !important; color: oklch(0.737 0.021 106.9) !important; }
+.ao-dr-nav li > button svg, .ao-dr-nav li > a.ao-dr-group svg { color: inherit !important; transition: transform 0.2s ease; }
+.ao-dr-nav li.ao-dr-collapsed > button svg, .ao-dr-nav li.ao-dr-collapsed > a.ao-dr-group svg { transform: rotate(-90deg) !important; }
+.ao-dr-nav li > button > div:last-child, .ao-dr-nav li > a.ao-dr-group > div:last-child { margin-left: auto !important; }
+.ao-dr-nav a, .ao-dr-nav a *, .ao-dr-nav button, .ao-dr-nav button * { font-weight: 400 !important; }
+.ao-dr-toplinks { padding-bottom: 16px; margin-bottom: 26px; }
+.ao-dr-nav .sidebar-group-header,
+.ao-dr-nav .sidebar-group-header h3 {
+  all: unset;
+  display: block;
+  font-size: 15px; font-weight: 400; line-height: 22.5px;
+  color: oklch(0.988 0.003 106.5);
+  padding-left: 0 !important; margin: 0 0 4px;
+}
+.ao-dr-nav .sidebar-group-header { padding-left: 8px !important;
+}
+/* group rows sit in the same 2px rhythm as leaves (orig has no extra group margin) */
+.ao-dr-nav > div:first-child { margin-top: 0 !important; }
+.ao-dr-nav .sidebar-group > li > a { margin-top: 2px; }
+.ao-dr-nav li.ao-dr-collapsed > ul { display: none; }
+/* Mintlify's own mobile drawer is superseded by the parity drawer above */
+[role="dialog"][class*="--bleed"]:not(:has([data-component-part="search-modal"])) { display: none !important; }
+
+.ao-dr-toplinks a { margin-top: 2px !important; }
+.ao-dr-nav ul.sidebar-group { margin-top: 6px !important; padding-bottom: 2px !important; }
+.ao-dr-nav ul.sidebar-group > li + li { margin-top: 2px !important; }
+.ao-dr-nav ul.sidebar-group > li > button {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  min-height: 38.5px; padding: 0 0 0 8px; margin: 0 !important;
+  font-size: 15px; font-weight: 400; line-height: 1.4; text-align: left;
+  color: oklch(0.737 0.021 106.9); background: transparent; border: none;
+  border-radius: 8px; cursor: pointer;
+}
+.ao-dr-nav ul.sidebar-group > li > button:hover { background: oklab(0.93 -0.002 0.007 / 0.05); }
+
+/* Code copy button: fumadocs parity (orig: 24x24, transparent, br6, no border, muted 16px icon, no hover bg) */
+[data-floating-buttons] { right: 8px !important; top: 12px !important; z-index: 20 !important; }
+button[data-testid="copy-code-button"] {
+  width: 24px !important; height: 24px !important;
+  margin: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+}
+button[data-testid="copy-code-button"]:hover,
+button[data-testid="copy-code-button"]:focus-visible { background: transparent !important; }
+button[data-testid="copy-code-button"] svg {
+  width: 16px !important; height: 16px !important;
+  color: oklch(0.737 0.021 106.9) !important;
+}
+button[data-testid="copy-code-button"]:hover svg { color: oklch(0.737 0.021 106.9) !important; }
+button[data-testid="copy-code-button"][data-ao-copied] svg { color: oklch(0.988 0.003 106.5) !important; }
+button[data-testid="copy-code-button"] { position: relative !important; }
+.code-block-copy-button {
+  margin: 0 !important; width: 24px !important; height: 24px !important;
+  background: transparent !important; border: none !important; border-radius: 8px !important;
+  backdrop-filter: blur(16px) !important; -webkit-backdrop-filter: blur(16px) !important;
+}
+
+/* CLI-state (logged-out) search header: match original 56px dialog */
+[data-component-part="search-modal"]:has([data-component-part="search-cli-state"]) [data-component-part="search-header"] {
+  height: 54px !important;
+}
+[data-component-part="search-modal"]:has([data-component-part="search-cli-state"]) [data-component-part="scroll-area"] {
+  display: none !important;
+}
+
+/* orig code blocks have no fade overlay panel */
+.code-block-fade-overlay { display: none !important; }
+
+/* orig code font is the plain system mono stack (no paperMono) */
+pre, pre *, code, kbd, samp, .code-block, .code-block * {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+}
+
+/* search CLI-state row: kill TW translate, match orig 18/28 label, ESC right-aligned */
+[data-component-part="search-cli-state"] > svg[data-search-item="header-icon"] { translate: none !important; }
+[data-component-part="search-cli-state"] [data-search-item="header-label"] { font-size: 18px !important; line-height: 28px !important; }
+[data-component-part="search-cli-state"] > button { margin-left: auto !important; }
+
+.ao-dr-panel:focus, .ao-dr-panel:focus-visible { outline: none !important; }
+
+/* expanded group children: fumadocs indent steps 20px per level from depth 1
+   (overriding Mintlify inline per-depth padding) */
+.ao-dr-nav li > ul { position: relative !important; padding-top: 2px !important; }
+.ao-dr-nav li > ul::before {
+  content: ""; position: absolute; left: 10px; top: 4px; bottom: 4px; width: 1px;
+  background: oklch(1 0 0 / 0.1);
+}
+.ao-dr-nav li > ul > li + li { margin-top: 2px !important; }
+.ao-dr-nav li li > a, .ao-dr-nav li li > button { padding-left: 20px !important; }
+.ao-dr-nav li li li > a, .ao-dr-nav li li li > button { padding-left: 32px !important; }
+.ao-dr-nav li li li li > a, .ao-dr-nav li li li li > button { padding-left: 44px !important; }
+.ao-dr-nav li li > a { position: relative; }
+.ao-dr-nav li li > a.ao-dr-active::before {
+  content: ""; position: absolute; left: 10px; top: 10px; bottom: 10px; width: 1px;
+  background: oklch(0.93 0.007 106.5);
+}
+
+/* original drawer: group rows carry no own bottom margin (fumadocs uses parent gap only) */
+.ao-dr-nav li > a.ao-dr-group { margin-bottom: 0 !important; }
+
+/* original mobile navbar: 56px row (h-14), right inset 10px, 34x34 icon buttons */
+#navbar div.flex.lg\:hidden.items-center.h-12 { height: 56px !important; padding-right: 10px !important; }
+#navbar div.flex.lg\:hidden.items-center button[aria-label="Open search"] { width: 34px !important; height: 34px !important; }
+#navbar div.flex.lg\:hidden.items-center button[aria-label="Open search"] svg { width: 18px !important; height: 18px !important; }
+
+/* original header mark: ao-logo 20px + "Docs" text-sm font-medium bright (Mintlify logo hidden on mobile) */
+#navbar div.flex.lg\:hidden.items-center a.select-none { display: none !important; }
+#navbar div.flex.lg\:hidden.items-center a.ao-hdr-logo, #navbar div.flex.lg\:hidden.items-center a.ao-hdr-logo span { color: oklch(0.988 0.003 106.5) !important; }
+/* original mobile navbar: warm translucent bg + bright icons */
+#navbar > div.z-10.absolute.w-full.h-full, #navbar > div.z-0.absolute.inset-0 { background: oklab(0.153 -0.00176424 0.00573476 / 0.8) !important; backdrop-filter: blur(8px) !important; -webkit-backdrop-filter: blur(8px) !important; }
+#navbar div.flex.lg\:hidden.items-center button[aria-label="Open search"], #navbar div.flex.lg\:hidden.items-center button#ao-nav-toggle { color: oklch(0.988 0.003 106.5) !important; }
+a.ao-hdr-logo { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; text-decoration: none; }
+a.ao-hdr-logo > span { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500; color: oklch(0.988 0.003 106.5); }
+a.ao-hdr-logo img { width: 20px; height: 20px; flex: none; display: block; }
+#navbar div.flex.lg\:hidden.items-center.h-12 { column-gap: 0 !important; }
+#navbar div.flex.lg\:hidden.items-center div.flex.items-center.gap-3.ml-auto { column-gap: 0 !important; }
+
+/* toc pill sits directly under the 56px navbar like the original (y56, no extra offset) */
+#ao-toc-bar { margin-top: 0 !important; }
+
+/* search trigger icon: original is lucide-search, bright, stroke-width 2 */
+#navbar button[aria-label*="Search" i] svg { color: oklch(0.988 0.003 106.5) !important; stroke-width: 2px !important; }
+/* separator below navbar: original has 1px oklch(1 0 0 / 0.1) at y56 */
+#navbar div.flex.lg\:hidden.items-center { border-bottom: 1px solid oklch(1 0 0 / 0.1) !important; }
+/* normalize header bg layer border color to the original line color */
+#navbar div.z-10.absolute.w-full.h-full { border-color: oklch(1 0 0 / 0.1) !important; }
+/* search button itself must be full-brightness like the original (was white/0.5) */
+#navbar button[aria-label*="Search" i] { color: oklch(0.988 0.003 106.5) !important; opacity: 1 !important; }
+
+.ao-hdr-logo span span { font-weight: 500 !important; }
+/* orig logo img sits at y17.5 (subpixel) */
+a.ao-hdr-logo img { position: relative; top: 0.5px; }
