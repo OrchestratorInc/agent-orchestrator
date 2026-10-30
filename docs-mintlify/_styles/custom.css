@@ -4,6 +4,23 @@
    All values measured from the live original, 2026-10-30.
    ========================================================================== */
 
+/* v36n: original body font - GeistSans variable webfont from docs.orchestrator.inc (CORS *).
+   Deployed previously fell back to system-ui, shifting all text metrics/wrapping. */
+@font-face {
+  font-family: 'GeistSans';
+  src: url('https://docs.orchestrator.inc/_next/static/media/27834908180db20f-s.p.woff2') format('woff2');
+  font-display: swap;
+  font-weight: 100 900;
+}
+@font-face {
+  font-family: 'GeistSans Fallback';
+  src: local('Arial');
+  ascent-override: 94.56%;
+  descent-override: 27.76%;
+  line-gap-override: 0%;
+  size-adjust: 106.28%;
+}
+
 :root {
   --fd-bg:        rgb(12, 12, 9);             /* page */
   --fd-bg-raised: rgb(29, 29, 22);            /* sidebar */
@@ -1220,3 +1237,11 @@ html[data-current-path="/installation"] main span[data-as="p"]:has(+ table) {
   padding: 0;
   margin: 44px 0 0 !important;
 }
+
+/* v36m: downloads table - first column as row headers (original uses th scope=row), after-table spacing */
+html[data-current-path="/installation"] main span[data-as="p"]:has(+ table) + table td:first-child {
+  font-weight: 600;
+  color: #fff;
+  background: oklch(0.286 0.016 107.4);
+}
+html[data-current-path="/installation"] main span[data-as="p"]:has(+ table) + table { margin-bottom: 44px !important; }
