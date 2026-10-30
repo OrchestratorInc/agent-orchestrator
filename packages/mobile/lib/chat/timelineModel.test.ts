@@ -108,9 +108,23 @@ describe("mobile Chat timeline model", () => {
 		});
 		value.items.push(late(5, "pending"), late(6, "completed"));
 
-		const planRows = readableConversationItems(value).filter((item) => item.kind === "activity" && item.activityKind === "plan");
+		const groups = groupConversationByTurn(value);
+		const planRows = groups.flatMap((group) => group.items).filter((item) => item.kind === "activity" && item.activityKind === "plan");
 		expect(planRows.map((item) => item.id)).toEqual(["plan-6"]);
-		expect(groupConversationByTurn(value).flatMap((group) => group.turn?.plan ? [group.turn.id] : [])).toEqual([]);
+		expect(groups.flatMap((group) => group.plan && group.turnId ? [group.turnId] : [])).toEqual([]);
+	});
+
+	// Provider turns AO never correlated each carry their own plan row. Without the
+	// cross-turn flag those are separate plans, not revisions of one.
+	it("keeps each plan row that is not a copy of a cross-turn list", () => {
+		const value = snapshot();
+		const row = (sequence: number, text: string): ConversationActivity => ({
+			...activity("plan", sequence),
+			detail: { event: "plan", steps: [{ text, status: "completed" }] },
+		});
+		value.items.push(row(5, "Read"), row(6, "Write"));
+		const planRows = groupConversationByTurn(value).flatMap((group) => group.items).filter((item) => item.kind === "activity" && item.activityKind === "plan");
+		expect(planRows.map((item) => item.id)).toEqual(["plan-5", "plan-6"]);
 	});
 
 	it("shows the latest turn's copy of a list that spans turns, and keeps per-turn plans", () => {
@@ -118,11 +132,11 @@ describe("mobile Chat timeline model", () => {
 		value.turns[0].state = "failed";
 		value.turns[0].plan = { spansTurns: true, steps: [{ text: "Render", status: "in_progress" }] };
 		value.turns[1].plan = { spansTurns: true, steps: [{ text: "Render", status: "completed" }] };
-		expect(groupConversationByTurn(value).flatMap((group) => group.turn?.plan ? [group.turn.id] : [])).toEqual(["t2"]);
+		expect(groupConversationByTurn(value).flatMap((group) => group.plan && group.turnId ? [group.turnId] : [])).toEqual(["t2"]);
 
 		value.turns[0].plan = { steps: [{ text: "Read", status: "completed" }] };
 		value.turns[1].plan = { steps: [{ text: "Write", status: "completed" }] };
-		expect(groupConversationByTurn(value).flatMap((group) => group.turn?.plan ? [group.turn.id] : [])).toEqual(["t1", "t2"]);
+		expect(groupConversationByTurn(value).flatMap((group) => group.plan && group.turnId ? [group.turnId] : [])).toEqual(["t1", "t2"]);
 	});
 
 	it("docks queued human messages instead of rendering them as sent timeline turns", () => {

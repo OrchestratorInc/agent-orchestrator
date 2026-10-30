@@ -130,6 +130,7 @@ type Store interface {
 
 	TurnByID(ctx context.Context, turnID string) (domain.ConversationTurn, error)
 	TurnByProviderID(ctx context.Context, conversationID, providerTurnID string) (domain.ConversationTurn, error)
+	LatestConversationTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error)
 	RollbackTurns(ctx context.Context, conversationID, turnID string, now time.Time) (int, error)
 
 	SetProviderTitle(ctx context.Context, conversationID, title string, now time.Time) error
@@ -3348,17 +3349,18 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		// which the column cannot. The compaction projection already sets this
 		// precedent, and the two cannot disagree because both are written from one
 		// event.
+		itemID, err := c.planItemID(ctx, event.ProviderTurnID)
+		if err != nil {
+			return err
+		}
 		return c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
-				ID:      c.newID(),
-				Kind:    domain.ActivityKindPlan,
-				Status:  planActivityStatus(*event.Plan),
-				Summary: event.Summary,
-				Detail:  planDetail(*event.Plan),
-				// Synthetic, because turn/plan/updated carries no item id: the plan is
-				// not an item. Keyed on the turn so a turn's plan is one row that
-				// updates, and prefixed so it can never collide with a provider id.
-				ProviderItemID: planItemID(event.ProviderTurnID),
+				ID:             c.newID(),
+				Kind:           domain.ActivityKindPlan,
+				Status:         planActivityStatus(*event.Plan),
+				Summary:        event.Summary,
+				Detail:         planDetail(*event.Plan),
+				ProviderItemID: itemID,
 			}, now)
 
 	case ports.ChatEventModelRerouted:
@@ -3983,15 +3985,26 @@ func (c *Controller) handoffActive() bool {
 	return c.handoff != controllerHandoffNone
 }
 
-// planItemID keys a turn's plan activity. The provider sends no item id with a plan
+// planItemID keys a plan's timeline row. The provider sends no item id with a plan
 // update — a plan is not an item — so the key is synthesized from the turn, which
 // is what makes repeated updates rewrite one row. The prefix keeps it from ever
 // colliding with a provider item id.
-func planItemID(providerTurnID string) string {
-	if providerTurnID == "" {
-		return ""
+//
+// A plan with no turn comes from work the agent does on its own after a turn has
+// ended. It is keyed on the turn that work followed, so the revisions in one such
+// run rewrite one row, and work after a later turn gets a row of its own there.
+func (c *Controller) planItemID(ctx context.Context, providerTurnID string) (string, error) {
+	if providerTurnID != "" {
+		return "ao-plan-" + providerTurnID, nil
 	}
-	return "ao-plan-" + providerTurnID
+	latest, err := c.store.LatestConversationTurn(ctx, c.conversation.ID)
+	if errors.Is(err, domain.ErrNoConversationTurn) {
+		return "ao-plan-turnless", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return "ao-plan-after-" + latest.ID, nil
 }
 
 // rerouteItemID keys a reroute notice the same way, for the same reason.

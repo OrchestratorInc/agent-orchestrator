@@ -5033,8 +5033,9 @@ function TimelineItem({
 			</FromAgent>
 		);
 	}
-	// A plan whose turn AO never correlated — one from before this controller
-	// started. The turn-level checklist cannot show it, so the row carries it.
+	// A plan no turn holds: work the agent did on its own after a turn ended, or a
+	// provider turn AO never correlated. The turn-level checklist cannot show it, so
+	// the row carries it. AO cannot tell when such work stops, so its step never spins.
 	if (item.activityKind === "plan") {
 		const plan = activityPlan(item);
 		return plan ? <TurnPlan plan={plan} /> : <ActivityRow activity={item} />;
@@ -5352,8 +5353,9 @@ function firstTurnSettled(snapshot: ConversationSnapshot): boolean {
 	return Boolean(first && first.state !== "queued" && first.state !== "running");
 }
 
-function isPlanRow(item: ConversationItem): item is ConversationActivity {
-	return item.kind === "activity" && item.activityKind === "plan";
+/** A plan row whose list the agent keeps across turns, including one that clears it. */
+function isSpanningPlanRow(item: ConversationItem): boolean {
+	return item.kind === "activity" && item.activityKind === "plan" && item.detail?.spansTurns === true;
 }
 
 /**
@@ -5418,31 +5420,30 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 
 	groups.sort((a, b) => a.anchor - b.anchor);
 
-	// Work the agent does after its turn ends belongs to no turn, so each plan
-	// revision in it is its own row. Like a turn's plan, only the latest is current.
-	for (const group of groups) {
-		const latestPlanRow = group.items.findLast(isPlanRow);
-		if (latestPlanRow) {
-			group.items = group.items.filter((item) => !isPlanRow(item) || item === latestPlanRow);
-		}
-	}
-
 	// A list the agent keeps across turns reaches every later turn as a copy of the
-	// same list, on the turn or, when no turn holds it, as a row. Only the latest
-	// copy is current, so only that group shows it.
-	const currentSpanningPlanGroup = groups.findLast(
-		(group) =>
-			(group.turnId !== undefined && byTurn.get(group.turnId)?.plan?.spansTurns) ||
-			group.items.some((item) => isPlanRow(item) && activityPlan(item)?.spansTurns),
-	);
+	// same list, on the turn or, for work after a turn ended, as a row with no turn.
+	// Only the latest copy is current. A turn's copy dates from the turn's last item
+	// and a row's from the row itself; mobile's timeline model reads the same.
+	let currentSpanningPlan: { turnId?: string; rowId?: string; at: number } | undefined;
 	for (const group of groups) {
-		if (group === currentSpanningPlanGroup) continue;
-		if (group.items.some((item) => isPlanRow(item) && activityPlan(item)?.spansTurns)) {
-			group.items = group.items.filter((item) => !isPlanRow(item) || !activityPlan(item)?.spansTurns);
+		const last = group.items.at(-1);
+		const turnSpans = group.turnId !== undefined && byTurn.get(group.turnId)?.plan?.spansTurns;
+		if (turnSpans && last && last.sequence > (currentSpanningPlan?.at ?? -1)) {
+			currentSpanningPlan = { turnId: group.turnId, at: last.sequence };
+		}
+		for (const item of group.items) {
+			if (isSpanningPlanRow(item) && item.sequence > (currentSpanningPlan?.at ?? -1)) {
+				currentSpanningPlan = { rowId: item.id, at: item.sequence };
+			}
 		}
 	}
-
 	for (const group of groups) {
+		group.items = group.items.filter((item) => !isSpanningPlanRow(item) || item.id === currentSpanningPlan?.rowId);
+	}
+	// A run of work that held nothing but an older copy has nothing left to show.
+	const shownGroups = groups.filter((group) => group.items.length > 0);
+
+	for (const group of shownGroups) {
 		if (!group.turnId) continue;
 		const turn = byTurn.get(group.turnId);
 		if (!turn) continue;
@@ -5450,7 +5451,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		// running turn's changed-file list growing, and its checklist ticking itself
 		// off, are the useful parts.
 		group.diff = turn.diff;
-		const stalePlan = turn.plan?.spansTurns && group !== currentSpanningPlanGroup;
+		const stalePlan = turn.plan?.spansTurns && group.turnId !== currentSpanningPlan?.turnId;
 		group.plan = turn.plan?.steps.length && !stalePlan ? turn.plan : undefined;
 		group.live = turn.state === "running";
 		group.liveStartedAt = turn.startedAt ?? turn.requestedAt;
@@ -5483,7 +5484,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		};
 	}
 
-	return groups.flatMap(splitAtSteers);
+	return shownGroups.flatMap(splitAtSteers);
 }
 
 /**

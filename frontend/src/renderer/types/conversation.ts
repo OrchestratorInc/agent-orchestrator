@@ -618,11 +618,7 @@ export function reviewedPaths(activity: ConversationActivity): string[] {
 export function activityPlan(activity: ConversationActivity): ConversationPlan | undefined {
 	const steps = activity.detail?.steps;
 	if (!Array.isArray(steps) || steps.length === 0) return undefined;
-	return {
-		explanation: activity.detail?.explanation,
-		steps,
-		spansTurns: activity.detail?.spansTurns === true || undefined,
-	};
+	return { explanation: activity.detail?.explanation, steps };
 }
 
 export interface ConversationActivity {

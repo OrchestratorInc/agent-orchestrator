@@ -62,49 +62,19 @@ export function queuedConversationMessages(snapshot: ConversationSnapshot, openi
 	);
 }
 
-/**
- * Plan copies a newer copy replaces. Work the agent does after its turn ends
- * belongs to no turn, so each plan revision in it is its own row: only the last
- * row in a run of turnless items is current. A list the agent keeps across turns
- * reaches every later turn as a copy, on the turn or as a turnless row: only the
- * latest copy is current.
- */
-export function supersededPlans(snapshot: ConversationSnapshot): { turnIds: Set<string>; rowIds: Set<string> } {
-	const turnIds = new Set<string>();
-	const rowIds = new Set<string>();
-	let runPlanRow: ConversationActivity | undefined;
-	const spanning: { turnId?: string; rowId?: string; at: number }[] = [];
-	const spanningTurns = new Map(snapshot.turns.filter((turn) => turn.plan?.spansTurns).map((turn) => [turn.id, -1]));
-	for (const item of snapshot.items) {
-		if (item.turnId) {
-			runPlanRow = undefined;
-			if (spanningTurns.has(item.turnId)) spanningTurns.set(item.turnId, item.sequence);
-			continue;
-		}
-		if (item.kind !== "activity" || item.activityKind !== "plan") continue;
-		if (runPlanRow) rowIds.add(runPlanRow.id);
-		runPlanRow = item;
-		if (item.detail?.spansTurns) spanning.push({ rowId: item.id, at: item.sequence });
-	}
-	for (const [turnId, at] of spanningTurns) spanning.push({ turnId, at });
-	spanning.sort((a, b) => a.at - b.at);
-	for (const copy of spanning.slice(0, -1)) {
-		if (copy.turnId) turnIds.add(copy.turnId);
-		if (copy.rowId) rowIds.add(copy.rowId);
-	}
-	return { turnIds, rowIds };
+/** A plan row whose list the agent keeps across turns, including one that clears it. */
+function isSpanningPlanRow(item: ConversationItem): boolean {
+	return item.kind === "activity" && item.activityKind === "plan" && item.detail?.spansTurns === true;
 }
 
 /** Keep conversation signal while removing provider telemetry/noise. */
 export function readableConversationItems(snapshot: ConversationSnapshot, openingTurnId?: string): ConversationItem[] {
 	const plannedTurns = new Set(snapshot.turns.filter((turn) => turn.plan?.steps.length).map((turn) => turn.id));
 	const queued = queuedTurnIds(snapshot, openingTurnId);
-	const superseded = supersededPlans(snapshot).rowIds;
 	return snapshot.items.filter((item) => !item.turnId || !queued.has(item.turnId)).filter((item) => item.kind === "message" || (
 		item.activityKind !== "usage" &&
 		item.activityKind !== "reasoning" &&
-		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) &&
-		!superseded.has(item.id)
+		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId))
 	));
 }
 
@@ -117,9 +87,7 @@ export function groupConversationByTurn(
 	snapshot: ConversationSnapshot,
 	items = readableConversationItems(snapshot),
 ): ConversationGroup[] {
-	const supersededTurns = supersededPlans(snapshot).turnIds;
-	// A turn whose copy of a cross-turn list is out of date shows no plan.
-	const turns = new Map(snapshot.turns.map((turn) => [turn.id, supersededTurns.has(turn.id) ? { ...turn, plan: undefined } : turn]));
+	const turns = new Map(snapshot.turns.map((turn) => [turn.id, turn]));
 	const byTurn = new Map<string, ConversationGroup>();
 	const groups: ConversationGroup[] = [];
 	for (const item of items) {
@@ -141,30 +109,36 @@ export function groupConversationByTurn(
 		}
 	}
 	groups.sort((left, right) => left.anchor - right.anchor);
-	attachCurrentPlans(groups);
-	return groups;
+	return attachCurrentPlans(groups);
 }
 
 /**
  * Gives each turn group the plan it should show, as the desktop does. A list the
  * agent keeps across turns (Claude's task list) reaches every later turn as a copy
- * of the same list. Only the latest copy is current, so only that turn shows it;
- * the earlier copies would otherwise stack down the history.
+ * of the same list, on the turn or, for work after a turn ended, as a row with no
+ * turn. Only the latest copy is current. A turn's copy dates from the turn's last
+ * item and a row's from the row itself, as on the desktop.
  */
-function attachCurrentPlans(groups: ConversationGroup[]): void {
-	let currentSpanningTurn: string | undefined;
-	for (let index = groups.length - 1; index >= 0; index--) {
-		if (groups[index].turn?.plan?.spansTurns) {
-			currentSpanningTurn = groups[index].turnId;
-			break;
+function attachCurrentPlans(groups: ConversationGroup[]): ConversationGroup[] {
+	let current: { turnId?: string; rowId?: string; at: number } | undefined;
+	for (const group of groups) {
+		const last = group.items.at(-1);
+		if (group.turn?.plan?.spansTurns && last && last.sequence > (current?.at ?? -1)) {
+			current = { turnId: group.turnId, at: last.sequence };
+		}
+		for (const item of group.items) {
+			if (isSpanningPlanRow(item) && item.sequence > (current?.at ?? -1)) current = { rowId: item.id, at: item.sequence };
 		}
 	}
 	for (const group of groups) {
+		group.items = group.items.filter((item) => !isSpanningPlanRow(item) || item.id === current?.rowId);
 		const plan = group.turn?.plan;
 		if (!plan?.steps.length) continue;
-		if (plan.spansTurns && group.turnId !== currentSpanningTurn) continue;
+		if (plan.spansTurns && group.turnId !== current?.turnId) continue;
 		group.plan = plan;
 	}
+	// A run of work that held nothing but an older copy has nothing left to show.
+	return groups.filter((group) => group.items.length > 0);
 }
 
 export type TurnItemPartition = {
