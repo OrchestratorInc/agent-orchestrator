@@ -1177,3 +1177,12 @@ main tr:last-child td { border-bottom: 0; }
 @media (min-width: 1024px) {
   nav a[aria-current="page"] { text-shadow: none !important; }
 }
+
+/* v36h: group chevron state rotation + sidebar toggle parity */
+nav#sidebar-content button[aria-expanded="false"] svg[data-ao-chev] { rotate: -90deg; }
+nav#sidebar-content button[aria-expanded="true"] svg[data-ao-chev] { rotate: 0deg; }
+nav#sidebar-content button svg[data-ao-chev] { transition: rotate 150ms ease; }
+@media (min-width: 1024px) {
+  button.ao-side-toggle { width: 30px !important; height: 30px !important; margin-right: 8px !important; }
+  button.ao-side-toggle svg { width: 18px !important; height: 18px !important; }
+}
