@@ -304,6 +304,7 @@
 	"cloud.lifecycle.paused": "Pausiert",
 	"cloud.planLimit.title": "Tariflimit erreicht",
 	"cloud.planLimit.contactAdmin": "Wende dich an den Administrator deiner Organisation, um es zu erhöhen.",
+	"cloud.planLimit.contactOwner": "Dieses Limit gehört zum Tarif des Projektinhabers. Bitte ihn, es zu erhöhen.",
 	"cloud.planLimit.slotsFull": "Das wurde nicht gestartet, weil alle laufenden Sitzungen deines Tarifs belegt sind.",
 	"cloud.planLimit.refused": "Dein Tarif erlaubt das nicht.",
 	"cloud.planLimit.onPlan": "Du nutzt den {{plan}}-Tarif.",

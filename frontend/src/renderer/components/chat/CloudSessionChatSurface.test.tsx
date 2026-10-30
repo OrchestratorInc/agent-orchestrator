@@ -1204,7 +1204,13 @@ describe("CloudSessionChatSurface", () => {
 		rerender(view(session.id));
 		expect(screen.queryByRole("button", { name: "Upgrade your plan" })).toBeNull();
 		expect(screen.getByRole("alert").textContent).toContain("Contact your organization's admin to raise it.");
+		// A guest's shared session runs on its owner's plan: not the guest org's plan, and no link to its billing.
 		billing.offering = { selfServeBilling: true, canManageBilling: true };
+		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1", shared: true } }} /></QueryClientProvider>);
+		expect(screen.queryByRole("button", { name: "Upgrade your plan" })).toBeNull();
+		expect(screen.getByRole("alert").textContent).not.toContain("Starter");
+		expect(screen.getByRole("alert").textContent).toContain("Ask them to raise it.");
+		rerender(view(session.id));
 		// The same surface shows another chat and comes back: the old notice stays gone.
 		rerender(view("session-2"));
 		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());

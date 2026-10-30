@@ -304,6 +304,7 @@
 	"cloud.lifecycle.paused": "일시 중지됨",
 	"cloud.planLimit.title": "플랜 한도에 도달했습니다",
 	"cloud.planLimit.contactAdmin": "한도를 늘리려면 조직 관리자에게 문의하세요.",
+	"cloud.planLimit.contactOwner": "이 한도는 프로젝트 소유자의 플랜에 따른 것입니다. 소유자에게 한도를 늘려 달라고 요청하세요.",
 	"cloud.planLimit.slotsFull": "플랜의 실행 중인 세션이 모두 사용 중이라 시작하지 못했습니다.",
 	"cloud.planLimit.refused": "현재 플랜에서는 이 작업을 할 수 없습니다.",
 	"cloud.planLimit.onPlan": "현재 플랜은 {{plan}}입니다.",

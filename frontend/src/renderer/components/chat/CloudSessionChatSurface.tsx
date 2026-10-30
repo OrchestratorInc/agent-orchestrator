@@ -215,10 +215,14 @@ export function planRefusalCode(item: ConversationItem): string | undefined {
 	return match?.[1] ?? match?.[2];
 }
 
-/** Why the agent's request was refused, with Upgrade for an org that can buy a plan. */
-function PlanLimitNotice({ code, onDismiss }: { code: string; onDismiss: () => void }) {
+/**
+ * Why the agent's request was refused, with Upgrade for an org that can buy a
+ * plan. A shared session runs on its owner's plan, not the viewer's org, so a
+ * guest sees neither this org's plan nor a link to its billing.
+ */
+function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: boolean; onDismiss: () => void }) {
 	const { data, offering } = useCloudBilling();
-	const plan = data?.limits?.plan ?? data?.plan;
+	const plan = shared ? undefined : data?.limits?.plan ?? data?.plan;
 	const reason = appI18n.t(code.endsWith("_SLOTS_FULL") ? "cloud.planLimit.slotsFull" : "cloud.planLimit.refused");
 	const onPlan = plan ? appI18n.t("cloud.planLimit.onPlan", { plan: plan.charAt(0).toUpperCase() + plan.slice(1) }) : undefined;
 	return (
@@ -226,7 +230,7 @@ function PlanLimitNotice({ code, onDismiss }: { code: string; onDismiss: () => v
 			title={appI18n.t("cloud.planLimit.title")}
 			message={<>{reason}{onPlan && <span className="block">{onPlan}</span>}</>}
 			onDismiss={onDismiss}
-			action={offering.selfServeBilling && offering.canManageBilling ? (
+			action={!shared && offering.selfServeBilling && offering.canManageBilling ? (
 				<button
 					type="button"
 					className="mt-1 font-medium text-foreground underline underline-offset-2 hover:decoration-dashed"
@@ -234,7 +238,7 @@ function PlanLimitNotice({ code, onDismiss }: { code: string; onDismiss: () => v
 				>
 					{appI18n.t("cloud.planLimit.upgrade")}
 				</button>
-			) : <p className="text-muted-foreground">{appI18n.t("cloud.planLimit.contactAdmin")}</p>}
+			) : <p className="text-muted-foreground">{appI18n.t(shared ? "cloud.planLimit.contactOwner" : "cloud.planLimit.contactAdmin")}</p>}
 		/>
 	);
 }
@@ -1204,7 +1208,7 @@ export function CloudSessionChatSurface({
 			headerActions={headerActions}
 			composerNotice={planRefusal?.key === refusalKey || live ? (
 				<>
-					{planRefusal?.key === refusalKey && <PlanLimitNotice code={planRefusal.code} onDismiss={() => setPlanRefusal(undefined)} />}
+					{planRefusal?.key === refusalKey && <PlanLimitNotice code={planRefusal.code} shared={cloud?.shared === true} onDismiss={() => setPlanRefusal(undefined)} />}
 					{live && <SharedComposerNotice live={live} lease={lease} userId={me} />}
 				</>
 			) : undefined}
