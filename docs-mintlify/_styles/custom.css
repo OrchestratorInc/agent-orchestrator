@@ -1261,3 +1261,8 @@ html[data-current-path="/installation"] main details.accordion:not(.accordion-gr
 main details.accordion summary { gap: 0 !important; }
 main details.accordion summary > div:has(svg) { display: none !important; }
 main details.accordion summary div { line-height: 21px !important; }
+
+/* v36r: accordion title paragraph metrics (Mintlify renders title as fs16/lh28 p) */
+main details.accordion summary p { font-size: 14px !important; line-height: 21px !important; font-weight: 500 !important; }
+html[data-current-path="/installation"] main details.accordion:not(.accordion-group details) summary { padding: 2.5px 0 !important; }
+html[data-current-path="/installation"] main details.accordion:not(.accordion-group details) summary p { font-size: 16px !important; line-height: 24px !important; font-weight: 400 !important; }
