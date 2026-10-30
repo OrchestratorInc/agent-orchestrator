@@ -958,7 +958,7 @@
       title.style.setProperty("color", "rgba(255,255,255,0.7)", "important");
       title.style.setProperty("margin", "0", "important");
       title.style.setProperty("padding", "0", "important");
-      var status = card.querySelector("p");
+      var status = card.querySelector("p, span[data-as='p']");
       var col = document.createElement("div");
       col.style.cssText = "display:flex;flex-direction:column;min-width:0;";
       if (status) {
