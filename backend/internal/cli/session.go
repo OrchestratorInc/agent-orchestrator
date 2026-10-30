@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 type sessionOptions struct {
@@ -406,7 +408,7 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 		Use:   "delete <id>",
 		Short: "Permanently delete a terminated session",
 		Long: "Permanently delete a terminated session's record and its AO history (conversation, PR facts, attachments and artifacts). " +
-			"The session must be terminated and its worktree cleaned up first (ao session cleanup). Git branches and pull requests are not touched.",
+			"The session must be terminated and its worktree cleaned up first (ao session cleanup). Git branches, pull requests and agent account usage totals are kept.",
 		Args: oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
@@ -933,7 +935,7 @@ func (c *commandContext) previewCleanupSessions(ctx context.Context, project str
 	// preview must not offer it again on every run.
 	pending := make([]sessionDTO, 0, len(res.Sessions))
 	for _, sess := range res.Sessions {
-		if sess.WorkspaceCleanup != "removed" && sess.WorkspaceCleanup != "not_applicable" {
+		if !domain.WorkspaceDisposition(sess.WorkspaceCleanup).Settled() {
 			pending = append(pending, sess)
 		}
 	}

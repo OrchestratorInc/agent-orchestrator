@@ -145,7 +145,7 @@ Orchestrator chooses a project in this order: `--project`, `AO_PROJECT_ID`, the 
 | `ao session resume-agent <id>` | Start the controller again in that session. |
 | `ao session rename <id> <name>` | Change its display name. The project orchestrator cannot be renamed. |
 | `ao session cleanup` | Reclaim eligible terminated workspaces; supports `--dry-run`. Workspaces already released are not listed again. |
-| `ao session delete <id>` | Permanently delete a terminated session and its AO history once its worktree is cleaned up. Branches and PRs are kept. |
+| `ao session delete <id>` | Permanently delete a terminated session and its AO history once its worktree is cleaned up. Branches, PRs and agent account usage totals are kept. |
 | `ao session claim-pr [<session-id>] <pr-ref>` | Attach an existing PR; omitting the session uses `AO_SESSION_ID`. |
 
 Most lookup commands accept `--project` to disambiguate a session ID.

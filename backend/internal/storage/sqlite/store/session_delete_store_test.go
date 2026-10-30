@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -58,6 +60,74 @@ func TestDeleteTerminatedSessionRemovesRecordAndNeverReusesItsID(t *testing.T) {
 	}
 	if next.ID == newest.ID {
 		t.Fatalf("new session reused deleted id %s", next.ID)
+	}
+}
+
+// A session's usage events cascade away with it, but its spend must stay in the
+// agent account usage view, attributed to the same accounts and days. Two
+// deleted sessions on the same account, day and model add up.
+func TestDeleteTerminatedSessionKeepsAccountUsage(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	t0 := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	first := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	second := sampleRecord("usage")
+	second.Harness = domain.HarnessClaudeCode
+	second, err := s.CreateSession(ctx, second)
+	mustNoError(t, err)
+	mustNoError(t, s.CreateAgentAccount(ctx, domain.AgentAccount{
+		ID: "acct-b", Provider: domain.AgentAccountProviderClaude, Home: "/tmp/acct-b", Email: "b@example.com", CreatedAt: t0,
+	}))
+	// first moves from the device login to acct-b after a day; second stays on
+	// the device login.
+	mustNoError(t, s.BindSessionAgentAccount(ctx, first.ID, domain.AgentAccountProviderClaude, "device-claude", t0))
+	mustNoError(t, s.BindSessionAgentAccount(ctx, first.ID, domain.AgentAccountProviderClaude, "acct-b", t0.Add(24*time.Hour)))
+	for i, sess := range []domain.SessionRecord{first, second} {
+		binding := mustUpsertUsageBinding(t, s, sess, t0, domain.UsageBindingRecord{
+			NativeRootID: "root", InitialModelID: "claude-x", State: domain.UsageBindingActive,
+		})
+		source := mustInsertUsageSource(t, s, t0, domain.UsageSourceRecord{
+			BindingID: binding.ID, Kind: domain.UsageSourceClaudeMain, NativeSessionID: "native",
+			ArtifactPath: fmt.Sprintf("/tmp/claude/%d.jsonl", i), FileIdentity: "dev:ino", State: domain.UsageSourcePending,
+		})
+		before := anthropicUsageEvent(fmt.Sprintf("before-%d", i), 10, 0, 0, 5)
+		before.CreatedAt = t0.Add(time.Hour)
+		after := anthropicUsageEvent(fmt.Sprintf("after-%d", i), 20, 0, 0, 7)
+		after.CreatedAt = t0.Add(25 * time.Hour)
+		mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+			ByteOffset: 100, State: domain.UsageSourceActive, ParserStateJSON: `{}`, UpdatedAt: t0,
+		}, []domain.ModelUsageEvent{before, after}))
+	}
+	totals := func() map[string]domain.AgentAccountUsage {
+		t.Helper()
+		rows, err := s.AgentAccountUsageSince(ctx, t0.Truncate(24*time.Hour))
+		mustNoError(t, err)
+		out := map[string]domain.AgentAccountUsage{}
+		for _, row := range rows {
+			key := row.AccountID + "|" + row.Day + "|" + row.Model
+			sum := out[key]
+			sum.InputTokens += row.InputTokens
+			sum.OutputTokens += row.OutputTokens
+			sum.CostNanos += row.CostNanos
+			out[key] = sum
+		}
+		return out
+	}
+	want := totals()
+	if len(want) != 3 {
+		t.Fatalf("seeded usage = %+v, want device-claude on both days and acct-b on the second", want)
+	}
+
+	for _, sess := range []domain.SessionRecord{first, second} {
+		sess.IsTerminated = true
+		mustNoError(t, s.UpdateSession(ctx, sess))
+		deleted, err := s.DeleteTerminatedSession(ctx, sess.ID)
+		if err != nil || !deleted {
+			t.Fatalf("delete %s = %v, %v", sess.ID, deleted, err)
+		}
+		if got := totals(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("after deleting %s usage = %+v, want %+v", sess.ID, got, want)
+		}
 	}
 }
 

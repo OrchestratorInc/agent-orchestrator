@@ -5487,10 +5487,11 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 		AlreadyGone: []domain.SessionID{},
 		Skipped:     []CleanupSkip{},
 	}
+	// A workspace already released (or never created) for the session's
+	// current generation is not revisited, so repeat runs report nothing.
+	settled := m.settledWorkspaceCleanups(ctx, recs)
 	for _, rec := range recs {
-		// A workspace already released (or never created) for the session's
-		// current generation is not revisited, so repeat runs report nothing.
-		if !rec.IsTerminated || m.workspaceCleanupSettled(ctx, rec) {
+		if !rec.IsTerminated || settled[rec.ID] {
 			continue
 		}
 		ws := workspaceInfo(rec)

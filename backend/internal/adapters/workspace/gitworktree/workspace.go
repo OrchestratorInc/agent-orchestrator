@@ -933,7 +933,9 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 		return reclaim, err
 	}
 	_, removeErr := w.run(ctx, w.binary, worktreeRemoveArgs(repo, path)...)
-	if removeErr != nil && isLockedWorktreeRemoveError(removeErr) && w.liftStaleAddLock(ctx, repo, path) {
+	// The lift reads the registration's lock from porcelain output, which git
+	// never translates, rather than matching the remove error's text.
+	if removeErr != nil && w.liftStaleAddLock(ctx, repo, path) {
 		_, removeErr = w.run(ctx, w.binary, worktreeRemoveArgs(repo, path)...)
 	}
 	if _, err := w.run(ctx, w.binary, worktreePruneArgs(repo)...); err != nil {
@@ -2347,12 +2349,40 @@ func moveStrayPathAside(path string) (string, error) {
 
 func runCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, binary, args...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	cmd.Env = append(untranslatedGitEnv(os.Environ()), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, commandError{args: append([]string{binary}, args...), output: string(out), err: err}
 	}
 	return out, nil
+}
+
+// untranslatedGitEnv keeps git's own messages in English. This adapter matches
+// git's error text, and `git worktree add` writes its add-time lock reason
+// ("initializing") through git's translations. Only the message language
+// changes: LANG=C with LC_ALL, LC_MESSAGES and LANGUAGE dropped selects it on
+// both glibc and macOS, and the user's character type is kept, so hooks git
+// runs still see their UTF-8 locale.
+func untranslatedGitEnv(environ []string) []string {
+	out := make([]string, 0, len(environ)+2)
+	locale := map[string]string{}
+	for _, kv := range environ {
+		key, val, _ := strings.Cut(kv, "=")
+		switch key {
+		case "LC_ALL", "LC_CTYPE", "LANG":
+			locale[key] = val
+		case "LC_MESSAGES", "LANGUAGE":
+		default:
+			out = append(out, kv)
+		}
+	}
+	out = append(out, "LANG=C")
+	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		if ctype := locale[key]; ctype != "" {
+			return append(out, "LC_CTYPE="+ctype)
+		}
+	}
+	return out
 }
 
 type commandError struct {

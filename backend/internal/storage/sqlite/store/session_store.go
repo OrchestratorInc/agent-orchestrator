@@ -882,7 +882,10 @@ const standaloneSessionIDPrefix = "standalone"
 // the checks and the delete.
 //
 // The session's number is recorded in session_num_floors so the next spawn
-// never reuses its id (or its branch name). Its change_log rows are dropped
+// never reuses its id (or its branch name). Its usage events cascade away with
+// their usage_bindings, so their spend is first folded into
+// deleted_session_account_usage, which keeps it in the agent account usage
+// view. Its change_log rows are dropped
 // because change_log references sessions without ON DELETE CASCADE, and one
 // project-level session_updated event takes their place so every client
 // refetches the list the session left.
@@ -931,6 +934,9 @@ SELECT EXISTS (
 INSERT INTO session_num_floors (id_prefix, max_num) VALUES (?, ?)
 ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`, prefix, num); err != nil {
 		return false, fmt.Errorf("delete session %s: record number floor: %w", id, err)
+	}
+	if err := foldDeletedSessionAccountUsage(ctx, s.qw.WithTx(tx), id); err != nil {
+		return false, fmt.Errorf("delete session %s: keep account usage: %w", id, err)
 	}
 	// Raw ExecContext for the same sqlc DELETE-parsing reason as DeleteSession.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE session_id = ?`, id); err != nil {

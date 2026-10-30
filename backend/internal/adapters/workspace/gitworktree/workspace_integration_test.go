@@ -1621,6 +1621,20 @@ func run(t *testing.T, binary string, args ...string) {
 // One left behind by an add that died is lifted, and the worktree is removed
 // the ordinary, non-forced way.
 func TestWorkspaceIntegrationDestroyLiftsStaleAddLock(t *testing.T) {
+	testDestroyLiftsStaleAddLock(t)
+}
+
+// A translated git (German here, when its catalog is installed) words the
+// locked-remove error differently; the lift must not depend on that text.
+func TestWorkspaceIntegrationDestroyLiftsStaleAddLockUnderTranslatedLocale(t *testing.T) {
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("LANG", "de_DE.UTF-8")
+	t.Setenv("LANGUAGE", "de")
+	testDestroyLiftsStaleAddLock(t)
+}
+
+func testDestroyLiftsStaleAddLock(t *testing.T) {
+	t.Helper()
 	git := requireGit(t)
 	tmp := t.TempDir()
 	repo := setupOriginClone(t, git, tmp)

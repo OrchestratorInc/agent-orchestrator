@@ -32,6 +32,26 @@ func (f *fakeStore) ListTerminalCleanupCandidates(_ context.Context, now time.Ti
 	return ids, nil
 }
 
+// batchCleanupFactsStore adds the SQLite store's one-query facts read, so
+// Cleanup's batched path is exercised as well as its per-session fallback.
+type batchCleanupFactsStore struct {
+	*fakeStore
+	batchReads int
+}
+
+func (b *batchCleanupFactsStore) ListSessionCleanupFactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID]domain.SessionCleanupRecord, error) {
+	b.cleanupMu.Lock()
+	defer b.cleanupMu.Unlock()
+	b.batchReads++
+	out := map[domain.SessionID]domain.SessionCleanupRecord{}
+	for _, id := range ids {
+		if facts, ok := b.cleanupFacts[id]; ok {
+			out[id] = facts
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeStore) DeleteTerminatedSession(_ context.Context, id domain.SessionID) (bool, error) {
 	if f.deleteErr != nil {
 		return false, f.deleteErr
@@ -76,6 +96,28 @@ func TestCleanup_RecordsReleaseAndSkipsItOnTheNextRun(t *testing.T) {
 				t.Fatalf("destroyed = %d, want 1", ws.destroyed)
 			}
 		})
+	}
+}
+
+// With a store that batches facts, a run reads every session's facts once
+// instead of once per session.
+func TestCleanup_BatchesSettledFactsRead(t *testing.T) {
+	_, st, rt, ws := newManager()
+	batch := &batchCleanupFactsStore{fakeStore: st}
+	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: ws, Store: batch, Messenger: &fakeMessenger{},
+		Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
+	seedTerminal(st, "mer-2", domain.SessionMetadata{WorkspacePath: "/ws/mer-2"})
+	st.cleanupFacts = map[domain.SessionID]domain.SessionCleanupRecord{
+		"mer-1": {SessionID: "mer-1", WorkspaceDisposition: domain.DispositionRemoved},
+	}
+
+	res, err := m.Cleanup(ctx, "mer")
+	if err != nil || len(res.Cleaned) != 1 || res.Cleaned[0] != "mer-2" {
+		t.Fatalf("result = %+v, %v; want only mer-2 reclaimed", res, err)
+	}
+	if batch.batchReads != 1 || ws.destroyed != 1 {
+		t.Fatalf("batch reads = %d, destroyed = %d; want 1 and 1", batch.batchReads, ws.destroyed)
 	}
 }
 
@@ -206,16 +248,19 @@ func TestReconcileWorkspaceCleanup_LeavesUnacceptedWorktreeOnDisk(t *testing.T) 
 	}
 }
 
-func TestReconcileWorkspaceCleanup_RecordsWorkspaceAlreadyGone(t *testing.T) {
+// A worktree already gone from disk still goes through teardown, which prunes
+// git's stale registration before the release is recorded.
+func TestReconcileWorkspaceCleanup_PrunesAndRecordsWorkspaceAlreadyGone(t *testing.T) {
 	m, st, _, ws := newManager()
+	ws.destroyReclaim = ports.WorkspaceReclaimAlreadyAbsent
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: filepath.Join(t.TempDir(), "gone")})
 	seedTerminal(st, "mer-2", domain.SessionMetadata{})
 
 	if err := m.ReconcileWorkspaceCleanup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if ws.destroyed != 0 {
-		t.Fatalf("destroyed = %d, want bookkeeping only", ws.destroyed)
+	if ws.destroyed != 1 {
+		t.Fatalf("destroyed = %d, want one teardown for the missing worktree", ws.destroyed)
 	}
 	for id, want := range map[domain.SessionID]domain.WorkspaceDisposition{
 		"mer-1": domain.DispositionRemoved,
@@ -227,6 +272,25 @@ func TestReconcileWorkspaceCleanup_RecordsWorkspaceAlreadyGone(t *testing.T) {
 	}
 	if ids, _ := st.ListTerminalCleanupCandidates(ctx, time.Now()); len(ids) != 0 {
 		t.Fatalf("candidates after reconcile = %v, want none", ids)
+	}
+}
+
+// A registration git still refuses to drop (a locked one) is not recorded, so
+// `ao session cleanup` keeps reporting it.
+func TestReconcileWorkspaceCleanup_LeavesRefusedRegistrationForCleanup(t *testing.T) {
+	m, st, _, ws := newManager()
+	ws.destroyErr = ports.ErrWorkspaceLocked
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: filepath.Join(t.TempDir(), "gone")})
+
+	if err := m.ReconcileWorkspaceCleanup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if facts, ok := cleanupFacts(t, st, "mer-1"); ok {
+		t.Fatalf("facts = %+v, want none while git refuses the registration", facts)
+	}
+	res, err := m.Cleanup(ctx, "mer")
+	if err != nil || len(res.Skipped) != 1 || res.Skipped[0].Reason != cleanupSkipReason(ports.ErrWorkspaceLocked) {
+		t.Fatalf("cleanup = %+v, %v; want the locked registration reported", res, err)
 	}
 }
 

@@ -259,11 +259,50 @@ func (m *Manager) workspaceCleanupSettled(ctx context.Context, rec domain.Sessio
 		m.logger.Warn("read workspace cleanup facts", "sessionID", rec.ID, "error", err)
 		return false
 	}
-	return ok && facts.SessionGeneration == rec.CleanupGeneration && settledDisposition(facts.WorkspaceDisposition)
+	return ok && releasedForGeneration(rec, facts)
 }
 
-func settledDisposition(disposition domain.WorkspaceDisposition) bool {
-	return disposition == domain.DispositionRemoved || disposition == domain.DispositionNotApplicable
+// cleanupFactsBatchStore reads many sessions' cleanup facts in one query. It
+// is optional so focused store fakes need not implement it.
+type cleanupFactsBatchStore interface {
+	ListSessionCleanupFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]domain.SessionCleanupRecord, error)
+}
+
+// settledWorkspaceCleanups is workspaceCleanupSettled for every terminated
+// session in recs, read in one query where the store supports it.
+func (m *Manager) settledWorkspaceCleanups(ctx context.Context, recs []domain.SessionRecord) map[domain.SessionID]bool {
+	settled := map[domain.SessionID]bool{}
+	batch, ok := m.store.(cleanupFactsBatchStore)
+	if !ok {
+		for _, rec := range recs {
+			if rec.IsTerminated && m.workspaceCleanupSettled(ctx, rec) {
+				settled[rec.ID] = true
+			}
+		}
+		return settled
+	}
+	ids := make([]domain.SessionID, 0, len(recs))
+	for _, rec := range recs {
+		if rec.IsTerminated {
+			ids = append(ids, rec.ID)
+		}
+	}
+	factsByID, err := batch.ListSessionCleanupFactsForSessions(ctx, ids)
+	if err != nil {
+		// Revisiting a settled session only finds nothing left to remove.
+		m.logger.Warn("read workspace cleanup facts", "error", err)
+		return settled
+	}
+	for _, rec := range recs {
+		if facts, ok := factsByID[rec.ID]; ok && rec.IsTerminated && releasedForGeneration(rec, facts) {
+			settled[rec.ID] = true
+		}
+	}
+	return settled
+}
+
+func releasedForGeneration(rec domain.SessionRecord, facts domain.SessionCleanupRecord) bool {
+	return facts.SessionGeneration == rec.CleanupGeneration && facts.WorkspaceDisposition.Settled()
 }
 
 // cleanupCandidateStore is the scan behind ReconcileWorkspaceCleanup. It is
@@ -278,7 +317,8 @@ type cleanupCandidateStore interface {
 //
 //   - a cleanup AO already accepted (kill or `ao session cleanup` recorded it
 //     pending) that the daemon stopped before finishing, and
-//   - bookkeeping for sessions with nothing left on disk to remove.
+//   - sessions with nothing left on disk to remove, whose stale git
+//     registration (if any) it prunes before recording the release.
 //
 // A worktree still on disk with no accepted cleanup is left for
 // `ao session cleanup`: this pass never deletes one on AO's own initiative.
@@ -316,6 +356,25 @@ func (m *Manager) reconcileWorkspaceCleanup(ctx context.Context, id domain.Sessi
 	if found && facts.SessionGeneration == rec.CleanupGeneration && facts.WorkspaceDisposition == domain.DispositionPending {
 		return m.resumeAcceptedCleanup(ctx, rec)
 	}
+	// Sessions this pass leaves alone are decided before taking the operation
+	// guard, so revisiting them on every tick never blocks a restore.
+	rows, err := m.store.ListSessionWorktrees(ctx, id)
+	if err != nil || len(rows) > 0 {
+		return err
+	}
+	if path := rec.Metadata.WorkspacePath; path != "" {
+		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		// The directory is gone, so teardown only prunes git's stale
+		// registration. Cleanup's own path does that under the workspace
+		// gate, skips a path a live successor (an orchestrator's) now holds,
+		// and records the release.
+		if _, reason := m.cleanupWorkspaceUnderGate(ctx, rec, workspaceInfo(rec)); reason == "" {
+			m.cleanupSystemPromptDir(rec.ID)
+		}
+		return nil
+	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			return nil
@@ -324,30 +383,13 @@ func (m *Manager) reconcileWorkspaceCleanup(ctx context.Context, id domain.Sessi
 	}
 	defer m.endAgentOperation(id, agentOperationKill)
 	// Re-read under the operation: a restore that won the race has made the
-	// session live, and its fresh workspace must not be touched.
+	// session live.
 	rec, ok, err = m.store.GetSession(ctx, id)
-	if err != nil || !ok || !rec.IsTerminated {
+	if err != nil || !ok || !rec.IsTerminated || rec.Metadata.WorkspacePath != "" {
 		return err
 	}
-	rows, err := m.store.ListSessionWorktrees(ctx, id)
-	if err != nil || len(rows) > 0 {
-		return err
-	}
-	disposition := domain.DispositionNotApplicable
-	if path := rec.Metadata.WorkspacePath; path != "" {
-		if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		// A live successor sharing the path (an orchestrator's) still owns
-		// the agent state kept for it.
-		if inUse, err := m.isWorkspaceInUse(ctx, rec.ProjectID, path, rec.ID); err != nil || inUse {
-			return err
-		}
-		disposition = domain.DispositionRemoved
-	}
-	m.cleanupAgentWorkspace(ctx, rec, rec.Metadata.WorkspacePath)
 	m.cleanupSystemPromptDir(rec.ID)
-	return m.recordWorkspaceCleanup(ctx, rec, disposition, "")
+	return m.recordWorkspaceCleanup(ctx, rec, domain.DispositionNotApplicable, "")
 }
 
 // resumeAcceptedCleanup reruns a pending cleanup the same way a user retry
@@ -386,7 +428,8 @@ type terminatedSessionDeleter interface {
 // DeleteSession permanently removes a terminated session's record once its
 // workspace is released (or it never had one), along with its AO-owned files.
 // It holds the session's operation guard, so a restore cannot run between the
-// checks and the delete. Branches, PRs and usage history are not touched.
+// checks and the delete. Branches and PRs are not touched, and the store keeps
+// the session's spend in the agent account usage totals.
 func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID) error {
 	deleter, ok := m.store.(terminatedSessionDeleter)
 	if !ok {

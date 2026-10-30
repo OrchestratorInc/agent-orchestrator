@@ -432,6 +432,16 @@ type Cue struct {
 	UpdatedAt time.Time
 }
 
+type DeletedSessionAccountUsage struct {
+	AccountID          string
+	Day                string
+	ModelID            string
+	InputTokens        int64
+	CachedInputTokens  int64
+	OutputTokens       int64
+	EstimatedCostNanos int64
+}
+
 type ManagedHarnessRelease struct {
 	Harness   string
 	Release   string
