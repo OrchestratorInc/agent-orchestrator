@@ -289,6 +289,10 @@ export function WorkerBoardList({
 			{ zone: "archive" as const, label: "Archive", color: t.textFaint, data: archiveOpen ? archived : [] },
 		];
 	}, [searching, filteredGroups, searchedArchive, pagedArchive.loading, pagedArchive.error, pinned, sections, archiveCount, archived, archiveOpen, t]);
+	// Nothing live, only history. The Archive row used to be the whole board then,
+	// which kept the list non-empty and so hid the empty state behind it. Now the
+	// empty state fills the screen and Archive sits beneath it as a footer.
+	const archiveOnly = listSections.length === 1 && listSections[0].zone === "archive";
 
 	// Headers and rows as one array of siblings, so a row changing section is a
 	// reorder rather than an unmount. See BoardRow.
@@ -299,7 +303,11 @@ export function WorkerBoardList({
 					? [{ kind: "archive-status", key: "archive:status" }]
 					: [];
 				if (section.zone === "archive") {
-					return [{ kind: "archive", key: "header:archive" } as const, ...section.data.map(sessionRow), ...status];
+					return [
+						...(archiveOnly ? [] : [{ kind: "archive", key: "header:archive" } as const]),
+						...section.data.map(sessionRow),
+						...status,
+					];
 				}
 				const collapsible = !ALWAYS_OPEN.has(section.zone);
 				const open = !collapsible || !collapsedSections[section.zone];
@@ -310,7 +318,7 @@ export function WorkerBoardList({
 					...status,
 				];
 			}),
-		[collapsedSections, listSections, archiveStatusShown, archiveOpen],
+		[collapsedSections, listSections, archiveStatusShown, archiveOpen, archiveOnly],
 	);
 
 	const toggleSection = useCallback((zone: string) => {
@@ -456,6 +464,16 @@ export function WorkerBoardList({
 	}, [archiveCount, archiveOpen, pagedArchive.loading, pagedArchive.error, pagedArchive.hasMore, pagedArchive.retry, pagedArchive.loadMore, toggleArchive, toggleSection, currentHostId, nowBucket, showProject, projectNameFor,
 		renamingWorkerId, activeSwipeId, openExclusiveSwipe, closeExclusiveSwipe, actions, restoringKey, restoreErrors, restoreArchived, machineOffline]);
 
+	// The header grows to the viewport, so the empty state centres in the free
+	// space and Archive rests at the bottom; opened, its rows follow beneath.
+	const header = archiveOnly ? (
+		<View style={styles.archiveOnly}>
+			{ListHeaderComponent}
+			{ListEmptyComponent}
+			<ArchiveHeader count={archiveCount} open={archiveOpen} onToggle={toggleArchive} />
+		</View>
+	) : ListHeaderComponent;
+
 	return (
 		<View style={styles.listWrap}>
 			{/* A filter/search scope is a wholesale replacement, not rows moving
@@ -469,12 +487,13 @@ export function WorkerBoardList({
 					keyExtractor={boardRowKey}
 					{...BOARD_LIST_WINDOW}
 					removeClippedSubviews={false}
-					contentContainerStyle={{ paddingBottom: contentBottomInset }}
+					contentContainerStyle={{ flexGrow: 1, paddingBottom: contentBottomInset }}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} tintColor={t.accent} />}
-					ListHeaderComponent={ListHeaderComponent}
-					ListEmptyComponent={ListEmptyComponent}
+					ListHeaderComponent={header}
+					ListHeaderComponentStyle={archiveOnly ? styles.archiveOnly : undefined}
+					ListEmptyComponent={archiveOnly ? null : ListEmptyComponent}
 					renderItem={renderItem}
 					// The next archive page loads as its end comes into view.
 					onEndReached={archiveOpen || searching ? pagedArchive.loadMore : undefined}
@@ -595,6 +614,7 @@ function ArchiveHeader({ count, open, onToggle }: { count: number; open: boolean
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		listWrap: { flex: 1 },
+		archiveOnly: { flexGrow: 1 },
 		updatesPill: {
 			position: "absolute",
 			top: space.sm,

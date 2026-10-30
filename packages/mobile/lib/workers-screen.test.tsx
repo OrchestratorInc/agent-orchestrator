@@ -64,6 +64,8 @@ vi.mock("./worker-board-list", async () => {
 		React.createElement("WorkerBoardList", props, props.sessions.length === 0 ? ListEmptyComponent : null) };
 });
 vi.mock("./worker-dock", () => ({ WorkerDock: "WorkerDock" }));
+vi.mock("./workers-idle-state", () => ({ WorkersIdleState: "WorkersIdleState" }));
+vi.mock("./archive/useLatestArchivedAt", () => ({ useLatestArchivedAt: () => undefined }));
 vi.mock("./worker-controls-sheet", () => ({ WorkerControlsSheet: "WorkerControlsSheet" }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
