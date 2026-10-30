@@ -621,6 +621,55 @@ describe("ActivityRow", () => {
 	});
 });
 
+describe("ActivityRow command labels", () => {
+	function commandActivity(
+		detail: ConversationActivity["detail"],
+		status: ConversationActivity["status"] = "completed",
+	): ConversationActivity {
+		return {
+			kind: "activity",
+			id: "cmd-1",
+			sequence: 1,
+			revision: 1,
+			activityKind: "command",
+			status,
+			summary: "go test ./...",
+			detail,
+			createdAt: "2026-08-24T00:00:00Z",
+		};
+	}
+
+	it("shows the command itself as the collapsed row label", () => {
+		render(
+			<ActivityRow activity={commandActivity({ command: "go test ./internal/..." }, "completed")} />,
+		);
+		expect(screen.getByText("go test ./internal/...")).toBeInTheDocument();
+		expect(screen.queryByText("Ran command")).not.toBeInTheDocument();
+	});
+
+	it("expands to the full command and its output while keeping the failed tag red", () => {
+		render(
+			<ActivityRow
+				activity={commandActivity({ command: "go test ./internal/...", output: "FAIL pkg" }, "failed")}
+			/>,
+		);
+		act(() => screen.getByRole("button", { name: /go test/ }).click());
+		expect(screen.getByText("go test ./internal/...", { selector: "pre" })).toBeInTheDocument();
+		expect(screen.getByText("FAIL pkg")).toBeInTheDocument();
+		expect(screen.getByText("failed")).toHaveClass("text-destructive");
+	});
+
+	it("truncates a long command to one line and keeps the full text on hover", () => {
+		const command =
+			"docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(pwd):/workspace builder:latest make test";
+		render(<ActivityRow activity={commandActivity({ command }, "completed")} />);
+
+		const label = screen.getByText(/…/);
+		expect(label.textContent?.length).toBeLessThanOrEqual(72);
+		expect(label.closest("strong")).toHaveAttribute("title", command);
+	});
+});
+
 describe("HumanMessage", () => {
 	function human(overrides: Partial<ConversationMessage> = {}): ConversationMessage {
 		return message({ id: "human-1", role: "user", origin: "human", text: "hi", streaming: false, ...overrides });
