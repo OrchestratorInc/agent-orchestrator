@@ -64,7 +64,10 @@ export interface paths {
         /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt so they can be published again; they serve nothing and use no slot, so used counts only active links. unlimited is true when the user is an active member of a paid, contract or otherwise entitled organization: the limit then does not apply. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
         get: operations["listArtifactShares"];
         put?: never;
-        /** @description Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link under a random 26-character link ID (lowercase a-z and 2-7) that names neither the file nor its owner. Publishing a document that already has a link replaces the version that link serves: the URL stays, the earlier version is no longer served, and the response is 200 with replaced true. An active link keeps its slot; a revoked link is restored the same way when a slot is free. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document, or restoring a revoked one, would exceed the user's limit of active links. A user whose list shows unlimited has no limit. */
+        /**
+         * @deprecated
+         * @description Deprecated: publish through createArtifactShareUpload and finalizeArtifactShare, which upload straight to storage and have no size cap on paid plans. This route keeps the free plan's size cap. Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link under a random 26-character link ID (lowercase a-z and 2-7) that names neither the file nor its owner. Publishing a document that already has a link replaces the version that link serves: the URL stays, the earlier version is no longer served, and the response is 200 with replaced true. An active link keeps its slot; a revoked link is restored the same way when a slot is free. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document, or restoring a revoked one, would exceed the user's limit of active links. A user whose list shows unlimited has no limit.
+         */
         post: operations["createArtifactShare"];
         delete?: never;
         options?: never;
@@ -82,11 +85,82 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Replaces the file an existing link serves. The link keeps its URL and does not count against the limit again. name must match the link's file name, which is part of its document; another name returns 409 artifact_share_name_changed, and the renamed file is published as a new link with POST. */
+        /**
+         * @deprecated
+         * @description Deprecated: update through createArtifactShareUpload with shareId. Replaces the file an existing link serves. The link keeps its URL and does not count against the limit again. name must match the link's file name, which is part of its document; another name returns 409 artifact_share_name_changed, and the renamed file is published as a new link with POST.
+         */
         put: operations["updateArtifactShare"];
         post?: never;
-        /** @description Revokes a link: it stops serving at once, its stored file is deleted after a grace period, and it frees its slot for another document. Publishing the same document again restores its URL when a slot is free. A link already revoked returns 404. */
+        /** @description Revokes a link: it stops serving at once, its stored file is deleted at once and purged from the CDN, and it frees its slot for another document. Publishing the same document again uploads it again and restores its URL when a slot is free. A link already revoked returns 404. */
         delete: operations["deleteArtifactShare"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts uploading one file from a local session straight to storage, for a new document (project, feature, name), a revoked document to restore, or an update of an active link (shareId, same name). The file goes in partCount parts of partSize bytes, the last one shorter: presign them with presignArtifactShareParts, PUT each, then finalizeArtifactShare. Nothing reaches storage when the upload is refused: 413 artifact_share_too_large for a file over the free plan's maxBytes, 415 artifact_share_type_unsupported for video, 409 artifact_share_limit_reached for a new or restored document over the free plan's link limit, 409 artifact_share_name_changed for an update with another name. Paid plans have no size or link limit. */
+        post: operations["createArtifactShareUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Presigns up to 100 parts of an upload. Each URL signs its part's length and SHA-256: send method to url with exactly headers and the part's bytes, and keep the response's ETag for finalizing. A URL works until expiresAt; presign again after that. */
+        post: operations["presignArtifactShareParts"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/uploads/abort": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Cancels an upload and discards its parts. */
+        post: operations["abortArtifactShareUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/artifact-shares/finalize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Finishes an upload from every one of its parts, in order, and publishes it: 201 with a new link, or 200 with replaced true when it updated or restored the document's link. The link limit is checked again, so 409 artifact_share_limit_reached can still come back here. 400 artifact_share_parts_invalid when the parts do not make up the upload; 409 artifact_share_upload_gone when it was already finalized, cancelled or expired (start again); 400 artifact_share_upload_invalid for a token that is not this user's or has expired. */
+        post: operations["finalizeArtifactShare"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3430,6 +3504,75 @@ export interface components {
             unlimited?: boolean;
             /** @description How many active links the user holds; revoked links do not count. */
             used: number;
+            /**
+             * Format: int64
+             * @description The largest file the user may share; absent when their plan has no size limit.
+             */
+            maxBytes?: number;
+        };
+        ArtifactShareUploadInput: {
+            /** @description The file name, without a directory. */
+            name: string;
+            /** Format: int64 */
+            size: number;
+            /** @description The whole file's SHA-256. */
+            sha256: string;
+            project?: string;
+            feature?: string;
+            /**
+             * Format: uuid
+             * @description Set to update this active link instead of publishing a document.
+             */
+            shareId?: string;
+        };
+        ArtifactShareUpload: {
+            /** @description Names the upload in the calls that follow; opaque. */
+            uploadToken: string;
+            /**
+             * Format: date-time
+             * @description When the upload can no longer be finalized.
+             */
+            expiresAt: string;
+            /** Format: int64 */
+            partSize: number;
+            partCount: number;
+        };
+        ArtifactShareUploadRef: {
+            uploadToken: string;
+        };
+        ArtifactShareUploadPartsInput: {
+            uploadToken: string;
+            parts: {
+                partNumber: number;
+                /** @description The part's SHA-256. */
+                sha256: string;
+            }[];
+        };
+        ArtifactSharePresignedParts: {
+            parts: {
+                partNumber: number;
+                method: string;
+                url: string;
+                headers: {
+                    [key: string]: string;
+                };
+                /**
+                 * Format: int64
+                 * @description The part's length in bytes.
+                 */
+                size: number;
+            }[];
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        ArtifactShareFinalizeInput: {
+            uploadToken: string;
+            parts: {
+                partNumber: number;
+                sha256: string;
+                /** @description The ETag the part's PUT returned. */
+                etag: string;
+            }[];
         };
         PublicArtifactShare: {
             linkId: string;
@@ -4419,6 +4562,113 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createArtifactShareUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareUploadInput"];
+            };
+        };
+        responses: {
+            /** @description The upload, ready for its parts. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactShareUpload"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    presignArtifactShareParts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareUploadPartsInput"];
+            };
+        };
+        responses: {
+            /** @description The presigned parts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePresignedParts"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    abortArtifactShareUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareUploadRef"];
+            };
+        };
+        responses: {
+            /** @description The upload was cancelled. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    finalizeArtifactShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactShareFinalizeInput"];
+            };
+        };
+        responses: {
+            /** @description The document's existing link, now serving the uploaded file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
+                };
+            };
+            /** @description The new share link. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactSharePublishResult"];
+                };
             };
             default: components["responses"]["Error"];
         };

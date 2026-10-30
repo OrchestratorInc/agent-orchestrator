@@ -126,7 +126,11 @@ paths:
     post:
       operationId: createArtifactShare
       tags: [Artifacts]
+      deprecated: true
       description: >-
+        Deprecated: publish through createArtifactShareUpload and
+        finalizeArtifactShare, which upload straight to storage and have no
+        size cap on paid plans. This route keeps the free plan's size cap.
         Publishes the request body, one file from a local session, as the
         link of the document named by project, feature and name. A new
         document gets a new public link under a random 26-character link ID
@@ -184,7 +188,9 @@ paths:
     put:
       operationId: updateArtifactShare
       tags: [Artifacts]
+      deprecated: true
       description: >-
+        Deprecated: update through createArtifactShareUpload with shareId.
         Replaces the file an existing link serves. The link keeps its URL and
         does not count against the limit again. name must match the link's
         file name, which is part of its document; another name returns 409
@@ -214,12 +220,118 @@ paths:
       tags: [Artifacts]
       description: >-
         Revokes a link: it stops serving at once, its stored file is deleted
-        after a grace period, and it frees its slot for another document.
-        Publishing the same document again restores its URL when a slot is
-        free. A link already revoked returns 404.
+        at once and purged from the CDN, and it frees its slot for another
+        document. Publishing the same document again uploads it again and
+        restores its URL when a slot is free. A link already revoked returns
+        404.
       responses:
         "204":
           description: The link was revoked.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/uploads:
+    post:
+      operationId: createArtifactShareUpload
+      tags: [Artifacts]
+      description: >-
+        Starts uploading one file from a local session straight to storage,
+        for a new document (project, feature, name), a revoked document to
+        restore, or an update of an active link (shareId, same name). The
+        file goes in partCount parts of partSize bytes, the last one shorter:
+        presign them with presignArtifactShareParts, PUT each, then
+        finalizeArtifactShare. Nothing reaches storage when the upload is
+        refused: 413 artifact_share_too_large for a file over the free plan's
+        maxBytes, 415 artifact_share_type_unsupported for video, 409
+        artifact_share_limit_reached for a new or restored document over the
+        free plan's link limit, 409 artifact_share_name_changed for an update
+        with another name. Paid plans have no size or link limit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareUploadInput"
+      responses:
+        "201":
+          description: The upload, ready for its parts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareUpload"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/uploads/parts:
+    post:
+      operationId: presignArtifactShareParts
+      tags: [Artifacts]
+      description: >-
+        Presigns up to 100 parts of an upload. Each URL signs its part's
+        length and SHA-256: send method to url with exactly headers and the
+        part's bytes, and keep the response's ETag for finalizing. A URL
+        works until expiresAt; presign again after that.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareUploadPartsInput"
+      responses:
+        "200":
+          description: The presigned parts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePresignedParts"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/uploads/abort:
+    post:
+      operationId: abortArtifactShareUpload
+      tags: [Artifacts]
+      description: Cancels an upload and discards its parts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareUploadRef"
+      responses:
+        "204":
+          description: The upload was cancelled.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/finalize:
+    post:
+      operationId: finalizeArtifactShare
+      tags: [Artifacts]
+      description: >-
+        Finishes an upload from every one of its parts, in order, and
+        publishes it: 201 with a new link, or 200 with replaced true when it
+        updated or restored the document's link. The link limit is checked
+        again, so 409 artifact_share_limit_reached can still come back here.
+        400 artifact_share_parts_invalid when the parts do not make up the
+        upload; 409 artifact_share_upload_gone when it was already finalized,
+        cancelled or expired (start again); 400 artifact_share_upload_invalid
+        for a token that is not this user's or has expired.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareFinalizeInput"
+      responses:
+        "200":
+          description: The document's existing link, now serving the uploaded file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
+        "201":
+          description: The new share link.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactSharePublishResult"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/artifact-shares/{linkId}:
@@ -6284,6 +6396,136 @@ components:
           type: integer
           minimum: 0
           description: How many active links the user holds; revoked links do not count.
+        maxBytes:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The largest file the user may share; absent when their plan has no size limit.
+    ArtifactShareUploadInput:
+      type: object
+      additionalProperties: false
+      required: [name, size, sha256]
+      properties:
+        name:
+          type: string
+          description: The file name, without a directory.
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: The whole file's SHA-256.
+        project:
+          type: string
+        feature:
+          type: string
+        shareId:
+          type: string
+          format: uuid
+          description: Set to update this active link instead of publishing a document.
+    ArtifactShareUpload:
+      type: object
+      additionalProperties: false
+      required: [uploadToken, expiresAt, partSize, partCount]
+      properties:
+        uploadToken:
+          type: string
+          description: Names the upload in the calls that follow; opaque.
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the upload can no longer be finalized.
+        partSize:
+          type: integer
+          format: int64
+        partCount:
+          type: integer
+          minimum: 1
+    ArtifactShareUploadRef:
+      type: object
+      additionalProperties: false
+      required: [uploadToken]
+      properties:
+        uploadToken:
+          type: string
+    ArtifactShareUploadPartsInput:
+      type: object
+      additionalProperties: false
+      required: [uploadToken, parts]
+      properties:
+        uploadToken:
+          type: string
+        parts:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            additionalProperties: false
+            required: [partNumber, sha256]
+            properties:
+              partNumber:
+                type: integer
+                minimum: 1
+              sha256:
+                type: string
+                pattern: "^[0-9a-f]{64}$"
+                description: The part's SHA-256.
+    ArtifactSharePresignedParts:
+      type: object
+      additionalProperties: false
+      required: [parts, expiresAt]
+      properties:
+        parts:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [partNumber, method, url, headers, size]
+            properties:
+              partNumber:
+                type: integer
+              method:
+                type: string
+              url:
+                type: string
+              headers:
+                type: object
+                additionalProperties:
+                  type: string
+              size:
+                type: integer
+                format: int64
+                description: The part's length in bytes.
+        expiresAt:
+          type: string
+          format: date-time
+    ArtifactShareFinalizeInput:
+      type: object
+      additionalProperties: false
+      required: [uploadToken, parts]
+      properties:
+        uploadToken:
+          type: string
+        parts:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [partNumber, sha256, etag]
+            properties:
+              partNumber:
+                type: integer
+                minimum: 1
+              sha256:
+                type: string
+                pattern: "^[0-9a-f]{64}$"
+              etag:
+                type: string
+                description: The ETag the part's PUT returned.
     PublicArtifactShare:
       type: object
       additionalProperties: false
