@@ -126,7 +126,8 @@ func TestFixedTunnelReadsAOCloudsNoFixedAddressAnswers(t *testing.T) {
 		status int
 		body   string
 	}{
-		{http.StatusServiceUnavailable, `{"code":"fixed_addresses_unavailable"}`},
+		{http.StatusNotFound, `{"code":"fixed_addresses_unavailable"}`},
+		{http.StatusServiceUnavailable, `{"code":"fixed_addresses_unavailable"}`}, // an older AO Cloud
 		{http.StatusConflict, `{"code":"fixed_address_limit_reached"}`},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

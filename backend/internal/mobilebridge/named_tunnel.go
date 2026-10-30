@@ -185,7 +185,7 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 		switch {
 		case resp.StatusCode == http.StatusUnauthorized && code == "unauthorized":
 			return NamedTunnel{}, errHostRefused
-		case resp.StatusCode == http.StatusServiceUnavailable && code == "fixed_addresses_unavailable",
+		case code == "fixed_addresses_unavailable" && (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusServiceUnavailable),
 			resp.StatusCode == http.StatusConflict && code == "fixed_address_limit_reached":
 			return NamedTunnel{}, errNoFixedAddresses
 		}
