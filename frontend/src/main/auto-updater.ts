@@ -210,6 +210,9 @@ let nativePreparationError: Error | undefined;
 // give up only after a stretch of no progress; fall back to a fixed cap when the
 // growth signal can't be read.
 const STAGE_POLL_INTERVAL_MS = 10_000;
+// Power events can be missed (including during DarkWake). A delayed JS timer
+// is a fallback sleep signal, not evidence that staging worked for that gap.
+const STAGE_TIMER_GAP_MS = 3 * STAGE_POLL_INTERVAL_MS;
 const STAGE_INACTIVITY_TIMEOUT_MS = 90_000;
 // After ditto finishes extracting, ShipIt verifies the code signature: a
 // read-only phase where the staging bytes plateau while real work continues.
@@ -237,7 +240,7 @@ function requiredFreeBytesToStage(archiveBytes: number | undefined): number {
 }
 // Short user-facing lines; the raw ditto/pkzip/codesign detail is logged, not shown.
 const STAGE_STALL_MESSAGE = "Couldn't finish preparing the update. AO stayed open. Relaunch AO to try again.";
-const STAGE_DISK_MESSAGE = "Not enough disk space to install the update. Free up space, then retry.";
+const STAGE_DISK_MESSAGE = "Not enough disk space to install the update. Free up space, then try again.";
 let nativePreparationBlocked: Error | undefined;
 // A stage refused by the disk preflight. Unlike a stall nothing reached
 // Squirrel, so this is not sticky: every updater operation re-probes the disk,
@@ -395,6 +398,7 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
       // fresh inactivity window. Total active work still has the absolute cap.
       stagingDir = macShipItDir();
       lastProgressAt = preparationNow();
+      lastTickAt = Date.now();
     },
     finish(error?: Error) {
       if (nativePreparation !== preparation) return;
@@ -416,6 +420,7 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
   // signal never engages and every stage falls back to the flat no-signal cap.
   let stagingDir = macShipItDir();
   const startedAt = preparationNow();
+  let lastTickAt = Date.now();
   let lastBytes = readStagingBytes(stagingDir);
   let lastProgressAt = startedAt;
   recordUpdateDiagnostic("native-preparation-started", {
@@ -439,7 +444,25 @@ function beginNativePreparation(version: string, archiveBytes?: number): void {
     broadcast(stagedDownloadedStatus());
   };
   const watchdog = setInterval(() => {
-    if (preparationSuspendedAt !== undefined) return;
+    const wallNow = Date.now();
+    const tickGapMs = wallNow - lastTickAt;
+    lastTickAt = wallNow;
+    if (preparationSuspendedAt !== undefined) {
+      // Executing JS is itself proof we are awake. Never leave the clock
+      // frozen forever waiting for a resume event that may not arrive.
+      const suspendedMs = Math.max(0, wallNow - preparationSuspendedAt);
+      preparationSuspendedMs += suspendedMs;
+      preparationSuspendedAt = undefined;
+      preparation.resume();
+      recordUpdateDiagnostic("native-preparation-resumed", { suspendedMs, source: "watchdog-tick" });
+    } else if (tickGapMs > STAGE_TIMER_GAP_MS || tickGapMs < 0) {
+      // Credit one normal poll after a long gap; exclude the rest. The same
+      // adjustment keeps a backwards wall-clock change from extending budgets.
+      const excludedMs = tickGapMs < 0 ? tickGapMs : tickGapMs - STAGE_POLL_INTERVAL_MS;
+      preparationSuspendedMs += excludedMs;
+      preparation.resume();
+      recordUpdateDiagnostic("native-preparation-clock-gap", { tickGapMs, excludedMs });
+    }
     const now = preparationNow();
     if (stagingDir === undefined) stagingDir = macShipItDir();
     const bytes = readStagingBytes(stagingDir);
@@ -1958,6 +1981,9 @@ function wireUpdaterEvents(): void {
       nativePreparation?.finish(short);
       nativeReadyVersion = undefined;
       nativePreparationError = short;
+      // Preparation may already be ready while install awaits the helper or
+      // relaunch marker. Reject that request too, so late waits cannot quit AO.
+      rejectNativeOperation?.(short);
       if (macRestartRequested) {
         macRestartRequested = false;
         macRestartPreparation = undefined;
@@ -2963,6 +2989,7 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
   let installAbandoned = false;
   const assertInstallActive = () => {
     if (installAbandoned) throw new Error("Update preparation cancelled. Confirm installation again.");
+    if (nativePreparationError) throw nativePreparationError;
   };
   macRestartPreparation = runSerializedUpdaterOperation("manual-install", async () => {
     let progress: Awaited<ReturnType<typeof startMacUpdateProgress>> | undefined;
