@@ -2086,10 +2086,13 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const server = detail?.server ?? detail?.namespace;
 	const sourceLabel = server ? `MCP · ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
 	const failed = activity.status === "failed" || detail?.success === false || Boolean(detail?.error);
+	// Null counts as absent here: historical details store a missing payload as
+	// JSON null, and `null !== undefined` is true — a row with only nulls was
+	// expandable and opened onto a literal "null".
 	const hasBody = Boolean(
-			detail?.arguments !== undefined ||
-			detail?.result !== undefined ||
-			detail?.content !== undefined ||
+			detail?.arguments != null ||
+			detail?.result != null ||
+			detail?.content != null ||
 			detail?.error ||
 			detail?.progress,
 	);
@@ -2154,13 +2157,13 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 							{detail.error}
 						</p>
 					) : null}
-					{detail?.arguments !== undefined ? (
+					{detail?.arguments != null ? (
 						<JsonPayload label="Arguments" value={detail.arguments} />
 					) : null}
-					{detail?.result !== undefined ? (
+					{detail?.result != null ? (
 						<JsonPayload label="Result" value={detail.result} />
 					) : null}
-					{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
+					{detail?.content != null ? <ToolContent value={detail.content} /> : null}
 					{detail?.progress ? (
 						<div className="flex flex-col gap-1">
 							<span className="text-caption text-muted-foreground/70">

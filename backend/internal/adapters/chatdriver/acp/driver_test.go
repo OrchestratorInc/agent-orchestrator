@@ -3066,8 +3066,8 @@ func TestACPDriverExtractsCommandFromExecuteToolInput(t *testing.T) {
 	if detail["rawCommand"] != "/bin/zsh -lc 'ao session ls'" {
 		t.Fatalf("detail.rawCommand = %#v, want the verbatim provider command", detail["rawCommand"])
 	}
-	if detail["input"] == nil {
-		t.Fatalf("detail.input dropped: %#v", detail)
+	if detail["arguments"] == nil {
+		t.Fatalf("detail.arguments dropped: %#v", detail)
 	}
 }
 
@@ -3095,15 +3095,26 @@ func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
 		if strings.Contains(string(raw), `\u003cp\u003ex\u003c/p\u003e`) || strings.Contains(string(raw), shot) {
 			t.Fatalf("%s detail stored the page or the screenshot: %.300s", name, raw)
 		}
-		var detail struct {
-			Input map[string]any `json:"input"`
-		}
-		if err := json.Unmarshal(raw, &detail); err != nil {
-			t.Fatal(err)
-		}
-		if detail.Input["truncated"] != true {
-			t.Fatalf("%s input = %v, want the truncation marker", name, detail.Input)
-		}
+	}
+	// The tool event stores the call's input under the neutral `arguments` key;
+	// the approval card keeps the provider-shaped `input`.
+	var toolDetail struct {
+		Arguments map[string]any `json:"arguments"`
+	}
+	if err := json.Unmarshal(event.Detail, &toolDetail); err != nil {
+		t.Fatal(err)
+	}
+	if toolDetail.Arguments["truncated"] != true {
+		t.Fatalf("tool arguments = %v, want the truncation marker", toolDetail.Arguments)
+	}
+	var approvalDetail struct {
+		Input map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(approval, &approvalDetail); err != nil {
+		t.Fatal(err)
+	}
+	if approvalDetail.Input["truncated"] != true {
+		t.Fatalf("approval input = %v, want the truncation marker", approvalDetail.Input)
 	}
 	var detail struct {
 		Content []json.RawMessage `json:"content"`
@@ -3119,6 +3130,27 @@ func TestACPToolDetailCapsInputAndDropsImageData(t *testing.T) {
 	}
 	if want := `[` + stub + `,{"text":"{\"width\":720}","type":"text"}]`; detail.Output != want {
 		t.Fatalf("output = %s\nwant     %s", detail.Output, want)
+	}
+}
+
+// A tool call that carries no input and no content — hermes' delegate "Agent
+// tool" call is the live case — must not store JSON nulls in its detail: the
+// timeline expanded the row onto a literal "null" body, reading as data when
+// it is only absence.
+func TestACPToolDetailOmitsMissingInputAndContent(t *testing.T) {
+	tool := &toolState{id: "agent-1", kind: acpsdk.ToolKindOther, status: acpsdk.ToolCallStatusCompleted}
+	event := (&conversation{}).toolEvent("turn-1", tool, true)
+	var detail map[string]any
+	if err := json.Unmarshal(event.Detail, &detail); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"arguments", "input", "content", "locations"} {
+		if _, ok := detail[key]; ok {
+			t.Fatalf("detail.%s stored for a call with no input or content: %#v", key, detail)
+		}
+	}
+	if strings.Contains(string(event.Detail), "null") {
+		t.Fatalf("detail contains JSON null: %s", event.Detail)
 	}
 }
 
@@ -3157,16 +3189,16 @@ func TestACPToolDetailKeepsReadContentAndSmallInput(t *testing.T) {
 		content:  []acpsdk.ToolCallContent{acpsdk.ToolContent(acpsdk.TextBlock(file))},
 	}
 	var detail struct {
-		Input   map[string]any           `json:"input"`
-		Content []acpsdk.ToolCallContent `json:"content"`
+		Arguments map[string]any           `json:"arguments"`
+		Content   []acpsdk.ToolCallContent `json:"content"`
 	}
 	if err := json.Unmarshal((&conversation{}).toolEvent("turn-1", tool, true).Detail, &detail); err != nil {
 		t.Fatal(err)
 	}
-	if detail.Input["file_path"] != "/repo/main.go" || len(detail.Content) != 1 ||
+	if detail.Arguments["file_path"] != "/repo/main.go" || len(detail.Content) != 1 ||
 		detail.Content[0].Content == nil || detail.Content[0].Content.Content.Text == nil ||
 		detail.Content[0].Content.Content.Text.Text != file {
-		t.Fatalf("read detail changed: input=%v content=%+v", detail.Input, detail.Content)
+		t.Fatalf("read detail changed: arguments=%v content=%+v", detail.Arguments, detail.Content)
 	}
 }
 
