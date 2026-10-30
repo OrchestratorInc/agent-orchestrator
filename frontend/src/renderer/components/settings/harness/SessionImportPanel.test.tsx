@@ -5,7 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { workspaceQueryKey } from "../../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../../lib/agent-options";
 import type { WorkspaceSummary } from "../../../types/workspace";
-import { SessionImportPanel } from "./SessionImportPanel";
+import { IMPORTABLE_AGENTS, SessionImportPanel } from "./SessionImportPanel";
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("../../../lib/api-client", () => ({
 	apiClient: api,
@@ -36,6 +36,18 @@ beforeEach(() => {
 	});
 	api.POST.mockResolvedValue({ data: { results: [{ id: "older", status: "created", sessionId: "standalone-1" }] } });
 });
+it("offers Qwen chats for import", () => {
+	expect(IMPORTABLE_AGENTS.has("qwen")).toBe(true);
+});
+
+it("lists Qwen chats for import", async () => {
+	api.GET.mockResolvedValue({
+		data: { candidates: [{ ...chat, id: "qwen-1", title: "Qwen chat", projectId: "project", harness: "qwen" }] },
+	});
+	renderPanel("qwen");
+	expect(await screen.findByRole("checkbox", { name: "Import Qwen chat" })).toBeInTheDocument();
+});
+
 it("lists only this agent's chats, preselects recent ones and imports only the selection", async () => {
 	renderPanel();
 	const recent = await screen.findByRole("checkbox", { name: "Import Fix parser" });

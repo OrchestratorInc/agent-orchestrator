@@ -50,7 +50,7 @@ import type { Theme } from "../../stores/ui-store";
 import { can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
-import type { WorkspaceSession } from "../../types/workspace";
+import { isHistoryOnlyImport, type WorkspaceSession } from "../../types/workspace";
 import { ComposerErrorNotice, switchEffort, type PendingAgentSwitch } from "./AgentSwitchPicker";
 import { AGENT_SWITCH_FAILED } from "./ChatComposer";
 import { useUiStore } from "../../stores/ui-store";
@@ -204,6 +204,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 }) {
 	const { t } = useTranslation();
 	const uiSessionId = sessionUiKey(session.id, hostId);
+	// A history-only import (e.g. Qwen) is shown but never resumed: the provider
+	// cannot reopen its native conversation from AO's worktree.
+	const importReadOnly = isHistoryOnlyImport(session);
 	const {
 		snapshot: queriedSnapshot,
 		isLoading,
@@ -650,7 +653,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				remoteHostId={hostId}
 				snapshot={renderSnapshot}
 				promptSuggestion={promptSuggestion}
-				newWorkDisabled={newWorkDisabled}
+				newWorkDisabled={newWorkDisabled || importReadOnly}
+				importReadOnly={importReadOnly}
+				composerLockedPlaceholder={importReadOnly ? t("sessionImport.readOnlyComposer") : undefined}
 				onLinkOpen={openLinkInBrowser}
 				onSessionLinkOpen={openSessionLink}
 				sessionTitle={session.title}
@@ -764,13 +769,17 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				commandError={commands.error}
 				agentSwitch={agentSwitch}
-				composerNotice={interfaceSwitch?.errorNotice ?? (switchError ? (
+				composerNotice={importReadOnly ? (
+					<p className="rounded-[var(--radius-chat-composer)] border border-border bg-surface px-4 py-2.5 text-xs leading-snug text-muted-foreground">
+						{t("sessionImport.readOnlyNotice", { agent: agentLabel(session.provider) })}
+					</p>
+				) : (interfaceSwitch?.errorNotice ?? (switchError ? (
 					<ComposerErrorNotice
 						title={t("agentSwitch.couldNotSwitch")}
 						message={apiErrorMessage(switchError)}
 						onDismiss={clearSwitchError}
 					/>
-				) : undefined)}
+				) : undefined))}
 				onDecide={commands.resolve}
 				onResolveInput={commands.resolveInput}
 				onInterrupt={commands.interrupt}

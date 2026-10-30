@@ -3534,6 +3534,8 @@
 	"files.finishEditingToOpen": "Save or cancel editing before opening in the center.",
 	"files.previousVersionAt": "Previous version at {{revision}}",
 	"sessionImport.description": "이 컴퓨터의 {{agent}} 대화를 가져옵니다. 아직 프로젝트가 아닌 Git 폴더의 대화는 그 폴더를 프로젝트로 추가합니다.",
+	"sessionImport.readOnlyComposer": "가져온 이 채팅은 읽기 전용입니다.",
+	"sessionImport.readOnlyNotice": "이 {{agent}} 채팅은 읽기 전용으로 가져왔습니다. {{agent}}은(는) 채팅이 시작된 폴더에서만 대화를 이어갈 수 있습니다.",
 	"sessionImport.allProjects": "모든 프로젝트 및 독립 대화",
 	"sessionImport.selectionHelp": "지난 30일 동안 활동한 대화가 미리 선택됩니다. 이전 대화도 선택할 수 있습니다. 가져온 모든 세션은 대기 상태로 유지됩니다.",
 	"sessionImport.reading": "로컬 기록 읽는 중…",

@@ -5266,6 +5266,7 @@ export interface components {
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;
+            historyOnly: boolean;
             id: string;
             isPinned: boolean;
             isTerminated: boolean;

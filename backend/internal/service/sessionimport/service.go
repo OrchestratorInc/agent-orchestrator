@@ -105,7 +105,11 @@ func New(store Store, dataDir string) *Service {
 	if codex == "" {
 		codex = filepath.Join(home, ".codex")
 	}
-	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex}}
+	qwen := os.Getenv(qwenHomeEnv)
+	if qwen == "" {
+		qwen = filepath.Join(home, ".qwen")
+	}
+	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessQwen: qwen}}
 	if dataDir != "" {
 		s.excluded = []string{canonical(dataDir)}
 	}
@@ -334,6 +338,18 @@ func repositoryRoot(common string) string {
 
 var errManagedByAO = errors.New("this conversation already belongs to an AO session")
 
+// historyOnlyImportHarnesses lists harnesses whose imports AO can only display,
+// never resume: their native resume is keyed to the original folder, so a chat
+// cannot be reopened from AO's worktree. Each such harness registers itself here.
+var historyOnlyImportHarnesses = map[domain.AgentHarness]bool{
+	domain.HarnessQwen: true,
+}
+
+// historyOnlyImport reports whether a harness's imports are history-only.
+func historyOnlyImport(harness domain.AgentHarness) bool {
+	return historyOnlyImportHarnesses[harness]
+}
+
 func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 	sum := sha256.Sum256([]byte(string(harness) + "\x00" + root + "\x00" + nativeID))
 	return hex.EncodeToString(sum[:])
@@ -371,6 +387,10 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 			}
 		case domain.HarnessCodex:
 			if key = codexThreadID(path); key == "" {
+				return nil
+			}
+		case domain.HarnessQwen:
+			if !qwenIsTranscript(path, entry.Name()) {
 				return nil
 			}
 		}
@@ -419,7 +439,9 @@ func codexSegments(paths []string) []string {
 // nativeID names the conversation as readTranscript will: Claude's file name,
 // Codex's thread id.
 func (f sourceFiles) nativeID() string {
-	if f.harness == domain.HarnessClaudeCode && len(f.paths) > 0 {
+	// Claude and Qwen name each conversation by its own <id>.jsonl file; Codex's
+	// id is the thread recorded inside the rollout.
+	if len(f.paths) > 0 && (f.harness == domain.HarnessClaudeCode || f.harness == domain.HarnessQwen) {
 		return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
 	}
 	return f.key
@@ -461,7 +483,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessQwen}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {
@@ -619,7 +641,7 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 		}
 		now := time.Now().UTC()
 		rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: domain.SessionModeChat, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
-		rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd}}
+		rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd, HistoryOnly: historyOnlyImport(source.harness)}}
 		// Claude resumes on the user's default model unless told otherwise; keep the chat's own.
 		if source.harness == domain.HarnessClaudeCode {
 			rec.Metadata.Model = source.model

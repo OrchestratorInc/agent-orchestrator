@@ -550,6 +550,23 @@ func TestStartupHealthKeepsIdleImportedHistory(t *testing.T) {
 	}
 }
 
+// A history-only import (e.g. Qwen) is never resumed: preparing its workspace
+// stops with ErrImportHistoryOnly instead of creating a worktree or launching
+// the provider, because the provider cannot reopen the chat from AO's worktree.
+func TestHistoryOnlyImportIsNotResumed(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	rec := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessQwen, Mode: domain.SessionModeChat, Activity: domain.Activity{State: domain.ActivityIdle}, ProvisionState: domain.SessionProvisionReady}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "native", ImportSource: &domain.SessionImportSource{NativeID: "native", ConfigDir: "/provider-home", HistoryOnly: true}}
+	st.sessions[rec.ID] = rec
+	if _, err := m.prepareImportedWorkspace(context.Background(), rec, st.projects["mer"]); !errors.Is(err, ErrImportHistoryOnly) {
+		t.Fatalf("prepareImportedWorkspace err = %v, want ErrImportHistoryOnly", err)
+	}
+	if len(launcher.started) != 0 {
+		t.Fatalf("history-only import launched a provider: %d", len(launcher.started))
+	}
+}
+
 // Provider worktrees are often deleted once their branch merges; the imported
 // conversation still continues natively from the project checkout.
 func TestImportedSessionWhoseFolderIsGoneStartsFromProjectCheckout(t *testing.T) {

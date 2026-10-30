@@ -184,6 +184,8 @@ export type WorkspaceSession = {
 	chatProviderPreserved?: boolean;
 	/** An imported chat not opened yet: it has no AO workspace until it resumes. */
 	needsResume?: boolean;
+	/** A history-only import the provider cannot resume from AO's worktree: shown read-only. */
+	historyOnly?: boolean;
 	/** User preference to tear down this session when its PR set completes through a merge. */
 	terminateOnPrMerge?: boolean;
 	/** Whether SCM review feedback is automatically injected into the worker. */
@@ -404,6 +406,16 @@ export function sortedWorkerSessions(sessions: WorkspaceSession[]): WorkspaceSes
 
 export function sessionIsActive(session: WorkspaceSession): boolean {
 	return session.isTerminated !== true && session.status !== "terminated";
+}
+
+/**
+ * A history-only import: the daemon marks it (via `historyOnly`) as an import it
+ * can show but never resume, because the provider cannot reopen the native
+ * conversation from AO's worktree. Such a session offers no Resume agent control
+ * and never auto-resumes.
+ */
+export function isHistoryOnlyImport(session: WorkspaceSession | undefined): boolean {
+	return Boolean(session?.historyOnly);
 }
 
 /**

@@ -178,6 +178,11 @@ type SessionImportSource struct {
 	Transferred   bool   `json:"transferred"`
 	Prepared      bool   `json:"prepared"`
 	WorkingSubdir string `json:"workingSubdir,omitempty"`
+	// HistoryOnly marks an import that AO can show but never resume, because the
+	// provider cannot reopen a CLI-created conversation from AO's worktree (its
+	// native resume is keyed to the original folder). Such a session keeps its
+	// archive visible and never adopts a controller. See the Qwen adapter.
+	HistoryOnly bool `json:"historyOnly,omitempty"`
 	// HistoryThrough is the last conversation sequence the provider replayed
 	// while adopting. The timeline shows the archive in place of that replay.
 	HistoryThrough int64 `json:"historyThrough,omitempty"`
@@ -551,6 +556,10 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 // persisted.
 type Session struct {
 	NeedsResume bool `json:"needsResume"`
+	// HistoryOnly is a history-only import: shown but never resumed, because the
+	// provider cannot reopen the native conversation from AO's worktree. Derived
+	// from ImportSource.HistoryOnly so clients need not know which harnesses apply.
+	HistoryOnly bool `json:"historyOnly"`
 	SessionRecord
 	// WorkspaceCleanup is a durable teardown fact for the current generation.
 	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`

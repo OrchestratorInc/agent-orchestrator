@@ -63,6 +63,10 @@ func (m *Manager) importReplayedThrough(ctx context.Context, id domain.SessionID
 // ErrSessionOpenElsewhere requires the other writer to close; AO never takes it over.
 var ErrSessionOpenElsewhere = errors.New("this is open elsewhere; close it there to continue here")
 
+// ErrImportHistoryOnly reports an import AO can only display: the provider cannot
+// reopen a CLI-created conversation from AO's worktree, so AO never launches it.
+var ErrImportHistoryOnly = errors.New("this imported chat is read-only; its provider cannot continue it from another folder")
+
 // applyImportedConfigEnv points a launch at the provider home that owns the
 // imported conversation. It leaves a launch alone when that home already holds
 // the conversation: Claude Code keys its keychain login by CLAUDE_CONFIG_DIR, so
@@ -238,6 +242,12 @@ func importGit(ctx context.Context, path string, args ...string) ([]byte, error)
 }
 
 func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (domain.SessionRecord, error) {
+	// A history-only import is never resumed: the provider cannot reopen the
+	// native conversation from AO's worktree, so AO shows the archive and stops
+	// here rather than creating a workspace or launching the provider.
+	if source := rec.Metadata.ImportSource; source != nil && source.HistoryOnly {
+		return rec, ErrImportHistoryOnly
+	}
 	if importOwnedElsewhere(ctx, rec) {
 		return rec, ErrSessionOpenElsewhere
 	}
