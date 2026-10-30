@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/linkpreview"
@@ -46,6 +47,7 @@ func (c *LinkPreviewController) preview(w http.ResponseWriter, r *http.Request) 
 		// apierr and goes through the standard mapping (400 invalid URL, 404
 		// non-HTML page).
 		if errors.Is(err, linkpreview.ErrFetchFailed) {
+			envelope.CaptureError(r, apierr.Internal("LINK_PREVIEW_FETCH_FAILED", "Link preview fetch failed"))
 			envelope.WriteAPIError(w, r, http.StatusBadGateway, "bad_gateway", "LINK_PREVIEW_FETCH_FAILED", "The page could not be fetched for a link preview", nil)
 			return
 		}

@@ -171,6 +171,7 @@ type AppSetting struct {
 	CloudOffering      bool
 	HarnessDefaults    string
 	VersionRefresh     bool
+	ComputerUse        bool
 }
 
 type Automation struct {
@@ -416,6 +417,8 @@ type ConversationTurn struct {
 	UsageLimitResetsAt    sql.NullTime
 	UsageLimitAutoResume  int64
 	UsageLimitResumeError string
+	BatchedInput          int64
+	ProviderInputText     string
 }
 
 type Cue struct {
@@ -879,6 +882,28 @@ type UsageCodexSourceDiscovery struct {
 	NativeSessionID        string
 	DiscoveredChildIdsJson string
 	HasMixedChildTypes     int64
+}
+
+type UsageMessageSummary struct {
+	SessionID    string
+	PendingCount int64
+	FirstAt      sql.NullTime
+	LastAt       sql.NullTime
+}
+
+type UsagePRMeasurement struct {
+	PRKey              string
+	ProjectID          string
+	Historical         int64
+	HistoricalMerged   int64
+	AssociatedReported int64
+	MergedReported     int64
+}
+
+type UsageProjectIdentity struct {
+	ProjectID   string
+	InstallID   string
+	TelemetryID string
 }
 
 type UsageSessionIntegrity struct {

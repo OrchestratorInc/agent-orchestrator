@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -24,6 +25,7 @@ import (
 
 // APIDeps bundles every service the API layer's controllers depend on.
 type APIDeps struct {
+	UsageFlush         func(context.Context)
 	Awake              controllers.AwakeService
 	Agents             controllers.AgentCatalog
 	CodexAccounts      controllers.CodexAccountService
@@ -66,6 +68,7 @@ type APIDeps struct {
 	Mobile                   *controllers.MobileController
 	BrowserLive              *BrowserLiveHub
 	Browser                  controllers.BrowserService
+	BrowserChrome            controllers.BrowserChromeService
 	PreviewServer            controllers.ManagedPreviewServer
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
@@ -78,7 +81,9 @@ type APIDeps struct {
 	// phone's endpoint-refresh route.
 	Endpoints controllers.EndpointSource
 	Installer controllers.Installer
-	AgentAuth controllers.AgentAuthService
+	// ComputerUse is the Cua Driver integration behind Settings and the computer-use tools.
+	ComputerUse controllers.ComputerUse
+	AgentAuth   controllers.AgentAuthService
 	// GitHub is the local GitHub PAT + repos surface.
 	GitHub controllers.GitHubPATService
 	// LinkPreview unfurls external URLs for the renderer's hover cards; nil
@@ -152,6 +157,7 @@ type API struct {
 	endpoints     *controllers.EndpointsController
 	telemetryID   *controllers.TelemetryIdentityController
 	systemInstall *controllers.SystemInstallController
+	computerUse   *controllers.ComputerUseController
 	agentAuth     *controllers.AgentAuthController
 	linkPreview   *controllers.LinkPreviewController
 	github        *controllers.GitHubController
@@ -209,12 +215,13 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir), Search: deps.ConversationSearch},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
-		browser:       &controllers.BrowserController{Svc: deps.Browser},
+		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
 		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity},
 		systemInstall: &controllers.SystemInstallController{Installer: deps.Installer},
+		computerUse:   &controllers.ComputerUseController{Svc: deps.ComputerUse},
 		agentAuth:     &controllers.AgentAuthController{Svc: deps.AgentAuth},
 		linkPreview:   &controllers.LinkPreviewController{Svc: deps.LinkPreview},
 		github:        &controllers.GitHubController{Svc: deps.GitHub},
@@ -267,12 +274,20 @@ func (a *API) Register(root chi.Router) {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
 				clone := middleware.Timeout(max(timeout, 30*time.Minute))(next)
+				computerUse := middleware.Timeout(max(timeout, 2*time.Minute))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					// A clone downloads the whole repository inside the request,
 					// which takes minutes for a large repository.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/projects/clone" ||
 						pattern == "/api/v1/projects/clone/prepare" {
 						clone.ServeHTTP(w, req)
+						return
+					}
+					// A run_steps batch may run for the driver's full 60 s before
+					// its step report and closing window read, and an action is
+					// followed by its own read: either outlasts the REST budget.
+					if chi.RouteContext(req.Context()).RoutePattern() == "/api/v1/computer-use/call" {
+						computerUse.ServeHTTP(w, req)
 						return
 					}
 					// A spawn, an orchestrator start or a restore runs the project's
@@ -329,6 +344,7 @@ func (a *API) Register(root chi.Router) {
 			a.endpoints.Register(r)
 			a.telemetryID.Register(r)
 			a.systemInstall.Register(r)
+			a.computerUse.Register(r)
 			a.agentAuth.Register(r)
 			a.linkPreview.Register(r)
 			a.github.Register(r)

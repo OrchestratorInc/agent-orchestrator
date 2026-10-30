@@ -537,6 +537,9 @@ type Manager struct {
 	// nil means they do not (see SetVersionRefreshPolicy).
 	versionPolicyMu sync.Mutex
 	versionPolicy   func() VersionRefreshPolicy
+	// computerUse reports the "Let agents use this computer" setting; nil is off.
+	computerUseMu sync.Mutex
+	computerUse   func(context.Context) bool
 	// versionTelemetry receives version-move events; nil drops them.
 	versionTelemetryMu sync.Mutex
 	versionTelemetry   ports.EventSink
@@ -5986,6 +5989,9 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	if pointer := strings.TrimSpace(m.aoSkillPointer(chat)); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)
 	}
+	if chat && m.computerUseEnabled(ctx) {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, computerUsePrompt(skillassets.Dir(m.dataDir)))
+	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactPrompt)
 	}
@@ -6174,8 +6180,9 @@ func (m *Manager) artifactPrompt(id domain.SessionID, chat bool) string {
 // artifactOutputPrompt is added for a session spawned with the artifact output
 // kind.
 const artifactOutputPrompt = "## Artifact Output\n\n" +
-	"The user's request in this session is for an artifact. Write the finished deliverable as a file in the session artifact directory: HTML for visual work such as pages, dashboards, and diagrams; Markdown for documents. " +
-	"Do not open a pull request, and do not commit the deliverable to the git workspace. If the request is unclear, ask the user what the artifact should contain before writing it."
+	"The initial deliverable for this session is an artifact. Write the finished deliverable as a file in the session artifact directory: HTML for visual work such as pages, dashboards, and diagrams; Markdown for documents. " +
+	"Do not commit the artifact deliverable to the git workspace. Do not push or open a PR/MR unless a later direct human instruction or authorized orchestrator scope update explicitly authorizes one in this same session. " +
+	"If the artifact request is unclear, ask the user what it should contain before writing it."
 
 func (m *Manager) cleanupSystemPromptDir(id domain.SessionID) {
 	dir := m.systemPromptDir(id)

@@ -1,6 +1,6 @@
 // A bare Electron window for running renderer e2e specs in the Chromium that AO
 // actually ships (AO_E2E_ELECTRON=1), which can differ from Playwright's own.
-// The throwaway profile goes to a temp directory, never the OS app-data folder.
+// Throwaway profiles stay under AO-owned dev state, never OS app-data folders.
 const { app, BrowserWindow } = require("electron");
 const fs = require("node:fs");
 const os = require("node:os");

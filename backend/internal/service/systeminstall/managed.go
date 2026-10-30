@@ -78,6 +78,9 @@ func (s *Service) SetBinaryInvalidator(invalidate func(Target)) {
 
 // managedEligible reports whether an update through plan installs side by side.
 func (s *Service) managedEligible(plan Plan) bool {
+	if _, ok := s.officialManagedRecipeFor(plan); ok {
+		return s.managedRoot != "" && !plan.Unsupported
+	}
 	return s.managedRoot != "" && s.installCommands != nil && managedMethods[plan.Method] &&
 		plan.Package != "" && !plan.Unsupported &&
 		// A managed npm copy installs and runs with the npm and Node on PATH,
@@ -90,13 +93,22 @@ func (s *Service) managedTargetDir(target Target) string {
 	return filepath.Join(s.managedRoot, string(target))
 }
 
-// isManagedPath reports whether path is one of AO's managed launchers or
-// installs, which no package manager's ownership check recognises.
+// isManagedPath reports whether the executable lives in AO's managed root.
+// A launcher in bin may instead link to a user's external installation;
+// that installation keeps its own owner, regardless of the launcher's location.
 func (s *Service) isManagedPath(path string) bool {
 	if s.managedRoot == "" || path == "" {
 		return false
 	}
-	rel, err := filepath.Rel(s.managedRoot, path)
+	root, err := filepath.EvalSymlinks(s.managedRoot)
+	if err != nil {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, resolved)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
@@ -253,16 +265,23 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 			pin = baseline.latest
 		}
 	}
-	argv, extraEnv := managedInstallCommand(plan.Method, pkg, pin, dir)
-	if argv == nil {
-		return installFailed(fmt.Sprintf("%s cannot install a side-by-side copy.", installMethodLabel(plan.Method)), nil)
-	}
-	_, _ = fmt.Fprintf(out, "Installing %s into %s\n", pkg, dir)
-	if err := s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: append(append([]string(nil), env...), extraEnv...)}, out, out); err != nil {
-		return installFailed("The install command failed.", err)
+	binRel := managedBinRel(s.goos, plan.Method, cli)
+	if recipe, ok := s.officialManagedRecipeFor(plan); ok {
+		if err := s.runOfficialManagedInstall(ctx, plan, recipe, pin, dir, env, out); err != nil {
+			return err
+		}
+		binRel = recipe.binRel
+	} else {
+		argv, extraEnv := managedInstallCommand(plan.Method, pkg, pin, dir)
+		if argv == nil {
+			return installFailed(fmt.Sprintf("%s cannot install a side-by-side copy.", installMethodLabel(plan.Method)), nil)
+		}
+		_, _ = fmt.Fprintf(out, "Installing %s into %s\n", pkg, dir)
+		if err := s.installCommands.RunInstall(ctx, ports.InstallCommand{Argv: argv, Env: append(append([]string(nil), env...), extraEnv...)}, out, out); err != nil {
+			return installFailed("The install command failed.", err)
+		}
 	}
 
-	binRel := managedBinRel(s.goos, plan.Method, cli)
 	binary := filepath.Join(dir, binRel)
 	if _, err := os.Stat(binary); err != nil {
 		return installFailed(fmt.Sprintf("Installed, but %s was not found.", cli), fmt.Errorf("%s is missing", binary))

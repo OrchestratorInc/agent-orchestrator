@@ -1020,6 +1020,33 @@ func (q *Queries) MovePRAliasReviews(ctx context.Context, arg MovePRAliasReviews
 	return err
 }
 
+const recordWorkerPRUsage = `-- name: RecordWorkerPRUsage :exec
+INSERT INTO usage_pr_measurement (pr_key, project_id, associated_reported, merged_reported)
+SELECT CASE WHEN pr.provider_id <> '' AND pr.provider <> ''
+        THEN pr.provider || ':' || pr.host || ':' || pr.provider_id
+        ELSE pr.url END,
+    sessions.project_id,
+    CASE WHEN ?1 = 0 THEN 1 ELSE 0 END,
+    CASE WHEN ?1 = 0 AND pr.pr_state = 'merged' THEN 1 ELSE 0 END
+FROM pr JOIN sessions ON sessions.id = pr.session_id
+WHERE pr.url = ?2 AND sessions.kind = 'worker' AND sessions.project_id IS NOT NULL
+ON CONFLICT(pr_key) DO UPDATE SET
+    associated_reported = CASE WHEN ?1 = 0 THEN 1 ELSE usage_pr_measurement.associated_reported END,
+    merged_reported = CASE WHEN ?1 = 0 AND
+        (SELECT pr_state FROM pr WHERE url = ?2) = 'merged'
+        THEN 1 ELSE usage_pr_measurement.merged_reported END
+`
+
+type RecordWorkerPRUsageParams struct {
+	ExportAllowed interface{}
+	PRURL         string
+}
+
+func (q *Queries) RecordWorkerPRUsage(ctx context.Context, arg RecordWorkerPRUsageParams) error {
+	_, err := q.db.ExecContext(ctx, recordWorkerPRUsage, arg.ExportAllowed, arg.PRURL)
+	return err
+}
+
 const repointPRAliases = `-- name: RepointPRAliases :exec
 UPDATE pr_url_alias
 SET canonical_url = ?1
@@ -1088,6 +1115,22 @@ type UpdatePRLastNudgeSignatureParams struct {
 
 func (q *Queries) UpdatePRLastNudgeSignature(ctx context.Context, arg UpdatePRLastNudgeSignatureParams) error {
 	_, err := q.db.ExecContext(ctx, updatePRLastNudgeSignature, arg.LastNudgeSignature, arg.URL)
+	return err
+}
+
+const upgradeWorkerPRUsageIdentity = `-- name: UpgradeWorkerPRUsageIdentity :exec
+UPDATE OR IGNORE usage_pr_measurement
+SET pr_key = (SELECT pr.provider || ':' || pr.host || ':' || pr.provider_id FROM pr WHERE pr.url = ?1)
+WHERE pr_key IN (
+    SELECT alias_url FROM pr_url_alias WHERE canonical_url = ?1
+    UNION SELECT ?1
+)
+AND EXISTS (SELECT 1 FROM pr WHERE pr.url = ?1
+    AND pr.provider <> '' AND pr.provider_id <> '')
+`
+
+func (q *Queries) UpgradeWorkerPRUsageIdentity(ctx context.Context, prUrl string) error {
+	_, err := q.db.ExecContext(ctx, upgradeWorkerPRUsageIdentity, prUrl)
 	return err
 }
 

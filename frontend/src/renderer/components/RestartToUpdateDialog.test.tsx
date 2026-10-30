@@ -385,3 +385,16 @@ it("does not reuse old release notes when a replacement has none and allows canc
 	expect(updInstall).toHaveBeenCalledTimes(1);
 	expect(useUiStore.getState().updateInstallPromptOpen).toBe(false);
 });
+
+it("pairs the staged build with its own notes while a newer build downloads (#6607)", async () => {
+	useUiStore.setState({ updateInstallPromptOpen: true });
+	renderDialog({
+		state: "downloading",
+		version: "2.1.0",
+		percent: 40,
+		releaseNotes: "Newer build notes",
+		staged: { version: "2.0.0", stagedAt: 1, escalated: false, releaseNotes: "Staged build notes" },
+	});
+	expect(await screen.findByText(/Staged build notes/)).toBeVisible();
+	expect(screen.queryByText(/Newer build notes/)).toBeNull();
+});

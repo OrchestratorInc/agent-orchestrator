@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { selectionActionClass, selectionToolbarClass, selectionToolbarPosition, selectionViewport } from "../../lib/selection-toolbar";
@@ -11,19 +11,34 @@ export function SelectionAskButton({ onAsk, source }: { onAsk: () => boolean | v
 	const { t } = useTranslation();
 	const selection = useSyncExternalStore(source.subscribe, source.get, () => null);
 	const buttonRef = useRef<HTMLDivElement>(null);
+	const [rejected, setRejected] = useState(false);
+
+	useEffect(() => setRejected(false), [selection]);
 	const submitted = useRef<CodeSelection | null>(null);
 	const [accepted, setAccepted] = useState<CodeSelection | null>(null);
-	const activate = () => {
+	const activate = useCallback(() => {
 		if (!selection || selection.dragging || submitted.current === selection) return;
 		submitted.current = selection;
 		try {
-			if (onAsk() === false) submitted.current = null;
+			if (onAsk() === false) { submitted.current = null; setRejected(true); }
 			else setAccepted(selection);
 		} catch (error) {
 			submitted.current = null;
 			throw error;
 		}
-	};
+	}, [selection, onAsk]);
+	useEffect(() => {
+		if (!selection) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "l") {
+				event.preventDefault();
+				event.stopPropagation();
+				activate();
+			}
+		};
+		document.addEventListener("keydown", onKeyDown, true);
+		return () => document.removeEventListener("keydown", onKeyDown, true);
+	}, [selection, activate]);
 	// Geometry is independent of the code capture store and the Pierre surface.
 	useLayoutEffect(() => {
 		const button = buttonRef.current;
@@ -91,6 +106,7 @@ export function SelectionAskButton({ onAsk, source }: { onAsk: () => boolean | v
 			>
 				{label}
 			</button>
+			{rejected ? <span role="alert" className="max-w-56 px-2 text-xs text-muted-foreground">{t("files.addToChatRejected")}</span> : null}
 		</div>,
 		document.body,
 	);

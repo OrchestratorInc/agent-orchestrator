@@ -18,7 +18,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
@@ -5931,6 +5930,20 @@ func (f *fakeCommander) RequestKill(ctx context.Context, id domain.SessionID) (s
 	return sessionmanager.KillResult{Freed: freed}, err
 }
 
+func TestArchiveFlushesPendingUsageSummary(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st})
+	flushed := 0
+	svc.SetUsageArchiveFlush(func(context.Context) { flushed++ })
+	if _, err := svc.RequestKill(context.Background(), "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if flushed != 1 {
+		t.Fatalf("usage flushes = %d, want 1 after archive", flushed)
+	}
+}
+
 func TestSessionReadsExposeOnlyCurrentTerminatedCleanupFacts(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["mer-1"] = domain.SessionRecord{ID: "mer-1", ProjectID: "mer", IsTerminated: true, CleanupGeneration: 2}
@@ -6059,11 +6072,12 @@ func TestDeleteArtifactsAcceptsTheCanonicalArtifactDir(t *testing.T) {
 func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
 	var sentryErrs []error
 	var sentryTags []map[string]string
+	originalCapture := captureRelaunchError
 	captureRelaunchError = func(_ context.Context, err error, tags map[string]string, _ string) {
 		sentryErrs = append(sentryErrs, err)
 		sentryTags = append(sentryTags, tags)
 	}
-	t.Cleanup(func() { captureRelaunchError = sentryobs.CaptureHTTPError })
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
 	cause := sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("tmux: secret-token failed")}
 	fc := &fakeCommander{restoreErr: fmt.Errorf("resume agent mer-1: %w", &cause)}
 	sink := &fakeTelemetrySink{}
@@ -6109,9 +6123,216 @@ func TestResumeAgentMapsRelaunchFailureToConflict(t *testing.T) {
 	if len(sink.events) != 2 {
 		t.Fatalf("a client that left mid-relaunch is not a failure to count; events = %#v", sink.events)
 	}
-	// Sentry keeps the raw error the 500 used to carry, once per relaunch failure.
+	// The capture boundary receives the error, then removes its text before send.
 	if len(sentryErrs) != 2 || !strings.Contains(sentryErrs[0].Error(), "secret-token") ||
 		sentryTags[1]["operation"] != "restore_session" || sentryTags[1]["step"] != "runtime" {
 		t.Fatalf("sentry captures = %v / %v, want the raw error for both operations", sentryErrs, sentryTags)
+	}
+}
+
+// memMilestones is an in-memory ports.InstallMilestones.
+type memMilestones map[string]bool
+
+func (m memMilestones) Claim(name string) (bool, bool) {
+	if m[name] {
+		return false, true
+	}
+	m[name] = true
+	return true, true
+}
+
+func spawnedFirstForInstall(t *testing.T, sink *fakeTelemetrySink) (any, bool) {
+	t.Helper()
+	for i := len(sink.events) - 1; i >= 0; i-- {
+		if sink.events[i].Name == "ao.session.spawned" {
+			v, ok := sink.events[i].Payload["first_for_install"]
+			return v, ok
+		}
+	}
+	t.Fatalf("no ao.session.spawned in %#v", sink.events)
+	return nil, false
+}
+
+func TestSpawnFirstForInstallIsDurableNotTableEmpty(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink, Milestones: memMilestones{}})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got, _ := spawnedFirstForInstall(t, sink); got != true {
+		t.Fatalf("first spawn first_for_install = %#v, want true", got)
+	}
+	// The fake store stays empty, so the legacy table-empty event fires again;
+	// the durable flag must not.
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn again: %v", err)
+	}
+	if got, _ := spawnedFirstForInstall(t, sink); got != false {
+		t.Fatalf("second spawn first_for_install = %#v, want false", got)
+	}
+	var legacy int
+	for _, ev := range sink.events {
+		if ev.Name == "ao.onboarding.first_session_spawned" {
+			legacy++
+		}
+	}
+	if legacy != 2 {
+		t.Fatalf("legacy first_session_spawned count = %d, want 2 (kept for continuity)", legacy)
+	}
+}
+
+func TestSpawnFirstForInstallFalseForUpgradedInstallWithSessions(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	st.sessions["old"] = domain.SessionRecord{ID: "old", ProjectID: "mer"}
+	sink := &fakeTelemetrySink{}
+	milestones := memMilestones{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink, Milestones: milestones})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got, _ := spawnedFirstForInstall(t, sink); got != false {
+		t.Fatalf("first_for_install = %#v, want false for an install with prior sessions", got)
+	}
+	if !milestones["session_spawned"] {
+		t.Fatal("marker not claimed; a later empty table would report a false first")
+	}
+}
+
+func TestSpawnOmitsFirstForInstallWithoutMilestones(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink})
+
+	if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer"}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got, ok := spawnedFirstForInstall(t, sink); ok {
+		t.Fatalf("first_for_install = %#v, want absent", got)
+	}
+}
+
+// seedingStore guards the session map so a held spawn can write its seed row
+// while another spawn lists sessions.
+type seedingStore struct {
+	*fakeStore
+	mu *sync.Mutex
+}
+
+func (s seedingStore) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fakeStore.ListAllSessions(ctx)
+}
+
+// seedingCommander persists a seed row before "provisioning", like the real
+// manager, and can hold a spawn after that row exists.
+type seedingCommander struct {
+	*fakeCommander
+	store *seedingStore
+	hold  map[domain.SessionID]chan struct{}
+	ready map[domain.SessionID]chan struct{}
+}
+
+func (c *seedingCommander) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	id := domain.SessionID(cfg.DisplayName)
+	rec := domain.SessionRecord{ID: id, ProjectID: cfg.ProjectID}
+	c.store.mu.Lock()
+	c.store.sessions[id] = rec
+	c.store.mu.Unlock()
+	if ready := c.ready[id]; ready != nil {
+		close(ready)
+	}
+	if hold := c.hold[id]; hold != nil {
+		<-hold
+	}
+	return rec, 0, 0, nil
+}
+
+type lockedTelemetrySink struct {
+	mu     sync.Mutex
+	events []ports.TelemetryEvent
+}
+
+func (f *lockedTelemetrySink) Emit(_ context.Context, ev ports.TelemetryEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, ev)
+}
+func (f *lockedTelemetrySink) Close(context.Context) error { return nil }
+
+func TestSpawnFirstForInstallSurvivesALaterSpawnFinishingFirst(t *testing.T) {
+	st := &seedingStore{fakeStore: newFakeStore(), mu: &sync.Mutex{}}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	holdA, readyA := make(chan struct{}), make(chan struct{})
+	cmd := &seedingCommander{
+		fakeCommander: &fakeCommander{},
+		store:         st,
+		hold:          map[domain.SessionID]chan struct{}{"a": holdA},
+		ready:         map[domain.SessionID]chan struct{}{"a": readyA},
+	}
+	sink := &lockedTelemetrySink{}
+	milestones := memMilestones{}
+	svc := NewWithDeps(Deps{Manager: cmd, Store: st, Telemetry: sink, Milestones: milestones})
+	project := domain.ProjectRecord{ID: "mer"}
+
+	errA := make(chan error, 1)
+	go func() {
+		_, _, _, err := svc.spawnWithTelemetry(context.Background(), ports.SpawnConfig{ProjectID: "mer", DisplayName: "a"}, project)
+		errA <- err
+	}()
+	<-readyA // A's seed row exists; A is still provisioning.
+	if _, _, _, err := svc.spawnWithTelemetry(context.Background(), ports.SpawnConfig{ProjectID: "mer", DisplayName: "b"}, project); err != nil {
+		t.Fatalf("spawn B: %v", err)
+	}
+	if milestones["session_spawned"] {
+		t.Fatal("ineligible spawn B claimed the marker while eligible spawn A was in flight")
+	}
+	close(holdA)
+	if err := <-errA; err != nil {
+		t.Fatalf("spawn A: %v", err)
+	}
+
+	got := map[domain.SessionID]any{}
+	sink.mu.Lock()
+	for _, ev := range sink.events {
+		if ev.Name == "ao.session.spawned" {
+			got[*ev.SessionID] = ev.Payload["first_for_install"]
+		}
+	}
+	sink.mu.Unlock()
+	if got["a"] != true || got["b"] != false {
+		t.Fatalf("first_for_install = %#v, want a=true b=false", got)
+	}
+	if !milestones["session_spawned"] {
+		t.Fatal("marker not claimed after A finished")
+	}
+}
+
+func TestSpawnFirstForInstallFailedEligibleSpawnReleasesTheClaim(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	sink := &fakeTelemetrySink{}
+	milestones := memMilestones{}
+	fc := &fakeCommander{spawnErr: errors.New("boom")}
+	svc := NewWithDeps(Deps{Manager: fc, Store: st, Telemetry: sink, Milestones: milestones})
+
+	if _, _, _, err := svc.spawnWithTelemetry(context.Background(), ports.SpawnConfig{ProjectID: "mer"}, domain.ProjectRecord{ID: "mer"}); err == nil {
+		t.Fatal("want spawn error")
+	}
+	if milestones["session_spawned"] || svc.firstSession.eligibleInFlight != 0 {
+		t.Fatalf("failed spawn claimed=%t inFlight=%d", milestones["session_spawned"], svc.firstSession.eligibleInFlight)
+	}
+	fc.spawnErr = nil
+	if _, _, _, err := svc.spawnWithTelemetry(context.Background(), ports.SpawnConfig{ProjectID: "mer"}, domain.ProjectRecord{ID: "mer"}); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got, _ := spawnedFirstForInstall(t, sink); got != true {
+		t.Fatalf("retry first_for_install = %#v, want true", got)
 	}
 }

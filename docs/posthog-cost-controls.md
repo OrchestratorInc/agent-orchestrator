@@ -173,6 +173,8 @@ Use layered controls:
    - renderer captures are bounded per event name per minute and per day
    - daemon remote exports are bounded per event name per minute and per day
    - burst-prone daemon failures are aggregated before export
+   - `ao.usage.*` summaries skip the minute cap and use a 100,000 per-name
+     daily emergency cap, rather than the standard 200 per-name cap
 5. Use the AO kill switch for a stream that turns out to be noisy. Setting
    `AO_TELEMETRY_DISABLED_EVENTS` silences named streams (with `*` prefix
    matching) on installs that already exist, without shipping a release. Local

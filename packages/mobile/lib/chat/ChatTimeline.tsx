@@ -22,8 +22,9 @@ import { haptics } from "../haptics";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { MascotLamp, Spinning } from "../ui";
+import { MascotLamp } from "../ui";
 import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
+import { LatticeLoader } from "./LatticeLoader";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { RenderFrame } from "./RenderFrame";
 import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
@@ -82,6 +83,8 @@ import { press, type, space } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
+import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
+import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates } from "./automationMessages";
 import { SessionStartupStatus } from "./SessionStartup";
 import type { SessionStartupView } from "../session/sessionStartup";
 
@@ -149,6 +152,12 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// durable record but hidden on mobile: prose and work are the primary surface.
 	const openingTurnId = startup?.view.openingTurnId;
 	const items = useMemo(() => readableConversationItems(snapshot, openingTurnId), [openingTurnId, snapshot]);
+	// Each worker's newest report, read once per item list and kept as the same set
+	// until some worker reports again, so settled rows stay idle while a reply streams.
+	const latestKeys = useMemo(() => latestWorkerUpdateKeys(items), [items]);
+	const latestSignature = useMemo(() => [...latestKeys].sort().join("\n"), [latestKeys]);
+	// Keyed on the signature, not the set: a new set with the same keys keeps the old one.
+	const latestUpdates = useMemo(() => latestKeys, [latestSignature]);
 	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
 	const groups = plan.groups;
 	const inverted = plan.inverted;
@@ -242,69 +251,75 @@ export const ChatTimeline = memo(function ChatTimeline({
 	) : null;
 
 	return (
-		<View style={styles.timelineWrap}>
-			<FlatList<ConversationGroup>
-				ref={listRef}
-				data={groups}
-				extraData={rowState}
-				inverted={plan.inverted}
-				keyExtractor={(group) => group.key}
-				style={styles.list}
-				contentContainerStyle={styles.content}
-				keyboardShouldPersistTaps="handled"
-				initialNumToRender={4}
-				maxToRenderPerBatch={4}
-				updateCellsBatchingPeriod={32}
-				windowSize={5}
-				// Content off screen can resize (a page measured ahead, earlier history
-				// loading in); what is on screen stays put on both platforms.
-				maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-				onScroll={(event) => {
-					const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-					followsTail.current = inverted
-						? Math.abs(contentOffset.y) < 120
-						: contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
-					setShowJump(!followsTail.current);
-					notifyRenderViewport();
-				}}
-				scrollEventThrottle={100}
-				onContentSizeChange={() => {
-					notifyRenderViewport();
-					if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
-				}}
-				onScrollToIndexFailed={({ index, averageItemLength }) => {
-					listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
-					setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
-				}}
-				ListHeaderComponent={inverted ? standaloneStartup : olderControl}
-				ListFooterComponent={inverted ? olderControl : standaloneStartup}
-				renderItem={({ item: group }) => <ConversationTurnGroup
-					group={group}
-					snapshot={snapshot}
-					approvalPending={approvalPending}
-					inputPending={inputPending}
-					onDecide={onDecide}
-					onResolveInput={onResolveInput}
-					onRollback={onRollback}
-					editableTurns={edits?.editable}
-					onEditMessage={onEditMessage ? startEdit : undefined}
-					editDraft={editDraft}
-					onCancelEdit={cancelEdit}
-					onSubmitEdit={submitEdit}
-					onEditFocus={revealEdit}
-					answeredBelow={answeredBelow}
-					workedOpen={openWorked.has(group.key)}
-					onToggleWorked={toggleWorked}
-					startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
-				/>}
-			/>
-			{/* An unresolved edit whose prompt left the conversation keeps its Retry and
-			    Abandon controls here, apart from the list, as the desktop does. */}
-			{detached && editDraft ? <View style={styles.detachedEditor}>
-				<InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked onCancel={cancelEdit} onEdit={submitEdit} />
-			</View> : null}
-			{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
-		</View>
+		<WorkerSessionsProvider>
+			<ConversationHarness.Provider value={snapshot.harness}>
+				<LatestWorkerUpdates.Provider value={latestUpdates}>
+					<View style={styles.timelineWrap}>
+						<FlatList<ConversationGroup>
+							ref={listRef}
+							data={groups}
+							extraData={rowState}
+							inverted={plan.inverted}
+							keyExtractor={(group) => group.key}
+							style={styles.list}
+							contentContainerStyle={styles.content}
+							keyboardShouldPersistTaps="handled"
+							initialNumToRender={4}
+							maxToRenderPerBatch={4}
+							updateCellsBatchingPeriod={32}
+							windowSize={5}
+							// Content off screen can resize (a page measured ahead, earlier history
+							// loading in); what is on screen stays put on both platforms.
+							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+							onScroll={(event) => {
+								const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+								followsTail.current = inverted
+									? Math.abs(contentOffset.y) < 120
+									: contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
+								setShowJump(!followsTail.current);
+								notifyRenderViewport();
+							}}
+							scrollEventThrottle={100}
+							onContentSizeChange={() => {
+								notifyRenderViewport();
+								if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
+							}}
+							onScrollToIndexFailed={({ index, averageItemLength }) => {
+								listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
+								setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
+							}}
+							ListHeaderComponent={inverted ? standaloneStartup : olderControl}
+							ListFooterComponent={inverted ? olderControl : standaloneStartup}
+							renderItem={({ item: group }) => <ConversationTurnGroup
+								group={group}
+								snapshot={snapshot}
+								approvalPending={approvalPending}
+								inputPending={inputPending}
+								onDecide={onDecide}
+								onResolveInput={onResolveInput}
+								onRollback={onRollback}
+								editableTurns={edits?.editable}
+								onEditMessage={onEditMessage ? startEdit : undefined}
+								editDraft={editDraft}
+								onCancelEdit={cancelEdit}
+								onSubmitEdit={submitEdit}
+								onEditFocus={revealEdit}
+								answeredBelow={answeredBelow}
+								workedOpen={openWorked.has(group.key)}
+								onToggleWorked={toggleWorked}
+								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
+							/>}
+						/>
+						{/* An unresolved edit whose prompt left the conversation keeps its Retry and
+						    Abandon controls here, apart from the list, as the desktop does. */}
+						{detached && editDraft ? <View style={styles.detachedEditor}>
+							<InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked onCancel={cancelEdit} onEdit={submitEdit} />
+						</View> : null}
+						{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
+					</View>
+				</LatestWorkerUpdates.Provider>
+			</ConversationHarness.Provider>
+		</WorkerSessionsProvider>
 	);
 });
 
@@ -410,14 +425,19 @@ const TimelineItem = memo(function TimelineItem({
 		if (item.role === "user" && item.origin === "human") {
 			if (editor) return <View style={styles.userRow}>{editor}</View>;
 			const delivery = deliveryCopy(item.delivery);
-			const { body, attachments } = stagedAttachmentParts(item.text);
+			// Reports the daemon folded in while the orchestrator was busy are drawn as
+			// the worker rows they are, above what the user typed.
+			const reports = piggybackedUpdates(item);
+			const { body, attachments } = stagedAttachmentParts(humanVisibleText(item.text));
 			// Long-press opens Edit and Copy, so the text is not selectable: a
 			// selection would take the same gesture.
 			return (
+				<>
+				{reports.length > 0 ? <WorkerUpdateRows updates={reports} /> : null}
 				<View style={styles.userRow}>
 					<MessageContextMenu style={styles.userMenu} canEdit={Boolean(onEdit)} onAction={(action) => {
 						if (action === "edit") onEdit?.(item);
-						else { void Clipboard.setStringAsync(editableMessageText(item.text).body.trim()); haptics.success(); }
+						else { void Clipboard.setStringAsync(editableMessageText(humanVisibleText(item.text)).body.trim()); haptics.success(); }
 					}}>
 						<View style={[styles.userBubble, styles.menuBubble, item.content?.some((content) => content.type === "excerpt" && content.text) && styles.quotedBubble]}>
 							<SentResponseQuotes content={item.content} />
@@ -427,10 +447,11 @@ const TimelineItem = memo(function TimelineItem({
 						</View>
 					</MessageContextMenu>
 				</View>
+				</>
 			);
 		}
 		if (item.role === "user") {
-			return <OriginMessage message={item} />;
+			return <OriginMessageView message={item} fallback={<OriginMessage message={item} />} />;
 		}
 		return (
 			<View style={styles.assistantRow}>
@@ -453,7 +474,9 @@ const TimelineItem = memo(function TimelineItem({
 	}
 	if (item.activityKind === "system" && item.detail?.event === "steer") {
 		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
-		return <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>STEERED</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
+		const steered = <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>STEERED</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
+		// Another agent's message that arrived mid-turn names its sender, as one between turns does.
+		return item.detail.senderSessionId ? <OriginMessageView message={item} fallback={steered} /> : steered;
 	}
 	// A page the agent published with html_render / ao render.
 	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
@@ -754,9 +777,10 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 }
 
 /**
- * The turn's status row, which sits between the prompt and the work: a ticking
- * "Working · 12s" while the turn runs, then "Worked for 20s" once it settles. When
- * there is folded work the settled row is the toggle that reveals it.
+ * The turn's status row, which sits between the prompt and the work: the lattice
+ * and a ticking "12s" while the turn runs (no "Working", like the desktop: the
+ * lattice is the liveness), then "Worked for 20s" once it settles. When there is
+ * folded work the settled row is the toggle that reveals it.
  */
 function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationTurn; foldable: boolean; open: boolean; onToggle(): void }) {
 	const t = useTheme();
@@ -779,8 +803,11 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 				? duration ? `Failed after ${duration}` : "Turn failed"
 				: turn.state === "interrupted"
 					? duration ? `Stopped after ${duration}` : "Turn stopped"
-					: workingDuration ? `Working · ${workingDuration}` : "Working";
-	const text = <Text style={[styles.turnState, turn.state === "failed" && { color: t.red }]}>{label}</Text>;
+					: workingDuration ?? "";
+	const text = <Text
+		accessibilityLabel={running ? (workingDuration ? `Working for ${workingDuration}` : "Working") : undefined}
+		style={[styles.turnState, running && styles.turnTimer, turn.state === "failed" && { color: t.red }]}
+	>{label}</Text>;
 	// One element throughout, so the spinner can leave and the label slide into
 	// its place when the turn settles instead of the whole row remounting.
 	return <Pressable
@@ -790,8 +817,8 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		onPress={() => { haptics.tap(); onToggle(); }}
 		style={styles.statusRow}
 	>
-		{/* Spinning holds the glyph still under Reduce Motion; loader still reads as in progress. */}
-		{running ? <StatusSpinner><Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning></StatusSpinner> : null}
+		{/* The desktop's lattice; it holds still under Reduce Motion, where the ticking label still reads as in progress. */}
+		{running ? <StatusSpinner><LatticeLoader color={t.textTertiary} /></StatusSpinner> : null}
 		<StatusLabel>{text}</StatusLabel>
 		{foldable ? <FoldChevron open={open} color={t.textFaint} /> : null}
 	</Pressable>;
@@ -1220,6 +1247,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	// rows and the setup checklist header, so the line holds through the handoff.
 	statusRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
 	turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
+	// Even-width digits, so the ticking timer doesn't shift as it counts.
+	turnTimer: { fontVariant: ["tabular-nums"] },
 	turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "right" },
 	rollbackConfirm: { marginTop: space.xxs, backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 12, padding: space.md, gap: space.xs },
 	rollbackTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontWeight: "600", fontSize: type.footnote.fontSize },

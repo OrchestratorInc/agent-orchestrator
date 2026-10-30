@@ -75,7 +75,7 @@ Never use visual polish to obscure a state transition, destructive action, conne
 - **Color:** rare, semantic, and stateful. A colored element must answer “what does this mean?”
 - **Shape:** modest radius, not a field of pills. A rounded control should read as a control; a panel should read as one composed container; ordinary metadata should remain text.
 - **Density:** compact by default. AO is used all day and needs high information capacity without cramped target sizes.
-- **Personality:** quiet competence. No gradients, glass, glow, stock imagery, decorative textures, emoji, or novelty visual language in the working UI.
+- **Personality:** quiet competence. No gradients, glass, glow, stock imagery, decorative textures, emoji, or novelty visual language in the working UI, except the transient glass surfaces defined below.
 
 ## 3. App architecture expressed visually
 
@@ -276,6 +276,8 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 
 Every modal is one composed, elevated surface: a restrained overlay, one clear title, a close control, the decision/form body, and a concise action area when needed. Modal content has no ornamental header band, no nested card stack, no gradient, and no explanatory prose unless it changes the user's decision.
 
+Cmd+K and the cloud New task dialog may use the shared `overlay-glass` surface to keep the underlying task visible. This exception is limited to those transient surfaces: use the shared background and blur tokens, preserve text contrast, and fall back to a solid surface in translucent windows or when reduced transparency is requested.
+
 - **Clone Repository:** compact back, title, and close controls establish its place in the Add Project sequence. Repository URL is code-like and uses mono; owner/provider identity may be an unobtrusive visual cue. Destination is one full-width chooser row with its action embedded at the trailing edge. Validate after intent to continue and place field errors directly below the field; do not turn errors into a large alarm card.
 - **Add Project:** present one decision at a time. The source picker is a shared container of adjacent choices with dividers—not three floating cards. Each row has a modest icon, a concise source name, and only the one line of detail needed to distinguish Clone, Local, and Workspace. Local/Cloud is a compact segmented choice; show the one decision-relevant hint below it only while the choice is ambiguous. Cloud sign-in and project creation remain part of this same flow rather than a competing dashboard.
 - **Settings:** use one modal split into a quiet navigation rail and a content pane. The rail is a list of compact icon-and-text rows with a restrained selected surface; it is not a collection of pills. The content pane gives the active section one sentence-case title, fields in logical groups, and no redundant introduction. Each group is one card with no outline: a filled background groups it and hairline dividers separate its items (rows fit their content with 10px vertical padding); the page title and section headings share the rows' 16px text inset. For project settings, keep the persistent save action anchored in the rail/footer position so it is predictable and does not float beside every field.
@@ -360,7 +362,7 @@ Test meaningful variants: dark/light theme, expanded/collapsed sidebar, long pro
 Reject these patterns in renderer work unless a specific exception is approved:
 
 - Generic SaaS hero/feature-grid language inside the application shell.
-- Decorative gradients, glows, glass, blobs, textures, or ornamental shadows.
+- Decorative gradients, glows, glass (except the Cmd+K and cloud New task surfaces defined above), blobs, textures, or ornamental shadows.
 - ALL CAPS labels, uppercase tracking used as decoration, or mono used to make ordinary prose look technical.
 - A rainbow of status colors, decorative accent borders, or color-only meaning.
 - Oversized avatars or icons that compete with task names and state.

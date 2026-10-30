@@ -342,10 +342,11 @@ export interface CloudCpClient {
 	/** Merge a requested pull request as its owner. */
 	approveMergeRequest(orgId: string, requestId: string, expectedHeadSha: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
 	rejectMergeRequest(orgId: string, requestId: string, options?: CloudCpRequestOptions): Promise<{ mergeRequest: CloudCpMergeRequest }>;
+	/** Archive a session; `deleteArtifacts` also deletes its artifact files. */
 	deleteSession(
 		orgId: string,
 		sessionId: string,
-		options?: CloudCpRequestOptions,
+		options?: CloudCpRequestOptions & { deleteArtifacts?: boolean },
 	): Promise<CloudCpSessionDeletedResponse>;
 	resumeSession(
 		orgId: string,
@@ -462,6 +463,8 @@ export interface CloudCpClient {
 	): Promise<CloudCpTerminalTicketResponse>;
 
 	listUserProviderConnections(options?: CloudCpRequestOptions): Promise<CloudCpProviderConnectionsResponse>;
+	/** The models a new task for this agent runs with in this organization. 409 MODEL_CATALOG_UNAVAILABLE: none for this agent. */
+	listUserAgentModels(orgId: string, agent: CloudCpAgentProvider, options?: CloudCpRequestOptions): Promise<CloudCpChatModelsResponse>;
 	putUserAgentConnection(
 		agent: CloudCpAgentProvider,
 		body: CloudCpPutAgentConnectionRequest,
@@ -865,7 +868,7 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		cancelSessionReviews: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/reviews/cancel`, { signal: o?.signal }),
 		deleteSession: (orgId, sessionId, o) =>
-			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}`, {
+			requestJson("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}${o?.deleteArtifacts ? "?deleteArtifacts=true" : ""}`, {
 				signal: o?.signal,
 			}),
 		resumeSession: (orgId, sessionId, o) =>
@@ -1002,6 +1005,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			}),
 
 		listUserProviderConnections: (o) => requestJson("GET", "/me/providers", { signal: o?.signal }),
+		listUserAgentModels: (orgId, agent, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/providers/${seg(agent)}/models`, { signal: o?.signal }),
 		putUserAgentConnection: (agent, body, o) =>
 			requestJson("PUT", `/me/providers/${seg(agent)}`, { body, signal: o?.signal }),
 		putGitHubPAT: (body, o) => requestJson("PUT", "/me/github-pat", { body, signal: o?.signal }),

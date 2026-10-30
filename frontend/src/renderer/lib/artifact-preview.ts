@@ -1,3 +1,5 @@
+import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
+
 const ARTIFACT_PREVIEW_HOST_LABEL = "ao-preview-artifact";
 
 /**
@@ -12,4 +14,9 @@ export function isArtifactPreviewUrl(url: string | undefined): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/** Local artifact output remains available after its session is terminated. */
+export function sessionBrowserUnavailable(session: WorkspaceSession | undefined, hostId = session?.hostId): boolean {
+	return Boolean(session && !sessionIsActive(session) && !(isArtifactPreviewUrl(session.previewUrl) && !hostId));
 }

@@ -211,6 +211,112 @@ func TestCodexAccountOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T)
 	}
 }
 
+// TestComputerUseOriginBoundaryBlocksPreviewAndAllowsRenderers keeps workspace
+// previews, which corsMiddleware admits as loopback content, from driving the
+// desktop through Cua Driver or turning on agent computer use.
+func TestComputerUseOriginBoundaryBlocksPreviewAndAllowsRenderers(t *testing.T) {
+	cfg := config.Config{AllowedOrigins: []string{"app://renderer", "http://localhost:5173"}}
+	router := newTestRouter(cfg, discardLogger(), nil)
+	const preview = "http://ao-preview.hostile.localhost:17018"
+
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		origin     string
+		preflight  bool
+		wantStatus int
+		wantACAO   string
+	}{
+		{
+			name:       "preview cannot call a tool",
+			method:     http.MethodPost,
+			path:       "/api/v1/computer-use/call",
+			origin:     preview,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "preview preflight for a tool call is refused",
+			method:     http.MethodOptions,
+			path:       "/api/v1/computer-use/call",
+			origin:     preview,
+			preflight:  true,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "preview cannot read status",
+			method:     http.MethodGet,
+			path:       "/api/v1/computer-use/status",
+			origin:     preview,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "preview cannot turn on agent computer use",
+			method:     http.MethodPatch,
+			path:       "/api/v1/settings/computer-use",
+			origin:     preview,
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "packaged renderer can call a tool",
+			method:     http.MethodPost,
+			path:       "/api/v1/computer-use/call",
+			origin:     "app://renderer",
+			wantStatus: http.StatusNotImplemented,
+			wantACAO:   "app://renderer",
+		},
+		{
+			name:       "packaged renderer preflight is answered",
+			method:     http.MethodOptions,
+			path:       "/api/v1/computer-use/call",
+			origin:     "app://renderer",
+			preflight:  true,
+			wantStatus: http.StatusNoContent,
+			wantACAO:   "app://renderer",
+		},
+		{
+			name:       "configured development renderer can read status",
+			method:     http.MethodGet,
+			path:       "/api/v1/computer-use/status",
+			origin:     "http://localhost:5173",
+			wantStatus: http.StatusNotImplemented,
+			wantACAO:   "http://localhost:5173",
+		},
+		{
+			name:       "native caller without origin can call a tool",
+			method:     http.MethodPost,
+			path:       "/api/v1/computer-use/call",
+			wantStatus: http.StatusNotImplemented,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, strings.NewReader(`{"tool":"list_apps"}`))
+			req.Header.Set("Content-Type", "application/json")
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.preflight {
+				req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+				req.Header.Set("Access-Control-Request-Headers", "content-type")
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			body := response.Body.String()
+			if response.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, tt.wantStatus, body)
+			}
+			if got := response.Header().Get("Access-Control-Allow-Origin"); got != tt.wantACAO {
+				t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, tt.wantACAO)
+			}
+			if tt.wantStatus == http.StatusForbidden && !strings.Contains(body, `"code":"ORIGIN_FORBIDDEN"`) {
+				t.Errorf("forbidden response = %s, want ORIGIN_FORBIDDEN", body)
+			}
+		})
+	}
+}
+
 // TestCORSPreflightHeaders pins the preflight grant shape: methods, echoed
 // request headers, max-age, and the private-network opt-in.
 func TestCORSPreflightHeaders(t *testing.T) {
