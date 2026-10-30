@@ -22,7 +22,7 @@ vi.mock("../lib/preview-mode", () => ({ usesPreviewWorkspaceData: false }));
 
 import type { ShellTerminal } from "./useShellTerminals";
 import { apiClient } from "../lib/api-client";
-import { githubAuthAutoLoginOfferedQueryKey, githubAuthTerminalQueryKey, systemRequirementsQueryKey, useGitHubAuthAutoLoginOffered, useGitHubAuthRequirement, useGitHubAuthTerminal, useSystemRequirementsGate } from "./useSystemRequirementsGate";
+import { githubAuthTerminalQueryKey, systemRequirementsQueryKey, useGitHubAuthRequirement, useGitHubAuthTerminal, useSystemRequirementsGate } from "./useSystemRequirementsGate";
 
 const loginTerminal: ShellTerminal = {
 	createdAt: "2026-09-06T00:00:00Z",
@@ -131,23 +131,6 @@ describe("useGitHubAuthTerminal", () => {
 
 		await waitFor(() => expect(result.current.data).toBeNull());
 		expect(queryClient.getQueryData(githubAuthTerminalQueryKey)).toBeNull();
-	});
-});
-
-describe("useGitHubAuthAutoLoginOffered", () => {
-	it("retains a dismissed offer while the notice is unmounted", async () => {
-		vi.useFakeTimers();
-		const queryClient = new QueryClient();
-		const first = renderHook(() => useGitHubAuthAutoLoginOffered(), { wrapper: wrapper(queryClient) });
-
-		act(() => first.result.current.markOffered());
-		expect(queryClient.getQueryData(githubAuthAutoLoginOfferedQueryKey)).toBe(true);
-		first.unmount();
-		vi.advanceTimersByTime(10 * 60 * 1000);
-
-		expect(queryClient.getQueryData(githubAuthAutoLoginOfferedQueryKey)).toBe(true);
-		const second = renderHook(() => useGitHubAuthAutoLoginOffered(), { wrapper: wrapper(queryClient) });
-		expect(second.result.current.offered).toBe(true);
 	});
 });
 

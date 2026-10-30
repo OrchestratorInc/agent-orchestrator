@@ -19,7 +19,7 @@ const routeMocks = vi.hoisted(() => ({
 	requirements: [] as Array<{ id: string; label: string; satisfied: boolean; required: boolean; detail: string }>,
 	authRequirement: undefined as { id: string; label: string; satisfied: boolean; required: boolean; detail: string } | undefined,
 	startGitHubAuth: vi.fn(),
-	markAutoLoginOffered: vi.fn(),
+	startDeviceLogin: vi.fn(),
 	closeTerminal: vi.fn(),
 	cloudEnabled: false,
 }));
@@ -40,7 +40,11 @@ vi.mock("../hooks/useCloudGate", () => ({
 vi.mock("../hooks/useSystemRequirementsGate", () => ({
 	useSystemRequirementsGate: () => ({ blocked: false, requirements: routeMocks.requirements, query: { refetch: vi.fn() } }),
 	useGitHubAuthRequirement: () => ({ data: routeMocks.authRequirement, isFetching: false, refetch: vi.fn() }),
-	useGitHubAuthAutoLoginOffered: () => ({ offered: false, markOffered: routeMocks.markAutoLoginOffered }),
+	useGitHubDeviceLogin: () => ({
+		login: { state: "idle" },
+		start: { mutate: routeMocks.startDeviceLogin, isPending: false, isError: false },
+		cancel: { mutate: vi.fn(), isPending: false },
+	}),
 	useGitHubAuthTerminal: () => ({ data: null, clear: vi.fn() }),
 	useStartGitHubAuthTerminal: () => ({ mutate: routeMocks.startGitHubAuth, isPending: false, isError: false }),
 }));
@@ -90,7 +94,7 @@ beforeEach(() => {
 	routeMocks.requirements = [];
 	routeMocks.authRequirement = undefined;
 	routeMocks.startGitHubAuth.mockReset();
-	routeMocks.markAutoLoginOffered.mockReset();
+	routeMocks.startDeviceLogin.mockReset();
 	routeMocks.closeTerminal.mockReset();
 	routeMocks.cloudEnabled = false;
 });

@@ -10,7 +10,6 @@ export type SystemRequirement = components["schemas"]["SystemRequirement"];
 
 export const systemRequirementsQueryKey = ["system-requirements"] as const;
 export const githubAuthTerminalQueryKey = ["github-auth-terminal"] as const;
-export const githubAuthAutoLoginOfferedQueryKey = ["github-auth-auto-login-offered"] as const;
 const GITHUB_AUTH_POLL_INTERVAL_MS = 2_500;
 
 async function fetchSystemRequirements(): Promise<components["schemas"]["SystemRequirementsResponse"]> {
@@ -102,21 +101,43 @@ export function useGitHubAuthTerminal() {
 	return { ...query, clear };
 }
 
-/** Remember an automatic login offer for the lifetime of this renderer so
- * dismissing its PTY remains respected across home/board remounts. */
-export function useGitHubAuthAutoLoginOffered() {
+export type GitHubLogin = components["schemas"]["GitHubLoginResponse"];
+
+const githubLoginQueryKey = ["github-login"] as const;
+const GITHUB_LOGIN_POLL_INTERVAL_MS = 2_000;
+
+/** GitHub device-flow sign-in owned by the daemon. The daemon polls GitHub and
+ * stores the token; the renderer only shows the code and polls the state. */
+export function useGitHubDeviceLogin() {
 	const queryClient = useQueryClient();
-	const query = useQuery<boolean>({
-		queryKey: githubAuthAutoLoginOfferedQueryKey,
-		queryFn: async () => false,
-		enabled: false,
-		initialData: false,
-		gcTime: Number.POSITIVE_INFINITY,
+	const query = useQuery({
+		queryKey: githubLoginQueryKey,
+		queryFn: async (): Promise<GitHubLogin> => {
+			const { data, error } = await apiClient.GET("/api/v1/github/login");
+			if (error || !data) throw new Error("Could not check GitHub sign-in.");
+			return data;
+		},
+		enabled: !usesPreviewWorkspaceData,
+		refetchOnWindowFocus: false,
+		refetchInterval: (current) => (current.state.data?.state === "pending" ? GITHUB_LOGIN_POLL_INTERVAL_MS : false),
 	});
-	const markOffered = useCallback(() => {
-		queryClient.setQueryData(githubAuthAutoLoginOfferedQueryKey, true);
-	}, [queryClient]);
-	return { offered: query.data, markOffered };
+	const start = useMutation({
+		mutationFn: async (): Promise<GitHubLogin> => {
+			const { data, error } = await apiClient.POST("/api/v1/github/login");
+			if (error || !data) throw new Error(apiErrorMessage(error, "Could not start GitHub sign-in."));
+			return data;
+		},
+		onSuccess: (login) => queryClient.setQueryData(githubLoginQueryKey, login),
+	});
+	const cancel = useMutation({
+		mutationFn: async (): Promise<GitHubLogin> => {
+			const { data, error } = await apiClient.DELETE("/api/v1/github/login");
+			if (error || !data) throw new Error("Could not cancel GitHub sign-in.");
+			return data;
+		},
+		onSuccess: (login) => queryClient.setQueryData(githubLoginQueryKey, login),
+	});
+	return { login: query.data, start, cancel };
 }
 
 /** Single source of truth for whether the machine satisfies AO's startup
