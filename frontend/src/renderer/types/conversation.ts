@@ -201,6 +201,8 @@ export interface ConversationMessage {
 	editAvailable?: boolean;
 	/** The user's one-click "continue" after stopping a turn; drawn as a marker, not a bubble. */
 	continuation?: boolean;
+	/** User-written content AO delivered as automation, e.g. Browser-panel annotations. */
+	authoredByUser?: boolean;
 	/** True while more deltas are expected. */
 	streaming: boolean;
 	delivery?: DeliveryState;
@@ -983,15 +985,19 @@ export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | u
  * messages have no dock row, so their queued feedback stays visible in the
  * timeline. Human turns cancelled from the dock must not reappear after refresh.
  */
+/**
+ * A prompt the user owns in the queue dock: their typed message, or their own
+ * words AO relayed as automation, such as Browser-panel annotations.
+ */
+export function isUserQueuePrompt(item: ConversationItem): item is ConversationMessage {
+	return item.kind === "message" && item.role === "user" &&
+		(item.origin === "human" || (item.origin === "automation" && Boolean(item.authoredByUser)));
+}
+
 export function hiddenTimelineTurnIds(snapshot: ConversationSnapshot): Set<string> {
 	const humanPromptTurnIds = new Set<string>();
 	for (const item of snapshot.items) {
-		if (
-			item.kind === "message" &&
-			item.role === "user" &&
-			item.origin === "human" &&
-			item.turnId
-		) {
+		if (isUserQueuePrompt(item) && item.turnId) {
 			humanPromptTurnIds.add(item.turnId);
 		}
 	}
