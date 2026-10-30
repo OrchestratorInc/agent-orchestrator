@@ -16,6 +16,20 @@ describe("workersIdleCopy", () => {
 		expect(workersIdleCopy({ machines: ["Lab Mac", "Windows"], connection: "open", now }).status).toBe("All 2 machines are idle.");
 	});
 
+	// The store marks the primary machine closed when the app goes to the
+	// background and keeps its rows, so this can render on resume.
+	it("does not call an offline machine idle", () => {
+		const copy = workersIdleCopy({ machines: ["Lab Mac"], connection: "closed", now });
+		expect(copy).toMatchObject({ title: "Nothing to show yet", status: "Not connected to Lab Mac." });
+		expect(workersIdleCopy({ machines: ["Lab Mac", "Windows"], connection: "closed", now }).status).toBe("Not connected to 2 machines.");
+		expect(workersIdleCopy({ machines: [], connection: "closed", now }).status).toBe("Not connected to your machine.");
+	});
+
+	it("only says nothing is running once a machine has answered", () => {
+		expect(workersIdleCopy({ machines: ["Lab Mac"], connection: "connecting", now }).title).toBe("Nothing to show yet");
+		expect(workersIdleCopy({ machines: ["Lab Mac"], connection: "open", now }).title).toBe("Nothing running");
+	});
+
 	it("does not call a machine idle while it is still connecting", () => {
 		expect(workersIdleCopy({ machines: ["Lab Mac"], connection: "connecting", now }).status).toBe("Connecting to Lab Mac…");
 		expect(workersIdleCopy({ machines: [], connection: "connecting", now }).status).toBe("Connecting…");
@@ -60,6 +74,12 @@ describe("idleFleet", () => {
 
 	it("follows the scope it is given, not the whole fleet", () => {
 		expect(idleFleet([windows], "open")).toEqual({ machines: ["Windows"], connection: "connecting" });
+	});
+
+	it("keeps an all-offline scope offline rather than idle", () => {
+		const fleet = idleFleet([{ name: "Lab Mac", connection: "closed" }], "open");
+		expect(fleet).toEqual({ machines: ["Lab Mac"], connection: "closed" });
+		expect(workersIdleCopy({ ...fleet, now }).status).toBe("Not connected to Lab Mac.");
 	});
 
 	it("falls back to the single-host connection with no host list", () => {
