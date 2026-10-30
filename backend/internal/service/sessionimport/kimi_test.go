@@ -259,6 +259,21 @@ func TestKimiUndoAnchorParity(t *testing.T) {
 		wantTexts(t, got.messages, "user: before compaction", "assistant: a reply")
 	})
 
+	t.Run("empty typed prompt still anchors undo", func(t *testing.T) {
+		got, err := read(t, `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"task A"}],"origin":{"kind":"user"}},"time":1700000001000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"a reply"}},"time":1700000002000}
+{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"image","source":{"data":"x"}}],"origin":{"kind":"user"}},"time":1700000003000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"b reply"}},"time":1700000004000}
+{"type":"context.undo","agentId":"main","count":1,"time":1700000005000}
+`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The image-only prompt carries no text to show but is still an anchor, so
+		// undo 1 retracts it and its reply, leaving the earlier typed prompt.
+		wantTexts(t, got.messages, "user: task A", "assistant: a reply")
+	})
+
 	t.Run("undo past every anchor empties the conversation", func(t *testing.T) {
 		if _, err := read(t, `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"only prompt"}],"origin":{"kind":"user"}},"time":1700000001000}
 {"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"only reply"}},"time":1700000002000}

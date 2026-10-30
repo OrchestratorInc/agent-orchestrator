@@ -212,8 +212,14 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 				if strings.Contains(text, omittedText) {
 					t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
 				}
-				if strings.TrimSpace(text) != "" {
+				switch {
+				case strings.TrimSpace(text) != "":
 					items = append(items, kimiItem{msg: Message{Role: domain.MessageRoleUser, Text: text, At: at}, anchor: anchor})
+				case anchor:
+					// A typed prompt with no visible text (image/attachment-only, or
+					// only the omitted marker) still anchors undo in Kimi; keep it
+					// hidden so undo counts match even without text to show.
+					items = append(items, kimiItem{anchor: true, hidden: true})
 				}
 			case anchor:
 				// A user-slash skill or plugin command: an undo anchor, but its
