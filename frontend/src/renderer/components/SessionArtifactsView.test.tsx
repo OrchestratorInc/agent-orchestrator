@@ -231,7 +231,7 @@ describe("SessionArtifactsView for a cloud session", () => {
 		const session = cloudSession();
 		session.artifactFiles = [{ kind: "file", name: "report.pdf", path: "report.pdf", size: 2, updatedAt: "2026-09-24T00:00:00Z" }];
 		renderView(<SessionArtifactsView session={session} />);
-		await userEvent.click(screen.getByRole("button", { name: /report\.pdf/ }));
+		await userEvent.click(screen.getByRole("button", { name: /^report\.pdf/ }));
 		await userEvent.click(screen.getByRole("button", { name: "report.pdf" }));
 		await userEvent.click(await screen.findByRole("menuitem", { name: "Download" }));
 
