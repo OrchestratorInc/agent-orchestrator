@@ -9,7 +9,7 @@ Start with a worker session that has a linked PR and a current head. Open that w
 
 ## GitHub feedback
 
-The SCM observer records review state and unresolved comments. When changes are requested or unresolved feedback changes, lifecycle sends the new unresolved comments to the owning worker in one message, grouped under the review they belong to with that review's body. Resolved threads drop out of the next message.
+The SCM observer records review state and unresolved comments. When changes are requested or unresolved feedback changes, lifecycle sends the new unresolved comments to the owning worker in one message, grouped under the review they belong to with that review's body. An Orchestrator review's summary is left out: its inline comments are the required changes. Resolved threads drop out of the next message.
 
 Delivery follows the session interface:
 
