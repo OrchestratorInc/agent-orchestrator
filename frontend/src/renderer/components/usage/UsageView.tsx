@@ -145,20 +145,25 @@ export function UsageView() {
 					</Tooltip>
 				</div>
 			</header>
+			{/* The page tabs stay put while the view under them scrolls. */}
+			<div className="shrink-0">
+				<div className="mx-auto w-full max-w-6xl px-6">
+					<Tabs value={tab} onValueChange={(value) => setTab(value as UsageTab)}>
+						<TabsList aria-label={t("usage.views")} className={HARNESS_TABS_CLASS}>
+							<TabsTrigger value="spend" className={HARNESS_TAB_CLASS}>{t("usage.view.spend")}</TabsTrigger>
+							<TabsTrigger value="limits" className={HARNESS_TAB_CLASS}>{t("usage.view.limits")}</TabsTrigger>
+							<TabsTrigger value="windows" className={cn(HARNESS_TAB_CLASS, "gap-1.5")}>
+								{t("usage.view.windows")}
+								<Badge className="h-4 px-1.5 text-2xs font-normal">{t("usage.windows.experimental")}</Badge>
+							</TabsTrigger>
+						</TabsList>
+					</Tabs>
+				</div>
+			</div>
 			<ScrollArea.Root asChild type="hover" scrollHideDelay={500}>
 				<main className="relative min-h-0 flex-1 overflow-hidden">
 					<ScrollArea.Viewport className="h-full w-full overscroll-contain focus-visible:outline-none">
-						<div className="mx-auto w-full max-w-6xl px-6 pb-6">
-							<Tabs value={tab} onValueChange={(value) => setTab(value as UsageTab)} className="mb-6">
-								<TabsList aria-label={t("usage.views")} className={HARNESS_TABS_CLASS}>
-									<TabsTrigger value="spend" className={HARNESS_TAB_CLASS}>{t("usage.view.spend")}</TabsTrigger>
-									<TabsTrigger value="limits" className={HARNESS_TAB_CLASS}>{t("usage.view.limits")}</TabsTrigger>
-									<TabsTrigger value="windows" className={cn(HARNESS_TAB_CLASS, "gap-1.5")}>
-										{t("usage.view.windows")}
-										<Badge className="h-4 px-1.5 text-2xs font-normal">{t("usage.windows.experimental")}</Badge>
-									</TabsTrigger>
-								</TabsList>
-							</Tabs>
+						<div className="mx-auto w-full max-w-6xl px-6 py-6">
 							{isWindows ? (
 								limitWindows.isLoading ? (
 									<p role="status" className="py-16 text-center text-sm text-muted-foreground">{t("usage.loading")}</p>
