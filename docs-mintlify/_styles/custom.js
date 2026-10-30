@@ -51,7 +51,7 @@
     var crect = container.getBoundingClientRect();
     var items = anchors.map(function (a) {
       var r = a.getBoundingClientRect();
-      return { top: r.top - crect.top, h: r.height, x: a._aoDepth === 3 ? 16.5 : 8.5 };
+      return { top: r.top - crect.top, h: r.height, x: a._aoDepth === 3 ? 16.5 : 8.5, cy: r.top - crect.top + r.height / 2 };
     });
     var H = Math.ceil(items[items.length - 1].top + items[items.length - 1].h);
     if (H <= 0) return null;
@@ -91,6 +91,25 @@
     track.thumb.style.opacity = "1";
   }
 
+  /* continuous marker: original glides with scroll (measured live: fractional
+     positions between rows), ours stepped between rows. Interpolate the dot
+     along the item anchors by fractional heading index. */
+  function glideDot(track, F) {
+    if (!track || F == null || !isFinite(F)) return;
+    var n = track.items.length;
+    if (!n) return;
+    var i = Math.max(0, Math.min(n - 1, Math.floor(F)));
+    var j = Math.min(n - 1, i + 1);
+    var f = Math.max(0, Math.min(1, F - i));
+    var A = track.items[i], B = track.items[j];
+    var x = A.x + (B.x - A.x) * f;
+    var y = (A.cy != null ? A.cy : A.top + A.h / 2) + (((B.cy != null ? B.cy : B.top + B.h / 2)) - (A.cy != null ? A.cy : A.top + A.h / 2)) * f;
+    if (track.dot) { track.dot.setAttribute("cx", String(x)); track.dot.setAttribute("cy", String(y)); }
+    track.thumb.style.left = (x - 2) + "px";
+    track.thumb.style.top = (y + 2) + "px";
+    track.thumb.style.opacity = "1";
+  }
+
   function spyAll() {
     if (TOC_STATE.ticking) return;
     TOC_STATE.ticking = true;
@@ -122,11 +141,28 @@
         if (svg) svg.setAttribute("aria-valuenow", String(prog.toFixed(4)));
       }
       if (TOC_STATE.activeLabel) TOC_STATE.activeLabel.textContent = clean(hs[labelIdx].textContent);
-      if (firstVis < 0) return;
+      /* fractional heading index: how far the reference line (96px below the
+         viewport top, matching the original's reading position) has passed
+         between consecutive heading offsets */
+      var sy = window.scrollY || window.pageYOffset || 0;
+      var line = sy + 96;
+      var fracIdx = 0;
+      for (var k = 0; k < n; k++) {
+        var off = hs[k].getBoundingClientRect().top + sy;
+        if (off <= line) fracIdx = k; else { var prev = k > 0 ? hs[k - 1].getBoundingClientRect().top + sy : off; fracIdx = off > prev ? (k - 1) + (line - prev) / (off - prev) : k - 1; break; }
+      }
+      if (fracIdx < 0) fracIdx = 0;
+      if (fracIdx > n - 1) fracIdx = n - 1;
+      if (firstVis < 0) {
+        if (TOC_STATE.mTrack) glideDot(TOC_STATE.mTrack, fracIdx);
+        if (TOC_STATE.dTrack) glideDot(TOC_STATE.dTrack, fracIdx);
+        return;
+      }
       if (TOC_STATE.listEl) {
         var as = TOC_STATE.listEl.querySelectorAll("a");
         as.forEach(function (a, j) { a.classList.toggle("ao-read", j >= firstVis && j <= lastVis); });
         updateTrack(TOC_STATE.mTrack, firstVis, lastVis);
+        glideDot(TOC_STATE.mTrack, fracIdx);
       }
       if (TOC_STATE.dAnchors) {
         TOC_STATE.dAnchors.forEach(function (a, j) {
@@ -134,6 +170,7 @@
           a.classList.toggle("ao-dtoc-active", j >= firstVis && j <= lastVis);
         });
         updateTrack(TOC_STATE.dTrack, firstVis, lastVis);
+        glideDot(TOC_STATE.dTrack, fracIdx);
       }
     });
   }
