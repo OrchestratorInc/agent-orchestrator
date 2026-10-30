@@ -1,3 +1,5 @@
+import { hasCodeSelection } from "../diffs/SelectionStableContent";
+import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 /**
  * The Chat composer.
@@ -821,9 +823,12 @@ export const ChatComposer = memo(function ChatComposer({
 	useEffect(() => {
 		if (!autoFocus) return;
 
-		const onWindowFocus = () => focusEditor();
+		const onWindowFocus = () => {
+   if (isDialogOrMenuOpen() || window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body)) return;
+   focusEditor();
+  };
 		const onVisibilityChange = () => {
-			if (document.visibilityState === "visible") focusEditor();
+			if (document.visibilityState === "visible") onWindowFocus();
 		};
 
 		window.addEventListener("focus", onWindowFocus);

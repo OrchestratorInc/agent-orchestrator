@@ -90,7 +90,7 @@ async function stubWorkspace(page: Page, id: string, fullText = after, selectedP
 
 /** A Chat-mode worker with one changed file, opened on its Files tab. */
 async function openChatSession(page: Page, fullText = after, selectedPath = filePath, text = "", checkingSide = false) {
-	await installFakeAgent(page, { projectId, projectName: projectId, workers: [{ id: chatSession, provider: "codex", title: "Ask in chat", mode: "chat" }] });
+	await installFakeAgent(page, { projectId, projectName: projectId, workers: [{ id: chatSession, provider: "codex", title: "Add to chat", mode: "chat" }] });
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
 		if (route.request().headers().accept?.includes("text/event-stream")) return quietEventStream(route);
 		const pathname = new URL(route.request().url()).pathname;
@@ -274,7 +274,7 @@ test.describe("Add to chat from highlighted code", () => {
 	});
 
 	test("a tall file selection stays actionable while scrolling without recapturing rows", async ({ page }) => {
-		const { inspector, composer } = await openChatSession(page);
+		const { inspector, composer, sentToChat } = await openChatSession(page);
 		await inspector.getByRole("button", { name: "Open full file" }).click();
 		await expect(row(page, CENTER, 80)).toBeAttached();
 		await row(page, CENTER, 80).evaluate((element) => {
@@ -295,7 +295,11 @@ test.describe("Add to chat from highlighted code", () => {
 		await expect(askButton(page).locator("svg")).toHaveCount(0);
 		await page.screenshot({ path: test.info().outputPath("file-selection.png") });
 		await askButton(page).getByRole("button", { name: "Add to chat" }).click();
-		await expect(composer).toContainText("retry.ts#L1-L80");
+		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+  await composer.fill("Ask about this large selection"); await composer.press("Enter");
+  await expect.poll(() => sentToChat.length).toBe(1);
+  expect(sentToChat[0].fileReferences[0]).toMatchObject({line:1,endLine:80});
+  expect(sentToChat[0].fileReferences[0].lines).toHaveLength(80);
 	});
 
 	test("Cmd/Ctrl+L asks about the highlighted lines", async ({ page }) => {

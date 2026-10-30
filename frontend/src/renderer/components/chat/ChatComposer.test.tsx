@@ -218,6 +218,23 @@ describe("send keys", () => {
 		expect(document.activeElement).toBe(field);
 	});
 
+ it.each(["focus", "visibilitychange"])("preserves a native shadow selection on passive %s", event => {
+  const {field} = renderComposer({autoFocusKey:"session-1"});field.blur();
+  const host=document.createElement("diffs-container");const root=host.attachShadow({mode:"open"});
+  root.textContent="selected file text";document.body.append(host);
+  Object.assign(root,{getSelection:()=>({isCollapsed:true,anchorNode:root.firstChild,anchorOffset:0,focusNode:root.firstChild,focusOffset:8})});
+  act(()=>{if(event==="focus")window.dispatchEvent(new Event(event));else document.dispatchEvent(new Event(event));});
+  expect(document.activeElement).not.toBe(field);host.remove();
+ });
+ it("preserves selected transcript text when the window regains focus", () => {
+  const {field}=renderComposer({autoFocusKey:"session-1"});field.blur();
+  const text=document.createElement("p");text.textContent="selected transcript";document.body.append(text);
+  const range=document.createRange();range.selectNodeContents(text);window.getSelection()!.addRange(range);
+  act(()=>window.dispatchEvent(new Event("focus")));
+  expect(document.activeElement).not.toBe(field);expect(window.getSelection()!.toString()).toBe("selected transcript");
+  window.getSelection()!.removeAllRanges();text.remove();
+ });
+
 	it("does not focus the hidden or inactive chat composer", () => {
 		const { field } = renderComposer({ autoFocus: false, autoFocusKey: "session-1" });
 		expect(document.activeElement).not.toBe(field);
