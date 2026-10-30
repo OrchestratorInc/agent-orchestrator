@@ -186,17 +186,33 @@ export async function loadCloudChatEvents(
 	}
 }
 
-const PLAN_REFUSAL_PATTERN = new RegExp(`\\b(${[...PLAN_REFUSAL_CODES].join("|")})\\b`);
+const PLAN_REFUSAL_CODE_ALTERNATION = [...PLAN_REFUSAL_CODES].join("|");
+// The two shapes a control plane refusal reaches a tool's output in: the code in
+// parentheses after its message, or a JSON `code` field. A bare code is not
+// enough, since a failing test or grep prints it without being refused.
+const PLAN_REFUSAL_PATTERN = new RegExp(
+	`\\((${PLAN_REFUSAL_CODE_ALTERNATION})\\)|"code"\\s*:\\s*"(${PLAN_REFUSAL_CODE_ALTERNATION})"`,
+);
+
+/** A command or MCP tool that failed, by the same rule the timeline rows use. */
+function failedTool(item: ConversationItem): item is ConversationItem & { kind: "activity" } {
+	if (item.kind !== "activity") return false;
+	if (item.activityKind === "command") return item.status === "failed";
+	if (item.activityKind !== "mcp_tool") return false;
+	return item.status === "failed" || item.detail?.success === false || Boolean(item.detail?.error);
+}
 
 /**
  * The plan refusal code a failed tool reported, if any. An agent's own call to
  * the control plane (an orchestrator spawning a worker) is refused inside the
- * sandbox, so the tool's output is the only place this desktop sees it.
+ * sandbox, so the tool's output is the only place this desktop sees it. A
+ * command reports it in its output, an MCP tool in its error.
  */
 export function planRefusalCode(item: ConversationItem): string | undefined {
-	if (item.kind !== "activity" || item.status !== "failed") return undefined;
-	if (item.activityKind !== "command" && item.activityKind !== "mcp_tool") return undefined;
-	return item.detail?.output ? PLAN_REFUSAL_PATTERN.exec(item.detail.output)?.[1] : undefined;
+	if (!failedTool(item)) return undefined;
+	const text = [item.detail?.error, item.detail?.output].filter((part): part is string => typeof part === "string").join("\n");
+	const match = PLAN_REFUSAL_PATTERN.exec(text);
+	return match?.[1] ?? match?.[2];
 }
 
 /** Why the agent's request was refused, with Upgrade for an org that can buy a plan. */
@@ -1031,7 +1047,7 @@ export function CloudSessionChatSurface({
 		const baseline = refusalBaseline.current;
 		// Events cached from an earlier opening are history too, until refetched.
 		if (eventsQuery.dataUpdatedAt < baseline.openedAt) return;
-		const failed = snapshot.items.filter((item) => item.kind === "activity" && item.status === "failed");
+		const failed = snapshot.items.filter(failedTool);
 		if (!baseline.seen) {
 			baseline.seen = new Set(failed.map((item) => item.id));
 			return;

@@ -8,7 +8,7 @@ import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceSession } from "../../types/workspace";
-import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, loadCloudChatEvents, planRefusalCode, toSnapshot } from "./CloudSessionChatSurface";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -1213,10 +1213,26 @@ describe("CloudSessionChatSurface", () => {
 		expect(screen.queryByRole("alert")).toBeNull();
 	});
 
+	it("reads a plan refusal only in the shape the control plane reports it", () => {
+		const tool = (activityKind: string, status: string, detail: Record<string, unknown>) =>
+			({ kind: "activity", id: "a", activityKind, status, detail }) as unknown as Parameters<typeof planRefusalCode>[0];
+		const refused = "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)";
+		expect(planRefusalCode(tool("command", "failed", { output: refused }))).toBe("WORKER_SLOTS_FULL");
+		expect(planRefusalCode(tool("command", "failed", { output: `{"code": "WORKER_SLOTS_FULL"}` }))).toBe("WORKER_SLOTS_FULL");
+		// A failing test or grep that only mentions the code is not a refusal.
+		expect(planRefusalCode(tool("command", "failed", { output: "FAIL plan-refusal.test.ts: expected WORKER_SLOTS_FULL" }))).toBeUndefined();
+		expect(planRefusalCode(tool("command", "completed", { output: refused }))).toBeUndefined();
+		// An MCP tool reports its failure in `error`, even when its status is not "failed".
+		expect(planRefusalCode(tool("mcp_tool", "completed", { success: false, error: refused }))).toBe("WORKER_SLOTS_FULL");
+		expect(planRefusalCode(tool("mcp_tool", "failed", { error: refused }))).toBe("WORKER_SLOTS_FULL");
+		expect(planRefusalCode(tool("mcp_tool", "completed", { success: true, result: refused }))).toBeUndefined();
+		expect(planRefusalCode(tool("mcp_tool", "failed", { error: "WORKER_SLOTS_FULL" }))).toBeUndefined();
+	});
+
 	it("treats a refusal from while the chat was closed as history on reopen", async () => {
 		const failed = (sequence: number): CloudCpClientEvent => ({
 			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
-			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "mcp_tool", status: "failed", detail: { output: "409 WORKER_SLOTS_FULL" } } },
+			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "mcp_tool", status: "completed", detail: { success: false, error: "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)" } } },
 		});
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
 		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [failed(2)], hasMore: false, nextAfter: 2 });
