@@ -3402,7 +3402,7 @@ func TestStandaloneSessionTelemetryKind(t *testing.T) {
 	st.sessions[rec.ID] = rec
 	sink := &fakeTelemetrySink{}
 	svc := NewWithDeps(Deps{Store: st, Telemetry: sink})
-	svc.emitSpawned(context.Background(), rec, 1)
+	svc.emitSpawned(context.Background(), rec, 1, false, false)
 	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex}, errors.New("launch failed"), 1)
 	originalCapture := captureRelaunchError
 	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
