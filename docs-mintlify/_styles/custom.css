@@ -552,11 +552,6 @@ header [class*="assistant"], header button[id*="assistant"], header a[id*="assis
   main article h1 { margin-top: 0 !important; }
 }
 
-/* scrollbars */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.22); }
 
 /* original Fumadocs renders <Steps> as plain h3 headings - hide Mintlify step chrome */
 [data-component-part="step-line"], [data-component-part="step-number"] { display: none !important; }
@@ -1097,4 +1092,20 @@ header button[class*="group/search"][class*="w-9"] { left: calc(15px + var(--ao-
 }
 @media (min-width: 1024px) and (max-width: 1279.5px) {
 #content-area, div[class*="lg:max-w"][class*="mx-auto"] { width: min(900px, calc(100vw - 268px)) !important; max-width: min(900px, calc(100vw - 268px)) !important; }
+}
+
+/* ── v36c: exact parity fixes ────────────────────────────────────────────
+   1. Original (Fumadocs) hides html/body scrollbars (scrollbar-width:none +
+      display:none). Our previous global 8px styled scrollbar forced a classic
+      strip on the page, narrowing content by 8px on every viewport and causing
+      different text wrapping (visible on mobile). Hide them the same way. */
+html, body { scrollbar-width: none !important; }
+html::-webkit-scrollbar, body::-webkit-scrollbar { display: none !important; }
+
+/* 2. Sidebar nav items: original item boxes start 11px from the sidebar edge
+   (container padding 12px at x=-1). Mintlify's scroll-area viewport uses
+   pl-5 (20px), leaving items 9px too far right. Desktop only; the mobile
+   drawer has its own tuned padding. */
+@media (min-width: 1024px) {
+  nav#sidebar-content [class*="--scroll-area-fade-size"] { padding-left: 11px !important; }
 }
