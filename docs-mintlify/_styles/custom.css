@@ -1060,3 +1060,13 @@ a.ao-hdr-logo img { width: 20px; height: 20px; flex: none; display: block; }
 .ao-hdr-logo span span { font-weight: 500 !important; }
 /* orig logo img sits at y17.5 (subpixel) */
 a.ao-hdr-logo img { position: relative; top: 0.5px; }
+
+/* v35 parity: original TOC active indicator is a bar with a round tip (dash
+   + linecap in custom.js) - no separate dot element */
+.ao-thumb { display: none !important; }
+/* v35 parity: original body list markers are neutral white/40, not primary */
+@layer base {
+  .mdx-content ul li::marker, .mdx-content ol li::marker, main .prose li::marker {
+    color: rgba(255,255,255,0.4) !important;
+  }
+}
