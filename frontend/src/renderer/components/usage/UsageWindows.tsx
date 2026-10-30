@@ -38,6 +38,9 @@ export function UsageWindows({ history, now }: { history: UsageLimitWindows; now
 	// The timeline starts on the day readings start, not on empty days before it.
 	const firstDay = firstReading === null ? since : new Date(firstReading).setHours(0, 0, 0, 0);
 	const timelineStart = Math.max(since, firstDay);
+	// It ends at the latest open window's reset, so that window is drawn whole
+	// with "now" marked inside it, not cut off at now.
+	const timelineEnd = Math.max(until, ...sessions.flatMap(({ spans }) => spans.filter((span) => span.state === "open").map((span) => Date.parse(span.resetsAt))));
 	const dateTime = new Intl.DateTimeFormat(locale, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
 	if (sessions.length === 0 && weekly.length === 0) {
@@ -56,7 +59,7 @@ export function UsageWindows({ history, now }: { history: UsageLimitWindows; now
 				{/* Say when recording began only when it began inside the period. */}
 				{firstReading !== null && firstReading - since > HOUR_MS ? ` ${t("usage.windows.recordingSince", { value: dateTime.format(firstReading) })}` : null}
 			</p>
-			{sessions.length > 0 ? <SessionTimeline sessions={sessions} since={timelineStart} until={until} now={now} dateTime={dateTime} /> : null}
+			{sessions.length > 0 ? <SessionTimeline sessions={sessions} since={timelineStart} until={timelineEnd} now={now} dateTime={dateTime} /> : null}
 			{sessions.length > 0 ? <Fullness sessions={sessions} now={now} dateTime={dateTime} /> : null}
 			{weekly.length > 0 ? (
 				<section aria-labelledby="usage-windows-weekly" className="flex flex-col gap-4">
@@ -169,6 +172,9 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 						<LoginName login={login} />
 						<div className="relative h-11 overflow-hidden rounded-md bg-muted/60">
 							{midnights.map((ms) => <div key={ms} aria-hidden="true" className="absolute inset-y-0 border-s border-border/70" style={{ insetInlineStart: at(ms) }} />)}
+							{now.getTime() < until ? (
+								<div aria-hidden="true" className="absolute inset-y-0 z-10 border-s border-dashed border-foreground/60" style={{ insetInlineStart: at(now.getTime()) }} />
+							) : null}
 							{spans.map((window) => {
 								const start = window.startsAt ? Date.parse(window.startsAt) : Date.parse(window.firstReadAt);
 								const end = Date.parse(window.resetsAt);
@@ -206,8 +212,14 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 													/>
 												) : null}
 												<span aria-hidden="true" className="absolute inset-x-0 top-0.5 truncate text-center text-2xs font-medium tabular-nums text-foreground">
-													{Math.round(window.peakUsedPercent)}%{pace && pace.atReset > used ? ` → ${Math.round(pace.atReset)}%` : ""}
+													{Math.round(window.peakUsedPercent)}%
 												</span>
+												{/* The projection gets its own line: a five-hour block is narrow on a week. */}
+												{pace && pace.atReset > used ? (
+													<span aria-hidden="true" className="absolute inset-x-0 top-4 truncate text-center text-2xs tabular-nums text-foreground/70">
+														→ {Math.round(pace.atReset)}%
+													</span>
+												) : null}
 											</div>
 										</TooltipTrigger>
 										<TooltipContent><SpanDetails span={window} now={now} dateTime={dateTime} /></TooltipContent>

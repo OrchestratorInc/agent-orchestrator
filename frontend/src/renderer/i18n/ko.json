@@ -3687,7 +3687,7 @@
 	"usage.windows.used": "{{value}} 사용",
 	"usage.windows.projected": "이 속도면 재설정 시 약 {{value}}",
 	"usage.windows.projectedRunsOut": "이 속도면 {{value}}에 한도에 도달",
-	"usage.windows.timelineHelp": "각 블록은 시작부터 재설정까지의 5시간 창 하나입니다. 숫자와 채움은 그 창의 한도 중 사용한 비율입니다. 빈 곳은 열린 창이 없던 시간입니다.",
+	"usage.windows.timelineHelp": "각 블록은 시작부터 재설정까지의 5시간 창 하나입니다. 숫자와 채움은 그 창의 한도 중 사용한 비율입니다. 빈 곳은 열린 창이 없던 시간입니다. 세로 점선은 현재입니다.",
 	"usage.windows.fullnessHelp": "끝난 창마다 막대 하나이며, 높이는 한도 중 사용한 비율입니다. 점선 막대는 읽기가 일찍 멈춘 것으로, 최소 그만큼 사용했습니다.",
 	"usage.windows.allowanceHelp": "선은 주가 시작된 뒤의 각 읽기 값입니다. 파선은 그 속도를 재설정까지 이어 그린 것이고, 점선은 현재입니다.",
 	"usage.windows.detail.used": "5시간 한도의 {{value}} 사용",

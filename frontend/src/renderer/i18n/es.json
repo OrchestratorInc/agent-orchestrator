@@ -3755,7 +3755,7 @@
 	"usage.windows.used": "{{value}} usado",
 	"usage.windows.projected": "A este ritmo: cerca de {{value}} al reiniciarse",
 	"usage.windows.projectedRunsOut": "A este ritmo llega al límite el {{value}}",
-	"usage.windows.timelineHelp": "Cada bloque es una ventana de cinco horas, desde su inicio hasta que se reinicia. El número y el relleno muestran cuánto del límite de esa ventana se usó. Los huecos son momentos sin ninguna ventana abierta.",
+	"usage.windows.timelineHelp": "Cada bloque es una ventana de cinco horas, desde su inicio hasta que se reinicia. El número y el relleno muestran cuánto del límite de esa ventana se usó. Los huecos son momentos sin ninguna ventana abierta. La línea vertical discontinua es ahora.",
 	"usage.windows.fullnessHelp": "Una barra por ventana terminada, tan alta como la parte del límite que se usó. Una barra discontinua significa que las lecturas se detuvieron antes, así que se usó al menos eso.",
 	"usage.windows.allowanceHelp": "La línea es cada lectura desde que empezó la semana. La línea discontinua prolonga ese ritmo hasta el reinicio; la punteada es ahora.",
 	"usage.windows.detail.used": "{{value}} del límite de cinco horas usado",

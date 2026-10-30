@@ -3687,7 +3687,7 @@
 	"usage.windows.used": "{{value}} verbraucht",
 	"usage.windows.projected": "Bei diesem Tempo: etwa {{value}} beim Zurücksetzen",
 	"usage.windows.projectedRunsOut": "Bei diesem Tempo ist das Limit am {{value}} erreicht",
-	"usage.windows.timelineHelp": "Jeder Block ist ein Fünf-Stunden-Fenster, vom Beginn bis zum Zurücksetzen. Zahl und Füllung zeigen, wie viel vom Limit dieses Fensters verbraucht wurde. Lücken sind Zeiten, in denen kein Fenster offen war.",
+	"usage.windows.timelineHelp": "Jeder Block ist ein Fünf-Stunden-Fenster, vom Beginn bis zum Zurücksetzen. Zahl und Füllung zeigen, wie viel vom Limit dieses Fensters verbraucht wurde. Lücken sind Zeiten, in denen kein Fenster offen war. Die senkrechte gestrichelte Linie ist jetzt.",
 	"usage.windows.fullnessHelp": "Ein Balken pro beendetem Fenster, so hoch wie der verbrauchte Anteil seines Limits. Ein gestrichelter Balken heißt, die Messwerte endeten früher; verbraucht wurde mindestens so viel.",
 	"usage.windows.allowanceHelp": "Die Linie zeigt jeden Messwert seit Beginn der Woche. Die gestrichelte Linie führt dieses Tempo bis zum Zurücksetzen fort; die gepunktete ist jetzt.",
 	"usage.windows.detail.used": "{{value}} des Fünf-Stunden-Limits verbraucht",

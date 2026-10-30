@@ -3669,7 +3669,7 @@
 	"usage.windows.used": "已用 {{value}}",
 	"usage.windows.projected": "按此速度，重置时约为 {{value}}",
 	"usage.windows.projectedRunsOut": "按此速度将在 {{value}} 达到上限",
-	"usage.windows.timelineHelp": "每个方块是一个 5 小时窗口，从开始到重置。数字和填充表示该窗口额度的使用比例。空白处表示当时没有打开的窗口。",
+	"usage.windows.timelineHelp": "每个方块是一个 5 小时窗口，从开始到重置。数字和填充表示该窗口额度的使用比例。空白处表示当时没有打开的窗口。竖直虚线表示现在。",
 	"usage.windows.fullnessHelp": "每个已结束的窗口一根柱子，高度是其额度的使用比例。虚线柱表示读数提前停止，至少用了这么多。",
 	"usage.windows.allowanceHelp": "实线是本周开始以来的每次读数。虚线按此速度延伸到重置，点线表示现在。",
 	"usage.windows.detail.used": "已用 5 小时额度的 {{value}}",

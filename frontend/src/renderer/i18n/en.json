@@ -3668,7 +3668,7 @@
 	"usage.windows.used": "{{value}} used",
 	"usage.windows.projected": "At this pace: about {{value}} by the reset",
 	"usage.windows.projectedRunsOut": "At this pace it hits the limit {{value}}",
-	"usage.windows.timelineHelp": "Each block is one five-hour window, from its start to its reset. The number and the fill show how much of that window's limit was used. Gaps are times when no window was open.",
+	"usage.windows.timelineHelp": "Each block is one five-hour window, from its start to its reset. The number and the fill show how much of that window's limit was used. Gaps are times when no window was open. The dashed vertical line is now.",
 	"usage.windows.fullnessHelp": "One bar per finished window, as tall as the share of its limit used. A dashed bar means readings stopped early, so at least that much was used.",
 	"usage.windows.allowanceHelp": "The line is each reading since the week opened. The dashed line carries that pace on to the reset; the dotted line is now.",
 	"usage.windows.detail.used": "{{value}} of the five-hour limit used",

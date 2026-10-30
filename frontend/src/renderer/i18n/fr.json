@@ -3755,7 +3755,7 @@
 	"usage.windows.used": "{{value}} utilisé",
 	"usage.windows.projected": "À ce rythme : environ {{value}} à la réinitialisation",
 	"usage.windows.projectedRunsOut": "À ce rythme, la limite est atteinte le {{value}}",
-	"usage.windows.timelineHelp": "Chaque bloc est une fenêtre de cinq heures, de son début à sa réinitialisation. Le nombre et le remplissage indiquent la part de la limite de cette fenêtre utilisée. Les vides sont des moments sans fenêtre ouverte.",
+	"usage.windows.timelineHelp": "Chaque bloc est une fenêtre de cinq heures, de son début à sa réinitialisation. Le nombre et le remplissage indiquent la part de la limite de cette fenêtre utilisée. Les vides sont des moments sans fenêtre ouverte. La ligne verticale en pointillés marque maintenant.",
 	"usage.windows.fullnessHelp": "Une barre par fenêtre terminée, aussi haute que la part de sa limite utilisée. Une barre en pointillés signifie que les relevés se sont arrêtés plus tôt : au moins cette part a été utilisée.",
 	"usage.windows.allowanceHelp": "La ligne suit chaque relevé depuis le début de la semaine. La ligne en tirets prolonge ce rythme jusqu'à la réinitialisation ; la ligne pointillée marque maintenant.",
 	"usage.windows.detail.used": "{{value}} de la limite de cinq heures utilisés",

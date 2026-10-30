@@ -3687,7 +3687,7 @@
 	"usage.windows.used": "{{value}} 使用",
 	"usage.windows.projected": "このペースならリセット時に約 {{value}}",
 	"usage.windows.projectedRunsOut": "このペースでは {{value}} に上限に達します",
-	"usage.windows.timelineHelp": "各ブロックは 5 時間ウィンドウ 1 つ分で、開始からリセットまでを表します。数値と塗りは、そのウィンドウの上限のうち使った割合です。すき間はウィンドウが開いていなかった時間です。",
+	"usage.windows.timelineHelp": "各ブロックは 5 時間ウィンドウ 1 つ分で、開始からリセットまでを表します。数値と塗りは、そのウィンドウの上限のうち使った割合です。すき間はウィンドウが開いていなかった時間です。縦の破線は現在です。",
 	"usage.windows.fullnessHelp": "終了したウィンドウごとに 1 本のバーで、高さは上限のうち使った割合です。破線のバーは途中で読み取りが止まったもので、少なくともその分は使っています。",
 	"usage.windows.allowanceHelp": "線は週が始まってからの各読み取り値です。破線はそのペースをリセットまで延ばしたもので、点線は現在です。",
 	"usage.windows.detail.used": "5 時間上限の {{value}} を使用",

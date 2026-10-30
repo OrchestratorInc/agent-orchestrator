@@ -3755,7 +3755,7 @@
 	"usage.windows.used": "{{value}} usado",
 	"usage.windows.projected": "Neste ritmo: cerca de {{value}} na redefinição",
 	"usage.windows.projectedRunsOut": "Neste ritmo atinge o limite em {{value}}",
-	"usage.windows.timelineHelp": "Cada bloco é uma janela de cinco horas, do início até a redefinição. O número e o preenchimento mostram quanto do limite dessa janela foi usado. Os espaços vazios são períodos sem janela aberta.",
+	"usage.windows.timelineHelp": "Cada bloco é uma janela de cinco horas, do início até a redefinição. O número e o preenchimento mostram quanto do limite dessa janela foi usado. Os espaços vazios são períodos sem janela aberta. A linha vertical tracejada é agora.",
 	"usage.windows.fullnessHelp": "Uma barra por janela encerrada, da altura da parte do limite usada. Uma barra tracejada significa que as leituras pararam antes, então pelo menos isso foi usado.",
 	"usage.windows.allowanceHelp": "A linha mostra cada leitura desde que a semana começou. A linha tracejada estende esse ritmo até a redefinição; a pontilhada é agora.",
 	"usage.windows.detail.used": "{{value}} do limite de cinco horas usado",
