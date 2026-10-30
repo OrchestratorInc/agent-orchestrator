@@ -2045,7 +2045,7 @@
 	"update.restart.title": "Перезапустить для обновления",
 	"update.restart.whatsNew": "Что нового",
 	"update.restart.noNotes": "Для этой сборки заметки о выпуске не опубликованы.",
-	"update.restart.sessionsTitle_one": "1 чат-сессия потеряет текущий ход",
+	"update.restart.sessionsTitle_one": "{{count}} чат-сессия потеряет текущий ход",
 	"update.restart.sessionsTitle_few": "{{count}} чат-сессии потеряют текущий ход",
 	"update.restart.sessionsTitle_many": "{{count}} чат-сессий потеряют текущий ход",
 	"update.restart.sessionsTitle_other": "{{count}} чат-сессии потеряют текущий ход",

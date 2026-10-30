@@ -15,7 +15,7 @@ export const TRAY_MESSAGE_KEYS = [
 
 export type TrayMessageKey = (typeof TRAY_MESSAGE_KEYS)[number];
 
-export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
+export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Partial<Record<string, string>>> = {
 	"en": {
 		"tray.untitledSession": "Untitled session",
 		"tray.attentionTooltip_one": "{{count}} session needs attention",
@@ -69,7 +69,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Mostrar Agent Orchestrator",
 		"tray.quit": "Salir completamente de AO",
 		"zone.merge": "Listo para fusionar",
-		"zone.action": "Te necesita"
+		"zone.action": "Te necesita",
+		"tray.attentionTooltip_many": "{{count}} sesiones requieren atención"
 	},
 	"fr": {
 		"tray.untitledSession": "Session sans titre",
@@ -80,7 +81,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Afficher Agent Orchestrator",
 		"tray.quit": "Quitter complètement AO",
 		"zone.merge": "Prêt à fusionner",
-		"zone.action": "Action requise"
+		"zone.action": "Action requise",
+		"tray.attentionTooltip_many": "{{count}} sessions nécessitent votre attention"
 	},
 	"de": {
 		"tray.untitledSession": "Unbenannte Sitzung",
@@ -102,7 +104,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Mostrar Agent Orchestrator",
 		"tray.quit": "Sair completamente do AO",
 		"zone.merge": "Pronto para merge",
-		"zone.action": "Precisa de você"
+		"zone.action": "Precisa de você",
+		"tray.attentionTooltip_many": "{{count}} sessões precisam de atenção"
 	},
 	"ru": {
 		"tray.untitledSession": "Сессия без названия",
@@ -113,6 +116,8 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Показать Agent Orchestrator",
 		"tray.quit": "Полностью выйти из AO",
 		"zone.merge": "Готово к слиянию",
-		"zone.action": "Требуется ваше действие"
+		"zone.action": "Требуется ваше действие",
+		"tray.attentionTooltip_few": "{{count}} сессии требуют внимания",
+		"tray.attentionTooltip_many": "{{count}} сессий требуют внимания"
 	}
 };
