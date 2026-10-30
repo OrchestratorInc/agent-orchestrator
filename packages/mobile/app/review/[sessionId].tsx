@@ -3,7 +3,7 @@ import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { cancelSessionReview, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, triggerSessionReview, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
+import { cancelSessionReview, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, sessionTitle, triggerSessionReview, type DashboardSession, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
@@ -13,7 +13,7 @@ import { openGitHub } from "../../lib/openGitHub";
 import { useOpenPage } from "../../lib/pageNavigation";
 import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
-import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
+import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit, workerRouteForSession } from "../../lib/reviewView";
 import { HostScope, useApp } from "../../lib/store";
 import { statusVisual, type Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -38,9 +38,10 @@ function ReviewDetailContent() {
 	const router = useRouter();
 	const openPage = useOpenPage();
 	const { sessionId, prUrl, prNumber, hostId: routeHostId } = useLocalSearchParams<{ sessionId: string; prUrl?: string; prNumber?: string; hostId?: string }>();
-	const { config, sessions, currentHostId } = useApp();
+	const { config, sessions, currentHostId, restore } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
-	const autoReviewEnabled = sessions.find((session) => session.id === sessionId)?.autoReviewEnabled === true;
+	const worker = sessions.find((session) => session.id === sessionId);
+	const autoReviewEnabled = worker?.autoReviewEnabled === true;
 	const [data, setData] = useState<SessionReviews>();
 	const [prs, setPRs] = useState<SessionPRSummary[]>([]);
 	const [sentRuns, setSentRuns] = useState<ReadonlySet<string>>(new Set());
@@ -80,7 +81,7 @@ function ReviewDetailContent() {
 		return () => clearTimeout(timer);
 	}, [autoReviewFailureId, dismissedAutoFailureId]);
 	useLayoutEffect(() => navigation.setOptions({
-		title: review?.title || "Review",
+		title: review?.title || "Pull request",
 		headerTitleStyle: { color: t.textPrimary, fontFamily: "Geist_600SemiBold", fontWeight: "600" },
 	}), [navigation, review?.title, t.textPrimary]);
 	useLayoutEffect(() => navigation.setOptions({
@@ -132,6 +133,26 @@ function ReviewDetailContent() {
 			await load();
 		} catch (value) {
 			setError(value instanceof Error ? value.message : "Could not restore the reviewer.");
+		} finally {
+			setMutation(undefined);
+		}
+	};
+	const openWorker = () => {
+		if (!worker) return;
+		haptics.tap();
+		const state = navigation.getState();
+		if (state && previousRouteIsWorker(state.routes, state.index, worker.id) && router.canGoBack()) router.back();
+		else openPage(workerRouteForSession(worker, routeHostId ?? currentHostId ?? undefined));
+	};
+	const restoreWorker = async () => {
+		if (!worker || mutation) return;
+		haptics.tap();
+		setMutation("restoreWorker");
+		setError("");
+		try {
+			await restore(worker.id, routeHostId ?? currentHostId ?? undefined);
+		} catch (value) {
+			setError(value instanceof Error ? value.message : "Could not restore the worker.");
 		} finally {
 			setMutation(undefined);
 		}
@@ -238,10 +259,16 @@ function ReviewDetailContent() {
 				</View>
 			</View>
 
+			{worker ? <>
+				<ListSectionHeader label="Worker" />
+				<WorkerRow worker={worker} restoring={mutation === "restoreWorker"} disabled={Boolean(mutation)} onOpen={openWorker} onRestore={() => void restoreWorker()} />
+			</> : null}
+
 			<ListSectionHeader label="Reviewer" />
 			{/* The row opens the reviewer; its pill and menu are laid over the row rather
 			    than inside its Pressable (as on the project page's orchestrator row), so
-			    a tap on "⋯" never also opens the reviewer. */}
+			    a tap on "⋯" never also opens the reviewer. Its Open is outlined so the
+			    worker's filled Open above stays the page's main way out. */}
 			<View>
 			<Pressable accessibilityRole={controls.open ? "button" : undefined} accessibilityLabel={controls.open ? `Open reviewer ${controls.open}` : undefined} disabled={!controls.open || Boolean(mutation)} onPress={openReviewer} style={({ pressed }) => [styles.row, styles.rowWithOverlay, pressed && styles.rowPressed]}>
 				<View style={styles.main}>
@@ -260,7 +287,7 @@ function ReviewDetailContent() {
 				<View style={styles.overlaySlot} pointerEvents="box-none">
 				<View style={styles.trailing}>
 					{controls.open
-						? <RowPill label="Open" icon={controls.open === "chat" ? "message-circle" : "terminal"} tone="solid" disabled={Boolean(mutation)} onPress={openReviewer} />
+						? <RowPill label="Open" icon={controls.open === "chat" ? "message-circle" : "terminal"} tone="outline" disabled={Boolean(mutation)} onPress={openReviewer} />
 						: controls.restore ? <RowPill label="Restore" icon="refresh-cw" tone="outline" busy={mutation === "restore"} disabled={Boolean(mutation)} onPress={() => void restoreReviewer()} /> : null}
 					<ItemActionsMenu accessibilityLabel="Reviewer session actions" actions={stopActions} loading={mutation === "kill"} disabled={Boolean(mutation)} />
 				</View>
@@ -305,6 +332,43 @@ function ReviewDetailContent() {
 		</View> : null}
 		</View>
 	);
+}
+
+/**
+ * The worker that owns this pull request, so the PR page leads back to its chat
+ * the way the chat leads to the PR page. Built like the reviewer row below it.
+ */
+function WorkerRow({ worker, restoring, disabled, onOpen, onRestore }: { worker: DashboardSession; restoring: boolean; disabled: boolean; onOpen: () => void; onRestore: () => void }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const title = sessionTitle(worker);
+	const terminated = worker.isTerminated === true || worker.status === "terminated";
+	const visual = statusVisual(t, worker.status);
+	// The daemon's phrase ("Fixing CI failures") when it says more than the status.
+	const phrase = worker.displayStatus?.trim();
+	const detail = phrase && phrase.toLowerCase() !== visual.label.toLowerCase() ? ` · ${phrase}` : "";
+	return <View>
+		<Pressable accessibilityRole="button" accessibilityLabel={`Open worker ${title}. ${visual.label}.`} disabled={disabled} onPress={onOpen} style={({ pressed }) => [styles.row, styles.rowWithPill, pressed && styles.rowPressed]}>
+			<View style={styles.main}>
+				<View style={styles.eyebrow}>
+					{worker.harness ? <AgentLogo harness={worker.harness} size={14} /> : <Feather name="user" size={13} color={t.textSecondary} />}
+					<Text style={styles.eyebrowText} numberOfLines={1}>{worker.harness ? reviewerName(worker.harness) : "Worker"}</Text>
+				</View>
+				<Text style={styles.title} numberOfLines={1}>{title}</Text>
+				<View style={styles.statusLine}>
+					<Dot color={visual.color} size={6} breathing={visual.breathing} />
+					<Text style={[styles.statusStrong, { color: visual.color }]}>{visual.label}</Text>
+					<Text style={styles.statusDetail} numberOfLines={1}>{detail}</Text>
+				</View>
+			</View>
+		</Pressable>
+		{/* Laid over the row, like the reviewer's, so the pill is its own target. */}
+		<View style={styles.overlaySlot} pointerEvents="box-none">
+			{terminated
+				? <RowPill label="Restore" icon="refresh-cw" tone="outline" busy={restoring} disabled={disabled} onPress={onRestore} />
+				: <RowPill label="Open" icon="message-circle" tone="solid" disabled={disabled} onPress={onOpen} />}
+		</View>
+	</View>;
 }
 
 type PillTone = "solid" | "outline" | "danger";
@@ -384,6 +448,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	rowPressed: { backgroundColor: t.bgSubtle },
 	// Room for the pill and menu laid over the row's trailing edge.
 	rowWithOverlay: { paddingRight: 150 },
+	rowWithPill: { paddingRight: 110 },
 	overlaySlot: { position: "absolute", right: space.lg - space.xxs, top: 0, bottom: 0, justifyContent: "center" },
 	main: { flex: 1, minWidth: 0, gap: space.hair },
 	trailing: { flexDirection: "row", alignItems: "center", gap: space.xxs },
