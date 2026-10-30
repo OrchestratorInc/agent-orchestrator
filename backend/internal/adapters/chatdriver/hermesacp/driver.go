@@ -44,6 +44,14 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		HistoryReconciler:  reconcileReplay,
 		PromptErrorFailure: promptErrorFailure,
 		VersionProbe:       probe,
+		// Hermes' session modes are edit-approval policies (default/accept_edits/
+		// dont_ask) that AO's own permission setting already drives through
+		// sessionMode on every turn. Surfacing the provider list as well rendered
+		// one setting twice in the composer: a three-row "mode" picker that
+		// flipped back to Default whenever the approval choice moved, and hid
+		// AO's fuller four-mode picker behind the provider catalog. The session
+		// still receives set_mode per turn; only the duplicate picker is dropped.
+		SuppressSessionModes: true,
 	}, log)
 }
 

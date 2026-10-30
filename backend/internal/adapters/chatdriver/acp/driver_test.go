@@ -3682,6 +3682,37 @@ func TestACPDriverConsumesLegacyKimiSelectorsOnSDK0135(t *testing.T) {
 	}
 }
 
+// A binding whose agent's session modes are pure approval policies suppresses
+// the provider mode list: AO renders its own permission picker instead, and the
+// dropped catalog must not shadow it with a second copy of the same setting.
+func TestACPDriverSuppressSessionModesDropsLegacyModeOption(t *testing.T) {
+	agent := &legacyKimiAgent{}
+	driver := New(Config{
+		Harness:              domain.HarnessKimi,
+		Capabilities:         ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:                func(context.Context) error { return nil },
+		Launch:               func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SuppressSessionModes: true,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeLegacyKimiSpawn(agent))
+
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath: t.TempDir(), Model: "kimi-code/kimi-for-coding",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+
+	options, err := conv.(ports.ChatConfigOptionController).ListConfigOptions(context.Background())
+	if err != nil {
+		t.Fatalf("ListConfigOptions: %v", err)
+	}
+	if len(options) != 1 || options[0].ID != "model" {
+		t.Fatalf("suppressed options = %#v, want the model option only", options)
+	}
+}
+
 func TestACPDriverResolvesCLIModelToAdvertisedParameterizedLegacyChoice(t *testing.T) {
 	agent := &legacyKimiAgent{
 		currentModel: "auto",

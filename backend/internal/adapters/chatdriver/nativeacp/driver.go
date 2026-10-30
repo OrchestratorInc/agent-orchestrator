@@ -59,6 +59,8 @@ type Config struct {
 	// SessionPreamble delivers standing context on the first prompt. See
 	// acpdriver.Config.SessionPreamble for when a binding needs it.
 	SessionPreamble func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
+	// SuppressSessionModes: see acpdriver.Config.SuppressSessionModes.
+	SuppressSessionModes bool
 	// PromptErrorFailure restates a session/prompt error. See
 	// acpdriver.Config.PromptErrorFailure.
 	PromptErrorFailure func(error, bool) error
@@ -164,6 +166,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		CloseSessionBeforeReload:     cfg.CloseSessionBeforeReload,
 		ValidateInitialize:           cfg.ValidateInitialize,
 		SessionPreamble:              cfg.SessionPreamble,
+		SuppressSessionModes:         cfg.SuppressSessionModes,
 		HistoryReconciler:            cfg.HistoryReconciler,
 		PromptErrorFailure:           cfg.PromptErrorFailure,
 		PermissionPolicy:             cfg.PermissionPolicy,
