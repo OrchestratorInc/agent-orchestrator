@@ -21,11 +21,11 @@ vi.mock("../../hooks/useCloudCp", () => ({
 	}),
 }));
 
-function Harness({ onNewTeam, unavailable }: { onNewTeam?: (people: Recipient[]) => void; unavailable?: Set<string> }) {
+function Harness({ onNewTeam, unavailable, workspaceHasAccess }: { onNewTeam?: (people: Recipient[]) => void; unavailable?: Set<string>; workspaceHasAccess?: boolean }) {
 	const [value, setValue] = useState<Recipient[]>([]);
 	return (
 		<>
-			<PeopleField orgId="org" value={value} onChange={setValue} placeholder="Add people or teams" ariaLabel="Add people or teams" onNewTeam={onNewTeam} unavailable={unavailable} />
+			<PeopleField orgId="org" value={value} onChange={setValue} placeholder="Add people or teams" ariaLabel="Add people or teams" onNewTeam={onNewTeam} unavailable={unavailable} workspaceHasAccess={workspaceHasAccess} />
 			<output data-testid="value">{JSON.stringify(value)}</output>
 		</>
 	);
@@ -92,6 +92,36 @@ describe("PeopleField", () => {
 		await type(input, "lee@acme.co,");
 		fireEvent.keyDown(input, { key: "," });
 		expect(value()).toEqual([{ kind: "person", email: "sam@contractor.io" }, { kind: "person", email: "lee@acme.co" }]);
+	});
+
+	it("shows people in the workspace as already having access when sharing, but not for teams", async () => {
+		mocks.candidates = [{ kind: "user", name: "Farah Nasser", email: "farah@northwind.dev", workspaceMember: true }, { kind: "user", name: "Riya Sen", email: "riya@acme.co" }];
+		const sharing = renderField({ workspaceHasAccess: true });
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.focus(input);
+		await type(input, "a");
+		const [farah, riya] = await screen.findAllByRole("option");
+		expect(farah!.getAttribute("aria-disabled")).toBe("true");
+		expect(farah!.textContent).toContain("In the workspace");
+		expect(riya!.getAttribute("aria-disabled")).toBeNull();
+		sharing.unmount();
+		renderField();
+		const teamInput = screen.getByRole("combobox", { name: "Add people or teams" });
+		fireEvent.focus(teamInput);
+		await type(teamInput, "a");
+		expect((await screen.findAllByRole("option"))[0]!.getAttribute("aria-disabled")).toBeNull();
+	});
+
+	it("closes the suggestions after a pick so the pick is in view", async () => {
+		renderField();
+		const input = screen.getByRole("combobox", { name: "Add people or teams" });
+		act(() => input.focus());
+		await type(input, "dana");
+		fireEvent.click(await screen.findByText("Dana Kim"));
+		expect(document.activeElement).toBe(input);
+		expect(screen.queryByRole("listbox")).toBeNull();
+		fireEvent.click(input);
+		expect(await screen.findByRole("listbox")).toBeInTheDocument();
 	});
 
 	it("offers New team with whoever is picked so far", async () => {

@@ -3755,6 +3755,7 @@
 	"teams.field.addEmail": "Add {{email}}",
 	"teams.field.addEmailHint": "Gets access when they sign in with this email",
 	"teams.field.hasAccess": "Has access",
+	"teams.field.inWorkspace": "In the workspace",
 	"teams.field.newTeam": "New team…",
 	"teams.field.people": "People",
 	"teams.field.remove": "Remove {{name}}",

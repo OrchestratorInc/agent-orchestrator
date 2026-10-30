@@ -1,5 +1,6 @@
 import { Plus, Search, X } from "lucide-react";
-import { type KeyboardEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Popover as PopoverPrimitive } from "radix-ui";
+import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import type { CloudCpShareCandidate } from "../../lib/cloud-cp";
@@ -17,7 +18,7 @@ export function recipientKey(recipient: Recipient): string {
 
 type Option =
 	| { id: string; kind: "team"; candidate: CloudCpShareCandidate; disabled: boolean }
-	| { id: string; kind: "person"; candidate: CloudCpShareCandidate; disabled: boolean }
+	| { id: string; kind: "person"; candidate: CloudCpShareCandidate; disabled: boolean; inWorkspace?: boolean }
 	| { id: string; kind: "email"; email: string; disabled: false }
 	| { id: string; kind: "newTeam"; disabled: false };
 
@@ -34,6 +35,7 @@ export function PeopleField({
 	allowTeams = true,
 	unavailable,
 	unavailableLabel,
+	workspaceHasAccess = false,
 	placeholder,
 	trailing,
 	onNewTeam,
@@ -50,6 +52,8 @@ export function PeopleField({
 	/** Keys (recipientKey) of people and teams that can't be picked, such as those who already have access. */
 	unavailable?: ReadonlySet<string>;
 	unavailableLabel?: string;
+	/** People in the workspace already have full access, so they can't be picked (sharing, not teams). */
+	workspaceHasAccess?: boolean;
 	placeholder: string;
 	/** Sits at the field's trailing edge, such as an access menu. */
 	trailing?: ReactNode;
@@ -65,6 +69,19 @@ export function PeopleField({
 	const { t } = useTranslation();
 	const listId = useId();
 	const inputRef = useRef<HTMLInputElement>(null);
+	const fieldRef = useRef<HTMLDivElement>(null);
+	// The list is portaled outside any modal dialog, whose scroll lock cancels
+	// wheel events there; scroll it directly, as SearchablePicker does.
+	const listRef = useCallback((list: HTMLDivElement | null) => {
+		if (!list) return;
+		const onWheel = (event: WheelEvent) => {
+			if (list.scrollHeight <= list.clientHeight) return;
+			list.scrollTop += event.deltaMode === 1 ? event.deltaY * 16 : event.deltaMode === 2 ? event.deltaY * list.clientHeight : event.deltaY;
+			event.preventDefault();
+		};
+		list.addEventListener("wheel", onWheel, { passive: false });
+		return () => list.removeEventListener("wheel", onWheel);
+	}, []);
 	const [text, setText] = useState("");
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
@@ -87,7 +104,8 @@ export function PeopleField({
 			} else if (candidate.email) {
 				const key = `email:${candidate.email.toLowerCase()}`;
 				if (picked.has(key)) continue;
-				list.push({ id: key, kind: "person", candidate, disabled: unavailable?.has(key) ?? false });
+				const inWorkspace = workspaceHasAccess && candidate.workspaceMember === true;
+				list.push({ id: key, kind: "person", candidate, disabled: inWorkspace || (unavailable?.has(key) ?? false), inWorkspace });
 			}
 		}
 		const typed = text.trim().toLowerCase();
@@ -96,7 +114,7 @@ export function PeopleField({
 		}
 		if (onNewTeam && allowTeams) list.push({ id: "new-team", kind: "newTeam", disabled: false });
 		return list;
-	}, [allowTeams, candidates.data, onNewTeam, picked, text, unavailable]);
+	}, [allowTeams, candidates.data, onNewTeam, picked, text, unavailable, workspaceHasAccess]);
 
 	const selectable = options.map((option, index) => (option.disabled ? -1 : index)).filter((index) => index >= 0);
 	useEffect(() => {
@@ -104,6 +122,12 @@ export function PeopleField({
 		// Reset to the first pickable option whenever the list changes.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [options.length, query]);
+
+	// Keep the highlighted suggestion in view as the arrow keys move it.
+	useEffect(() => {
+		if (!open) return;
+		document.getElementById(`${listId}-${highlight}`)?.scrollIntoView({ block: "nearest" });
+	}, [highlight, listId, open]);
 
 	const pick = (option: Option) => {
 		if (option.disabled) return;
@@ -121,6 +145,9 @@ export function PeopleField({
 		onChange([...value, next]);
 		setText("");
 		setQuery("");
+		// Close so what was picked, and what it means, is in view; typing,
+		// a click or an arrow key opens the suggestions again.
+		setOpen(false);
 		inputRef.current?.focus();
 	};
 
@@ -171,139 +198,160 @@ export function PeopleField({
 	const firstTeam = options.findIndex((option) => option.kind === "team");
 
 	return (
-		<div className={cn("relative", className)}>
-			<div
-				className={cn(
-					"flex min-h-9 w-full cursor-text flex-wrap items-center gap-1.5 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) py-1 pr-1 pl-2.5 text-control transition-[box-shadow,border-color] duration-(--duration-fast)",
-					"focus-within:border-ring/70 focus-within:ring-3 focus-within:ring-ring/20",
-					invalid && "border-destructive/60",
-				)}
-				onMouseDown={(event) => {
-					if (event.target === event.currentTarget) {
-						event.preventDefault();
-						inputRef.current?.focus();
-					}
-				}}
-				data-people-field=""
-			>
-				{value.length === 0 ? <Search className="size-icon-md shrink-0 text-muted-foreground" aria-hidden="true" /> : null}
-				{value.map((recipient) => (
-					<span
-						key={recipientKey(recipient)}
+		<PopoverPrimitive.Root open={showList}>
+			<div className={cn("relative", className)}>
+				<PopoverPrimitive.Anchor asChild>
+					<div
+						ref={fieldRef}
 						className={cn(
-							"inline-flex h-6.5 max-w-full items-center gap-1.5 rounded-sm py-0 pr-1 pl-0.75 text-[12.5px] text-foreground",
-							recipient.kind === "person" && !recipient.name ? "ring-1 ring-foreground/15 ring-inset" : "bg-foreground/10",
+							"flex min-h-9 w-full cursor-text flex-wrap items-center gap-1.5 rounded-md border border-(--color-border-settings-input) bg-(--color-bg-settings-input) py-1 pr-1 pl-2.5 text-control transition-[box-shadow,border-color] duration-(--duration-fast)",
+							"focus-within:border-ring/70 focus-within:ring-3 focus-within:ring-ring/20",
+							invalid && "border-destructive/60",
 						)}
-						data-people-token={recipient.kind}
+						onMouseDown={(event) => {
+							if (event.target === event.currentTarget) {
+								event.preventDefault();
+								inputRef.current?.focus();
+							}
+						}}
+						data-people-field=""
 					>
-						{recipient.kind === "team" ? <TeamTile name={recipient.name} size="sm" /> : <PersonAvatar name={recipient.name} email={recipient.email} size="xs" />}
-						<span className="min-w-0 truncate">{recipient.kind === "team" ? recipient.name : recipient.name || recipient.email}</span>
-						<button
-							type="button"
-							className="grid size-4 shrink-0 place-items-center rounded-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
-							aria-label={t("teams.field.remove", { name: recipient.kind === "team" ? recipient.name : recipient.name || recipient.email })}
-							onClick={() => onChange(value.filter((other) => recipientKey(other) !== recipientKey(recipient)))}
-						>
-							<X className="size-2.5" aria-hidden="true" />
-						</button>
-					</span>
-				))}
-				<input
-					ref={inputRef}
-					value={text}
-					autoFocus={autoFocus}
-					onChange={(event) => {
-						setText(event.target.value);
-						setOpen(true);
-					}}
-					onFocus={() => setOpen(true)}
-					onBlur={() => {
-						window.setTimeout(() => setOpen(false), 120);
-						commitTyped();
-					}}
-					onKeyDown={onKeyDown}
-					placeholder={value.length === 0 ? placeholder : ""}
-					aria-label={ariaLabel}
-					role="combobox"
-					aria-expanded={showList}
-					aria-controls={listId}
-					aria-autocomplete="list"
-					aria-activedescendant={showList && options[highlight] ? `${listId}-${highlight}` : undefined}
-					autoComplete="off"
-					spellCheck={false}
-					className="h-6.5 min-w-10 flex-[1_1_40px] bg-transparent text-control text-foreground outline-none placeholder:text-muted-foreground"
-				/>
-				{trailing}
-			</div>
-			{showList ? (
-				<div
-					id={listId}
-					role="listbox"
-					className="absolute top-[calc(100%+6px)] right-0 left-0 z-overlay flex max-h-80 flex-col gap-px overflow-y-auto rounded-lg border border-(--color-border-overlay) bg-overlay p-1 shadow-(--shadow-popover)"
-					onMouseDown={(event) => event.preventDefault()}
-					data-people-suggestions=""
-				>
-					{options.map((option, index) => (
-						<div key={option.id} className="contents">
-							{index === firstTeam ? <p className="px-2 pt-1.5 pb-1 text-caption text-passive">{t("teams.field.teams")}</p> : null}
-							{index === firstPerson ? (
-								<>
-									{firstTeam >= 0 ? <div className="-mx-1 my-1 h-px bg-border" /> : null}
-									<p className="px-2 pt-1.5 pb-1 text-caption text-passive">{t("teams.field.people")}</p>
-								</>
-							) : null}
-							{option.kind === "newTeam" && index > 0 ? <div className="-mx-1 my-1 h-px bg-border" /> : null}
-							<div
-								id={`${listId}-${index}`}
-								role="option"
-								aria-selected={index === highlight}
-								aria-disabled={option.disabled || undefined}
+						{value.length === 0 ? <Search className="size-icon-md shrink-0 text-muted-foreground" aria-hidden="true" /> : null}
+						{value.map((recipient) => (
+							<span
+								key={recipientKey(recipient)}
 								className={cn(
-									"flex min-h-8 cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 text-control",
-									option.disabled ? "text-muted-foreground" : "text-foreground",
-									index === highlight && !option.disabled ? "bg-foreground/10" : "",
+									"inline-flex h-6.5 max-w-full items-center gap-1.5 rounded-sm py-0 pr-1 pl-0.75 text-[12.5px] text-foreground",
+									recipient.kind === "person" && !recipient.name ? "ring-1 ring-foreground/15 ring-inset" : "bg-foreground/10",
 								)}
-								onMouseEnter={() => !option.disabled && setHighlight(index)}
-								onClick={() => pick(option)}
-								data-people-option={option.kind}
+								data-people-token={recipient.kind}
 							>
-								{option.kind === "team" ? (
+								{recipient.kind === "team" ? <TeamTile name={recipient.name} size="sm" /> : <PersonAvatar name={recipient.name} email={recipient.email} size="xs" />}
+								<span className="min-w-0 truncate">{recipient.kind === "team" ? recipient.name : recipient.name || recipient.email}</span>
+								<button
+									type="button"
+									className="grid size-4 shrink-0 place-items-center rounded-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+									aria-label={t("teams.field.remove", { name: recipient.kind === "team" ? recipient.name : recipient.name || recipient.email })}
+									onClick={() => onChange(value.filter((other) => recipientKey(other) !== recipientKey(recipient)))}
+								>
+									<X className="size-2.5" aria-hidden="true" />
+								</button>
+							</span>
+						))}
+						<input
+							ref={inputRef}
+							value={text}
+							autoFocus={autoFocus}
+							onChange={(event) => {
+								setText(event.target.value);
+								setOpen(true);
+							}}
+							onFocus={() => setOpen(true)}
+							onClick={() => setOpen(true)}
+							onBlur={() => {
+								window.setTimeout(() => setOpen(false), 120);
+								commitTyped();
+							}}
+							onKeyDown={onKeyDown}
+							placeholder={value.length === 0 ? placeholder : ""}
+							aria-label={ariaLabel}
+							role="combobox"
+							aria-expanded={showList}
+							aria-controls={listId}
+							aria-autocomplete="list"
+							aria-activedescendant={showList && options[highlight] ? `${listId}-${highlight}` : undefined}
+							autoComplete="off"
+							spellCheck={false}
+							className="h-6.5 min-w-10 flex-[1_1_40px] bg-transparent text-control text-foreground outline-none placeholder:text-muted-foreground"
+						/>
+						{trailing}
+					</div>
+				</PopoverPrimitive.Anchor>
+				{/* Above everything, so a short dialog doesn't clip the suggestions. */}
+				<PopoverPrimitive.Portal>
+					<PopoverPrimitive.Content
+						ref={listRef}
+						id={listId}
+						role="listbox"
+						align="start"
+						sideOffset={6}
+						collisionPadding={8}
+						onOpenAutoFocus={(event) => event.preventDefault()}
+						onCloseAutoFocus={(event) => event.preventDefault()}
+						onEscapeKeyDown={() => setOpen(false)}
+						onInteractOutside={(event) => {
+							if (!fieldRef.current?.contains(event.target as Node)) setOpen(false);
+						}}
+						className="z-overlay flex max-h-[min(20rem,var(--radix-popover-content-available-height))] w-(--radix-popover-trigger-width) flex-col gap-px overflow-y-auto rounded-lg border border-(--color-border-overlay) bg-overlay p-1 shadow-(--shadow-popover) outline-none"
+						onMouseDown={(event) => event.preventDefault()}
+						data-people-suggestions=""
+					>
+						{options.map((option, index) => (
+							<div key={option.id} className="contents">
+								{index === firstTeam ? <p className="px-2 pt-1.5 pb-1 text-caption text-passive">{t("teams.field.teams")}</p> : null}
+								{index === firstPerson ? (
 									<>
-										<TeamTile name={option.candidate.name} />
-										<span className="min-w-0 flex-1">
-											<span className="block truncate">{option.candidate.name}</span>
-											<span className="block truncate text-xs text-muted-foreground">{teamSummary(t, option.candidate)}</span>
-										</span>
+										{firstTeam >= 0 ? <div className="-mx-1 my-1 h-px bg-border" /> : null}
+										<p className="px-2 pt-1.5 pb-1 text-caption text-passive">{t("teams.field.people")}</p>
 									</>
-								) : option.kind === "person" ? (
-									<>
-										<PersonAvatar name={option.candidate.name} email={option.candidate.email} />
-										<span className="min-w-0 flex-1">
-											<span className="block truncate">{option.candidate.name || option.candidate.email}</span>
-											{option.candidate.name ? <span className="block truncate text-xs text-muted-foreground">{option.candidate.email}</span> : null}
-										</span>
-									</>
-								) : option.kind === "email" ? (
-									<>
-										<PersonAvatar email={option.email} invited />
-										<span className="min-w-0 flex-1">
-											<span className="block truncate">{t("teams.field.addEmail", { email: option.email })}</span>
-											<span className="block truncate text-xs text-muted-foreground">{t("teams.field.addEmailHint")}</span>
-										</span>
-									</>
-								) : (
-									<>
-										<Plus className="size-icon-md text-muted-foreground" aria-hidden="true" />
-										<span className="text-muted-foreground">{t("teams.field.newTeam")}</span>
-									</>
-								)}
-								{option.disabled ? <span className="ml-auto shrink-0 text-caption text-passive">{unavailableLabel ?? t("teams.field.hasAccess")}</span> : null}
+								) : null}
+								{option.kind === "newTeam" && index > 0 ? <div className="-mx-1 my-1 h-px bg-border" /> : null}
+								<div
+									id={`${listId}-${index}`}
+									role="option"
+									aria-selected={index === highlight}
+									aria-disabled={option.disabled || undefined}
+									className={cn(
+										"flex min-h-8 cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 text-control",
+										option.disabled ? "text-muted-foreground" : "text-foreground",
+										index === highlight && !option.disabled ? "bg-foreground/10" : "",
+									)}
+									onMouseEnter={() => !option.disabled && setHighlight(index)}
+									onClick={() => pick(option)}
+									data-people-option={option.kind}
+								>
+									{option.kind === "team" ? (
+										<>
+											<TeamTile name={option.candidate.name} />
+											<span className="min-w-0 flex-1">
+												<span className="block truncate">{option.candidate.name}</span>
+												<span className="block truncate text-xs text-muted-foreground">{teamSummary(t, option.candidate)}</span>
+											</span>
+										</>
+									) : option.kind === "person" ? (
+										<>
+											<PersonAvatar name={option.candidate.name} email={option.candidate.email} />
+											<span className="min-w-0 flex-1">
+												<span className="block truncate">{option.candidate.name || option.candidate.email}</span>
+												{option.candidate.name ? <span className="block truncate text-xs text-muted-foreground">{option.candidate.email}</span> : null}
+											</span>
+										</>
+									) : option.kind === "email" ? (
+										<>
+											<PersonAvatar email={option.email} invited />
+											<span className="min-w-0 flex-1">
+												<span className="block truncate">{t("teams.field.addEmail", { email: option.email })}</span>
+												<span className="block truncate text-xs text-muted-foreground">{t("teams.field.addEmailHint")}</span>
+											</span>
+										</>
+									) : (
+										<>
+											<Plus className="size-icon-md text-muted-foreground" aria-hidden="true" />
+											<span className="text-muted-foreground">{t("teams.field.newTeam")}</span>
+										</>
+									)}
+									{option.disabled ? (
+									<span className="ml-auto shrink-0 text-caption text-passive">
+										{option.kind === "person" && option.inWorkspace ? t("teams.field.inWorkspace") : unavailableLabel ?? t("teams.field.hasAccess")}
+									</span>
+								) : null}
+								</div>
 							</div>
-						</div>
-					))}
-				</div>
-			) : null}
-		</div>
+						))}
+					</PopoverPrimitive.Content>
+				</PopoverPrimitive.Portal>
+			</div>
+		</PopoverPrimitive.Root>
 	);
 }
 

@@ -1799,6 +1799,8 @@ export interface CloudCpShareCandidate {
 	memberCount?: number;
 	/** The first few people in a team, to tell similar teams apart. */
 	memberNames?: string[];
+	/** A person already in the workspace, who has full access without a share. */
+	workspaceMember?: boolean;
 }
 
 export interface CloudCpTeamMemberInput {

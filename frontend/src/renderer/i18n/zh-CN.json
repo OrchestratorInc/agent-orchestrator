@@ -3756,6 +3756,7 @@
 	"teams.field.addEmail": "添加 {{email}}",
 	"teams.field.addEmailHint": "使用此邮箱登录后获得访问权限",
 	"teams.field.hasAccess": "已有权限",
+	"teams.field.inWorkspace": "工作区成员",
 	"teams.field.newTeam": "新建团队…",
 	"teams.field.people": "用户",
 	"teams.field.remove": "移除 {{name}}",

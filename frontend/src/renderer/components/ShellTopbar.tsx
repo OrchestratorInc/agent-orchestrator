@@ -45,7 +45,6 @@ import { useSessionShortcut } from "../hooks/useAppShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { CueRunMenu } from "./chat/CueRunMenu";
 import { SessionOwnerTag } from "./SessionOwnerTag";
-import { SessionAccessTag } from "./teams/SessionAccessTag";
 
 const isMac = isMacPlatform();
 export const topbarDragStyle = isMac ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined;
@@ -175,7 +174,6 @@ export function ShellTopbar({
 				{isSessionRoute && session ? (
 					<div className="flex min-w-0 items-center gap-2.5" data-testid="session-topbar-identity">
 						<SessionOwnerTag session={session} />
-						<SessionAccessTag session={session} />
 						{isOrchestrator ? (
 							<span className={cn(topbarProjectLabelClass, "inline-flex min-w-0 items-center gap-1.5")}>
 								<Folder aria-hidden="true" className="size-icon-md shrink-0 text-muted-foreground" />

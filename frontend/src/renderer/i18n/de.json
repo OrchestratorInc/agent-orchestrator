@@ -3774,6 +3774,7 @@
 	"teams.field.addEmail": "{{email}} hinzufügen",
 	"teams.field.addEmailHint": "Bekommt Zugriff nach der Anmeldung mit dieser E-Mail",
 	"teams.field.hasAccess": "Hat Zugriff",
+	"teams.field.inWorkspace": "Im Workspace",
 	"teams.field.newTeam": "Neues Team…",
 	"teams.field.people": "Personen",
 	"teams.field.remove": "{{name}} entfernen",

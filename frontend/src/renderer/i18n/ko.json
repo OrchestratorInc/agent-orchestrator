@@ -3774,6 +3774,7 @@
 	"teams.field.addEmail": "{{email}} 추가",
 	"teams.field.addEmailHint": "이 이메일로 로그인하면 액세스 권한을 받습니다",
 	"teams.field.hasAccess": "액세스 있음",
+	"teams.field.inWorkspace": "워크스페이스 멤버",
 	"teams.field.newTeam": "새 팀…",
 	"teams.field.people": "사용자",
 	"teams.field.remove": "{{name}} 제거",

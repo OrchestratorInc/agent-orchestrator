@@ -3851,6 +3851,7 @@
 	"teams.field.addEmail": "Añadir {{email}}",
 	"teams.field.addEmailHint": "Recibe acceso al iniciar sesión con este correo",
 	"teams.field.hasAccess": "Tiene acceso",
+	"teams.field.inWorkspace": "En el espacio de trabajo",
 	"teams.field.newTeam": "Nuevo equipo…",
 	"teams.field.people": "Personas",
 	"teams.field.remove": "Quitar a {{name}}",

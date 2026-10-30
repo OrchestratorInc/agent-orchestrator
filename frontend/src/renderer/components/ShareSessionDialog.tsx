@@ -232,6 +232,7 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 							share.reset();
 						}}
 						unavailable={unavailable}
+						workspaceHasAccess
 						placeholder={t("share.addPeopleOrTeams")}
 						ariaLabel={t("share.addPeopleOrTeams")}
 						onNewTeam={(people) => setNewTeamFor(people)}

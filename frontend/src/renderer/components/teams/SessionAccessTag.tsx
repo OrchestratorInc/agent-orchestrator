@@ -27,7 +27,7 @@ function SharedSessionAccessTag({ session }: { session: TaggedSession }) {
 	const label = via ? t("teams.accessVia", { access: level, team: via }) : level;
 	return (
 		<span
-			className="inline-flex min-w-0 max-w-full shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground"
+			className="mx-1 inline-flex min-w-0 max-w-56 shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground"
 			title={label}
 			data-session-access-tag={role}
 		>

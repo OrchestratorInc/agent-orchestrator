@@ -3774,6 +3774,7 @@
 	"teams.field.addEmail": "{{email}} を追加",
 	"teams.field.addEmailHint": "このメールでサインインするとアクセスできます",
 	"teams.field.hasAccess": "アクセスあり",
+	"teams.field.inWorkspace": "ワークスペース内",
 	"teams.field.newTeam": "新しいチーム…",
 	"teams.field.people": "ユーザー",
 	"teams.field.remove": "{{name}} を外す",

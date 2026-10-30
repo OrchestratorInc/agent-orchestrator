@@ -1,7 +1,27 @@
+import type { TFunction } from "i18next";
 import { Users } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { WorkspaceShare } from "../../types/workspace";
+import { listNames } from "../share/accessLabels";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+
+/**
+ * Who shared a project with this person and through which teams. A whole
+ * project share speaks for itself; otherwise each session shared on its own
+ * counts, so sessions that came through different teams name them all.
+ */
+export function sharedProjectLines(share: WorkspaceShare, t: TFunction, locale: string): string[] {
+	const sources = share.wholeProject ? [share.wholeProject] : Object.values(share.sessions ?? {});
+	if (sources.length === 0) sources.push(share);
+	const unique = (values: Array<string | undefined>) => [...new Set(values.filter((value): value is string => Boolean(value)))];
+	const more = (count: number) => t("share.summary.more", { count });
+	const names = unique(sources.map((source) => source.byName));
+	const teams = unique(sources.map((source) => source.viaTeamName));
+	return [
+		names.length > 0 ? t("teams.sharedBy", { name: listNames(names, locale, more) }) : t("teams.sharedWithYou"),
+		teams.length > 0 ? t("teams.throughTeam", { team: listNames(teams, locale, more) }) : null,
+	].filter((line): line is string => line !== null);
+}
 
 /**
  * Marks a project someone else shared with this person, without a pill in
@@ -9,12 +29,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
  * which team.
  */
 export function SharedProjectMark({ share }: { share: WorkspaceShare }) {
-	const { t } = useTranslation();
-	const source = share.wholeProject ?? share;
-	const lines = [
-		source.byName ? t("teams.sharedBy", { name: source.byName }) : t("teams.sharedWithYou"),
-		source.viaTeamName ? t("teams.throughTeam", { team: source.viaTeamName }) : null,
-	].filter(Boolean) as string[];
+	const { t, i18n } = useTranslation();
+	const lines = sharedProjectLines(share, t, i18n.language);
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
