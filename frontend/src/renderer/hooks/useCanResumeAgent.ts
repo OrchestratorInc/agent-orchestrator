@@ -3,7 +3,7 @@ import {
 	type SessionInterfaceTransition,
 	useSessionInterfaceTransitionStatus,
 } from "./useSessionInterfaceTransition";
-import { sessionAgentExited, sessionIsActive, type WorkspaceSession } from "../types/workspace";
+import { isHistoryOnlyImport, sessionAgentExited, sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 
@@ -38,6 +38,9 @@ export function canResumeAgent(
 ): boolean {
 	return Boolean(
 		session &&
+			// A history-only import is shown but never resumed: no auto-resume on open,
+			// no Sidebar prefetch, and no Resume agent control.
+			!isHistoryOnlyImport(session) &&
 			(session.needsResume && sessionIsActive(session) || sessionAgentExited(session)) &&
 			!session.cloud &&
 			!interfaceTransitionIsActive(transition),
