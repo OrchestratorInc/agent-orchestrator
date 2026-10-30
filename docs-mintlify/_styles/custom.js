@@ -901,6 +901,7 @@
       if (li.getAttribute("data-ao-ol")) return;
       li.setAttribute("data-ao-ol", "1");
       li.style.setProperty("list-style-type", "decimal", "important");
+      li.style.setProperty("padding-left", "6px", "important"); /* original: 6px text inset after marker */
     });
     var codes = document.querySelectorAll("main table td code, main table th code");
     Array.prototype.forEach.call(codes, function (c) {
