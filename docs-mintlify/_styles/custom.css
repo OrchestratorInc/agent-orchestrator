@@ -1145,3 +1145,12 @@ html::-webkit-scrollbar, body::-webkit-scrollbar { display: none !important; }
   /* first section label: +1px so all rows land on original positions */
   nav#sidebar-content div:not([class*="lg:mt-8"]) > .sidebar-group-header { margin-top: 25px !important; }
 }
+
+/* ── v36f: search trigger parity ─────────────────────────────────────────
+   Original trigger: ps-2 pe-1.5, muted rgb(184) text, lucide search icon
+   stroke-width 2, kbd badges filled with bg oklch(0.153 0.006 107.1). */
+@media (min-width: 1024px) {
+  #search-bar-entry { padding-left: 8px !important; padding-right: 6px !important; color: rgb(184, 184, 184) !important; }
+  #search-bar-entry svg { stroke-width: 2 !important; }
+  #search-bar-entry .ao-kbd { background: oklch(0.153 0.006 107.1) !important; }
+}
