@@ -387,7 +387,7 @@ header [class*="assistant"], header button[id*="assistant"], header a[id*="assis
   padding-bottom: 0;
 }
 .ao-action {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: 8px;
   height: 30px; padding: 6px 8px;
   font-size: 12px; font-weight: 500; letter-spacing: -0.5px;
   color: var(--fd-fg) !important;
@@ -398,7 +398,7 @@ header [class*="assistant"], header button[id*="assistant"], header a[id*="assis
 }
 .ao-action:hover { background: oklch(0.32 0.018 107.4); }
 .ao-action svg { width: 14px; height: 14px; flex: none; }
-.ao-action .ao-caret { width: 12px; height: 12px; }
+.ao-action .ao-caret { width: 14px; height: 14px; }
 .ao-openin { position: relative; }
 .ao-openin-menu {
   position: absolute; top: calc(100% + 6px); left: 0; min-width: 100%;
@@ -444,6 +444,7 @@ header [class*="assistant"], header button[id*="assistant"], header a[id*="assis
   .ao-dtoc-a.ao-dtoc-h3 { padding-left: 32px !important; }
   .ao-dtoc-a.ao-dtoc-first { padding-top: 0 !important; }   /* first row h26 */
   .ao-dtoc-a.ao-dtoc-active { color: var(--fd-fg-2) !important; }
+  .ao-dtoc-a { text-shadow: none !important; }   /* mintlify active-row fake-bold (+-0.15px) */
   [class*="toc"], aside:not([class*="sidebar"]) { border-left: none !important; }
   /* hide Mintlify's own toc active marker (orange) - we draw the Fumadocs one */
   #table-of-contents li::before, #table-of-contents li::after,
