@@ -5,9 +5,11 @@ package persistenthost
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -182,5 +184,85 @@ func TestWindowsProviderJobReapsGrandchild(t *testing.T) {
 				t.Fatalf("provider grandchild %d survived host exit: status=%d err=%v", pid, status, err)
 			}
 		})
+	}
+}
+
+// TestWindowsShutdownWaitBudgetCoversStopSequence pins the shutdown wait
+// budget above the host's serialized stop sequence on Windows: stdin grace,
+// stop deadline, reap wait, and the taskkill kill. The Unix 10 s budget left
+// under 2 s of margin over the 8 s chain, and -race CI load pushed real
+// hibernate shutdowns past it (PR #6635, windows-workspace, October 2026).
+func TestWindowsShutdownWaitBudgetCoversStopSequence(t *testing.T) {
+	chain := providerStdinGrace + providerStopDeadline + providerReapWait + providerKillTimeout
+	if shutdownWaitBudget < chain+5*time.Second {
+		t.Fatalf("shutdown wait budget %s does not cover the %s serialized stop sequence plus load margin", shutdownWaitBudget, chain)
+	}
+}
+
+// TestWindowsShutdownToleratesSlowHostCleanup is the behavioral regression
+// for the wait budget: a host that acknowledges the shutdown request but
+// releases its descriptor and lock only after the old 10 s budget — exactly
+// what the bounded stop sequence does under load — must still shut down
+// cleanly instead of failing with a deadline error.
+func TestWindowsShutdownToleratesSlowHostCleanup(t *testing.T) {
+	const slowCleanup = 12 * time.Second
+
+	dir := t.TempDir()
+	sessionID := "slow-cleanup"
+	hostDirPath := filepath.Join(dir, "chat-hosts", sessionID)
+	if err := os.MkdirAll(hostDirPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	descriptorPath := filepath.Join(hostDirPath, "host.json")
+	descriptor, err := json.Marshal(Descriptor{
+		Version: ProtocolVersion, SessionID: sessionID, Protocol: ProtocolRaw,
+		Address: listener.Addr().String(), Token: "test-token", PID: os.Getpid(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(descriptorPath, descriptor, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(hostDirPath, "host.lock")
+	if err := os.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			var request hello
+			if decodeErr := json.NewDecoder(conn).Decode(&request); decodeErr != nil {
+				_ = conn.Close()
+				continue
+			}
+			if request.Action != "shutdown" {
+				_ = conn.Close()
+				continue
+			}
+			_ = json.NewEncoder(conn).Encode(helloResponse{OK: true})
+			_ = conn.Close()
+			// The host process is gone from the shutdown's point of view; it
+			// just has not released its files yet.
+			time.AfterFunc(slowCleanup, func() {
+				_ = os.Remove(descriptorPath)
+				_ = os.Remove(lockPath)
+			})
+			return
+		}
+	}()
+
+	if err := Shutdown(context.Background(), dir, sessionID); err != nil {
+		t.Fatalf("Shutdown did not tolerate a host that cleaned up after %s: %v", slowCleanup, err)
 	}
 }
