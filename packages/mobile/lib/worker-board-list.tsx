@@ -106,6 +106,7 @@ export function WorkerBoardList({
 	showProject = true,
 	identityKey,
 	archiveSources = NO_ARCHIVE_SOURCES,
+	archiveFooter = false,
 }: {
 	sessions: DashboardSession[];
 	/** Non-empty switches the board to a single flat "Search results" section. */
@@ -135,6 +136,13 @@ export function WorkerBoardList({
 	 * `sessions`; they are fetched when Archive opens, or a search runs.
 	 */
 	archiveSources?: readonly ArchiveSource[];
+	/**
+	 * With nothing live, show `ListEmptyComponent` filling the screen and Archive
+	 * beneath it as a footer, instead of Archive as the board's only row. The
+	 * Workers tab's idle state is written for that; a project page's "no workers
+	 * yet" copy is not, so it keeps the plain Archive row.
+	 */
+	archiveFooter?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -292,7 +300,7 @@ export function WorkerBoardList({
 	// Nothing live, only history. The Archive row used to be the whole board then,
 	// which kept the list non-empty and so hid the empty state behind it. Now the
 	// empty state fills the screen and Archive sits beneath it as a footer.
-	const archiveOnly = listSections.length === 1 && listSections[0].zone === "archive";
+	const archiveOnly = archiveFooter && listSections.length === 1 && listSections[0].zone === "archive";
 
 	// Headers and rows as one array of siblings, so a row changing section is a
 	// reorder rather than an unmount. See BoardRow.
@@ -487,7 +495,7 @@ export function WorkerBoardList({
 					keyExtractor={boardRowKey}
 					{...BOARD_LIST_WINDOW}
 					removeClippedSubviews={false}
-					contentContainerStyle={{ flexGrow: 1, paddingBottom: contentBottomInset }}
+					contentContainerStyle={{ flexGrow: archiveFooter ? 1 : undefined, paddingBottom: contentBottomInset }}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} tintColor={t.accent} />}

@@ -243,6 +243,7 @@ export default function FleetScreen() {
 					key={boardIdentityKey}
 					sessions={projectSessions}
 					archiveSources={archiveSources}
+					archiveFooter
 					query={query}
 					identityKey={boardIdentityKey}
 					listRef={listRef}

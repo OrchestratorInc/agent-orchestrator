@@ -42,11 +42,11 @@ function session(id: string, status: DashboardSession["status"]): DashboardSessi
 	};
 }
 
-function render(sessions: DashboardSession[]) {
+function render(sessions: DashboardSession[], { archiveFooter = true } = {}) {
 	act(() => {
 		renderer = create(
 			<WorkerBoardList sessions={sessions} contentBottomInset={0} refreshing={false} onRefresh={() => {}}
-				ListEmptyComponent={React.createElement("EmptyState")} />,
+				archiveFooter={archiveFooter} ListEmptyComponent={React.createElement("EmptyState")} />,
 		);
 	});
 	return renderer.root.findByType("FlatList" as never);
@@ -92,5 +92,15 @@ describe("board with only archived workers", () => {
 		expect(kinds).toContain("session");
 		expect(list.props.ListHeaderComponentStyle).toBeUndefined();
 		expect(list.props.ListEmptyComponent).not.toBeNull();
+	});
+
+	// A project page also renders this list, and its empty state says "No workers
+	// yet": wrong under a project's history. Only the Workers tab opts in.
+	it("keeps Archive as the only row on a board that does not opt in", () => {
+		const list = render([session("old-1", "terminated"), session("old-2", "terminated")], { archiveFooter: false });
+		expect((list.props.data as BoardRow[]).map((row) => row.kind)).toEqual(["archive"]);
+		expect(list.props.ListHeaderComponent).toBeUndefined();
+		expect(list.props.ListHeaderComponentStyle).toBeUndefined();
+		expect(list.props.contentContainerStyle.flexGrow).toBeUndefined();
 	});
 });
