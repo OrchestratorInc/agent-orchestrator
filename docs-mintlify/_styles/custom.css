@@ -1186,3 +1186,9 @@ nav#sidebar-content button svg[data-ao-chev] { transition: rotate 150ms ease; }
   button.ao-side-toggle { width: 30px !important; height: 30px !important; margin-right: 8px !important; }
   button.ao-side-toggle svg { width: 18px !important; height: 18px !important; }
 }
+
+/* v36i: hide Mintlify assistant affordances absent from original; toggle vertical offset */
+button[aria-label="Ask Assistant"] { display: none !important; }
+@media (min-width: 1024px) {
+  button.ao-side-toggle { margin-top: 4px !important; }
+}
