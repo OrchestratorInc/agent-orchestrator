@@ -43,8 +43,7 @@ export function GitHubSignInGate({ enabled }: { enabled: boolean }) {
 		void aoBridge.app.openExternal(login.verificationUri);
 	};
 	const error = device.start.isError ? device.start.error.message : login?.state === "failed" ? login.error : undefined;
-	const primaryClass = "mt-6 h-9 w-full gap-2 rounded-[10px] text-sm";
-	const quietClass = "mt-2 h-8 text-[13px] font-normal text-muted-foreground";
+	const buttonClass = "h-9 w-full gap-2 rounded-[10px] text-sm";
 
 	return (
 		<Dialog open onOpenChange={() => {}}>
@@ -73,39 +72,41 @@ export function GitHubSignInGate({ enabled }: { enabled: boolean }) {
 								<p className="mt-1 select-all font-mono text-[22px] font-semibold tracking-[0.2em] text-[var(--color-text-import-title)]">
 									{login.userCode}
 								</p>
+								<p className={cn(onboardingFieldHintClass, "mt-1 flex items-center justify-center gap-1.5")}>
+									<LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+									{t("startup.githubDeviceWaiting")}
+								</p>
 							</div>
-							<Button type="button" variant="footer-primary" className={primaryClass} onClick={() => void openVerification()}>
-								<GitHubIcon className="size-4" />
-								{t("startup.githubDeviceOpen")}
-							</Button>
-							<p className={cn(onboardingFieldHintClass, "mt-3 flex items-center gap-1.5")}>
-								<LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
-								{t("startup.githubDeviceWaiting")}
-							</p>
-							<Button type="button" variant="ghost" className={quietClass} disabled={device.cancel.isPending} onClick={() => device.cancel.mutate()}>
-								{t("startup.githubLoginCancel")}
-							</Button>
+							<div className="mt-5 flex w-full flex-col gap-2">
+								<Button type="button" variant="footer-primary" className={buttonClass} onClick={() => void openVerification()}>
+									<GitHubIcon className="size-4" />
+									{t("startup.githubDeviceOpen")}
+								</Button>
+								<Button type="button" variant="footer" className={buttonClass} disabled={device.cancel.isPending} onClick={() => device.cancel.mutate()}>
+									{t("startup.githubLoginCancel")}
+								</Button>
+							</div>
 						</>
 					) : (
 						<>
-							<Button type="button" variant="footer-primary" className={primaryClass} disabled={device.start.isPending} onClick={() => device.start.mutate()}>
-								<GitHubIcon className="size-4" />
-								{device.start.isPending
-									? t("startup.githubLoginStarting")
-									: error
-										? t("startup.githubLoginTryAgain")
-										: t("startup.githubLogin")}
-							</Button>
+							<div className="mt-6 flex w-full flex-col gap-2">
+								<Button type="button" variant="footer-primary" className={buttonClass} disabled={device.start.isPending} onClick={() => device.start.mutate()}>
+									<GitHubIcon className="size-4" />
+									{device.start.isPending
+										? t("startup.githubLoginStarting")
+										: error
+											? t("startup.githubLoginTryAgain")
+											: t("startup.githubLogin")}
+								</Button>
+								<Button type="button" variant="footer" className={buttonClass} onClick={() => void window.ao?.menu?.action("app.quit")}>
+									{t("startup.quit")}
+								</Button>
+							</div>
 							{error ? (
 								<p role="alert" className={cn(onboardingFieldErrorClass, "mt-3")}>
 									{error}
 								</p>
-							) : (
-								<p className={cn(onboardingFieldHintClass, "mt-3")}>{t("startup.githubSignInNote")}</p>
-							)}
-							<Button type="button" variant="ghost" className={quietClass} onClick={() => void window.ao?.menu?.action("app.quit")}>
-								{t("startup.quit")}
-							</Button>
+							) : null}
 						</>
 					)}
 				</div>
