@@ -1215,6 +1215,7 @@ html[data-current-path="/installation"] main span[data-as="p"]:has(+ table) {
   display: block;
   text-align: center;
   font-size: 14px;
+  line-height: 1.5;
   color: rgba(255,255,255,0.7);
   padding: 0;
   margin: 44px 0 0 !important;
