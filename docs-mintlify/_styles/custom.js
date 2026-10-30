@@ -163,6 +163,8 @@
       }
       if (fracIdx < 0) fracIdx = 0;
       if (fracIdx > n - 1) fracIdx = n - 1;
+      /* at page bottom the original rests the marker on the last row */
+      if (sy + vh >= document.documentElement.scrollHeight - 4) fracIdx = n - 1;
       if (firstVis < 0) {
         if (TOC_STATE.mTrack) glideDot(TOC_STATE.mTrack, fracIdx);
         if (TOC_STATE.dTrack) glideDot(TOC_STATE.dTrack, fracIdx);
