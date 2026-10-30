@@ -1227,6 +1227,8 @@ describe("controller recovery", () => {
 	});
 
 	it("refreshes the conversation after Stop reports stale turn state", async () => {
+		apiErrorCodeMock.mockReturnValue("CHAT_NO_ACTIVE_TURN");
+		apiErrorMessageMock.mockReturnValue("there is no turn in flight to interrupt");
 		postMock.mockResolvedValue({
 			data: undefined,
 			error: { code: "CHAT_NO_ACTIVE_TURN" },
@@ -1246,7 +1248,77 @@ describe("controller recovery", () => {
 			);
 			expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["conversation", "ao-1"] });
 		});
+		expect(result.current.error).toBeUndefined();
 		invalidateSpy.mockRestore();
+	});
+
+	it("clears a stale Stop failure when the next message is sent", async () => {
+		apiErrorCodeMock.mockReturnValue("CHAT_INTERRUPT_FAILED");
+		apiErrorMessageMock.mockReturnValue("the controller did not acknowledge the stop");
+		postMock.mockResolvedValueOnce({
+			data: undefined,
+			error: { code: "CHAT_INTERRUPT_FAILED" },
+			response: { status: 500 },
+		});
+
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+		await act(async () => {
+			result.current.interrupt();
+		});
+		await waitFor(() => expect(result.current.error).toBe("the controller did not acknowledge the stop"));
+
+		postMock.mockResolvedValueOnce({
+			data: { turnId: "turn-1", state: "running" },
+			error: undefined,
+			response: { status: 202 },
+		});
+		await act(async () => {
+			await result.current.send("next message");
+		});
+
+		await waitFor(() => expect(result.current.error).toBeUndefined());
+	});
+
+	it("clears any composer command failure when the user dismisses it", async () => {
+		apiErrorMessageMock.mockReturnValue("the approval could not be submitted");
+		postMock.mockResolvedValue({
+			data: undefined,
+			error: { code: "CHAT_APPROVAL_FAILED" },
+			response: { status: 500 },
+		});
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		act(() => {
+			result.current.resolve("request-1", "decision-1");
+		});
+		await waitFor(() => expect(result.current.error).toBe("the approval could not be submitted"));
+
+		act(() => {
+			result.current.dismissError();
+		});
+		await waitFor(() => expect(result.current.error).toBeUndefined());
+	});
+
+	it("clears a failed settings save when the next message is sent", async () => {
+		apiErrorMessageMock.mockReturnValue("the model change did not save");
+		patchMock.mockResolvedValue({ data: undefined, error: { code: "SETTINGS_WRITE_FAILED" } });
+		postMock.mockResolvedValue({
+			data: { turnId: "turn-1", state: "running" },
+			error: undefined,
+			response: { status: 202 },
+		});
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		act(() => {
+			result.current.chooseSettings({ model: "gpt-5.6-terra" });
+		});
+		await waitFor(() => expect(result.current.error).toBe("the model change did not save"));
+
+		await act(async () => {
+			await result.current.send("next message");
+		});
+
+		await waitFor(() => expect(result.current.error).toBeUndefined());
 	});
 
 	it("resumes the agent and refreshes both chat and task state", async () => {
