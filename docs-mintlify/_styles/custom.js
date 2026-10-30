@@ -1,3 +1,22 @@
+/* Language data: live site ships en + ja + zh-CN */
+var LANGS = [["English",""],["日本語","/ja"],["中文","/zh-CN"]];
+var AO_TRANSLATED = ["", "/installation", "/quickstart"];
+function aoCurLangPrefix() {
+  var m = window.location.pathname.match(/^\/(ja|zh-CN)(\/|$)/);
+  return m ? "/" + m[1] : "";
+}
+function aoLangTarget(prefix) {
+  var p = window.location.pathname.replace(/\/+$/, "");
+  var m = p.match(/^\/(ja|zh-CN)(\/|$)(.*)$/);
+  if (m) p = m[3] ? "/" + m[3].replace(/\/+$/, "") : "";
+  if (AO_TRANSLATED.indexOf(p) < 0) p = "";
+  return prefix + p || "/";
+}
+function aoCurLangName() {
+  var cur = aoCurLangPrefix();
+  for (var i = 0; i < LANGS.length; i++) if (LANGS[i][1] === cur) return LANGS[i][0];
+  return "English";
+}
 /* Custom adjustments: replicate original docs UI chrome where Mintlify's
    components differ structurally. Runs after hydration; re-runs on
    Mintlify SPA navigations and resize across breakpoints. */
@@ -340,7 +359,6 @@
       sb.appendChild(btn);
     }
     if (!sb.querySelector(".ao-lang")) {
-      var LANGS = [["English",""],["日本語","/ja"]]; /* live site only ships en+ja; other locales 404 */
       var langWrap = document.createElement("div");
       langWrap.className = "ao-lang-wrap";
       var lang = document.createElement("button");
@@ -348,7 +366,7 @@
       lang.className = "ao-lang";
       lang.setAttribute("aria-haspopup", "menu");
       lang.setAttribute("aria-expanded", "false");
-      lang.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="m14 18h6"/></svg><span>English</span><svg class="ao-lang-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+      lang.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="m14 18h6"/></svg><span>' + aoCurLangName() + '</span><svg class="ao-lang-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
       var menu = document.createElement("div");
       menu.className = "ao-lang-menu";
       menu.setAttribute("role", "menu");
@@ -357,9 +375,9 @@
         var item = document.createElement("a");
         item.className = "ao-lang-item";
         item.setAttribute("role", "menuitem");
-        item.href = L[1] === "" ? window.location.pathname : "https://docs.orchestrator.inc" + L[1] + "/quickstart";
+        if (L[1] === aoCurLangPrefix()) { item.textContent = L[0]; item.setAttribute("aria-current", "true"); menu.appendChild(item); return; }
+        item.href = aoLangTarget(L[1]);
         item.textContent = L[0];
-        if (L[1] === "") { item.setAttribute("aria-current", "true"); item.removeAttribute("href"); }
         menu.appendChild(item);
       });
       lang.addEventListener("click", function () {
@@ -656,7 +674,7 @@
 
   /* ---------- Mobile drawer: exact Fumadocs-parity replacement ---------- */
   var AO_DR = { panel: null, backdrop: null, opener: null, prevOverflow: null, langCleanup: null };
-  var AO_DR_LANGS = [["English",""],["日本語","/ja"]]; /* live site only ships en+ja; other locales 404 */
+  var AO_DR_LANGS = LANGS;
   function aoDrLangSvg() {
     return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="m14 18h6"/></svg>';
   }
@@ -671,7 +689,7 @@
     btn.className = "ao-dr-lang";
     btn.setAttribute("aria-haspopup", "menu");
     btn.setAttribute("aria-expanded", "false");
-    btn.innerHTML = aoDrLangSvg() + "<span>English</span>";
+    btn.innerHTML = aoDrLangSvg() + "<span>" + aoCurLangName() + "</span>";
     var menu = document.createElement("div");
     menu.className = "ao-dr-lang-menu";
     menu.setAttribute("role", "menu");
@@ -680,9 +698,9 @@
       var item = document.createElement("a");
       item.className = "ao-dr-lang-item";
       item.setAttribute("role", "menuitem");
-      item.href = L[1] === "" ? window.location.pathname : "https://docs.orchestrator.inc" + L[1] + "/quickstart";
+      if (L[1] === aoCurLangPrefix()) { item.textContent = L[0]; item.setAttribute("aria-current", "true"); menu.appendChild(item); return; }
+      item.href = aoLangTarget(L[1]);
       item.textContent = L[0];
-      if (L[1] === "") { item.setAttribute("aria-current", "true"); item.removeAttribute("href"); }
       menu.appendChild(item);
     });
     btn.addEventListener("click", function (e) {
