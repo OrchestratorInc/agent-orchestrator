@@ -290,10 +290,11 @@ ao project set-config my-project \
   --canonical-repo-url https://github.com/my-org/my-repo
 ```
 
-`set-config` replaces the whole config. For an existing configured project, read
-`ao project get my-project --json`, preserve its `project.config` fields, add
-`canonicalRepoURL`, and submit the complete object with `--config-json`. The same
-object is accepted by `PUT /api/v1/projects/{id}/config` as `{"config": {...}}`.
+`set-config` flags change only the fields they name, so this also works for an
+existing configured project. `--config-json` replaces the whole config; to use it,
+read `ao project get my-project --json`, preserve its `project.config` fields, add
+`canonicalRepoURL`, and submit the complete object. The same object is accepted
+by `PUT /api/v1/projects/{id}/config` as `{"config": {...}}`.
 Use an HTTPS repository URL, without a PR/MR suffix, credentials, query, or fragment.
 Self-managed GitLab URLs and nested namespaces are supported. Explicit ports
 are preserved and must match too; `gitlab.example.com:8443` is a different
