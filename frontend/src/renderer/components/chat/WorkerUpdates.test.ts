@@ -123,8 +123,10 @@ describe("worker updates", () => {
 		};
 		expect(isDuplicateSpawnAction(action, spawned)).toBe(true);
 		expect(isDuplicateSpawnAction({ ...action, detail: { ...action.detail, targetSessionId: "proj-285" } }, spawned)).toBe(false);
+		expect(isDuplicateSpawnAction({ ...action, detail: { ...action.detail, operationId: "another-operation" } }, spawned)).toBe(false);
 		expect(isDuplicateSpawnAction({ ...action, status: "failed" }, spawned)).toBe(false);
 		expect(isDuplicateSpawnAction(command("ao spawn --prompt audit"), spawned)).toBe(false);
+		expect(spawnedSessionIds([{ ...command("ao spawn --prompt audit", 'spawned session proj-288 "Audit" (idle)'), status: "failed" }])).toEqual([]);
 	});
 
 	it("finds a worker turn's quiet reply only when it asks nothing", () => {

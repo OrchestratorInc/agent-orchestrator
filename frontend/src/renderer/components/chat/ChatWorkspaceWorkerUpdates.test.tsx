@@ -109,6 +109,45 @@ describe("orchestrator worker updates", () => {
 		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
 	});
 
+	it("keeps a distinct structured spawn next to the command spawn group", () => {
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj"),
+			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
+		};
+		const action: ConversationActivity = {
+			kind: "activity", id: "ao-action:session.spawned:proj-289", sequence: 13, revision: 0,
+			activityKind: "ao_action", status: "completed", summary: "Spawned an agent", createdAt: at(1),
+			detail: { action: "session.spawned", operationId: "proj-289", targetSessionId: "proj-289" },
+		};
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started."), action]);
+		expect(screen.getByRole("button", { name: "Spawned 1 agent" })).toBeInTheDocument();
+		expect(screen.getByText("Spawned an agent")).toBeInTheDocument();
+	});
+
+	it.each([
+		["provisioning", { provisionState: "provisioning" }, "Spawning", true],
+		["active", { status: "working", activity: { state: "active" } }, "Working", true],
+		["idle", { status: "idle", activity: { state: "idle" } }, "Idle", false],
+		["exited", { status: "exited", activity: { state: "exited" } }, "Exited", false],
+		["terminated", { status: "terminated", isTerminated: true }, "Terminated", false],
+		["failed start", { provisionState: "failed" }, "Start failed", false],
+		["unavailable", { statusReadiness: "unavailable" }, "Status unavailable", false],
+		["missing", null, "Status unavailable", false],
+	] as const)("shows %s child state without a false spinner", async (_case, child, label, spinning) => {
+		const workspaces = [{
+			id: "proj", name: "proj", path: "/tmp/proj",
+			sessions: child ? [{ id: "proj-288", workspaceId: "proj", title: "Audit usage", provider: "codex", kind: "worker", status: "idle", prs: [], ...child }] : [],
+		}] as unknown as WorkspaceSummary[];
+		const spawn = {
+			...command("t1", 1, "ao spawn --project proj"),
+			detail: { command: "ao spawn --project proj", output: 'spawned session proj-288 "Audit" (idle)' },
+		};
+		renderOrchestrator([automation("t1", 1, "Check usage."), spawn, reply("t1", 1, "Started.")], vi.fn(), workspaces);
+		await userEvent.click(screen.getByRole("button", { name: "Spawned 1 agent" }));
+		const line = screen.getByText(label).parentElement;
+		expect(line?.querySelector(".animate-spin") !== null).toBe(spinning);
+	});
+
 	it("draws a report as a row and an answer that asks nothing as one line that keeps copy and rollback", async () => {
 		const onRollback = renderOrchestrator([
 			report("t1", 1, "[done] [Check regressions](ao://sessions/proj/proj-288)\nOne strong candidate: #7043\nScreened 58 PRs."),
