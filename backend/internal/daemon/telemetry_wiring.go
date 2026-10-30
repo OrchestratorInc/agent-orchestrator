@@ -125,7 +125,7 @@ func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident port
 				return
 			case <-time.After(delay):
 			}
-			scm := newMultiSCMProvider(cfg.GitLab, log)
+			scm := newMultiSCMProvider(cfg.DataDir, cfg.GitLab, log)
 			if scm == nil {
 				continue
 			}

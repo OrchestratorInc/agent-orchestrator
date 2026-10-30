@@ -425,6 +425,7 @@ type Manager struct {
 	browserCapabilities         BrowserCapabilityIssuer
 	agentBrowserURL             string
 	agentBrowserToken           string
+	githubToken                 func(context.Context) (string, error)
 	agentAccounts               ports.AgentAccountLaunchEnv
 	accountOverrideMu           sync.Mutex
 	accountOverrides            map[domain.SessionID]string
@@ -842,6 +843,9 @@ type Deps struct {
 	// instead of the desktop browser bridge.
 	AgentBrowserURL   string
 	AgentBrowserToken string
+	// GitHubToken returns the token from AO's own GitHub sign-in. Sessions get
+	// it as GH_TOKEN plus a git credential helper. Nil or an error adds nothing.
+	GitHubToken func(context.Context) (string, error)
 	// DataDir owns durable attachment storage and is exported to spawned agents
 	// as AO_DATA_DIR so their hook commands can open the same store.
 	DataDir string
@@ -909,6 +913,7 @@ func New(d Deps) *Manager {
 		browserCapabilities:            d.BrowserCapabilities,
 		agentBrowserURL:                d.AgentBrowserURL,
 		agentBrowserToken:              d.AgentBrowserToken,
+		githubToken:                    d.GitHubToken,
 		attachments:                    attachmentstore.New(d.DataDir),
 		attachmentSuffix:               randomSuffix,
 		dataDir:                        d.DataDir,
@@ -6298,6 +6303,7 @@ func (m *Manager) runtimeEnvChecked(id domain.SessionID, project domain.ProjectI
 		env[EnvAgentBrowserURL] = m.agentBrowserURL
 		env[EnvAgentBrowserToken] = m.agentBrowserToken
 	}
+	m.applyGitHubEnv(env, projectEnv, caseInsensitive)
 	accountErr := m.applyAgentAccountEnv(id, accountID, env, caseInsensitive)
 	path, err := hookPATHForOS(m.executable, os.Getenv, projectEnv, m.dataDir, caseInsensitive)
 	if err != nil {

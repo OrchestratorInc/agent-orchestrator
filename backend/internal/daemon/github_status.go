@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -62,4 +63,20 @@ func (s *githubStatusService) Login(ctx context.Context) string {
 		return ""
 	}
 	return identity.Login
+}
+
+// savedGitHubToken is the token from AO's own GitHub sign-in, as a token
+// source for the SCM provider and the issue tracker. noToken is the caller's
+// "no token" error, so its fallback chain moves on to the next source.
+type savedGitHubToken struct {
+	svc     *githubpat.Service
+	noToken error
+}
+
+func (s savedGitHubToken) Token(ctx context.Context) (string, error) {
+	token, err := s.svc.GetToken(ctx)
+	if errors.Is(err, githubpat.ErrNotConnected) {
+		return "", s.noToken
+	}
+	return token, err
 }

@@ -17,6 +17,9 @@ import (
 // ErrInvalidCredentials reports that GitHub rejected the stored credential.
 var ErrInvalidCredentials = errors.New("GitHub credentials are invalid")
 
+// ErrNotConnected reports that no GitHub token is stored.
+var ErrNotConnected = errors.New("no GitHub token stored")
+
 // refreshSkew renews an expiring OAuth token a little before its deadline so a
 // call never races the expiry.
 const refreshSkew = 2 * time.Minute
@@ -40,6 +43,10 @@ type Service struct {
 	clientSecret string
 	now          func() time.Time
 	mu           sync.Mutex
+
+	deviceMu     sync.Mutex
+	device       DeviceLogin
+	deviceCancel context.CancelFunc
 }
 
 // New returns a Service rooted at dataDir. GitHub App user tokens expire (8h by
@@ -50,7 +57,7 @@ type Service struct {
 func New(dataDir string) *Service {
 	s := newWithClient(dataDir, http.DefaultClient, "https://api.github.com")
 	s.oauthURL = "https://github.com"
-	s.clientID = os.Getenv("AO_GITHUB_OAUTH_CLIENT_ID")
+	s.clientID = firstNonEmpty(os.Getenv("AO_GITHUB_OAUTH_CLIENT_ID"), defaultOAuthClientID)
 	s.clientSecret = os.Getenv("AO_GITHUB_OAUTH_CLIENT_SECRET")
 	return s
 }
@@ -141,6 +148,9 @@ func (s *Service) DeletePAT(_ context.Context) error {
 
 func (s *Service) loadStoredLocked() (storedPAT, error) {
 	data, err := os.ReadFile(s.patPath())
+	if os.IsNotExist(err) {
+		return storedPAT{}, ErrNotConnected
+	}
 	if err != nil {
 		return storedPAT{}, err
 	}
@@ -149,7 +159,7 @@ func (s *Service) loadStoredLocked() (storedPAT, error) {
 		return storedPAT{}, err
 	}
 	if stored.Token == "" {
-		return storedPAT{}, fmt.Errorf("no GitHub token stored")
+		return storedPAT{}, ErrNotConnected
 	}
 	return stored, nil
 }
@@ -301,7 +311,7 @@ func expiryFrom(now time.Time, seconds int, prior time.Time) time.Time {
 func (s *Service) ListRepos(ctx context.Context) ([]Repo, error) {
 	token, err := s.accessToken(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("no GitHub token stored: %w", err)
+		return nil, err
 	}
 	repos, status, err := s.fetchRepos(ctx, token)
 	if err != nil {

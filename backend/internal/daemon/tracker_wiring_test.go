@@ -220,7 +220,7 @@ func TestNewMultiTracker_WithGitLabConfig(t *testing.T) {
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	tracker := newMultiTracker(cfg, log)
+	tracker := newMultiTracker(t.TempDir(), cfg, log)
 	if tracker == nil {
 		t.Fatal("newMultiTracker = nil, want non-nil when GitLab token is available")
 	}
@@ -334,7 +334,7 @@ func TestWiring_NewMultiTracker_DoesNotProbeGHCLIAtBoot(t *testing.T) {
 	t.Setenv("PATH", binDir)
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	tracker := newMultiTracker(config.GitLabConfig{}, log)
+	tracker := newMultiTracker(t.TempDir(), config.GitLabConfig{}, log)
 	if tracker == nil {
 		t.Fatal("newMultiTracker = nil, want non-nil: the GitHub slot is lazily constructed and always present")
 	}

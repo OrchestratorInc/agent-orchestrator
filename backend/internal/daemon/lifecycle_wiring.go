@@ -31,6 +31,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -326,6 +327,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		BrowserCapabilities: browserCapabilities,
 		AgentBrowserURL:     cfg.AgentBrowserURL,
 		AgentBrowserToken:   cfg.AgentBrowserToken,
+		GitHubToken:         githubpat.New(cfg.DataDir).GetToken,
 		DataDir:             cfg.DataDir,
 		RunFilePath:         cfg.RunFilePath,
 		BackgroundContext:   ctx,
@@ -334,7 +336,7 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		CodexOperationGate:  codexOperationGate,
 	})
 	mgr.SetAgentReadiness(agentReadiness)
-	scmProvider := newMultiSCMProvider(cfg.GitLab, log)
+	scmProvider := newMultiSCMProvider(cfg.DataDir, cfg.GitLab, log)
 	// Attach the operator's GitHub login to product telemetry only when its carrier
 	// event can actually be sent, and guard the typed nil from newMultiSCMProvider
 	// so the interface stays nil (degrading to anonymous) rather than wrapping a

@@ -31,6 +31,13 @@ func (invalidGitHubPATService) DeletePAT(context.Context) error {
 func (invalidGitHubPATService) ListRepos(context.Context) ([]githubpat.Repo, error) {
 	return nil, githubpat.ErrInvalidCredentials
 }
+func (invalidGitHubPATService) StartDeviceLogin(context.Context) (githubpat.DeviceLogin, error) {
+	return githubpat.DeviceLogin{}, githubpat.ErrDeviceLoginUnavailable
+}
+func (invalidGitHubPATService) DeviceLoginStatus() githubpat.DeviceLogin {
+	return githubpat.DeviceLogin{State: githubpat.DeviceLoginIdle}
+}
+func (invalidGitHubPATService) CancelDeviceLogin() {}
 
 type loginGitHubPATService struct {
 	invalidGitHubPATService

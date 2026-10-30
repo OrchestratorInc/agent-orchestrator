@@ -3261,6 +3261,55 @@ paths:
       summary: List the subdirectories of a directory on the daemon host
       tags:
       - fs
+  /api/v1/github/login:
+    delete:
+      operationId: cancelGitHubLogin
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitHubLoginResponse'
+          description: OK
+      summary: Cancel a pending GitHub device-flow sign-in
+      tags:
+      - github
+    get:
+      operationId: getGitHubLogin
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitHubLoginResponse'
+          description: OK
+      summary: Report the state of the GitHub device-flow sign-in
+      tags:
+      - github
+    post:
+      operationId: startGitHubLogin
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GitHubLoginResponse'
+          description: OK
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Start a GitHub device-flow sign-in, or return the one already pending
+      tags:
+      - github
   /api/v1/github/pat:
     delete:
       operationId: deleteGitHubPAT
@@ -17448,6 +17497,37 @@ components:
       - name
       - path
       - gitRepo
+      type: object
+    GitHubLoginResponse:
+      properties:
+        error:
+          description: Why the sign-in failed.
+          type: string
+        expiresAt:
+          description: When the code stops working.
+          format: date-time
+          type:
+          - "null"
+          - string
+        login:
+          description: GitHub username, once signed in.
+          type: string
+        state:
+          description: Progress of the sign-in.
+          enum:
+          - idle
+          - pending
+          - succeeded
+          - failed
+          type: string
+        userCode:
+          description: Code the user enters on GitHub; present while pending.
+          type: string
+        verificationUri:
+          description: GitHub page where the user enters the code.
+          type: string
+      required:
+      - state
       type: object
     GitHubRepo:
       properties:

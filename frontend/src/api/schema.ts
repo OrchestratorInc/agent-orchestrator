@@ -1305,6 +1305,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/github/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report the state of the GitHub device-flow sign-in */
+        get: operations["getGitHubLogin"];
+        put?: never;
+        /** Start a GitHub device-flow sign-in, or return the one already pending */
+        post: operations["startGitHubLogin"];
+        /** Cancel a pending GitHub device-flow sign-in */
+        delete: operations["cancelGitHubLogin"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/github/pat": {
         parameters: {
             query?: never;
@@ -6076,6 +6095,26 @@ export interface components {
             name: string;
             /** @description Absolute path of the directory on the daemon host. */
             path: string;
+        };
+        GitHubLoginResponse: {
+            /** @description Why the sign-in failed. */
+            error?: string;
+            /**
+             * Format: date-time
+             * @description When the code stops working.
+             */
+            expiresAt?: null | string;
+            /** @description GitHub username, once signed in. */
+            login?: string;
+            /**
+             * @description Progress of the sign-in.
+             * @enum {string}
+             */
+            state: "idle" | "pending" | "succeeded" | "failed";
+            /** @description Code the user enters on GitHub; present while pending. */
+            userCode?: string;
+            /** @description GitHub page where the user enters the code. */
+            verificationUri?: string;
         };
         GitHubRepo: {
             clone_url: string;
@@ -12430,6 +12469,84 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getGitHubLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubLoginResponse"];
+                };
+            };
+        };
+    };
+    startGitHubLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubLoginResponse"];
+                };
+            };
+            /** @description Bad Gateway */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    cancelGitHubLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitHubLoginResponse"];
                 };
             };
         };

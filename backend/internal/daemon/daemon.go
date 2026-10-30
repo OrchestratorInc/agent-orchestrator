@@ -515,7 +515,7 @@ func Run(buildVersion string) error {
 	// blocked. May be nil (no usable credentials) — the session service's
 	// nil-guard and the intake resolver's backoff both tolerate that
 	// (issue #2685).
-	tracker := newMultiTracker(cfg.GitLab, log)
+	tracker := newMultiTracker(cfg.DataDir, cfg.GitLab, log)
 	codexPlugin := codexagent.New()
 	codexHome, err := codexPlugin.NativeSessionConfigDir(ctx, nil)
 	if err != nil {
@@ -690,6 +690,8 @@ func Run(buildVersion string) error {
 
 	hostCommands := systemexec.New(cfg.DataDir)
 	systemChecks := systemcheck.NewWithCommandRunner(agentSvc, hostCommands, hostCommands)
+	githubAccount := githubpat.New(cfg.DataDir)
+	systemChecks.SetSavedGitHubLogin(githubAccount)
 	privateNPMPrefixes := map[systeminstall.Target]string{}
 	if prefix, err := opencode.V2NPMPrefix(); err == nil {
 		privateNPMPrefixes[systeminstall.TargetOpencodeV2] = prefix
@@ -868,10 +870,10 @@ func Run(buildVersion string) error {
 		}()
 		lcStack.LCM.SetUsageFinalizer(usageCollector)
 	}
-	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.GitLab, reviewRefresher, log)
+	lcStack.scmDone = startSCMObserver(ctx, store, lcStack.LCM, sessionSvc, cfg.DataDir, cfg.GitLab, reviewRefresher, log)
 	var prActions prsvc.ActionManager
-	prReader := newMultiSCMProvider(cfg.GitLab, log)
-	prMerger := newMultiSCMMerger(cfg.GitLab, log)
+	prReader := newMultiSCMProvider(cfg.DataDir, cfg.GitLab, log)
+	prMerger := newMultiSCMMerger(cfg.DataDir, cfg.GitLab, log)
 	if prReader != nil && prMerger != nil {
 		prActions = prsvc.NewActionService(prsvc.ActionDeps{
 			Store:        store,
@@ -1055,7 +1057,7 @@ func Run(buildVersion string) error {
 		ShellTerminals:     shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
 		AgentAuth:          agentAuthSvc,
-		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
+		GitHub:             newGitHubStatusService(githubAccount, prReader),
 		Conversations:      chatSvc,
 		ConversationSearch: store,
 		Settings:           settingsSvc,

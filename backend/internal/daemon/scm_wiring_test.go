@@ -16,7 +16,7 @@ import (
 // satisfies ports.ScopedIdentityResolver so it can be wired as the observer's
 // scoped identity resolver (finding #7).
 func TestSCMWiring_MultiProviderSatisfiesScopedIdentityResolver(t *testing.T) {
-	gh, err := newGitHubSCMProvider(slog.Default())
+	gh, err := newGitHubSCMProvider(t.TempDir(), slog.Default())
 	if err != nil {
 		t.Skipf("github provider unavailable (no token): %v", err)
 	}
@@ -43,7 +43,7 @@ func TestSCMWiring_MultiProviderSatisfiesScopedIdentityResolver(t *testing.T) {
 // newMultiSCMProvider helper (used outside the observer) also returns a value
 // that satisfies ScopedIdentityResolver.
 func TestSCMWiring_NewMultiSCMProviderReturnsScopedResolver(t *testing.T) {
-	multi := newMultiSCMProvider(testGitLabConfig(), slog.Default())
+	multi := newMultiSCMProvider(t.TempDir(), testGitLabConfig(), slog.Default())
 	if multi == nil {
 		t.Skip("no SCM provider available (missing tokens)")
 	}
@@ -54,7 +54,7 @@ func TestSCMWiring_NewMultiSCMProviderReturnsScopedResolver(t *testing.T) {
 // Config constructed in production wiring (startSCMObserver) carries a
 // non-nil ScopedIdentityResolver when a multi provider is available.
 func TestSCMWiring_ObserverConfigHasScopedResolver(t *testing.T) {
-	gh, err := newGitHubSCMProvider(slog.Default())
+	gh, err := newGitHubSCMProvider(t.TempDir(), slog.Default())
 	if err != nil {
 		t.Skipf("github provider unavailable: %v", err)
 	}

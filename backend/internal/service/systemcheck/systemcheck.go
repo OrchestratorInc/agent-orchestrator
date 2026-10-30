@@ -51,12 +51,24 @@ type GitHubAuthTerminalOpener interface {
 	OpenCommandTerminal(context.Context, shellterm.OpenCommandTerminalInput) (shellterm.ShellTerminal, error)
 }
 
+// SavedGitHubLogin reports whether AO's own GitHub sign-in stored a token.
+type SavedGitHubLogin interface {
+	HasPAT(ctx context.Context) bool
+}
+
 // Service runs the startup requirements gate.
 type Service struct {
 	harnesses   HarnessCatalog
 	executables ports.ExecutableFinder
 	commands    ports.CommandRunner
 	terminals   GitHubAuthTerminalOpener
+	savedGitHub SavedGitHubLogin
+}
+
+// SetSavedGitHubLogin makes AO's own GitHub sign-in satisfy the GitHub access
+// check, so users signed in through AO never need the gh CLI.
+func (s *Service) SetSavedGitHubLogin(saved SavedGitHubLogin) {
+	s.savedGitHub = saved
 }
 
 // SetGitHubAuthTerminalOpener late-binds the shell terminal service, which is
@@ -249,7 +261,10 @@ func (s *Service) checkGH() Requirement {
 // not configured, but onboarding should surface the missing capability before
 // an agent first tries to open a pull request. Token bytes are never captured.
 func (s *Service) checkGitHubAuth(ctx context.Context) Requirement {
-	const detail = "Sign in with `gh auth login` so agent sessions can open pull requests and read issues."
+	const detail = "Sign in to GitHub so agent sessions can open pull requests and read issues."
+	if s.savedGitHub != nil && s.savedGitHub.HasPAT(ctx) {
+		return Requirement{ID: "github-auth", Label: "GitHub access", Satisfied: true, Detail: "Signed in to GitHub through AO."}
+	}
 	path, err := s.executables.LookPath("gh")
 	if err != nil || path == "" {
 		return Requirement{ID: "github-auth", Label: "GitHub access", Detail: detail}

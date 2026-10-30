@@ -383,6 +383,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersArtifactFileResponse":                     "ArtifactFileResponse",
 	"ControllersUpdateArtifactFileRequest":                "UpdateArtifactFileRequest",
 	"ControllersGitHubStatusResponse":                     "GitHubStatusResponse",
+	"ControllersGitHubLoginResponse":                      "GitHubLoginResponse",
 	"ControllersArtifactVersionQuery":                     "ArtifactVersionQuery",
 	"ControllersArtifactVersionSummary":                   "ArtifactVersionSummary",
 	"ControllersListArtifactVersionsResponse":             "ListArtifactVersionsResponse",
@@ -3841,6 +3842,21 @@ func prOperations() []operation {
 			method: http.MethodGet, path: "/api/v1/github/repos", id: "listGitHubRepos", tag: "github",
 			summary: "List repositories accessible with the stored GitHub token",
 			resps:   []respUnit{{http.StatusOK, map[string]any{"repos": []githubpat.Repo{}}}, {http.StatusUnauthorized, envelope.APIError{}}, {http.StatusInternalServerError, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/github/login", id: "startGitHubLogin", tag: "github",
+			summary: "Start a GitHub device-flow sign-in, or return the one already pending",
+			resps:   []respUnit{{http.StatusOK, controllers.GitHubLoginResponse{}}, {http.StatusBadGateway, envelope.APIError{}}, {http.StatusServiceUnavailable, envelope.APIError{}}},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/github/login", id: "getGitHubLogin", tag: "github",
+			summary: "Report the state of the GitHub device-flow sign-in",
+			resps:   []respUnit{{http.StatusOK, controllers.GitHubLoginResponse{}}},
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/github/login", id: "cancelGitHubLogin", tag: "github",
+			summary: "Cancel a pending GitHub device-flow sign-in",
+			resps:   []respUnit{{http.StatusOK, controllers.GitHubLoginResponse{}}},
 		},
 	}
 }
