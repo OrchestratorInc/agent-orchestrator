@@ -10,6 +10,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
+	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
@@ -123,7 +124,7 @@ func TestUsageFlusherReportsNewWorkerPROutcomesWithDetail(t *testing.T) {
 		t.Fatalf("associations = %+v", assoc)
 	}
 	a := assoc[0].Payload
-	if a["count"] != 1 || a["historical"] != false || a["harness"] != "claude-code" || a["scm_provider"] != "github" ||
+	if a["count"] != 1 || a["historical"] != false || a["kind"] != "worker" || a["harness"] != "claude-code" || a["scm_provider"] != "github" ||
 		a["ms_since_spawn"] != int64(time.Hour/time.Millisecond) || a["first_for_install"] != true {
 		t.Fatalf("first association = %#v", a)
 	}
@@ -133,7 +134,7 @@ func TestUsageFlusherReportsNewWorkerPROutcomesWithDetail(t *testing.T) {
 
 	// AO merges the first from a phone; the second merges on GitHub, then a
 	// third PR is closed unmerged.
-	if err := store.RecordWorkerPRMergedVia(ctx, first.URL, deliverytelemetry.MergedViaMobileSwipe); err != nil {
+	if err := store.RecordWorkerPRMergedVia(ctx, first.URL, deliverytelemetry.MergedViaMobile); err != nil {
 		t.Fatal(err)
 	}
 	first.Merged, first.MergedAtProvider = true, now
@@ -153,10 +154,10 @@ func TestUsageFlusherReportsNewWorkerPROutcomesWithDetail(t *testing.T) {
 	for _, m := range merges {
 		via[m.Payload["merged_via"]] = m.Payload
 	}
-	if via["mobile_swipe"] == nil || via["github"] == nil {
+	if via["mobile"] == nil || via["github"] == nil {
 		t.Fatalf("merged_via = %#v", via)
 	}
-	m := via["mobile_swipe"]
+	m := via["mobile"]
 	if m["ms_since_open"] != int64(time.Hour/time.Millisecond) || m["ms_since_spawn"] != int64(2*time.Hour/time.Millisecond) ||
 		m["review_rounds"] != int64(0) || m["ao_review_used"] != false || m["first_for_install"] != true {
 		t.Fatalf("merge detail = %#v", m)
@@ -164,8 +165,8 @@ func TestUsageFlusherReportsNewWorkerPROutcomesWithDetail(t *testing.T) {
 	if via["github"]["first_for_install"] != false {
 		t.Fatalf("second merge first_for_install = %#v", via["github"]["first_for_install"])
 	}
-	closed := usageEventsNamed(sink, "ao.usage.worker_pr_closed")
-	if len(closed) != 1 || closed[0].Payload["historical"] != false {
+	closed := usageEventsNamed(sink, "ao.prs.closed")
+	if len(closed) != 1 || closed[0].Payload["historical"] != false || closed[0].Payload["kind"] != "worker" {
 		t.Fatalf("closed = %+v", closed)
 	}
 	if _, ok := closed[0].Payload["merged_via"]; ok {
@@ -183,5 +184,20 @@ func TestUsageFlusherReportsNewWorkerPROutcomesWithDetail(t *testing.T) {
 	f.flush(ctx, false)
 	if len(sink.events) != before {
 		t.Fatalf("outcomes reported twice: %+v", sink.events[before:])
+	}
+}
+
+func TestWorkerPRKindUsesSessionKindWithoutInventingMissingFacts(t *testing.T) {
+	for _, tc := range []struct {
+		fact sqlitestore.UsagePRFact
+		want string
+	}{
+		{sqlitestore.UsagePRFact{SessionKind: "worker"}, "standalone"},
+		{sqlitestore.UsagePRFact{ProjectID: "p", SessionKind: "worker"}, "worker"},
+		{sqlitestore.UsagePRFact{ProjectID: "p"}, ""},
+	} {
+		if got := workerPRKind(tc.fact); got != tc.want {
+			t.Fatalf("workerPRKind(%+v) = %q, want %q", tc.fact, got, tc.want)
+		}
 	}
 }

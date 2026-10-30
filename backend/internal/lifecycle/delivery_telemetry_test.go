@@ -41,7 +41,7 @@ func newDeliveryManager() (*Manager, *deliveryStore, *telemetrySink) {
 func endedEvents(sink *telemetrySink) []ports.TelemetryEvent {
 	var out []ports.TelemetryEvent
 	for _, ev := range sink.events {
-		if ev.Name == "ao.session.ended" {
+		if ev.Name == "ao.sessions.ended" {
 			out = append(out, ev)
 		}
 	}

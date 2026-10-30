@@ -152,7 +152,7 @@ The daemon sends four usage summaries when remote product telemetry is enabled:
 | `ao.usage.messages_sent` | New, direct human Chat messages accepted into a session. One count per accepted message. |
 | `ao.usage.worker_pr_associated` | A provider PR first associated with an AO worker session. This is not proof the worker created the PR. |
 | `ao.usage.worker_pr_merged` | An associated worker PR first observed as merged. |
-| `ao.usage.worker_pr_closed` | An associated worker PR first observed as closed without merging. |
+| `ao.prs.closed` | An associated worker PR first observed as closed without merging. |
 
 The project grouping value, `project_telemetry_id`, is a random UUID persisted
 locally for each project and installation. It is not a hash of a repository,
@@ -219,19 +219,21 @@ product telemetry opt-out discards pending associations before export.
 - `desktop_count`, `mobile_count`, `cli_count`: all of the above split by the
   client the message came from. The daemon works the client out from how the
   request arrived; `cli` covers any local client without a browser origin.
-- `kind` (`orchestrator` or `worker`) and `harness` of the session.
+- `kind` (`orchestrator` or `worker`) and `harness` of the included project
+  session. Standalone message counts are excluded as noted above.
 
 New (`historical: false`) PR outcomes add:
 
-- `harness` of the owning worker and `scm_provider` (`github` or `gitlab`).
+- `kind` and `harness` of the owning worker when known, plus
+  `scm_provider` (`github` or `gitlab`).
 - `ms_since_spawn`: from the worker starting to the PR opening, merging, or
   closing.
 - `ms_since_open` (merged and closed): from the PR opening to its outcome.
 - `review_rounds` (merged and closed): reviews recorded on the PR.
   `ao_review_used`: whether an AO review ran on it.
-- `merged_via` (merged): `desktop` or `mobile_swipe` when you merged in
-  Orchestrator.inc, `github` when the merge happened on GitHub, and `other`
-  otherwise (for example the CLI or GitLab).
+- `merged_via` (merged): `desktop`, `mobile`, or `cli` when merged through
+  Orchestrator.inc, and `github` when the merge happened on GitHub. It is
+  omitted when the external merge surface is unknown, such as GitLab.
 - `first_for_install` (associated and merged): true only for the
   installation's first new worker PR and first merge, recorded by
   `telemetry_first_pr_opened` and `telemetry_first_pr_merged` under
@@ -243,7 +245,7 @@ New (`historical: false`) PR outcomes add:
 | Event | When it is sent | Properties |
 | --- | --- | --- |
 | `ao.session.spawned` | A session starts (existing event) | adds `created_by` and, for sessions a request started, `surface` |
-| `ao.session.ended` | A session is killed, torn down after its pull requests merged or its issue closed, or its runtime dies | `kind`, `harness`, `outcome`, `duration_s`, `had_pr`, `waiting_input_count`, `created_by`, and for project sessions the same `project_telemetry_id` and `session_telemetry_id` as the usage counts |
+| `ao.sessions.ended` | A session is killed, torn down after its pull requests merged or its issue closed, or its runtime dies | `kind` (`standalone`, `worker`, or `orchestrator`), `harness`, `outcome`, `duration_ms`, `had_pr`, `waiting_input_count`, `created_by`, and for project sessions the same `project_telemetry_id` and `session_telemetry_id` as the usage counts |
 
 - `surface` is `desktop`, `mobile`, or `cli`, as above.
 - `created_by` is `user`, `orchestrator` (an orchestrator ran `ao spawn`),

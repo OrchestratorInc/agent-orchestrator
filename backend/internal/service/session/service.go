@@ -293,7 +293,7 @@ type Deps struct {
 	// Milestones durably records the install's first spawned session, so
 	// ao.session.spawned carries first_for_install. Left nil, it is omitted.
 	Milestones ports.InstallMilestones
-	// Delivery emits ao.session.ended on kill and ao.pr.opened on claim. Left
+	// Delivery emits ao.sessions.ended on kill and ao.pr.opened on claim. Left
 	// nil, neither is reported from this service.
 	Delivery *deliverytelemetry.Recorder
 	Logger   *slog.Logger
@@ -573,7 +573,7 @@ func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, dur
 	projectID := rec.ProjectID
 	sessionID := rec.ID
 	payload := map[string]any{
-		"kind":        string(rec.Kind),
+		"kind":        telemetrymeta.SessionKind(rec),
 		"harness":     string(rec.Harness),
 		"duration_ms": durationMs,
 		"created_by":  string(createdBy),
@@ -626,7 +626,7 @@ func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.Sessio
 	projectID := rec.ProjectID
 	sessionID := rec.ID
 	payload := map[string]any{
-		"kind":    string(rec.Kind),
+		"kind":    telemetrymeta.SessionKind(rec),
 		"harness": string(rec.Harness),
 	}
 	if !project.RegisteredAt.IsZero() {
@@ -654,7 +654,7 @@ func (s *Service) emitSpawnFailed(ctx context.Context, cfg ports.SpawnConfig, er
 	payload := map[string]any{
 		"component":   "session_service",
 		"operation":   "spawn_session",
-		"kind":        string(cfg.Kind),
+		"kind":        telemetrymeta.SessionKind(domain.SessionRecord{ProjectID: cfg.ProjectID, Kind: cfg.Kind}),
 		"harness":     string(cfg.Harness),
 		"duration_ms": durationMs,
 		"error_kind":  errorKind,
@@ -709,7 +709,7 @@ func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id d
 	var projectID *domain.ProjectID
 	if rec, ok, getErr := s.store.GetSession(ctx, id); getErr == nil && ok {
 		payload["harness"] = string(rec.Harness)
-		payload["kind"] = string(rec.Kind)
+		payload["kind"] = telemetrymeta.SessionKind(rec)
 		projectID = &rec.ProjectID
 	}
 	tags := map[string]string{"area": "agent"}

@@ -104,6 +104,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"project_telemetry_id": {},
 		"count":                {},
 		"historical":           {},
+		"kind":                 {},
 		"harness":              {},
 		"scm_provider":         {},
 		"ms_since_spawn":       {},
@@ -113,6 +114,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"project_telemetry_id": {},
 		"count":                {},
 		"historical":           {},
+		"kind":                 {},
 		"harness":              {},
 		"scm_provider":         {},
 		"ms_since_spawn":       {},
@@ -122,10 +124,11 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"merged_via":           {},
 		"first_for_install":    {},
 	},
-	"ao.usage.worker_pr_closed": {
+	"ao.prs.closed": {
 		"project_telemetry_id": {},
 		"count":                {},
 		"historical":           {},
+		"kind":                 {},
 		"harness":              {},
 		"scm_provider":         {},
 		"ms_since_spawn":       {},
@@ -280,11 +283,11 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	},
 	// Whether a session delivered: outcome is pr_opened, completed, killed,
 	// failed or abandoned (internal/deliverytelemetry).
-	"ao.session.ended": {
+	"ao.sessions.ended": {
 		"created_by":           {},
 		"project_telemetry_id": {},
 		"session_telemetry_id": {},
-		"duration_s":           {},
+		"duration_ms":          {},
 		"had_pr":               {},
 		"harness":              {},
 		"kind":                 {},
@@ -435,7 +438,7 @@ func (s *PostHogSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 		return
 	}
 	queued := false
-	if strings.HasPrefix(ev.Name, "ao.usage.") {
+	if strings.HasPrefix(ev.Name, "ao.usage.") || ev.Name == "ao.prs.closed" {
 		// Usage summaries have already been reserved in SQLite. Wait for queue
 		// capacity so a burst cannot discard them behind the caller's back.
 		select {
@@ -783,6 +786,13 @@ func sanitizeRemoteValue(key string, v any) (any, bool) {
 		value = strings.TrimSpace(value)
 		if value == "" {
 			return nil, false
+		}
+		if key == "merged_via" {
+			switch value {
+			case "desktop", "mobile", "cli", "github":
+			default:
+				return nil, false
+			}
 		}
 		if key == "project_telemetry_id" && !uuidPattern.MatchString(value) {
 			return nil, false

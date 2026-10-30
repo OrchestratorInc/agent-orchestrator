@@ -13,7 +13,7 @@ import (
 func (m *Manager) DeliveryTelemetry() *deliverytelemetry.Recorder { return m.delivery }
 
 // waitingInputCounter persists how often a session stopped for the user, read
-// back by ao.session.ended. Optional so focused store fakes need not have it.
+// back by ao.sessions.ended. Optional so focused store fakes need not have it.
 type waitingInputCounter interface {
 	IncrementSessionWaitingInputCount(ctx context.Context, id domain.SessionID) error
 }

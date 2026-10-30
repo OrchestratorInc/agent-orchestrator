@@ -1,7 +1,7 @@
-// Package deliverytelemetry emits ao.session.ended, which says how a session
+// Package deliverytelemetry emits ao.sessions.ended, which says how a session
 // ended and whether it delivered. Several owners end sessions (session kill,
 // lifecycle teardown, the reaper), so the payload is built here once. PR
-// outcomes are measured by the usage flusher (ao.usage.worker_pr_*); this
+// outcomes are measured by the usage flusher; this
 // package only names how a merge happened, for that measurement.
 //
 // Payloads carry enums, counts and durations only: never a title, branch, URL,
@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 // Store is the read surface the payloads are derived from.
@@ -45,7 +46,7 @@ const (
 	EndRuntimeDied EndReason = "runtime_died"
 )
 
-// Session outcomes reported on ao.session.ended.
+// Session outcomes reported on ao.sessions.ended.
 const (
 	OutcomePROpened  = "pr_opened"
 	OutcomeCompleted = "completed"
@@ -54,12 +55,12 @@ const (
 	OutcomeAbandoned = "abandoned"
 )
 
-// How a merge happened, reported as merged_via on ao.pr.merged.
+// How a merge happened, reported as merged_via on worker PR merge usage.
 const (
-	MergedViaDesktop     = "desktop"
-	MergedViaMobileSwipe = "mobile_swipe"
-	MergedViaGitHub      = "github"
-	MergedViaOther       = "other"
+	MergedViaDesktop = "desktop"
+	MergedViaMobile  = "mobile"
+	MergedViaCLI     = "cli"
+	MergedViaGitHub  = "github"
 )
 
 // Recorder emits delivery events. A nil Recorder, or one without a sink, does
@@ -128,20 +129,20 @@ func (r *Recorder) SessionEnded(ctx context.Context, rec domain.SessionRecord, r
 	}
 	facts, _ := r.store.GetSessionTelemetry(ctx, rec.ID)
 	payload := map[string]any{
-		"kind":                string(rec.Kind),
+		"kind":                telemetrymeta.SessionKind(rec),
 		"harness":             string(rec.Harness),
 		"outcome":             sessionOutcome(reason, rec.Activity.State, hadPR, doneReported),
 		"had_pr":              hadPR,
 		"waiting_input_count": facts.WaitingInputCount,
 	}
 	if !rec.CreatedAt.IsZero() {
-		payload["duration_s"] = nonNegative(int64(r.now().Sub(rec.CreatedAt) / time.Second))
+		payload["duration_ms"] = nonNegative(r.now().Sub(rec.CreatedAt).Milliseconds())
 	}
 	if facts.CreatedBy.Valid() {
 		payload["created_by"] = string(facts.CreatedBy)
 	}
 	r.stampUsageGrouping(ctx, rec, payload)
-	r.emit(ctx, "ao.session.ended", rec, payload)
+	r.emit(ctx, "ao.sessions.ended", rec, payload)
 }
 
 // sessionOutcome folds how a session ended into one outcome. A PR wins over
@@ -165,18 +166,18 @@ func sessionOutcome(reason EndReason, activity domain.ActivityState, hadPR, done
 }
 
 // MergedViaSurface maps the client that asked AO to merge to merged_via. The
-// mobile app merges with a swipe on the PR card.
+// mobile app merges from the PR card.
 func MergedViaSurface(surface domain.RequestSurface, ok bool) string {
 	if !ok {
-		return MergedViaOther
+		return MergedViaCLI
 	}
 	switch surface {
 	case domain.RequestSurfaceDesktop:
 		return MergedViaDesktop
 	case domain.RequestSurfaceMobile:
-		return MergedViaMobileSwipe
+		return MergedViaMobile
 	default:
-		return MergedViaOther
+		return MergedViaCLI
 	}
 }
 
@@ -186,7 +187,7 @@ func MergedOutsideAO(provider string) string {
 	if provider == "github" {
 		return MergedViaGitHub
 	}
-	return MergedViaOther
+	return ""
 }
 
 // stampUsageGrouping adds the same project and session grouping IDs the usage

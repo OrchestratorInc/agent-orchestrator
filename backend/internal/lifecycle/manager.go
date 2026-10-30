@@ -157,7 +157,7 @@ func WithNotificationSink(sink notificationSink) Option {
 	return func(m *Manager) { m.notifications = sink }
 }
 
-// WithDeliveryTelemetry reports ao.session.ended for the terminations lifecycle
+// WithDeliveryTelemetry reports ao.sessions.ended for the terminations lifecycle
 // itself decides (runtime death, merge and issue-close teardown).
 func WithDeliveryTelemetry(r *deliverytelemetry.Recorder) Option {
 	return func(m *Manager) { m.delivery = r }

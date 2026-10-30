@@ -324,7 +324,7 @@ func Run(buildVersion string) error {
 	messenger := newSessionMessenger(store, runtimeAdapter, log, agents)
 
 	lcStack := startLifecycle(ctx, cfg.DataDir, store, runtimeAdapter, lifecycleMessenger, notificationWriter, telemetrySink, agents, log)
-	// ao.session.ended joins the usage summaries through the same grouping IDs,
+	// ao.sessions.ended joins the usage summaries through the same grouping IDs,
 	// which are scoped to the install and only minted while export is on.
 	lcStack.LCM.DeliveryTelemetry().SetInstallID(func() string {
 		if telemetryIdentity == nil || telemetryIdentity.OptedOut() || telemetryIdentity.ExportSuppressed() {

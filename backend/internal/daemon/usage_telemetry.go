@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	sqlitestore "github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
 const usageFlushInterval = 30 * time.Minute
@@ -102,7 +104,7 @@ func (f *usageTelemetryFlusher) flush(ctx context.Context, terminatedOnly bool) 
 					"desktop_count": b.DesktopCount,
 					"mobile_count":  b.MobileCount,
 					"cli_count":     b.CLICount,
-					"kind":          b.Kind,
+					"kind":          telemetrymeta.SessionKind(domain.SessionRecord{ProjectID: domain.ProjectID(b.ProjectID), Kind: domain.SessionKind(b.Kind)}),
 					"harness":       b.Harness,
 				},
 			})
@@ -134,6 +136,7 @@ func (f *usageTelemetryFlusher) flushPRs(ctx context.Context, installID string) 
 			project    string
 			event      string
 			historical bool
+			kind       string
 		}
 		// Historical backfill stays grouped: it has no meaningful timing. New
 		// outcomes go out one per PR with their detail and count 1, so summing
@@ -164,7 +167,7 @@ func (f *usageTelemetryFlusher) flushPRs(ctx context.Context, installID string) 
 			processed++
 			if fact.AssociationPending {
 				if fact.Historical {
-					counts[group{projectTelemetryID, "ao.usage.worker_pr_associated", true}]++
+					counts[group{projectTelemetryID, "ao.usage.worker_pr_associated", true, workerPRKind(fact)}]++
 				} else {
 					payload := workerPRDetail(projectTelemetryID, fact)
 					if first, known := f.firstForInstall("pr_opened", historyKnown, !associatedBefore); known {
@@ -179,14 +182,16 @@ func (f *usageTelemetryFlusher) flushPRs(ctx context.Context, installID string) 
 			}
 			if fact.MergePending {
 				if fact.HistoricalMerged {
-					counts[group{projectTelemetryID, "ao.usage.worker_pr_merged", true}]++
+					counts[group{projectTelemetryID, "ao.usage.worker_pr_merged", true, workerPRKind(fact)}]++
 				} else {
 					payload := workerPROutcome(projectTelemetryID, fact, fact.MergedAt)
 					mergedVia := fact.MergedVia
 					if mergedVia == "" {
 						mergedVia = deliverytelemetry.MergedOutsideAO(fact.Provider)
 					}
-					payload["merged_via"] = mergedVia
+					if mergedVia != "" {
+						payload["merged_via"] = mergedVia
+					}
 					if first, known := f.firstForInstall("pr_merged", historyKnown, !mergedBefore); known {
 						payload["first_for_install"] = first
 					}
@@ -195,14 +200,18 @@ func (f *usageTelemetryFlusher) flushPRs(ctx context.Context, installID string) 
 				mergedBefore = true
 			}
 			if closePending {
-				detailed = append(detailed, usageEvent("ao.usage.worker_pr_closed", workerPROutcome(projectTelemetryID, fact, fact.ClosedAt)))
+				detailed = append(detailed, usageEvent("ao.prs.closed", workerPROutcome(projectTelemetryID, fact, fact.ClosedAt)))
 			}
 		}
 		for key, count := range counts {
 			if f.identity.ExportSuppressed() {
 				return
 			}
-			f.sink.Emit(ctx, usageEvent(key.event, map[string]any{"project_telemetry_id": key.project, "count": count, "historical": key.historical}))
+			payload := map[string]any{"project_telemetry_id": key.project, "count": count, "historical": key.historical}
+			if key.kind != "" {
+				payload["kind"] = key.kind
+			}
+			f.sink.Emit(ctx, usageEvent(key.event, payload))
 		}
 		for _, ev := range detailed {
 			if f.identity.ExportSuppressed() {
@@ -234,6 +243,9 @@ func usageEvent(name string, payload map[string]any) ports.TelemetryEvent {
 // outcome: counts, enums and the owning worker's harness, never PR text.
 func workerPRDetail(projectTelemetryID string, fact sqlitestore.UsagePRFact) map[string]any {
 	payload := map[string]any{"project_telemetry_id": projectTelemetryID, "count": 1, "historical": false}
+	if kind := workerPRKind(fact); kind != "" {
+		payload["kind"] = kind
+	}
 	if fact.Harness != "" {
 		payload["harness"] = fact.Harness
 	}
@@ -241,6 +253,13 @@ func workerPRDetail(projectTelemetryID string, fact sqlitestore.UsagePRFact) map
 		payload["scm_provider"] = fact.Provider
 	}
 	return payload
+}
+
+func workerPRKind(fact sqlitestore.UsagePRFact) string {
+	if fact.SessionKind == "" {
+		return ""
+	}
+	return telemetrymeta.SessionKind(domain.SessionRecord{ProjectID: domain.ProjectID(fact.ProjectID), Kind: domain.SessionKind(fact.SessionKind)})
 }
 
 // workerPROutcome adds timing and review facts for a merge or close at at.

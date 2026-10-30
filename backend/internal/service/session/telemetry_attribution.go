@@ -8,7 +8,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// createdByStore persists created_by for ao.session.ended. It is optional so
+// createdByStore persists created_by for ao.sessions.ended. It is optional so
 // focused service fakes need not implement it.
 type createdByStore interface {
 	RecordSessionCreatedBy(ctx context.Context, id domain.SessionID, createdBy domain.SessionCreator) error

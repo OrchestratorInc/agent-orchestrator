@@ -85,7 +85,7 @@ func TestPostHogPropertiesCarryExperimentCohort(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = sink.Close(context.Background()) }()
-	props := sink.properties(ports.TelemetryEvent{Name: "ao.session.ended", Source: "delivery_telemetry", Payload: map[string]any{"experiment_cohort": 99}})
+	props := sink.properties(ports.TelemetryEvent{Name: "ao.sessions.ended", Source: "delivery_telemetry", Payload: map[string]any{"experiment_cohort": 99}})
 	if props["experiment_cohort"] != 7 {
 		t.Fatalf("experiment_cohort = %#v, want 7 from the install, not the payload", props["experiment_cohort"])
 	}

@@ -135,7 +135,7 @@ func TestUsagePRClosedOutcomeMergedViaAndDetail(t *testing.T) {
 		t.Fatal("reported association not visible as history")
 	}
 
-	if err := s.RecordWorkerPRMergedVia(ctx, merged.URL, "mobile_swipe"); err != nil {
+	if err := s.RecordWorkerPRMergedVia(ctx, merged.URL, "mobile"); err != nil {
 		t.Fatal(err)
 	}
 	merged.Merged, merged.MergedAtProvider = true, now
@@ -152,7 +152,7 @@ func TestUsagePRClosedOutcomeMergedViaAndDetail(t *testing.T) {
 		byNumber[f.Key] = true
 		switch {
 		case f.MergePending:
-			if f.MergedVia != "mobile_swipe" || f.ClosePending || f.ReviewRounds != 2 || f.AOReviewUsed ||
+			if f.MergedVia != "mobile" || f.ClosePending || f.ReviewRounds != 2 || f.AOReviewUsed ||
 				f.Provider != "github" || f.Harness != string(worker.Harness) || f.SessionKind != "worker" ||
 				!f.PRCreatedAt.Equal(opened) || !f.MergedAt.Equal(now) || f.SessionCreatedAt.IsZero() {
 				t.Fatalf("merge fact = %+v", f)

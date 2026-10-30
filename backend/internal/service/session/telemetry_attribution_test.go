@@ -2,12 +2,15 @@ package session
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
@@ -31,6 +34,35 @@ func lastEvent(t *testing.T, sink *fakeTelemetrySink, name string) ports.Telemet
 	}
 	t.Fatalf("no %s in %#v", name, sink.events)
 	return ports.TelemetryEvent{}
+}
+
+func TestStandaloneSessionKindsOnSpawnAndFailure(t *testing.T) {
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: newFakeStore(), Telemetry: sink})
+	rec := domain.SessionRecord{ID: "standalone-1", Kind: domain.KindWorker, Harness: domain.HarnessCodex}
+	svc.emitSpawned(context.Background(), rec, 1, false, false, domain.SessionCreatedByUser)
+	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex}, errors.New("failed"), 1)
+	for _, name := range []string{"ao.session.spawned", "ao.session.spawn_failed"} {
+		if got := lastEvent(t, sink, name).Payload["kind"]; got != "standalone" {
+			t.Fatalf("%s kind = %#v", name, got)
+		}
+	}
+}
+
+func TestStandaloneKindOnRelaunchFailure(t *testing.T) {
+	oldCapture := captureRelaunchError
+	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
+	t.Cleanup(func() { captureRelaunchError = oldCapture })
+	st := newFakeStore()
+	st.sessions["standalone-1"] = domain.SessionRecord{ID: "standalone-1", Kind: domain.KindWorker, Harness: domain.HarnessCodex}
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Manager: &fakeCommander{}, Store: st, Telemetry: sink})
+	svc.emitRelaunchFailed(context.Background(), "resume_agent", "standalone-1",
+		&sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("failed")},
+		apierr.Conflict("AGENT_RESUME_FAILED", "failed", nil))
+	if got := lastEvent(t, sink, "ao.session.relaunch_failed").Payload["kind"]; got != "standalone" {
+		t.Fatalf("relaunch kind = %#v", got)
+	}
 }
 
 func TestSpawnCreatedByAndSurface(t *testing.T) {
@@ -152,7 +184,7 @@ func TestKillReportsSessionEndedOnce(t *testing.T) {
 	if _, err := svc.Kill(context.Background(), "mer-1"); err != nil {
 		t.Fatalf("Kill: %v", err)
 	}
-	ev := lastEvent(t, sink, "ao.session.ended")
+	ev := lastEvent(t, sink, "ao.sessions.ended")
 	if ev.Payload["outcome"] != "killed" || ev.Payload["created_by"] != "user" || ev.Payload["harness"] != "codex" {
 		t.Fatalf("payload = %#v, want killed mid-turn by a user-created codex worker", ev.Payload)
 	}

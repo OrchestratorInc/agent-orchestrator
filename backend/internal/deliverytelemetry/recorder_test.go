@@ -115,10 +115,10 @@ func TestSessionEndedPayload(t *testing.T) {
 	r, sink := newRecorder(store)
 	r.SessionEnded(context.Background(), rec, EndKilled)
 
-	ev := sink.only(t, "ao.session.ended")
+	ev := sink.only(t, "ao.sessions.ended")
 	want := map[string]any{
 		"kind": "worker", "harness": "codex", "outcome": OutcomeCompleted, "had_pr": false,
-		"waiting_input_count": int64(3), "duration_s": int64(90), "created_by": "orchestrator",
+		"waiting_input_count": int64(3), "duration_ms": int64(90000), "created_by": "orchestrator",
 	}
 	for k, v := range want {
 		if ev.Payload[k] != v {
@@ -137,12 +137,15 @@ func TestSessionEndedOmitsUnknownCreator(t *testing.T) {
 	rec := domain.SessionRecord{ID: "w-1", Kind: domain.KindWorker, CreatedAt: t0}
 	r, sink := newRecorder(&fakeStore{prs: map[domain.SessionID][]domain.PullRequest{"w-1": {{Number: 4}}}})
 	r.SessionEnded(context.Background(), rec, EndKilled)
-	ev := sink.only(t, "ao.session.ended")
+	ev := sink.only(t, "ao.sessions.ended")
 	if _, ok := ev.Payload["created_by"]; ok {
 		t.Fatalf("created_by present for a session created before it was recorded: %#v", ev.Payload)
 	}
 	if ev.Payload["outcome"] != OutcomePROpened || ev.Payload["had_pr"] != true {
 		t.Fatalf("payload = %#v, want pr_opened with had_pr", ev.Payload)
+	}
+	if ev.Payload["kind"] != "standalone" {
+		t.Fatalf("standalone kind = %#v", ev.Payload["kind"])
 	}
 }
 
@@ -155,7 +158,7 @@ func TestSessionEndedJoinsUsageGrouping(t *testing.T) {
 	r.SetInstallID(func() string { return "ins_1" })
 	r.SessionEnded(context.Background(), domain.SessionRecord{ID: "w-1", ProjectID: "proj", Kind: domain.KindWorker}, EndKilled)
 
-	p := sink.only(t, "ao.session.ended").Payload
+	p := sink.only(t, "ao.sessions.ended").Payload
 	if p["project_telemetry_id"] != projectTelemetryID || p["session_telemetry_id"] != SessionTelemetryID(projectTelemetryID, "w-1") {
 		t.Fatalf("grouping = %#v / %#v", p["project_telemetry_id"], p["session_telemetry_id"])
 	}
@@ -182,7 +185,7 @@ func TestSessionEndedSkipsGroupingWhenUnavailable(t *testing.T) {
 			r, sink := newRecorder(store)
 			r.SetInstallID(func() string { return tc.installID })
 			r.SessionEnded(context.Background(), domain.SessionRecord{ID: "w-1", ProjectID: tc.projectID}, EndKilled)
-			p := sink.only(t, "ao.session.ended").Payload
+			p := sink.only(t, "ao.sessions.ended").Payload
 			if _, ok := p["project_telemetry_id"]; ok {
 				t.Fatalf("payload = %#v, want no grouping", p)
 			}
@@ -197,19 +200,19 @@ func TestMergedVia(t *testing.T) {
 	if got := MergedViaSurface(domain.RequestSurfaceDesktop, true); got != MergedViaDesktop {
 		t.Errorf("desktop = %q", got)
 	}
-	if got := MergedViaSurface(domain.RequestSurfaceMobile, true); got != MergedViaMobileSwipe {
+	if got := MergedViaSurface(domain.RequestSurfaceMobile, true); got != MergedViaMobile {
 		t.Errorf("mobile = %q", got)
 	}
-	if got := MergedViaSurface(domain.RequestSurfaceCLI, true); got != MergedViaOther {
+	if got := MergedViaSurface(domain.RequestSurfaceCLI, true); got != MergedViaCLI {
 		t.Errorf("cli = %q", got)
 	}
-	if got := MergedViaSurface("", false); got != MergedViaOther {
+	if got := MergedViaSurface("", false); got != MergedViaCLI {
 		t.Errorf("no surface = %q", got)
 	}
 	if got := MergedOutsideAO("github"); got != MergedViaGitHub {
 		t.Errorf("github = %q", got)
 	}
-	if got := MergedOutsideAO("gitlab"); got != MergedViaOther {
+	if got := MergedOutsideAO("gitlab"); got != "" {
 		t.Errorf("gitlab = %q", got)
 	}
 }
