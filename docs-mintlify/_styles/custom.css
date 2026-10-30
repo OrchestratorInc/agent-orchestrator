@@ -116,7 +116,7 @@ body { letter-spacing: -0.5px; }
     align-items: flex-start !important;
     gap: 0.125rem !important;
     position: fixed !important;
-    top: 6.9rem !important;
+    top: 6.4rem !important;
     left: 0.9rem !important;
     width: 14.75rem !important;
     z-index: 40 !important;
@@ -125,10 +125,11 @@ body { letter-spacing: -0.5px; }
     color: var(--fd-muted) !important;
     font-weight: 400 !important;
     font-size: 0.875rem !important;
-    height: 1.75rem !important;
+    height: 2.25rem !important;
     background: transparent !important;
     border: none !important;
-    padding: 0 !important;
+    padding: 8px !important;
+    border-radius: 8px !important;
     box-shadow: none !important;
   }
   [class*="topbar-right-container"] ul li.navbar-link a:hover { color: var(--fd-fg) !important; }
@@ -1158,9 +1159,10 @@ html::-webkit-scrollbar, body::-webkit-scrollbar { display: none !important; }
 main table {
   border: 1px solid oklch(1 0 0 / 0.1) !important;
   background: oklch(0.228 0.013 107.4);
-  margin-top: 24px;
-  margin-bottom: 24px;
+  margin-top: 0;
+  margin-bottom: 0;
 }
+main [class~="table"] { margin-top: 24px; margin-bottom: 24px; }
 main th {
   background: oklch(0.286 0.016 107.4) !important;
   padding: 8px 12px !important;
@@ -1172,12 +1174,4 @@ main td { padding: 8px 12px !important; border-bottom: 1px solid oklch(1 0 0 / 0
 main tr:last-child td { border-bottom: 0; }
 @media (min-width: 1024px) {
   nav a[aria-current="page"] { text-shadow: none !important; }
-  li.navbar-link a {
-    border: 0 !important;
-    border-radius: 8px !important;
-    padding: 8px !important;
-    height: 36px !important;
-    font-weight: 400 !important;
-    background: transparent !important;
-  }
 }
