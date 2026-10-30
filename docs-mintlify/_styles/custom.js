@@ -891,6 +891,24 @@
     }, true);
   }
 
+  /* ---------- Prose parity that loses to layered important utilities ----------
+     Mintlify's layered Tailwind important rules beat stylesheet !important,
+     so set inline important styles: ol>li decimal markers (original) and
+     table-cell inline code at 0.875em (original 12.25px in 14px cells). */
+  function fixProseParity() {
+    var lis = document.querySelectorAll("main ol > li");
+    Array.prototype.forEach.call(lis, function (li) {
+      if (li.getAttribute("data-ao-ol")) return;
+      li.setAttribute("data-ao-ol", "1");
+      li.style.setProperty("list-style-type", "decimal", "important");
+    });
+    var codes = document.querySelectorAll("main table td code, main table th code");
+    Array.prototype.forEach.call(codes, function (c) {
+      if (c.getAttribute("data-ao-tc")) return;
+      c.setAttribute("data-ao-tc", "1");
+      c.style.setProperty("font-size", "0.875em", "important");
+    });
+  }
   function init() {
     try { TOC_STATE.headings = collectHeadings(); } catch (e) {}
     try { buildTocBar(); } catch (e) {}
@@ -905,6 +923,7 @@
     try { buildSearchChrome(); } catch (e) {}
     try { buildPager(); } catch (e) {}
     try { fixCopyIcons(); } catch (e) {}
+    try { fixProseParity(); } catch (e) {}
     try { bindCopyFeedback(); } catch (e) {}
     try { spyAll(); } catch (e) {}
   }
