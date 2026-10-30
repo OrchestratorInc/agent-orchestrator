@@ -29,6 +29,26 @@ func providerLockHeld(path string) bool {
 	return false
 }
 
+// processRunsPi reports whether the live process pid is a Pi writer: its own
+// executable, or the node/bun interpreter whose argv runs the pi CLI or pi-acp.
+// It reads the command line with the same kind of bounded ps probe processStart
+// uses, then matches with identifiesPi.
+func processRunsPi(ctx context.Context, pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	cmd := process.CommandContext(probeCtx, "ps", "-o", "comm=", "-o", "args=", "-p", strconv.Itoa(pid))
+	// The C locale keeps ps from translating or reformatting the output.
+	cmd.Env = append(os.Environ(), "LC_ALL=C")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return identifiesPi(string(out))
+}
+
 // processStart reads a live process's executable name and start time.
 func processStart(ctx context.Context, pid int) (string, time.Time, bool) {
 	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)

@@ -15,6 +15,11 @@ import (
 // LockFileEx probe if imported chats there report races.
 func providerLockHeld(string) bool { return false }
 
+// processRunsPi has no lsof-based writer probe on Windows; writableTranscriptOwner
+// finds no writers there, so Pi ownership falls back to the provider refusing a
+// second writer on resume.
+func processRunsPi(context.Context, int) bool { return false }
+
 // processStart reads a live process's executable name and start time.
 func processStart(_ context.Context, pid int) (string, time.Time, bool) {
 	if pid <= 0 || pid > math.MaxUint32 {

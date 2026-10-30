@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -202,18 +203,55 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 	defer cancel()
 	out, _ := process.CommandContext(probeCtx, "lsof", "-F", "pcfa", "--", path).Output()
 	command := ""
+	pid := 0
+	piChecked := map[int]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "p") {
+		switch {
+		case strings.HasPrefix(line, "p"):
 			command = ""
-		}
-		if strings.HasPrefix(line, "c") {
+			pid, _ = strconv.Atoi(strings.TrimPrefix(line, "p"))
+		case strings.HasPrefix(line, "c"):
 			command = strings.ToLower(line[1:])
-		}
-		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex") || strings.Contains(command, "pi")) {
-			return true
+		case line == "aw" || line == "au":
+			// Claude and Codex name themselves in lsof's COMMAND. Pi runs under
+			// node/bun, so lsof reports the interpreter; a writer is only Pi when
+			// its own argv identifies it, read from a bounded per-PID probe.
+			if strings.Contains(command, "claude") || strings.Contains(command, "codex") {
+				return true
+			}
+			if pid > 0 && !piChecked[pid] {
+				piChecked[pid] = true
+				if processRunsPi(ctx, pid) {
+					return true
+				}
+			}
 		}
 	}
 	return false
+}
+
+// identifiesPi reports whether a `ps -o comm= -o args=` line describes a Pi
+// writer: the native `pi`/`pi-acp` executable, or an interpreter (node/bun)
+// whose argv runs the pi CLI or the pi-acp package. An unrelated command that
+// merely contains "pi" (pip, api-server, spin), or a plain interpreter, is not.
+func identifiesPi(psLine string) bool {
+	fields := strings.Fields(psLine)
+	if len(fields) == 0 {
+		return false
+	}
+	// ps prints the executable first; a native pi/pi-acp binary is Pi itself.
+	if base := filepath.Base(fields[0]); base == "pi" || base == "pi-acp" {
+		return true
+	}
+	// Otherwise an interpreter counts only when a later argv token is the pi or
+	// pi-acp bin, or the command line names the pi/pi-acp package.
+	for _, field := range fields[1:] {
+		if base := filepath.Base(field); base == "pi" || base == "pi-acp" {
+			return true
+		}
+	}
+	low := strings.ToLower(psLine)
+	return strings.Contains(low, "pi-acp") || strings.Contains(low, "pi-coding-agent")
 }
 
 // importCommit fetches unpublished commits into the registered repository so
