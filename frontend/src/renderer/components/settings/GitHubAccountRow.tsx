@@ -1,4 +1,4 @@
-import { scmUserAvatarUrl, UserAvatar } from "@aoagents/product-ui";
+import { GithubAvatar } from "@aoagents/product-ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -36,11 +36,15 @@ export function GitHubAccountRow() {
 			: t("settings.github.notConnected");
 
 	const connected = signedInHere || auth.data?.satisfied === true;
+	// GithubAvatar's own size class cannot be overridden through className (the
+	// shared cn does not know the size-icon-* tokens), so a sized frame sets it.
 	const leading = connected && login ? (
-		<UserAvatar className="size-7" name={login} imageUrl={scmUserAvatarUrl("github", "https://github.com", login)} />
+		<span className="block size-9 shrink-0 [&>span]:size-full">
+			<GithubAvatar login={login} />
+		</span>
 	) : (
-		<span className="grid size-7 place-items-center rounded-full bg-muted text-muted-foreground">
-			<GitHubIcon className="size-4" />
+		<span className="grid size-9 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground">
+			<GitHubIcon className="size-5" />
 		</span>
 	);
 
