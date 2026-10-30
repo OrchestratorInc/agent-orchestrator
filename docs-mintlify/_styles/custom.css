@@ -1279,3 +1279,11 @@ html[data-current-path="/installation"] main details.accordion:not(.accordion-gr
 
 /* v36t: table cell inline code at 0.875em like the original (prevents extra wraps) */
 main table :is(th, td) code { font-size: 0.875em !important; }
+
+/* v36u: ordered-list markers + list padding parity; code block horizontal scroll parity */
+main ol > li { list-style-type: decimal !important; }
+main li::marker { color: rgba(255,255,255,0.5); }
+main :is(ol, ul) { padding-left: 24px !important; }
+main div[class*="--scroll-area-fade-size"] { overflow-x: auto !important; scrollbar-width: thin; }
+main div[class*="--scroll-area-fade-size"]::-webkit-scrollbar { height: 5px !important; }
+main div[class*="--scroll-area-fade-size"]::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
