@@ -1,23 +1,27 @@
 import { MenuView, type MenuAction, type MenuComponentRef, type NativeActionEvent } from "@expo/ui/community/menu";
 import { useRef, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { AgentLogo } from "../AgentLogo";
 import { AppSymbol } from "../AppSymbol";
 import { haptics } from "../haptics";
 import { usePressFeedback } from "../pressFeedback";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
-import { iconSize, radius, space, stateOpacity, touchTarget, type } from "../tokens";
+import { font, iconSize, radius, space, stateOpacity, touchTarget, type } from "../tokens";
 import { chatMenuIcon } from "./chatMenuIcons";
 import { COMPOSER_DISC } from "./composerStyles";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow } from "./turnSettingsModel";
 
 const effortGlyph = { ios: "gauge.medium", android: "speed" } as const;
+/** The agent's mark in the capsule, at the size iOS's capsule draws it. */
+const HARNESS_MARK = 20;
 const approvalGlyph = { ios: "checkmark.shield", android: "verified_user" } as const;
 
 /**
  * The chat's controls row on Android, laid out as the new task's: the model in
- * a filled capsule, the effort as a speedometer beside it, and the approval
+ * a filled capsule led by its agent's mark, as iOS's is, the effort as a
+ * speedometer beside it, and the approval
  * mode as its shield at the row's end. Each opens Compose's dropdown with its
  * choices ticked; the model's also holds any other setting the provider offers,
  * an on/off one as a checkable item and the rest one level down.
@@ -67,6 +71,7 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 				testID="chat-model"
 			>
 				<View style={styles.capsule}>
+					{snapshot.harness ? <AgentLogo harness={snapshot.harness} size={HARNESS_MARK} /> : null}
 					<Text numberOfLines={1} style={styles.label}>{parts.model || "Model"}</Text>
 					<AppSymbol name="chevronUpDown" size={iconSize.sm} color={t.textTertiary} />
 				</View>
@@ -151,8 +156,9 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	row: { alignSelf: "stretch", minHeight: touchTarget, flexDirection: "row", alignItems: "center", overflow: "hidden" },
 	spacer: { flex: 1 },
 	trigger: { minWidth: touchTarget, minHeight: touchTarget, alignItems: "center", justifyContent: "center", flexShrink: 1 },
-	// The new task's capsule: filled, the composer's discs' height.
-	capsule: { height: COMPOSER_DISC, maxWidth: "100%", flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: radius.pill, backgroundColor: t.bgSubtle },
-	label: { fontFamily: "DMSans_600SemiBold", flexShrink: 1, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+	// iOS's capsule: filled in the card colour, the composer's discs' height,
+	// on the composer's darker sheet.
+	capsule: { height: COMPOSER_DISC, maxWidth: "100%", flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: radius.pill, backgroundColor: t.bgElevated },
+	label: { fontFamily: font.medium, flexShrink: 1, color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "500" },
 	disabled: { opacity: stateOpacity.disabled },
 });

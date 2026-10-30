@@ -20,10 +20,13 @@ export const addFabClearance = FAB_SIZE + FAB_MARGIN;
 
 /**
  * A screen's create action as Material 3's extended floating action button: the
- * add symbol and "New" on the accent fill, with Compose's ripple, elevation and
- * semantics.
+ * add symbol and "New", with Compose's ripple, elevation and semantics.
+ *
+ * Tonal, on the raised card surface, rather than the accent fill: the near-white
+ * accent made it the loudest thing on a quiet board, where iOS's New task is a
+ * glass button the colour of the bar. The elevation still lifts it off the rows.
  */
-export function AddFab({ label, onPress, bottomInset, testID }: AddFabProps) {
+export function AddFab({ label, onPress, bottomInset, expanded = true, testID }: AddFabProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	return (
@@ -33,18 +36,20 @@ export function AddFab({ label, onPress, bottomInset, testID }: AddFabProps) {
 			style={[styles.anchor, { bottom: bottomInset + FAB_MARGIN - SHADOW_ROOM }]}
 		>
 			<ExtendedFloatingActionButton
-				containerColor={t.accent}
+				containerColor={t.bgElevated}
 				onClick={onPress}
-				expanded
+				// Compose animates the fold and the label with Material's own motion.
+				expanded={expanded}
 				modifiers={[paddingAll(SHADOW_ROOM), ...(testID ? [testTag(testID)] : [])]}
 			>
 				<ExtendedFloatingActionButton.Icon>
-					{/* An accent container is not one of the Material scheme's own, so
-					    Compose has no content colour to pair with it. */}
-					<Icon source={materialDrawable("add")} size={iconSize.xl} tint={t.onAccent} contentDescription={label} />
+					{/* Set outright: the card surface is not one of the Material
+					    scheme's container roles, so Compose has no content colour
+					    to pair with it. */}
+					<Icon source={materialDrawable("add")} size={iconSize.xl} tint={t.textPrimary} contentDescription={label} />
 				</ExtendedFloatingActionButton.Icon>
 				<ExtendedFloatingActionButton.Text>
-					<Text color={t.onAccent} style={{ typography: "labelLarge", fontFamily: font.semibold }}>New</Text>
+					<Text color={t.textPrimary} style={{ typography: "labelLarge", fontFamily: font.semibold }}>New</Text>
 				</ExtendedFloatingActionButton.Text>
 			</ExtendedFloatingActionButton>
 		</Host>

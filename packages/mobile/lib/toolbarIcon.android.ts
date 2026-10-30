@@ -79,6 +79,7 @@ const drawables: Record<MaterialDrawableName, ImageSourcePropType> = {
 	tab: require("../assets/icons/tab.xml"),
 	terminal: require("../assets/icons/terminal.xml"),
 	tune: require("../assets/icons/tune.xml"),
+	unfold_more: require("../assets/icons/unfold_more.xml"),
 	verified_user: require("../assets/icons/verified_user.xml"),
 	vertical_align_top: require("../assets/icons/vertical_align_top.xml"),
 	visibility: require("../assets/icons/visibility.xml"),

@@ -70,6 +70,11 @@
         "exclude": [
           "expo-in-app-updates"
         ]
+      },
+      "android": {
+        "buildFromSource": [
+          "expo-ui"
+        ]
       }
     }
   },

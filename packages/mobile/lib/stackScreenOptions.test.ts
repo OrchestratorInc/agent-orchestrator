@@ -41,4 +41,10 @@ describe("large-title header", () => {
 		platform.OS = "android";
 		expect(largeTitleScreenOptions()).toEqual({});
 	});
+
+	// The app's family carries Android's title rather than Roboto at an iOS weight.
+	it("titles Android's top app bar in the app's face at Material's title size", () => {
+		platform.OS = "android";
+		expect(stackScreenOptions(theme).headerTitleStyle).toEqual({ fontFamily: "DMSans_600SemiBold", fontSize: 20 });
+	});
 });

@@ -111,6 +111,7 @@ export function WorkerBoardList({
 	showProject = true,
 	identityKey,
 	archiveSources = NO_ARCHIVE_SOURCES,
+	onScroll,
 }: {
 	sessions: DashboardSession[];
 	/** Non-empty switches the board to a single flat "Search results" section. */
@@ -121,7 +122,8 @@ export function WorkerBoardList({
 	contentInsetAdjustmentBehavior?: ScrollViewProps["contentInsetAdjustmentBehavior"];
 	/**
 	 * How much of the list's top a translucent header covers. The list insets
-	 * its rows itself; what floats over it starts this far down.
+	 * its rows itself; what floats over it, and Android's pull-to-refresh
+	 * spinner, start this far down.
 	 */
 	overlayTopInset?: number;
 	refreshing: boolean;
@@ -131,6 +133,8 @@ export function WorkerBoardList({
 	initialArchiveOpen?: boolean;
 	/** Off on a project's own page, where every row would repeat its name; the agent shows instead. */
 	showProject?: boolean;
+	/** The list's scroll, for what floats over it (the Android FAB's fold). */
+	onScroll?: ScrollViewProps["onScroll"];
 	/**
 	 * Changes when the *set* of workers changes wholesale — a different project
 	 * filter, or a search. The list is remounted on a new value.
@@ -483,13 +487,15 @@ export function WorkerBoardList({
 					contentInsetAdjustmentBehavior={contentInsetAdjustmentBehavior}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
-					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} {...refreshControlColors(t)} />}
+					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} progressViewOffset={overlayTopInset} {...refreshControlColors(t)} />}
 					ListHeaderComponent={ListHeaderComponent}
 					ListEmptyComponent={ListEmptyComponent}
 					renderItem={renderItem}
 					// The next archive page loads as its end comes into view.
 					onEndReached={archiveOpen || searching ? pagedArchive.loadMore : undefined}
 					onEndReachedThreshold={1.5}
+					onScroll={onScroll}
+					scrollEventThrottle={onScroll ? 16 : undefined}
 				/>
 			</LayoutAnimationConfig>
 		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} top={overlayTopInset + space.sm} onPress={showLatest} /> : null}

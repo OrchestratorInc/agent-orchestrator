@@ -96,6 +96,10 @@ vi.mock("./worker-board-list", async () => {
 });
 // The real one draws nothing on iOS; this stands in for Android's FAB on both.
 vi.mock("./AddFab", () => ({ AddFab: "AddFab", addFabClearance: 72 }));
+vi.mock("./frost", () => ({ useTabBarFrost: () => ({ inset: 0, frost: null }) }));
+vi.mock("./largeTitle", () => ({
+	useLargeTitle: (_title: string, onScroll?: unknown) => ({ header: null, edge: null, onScroll, topInset: 0 }),
+}));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 
 import { startNewTask } from "./newTaskAction";
@@ -353,10 +357,11 @@ describe("Workers spawn action", () => {
 
 	// Android floats Material's FAB instead, at the page's bottom-end corner,
 	// which already ends at the navigation bar.
+	// Settings and Pull Requests are tabs on Android, so the bar keeps the bell.
 	it("floats the Android spawn button instead of a header item", () => {
 		fixtures.platform = "android";
 		act(() => { renderer = create(<FleetScreen />); });
-		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Settings", "Pull Requests", "Notifications"]);
+		expect(toolbar("right")!.findAllByType("StackToolbarButton" as never).map((node) => node.props.accessibilityLabel)).toEqual(["Notifications"]);
 		const fab = renderer.root.findByType("AddFab" as never);
 		expect(fab.props).toMatchObject({ label: "Spawn worker", bottomInset: 0, testID: "spawn-worker" });
 		expect(renderer.root.findByType(WorkerBoardList).props.contentBottomInset).toBe(72 + 24);

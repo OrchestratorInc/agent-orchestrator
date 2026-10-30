@@ -19,6 +19,7 @@ vi.mock("react-native", () => ({
 	Text: "Text",
 	View: "View",
 }));
+vi.mock("../AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
 vi.mock("../AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 vi.mock("../haptics", () => ({ haptics: { select: fixtures.select } }));
 vi.mock("../pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: { color: "ripple" }, pressed: undefined }) }));
@@ -90,6 +91,8 @@ describe("Android chat controls row", () => {
 	it("names the model on its capsule and lists the agent's models, then any other setting", () => {
 		render();
 		expect(trigger("chat-model").props.accessibilityLabel).toBe("Model, Opus");
+		// Led by the agent's mark, as iOS's capsule is.
+		expect(trigger("chat-model").findByType("AgentLogo" as never).props).toEqual({ harness: "claude-code", size: 20 });
 		expect(titles("chat-model")).toEqual([["Opus", "on"], ["Haiku", "off"], ["Fast mode", "off"]]);
 		expect(menu("chat-model").props.actions[2].image).toBe("bolt");
 		act(() => trigger("chat-model").props.onPress());

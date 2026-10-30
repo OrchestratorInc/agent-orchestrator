@@ -17,6 +17,7 @@ import { Button, EmptyState, ListSectionHeader } from "../../lib/ui";
 import { WorkerBoardList } from "../../lib/worker-board-list";
 import type { ArchiveSource } from "../../lib/archive/useArchivedSessions";
 import { hostedRowKey } from "../../lib/hostedRows";
+import { useFabExpanded } from "../../lib/useFabExpanded";
 import { AddFab, addFabClearance } from "../../lib/AddFab";
 import { space } from "../../lib/tokens";
 
@@ -38,6 +39,7 @@ function ProjectScreenContent() {
 	const router = useRouter();
 	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
+	const fab = useFabExpanded();
 	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
 	const { config, currentHostId, hostStates, connection, loading, error, refresh, projects, sessions, orchestrators, archive, linkHealth } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
@@ -148,6 +150,7 @@ function ProjectScreenContent() {
 				)
 			) : (
 				<WorkerBoardList
+					onScroll={fab.onScroll}
 					sessions={projectSessions}
 					archiveSources={archiveSources}
 					showProject={false}
@@ -175,7 +178,7 @@ function ProjectScreenContent() {
 					}
 				/>
 			)}
-			{canStartTask ? <AddFab label="Spawn worker" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" /> : null}
+			{canStartTask ? <AddFab expanded={fab.expanded} label="Spawn worker" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" /> : null}
 		</View>
 	);
 }

@@ -143,12 +143,13 @@ export function SpawnComposerControls({
 					<Host matchContents={{ vertical: true }} colorScheme={scheme}>
 						<Row verticalAlignment="center" modifiers={[fillMaxWidth(), height(touchTarget)]}>
 							{/* Who runs the task: the harness's mark and the model it runs,
-							    in a filled capsule the circles' height. */}
+							    in a capsule the circles' height, filled in the card colour
+							    as the plus's circle is, so it reads on the composer's sheet. */}
 							<DropdownMenu expanded={openMenu === "harness"} onDismissRequest={close} color={t.bgElevated}>
 								<DropdownMenu.Trigger>
 									<Button
 										onClick={() => setOpenMenu("harness")}
-										colors={{ containerColor: t.bgSubtle, contentColor: t.textPrimary }}
+										colors={{ containerColor: t.bgElevated, contentColor: t.textPrimary }}
 										contentPadding={{ start: space.md, end: space.xs }}
 										enabled={!busy}
 										modifiers={[height(COMPOSER_DISC), testID("spawn-harness")]}
@@ -157,7 +158,7 @@ export function SpawnComposerControls({
 										<Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: font.medium }} modifiers={[padding(space.sm, 0, space.xxs, 0)]}>
 											{agentTitle}
 										</Text>
-										<Icon source={materialDrawable("arrow_drop_down")} size={iconSize.xl} tint={t.textTertiary} />
+										<Icon source={materialDrawable("unfold_more")} size={iconSize.md} tint={t.textTertiary} />
 									</Button>
 								</DropdownMenu.Trigger>
 								<DropdownMenu.Items>
@@ -279,7 +280,7 @@ function SelectorMenu({ label, accessibilityLabel, leading, options, selectedId,
 					>
 						{label}
 					</Text>
-					<Icon source={materialDrawable("arrow_drop_down")} size={iconSize.xl} tint={t.textTertiary} />
+					<Icon source={materialDrawable("unfold_more")} size={iconSize.md} tint={t.textTertiary} />
 				</TextButton>
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Items>

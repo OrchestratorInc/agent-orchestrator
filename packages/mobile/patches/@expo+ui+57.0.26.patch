@@ -1,0 +1,220 @@
+diff --git a/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/ExpoUIModule.kt b/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/ExpoUIModule.kt
+index f7f0d1b..9e83aae 100644
+--- a/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/ExpoUIModule.kt
++++ b/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/ExpoUIModule.kt
+@@ -10,6 +10,8 @@ import androidx.compose.ui.graphics.toArgb
+ import expo.modules.kotlin.exception.Exceptions
+ import expo.modules.kotlin.modules.Module
+ import expo.modules.kotlin.modules.ModuleDefinition
++import expo.modules.ui.colors.AppTheme
++import expo.modules.ui.colors.AppThemeOptions
+ import expo.modules.ui.colors.MaterialColorsOptions
+ import expo.modules.ui.colors.isDynamicColorSupported
+ import expo.modules.ui.colors.isSystemInDarkTheme
+@@ -162,6 +164,10 @@ class ExpoUIModule : Module() {
+       return@Constant isDynamicColorSupported
+     }
+ 
++    Function("setAppTheme") { options: AppThemeOptions? ->
++      AppTheme.options.value = options
++    }
++
+     Function("getMaterialColors") { options: MaterialColorsOptions? ->
+       val context = appContext.currentActivity
+         ?: appContext.reactContext
+diff --git a/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/HostView.kt b/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/HostView.kt
+index 5b3e528..9368a9e 100644
+--- a/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/HostView.kt
++++ b/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/HostView.kt
+@@ -50,6 +50,10 @@ import expo.modules.kotlin.views.ComposableScope
+ import expo.modules.kotlin.views.ComposeProps
+ import expo.modules.kotlin.views.ExpoComposeView
+ import expo.modules.kotlin.views.OptimizedComposeProps
++import expo.modules.ui.colors.AppTheme
++import expo.modules.ui.colors.appShapes
++import expo.modules.ui.colors.appTypography
++import expo.modules.ui.colors.withAppColors
+ import expo.modules.ui.colors.isDynamicColorSupported
+ import expo.modules.ui.colors.seedColorScheme
+ 
+@@ -137,9 +141,17 @@ internal class HostView(context: Context, appContext: AppContext) :
+     val seededScheme = remember(seedArgb, isDark) {
+       seedArgb?.let { seedColorScheme(it, isDark) }
+     }
+-    val colorScheme = seededScheme
++    val baseScheme = seededScheme
+       ?: props.colorScheme.value?.toColorScheme(context)
+       ?: ExpoColorScheme.defaultColorScheme(context, isSystemInDarkTheme())
++    // The app's palette, type and shapes, when it has set them for this scheme.
++    // A seed colour is the call site's own choice and wins.
++    val appTheme = AppTheme.options.value?.takeIf { it.dark == isDark && seededScheme == null }
++    val colorScheme = remember(baseScheme, appTheme) {
++      appTheme?.let { baseScheme.withAppColors(it.colors) } ?: baseScheme
++    }
++    val typography = remember(appTheme?.fonts) { appTheme?.fonts?.let { appTypography(it, context) } }
++    val shapes = remember(appTheme?.extraSmallCorner) { appShapes(appTheme?.extraSmallCorner) }
+     val layoutDirection = props.layoutDirection.value.toLayoutDirection()
+ 
+     // Material3's `MaterialTheme` does not provide `LocalContentColor` — only `Surface` does — so
+@@ -149,7 +161,7 @@ internal class HostView(context: Context, appContext: AppContext) :
+       LocalLayoutDirection provides layoutDirection,
+       LocalContentColor provides colorScheme.onSurface
+     ) {
+-      MaterialExpressiveTheme(colorScheme = colorScheme) {
++      MaterialExpressiveTheme(colorScheme = colorScheme, typography = typography, shapes = shapes) {
+         MaybeMatchContentsLayout {
+           Children(this@Content)
+         }
+diff --git a/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/TextView.kt b/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/TextView.kt
+index 66905c6..def53f2 100644
+--- a/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/TextView.kt
++++ b/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/TextView.kt
+@@ -3,6 +3,7 @@ package expo.modules.ui
+ import android.content.Context
+ import android.graphics.Color
+ import android.graphics.Typeface
++import androidx.compose.material3.LocalTextStyle
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Text
+ import androidx.compose.runtime.Composable
+@@ -298,7 +299,10 @@ fun FunctionalComposableScope.TextContent(props: TextProps) {
+       fontSize = props.fontSize?.sp ?: androidx.compose.ui.unit.TextUnit.Unspecified,
+       fontWeight = props.fontWeight?.toComposeFontWeight(),
+       fontStyle = props.fontStyle?.toComposeFontStyle(),
+-      fontFamily = appContext.reactContext?.let { resolveFontFamily(props.fontFamily, it) },
++      // Without a family of its own, a Text takes the theme's from the slot it
++      // sits in (a list item's headline, a menu item), as Material's Text does.
++      fontFamily = appContext.reactContext?.let { resolveFontFamily(props.fontFamily, it) }
++        ?: LocalTextStyle.current.fontFamily.takeIf { props.typography == null },
+       textDecoration = props.textDecoration?.toComposeTextDecoration(),
+       letterSpacing = props.letterSpacing?.sp ?: androidx.compose.ui.unit.TextUnit.Unspecified,
+       lineHeight = props.lineHeight?.sp ?: androidx.compose.ui.unit.TextUnit.Unspecified,
+diff --git a/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/colors/AppTheme.kt b/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/colors/AppTheme.kt
+new file mode 100644
+index 0000000..c37c190
+--- /dev/null
++++ b/node_modules/@expo/ui/android/src/main/java/expo/modules/ui/colors/AppTheme.kt
+@@ -0,0 +1,123 @@
++package expo.modules.ui.colors
++
++import android.content.Context
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.material3.ColorScheme
++import androidx.compose.material3.Shapes
++import androidx.compose.material3.Typography
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.text.TextStyle
++import androidx.compose.ui.text.font.FontFamily
++import androidx.compose.ui.text.font.FontWeight
++import androidx.compose.ui.unit.dp
++import expo.modules.kotlin.records.Field
++import expo.modules.kotlin.records.Record
++import expo.modules.ui.resolveFontFamily
++
++/**
++ * The app's own theme for every Host: its palette in place of the wallpaper's
++ * dynamic colours, its type family in place of Roboto, and its corner for the
++ * smallest shapes. Set from JS through `setAppTheme` whenever the palette
++ * changes; a Host reads it during composition, so every Host on screen
++ * recomposes with the new theme.
++ */
++internal class AppThemeOptions : Record {
++  /** Which scheme the colours are for. A Host in the other scheme keeps its default. */
++  @Field val dark: Boolean = true
++
++  /** Colour roles by `ColorScheme` property name, as ARGB integers. Missing roles keep the default. */
++  @Field val colors: Map<String, Double> = emptyMap()
++
++  /** Font family names for the regular, medium and semibold weights. */
++  @Field val fonts: Map<String, String> = emptyMap()
++
++  /** Corner radius of the extra-small shape (menus, outlined fields, snackbars), in dp. */
++  @Field val extraSmallCorner: Double? = null
++}
++
++internal object AppTheme {
++  val options = mutableStateOf<AppThemeOptions?>(null)
++}
++
++internal fun ColorScheme.withAppColors(colors: Map<String, Double>): ColorScheme {
++  fun role(name: String, fallback: Color): Color = colors[name]?.let { Color(it.toLong().toInt()) } ?: fallback
++  return copy(
++    primary = role("primary", primary),
++    onPrimary = role("onPrimary", onPrimary),
++    primaryContainer = role("primaryContainer", primaryContainer),
++    onPrimaryContainer = role("onPrimaryContainer", onPrimaryContainer),
++    inversePrimary = role("inversePrimary", inversePrimary),
++    secondary = role("secondary", secondary),
++    onSecondary = role("onSecondary", onSecondary),
++    secondaryContainer = role("secondaryContainer", secondaryContainer),
++    onSecondaryContainer = role("onSecondaryContainer", onSecondaryContainer),
++    tertiary = role("tertiary", tertiary),
++    onTertiary = role("onTertiary", onTertiary),
++    tertiaryContainer = role("tertiaryContainer", tertiaryContainer),
++    onTertiaryContainer = role("onTertiaryContainer", onTertiaryContainer),
++    background = role("background", background),
++    onBackground = role("onBackground", onBackground),
++    surface = role("surface", surface),
++    onSurface = role("onSurface", onSurface),
++    surfaceVariant = role("surfaceVariant", surfaceVariant),
++    onSurfaceVariant = role("onSurfaceVariant", onSurfaceVariant),
++    surfaceTint = role("surfaceTint", surfaceTint),
++    inverseSurface = role("inverseSurface", inverseSurface),
++    inverseOnSurface = role("inverseOnSurface", inverseOnSurface),
++    error = role("error", error),
++    onError = role("onError", onError),
++    errorContainer = role("errorContainer", errorContainer),
++    onErrorContainer = role("onErrorContainer", onErrorContainer),
++    outline = role("outline", outline),
++    outlineVariant = role("outlineVariant", outlineVariant),
++    scrim = role("scrim", scrim),
++    surfaceBright = role("surfaceBright", surfaceBright),
++    surfaceDim = role("surfaceDim", surfaceDim),
++    surfaceContainer = role("surfaceContainer", surfaceContainer),
++    surfaceContainerHigh = role("surfaceContainerHigh", surfaceContainerHigh),
++    surfaceContainerHighest = role("surfaceContainerHighest", surfaceContainerHighest),
++    surfaceContainerLow = role("surfaceContainerLow", surfaceContainerLow),
++    surfaceContainerLowest = role("surfaceContainerLowest", surfaceContainerLowest)
++  )
++}
++
++/** Material's type scale in the app's family, each style taking the face for its weight. */
++internal fun appTypography(fonts: Map<String, String>, context: Context): Typography? {
++  val regular = resolveFontFamily(fonts["regular"], context)
++  val medium = resolveFontFamily(fonts["medium"], context) ?: regular
++  val semibold = resolveFontFamily(fonts["semibold"], context) ?: medium
++  if (regular == null) return null
++  fun TextStyle.inApp(): TextStyle {
++    val weight = fontWeight ?: FontWeight.Normal
++    val family: FontFamily? = when {
++      weight >= FontWeight.SemiBold -> semibold
++      weight >= FontWeight.Medium -> medium
++      else -> regular
++    }
++    return copy(fontFamily = family)
++  }
++  val base = Typography()
++  return Typography(
++    displayLarge = base.displayLarge.inApp(),
++    displayMedium = base.displayMedium.inApp(),
++    displaySmall = base.displaySmall.inApp(),
++    headlineLarge = base.headlineLarge.inApp(),
++    headlineMedium = base.headlineMedium.inApp(),
++    headlineSmall = base.headlineSmall.inApp(),
++    titleLarge = base.titleLarge.inApp(),
++    titleMedium = base.titleMedium.inApp(),
++    titleSmall = base.titleSmall.inApp(),
++    bodyLarge = base.bodyLarge.inApp(),
++    bodyMedium = base.bodyMedium.inApp(),
++    bodySmall = base.bodySmall.inApp(),
++    labelLarge = base.labelLarge.inApp(),
++    labelMedium = base.labelMedium.inApp(),
++    labelSmall = base.labelSmall.inApp()
++  )
++}
++
++internal fun appShapes(extraSmallCorner: Double?): Shapes? {
++  val corner = extraSmallCorner ?: return null
++  return Shapes().copy(extraSmall = RoundedCornerShape(corner.dp))
++}

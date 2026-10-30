@@ -114,7 +114,7 @@ describe("project page", () => {
 	it("starts a task in this project from a header + on iOS and a FAB on Android", () => {
 		expect(page).toContain('const headerAdd = Platform.OS === "ios" && canStartTask;');
 		expect(page).toContain('{headerAdd ? <Stack.Toolbar.Button icon={toolbarIcon("add")} accessibilityLabel="Spawn worker" onPress={startTask} /> : null}');
-		expect(page).toContain('<AddFab label="Spawn worker" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" />');
+		expect(page).toContain('<AddFab expanded={fab.expanded} label="Spawn worker" onPress={startTask} bottomInset={insets.bottom} testID="project-spawn-worker" />');
 		expect(page).toContain('params: { projectId: id, hostId: routeHostId }');
 		expect(page).toContain("contentBottomInset={insets.bottom + addFabClearance + space.xxl}");
 	});

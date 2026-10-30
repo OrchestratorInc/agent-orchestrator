@@ -9,6 +9,8 @@ describe("board tabs", () => {
 		expect(boardTabs.map(({ name, href }) => [name, href])).toEqual([
 			["(workers)", "/"],
 			["(projects)", "/projects"],
+			["(pull-requests)", "/pull-requests"],
+			["(preferences)", "/preferences"],
 		]);
 	});
 

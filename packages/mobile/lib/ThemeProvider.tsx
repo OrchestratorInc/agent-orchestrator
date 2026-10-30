@@ -1,6 +1,7 @@
 import { requireOptionalNativeModule } from "expo-modules-core";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Appearance, Platform, useColorScheme } from "react-native";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { Appearance, Platform, processColor, useColorScheme } from "react-native";
+import { composeThemeFor } from "./composeTheme";
 import { themeFor, type ColorScheme, type Theme } from "./theme";
 import {
 	DEFAULT_PREFERENCE,
@@ -111,6 +112,23 @@ export function ThemeProvider({ children, initial }: { children: ReactNode; init
 		const navigationBar = requireOptionalNativeModule<{ setStyle(style: "light" | "dark"): Promise<void> }>("ExpoNavigationBar");
 		void navigationBar?.setStyle(scheme === "dark" ? "light" : "dark").catch(() => {});
 	}, [scheme]);
+
+	// Compose controls draw in this palette and family rather than the
+	// wallpaper's colours and Roboto. Optional for the same reason as above: a
+	// build without the `@expo/ui` patch has no `setAppTheme`. A layout effect,
+	// so the Hosts in the first frame after a theme change already have it.
+	useLayoutEffect(() => {
+		if (Platform.OS !== "android") return;
+		const expoUI = requireOptionalNativeModule<{ setAppTheme?(options: object): void }>("ExpoUI");
+		if (!expoUI?.setAppTheme) return;
+		const compose = composeThemeFor(theme, scheme === "dark");
+		const colors: Record<string, number> = {};
+		for (const [role, color] of Object.entries(compose.colors)) {
+			const argb = processColor(color);
+			if (typeof argb === "number") colors[role] = argb;
+		}
+		expoUI.setAppTheme({ ...compose, colors });
+	}, [theme, scheme]);
 
 	const value = useMemo<ThemeState>(
 		() => ({ theme, scheme, preference, setPreference, style, setStyle }),

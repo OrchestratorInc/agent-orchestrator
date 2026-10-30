@@ -72,10 +72,10 @@ describe("root stack", () => {
 		}
 	});
 
-	// No slab on iOS: the bar is the page's own colour. It stays opaque, because
-	// a clear bar showed the page underneath through it during every push and
-	// pop. Android's top app bar keeps the navigation theme's card surface.
-	it("paints the iOS bar in the page's background", async () => {
+	// No slab on either platform: the bar is the page's own colour. It stays
+	// opaque, because a clear bar showed the page underneath through it during
+	// every push and pop.
+	it("paints the bar in the page's background", async () => {
 		const ios = await renderRoot("ios");
 		try {
 			expect(ios.root.findByType("Stack" as never).props.screenOptions.headerStyle).toEqual({ backgroundColor: "#bgBase" });
@@ -85,7 +85,7 @@ describe("root stack", () => {
 		}
 		const android = await renderRoot("android");
 		try {
-			expect(android.root.findByType("Stack" as never).props.screenOptions).not.toHaveProperty("headerStyle");
+			expect(android.root.findByType("Stack" as never).props.screenOptions.headerStyle).toEqual({ backgroundColor: "#bgBase" });
 			expect(android.root.findByType("NavigationThemeProvider" as never).props.value.colors.card).toBe("#bgSurface");
 		} finally {
 			act(() => android.unmount());

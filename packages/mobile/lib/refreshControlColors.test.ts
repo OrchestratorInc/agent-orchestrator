@@ -16,7 +16,8 @@ describe("refreshControlColors", () => {
 	it("is what every board list's pull-to-refresh draws with", () => {
 		for (const path of ["./worker-board-list.tsx", "../app/(tabs)/(projects)/projects.tsx", "../app/prs/index.tsx"]) {
 			const text = source(path);
-			expect(text).toMatch(/<RefreshControl refreshing=\{refreshing\} onRefresh=\{\w+\} \{\.\.\.refreshControlColors\(t\)\} \/>/);
+			// A board list under Android's clear bar also offsets the spinner below it.
+			expect(text).toMatch(/<RefreshControl refreshing=\{refreshing\} onRefresh=\{\w+\} (progressViewOffset=\{[\w.]+\} )?\{\.\.\.refreshControlColors\(t\)\} \/>/);
 			expect(text).not.toMatch(/<RefreshControl[^>]*tintColor=/);
 		}
 	});

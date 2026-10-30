@@ -3,6 +3,7 @@ import { SymbolView } from "expo-symbols";
 import regular from "expo-symbols/androidWeights/regular";
 import { Text, useWindowDimensions, View } from "react-native";
 import type { AppSymbolProps } from "./AppSymbol.types";
+import { ComposerGlyph, isComposerGlyph } from "./composerGlyphs.android";
 import { materialGlyph } from "./symbolCodepoints";
 import { resolveSymbol, symbolAccessibilityProps } from "./symbols";
 import { useTheme } from "./ThemeProvider";
@@ -22,8 +23,11 @@ import { iconSize } from "./tokens";
  *
  * `SymbolView` passes its View nothing but its style, so the accessibility
  * props and the caller's style sit on a wrapper either way.
+ *
+ * The composer's send, dictate and stop glyphs are drawn as iOS draws them
+ * instead (see `composerGlyphs`), at the weight the call site asks for.
  */
-export function AppSymbol({ name, size = iconSize.xl, color, accessibilityLabel, style, testID }: AppSymbolProps) {
+export function AppSymbol({ name, size = iconSize.xl, color, weight, accessibilityLabel, style, testID }: AppSymbolProps) {
 	const t = useTheme();
 	const { fontScale } = useWindowDimensions();
 	const symbol = resolveSymbol(name);
@@ -32,7 +36,9 @@ export function AppSymbol({ name, size = iconSize.xl, color, accessibilityLabel,
 	const box = { width: size, height: size };
 	return (
 		<View style={[box, style]} testID={testID} {...symbolAccessibilityProps(accessibilityLabel)}>
-			{glyph !== undefined ? (
+			{isComposerGlyph(symbol.ios) ? (
+				<ComposerGlyph name={symbol.ios} size={size} color={tint} weight={weight} />
+			) : glyph !== undefined ? (
 				// An icon keeps its size at any system font scale, as M3 and SF
 				// Symbols both do, so the character opts out of scaling.
 				<Text

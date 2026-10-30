@@ -13,8 +13,9 @@ export type AppSymbolProps = {
 	/** Defaults to the theme's `textSecondary`, the tint chrome glyphs use. */
 	color?: ColorValue;
 	/**
-	 * iOS only. Android always draws Material Symbols' regular weight: it is the
-	 * one M3 specifies, and the only face loaded before the first frame.
+	 * iOS, and on Android only the composer's send arrow (see `composerGlyphs`).
+	 * Android otherwise draws Material Symbols' regular weight: it is the one M3
+	 * specifies, and the only face loaded before the first frame.
 	 */
 	weight?: SymbolWeight;
 	/**

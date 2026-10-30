@@ -85,7 +85,7 @@ describe("Android native compatibility boundaries", () => {
 	// of the hand-built dock and its bottom sheet, and spawning is Material's FAB.
 	it("filters and spawns Android workers with native controls", () => {
 		const board = source("../app/(tabs)/(workers)/index.tsx");
-		expect(board).toContain('<AddFab label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset} testID="spawn-worker" />');
+		expect(board).toContain('<AddFab expanded={fab.expanded} label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset + tabBar.inset} testID="spawn-worker" />');
 		expect(source("./BoardHeaderItems.tsx")).toContain("{!ios ? filter : null}");
 		expect(source("./AddFab.android.tsx")).toContain('import { ExtendedFloatingActionButton, Host, Icon, Text } from "@expo/ui/jetpack-compose";');
 		for (const gone of ["./worker-dock.android.tsx", "./worker-controls-sheet.android.tsx", "./worker-controls-sheet.tsx"]) {

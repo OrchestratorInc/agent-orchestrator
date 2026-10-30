@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("react-native", () => ({ StyleSheet: { create: (styles: object) => styles } }));
 vi.mock("./ThemeProvider", () => ({
-	useTheme: () => ({ accent: "#accent", onAccent: "#onAccent", textPrimary: "#textPrimary" }),
+	useTheme: () => ({ accent: "#accent", onAccent: "#onAccent", bgElevated: "#bgElevated", textPrimary: "#textPrimary" }),
 	useThemeState: () => ({ scheme: "dark" }),
 }));
 vi.mock("./toolbarIcon.android", () => ({ materialDrawable: (name: string) => `drawable:${name}` }));
@@ -47,11 +47,11 @@ describe("AddFab on Android", () => {
 		const onPress = vi.fn();
 		await act(async () => { renderer = create(<AndroidAddFab label="Spawn worker" onPress={onPress} bottomInset={0} testID="spawn-worker" />); });
 		const fab = renderer!.root.findByType("ExtendedFloatingActionButton" as never);
-		expect(fab.props).toMatchObject({ containerColor: "#accent", expanded: true });
+		expect(fab.props).toMatchObject({ containerColor: "#bgElevated", expanded: true });
 		expect(fab.props.modifiers).toContainEqual({ testID: "spawn-worker" });
 		const icon = fab.findByType("FabIconSlot" as never).findByType("Icon" as never);
-		expect(icon.props).toMatchObject({ source: "drawable:add", tint: "#onAccent", contentDescription: "Spawn worker" });
-		expect(fab.findByType("FabTextSlot" as never).findByType("ComposeText" as never).props).toMatchObject({ children: "New", color: "#onAccent" });
+		expect(icon.props).toMatchObject({ source: "drawable:add", tint: "#textPrimary", contentDescription: "Spawn worker" });
+		expect(fab.findByType("FabTextSlot" as never).findByType("ComposeText" as never).props).toMatchObject({ children: "New", color: "#textPrimary" });
 		act(() => fab.props.onClick());
 		expect(onPress).toHaveBeenCalledOnce();
 	});

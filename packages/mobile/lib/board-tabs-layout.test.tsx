@@ -47,8 +47,15 @@ function render() {
 	return renderer!;
 }
 /** The three board tabs, without the New task button set apart beside them. */
+const ANDROID_TABS = ["(pull-requests)", "(preferences)"];
+
+/** The board's own tabs, Workers and Projects, on both platforms. */
 function triggers() {
-	return renderer!.root.findAllByType("Trigger" as never).filter((trigger) => trigger.props.name !== "compose");
+	return renderer!.root.findAllByType("Trigger" as never).filter((trigger) => trigger.props.name !== "compose" && !ANDROID_TABS.includes(trigger.props.name));
+}
+
+function trigger(name: string) {
+	return renderer!.root.findAllByType("Trigger" as never).find((node) => node.props.name === name)!;
 }
 
 beforeEach(() => {
@@ -71,6 +78,18 @@ describe("board tabs", () => {
 		// Outlined at rest, filled once selected.
 		expect(workers).toMatchObject({ sf: { default: "square.stack.3d.up", selected: "square.stack.3d.up.fill" }, md: "stacks" });
 		expect(projects).toMatchObject({ sf: { default: "folder", selected: "folder.fill" }, md: "folder" });
+	});
+
+	// Material's bar takes up to five destinations, so Android has Pull
+	// Requests and Settings there rather than in the top app bar; iOS opens both
+	// as sheets from the board's bar and never shows these.
+	it.each([["android", false], ["ios", true]])("shows Pull Requests and Settings as tabs on %s: hidden %s", (os, hidden) => {
+		fixtures.platform.OS = os;
+		render();
+		expect(ANDROID_TABS.map((name) => trigger(name).props.hidden)).toEqual([hidden, hidden]);
+		expect(ANDROID_TABS.map((name) => trigger(name).findByType("TriggerLabel" as never).props.children)).toEqual(["Pull Requests", "Settings"]);
+		expect(trigger("(preferences)").findByType("TriggerIcon" as never).props).toMatchObject({ md: "settings" });
+		expect(trigger("(pull-requests)").findByType("TriggerIcon" as never).props.src).toBeDefined();
 	});
 
 	// Tapping the current tab again scrolls its list to the top, natively.
@@ -97,7 +116,8 @@ describe("board tabs", () => {
 			iconColor: { default: "#textSecondary", selected: "#accent" },
 			labelStyle: { default: { color: "#textSecondary" }, selected: { color: "#accent" } },
 			indicatorColor: "#accentTint",
-			backgroundColor: os === "android" ? "#bgSurface" : undefined,
+			labelVisibilityMode: "labeled",
+			backgroundColor: os === "android" ? "transparent" : undefined,
 		});
 	});
 

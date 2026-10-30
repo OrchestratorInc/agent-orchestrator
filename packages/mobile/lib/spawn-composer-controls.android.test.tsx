@@ -215,7 +215,7 @@ describe("Android spawn model", () => {
 		const root = await render(baseProps());
 		const capsule = trigger(root, "spawn-harness");
 		expect(String(capsule.type)).toBe("Button");
-		expect(capsule.props.colors).toEqual({ containerColor: "#bgSubtle", contentColor: "#textPrimary" });
+		expect(capsule.props.colors).toEqual({ containerColor: "#bgElevated", contentColor: "#textPrimary" });
 		expect(modifier(capsule, "height")?.args).toEqual([COMPOSER_DISC]);
 		expect(text(capsule)).toBe("Codex");
 		expect(capsule.findAllByType("Icon" as never)[0].props).toMatchObject({ source: "logo:codex", tint: null });

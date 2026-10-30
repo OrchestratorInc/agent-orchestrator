@@ -18,6 +18,7 @@ vi.mock("expo-font", () => ({ isLoaded: (family: string) => fixtures.loadedFonts
 // The real module requires the .ttf, which node cannot load.
 vi.mock("expo-symbols/androidWeights/regular", () => ({ default: { name: "MaterialSymbols_400Regular", font: 1 } }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => ({ textSecondary: "secondary", red: "red" }) }));
+vi.mock("react-native-svg", () => ({ default: "Svg", Path: "Path", Rect: "Rect" }));
 
 import { AppSymbol as AndroidSymbol } from "./AppSymbol.android";
 import { AppSymbol as IOSSymbol } from "./AppSymbol";
@@ -140,6 +141,19 @@ describe("AppSymbol on Android", () => {
 
 		expect(symbolView(renderer).props.name).toEqual({ ios: "tray.2", android: "move_to_inbox" });
 		expect(renderer.root.findAllByType("Text" as never)).toHaveLength(0);
+	});
+
+	// Material Symbols is loaded at one weight, so the composer's round-button
+	// glyphs are drawn in SF's shapes instead: a bold rounded arrow, a filled
+	// microphone and a filled square, never the font's outlines.
+	it("draws the composer's send, dictate and stop glyphs as iOS does, at the weight asked for", () => {
+		const send = render(<AndroidSymbol name="send" size={15} weight="bold" color="ink" />);
+		expect(send.root.findAllByType("Text" as never)).toHaveLength(0);
+		expect(send.root.findByType("Path" as never).props).toMatchObject({ stroke: "ink", strokeWidth: 2.8, strokeLinecap: "round" });
+		const mic = render(<AndroidSymbol name={{ ios: "mic.fill", android: "mic" }} size={15} color="ink" />);
+		expect(mic.root.findByType("Rect" as never).props).toMatchObject({ fill: "ink" });
+		const stop = render(<AndroidSymbol name="stop" size={15} color="ink" />);
+		expect(stop.root.findByType("Rect" as never).props).toMatchObject({ fill: "ink", rx: 3 });
 	});
 });
 

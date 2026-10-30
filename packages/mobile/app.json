@@ -69,6 +69,7 @@
 			"expo-router",
 			"./plugins/withCircleDashedCheck",
 			"./plugins/withHarnessMenuIcons",
+			"./plugins/withAndroidDialogTheme",
 			[
 				"expo-navigation-bar",
 				{

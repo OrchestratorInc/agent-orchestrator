@@ -2,7 +2,10 @@ import { useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, View } from "react-native";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
+import { boardTitle } from "../../../lib/board-tabs";
 import { hostedProjectKey, hostedProjectSections } from "../../../lib/hostedRows";
+import { useLargeTitle } from "../../../lib/largeTitle";
+import { useTabBarFrost } from "../../../lib/frost";
 import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
 import { ProjectCard } from "../../../lib/project-card";
 import { refreshControlColors } from "../../../lib/refreshControlColors";
@@ -33,6 +36,8 @@ export default function ProjectsScreen() {
 		notificationsUnread,
 		refreshAll,
 	} = useApp();
+	const largeTitle = useLargeTitle(boardTitle("(projects)"));
+	const tabBar = useTabBarFrost();
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
 	const fleetError = hostStates.length > 1
 		? hostStates.every((host) => host.connection === "closed" && !host.loading)
@@ -72,9 +77,12 @@ export default function ProjectsScreen() {
 		return (
 			<View style={styles.screen}>
 				<TabPageScroll>
+					{largeTitle.header}
 					<UnpairedState />
 				</TabPageScroll>
 				<BoardHeaderItems unread={0} notifications={false} />
+				{largeTitle.edge}
+				{tabBar.frost}
 			</View>
 		);
 	}
@@ -87,6 +95,7 @@ export default function ProjectsScreen() {
 		<View style={styles.screen}>
 			{fleetLoading && allProjects.length === 0 ? (
 				<TabPageScroll>
+					{largeTitle.header}
 					{staleBanner}
 					<View style={styles.center}>
 						<Spinner color={t.accent} accessibilityLabel="Loading projects" />
@@ -97,9 +106,12 @@ export default function ProjectsScreen() {
 					data={rows}
 					keyExtractor={(row) => hostedProjectKey(row.project)}
 					contentInsetAdjustmentBehavior="automatic"
-					contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl }}
-					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
-					ListHeaderComponent={staleBanner}
+					// Android's tab bar is clear and the list runs on under it.
+					contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl + tabBar.inset }}
+					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} progressViewOffset={largeTitle.topInset} {...refreshControlColors(t)} />}
+					ListHeaderComponent={<>{largeTitle.header}{staleBanner}</>}
+					onScroll={largeTitle.onScroll}
+					scrollEventThrottle={largeTitle.onScroll ? 16 : undefined}
 					renderItem={({ item }) => (
 						<ProjectCard
 							row={item}
@@ -124,6 +136,8 @@ export default function ProjectsScreen() {
 				/>
 			)}
 			<BoardHeaderItems unread={unreadCount} />
+			{largeTitle.edge}
+			{tabBar.frost}
 		</View>
 	);
 }

@@ -1,6 +1,10 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
+import { useFabExpanded } from "../../../lib/useFabExpanded";
+import { useLargeTitle } from "../../../lib/largeTitle";
+import { useTabBarFrost } from "../../../lib/frost";
+import { boardTitle } from "../../../lib/board-tabs";
 import { AddFab, addFabClearance } from "../../../lib/AddFab";
 import { StaleBanner } from "../../../lib/StaleBanner";
 import { useApp } from "../../../lib/store";
@@ -41,6 +45,9 @@ export default function FleetScreen() {
 
 	const router = useRouter();
 	const tabBarInset = useTabBarInset();
+	const fab = useFabExpanded();
+	const largeTitle = useLargeTitle(boardTitle("(workers)"), fab.onScroll);
+	const tabBar = useTabBarFrost();
 	const headerOverlap = useHeaderOverlap();
 	const { config, configured, configResolved, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, notificationsUnread, phoneNetwork } = useApp();
 	const fleetLoading = hostStates.length ? hostStates.some((host) => host.loading) : loading;
@@ -162,8 +169,9 @@ export default function FleetScreen() {
 	// is laid out under it, so the list has to be the page's first view. Above the
 	// rows rather than inside ListEmptyComponent, because the case the banner
 	// exists for is a populated board whose poll has died.
-	const listHeader = unpaired ? null : (
+	const listHeader = unpaired ? largeTitle.header : (
 		<>
+			{largeTitle.header}
 			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
 			{showsEnvironmentFilter(environments) ? (
 				<WorkerEnvironmentFilter
@@ -182,16 +190,18 @@ export default function FleetScreen() {
 			    page shows, and a placeholder swapped out for the list left the title
 			    tracking a view that was gone, so it stayed expanded over the rows. */}
 			<WorkerBoardList
+				onScroll={largeTitle.onScroll}
 				key={boardIdentityKey}
 				sessions={projectSessions}
 				archiveSources={archiveSources}
 				identityKey={boardIdentityKey}
 				listRef={listRef}
-				// iOS insets the list by the tab bar already; Android pads it clear
-				// of the floating New button too.
-				contentBottomInset={addFabClearance + space.xxl}
+				// iOS insets the list by the tab bar already. Android pads it clear
+				// of the floating New button, and of the clear tab bar it runs
+				// on under.
+				contentBottomInset={addFabClearance + space.xxl + tabBar.inset}
 				contentInsetAdjustmentBehavior="automatic"
-				overlayTopInset={headerOverlap}
+				overlayTopInset={headerOverlap + largeTitle.topInset}
 				refreshing={refreshing}
 				onRefresh={onRefresh}
 				ListHeaderComponent={listHeader}
@@ -248,13 +258,16 @@ export default function FleetScreen() {
 				}
 			/>
 
+			{/* Over the rows and under what floats: the bars' frost. */}
+			{largeTitle.edge}
+			{tabBar.frost}
 			{unpaired ? (
 				// Settings is where pairing starts; there is nothing yet to filter
 				// or spawn.
 				<BoardHeaderItems unread={0} notifications={false} />
 			) : (
 				<>
-					<AddFab label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset} testID="spawn-worker" />
+					<AddFab expanded={fab.expanded} label="Spawn worker" onPress={spawnWorker} bottomInset={tabBarInset + tabBar.inset} testID="spawn-worker" />
 					{/* New task is the tab bar's own round button on iOS and the
 					    floating New button on Android; the header keeps settings and
 					    alerts. */}

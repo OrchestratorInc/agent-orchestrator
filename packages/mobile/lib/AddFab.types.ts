@@ -8,5 +8,7 @@ export type AddFabProps = {
 	 * already ends at the navigation bar.
 	 */
 	bottomInset: number;
+	/** False folds the button to its icon, while the list under it scrolls down. See useFabExpanded. */
+	expanded?: boolean;
 	testID?: string;
 };

@@ -83,6 +83,7 @@ export const materialDrawableNames = [
 	"tab",
 	"terminal",
 	"tune",
+	"unfold_more",
 	"verified_user",
 	"vertical_align_top",
 	"visibility",

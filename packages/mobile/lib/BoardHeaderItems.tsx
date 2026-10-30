@@ -40,7 +40,8 @@ export type BoardHeaderItemsProps = {
 
 /**
  * The board tabs' header items: Settings, Pull Requests, and Notifications
- * with its unread count, plus a tab's own filter and create action. Native bar-button items on
+ * with its unread count, plus a tab's own filter and create action. Android
+ * leaves out Settings and Pull Requests, which are tabs there. Native bar-button items on
  * iOS, Compose icon buttons on Android.
  *
  * Pull requests and notifications come from a paired machine, so a board with
@@ -58,8 +59,9 @@ export function BoardHeaderItems({ unread, notifications = true, filter = null, 
 	const trailing = useMemo(() => (
 		<Stack.Toolbar placement="right">
 			{!ios ? filter : null}
-			<Stack.Toolbar.Button icon={SETTINGS_ICON} hidesSharedBackground accessibilityLabel="Settings" onPress={() => router.push("/settings")} />
-			{notifications ? (
+			{/* Android has Settings and Pull Requests as tabs. */}
+			{ios ? <Stack.Toolbar.Button icon={SETTINGS_ICON} hidesSharedBackground accessibilityLabel="Settings" onPress={() => router.push("/settings")} /> : null}
+			{ios && notifications ? (
 				<Stack.Toolbar.Button icon={PULL_REQUESTS_ICON} iconRenderingMode="template" hidesSharedBackground accessibilityLabel="Pull Requests" onPress={() => router.push("/prs")} />
 			) : null}
 			{notifications ? (
