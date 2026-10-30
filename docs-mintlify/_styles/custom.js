@@ -824,26 +824,30 @@ function aoCurLangName() {
         return b.getAttribute("aria-expanded") === "false" || (li && !li.querySelector("ul"));
       });
       if (need.length) {
-        var origPath = location.pathname;
-        need.forEach(function (b) { if (b.getAttribute("aria-expanded") === "false") b.click(); });
-        /* expanding a root-linked group (e.g. Configuration) also SPA-navigates
-           to its root page; go back and keep the expanded state */
-        var backTries = 0;
-        setTimeout(function settle() {
-          if (location.pathname !== origPath && backTries++ < 10) {
-            history.back();
-            setTimeout(settle, 600);
-            return;
-          }
-          /* quiet beat: only build once the path has stayed put */
-          setTimeout(function () {
-            if (location.pathname !== origPath) { settle(); return; }
-            openAoDrawer(opener);
-            setTimeout(function () {
-              if (location.pathname !== origPath) history.back();
-            }, 600);
-          }, 400);
-        }, 600);
+        var fetches = [];
+        need.forEach(function (b) {
+          if (b.getAttribute("aria-expanded") !== "false") return;
+          var href = b.getAttribute("data-nav-href");
+          if (!href) { b.click(); return; }
+          /* root-linked groups navigate when clicked; graft their children
+             from the root page's rendered sidebar instead (no navigation) */
+          fetches.push(fetch(href).then(function (r) { return r.text(); }).then(function (html) {
+            try {
+              var doc = new DOMParser().parseFromString(html, "text/html");
+              var li = b.closest("li");
+              var esc = window.CSS && CSS.escape ? CSS.escape(li.id) : li.id;
+              var srcLi = li && li.id ? doc.querySelector('#sidebar-content li[id="' + esc + '"]') : null;
+              var ul = srcLi && srcLi.querySelector("ul");
+              if (ul && li && !li.querySelector("ul")) {
+                li.appendChild(document.importNode(ul, true));
+                b.setAttribute("aria-expanded", "true");
+              }
+            } catch (e) {}
+          }).catch(function () {}));
+        });
+        Promise.all(fetches).then(function () {
+          setTimeout(function () { openAoDrawer(opener); }, 450);
+        });
         return;
       }
     }
