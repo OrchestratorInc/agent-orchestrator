@@ -119,6 +119,15 @@ func (s *Service) readManagedRecord(target Target) (managedRecord, bool) {
 	return record, true
 }
 
+// managedRecordMatchesPlan keeps the Bun entry usable after OMP migrates to
+// AO's standalone release. This alias applies only to managed OMP on platforms
+// where its isolated standalone installer is supported.
+func (s *Service) managedRecordMatchesPlan(record managedRecord, plan Plan) bool {
+	method := plan.ownershipMethod()
+	return record.Method == method || plan.Target == TargetOMP && method == "bun" &&
+		record.Method == "official-installer" && (s.goos == "darwin" || s.goos == "linux")
+}
+
 // managedCLINames fixes the executable a managed install puts in bin/ for
 // targets whose resolved binary has another name. OpenCode v2 resolves its own
 // opencode-v2 launcher but installs bin/opencode, and the Copilot resolver

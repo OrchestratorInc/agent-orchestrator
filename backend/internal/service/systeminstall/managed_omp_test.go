@@ -24,13 +24,14 @@ func TestManagedOMPUsesStandaloneInsteadOfTheSystemBun(t *testing.T) {
 		for _, tc := range []struct {
 			name         string
 			operation    AgentOperation
+			maintain     bool
 			downloadErr  bool
 			startupErr   bool
 			unavailable  bool
 			missingShell bool
 			wantError    string
 		}{
-			{name: "success"},
+			{name: "migrate then maintain", maintain: true},
 			{name: "reinstall", operation: AgentOperationReinstall},
 			{name: "download fails", downloadErr: true, wantError: "download failed"},
 			{name: "startup fails", startupErr: true, wantError: "invalid standalone binary"},
@@ -53,6 +54,7 @@ func TestManagedOMPUsesStandaloneInsteadOfTheSystemBun(t *testing.T) {
 				t.Cleanup(s.stop)
 				s.managedRoot = t.TempDir()
 				targetDir := s.managedTargetDir(TargetOMP)
+				release := "v2"
 				oldBinary := filepath.Join(targetDir, "versions", "v1", "bin", "omp")
 				if err := os.MkdirAll(filepath.Dir(oldBinary), 0o755); err != nil {
 					t.Fatal(err)
@@ -83,7 +85,7 @@ func TestManagedOMPUsesStandaloneInsteadOfTheSystemBun(t *testing.T) {
 							return ports.InstallScriptResult{}, errors.New("download failed")
 						}
 						bin := envValue(command.Env, "PI_INSTALL_DIR")
-						if bin != filepath.Join(targetDir, "versions", "v2", "bin") || envValue(command.Env, "PATH") != managedInstallerPath {
+						if bin != filepath.Join(targetDir, "versions", release, "bin") || envValue(command.Env, "PATH") != managedInstallerPath {
 							t.Fatalf("installer escaped the isolated candidate: %+v", command)
 						}
 						if err := os.MkdirAll(bin, 0o755); err != nil {
@@ -188,6 +190,52 @@ func TestManagedOMPUsesStandaloneInsteadOfTheSystemBun(t *testing.T) {
 				}
 				if got := readFile(oldBinary); got != "18.13.2\n" {
 					t.Fatalf("previous release was modified: %q", got)
+				}
+				if tc.maintain {
+					s.sessions = nil
+					for _, followup := range []struct {
+						operation        AgentOperation
+						version, release string
+					}{
+						{AgentOperationReinstall, "18.14.0", "v3"},
+						{AgentOperationUpdate, "18.14.1", "v4"},
+					} {
+						previous, ok := s.readManagedRecord(TargetOMP)
+						if !ok || previous.Method != "official-installer" {
+							t.Fatalf("migration record missing before %s: %+v", followup.operation, previous)
+						}
+						release, wantVersion = followup.release, followup.version
+						if followup.operation == AgentOperationUpdate {
+							s.mu.Lock()
+							s.updateAdvisories = map[Target]UpdateAdvisory{TargetOMP: {
+								AgentID: "omp", Status: UpdateStatusBehindLatest, LatestVersion: "18.14.1",
+								MaintenanceMethod: "bun", CheckedAt: time.Now(),
+							}}
+							s.mu.Unlock()
+						}
+						job, err = s.StartAgentOperation(context.Background(), TargetOMP, "bun", followup.operation, "")
+						if err != nil {
+							t.Fatalf("%s after migration: %v", followup.operation, err)
+						}
+						if job.Method != "official-installer" || !strings.Contains(job.Command, "<downloaded from https://omp.sh/install> --binary") {
+							t.Fatalf("%s escaped the managed standalone installer: %+v", followup.operation, job)
+						}
+						if followup.operation == AgentOperationReinstall && !strings.HasSuffix(job.Command, "--binary --ref v18.14.0") {
+							t.Fatalf("reinstall did not pin the migrated record's version: %+v", job)
+						}
+						s.workers.Wait()
+						job, err = s.Status(context.Background(), TargetOMP)
+						if err != nil || job.Status != StatusSucceeded {
+							t.Fatalf("%s after migration = %+v (%v)", followup.operation, job, err)
+						}
+						if record, ok := s.readManagedRecord(TargetOMP); !ok || record.Method != "official-installer" || record.Dir != release || record.Version != wantVersion {
+							t.Fatalf("%s did not maintain the migrated copy: %+v", followup.operation, record)
+						}
+						assertResolvesInto(t, launcher, filepath.Join(targetDir, "versions", release))
+						if got := readFile(filepath.Join(targetDir, "versions", previous.Dir, previous.BinRel)); got != previous.Version+"\n" {
+							t.Fatalf("%s modified the previous managed release: %q", followup.operation, got)
+						}
+					}
 				}
 			})
 		}

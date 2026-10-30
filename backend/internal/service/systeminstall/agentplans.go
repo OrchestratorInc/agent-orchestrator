@@ -372,7 +372,7 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 	installScript := plan.Script
 	plan.Script = nil
 	if operation == AgentOperationReinstall {
-		if record, ok := s.readManagedRecord(plan.Target); ok && record.Method == plan.Method {
+		if record, ok := s.readManagedRecord(plan.Target); ok && s.managedRecordMatchesPlan(record, plan) {
 			managed := s.planManagedOMP(plan, record.Version)
 			if managed.Unsupported {
 				return managed
