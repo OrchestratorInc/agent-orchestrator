@@ -573,6 +573,14 @@ function aoCurLangName() {
     btn.appendChild(s);
   }
 
+  function hideBuiltinLocaleSelect() {
+    var t = document.getElementById("localization-select-trigger");
+    if (t) {
+      var wrap = t.closest("div");
+      if (wrap && wrap.style.display !== "none") wrap.style.display = "none";
+    }
+  }
+
   function buildMobileNavToggle() {
     var old = document.getElementById("ao-nav-toggle");
     if (old) old.remove();
@@ -1255,7 +1263,7 @@ function aoCurLangName() {
       document.title = document.title.slice(0, -" - Orchestrator".length) + " | Orchestrator.inc Docs";
     }
   }
-  function initAll() { init(); fixTitle(); }
+  function initAll() { init(); fixTitle(); try { hideBuiltinLocaleSelect(); } catch (e) {} }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initAll);
   } else { initAll(); }
@@ -1281,6 +1289,7 @@ function aoCurLangName() {
         needPh = si && si.placeholder !== "Search";
       }
       try { fixSearchTrigger(); } catch (e) {}
+      try { hideBuiltinLocaleSelect(); } catch (e) {}
       try { fixBandArticle(); } catch (e) {}
       try { fixChromeParity(); } catch (e) {}
       try { fixTitle(); } catch (e) {}
