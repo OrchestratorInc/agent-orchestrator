@@ -210,10 +210,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"kind":                   {},
 		"since_first_project_ms": {},
 	},
-	"ao.onboarding.second_session_spawned": {
-		"harness": {},
-		"kind":    {},
-	},
 	"ao.onboarding.app_opened":      {},
 	"ao.onboarding.cli_detected":    {},
 	"ao.onboarding.next_day_return": {},

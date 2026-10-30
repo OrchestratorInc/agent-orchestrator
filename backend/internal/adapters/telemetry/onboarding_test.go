@@ -46,18 +46,3 @@ func TestCLIOnboardingMilestoneIsDurableAndHonorsOptOut(t *testing.T) {
 		t.Fatal("opted out CLI command generated an onboarding milestone")
 	}
 }
-
-func TestSecondSessionMilestoneIsDurable(t *testing.T) {
-	dir := t.TempDir()
-	identity, err := NewIdentity(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := &syncRecordingSink{}
-	event := ports.TelemetryEvent{Name: "ao.onboarding.second_session_spawned"}
-	NewOnboardingSink(rec, identity).Emit(context.Background(), event)
-	NewOnboardingSink(rec, identity).Emit(context.Background(), event)
-	if got := len(rec.snapshot()); got != 1 {
-		t.Fatalf("milestones = %d, want one after restart", got)
-	}
-}

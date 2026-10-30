@@ -151,10 +151,10 @@ describe("telemetry sanitizers", () => {
 		expect(isDeniedEvent("ao.app.active", ["", "  ", "*"])).toBe(false);
 	});
 
-	it("keeps setup signals but drops inventory details", async () => {
+	it("keeps setup signals and bounded inventory details", async () => {
 		expect(await sanitizeRendererProperties("ao.setup.agent_missing", { reason: "none_installed", path: "/private/bin" })).toEqual({ reason: "none_installed" });
 		expect(await sanitizeRendererProperties("ao.setup.agent_install_clicked", { agent: "codex", method: "/private/bin" })).toEqual({ agent: "codex" });
-		expect(await sanitizeRendererProperties("ao.renderer.agents_available", { installed_count: 2 })).toEqual({});
+		expect(await sanitizeRendererProperties("ao.renderer.agents_available", { installed_count: 2, supported_count: 4, path: "/private/bin" })).toEqual({ installed_count: 2, supported_count: 4 });
 	});
 
 	it("allowlists only enum-like fields on update events", async () => {
@@ -600,33 +600,36 @@ describe("telemetry sanitizers", () => {
 		}
 	});
 
-	it("keeps bounded spawn reason and provider fields", async () => {
+	it("keeps bounded spawn source and typed failure fields", async () => {
 		const props = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_succeeded", {
 			project_id: "demo-project",
 			source: "board",
 			provider_kind: "local",
+			spawn_reason: "board",
 		});
-		expect(Object.keys(props).sort()).toEqual(["project_id_hash", "provider_kind", "source", "spawn_reason"]);
+		expect(Object.keys(props).sort()).toEqual(["project_id_hash", "source"]);
 		expect(props.source).toBe("board");
-		expect(props.spawn_reason).toBe("board");
 
 		const badSource = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_failed", {
 			project_id: "demo-project",
 			source: "/Users/alice/private",
 		});
 		expect(badSource).not.toHaveProperty("source");
-		expect(badSource).not.toHaveProperty("spawn_reason");
 		const failure = await sanitizeRendererProperties("ao.renderer.orchestrator_spawn_failed", {
 			source: "settings", provider_kind: "remote", error_code: "PROJECT_NOT_FOUND", http_status: 404,
 			request_id: "private", message: "private", project_id: "demo-project",
 		});
-		expect(failure).toMatchObject({ spawn_reason: "settings", provider_kind: "remote", error_code: "PROJECT_NOT_FOUND", http_status: 404 });
+		expect(failure).toMatchObject({ source: "settings", error_code: "PROJECT_NOT_FOUND", http_status: 404 });
+		expect(failure).not.toHaveProperty("provider_kind");
+		expect(failure).not.toHaveProperty("spawn_reason");
 		expect(failure).not.toHaveProperty("request_id");
 		expect(failure).not.toHaveProperty("message");
 		const cloud = await sanitizeRendererProperties("ao.renderer.cloud_orchestrator_spawn_succeeded", {
 			project_id: "cloud-project", provider_kind: "cloud", spawn_reason: "sidebar", sandbox_id: "private",
 		});
-		expect(cloud).toMatchObject({ provider_kind: "cloud", spawn_reason: "sidebar" });
+		expect(cloud).toHaveProperty("project_id_hash");
+		expect(cloud).not.toHaveProperty("provider_kind");
+		expect(cloud).not.toHaveProperty("spawn_reason");
 		expect(cloud).not.toHaveProperty("sandbox_id");
 	});
 
@@ -636,7 +639,7 @@ describe("telemetry sanitizers", () => {
 				project_id: "demo-project",
 				source,
 			});
-			expect(Object.keys(props).sort()).toEqual(["project_id_hash", "source", "spawn_reason"]);
+			expect(Object.keys(props).sort()).toEqual(["project_id_hash", "source"]);
 			expect(props.source).toBe(source);
 		}
 	});

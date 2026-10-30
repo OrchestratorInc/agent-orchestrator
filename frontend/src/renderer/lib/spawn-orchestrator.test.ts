@@ -100,7 +100,6 @@ describe("spawnOrchestrator", () => {
 		expect(captureMock).toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_succeeded", {
 			project_id: "proj",
 			source: "sidebar",
-			provider_kind: "local",
 		});
 	});
 
@@ -124,7 +123,6 @@ describe("spawnOrchestrator", () => {
 		expect(captureMock).toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_failed", {
 			project_id: "proj",
 			source: "topbar",
-			provider_kind: "local",
 			error_code: undefined,
 			http_status: 500,
 		});
