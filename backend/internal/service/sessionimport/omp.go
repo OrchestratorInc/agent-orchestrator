@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -50,6 +51,7 @@ func ompNativeIDFromPath(path string) string {
 type ompRecord struct {
 	Type      string    `json:"type"`
 	ID        string    `json:"id"`
+	ParentID  string    `json:"parentId"`
 	CWD       string    `json:"cwd"`
 	Title     string    `json:"title"`
 	Timestamp time.Time `json:"timestamp"`
@@ -60,6 +62,17 @@ type ompRecord struct {
 		Role    string      `json:"role"`
 		Content contentText `json:"content"`
 	} `json:"message"`
+}
+
+// ompNode is one entry in a session's parent tree. Every id-bearing entry is a
+// node so a message's parent chain stays connected through the model_change and
+// custom entries that also carry ids; only message nodes are display messages.
+type ompNode struct {
+	id, parent string
+	role, text string
+	at         time.Time
+	message    bool
+	omitted    bool
 }
 
 // readOMPTranscript reads one OMP conversation file into the shared transcript
@@ -78,23 +91,12 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 	t.nativeID = ompNativeIDFromPath(paths[0])
 
 	var (
-		items    []tagged
-		prompted bool
-		sawMeta  bool
-		now      = time.Now()
+		nodes   []ompNode
+		index   = map[string]int{}
+		leafID  string
+		sawMeta bool
+		now     = time.Now()
 	)
-	add := func(role, text string, at time.Time) {
-		if strings.Contains(text, omittedText) {
-			t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
-		}
-		if strings.TrimSpace(text) == "" {
-			return
-		}
-		if role == "user" {
-			prompted = true
-		}
-		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
-	}
 	handle := func(line []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -116,17 +118,29 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 				return errNativeIdentityMismatch
 			}
 			t.cwd = r.CWD
+			return nil // The header id is the session uuid, not a node in the parent tree.
 		case "title", "title_change":
 			if title := strings.TrimSpace(r.Title); title != "" {
 				t.title = title
 			}
-		case "message":
-			switch r.Message.Role {
-			case "user", "assistant":
-				t.shortened = t.shortened || r.Omitted // A dropped oversize record may have held visible text.
-				add(r.Message.Role, string(r.Message.Content), r.Timestamp)
-			}
+			return nil
 		}
+		// Every id-bearing entry is a node in the parent tree. Non-message entries
+		// (model_change, custom, …) carry no text but keep the chain connected.
+		if r.ID == "" {
+			return nil
+		}
+		node := ompNode{id: r.ID, parent: r.ParentID, at: r.Timestamp}
+		if r.Type == "message" && (r.Message.Role == "user" || r.Message.Role == "assistant") {
+			node.role, node.text, node.message, node.omitted = r.Message.Role, string(r.Message.Content), true, r.Omitted
+		}
+		if i, ok := index[r.ID]; ok {
+			nodes[i] = node // OMP rewrites a record in place; keep its first position.
+		} else {
+			index[r.ID] = len(nodes)
+			nodes = append(nodes, node)
+		}
+		leafID = r.ID
 		return nil
 	}
 	for _, path := range paths {
@@ -136,6 +150,56 @@ func readOMPTranscript(ctx context.Context, root string, paths ...string) (trans
 		t.paths = append(t.paths, path)
 	}
 	t.path = t.paths[len(t.paths)-1]
+
+	// Follow the active branch from the last entry so a rewound or branched prompt
+	// is not shown as history. A dangling parent falls back to full file order.
+	chain := nodes
+	if leafID != "" {
+		var walked []ompNode
+		visited := map[string]bool{}
+		dangling := false
+		for id := leafID; id != ""; {
+			i, ok := index[id]
+			if !ok {
+				dangling = true
+				break
+			}
+			if visited[id] {
+				break // A cycle cannot be a valid chain; show file order instead.
+			}
+			visited[id] = true
+			walked = append(walked, nodes[i])
+			id = nodes[i].parent
+		}
+		if !dangling {
+			slices.Reverse(walked)
+			chain = walked
+		}
+	}
+
+	var (
+		items    []tagged
+		prompted bool
+	)
+	add := func(role, text string, at time.Time) {
+		if strings.Contains(text, omittedText) {
+			t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
+		}
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		if role == "user" {
+			prompted = true
+		}
+		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
+	}
+	for _, node := range chain {
+		if !node.message {
+			continue
+		}
+		t.shortened = t.shortened || node.omitted // A dropped oversize record may have held visible text.
+		add(node.role, node.text, node.at)
+	}
 
 	n := len(items)
 	items = trimVisible(items)

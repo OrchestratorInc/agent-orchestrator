@@ -17,16 +17,18 @@ func ompFile(root string) string {
 }
 
 func TestOMPTranscriptKeepsOnlyUserAndAssistantText(t *testing.T) {
+	// A linear chain (b1 -> m1 -> m2 -> m3 -> m4 -> c2); non-message entries
+	// (model_change, custom) keep the parent chain connected but show nothing.
 	body := `{"type":"session","version":3,"id":"` + ompSession + `","timestamp":"2026-10-27T10:41:41.840Z","cwd":"/work/repo"}
 {"type":"title","v":1,"title":"","updatedAt":"2026-10-27T10:41:41.840Z"}
 {"type":"model_change","id":"b1","parentId":null,"timestamp":"2026-10-27T10:41:41.913Z","model":"zai/glm-5"}
-{"type":"message","id":"m1","parentId":null,"timestamp":"2026-10-27T10:41:42.000Z","message":{"role":"user","content":[{"type":"text","text":"start the refactor"}]}}
+{"type":"message","id":"m1","parentId":"b1","timestamp":"2026-10-27T10:41:42.000Z","message":{"role":"user","content":[{"type":"text","text":"start the refactor"}]}}
 {"type":"message","id":"m2","parentId":"m1","timestamp":"2026-10-27T10:41:43.000Z","message":{"role":"assistant","content":[{"type":"thinking","text":"hidden reasoning"},{"type":"toolCall","text":"run tests"},{"type":"text","text":"Working on it."}]}}
 {"type":"custom","customType":"tool_execution_start","id":"c1","parentId":"m2","timestamp":"2026-10-27T10:41:44.000Z","data":{}}
 {"type":"message","id":"m3","parentId":"m2","timestamp":"2026-10-27T10:41:45.000Z","message":{"role":"toolResult","content":[{"type":"text","text":"tool output noise"}]}}
 {"type":"title_change","title":"Refactor the parser"}
 {"type":"message","id":"m4","parentId":"m3","timestamp":"2026-10-27T10:41:46.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}
-{"type":"custom","customType":"system-prompt-digest","id":"c2","timestamp":"2026-10-27T10:41:47.000Z","data":{}}
+{"type":"custom","customType":"session_exit","id":"c2","parentId":"m4","timestamp":"2026-10-27T10:41:47.000Z","data":{}}
 `
 	root := t.TempDir()
 	path := writeFile(t, ompFile(root), body)
@@ -49,6 +51,24 @@ func TestOMPTranscriptKeepsOnlyUserAndAssistantText(t *testing.T) {
 	}
 }
 
+// A rewind appends a replacement under an earlier parent, so one parent has two
+// children. Only the branch reachable from the last entry (the leaf) is shown.
+func TestOMPShowsOnlyActiveBranch(t *testing.T) {
+	body := `{"type":"session","version":3,"id":"` + ompSession + `","timestamp":"2026-10-27T10:41:41.840Z","cwd":"/work/repo"}
+{"type":"message","id":"m1","parentId":null,"timestamp":"2026-10-27T10:41:42.000Z","message":{"role":"user","content":[{"type":"text","text":"keep this"}]}}
+{"type":"message","id":"a1","parentId":"m1","timestamp":"2026-10-27T10:41:43.000Z","message":{"role":"assistant","content":[{"type":"text","text":"abandoned answer"}]}}
+{"type":"message","id":"m2","parentId":"m1","timestamp":"2026-10-27T10:41:44.000Z","message":{"role":"user","content":[{"type":"text","text":"redo it"}]}}
+{"type":"message","id":"a2","parentId":"m2","timestamp":"2026-10-27T10:41:45.000Z","message":{"role":"assistant","content":[{"type":"text","text":"active answer"}]}}
+`
+	root := t.TempDir()
+	got, err := readTranscript(context.Background(), domain.HarnessOMP, root, writeFile(t, ompFile(root), body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a1 ("abandoned answer") is a sibling of m2 off the active path and must not show.
+	wantTexts(t, got.messages, "user: keep this", "user: redo it", "assistant: active answer")
+}
+
 func TestOMPTitleFallsBackToFirstPrompt(t *testing.T) {
 	body := `{"type":"session","version":3,"id":"` + ompSession + `","timestamp":"2026-10-27T10:41:41.840Z","cwd":"/work/repo"}
 {"type":"message","id":"m1","parentId":null,"timestamp":"2026-10-27T10:41:42.000Z","message":{"role":"user","content":[{"type":"text","text":"explain the build"}]}}
@@ -68,14 +88,14 @@ func TestOMPRejectsIdentityMismatchAndPromptlessSessions(t *testing.T) {
 	root := t.TempDir()
 	// The session header's id must match the id in the file name.
 	mismatch := `{"type":"session","version":3,"id":"00000000-0000-7000-8000-000000000000","cwd":"/work/repo"}
-{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
+{"type":"message","id":"m1","parentId":null,"message":{"role":"user","content":[{"type":"text","text":"hi"}]}}
 `
 	if _, err := readTranscript(context.Background(), domain.HarnessOMP, root, writeFile(t, ompFile(root), mismatch)); err == nil {
 		t.Fatal("expected native identity mismatch")
 	}
 	// A session with no user prompt is not a conversation to continue.
 	noPrompt := `{"type":"session","version":3,"id":"` + ompSession + `","cwd":"/work/repo"}
-{"type":"message","id":"a1","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}
+{"type":"message","id":"a1","parentId":null,"message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}
 `
 	if _, err := readTranscript(context.Background(), domain.HarnessOMP, root, writeFile(t, ompFile(root), noPrompt)); err == nil {
 		t.Fatal("expected promptless session to be rejected")
