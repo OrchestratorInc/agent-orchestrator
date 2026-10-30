@@ -45,9 +45,9 @@ export function planEdgeFades(offset: number, viewportHeight: number, contentHei
 }
 
 /** The plan in a sentence, for the header's accessibility label. */
-export function planAccessibilityLabel(steps: readonly PlanStep[], title = "Plan"): string {
+export function planAccessibilityLabel(steps: readonly PlanStep[]): string {
 	const done = steps.filter((step) => step.status === "completed").length;
-	if (steps.length > 0 && done === steps.length) return `${title}, all ${steps.length} steps done`;
+	if (steps.length > 0 && done === steps.length) return `Plan, all ${steps.length} steps done`;
 	const current = steps[activePlanStep(steps)];
-	return `${title}, ${done} of ${steps.length} steps done${current ? `. Now: ${current.text}` : ""}`;
+	return `Plan, ${done} of ${steps.length} steps done${current ? `. Now: ${current.text}` : ""}`;
 }

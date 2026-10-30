@@ -88,3 +88,14 @@ describe("message edit list identity", () => {
 	});
 });
 
+
+describe("plan activity row", () => {
+	const planActivity = source.slice(source.indexOf("function PlanActivity"), source.indexOf("function ActivityRun"));
+
+	it("draws the plan as the desktop does, without the summary as a title or a live state", () => {
+		// The summary repeats the count and current step ("Plan 3/7: <step>"), and the
+		// row's status is "running" while any step is unfinished, not while the turn runs.
+		expect(planActivity).toContain("<TurnPlan plan={{ explanation: activity.detail?.explanation, steps }} />");
+		expect(planActivity).not.toMatch(/<TurnPlan[^>]*\b(title|live)=/);
+	});
+});

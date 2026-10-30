@@ -43,12 +43,10 @@ import type { ConversationPlan, PlanStep } from "./types";
 export function TurnPlan({
 	plan,
 	live,
-	title = "Plan",
 }: {
 	plan: ConversationPlan;
 	/** The turn is still running, so the plan can still change. */
 	live?: boolean;
-	title?: string;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -113,7 +111,7 @@ export function TurnPlan({
 			<Pressable
 				accessibilityRole="button"
 				accessibilityState={{ expanded }}
-				accessibilityLabel={planAccessibilityLabel(steps, title)}
+				accessibilityLabel={planAccessibilityLabel(steps)}
 				accessibilityHint={expanded ? "Collapses the plan" : "Expands the plan"}
 				onPress={() => {
 					haptics.tap();
@@ -122,7 +120,7 @@ export function TurnPlan({
 				style={({ pressed }) => [styles.header, pressed && { opacity: press.opacity }]}
 			>
 				<PlanMark done={allDone} />
-				<Text numberOfLines={1} style={styles.title}>{title}</Text>
+				<Text numberOfLines={1} style={styles.title}>Plan</Text>
 				<Text numberOfLines={1} style={styles.current}>{currentStep}</Text>
 				{/* Tabular so the count does not jitter the header as it climbs. */}
 				<Text style={styles.count}>{done}/{steps.length}</Text>

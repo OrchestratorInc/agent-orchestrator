@@ -714,8 +714,12 @@ function PlanActivity({ activity }: { activity: ConversationActivity }) {
 	const [open, setOpen] = useState(activity.status === "running");
 	const steps = activity.detail?.steps ?? [];
 	// Older daemons report the plan as an activity rather than on the turn; with
-	// steps it is the same checklist, so it gets the same panel.
-	if (steps.length) return <TurnPlan plan={{ explanation: activity.detail?.explanation, steps }} live={activity.status === "running"} title={activity.summary || "Plan"} />;
+	// steps it is the same checklist, so it gets the same panel, drawn as the
+	// desktop draws it. Not the summary as a title: for Codex it is "Plan 3/7:
+	// <step>", which repeats the header's count and current step. Not `live`
+	// either: the row is "running" while any step is unfinished, not while the
+	// turn runs, so an interrupted turn's plan would stay busy for good.
+	if (steps.length) return <TurnPlan plan={{ explanation: activity.detail?.explanation, steps }} />;
 	return <View style={styles.planCard}><Pressable
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
