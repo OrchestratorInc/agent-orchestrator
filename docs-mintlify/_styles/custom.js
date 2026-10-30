@@ -909,6 +909,16 @@
       c.setAttribute("data-ao-tc", "1");
       c.style.setProperty("font-size", "0.875em", "important");
     });
+    /* Mobile: long inline-code tokens (paths) must wrap; an unbreakable pill
+       widened the layout viewport to 405 on /configuration/remote-access. */
+    if (window.innerWidth < 1024) {
+      var pcodes = document.querySelectorAll("main p code, main li code");
+      Array.prototype.forEach.call(pcodes, function (c) {
+        if (c.getAttribute("data-ao-pc")) return;
+        c.setAttribute("data-ao-pc", "1");
+        c.style.setProperty("overflow-wrap", "anywhere", "important");
+      });
+    }
   }
   /* ---------- /platforms support cards: replicate original PlatformSupport ----------
      Original: flex row, 3 compact cards (66px, radius 12, hairline border),
