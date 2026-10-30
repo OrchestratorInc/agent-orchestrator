@@ -103,5 +103,16 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.quit": "Sair completamente do AO",
 		"zone.merge": "Pronto para merge",
 		"zone.action": "Precisa de você"
+	},
+	"ru": {
+		"tray.untitledSession": "Сессия без названия",
+		"tray.attentionTooltip_one": "{{count}} сессия требует внимания",
+		"tray.attentionTooltip_other": "{{count}} сессии требуют внимания",
+		"tray.empty": "Нет сессий, требующих внимания",
+		"tray.more": "Ещё",
+		"tray.show": "Показать Agent Orchestrator",
+		"tray.quit": "Полностью выйти из AO",
+		"zone.merge": "Готово к слиянию",
+		"zone.action": "Требуется ваше действие"
 	}
 };

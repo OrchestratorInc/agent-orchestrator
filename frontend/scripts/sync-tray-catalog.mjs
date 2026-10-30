@@ -10,7 +10,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const frontend = join(dirname(fileURLToPath(import.meta.url)), "..");
-const LOCALES = ["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR"];
+const LOCALES = ["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR", "ru"];
 const KEYS = [
 	"tray.untitledSession",
 	"tray.attentionTooltip_one",
