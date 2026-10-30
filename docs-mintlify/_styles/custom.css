@@ -1206,11 +1206,16 @@ main table caption {
 main table:not(:has(> caption)) th:first-child { border-top-left-radius: 8px; }
 main table:not(:has(> caption)) th:last-child { border-top-right-radius: 8px; }
 
-/* v36k: caption-as-paragraph (Mintlify strips <caption> from raw HTML tables) */
-html[data-current-path="/installation"] main p:has(+ table) {
+/* v36l: raw-HTML tables - real table display so header/borders span (Mintlify sets display:block) */
+@media (min-width: 1024px) {
+  main table { display: table !important; width: 100% !important; }
+}
+/* v36k: caption-as-paragraph (Mintlify strips <caption> and rewrites p to span[data-as=p]) */
+html[data-current-path="/installation"] main span[data-as="p"]:has(+ table) {
+  display: block;
   text-align: center;
   font-size: 14px;
   color: rgba(255,255,255,0.7);
-  padding: 0 12px;
-  margin-bottom: 2px;
+  padding: 0;
+  margin: 0 0 6px;
 }
