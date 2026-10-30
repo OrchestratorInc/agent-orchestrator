@@ -1074,3 +1074,21 @@ a.ao-hdr-logo img { position: relative; top: 0.5px; }
 }
 /* v35b: hide Mintlify's own toc-indicator dot (we draw the original bar) */
 [data-layout-item="toc-indicator"] { display: none !important; }
+
+/* v36: wide-desktop parity - center layout in the original 1552px container.
+   Original grid: [gutter] 268px sidebar | minmax(0,1016px) main | 268px toc [gutter],
+   gutter = max(0,(100vw-1552)/2); the 900px article centers inside the main column.
+   Gutter is 0 at <=1552px, so narrower desktop and mobile keep current behavior. */
+@media (min-width: 1024px) {
+:root { --ao-gutter: max(0px, calc((100vw - 1552px) / 2)); }
+#body-content { max-width: 1552px !important; margin-left: var(--ao-gutter) !important; margin-right: 0 !important; }
+nav#sidebar-content { width: calc(16.75rem + var(--ao-gutter)) !important; padding-left: var(--ao-gutter) !important; }
+header#navbar { left: var(--ao-gutter) !important; }
+header a:has(img.nav-logo) { left: calc(15px + var(--ao-gutter)) !important; }
+header button[class*="group/search"][class*="w-9"] { left: calc(15px + var(--ao-gutter)) !important; }
+[class*="topbar-right-container"] ul { left: calc(0.9rem + var(--ao-gutter)) !important; }
+.ao-lang-wrap { left: calc(15px + var(--ao-gutter)) !important; }
+#content-area, div[class*="lg:max-w"][class*="mx-auto"] { width: min(900px, 100%) !important; max-width: min(900px, 100%) !important; margin-left: auto !important; margin-right: auto !important; }
+#content-side-layout { width: 268px !important; min-width: 268px !important; flex: none !important; }
+#table-of-contents { margin-left: -42px !important; }
+}
