@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,7 +20,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/daemonmeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
-	agentswitchobs "github.com/aoagents/agent-orchestrator/backend/internal/observe/agentswitch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
@@ -28,15 +28,7 @@ import (
 // ControlDeps carries the daemon-control hooks the router exposes, such as the
 // callback that requests a graceful shutdown.
 type ControlDeps struct {
-	RequestShutdown   func()
-	AgentSwitchPolicy AgentSwitchPolicyControl
-}
-
-// AgentSwitchPolicyControl coordinates the daemon side of desktop telemetry
-// policy changes without exposing the concrete policy coordinator to HTTP.
-type AgentSwitchPolicyControl interface {
-	PrepareDisable(context.Context) (ports.AgentSwitchFailurePolicyAcknowledgement, error)
-	ApplyPolicy(context.Context, string, bool) (ports.AgentSwitchFailurePolicyAcknowledgement, error)
+	RequestShutdown func()
 }
 
 // NewRouterWithControl builds the root router with the standard middleware
@@ -49,7 +41,8 @@ type AgentSwitchPolicyControl interface {
 //	RequestID     → attach a request id for correlation
 //	requestLogger → slog-backed access log + 5xx telemetry, carries the request id
 //	recoverer     → turn a handler panic into 500 instead of crashing the daemon
-//	accountOrigin → exact renderer-origin boundary for Codex account management
+//	rendererOrigin → exact renderer-origin boundary for Codex account management
+//	                 and computer use
 //	cors          → CORS allowlist for the Electron renderer / dev origins
 //
 // The per-request timeout is deliberately not global: it wraps only bounded
@@ -63,10 +56,11 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.Use(middleware.RequestID)
 	r.Use(requestLogger(log, deps.Telemetry))
 	r.Use(recoverTelemetry(log, deps.Telemetry))
-	// Account-management routes do not inherit the general localhost preview
-	// exception. This guard must wrap corsMiddleware so hostile preflights are
-	// rejected before the general CORS layer can answer them.
-	r.Use(codexAccountOriginMiddleware(cfg.AllowedOrigins))
+	// Account-management and computer-use routes retain their exact
+	// renderer-only boundary, even for authenticated LAN callers, and so do
+	// mobile controls. Check before CORS can answer a preflight.
+	r.Use(rendererOriginMiddleware(cfg.AllowedOrigins))
+	r.Use(mobileControlOriginMiddleware(cfg.AllowedOrigins))
 	r.Use(corsMiddleware(cfg.AllowedOrigins))
 	r.Use(previewOriginMiddleware(api.sessions))
 
@@ -77,72 +71,33 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.MethodNotAllowed(methodNotAllowedJSON)
 
 	mountHealth(r, cfg)
-	mountTerminalMux(r, termMgr, log)
+	mountTerminalMux(r, termMgr, log, cfg.AllowedOrigins)
 	mountControl(r, control)
-	mountAgentSwitchPolicyControl(r, control.AgentSwitchPolicy)
 	mountTelemetry(r, cfg, deps.Telemetry)
+	mountUsageFlush(r, deps.UsageFlush)
+	mountTelemetryIdentity(r, deps.TelemetryIdentity)
 	mountMobile(r, deps.Mobile)
+	mountBrowserLive(r, deps.BrowserLive)
+	mountAwake(r, &controllers.AwakeController{Svc: deps.Awake})
 	mountMobileDevices(r, &controllers.MobileDevicesController{Registry: deps.DeviceRoster, Presence: deps.DeviceLive})
 	api.Register(r)
 
 	return r
 }
 
-type applyAgentSwitchPolicyRequest struct {
-	ConsentGeneration string `json:"consentGeneration"`
-	EventsEnabled     bool   `json:"eventsEnabled"`
-}
-
-func mountAgentSwitchPolicyControl(r chi.Router, policy AgentSwitchPolicyControl) {
-	if policy == nil {
+func mountUsageFlush(r chi.Router, flush func(context.Context)) {
+	if flush == nil {
 		return
 	}
-	writeAck := func(w http.ResponseWriter, acknowledgement ports.AgentSwitchFailurePolicyAcknowledgement) {
-		envelope.WriteJSON(w, http.StatusOK, map[string]any{
-			"status": "applied", "consentGeneration": acknowledgement.Authorization.ConsentGeneration,
-			"eventsEnabled": acknowledgement.Authorization.Enabled, "gateDrained": acknowledgement.GateDrained,
-			"purgeConfirmed": acknowledgement.PurgeConfirmed,
-		})
-	}
-	r.Post("/internal/agent-switch-observability/prepare-disable", func(w http.ResponseWriter, req *http.Request) {
+	r.Post("/internal/telemetry/usage-flush", func(w http.ResponseWriter, req *http.Request) {
 		if !localControlRequest(req) {
-			envelope.WriteJSON(w, http.StatusForbidden, map[string]any{"status": "forbidden"})
+			envelope.WriteJSON(w, http.StatusForbidden, map[string]any{
+				"status": "forbidden", "service": daemonmeta.ServiceName,
+			})
 			return
 		}
-		acknowledgement, err := policy.PrepareDisable(req.Context())
-		if err != nil {
-			envelope.WriteJSON(w, http.StatusInternalServerError, map[string]any{"status": "failed"})
-			return
-		}
-		writeAck(w, acknowledgement)
-	})
-	r.Post("/internal/agent-switch-observability/apply-policy", func(w http.ResponseWriter, req *http.Request) {
-		if !localControlRequest(req) {
-			envelope.WriteJSON(w, http.StatusForbidden, map[string]any{"status": "forbidden"})
-			return
-		}
-		decoder := json.NewDecoder(http.MaxBytesReader(w, req.Body, 4096))
-		decoder.DisallowUnknownFields()
-		var body applyAgentSwitchPolicyRequest
-		if err := decoder.Decode(&body); err != nil || body.ConsentGeneration == "" {
-			envelope.WriteJSON(w, http.StatusBadRequest, map[string]any{"status": "invalid_request"})
-			return
-		}
-		acknowledgement, err := policy.ApplyPolicy(req.Context(), body.ConsentGeneration, body.EventsEnabled)
-		if err != nil {
-			status := http.StatusInternalServerError
-			result := "failed"
-			if errors.Is(err, agentswitchobs.ErrPolicyHintMismatch) {
-				status = http.StatusConflict
-				result = "authority_mismatch"
-			} else if errors.Is(err, agentswitchobs.ErrPolicyCleanupPending) {
-				status = http.StatusConflict
-				result = "cleanup_pending"
-			}
-			envelope.WriteJSON(w, status, map[string]any{"status": result})
-			return
-		}
-		writeAck(w, acknowledgement)
+		flush(req.Context())
+		w.WriteHeader(http.StatusNoContent)
 	})
 }
 
@@ -209,7 +164,8 @@ func mountControl(r chi.Router, deps ControlDeps) {
 // on the LAN listener instead, by lanControlBlock, which 404s /api/v1/mobile on
 // the 0.0.0.0 socket the phone reaches — a transport-based check that cannot be
 // spoofed with a forged Host header. On the loopback listener these routes are
-// protected by the same CORS allowlist as every other app route.
+// protected by mobileControlOriginMiddleware: exact renderer origins or native
+// requests without browser metadata, independent of general preview CORS.
 func mountMobile(r chi.Router, c *controllers.MobileController) {
 	if c == nil {
 		return
@@ -224,6 +180,7 @@ func mountMobile(r chi.Router, c *controllers.MobileController) {
 	r.Post("/api/v1/mobile/secure-pairing", c.SecurePairing)
 	r.Post("/api/v1/mobile/keep-awake", c.KeepAwake)
 	r.Post("/api/v1/remote-host/account-token", c.IssueAccountToken)
+	r.Post("/api/v1/mobile/browser-control", c.BrowserRemoteAccess)
 }
 
 // mountMobileDevices registers the desktop-only mobile device roster. These sit
@@ -243,7 +200,6 @@ func mountMobileDevices(r chi.Router, c *controllers.MobileDevicesController) {
 		return
 	}
 	r.Get("/api/v1/mobile/devices", c.List)
-	r.Patch("/api/v1/mobile/devices/{installId}", c.Mute)
 	r.Delete("/api/v1/mobile/devices/{installId}", c.Remove)
 }
 
@@ -376,6 +332,62 @@ func mountTelemetry(r chi.Router, cfg config.Config, sink ports.EventSink) {
 	})
 }
 
+type telemetryIdentityRequest struct {
+	CloudUserID string `json:"cloudUserId"`
+	// Sequence orders hand-offs from one desktop. A request cannot be recalled
+	// once sent (a client timeout leaves it in flight), so the daemon, not the
+	// client, rejects one older than what it already applied. Zero means unordered.
+	Sequence int64 `json:"sequence,omitempty"`
+}
+
+// mountTelemetryIdentity lets the desktop app (Electron main, which sends no
+// Origin) tell the daemon which AO Cloud user is signed in; "" signs out. Only
+// the opaque user ID crosses: the email goes straight to PostHog from the
+// desktop at identify time and never touches the daemon.
+func mountTelemetryIdentity(r chi.Router, ident ports.TelemetryIdentityStore) {
+	if ident == nil {
+		return
+	}
+	var (
+		seqMu   sync.Mutex
+		lastSeq int64
+	)
+	r.Post("/internal/telemetry/identity", func(w http.ResponseWriter, req *http.Request) {
+		if !localControlRequest(req) {
+			envelope.WriteJSON(w, http.StatusForbidden, map[string]any{"status": "forbidden", "service": daemonmeta.ServiceName})
+			return
+		}
+		var body telemetryIdentityRequest
+		dec := json.NewDecoder(http.MaxBytesReader(w, req.Body, 1024))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil {
+			envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_JSON", "request body must be valid JSON", nil)
+			return
+		}
+		// Check-and-apply is one critical section so a late older request cannot
+		// slip in after a newer one has committed. The newest sequence is recorded
+		// before applying: it is the user's latest intent even if saving fails.
+		seqMu.Lock()
+		defer seqMu.Unlock()
+		if body.Sequence > 0 {
+			if body.Sequence < lastSeq {
+				envelope.WriteAPIError(w, req, http.StatusConflict, "conflict", "STALE_TELEMETRY_IDENTITY", "a newer telemetry identity was already applied", map[string]any{"lastSequence": lastSeq})
+				return
+			}
+			lastSeq = body.Sequence
+		}
+		if err := ident.SetCloudUserID(req.Context(), body.CloudUserID); err != nil {
+			if errors.Is(err, ports.ErrInvalidCloudUserID) {
+				envelope.WriteAPIError(w, req, http.StatusBadRequest, "bad_request", "INVALID_CLOUD_USER_ID", "cloudUserId is not a valid user id", nil)
+				return
+			}
+			envelope.WriteAPIError(w, req, http.StatusInternalServerError, "internal_error", "TELEMETRY_IDENTITY_NOT_PERSISTED", "telemetry identity could not be saved", nil)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
 // localControlRequest reports whether a control request is a trusted local
 // caller. The Go CLI client addresses the daemon by its loopback host and
 // never sets an Origin header; a cross-site browser fetch always carries an
@@ -425,4 +437,22 @@ func daemonProbePayload(status string, cfg config.Config) map[string]any {
 		payload["appImagePath"] = appImage
 	}
 	return payload
+}
+
+// Wake policy can alter host power and remains desktop/loopback-only.
+func mountAwake(r chi.Router, c *controllers.AwakeController) {
+	r.Get("/api/v1/awake", c.Status)
+	r.Get("/api/v1/awake/observations", c.Observe)
+	r.Post("/api/v1/awake/sessions", c.Start)
+	r.Post("/api/v1/awake/sessions/{awakeId}/end", c.End)
+	r.Post("/api/v1/awake/sessions/{awakeId}/extend", c.Extend)
+	r.Put("/api/v1/awake/settings", c.Settings)
+	r.Put("/api/v1/awake/rules", c.Rules)
+	r.Post("/api/v1/awake/low-power/authorize", c.AuthorizeLowPower)
+	r.Post("/api/v1/awake/low-power/revoke", c.RevokeLowPower)
+	r.Post("/api/v1/awake/stop", c.Stop)
+	r.Post("/api/v1/awake/resume", c.Resume)
+	r.Post("/api/v1/awake/recover", c.Recover)
+	r.Delete("/api/v1/awake/history", c.ClearHistory)
+	r.Post("/api/v1/awake/downloads", c.Downloads)
 }

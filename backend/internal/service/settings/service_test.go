@@ -8,6 +8,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 type hibernationSettingsStore struct{ err error }
@@ -19,6 +20,12 @@ func (*hibernationSettingsStore) SetDefaultSessionMode(context.Context, domain.S
 	return nil
 }
 func (*hibernationSettingsStore) SetCloudOffering(context.Context, bool, time.Time) error { return nil }
+func (*hibernationSettingsStore) SetVersionRefresh(context.Context, bool, time.Time) error {
+	return nil
+}
+func (*hibernationSettingsStore) SetComputerUse(context.Context, bool, time.Time) error {
+	return nil
+}
 
 func TestChatHibernationGateResetsOnDaemonBoot(t *testing.T) {
 	ctx := context.Background()
@@ -103,5 +110,107 @@ func TestOfferingBakedURLDoesNotEnableCloud(t *testing.T) {
 	}
 	if offering.CloudEnabled(Snapshot{CloudOffering: false}) {
 		t.Fatal("cloud enabled with only the baked URL set; a local-only install must stay off")
+	}
+}
+
+func (*hibernationSettingsStore) SetHarnessDefault(context.Context, domain.AgentHarness, domain.HarnessDefault, time.Time) error {
+	return nil
+}
+
+type versionRefreshStore struct {
+	hibernationSettingsStore
+	refresh bool
+	reads   int
+}
+
+func (s *versionRefreshStore) GetAppSettings(context.Context) (Snapshot, error) {
+	s.reads++
+	return Snapshot{VersionRefresh: s.refresh}, nil
+}
+
+func (s *versionRefreshStore) SetVersionRefresh(_ context.Context, enabled bool, _ time.Time) error {
+	s.refresh = enabled
+	return nil
+}
+
+func TestVersionRefreshToggleIsReadOnceAndCached(t *testing.T) {
+	ctx := context.Background()
+	store := &versionRefreshStore{refresh: true}
+	svc := New(store, nil, Offering{}, nil)
+	first := svc.VersionRefreshEnabled(ctx)
+	if second := svc.VersionRefreshEnabled(ctx); !first || !second || store.reads != 1 {
+		t.Fatalf("enabled reads = %d, want one cached read", store.reads)
+	}
+	snapshot, err := svc.SetVersionRefresh(ctx, false)
+	if err != nil || snapshot.VersionRefresh || svc.VersionRefreshEnabled(ctx) {
+		t.Fatalf("turn off: snapshot=%+v err=%v enabled=%t", snapshot, err, svc.VersionRefreshEnabled(ctx))
+	}
+}
+
+type computerUseStore struct {
+	hibernationSettingsStore
+	enabled bool
+	err     error
+}
+
+func (s *computerUseStore) GetAppSettings(context.Context) (Snapshot, error) {
+	return Snapshot{ComputerUse: s.enabled}, s.err
+}
+
+func (s *computerUseStore) SetComputerUse(_ context.Context, enabled bool, _ time.Time) error {
+	s.enabled = enabled
+	return nil
+}
+
+// The toggle is read at every spawn, so a change applies to the next session
+// without a daemon restart, and an unreadable store never turns it on.
+func TestComputerUseToggle(t *testing.T) {
+	ctx := context.Background()
+	store := &computerUseStore{}
+	svc := New(store, nil, Offering{}, nil)
+	if svc.ComputerUseEnabled(ctx) {
+		t.Fatal("computer use is on by default")
+	}
+	snapshot, err := svc.SetComputerUse(ctx, true)
+	if err != nil || !snapshot.ComputerUse || !svc.ComputerUseEnabled(ctx) {
+		t.Fatalf("after enabling: snapshot=%+v err=%v enabled=%v", snapshot, err, svc.ComputerUseEnabled(ctx))
+	}
+	store.err = errors.New("database is locked")
+	if svc.ComputerUseEnabled(ctx) {
+		t.Fatal("an unreadable store must count as off")
+	}
+}
+
+// Turning computer use on needs Cua Driver installed, whatever client asks;
+// turning it off always works.
+func TestComputerUseNeedsCuaDriverToTurnOn(t *testing.T) {
+	ctx := context.Background()
+	store := &computerUseStore{}
+	svc := New(store, nil, Offering{}, nil)
+	installed, checkErr := false, error(nil)
+	svc.SetCuaDriverInstalled(func(context.Context) (bool, error) { return installed, checkErr })
+
+	_, err := svc.SetComputerUse(ctx, true)
+	var apiErr *apierr.Error
+	if !errors.As(err, &apiErr) || apiErr.Code != "COMPUTER_USE_NOT_INSTALLED" || apiErr.Kind != apierr.KindConflict {
+		t.Fatalf("enable without Cua Driver: err = %v, want COMPUTER_USE_NOT_INSTALLED", err)
+	}
+	if svc.ComputerUseEnabled(ctx) {
+		t.Fatal("computer use turned on without Cua Driver")
+	}
+
+	checkErr = errors.New("permission denied")
+	if _, err := svc.SetComputerUse(ctx, true); !errors.Is(err, checkErr) {
+		t.Fatalf("enable with a failed check: err = %v, want the check's error", err)
+	}
+
+	installed, checkErr = true, nil
+	if snapshot, err := svc.SetComputerUse(ctx, true); err != nil || !snapshot.ComputerUse {
+		t.Fatalf("enable with Cua Driver: snapshot=%+v err=%v", snapshot, err)
+	}
+
+	installed = false
+	if snapshot, err := svc.SetComputerUse(ctx, false); err != nil || snapshot.ComputerUse {
+		t.Fatalf("disable after Cua Driver was removed: snapshot=%+v err=%v", snapshot, err)
 	}
 }

@@ -2,6 +2,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { RotateCcw } from "lucide-react";
 import {
 	createContext,
+	lazy,
+	Suspense,
 	useCallback,
 	useContext,
 	useEffect,
@@ -40,7 +42,18 @@ import { useShellTerminals } from "../hooks/useShellTerminals";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { terminalResetNonce, useTerminalResetStore } from "../stores/terminal-reset-store";
 import { createCloudTerminalMux } from "../lib/cloud-terminal-mux";
-import { XtermTerminal } from "./XtermTerminal";
+import { LazyChunkBoundary } from "./LazyChunkBoundary";
+
+// xterm and its WebGL addon (~700 KB) load on first terminal render instead of
+// with the shell: the shell imports TerminalCacheProvider from this module, so a
+// static import here put xterm on every route. preloadXtermTerminal() warms the
+// chunk in idle time once the daemon is up.
+const loadXtermTerminal = () => import("./XtermTerminal");
+const XtermTerminal = lazy(() => loadXtermTerminal().then((module) => ({ default: module.XtermTerminal })));
+
+export function preloadXtermTerminal(): void {
+	void loadXtermTerminal().catch(() => undefined);
+}
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -60,6 +73,10 @@ type TerminalPaneProps = {
 	inputDisabled?: boolean;
 	/** The agent terminal is coming up after an interface switch; show the boot spinner instead of ended/empty chrome. */
 	booting?: boolean;
+	/** An account move is restarting this agent in a new terminal. The label covers
+	 * the pane while nothing is drawn there, instead of boot text and an empty
+	 * terminal; the old screen stays until its terminal is gone. */
+	switchingLabel?: string;
 	/** Focus the terminal when an in-flight controller asks for human input. */
 	focusRequested?: boolean;
 	/** Observe attachment state without taking ownership of the terminal lifecycle. */
@@ -91,6 +108,13 @@ type CachedTerminalEntry = TerminalCacheDescriptor & {
 	props: TerminalPaneProps;
 	terminal?: AttachableTerminal;
 };
+
+// isUnlisted reports whether the last workspace snapshot (listed; null before
+// one arrived) does not list an entry's session. Such an entry is kept only
+// while it is on screen (see the snapshot reconcile).
+function isUnlisted(entry: CachedTerminalEntry, listed: Set<string> | null): boolean {
+	return Boolean(entry.sessionId) && listed !== null && !listed.has(entry.sessionId ?? "");
+}
 
 type ActiveTerminalEntry = {
 	key: string;
@@ -135,6 +159,7 @@ function terminalPropsMatch(left: TerminalPaneProps, right: TerminalPaneProps): 
 		left.onToggleFullscreen === right.onToggleFullscreen &&
 		left.inputDisabled === right.inputDisabled &&
 		left.booting === right.booting &&
+		left.switchingLabel === right.switchingLabel &&
 		left.focusRequested === right.focusRequested &&
 		left.onTerminalStateChange === right.onTerminalStateChange &&
 		left.onTerminalContentReadyChange === right.onTerminalContentReadyChange &&
@@ -321,6 +346,11 @@ export function TerminalCacheProvider({
 	const entriesRef = useRef(new Map<string, CachedTerminalEntry>());
 	const activeRef = useRef<ActiveTerminalEntry | null>(null);
 	const parkingRef = useRef<HTMLDivElement | null>(null);
+	// The sessions the last workspace snapshot listed (null before one
+	// arrived). A terminal kept on screen while its session was not listed is
+	// disposed once it is parked (disposeIfUnlistedOnceParked), since a later
+	// snapshot (which would dispose it then) may never come.
+	const listedSessionsRef = useRef<Set<string> | null>(null);
 	const muxPoolRef = useRef<TerminalMuxPool | null>(null);
 	if (!muxPoolRef.current) {
 		muxPoolRef.current = createTerminalMuxPool(() =>
@@ -415,6 +445,22 @@ export function TerminalCacheProvider({
 		[rerender],
 	);
 
+	// A terminal that left the screen while the snapshot does not list its
+	// session is disposed, as the snapshot reconcile disposes a parked one: it
+	// was kept only while on screen, and no later snapshot may come. The check
+	// waits for the commit to finish, so a slot that re-activates the same
+	// entry in it (its effect re-running) keeps it on screen without a remount.
+	const disposeIfUnlistedOnceParked = useCallback(
+		(cacheKey: string) => {
+			queueMicrotask(() => {
+				const entry = entriesRef.current.get(cacheKey);
+				if (!entry || activeRef.current?.key === cacheKey) return;
+				if (isUnlisted(entry, listedSessionsRef.current)) removeEntry(cacheKey);
+			});
+		},
+		[removeEntry],
+	);
+
 	const activate = useCallback(
 		(descriptor: TerminalCacheDescriptor, props: TerminalPaneProps, slot: HTMLDivElement) => {
 			const parking = parkingRef.current;
@@ -429,6 +475,8 @@ export function TerminalCacheProvider({
 					if (previousEntry.discardOnDeactivate) {
 						entriesRef.current.delete(previous.key);
 						previousEntry.container.remove();
+					} else {
+						disposeIfUnlistedOnceParked(previous.key);
 					}
 				}
 			}
@@ -469,7 +517,7 @@ export function TerminalCacheProvider({
 			activeRef.current = { key: entry.cacheKey, slot };
 			rerender();
 		},
-		[muxPool, rerender],
+		[disposeIfUnlistedOnceParked, muxPool, rerender],
 	);
 
 	const deactivate = useCallback(
@@ -487,9 +535,10 @@ export function TerminalCacheProvider({
 				return;
 			}
 			parkTerminal(entry, parking);
+			disposeIfUnlistedOnceParked(cacheKey);
 			rerender();
 		},
-		[rerender],
+		[disposeIfUnlistedOnceParked, rerender],
 	);
 
 	const update = useCallback(
@@ -552,9 +601,18 @@ export function TerminalCacheProvider({
 				workspace.sessions.map((session) => [session.id, session] as const),
 			),
 		);
+		listedSessionsRef.current = new Set(sessions.keys());
 		for (const entry of entriesRef.current.values()) {
 			const session = entry.sessionId ? sessions.get(entry.sessionId) : undefined;
 			if (entry.sessionId && !session) {
+				// The terminal on screen is kept: its slot activates an entry only
+				// when it mounts, so disposing it would leave the pane empty for as
+				// long as the session stays open. A session can be on screen before
+				// the snapshot lists it (opened right after it was created, or in a
+				// project created elsewhere that the project list has not fetched
+				// yet). Once it leaves the screen it is disposed unless a snapshot
+				// lists it by then (disposeIfUnlistedOnceParked).
+				if (activeRef.current?.key === entry.cacheKey) continue;
 				removeEntry(entry.cacheKey);
 				continue;
 			}
@@ -705,7 +763,7 @@ const BOOT_STATUS_STEPS = [
 	"Almost there",
 ];
 
-function TerminalBootStatus({ subject }: { subject: string }) {
+function TerminalBootStatus({ subject, label }: { subject: string; label?: string }) {
 	const [tick, setTick] = useState(0);
 	useEffect(() => {
 		const id = window.setInterval(() => setTick((value) => value + 1), 120);
@@ -715,7 +773,7 @@ function TerminalBootStatus({ subject }: { subject: string }) {
 	return (
 		<div className="flex items-center gap-2.5 text-terminal-dim" role="status" aria-live="polite">
 			<span aria-hidden="true" className="inline-block w-[1ch] shrink-0 text-center font-mono">{BOOT_SPINNER_FRAMES[tick % BOOT_SPINNER_FRAMES.length]}</span>
-			<span>{BOOT_STATUS_STEPS[step].replace("{subject}", subject)}</span>
+			<span>{label ?? BOOT_STATUS_STEPS[step].replace("{subject}", subject)}</span>
 		</div>
 	);
 }
@@ -732,6 +790,7 @@ export function TerminalPane({
 	onToggleFullscreen,
 	inputDisabled,
 	booting,
+	switchingLabel,
 	focusRequested,
 	onTerminalStateChange,
 	onTerminalContentReadyChange,
@@ -835,6 +894,7 @@ export function TerminalPane({
 		onToggleFullscreen,
 		inputDisabled,
 		booting,
+		switchingLabel,
 		focusRequested,
 		onTerminalStateChange,
 		onTerminalContentReadyChange,
@@ -866,6 +926,7 @@ export function TerminalPane({
 			isFullscreen={isFullscreen}
 			inputDisabled={inputDisabled}
 			booting={booting}
+			switchingLabel={switchingLabel}
 			onChangeFontSize={onChangeFontSize}
 			onToggleFullscreen={onToggleFullscreen}
 			focusRequested={focusRequested}
@@ -1033,6 +1094,7 @@ function AttachedTerminal({
 	onToggleFullscreen,
 	inputDisabled,
 	booting,
+	switchingLabel,
 	focusRequested,
 	onTerminalStateChange,
 	onTerminalContentReadyChange,
@@ -1079,7 +1141,9 @@ function AttachedTerminal({
 		exitNotice:
 			terminalTarget?.kind === "reviewer"
 				? "\r\n\x1b[2m[reviewer terminal finished]\x1b[0m"
-				: undefined,
+				: terminalTarget?.kind === "shell"
+					? undefined
+					: "",
 		inputDisabled,
 		isVisible,
 		shellTerminalHandleId,
@@ -1320,7 +1384,15 @@ function AttachedTerminal({
 		!showEmptyState &&
 		!showEndedStatePreview &&
 		!cloudRevealedRef.current;
-	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud && !booting;
+	// A terminal the move covered stays covered until the agent draws its first
+	// frame, even after the move commits. ponytail: no timeout; an agent that
+	// never draws exits, and the exited state ends the cover.
+	const switchingHeldRef = useRef<string | undefined>(undefined);
+	if (switchingLabel && !hasVisibleContent) switchingHeldRef.current = switchingLabel;
+	if (hasVisibleContent || state === "exited" || state === "error") switchingHeldRef.current = undefined;
+	const coverLabel = switchingLabel ?? switchingHeldRef.current;
+	const switchingCover = Boolean(coverLabel) && !hasVisibleContent && state !== "exited" && state !== "error";
+	const showEndedState = showEndedStatePreview && !isBoxComingUp && !session?.cloud && !booting && !coverLabel;
 
 	return (
 		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
@@ -1342,6 +1414,8 @@ function AttachedTerminal({
 			    content box, so FitAddon still measures it correctly and the absolute
 			    overlays (empty state, banner) keep covering the full padding box. */}
 			<div className="relative min-h-0 flex-1 pl-2">
+				<LazyChunkBoundary>
+				<Suspense fallback={null}>
 				<XtermTerminal
 					ariaLabel={terminalTarget?.kind === "shell" ? t("terminal.shellAria") : t("terminal.sessionAria")}
 					fontSize={fontSize}
@@ -1353,17 +1427,19 @@ function AttachedTerminal({
 					onLinkOpen={handleLinkOpen}
 					onSessionLinkOpen={handleSessionLinkOpen}
 					onReady={handleReady}
-					onVisibleContent={attachSession?.cloud ? () => setHasVisibleContent(true) : undefined}
+					onVisibleContent={() => setHasVisibleContent(true)}
 					onToggleFullscreen={onToggleFullscreen}
 					onVisibleSize={syncVisibleSize}
 					paneScrollsByKeyboard={providerScrollsByKeyboard(provider)}
 					supportsCursorColorScheme={provider === "cursor"}
 					theme={theme}
 				/>
-				{(showEmptyState || booting) && (
+				</Suspense>
+				</LazyChunkBoundary>
+				{(showEmptyState || booting || switchingCover) && (
 					<div className="terminal-surface absolute inset-0 grid place-items-center font-mono text-control">
 						{session ? (
-							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} />
+							<TerminalBootStatus subject={session.kind === "orchestrator" ? "orchestrator" : "agent"} label={coverLabel} />
 						) : (
 							<div className="text-center">
 								<div className="text-terminal">{"Agent Orchestrator"}</div>
@@ -1457,6 +1533,18 @@ type TerminalEndedStripProps = {
 function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewStatus, session, variant }: TerminalEndedStripProps) {
 	const { t } = useTranslation();
 	const reviewDelivered = variant === "reviewer" && reviewStatus === "delivered";
+	const terminated = variant === "session" && session && !sessionIsActive(session);
+	const agentExited = variant === "session" && sessionAgentExited(session);
+	const startupFailed = variant === "session" && session?.provisionState === "failed";
+	const heading = reviewDelivered
+		? t("terminal.reviewCompleted")
+		: startupFailed
+			? t("terminal.startupFailed")
+			: terminated
+				? t("terminal.sessionTerminated")
+				: agentExited
+					? t("terminal.agentExited")
+					: t("terminal.ended");
 	const message = reviewDelivered
 		? t("terminal.reviewerCompleted")
 		: canRestore
@@ -1469,12 +1557,19 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 
 	return (
 		<div className="shrink-0 border-b border-border bg-surface/80 px-4 py-2">
-			<div className="flex min-h-control-board items-center gap-3">
-				<div className="min-w-0 flex-1">
-					<div className="font-mono text-caption font-medium uppercase tracking-wide-md text-muted-foreground">
-						{reviewDelivered ? t("terminal.reviewCompleted") : t("terminal.ended")}
+			<div className="flex min-h-control-board flex-wrap items-center gap-3">
+				<div className="min-w-0">
+					<div
+						className={cn(
+							"font-mono text-caption font-medium uppercase tracking-wide-md",
+							terminated || startupFailed ? "text-destructive" : "text-muted-foreground",
+						)}
+					>
+						{heading}
 					</div>
-					<div className="mt-0.5 truncate text-xs text-muted-foreground">{message}</div>
+					<div className="mt-0.5 text-xs text-muted-foreground">
+						{startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
+					</div>
 				</div>
 				{error && <div className="max-w-content-max truncate text-xs text-destructive">{error}</div>}
 				{variant === "session" && session ? <ResumeAgentControl session={session} /> : null}
@@ -1485,11 +1580,12 @@ function TerminalEndedStrip({ canRestore, error, isRestoring, onRestore, reviewS
 								<button
 									type="button"
 									aria-label={t("terminal.restoreSession")}
-									className="inline-flex size-control-form shrink-0 items-center justify-center rounded-md border border-border bg-raised text-foreground transition hover:bg-interactive-hover disabled:cursor-not-allowed disabled:opacity-50"
+									className="inline-flex h-control-form shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-raised px-3 text-xs font-medium text-foreground transition hover:bg-interactive-hover disabled:cursor-not-allowed disabled:opacity-50"
 									disabled={isRestoring}
 									onClick={onRestore}
 								>
 									<RotateCcw className={cn("size-icon-base", isRestoring && "animate-spin")} aria-hidden="true" />
+									{t("terminal.restoreSession")}
 								</button>
 							</span>
 						</TooltipTrigger>

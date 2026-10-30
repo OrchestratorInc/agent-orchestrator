@@ -55,13 +55,13 @@ async function authenticate(body: Record<string, string>): Promise<TokenResponse
 		body: JSON.stringify({ client_id: CLIENT_ID, ...body }),
 	});
 	const result = await response.json() as TokenResponse;
-	if (!response.ok) throw new Error(result.error === "invalid_grant" ? "Session expired. Sign in again." : "AO sign-in failed. Try again.");
+	if (!response.ok) throw new Error(result.error === "invalid_grant" ? "Session expired. Sign in again." : "Orchestrator sign-in failed. Try again.");
 	return result;
 }
 
 async function saveAccount(result: TokenResponse, generation: number): Promise<Account> {
 	const { id, email } = result.user ?? {};
-	if (!id || !email || !result.refresh_token || !result.access_token) throw new Error("AO sign-in returned an incomplete session.");
+	if (!id || !email || !result.refresh_token || !result.access_token) throw new Error("Orchestrator sign-in returned an incomplete session.");
 	await SecureStore.setItemAsync(STORE_KEY, JSON.stringify({ id, email, refreshToken: result.refresh_token } satisfies StoredAccount));
 	if (generation === accountGeneration) {
 		accessToken = result.access_token;
@@ -98,11 +98,11 @@ export async function signInToAccount(): Promise<Account | null> {
 	if (result.type !== "success") return null;
 	const callback = new URL(result.url);
 	if (callback.protocol !== "ao-app:" || callback.hostname !== "callback" || callback.searchParams.get("state") !== state) {
-		throw new Error("AO sign-in response could not be verified.");
+		throw new Error("Orchestrator sign-in response could not be verified.");
 	}
-	if (callback.searchParams.has("error")) throw new Error("AO sign-in was not completed.");
+	if (callback.searchParams.has("error")) throw new Error("Orchestrator sign-in was not completed.");
 	const code = callback.searchParams.get("code");
-	if (!code) throw new Error("AO sign-in did not return a code.");
+	if (!code) throw new Error("Orchestrator sign-in did not return a code.");
 	const session = await authenticate({ grant_type: "authorization_code", code, code_verifier: verifier });
 	return mutateCredentials(async () => generation === accountGeneration ? saveAccount(session, generation) : null);
 }

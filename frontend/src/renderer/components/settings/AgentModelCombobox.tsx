@@ -5,7 +5,9 @@ import type { AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
 import { useSuppressStrayFocusRing } from "../../hooks/useSuppressStrayFocusRing";
 import { isConcreteModelID, modelChoiceLabel, splitClaudeModels } from "../../lib/agent-model-choices";
 import { fallbackEffort, useApplyEffortDefault } from "../../lib/effort";
+import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant, type ModelVariant } from "../../lib/model-variants";
 import { cn } from "../../lib/utils";
+import { ToggleRow } from "../chat/AgentSwitchPicker";
 import { formatEffortLabel } from "./EffortPicker";
 import { useModelTuning, type ModelTuningControlsProps } from "./ModelTuningControls";
 import { OptionMenuItem, OptionMenuSub, OptionMenuSubContent, OptionMenuSubTrigger } from "../ui/option-menu";
@@ -66,7 +68,9 @@ export function AgentModelCombobox({
 	retryAt,
 	onChange,
 	onCustom,
+	onUseDefault,
 	emptyLabel,
+	footer,
 	triggerLabel,
 	triggerClassName,
 	menuAlign = "end",
@@ -91,8 +95,12 @@ export function AgentModelCombobox({
 	retryAt?: string | null;
 	onChange: (value: string) => void;
 	onCustom?: (value: string) => void;
+	/** Offers the agent's native default as a choice, above the listed models. */
+	onUseDefault?: () => void;
 	/** Shown when the agent does not report a concrete model. */
 	emptyLabel?: string;
+	/** A note under the models, such as where they come from. */
+	footer?: ReactNode;
 	/** Claude Code lists its newest model per family and folds the rest under "Other models". */
 	agentId?: string;
 	triggerLabel?: string;
@@ -121,6 +129,14 @@ export function AgentModelCombobox({
 		[models],
 	);
 	const explicitModel = isConcreteModelID(value) ? value : "";
+	// Cursor lists one id per model setting: each model shows once, but the variant's id is saved.
+	const families = useMemo(
+		() => (listsModelVariants(agentId) ? collapseModelVariants(concreteModels.map((model) => ({ id: model.id, label: model.label }))) : undefined),
+		[agentId, concreteModels],
+	);
+	const listedModels = useMemo(() => families
+		? families.map((family) => ({ ...concreteModels.find((model) => model.id === family.defaultVariant.id)!, id: family.id, label: family.label, provider: family.group }))
+		: concreteModels, [concreteModels, families]);
 	const { selected: effortModel, invalidEffort } = useModelTuning({
 		models: concreteModels,
 		model: explicitModel,
@@ -159,10 +175,13 @@ export function AgentModelCombobox({
 	const storedRecentModels = useMemo(() => readRecentModels(recentScope), [recentScope]);
 	const recentModelIDs = recentScope ? (sessionRecentModels[recentKey] ?? storedRecentModels) : [];
 	const normalizedSearch = normalizeSearch(search);
-	const searchIndex = useMemo(() => buildModelSearchIndex(concreteModels), [concreteModels]);
+	const searchIndex = useMemo(() => buildModelSearchIndex(listedModels), [listedModels]);
 	const defaultModel = concreteModels.find((model) => model.isDefault)?.id || "";
 	const effectiveModel = explicitModel || defaultModel;
-	const selected = searchIndex.byID.get(normalizeSearch(effectiveModel));
+	const variant = families ? findModelVariant(families, effectiveModel) : undefined;
+	// The row a Cursor variant id shows as is its model's.
+	const shownModel = variant?.family.id ?? effectiveModel;
+	const selected = searchIndex.byID.get(normalizeSearch(shownModel));
 	const hasMultipleProviders = useMemo(
 		() =>
 			new Set(
@@ -190,21 +209,21 @@ export function AgentModelCombobox({
 			const base = claude ? (showOther ? [...claude.current, ...claude.other] : claude.current) : searchIndex.models;
 			// Compact mode reads as a plain, stable list — picking a model
 			// shouldn't reorder it to the top on the next open.
-			return compact ? base : rankInitialModels(base, effectiveModel, recentModelIDs);
+			return compact ? base : rankInitialModels(base, shownModel, recentModelIDs);
 		}
 		return searchModelIndex(searchIndex, normalizedSearch).models;
-	}, [claude, compact, effectiveModel, normalizedSearch, recentModelIDs, searchIndex, showOther]);
+	}, [claude, compact, shownModel, normalizedSearch, recentModelIDs, searchIndex, showOther]);
 
 	const visibleModels = rankedModels.slice(0, MAX_VISIBLE_MODELS);
 	const groups = useMemo(
 		() =>
 			compact
 				? [{ key: "all", label: "", kind: "provider" as const, models: visibleModels }]
-				: groupModels(visibleModels, normalizedSearch === "", effectiveModel, recentModelIDs, {
+				: groupModels(visibleModels, normalizedSearch === "", shownModel, recentModelIDs, {
 						pinned: t("settings.models.currentDefaults"),
 						recent: t("settings.models.recent"),
 					}),
-		[compact, effectiveModel, normalizedSearch, recentModelIDs, t, visibleModels],
+		[compact, shownModel, normalizedSearch, recentModelIDs, t, visibleModels],
 	);
 	const customSearchValue = search.trim();
 	const showCustomSearchAction = allowDirectCustom && customSearchValue !== "" && rankedModels.length === 0;
@@ -231,7 +250,10 @@ export function AgentModelCombobox({
 		return () => observer.disconnect();
 	}, [groups.length, menuOpen, normalizedSearch, showCustomSearchAction, updateScrollCue, visibleModels.length]);
 	const onCloseAutoFocus = useSuppressStrayFocusRing(menuOpen);
-	const selectModel = (modelID: string) => {
+	const selectModel = (picked: string, want?: Partial<ModelVariant>) => {
+		// A Cursor model keeps the current effort, thinking and speed where it has them.
+		const family = families?.find((entry) => entry.id === picked) ?? (want ? variant?.family : undefined);
+		const modelID = family ? pickModelVariant(family, { ...(variant?.variant ?? family.defaultVariant), ...want }).id : picked;
 		if (recentScope) {
 			const next = rememberRecentModel(recentScope, modelID);
 			setSessionRecentModels((current) => ({ ...current, [recentScope]: next }));
@@ -239,7 +261,10 @@ export function AgentModelCombobox({
 		onChange(modelID === defaultModel ? "" : modelID);
 	};
 	const selectCatalogModel = (event: Event, item: IndexedModel) => {
-		const openEffort = Boolean(tuning && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));
+		const family = families?.find((entry) => entry.id === item.id);
+		const openEffort = family
+			? Boolean(tuning) && (family.efforts.length > 1 || family.hasThinkingChoice)
+			: Boolean(tuning && item.model.efforts?.some((effort) => effort && effort.toLowerCase() !== "default"));
 		if (openEffort) event.preventDefault();
 		selectModel(item.id);
 		setEffortMenuOpen(openEffort);
@@ -289,6 +314,7 @@ export function AgentModelCombobox({
 						<span className="min-w-0 truncate">{currentLabel}</span>
 					)}
 					{showEffort && showEffortInTrigger && <span className="shrink-0 text-settings-muted"> · {currentEffortLabel}</span>}
+					{variant?.variant.effort && tuning && showEffortInTrigger && <span className="shrink-0 text-settings-muted"> · {formatEffortLabel(variant.variant.effort, t)}</span>}
 					<ChevronDown
 						className="size-icon-sm shrink-0 opacity-70 transition-transform duration-300 ease-out group-data-[state=open]/agent-model-trigger:rotate-180"
 						aria-hidden="true"
@@ -314,7 +340,7 @@ export function AgentModelCombobox({
 						setSearch((current) => current + event.key);
 					}
 				}}
-				className={cn("settings-menu-surface max-h-select-menu-max! w-[min(22rem,calc(100vw-2rem))] overflow-hidden! rounded-(--radius-settings-panel) border-settings-menu bg-settings-menu", menuClassName)}
+				className={cn("settings-menu-surface max-h-select-menu-max! w-[min(22rem,calc(100vw-2rem))] overflow-hidden! rounded-(--radius-settings-panel) border border-(--color-border-overlay) bg-settings-menu shadow-(--shadow-popover)", menuClassName)}
 			>
 				{(showSearch || showManualRefresh) && (
 					<div className="flex shrink-0 items-center gap-1">
@@ -396,6 +422,16 @@ export function AgentModelCombobox({
 						className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
 						onScroll={updateScrollCue}
 					>
+						{onUseDefault && normalizedSearch === "" && (
+							<>
+								<DropdownMenuItem onSelect={onUseDefault} className={modelItemClass(explicitModel === "")}>
+									<span className="truncate text-settings-label">
+										{t("settings.models.useConfiguredDefault")}
+									</span>
+								</DropdownMenuItem>
+								{visibleModels.length > 0 && <DropdownMenuSeparator />}
+							</>
+						)}
 						{groups.map((group, groupIndex) => (
 							<div key={group.key}>
 								{!compact && (groupIndex > 0 || normalizedSearch === "") && <DropdownMenuSeparator />}
@@ -405,17 +441,17 @@ export function AgentModelCombobox({
 										<DropdownMenuItem
 											key={item.id}
 											onSelect={(event) => selectCatalogModel(event, item)}
-											className={modelItemClass(item.id === effectiveModel)}
-											aria-current={tuning && item.id === effectiveModel ? true : undefined}
+											className={modelItemClass(item.id === shownModel)}
+											aria-current={tuning && item.id === shownModel ? true : undefined}
 										>
 											<span className="truncate text-settings-label">{item.label}</span>
-											{tuning && item.id === effectiveModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
+											{tuning && item.id === shownModel && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
 										</DropdownMenuItem>
 									) : (
 										<DropdownMenuItem
 											key={item.id}
 											onSelect={(event) => selectCatalogModel(event, item)}
-											className={modelItemClass(item.id === effectiveModel)}
+											className={modelItemClass(item.id === shownModel)}
 										>
 										<div className="flex min-w-0 flex-1 items-center gap-3">
 											<div className="min-w-0 flex-1">
@@ -500,6 +536,34 @@ export function AgentModelCombobox({
 						aria-hidden="true"
 					/>
 				</div>
+				{footer && (
+					<div className="shrink-0">
+						<DropdownMenuSeparator />
+						<p className="px-2 py-1.5 text-xs text-settings-muted" aria-live="polite">{footer}</p>
+					</div>
+				)}
+				{/* Cursor's effort and thinking open beside the model like other agents' effort (no fast mode here, as for them). */}
+				{variant && tuning && (variant.family.efforts.length > 1 || variant.family.hasThinkingChoice) && (
+					<div className="shrink-0">
+						<DropdownMenuSeparator />
+						<OptionMenuSub open={effortMenuOpen} onOpenChange={(open) => {
+							if (open || !awaitingEffort) setEffortMenuOpen(open);
+						}}>
+							<OptionMenuSubTrigger label={t("settings.models.reasoningEffort", { defaultValue: "Reasoning effort" })} value={variant.variant.effort ? formatEffortLabel(variant.variant.effort, t) : undefined} />
+							<OptionMenuSubContent>
+								{variant.family.efforts.map((effort) => (
+									<OptionMenuItem key={effort} role="menuitemradio" aria-checked={effort === variant.variant.effort} active={effort === variant.variant.effort}
+										onSelect={() => { selectModel(variant.variant.id, { effort }); setAwaitingEffort(false); setEffortMenuOpen(false); setMenuOpen(false); }} className="gap-3 text-xs">
+										{formatEffortLabel(effort, t)}
+										{effort === variant.variant.effort && <Check className="ml-auto size-icon-sm shrink-0" aria-hidden="true" />}
+									</OptionMenuItem>
+								))}
+								{variant.family.hasThinkingChoice && variant.family.efforts.length > 1 && <DropdownMenuSeparator />}
+								<ToggleRow label={t("agentSwitch.thinking")} checked={variant.family.hasThinkingChoice ? variant.variant.thinking : undefined} onChange={(thinking) => selectModel(variant.variant.id, { thinking })} />
+							</OptionMenuSubContent>
+						</OptionMenuSub>
+					</div>
+				)}
 				{showEffort && tuning && (
 					<div className="shrink-0">
 						<DropdownMenuSeparator />
@@ -810,8 +874,8 @@ function groupModels(
 function modelItemClass(selected: boolean): string {
 	return cn(
 		"settings-menu-item min-w-0 cursor-default outline-none",
-		"focus:bg-settings-menu-selected focus:text-settings-title",
-		"data-highlighted:bg-settings-menu-selected data-highlighted:text-settings-title",
-		selected && "border-settings-menu bg-settings-menu-selected text-settings-title",
+		"focus:bg-interactive-hover focus:text-foreground",
+		"data-highlighted:bg-interactive-hover data-highlighted:text-foreground",
+		selected && "bg-interactive-active text-foreground",
 	);
 }

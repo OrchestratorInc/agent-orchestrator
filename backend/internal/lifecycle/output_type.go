@@ -56,7 +56,7 @@ func (m *Manager) ReconcileSessionOutputType(ctx context.Context, id domain.Sess
 	if err != nil {
 		return err
 	}
-	artifacts, err := sessionartifacts.List(artifactDir)
+	artifacts, err := sessionartifacts.List(ctx, artifactDir)
 	if err != nil {
 		return err
 	}

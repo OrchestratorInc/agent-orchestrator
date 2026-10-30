@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { components } from "../../api/schema";
-import { buildRankedAgentOptions, defaultAuthorizedAgentForRole, type RoleSession } from "./agent-select-options";
+import { buildRankedAgentOptions, defaultAuthorizedAgentForRole, isLaunchableAgent, type RoleSession } from "./agent-select-options";
 
 type Agent = components["schemas"]["AgentReadinessSnapshot"];
 
@@ -101,6 +101,14 @@ describe("buildRankedAgentOptions", () => {
 		expect(options[1]).toMatchObject({ id: "codex", disabled: true, status: "Needs auth" });
 	});
 
+	it("keeps harnesses without installation checks selectable and launchable", () => {
+		const unchecked = agent("codex", "unknown", "unknown");
+		unchecked.installation.reasonCode = "install_check_unsupported";
+		const options = buildRankedAgentOptions({ agents: [unchecked], priorityRank, fallbackAgents: [] });
+		expect(options[0]).toMatchObject({ disabled: false, status: "Install unknown" });
+		expect(isLaunchableAgent(unchecked)).toBe(true);
+	});
+
 	it("keeps stale known-good agents selectable while checking", () => {
 		const knownGood = agent("codex");
 		knownGood.installation.freshness = "checking";
@@ -114,20 +122,29 @@ describe("buildRankedAgentOptions", () => {
 
 		expect(option).toMatchObject({ disabled: false, status: "" });
 	});
+
+	it.each(["fresh", "stale", "checking"] as const)("omits unknown authentication badges while %s and keeps the agent launchable", (freshness) => {
+		const unchecked = agent("codex", "installed", "unknown");
+		unchecked.authentication.freshness = freshness;
+		const [option] = buildRankedAgentOptions({ agents: [unchecked], priorityRank, fallbackAgents: [] });
+
+		expect(option).toMatchObject({ disabled: false, status: "", statusTone: "muted" });
+		expect(isLaunchableAgent(unchecked)).toBe(true);
+	});
 });
 
 describe("configured but unverified credentials", () => {
 	// The whole point of the "configured" state is that it must not look like
 	// a working credential. Falling through to the known-good branch would
 	// paint an unvalidated — possibly revoked — credential green.
-	it("shows an unverified agent as neutral rather than known-good", () => {
+	it.each(["mimo-code", "hermes", "claude-code"])("omits the verification badge for %s while keeping a neutral tone", (id) => {
 		const [option] = buildRankedAgentOptions({
-			agents: [agent("claude-code", "installed", "configured")],
+			agents: [agent(id, "installed", "configured")],
 			priorityRank,
 			fallbackAgents: [],
 		});
 		expect(option.statusTone).not.toBe("success");
-		expect(option.status).toBe("Unverified");
+		expect(option.status).toBe("");
 	});
 
 	// I1: never block. An unverified credential is not a disproved one.

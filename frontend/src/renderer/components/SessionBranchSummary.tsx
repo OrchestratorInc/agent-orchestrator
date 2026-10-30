@@ -18,6 +18,8 @@ import { sessionWorkspaceFilesQueryOptions, type WorkspaceFileSummary } from "..
 import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
+import { sessionBranchPresentation } from "../lib/session-branch";
+import { BranchNamingLabel } from "./BranchNamingLabel";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
 import type { SessionBranchState, WorkspaceSession } from "../types/workspace";
@@ -126,7 +128,8 @@ export function SessionBranchSummary({
 
 	const commitsRow = commitsRowView(facts, t);
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null;
-	if (!session.branch && !pullRequests && !hasWork) return null;
+	const { branch, naming } = sessionBranchPresentation(session);
+	if (!branch && !naming && !pullRequests && !hasWork) return null;
 
 	const sendError = send.error instanceof Error ? send.error.message : null;
 	let action: ReactNode = null;
@@ -151,7 +154,7 @@ export function SessionBranchSummary({
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
-				{session.branch ? <BranchLine base={facts.base} branch={session.branch} /> : null}
+				{branch || naming ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
 				{cards}
 				{facts.uncommitted.length > 0 ? (
 					<GitStatusRow
@@ -184,14 +187,14 @@ export function SessionBranchSummary({
 	);
 }
 
-function BranchLine({ base, branch }: { base?: string; branch: string }) {
+function BranchLine({ base, branch, naming }: { base?: string; branch?: string; naming: boolean }) {
 	return (
 		<div className="flex min-w-0 items-center gap-1.5 pb-3 font-mono last:pb-0 text-xs text-muted-foreground">
 			<GitBranch aria-hidden="true" className="size-icon-2xs shrink-0" />
-			<span className="min-w-0 truncate" title={branch}>
+			{naming ? <BranchNamingLabel /> : <span className="min-w-0 truncate" title={branch}>
 				{branch}
-			</span>
-			{base ? <span className="shrink-0 text-passive">→ {base}</span> : null}
+			</span>}
+			{base && !naming ? <span className="shrink-0 text-passive">→ {base}</span> : null}
 		</div>
 	);
 }

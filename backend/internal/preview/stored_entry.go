@@ -56,6 +56,17 @@ func ArtifactEntryRelative(raw string) (string, bool) {
 
 // StoredEntryFromPreview extracts a stored preview entry and its source scope.
 func StoredEntryFromPreview(raw string, id domain.SessionID) (StoredEntry, bool) {
+	// Artifact origins carry scope in the host, not in the path. Resolve them
+	// before the legacy workspace/path-marker formats below.
+	if parsed, err := url.Parse(raw); err == nil {
+		if originID, artifact := SessionIDFromArtifactHost(parsed.Host); artifact {
+			if originID != id {
+				return StoredEntry{}, false
+			}
+			entry, valid := CleanWorkspacePath(strings.TrimPrefix(parsed.Path, "/"))
+			return StoredEntry{Scope: StoredEntryScopeArtifact, Path: entry}, valid
+		}
+	}
 	entry, ok := storedPreviewPath(raw, id)
 	if !ok {
 		return StoredEntry{}, false

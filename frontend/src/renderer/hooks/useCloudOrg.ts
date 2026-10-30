@@ -37,10 +37,12 @@ export interface UseCloudOrgResult {
 	ready: boolean;
 }
 
-export function useCloudOrg(): UseCloudOrgResult {
-	const { client, ready, baseUrl } = useCloudCp();
+export function useCloudOrg(enabled = true): UseCloudOrgResult {
+	const { client, ready, baseUrl, userId } = useCloudCp(enabled);
 	const query = useQuery({
-		queryKey: [...cloudOrgQueryKey, baseUrl],
+		// Per signed-in user: after switching accounts on the same control plane
+		// the previous account's org must never scope a request.
+		queryKey: [...cloudOrgQueryKey, baseUrl, userId],
 		enabled: ready,
 		// Re-resolve the org eagerly: membership CAN change out from under a live
 		// session (a user is moved to their own org, or removed from a shared one),

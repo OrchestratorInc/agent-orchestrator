@@ -7,12 +7,17 @@ package settings
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -21,15 +26,25 @@ type Store interface {
 	GetAppSettings(ctx context.Context) (Snapshot, error)
 	SetDefaultSessionMode(ctx context.Context, mode domain.SessionMode, now time.Time) error
 	SetCloudOffering(ctx context.Context, enabled bool, now time.Time) error
+	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
+	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
+	SetComputerUse(ctx context.Context, enabled bool, now time.Time) error
 }
 
 // Snapshot is the current preference set.
 type Snapshot struct {
+	HarnessDefaults    map[string]domain.HarnessDefault
 	DefaultSessionMode domain.SessionMode
 	// CloudOffering is the user's cloud toggle (Settings, Developer Mode).
 	CloudOffering          bool
 	ChatHibernationEnabled bool
-	UpdatedAt              time.Time
+	// VersionRefresh moves idle open sessions to a harness release installed
+	// while they ran (Settings, General). On by default.
+	VersionRefresh bool
+	// ComputerUse gives new chat sessions the computer-use tools and their
+	// standing instruction (Settings, Computer use agents). Off by default.
+	ComputerUse bool
+	UpdatedAt   time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -86,6 +101,19 @@ type Service struct {
 	offering        Offering
 	now             func() time.Time
 	chatHibernation atomic.Bool
+	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
+	versionRefresh atomic.Int32
+	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
+	cuaInstalled atomic.Pointer[func(context.Context) (bool, error)]
+}
+
+// errCuaDriverMissing refuses turning computer use on without Cua Driver.
+var errCuaDriverMissing = apierr.Conflict("COMPUTER_USE_NOT_INSTALLED", "Install Cua Driver in Settings > Computer use agents before letting agents use this computer.", nil)
+
+// SetCuaDriverInstalled supplies the check SetComputerUse runs before turning
+// computer use on.
+func (s *Service) SetCuaDriverInstalled(installed func(context.Context) (bool, error)) {
+	s.cuaInstalled.Store(&installed)
 }
 
 // New builds the service.
@@ -105,7 +133,71 @@ func (s *Service) Offering() Offering {
 func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	snapshot, err := s.store.GetAppSettings(ctx)
 	snapshot.ChatHibernationEnabled = s.chatHibernation.Load()
+	if err == nil {
+		s.cacheVersionRefresh(snapshot.VersionRefresh)
+	}
 	return snapshot, err
+}
+
+func (s *Service) cacheVersionRefresh(enabled bool) {
+	if enabled {
+		s.versionRefresh.Store(1)
+	} else {
+		s.versionRefresh.Store(2)
+	}
+}
+
+// VersionRefreshEnabled reports the user's "move open sessions to new
+// versions" toggle. It reads the store once and then serves the cached value;
+// an unreadable store counts as off until a read succeeds.
+func (s *Service) VersionRefreshEnabled(ctx context.Context) bool {
+	switch s.versionRefresh.Load() {
+	case 1:
+		return true
+	case 2:
+		return false
+	}
+	snapshot, err := s.store.GetAppSettings(ctx)
+	if err != nil {
+		return false
+	}
+	s.cacheVersionRefresh(snapshot.VersionRefresh)
+	return snapshot.VersionRefresh
+}
+
+// SetVersionRefresh changes whether idle open sessions move to new harness releases.
+func (s *Service) SetVersionRefresh(ctx context.Context, enabled bool) (Snapshot, error) {
+	if err := s.store.SetVersionRefresh(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	s.cacheVersionRefresh(enabled)
+	return s.Get(ctx)
+}
+
+// ComputerUseEnabled reports the user's "Let agents use this computer"
+// toggle. It is read once per session spawn, so it goes to the store each
+// time; an unreadable store counts as off.
+func (s *Service) ComputerUseEnabled(ctx context.Context) bool {
+	snapshot, err := s.store.GetAppSettings(ctx)
+	return err == nil && snapshot.ComputerUse
+}
+
+// SetComputerUse changes whether new chat sessions get the computer-use tools.
+// Turning it on needs Cua Driver installed; turning it off always works.
+func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, error) {
+	if installed := s.cuaInstalled.Load(); enabled && installed != nil {
+		ok, err := (*installed)(ctx)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if !ok {
+			return Snapshot{}, errCuaDriverMissing
+		}
+	}
+	if err := s.store.SetComputerUse(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
 }
 
 // DefaultSessionMode resolves the default for a spawn that named no mode. A read
@@ -175,4 +267,56 @@ func (s *Service) ChatHarnesses(candidates []domain.AgentHarness) []domain.Agent
 		}
 	}
 	return out
+}
+
+// maxDisabledModels bounds the picker denylist; the largest catalog (OpenCode
+// via models.dev) lists under 9,000 models.
+const maxDisabledModels = 20000
+
+// normalizeDisabledModels trims and de-duplicates ids, keeping the given order.
+func normalizeDisabledModels(ids []string) ([]string, bool) {
+	if len(ids) > maxDisabledModels {
+		return nil, false
+	}
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || len(id) > 256 || strings.ContainsFunc(id, unicode.IsControl) {
+			return nil, false
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil, true
+	}
+	return out, true
+}
+
+// ErrInvalidHarnessDefault marks invalid preference input at the API boundary.
+var ErrInvalidHarnessDefault = errors.New("invalid harness default")
+
+// ErrUnknownHarness marks a preference for a harness AO does not know.
+var ErrUnknownHarness = errors.New("unknown harness")
+
+// SetHarnessDefault replaces the selected harness's picker preference. The
+// store writes only that harness's entry, so concurrent saves for other
+// harnesses are kept.
+func (s *Service) SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault) (Snapshot, error) {
+	if !slices.Contains(domain.AllHarnesses, agent) {
+		return Snapshot{}, fmt.Errorf("%w %q", ErrUnknownHarness, agent)
+	}
+	disabled, ok := normalizeDisabledModels(value.DisabledModels)
+	if !ok {
+		return Snapshot{}, fmt.Errorf("%w: disabled models must be at most %d model ids of up to 256 characters", ErrInvalidHarnessDefault, maxDisabledModels)
+	}
+	value.DisabledModels = disabled
+	if err := s.store.SetHarnessDefault(ctx, agent, value, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
 }

@@ -20,7 +20,7 @@ vi.mock("../../lib/api-client", () => ({
 	subscribeApiBaseUrl: () => () => {},
 }));
 vi.mock("../../lib/bridge", () => ({
-	aoBridge: { sideChats: { capture: async () => {} } },
+	aoBridge: { sideChats: { capture: async () => {}, confirmClose: async () => {}, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} } },
 }));
 
 describe("side delivery draft ownership", () => {
@@ -70,6 +70,13 @@ describe("side delivery draft ownership", () => {
 		await waitFor(() => expect(post).toHaveBeenCalledOnce());
 		return { ...hook, sending };
 	}
+
+	it("keeps existing sides accessible while creation is unsupported", async () => {
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false, true, undefined, undefined, false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		await expect(hook.result.current.create()).rejects.toThrow("does not support resumable side chats");
+		expect(post).not.toHaveBeenCalled();
+	});
 
 	it("preserves a reference added while acceptance is pending", async () => {
 		const hook = await beginSend();

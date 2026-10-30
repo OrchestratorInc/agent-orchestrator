@@ -42,6 +42,7 @@ import {
 	type StoreRowResult,
 } from "../../lib/storeUpdate";
 import type { Theme } from "../../lib/theme";
+import { getThemeDefinition } from "../../../shared/theme/palettes";
 import { preferenceLabel, type ThemePreference } from "../../lib/themePreference";
 
 // Light / Dark / System, in the desktop app's order and wording.
@@ -50,6 +51,7 @@ const THEME_OPTIONS: { value: ThemePreference; icon: keyof typeof Feather.glyphM
 	{ value: "dark", icon: "moon" },
 	{ value: "system", icon: "smartphone" },
 ];
+import { settingsSwitchModifiers, settingsSwitchSize } from "../../lib/settings-switch";
 import { useTheme, useThemedStyles, useThemeState } from "../../lib/ThemeProvider";
 import { checkAndDownload, describeUpdateRow, type UpdateOutcome } from "../../lib/updates";
 import { VERSION_FLOOR } from "../../lib/versionFloor";
@@ -63,7 +65,7 @@ export default function SettingsScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
-	const { config, configured, selectedHostName, switchHost, connection, error, errorStatus, activeEndpoints, loading: appLoading, reloadConfig } = useApp();
+	const { config, configured, selectedHostName, switchHost, connection, error, errorStatus, activeEndpoints, linkHealth, loading: appLoading, reloadConfig } = useApp();
 	const scrollRef = useRef<ScrollView>(null);
 	const [pairedHosts, setPairedHosts] = useState<PairedHost[]>([]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
@@ -117,7 +119,7 @@ export default function SettingsScreen() {
 		classified === "unreachable" && tunnelMayHaveRotated(activeEndpoints, config?.endpointKind, connection === "open")
 			? "tunnel-rotated"
 			: classified ?? (paired && !config && !appLoading ? "unreachable" : null);
-	const machineStatus = describeDesktopStatus({ configured: paired, connection, failure });
+	const machineStatus = describeDesktopStatus({ configured: paired, connection, failure, link: linkHealth });
 	const machineStatusColor = machineStatus.tone === "ok" ? t.green : machineStatus.tone === "error" ? t.red : undefined;
 	return (
 		<View style={styles.screen} collapsable={false}>
@@ -172,7 +174,7 @@ export default function SettingsScreen() {
 
 				<SettingsSection title="Account" footer="Paired machines sync across signed-in devices.">
 					<SettingsCard>
-						<CardRow icon="user" label={account ? "AO Cloud" : "Sign in to AO Cloud"} value={account?.email} loading={accountLoading || accountBusy} onPress={account ? undefined : () => {
+						<CardRow icon="user" label={account ? "Orchestrator Cloud" : "Sign in to Orchestrator Cloud"} value={account?.email} loading={accountLoading || accountBusy} onPress={account ? undefined : () => {
 							setAccountBusy(true);
 							void signInToAccount().then(async (value) => {
 								if (!value) return;
@@ -207,6 +209,7 @@ export default function SettingsScreen() {
 				<SettingsSection title="Preferences">
 					<SettingsCard>
 						<AppearanceRow />
+						<ColorThemeRow />
 						<NotificationsRow />
 					</SettingsCard>
 				</SettingsSection>
@@ -442,6 +445,20 @@ function AppearanceRow() {
 	);
 }
 
+/** The named colour theme; the picker is its own screen, the list is too long for a menu. */
+function ColorThemeRow() {
+	const router = useRouter();
+	const { style } = useThemeState();
+	return (
+		<CardRow
+			icon="palette"
+			label="Theme"
+			value={getThemeDefinition(style).label}
+			onPress={() => router.push("/settings/theme")}
+		/>
+	);
+}
+
 function NotificationsRow() {
 	const t = useTheme();
 	const { scheme } = useThemeState();
@@ -464,7 +481,7 @@ function NotificationsRow() {
 
 	async function onToggle(next: boolean) {
 		if (toggle.blocked) {
-			Alert.alert("Notifications are blocked", "Allow notifications for AO in your system settings, then come back.", [
+			Alert.alert("Notifications are blocked", "Allow notifications for Orchestrator in your system settings, then come back.", [
 				{ text: "Not now", style: "cancel" },
 				{ text: "Open settings", onPress: openNotificationSettings },
 			]);
@@ -501,8 +518,11 @@ function NotificationsRow() {
 			label="Notifications"
 			disabled={toggle.disabled}
 			right={
-				<Host style={{ width: 54, height: 34 }} colorScheme={scheme} seedColor={t.accent}>
-					<Switch value={pending ?? toggle.value} disabled={toggle.disabled || pending !== null} onValueChange={onToggle} />
+				// iOS uses seedColor as the SwiftUI tint, i.e. the "on" track. The dark
+				// accent is near-white, which hides the white thumb, so follow the
+				// system convention of a green track there.
+				<Host style={settingsSwitchSize} colorScheme={scheme} seedColor={Platform.OS === "ios" ? t.green : t.accent}>
+					<Switch value={pending ?? toggle.value} disabled={toggle.disabled || pending !== null} onValueChange={onToggle} modifiers={settingsSwitchModifiers} />
 				</Host>
 			}
 		/>
@@ -590,7 +610,7 @@ function SoftwareUpdateRow() {
 			/>
 			{storePrompt ? (
 				<InlinePanel
-					title="A newer AO is ready"
+					title="A newer version of Orchestrator is ready"
 					copy={describePrompt({ version: storePrompt.version, storeConfirmed: storePrompt.storeConfirmed, storeName: Platform.OS === "ios" ? "App Store" : "Play Store" })}
 					primary={`Open ${Platform.OS === "ios" ? "App Store" : "Play Store"}`}
 					secondary="Not now"
@@ -669,7 +689,7 @@ function FeatureRequestRow() {
 
 function VersionFooter() {
 	const styles = useThemedStyles(makeStyles);
-	return <Text style={styles.versionFooter}>AO {formatVersionLine(buildInfo())}</Text>;
+	return <Text style={styles.versionFooter}>Orchestrator {formatVersionLine(buildInfo())}</Text>;
 }
 
 const makeStyles = (t: Theme) => StyleSheet.create({
