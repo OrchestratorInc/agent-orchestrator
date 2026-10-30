@@ -3767,8 +3767,9 @@ describe("Sidebar active-session reveal", () => {
 		);
 		const view = render(tree());
 		return {
-			go: (sessionId: string | undefined, projectId: string | undefined = sessionId ? workspace.id : undefined) => {
-				mockParams.projectId = projectId;
+			// Pass null for a projectless route such as /sessions/$sessionId.
+			go: (sessionId: string | undefined, projectId: string | null = sessionId ? workspace.id : null) => {
+				mockParams.projectId = projectId ?? undefined;
 				mockParams.sessionId = sessionId;
 				view.rerender(tree());
 			},
@@ -3794,7 +3795,7 @@ describe("Sidebar active-session reveal", () => {
 		window.localStorage.setItem("ao.sidebar.sections", JSON.stringify({ projects: false, scratchpad: false }));
 		const { go } = mount([workspace.id]);
 
-		go(scratch.id, undefined);
+		go(scratch.id, null);
 
 		expect(await screen.findByLabelText("Open scratch note")).toHaveAttribute("aria-current", "page");
 		expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-expanded", "false");
