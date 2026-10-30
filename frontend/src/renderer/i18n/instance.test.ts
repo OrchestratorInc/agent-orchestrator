@@ -214,11 +214,12 @@ describe("app i18next instance", () => {
 			if (locale === "en") continue;
 			const catalog = allCatalogs[locale] as unknown as Record<keyof typeof enMessages, string | string[]>;
 			for (const key of Object.keys(enMessages) as (keyof typeof enMessages)[]) {
-				// i18next always passes count to plural keys, so a locale may show it where English
-				// hardcodes "1" (Russian uses the one form for 21, 31, ...).
-				const ignored = /_(zero|one|two|few|many|other)$/.test(key) ? ["count"] : [];
-				const vars = (message: string | string[]) => variables(message).filter((name) => !ignored.includes(name));
-				expect(vars(catalog[key]), `${locale} placeholder mismatch for ${key}`).toEqual(vars(enMessages[key]));
+				const english = variables(enMessages[key]);
+				// i18next always passes count to plural keys, so a locale may add it where English
+				// hardcodes "1" (Russian uses the one form for 21, 31, ...). It may never drop it.
+				const mayAddCount = /_(zero|one|two|few|many|other)$/.test(key) && !english.includes("count");
+				const actual = variables(catalog[key]).filter((name) => !(mayAddCount && name === "count"));
+				expect(actual, `${locale} placeholder mismatch for ${key}`).toEqual(english);
 			}
 		}
 	});
