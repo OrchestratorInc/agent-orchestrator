@@ -99,6 +99,35 @@ func TestConfigureLaunchesNativeACPWithEnvSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestSessionPreambleCarriesStandingPromptAndLanguagePin(t *testing.T) {
+	blocks := SessionPreamble(acpdriver.LaunchConfig{SystemPrompt: "  Coordinate work, not implementation.  "})
+	if len(blocks) != 1 {
+		t.Fatalf("SessionPreamble returned %d blocks, want 1", len(blocks))
+	}
+	text := blocks[0].Text.Text
+	if !strings.Contains(text, "Coordinate work, not implementation.") {
+		t.Errorf("preamble %q is missing the standing prompt", text)
+	}
+	if !strings.Contains(text, "Never output Chinese") {
+		t.Errorf("preamble %q is missing the output-language pin", text)
+	}
+	if !strings.Contains(text, "<ao_standing_instructions>") || !strings.Contains(text, "</ao_standing_instructions>") {
+		t.Errorf("preamble %q is not wrapped in ao_standing_instructions", text)
+	}
+	if strings.Index(text, "Coordinate work") > strings.Index(text, "Never output Chinese") {
+		t.Errorf("preamble %q puts the language pin ahead of the standing prompt", text)
+	}
+}
+
+func TestSessionPreambleNilWithoutStandingPrompt(t *testing.T) {
+	if blocks := SessionPreamble(acpdriver.LaunchConfig{}); blocks != nil {
+		t.Fatalf("SessionPreamble with no system prompt = %#v, want nil", blocks)
+	}
+	if blocks := SessionPreamble(acpdriver.LaunchConfig{SystemPrompt: "   "}); blocks != nil {
+		t.Fatalf("SessionPreamble with a whitespace system prompt = %#v, want nil", blocks)
+	}
+}
+
 func TestSessionModeMapsApprovalVocabulary(t *testing.T) {
 	tests := []struct {
 		mode ports.PermissionMode

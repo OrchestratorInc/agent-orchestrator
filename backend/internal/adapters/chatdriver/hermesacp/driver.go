@@ -40,6 +40,7 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		Configure:          configure,
 		SessionMode:        sessionMode,
 		SessionOptions:     sessionOptions,
+		SessionPreamble:    SessionPreamble,
 		PermissionPolicy:   permissionPolicy,
 		HistoryReconciler:  reconcileReplay,
 		PromptErrorFailure: promptErrorFailure,
@@ -55,17 +56,47 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 	}, log)
 }
 
+// outputLanguageInstruction pins every hermes chat session to English. Hermes
+// sessions commonly run on the Z.ai/GLM models, which narrate tool calls in
+// their native Chinese style; that narration flows verbatim into the AO chat
+// transcript and into edit/permission approval cards, so a reader who cannot
+// read Chinese cannot tell what they are approving. This is a harness-level
+// constant: no per-project configuration has to remember it.
+const outputLanguageInstruction = "Output language: all user-visible output (narration, tool-call text, permission and edit approval requests, diff context, commit and PR text) must be in English. Never output Chinese."
+
+// SessionPreamble delivers AO's standing instructions as a text block ahead of
+// the first prompt. Stock Hermes's ACP adapter proxies every prompt to its
+// shared gateway process (GatewayACPAgent -> prompt.submit RPC) and executes
+// turns there, so a HERMES_EPHEMERAL_SYSTEM_PROMPT set on the `hermes acp`
+// child never reaches the model — Hermes silently falls back to the user's
+// profile system prompt. Like DeepSeek Harness, Hermes accepts no
+// system-prompt launch flag and reads no session/new _meta, so plain text on
+// the first turn is the only channel it follows. The output-language pin rides
+// in the same block. The preamble leads only the first prompt of a new
+// provider session; that is correct here, because a fresh provider session is
+// created on every chat-host relaunch and each one gets it.
+func SessionPreamble(cfg acpdriver.LaunchConfig) []acpsdk.ContentBlock {
+	standing := strings.TrimSpace(cfg.SystemPrompt)
+	if standing == "" {
+		return nil
+	}
+	return []acpsdk.ContentBlock{acpsdk.TextBlock(
+		"Standing instructions from Agent Orchestrator. Follow them for this whole session:\n" +
+			"<ao_standing_instructions>\n" + standing + "\n" + outputLanguageInstruction + "\n</ao_standing_instructions>",
+	)}
+}
+
 // configure adds provider-native arguments and environment overlays. Hermes'
 // ACP server has no launch-time model flag — models are session-owned and
-// switched through the ACP config options the session response advertises — and
-// no system-prompt flag, so standing instructions ride in
-// HERMES_EPHEMERAL_SYSTEM_PROMPT, which Hermes injects at API-call time without
-// persisting it into the transcript. Hermes reads that variable first and only
-// falls back to its native persona configuration when it is empty, so the
-// value folds the persona the session would have applied natively in ahead of
-// AO's instructions exactly like the TUI launch path does. The native side is
-// resolved by OriginalEphemeralPrompt: an explicit prompt inherited through
-// the environment wins over the config.yaml overlay, mirroring GetAgentHooks.
+// switched through the ACP config options the session response advertises. The
+// HERMES_EPHEMERAL_SYSTEM_PROMPT overlay is kept even though it is unreliable:
+// Hermes's gateway executes turns in a process that never sees this child's
+// environment, so the standing prompt actually reaches the model through
+// SessionPreamble above — the overlay stays only on the chance a future Hermes
+// honors it at launch, in which case folding the persona in ahead of AO's
+// instructions mirrors the TUI launch path. The native side is resolved by
+// OriginalEphemeralPrompt: an explicit prompt inherited through the
+// environment wins over the config.yaml overlay, mirroring GetAgentHooks.
 func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
 	args := []string{"acp"}
 	env := map[string]string(nil)
