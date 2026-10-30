@@ -1,5 +1,6 @@
 import { MenuView, type MenuAction, type NativeActionEvent } from "@expo/ui/community/menu";
 import { Pressable, View } from "react-native";
+import { haptics } from "./haptics";
 import type { LongPressMenuProps } from "./long-press-menu";
 
 export type { LongPressMenuAction, LongPressMenuProps } from "./long-press-menu";
@@ -11,7 +12,7 @@ export function LongPressMenu<Id extends string>({ children, actions, onAction, 
 		<MenuView
 			actions={menuActions}
 			shouldOpenOnLongPress
-			onPressAction={(event: NativeActionEvent) => onAction(event.nativeEvent.event as Id)}
+			onPressAction={(event: NativeActionEvent) => { haptics.tap(); onAction(event.nativeEvent.event as Id); }}
 			testID={testID}
 			style={onPress ? undefined : style}
 		>

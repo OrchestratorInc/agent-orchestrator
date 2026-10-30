@@ -64,6 +64,8 @@ function ReviewDetailContent() {
 	// the merge call returns. Show the merge at once and poll until it agrees.
 	const [mergedURL, setMergedURL] = useState<string>();
 	const [error, setError] = useState("");
+	// Kept apart from `error`: a quiet poll clears that, and it renders far below the row.
+	const [workerError, setWorkerError] = useState("");
 	const [reviewNotice, setReviewNotice] = useState("");
 	const [dismissedAutoFailureId, setDismissedAutoFailureId] = useState<string>();
 	const [refreshing, setRefreshing] = useState(false);
@@ -154,20 +156,18 @@ function ReviewDetailContent() {
 	};
 	const openWorker = () => {
 		if (!worker) return;
-		haptics.tap();
 		const state = navigation.getState();
 		if (state && previousRouteIsWorker(state.routes, state.index, worker.id) && router.canGoBack()) router.back();
 		else openPage(workerRouteForSession(worker, routeHostId ?? currentHostId ?? undefined));
 	};
 	const restoreWorker = async () => {
 		if (!worker || mutation) return;
-		haptics.tap();
 		setMutation("restoreWorker");
-		setError("");
+		setWorkerError("");
 		try {
 			await restore(worker.id, routeHostId ?? currentHostId ?? undefined);
 		} catch (value) {
-			setError(value instanceof Error ? value.message : "Could not restore the worker.");
+			setWorkerError(value instanceof Error ? value.message : "Could not restore the worker.");
 		} finally {
 			setMutation(undefined);
 		}
@@ -277,13 +277,14 @@ function ReviewDetailContent() {
 			{worker ? <>
 				<ListSectionHeader label="Worker" />
 				<WorkerRow worker={worker} restoring={mutation === "restoreWorker"} disabled={Boolean(mutation)} onOpen={openWorker} onRestore={() => void restoreWorker()} />
+				{workerError ? <Text accessibilityRole="alert" style={[styles.note, styles.noteError]}>{workerError}</Text> : null}
 			</> : null}
 
 			<ListSectionHeader label="Reviewer" />
 			{/* The row opens the reviewer; its pill and menu are laid over the row rather
 			    than inside its Pressable (as on the project page's orchestrator row), so
-			    a tap on "⋯" never also opens the reviewer. Its Open is outlined so the
-			    worker's filled Open above stays the page's main way out. */}
+			    a tap on "⋯" never also opens the reviewer. Its Open is outlined when a
+			    Worker row is shown, so the worker's filled Open stays the main way out. */}
 			<View>
 			<Pressable accessibilityRole={controls.open ? "button" : undefined} accessibilityLabel={controls.open ? `Open reviewer ${controls.open}` : undefined} disabled={!controls.open || Boolean(mutation)} onPress={openReviewer} style={({ pressed }) => [styles.row, styles.rowWithOverlay, pressed && styles.rowPressed]}>
 				<View style={styles.main}>
@@ -302,8 +303,8 @@ function ReviewDetailContent() {
 				<View style={styles.overlaySlot} pointerEvents="box-none">
 				<View style={styles.trailing}>
 					{controls.open
-						? <RowPill label="Open" icon={controls.open === "chat" ? "message-circle" : "terminal"} tone="outline" disabled={Boolean(mutation)} onPress={openReviewer} />
-						: controls.restore ? <RowPill label="Restore" icon="refresh-cw" tone="outline" busy={mutation === "restore"} disabled={Boolean(mutation)} onPress={() => void restoreReviewer()} /> : null}
+						? <RowPill label="Open" accessibilityLabel="Open reviewer" icon={controls.open === "chat" ? "message-circle" : "terminal"} tone={worker ? "outline" : "solid"} disabled={Boolean(mutation)} onPress={openReviewer} />
+						: controls.restore ? <RowPill label="Restore" accessibilityLabel="Restore reviewer" icon="refresh-cw" tone="outline" busy={mutation === "restore"} disabled={Boolean(mutation)} onPress={() => void restoreReviewer()} /> : null}
 					<ItemActionsMenu accessibilityLabel="Reviewer session actions" actions={stopActions} loading={mutation === "kill"} disabled={Boolean(mutation)} />
 				</View>
 				</View>
@@ -363,7 +364,7 @@ function WorkerRow({ worker, restoring, disabled, onOpen, onRestore }: { worker:
 	const phrase = worker.displayStatus?.trim();
 	const detail = phrase && phrase.toLowerCase() !== visual.label.toLowerCase() ? ` · ${phrase}` : "";
 	return <View>
-		<Pressable accessibilityRole="button" accessibilityLabel={`Open worker ${title}. ${visual.label}.`} disabled={disabled} onPress={onOpen} style={({ pressed }) => [styles.row, styles.rowWithPill, pressed && styles.rowPressed]}>
+		<Pressable accessibilityRole="button" accessibilityLabel={`Open worker ${title}. ${visual.label}.`} disabled={disabled} onPress={() => { haptics.tap(); onOpen(); }} style={({ pressed }) => [styles.row, styles.rowWithPill, pressed && styles.rowPressed]}>
 			<View style={styles.main}>
 				<View style={styles.eyebrow}>
 					{worker.harness ? <AgentLogo harness={worker.harness} size={14} /> : <Feather name="user" size={13} color={t.textSecondary} />}
@@ -380,8 +381,8 @@ function WorkerRow({ worker, restoring, disabled, onOpen, onRestore }: { worker:
 		{/* Laid over the row, like the reviewer's, so the pill is its own target. */}
 		<View style={styles.overlaySlot} pointerEvents="box-none">
 			{terminated
-				? <RowPill label="Restore" icon="refresh-cw" tone="outline" busy={restoring} disabled={disabled} onPress={onRestore} />
-				: <RowPill label="Open" icon="message-circle" tone="solid" disabled={disabled} onPress={onOpen} />}
+				? <RowPill label="Restore" accessibilityLabel="Restore worker" icon="refresh-cw" tone="outline" busy={restoring} disabled={disabled} onPress={onRestore} />
+				: <RowPill label="Open" accessibilityLabel="Open worker" icon="message-circle" tone="solid" disabled={disabled} onPress={onOpen} />}
 		</View>
 	</View>;
 }
@@ -389,14 +390,14 @@ function WorkerRow({ worker, restoring, disabled, onOpen, onRestore }: { worker:
 type PillTone = "solid" | "outline" | "danger";
 
 /** The board's row pill: solid for the live action, outlined for the rest. */
-function RowPill({ label, icon, tone, busy = false, disabled = false, onPress }: { label: string; icon: keyof typeof Feather.glyphMap; tone: PillTone; busy?: boolean; disabled?: boolean; onPress: () => void }) {
+function RowPill({ label, accessibilityLabel = label, icon, tone, busy = false, disabled = false, onPress }: { label: string; /** What a screen reader says when several pills read the same. */ accessibilityLabel?: string; icon: keyof typeof Feather.glyphMap; tone: PillTone; busy?: boolean; disabled?: boolean; onPress: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const filled = tone === "solid";
 	const ink = tone === "solid" ? t.bgBase : tone === "danger" ? t.red : t.textPrimary;
 	return <Pressable
 		accessibilityRole="button"
-		accessibilityLabel={label}
+		accessibilityLabel={accessibilityLabel}
 		accessibilityState={{ busy, disabled: disabled || busy }}
 		disabled={disabled || busy}
 		hitSlop={8}

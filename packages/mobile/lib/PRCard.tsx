@@ -68,8 +68,8 @@ export const PRCard = memo(function PRCard({
 
 	const githubUrl = summary?.htmlUrl || summary?.url || pr.url;
 	const openPR = () => openPage(reviewRouteForPR(session.id, pr, hostId));
+	// The menu gives the haptic for its own items.
 	const runAction = (action: PRCardAction) => {
-		haptics.tap();
 		if (action === "worker") router.push(workerRouteForSession(session, hostId));
 		else if (action === "pr") openPR();
 		else void openGitHub(githubUrl);
