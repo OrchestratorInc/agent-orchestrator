@@ -111,10 +111,17 @@ func discoverOpenCode(ctx context.Context, root string) ([]sourceFiles, error) {
 // openCodeMessageText returns each message's concatenated visible text, keyed
 // by message id, and whether any block was truncated to the visible budget.
 func openCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map[string]string, bool, error) {
+	// OpenCode injects text parts it generates itself (for example an @file
+	// attachment that echoes the Read tool call and the file body into the user
+	// turn) and marks them "synthetic", sometimes also "ignored". Its own UI
+	// hides these; keeping them would show boilerplate the user never typed, spend
+	// the visible-byte budget on it, and let it become the fallback title.
 	rows, err := db.QueryContext(ctx, `
 		SELECT message_id, json_extract(data, '$.text')
 		FROM part
 		WHERE session_id = ? AND json_extract(data, '$.type') = 'text'
+		  AND COALESCE(json_extract(data, '$.synthetic'), 0) = 0
+		  AND COALESCE(json_extract(data, '$.ignored'), 0) = 0
 		ORDER BY time_created, id`, sessionID)
 	if err != nil {
 		return nil, false, err

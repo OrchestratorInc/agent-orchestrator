@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -47,8 +48,10 @@ func addSession(t *testing.T, db *sql.DB, id, parent, dir, title string, updated
 	}
 }
 
-// addMessage writes a message and its ordered parts. A part is "role:text",
-// "tool", "reasoning", or "step-start" to exercise the text-only filter.
+// addMessage writes a message and its ordered parts. A part is "text:<body>"
+// for a visible text block, "synthetic:<body>"/"ignored:<body>" for an
+// OpenCode-injected text part, or a bare part type ("tool", "reasoning",
+// "step-start") to exercise the text-only filter.
 func addMessage(t *testing.T, db *sql.DB, sessionID, msgID, role string, created int64, parts ...string) {
 	t.Helper()
 	if _, err := db.Exec(`INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)`,
@@ -58,9 +61,14 @@ func addMessage(t *testing.T, db *sql.DB, sessionID, msgID, role string, created
 	for i, part := range parts {
 		partID := fmt.Sprintf("%s_p%d", msgID, i)
 		var data string
-		if len(part) > 5 && part[:5] == "text:" {
-			data = fmt.Sprintf(`{"type":"text","text":%q}`, part[5:])
-		} else {
+		switch {
+		case strings.HasPrefix(part, "text:"):
+			data = fmt.Sprintf(`{"type":"text","text":%q}`, part[len("text:"):])
+		case strings.HasPrefix(part, "synthetic:"):
+			data = fmt.Sprintf(`{"type":"text","synthetic":true,"text":%q}`, part[len("synthetic:"):])
+		case strings.HasPrefix(part, "ignored:"):
+			data = fmt.Sprintf(`{"type":"text","ignored":true,"text":%q}`, part[len("ignored:"):])
+		default:
 			data = fmt.Sprintf(`{"type":%q}`, part)
 		}
 		if _, err := db.Exec(`INSERT INTO part (id, message_id, session_id, time_created, data) VALUES (?, ?, ?, ?, ?)`,
@@ -95,9 +103,11 @@ func TestOpenCodeDiscoverSkipsChildAndArchived(t *testing.T) {
 func TestOpenCodeTranscriptKeepsOnlyUserAssistantText(t *testing.T) {
 	root, db := newOpenCodeStore(t)
 	addSession(t, db, "ses_abc123", "", "/work/repo", "Fix the parser", 9000, nil)
-	// A user turn, then an assistant turn whose reasoning/tool/step parts are
-	// provider internals and must not appear as visible messages.
-	addMessage(t, db, "ses_abc123", "msg_a", "user", 1000, "text:Fix the parser")
+	// A user turn whose typed prompt sits beside an OpenCode-injected @file echo
+	// (synthetic) and an ignored part, then an assistant turn whose
+	// reasoning/tool/step parts are provider internals. Only the typed prompt and
+	// the assistant's text must survive.
+	addMessage(t, db, "ses_abc123", "msg_a", "user", 1000, "synthetic:<file>parser.go contents the user never typed</file>", "text:Fix the parser", "ignored:stale attachment")
 	addMessage(t, db, "ses_abc123", "msg_b", "assistant", 2000, "step-start", "reasoning", "tool", "text:Done, fixed it.", "step-finish")
 
 	got, err := readTranscript(context.Background(), domain.HarnessOpenCode, root, "ses_abc123")
