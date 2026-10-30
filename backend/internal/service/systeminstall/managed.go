@@ -218,6 +218,16 @@ const (
 // running session uses is touched; on any failure the new directory is
 // removed and the current release stays as it was.
 func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *installedBaseline, env []string, out io.Writer) error {
+	if plan.Target == TargetOMP && plan.Method == "bun" && (s.goos == "darwin" || s.goos == "linux") {
+		// New OMP releases can require a newer Bun than the working copy uses.
+		// Install the self-contained release instead of upgrading that shared
+		// runtime. The existing release stays selected until the candidate starts.
+		plan.Method, plan.Package = "official-installer", ""
+		plan.Script = &ports.InstallScriptCommand{URL: "https://omp.sh/install", Interpreter: []string{"sh"}}
+		if _, ok := s.officialManagedRecipeFor(plan); !ok {
+			return installFailed("OMP's standalone installer is unavailable.", nil)
+		}
+	}
 	cli := managedCLINames[plan.Target]
 	if cli == "" {
 		cli = managedCLIName(baseline)
