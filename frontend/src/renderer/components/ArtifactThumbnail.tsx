@@ -3,7 +3,7 @@ import { File, FileText, Globe, Image, Table2, Workflow } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
-import { cloudArtifactFileUrl, useCloudArtifactAccess } from "../hooks/useCloudArtifacts";
+import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
 import { CLOUD_TEXT_ARTIFACT, CloudArtifactAccessError, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { artifactContentUrl } from "../lib/artifact-content-url";
 import type { ArtifactRow } from "../lib/artifacts";
@@ -46,7 +46,10 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 		? cloud ? contentUrl : row.inlineUrl && isInlineArtifactUrl(row.inlineUrl) ? row.inlineUrl : undefined
 		: undefined;
 	const image = imagePath ? contentUrl : undefined;
-	const pdf = previewLive && pdfPath ? contentUrl : undefined;
+	// A cloud PDF card keeps the link it loaded with, so an access renewal does
+	// not download and parse the whole file again.
+	const pinnedPdf = usePinnedArtifactUrl(cloud && pdfPath ? access.data : undefined, cloud && pdfPath ? row.path : undefined, row.updatedAt);
+	const pdf = previewLive && pdfPath ? cloud ? pinnedPdf.url : contentUrl : undefined;
 	const readText = visible && Boolean(contentUrl) && textPreview && (!cloud || (cloudPreviewable && !imagePath));
 	const fileOptions = sessionArtifactFileQueryOptions(row.sessionId, row.path, rawUrl, undefined, cloud);
 	const file = useQuery({
@@ -86,7 +89,7 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 		if (imageStatus.data === 401 || imageStatus.data === 403) refreshAccess();
 		else if (imageStatus.data !== undefined && imageStatus.data >= 200 && imageStatus.data < 400) accessGranted();
 	}, [checkImage, imageStatus.data, imageStatus.dataUpdatedAt, refreshAccess, accessGranted]);
-	useEffect(() => setFailed(false), [contentUrl]);
+	useEffect(() => setFailed(false), [contentUrl, pdf]);
 	useLayoutEffect(() => {
 		const element = container.current;
 		if (!element) return;
@@ -166,7 +169,12 @@ export function ArtifactThumbnail({ row, previewLive = true }: { row: ArtifactRo
 			) : pdf ? (
 				<div className="flex h-full min-h-0 flex-col overflow-hidden">
 					{/* A cloud file's URL already carries its version. */}
-					<PdfPreview cloud={cloud} firstPageOnly onError={() => setFailed(true)} path={row.path} src={cloud ? pdf : `${pdf}${pdf.includes("?") ? "&" : "?"}v=${encodeURIComponent(row.updatedAt)}`} />
+					<PdfPreview cloud={cloud} firstPageOnly onError={() => {
+						setFailed(true);
+						if (!cloud) return;
+						pinnedPdf.repin();
+						refreshAccess();
+					}} path={row.path} src={cloud ? pdf : `${pdf}${pdf.includes("?") ? "&" : "?"}v=${encodeURIComponent(row.updatedAt)}`} />
 				</div>
 			) : table ? (
 				<TableFileView content={content.slice(0, 4000)} path={row.path} />
