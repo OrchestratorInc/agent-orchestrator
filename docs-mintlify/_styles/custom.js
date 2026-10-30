@@ -991,9 +991,55 @@
       note.style.setProperty("color", "rgba(255,255,255,0.7)", "important");
     }
   }
+  /* Original nested pages show a breadcrumb row above the h1 (fs14 lh20,
+     muted links, last one primary) that pushes the h1 to y92. Mintlify has none. */
+  var AO_PLUGIN_GROUPS = { agents: "Agents", runtimes: "Runtimes", workspaces: "Workspaces", trackers: "Trackers", scm: "SCM", notifiers: "Notifications", terminals: "Terminals" };
+  function buildBreadcrumb() {
+    var old = document.querySelector(".ao-crumb");
+    if (old) old.remove();
+    var segs = location.pathname.replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+    var crumbs = null;
+    if (segs[0] === "guides" && segs.length >= 2 && segs[1] !== "index") {
+      crumbs = [["Guides", "/guides/"]];
+    } else if (segs[0] === "configuration" && segs.length >= 2 && segs[1] !== "index") {
+      crumbs = [["Configuration", "/configuration/"]];
+    } else if (segs[0] === "plugins" && segs.length >= 2 && segs[1] !== "index") {
+      crumbs = [["Built-in capabilities", "/plugins/"]];
+      if (segs.length >= 3 && segs[2] !== "index" && AO_PLUGIN_GROUPS[segs[1]]) {
+        crumbs.push([AO_PLUGIN_GROUPS[segs[1]], "/plugins/" + segs[1] + "/"]);
+      }
+    }
+    if (!crumbs) return;
+    var header = document.querySelector("header#header, header[class*=\"page-header\"]");
+    if (!header || !header.querySelector("h1")) return;
+    var div = document.createElement("div");
+    div.className = "ao-crumb";
+    div.style.cssText = "display:flex;align-items:center;gap:6px;font-size:14px;line-height:20px;margin:0 0 16px 0;letter-spacing:-0.5px;";
+    crumbs.forEach(function (c, i) {
+      if (i > 0) {
+        var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("width", "12"); svg.setAttribute("height", "12"); svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("fill", "none"); svg.setAttribute("stroke", "currentColor"); svg.setAttribute("stroke-width", "2");
+        svg.setAttribute("stroke-linecap", "round"); svg.setAttribute("stroke-linejoin", "round");
+        svg.style.color = "oklch(0.737 0.021 106.9)"; svg.style.flex = "none";
+        var path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", "m9 6 6 6-6 6");
+        svg.appendChild(path);
+        div.appendChild(svg);
+      }
+      var a = document.createElement("a");
+      a.href = c[1];
+      a.textContent = c[0];
+      var last = i === crumbs.length - 1;
+      a.style.cssText = "color:" + (last ? "oklch(0.93 0.007 106.5)" : "oklch(0.737 0.021 106.9)") + ";font-weight:" + (last ? "500" : "400") + ";text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+      div.appendChild(a);
+    });
+    header.insertBefore(div, header.firstChild);
+  }
   function init() {
     try { TOC_STATE.headings = collectHeadings(); } catch (e) {}
     try { buildTocBar(); } catch (e) {}
+    try { buildBreadcrumb(); } catch (e) {}
     try { buildDesktopToc(); } catch (e) {}
     try { buildHeaderLogo(); } catch (e) {}
     try { buildSearchIcon(); } catch (e) {}
@@ -1044,6 +1090,7 @@
       try { fixTitle(); } catch (e) {}
       var needChev = !!document.querySelector('nav#sidebar-content button svg use[href*="ChevronRight"]');
       if (needChev) { try { fixGroupChevrons(); } catch (e) {} }
+      try { buildBreadcrumb(); } catch (e) {}
       if (needToc || needToggle || needActions || needDtoc || needKeys || kebabVisible) init();
       else if (needEsc || needPh) { try { buildSearchChrome(); } catch (e) {} }
     }, 400);
