@@ -805,9 +805,13 @@ export const ChatComposer = memo(function ChatComposer({
 		editor.current?.focus();
 	}, [autoFocus, disabled]);
 
-	useEffect(() => {
-		focusEditor();
-	}, [autoFocusKey, focusEditor]);
+	const previousAutoFocusKey = useRef(autoFocusKey);
+ useEffect(() => {
+  const changedSession = previousAutoFocusKey.current !== autoFocusKey;
+  previousAutoFocusKey.current = autoFocusKey;
+  if (!changedSession && (window.getSelection()?.isCollapsed === false || hasCodeSelection(document.body))) return;
+  focusEditor();
+ }, [autoFocusKey, focusEditor]);
 
 	const hasQueuedDock = Boolean(queuedDock);
 	const restoreFocusAfterQueueAppears =

@@ -218,6 +218,15 @@ describe("send keys", () => {
 		expect(document.activeElement).toBe(field);
 	});
 
+ it("does not steal selection when the same composer becomes enabled", () => {
+  const view=render(<ChatComposer onSend={vi.fn()} autoFocusKey="same-session" disabled />);
+  const field=screen.getByLabelText("Message the agent");
+  const host=document.createElement("diffs-container");const root=host.attachShadow({mode:"open"});root.textContent="selected file text";document.body.append(host);
+  Object.assign(root,{getSelection:()=>({anchorNode:root.firstChild,anchorOffset:0,focusNode:root.firstChild,focusOffset:8})});
+  view.rerender(<ChatComposer onSend={vi.fn()} autoFocusKey="same-session" />);
+  expect(document.activeElement).not.toBe(field);host.remove();
+ });
+
  it.each(["focus", "visibilitychange"])("preserves a native shadow selection on passive %s", event => {
   const {field} = renderComposer({autoFocusKey:"session-1"});field.blur();
   const host=document.createElement("diffs-container");const root=host.attachShadow({mode:"open"});
