@@ -45,6 +45,41 @@ the opt-out is complete. If the app exits during that cleanup, startup purges
 the leftover queue while sharing is off, before a later opt-in can start the
 sender.
 
+The mobile app uses the existing ao-mobile Sentry project in non-development
+builds when mobile telemetry is active. Its JavaScript error sender starts after the
+saved phone analytics preference is restored. It follows the paired desktop's
+analytics opt-out, which remains sticky while the phone is unpaired or waiting
+for a replacement desktop. Development builds and
+`EXPO_PUBLIC_AO_TELEMETRY_DISABLED=1` do not initialize it. An explicit empty
+`EXPO_PUBLIC_SENTRY_DSN` disables it; otherwise the app uses its bundled
+mobile DSN. Reportable React render failures, uncaught JavaScript failures,
+and server API failures are captured. Native crash capture is disabled because
+the native SDK's offline envelope queue cannot be cleared at the phone's
+analytics opt-out boundary. No failed mobile Sentry send is persisted for retry.
+The sender checks consent both before capture and immediately before network
+send, so an event still queued when opt-out arrives is discarded.
+
+Mobile Sentry receives fixed error titles and categories, safe stack line
+numbers with generic frame names, release version and build number, and the
+production or preview environment. It receives no raw error message, URL,
+request body, repository or workspace path, project or session identifier,
+credential, or account identity. Its `user.id` is the authenticated paired
+desktop installation ID only. It is absent before pairing, during repair, and
+after unpairing or a failed identity refresh. The phone retains its separate
+PostHog identity across those changes. A paired Sentry error can therefore be
+associated with the desktop installation. The Sentry package and Expo plugin
+require a native prebuild before a mobile binary can include this change.
+All EAS profiles disable automatic Sentry source map and debug file upload,
+so builds do not require Sentry credentials. Mobile Sentry stack traces use
+generic frame names and line numbers; source maps are not available for them.
+
+For workspace file streams, a deleted worktree or a linked worktree whose
+owning Git repository disappeared returns a missing-workspace or
+`PROJECT_FOLDER_MISSING` 404. A recognized Git lock returns retryable
+`WORKSPACE_GIT_BUSY` 503. Other Git read failures remain
+`WORKSPACE_GIT_READ_FAILED` 500 for investigation; the app does not infer
+session death or remove worktrees from these read failures.
+
 ## What Orchestrator.inc sends
 
 Orchestrator.inc sends structured events in a few broad categories:

@@ -289,7 +289,6 @@ function ArtifactSection({ sectionId, name, icon: Icon, updatedAt, children, vie
 }
 
 function ArtifactCard({ row, projectName, view, showProjectName = false, previewLive = true, onPreview }: { row: ArtifactRow; projectName: string; view: ArtifactViewMode; showProjectName?: boolean; previewLive?: boolean; onPreview: (row: ArtifactRow, projectName: string) => void }) {
-	const { t } = useTranslation();
 	const id = artifactKey(row);
 	const pinned = useArtifactsViewStore((state) => state.pinnedArtifactIds.includes(id));
 	const togglePinnedArtifact = useArtifactsViewStore((state) => state.togglePinnedArtifact);
@@ -315,9 +314,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 						onClick={open}
 						title={`${row.sessionTitle} · ${row.path}`}
 					>
-						{row.generating ? (
-							<Loader2 aria-label={t("artifacts.generating")} className="relative z-[1] size-icon-sm shrink-0 animate-spin text-status-working motion-reduce:animate-none" />
-						) : <KindIcon aria-hidden="true" className="relative z-[1] size-icon-sm shrink-0 text-muted-foreground" />}
+						<KindIcon aria-hidden="true" className="relative z-[1] size-icon-sm shrink-0 text-muted-foreground" />
 						<span className="relative z-[1] min-w-0 shrink truncate text-control font-medium text-foreground">{row.name}</span>
 						<span className="relative z-[1] min-w-0 flex-1 truncate text-xs text-muted-foreground">
 							{showProjectName ? `${projectName} · ${row.sessionTitle}` : row.sessionTitle}

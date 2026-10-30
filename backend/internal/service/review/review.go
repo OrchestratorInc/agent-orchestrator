@@ -132,6 +132,23 @@ type PRRefresher interface {
 	RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error
 }
 
+// BranchPRFinder finds open PRs from the worker's own branch that AO does not
+// track yet, so a review requested right after opening a PR can attach it
+// instead of failing until the SCM observer's next poll.
+type BranchPRFinder interface {
+	FindBranchPRs(ctx context.Context, workerID domain.SessionID) (BranchPRs, error)
+}
+
+// BranchPRs are the open PR URLs a branch lookup found, split by who opened
+// them.
+type BranchPRs struct {
+	// Own are the PRs opened by the account AO is signed in with.
+	Own []string
+	// OtherAuthor are the PRs another account opened on the same branch; they
+	// are attached only when named with --pr.
+	OtherAuthor []string
+}
+
 // prRefreshTimeout bounds the provider fetch a trigger waits for before
 // falling back to the PR facts AO already has.
 const prRefreshTimeout = 10 * time.Second
@@ -478,17 +495,19 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	if req.Rerun && req.RejectReviewedHead {
 		return TriggerOutcome{}, fmt.Errorf("%w: rerun cannot be combined with rejecting an already-reviewed head", ErrInvalid)
 	}
-	if err := s.refreshPRs(ctx, workerID, strings.TrimSpace(req.PRURL)); err != nil {
+	branchLookupFoundNone, err := s.refreshPRs(ctx, workerID, strings.TrimSpace(req.PRURL))
+	if err != nil {
 		return TriggerOutcome{}, err
 	}
 	result, err := s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{
-		Harness:            req.Harness,
-		Config:             req.Config,
-		Source:             source,
-		InterfaceMode:      req.InterfaceMode,
-		PRURL:              strings.TrimSpace(req.PRURL),
-		RejectReviewedHead: req.RejectReviewedHead,
-		Rerun:              req.Rerun,
+		Harness:                 req.Harness,
+		Config:                  req.Config,
+		Source:                  source,
+		InterfaceMode:           req.InterfaceMode,
+		PRURL:                   strings.TrimSpace(req.PRURL),
+		RejectReviewedHead:      req.RejectReviewedHead,
+		Rerun:                   req.Rerun,
+		BranchPRLookupFoundNone: branchLookupFoundNone,
 	})
 	if err != nil {
 		return TriggerOutcome{}, err
@@ -524,16 +543,20 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 // not track it yet; failing to fetch it is an error, because there is nothing
 // else to review. Refreshing already-tracked PRs is best effort: on failure the
 // trigger proceeds with the facts AO has, and its same-commit checks still
-// report a push AO has not observed.
-func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prURL string) error {
+// report a push AO has not observed. It reports whether a lookup of the
+// worker's branch ran and found no open PR.
+func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prURL string) (bool, error) {
 	if s.prRefresher == nil {
-		return nil
+		return false, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, prRefreshTimeout)
 	defer cancel()
 	tracked, err := s.store.ListPRsBySession(ctx, workerID)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if prURL == "" && !hasOpenPR(tracked) {
+		return s.attachBranchPR(ctx, workerID)
 	}
 	if prURL != "" {
 		known := false
@@ -544,11 +567,11 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 			}
 		}
 		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil && !known {
-			return err
+			return false, err
 		} else if err != nil {
 			slog.Default().WarnContext(ctx, "review trigger: refresh named PR failed; using stored facts", "session", workerID, "err", err)
 		}
-		return nil
+		return false, nil
 	}
 	for _, pr := range tracked {
 		if pr.Merged || pr.Closed {
@@ -558,7 +581,65 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 			slog.Default().WarnContext(ctx, "review trigger: refresh PR failed; using stored facts", "session", workerID, "err", err)
 		}
 	}
-	return nil
+	return false, nil
+}
+
+// hasOpenPR reports whether any tracked PR is still open. A session whose
+// only tracked PRs are closed or merged may have opened a new one on the same
+// branch.
+func hasOpenPR(prs []domain.PullRequest) bool {
+	for _, pr := range prs {
+		if !pr.Merged && !pr.Closed {
+			return true
+		}
+	}
+	return false
+}
+
+// attachBranchPR attaches the one open PR from the worker's branch when AO
+// tracks no open PR yet, typically because the PR was opened moments ago. Finding
+// nothing leaves the engine to report that no PR is tracked, and is reported
+// as true so the engine can say the branch has none; a failed lookup, several
+// candidates, and a PR another account opened are reported with the exact
+// retry command. Another account's PR is never attached without --pr, the
+// same rule the SCM observer follows.
+func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID) (bool, error) {
+	finder, ok := s.prRefresher.(BranchPRFinder)
+	if !ok {
+		return false, nil
+	}
+	found, err := finder.FindBranchPRs(ctx, workerID)
+	if err != nil {
+		// Nothing is tracked, so the review cannot go ahead; say the lookup
+		// failed rather than that the branch has no PR.
+		slog.Default().WarnContext(ctx, "review trigger: find PR on worker branch failed", "session", workerID, "err", err)
+		return false, fmt.Errorf("%w: AO is not tracking an open PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
+	}
+	switch len(found.Own) {
+	case 0:
+		if len(found.OtherAuthor) > 0 {
+			return false, fmt.Errorf("%w: AO is not tracking an open PR for worker %q yet; found a PR from another author on its branch, which AO does not attach automatically; to review it anyway, run %s", ErrInvalid, workerID, retryCommands(workerID, found.OtherAuthor))
+		}
+		return true, nil
+	case 1:
+		// The PR may have closed since the lookup, seconds ago; say it was
+		// found, so a not-found or not-open error does not read as a miss.
+		prURL := found.Own[0]
+		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil {
+			return false, fmt.Errorf("found PR %s on worker %q's branch but could not attach it: %w; run `ao review trigger %s --pr %s` to try again", prURL, workerID, err, workerID, prURL)
+		}
+		return false, nil
+	}
+	return false, fmt.Errorf("%w: worker %q has %d open PRs from its branch that AO does not track yet; name one: %s", ErrInvalid, workerID, len(found.Own), retryCommands(workerID, found.Own))
+}
+
+// retryCommands lists the `ao review trigger --pr` command for each URL.
+func retryCommands(workerID domain.SessionID, urls []string) string {
+	cmds := make([]string, len(urls))
+	for i, prURL := range urls {
+		cmds[i] = fmt.Sprintf("`ao review trigger %s --pr %s`", workerID, prURL)
+	}
+	return strings.Join(cmds, ", ")
 }
 
 func firstNonEmpty(values ...string) string {

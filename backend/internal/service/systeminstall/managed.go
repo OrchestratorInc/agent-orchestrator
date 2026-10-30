@@ -128,6 +128,15 @@ func (s *Service) readManagedRecord(target Target) (managedRecord, bool) {
 	return record, true
 }
 
+// managedRecordMatchesPlan keeps the Bun entry usable after OMP migrates to
+// AO's standalone release. This alias applies only to managed OMP on platforms
+// where its isolated standalone installer is supported.
+func (s *Service) managedRecordMatchesPlan(record managedRecord, plan Plan) bool {
+	method := plan.ownershipMethod()
+	return record.Method == method || plan.Target == TargetOMP && method == "bun" &&
+		record.Method == "official-installer" && (s.goos == "darwin" || s.goos == "linux")
+}
+
 // managedCLINames fixes the executable a managed install puts in bin/ for
 // targets whose resolved binary has another name. OpenCode v2 resolves its own
 // opencode-v2 launcher but installs bin/opencode, and the Copilot resolver
@@ -368,9 +377,13 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 func (s *Service) probeManagedVersion(ctx context.Context, target Target, cli, binary string) (string, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, defaultVerifyTimeout)
 	defer cancel()
-	var output strings.Builder
-	if err := s.commands.Run(probeCtx, []string{binary, "--version"}, &output, &output); err != nil {
-		return "", installFailed(fmt.Sprintf("The new %s did not start.", cli), fmt.Errorf("the new copy did not start: %w", err))
+	output := &capturedOutput{max: maxOutputBytes}
+	if err := s.commands.Run(probeCtx, []string{binary, "--version"}, output, output); err != nil {
+		detail := fmt.Errorf("the new copy did not start: %w", err)
+		if text := strings.TrimSpace(output.String()); text != "" {
+			detail = fmt.Errorf("%w\n%s", detail, text)
+		}
+		return "", installFailed(fmt.Sprintf("The new %s did not start.", cli), detail)
 	}
 	version, ok := versionSchemeFor(target).find(output.String())
 	if !ok {

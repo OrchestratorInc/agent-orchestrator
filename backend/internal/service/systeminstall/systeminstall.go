@@ -211,6 +211,10 @@ type Plan struct {
 	managed bool
 	// managedPin is the release a managed reinstall installs again.
 	managedPin string
+	// sourceMethod/sourcePackage identify the existing owner during a planned
+	// migration. Method and Package always describe what the operation runs.
+	sourceMethod  string
+	sourcePackage string
 
 	// daemonRuntimeRejected and daemonPrefixRejected mark an npm plan rejected
 	// only for the daemon's own Node/npm or global prefix. An install runs
@@ -225,6 +229,13 @@ type Plan struct {
 	// ownerPrefixFound records that targetInstalledCopy located the npm prefix
 	// that owns the installed binary.
 	ownerPrefixFound bool
+}
+
+func (plan Plan) ownershipMethod() string {
+	if plan.sourceMethod != "" {
+		return plan.sourceMethod
+	}
+	return plan.Method
 }
 
 // AgentPlan is the display-safe plan returned to the settings page. Command is
@@ -547,10 +558,7 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 	for _, target := range agentTargets {
 		plans := planner.agentMethodPlans(target, AgentOperationInstall)
 		reinstallPlans := planner.agentMethodPlans(target, AgentOperationReinstall)
-		reinstallByMethod := make(map[string]Plan, len(reinstallPlans))
-		for _, reinstallPlan := range reinstallPlans {
-			reinstallByMethod[reinstallPlan.Method] = reinstallPlan
-		}
+		reinstallByMethod := plansByMethod(reinstallPlans)
 		recommended := recommendedPlanIndex(plans)
 		plan := plans[recommended]
 		updateByMethod := plansByMethod(planner.agentMethodPlans(target, AgentOperationUpdate))
@@ -584,7 +592,7 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 func plansByMethod(plans []Plan) map[string]Plan {
 	out := make(map[string]Plan, len(plans))
 	for _, plan := range plans {
-		out[plan.Method] = plan
+		out[plan.ownershipMethod()] = plan
 	}
 	return out
 }
@@ -941,7 +949,7 @@ func (s *Service) owningUpdatePlan(ctx context.Context, target Target, plans []P
 	s.mu.Unlock()
 	if hasAdvisory && advisory.MaintenanceMethod != "" {
 		for _, plan := range plans {
-			if plan.Method == advisory.MaintenanceMethod && !plan.Unsupported {
+			if plan.ownershipMethod() == advisory.MaintenanceMethod && !plan.Unsupported {
 				return plan, true
 			}
 		}

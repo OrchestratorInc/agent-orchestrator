@@ -914,6 +914,67 @@ func TestListWorkspaceFilesRepoUnavailableWrapsSentinel(t *testing.T) {
 	}
 }
 
+func TestLinkedWorkspaceMissingCommonRepository(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "worktree with spaces")
+	gitdir := filepath.Join(parent, "metadata with spaces", "worktrees", "session")
+	common := filepath.Join(parent, "owning repo", ".git")
+	for _, dir := range []string{root, gitdir, common} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	backpointer, err := filepath.Rel(root, gitdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+backpointer+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commonPointer, err := filepath.Rel(gitdir, common)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitdir, "commondir"), []byte(commonPointer+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceRepoUnavailable(root) {
+		t.Fatal("existing common repository classified as missing")
+	}
+	if err := os.RemoveAll(common); err != nil {
+		t.Fatal(err)
+	}
+	if !workspaceRepoUnavailable(root) {
+		t.Fatal("missing common repository was not detected")
+	}
+	_, err = gitWorkspaceOutput(context.Background(), root, "status", "--porcelain=v1")
+	if !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+		t.Fatalf("Git error = %v, want missing repository", err)
+	}
+	st := newFakeStore()
+	st.sessions["ao-1"] = domain.SessionRecord{
+		ID:       "ao-1",
+		Metadata: domain.SessionMetadata{WorkspacePath: root},
+	}
+	svc := NewWithDeps(Deps{Store: st})
+	_, err = svc.ReconcileWorkspaceManifest(context.Background(), "ao-1")
+	if !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+		t.Fatalf("stream startup reconciliation = %v, want missing repository", err)
+	}
+}
+
+func TestWorkspaceGitErrorClassificationPreservesUnknownFailure(t *testing.T) {
+	busy := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
+	var apiErr *apierr.Error
+	if !errors.As(busy, &apiErr) || apiErr.Code != "WORKSPACE_GIT_BUSY" {
+		t.Fatalf("lock error = %v, want retryable WORKSPACE_GIT_BUSY", busy)
+	}
+	unknown := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: bad object")
+	if !errors.As(unknown, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
+		t.Fatalf("unknown Git error = %v, want WORKSPACE_GIT_READ_FAILED", unknown)
+	}
+}
+
 func TestListWorkspaceFilesClassifiesGitReadFailure(t *testing.T) {
 	repo := newWorkspaceRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, ".git", "index"), []byte("not a git index"), 0o600); err != nil {
