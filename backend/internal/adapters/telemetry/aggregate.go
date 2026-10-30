@@ -75,7 +75,7 @@ func (s *AggregatingSink) Emit(ctx context.Context, ev ports.TelemetryEvent) {
 		s.buckets[ev.Name] = b
 	}
 	b.count++
-	b.sample = ev // last occurrence wins; only used for dims (level/source/ids), count/window carry the volume
+	b.sample = ev // last occurrence supplies non-HTTP dimensions; count and window carry HTTP volume
 	s.mu.Unlock()
 }
 
@@ -102,8 +102,10 @@ func (s *AggregatingSink) flush(ctx context.Context) {
 	now := time.Now().UTC()
 	for name, b := range buckets {
 		payload := make(map[string]any, len(b.sample.Payload)+3)
-		for k, v := range b.sample.Payload {
-			payload[k] = v
+		if name != "ao.http.5xx" {
+			for k, v := range b.sample.Payload {
+				payload[k] = v
+			}
 		}
 		payload["count"] = b.count
 		// Stringified (not time.Time): sanitizeRemoteValue's allowlist
@@ -113,16 +115,19 @@ func (s *AggregatingSink) flush(ctx context.Context) {
 		payload["window_start"] = b.windowStart.UTC().Format(time.RFC3339Nano)
 		payload["window_end"] = now.Format(time.RFC3339Nano)
 
-		s.next.Emit(ctx, ports.TelemetryEvent{
+		rollup := ports.TelemetryEvent{
 			Name:       name,
 			Source:     b.sample.Source,
 			OccurredAt: now,
 			Level:      b.sample.Level,
-			ProjectID:  b.sample.ProjectID,
-			SessionID:  b.sample.SessionID,
-			RequestID:  b.sample.RequestID,
 			Payload:    payload,
-		})
+		}
+		if name != "ao.http.5xx" {
+			rollup.ProjectID = b.sample.ProjectID
+			rollup.SessionID = b.sample.SessionID
+			rollup.RequestID = b.sample.RequestID
+		}
+		s.next.Emit(ctx, rollup)
 	}
 }
 

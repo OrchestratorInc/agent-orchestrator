@@ -75,8 +75,8 @@ func TestAggregatingSinkFoldsBurstIntoOneRollupOnFlush(t *testing.T) {
 	if count, _ := events[0].Payload["count"].(int); count != 812 {
 		t.Fatalf("rollup count = %#v, want 812", events[0].Payload["count"])
 	}
-	if events[0].Payload["path"] != "/api/v1/whatever" {
-		t.Fatalf("rollup payload lost sample dims: %#v", events[0].Payload)
+	if _, ok := events[0].Payload["path"]; ok {
+		t.Fatalf("rollup exported per-error path: %#v", events[0].Payload)
 	}
 	windowStart, ok := events[0].Payload["window_start"].(string)
 	if !ok || windowStart == "" {
@@ -91,6 +91,27 @@ func TestAggregatingSinkFoldsBurstIntoOneRollupOnFlush(t *testing.T) {
 	}
 	if _, err := time.Parse(time.RFC3339Nano, windowEnd); err != nil {
 		t.Fatalf("window_end not RFC3339: %v", err)
+	}
+}
+
+func TestHTTP5xxFanoutKeepsLocalDetailsAndExportsCountOnly(t *testing.T) {
+	local, remote := &syncRecordingSink{}, &syncRecordingSink{}
+	rollup := NewAggregatingSink(remote, []string{"ao.http.5xx"}, time.Hour)
+	fanout := NewFanoutSink(local, rollup)
+	for _, code := range []string{"FIRST", "SECOND"} {
+		fanout.Emit(context.Background(), ports.TelemetryEvent{Name: "ao.http.5xx", RequestID: code,
+			Payload: map[string]any{"error_code": code, "path": "/private/path"}})
+	}
+	rollup.flush(context.Background())
+	localEvents, remoteEvents := local.snapshot(), remote.snapshot()
+	if len(localEvents) != 2 || localEvents[0].Payload["error_code"] != "FIRST" || localEvents[1].Payload["error_code"] != "SECOND" {
+		t.Fatalf("local detail stream = %#v", localEvents)
+	}
+	if len(remoteEvents) != 1 || remoteEvents[0].Payload["count"] != 2 || remoteEvents[0].RequestID != "" {
+		t.Fatalf("remote rollup = %#v", remoteEvents)
+	}
+	if _, ok := remoteEvents[0].Payload["error_code"]; ok {
+		t.Fatalf("remote rollup retained error code: %#v", remoteEvents[0])
 	}
 }
 

@@ -3330,6 +3330,43 @@ func TestSpawnEmitsFirstSessionOnboardingAndDuration(t *testing.T) {
 	}
 }
 
+type milestoneStore struct {
+	*fakeStore
+	count int64
+}
+
+func (s *milestoneStore) LifetimeSessions(context.Context) (int64, error) { return s.count, nil }
+
+func TestSpawnUsesDurableCountForFirstAndSecondSessionMilestones(t *testing.T) {
+	st := &milestoneStore{fakeStore: newFakeStore()}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+	sink := &fakeTelemetrySink{}
+	fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+		st.count++
+		rec := domain.SessionRecord{ID: domain.SessionID(fmt.Sprintf("mer-%d", st.count)), ProjectID: cfg.ProjectID, Kind: domain.KindWorker, Harness: domain.HarnessCodex}
+		st.sessions[rec.ID] = rec
+		return rec
+	}}
+	svc := NewWithDeps(Deps{Manager: fc, Store: st, Telemetry: sink})
+	for range 2 {
+		if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var first, second int
+	for _, event := range sink.events {
+		switch event.Name {
+		case "ao.onboarding.first_session_spawned":
+			first++
+		case "ao.onboarding.second_session_spawned":
+			second++
+		}
+	}
+	if first != 1 || second != 1 {
+		t.Fatalf("first=%d second=%d, want one of each", first, second)
+	}
+}
+
 type fakeTracker struct {
 	issue domain.Issue
 	err   error

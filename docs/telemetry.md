@@ -104,6 +104,8 @@ Orchestrator.inc sends structured events in a few broad categories:
   `ao.onboarding.first_project_added` events are deprecated: they fire again
   whenever the session or project list is empty, and are kept only so
   existing dashboards continue
+- Desktop onboarding milestones separately record an app open on the install
+  day, first human CLI command, and return on a later UTC day.
 - The Orchestrator.inc version on every daemon event
 - A random `install_id` on every desktop and daemon event, the phone's own
   stored `install_id` when available, and a `paired_install_id` on phone events
@@ -132,6 +134,49 @@ group events for the same project or session without sending those identifiers
 in plain text. These identifiers are distinct from the explicit GitHub account
 attribution on session-start events, but events that share an installation
 identifier can still be associated with that attribution in PostHog.
+
+Daemon `project_id_hash` uses the random install ID as a salt before hashing
+the local project ID. This keeps the session spawn grouping stable within one
+installation while preventing a short, guessable project slug from yielding
+the same hash across installations. Usage summary events retain their separate
+random `project_telemetry_id`.
+
+Desktop and daemon events carry `days_since_install` when the persisted install
+ID file has a valid timestamp. The daemon reads it at export time; the desktop
+reads it during telemetry bootstrap. The daemon also reads `lifetime_sessions` from
+a SQLite counter that increases when a session is committed and survives its
+later deletion. The desktop reads that counter from the loopback daemon during
+bootstrap, and a paired phone receives it through the authenticated telemetry
+identity route. If the count cannot be read, it is omitted. Historical sessions
+deleted before this counter was introduced cannot be reconstructed.
+`is_signed_in` reflects the AO Cloud identity known on the emitting surface.
+It is omitted when the desktop or phone has not yet learned that state. These
+properties contain no local project or session ID.
+
+Daemon session spawn events use `provider_kind: local` and a bounded
+`spawn_reason` of `direct`, `delegation`, or `automation`, based on the spawn
+request. Desktop orchestrator spawn outcomes include `provider_kind` of
+`local`, `remote`, or `cloud` and a bounded reason from the launcher source. Failed
+outcomes also include the daemon error code and HTTP status when available.
+These values contain no error message, project name, or request ID.
+
+The onboarding milestones use durable local reservations. The first project
+and session come from committed daemon records; the second session uses the
+durable lifetime counter. A first app open is recorded only on the install day.
+The next-day return requires a prior desktop active day and a later UTC day.
+The first human CLI command reserves a local marker before export. None of
+these milestones treats an idle session as a successful session.
+
+| Event | Authoritative source | Deduplication |
+| --- | --- | --- |
+| `ao.onboarding.app_opened` | Desktop opens on the installation day | Desktop local reservation |
+| `ao.onboarding.cli_detected` | First human CLI command accepted by the daemon | Install marker file |
+| `ao.onboarding.first_project_added` | First committed project registration | Durable project registry |
+| `ao.onboarding.first_session_spawned` | First committed session | Durable session counter |
+| `ao.onboarding.second_session_spawned` | Second committed session | Durable session counter |
+| `ao.onboarding.next_day_return` | Desktop active on a previous UTC day and opened again later | Desktop local reservation |
+| `ao.setup.agent_missing` | Agent readiness reports zero installed agents | Once per desktop launch |
+| `ao.setup.agent_install_clicked` | User starts an agent install from Settings | One event per accepted click |
 
 ## Usage counts by project
 
@@ -290,17 +335,19 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   or account switch, its anonymous `distinct_id` changes to avoid attributing
   new anonymous events to the previous person.
 - Project and session identifiers included in telemetry are one-way hashed.
-  Hashing hides the plain text but still allows related events to be grouped.
+  Daemon project hashes are salted by the random install ID. Hashing hides
+  the plain text while allowing related events on that install to be grouped.
 - Absolute local paths and local application URLs detected in desktop events
   are replaced with redaction markers before the events are sent.
 - Daemon events sent to PostHog and mobile events accept a fixed set of
   properties; unexpected fields are discarded.
 - Event rates are limited to reduce repeated background activity and error
   loops.
-- Remote HTTP 5xx events are not sampled. The minute rollup and the daily
-  rate limit bound them, and real HTTP 500 responses also go to the existing
-  gated Sentry capture once. The local diagnostic stream keeps every
-  occurrence. CLI usage errors are one event per command path and error kind
+- Remote HTTP 5xx events contain only a count and rollup window. The minute
+  rollup and daily rate limit bound them. Reportable HTTP errors still go to
+  the existing gated daemon Sentry capture once, and local logs and local
+  telemetry retain each occurrence with diagnostic fields. CLI usage errors
+  are one event per command path and error kind
   per install per completed UTC day, with `command_path`, `error_kind`, and
   `count`. At most 20 of those events are sent per day. The minute rate limit
   does not apply to this event, because each one is already a summary. Paths
@@ -314,7 +361,10 @@ that waitlist as described in the [privacy policy](https://orchestrator.inc/priv
   `GET /api/v1/sessions/:id/conversation/models`, and
   `GET /api/v1/sessions/:id/conversation/skills`. Codex
   account management being unwired, and an already-closed shell terminal, are
-  not analytics events. An expired GitHub token still reports. A Codex login
+  not analytics events. A GitHub token rejected after refresh still reports
+  `GITHUB_AUTH_INVALID`. A temporary refresh outage reports
+  `GITHUB_REFRESH_UNAVAILABLE` for retry instead of claiming the credential is
+  invalid. A Codex login
   terminal failure is `CODEX_LOGIN_TERMINAL_UNAVAILABLE`. An incomplete Codex
   account setup is `CODEX_ACCOUNT_SETUP_INCOMPLETE`. Both still report on the
   account routes. The account event stream stays open for setup-incomplete

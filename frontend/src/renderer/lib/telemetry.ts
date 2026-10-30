@@ -15,6 +15,7 @@ const TELEMETRY_SCHEMA_VERSION = 2;
 const REDACTED_LOCAL_URL = "[redacted-local-url]";
 const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const ACTIVE_STORAGE_KEY = "ao.telemetry.activeSlotsByDate";
+const ONBOARDING_MILESTONES_KEY = "ao.telemetry.onboardingMilestones";
 const ROUTE_VIEW_STORAGE_KEY = "ao.telemetry.routeViewsByDate";
 const UPDATE_FAILURE_STORAGE_KEY = "ao.telemetry.updateFailures.v1";
 const EMBEDDED_LOCAL_URL_PATTERN =
@@ -308,12 +309,13 @@ async function readUpdateSettingsForTelemetry(): Promise<{ channel?: unknown; fe
 export function withTelemetryContext(properties: TelemetryProperties): TelemetryProperties {
 	// Anonymous until an AO Cloud sign-in identifies this install. Once signed in
 	// the flag is left to the SDK, which processes the identified person.
-	return { ...telemetryContext, ...cloudContext, ...properties, ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
+	return { ...telemetryContext, ...cloudContext, ...properties, ...(signInKnown ? { is_signed_in: cloudUser !== null } : {}), ...(cloudUser ? {} : { $process_person_profile: false }), install_id: installId };
 }
 
 // Who this install is. The GitHub login and AO Cloud user ID ride every event as
 // super properties; email is only ever a person property set at identify time.
 let cloudUser: { id: string; email: string } | null = null;
+let signInKnown = false;
 let githubLogin: string | null = null;
 let identifiedId: string | null = null;
 let posthogReady = false;
@@ -336,6 +338,7 @@ function registerBaseProperties(): void {
  */
 export async function identifyCloudUser(user: { id: string; email: string }): Promise<void> {
 	cloudUser = user;
+	signInKnown = true;
 	if (analyticsOptedOut || identifiedId === user.id || !(await initTelemetry())) return;
 	// A sign-out, a different account or an opt-out may have landed while init
 	// was pending; this continuation must not identify who is no longer current.
@@ -358,6 +361,7 @@ export async function identifyCloudUser(user: { id: string; email: string }): Pr
  */
 export function clearCloudUser(): void {
 	cloudUser = null;
+	signInKnown = true;
 	if (!posthogReady || identifiedId === null) return;
 	identifiedId = null;
 	posthog.reset();
@@ -566,6 +570,28 @@ export function telemetryStorage(): DailyActiveStorage | undefined {
 		return window.localStorage;
 	} catch {
 		return undefined;
+	}
+}
+
+function claimOnboardingMilestone(storage: DailyActiveStorage | undefined, milestone: string): boolean {
+	if (!storage) return false;
+	try {
+		const value = JSON.parse(storage.getItem(ONBOARDING_MILESTONES_KEY) ?? "[]") as unknown;
+		const claimed = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+		if (claimed.includes(milestone)) return false;
+		storage.setItem(ONBOARDING_MILESTONES_KEY, JSON.stringify([...claimed, milestone]));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function hadEarlierActiveDay(storage: DailyActiveStorage | undefined, now = new Date()): boolean {
+	try {
+		const value = JSON.parse(storage?.getItem(ACTIVE_STORAGE_KEY) ?? "{}") as { date?: unknown };
+		return typeof value.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.date) && value.date < now.toISOString().slice(0, 10);
+	} catch {
+		return false;
 	}
 }
 
@@ -871,9 +897,14 @@ export async function sanitizeRendererProperties(
 			break;
 		case "ao.renderer.loaded":
 			break;
+		case "ao.setup.agent_missing":
+			if (properties?.reason === "none_installed") safe.reason = properties.reason;
+			break;
+		case "ao.setup.agent_install_clicked":
+			if (typeof properties?.agent === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(properties.agent)) safe.agent = properties.agent;
+			break;
 		case "ao.renderer.project_add_succeeded":
 		case "ao.renderer.project_removed":
-		case "ao.renderer.orchestrator_open_requested":
 		case "ao.renderer.task_create_succeeded":
 		case "ao.renderer.task_create_failed":
 		case "ao.renderer.session_kill_succeeded":
@@ -893,6 +924,8 @@ export async function sanitizeRendererProperties(
 			// offering's core loop; only a hashed project id rides along.
 			const cloudProjectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (cloudProjectIDHash) safe.project_id_hash = cloudProjectIDHash;
+			if (properties?.provider_kind === "cloud") safe.provider_kind = "cloud";
+			if (typeof properties?.spawn_reason === "string" && ORCHESTRATOR_SPAWN_SOURCE_SET.has(properties.spawn_reason)) safe.spawn_reason = properties.spawn_reason;
 			break;
 		}
 		case "ao.renderer.cloud_workers_viewed":
@@ -911,6 +944,12 @@ export async function sanitizeRendererProperties(
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
 			if (typeof properties?.source === "string" && ORCHESTRATOR_SPAWN_SOURCE_SET.has(properties.source)) {
 				safe.source = properties.source;
+				safe.spawn_reason = properties.source;
+			}
+			if (properties?.provider_kind === "local" || properties?.provider_kind === "remote") safe.provider_kind = properties.provider_kind;
+			if (event === "ao.renderer.orchestrator_spawn_failed") {
+				if (typeof properties?.error_code === "string" && /^[A-Z0-9_]+$/.test(properties.error_code)) safe.error_code = properties.error_code;
+				if (typeof properties?.http_status === "number" && Number.isInteger(properties.http_status) && properties.http_status >= 400 && properties.http_status <= 599) safe.http_status = properties.http_status;
 			}
 			break;
 		}
@@ -958,17 +997,6 @@ export async function sanitizeRendererProperties(
 				safe.reason = properties.reason;
 			}
 			break;
-		case "ao.renderer.agents_available": {
-			// Counts and a fixed-vocabulary id list only. Agent ids come from AO's own
-			// registry, never from user input, so they carry no user data.
-			for (const key of ["installed_count", "authorized_count", "supported_count"] as const) {
-				if (typeof properties?.[key] === "number") safe[key] = properties[key];
-			}
-			if (typeof properties?.authorized_agents === "string") {
-				safe.authorized_agents = properties.authorized_agents;
-			}
-			break;
-		}
 		case "ao.renderer.open_in_editor_succeeded": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
@@ -1205,6 +1233,8 @@ export async function initTelemetry(): Promise<boolean> {
 		// could only set the flag then, so honor it before any client exists.
 		if (analyticsOptedOut) return false;
 		telemetryContext = buildTelemetryContext(bootstrap.appVersion, bootstrap.platform, channel, bootstrap.install);
+		if (bootstrap.daysSinceInstall !== undefined) telemetryContext.days_since_install = bootstrap.daysSinceInstall;
+		if (bootstrap.lifetimeSessions !== undefined) telemetryContext.lifetime_sessions = bootstrap.lifetimeSessions;
 		posthog = await loadPostHog();
 		// Loading the SDK is asynchronous; an opt-out in that gap must prevent
 		// both SDK initialization and the unconditional opt-in below.
@@ -1225,8 +1255,15 @@ export async function initTelemetry(): Promise<boolean> {
 			distinctId: bootstrap.distinctId,
 		});
 		bindRendererErrorHandlers();
+		const storage = telemetryStorage();
+		if (bootstrap.daysSinceInstall === 0 && !isDeniedEvent("ao.onboarding.app_opened") && claimOnboardingMilestone(storage, "app_opened")) {
+			posthog.capture("ao.onboarding.app_opened", withTelemetryContext({}));
+		}
+		if (hadEarlierActiveDay(storage) && !isDeniedEvent("ao.onboarding.next_day_return") && claimOnboardingMilestone(storage, "next_day_return")) {
+			posthog.capture("ao.onboarding.next_day_return", withTelemetryContext({}));
+		}
 		startDailyActiveHeartbeat({
-			storage: telemetryStorage(),
+			storage,
 			window,
 			document,
 			// Ride the batched request queue like every other renderer event
