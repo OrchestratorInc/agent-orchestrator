@@ -1070,3 +1070,5 @@ a.ao-hdr-logo img { position: relative; top: 0.5px; }
     color: rgba(255,255,255,0.4) !important;
   }
 }
+/* v35b: hide Mintlify's own toc-indicator dot (we draw the original bar) */
+[data-layout-item="toc-indicator"] { display: none !important; }
