@@ -1245,3 +1245,6 @@ html[data-current-path="/installation"] main span[data-as="p"]:has(+ table) + ta
   background: oklch(0.286 0.016 107.4);
 }
 html[data-current-path="/installation"] main span[data-as="p"]:has(+ table) + table { margin-bottom: 44px !important; }
+
+/* v36o: remove Mintlify's 150px td min-width (original has none) - it skewed column distribution */
+main table td { min-width: 0 !important; }
