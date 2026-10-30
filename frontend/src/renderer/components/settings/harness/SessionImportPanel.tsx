@@ -17,10 +17,6 @@ type ImportResult = components["schemas"]["SessionImportResult"];
 /** Agents whose local chats AO can import. */
 export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "qwen"]);
 
-// HISTORY_ONLY_IMPORT_AGENTS lives in types/workspace (so session predicates can
-// use it without importing this component); re-exported here for the import UI.
-export { HISTORY_ONLY_IMPORT_AGENTS } from "../../../types/workspace";
-
 const offerClosedKey = "ao.sessionImport.offerClosed";
 const offerListeners = new Set<() => void>();
 const folderFilter = "folder:";

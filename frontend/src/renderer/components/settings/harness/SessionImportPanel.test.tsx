@@ -5,7 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { workspaceQueryKey } from "../../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../../lib/agent-options";
 import type { WorkspaceSummary } from "../../../types/workspace";
-import { HISTORY_ONLY_IMPORT_AGENTS, IMPORTABLE_AGENTS, SessionImportPanel } from "./SessionImportPanel";
+import { IMPORTABLE_AGENTS, SessionImportPanel } from "./SessionImportPanel";
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("../../../lib/api-client", () => ({
 	apiClient: api,
@@ -36,13 +36,8 @@ beforeEach(() => {
 	});
 	api.POST.mockResolvedValue({ data: { results: [{ id: "older", status: "created", sessionId: "standalone-1" }] } });
 });
-it("offers Qwen imports as history-only", () => {
+it("offers Qwen chats for import", () => {
 	expect(IMPORTABLE_AGENTS.has("qwen")).toBe(true);
-	// Qwen cannot resume a CLI chat from AO's worktree, so its imports are read-only.
-	expect(HISTORY_ONLY_IMPORT_AGENTS.has("qwen")).toBe(true);
-	// The resumable harnesses are not history-only.
-	expect(HISTORY_ONLY_IMPORT_AGENTS.has("claude-code")).toBe(false);
-	expect(HISTORY_ONLY_IMPORT_AGENTS.has("codex")).toBe(false);
 });
 
 it("lists Qwen chats for import", async () => {
