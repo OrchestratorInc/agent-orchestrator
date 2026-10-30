@@ -48,3 +48,5 @@ verification. Native platform coverage and final-head checks are reported in the
 - New report (human observation): selecting file text shows a toolbar that automatically closes after some time; whether its highlight also disappears is unknown.
 - Agent-collected evidence: shadow-aware selection, deferred refresh completion, explicit navigation, and renderer-prop retention regressions pass. This isolates plausible failure paths; it does not establish the cause in the reporter’s installed app.
 - Phase 1 component run: 297 tests pass and one unrelated Windows locale assertion fails (`2,58,400` versus `258,400`). Narrow follow-up: 26 tests pass; frontend and E2E typechecks pass. Native verification is recorded separately when available.
+
+- Phase 2: selection operations freeze their creation receipt and destination across retries; repeat activation shares an in-flight request, newer selections get fresh identities, and disposed surfaces reject stale completion. All 68 SessionChatSurface tests pass, including four new operation-ownership regressions; frontend typecheck passes.

@@ -451,15 +451,42 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
-	const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
-		openSideInspector();
-		if (sideChats.activeId) {
-			sideChats.addReference(sideChats.activeId, excerpt);
-			sideChats.show(sideChats.activeId);
-		} else {
-			await sideChats.create(excerpt);
-		}
-	};
+ // A selection owns its destination and receipt until its action succeeds.
+ const selectionSideScope = useMemo(() => ({ active: true, operations: new Map<string, {
+  creationKey: string; destinationId?: string; inFlight?: Promise<void>;
+ }>() }), [uiSessionId]);
+ useEffect(() => {
+  selectionSideScope.active = true;
+  return () => { selectionSideScope.active = false; selectionSideScope.operations.clear(); };
+ }, [selectionSideScope]);
+ const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
+  if (!selectionSideScope.active) throw new Error("Side chat is no longer active.");
+  let operation = selectionSideScope.operations.get(excerpt.id);
+  if (!operation) {
+   operation = { creationKey: crypto.randomUUID(), destinationId: sideChats.activeId };
+   selectionSideScope.operations.set(excerpt.id, operation);
+  }
+  if (operation.inFlight) return operation.inFlight;
+  openSideInspector();
+  const target = operation;
+  target.inFlight = (async () => {
+   if (target.destinationId) {
+    if (!sideChats.sides.some(side => side.id === target.destinationId)) throw new Error("Side chat is no longer active.");
+    sideChats.addReference(target.destinationId, excerpt);
+    sideChats.show(target.destinationId);
+   } else {
+    const created = await sideChats.create(excerpt, false, target.creationKey);
+    if (!selectionSideScope.active) throw new Error("Side chat is no longer active.");
+    target.destinationId = created.id;
+   }
+  })();
+  try {
+   await target.inFlight;
+   if (selectionSideScope.active) selectionSideScope.operations.delete(excerpt.id);
+  } finally {
+   target.inFlight = undefined;
+  }
+ };
 
 	const openLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths, onOpenFile);
 	// Links opened on the user's behalf stay quiet about a file the session does

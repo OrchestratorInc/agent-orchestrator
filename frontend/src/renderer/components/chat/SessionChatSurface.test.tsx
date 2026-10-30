@@ -1,3 +1,4 @@
+import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -90,14 +91,16 @@ const sideMocks = vi.hoisted(() => ({
 	send: vi.fn(),
 	show: vi.fn(),
 	addReference: vi.fn(),
-	sides: [] as { hasWork: boolean }[],
+	sides: [] as { id: string; hasWork: boolean }[],
+ activeId: "existing-side" as string | undefined,
+ attach: undefined as undefined | ((excerpt: ChatDraftExcerptReference) => Promise<void>),
 	agentSwitch: undefined as AgentSwitchProps | undefined,
 	workspaceSend: undefined as
 		| undefined
 		| ((text: string, attachments: undefined, clientMessageId: string) => Promise<void>),
 }));
 vi.mock("./IndependentSideChats", () => ({
-	useIndependentSideChats: () => ({ ...sideMocks, panel: null, activeId: "existing-side" }),
+	useIndependentSideChats: () => ({ ...sideMocks, panel: null }),
 }));
 
 vi.mock("../../lib/api-client", () => ({
@@ -165,10 +168,12 @@ vi.mock("./ChatWorkspace", async () => {
 			promptSuggestion,
 			snapshot,
 			shellTarget,
+   onAddToSideChat,
 			onSend,
 			composerNotice,
 		}: {
 			onSend: typeof sideMocks.workspaceSend;
+   onAddToSideChat?: typeof sideMocks.attach;
 			composerNotice?: ReactNode;
 			agentSwitch?: AgentSwitchProps;
 			agentInputDisabled?: boolean;
@@ -187,6 +192,7 @@ vi.mock("./ChatWorkspace", async () => {
 			shellTarget?: { handleId: string };
 		}) => {
 			sideMocks.workspaceSend = onSend;
+   sideMocks.attach = onAddToSideChat;
 			sideMocks.agentSwitch = agentSwitch;
 			const [mountedSessionId] = useState(snapshot.sessionId);
 			return (
@@ -261,6 +267,8 @@ beforeEach(() => {
 	postMock.mockReset().mockResolvedValue({ data: {}, error: undefined });
 	providerSwitchMock.mockReset().mockResolvedValue({});
 	sideMocks.agentSwitch = undefined;
+ sideMocks.activeId = "existing-side";
+ sideMocks.attach = undefined;
 	clearCatalogsMock.mockReset();
 	invalidateCatalogsMock.mockReset();
 	conversationState.snapshot = { capabilities: [] };
@@ -1364,4 +1372,60 @@ describe("SessionChatSurface startup recovery", () => {
 		view.rerender(<Wrapper client={queryClient}><SessionChatSurface session={{ ...session, statusReadiness: "ready" }} /></Wrapper>);
 		expect(conversationRefreshes(invalidate)).toBe(0);
 	});
+});
+
+
+describe("selection side-chat operation ownership", () => {
+ const excerpt: ChatDraftExcerptReference = { id: "selection-operation", conversationId: "conv-sess-1", messageId: "message", revision: 1, text: "selected text", role: "assistant" };
+ function mount() {
+  useUiStore.setState({ developerMode:true, sideChats:true });
+  conversationState.snapshot = { ...snapshotFor(session.id), capabilities:["resume"] };
+  sideMocks.create.mockReset(); sideMocks.addReference.mockReset(); sideMocks.show.mockReset();
+  sideMocks.activeId = undefined; sideMocks.sides = [];
+  const client = new QueryClient({defaultOptions:{queries:{retry:false}}});
+  const view = render(<Wrapper client={client}><SessionChatSurface session={{...session}} /></Wrapper>);
+  return { ...view, advance() {
+   conversationState.snapshot = { ...snapshotFor(session.id), capabilities:["resume"], latestSequence:42 };
+   view.rerender(<Wrapper client={client}><SessionChatSurface session={{...session}} /></Wrapper>);
+  } };
+ }
+ it("reuses creation identity after a lost reply despite parent advancement and destination switching", async () => {
+  const view = mount();
+  sideMocks.create.mockRejectedValueOnce(new Error("Reply lost")).mockResolvedValueOnce({id:"original-side"});
+  await act(async()=>{ await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost"); });
+  const first = sideMocks.create.mock.calls[0];
+  sideMocks.activeId = "unrelated-side"; sideMocks.sides = [{id:"unrelated-side",hasWork:false}]; view.advance();
+  await act(async()=>{ await sideMocks.attach!(excerpt); });
+  expect(sideMocks.create).toHaveBeenCalledTimes(2);
+  expect(sideMocks.create.mock.calls[1]).toEqual(first);
+  expect(first).toEqual([excerpt,false,expect.any(String)]);
+  expect(sideMocks.addReference).not.toHaveBeenCalled();
+ });
+ it("coalesces repeated activation and gives later selections fresh creation identities", async () => {
+  mount(); let resolve!: (side:{id:string})=>void;
+  sideMocks.create.mockImplementationOnce(()=>new Promise(done=>{resolve=done;})).mockResolvedValue({id:"next"});
+  await act(async()=>{
+   const first = sideMocks.attach!(excerpt); const second = sideMocks.attach!(excerpt);
+   expect(sideMocks.create).toHaveBeenCalledTimes(1); resolve({id:"original"}); await Promise.all([first,second]);
+  });
+  await act(async()=>{ await sideMocks.attach!({...excerpt,id:"next-selection"}); });
+  expect(sideMocks.create.mock.calls[1][2]).not.toBe(sideMocks.create.mock.calls[0][2]);
+ });
+ it("retries an existing destination without following the active tab", async () => {
+  const view = mount();sideMocks.activeId="original";sideMocks.sides=[{id:"original",hasWork:false},{id:"other",hasWork:false}];view.advance();
+  sideMocks.addReference.mockImplementationOnce(()=>{throw new Error("Failed");});
+  await act(async()=>{ await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Failed"); });
+  sideMocks.activeId="other";view.advance();
+  await act(async()=>{await sideMocks.attach!(excerpt);});
+  expect(sideMocks.addReference.mock.calls.map(call=>call[0])).toEqual(["original","original"]);
+  expect(sideMocks.create).not.toHaveBeenCalled();
+ });
+ it("ignores a late creation completion after the source surface is disposed", async () => {
+  const view=mount();let resolve!:(side:{id:string})=>void;
+  sideMocks.create.mockImplementation(()=>new Promise(done=>{resolve=done;}));
+  let request!:Promise<void>;act(()=>{request=sideMocks.attach!(excerpt);});
+  view.unmount();
+  await act(async()=>{resolve({id:"old-side"});await expect(request).rejects.toThrow("no longer active");});
+  expect(sideMocks.show).not.toHaveBeenCalled();
+ });
 });
