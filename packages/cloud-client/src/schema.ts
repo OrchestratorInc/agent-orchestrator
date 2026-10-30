@@ -61,10 +61,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt: they no longer serve but still use a slot, so used counts them. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        /** @description Lists the signed-in user's public artifact share links, newest first, with how many they may hold. Revoked links are listed with revokedAt so they can be published again; they serve nothing and use no slot, so used counts only active links. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
         get: operations["listArtifactShares"];
         put?: never;
-        /** @description Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link at <project>-<feature>-<email> under the share origin; a taken name gets a -2, -3, ... suffix. Publishing a document that already has a link replaces the version that link serves: the URL and slot stay, the earlier version is no longer served, and the response is 200 with replaced true. A revoked link is restored the same way. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document would exceed the user's limit of links; revoked links count toward it. */
+        /** @description Publishes the request body, one file from a local session, as the link of the document named by project, feature and name. A new document gets a new public link under a random 26-character link ID (lowercase a-z and 2-7) that names neither the file nor its owner. Publishing a document that already has a link replaces the version that link serves: the URL stays, the earlier version is no longer served, and the response is 200 with replaced true. An active link keeps its slot; a revoked link is restored the same way when a slot is free. Content-Length and X-AO-Artifact-SHA256 are required. Returns 409 artifact_share_limit_reached when a new document, or restoring a revoked one, would exceed the user's limit of active links. */
         post: operations["createArtifactShare"];
         delete?: never;
         options?: never;
@@ -85,8 +85,28 @@ export interface paths {
         /** @description Replaces the file an existing link serves. The link keeps its URL and does not count against the limit again. name must match the link's file name, which is part of its document; another name returns 409 artifact_share_name_changed, and the renamed file is published as a new link with POST. */
         put: operations["updateArtifactShare"];
         post?: never;
-        /** @description Revokes a link: it stops serving at once and its stored file is deleted after a grace period. The link still uses its slot, so revoking never makes room for a new document. Publishing the same document again restores it. A link already revoked returns 404. */
+        /** @description Revokes a link: it stops serving at once, its stored file is deleted after a grace period, and it frees its slot for another document. Publishing the same document again restores its URL when a slot is free. A link already revoked returns 404. */
         delete: operations["deleteArtifactShare"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/artifact-shares/{linkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        /** @description Returns what the public viewer page shows for a share link: its file's name, type and size, its owner's display name, and the URL its file is served at. Needs no sign-in and never returns the owner's email. Readable from a browser only by the configured viewer origin, and rate-limited per client (429 rate_limited). An unknown or revoked link returns 404. Available only when the development-only AO_CLOUD_ARTIFACT_SHARES flag is on; otherwise 404. */
+        get: operations["getPublicArtifactShare"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -3371,10 +3391,14 @@ export interface components {
         ArtifactShare: {
             /** Format: uuid */
             id: string;
-            /** @description The link's subdomain label. */
+            /** @description The link's public ID, 26 random characters of a-z and 2-7, and its subdomain label under the share origin. */
             slug: string;
-            /** @description The public link, for example http://<slug>.share.localhost:8081/. */
+            /** @description The same as contentUrl, kept for clients that predate it. */
             url: string;
+            /** @description Where the link's file is served, for example https://<slug>.orchestrator-usercontent.com/. */
+            contentUrl: string;
+            /** @description The public page that shows the link, for example https://orchestrator.inc/artifact/<slug>. Absent when the control plane has no viewer configured; share contentUrl instead. */
+            viewerUrl?: string;
             name: string;
             contentType: string;
             /** Format: int64 */
@@ -3386,7 +3410,7 @@ export interface components {
             updatedAt: string;
             /**
              * Format: date-time
-             * @description When the link was revoked. A revoked link serves nothing but still uses a slot.
+             * @description When the link was revoked. A revoked link serves nothing and uses no slot.
              */
             revokedAt?: string;
         };
@@ -3401,7 +3425,23 @@ export interface components {
         ArtifactShareList: {
             shares: components["schemas"]["ArtifactShare"][];
             limit: number;
+            /** @description How many active links the user holds; revoked links do not count. */
             used: number;
+        };
+        PublicArtifactShare: {
+            linkId: string;
+            name: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            /** Format: date-time */
+            updatedAt: string;
+            owner: {
+                /** @description The owner's display name; empty when they set none. */
+                displayName: string;
+            };
+            /** @description Where the link's file is served; the viewer frames it. */
+            contentUrl: string;
         };
         WorkerArtifactFile: {
             path: string;
@@ -4376,6 +4416,30 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getPublicArtifactShare: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link's public details. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicArtifactShare"];
+                };
             };
             default: components["responses"]["Error"];
         };
