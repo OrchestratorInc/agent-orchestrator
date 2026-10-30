@@ -829,14 +829,21 @@ function aoCurLangName() {
         /* expanding a root-linked group (e.g. Configuration) also SPA-navigates
            to its root page; go back and keep the expanded state */
         var backTries = 0;
-        (function settle() {
-          if (location.pathname !== origPath && backTries++ < 8) {
+        setTimeout(function settle() {
+          if (location.pathname !== origPath && backTries++ < 10) {
             history.back();
-            setTimeout(settle, 500);
+            setTimeout(settle, 600);
             return;
           }
-          setTimeout(function () { openAoDrawer(opener); }, 350);
-        })();
+          /* quiet beat: only build once the path has stayed put */
+          setTimeout(function () {
+            if (location.pathname !== origPath) { settle(); return; }
+            openAoDrawer(opener);
+            setTimeout(function () {
+              if (location.pathname !== origPath) history.back();
+            }, 600);
+          }, 400);
+        }, 600);
         return;
       }
     }
