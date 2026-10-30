@@ -103,6 +103,8 @@ export interface ConversationPlan {
 	steps: PlanStep[];
 	/** The agent keeps this list across turns (Claude's task list), so later turns carry copies of it. */
 	spansTurns?: boolean;
+	/** A later turn or run carries a newer copy of this list; the daemon sets it. */
+	superseded?: boolean;
 }
 
 export interface ConversationUsageLimit {
@@ -544,6 +546,8 @@ export interface PlanDetail {
 	steps?: PlanStep[];
 	/** The list spans turns; see ConversationPlan.spansTurns. */
 	spansTurns?: boolean;
+	/** See ConversationPlan.superseded. */
+	superseded?: boolean;
 }
 
 export interface UsageDetail {

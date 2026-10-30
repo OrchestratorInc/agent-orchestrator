@@ -130,7 +130,6 @@ type Store interface {
 
 	TurnByID(ctx context.Context, turnID string) (domain.ConversationTurn, error)
 	TurnByProviderID(ctx context.Context, conversationID, providerTurnID string) (domain.ConversationTurn, error)
-	LatestConversationTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error)
 	RollbackTurns(ctx context.Context, conversationID, turnID string, now time.Time) (int, error)
 
 	SetProviderTitle(ctx context.Context, conversationID, title string, now time.Time) error
@@ -160,6 +159,7 @@ type Store interface {
 	RecordMCPServers(ctx context.Context, conversationID string, servers []domain.ConversationMCPServer) error
 
 	UpsertActivity(ctx context.Context, conversationID, providerTurnID string, activity domain.ConversationActivity, now time.Time) error
+	SupersedeSpanningPlans(ctx context.Context, conversationID, providerTurnID, providerItemID string, now time.Time) error
 	MarkCompacted(ctx context.Context, conversationID string, at time.Time) error
 	ResolveApproval(ctx context.Context, conversationID, requestID, detailJSON string, now time.Time) error
 	HasPendingConversationInteractions(ctx context.Context, conversationID string) (bool, error)
@@ -308,6 +308,9 @@ type Controller struct {
 	// replacement erases the other half and turns a percentage meter into a bare
 	// token count.
 	usage domain.ConversationUsage
+	// turnlessPlanItemID keys the plan row of the agent's current run of work
+	// outside any turn; see planItemID. Cleared when an event names a turn.
+	turnlessPlanItemID string
 	// mcpServers is keyed by name; mcpServerOrder preserves first-seen order so the
 	// list a client renders does not reshuffle on every turn.
 	mcpServers            map[string]domain.ConversationMCPServer
@@ -3156,6 +3159,9 @@ func (c *Controller) applyCommittedTurnLifecycle(event ports.ChatEvent) bool {
 
 func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 	now := c.now()
+	if event.ProviderTurnID != "" {
+		c.turnlessPlanItemID = ""
+	}
 
 	switch event.Kind {
 	case ports.ChatEventTurnStarted:
@@ -3349,11 +3355,8 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 		// which the column cannot. The compaction projection already sets this
 		// precedent, and the two cannot disagree because both are written from one
 		// event.
-		itemID, err := c.planItemID(ctx, event.ProviderTurnID)
-		if err != nil {
-			return err
-		}
-		return c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
+		itemID := c.planItemID(event.ProviderTurnID)
+		if err := c.store.UpsertActivity(ctx, c.conversation.ID, event.ProviderTurnID,
 			domain.ConversationActivity{
 				ID:             c.newID(),
 				Kind:           domain.ActivityKindPlan,
@@ -3361,7 +3364,16 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 				Summary:        event.Summary,
 				Detail:         planDetail(*event.Plan),
 				ProviderItemID: itemID,
-			}, now)
+			}, now); err != nil {
+			return err
+		}
+		if !event.Plan.SpansTurns {
+			return nil
+		}
+		// Every earlier turn and run holds a copy of this same list. The daemon sees
+		// the writes in order, so it marks which copy is current rather than leaving
+		// each client to date the copies.
+		return c.store.SupersedeSpanningPlans(ctx, c.conversation.ID, event.ProviderTurnID, itemID, now)
 
 	case ports.ChatEventModelRerouted:
 		// A correction to a claim AO has already made. The composer names the model it
@@ -3991,24 +4003,17 @@ func (c *Controller) handoffActive() bool {
 // colliding with a provider item id.
 //
 // A plan with no turn comes from work the agent does on its own, outside any AO
-// turn. It is keyed on the latest turn and on whether that turn had settled, so
-// the revisions in one such run rewrite one row, and a run that starts once the
-// turn ends gets a row of its own after it.
-func (c *Controller) planItemID(ctx context.Context, providerTurnID string) (string, error) {
+// turn. Each run of that work gets one row, so its revisions rewrite it. A run
+// ends when the agent next works on a turn; the provider reports nothing when
+// such work stops, so two runs with no turn between them share a row.
+func (c *Controller) planItemID(providerTurnID string) string {
 	if providerTurnID != "" {
-		return "ao-plan-" + providerTurnID, nil
+		return "ao-plan-" + providerTurnID
 	}
-	latest, err := c.store.LatestConversationTurn(ctx, c.conversation.ID)
-	if errors.Is(err, domain.ErrNoConversationTurn) {
-		return "ao-plan-turnless", nil
+	if c.turnlessPlanItemID == "" {
+		c.turnlessPlanItemID = "ao-plan-run-" + c.newID()
 	}
-	if err != nil {
-		return "", err
-	}
-	if latest.State == domain.TurnStateQueued || latest.State == domain.TurnStateRunning {
-		return "ao-plan-during-" + latest.ID, nil
-	}
-	return "ao-plan-after-" + latest.ID, nil
+	return c.turnlessPlanItemID
 }
 
 // rerouteItemID keys a reroute notice the same way, for the same reason.

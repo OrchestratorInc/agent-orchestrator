@@ -1198,7 +1198,7 @@ func (s *Store) HasConversationTurns(ctx context.Context, conversationID string)
 // LatestConversationTurn reads the latest non-rolled-back turn on the active
 // branch lineage without loading messages or activities.
 func (s *Store) LatestConversationTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error) {
-	row, err := s.conversationReader(ctx).SelectLatestConversationTurn(ctx, conversationID)
+	row, err := s.qr.SelectLatestConversationTurn(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ConversationTurn{}, domain.ErrNoConversationTurn
 	}
@@ -2350,6 +2350,32 @@ func (s *Store) SetTurnPlan(
 		return false, fmt.Errorf("set turn plan for %s: %w", providerTurnID, err)
 	}
 	return rows > 0, nil
+}
+
+// SupersedeSpanningPlans marks every copy of a list that spans turns superseded
+// except the one just written: the plan of providerTurnID, if any, and the plan
+// row keyed providerItemID.
+func (s *Store) SupersedeSpanningPlans(
+	ctx context.Context,
+	conversationID, providerTurnID, providerItemID string,
+	now time.Time,
+) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if err := q.SupersedeConversationTurnPlans(ctx, gen.SupersedeConversationTurnPlansParams{
+		ConversationID:        conversationID,
+		CurrentProviderTurnID: providerTurnID,
+	}); err != nil {
+		return fmt.Errorf("supersede turn plans in %s: %w", conversationID, err)
+	}
+	if err := q.SupersedeConversationPlanActivities(ctx, gen.SupersedeConversationPlanActivitiesParams{
+		UpdatedAt:             now,
+		ConversationID:        conversationID,
+		CurrentProviderItemID: providerItemID,
+	}); err != nil {
+		return fmt.Errorf("supersede plan rows in %s: %w", conversationID, err)
+	}
+	return nil
 }
 
 // MaxStreamedTextChars caps the provider prose stored for one activity.

@@ -94,24 +94,18 @@ describe("mobile Chat timeline model", () => {
 		expect(readableConversationItems(value).slice(-1)[0]).toMatchObject({ activityKind: "system" });
 	});
 
-	// Claude keeps one task list across turns, re-sent into each later turn, and can
-	// revise it after a turn ends, when the revision belongs to no turn. Only the
-	// newest copy is current.
-	it("shows a list that spans turns once, at its newest copy", () => {
+	// Claude keeps one task list across turns and can revise it after a turn ends,
+	// when the revision belongs to no turn. The daemon marks every older copy
+	// superseded, so only the newest shows.
+	it("hides plan rows the daemon marked superseded", () => {
 		const value = snapshot();
-		const steps = (status: "pending" | "completed") => [{ text: "Render", status }];
-		value.turns[0].plan = { spansTurns: true, steps: steps("pending") };
-		value.turns[1].plan = { spansTurns: true, steps: steps("pending") };
-		const late = (sequence: number, status: "pending" | "completed"): ConversationActivity => ({
+		const row = (sequence: number, superseded: boolean): ConversationActivity => ({
 			...activity("plan", sequence),
-			detail: { event: "plan", spansTurns: true, steps: steps(status) },
+			detail: { event: "plan", spansTurns: true, superseded, steps: [{ text: "Render", status: "completed" }] },
 		});
-		value.items.push(late(5, "pending"), late(6, "completed"));
-
-		const groups = groupConversationByTurn(value);
-		const planRows = groups.flatMap((group) => group.items).filter((item) => item.kind === "activity" && item.activityKind === "plan");
+		value.items.push(row(5, true), row(6, false));
+		const planRows = groupConversationByTurn(value).flatMap((group) => group.items).filter((item) => item.kind === "activity" && item.activityKind === "plan");
 		expect(planRows.map((item) => item.id)).toEqual(["plan-6"]);
-		expect(groups.flatMap((group) => group.plan && group.turnId ? [group.turnId] : [])).toEqual([]);
 	});
 
 	// Provider turns AO never correlated each carry their own plan row. Without the
@@ -127,16 +121,17 @@ describe("mobile Chat timeline model", () => {
 		expect(planRows.map((item) => item.id)).toEqual(["plan-5", "plan-6"]);
 	});
 
-	it("shows the latest turn's copy of a list that spans turns, and keeps per-turn plans", () => {
+	it("shows a turn's plan unless the daemon marked it superseded, and keeps per-turn plans", () => {
 		const value = snapshot();
+		const shown = () => groupConversationByTurn(value).flatMap((group) => group.plan && group.turnId ? [group.turnId] : []);
 		value.turns[0].state = "failed";
-		value.turns[0].plan = { spansTurns: true, steps: [{ text: "Render", status: "in_progress" }] };
+		value.turns[0].plan = { spansTurns: true, superseded: true, steps: [{ text: "Render", status: "in_progress" }] };
 		value.turns[1].plan = { spansTurns: true, steps: [{ text: "Render", status: "completed" }] };
-		expect(groupConversationByTurn(value).flatMap((group) => group.plan && group.turnId ? [group.turnId] : [])).toEqual(["t2"]);
+		expect(shown()).toEqual(["t2"]);
 
 		value.turns[0].plan = { steps: [{ text: "Read", status: "completed" }] };
 		value.turns[1].plan = { steps: [{ text: "Write", status: "completed" }] };
-		expect(groupConversationByTurn(value).flatMap((group) => group.plan && group.turnId ? [group.turnId] : [])).toEqual(["t1", "t2"]);
+		expect(shown()).toEqual(["t1", "t2"]);
 	});
 
 	it("docks queued human messages instead of rendering them as sent timeline turns", () => {

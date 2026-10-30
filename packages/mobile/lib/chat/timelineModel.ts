@@ -62,11 +62,6 @@ export function queuedConversationMessages(snapshot: ConversationSnapshot, openi
 	);
 }
 
-/** A plan row whose list the agent keeps across turns, including one that clears it. */
-function isSpanningPlanRow(item: ConversationItem): boolean {
-	return item.kind === "activity" && item.activityKind === "plan" && item.detail?.spansTurns === true;
-}
-
 /** Keep conversation signal while removing provider telemetry/noise. */
 export function readableConversationItems(snapshot: ConversationSnapshot, openingTurnId?: string): ConversationItem[] {
 	const plannedTurns = new Set(snapshot.turns.filter((turn) => turn.plan?.steps.length).map((turn) => turn.id));
@@ -74,7 +69,9 @@ export function readableConversationItems(snapshot: ConversationSnapshot, openin
 	return snapshot.items.filter((item) => !item.turnId || !queued.has(item.turnId)).filter((item) => item.kind === "message" || (
 		item.activityKind !== "usage" &&
 		item.activityKind !== "reasoning" &&
-		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId))
+		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) &&
+		// An older copy of a list that spans turns; a later turn or run carries it.
+		!(item.activityKind === "plan" && item.detail?.superseded)
 	));
 }
 
@@ -109,36 +106,20 @@ export function groupConversationByTurn(
 		}
 	}
 	groups.sort((left, right) => left.anchor - right.anchor);
-	return attachCurrentPlans(groups);
+	attachCurrentPlans(groups);
+	return groups;
 }
 
 /**
- * Gives each turn group the plan it should show, as the desktop does. A list the
- * agent keeps across turns (Claude's task list) reaches every later turn as a copy
- * of the same list, on the turn or, for work after a turn ended, as a row with no
- * turn. Only the latest copy is current. A turn's copy dates from the turn's last
- * item and a row's from the row itself, as on the desktop.
+ * Gives each turn group the plan it should show, as the desktop does: the turn's
+ * plan, unless the daemon marked it superseded. That is an older copy of a list the
+ * agent keeps across turns (Claude's task list), which a later turn or run carries.
  */
-function attachCurrentPlans(groups: ConversationGroup[]): ConversationGroup[] {
-	let current: { turnId?: string; rowId?: string; at: number } | undefined;
+function attachCurrentPlans(groups: ConversationGroup[]): void {
 	for (const group of groups) {
-		const last = group.items.at(-1);
-		if (group.turn?.plan?.spansTurns && last && last.sequence > (current?.at ?? -1)) {
-			current = { turnId: group.turnId, at: last.sequence };
-		}
-		for (const item of group.items) {
-			if (isSpanningPlanRow(item) && item.sequence > (current?.at ?? -1)) current = { rowId: item.id, at: item.sequence };
-		}
-	}
-	for (const group of groups) {
-		group.items = group.items.filter((item) => !isSpanningPlanRow(item) || item.id === current?.rowId);
 		const plan = group.turn?.plan;
-		if (!plan?.steps.length) continue;
-		if (plan.spansTurns && group.turnId !== current?.turnId) continue;
-		group.plan = plan;
+		if (plan?.steps.length && !plan.superseded) group.plan = plan;
 	}
-	// A run of work that held nothing but an older copy has nothing left to show.
-	return groups.filter((group) => group.items.length > 0);
 }
 
 export type TurnItemPartition = {

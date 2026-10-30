@@ -1885,6 +1885,7 @@ export function toSnapshot(wire: WireSnapshot): ConversationSnapshot {
 							}),
 						),
 						spansTurns: turn.plan.spansTurns || undefined,
+						superseded: turn.plan.superseded || undefined,
 					}
 				: undefined,
 			rolledBack: turn.rolledBack ?? undefined,

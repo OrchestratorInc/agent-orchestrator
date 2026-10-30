@@ -2212,6 +2212,8 @@ function runsOf(items: ConversationItem[]): TimelineRun[] {
  *     one event, so they cannot disagree; the turn's copy renders as a checklist at
  *     the end of the turn and a second rendering of the same plan in the middle of
  *     it would just be the same list twice.
+ *   - a plan row the daemon marked superseded: an older copy of a list the agent
+ *     keeps across turns, which a later turn or run carries.
  *
  * Everything else is kept, including an activity this build does not fully
  * understand — dropping an unrecognized item would hide work the agent really did.
@@ -2229,6 +2231,7 @@ function readableItems(snapshot: ConversationSnapshot): ConversationItem[] {
 		if (item.kind !== "activity") return true;
 		if (item.activityKind === "usage") return false;
 		if (item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) return false;
+		if (item.activityKind === "plan" && item.detail?.superseded) return false;
 		if (item.activityKind === "reasoning") return false;
 		// Claude emits both a tool call and an elicitation for the same question.
 		// The pending form already presents it above the composer.
@@ -5353,11 +5356,6 @@ function firstTurnSettled(snapshot: ConversationSnapshot): boolean {
 	return Boolean(first && first.state !== "queued" && first.state !== "running");
 }
 
-/** A plan row whose list the agent keeps across turns, including one that clears it. */
-function isSpanningPlanRow(item: ConversationItem): boolean {
-	return item.kind === "activity" && item.activityKind === "plan" && item.detail?.spansTurns === true;
-}
-
 /**
  * Group items by the turn that produced them, so a completed turn can be closed
  * off with its outcome.
@@ -5420,30 +5418,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 
 	groups.sort((a, b) => a.anchor - b.anchor);
 
-	// A list the agent keeps across turns reaches every later turn as a copy of the
-	// same list, on the turn or, for work after a turn ended, as a row with no turn.
-	// Only the latest copy is current. A turn's copy dates from the turn's last item
-	// and a row's from the row itself; mobile's timeline model reads the same.
-	let currentSpanningPlan: { turnId?: string; rowId?: string; at: number } | undefined;
 	for (const group of groups) {
-		const last = group.items.at(-1);
-		const turnSpans = group.turnId !== undefined && byTurn.get(group.turnId)?.plan?.spansTurns;
-		if (turnSpans && last && last.sequence > (currentSpanningPlan?.at ?? -1)) {
-			currentSpanningPlan = { turnId: group.turnId, at: last.sequence };
-		}
-		for (const item of group.items) {
-			if (isSpanningPlanRow(item) && item.sequence > (currentSpanningPlan?.at ?? -1)) {
-				currentSpanningPlan = { rowId: item.id, at: item.sequence };
-			}
-		}
-	}
-	for (const group of groups) {
-		group.items = group.items.filter((item) => !isSpanningPlanRow(item) || item.id === currentSpanningPlan?.rowId);
-	}
-	// A run of work that held nothing but an older copy has nothing left to show.
-	const shownGroups = groups.filter((group) => group.items.length > 0);
-
-	for (const group of shownGroups) {
 		if (!group.turnId) continue;
 		const turn = byTurn.get(group.turnId);
 		if (!turn) continue;
@@ -5451,8 +5426,8 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		// running turn's changed-file list growing, and its checklist ticking itself
 		// off, are the useful parts.
 		group.diff = turn.diff;
-		const stalePlan = turn.plan?.spansTurns && group.turnId !== currentSpanningPlan?.turnId;
-		group.plan = turn.plan?.steps.length && !stalePlan ? turn.plan : undefined;
+		// A later turn or run carries a newer copy of a list that spans turns.
+		group.plan = turn.plan?.steps.length && !turn.plan.superseded ? turn.plan : undefined;
 		group.live = turn.state === "running";
 		group.liveStartedAt = turn.startedAt ?? turn.requestedAt;
 		group.blocked = group.items.some(
@@ -5484,7 +5459,7 @@ function groupByTurn(snapshot: ConversationSnapshot): TimelineGroup[] {
 		};
 	}
 
-	return shownGroups.flatMap(splitAtSteers);
+	return groups.flatMap(splitAtSteers);
 }
 
 /**

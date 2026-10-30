@@ -1582,6 +1582,7 @@ func turnPlanPayload(plan *domain.ConversationPlan) *ConversationPlanResponse {
 		Explanation: plan.Explanation,
 		Steps:       make([]ConversationPlanStepResponse, 0, len(plan.Steps)),
 		SpansTurns:  plan.SpansTurns,
+		Superseded:  plan.Superseded,
 	}
 	for _, step := range plan.Steps {
 		out.Steps = append(out.Steps, ConversationPlanStepResponse{

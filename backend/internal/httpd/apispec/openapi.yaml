@@ -16488,6 +16488,8 @@ components:
           items:
             $ref: '#/components/schemas/ConversationPlanStepResponse'
           type: array
+        superseded:
+          type: boolean
       required:
       - steps
       type: object
