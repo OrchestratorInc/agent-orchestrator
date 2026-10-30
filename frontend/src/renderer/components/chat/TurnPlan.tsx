@@ -240,9 +240,9 @@ function activeStepIndex(plan: ConversationPlan): number {
  * each time a step finished. All three marks are drawn and only the current one is
  * shown, so a step that ticks over cross-fades in place instead of popping.
  *
- * The arc turns only while the turn runs. A turn that has ended, failed or been
+ * The arc shows only while the turn runs. A turn that has ended, failed or been
  * stopped is not working on anything, so its unfinished step keeps only the faint
- * ring: a stopped arc would read as a frozen spinner.
+ * ring. The arc keeps turning as it fades, so it does not jump back first.
  */
 function StepMark({ status, live }: { status: PlanStepStatus; live: boolean }) {
 	const shown = (mark: PlanStepStatus) =>
@@ -275,8 +275,8 @@ function StepMark({ status, live }: { status: PlanStepStatus; live: boolean }) {
 						strokeLinecap="round"
 						strokeDasharray="12 43"
 						className={cn(
-							"origin-center transition-opacity duration-200 [transform-box:fill-box] motion-reduce:transition-none",
-							live ? "animate-spin motion-reduce:animate-none" : "opacity-0",
+							"origin-center animate-spin transition-opacity duration-200 [transform-box:fill-box] motion-reduce:animate-none motion-reduce:transition-none",
+							!live && "opacity-0",
 						)}
 					/>
 				</g>
