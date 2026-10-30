@@ -579,7 +579,7 @@ function aoCurLangName() {
     if (window.innerWidth >= 1024) return;
     var header = document.querySelector("header");
     if (!header) return;
-    var more = Array.prototype.find.call(header.querySelectorAll("button"), function (b) { return b.getAttribute("aria-label") === "More actions"; });
+    var more = Array.prototype.find.call(header.querySelectorAll("button"), function (b) { var c = b.className || ""; return /\bsize-9\b/.test(c) && /\brounded-full\b/.test(c); });
     if (more) more.style.display = "none";
     /* hide Mintlify's mobile breadcrumb strip even when this page has no TOC bar
        (heading-less index pages): the original header has no breadcrumb strip */
@@ -596,7 +596,7 @@ function aoCurLangName() {
     btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>';
     btn.addEventListener("click", function () { openAoDrawer(btn); });
     var search = Array.prototype.find.call(header.querySelectorAll("button"), function (b) {
-      return b.getAttribute("aria-label") === "Open search" && b.getBoundingClientRect().width > 0;
+      return b.getAttribute("data-search-item") === "trigger" && b.getBoundingClientRect().width > 0;
     });
     if (search && search.parentElement) search.insertAdjacentElement("afterend", btn);
   }
@@ -1271,7 +1271,7 @@ function aoCurLangName() {
       var needActions = !document.getElementById("ao-page-actions");
       var needDtoc = window.innerWidth >= 1280 && !document.querySelector(".ao-dtoc-done");
       var needKeys = !document.querySelector("[data-search-item='trigger-hint'].ao-kbd-group, [data-search-item='trigger-hint'][data-ao-done]");
-      var more = Array.prototype.find.call(document.querySelectorAll("header button"), function (b) { return b.getAttribute("aria-label") === "More actions"; });
+      var more = Array.prototype.find.call(document.querySelectorAll("header button"), function (b) { var c = b.className || ""; return /\bsize-9\b/.test(c) && /\brounded-full\b/.test(c); });
       var kebabVisible = more && getComputedStyle(more).display !== "none" && window.innerWidth < 1024;
       var searchOpen = !!document.querySelector('[data-component-part="search-modal"]');
       var needEsc = searchOpen && !document.querySelector('.ao-search-esc');
