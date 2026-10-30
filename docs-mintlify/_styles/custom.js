@@ -1129,12 +1129,18 @@
       sc.classList.remove("base-ui-disable-scrollbar");
       sc.style.setProperty("scrollbar-width", "auto", "important");
     });
+    var aoMobile = window.innerWidth < 1024;
     Array.prototype.forEach.call(document.querySelectorAll(".mdx-content :not(pre) > code"), function (c) {
       c.style.setProperty("box-decoration-break", "slice", "important");
       /* original code fragments use overflow/word-break normal; Mintlify's
-         break-word shrank table min-content widths and moved column splits */
-      c.style.setProperty("overflow-wrap", "normal", "important");
-      c.style.setProperty("word-break", "normal", "important");
+         break-word shrank table min-content widths and moved column splits.
+         On mobile, non-table pills keep overflow-wrap anywhere (set in
+         fixProseParity) so long path tokens wrap instead of widening the
+         layout viewport (v42/v43). */
+      if (!(aoMobile && !c.closest("td, th"))) {
+        c.style.setProperty("overflow-wrap", "normal", "important");
+        c.style.setProperty("word-break", "normal", "important");
+      }
       if (!c.closest("td, th")) {
         c.style.setProperty("padding", "2.8px 5.6px", "important");
       }
