@@ -376,6 +376,39 @@ func TestHooks_ReviewerRoutesToReviewActivity(t *testing.T) {
 	}
 }
 
+func TestHooks_ClineReviewerUsesResumableIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, want string
+	}{
+		{"task ID", `{"taskId":"conv_123"}`, ""},
+		{"snake task ID", `{"task_id":"conv_123"}`, ""},
+		{"root ID", `{"taskId":"conv_123","sessionContext":{"rootSessionId":"native-root"}}`, "native-root"},
+		{"legacy ID", `{"taskResume":{"taskMetadata":{"ulid":"native-legacy"}}}`, "native-legacy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
+			t.Setenv("AO_REVIEW_HARNESS", "cline")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(tc.payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "cline", "session-start")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setReviewActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if capture.path != "/api/v1/reviews/review-7/activity" || req.AgentSessionID != tc.want || req.State != "active" {
+				t.Fatalf("review hook = %s, %+v; want native ID %q and active state", capture.path, req, tc.want)
+			}
+		})
+	}
+}
+
 func TestHooks_ReviewerActivityOmitsToolCorrelationFields(t *testing.T) {
 	t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
 	t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "worker-7")

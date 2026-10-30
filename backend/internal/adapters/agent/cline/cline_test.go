@@ -517,11 +517,16 @@ func TestGetRestoreCommandRecoversStaleAgentSessionID(t *testing.T) {
 		{"missing native ID", "deleted-session", "matching", "newest-session", false},
 		{"preserve valid ID", "older-session", "matching", "older-session", false},
 		{"no matching workspace", "deleted-session", "other", "", false},
-		{"history failure", "conv_stale", "failure", "", true},
-		{"malformed history", "conv_stale", "malformed", "", true},
+		{"history failure keeps stored ID", "stored-session", "failure", "stored-session", false},
+		{"malformed history keeps stored ID", "stored-session", "malformed", "stored-session", false},
+		{"history failure without stored ID", "", "failure", "", true},
+		{"malformed history without stored ID", "", "malformed", "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := t.TempDir()
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
 			entries := []map[string]string{{"sessionId": "other-session", "cwd": filepath.Join(workspace, "other")}}
 			if tc.history == "matching" {
 				entries = append(entries, map[string]string{"sessionId": "newest-session", "cwd": workspace}, map[string]string{"sessionId": "older-session", "cwd": workspace})
@@ -530,7 +535,7 @@ func TestGetRestoreCommandRecoversStaleAgentSessionID(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			script := "#!/bin/sh\n[ \"$*\" = \"history --json --limit 2147483647\" ] || exit 2\nprintf '%s\\n' '" + string(history) + "'\n"
+			script := "#!/bin/sh\n[ \"$*\" = \"history --json --limit 100\" ] || exit 2\nprintf '%s\\n' '" + string(history) + "'\n"
 			if tc.history == "failure" {
 				script = "#!/bin/sh\nexit 1\n"
 			}
@@ -555,6 +560,38 @@ func TestGetRestoreCommandRecoversStaleAgentSessionID(t *testing.T) {
 				t.Fatalf("restore = %v, %v; want ID %s", cmd, ok, tc.want)
 			}
 		})
+	}
+}
+
+func TestGetRestoreCommandUsesSavedHistoryWithoutGlobalScan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper is a shell script")
+	}
+	home, workspace := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	const nativeID = "1793289478728_shqn8"
+	dir := filepath.Join(home, ".cline", "data", "sessions", nativeID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeClineHistoryFixture(t, filepath.Join(dir, nativeID+".json"), `{"session_id":"1793289478728_shqn8","cwd":"WORKSPACE"}`, workspace)
+	writeClineHistoryFixture(t, filepath.Join(dir, nativeID+".messages.json"), `{"sessionId":"1793289478728_shqn8","messages":[{"role":"user","content":"keep this older conversation"}]}`, workspace)
+	marker := filepath.Join(t.TempDir(), "history-called")
+	t.Setenv("CLINE_HISTORY_MARKER", marker)
+	binary := filepath.Join(t.TempDir(), "cline")
+	script := "#!/bin/sh\nprintf called > \"$CLINE_HISTORY_MARKER\"\nexit 1\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd, selectedID, ok, err := (&Plugin{resolvedBinary: binary}).GetRestoreCommandWithSessionID(context.Background(), ports.RestoreConfig{
+		Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeID}},
+	})
+	if err != nil || !ok || selectedID != nativeID || !reflect.DeepEqual(cmd, []string{binary, "--id", nativeID}) {
+		t.Fatalf("restore = %q, %q, %v, %v", cmd, selectedID, ok, err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("valid stored history triggered a global history scan: %v", err)
 	}
 }
 

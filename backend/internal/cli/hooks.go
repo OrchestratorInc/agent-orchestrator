@@ -225,6 +225,19 @@ func normalizeHookPayload(payload []byte) []byte {
 	return bytes.TrimPrefix(payload, []byte("\xef\xbb\xbf"))
 }
 
+// hookAgentSessionIDForHarness is shared by worker and reviewer hooks. Cline
+// must not inherit generic task/conversation aliases when its parser rejects them.
+func hookAgentSessionIDForHarness(agent string, payload []byte) string {
+	if agent == "cline" {
+		id, _ := activitydispatch.AgentSessionID(agent, payload)
+		return id
+	}
+	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
+		return hookAgentSessionID(payload)
+	}
+	return ""
+}
+
 // hookAgentSessionID extracts the native resume handle shared by Agy, Copilot,
 // Codex, Claude Code, Cline, and other hook payloads. It is independent of
 // activity derivation because SessionStart is intentionally metadata-only for
@@ -708,14 +721,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	}
 
 	state, hasActivity := activitydispatch.Derive(agent, event, payload)
-	agentSessionID := ""
-	if agent == "cline" {
-		// Only Cline's adapter knows which hook IDs are resumable. Generic
-		// taskId/session_id aliases can identify non-resumable conversations.
-		agentSessionID, _ = activitydispatch.AgentSessionID(agent, payload)
-	} else if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
-		agentSessionID = hookAgentSessionID(payload)
-	}
+	agentSessionID := hookAgentSessionIDForHarness(agent, payload)
 	if agent == "memcode" && event == "session-start" {
 		agentSessionID = os.Getenv("MEMCODE_SESSION_ID")
 	}
@@ -938,10 +944,7 @@ func (c *commandContext) runReviewHook(ctx context.Context, agent, event, review
 		return nil
 	}
 	state, hasActivity := activitydispatch.Derive(agent, event, payload)
-	agentSessionID := ""
-	if activitydispatch.SupportsHarness(domain.AgentHarness(agent)) {
-		agentSessionID = hookAgentSessionID(payload)
-	}
+	agentSessionID := hookAgentSessionIDForHarness(agent, payload)
 	if !hasActivity && agentSessionID == "" {
 		return nil
 	}

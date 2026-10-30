@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -146,9 +147,26 @@ func (p *Plugin) GetRestoreCommandWithSessionID(ctx context.Context, cfg ports.R
 
 	agentSessionID = strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	if strings.TrimSpace(cfg.Session.WorkspacePath) != "" {
-		agentSessionID, err = clineHistorySessionID(ctx, binary, cfg.Session.WorkspacePath, agentSessionID)
-		if err != nil {
-			return nil, "", false, err
+		var savedHistory bool
+		if agentSessionID != "" {
+			// Valid stored conversations need no global scan and may be older
+			// than the bounded recovery window.
+			savedHistory, _ = p.NativeConversationExists(ctx, cfg.Session, agentSessionID, nil)
+		}
+		if !savedHistory {
+			recoveredID, historyErr := clineHistorySessionID(ctx, binary, cfg.Session.WorkspacePath, agentSessionID)
+			if historyErr == nil {
+				agentSessionID = recoveredID
+			} else if ctx.Err() != nil {
+				return nil, "", false, ctx.Err()
+			} else if agentSessionID == "" {
+				return nil, "", false, historyErr
+			} else {
+				// History failure is not evidence that the stored ID is lost.
+				// The manager still probes this ID before choosing native restore.
+				slog.Default().WarnContext(ctx, "cline: history lookup failed; using stored session ID",
+					"sessionID", cfg.Session.ID, "error", historyErr)
+			}
 		}
 	}
 	if agentSessionID == "" {
@@ -167,13 +185,14 @@ func (p *Plugin) GetRestoreCommandWithSessionID(ctx context.Context, cfg ports.R
 }
 
 // clineHistorySessionID prefers a stored native id present in the workspace's
-// history, falling back to its newest entry when the id is missing or stale.
-// AO gives each session its own worktree, so history from another cwd must
-// never be used to recover its conversation.
+// recent history, falling back to its newest entry when the id is missing or
+// stale. Cline history is global; the bounded recovery window avoids scanning
+// every project. AO gives each session its own worktree, so history from another
+// cwd must never be used to recover its conversation.
 func clineHistorySessionID(ctx context.Context, binary, workspacePath, storedID string) (string, error) {
-	// A recent-entry limit cannot prove that a stored native id is stale.
-	// Use the largest portable count to include older saved conversations.
-	cmd := aoprocess.CommandContext(ctx, binary, "history", "--json", "--limit", "2147483647") //nolint:gosec // binary is adapter-resolved; args are static
+	// Stored native history is checked directly before this recovery lookup.
+	// Missing hook IDs can only be recovered from the 100 most recent entries.
+	cmd := aoprocess.CommandContext(ctx, binary, "history", "--json", "--limit", "100") //nolint:gosec // binary is adapter-resolved; args are static
 	cmd.Dir = workspacePath
 	out, err := cmd.Output()
 	if err != nil {
