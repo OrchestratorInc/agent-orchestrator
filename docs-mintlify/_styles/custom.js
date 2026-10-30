@@ -824,8 +824,19 @@ function aoCurLangName() {
         return b.getAttribute("aria-expanded") === "false" || (li && !li.querySelector("ul"));
       });
       if (need.length) {
+        var origPath = location.pathname;
         need.forEach(function (b) { if (b.getAttribute("aria-expanded") === "false") b.click(); });
-        setTimeout(function () { openAoDrawer(opener); }, 450);
+        /* expanding a root-linked group (e.g. Configuration) also SPA-navigates
+           to its root page; go back and keep the expanded state */
+        var backTries = 0;
+        (function settle() {
+          if (location.pathname !== origPath && backTries++ < 8) {
+            history.back();
+            setTimeout(settle, 500);
+            return;
+          }
+          setTimeout(function () { openAoDrawer(opener); }, 350);
+        })();
         return;
       }
     }
