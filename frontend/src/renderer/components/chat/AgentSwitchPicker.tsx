@@ -757,7 +757,7 @@ export function DismissButton({ label, onClick, disabled, className }: { label: 
 
 /** An error from a switch, shown as a strip on top of the chat box. */
 export function ComposerErrorNotice(
-	{ title, message, action, onDismiss, dismissLabel }: { title: string; message: string; action?: ReactNode; onDismiss: () => void; dismissLabel?: string },
+	{ title, message, action, onDismiss, dismissLabel }: { title: string; message: ReactNode; action?: ReactNode; onDismiss: () => void; dismissLabel?: string },
 ) {
 	const { t } = useTranslation();
 	return (

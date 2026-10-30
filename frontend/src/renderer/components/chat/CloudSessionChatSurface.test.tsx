@@ -1192,7 +1192,9 @@ describe("CloudSessionChatSurface", () => {
 		expect(screen.queryByRole("alert")).toBeNull();
 		await act(() => queryClient.refetchQueries({ queryKey: key }));
 		const notice = await screen.findByRole("alert");
-		expect(notice.textContent).toContain("all running sessions on your plan are in use. You're on the Starter plan.");
+		expect(notice.textContent).toContain("all running sessions on your plan are in use.");
+		// The plan sits on its own line, so no language needs a joining space.
+		expect(screen.getByText("You're on the Starter plan.").tagName).toBe("SPAN");
 		const openGlobalSettings = vi.fn();
 		useUiStore.setState({ openGlobalSettings });
 		fireEvent.click(screen.getByRole("button", { name: "Upgrade your plan" }));

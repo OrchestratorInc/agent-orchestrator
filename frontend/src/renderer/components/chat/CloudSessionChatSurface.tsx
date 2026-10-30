@@ -204,11 +204,11 @@ function PlanLimitNotice({ code, onDismiss }: { code: string; onDismiss: () => v
 	const { data, offering } = useCloudBilling();
 	const plan = data?.limits?.plan ?? data?.plan;
 	const reason = appI18n.t(code.endsWith("_SLOTS_FULL") ? "cloud.planLimit.slotsFull" : "cloud.planLimit.refused");
-	const onPlan = plan ? ` ${appI18n.t("cloud.planLimit.onPlan", { plan: plan.charAt(0).toUpperCase() + plan.slice(1) })}` : "";
+	const onPlan = plan ? appI18n.t("cloud.planLimit.onPlan", { plan: plan.charAt(0).toUpperCase() + plan.slice(1) }) : undefined;
 	return (
 		<ComposerErrorNotice
 			title={appI18n.t("cloud.planLimit.title")}
-			message={reason + onPlan}
+			message={<>{reason}{onPlan && <span className="block">{onPlan}</span>}</>}
 			onDismiss={onDismiss}
 			action={offering.selfServeBilling && offering.canManageBilling ? (
 				<button
