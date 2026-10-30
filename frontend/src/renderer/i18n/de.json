@@ -2871,7 +2871,6 @@
 	"newTask.phoneConnected_one": "Telefon verbunden",
 	"newTask.phoneConnected_other": "{{count}} Telefone verbunden",
 	"newTask.modelNotice.missingCLI": "Die {{agent}}-CLI ist nicht installiert. AO benötigt das Kommandozeilentool, um Modelle zu laden und lokale Aufgaben auszuführen.",
-	"newTask.modelNotice.cloudMissingCLI": "Die {{agent}}-CLI ist auf diesem Computer nicht installiert, daher konnten die Modelle nicht geladen werden. Cloud-Aufgaben verwenden deine Cloud-Verbindung und können weiterhin starten.",
 	"newTask.modelNotice.install": "Installieren",
 	"newTask.modelNotice.signedOut": "{{agent}} ist auf diesem Computer nicht angemeldet, daher konnten die Modelle nicht geladen werden.",
 	"newTask.modelNotice.expired": "Die gespeicherte Anmeldung von {{agent}} ist abgelaufen. Sie wird beim nächsten Start von {{agent}} erneuert, oder Sie melden sich jetzt neu an.",
