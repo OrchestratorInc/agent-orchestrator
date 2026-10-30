@@ -8,9 +8,11 @@
 // attachments stay readable and Cline's startup command parser is bypassed.
 //
 // AO-managed sessions prefer native session identity from Cline hooks (the
-// workspace-local `.clinerules/hooks/` executable scripts AO installs). Cline's
-// interactive hub currently omits that identity, so restore falls back to the
-// newest Cline history entry scoped to the session's unique worktree.
+// workspace-local `.clinerules/hooks/` executable scripts AO installs). Interactive
+// hooks carry root session IDs, but shared hubs can reuse the starting session's
+// AO environment for other sessions, misattributing identity and activity (#7478).
+// Restore therefore retains history recovery scoped to the session's unique
+// worktree; hooks alone do not reliably bind interactive TUI sessions.
 package cline
 
 import (
