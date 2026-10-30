@@ -133,6 +133,14 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
 				},
+				cloudShare: {
+					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false }),
+					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+					publish: async () => ({ status: "cancelled" as const }),
+					cancel: async () => undefined,
+					unpublish: async () => undefined,
+					onProgress: () => () => undefined,
+				},
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),
 					onFrameNavigated: () => () => undefined,
@@ -1034,6 +1042,14 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				chatImage: {
 					fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 					save: async () => true,
+				},
+				cloudShare: {
+					inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false }),
+					list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+					publish: async () => ({ status: "cancelled" as const }),
+					cancel: async () => undefined,
+					unpublish: async () => undefined,
+					onProgress: () => () => undefined,
 				},
 				cloudArtifact: {
 					fetch: async () => new Uint8Array(),

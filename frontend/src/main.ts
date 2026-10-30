@@ -145,6 +145,7 @@ import { DEFAULT_TERMINAL_SHELL, type TerminalShellPreference } from "./shared/u
 import { bundledTmuxBinaryPath, stableBundledTmuxBinaryPath } from "./shared/bundled-tmux";
 import {
 	handleCloudDeepLink,
+	getCloudAccessToken,
 	getCloudSession,
 	installCloudIPC,
 	registerCloudProtocol,
@@ -152,6 +153,8 @@ import {
 	showCloudSignInFailure,
 } from "./main/cloud-auth";
 import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
+import { clearShareSnapshots } from "./main/cloud-share";
+import { confirmationText, registerCloudShareIpc } from "./main/cloud-share-ipc";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
@@ -3059,6 +3062,34 @@ registerChatImageIpc({
 	downloadsDirectory: () => app.getPath("downloads"),
 });
 registerCloudArtifactIpc({ ipcMain });
+
+// Share links: publishing reads the file, holds the token and asks the person
+// here, in the main process; the renderer can only ask for it.
+const shareSnapshotDir = path.join(desktopDataDir, "tmp", "share-uploads");
+void clearShareSnapshots(shareSnapshotDir).catch(() => undefined);
+registerCloudShareIpc({
+	ipcMain,
+	daemonDataDir: resolvedDaemonDataDir,
+	snapshotDir: () => shareSnapshotDir,
+	getToken: () => getCloudAccessToken(cloudDataDir()),
+	fetch: (url, init) => net.fetch(url, init),
+	confirm: async (sender, confirmation) => {
+		const text = confirmationText(confirmation);
+		const risky = confirmation.secretFindings.length > 0;
+		const options = {
+			type: risky ? ("warning" as const) : ("question" as const),
+			message: text.message,
+			detail: text.detail,
+			buttons: [text.button, "Cancel"],
+			defaultId: risky ? 1 : 0,
+			cancelId: 1,
+			noLink: true,
+		};
+		const window = BrowserWindow.fromWebContents(sender);
+		const { response } = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+		return response === 0;
+	},
+});
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile

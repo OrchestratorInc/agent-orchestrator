@@ -58,7 +58,7 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 						<div className="relative z-10 flex shrink-0 items-center gap-1">
 							<ArtifactActionsMenu
 								artifact={artifact}
-								session={{ id: artifact.sessionId, cloud: artifact.cloud }}
+								session={{ id: artifact.sessionId, cloud: artifact.cloud, workspaceId: artifact.projectId }}
 								iconOnly
 								pinInMenu
 								pinned={pinned}

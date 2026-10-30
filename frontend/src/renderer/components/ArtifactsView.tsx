@@ -326,7 +326,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 					<div className="relative z-[2] ms-auto flex shrink-0 items-center gap-1">
 						<ArtifactActionsMenu
 							artifact={row}
-							session={{ id: row.sessionId, cloud: row.cloud }}
+							session={{ id: row.sessionId, cloud: row.cloud, workspaceId: row.projectId }}
 							iconOnly
 							onOpenInSession={openInSession}
 							pinned={pinned}
@@ -351,7 +351,7 @@ function ArtifactCard({ row, projectName, view, showProjectName = false, preview
 			actions={
 				<ArtifactActionsMenu
 					artifact={row}
-					session={{ id: row.sessionId, cloud: row.cloud }}
+					session={{ id: row.sessionId, cloud: row.cloud, workspaceId: row.projectId }}
 					iconOnly
 					onOpenInSession={openInSession}
 					pinned={pinned}
