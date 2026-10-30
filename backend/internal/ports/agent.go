@@ -190,6 +190,15 @@ type Agent interface {
 	SessionInfo(ctx context.Context, session SessionRef) (info SessionInfo, ok bool, err error)
 }
 
+// AgentNativeRestoreCommand is an optional refinement for adapters that can
+// recover a different native session ID while building a restore command.
+// When ok is true, sessionID is the exact identity selected by cmd. The manager
+// uses it for native history validation instead of the potentially stale stored ID.
+// Implementations must return the command and identity from the same lookup.
+type AgentNativeRestoreCommand interface {
+	GetRestoreCommandWithSessionID(ctx context.Context, cfg RestoreConfig) (cmd []string, sessionID string, ok bool, err error)
+}
+
 // AgentAuthChecker is the optional capability for adapters whose native CLI has
 // a cheap local authentication status probe.
 type AgentAuthChecker interface {

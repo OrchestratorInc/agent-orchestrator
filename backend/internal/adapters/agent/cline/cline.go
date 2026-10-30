@@ -44,6 +44,7 @@ func New() *Plugin {
 
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.AgentNativeRestoreCommand = (*Plugin)(nil)
 var _ ports.ContinuousTerminalActivityDetector = (*Plugin)(nil)
 
 // Manifest returns the adapter's static self-description.
@@ -128,23 +129,30 @@ func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig)
 // because no prompt is supplied here. History validates the stored native id
 // and recovers missing or stale ids by this session's unique worktree.
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
+	cmd, _, ok, err = p.GetRestoreCommandWithSessionID(ctx, cfg)
+	return cmd, ok, err
+}
+
+// GetRestoreCommandWithSessionID returns the native identity selected by the
+// command so the manager validates recovered history rather than stale metadata.
+func (p *Plugin) GetRestoreCommandWithSessionID(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, agentSessionID string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 	binary, err := p.clineBinary(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
 
-	agentSessionID := strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
+	agentSessionID = strings.TrimSpace(cfg.Session.Metadata[ports.MetadataKeyAgentSessionID])
 	if strings.TrimSpace(cfg.Session.WorkspacePath) != "" {
 		agentSessionID, err = clineHistorySessionID(ctx, binary, cfg.Session.WorkspacePath, agentSessionID)
 		if err != nil {
-			return nil, false, err
+			return nil, "", false, err
 		}
 	}
 	if agentSessionID == "" {
-		return nil, false, nil
+		return nil, "", false, nil
 	}
 
 	cmd = make([]string, 0, 8)
@@ -155,7 +163,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		cmd = append(cmd, "-s", cfg.SystemPrompt)
 	}
 	cmd = append(cmd, "--id", agentSessionID)
-	return cmd, true, nil
+	return cmd, agentSessionID, true, nil
 }
 
 // clineHistorySessionID prefers a stored native id present in the workspace's
