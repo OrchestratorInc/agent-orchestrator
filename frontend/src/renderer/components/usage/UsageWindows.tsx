@@ -3,7 +3,7 @@ import { TriangleAlert } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { agentAccountProviderNames } from "../../hooks/useAgentAccounts";
 import { agentTone } from "../../lib/agent-tone";
-import { DAY_MINUTES, formatCountdown, weeklyPace, type UsageLimitLogin, type UsageLimitSpan, type UsageLimitWindows } from "../../lib/usage-limits";
+import { DAY_MINUTES, formatCountdown, spanPace, type UsageLimitLogin, type UsageLimitSpan, type UsageLimitWindows } from "../../lib/usage-limits";
 import { cn } from "../../lib/utils";
 import { AgentAvatar } from "../AgentAvatar";
 import { formatPlanName } from "../settings/CodexAccountDetails";
@@ -117,6 +117,7 @@ function SpanDetails({ span, now, dateTime }: { span: UsageLimitSpan; now: Date;
 	const start = span.startsAt ? Date.parse(span.startsAt) : Date.parse(span.firstReadAt);
 	const lastAt = Date.parse(span.lastReadAt);
 	const before = formatCountdown(span.resetsAt, new Date(lastAt)) ?? "0m";
+	const pace = span.state === "open" ? spanPace(span) : null;
 	return (
 		<span className="flex max-w-xs flex-col gap-0.5 tabular-nums">
 			<span className="font-medium">{dateTime.formatRange(start, Date.parse(span.resetsAt))}</span>
@@ -128,6 +129,13 @@ function SpanDetails({ span, now, dateTime }: { span: UsageLimitSpan; now: Date;
 						? t("usage.windows.detail.final", { value: before })
 						: t("usage.windows.detail.partial", { time: dateTime.format(lastAt), value: before })}
 			</span>
+			{pace ? (
+				<span className="opacity-80">
+					{pace.runsOutAt
+						? t("usage.windows.projectedRunsOut", { value: dateTime.format(pace.runsOutAt) })
+						: t("usage.windows.projected", { value: `${Math.round(pace.atReset)}%` })}
+				</span>
+			) : null}
 		</span>
 	);
 }
@@ -166,6 +174,8 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 								const end = Date.parse(window.resetsAt);
 								const tone = spanTone(login, window);
 								const label = spanSummary(window, dateTime, t);
+								const used = Math.min(100, window.peakUsedPercent);
+								const pace = window.state === "open" ? spanPace(window) : null;
 								return (
 									<Tooltip key={window.resetsAt}>
 										<TooltipTrigger asChild>
@@ -185,10 +195,18 @@ function SessionTimeline({ sessions, since, until, now, dateTime }: { sessions: 
 											>
 												<div
 													className={cn("absolute inset-x-0 bottom-0", window.state === "open" && "opacity-60")}
-													style={{ height: `${Math.min(100, window.peakUsedPercent)}%`, backgroundColor: tone }}
+													style={{ height: `${used}%`, backgroundColor: tone }}
 												/>
+												{/* The projection: where the open window lands at its reset if its pace holds. */}
+												{pace && pace.atReset > used ? (
+													<div
+														aria-hidden="true"
+														className="absolute inset-x-0 border-t border-dashed"
+														style={{ bottom: `${used}%`, height: `${pace.atReset - used}%`, borderColor: tone, backgroundColor: `color-mix(in oklab, ${tone} 30%, transparent)` }}
+													/>
+												) : null}
 												<span aria-hidden="true" className="absolute inset-x-0 top-0.5 truncate text-center text-2xs font-medium tabular-nums text-foreground">
-													{Math.round(window.peakUsedPercent)}%
+													{Math.round(window.peakUsedPercent)}%{pace && pace.atReset > used ? ` → ${Math.round(pace.atReset)}%` : ""}
 												</span>
 											</div>
 										</TooltipTrigger>
@@ -271,7 +289,7 @@ function WeeklyAllowance({ login, span, now, dateTime }: { login: UsageLimitLogi
 	const x = (ms: number) => ((ms - start) / (reset - start)) * 100;
 	const y = (percent: number) => 100 - Math.min(100, Math.max(0, percent));
 	const points = span.points ?? [];
-	const pace = weeklyPace(span);
+	const pace = spanPace(span);
 	const last = points.at(-1);
 	const stale = now.getTime() - Date.parse(span.lastReadAt) > STALE_MS;
 	const note = stale

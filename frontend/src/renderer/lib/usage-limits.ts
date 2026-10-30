@@ -1,5 +1,5 @@
 import type { components } from "../../api/schema";
-import type { AgentAccount, AgentAccountProvider } from "../hooks/useAgentAccounts";
+import type { AgentAccount, AgentAccountLimitWindow, AgentAccountProvider } from "../hooks/useAgentAccounts";
 
 export type UsageLimitWindows = components["schemas"]["UsageLimitWindowsResponse"];
 export type UsageLimitLogin = components["schemas"]["UsageLimitLogin"];
@@ -48,28 +48,45 @@ export function formatCountdown(resetsAt: string | null | undefined, now: Date):
 	return `${minutes}m`;
 }
 
-export type WeeklyPace = {
+export type LimitPace = {
 	/** Percent used at the reset if the pace so far holds, capped at 100. */
 	atReset: number;
 	/** When it reaches 100% at that pace, if before the reset. */
 	runsOutAt: Date | null;
 };
 
+const HOUR_MS = 3_600_000;
+
 /**
- * Where a weekly window lands if it keeps the pace it has had since it opened.
- * null until it has been open an hour, when one reading would say little.
+ * Where a window lands at its reset if it keeps the pace it has had since it
+ * opened. null while nothing is used, once it is already at the limit, or
+ * until a tenth of the window (at most an hour) has passed, when one reading
+ * would say little.
  */
-export function weeklyPace(span: UsageLimitSpan): WeeklyPace | null {
-	if (!span.startsAt) return null;
-	const start = Date.parse(span.startsAt);
-	const reset = Date.parse(span.resetsAt);
-	const last = span.points?.at(-1);
-	const lastAt = last ? Date.parse(last.at) : Date.parse(span.lastReadAt);
-	const used = last ? last.usedPercent : span.peakUsedPercent;
-	const elapsed = lastAt - start;
-	if (!(elapsed >= 3_600_000) || !(reset > lastAt)) return null;
+export function paceToReset(startMs: number, resetMs: number, atMs: number, used: number): LimitPace | null {
+	const elapsed = atMs - startMs;
+	if (!(elapsed >= Math.min(HOUR_MS, (resetMs - startMs) / 10)) || !(resetMs > atMs) || !(used > 0) || used >= 100) return null;
 	const perMs = used / elapsed;
-	const atReset = Math.min(100, used + perMs * (reset - lastAt));
-	const runsOut = perMs > 0 ? lastAt + (100 - used) / perMs : Number.POSITIVE_INFINITY;
-	return { atReset, runsOutAt: runsOut < reset ? new Date(runsOut) : null };
+	const atReset = Math.min(100, used + perMs * (resetMs - atMs));
+	const runsOut = atMs + (100 - used) / perMs;
+	return { atReset, runsOutAt: runsOut < resetMs ? new Date(runsOut) : null };
+}
+
+/** The pace of a window from AO's reading history, as of its last reading. */
+export function spanPace(span: UsageLimitSpan): LimitPace | null {
+	if (!span.startsAt) return null;
+	const last = span.points?.at(-1);
+	return paceToReset(
+		Date.parse(span.startsAt),
+		Date.parse(span.resetsAt),
+		last ? Date.parse(last.at) : Date.parse(span.lastReadAt),
+		last ? last.usedPercent : span.peakUsedPercent,
+	);
+}
+
+/** The pace of a window from one live reading: its length gives when it opened. */
+export function limitWindowPace(window: AgentAccountLimitWindow, fetchedAt: string): LimitPace | null {
+	if (!window.resetsAt || !window.durationMinutes) return null;
+	const reset = Date.parse(window.resetsAt);
+	return paceToReset(reset - window.durationMinutes * 60_000, reset, Date.parse(fetchedAt), window.usedPercent);
 }

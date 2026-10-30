@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { agentAccountName, agentAccountProviderNames, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import { agentTone } from "../../lib/agent-tone";
-import { formatCountdown, groupAccounts, remainingPercent } from "../../lib/usage-limits";
+import { formatCountdown, groupAccounts, limitWindowPace, remainingPercent } from "../../lib/usage-limits";
 import { formatRelativeTime } from "../../lib/usage-format";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
@@ -86,16 +86,19 @@ function AccountLimitRows({ account, harness, first, now }: { account: AgentAcco
 					</span>
 				) : null}
 			</div>
-			{windows.map((window) => <LimitWindowRow key={window.id} window={window} harness={harness} now={now} />)}
+			{windows.map((window) => <LimitWindowRow key={window.id} window={window} fetchedAt={account.limits?.fetchedAt} harness={harness} now={now} />)}
 			{windows.length === 0 && !issue ? <p className="col-span-full text-xs text-muted-foreground">{t("usage.limits.noWindows")}</p> : null}
 		</>
 	);
 }
 
-function LimitWindowRow({ window, harness, now }: { window: AgentAccountLimitWindow; harness: string; now: Date }) {
+function LimitWindowRow({ window, fetchedAt, harness, now }: { window: AgentAccountLimitWindow; fetchedAt?: string; harness: string; now: Date }) {
 	const { t, i18n } = useTranslation();
 	const remaining = Math.round(remainingPercent(window.usedPercent));
 	const tone = remainingTone(remaining);
+	const pace = fetchedAt ? limitWindowPace(window, fetchedAt) : null;
+	const leftAtReset = pace ? Math.max(0, 100 - pace.atReset) : null;
+	const when = new Intl.DateTimeFormat(i18n.language, { weekday: "short", hour: "2-digit", minute: "2-digit" });
 	const countdown = formatCountdown(window.resetsAt, now);
 	const percent = new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format(remaining / 100);
 	return (
@@ -111,13 +114,25 @@ function LimitWindowRow({ window, harness, now }: { window: AgentAccountLimitWin
 				aria-valuemin={0}
 				aria-valuemax={100}
 				aria-valuenow={remaining}
-				className="h-2.5 min-w-0 overflow-hidden rounded-full bg-muted"
+				className="relative h-2.5 min-w-0 overflow-hidden rounded-full bg-muted"
 			>
 				<div className={cn("h-full rounded-full", tone)} style={{ width: `${remaining}%`, backgroundColor: tone ? undefined : agentTone(harness) }} />
+				{/* Where what is left lands at the reset if the pace so far holds. */}
+				{leftAtReset !== null && leftAtReset < remaining ? (
+					<div aria-hidden="true" className="absolute inset-y-0 w-0.5 bg-foreground/70" style={{ insetInlineStart: `${leftAtReset}%` }} />
+				) : null}
 			</div>
 			<span className="whitespace-nowrap text-end text-xs tabular-nums text-muted-foreground">
 				{countdown ? t("usage.limits.resetsIn", { value: countdown }) : ""}
 			</span>
+			{pace ? (
+				<p className={cn("col-span-2 col-start-3 -mt-2 inline-flex items-center gap-1.5 text-xs tabular-nums", pace.runsOutAt ? "text-warning" : "text-muted-foreground")}>
+					{pace.runsOutAt ? <TriangleAlert aria-hidden="true" className="size-icon-sm" /> : null}
+					{pace.runsOutAt
+						? t("usage.limits.paceRunsOut", { value: when.format(pace.runsOutAt) })
+						: t("usage.limits.paceLeft", { value: new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format((leftAtReset ?? 0) / 100) })}
+				</p>
+			) : null}
 		</>
 	);
 }
