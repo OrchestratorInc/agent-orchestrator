@@ -153,30 +153,36 @@ deleted before this counter was introduced cannot be reconstructed.
 It is omitted when the desktop or phone has not yet learned that state. These
 properties contain no local project or session ID.
 
-Daemon session spawn events use `provider_kind: local` and a bounded
-`spawn_reason` of `direct`, `delegation`, or `automation`, based on the spawn
-request. Desktop orchestrator spawn outcomes include `provider_kind` of
-`local`, `remote`, or `cloud` and a bounded reason from the launcher source. Failed
-outcomes also include the daemon error code and HTTP status when available.
-These values contain no error message, project name, or request ID.
+Session spawn events use `created_by` from the durable session attribution
+record to describe whether a user, orchestrator, schedule, or automation
+started the session. Session telemetry reports `kind: standalone` when the
+session has no project. Failed desktop orchestrator spawn outcomes include
+the daemon error code and HTTP status when available. These values contain
+no error message, project name, or request ID.
 
-The onboarding milestones use durable local reservations. The first project
-and session come from committed daemon records; the second session uses the
-durable lifetime counter. A first app open is recorded only on the install day.
+The onboarding milestones use durable local reservations. A first app open is
+recorded only on the install day.
 The next-day return requires a prior desktop active day and a later UTC day.
 The first human CLI command reserves a local marker before export. None of
 these milestones treats an idle session as a successful session.
+The first project and first session are identified by `first_for_install` on
+the committed project and session events. The old `ao.onboarding.first_*`
+events remain deprecated until the separate event rename.
+`lifetime_sessions: 2` on `ao.session.spawned` identifies the second session.
 
 | Event | Authoritative source | Deduplication |
 | --- | --- | --- |
 | `ao.onboarding.app_opened` | Desktop opens on the installation day | Desktop local reservation |
 | `ao.onboarding.cli_detected` | First human CLI command accepted by the daemon | Install marker file |
-| `ao.onboarding.first_project_added` | First committed project registration | Durable project registry |
-| `ao.onboarding.first_session_spawned` | First committed session | Durable session counter |
-| `ao.onboarding.second_session_spawned` | Second committed session | Durable session counter |
+| `ao.projects.created` with `first_for_install` | First committed project registration | Durable project registry |
+| `ao.session.spawned` with `first_for_install` | First committed session | Durable install milestone |
+| `ao.session.spawned` with `lifetime_sessions: 2` | Second committed session | Durable lifetime counter |
 | `ao.onboarding.next_day_return` | Desktop active on a previous UTC day and opened again later | Desktop local reservation |
 | `ao.setup.agent_missing` | Agent readiness reports zero installed agents | Once per desktop launch |
 | `ao.setup.agent_install_clicked` | User starts an agent install from Settings | One event per accepted click |
+
+`ao.renderer.agents_available` continues to report bounded installed,
+authorized, and supported agent inventory once per desktop launch.
 
 ## Usage counts by project
 

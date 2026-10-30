@@ -6,7 +6,6 @@ import { selectActiveOrganization } from "./cloud-offering";
 import { settingsQueryKey, type Settings } from "../hooks/useSettings";
 import { seedCreatedFreestyleSession } from "../hooks/useWorkspaceQuery";
 import { captureRendererEvent } from "./telemetry";
-import type { OrchestratorSpawnSource } from "./orchestrator-spawn-sources";
 import { cloudDefaultInterfaceMode, createCloudSession } from "./cloud-session-create";
 
 // A cloud project has no locally-configured orchestrator agent (that config
@@ -66,7 +65,7 @@ export function resolveConfiguredOrchestratorHarness(
 }
 
 /** Spawns a cloud orchestrator session for the project and returns its id. */
-export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId: string, source?: OrchestratorSpawnSource): Promise<string> {
+export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId: string): Promise<string> {
 	const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
 	const baseUrl = settings?.cloudControlPlaneUrl ?? "";
 	if (baseUrl === "") throw new Error("The cloud control plane is not configured.");
@@ -109,10 +108,10 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 			defaultInterfaceMode: cloudDefaultInterfaceMode(settings),
 		});
 		seedCreatedFreestyleSession(queryClient, baseUrl, orgId, session);
-		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_succeeded", { project_id: projectId, provider_kind: "cloud", spawn_reason: source });
+		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_succeeded", { project_id: projectId });
 		return session.id;
 	} catch (error) {
-		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_failed", { project_id: projectId, provider_kind: "cloud", spawn_reason: source });
+		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_failed", { project_id: projectId });
 		throw error;
 	}
 }

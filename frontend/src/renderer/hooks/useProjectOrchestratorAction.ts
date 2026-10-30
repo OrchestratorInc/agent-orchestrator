@@ -102,7 +102,7 @@ export function useProjectOrchestratorAction({
 				: resumableOrchestrator
 				? (await earlyResume, resumableOrchestrator.id)
 				: project?.kind === CLOUD_PROJECT_KIND
-					? await spawnCloudOrchestrator(queryClient, projectId, source)
+					? await spawnCloudOrchestrator(queryClient, projectId)
 					: await spawnOrchestrator(projectId, source, false, mode);
 			await queryClient.invalidateQueries({
 				queryKey: project?.kind === CLOUD_PROJECT_KIND ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId),

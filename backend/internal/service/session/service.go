@@ -566,7 +566,7 @@ func (s *Service) emitSpawned(ctx context.Context, rec domain.SessionRecord, dur
 	projectID := rec.ProjectID
 	sessionID := rec.ID
 	payload := map[string]any{
-		"kind":        string(rec.Kind),
+		"kind":        telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
 		"harness":     string(rec.Harness),
 		"duration_ms": durationMs,
 	}
@@ -614,7 +614,7 @@ func (s *Service) emitFirstSessionSpawned(ctx context.Context, rec domain.Sessio
 	projectID := rec.ProjectID
 	sessionID := rec.ID
 	payload := map[string]any{
-		"kind":    string(rec.Kind),
+		"kind":    telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
 		"harness": string(rec.Harness),
 	}
 	if !project.RegisteredAt.IsZero() {
@@ -642,7 +642,7 @@ func (s *Service) emitSpawnFailed(ctx context.Context, cfg ports.SpawnConfig, er
 	payload := map[string]any{
 		"component":   "session_service",
 		"operation":   "spawn_session",
-		"kind":        string(cfg.Kind),
+		"kind":        telemetrymeta.SessionKind(cfg.Kind, cfg.ProjectID),
 		"harness":     string(cfg.Harness),
 		"duration_ms": durationMs,
 		"error_kind":  errorKind,
@@ -697,7 +697,7 @@ func (s *Service) emitRelaunchFailed(ctx context.Context, operation string, id d
 	var projectID *domain.ProjectID
 	if rec, ok, getErr := s.store.GetSession(ctx, id); getErr == nil && ok {
 		payload["harness"] = string(rec.Harness)
-		payload["kind"] = string(rec.Kind)
+		payload["kind"] = telemetrymeta.SessionKind(rec.Kind, rec.ProjectID)
 		projectID = &rec.ProjectID
 	}
 	tags := map[string]string{"area": "agent"}

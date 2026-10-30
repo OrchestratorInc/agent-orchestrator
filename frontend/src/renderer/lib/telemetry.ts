@@ -924,8 +924,6 @@ export async function sanitizeRendererProperties(
 			// offering's core loop; only a hashed project id rides along.
 			const cloudProjectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (cloudProjectIDHash) safe.project_id_hash = cloudProjectIDHash;
-			if (properties?.provider_kind === "cloud") safe.provider_kind = "cloud";
-			if (typeof properties?.spawn_reason === "string" && ORCHESTRATOR_SPAWN_SOURCE_SET.has(properties.spawn_reason)) safe.spawn_reason = properties.spawn_reason;
 			break;
 		}
 		case "ao.renderer.cloud_workers_viewed":
@@ -942,11 +940,7 @@ export async function sanitizeRendererProperties(
 		case "ao.renderer.orchestrator_spawn_failed": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
-			if (typeof properties?.source === "string" && ORCHESTRATOR_SPAWN_SOURCE_SET.has(properties.source)) {
-				safe.source = properties.source;
-				safe.spawn_reason = properties.source;
-			}
-			if (properties?.provider_kind === "local" || properties?.provider_kind === "remote") safe.provider_kind = properties.provider_kind;
+			if (typeof properties?.source === "string" && ORCHESTRATOR_SPAWN_SOURCE_SET.has(properties.source)) safe.source = properties.source;
 			if (event === "ao.renderer.orchestrator_spawn_failed") {
 				if (typeof properties?.error_code === "string" && /^[A-Z0-9_]+$/.test(properties.error_code)) safe.error_code = properties.error_code;
 				if (typeof properties?.http_status === "number" && Number.isInteger(properties.http_status) && properties.http_status >= 400 && properties.http_status <= 599) safe.http_status = properties.http_status;
@@ -997,6 +991,14 @@ export async function sanitizeRendererProperties(
 				safe.reason = properties.reason;
 			}
 			break;
+		case "ao.renderer.agents_available": {
+			// Agent ids come from AO's registry, never from user input.
+			for (const key of ["installed_count", "authorized_count", "supported_count"] as const) {
+				if (typeof properties?.[key] === "number") safe[key] = properties[key];
+			}
+			if (typeof properties?.authorized_agents === "string") safe.authorized_agents = properties.authorized_agents;
+			break;
+		}
 		case "ao.renderer.open_in_editor_succeeded": {
 			const projectIDHash = await hashedTelemetryID(properties?.project_id);
 			if (projectIDHash) safe.project_id_hash = projectIDHash;

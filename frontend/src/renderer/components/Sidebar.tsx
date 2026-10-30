@@ -1633,7 +1633,7 @@ const ProjectItem = memo(function ProjectItem({
 		if (workspace.kind === "cloud") {
 			setIsSpawning(true);
 			try {
-			const sessionId = await spawnCloudOrchestrator(queryClient, workspace.id, "sidebar");
+				const sessionId = await spawnCloudOrchestrator(queryClient, workspace.id);
 				await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 				selection.goSession(workspace.id, sessionId);
 			} catch (err) {

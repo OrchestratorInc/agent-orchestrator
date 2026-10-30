@@ -3330,40 +3330,26 @@ func TestSpawnEmitsFirstSessionOnboardingAndDuration(t *testing.T) {
 	}
 }
 
-type milestoneStore struct {
-	*fakeStore
-	count int64
-}
-
-func (s *milestoneStore) LifetimeSessions(context.Context) (int64, error) { return s.count, nil }
-
-func TestSpawnUsesDurableCountForFirstAndSecondSessionMilestones(t *testing.T) {
-	st := &milestoneStore{fakeStore: newFakeStore()}
-	st.projects["mer"] = domain.ProjectRecord{ID: "mer"}
+func TestStandaloneSessionTelemetryKind(t *testing.T) {
+	rec := domain.SessionRecord{ID: "standalone-1", Kind: domain.KindWorker, Harness: domain.HarnessCodex}
+	st := newFakeStore()
+	st.sessions[rec.ID] = rec
 	sink := &fakeTelemetrySink{}
-	fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
-		st.count++
-		rec := domain.SessionRecord{ID: domain.SessionID(fmt.Sprintf("mer-%d", st.count)), ProjectID: cfg.ProjectID, Kind: domain.KindWorker, Harness: domain.HarnessCodex}
-		st.sessions[rec.ID] = rec
-		return rec
-	}}
-	svc := NewWithDeps(Deps{Manager: fc, Store: st, Telemetry: sink})
-	for range 2 {
-		if _, _, _, err := svc.Spawn(context.Background(), ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex}); err != nil {
-			t.Fatal(err)
-		}
+	svc := NewWithDeps(Deps{Store: st, Telemetry: sink})
+	svc.emitSpawned(context.Background(), rec, 1)
+	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex}, errors.New("launch failed"), 1)
+	originalCapture := captureRelaunchError
+	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
+	cause := &sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("launch failed")}
+	svc.emitRelaunchFailed(context.Background(), "resume_agent", rec.ID, cause, apierr.Conflict("AGENT_RESUME_FAILED", "Agent resume failed", nil))
+	if len(sink.events) != 3 {
+		t.Fatalf("events = %d, want three session outcomes", len(sink.events))
 	}
-	var first, second int
-	for _, event := range sink.events {
-		switch event.Name {
-		case "ao.onboarding.first_session_spawned":
-			first++
-		case "ao.onboarding.second_session_spawned":
-			second++
+	for _, ev := range sink.events {
+		if got := ev.Payload["kind"]; got != "standalone" {
+			t.Fatalf("%s kind = %#v, want standalone", ev.Name, got)
 		}
-	}
-	if first != 1 || second != 1 {
-		t.Fatalf("first=%d second=%d, want one of each", first, second)
 	}
 }
 
