@@ -50,6 +50,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
 	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
+	TargetJCode:       "https://github.com/1jehuang/jcode",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -283,6 +284,10 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
+	case TargetJCode:
+		// Both official installers download the release archive for the
+		// platform and refuse it unless its SHA-256 matches SHA256SUMS.
+		plans = []Plan{s.officialByOS(target, "https://jcode.sh/install", "bash", "https://jcode.sh/install.ps1", agentDocumentationURLs[target])}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}

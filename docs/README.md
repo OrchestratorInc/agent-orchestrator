@@ -28,6 +28,7 @@ in [gemini-cli.md](gemini-cli.md).
 | [development.md](development.md)                       | Prerequisites, build steps, running tests, and troubleshooting for local development.                                 |
 | [harnesses/unreal-agent.md](harnesses/unreal-agent.md) | Built-in Unreal Agent Chat setup, provider environment, persistence, and current limits.                              |
 | [harnesses/mimo-code.md](harnesses/mimo-code.md)       | MiMo Code TUI setup, permissions, activity hooks, exact restore, and current limits.                                 |
+| [harnesses/jcode.md](harnesses/jcode.md)               | jcode TUI setup, verified sign-in, per-session daemon, hooks, exact restore, and current limits.                     |
 | [harnesses/deepseek-harness.md](harnesses/deepseek-harness.md) | DeepSeek Harness Chat over ACP, headless task mode, credentials, and current limits.                        |
 | [harnesses/command-code.md](harnesses/command-code.md)   | Command Code TUI setup, activity hooks, Chat over `cmd acp`, exact restore, and current limits.                 |
 | [STATUS.md](STATUS.md)                                 | What is shipped on `main` today and what is still in flight.                                                          |

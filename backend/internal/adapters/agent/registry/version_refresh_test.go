@@ -19,7 +19,7 @@ func TestEveryRefreshHarnessResumesExactConversation(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixtures")
 	}
-	binaries := map[string]string{"claude-code": "claude", "codex": "codex", "opencode": "opencode", "opencode-v2": "opencode", "grok": "grok", "cursor": "cursor-agent", "qwen": "qwen", "gemini": "gemini", "copilot": "copilot", "kimi": "kimi", "muse": "muse", "droid": "droid", "amp": "amp", "agy": "agy", "crush": "crush", "goose": "goose", "auggie": "auggie", "devin": "devin", "omp": "omp", "codewhale": "codewhale", "openhands": "openhands", "cline": "cline", "kiro": "kiro-cli", "kilocode": "kilo", "vibe": "vibe", "pi": "pi", "kimchi": "kimchi", "prime-agent": "prime-agent", "autohand": "autohand", "fx": "fx", "command-code": "cmd", "mimo-code": "mimo"}
+	binaries := map[string]string{"claude-code": "claude", "codex": "codex", "opencode": "opencode", "opencode-v2": "opencode", "grok": "grok", "cursor": "cursor-agent", "qwen": "qwen", "gemini": "gemini", "copilot": "copilot", "kimi": "kimi", "muse": "muse", "droid": "droid", "amp": "amp", "agy": "agy", "crush": "crush", "goose": "goose", "auggie": "auggie", "devin": "devin", "omp": "omp", "codewhale": "codewhale", "openhands": "openhands", "cline": "cline", "kiro": "kiro-cli", "kilocode": "kilo", "vibe": "vibe", "pi": "pi", "kimchi": "kimchi", "prime-agent": "prime-agent", "autohand": "autohand", "fx": "fx", "command-code": "cmd", "mimo-code": "mimo", "jcode": "jcode"}
 	for _, harness := range agentregistry.Harnessed() {
 		t.Run(string(harness.Harness), func(t *testing.T) {
 			capability, ok := harness.Agent.(ports.AgentTerminalVersionRefresher)
@@ -30,8 +30,11 @@ func TestEveryRefreshHarnessResumesExactConversation(t *testing.T) {
 				return
 			}
 			nativeID := "019e950e-52e0-7411-961b-d380ca7e610f"
-			if string(harness.Harness) == "mimo-code" {
+			switch string(harness.Harness) {
+			case "mimo-code":
 				nativeID = "ses_original"
+			case "jcode":
+				nativeID = "session_fox_1793367230599_7049d57744447aef"
 			}
 			dir := t.TempDir()
 			home := t.TempDir()
@@ -49,6 +52,8 @@ func TestEveryRefreshHarnessResumesExactConversation(t *testing.T) {
 				version = "2.0.0"
 			case "mimo-code":
 				version = "0.1.12"
+			case "jcode":
+				version = "v0.99.1"
 			}
 			label := cli
 			switch string(harness.Harness) {
@@ -66,6 +71,18 @@ func TestEveryRefreshHarnessResumesExactConversation(t *testing.T) {
 			t.Setenv("USERPROFILE", home)
 			t.Setenv("XDG_DATA_HOME", filepath.Join(home, "data"))
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "config"))
+			if string(harness.Harness) == "jcode" {
+				// JCode resumes only a session it saved for this workspace.
+				t.Setenv("JCODE_HOME", filepath.Join(home, ".jcode"))
+				sessions := filepath.Join(home, ".jcode", "sessions")
+				if err := os.MkdirAll(sessions, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				saved := `{"id":"` + nativeID + `","working_dir":"` + workspace + `"}`
+				if err := os.WriteFile(filepath.Join(sessions, nativeID+".json"), []byte(saved), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			promptFile := filepath.Join(t.TempDir(), "system.md")
 			if err := os.WriteFile(promptFile, []byte("Keep code-word papaya"), 0600); err != nil {
 				t.Fatal(err)

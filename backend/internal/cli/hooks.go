@@ -698,6 +698,11 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 			c.reportHookFailure(agent, event, sessionID, fmt.Errorf("read stdin: %w", err))
 		}
 	}
+	if agent == "jcode" && len(bytes.TrimSpace(payload)) == 0 {
+		// JCode runs hooks detached with stdin closed and passes the event
+		// (session_id, cwd, turn fields) as JSON in this variable instead.
+		payload = []byte(os.Getenv("JCODE_HOOK_PAYLOAD"))
+	}
 	if shouldEmitSessionStartContext(agent, event) {
 		c.emitSessionStartContext(agent, event, sessionID)
 	}
