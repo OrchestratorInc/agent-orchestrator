@@ -244,6 +244,8 @@ interface MobileStatus {
 		hostname: string;
 		location: string;
 		lastError: string;
+		/** Set while the connector serves the computer's fixed address. */
+		fixed?: boolean;
 	};
 	host: string;
 	tailscaleHost: string;
@@ -880,7 +882,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 					</p>
 				)}
 
-				{qrValue && signInConfigured && !signedIn && (
+				{qrValue && signInConfigured && !signedIn && !status?.tunnel?.fixed && (
 					<p className="mt-4 text-xs leading-5 text-settings-muted" data-testid="mobile-sign-in-hint" role="status">
 						{t("mobile.signInForFixedAddress", "Sign in to AO to give this computer an address that stays the same after restarts.")}
 					</p>

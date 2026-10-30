@@ -130,6 +130,11 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 			t.repair = false
 		}
 		switch {
+		case named.RunToken != "" && err != nil && t.repair:
+			// The cached tunnel just failed to serve and AO Cloud cannot replace
+			// it: a quick tunnel serves until AO Cloud can.
+			t.logger().Warn("the fixed tunnel failed and AO Cloud cannot replace it; starting a quick tunnel", "error", err)
+			named = NamedTunnel{}
 		case named.RunToken != "" && err != nil:
 			t.logger().Warn("could not reach AO Cloud; starting the cached fixed tunnel", "error", err)
 		case err != nil && !unlinked(err):

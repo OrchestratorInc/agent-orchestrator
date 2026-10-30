@@ -146,7 +146,7 @@ func TestTunnelRunnerRepairsATunnelThatLostEveryConnection(t *testing.T) {
 }
 
 // On a network that blocks Cloudflare's edge, every start dies the same way.
-// A repair that did not help is not asked for again within the half hour.
+// A repair that did not help is not asked for again within repairSpacing.
 func TestTunnelRunnerSpacesRepairsOut(t *testing.T) {
 	_, src := newFixedSource(t)
 	bin, _ := fakeCloudflared(t, registeredLine+"\n"+droppedLines)
@@ -160,7 +160,7 @@ func TestTunnelRunnerSpacesRepairsOut(t *testing.T) {
 	}
 	r.repairedAt = time.Now().Add(-time.Hour)
 	if err := r.runOnce(ctx); err == nil || !r.repair {
-		t.Fatalf("runOnce = %v, repair %v; want a repair half an hour on", err, r.repair)
+		t.Fatalf("runOnce = %v, repair %v; want a repair an hour on", err, r.repair)
 	}
 }
 
@@ -272,24 +272,48 @@ func TestTunnelRunnerAsksForItsTunnelOnceEveryConnectionStaysDown(t *testing.T) 
 // A repair asked for while AO Cloud cannot be reached is asked for again at
 // the next start while the connector has not served, and not once the cached
 // tunnel serves after all.
-func TestTunnelRunnerKeepsARepairAOCloudNeverHeard(t *testing.T) {
+// A cached tunnel that just failed is not started again while AO Cloud cannot
+// replace it: a quick tunnel serves, and the repair is asked for once AO Cloud
+// answers.
+func TestTunnelRunnerServesAQuickTunnelWhileARepairGoesUnheard(t *testing.T) {
 	cloud, src := newFixedSource(t)
 	knownTunnel(t, cloud, src)
 	cloud.set(http.StatusBadGateway)
-	bin, _ := fakeCloudflared(t, "")
+	bin, argsFile := fakeCloudflared(t, "")
 	r := namedRunner(t, bin, src)
 	r.repair = true
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	r.upgradeEvery = 20 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	_ = r.runOnce(ctx) // the cached tunnel starts, and never registers
+	done := make(chan error, 1)
+	go func() { done <- r.runOnce(ctx) }()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if _, err := os.Stat(argsFile); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no connector started")
+		}
+	}
+	if argv, token := readArgs(t, argsFile); strings.HasSuffix(argv, " run") || token != "" {
+		t.Fatalf("started the failed tunnel again: argv %q, token %q", argv, token)
+	}
+
+	cloud.set(0)
+	if err := <-done; !errors.Is(err, errFixedTunnelReady) {
+		t.Fatalf("runOnce = %v, want the switch to the fixed address", err)
+	}
 	if !r.repair {
 		t.Fatal("a repair AO Cloud never heard was dropped")
 	}
 	bin, _ = fakeCloudflared(t, registeredLine)
 	r.Binary = bin
 	advertisedHostname(t, r)
-	if r.repair {
-		t.Fatal("a tunnel that served still owes a repair")
+	cloud.mu.Lock()
+	repaired := cloud.repairs[len(cloud.repairs)-1]
+	cloud.mu.Unlock()
+	if !repaired || r.repair {
+		t.Fatalf("last request repair = %v; repair still owed = %v", repaired, r.repair)
 	}
 }
 
