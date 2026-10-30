@@ -682,36 +682,18 @@ test("does not turn Connect Mobile on when browsed to", async () => {
 	act(() => useUiStore.getState().closeSettings());
 });
 
-test("says remote access is enabling while the tunnel starts", async () => {
+// While the internet address starts, nothing is said under the code: it
+// already works on this network and gains the address by itself.
+test("says nothing under the code while remote access starts", async () => {
 	mobileStatus.tunnel = {
 		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
 	};
 	renderMobileSettings();
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
 
-	expect(screen.getByTestId("mobile-remote-access-starting")).toHaveTextContent("Enabling remote access");
-	expect(screen.getByTestId("mobile-remote-access-starting")).toHaveTextContent("Until then, works on this network only");
 	expect(screen.queryByTestId("mobile-remote-access-on")).not.toBeInTheDocument();
 	expect(screen.queryByTestId("mobile-local-only")).not.toBeInTheDocument();
-});
-
-// Tailscale reaches this machine from another network once both devices are
-// on the tailnet, so a code carrying one must not be called "this network only".
-test("keeps Tailscale as the remote path while the public tunnel is missing", async () => {
-	mobileStatus.endpoints = [
-		{ kind: "lan", host: "192.168.88.7", port: 3011, secure: false },
-		{ kind: "tailscale", host: "100.72.46.7", port: 3011, secure: false },
-	];
-	mobileStatus.tunnel = {
-		supported: true, running: true, ready: false, hostname: "", location: "", lastError: "",
-	};
-	renderMobileSettings();
-	await waitFor(() => expect(qrPayload()).not.toBeNull());
-
-	const note = screen.getByTestId("mobile-remote-access-starting");
-	expect(note).toHaveTextContent("Enabling remote access");
-	expect(note).toHaveTextContent(/only over Tailscale/);
-	expect(note).not.toHaveTextContent(/this network only/i);
+	expect(screen.queryByText(/Enabling remote access|Until then/)).not.toBeInTheDocument();
 });
 
 // The note under the code comes and goes with the tunnel, but the code itself
@@ -724,19 +706,18 @@ test("keeps the same code element as the remote access note changes", async () =
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	renderMobileSettings(client);
 	await waitFor(() => expect(qrPayload()).not.toBeNull());
-	expect(screen.getByTestId("mobile-remote-access-starting")).toBeInTheDocument();
+	expect(screen.queryByTestId("mobile-remote-access-on")).not.toBeInTheDocument();
 	const square = screen.getByTestId("mobile-pairing-panel").firstElementChild;
 	const canvas = document.querySelector("[data-qr-value]");
 
-	// starting -> failed: the note goes, the code is unchanged.
+	// starting -> failed: the warning comes, the code is unchanged.
 	act(() => {
 		client.setQueryData(mobileStatusQueryKey, {
 			...structuredClone(mobileStatus),
 			tunnel: { supported: true, running: false, ready: false, hostname: "", location: "", lastError: "connector exited" },
 		});
 	});
-	await waitFor(() => expect(screen.queryByTestId("mobile-remote-access-starting")).not.toBeInTheDocument());
-	expect(screen.getByTestId("mobile-local-only")).toBeInTheDocument();
+	await waitFor(() => expect(screen.getByTestId("mobile-local-only")).toBeInTheDocument());
 	expect(screen.getByTestId("mobile-pairing-panel").firstElementChild).toBe(square);
 	expect(document.querySelector("[data-qr-value]")).toBe(canvas);
 

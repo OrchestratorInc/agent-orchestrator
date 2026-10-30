@@ -761,42 +761,24 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			) : null}
 		</QrPlaceholder>
 	);
-	// Whether the code reaches this machine from elsewhere, said in a few words
-	// under the code it describes: on once the code carries the tunnel, enabling
-	// while the tunnel is still starting (the code refreshes itself when it is
-	// up). A tunnel that failed is a warning, stated in the details column.
-	const remoteAccessStarting = qrValue !== null && !remoteAccessOn && localOnly === "starting";
+	// "Remote access on" under the code once it carries the internet address.
+	// While that address is still starting nothing is said: the code already
+	// works on this network and gains the address by itself. A tunnel that
+	// failed is a warning, stated in the details column.
 	const panel = (
 		<PairingPanel
 			code={code}
 			note={
-				remoteAccessOn || remoteAccessStarting ? (
+				remoteAccessOn ? (
 					<div
 						className="flex flex-col items-center text-center text-xs leading-5 text-settings-muted"
-						data-testid={remoteAccessOn ? "mobile-remote-access-on" : "mobile-remote-access-starting"}
+						data-testid="mobile-remote-access-on"
 						role="status"
 					>
 						<p className="flex items-center gap-1.5">
-							{remoteAccessOn ? (
-								<Globe className="size-3.5 shrink-0" aria-hidden="true" />
-							) : (
-								<Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
-							)}
-							{remoteAccessOn
-								? t("mobile.remoteAccessOn", "Remote access on")
-								: t("mobile.remoteAccessEnabling", "Enabling remote access")}
+							<Globe className="size-3.5 shrink-0" aria-hidden="true" />
+							{t("mobile.remoteAccessOn", "Remote access on")}
 						</p>
-						{/* Until the tunnel is up the code carries no public address. A
-						    tailnet address still reaches this machine from elsewhere once
-						    both devices are on the tailnet, so only without one is the code
-						    limited to this network. */}
-						{!remoteAccessOn && (
-							<p className="text-caption leading-4">
-								{viaTailscale
-									? t("mobile.remoteAccessEnablingHintTailscale", "Until then, reachable from elsewhere only over Tailscale")
-									: t("mobile.remoteAccessEnablingHint", "Until then, works on this network only")}
-							</p>
-						)}
 					</div>
 				) : null
 			}
