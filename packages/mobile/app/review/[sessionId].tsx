@@ -14,6 +14,7 @@ import { useOpenPage } from "../../lib/pageNavigation";
 import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
 import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit, workerRouteForSession } from "../../lib/reviewView";
+import { readSession } from "../../lib/chat/sessionLookup";
 import { HostScope, useApp } from "../../lib/store";
 import { statusVisual, type Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
@@ -40,7 +41,19 @@ function ReviewDetailContent() {
 	const { sessionId, prUrl, prNumber, hostId: routeHostId } = useLocalSearchParams<{ sessionId: string; prUrl?: string; prNumber?: string; hostId?: string }>();
 	const { config, sessions, currentHostId, restore } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
-	const worker = sessions.find((session) => session.id === sessionId);
+	const listedWorker = sessions.find((session) => session.id === sessionId);
+	// The board poll holds live workers only on a daemon that pages its archive,
+	// so an archived worker is read from its machine. The listed copy wins, so the
+	// row flips to Open once a restore refreshes the host.
+	const [readWorker, setReadWorker] = useState<DashboardSession | null>();
+	const listed = Boolean(listedWorker);
+	useEffect(() => {
+		if (listed || !hostMatches || !config || !sessionId) return;
+		let current = true;
+		void readSession(config, sessionId).then((read) => { if (current) setReadWorker(read); });
+		return () => { current = false; };
+	}, [config, hostMatches, listed, sessionId]);
+	const worker = listedWorker ?? readWorker ?? undefined;
 	const autoReviewEnabled = worker?.autoReviewEnabled === true;
 	const [data, setData] = useState<SessionReviews>();
 	const [prs, setPRs] = useState<SessionPRSummary[]>([]);

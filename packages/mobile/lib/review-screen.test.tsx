@@ -1,0 +1,122 @@
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { DashboardSession, SessionReviews } from "./api";
+
+const fixtures = vi.hoisted(() => ({
+	config: { host: "dev.local", httpPort: "3011", muxPort: "3012", secure: false, password: "secret", hostId: "dev" },
+	sessions: [] as DashboardSession[],
+	read: undefined as DashboardSession | null | undefined,
+	readSession: vi.fn(),
+	restore: vi.fn(async (_id: string, _hostId?: string) => {}),
+	theme: new Proxy({}, { get: () => "#000000" }),
+}));
+
+vi.mock("react-native", async () => {
+	const React = await import("react");
+	const host = (name: string) => ({ children, ...props }: { children?: React.ReactNode }) => React.createElement(name, props, children);
+	return {
+		ActivityIndicator: host("ActivityIndicator"), Alert: { alert: vi.fn() }, Platform: { OS: "ios", select: (options: { ios?: unknown; default?: unknown }) => options.ios ?? options.default },
+		Pressable: ({ children, style, ...props }: { children?: React.ReactNode | ((state: { pressed: boolean }) => React.ReactNode); style?: unknown }) =>
+			React.createElement("Pressable", { ...props, style: typeof style === "function" ? style({ pressed: false }) : style }, typeof children === "function" ? children({ pressed: false }) : children),
+		RefreshControl: host("RefreshControl"), ScrollView: host("ScrollView"), Text: host("Text"), View: host("View"),
+		StyleSheet: { create: (styles: object) => styles, hairlineWidth: 1 },
+	};
+});
+vi.mock("react-native-safe-area-context", () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
+vi.mock("@expo/vector-icons", () => ({ Feather: "Feather" }));
+vi.mock("expo-router", async () => {
+	const React = await import("react");
+	return {
+		useLocalSearchParams: () => ({ sessionId: "worker-1", prNumber: "12", prUrl: "https://github.com/acme/repo/pull/12", hostId: "dev" }),
+		useFocusEffect: (effect: () => void) => React.useEffect(() => { effect(); }, [effect]),
+		useNavigation: () => ({ setOptions: vi.fn(), getState: () => ({ routes: [], index: 0 }) }),
+		useRouter: () => ({ push: vi.fn(), back: vi.fn(), canGoBack: () => false }),
+	};
+});
+vi.mock("./api", () => ({
+	getSessionReviews: vi.fn(async (): Promise<SessionReviews> => ({
+		reviews: [{ prUrl: "https://github.com/acme/repo/pull/12", prNumber: 12, title: "Improve mobile review", targetSha: "abcdef123456", status: "needs_review" }],
+		runs: [],
+	} as unknown as SessionReviews)),
+	getSessionPR: vi.fn(async () => []),
+	sessionTitle: (session: DashboardSession) => session.displayName ?? session.id,
+	cancelSessionReview: vi.fn(), killSessionReviewer: vi.fn(), mergeSessionPR: vi.fn(), restoreSessionReviewer: vi.fn(), sendMessage: vi.fn(), triggerSessionReview: vi.fn(),
+}));
+vi.mock("./chat/sessionLookup", () => ({ readSession: fixtures.readSession }));
+vi.mock("./store", () => ({
+	HostScope: ({ children }: { children: unknown }) => children,
+	useApp: () => ({ config: fixtures.config, sessions: fixtures.sessions, currentHostId: "dev", restore: fixtures.restore }),
+}));
+vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemedStyles: (factory: (theme: object) => object) => factory(fixtures.theme) }));
+vi.mock("./ui", () => ({ Button: "Button", Dot: "Dot", EmptyState: "EmptyState", ListSectionHeader: "ListSectionHeader" }));
+vi.mock("./AgentLogo", () => ({ AgentLogo: "AgentLogo" }));
+vi.mock("./SwipeToMerge", () => ({ SwipeToMerge: "SwipeToMerge" }));
+vi.mock("./item-actions-menu", () => ({ ItemActionsMenu: "ItemActionsMenu" }));
+vi.mock("./chat/ChatMarkdown", () => ({ ChatMarkdown: "ChatMarkdown" }));
+vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn() } }));
+vi.mock("./openGitHub", () => ({ openGitHub: vi.fn() }));
+vi.mock("./pageNavigation", () => ({ useOpenPage: () => vi.fn() }));
+vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
+
+import ReviewDetailScreen from "../app/review/[sessionId]";
+
+const worker = (over: Partial<DashboardSession> = {}) => ({
+	id: "worker-1", projectId: "repo", status: "idle", harness: "claude-code", displayName: "Fix the PR page", ...over,
+}) as DashboardSession;
+
+let renderer: ReactTestRenderer | undefined;
+beforeEach(() => {
+	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+	fixtures.sessions = [];
+	fixtures.readSession.mockReset();
+	fixtures.restore.mockClear();
+	const error = console.error;
+	vi.spyOn(console, "error").mockImplementation((...args) => {
+		if (String(args[0]).startsWith("react-test-renderer is deprecated")) return;
+		error(...args);
+	});
+});
+afterEach(() => {
+	act(() => renderer?.unmount());
+	renderer = undefined;
+	vi.restoreAllMocks();
+	vi.unstubAllGlobals();
+});
+
+async function render() {
+	await act(async () => { renderer = create(<ReviewDetailScreen />); });
+	// Let the reviews load and the worker read settle.
+	await act(async () => { await Promise.resolve(); });
+}
+const pill = (label: string) => renderer!.root.findAll((node) => (node.type as unknown) === "Pressable" && node.props.accessibilityLabel === label);
+const workerRow = () => renderer!.root.findAll((node) => (node.type as unknown) === "Pressable" && String(node.props.accessibilityLabel).startsWith("Open worker"));
+
+it("reads an archived worker the board poll leaves out and offers Restore", async () => {
+	fixtures.readSession.mockResolvedValue(worker({ status: "terminated", isTerminated: true }));
+	await render();
+
+	expect(fixtures.readSession).toHaveBeenCalledExactlyOnceWith(fixtures.config, "worker-1");
+	expect(workerRow()).toHaveLength(1);
+	expect(pill("Restore")).toHaveLength(1);
+	await act(async () => { pill("Restore")[0].props.onPress(); });
+	expect(fixtures.restore).toHaveBeenCalledExactlyOnceWith("worker-1", "dev");
+});
+
+it("uses the board's copy of a live worker without reading it again", async () => {
+	fixtures.sessions = [worker({ status: "working" })];
+	await render();
+
+	expect(fixtures.readSession).not.toHaveBeenCalled();
+	expect(workerRow()).toHaveLength(1);
+	expect(pill("Restore")).toHaveLength(0);
+	// The worker's Open; the reviewer row has none without a reviewer surface.
+	expect(pill("Open")).toHaveLength(1);
+});
+
+it("leaves the Worker section out when the worker cannot be read", async () => {
+	fixtures.readSession.mockResolvedValue(null);
+	await render();
+
+	expect(workerRow()).toHaveLength(0);
+	expect(renderer!.root.findAll((node) => (node.type as unknown) === "ListSectionHeader" && node.props.label === "Worker")).toHaveLength(0);
+});
