@@ -1162,7 +1162,8 @@ main table {
   margin-top: 0;
   margin-bottom: 0;
 }
-main div[class~="table"] { margin-top: 24px; margin-bottom: 24px; }
+main div[class~="table"] { margin-top: 12px; margin-bottom: 12px; }
+main table { line-height: 1.5; }
 main table { margin-top: 0 !important; margin-bottom: 0 !important; }
 main th {
   background: oklch(0.286 0.016 107.4) !important;
