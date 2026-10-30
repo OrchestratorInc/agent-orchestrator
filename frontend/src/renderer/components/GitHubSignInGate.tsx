@@ -63,20 +63,22 @@ export function GitHubSignInGate({ enabled }: { enabled: boolean }) {
 					</DialogDescription>
 				</div>
 
-				<div className={settingsDialogBodyClass}>
-					{pending ? (
-						<div className="flex flex-col gap-1">
-							<p className="text-caption text-settings-muted">{t("startup.githubDeviceCodeHint")}</p>
-							<p className="select-all font-mono text-[22px] font-semibold tracking-[0.2em] text-settings-title">{login.userCode}</p>
-							<p className="text-caption text-settings-muted">{t("startup.githubDeviceWaiting")}</p>
-						</div>
-					) : null}
-					{error ? (
-						<p role="alert" className="text-caption leading-4 text-error">
-							{error}
-						</p>
-					) : null}
-				</div>
+				{pending || error ? (
+					<div className={settingsDialogBodyClass}>
+						{pending ? (
+							<div className="flex flex-col gap-1">
+								<p className="text-caption text-settings-muted">{t("startup.githubDeviceCodeHint")}</p>
+								<p className="select-all font-mono text-[22px] font-semibold tracking-[0.2em] text-settings-title">{login.userCode}</p>
+								<p className="text-caption text-settings-muted">{t("startup.githubDeviceWaiting")}</p>
+							</div>
+						) : null}
+						{error ? (
+							<p role="alert" className="text-caption leading-4 text-error">
+								{error}
+							</p>
+						) : null}
+					</div>
+				) : null}
 
 				<div className={settingsDialogFooterClass}>
 					{pending ? (
