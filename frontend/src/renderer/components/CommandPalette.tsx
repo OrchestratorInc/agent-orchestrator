@@ -570,7 +570,7 @@ export function CommandPalette() {
 			// orchestrator as a cloud session in its own sandbox instead of falling
 			// through to the project-settings page.
 			if (workspace?.kind === "cloud") {
-				const sessionId = await spawnCloudOrchestrator(queryClient, projectId, "command_palette");
+				const sessionId = await spawnCloudOrchestrator(queryClient, projectId);
 				await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
 				navigateToTarget(sessionRoute(projectId, sessionId));
 				if (isCurrentRun()) closePalette();
