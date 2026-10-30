@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { THUMBNAIL_PAGE_WIDTH, thumbnailPageHtml, thumbnailScale } from "./artifactThumbnailModel";
+import { describe, expect, it, vi } from "vitest";
+import { cachedThumbnailText, THUMBNAIL_PAGE_WIDTH, thumbnailPageHtml, thumbnailScale } from "./artifactThumbnailModel";
 
 describe("thumbnailScale", () => {
 	it("fits the preview page width into the card", () => {
@@ -20,5 +20,22 @@ describe("thumbnailPageHtml", () => {
 		expect(thumbnailPageHtml('<html lang="en"><body>b</body></html>')).toBe(`<html lang="en">${rule}<body>b</body></html>`);
 		expect(thumbnailPageHtml("<!DOCTYPE html><p>b</p>")).toBe(`<!DOCTYPE html>${rule}<p>b</p>`);
 		expect(thumbnailPageHtml("<p>b</p>")).toBe(`${rule}<p>b</p>`);
+	});
+});
+
+describe("cachedThumbnailText", () => {
+	it("reads a file version once, keeping a file with nothing to show", async () => {
+		const read = vi.fn(async () => undefined);
+		expect(await cachedThumbnailText("s|data.bin|t1", read)).toBeUndefined();
+		expect(await cachedThumbnailText("s|data.bin|t1", read)).toBeUndefined();
+		expect(read).toHaveBeenCalledTimes(1);
+	});
+
+	it("reads again after a failed read", async () => {
+		const failing = vi.fn(async (): Promise<string | undefined> => { throw new Error("offline"); });
+		expect(await cachedThumbnailText("s|notes.md|t1", failing)).toBeUndefined();
+		const read = vi.fn(async () => "# Notes");
+		expect(await cachedThumbnailText("s|notes.md|t1", read)).toBe("# Notes");
+		expect(read).toHaveBeenCalledTimes(1);
 	});
 });

@@ -42,6 +42,8 @@ function SessionArtifactsContent() {
 	const onDeleted = useCallback((artifact: SessionArtifact) => markDeleted(artifact.path), [markDeleted]);
 	const { openMenu, menu } = useArtifactActions(sessionId, onDeleted);
 	const [refreshing, setRefreshing] = useState(false);
+	// Each pull to refresh lets a card whose preview failed try it again.
+	const [refreshes, setRefreshes] = useState(0);
 
 	useLayoutEffect(() => {
 		navigation.setOptions({ title: "Artifacts" });
@@ -75,6 +77,7 @@ function SessionArtifactsContent() {
 			await reload();
 		} finally {
 			setRefreshing(false);
+			setRefreshes((count) => count + 1);
 		}
 	}, [reload]);
 
@@ -100,7 +103,7 @@ function SessionArtifactsContent() {
 				ListEmptyComponent={<EmptyState icon="layers" title="No artifacts yet" message="Pages and documents the agent writes for this session show up here." />}
 				renderItem={({ item }) => (
 					<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
-						<ArtifactCard artifact={item} config={config} sessionId={sessionId} visible={visiblePaths.has(item.path)} thumbnail={config && artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
+						<ArtifactCard artifact={item} config={config} sessionId={sessionId} visible={visiblePaths.has(item.path)} refreshes={refreshes} thumbnail={config && artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
 					</View>
 				)}
 			/>
@@ -109,12 +112,14 @@ function SessionArtifactsContent() {
 	);
 }
 
-function ArtifactCard({ artifact, config, sessionId, visible, thumbnail, onOpen, onMenu }: {
+function ArtifactCard({ artifact, config, sessionId, visible, refreshes, thumbnail, onOpen, onMenu }: {
 	artifact: SessionArtifact;
 	config: ServerConfig | null;
 	sessionId: string;
 	/** On screen: the card's preview of its contents may load. */
 	visible: boolean;
+	/** Pulls to refresh so far; a failed preview is tried again after one. */
+	refreshes: number;
 	/** An image artifact's own picture, drawn over its icon tile. */
 	thumbnail?: { uri: string; headers: Record<string, string> };
 	onOpen(): void;
@@ -126,10 +131,12 @@ function ArtifactCard({ artifact, config, sessionId, visible, thumbnail, onOpen,
 	const [failedUri, setFailedUri] = useState<string>();
 	const picture = thumbnail && failedUri !== thumbnail.uri ? thumbnail : undefined;
 	// A card that previews its contents shows a plain tile while the preview
-	// loads, and its icon only if the preview cannot load.
+	// loads, and its icon only if the preview cannot load: until the file
+	// changes or the gallery is refreshed.
+	const attempt = `${artifact.updatedAt}#${refreshes}`;
 	const [previewFailedAt, setPreviewFailedAt] = useState<string>();
-	const preview = Boolean(config && hasContentThumbnail(artifact)) && previewFailedAt !== artifact.updatedAt;
-	const onPreviewFailed = useCallback(() => setPreviewFailedAt(artifact.updatedAt), [artifact.updatedAt]);
+	const preview = Boolean(config && hasContentThumbnail(artifact)) && previewFailedAt !== attempt;
+	const onPreviewFailed = useCallback(() => setPreviewFailedAt(attempt), [attempt]);
 	const visual = cardVisual(artifact, t);
 	const age = relativeTime(artifact.updatedAt);
 	const meta = [age, formatArtifactSize(artifact.size)].filter(Boolean).join(" · ");

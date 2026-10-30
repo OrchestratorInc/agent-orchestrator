@@ -34,3 +34,25 @@ export function thumbnailPageHtml(html: string): string {
 	const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
 	return doctype ? doctype[0] + rule + html.slice(doctype[0].length) : rule + html;
 }
+
+// Text previews read once per file version; a gallery scrolls past the same cards again.
+const TEXT_CACHE_SIZE = 24;
+const textCache = new Map<string, Promise<string | undefined>>();
+
+/**
+ * A text card's preview for `key` (which carries the file's version), read
+ * once. `undefined` means the file has nothing to show (binary or empty) and
+ * is kept; a failed read (offline, a timeout) also reads as `undefined` but is
+ * not kept, so the next mount or refresh tries again.
+ */
+export function cachedThumbnailText(key: string, read: () => Promise<string | undefined>): Promise<string | undefined> {
+	const hit = textCache.get(key);
+	if (hit) return hit;
+	const pending: Promise<string | undefined> = read().catch(() => {
+		if (textCache.get(key) === pending) textCache.delete(key);
+		return undefined;
+	});
+	textCache.set(key, pending);
+	while (textCache.size > TEXT_CACHE_SIZE) textCache.delete(textCache.keys().next().value!);
+	return pending;
+}

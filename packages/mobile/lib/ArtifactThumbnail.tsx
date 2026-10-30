@@ -3,7 +3,7 @@ import { StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { WebView } from "react-native-webview";
 import { artifactMarkdownImageSource, getArtifactText } from "./api";
 import { artifactViewKind, looksBinary, type SessionArtifact } from "./artifacts";
-import { MAX_THUMBNAIL_TEXT_BYTES, THUMBNAIL_PAGE_WIDTH, THUMBNAIL_TEXT_CHARS, thumbnailPageHtml, thumbnailScale } from "./artifactThumbnailModel";
+import { cachedThumbnailText, MAX_THUMBNAIL_TEXT_BYTES, THUMBNAIL_PAGE_WIDTH, THUMBNAIL_TEXT_CHARS, thumbnailPageHtml, thumbnailScale } from "./artifactThumbnailModel";
 import { ChatMarkdown } from "./chat/ChatMarkdown";
 import { useRenderTheme } from "./chat/RenderFrame";
 import { renderThemeScript } from "./chat/renderFrameModel";
@@ -15,19 +15,6 @@ import { useInlinedArtifactPage } from "./useInlinedArtifactPage";
 
 // A markdown card lays the document out at twice its width and draws it at half.
 const MARKDOWN_SCALE = 0.5;
-
-// Text previews read once per file version; a gallery scrolls past the same cards again.
-const TEXT_CACHE_SIZE = 24;
-const textCache = new Map<string, Promise<string | undefined>>();
-
-function cachedText(key: string, read: () => Promise<string | undefined>): Promise<string | undefined> {
-	const hit = textCache.get(key);
-	if (hit) return hit;
-	const pending = read().catch(() => undefined);
-	textCache.set(key, pending);
-	while (textCache.size > TEXT_CACHE_SIZE) textCache.delete(textCache.keys().next().value!);
-	return pending;
-}
 
 /** Whether a card can show a peek at the file's contents (images have their own). */
 export function hasContentThumbnail(artifact: Pick<SessionArtifact, "path" | "kind" | "size">): boolean {
@@ -114,7 +101,7 @@ function TextThumbnail({ config, sessionId, artifact, visible, width, markdown, 
 	useEffect(() => {
 		if (!visible || text?.key === key) return;
 		let live = true;
-		void cachedText(key, async () => {
+		void cachedThumbnailText(key, async () => {
 			const body = await getArtifactText(config, sessionId, artifact.path);
 			return looksBinary(body) ? undefined : body.slice(0, THUMBNAIL_TEXT_CHARS);
 		}).then((value) => { if (live) setText({ key, value }); });
