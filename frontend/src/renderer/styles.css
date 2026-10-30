@@ -537,6 +537,8 @@ html[data-modal-handoff] .dialog-overlay,
 	padding-right: var(--size-center-panel-inset-mac);
 	padding-bottom: var(--size-center-panel-inset-mac);
 	padding-left: 0;
+	/* The frame never resizes with the sidebar; only the sidebar slides. */
+	transition: none;
 }
 
 /* Keep the center surface closed on all four edges, including macOS where the
@@ -576,15 +578,15 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	-webkit-app-region: drag;
 }
 
-/* Sidebar closed on mac: content panel expands to fill the full window.
- * Remove all padding and strip the surface border + radius so it's flush. */
+/* Sidebar closed on mac: the panel keeps its frame and gains the same inset
+ * on the left, so its header stays on the traffic-light centreline. */
 .sidebar-hidden .center-panel-shell.center-panel-shell--mac {
-	padding: 0;
+	padding-left: var(--size-center-panel-inset-mac);
 }
 
-.sidebar-hidden .center-panel-shell--mac .center-panel-surface {
-	border-color: transparent;
-	border-radius: 0;
+/* Without a sidebar beside it, the frame recedes to half strength. */
+.sidebar-hidden .center-panel-shell--mac > .center-panel-surface {
+	border-color: color-mix(in srgb, var(--color-border-strong) 50%, transparent);
 }
 
 /* Session topbar now lives inside .center-panel-surface. When it's rendered
