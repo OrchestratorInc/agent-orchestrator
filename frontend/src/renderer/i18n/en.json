@@ -3675,5 +3675,18 @@
 	"newTask.cloudModelsUnavailable": "Cloud has no model list for {{agent}}. Use the default or enter a model ID.",
 	"newTask.cloudModelsVerified": "Verified on your Cloud workers",
 	"newTask.cloudModelUnlisted": "{{model}} isn't in Cloud's model list for {{agent}}, so it may not run.",
-	"settings.models.useConfiguredDefault": "Use project or agent default"
+	"settings.models.useConfiguredDefault": "Use project or agent default",
+	"onboarding.attribution.title": "How did you hear about Orchestrator?",
+	"onboarding.attribution.skip": "Skip",
+	"onboarding.attribution.channel.x_twitter": "X (Twitter)",
+	"onboarding.attribution.channel.youtube": "YouTube",
+	"onboarding.attribution.channel.friend_colleague": "Friend or colleague",
+	"onboarding.attribution.channel.github": "GitHub",
+	"onboarding.attribution.channel.hacker_news": "Hacker News",
+	"onboarding.attribution.channel.reddit": "Reddit",
+	"onboarding.attribution.channel.search": "Search engine",
+	"onboarding.attribution.channel.ai_assistant": "AI assistant",
+	"onboarding.attribution.channel.newsletter_blog": "Newsletter or blog",
+	"onboarding.attribution.channel.conference_event": "Conference or event",
+	"onboarding.attribution.channel.other": "Other"
 }

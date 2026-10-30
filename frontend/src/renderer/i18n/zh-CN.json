@@ -3676,5 +3676,18 @@
 	"newTask.cloudModelsUnavailable": "云端没有 {{agent}} 的模型列表。请使用默认值或输入模型 ID。",
 	"newTask.cloudModelsVerified": "已在你的云端工作节点上验证",
 	"newTask.cloudModelUnlisted": "{{model}} 不在云端 {{agent}} 的模型列表中，可能无法运行。",
-	"settings.models.useConfiguredDefault": "使用项目或智能体默认值"
+	"settings.models.useConfiguredDefault": "使用项目或智能体默认值",
+	"onboarding.attribution.title": "你是从哪里了解到 Orchestrator 的？",
+	"onboarding.attribution.skip": "跳过",
+	"onboarding.attribution.channel.x_twitter": "X (Twitter)",
+	"onboarding.attribution.channel.youtube": "YouTube",
+	"onboarding.attribution.channel.friend_colleague": "朋友或同事",
+	"onboarding.attribution.channel.github": "GitHub",
+	"onboarding.attribution.channel.hacker_news": "Hacker News",
+	"onboarding.attribution.channel.reddit": "Reddit",
+	"onboarding.attribution.channel.search": "搜索引擎",
+	"onboarding.attribution.channel.ai_assistant": "AI 助手",
+	"onboarding.attribution.channel.newsletter_blog": "新闻通讯或博客",
+	"onboarding.attribution.channel.conference_event": "会议或活动",
+	"onboarding.attribution.channel.other": "其他"
 }

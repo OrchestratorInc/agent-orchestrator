@@ -17,6 +17,7 @@ vi.mock("../stores/ui-store", () => ({
 vi.mock("../lib/onboarding-telemetry", () => ({ useOnboardingStep: () => mocks.completeWelcome }));
 vi.mock("./WelcomePanel", () => ({ WelcomePanel: ({ children }: { children: ReactNode }) => <>{children}</> }));
 vi.mock("./GitHubOnboardingNotice", () => ({ GitHubOnboardingNotice: () => null }));
+vi.mock("./onboarding/AttributionQuestion", () => ({ AttributionQuestion: () => null }));
 vi.mock("./CreateProjectFlow", () => ({
 	CreateProjectFlow: ({ onInitializeProject, onCreateStandaloneAgent }: {
 		onInitializeProject: (path: string) => Promise<void>;

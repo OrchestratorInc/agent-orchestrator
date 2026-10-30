@@ -107,12 +107,24 @@ describe("telemetry sanitizers", () => {
 	});
 
 	it("allows only the closed onboarding step vocabulary", async () => {
-		for (const event of ["ao.onboarding.step_viewed", "ao.onboarding.step_completed", "ao.onboarding.step_abandoned"]) {
+		for (const event of ["ao.onboarding.step_viewed", "ao.onboarding.step_completed", "ao.onboarding.step_skipped", "ao.onboarding.step_abandoned"]) {
 			expect(await sanitizeRendererProperties(event, { step: "github_auth", email: "a@b.co", path: "/Users/x" })).toEqual({
 				step: "github_auth",
 			});
+			for (const step of ["welcome", "attribution"]) expect(await sanitizeRendererProperties(event, { step })).toEqual({ step });
 			expect(await sanitizeRendererProperties(event, { step: "/Users/x/secret" })).toEqual({});
 		}
+	});
+
+	it("allows only the closed acquisition channel vocabulary on attribution answers", async () => {
+		const event = "ao.onboarding.attribution_answered";
+		expect(await sanitizeRendererProperties(event, { channel: "hacker_news", skipped: false, note: "my friend bob" })).toEqual({
+			channel: "hacker_news",
+			skipped: false,
+		});
+		expect(await sanitizeRendererProperties(event, { skipped: true, channel: "github" })).toEqual({ skipped: true });
+		expect(await sanitizeRendererProperties(event, { channel: "bob@example.com", skipped: false })).toEqual({ skipped: false });
+		expect(await sanitizeRendererProperties(event, { channel: "github" })).toEqual({});
 	});
 
 	it("exports the session management summary under the v2 name", () => {

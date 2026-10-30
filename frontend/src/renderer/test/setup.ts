@@ -387,6 +387,8 @@ if (typeof window !== "undefined") {
 		appState: {
 			getMigration: async () => ({ status: "pending" }),
 			setMigration: async () => undefined,
+			getAcquisitionChannel: async () => null,
+			recordAcquisitionChannel: async () => false,
 		},
 		cliLink: {
 			setEnabled: async () => undefined,

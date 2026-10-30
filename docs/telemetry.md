@@ -77,8 +77,10 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Your GitHub username, when Orchestrator.inc can resolve the account signed in
   to its GitHub integration, on every desktop and daemon event (previously only
   session-start events)
-- Desktop onboarding progress, such as viewing, completing, or leaving the
-  welcome and GitHub sign-in steps, and a one-time install event on first run
+- Desktop onboarding progress, such as viewing, completing, skipping, or
+  leaving the welcome, "How did you hear about Orchestrator?", and GitHub
+  sign-in steps, your answer to that question (one option from a fixed list, or
+  that you skipped it), and a one-time install event on first run
 - The Orchestrator.inc version on every daemon event
 - A random `install_id` on every desktop and daemon event, the phone's own
   stored `install_id` when available, and a `paired_install_id` on phone events
@@ -219,6 +221,33 @@ people choose and whether creation succeeds.
 
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
+
+## Desktop onboarding
+
+When desktop product telemetry is enabled, Orchestrator.inc records each
+first-run onboarding step at most once per installation:
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `ao.onboarding.step_viewed` | A step is shown | `step` |
+| `ao.onboarding.step_completed` | A step is finished | `step` |
+| `ao.onboarding.step_skipped` | You skip an optional step | `step` |
+| `ao.onboarding.step_abandoned` | The window closes while a step is shown | `step` |
+| `ao.onboarding.attribution_answered` | You answer or skip "How did you hear about Orchestrator?" | `skipped`, and `channel` when you answered |
+
+`step` is `welcome` (the home page before your first project), `attribution`,
+or `github_auth`. A step is completed or skipped, never both, and a finished step
+is never reported as abandoned.
+
+The "How did you hear about Orchestrator?" question is optional and shown only
+on new installations during first-run onboarding, never to installations that
+existed before it was added. `channel` is one of `x_twitter`, `youtube`,
+`friend_colleague`, `github`, `hacker_news`, `reddit`, `search`,
+`ai_assistant`, `newsletter_blog`, `conference_event`, or `other`. There is no
+free-text answer. Your answer, or that you skipped, is stored locally as
+`acq_channel_self_reported` in `~/.ao/app-state.json` so the question is not
+asked again, including after updates. The answer is stored even when telemetry
+is off, but then nothing is sent.
 
 ## What Orchestrator.inc does not intentionally send
 

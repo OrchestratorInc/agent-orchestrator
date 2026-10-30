@@ -3694,5 +3694,18 @@
 	"newTask.cloudModelsUnavailable": "Die Cloud hat keine Modellliste für {{agent}}. Nutzen Sie den Standard oder geben Sie eine Modell-ID ein.",
 	"newTask.cloudModelsVerified": "Auf Ihren Cloud-Workern geprüft",
 	"newTask.cloudModelUnlisted": "{{model}} steht nicht in der Cloud-Modellliste für {{agent}} und läuft daher möglicherweise nicht.",
-	"settings.models.useConfiguredDefault": "Projekt- oder Agent-Standard verwenden"
+	"settings.models.useConfiguredDefault": "Projekt- oder Agent-Standard verwenden",
+	"onboarding.attribution.title": "Wie bist du auf Orchestrator aufmerksam geworden?",
+	"onboarding.attribution.skip": "Überspringen",
+	"onboarding.attribution.channel.x_twitter": "X (Twitter)",
+	"onboarding.attribution.channel.youtube": "YouTube",
+	"onboarding.attribution.channel.friend_colleague": "Freund oder Kollege",
+	"onboarding.attribution.channel.github": "GitHub",
+	"onboarding.attribution.channel.hacker_news": "Hacker News",
+	"onboarding.attribution.channel.reddit": "Reddit",
+	"onboarding.attribution.channel.search": "Suchmaschine",
+	"onboarding.attribution.channel.ai_assistant": "KI-Assistent",
+	"onboarding.attribution.channel.newsletter_blog": "Newsletter oder Blog",
+	"onboarding.attribution.channel.conference_event": "Konferenz oder Event",
+	"onboarding.attribution.channel.other": "Sonstiges"
 }

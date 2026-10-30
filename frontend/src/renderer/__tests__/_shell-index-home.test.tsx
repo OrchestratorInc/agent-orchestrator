@@ -12,6 +12,7 @@ const routeMocks = vi.hoisted(() => ({
 	createProjectFlowProps: null as null | {
 		existingProjectPaths?: readonly string[];
 		onOpenExistingProject?: (path: string) => void | Promise<void>;
+		onCloneProject?: (input: never) => Promise<void>;
 		sourceSignal?: { source: string; nonce: number } | null;
 	},
 	navigate: vi.fn(),
@@ -22,6 +23,20 @@ const routeMocks = vi.hoisted(() => ({
 	markAutoLoginOffered: vi.fn(),
 	closeTerminal: vi.fn(),
 	cloudEnabled: false,
+	onboardingSteps: [] as Array<[string, boolean]>,
+	completeWelcome: vi.fn(),
+	cloneProject: vi.fn(async () => undefined),
+}));
+
+vi.mock("../lib/onboarding-telemetry", () => ({
+	useOnboardingStep: (step: string, active: boolean) => {
+		routeMocks.onboardingSteps.push([step, active]);
+		return step === "welcome" ? routeMocks.completeWelcome : vi.fn();
+	},
+}));
+
+vi.mock("../components/onboarding/AttributionQuestion", () => ({
+	AttributionQuestion: () => <p>How did you hear about Orchestrator?</p>,
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -53,7 +68,7 @@ vi.mock("../lib/shell-context", () => ({
 	useShell: () => ({
 		daemonStatus: { state: "ready" },
 		workspaceStartupState: "ready",
-		cloneProject: vi.fn(),
+		cloneProject: routeMocks.cloneProject,
 		createProject: vi.fn(),
 		initializeProjectRepository: vi.fn(),
 	}),
@@ -93,7 +108,12 @@ beforeEach(() => {
 	routeMocks.markAutoLoginOffered.mockReset();
 	routeMocks.closeTerminal.mockReset();
 	routeMocks.cloudEnabled = false;
+	routeMocks.onboardingSteps = [];
+	routeMocks.completeWelcome.mockReset();
+	routeMocks.cloneProject.mockClear();
 });
+
+const welcomeActive = () => routeMocks.onboardingSteps.filter(([step]) => step === "welcome").at(-1)?.[1];
 
 describe("shell index route", () => {
 	it("shows the home actions when no projects exist", () => {
@@ -195,6 +215,41 @@ describe("shell index route", () => {
 				screen.getByText("Connect GitHub for pull requests"),
 			) & Node.DOCUMENT_POSITION_FOLLOWING,
 		).toBeTruthy();
+	});
+
+	it("reports the empty home as the welcome step and asks attribution before GitHub sign-in", () => {
+		routeMocks.requirements = [{ id: "gh", label: "gh", satisfied: true, required: false, detail: "/usr/bin/gh" }];
+		routeMocks.authRequirement = { id: "github-auth", label: "GitHub access", satisfied: false, required: false, detail: "Sign in." };
+
+		render(<HomePage />);
+
+		expect(welcomeActive()).toBe(true);
+		const question = screen.getByText("How did you hear about Orchestrator?");
+		expect(screen.getByRole("button", { name: "Clone a repo" }).compareDocumentPosition(question) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(question.compareDocumentPosition(screen.getByText("Connect GitHub for pull requests")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it("completes welcome once a project is added or a standalone agent starts", async () => {
+		render(<HomePage />);
+
+		await act(async () => {
+			await routeMocks.createProjectFlowProps?.onCloneProject?.({} as never);
+		});
+		expect(routeMocks.cloneProject).toHaveBeenCalledOnce();
+		expect(routeMocks.completeWelcome).toHaveBeenCalledOnce();
+		fireEvent.click(screen.getByRole("button", { name: "Start a standalone agent" }));
+		expect(routeMocks.completeWelcome).toHaveBeenCalledTimes(2);
+	});
+
+	it("is not the welcome step and does not ask attribution once projects exist", () => {
+		routeMocks.workspaces = [{ id: "p1", name: "Project", kind: "single_repo", path: "/p1", sessions: [] }];
+
+		render(<HomePage />);
+
+		expect(welcomeActive()).toBe(false);
+		expect(screen.queryByText("How did you hear about Orchestrator?")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Start a standalone agent" }));
+		expect(routeMocks.completeWelcome).not.toHaveBeenCalled();
 	});
 
 	it("opens a project from the recent-project list", async () => {

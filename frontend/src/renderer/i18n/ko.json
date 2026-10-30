@@ -3694,5 +3694,18 @@
 	"newTask.cloudModelsUnavailable": "클라우드에 {{agent}} 모델 목록이 없습니다. 기본값을 사용하거나 모델 ID를 입력하세요.",
 	"newTask.cloudModelsVerified": "내 클라우드 워커에서 확인됨",
 	"newTask.cloudModelUnlisted": "{{model}}은(는) 클라우드의 {{agent}} 모델 목록에 없어 실행되지 않을 수 있습니다.",
-	"settings.models.useConfiguredDefault": "프로젝트 또는 에이전트 기본값 사용"
+	"settings.models.useConfiguredDefault": "프로젝트 또는 에이전트 기본값 사용",
+	"onboarding.attribution.title": "Orchestrator를 어떻게 알게 되셨나요?",
+	"onboarding.attribution.skip": "건너뛰기",
+	"onboarding.attribution.channel.x_twitter": "X (Twitter)",
+	"onboarding.attribution.channel.youtube": "YouTube",
+	"onboarding.attribution.channel.friend_colleague": "친구 또는 동료",
+	"onboarding.attribution.channel.github": "GitHub",
+	"onboarding.attribution.channel.hacker_news": "Hacker News",
+	"onboarding.attribution.channel.reddit": "Reddit",
+	"onboarding.attribution.channel.search": "검색 엔진",
+	"onboarding.attribution.channel.ai_assistant": "AI 어시스턴트",
+	"onboarding.attribution.channel.newsletter_blog": "뉴스레터 또는 블로그",
+	"onboarding.attribution.channel.conference_event": "컨퍼런스 또는 이벤트",
+	"onboarding.attribution.channel.other": "기타"
 }
