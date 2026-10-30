@@ -866,6 +866,11 @@ type TelemetryEvent struct {
 	PayloadJson string
 }
 
+type TelemetryLifetimeSession struct {
+	Singleton int64
+	Count     int64
+}
+
 type UsageBinding struct {
 	ID             int64
 	SessionID      domain.SessionID
