@@ -55,6 +55,7 @@ describe("boardZoneOf", () => {
 		expect(boardZoneOf(session({ status: "stuck" }))).toBe("needs_you");
 		expect(boardZoneOf(session({ status: "errored" }))).toBe("needs_you");
 		expect(boardZoneOf(session({ status: "working", displayStatus: "Blocked" }))).toBe("needs_you");
+		expect(boardZoneOf(session({ status: "working", displayStatus: "Needs input" }))).toBe("needs_you");
 	});
 
 	// A stopped agent is not waiting on anyone; opening the session in a client

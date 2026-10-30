@@ -128,7 +128,7 @@ type Engine struct {
 	triggerLocks map[domain.SessionID]*sync.Mutex
 }
 
-const autoReviewFailedRetryLimit = 3
+const autoReviewFailedRetryLimit = domain.AutoReviewFailedRetryLimit
 
 // New wires an Engine from its dependencies, defaulting the clock and id source.
 func New(d Deps) *Engine {
