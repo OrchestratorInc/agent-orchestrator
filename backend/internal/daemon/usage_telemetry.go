@@ -104,7 +104,7 @@ func (f *usageTelemetryFlusher) flush(ctx context.Context, terminatedOnly bool) 
 					"desktop_count": b.DesktopCount,
 					"mobile_count":  b.MobileCount,
 					"cli_count":     b.CLICount,
-					"kind":          telemetrymeta.SessionKind(domain.SessionRecord{ProjectID: domain.ProjectID(b.ProjectID), Kind: domain.SessionKind(b.Kind)}),
+					"kind":          telemetrymeta.SessionKind(domain.SessionKind(b.Kind), domain.ProjectID(b.ProjectID)),
 					"harness":       b.Harness,
 				},
 			})
@@ -259,7 +259,7 @@ func workerPRKind(fact sqlitestore.UsagePRFact) string {
 	if fact.SessionKind == "" {
 		return ""
 	}
-	return telemetrymeta.SessionKind(domain.SessionRecord{ProjectID: domain.ProjectID(fact.ProjectID), Kind: domain.SessionKind(fact.SessionKind)})
+	return telemetrymeta.SessionKind(domain.SessionKind(fact.SessionKind), domain.ProjectID(fact.ProjectID))
 }
 
 // workerPROutcome adds timing and review facts for a merge or close at at.

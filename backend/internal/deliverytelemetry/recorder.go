@@ -129,7 +129,7 @@ func (r *Recorder) SessionEnded(ctx context.Context, rec domain.SessionRecord, r
 	}
 	facts, _ := r.store.GetSessionTelemetry(ctx, rec.ID)
 	payload := map[string]any{
-		"kind":                telemetrymeta.SessionKind(rec),
+		"kind":                telemetrymeta.SessionKind(rec.Kind, rec.ProjectID),
 		"harness":             string(rec.Harness),
 		"outcome":             sessionOutcome(reason, rec.Activity.State, hadPR, doneReported),
 		"had_pr":              hadPR,

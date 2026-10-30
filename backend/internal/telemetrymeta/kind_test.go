@@ -17,7 +17,7 @@ func TestSessionKind(t *testing.T) {
 		{"project orchestrator", domain.SessionRecord{ProjectID: "p", Kind: domain.KindOrchestrator}, "orchestrator"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := SessionKind(tc.rec); got != tc.want {
+			if got := SessionKind(tc.rec.Kind, tc.rec.ProjectID); got != tc.want {
 				t.Fatalf("SessionKind = %q, want %q", got, tc.want)
 			}
 		})
