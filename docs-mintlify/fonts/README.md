@@ -1,0 +1,8 @@
+# Fonts
+
+GeistSans-Variable.woff2 is the Geist Sans variable font (Geist by Vercel),
+the exact file served by the original documentation site
+(https://docs.orchestrator.inc/_next/static/media/27834908180db20f-s.p.woff2).
+
+Source: https://github.com/vercel/geist-font
+License: SIL Open Font License 1.1 (see LICENSE.txt)
