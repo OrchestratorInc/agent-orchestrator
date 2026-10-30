@@ -2906,7 +2906,6 @@
 	"newTask.phoneConnected_other": "{{count}} téléphones connectés",
 	"newTask.modelNotice.signedOut": "{{agent}} n’est pas connecté sur cet ordinateur, ses modèles n’ont donc pas pu être chargés.",
 	"newTask.modelNotice.expired": "La connexion enregistrée de {{agent}} a expiré. Elle sera renouvelée au prochain lancement de {{agent}}, ou vous pouvez vous reconnecter maintenant.",
-	"newTask.modelNotice.cloud": "Les modèles par défaut de {{agent}} sont affichés car cet ordinateur n’y est pas connecté. Les tâches cloud utilisent votre connexion cloud et peuvent quand même démarrer.",
 	"newTask.modelNotice.login": "Se connecter",
 	"newTask.modelNotice.loginAgain": "Se reconnecter",
 	"newTask.modelNotice.retry": "Réessayer",
@@ -3756,5 +3755,15 @@
 	"share.people.working": "au travail",
 	"share.people.waiting": "en attente",
 	"share.people.idle": "inactif",
-	"board.shared.working": "{{name}} au travail"
+	"board.shared.working": "{{name}} au travail",
+	"newTask.cloudConfiguredDefault": "Valeur par défaut du projet ou de l’agent",
+	"newTask.cloudCredentialModels": "D’après la liste de modèles de votre fournisseur connecté",
+	"newTask.cloudLegacyModels": "Ce serveur cloud ne peut pas lister ses modèles. Ces suggestions viennent de cet ordinateur et risquent de ne pas fonctionner dans le cloud.",
+	"newTask.cloudModelsCatalog": "Modèles de {{agent}} dans le cloud",
+	"newTask.cloudModelsFailed": "Impossible de charger les modèles cloud de {{agent}}. Utilisez la valeur par défaut ou saisissez un identifiant de modèle.",
+	"newTask.cloudModelsRelease": "Modèles de {{agent}} {{version}}",
+	"newTask.cloudModelsUnavailable": "Le cloud n’a pas de liste de modèles pour {{agent}}. Utilisez la valeur par défaut ou saisissez un identifiant de modèle.",
+	"newTask.cloudModelsVerified": "Vérifié sur vos workers cloud",
+	"newTask.cloudModelUnlisted": "{{model}} ne figure pas dans la liste de modèles cloud de {{agent}} et risque de ne pas fonctionner.",
+	"settings.models.useConfiguredDefault": "Utiliser la valeur par défaut du projet ou de l’agent"
 }

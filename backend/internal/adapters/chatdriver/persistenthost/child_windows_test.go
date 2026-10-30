@@ -21,6 +21,43 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
+func TestReadDescriptorRetriesSharingViolation(t *testing.T) {
+	dataDir := t.TempDir()
+	d := Descriptor{Version: ProtocolVersion, SessionID: "locked", Address: "127.0.0.1:1", Token: "token"}
+	if err := writeDescriptor(dataDir, d); err != nil {
+		t.Fatal(err)
+	}
+	path, err := descriptorPath(dataDir, d.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ, 0, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		_ = windows.CloseHandle(handle)
+		close(released)
+	}()
+	defer func() { <-released }()
+	if _, err := os.ReadFile(path); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+		t.Fatalf("locked descriptor read error = %v, want sharing violation", err)
+	}
+	got, err := readDescriptor(dataDir, d.SessionID)
+	if err != nil {
+		t.Fatalf("read shutdown descriptor: %v", err)
+	}
+	if got.SessionID != d.SessionID || got.Token != d.Token {
+		t.Fatalf("descriptor = %+v, want session %q and original token", got, d.SessionID)
+	}
+}
+
 func TestConfigureProviderProcessPreservesHiddenAttributes(t *testing.T) {
 	cmd := aoprocess.Command("provider.exe")
 

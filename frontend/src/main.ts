@@ -44,7 +44,7 @@ import {
 	type UpdateCheckOptions,
 } from "./main/auto-updater";
 import { listFeatureBuilds, getActiveFeatureBuild } from "./main/feature-builds";
-import { initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
+import { clearMainSentryCache, initMainSentry, sanitizeRendererCapture } from "./main/sentry-main";
 import { TelemetryPolicyAuthority, resolveDesktopDataDir } from "./main/telemetry-policy-file";
 import { DesktopTelemetryController } from "./main/desktop-telemetry-controller";
 import { TelemetryIdentityController } from "./main/telemetry-identity";
@@ -155,7 +155,7 @@ import { installCloudLocalAuthIPC } from "./main/cloud-auth-local";
 import { createCloudAgentProxy } from "./main/cloud-agent-proxy";
 import { installCloudCpProxy } from "./main/cloud-cp-proxy";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "./shared/posthog-config";
-import { DEFAULT_SENTRY_DSN } from "./shared/sentry-config";
+import { daemonSentryDsn } from "./shared/sentry-config";
 import { buildTelemetryBootstrap, rendererTelemetryEnabled } from "./shared/telemetry";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
@@ -1365,7 +1365,7 @@ function telemetryOverrides(): Record<string, string> {
 		// env so the spawned daemon inherits the DSN; off in dev to match the
 		// PostHog remote gate, and an explicit env always wins. A blank value
 		// leaves the daemon's Sentry a no-op.
-		AO_SENTRY_DSN: process.env.AO_SENTRY_DSN ?? (isDev ? "" : DEFAULT_SENTRY_DSN),
+		AO_SENTRY_DSN: daemonSentryDsn(process.env.AO_SENTRY_DSN, isDev),
 		// The daemon binary has no version of its own that release tooling sets,
 		// so without this every daemon event lands unattributable to a release.
 		AO_TELEMETRY_APP_VERSION: process.env.AO_TELEMETRY_APP_VERSION ?? app.getVersion(),
@@ -2845,10 +2845,21 @@ ipcMain.handle("telemetry:getBootstrap", () => {
 	return buildTelemetryBootstrap({ ...process.env, AO_DATA_DIR: desktopDataDir }, app.getVersion(), process.platform, os.homedir(), app.isPackaged, telemetryPolicyController.snapshot());
 });
 ipcMain.handle("telemetry:getAnalyticsOptOut", () => telemetryIdentity.isOptedOut());
-ipcMain.handle("telemetry:setAnalyticsOptOut", (event, optedOut: unknown) => {
+async function flushDaemonUsage(): Promise<void> {
+	if (daemonStatus.state !== "ready" || !daemonStatus.port) return;
+	try {
+		await fetch(`http://127.0.0.1:${daemonStatus.port}/internal/telemetry/usage-flush`, {
+			method: "POST", signal: AbortSignal.timeout(3000),
+		});
+	} catch (error) { console.warn("AO: usage telemetry flush failed", error); }
+}
+
+ipcMain.handle("telemetry:setAnalyticsOptOut", async (event, optedOut: unknown) => {
 	const trustedSender = trustedShellWebContents.get(event.sender.id);
 	if (trustedSender !== event.sender || typeof optedOut !== "boolean") throw new Error("invalid analytics opt-out request");
-	return telemetryIdentity.setOptedOut(optedOut);
+	const result = await telemetryIdentity.setOptedOut(optedOut);
+	if (optedOut) void flushDaemonUsage();
+	return result;
 });
 ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
 	const trustedSender = trustedShellWebContents.get(event.sender.id);
@@ -3545,7 +3556,8 @@ app.whenReady().then(async () => {
 	const policyController = new DesktopTelemetryController({
 		authority,
 		environmentAllowsEvents: rendererTelemetryEnabled(process.env, app.isPackaged),
-		transportFactory: () => initMainSentry(app.getVersion(), app.getPath("userData")),
+		transportFactory: () => initMainSentry(app.getVersion(), desktopDataDir, app.getPath("userData"), isDev),
+		clearTransportCache: () => clearMainSentryCache(app.getPath("userData")),
 		clearRendererQueues: clearRendererTelemetryQueues,
 		broadcast: (view) => {
 			for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(TELEMETRY_POLICY_CHANGED_CHANNEL, view);
@@ -3757,6 +3769,7 @@ app.on("before-quit", (event) => {
 				cloudAgentProxy.close(),
 				telemetryPolicyController?.close() ?? Promise.resolve(),
 				retireSides(),
+				flushDaemonUsage(),
 			]);
 			const finishQuit = () => {
 				browserCleanupComplete = true;

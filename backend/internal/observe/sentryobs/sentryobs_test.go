@@ -2,30 +2,24 @@ package sentryobs
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/getsentry/sentry-go"
-)
+	"github.com/go-chi/chi/v5"
+	sqlite3 "modernc.org/sqlite"
 
-func TestScrubRedactsLocalPaths(t *testing.T) {
-	t.Parallel()
-	cases := map[string]string{
-		// A trailing ':' is part of the matched path run (it must be, for C:\...),
-		// so it is redacted along with the path.
-		"open /Users/alice/secret/notes.md: no such file":             "open [redacted-path] no such file",
-		"read /home/bob/ao/worktree/x.go failed":                      "read [redacted-path] failed",
-		`stat C:\Users\carol\AppData\ao\db failed`:                    "stat [redacted-path] failed",
-		"open /Users/dave/Library/Mobile Documents/report.md: denied": "open [redacted-path] denied",
-		"no paths here": "no paths here",
-	}
-	for in, want := range cases {
-		if got := scrub(in); got != want {
-			t.Fatalf("scrub(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
+	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
+)
 
 func TestShouldCaptureStatus(t *testing.T) {
 	t.Parallel()
@@ -52,23 +46,26 @@ func TestInitNoDSNIsNoOp(t *testing.T) {
 		t.Fatal("Sentry should be disabled without a DSN")
 	}
 	// Capture calls must be safe no-ops when disabled.
-	CaptureHTTPError(context.TODO(), errString("boom"), map[string]string{"path": "/x"}, "fp")
-	CapturePanic(context.TODO(), "kaboom", "stack", nil, "fp")
+	CaptureError(context.TODO(), errString("boom"), map[string]string{"path": "/x"}, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	CapturePanic(context.TODO(), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	Flush(0)
 }
 
 func TestCaptureTagsAuthoritativeInstallID(t *testing.T) {
 	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
-	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "1.2.3", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
 	SetPolicyEnabled(true)
-	CaptureHTTPError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp")
+	CaptureError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	select {
 	case event := <-transport.events:
 		if event.Tags["install_id"] != "ins_stable" {
 			t.Fatalf("install tag = %q", event.Tags["install_id"])
+		}
+		if event.User.ID != "ins_stable" || event.User.Email != "" || event.Release != "1.2.3" || event.Environment != "stable" {
+			t.Fatalf("Sentry identity or build context = user=%+v release=%q environment=%q", event.User, event.Release, event.Environment)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Sentry event missing")
@@ -85,11 +82,17 @@ func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
 	if !Enabled() {
 		t.Fatal("missing installation ID disabled Sentry")
 	}
-	CaptureHTTPError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp")
+	CaptureError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	select {
 	case event := <-transport.events:
 		if _, ok := event.Tags["install_id"]; ok {
 			t.Fatal("event used a caller supplied installation ID")
+		}
+		if event.User.ID != "" {
+			t.Fatalf("event used a caller supplied user ID: %+v", event.User)
+		}
+		if event.Release != "unknown" || event.Environment != "unknown" {
+			t.Fatalf("missing build context fallback: release=%q environment=%q", event.Release, event.Environment)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Sentry event missing")
@@ -110,15 +113,17 @@ func TestScrubEventStripsPathsAndContext(t *testing.T) {
 		Message:    "failed at /Users/dave/ao/main.go",
 		ServerName: "daves-macbook.local",
 		Request:    &sentry.Request{URL: "http://127.0.0.1:3001/api/v1/x"},
+		Contexts:   map[string]sentry.Context{"runtime": {"go_stack": "secret stack argument"}},
+		Tags:       map[string]string{"path": "unmatched", "operation": "http_request"},
 		Exception: []sentry.Exception{{
 			Value: "open /home/eve/ws/file: denied",
 			Stacktrace: &sentry.Stacktrace{Frames: []sentry.Frame{
-				{AbsPath: "/Users/dave/ao/backend/internal/x.go", Filename: "/Users/dave/ao/backend/internal/x.go"},
+				{Function: "safeFunction", Lineno: 42, AbsPath: "/Users/dave/ao/backend/internal/x.go", Filename: "/Users/dave/ao/backend/internal/x.go", ContextLine: "secret source", Vars: map[string]interface{}{"secret": "value"}},
 			}},
 		}},
 	}
 	out := scrubEvent(event)
-	if out.Message != "failed at [redacted-path]" {
+	if out.Message != "HTTP server error" {
 		t.Fatalf("message not scrubbed: %q", out.Message)
 	}
 	if out.ServerName != "" {
@@ -127,12 +132,283 @@ func TestScrubEventStripsPathsAndContext(t *testing.T) {
 	if out.Request != nil {
 		t.Fatal("request context not dropped")
 	}
-	if out.Exception[0].Value != "open [redacted-path] denied" {
+	if out.Exception[0].Value != "" || out.Exception[0].Type != "HTTP server error" {
 		t.Fatalf("exception value not scrubbed: %q", out.Exception[0].Value)
 	}
 	f := out.Exception[0].Stacktrace.Frames[0]
-	if f.AbsPath != "[redacted-path]" || f.Filename != "[redacted-path]" {
+	if f.AbsPath != "" || f.Filename != "" || f.ContextLine != "" || len(f.Vars) != 0 || f.Function != "safeFunction" || f.Lineno != 42 {
 		t.Fatalf("frame paths not scrubbed: %+v", f)
+	}
+	if len(out.Contexts) != 3 || out.Contexts["runtime"]["go_stack"] != nil || out.Contexts["runtime"]["version"] == "" || out.Contexts["device"]["arch"] == "" || out.Contexts["os"]["name"] == "" || len(out.Tags) != 2 {
+		t.Fatalf("dynamic context or tag survived: contexts=%+v tags=%+v", out.Contexts, out.Tags)
+	}
+}
+
+func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 3)}
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+
+	const secret = "PrivateProjectOrSession_Z9"
+	tags := map[string]string{
+		"component": "httpd", "operation": "http_request", "method": "GET", "category": "http_5xx", "platform": "daemon",
+		"status": "500", "error_kind": "internal", "error_code": "INTERNAL_ERROR",
+		"path": "/api/v1/projects/" + secret, "request_id": secret,
+	}
+	for _, err := range []error{
+		fmt.Errorf("get project %s: storage failed", secret),
+		fmt.Errorf("get session %s: repo %s failed", secret, secret),
+		fmt.Errorf("open /tmp/%s/worktree: access denied", secret),
+	} {
+		CaptureError(context.Background(), err, tags, "0123456789abcdef", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	}
+	for i := 0; i < 3; i++ {
+		event := <-transport.events
+		if event.Message != "HTTP server error (INTERNAL_ERROR)" || len(event.Exception) == 0 || event.Exception[0].Value != "" || event.Exception[0].Type != event.Message {
+			t.Fatalf("unsafe title fields: message=%q exception=%+v", event.Message, event.Exception)
+		}
+		if event.Tags["method"] != "GET" || event.Tags["error_code"] != "INTERNAL_ERROR" || event.Tags["install_id"] != "ins_stable" || event.Tags["category"] != "http_5xx" || event.Tags["platform"] != "daemon" || event.Tags["status"] != "500" || len(event.Exception[0].Stacktrace.Frames) == 0 {
+			t.Fatalf("diagnostics lost: %+v", event)
+		}
+		if event.Fingerprint[0] != "0123456789abcdef" {
+			t.Fatalf("fingerprint lost: %+v", event.Fingerprint)
+		}
+		if event.Tags["path"] != "unmatched" {
+			t.Fatalf("unsafe route fallback: %+v", event.Tags)
+		}
+		if _, ok := event.Tags["request_id"]; ok {
+			t.Fatalf("untrusted request id leaked: %+v", event.Tags)
+		}
+		encoded, marshalErr := event.MarshalJSON()
+		if marshalErr != nil || strings.Contains(string(encoded), secret) {
+			t.Fatalf("sensitive value in outbound event: %s, marshal error: %v", encoded, marshalErr)
+		}
+	}
+
+	panicSite := telemetrymeta.CurrentFailureSite()
+	CapturePanic(context.Background(), map[string]string{
+		"component": "httpd", "operation": "http_request_panic", "panic_kind": "string", "path": "/" + secret,
+	}, "fedcba9876543210", telemetrymeta.RoutePattern(nil), panicSite)
+	event := <-transport.events
+	if event.Message != "http handler panic" || event.Exception[0].Value != "" || event.Exception[0].Type != event.Message {
+		t.Fatalf("unsafe panic title: %+v", event)
+	}
+	if event.User.ID != "ins_stable" || event.Release == "" || event.Environment == "" {
+		t.Fatalf("panic lost Sentry identity or build context: %+v", event)
+	}
+	if len(event.Fingerprint) != 1 || event.Fingerprint[0] != "fedcba9876543210" || event.Exception[0].Stacktrace.Frames[0].Function != panicSite.String() {
+		t.Fatalf("panic did not group at AO failure site: %+v", event)
+	}
+	encoded, err := event.MarshalJSON()
+	if err != nil || strings.Contains(string(encoded), secret) {
+		t.Fatalf("sensitive panic value in outbound event: %s, marshal error: %v", encoded, err)
+	}
+
+	CaptureError(context.Background(), errString(secret), map[string]string{
+		"operation": secret, "error_code": "PRIVATEPROJECTORSESSION_Z9", "path": "/" + secret,
+	}, secret, telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	event = <-transport.events
+	if event.Message != "daemon error" || event.Exception[0].Type != "daemon error" || event.Exception[0].Value != "" || len(event.Fingerprint) != 0 || event.Tags["error_code"] != "" || event.Tags["operation"] != "" || event.Tags["path"] != "" {
+		t.Fatalf("unknown code, operation, or fingerprint survived: %+v", event)
+	}
+	encoded, err = event.MarshalJSON()
+	if err != nil || strings.Contains(string(encoded), secret) {
+		t.Fatalf("sensitive fallback value in outbound event: %s, marshal error: %v", encoded, err)
+	}
+}
+
+func TestCaptureBoundaryKeepsRegisteredRouteTemplate(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+
+	router := chi.NewRouter()
+	router.Get("/api/v1/projects/{projectID}", func(w http.ResponseWriter, r *http.Request) {
+		CaptureError(r.Context(), errString("get project PrivateProjectOrSession_Z9 failed"), map[string]string{
+			"operation": "http_request", "path": r.URL.Path,
+		}, "0123456789abcdef", telemetrymeta.RoutePattern(r), telemetrymeta.FailureSite{})
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	router.Get("/api/v1/projects", func(w http.ResponseWriter, r *http.Request) {
+		CaptureError(r.Context(), errString("list projects failed"), map[string]string{
+			"operation": "http_request", "path": r.URL.Path,
+		}, "0123456789abcdef", telemetrymeta.RoutePattern(r), telemetrymeta.FailureSite{})
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/projects/PrivateProjectOrSession_Z9", nil))
+	event := <-transport.events
+	if event.Tags["path"] != "/api/v1/projects/{projectID}" || event.Message != "HTTP server error" {
+		t.Fatalf("registered route or operation lost: %+v", event)
+	}
+	encoded, err := event.MarshalJSON()
+	if err != nil || strings.Contains(string(encoded), "PrivateProjectOrSession_Z9") {
+		t.Fatalf("request path leaked through registered route: %s, marshal error: %v", encoded, err)
+	}
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/api/v1/projects", nil))
+	if static := <-transport.events; static.Tags["path"] != "/api/v1/projects" {
+		t.Fatalf("registered static route lost: %+v", static.Tags)
+	}
+}
+
+func TestCaptureBoundaryScrubsAgentRelaunchFailure(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+	const secret = "PrivateProjectOrSession_Z9"
+	CaptureError(context.Background(), fmt.Errorf("resume session %s: %s", secret, secret), map[string]string{
+		"component": "session_service", "operation": "resume_agent", "area": "agent",
+		"error_code": "AGENT_RESUME_FAILED", "step": "runtime", "request_id": secret, "cause_type": secret,
+	}, "0123456789abcdef", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	event := <-transport.events
+	if event.Message != "Agent resume failed (AGENT_RESUME_FAILED)" || event.Exception[0].Value != "" ||
+		event.Tags["component"] != "session_service" || event.Tags["operation"] != "resume_agent" ||
+		event.Tags["error_code"] != "AGENT_RESUME_FAILED" || event.Tags["area"] != "agent" ||
+		event.Tags["step"] != "runtime" || event.Tags["path"] != "" ||
+		len(event.Fingerprint) != 1 || event.Fingerprint[0] != "0123456789abcdef" {
+		t.Fatalf("agent relaunch diagnostics = %+v", event)
+	}
+	encoded, err := event.MarshalJSON()
+	if err != nil || strings.Contains(string(encoded), secret) {
+		t.Fatalf("agent relaunch leaked sensitive context: %s, marshal error: %v", encoded, err)
+	}
+}
+
+func TestCaptureBoundaryUsesFailureSiteAndFixedAreaLabel(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 2)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "nightly", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+	const secret = "PrivateProjectOrSession_Z9"
+	tags := map[string]string{"operation": "http_request", "error_code": "WORKSPACE_GIT_READ_FAILED", "area": "git", "path": "/" + secret}
+	site := telemetrymeta.CurrentFailureSite()
+	CaptureError(context.Background(), fmt.Errorf("get project %s: git failed", secret), tags, "0123456789abcdef", telemetrymeta.RoutePattern(nil), site)
+	event := <-transport.events
+	if site.String() == "" || strings.Contains(site.String(), "sentryobs.CaptureError") {
+		t.Fatalf("failure site = %q", site.String())
+	}
+	if event.Message != "Git operation failed (WORKSPACE_GIT_READ_FAILED)" || event.Tags["area"] != "git" {
+		t.Fatalf("fixed diagnostics lost: %+v", event)
+	}
+	wantGroup := "0123456789abcdef"
+	if len(event.Fingerprint) != 1 || event.Fingerprint[0] != wantGroup {
+		t.Fatalf("route and code fingerprint = %v, want %q", event.Fingerprint, wantGroup)
+	}
+	frames := event.Exception[0].Stacktrace.Frames
+	if len(frames) != 1 || frames[0].Function != site.String() || frames[0].Lineno != site.Line() || strings.Contains(frames[0].Function, "sentryobs.CaptureError") {
+		t.Fatalf("failure stack = %+v, want AO site %q:%d", frames, site.String(), site.Line())
+	}
+	encoded, err := event.MarshalJSON()
+	if err != nil || strings.Contains(string(encoded), secret) {
+		t.Fatalf("sensitive outbound event: %s, marshal error: %v", encoded, err)
+	}
+
+	CaptureError(context.Background(), fmt.Errorf("request canceled: %w", context.Canceled), tags, "0123456789abcdef", telemetrymeta.RoutePattern(nil), site)
+	select {
+	case event := <-transport.events:
+		t.Fatalf("canceled request captured: %+v", event)
+	default:
+	}
+}
+
+func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
+	SetPolicyEnabled(true)
+	assertRepanic := func(value string) {
+		t.Helper()
+		func() {
+			defer func() {
+				if got := recover(); got != value {
+					t.Fatalf("background panic = %v, want %q", got, value)
+				}
+			}()
+			defer RecoverBackground()
+			panic(value)
+		}()
+	}
+	assertRepanic("resume agent ai-sports-coach-113")
+	select {
+	case event := <-transport.events:
+		if event.Message != "daemon background panic" || event.User.ID != "ins_stable" || event.Tags["panic_kind"] != "string" {
+			t.Fatalf("background panic metadata = %+v", event)
+		}
+		if len(event.Fingerprint) != 1 || len(event.Exception) != 1 || len(event.Exception[0].Stacktrace.Frames) != 1 || strings.Contains(event.Exception[0].Stacktrace.Frames[0].Function, "sentryobs.RecoverBackground") {
+			t.Fatalf("background panic grouping or culprit = %+v", event)
+		}
+		encoded, err := event.MarshalJSON()
+		if err != nil || strings.Contains(string(encoded), "ai-sports-coach-113") {
+			t.Fatalf("background panic leaked private value: %s, error: %v", encoded, err)
+		}
+	default:
+		t.Fatal("background panic was not captured")
+	}
+	SetPolicyEnabled(false)
+	assertRepanic("private branch")
+	select {
+	case event := <-transport.events:
+		t.Fatalf("opted out background panic was captured: %+v", event)
+	default:
+	}
+}
+
+func TestSentryTagRules(t *testing.T) {
+	t.Parallel()
+	for value, want := range map[string]bool{"500": true, "502": true, "503": false, "499": false, "500x": false} {
+		if got := safeSentryTag("status", value); got != want {
+			t.Fatalf("status %q allowed = %v, want %v", value, got, want)
+		}
+	}
+	if !safeErrorCode("INTERNAL_ERROR") || safeErrorCode("PRIVATEPROJECTORSESSION_Z9") {
+		t.Fatal("error code allowlist accepted a synthetic code or rejected a known code")
+	}
+	if safeSentryTag("path", "/api/v1/projects/PrivateProjectOrSession_Z9") ||
+		safeSentryTag("path", "/api/v1/projects/{projectID}/PrivateProjectOrSession_Z9") ||
+		!safeSentryTag("path", "unmatched") {
+		t.Fatal("route tag accepted an unregistered path or rejected the fixed fallback")
+	}
+	if !safeSentryTag("step", "runtime") || safeSentryTag("step", "PrivateProjectOrSession_Z9") || safeSentryTag("area", "update") {
+		t.Fatal("step or area tag accepted a dynamic or unsupported value")
+	}
+	for _, step := range []string{"workspace roots", "provider ownership", "chat start"} {
+		if !safeSentryTag("step", step) {
+			t.Fatalf("fixed chat relaunch step %q was dropped", step)
+		}
+	}
+}
+
+func TestAreaRequiresErrorEvidence(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		err  error
+		code string
+		want string
+	}{
+		{errString("project PrivateProjectOrSession_Z9"), "", ""},
+		{errString("git failure"), "WORKSPACE_GIT_READ_FAILED", "git"},
+		{errString("agent failure"), "SPAWN_CREATE_FAILED", "agent"},
+		{&sqlite3.Error{}, "", "db"},
+		{&fs.PathError{Op: "open", Path: "/private/PrivateProjectOrSession_Z9", Err: fs.ErrNotExist}, "", ""},
+		{&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, "", "network"},
+		{&net.DNSError{Err: "no such host", Name: "PrivateProjectOrSession_Z9"}, "", "network"},
+		{&url.Error{Op: "Get", URL: "https://PrivateProjectOrSession_Z9.test", Err: errors.New("connection refused")}, "", "network"},
+	} {
+		if got := Area(tc.err, tc.code); got != tc.want {
+			t.Fatalf("Area(%q, %q) = %q, want %q", tc.err, tc.code, got, tc.want)
+		}
 	}
 }
 
@@ -149,7 +425,7 @@ func TestPolicyDisableDrainsEnteredProviderCallAndRejectsLaterCapture(t *testing
 
 	captured := make(chan struct{})
 	go func() {
-		CaptureHTTPError(context.Background(), errString("before opt-out"), nil, "fp")
+		CaptureError(context.Background(), errString("before opt-out"), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 		close(captured)
 	}()
 	select {
@@ -176,7 +452,7 @@ func TestPolicyDisableDrainsEnteredProviderCallAndRejectsLaterCapture(t *testing
 		t.Fatalf("Drain: %v", err)
 	}
 
-	CaptureHTTPError(context.Background(), errString("after opt-out"), nil, "fp")
+	CaptureError(context.Background(), errString("after opt-out"), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	if got := transport.calls.Load(); got != 1 {
 		t.Fatalf("provider calls = %d, want only the call entered before opt-out", got)
 	}

@@ -11,7 +11,8 @@ import { MachOParseError } from "./makers/macho-archs";
 // suite from spawning codesign/xcrun/bash indirectly through the real chain.
 // vi.mock's factory is hoisted above the rest of the file (including plain
 // const declarations), so the mock fns themselves must go through vi.hoisted.
-const { sealDmg, verifyDmg, verifyMacArtifact, isSigningConfigured } = vi.hoisted(() => ({
+const { sealDmg, verifyDmg, verifyMacArtifact, isSigningConfigured, checkMacDmgLayout } = vi.hoisted(() => ({
+	checkMacDmgLayout: vi.fn<(path: string) => Promise<void>>(async () => undefined),
 	sealDmg: vi.fn<(path: string) => Promise<boolean>>(),
 	verifyDmg: vi.fn<(path: string) => Promise<void>>(async () => undefined),
 	verifyMacArtifact: vi.fn<(path: string) => Promise<void>>(async () => undefined),
@@ -20,6 +21,12 @@ const { sealDmg, verifyDmg, verifyMacArtifact, isSigningConfigured } = vi.hoiste
 vi.mock("./makers/maker-dmg", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("./makers/maker-dmg")>();
 	return { ...actual, sealDmg, verifyDmg, verifyMacArtifact, isSigningConfigured };
+});
+// The layout check mounts the dmg with hdiutil; its behavior is covered by
+// scripts/build-mac-dmg.test.mjs and the mac-dmg-layout CI job.
+vi.mock("./scripts/build-mac-dmg.mjs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("./scripts/build-mac-dmg.mjs")>();
+	return { ...actual, checkMacDmgLayout };
 });
 
 import config, { extraResourcesForPlatform, macSignOptionsForFile } from "./forge.config";
@@ -158,6 +165,7 @@ afterEach(() => {
 	verifyDmg.mockReset().mockImplementation(async () => undefined);
 	verifyMacArtifact.mockReset().mockImplementation(async () => undefined);
 	isSigningConfigured.mockReset();
+	checkMacDmgLayout.mockReset().mockImplementation(async () => undefined);
 });
 
 describe("macOS signing", () => {
@@ -270,6 +278,20 @@ describe("postMake artifact verification", () => {
 		expect(sealDmg).toHaveBeenCalledWith("/out/make/app.dmg");
 		expect(verifyDmg).toHaveBeenCalledWith("/out/make/app.dmg");
 		expect(verifyMacArtifact).not.toHaveBeenCalled();
+	});
+
+	// A dmg without its install window layout must fail the build, before any
+	// signing or notarization time is spent on it, signed or not.
+	it("checks the dmg layout before sealing and stops the build when it is missing", async () => {
+		const makeResults = darwinResult(["/out/make/app.dmg"]);
+		await config.hooks?.postMake?.({} as never, makeResults);
+		expect(checkMacDmgLayout).toHaveBeenCalledWith("/out/make/app.dmg");
+		expect(checkMacDmgLayout.mock.invocationCallOrder[0]).toBeLessThan(sealDmg.mock.invocationCallOrder[0]);
+
+		sealDmg.mockClear();
+		checkMacDmgLayout.mockRejectedValueOnce(new Error("no usable install window layout"));
+		await expect(config.hooks?.postMake?.({} as never, makeResults)).rejects.toThrow(/install window layout/);
+		expect(sealDmg).not.toHaveBeenCalled();
 	});
 
 	it("verifies both the dmg and the zip when a make run produces both", async () => {

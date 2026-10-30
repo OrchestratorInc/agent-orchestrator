@@ -265,7 +265,6 @@
 	--size-icon-sm: 13px;
 	--size-icon-md: 14px;
 	--size-icon-base: 16px;
-	--size-terminal-agent-icon: 11px;
 	--size-icon-lg: 15px;
 	--size-icon-xl: 18px;
 	--size-dot-sm: 7px;
@@ -361,9 +360,6 @@
 	--size-shell-tab-min: 64px;
 	/* Keeps added session tabs aligned with the owning tab in the secondary strip. */
 	--size-session-pane-tab-max: 112px;
-	/* Compact connected shell tab in a session's terminal strip. This includes
-	   the terminal glyph and close action, not only the truncated label. */
-	--size-shell-tab-connected: 148px;
 	/* Caps a standalone shell terminal's tab label so several open shells stay
 	   readable side by side instead of one long path crowding out the rest. */
 	--size-shell-tab-max: 140px;

@@ -222,7 +222,8 @@ func Run(buildVersion string) error {
 	telemetryPolicy := policyauthority.New(filepath.Join(cfg.DataDir, policyauthority.FileName))
 	eventsAllowed := telemetryPolicy.EventsAllowed(context.Background(), cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
 	sentryobs.SetPolicyEnabled(eventsAllowed)
-	telemetrySink, telemetryIdentity := newTelemetrySink(cfg, store, log)
+	telemetrySink, telemetryIdentity, remoteTelemetryActive := newTelemetrySink(cfg, store, log)
+	configureUsageRecording(cfg, store, telemetryIdentity)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
 	installID := ""
 	if telemetryIdentity != nil {
@@ -268,7 +269,19 @@ func Run(buildVersion string) error {
 	// graceful shutdown inside Server.Run and stops the background goroutines.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	go telemetryPolicy.Watch(ctx, time.Second, cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit, eventsAllowed, sentryobs.SetPolicyEnabled)
+	var usage *usageTelemetryFlusher
+	if remoteTelemetryActive && telemetryIdentity != nil {
+		usage = startUsageTelemetry(ctx, store, telemetrySink, telemetryIdentity, log)
+		defer func() {
+			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			usage.flush(flushCtx, false)
+		}()
+	}
+	go func() {
+		defer sentryobs.RecoverBackground()
+		telemetryPolicy.Watch(ctx, time.Second, cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit, eventsAllowed, sentryobs.SetPolicyEnabled)
+	}()
 	startGitHubLoginResolver(ctx, cfg, telemetryIdentity, log)
 	cdcPipe, err := startCDC(ctx, store, log)
 	if err != nil {
@@ -414,7 +427,10 @@ func Run(buildVersion string) error {
 			// The session's own account (a saved one, or this computer's login) is
 			// read again off the chat path; the CLI probe can take seconds.
 			if accounts := agentAccountSvc; accounts != nil {
-				go accounts.RecheckSessionAccount(ctx, sessionID, harness)
+				go func() {
+					defer sentryobs.RecoverBackground()
+					accounts.RecheckSessionAccount(ctx, sessionID, harness)
+				}()
 			}
 			if harness != domain.HarnessCodex || agentSvc == nil || agentSvc.CodexAccountSwitchInProgress() {
 				return
@@ -549,6 +565,9 @@ func Run(buildVersion string) error {
 			log.Error("cdc pipeline shutdown", "err", cdcErr)
 		}
 		return fmt.Errorf("wire session service: %w", err)
+	}
+	if usage != nil {
+		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}
 	sessionSvc.SetChatProviderPreserver(chatSvc.PreservesProviderOnRestart)
 	memoryReader := usagesvc.NewMemoryReader(usagesvc.MemoryReaderDeps{
@@ -835,6 +854,7 @@ func Run(buildVersion string) error {
 		// continuation transcripts) and rebuilds the watch set. Survives
 		// coordinator restarts because the pipeline forwards to the live instance.
 		go func() {
+			defer sentryobs.RecoverBackground()
 			ticker := time.NewTicker(usageReconcileTick)
 			defer ticker.Stop()
 			for {
@@ -984,7 +1004,10 @@ func Run(buildVersion string) error {
 	// same-numbered sessions on another machine. No identity means no push.
 	if pushDevices != nil && hostIdentity.HostID != "" {
 		dispatcher := push.NewDispatcher(notificationHub, pushDevices, push.NewExpoClient(os.Getenv("EXPO_ACCESS_TOKEN")), hostIdentity.HostID, log)
-		go dispatcher.Run(ctx)
+		go func() {
+			defer sentryobs.RecoverBackground()
+			dispatcher.Run(ctx)
+		}()
 	}
 	if mobilebridge.KeepAwakeSupported() {
 		ka := mobilebridge.NewKeepAwake(os.Getpid())
@@ -1054,8 +1077,13 @@ func Run(buildVersion string) error {
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
-		Mobile:             mc,
-		BrowserLive:        browserLive,
+		UsageFlush: func(ctx context.Context) {
+			if usage != nil {
+				usage.flush(ctx, false)
+			}
+		},
+		Mobile:      mc,
+		BrowserLive: browserLive,
 		DevImport: devimportsvc.New(devimportsvc.Deps{
 			Store:         store,
 			TargetDataDir: cfg.DataDir,
@@ -1090,6 +1118,7 @@ func Run(buildVersion string) error {
 		}
 		log.Info("browser runtime: listening", "addr", addr)
 		go func() {
+			defer sentryobs.RecoverBackground()
 			if err := browserBroker.Serve(ctx, ln); err != nil {
 				log.Warn("browser runtime: serve stopped with error", "err", err)
 			}
@@ -1110,6 +1139,7 @@ func Run(buildVersion string) error {
 		}
 		log.Info("browser stream: listening", "addr", addr)
 		go func() {
+			defer sentryobs.RecoverBackground()
 			if err := browserStreamBroker.Serve(ctx, ln); err != nil {
 				log.Warn("browser stream: serve stopped with error", "err", err)
 			}
@@ -1132,7 +1162,10 @@ func Run(buildVersion string) error {
 	if err := restoreMobileOnBoot(mobilebridge.Path(cfg.DataDir), bs); err != nil {
 		log.Warn("restore mobile bridge on boot failed", "err", err)
 	}
-	go runRemoteHostAddressPublisher(ctx, bs, cfg.CloudControlPlaneURL, log)
+	go func() {
+		defer sentryobs.RecoverBackground()
+		runRemoteHostAddressPublisher(ctx, bs, cfg.CloudControlPlaneURL, log)
+	}()
 
 	if usagePipeline != nil {
 		usageDone = usagePipeline.Start(ctx)
@@ -1148,6 +1181,7 @@ func Run(buildVersion string) error {
 		log.Info("supervisor: listening", "addr", addr)
 		sup := supervisor.New(supervisorGrace, srv.RequestShutdown, log)
 		go func() {
+			defer sentryobs.RecoverBackground()
 			if err := sup.Serve(ctx, ln); err != nil {
 				log.Warn("supervisor: serve stopped with error", "err", err)
 			}
@@ -1163,13 +1197,17 @@ func Run(buildVersion string) error {
 		// migration and fencing reconcile that gate the port bind.
 		readinessDone := agentSvc.WarmReadiness()
 		if cfg.HarnessUpdateChecks {
-			go watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.EnsureInstallationReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
-				return systemInstall.UpdateAdvisory(ctx, target, refresh)
-			}, log)
+			go func() {
+				defer sentryobs.RecoverBackground()
+				watchInstalledHarnessUpdates(ctx, readinessDone, cfg.HarnessUpdateInterval, agentSvc.EnsureInstallationReadiness, func(ctx context.Context, target systeminstall.Target, refresh bool) (systeminstall.UpdateAdvisory, error) {
+					return systemInstall.UpdateAdvisory(ctx, target, refresh)
+				}, log)
+			}()
 		}
 		done := make(chan struct{})
 		startupReconcileDone = done
 		go func() {
+			defer sentryobs.RecoverBackground()
 			defer close(done)
 			if reconcileErr := reconcilePersistentChatHosts(ctx, cfg.DataDir, store, cfg.AppRunID); reconcileErr != nil {
 				log.Error("persistent chat host reconciliation on boot failed", "err", reconcileErr)
@@ -1190,6 +1228,7 @@ func Run(buildVersion string) error {
 			}
 		}()
 		go func() {
+			defer sentryobs.RecoverBackground()
 			// The session operation gate skips reconciliation in progress, so
 			// a slow provider reconnect must not stall hibernation of others.
 			ticker := time.NewTicker(chatHibernateSweepTick)
@@ -1211,6 +1250,7 @@ func Run(buildVersion string) error {
 		resumeDone := make(chan struct{})
 		usageLimitResumeDone = resumeDone
 		go func() {
+			defer sentryobs.RecoverBackground()
 			defer close(resumeDone)
 			var sweeps sync.WaitGroup
 			defer sweeps.Wait()
@@ -1230,6 +1270,7 @@ func Run(buildVersion string) error {
 				// The service bounds overlapping scans and provider attempts. A wake
 				// must not stop the next tick discovering another session's deadline.
 				sweeps.Go(func() {
+					defer sentryobs.RecoverBackground()
 					if err := chatSvc.ResumeUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
 						log.Warn("usage-limit auto-resume failed", "err", err)
 					}
@@ -1241,7 +1282,10 @@ func Run(buildVersion string) error {
 				}
 			}
 		}()
-		go runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, telemetrySink, log)
+		go func() {
+			defer sentryobs.RecoverBackground()
+			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, telemetrySink, log)
+		}()
 	})
 
 	// Both graceful shutdown paths (SIGTERM and POST /shutdown) funnel through

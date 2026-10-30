@@ -186,6 +186,9 @@ export type UiState = {
 	// session actions until the spawn settles, instead of blocking navigation.
 	provisioningProjectIds: ReadonlySet<string>;
 	projectCreationPending: boolean;
+	// Freestyle cloud projects just created, whose board starts the orchestrator
+	// on its own instead of waiting for the Orchestrator button.
+	autoStartOrchestratorProjectIds: ReadonlySet<string>;
 	orchestratorReplacementErrors: Record<string, OrchestratorReplacementFailure>;
 	orchestratorStartupErrors: Record<string, string>;
 	globalToasts: GlobalToast[];
@@ -270,6 +273,7 @@ export type UiState = {
 	setCommandPaletteOpen: (open: boolean) => void;
 	setProjectRestarting: (projectId: string, restarting: boolean, hostId?: string) => void;
 	setProjectProvisioning: (projectId: string, provisioning: boolean, hostId?: string) => void;
+	setAutoStartOrchestrator: (projectId: string, autoStart: boolean) => void;
 	setProjectCreationPending: (pending: boolean) => void;
 	setOrchestratorReplacementError: (projectId: string, failure: OrchestratorReplacementFailure | null) => void;
 	setOrchestratorStartupError: (projectId: string, message: string | null, hostId?: string) => void;
@@ -401,6 +405,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
 	projectCreationPending: false,
+	autoStartOrchestratorProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},
 	orchestratorStartupErrors: {},
 	globalToasts: [],
@@ -696,6 +701,14 @@ export const useUiStore = create<UiState>((set, get) => ({
 			return { restartingProjectIds };
 		}),
 	setProjectCreationPending: (pending) => set({ projectCreationPending: pending }),
+	setAutoStartOrchestrator: (projectId, autoStart) =>
+		set((state) => {
+			if (state.autoStartOrchestratorProjectIds.has(projectId) === autoStart) return state;
+			const autoStartOrchestratorProjectIds = new Set(state.autoStartOrchestratorProjectIds);
+			if (autoStart) autoStartOrchestratorProjectIds.add(projectId);
+			else autoStartOrchestratorProjectIds.delete(projectId);
+			return { autoStartOrchestratorProjectIds };
+		}),
 	setProjectProvisioning: (projectId, provisioning, hostId) =>
 		set((state) => {
 			const provisioningProjectIds = new Set(state.provisioningProjectIds);

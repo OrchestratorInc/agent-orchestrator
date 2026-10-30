@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
-import { cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "./cloud-lifecycle";
+import { cloudChatStartingInPlace, cloudLifecycleStage, cloudStartupProblem, isCloudPausedStage } from "./cloud-lifecycle";
 
 function session(
 	desiredState: string,
@@ -52,6 +52,37 @@ describe("cloudLifecycleStage", () => {
 		const local = session("running", "running", true);
 		delete local.cloud;
 		expect(cloudLifecycleStage(local)).toBeUndefined();
+	});
+});
+
+describe("cloudChatStartingInPlace", () => {
+	const freestyleChat = (desired: string, observed: string, connected = false): WorkspaceSession => {
+		const base = session(desired, observed, connected);
+		return { ...base, mode: "chat", cloud: { ...base.cloud!, sandboxProvider: "freestyle" } };
+	};
+
+	it.each([
+		["running", "requested"],
+		["running", "provisioning"],
+		["running", "bootstrapping"],
+		["running", "stopped"],
+		["running", "restoring"],
+	] as const)("holds a Freestyle Chat session on its conversation while %s/%s", (desired, observed) => {
+		expect(cloudChatStartingInPlace(freestyleChat(desired, observed))).toBe(true);
+	});
+
+	it("lets go once the worker connects, and while the session is paused", () => {
+		expect(cloudChatStartingInPlace(freestyleChat("running", "bootstrapping", true))).toBe(false);
+		expect(cloudChatStartingInPlace(freestyleChat("paused", "stopped"))).toBe(false);
+		// A session being deleted or archived is going away, not getting ready.
+		expect(cloudChatStartingInPlace(freestyleChat("deleted", "stopped"))).toBe(false);
+		expect(cloudChatStartingInPlace(freestyleChat("deleted", "running"))).toBe(false);
+	});
+
+	it("leaves other providers and terminal sessions to the startup screen", () => {
+		expect(cloudChatStartingInPlace({ ...freestyleChat("running", "provisioning"), mode: "tui" })).toBe(false);
+		const coder = freestyleChat("running", "provisioning");
+		expect(cloudChatStartingInPlace({ ...coder, cloud: { ...coder.cloud!, sandboxProvider: "coder" } })).toBe(false);
 	});
 });
 

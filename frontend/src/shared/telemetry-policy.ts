@@ -31,6 +31,7 @@ export type RendererTelemetryCapture = {
 	message: string;
 	level?: "fatal" | "error" | "warning" | "info";
 	tags?: Record<string, string>;
+	exception?: { type: string; frames: Array<{ function: string; lineno?: number }> };
 };
 
 export type RendererTelemetryCaptureInput = Omit<RendererTelemetryCapture, "consentGeneration">;
