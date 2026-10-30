@@ -258,6 +258,11 @@ vi.mock("../components/DaemonStartupLoader", () => ({
 }));
 vi.mock("../components/CommandPalette", () => ({ CommandPalette: () => null }));
 vi.mock("../components/OrchestratorReplacementDialog", () => ({ OrchestratorReplacementDialog: () => null }));
+vi.mock("../components/SpawnPreflightDialog", () => ({ SpawnPreflightDialog: () => null }));
+vi.mock("../lib/spawn-preflight", () => ({
+	ensureSpawnPreflight: async (input: { harness?: string }) => ({ harness: input.harness }),
+	isSpawnPreflightCancelled: () => false,
+}));
 vi.mock("../components/OpenShareLinkDialog", () => ({ ShareLinkHost: () => null }));
 vi.mock("../components/ShellTopbar", () => ({ ShellTopbar: () => null }));
 vi.mock("../components/TitlebarNav", async () => {

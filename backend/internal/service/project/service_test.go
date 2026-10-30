@@ -2469,3 +2469,56 @@ func TestKeepPreparedCloneReleasesCleanupOwnership(t *testing.T) {
 		t.Fatalf("released checkout was modified: %q, %v", data, err)
 	}
 }
+
+// A child repo's base branch lives on its own registry row: setting it is the
+// only fix for a child whose Git default does not resolve.
+func TestManager_SetWorkspaceRepoDefaultBranch(t *testing.T) {
+	configureCommitter(t)
+	ctx := context.Background()
+	t.Setenv("GIT_CEILING_DIRECTORIES", os.TempDir())
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	m := project.New(store)
+	parent := t.TempDir()
+	gitRepoWithCommit(t, filepath.Join(parent, "api"))
+	gitRepoWithCommit(t, filepath.Join(parent, "web"))
+	if _, err := m.Add(ctx, project.AddInput{Path: parent, ProjectID: ptr("ws-branch"), AsWorkspace: true}); err != nil {
+		t.Fatalf("Add workspace: %v", err)
+	}
+
+	if _, err := m.SetWorkspaceRepoDefaultBranch(ctx, "ws-branch", "web", project.SetWorkspaceRepoDefaultBranchInput{DefaultBranch: " trunk "}); err != nil {
+		t.Fatalf("SetWorkspaceRepoDefaultBranch: %v", err)
+	}
+	repos, err := store.ListWorkspaceRepos(ctx, "ws-branch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	branches := map[string]string{}
+	for _, repo := range repos {
+		branches[repo.Name] = repo.DefaultBranch
+	}
+	if branches["web"] != "trunk" {
+		t.Fatalf("web default branch = %q, want trunk (repos %+v)", branches["web"], repos)
+	}
+	if branches["api"] == "trunk" {
+		t.Fatalf("api default branch changed: %+v", repos)
+	}
+
+	_, err = m.SetWorkspaceRepoDefaultBranch(ctx, "ws-branch", "web", project.SetWorkspaceRepoDefaultBranchInput{DefaultBranch: "bad..name"})
+	wantCode(t, err, "INVALID_BRANCH")
+	_, err = m.SetWorkspaceRepoDefaultBranch(ctx, "ws-branch", "missing", project.SetWorkspaceRepoDefaultBranchInput{DefaultBranch: "main"})
+	wantCode(t, err, "WORKSPACE_REPO_NOT_FOUND")
+	_, err = m.SetWorkspaceRepoDefaultBranch(ctx, "nope", "web", project.SetWorkspaceRepoDefaultBranchInput{DefaultBranch: "main"})
+	wantCode(t, err, "PROJECT_NOT_FOUND")
+
+	single := t.TempDir()
+	gitRepoWithCommit(t, single)
+	if _, err := m.Add(ctx, project.AddInput{Path: single, ProjectID: ptr("single")}); err != nil {
+		t.Fatalf("Add single repo: %v", err)
+	}
+	_, err = m.SetWorkspaceRepoDefaultBranch(ctx, "single", "web", project.SetWorkspaceRepoDefaultBranchInput{DefaultBranch: "main"})
+	wantCode(t, err, "NOT_A_WORKSPACE_PROJECT")
+}

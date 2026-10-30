@@ -163,6 +163,24 @@ func (q *Queries) SetSessionWorktreeBranch(ctx context.Context, arg SetSessionWo
 	return err
 }
 
+const setWorkspaceRepoDefaultBranch = `-- name: SetWorkspaceRepoDefaultBranch :execrows
+UPDATE workspace_repos SET default_branch = ? WHERE project_id = ? AND name = ?
+`
+
+type SetWorkspaceRepoDefaultBranchParams struct {
+	DefaultBranch string
+	ProjectID     domain.ProjectID
+	Name          string
+}
+
+func (q *Queries) SetWorkspaceRepoDefaultBranch(ctx context.Context, arg SetWorkspaceRepoDefaultBranchParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setWorkspaceRepoDefaultBranch, arg.DefaultBranch, arg.ProjectID, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const upsertSessionWorktree = `-- name: UpsertSessionWorktree :exec
 INSERT INTO session_worktrees (session_id, repo_name, branch, base_sha, base_ref, creation_sha, worktree_path, preserved_ref, state)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

@@ -17,6 +17,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/spawnpreflight"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systemcheck"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 
@@ -91,6 +92,12 @@ type ListReportsQuery struct {
 // as the path parameter.
 type ProjectIDParam struct {
 	ID string `path:"id" description:"Project identifier (registry key)."`
+}
+
+// WorkspaceRepoParams identifies one child repo of a workspace project.
+type WorkspaceRepoParams struct {
+	ID   string `path:"id" description:"Project identifier (registry key)."`
+	Name string `path:"name" description:"Child repository name within the workspace."`
 }
 
 // TaskPreparationTokenParam identifies an unclaimed speculative task workspace.
@@ -2138,6 +2145,12 @@ type SessionUsageResponse struct {
 
 // SystemRequirementsResponse is the body of GET /api/v1/system/requirements.
 type SystemRequirementsResponse = systemcheck.Report
+
+// SpawnPreflightRequest is the body of POST /api/v1/sessions/preflight.
+type SpawnPreflightRequest = spawnpreflight.Request
+
+// SpawnPreflightResponse is the body of a 200 from POST /api/v1/sessions/preflight.
+type SpawnPreflightResponse = spawnpreflight.Report
 
 // GitHubAuthRequirementResponse is the advisory GitHub credential probe.
 type GitHubAuthRequirementResponse = systemcheck.Requirement

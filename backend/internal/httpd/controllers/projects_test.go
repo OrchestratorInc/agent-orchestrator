@@ -698,3 +698,33 @@ func TestProjectsAPI_SetPermissions(t *testing.T) {
 	body, status, _ = doRequest(t, srv, "DELETE", "/api/v1/projects/missing/permissions", "")
 	assertErrorCode(t, body, status, http.StatusNotFound, "PROJECT_NOT_FOUND")
 }
+
+type childBranchManager struct {
+	projectsvc.Manager
+	id     domain.ProjectID
+	name   string
+	branch string
+}
+
+func (m *childBranchManager) SetWorkspaceRepoDefaultBranch(_ context.Context, id domain.ProjectID, name string, in projectsvc.SetWorkspaceRepoDefaultBranchInput) (projectsvc.Project, error) {
+	m.id, m.name, m.branch = id, name, in.DefaultBranch
+	return projectsvc.Project{ID: id}, nil
+}
+
+func TestProjectsAPI_SetWorkspaceRepoDefaultBranch(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := &childBranchManager{}
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Projects: mgr}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+
+	body, status, _ := doRequest(t, srv, "PUT", "/api/v1/projects/ws/workspace-repos/web/default-branch", `{"defaultBranch":"trunk"}`)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", status, body)
+	}
+	if mgr.id != "ws" || mgr.name != "web" || mgr.branch != "trunk" {
+		t.Fatalf("manager got %q/%q/%q", mgr.id, mgr.name, mgr.branch)
+	}
+	if _, status, _ := doRequest(t, srv, "PUT", "/api/v1/projects/ws/workspace-repos/web/default-branch", `{"branch":"trunk"}`); status != http.StatusBadRequest {
+		t.Fatalf("unknown field status = %d, want 400", status)
+	}
+}

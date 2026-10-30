@@ -500,6 +500,10 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	// endpoint it serves, same treatment as AgentInventory above.
 	"SystemcheckReport":             "SystemRequirementsResponse",
 	"SystemcheckRequirement":        "SystemRequirement",
+	"SpawnpreflightRequest":         "SpawnPreflightRequest",
+	"SpawnpreflightResolution":      "SpawnPreflightResolution",
+	"SpawnpreflightReport":          "SpawnPreflightResponse",
+	"SpawnpreflightCheck":           "SpawnPreflightCheck",
 	"ControllersInstallTargetParam": "InstallTargetParam",
 	// service/computeruse: the Cua Driver integration behind Settings and the computer-use tools.
 	"ComputeruseStatus":                        "ComputerUseStatus",
@@ -2840,6 +2844,18 @@ func projectOperations() []operation {
 			},
 		},
 		{
+			method: http.MethodPut, path: "/api/v1/projects/{id}/workspace-repos/{name}/default-branch", id: "setWorkspaceRepoDefaultBranch", tag: "projects",
+			summary:    "Set the base branch one child repo of a workspace project starts sessions from",
+			pathParams: []any{controllers.WorkspaceRepoParams{}},
+			reqBody:    projectsvc.SetWorkspaceRepoDefaultBranchInput{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ProjectResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodPatch, path: "/api/v1/projects/{id}/permissions", id: "setProjectPermissions", tag: "projects",
 			summary:    "Remember project permissions for future sessions",
 			pathParams: []any{controllers.ProjectIDParam{}},
@@ -3725,6 +3741,18 @@ func sessionOperations() []operation {
 			summary: "List orchestrator sessions across projects",
 			resps: []respUnit{
 				{http.StatusOK, controllers.ListSessionsResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/preflight", id: "checkSpawnPreflight", tag: "sessions",
+			summary: "Check a prospective spawn's agent, runtime, and default-branch prerequisites without spawning",
+			reqBody: controllers.SpawnPreflightRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.SpawnPreflightResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},

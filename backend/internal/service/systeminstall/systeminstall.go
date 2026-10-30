@@ -580,6 +580,47 @@ func (s *Service) AgentPlans(ctx context.Context) ([]AgentPlan, error) {
 	return out, nil
 }
 
+// AgentInstallHint is what a user needs to install one agent harness here.
+type AgentInstallHint struct {
+	// Command is a line the user can paste into a terminal, or empty when
+	// only downloaded-script installers exist: their display form names the
+	// script rather than a runnable line.
+	Command string
+	// DocsURL is the harness's setup guide.
+	DocsURL string
+	// Automatic is true when AO can run the recommended method itself
+	// through POST /api/v1/agents/{agent}/install.
+	Automatic bool
+}
+
+// AgentInstallCommand resolves an AgentInstallHint for target. The command
+// prefers the recommended method, then any other available one.
+func (s *Service) AgentInstallCommand(ctx context.Context, target Target) (AgentInstallHint, error) {
+	if !IsAgentTarget(target) {
+		return AgentInstallHint{}, fmt.Errorf("unknown agent install target %q", target)
+	}
+	planner, err := s.newRequestPlanner(ctx)
+	if err != nil {
+		return AgentInstallHint{}, err
+	}
+	plans := planner.agentMethodPlans(target, AgentOperationInstall)
+	recommended := plans[recommendedPlanIndex(plans)]
+	hint := AgentInstallHint{DocsURL: recommended.DocsURL, Automatic: !recommended.Unsupported}
+	if hint.DocsURL == "" {
+		hint.DocsURL = agentDocumentationURLs[target]
+	}
+	for _, plan := range append([]Plan{recommended}, plans...) {
+		if plan.Unsupported || plan.Script != nil {
+			continue
+		}
+		if command := displayCommand(plan); command != "" {
+			hint.Command = command
+			break
+		}
+	}
+	return hint, nil
+}
+
 func plansByMethod(plans []Plan) map[string]Plan {
 	out := make(map[string]Plan, len(plans))
 	for _, plan := range plans {
@@ -1593,6 +1634,12 @@ func (s *Service) resolvePlan(target Target) Plan {
 		return s.planAgent(target)
 	}
 	return s.planFor(target)
+}
+
+// DisplayCommand is the copyable, display-only form of plan's command, the
+// same text the installer catalog shows. Callers never execute it.
+func DisplayCommand(plan Plan) string {
+	return displayCommand(plan)
 }
 
 // displayCommand renders the plan for display. Prepare steps are joined with

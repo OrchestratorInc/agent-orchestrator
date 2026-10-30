@@ -87,6 +87,7 @@ import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConv
 import { usePinSession, useUnpinSession } from "../hooks/usePinSession";
 import { spawnCloudOrchestrator } from "../lib/cloud-orchestrator";
 import { resumeOrchestrator, spawnOrchestrator } from "../lib/spawn-orchestrator";
+import { isSpawnPreflightCancelled } from "../lib/spawn-preflight";
 import { formatTimeCompact, formatTimeTerse } from "../lib/format-time";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useResizable } from "../hooks/useResizable";
@@ -1653,7 +1654,7 @@ const ProjectItem = memo(function ProjectItem({
 			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			selection.goSession(workspace.id, sessionId);
 		} catch (err) {
-			console.error("Failed to spawn orchestrator:", err);
+			if (!isSpawnPreflightCancelled(err)) console.error("Failed to spawn orchestrator:", err);
 		} finally {
 			setIsSpawning(false);
 		}

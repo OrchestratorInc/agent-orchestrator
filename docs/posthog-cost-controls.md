@@ -63,6 +63,8 @@ followed by a space:
    installs still contribute to DAU until they update.
 5. Keep low-volume reliability events such as `ao.session.spawned`,
    `ao.session.spawn_failed`, `ao.session.relaunch_failed`,
+   `ao.session.preflight_checked`, `ao.session.preflight_resolved` (one per
+   user-initiated start or re-check),
    `ao.session.waiting_input_entered`,
    `ao.session.waiting_input_exited`, `ao.http.5xx`, and `ao.daemon.panic`,
    and the harness-update rollout events `ao.harness.update`,

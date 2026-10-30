@@ -5,6 +5,7 @@ import { ONBOARDING_STEPS } from "./onboarding-steps";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
+import { AGENT_LABELS } from "./agent-options";
 import { captureExceptionToSentry, initSentry } from "./sentry";
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
@@ -895,6 +896,17 @@ export async function sanitizeRendererProperties(
 			if (projectIDHash) safe.project_id_hash = projectIDHash;
 			if (typeof properties?.source === "string" && ORCHESTRATOR_SPAWN_SOURCE_SET.has(properties.source)) {
 				safe.source = properties.source;
+			}
+			if (event === "ao.renderer.orchestrator_spawn_failed") {
+				// The daemon's stable error code, so blocked first spawns are
+				// measurable by cause. Codes are uppercase constants, never text.
+				if (typeof properties?.error_code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(properties.error_code)) {
+					safe.error_code = properties.error_code;
+				}
+				if (typeof properties?.harness === "string" && Object.hasOwn(AGENT_LABELS, properties.harness)) {
+					safe.harness = properties.harness;
+				}
+				if (properties?.kind === "orchestrator") safe.kind = "orchestrator";
 			}
 			break;
 		}

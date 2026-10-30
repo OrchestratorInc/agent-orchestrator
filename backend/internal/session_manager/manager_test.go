@@ -1212,6 +1212,7 @@ type fakeWorkspace struct {
 	fetches     []fetchDefaultBranchCall
 	resolves    []resolveDefaultBranchCall
 	resolved    map[string]ports.WorkspaceDefaultBranch
+	resolveErr  map[string]error
 	fetchFunc   func(context.Context, string, ports.WorkspaceDefaultBranch) error
 	// createRepoPath, when set, is returned as the RepoPath of a single-repo
 	// Create so tests can assert it survives the spawn->teardown metadata round
@@ -1266,6 +1267,9 @@ type resolveDefaultBranchCall struct {
 
 func (w *fakeWorkspace) ResolveDefaultBranch(_ context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
 	w.resolves = append(w.resolves, resolveDefaultBranchCall{repoPath: repoPath, configuredBranch: configuredBranch})
+	if err := w.resolveErr[repoPath]; err != nil {
+		return ports.WorkspaceDefaultBranch{}, err
+	}
 	if target, ok := w.resolved[repoPath]; ok {
 		return target, nil
 	}

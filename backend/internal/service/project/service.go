@@ -60,6 +60,10 @@ type Manager interface {
 	// read-model.
 	SetConfig(ctx context.Context, id domain.ProjectID, in SetConfigInput) (Project, error)
 
+	// SetWorkspaceRepoDefaultBranch sets the base branch one child repo of a
+	// workspace project starts session worktrees from.
+	SetWorkspaceRepoDefaultBranch(ctx context.Context, id domain.ProjectID, name string, in SetWorkspaceRepoDefaultBranchInput) (Project, error)
+
 	// Remove unregisters a project, stopping its sessions and reclaiming
 	// managed workspaces.
 	Remove(ctx context.Context, id domain.ProjectID) (RemoveResult, error)
@@ -766,6 +770,38 @@ func (m *Service) SetConfig(ctx context.Context, id domain.ProjectID, in SetConf
 	row.Config = in.Config
 	if err := m.store.UpsertProject(ctx, row); err != nil {
 		return Project{}, apierr.Internal("PROJECT_CONFIG_UPDATE_FAILED", "Failed to update project config")
+	}
+	return m.projectFromRow(ctx, row), nil
+}
+
+// SetWorkspaceRepoDefaultBranch records the base branch for one registered
+// child repo. A child's branch lives on its own registry row, so the
+// project-level defaultBranch cannot repair a child whose Git default does
+// not resolve.
+func (m *Service) SetWorkspaceRepoDefaultBranch(ctx context.Context, id domain.ProjectID, name string, in SetWorkspaceRepoDefaultBranchInput) (Project, error) {
+	if err := validateProjectID(id); err != nil {
+		return Project{}, err
+	}
+	branch := strings.TrimSpace(in.DefaultBranch)
+	if branch != "" && !domain.ValidBranchName(branch) {
+		return Project{}, apierr.Invalid("INVALID_BRANCH", "defaultBranch is not a valid Git branch name", nil)
+	}
+	row, ok, err := m.store.GetProject(ctx, string(id))
+	if err != nil {
+		return Project{}, apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project")
+	}
+	if !ok || !row.ArchivedAt.IsZero() {
+		return Project{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+	}
+	if row.Kind.WithDefault() != domain.ProjectKindWorkspace {
+		return Project{}, apierr.Invalid("NOT_A_WORKSPACE_PROJECT", "Only workspace projects have child repositories", nil)
+	}
+	updated, err := m.store.SetWorkspaceRepoDefaultBranch(ctx, string(id), name, branch)
+	if err != nil {
+		return Project{}, apierr.Internal("WORKSPACE_REPO_UPDATE_FAILED", "Failed to update the repository's default branch")
+	}
+	if !updated {
+		return Project{}, apierr.NotFound("WORKSPACE_REPO_NOT_FOUND", "Unknown repository in this workspace")
 	}
 	return m.projectFromRow(ctx, row), nil
 }

@@ -73,6 +73,7 @@ type APIDeps struct {
 	SessionCapabilities      controllers.SessionCapabilityValidator
 	ShellPreviewCapabilities controllers.ShellPreviewCapabilityValidator
 	SystemChecks             controllers.SystemChecker
+	SpawnPreflight           controllers.SpawnPreflighter
 	// HostID is this machine's stable, machine-bound identity, served by the
 	// unauthenticated GET /api/v1/identity probe so a phone can confirm which
 	// machine answered before presenting a credential.
@@ -153,6 +154,7 @@ type API struct {
 	dev           *controllers.DevController
 	browser       *controllers.BrowserController
 	system        *controllers.SystemController
+	preflight     *controllers.SpawnPreflightController
 	identity      *controllers.IdentityController
 	endpoints     *controllers.EndpointsController
 	telemetryID   *controllers.TelemetryIdentityController
@@ -217,6 +219,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		dev:           &controllers.DevController{Import: deps.DevImport},
 		browser:       &controllers.BrowserController{Svc: deps.Browser, Chrome: deps.BrowserChrome},
 		system:        &controllers.SystemController{Checks: deps.SystemChecks},
+		preflight:     &controllers.SpawnPreflightController{Svc: deps.SpawnPreflight},
 		identity:      &controllers.IdentityController{HostID: deps.HostID},
 		endpoints:     &controllers.EndpointsController{Source: deps.Endpoints},
 		telemetryID:   &controllers.TelemetryIdentityController{Source: deps.TelemetryIdentity},
@@ -340,6 +343,7 @@ func (a *API) Register(root chi.Router) {
 			a.dev.Register(r)
 			a.browser.Register(r)
 			a.system.Register(r)
+			a.preflight.Register(r)
 			a.identity.Register(r)
 			a.endpoints.Register(r)
 			a.telemetryID.Register(r)

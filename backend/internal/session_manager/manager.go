@@ -7179,10 +7179,18 @@ func AugmentRuntimePATHForLaunchBinary(ctx context.Context, env map[string]strin
 }
 
 func (m *Manager) validateRuntimePrerequisites() error {
-	if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
+	return RuntimePrerequisiteError(runtime.GOOS, m.executable, m.lookPath)
+}
+
+// RuntimePrerequisiteError reports the terminal-runtime prerequisite a TUI
+// spawn on goos needs and cannot find. Only macOS gates TUI sessions on tmux;
+// Windows (ConPTY) and Linux launch without this gate. Spawn pre-flight
+// shares this check so it can never disagree with the launch path.
+func RuntimePrerequisiteError(goos string, executable func() (string, error), lookPath func(string) (string, error)) error {
+	if goos == "windows" || goos == "linux" {
 		return nil
 	}
-	if resolution, err := tmuxbin.ResolveWith(os.Getenv("AO_TMUX_BINARY"), m.executable, m.lookPath); err != nil || resolution.Path == "" {
+	if resolution, err := tmuxbin.ResolveWith(os.Getenv("AO_TMUX_BINARY"), executable, lookPath); err != nil || resolution.Path == "" {
 		return fmt.Errorf("%w: tmux required on macOS but AO's configured, bundled, or system tmux was not found", ports.ErrRuntimePrerequisite)
 	}
 	return nil

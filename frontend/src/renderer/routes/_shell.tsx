@@ -24,6 +24,7 @@ import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { ShellTopbar } from "../components/ShellTopbar";
 import { SessionTopbarProvider } from "../components/SessionTopbarPortal";
 import { OrchestratorReplacementDialog } from "../components/OrchestratorReplacementDialog";
+import { SpawnPreflightDialog } from "../components/SpawnPreflightDialog";
 import { RestartToUpdateDialog } from "../components/RestartToUpdateDialog";
 import { TelemetryConsentRenewalDialog } from "../components/TelemetryConsentRenewalDialog";
 import { Sidebar } from "../components/Sidebar";
@@ -46,6 +47,8 @@ import { cloudProjectsQueryKey, cloudSessionsQueryKey, useRemoteWorkspaces, useW
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId, hasTrustedApiBaseUrl } from "../lib/api-client";
+import { ensureSpawnPreflight, isSpawnPreflightCancelled } from "../lib/spawn-preflight";
+import { OrchestratorSpawnError, orchestratorSpawnFailureProperties } from "../lib/spawn-orchestrator";
 import { cachedCloudBillingMode } from "../lib/cloud-offering";
 import { resolveCssColorToHex } from "../lib/css-color";
 import { refreshDaemonStatus } from "../lib/daemon-status";
@@ -666,6 +669,17 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			input: CreateProjectConfigInput,
 			source: "project_add" | "project_clone",
 		) => {
+		// Pre-flight first: a fix dialog may stay open for minutes, which must
+		// not count against the hung-spawn budget below. Dismissing it leaves
+		// the board's normal start action in place.
+		let harness = input.orchestratorAgent;
+		try {
+			harness = (await ensureSpawnPreflight({ projectId: workspace.id, kind: "orchestrator", harness })).harness ?? harness;
+		} catch (cause) {
+			setProjectProvisioning(workspace.id, false);
+			if (!isSpawnPreflightCancelled(cause)) setOrchestratorStartupError(workspace.id, cause instanceof Error ? cause.message : "Could not start orchestrator");
+			return;
+		}
 		// Safety: a hung spawn must never wedge the board behind the
 		// provisioning gate. If it outlives this budget, release the gate and
 		// surface the retry banner; a late success still navigates below and
@@ -687,14 +701,20 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				body: {
 					projectId: workspace.id,
 					kind: "orchestrator",
-					harness: input.orchestratorAgent as components["schemas"]["SpawnSessionRequest"]["harness"],
+					harness: harness as components["schemas"]["SpawnSessionRequest"]["harness"],
 				},
 			});
 			if (spawnError || !spawnData?.session?.id) {
 				const message = spawnError
 					? apiErrorMessage(spawnError, `Failed to spawn orchestrator (${spawnResponse.status})`)
 					: `Failed to spawn orchestrator (${spawnResponse.status})`;
-				throw new Error(message);
+				throw new OrchestratorSpawnError(
+					message,
+					apiErrorCode(spawnError),
+					apiErrorRequestId(spawnError),
+					spawnResponse.status,
+					apiErrorDetails(spawnError),
+				);
 			}
 			void captureRendererEvent("ao.renderer.orchestrator_spawn_succeeded", {
 				project_id: workspace.id,
@@ -727,6 +747,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", {
 				project_id: workspace.id,
 				source,
+				...orchestratorSpawnFailureProperties(spawnError, harness),
 			});
 			const message = spawnError instanceof Error ? spawnError.message : "Could not start orchestrator";
 			const startupMessage = `Project added, but orchestrator did not start: ${message}`;
@@ -1647,6 +1668,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					projectId={replacementErrorProjectId}
 					workspaces={workspaces}
 				/>
+				<SpawnPreflightDialog />
 					<CommandPalette />
 				</div>
 				</TerminalCacheProvider>
