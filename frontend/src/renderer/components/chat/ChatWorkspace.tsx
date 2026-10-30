@@ -177,6 +177,7 @@ import {
 	isCompaction,
 	isSteer,
 	hiddenTimelineTurnIds,
+	isUserQueuePrompt,
 	queuedTurnIds,
 	type ConversationPlan,
 	type ConversationSnapshot,
@@ -312,13 +313,7 @@ function useQueuedMessages(snapshot: ConversationSnapshot, excludeTurnId?: strin
 	return useMemo(() => {
 		const messagesByTurn = new Map(
 			snapshot.items
-				.filter(
-					(item): item is ConversationMessage =>
-						item.kind === "message" &&
-						item.role === "user" &&
-						item.origin === "human" &&
-						Boolean(item.turnId),
-				)
+				.filter((item): item is ConversationMessage => isUserQueuePrompt(item) && Boolean(item.turnId))
 				.map((message) => [message.turnId as string, message]),
 		);
 		const next = snapshot.turns.flatMap((queuedTurn) => {

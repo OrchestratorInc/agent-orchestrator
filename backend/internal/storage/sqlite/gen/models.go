@@ -357,6 +357,7 @@ type ConversationMessage struct {
 	SenderProjectID     string
 	SenderDisplayName   string
 	Continuation        int64
+	AuthoredByUser      int64
 }
 
 type ConversationMessagesFt struct {

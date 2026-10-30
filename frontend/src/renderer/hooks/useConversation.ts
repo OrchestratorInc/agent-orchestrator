@@ -1983,6 +1983,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 		})),
 		editAvailable: wire.editAvailable ?? undefined,
 		continuation: wire.continuation || undefined,
+		authoredByUser: wire.authoredByUser || undefined,
 		streaming: wire.streaming,
 		senderSessionId: wire.senderSessionId,
 		senderProjectId: wire.senderProjectId,

@@ -486,6 +486,113 @@ describe("ChatWorkspace steering", () => {
 		expect(within(screen.getByTestId("queued-message-dock")).getByText("second queued")).toBeVisible();
 	});
 
+	it("lets the user steer or delete a queued browser annotation, but not edit it", async () => {
+		const annotationText = [
+			"<browser_annotations>",
+			"Browser feedback",
+			"Page: Download page",
+			"URL: https://example.test/download",
+			"Annotations: 1",
+			"",
+			"Annotation 1 (comment):",
+			"Comment: Rename this file",
+			"</browser_annotations>",
+		].join("\n");
+		const snapshot = {
+			...chatFixture,
+			turns: [
+				...chatFixture.turns,
+				{ id: "queued-annotation", state: "queued" as const, requestedAt: "2026-08-11T10:01:00Z" },
+				{ id: "queued-automation", state: "queued" as const, requestedAt: "2026-08-11T10:02:00Z" },
+			],
+			items: [
+				...chatFixture.items,
+				{
+					kind: "message" as const,
+					id: "queued-annotation-message",
+					turnId: "queued-annotation",
+					sequence: 100,
+					revision: 0,
+					role: "user" as const,
+					origin: "automation" as const,
+					authoredByUser: true,
+					text: annotationText,
+					streaming: false,
+					createdAt: "2026-08-11T10:01:00Z",
+				},
+				{
+					kind: "message" as const,
+					id: "queued-automation-message",
+					turnId: "queued-automation",
+					sequence: 101,
+					revision: 0,
+					role: "user" as const,
+					origin: "automation" as const,
+					text: "automation follow-up",
+					streaming: false,
+					createdAt: "2026-08-11T10:02:00Z",
+				},
+			],
+		};
+		const onPromoteQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		const onCancelQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<ChatWorkspace
+				snapshot={snapshot}
+				onSteer={vi.fn()}
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+				onEditQueuedTurn={vi.fn()}
+				onCancelQueuedTurn={onCancelQueuedTurn}
+			/>,
+		);
+
+		const row = screen.getByTestId("queued-message-queued-annotation");
+		expect(within(row).getByText("Download page · 1 annotation")).toBeVisible();
+		expect(within(row).queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
+		// The dock owns the queued annotation, as it does a typed message.
+		expect(screen.queryByText("Queued · sends when the agent finishes")).not.toBeInTheDocument();
+		// Ordinary automation turns stay out of the user's queue controls.
+		expect(screen.queryByTestId("queued-message-queued-automation")).not.toBeInTheDocument();
+
+		expect(within(row).getByRole("button", { name: "Delete queued message" })).toBeVisible();
+		await userEvent.click(within(row).getAllByRole("button", {
+			name: "Steer this queued message into the running turn",
+		})[0]!);
+		await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-annotation"));
+	});
+
+	it("deletes a queued browser annotation from the dock", async () => {
+		const onCancelQueuedTurn = vi.fn().mockResolvedValue(undefined);
+		render(
+			<QueuedMessageDock
+				messages={[{
+					turnId: "queued-annotation",
+					message: {
+						kind: "message",
+						id: "queued-annotation-message",
+						turnId: "queued-annotation",
+						sequence: 100,
+						revision: 0,
+						role: "user",
+						origin: "automation",
+						authoredByUser: true,
+						text: "<browser_annotations>\nPage: Download page\nAnnotations: 1\n\nAnnotation 1 (comment):\nComment: Rename this file\n</browser_annotations>",
+						streaming: false,
+						createdAt: "2026-08-11T10:01:00Z",
+					},
+				}]}
+				canSteer
+				onBeginQueuedEdit={vi.fn()}
+				onCancelQueuedTurn={onCancelQueuedTurn}
+			/>,
+		);
+
+		const row = screen.getByTestId("queued-message-queued-annotation");
+		expect(within(row).queryByRole("button", { name: "Edit queued message" })).not.toBeInTheDocument();
+		await userEvent.click(within(row).getByRole("button", { name: "Delete queued message" }));
+		expect(onCancelQueuedTurn).toHaveBeenCalledWith("queued-annotation");
+	});
+
 	it("clears a queued edit when that message is deleted from the dock", async () => {
 		const onCancelQueuedTurn = vi.fn().mockResolvedValue(undefined);
 		render(

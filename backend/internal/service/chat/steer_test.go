@@ -980,6 +980,65 @@ func TestPromoteQueuedTurnRejectsNonHumanSourceWithoutContactingProvider(t *test
 	}
 }
 
+// Browser annotations are the user's own words relayed as automation. Their
+// queued turn keeps its attribution but can be steered like a typed message.
+func TestPromoteQueuedUserAuthoredAutomationTurnIntoTheRunningTurn(t *testing.T) {
+	h, provider := steerHarness(t)
+	ctx := context.Background()
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "<browser_annotations>fix the label</browser_annotations>", ClientMessageID: "queued-annotation",
+		Origin: domain.MessageOriginAutomation, AuthoredByUser: true,
+	})
+	if err != nil {
+		t.Fatalf("queue annotation turn: %v", err)
+	}
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, msg := range s.Messages {
+			if msg.TurnID == queued.ID {
+				return true
+			}
+		}
+		return false
+	})
+	for _, msg := range snapshot.Messages {
+		if msg.TurnID == queued.ID && (!msg.AuthoredByUser || msg.Origin != domain.MessageOriginAutomation) {
+			t.Fatalf("queued annotation message = %+v, want automation origin authored by the user", msg)
+		}
+	}
+
+	if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID); err != nil {
+		t.Fatalf("PromoteQueuedTurn: %v", err)
+	}
+	calls := provider.steers()
+	if len(calls) != 1 || calls[0].msg.ClientMessageID != "queued-annotation" ||
+		calls[0].msg.Origin != domain.MessageOriginAutomation {
+		t.Fatalf("provider steers = %+v, want the queued annotation as automation", calls)
+	}
+}
+
+// The annotation text is generated from the Browser panel, so it is not
+// editable even though the user may steer or cancel it.
+func TestQueuedUserAuthoredAutomationTurnCanBeCancelledButNotEdited(t *testing.T) {
+	h, _ := steerHarness(t)
+	ctx := context.Background()
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "<browser_annotations>fix the label</browser_annotations>", ClientMessageID: "queued-annotation-edit",
+		Origin: domain.MessageOriginAutomation, AuthoredByUser: true,
+	})
+	if err != nil {
+		t.Fatalf("queue annotation turn: %v", err)
+	}
+	if err := h.svc.EditQueuedTurn(ctx, testSession, queued.ID, chatsvc.QueuedMessageEdit{Text: "rewritten"}); err == nil {
+		t.Fatal("EditQueuedTurn accepted a user-authored automation turn")
+	}
+	if err := h.svc.CancelQueuedTurn(ctx, testSession, queued.ID); err != nil {
+		t.Fatalf("CancelQueuedTurn: %v", err)
+	}
+	if next, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID()); err == nil {
+		t.Fatalf("queue head after cancel = %+v, want empty", next)
+	}
+}
+
 // A transport failure after the request leaves delivery unknowable. Returning the
 // source to the queue would let drain send guidance the provider may already have
 // accepted, so it must settle failed and require an explicit user decision.
