@@ -1287,3 +1287,6 @@ main :is(ol, ul) { padding-left: 24px !important; }
 main div[class*="--scroll-area-fade-size"] { overflow-x: auto !important; scrollbar-width: thin; }
 main div[class*="--scroll-area-fade-size"]::-webkit-scrollbar { height: 5px !important; }
 main div[class*="--scroll-area-fade-size"]::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+
+/* v36v: pages whose first content block is an h2 sat 20px low vs the original */
+main .mdx-content > h2:first-child { margin-top: 20px !important; }
