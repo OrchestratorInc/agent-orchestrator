@@ -1983,7 +1983,7 @@ function wireUpdaterEvents(): void {
       nativePreparationError = short;
       // Preparation may already be ready while install awaits the helper or
       // relaunch marker. Reject that request too, so late waits cannot quit AO.
-      rejectNativeOperation?.(short);
+      if (activeUpdaterOperation === "manual-install") rejectNativeOperation?.(short);
       if (macRestartRequested) {
         macRestartRequested = false;
         macRestartPreparation = undefined;
@@ -2987,11 +2987,12 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
   // cache transfer has no cancellation guarantee. Never let its late resolution
   // continue an install request whose caller already received a failure.
   let installAbandoned = false;
-  const assertInstallActive = () => {
-    if (installAbandoned) throw new Error("Update preparation cancelled. Confirm installation again.");
-    if (nativePreparationError) throw nativePreparationError;
-  };
   macRestartPreparation = runSerializedUpdaterOperation("manual-install", async () => {
+    const previousPreparationError = nativePreparationError;
+    const assertInstallActive = () => {
+      if (installAbandoned) throw new Error("Update preparation cancelled. Confirm installation again.");
+      if (nativePreparationError && nativePreparationError !== previousPreparationError) throw nativePreparationError;
+    };
     let progress: Awaited<ReturnType<typeof startMacUpdateProgress>> | undefined;
     try {
       if (!escalationStateDir || !hasStagedBuild()) {

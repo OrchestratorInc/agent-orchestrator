@@ -3437,6 +3437,21 @@ describe("quitAndInstallUpdate", () => {
     } finally { restore(); }
   });
 
+  it("returns a new remembered target for confirmation despite an earlier native error", async () => {
+    const restore = stubProcess("darwin", "/usr/bin/node");
+    try {
+      writeFileSync(nodePath.join(stateDir, "staged-update.json"), JSON.stringify({ version: "2.1.0", stagedAt: Date.now(), channel: "latest" }));
+      const { module, autoUpdater, nativeAutoUpdater, startMacUpdateProgress } = await importAutoUpdater({ enabled: false, channel: "latest", nightlyAck: false, feature: null });
+      await module.startAutoUpdates(stateDir);
+      nativeAutoUpdater.emit("error", new Error("earlier signature rejected"));
+      autoUpdater.checkForUpdates.mockResolvedValue({ isUpdateAvailable: true, updateInfo: { version: "2.2.0" } });
+      await expect(module.quitAndInstallUpdate("2.1.0")).resolves.toMatchObject({ state: "confirmation-required", version: "2.2.0" });
+      expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+      expect(startMacUpdateProgress).not.toHaveBeenCalled();
+      expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled();
+    } finally { restore(); }
+  });
+
   it("requires confirmation again if the feed changes a second time", async () => {
     const restore = stubProcess("darwin", "/usr/bin/node");
     try {
