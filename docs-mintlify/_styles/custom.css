@@ -1153,3 +1153,31 @@ html::-webkit-scrollbar, body::-webkit-scrollbar { display: none !important; }
   #search-bar-entry .ao-kbd { background: oklch(0.153 0.006 107.1) !important; }
   /* trigger padding/text/icon are set inline by custom.js fixSearchTrigger(): Mintlify's layered important utilities (p-0!) beat unlayered !important here. */
 }
+
+/* v36g: original parity - content tables, active-row weight, utility rows */
+main table {
+  border: 1px solid oklch(1 0 0 / 0.1) !important;
+  background: oklch(0.228 0.013 107.4);
+  margin-top: 24px;
+  margin-bottom: 24px;
+}
+main th {
+  background: oklch(0.286 0.016 107.4) !important;
+  padding: 8px 12px !important;
+  font-weight: 600 !important;
+  color: #fff !important;
+  border-bottom: 1px solid oklch(1 0 0 / 0.1) !important;
+}
+main td { padding: 8px 12px !important; border-bottom: 1px solid oklch(1 0 0 / 0.1); }
+main tr:last-child td { border-bottom: 0; }
+@media (min-width: 1024px) {
+  nav a[aria-current="page"] { text-shadow: none !important; }
+  li.navbar-link a {
+    border: 0 !important;
+    border-radius: 8px !important;
+    padding: 8px !important;
+    height: 36px !important;
+    font-weight: 400 !important;
+    background: transparent !important;
+  }
+}
