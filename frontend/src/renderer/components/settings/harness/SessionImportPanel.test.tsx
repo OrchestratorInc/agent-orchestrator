@@ -48,6 +48,20 @@ it("lists Qwen chats for import", async () => {
 	expect(await screen.findByRole("checkbox", { name: "Import Qwen chat" })).toBeInTheDocument();
 });
 
+it("offers OMP chats for import", () => {
+	// OMP imports are history-only via the daemon's serialized session.historyOnly
+	// (historyOnlyImportHarnesses), not a client list.
+	expect(IMPORTABLE_AGENTS.has("omp")).toBe(true);
+});
+
+it("lists OMP chats for import", async () => {
+	api.GET.mockResolvedValue({
+		data: { candidates: [{ ...chat, id: "omp-1", title: "OMP chat", projectId: "project", harness: "omp" }] },
+	});
+	renderPanel("omp");
+	expect(await screen.findByRole("checkbox", { name: "Import OMP chat" })).toBeInTheDocument();
+});
+
 it("lists only this agent's chats, preselects recent ones and imports only the selection", async () => {
 	renderPanel();
 	const recent = await screen.findByRole("checkbox", { name: "Import Fix parser" });

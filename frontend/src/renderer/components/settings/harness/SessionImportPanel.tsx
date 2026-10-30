@@ -15,7 +15,7 @@ type Candidate = components["schemas"]["SessionImportCandidate"];
 type ImportResult = components["schemas"]["SessionImportResult"];
 
 /** Agents whose local chats AO can import. */
-export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "qwen"]);
+export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "qwen", "omp"]);
 
 const offerClosedKey = "ao.sessionImport.offerClosed";
 const offerListeners = new Set<() => void>();
