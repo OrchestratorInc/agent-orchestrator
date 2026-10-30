@@ -1,3 +1,4 @@
+import { SelectionStableContent, useSelectionSnapshot, hasCodeSelection } from "./SelectionStableContent";
 import type { FileAnnotationRange } from "../../../shared/chat-file-reference";
 import { useFileAnnotationReveal } from "./useFileAnnotationReveal";
 import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
@@ -52,7 +53,7 @@ export function AoDiffFile({
 	annotation,
 	annotationRange,
  annotationReady = true,
-	detail,
+	detail: incomingDetail,
 	fallback,
 	onActiveSelectionChange,
 	scope = "combined",
@@ -84,6 +85,8 @@ export function AoDiffFile({
 	const { t } = useTranslation();
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
+ const selectionIdentity = JSON.stringify([sessionId, hostId, incomingDetail.path, source, scope, commitSha, split, annotationRange?.requestKey]);
+ const detail = useSelectionSnapshot(containerRef, incomingDetail, selectionIdentity);
 	const gutterHover = usePersistentGutterUtility(containerRef);
 	const metadata = useMemo(() => cachedMetadata(detail), [detail]);
 	const rows = useMemo(() => parseUnifiedDiff(detail.diff), [detail.diff]);
@@ -94,8 +97,7 @@ export function AoDiffFile({
 
 	useEffect(() => {
 		const onSelectionChange = () => {
-			const selection = window.getSelection();
-			onActiveSelectionChange(Boolean(selection && !selection.isCollapsed && selection.anchorNode && containerRef.current?.contains(selection.anchorNode)));
+			onActiveSelectionChange(hasCodeSelection(containerRef.current));
 		};
 		document.addEventListener("selectionchange", onSelectionChange);
 		return () => {
@@ -185,6 +187,7 @@ export function AoDiffFile({
 			onPointerMove={gutterHover.onPointerMove}
 			ref={containerRef}
 		>
+			<SelectionStableContent container={containerRef} identity={selectionIdentity}>
 			<FileDiff
 				disableWorkerPool={typeof Worker === "undefined"}
 				fileDiff={fileDiff ?? metadata}
@@ -226,6 +229,7 @@ export function AoDiffFile({
 					/>
 				)}
 			/>
+   </SelectionStableContent>
 			{annotationRange && endOfFileContents.isError ? <div role="alert" className="px-3 py-2 text-xs text-muted-foreground">
 				{t("chat.fileAnnotationLoadFailed")}
 				<span data-file-annotation-retry={annotationRange.requestKey}><RetryButton onClick={() => void endOfFileContents.refetch({cancelRefetch:false})}/></span>

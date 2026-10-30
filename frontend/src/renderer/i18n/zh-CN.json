@@ -3407,7 +3407,6 @@
 	"sideChat.decline": "Decline",
 	"sideChat.working": "Working…",
 	"sideChat.retryQuestion": "Retry question",
-	"sideChat.checkingAvailability": "正在检查侧边聊天…",
 	"sideChat.addToSideChat": "添加到侧边聊天",
 	"sideChat.referenceLimit": "一个侧边问题最多可包含八条引用。请先移除一条再添加。",
 	"sideChat.defaultLabel": "侧边聊天",

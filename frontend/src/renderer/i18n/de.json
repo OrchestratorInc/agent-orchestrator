@@ -3425,7 +3425,6 @@
 	"sideChat.decline": "Decline",
 	"sideChat.working": "Working…",
 	"sideChat.retryQuestion": "Retry question",
-	"sideChat.checkingAvailability": "Nebenchat wird geprüft…",
 	"sideChat.addToSideChat": "Zum Seiten-Chat hinzufügen",
 	"sideChat.referenceLimit": "Eine Seitenfrage kann bis zu acht Verweise enthalten. Entfernen Sie einen, um einen weiteren hinzuzufügen.",
 	"sideChat.defaultLabel": "Seiten-Chat",

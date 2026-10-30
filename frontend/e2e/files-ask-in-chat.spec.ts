@@ -222,7 +222,7 @@ test.describe("Add to chat from highlighted code", () => {
 		expect(sentToChat[0].fileReferences[0].lines.map(row => `${sentToChat[0].fileReferences[0].side === "file" ? "" : row.kind === "add" ? "+" : row.kind === "del" ? "-" : " "}${row.text}`).join("\n")).toBe("   step(2);\n   step(3);\n const value4 = 4;");
 	});
 
-	test("a tall chat selection sticks to the pane top and shows checking immediately", async ({ page }) => {
+	test("a tall chat selection sticks to the pane top and keeps the disabled side-chat label", async ({ page }) => {
 		const text = Array.from({ length: 80 }, (_, i) => `Selected parent context line ${i + 1}.`).join("\n\n");
 		await openChatSession(page, after, filePath, text, true);
 		const log = page.getByRole("log", { name: "Conversation" });
@@ -241,7 +241,7 @@ test.describe("Add to chat from highlighted code", () => {
 		console.log("selection release to two-frame visibility", timing.elapsed, "ms");
 		const toolbar = page.locator("[data-chat-selection-actions]");
 		await expect(toolbar).toBeVisible();
-		await expect(toolbar.getByRole("button", { name: "Checking side chat…" })).toBeDisabled();
+		await expect(toolbar.getByRole("button", { name: "Add to side chat" })).toBeDisabled();
 		await expect(toolbar.locator("svg")).toHaveCount(0);
 		const check = async () => {
 			const pane = (await log.boundingBox())!;
@@ -345,6 +345,30 @@ test.describe("Add to chat from highlighted code", () => {
 		await askButton(page).getByRole("button", { name: "Add to chat" }).click();
 		await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
 	});
+
+ for (const mode of ["file", "diff"] as const) test(mode + ": selection survives idle, focus and background cache completion", async ({ page }) => {
+  const { inspector } = await openChatSession(page);
+  await inspector.getByRole("button", { name: mode === "file" ? "Open full file" : "Open diff in center" }).click();
+  const first = row(page, CENTER, 3);
+  await selectText(page, first, row(page, CENTER, 6));
+  await expect(askButton(page)).toBeVisible();
+  await first.evaluate(element => { (window as unknown as { selectionProbe: Element }).selectionProbe = element; });
+  await page.evaluate(async () => {
+   const modulePath = "/src/renderer/lib/query-client.ts";
+   const { queryClient } = await import(/* @vite-ignore */ modulePath);
+   // A cache write represents a request already in flight when selection began.
+   queryClient.setQueriesData({ predicate: (query: { state: { data?: unknown } }) => {
+    const data = query.state.data as { path?: string; content?: string } | undefined;
+    return data?.path === "src/retry.ts" && typeof data.content === "string";
+   } }, (data: { content: string; fileFingerprint?: string } | undefined) => data ? { ...data, content: data.content + "\n// refreshed", fileFingerprint: "new-background-revision" } : data);
+   window.dispatchEvent(new Event("blur")); window.dispatchEvent(new Event("focus"));
+  });
+  await page.waitForTimeout(6000); // Exceed the viewer's five-second freshness interval.
+  await expect(askButton(page)).toBeVisible();
+  expect(await first.evaluate(element => element === (window as unknown as { selectionProbe: Element }).selectionProbe)).toBe(true);
+  await askButton(page).getByRole("button", { name: "Add to chat" }).click();
+  await expect(page.getByRole("button", { name: "1 annotation" })).toBeVisible();
+ });
 
 	test("the button hides on Escape, when scrolled away (returning when back), and when the rows redraw", async ({ page }) => {
 		const { inspector } = await openChatSession(page);

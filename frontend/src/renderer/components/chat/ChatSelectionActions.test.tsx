@@ -21,7 +21,7 @@ describe("chat selection actions", () => {
 	it("shows both text-only actions together while checking, then enables the side action", () => {
 		const props = setup(); const onSide = vi.fn();
 		const view = render(<ChatSelectionActions {...props} checkingSide />);
-		expect(screen.getByRole("button", { name: "Checking side chat…" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "Add to side chat" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Add to chat" })).toBeEnabled();
 		expect(view.container.querySelector("svg")).toBeNull();
 		view.rerender(<ChatSelectionActions {...props} onSide={onSide} />);

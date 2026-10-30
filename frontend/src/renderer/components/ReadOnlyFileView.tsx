@@ -1,3 +1,4 @@
+import { SelectionStableContent, useSelectionSnapshot } from "./diffs/SelectionStableContent";
 import { mediaCrossOrigin } from "../lib/file-media";
 import { fileReferenceSource } from "../lib/file-reference-source";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
@@ -41,7 +42,7 @@ export function ReadOnlyFileView({
 	annotation,
 	annotationRange,
  annotationReady = true,
-	detail,
+	detail: incomingDetail,
 	editing = false,
 	onContentReady,
 	onEditChange,
@@ -77,6 +78,8 @@ export function ReadOnlyFileView({
 	const { baseUrl: remoteBaseUrl } = useHostConnection(hostId);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const containerRef = useRef<HTMLDivElement>(null);
+ const selectionIdentity = JSON.stringify([sessionId, hostId, incomingDetail.path, source, scope, commitSha, side, editing, annotationRange?.requestKey]);
+ const detail = useSelectionSnapshot(containerRef, incomingDetail, selectionIdentity);
 	const annotationReveal=useFileAnnotationReveal(containerRef,editing ? undefined : annotationRange, {ready:annotationReady,contentKey:detail.content});
 	const pendingRevealRef = useRef(revealLine);
 	const consumedRevealRequestKeysRef = useRef(new Set<number>());
@@ -170,6 +173,7 @@ export function ReadOnlyFileView({
 			onPointerMove={gutterHover.onPointerMove}
 			ref={containerRef}
 		>
+			<SelectionStableContent container={containerRef} identity={selectionIdentity}>
 			<File<"feedback">
 				disableWorkerPool={typeof Worker === "undefined"}
 				edit={editing}
@@ -212,6 +216,7 @@ export function ReadOnlyFileView({
 					}} />
 				)}
 			/>
+   </SelectionStableContent>
 			{annotationReveal.loading ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationLoading")}</p>
 			: annotationReveal.changed || annotationReveal.unverified ? <p role="status" className="px-3 py-2 text-xs text-muted-foreground">{t("chat.fileAnnotationChangedDuringOpen")}</p> : null}
 			<SelectionAskButton onAsk={codeSelection.ask} source={codeSelection.source} />

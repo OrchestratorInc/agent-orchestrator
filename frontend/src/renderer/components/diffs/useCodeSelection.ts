@@ -1,3 +1,4 @@
+import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { normalizeCodeRowText } from "../../../shared/file-annotations";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { FileCodeReference } from "../../../shared/file-annotations";
@@ -81,6 +82,13 @@ export function codeReference(path: string, selection: CodeSelection, diff: bool
 		endSide: diff ? (selection.range.endSide === "deletions" ? "old" : "new") : "file",
 		lines: selection.rows.map(({ kind, oldNo, newNo, text, side }) => ({ kind: kind as "context" | "add" | "del", oldNo, newNo, text, side: diff ? side : "file" })),
 	};
+}
+
+/** Read native shadow selection without traversing or copying code rows. */
+export function codeSelectionRange(host: HTMLElement): Range | null {
+ const selection = (host.shadowRoot as ShadowRootWithSelection | null)?.getSelection?.();
+ const range = selection ? selectionRange(selection) : null;
+ return range && !range.collapsed && host.shadowRoot?.contains(range.startContainer) && host.shadowRoot.contains(range.endContainer) ? range : null;
 }
 
 /** Reads the rows a selection covers inside one Pierre surface, or null. */
@@ -223,11 +231,21 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 			pressed = false;
 			schedule();
 		};
-		const onKeyDown = (event: KeyboardEvent) => {
-			const current = selectionRef.current;
+		let dismissedEscapePress = false;
+  const releaseEscape = (event: KeyboardEvent) => { if (event.key === "Escape") dismissedEscapePress = false; };
+  const blur = () => { dismissedEscapePress = false; };
+  const onKeyDown = (event: KeyboardEvent) => {
+   if (event.defaultPrevented || isDialogOrMenuOpen()) return;
+   if (event.key === "Escape" && event.repeat && dismissedEscapePress) { event.preventDefault(); event.stopPropagation(); return; }
+   const current = selectionRef.current;
 			if (!current) return;
-			if (event.key === "Escape") {
-				clearSelection(current.host);
+			if (event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    const toolbar = document.querySelector<HTMLElement>("[data-selection-ask]");
+    if (toolbar?.style.visibility === "hidden") return;
+    dismissedEscapePress = true;
+    event.preventDefault(); event.stopPropagation();
+    clearSelection(current.host);
+    publish(null);
 				return;
 			}
 		};
@@ -236,6 +254,8 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 		document.addEventListener("pointerup", onPointerUp, true);
 		document.addEventListener("pointercancel", onPointerUp, true);
 		document.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("keyup", releaseEscape, true);
+  window.addEventListener("blur", blur);
 		schedule();
 		return () => {
 			document.removeEventListener("selectionchange", schedule);
@@ -243,6 +263,8 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 			document.removeEventListener("pointerup", onPointerUp, true);
 			document.removeEventListener("pointercancel", onPointerUp, true);
 			document.removeEventListener("keydown", onKeyDown, true);
+   document.removeEventListener("keyup", releaseEscape, true);
+   window.removeEventListener("blur", blur);
 			if (frame !== null) cancelAnimationFrame(frame);
 			redraws.disconnect();
 			publish(null);

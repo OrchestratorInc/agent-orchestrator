@@ -3425,7 +3425,6 @@
 	"sideChat.decline": "Decline",
 	"sideChat.working": "Working…",
 	"sideChat.retryQuestion": "Retry question",
-	"sideChat.checkingAvailability": "サイドチャットを確認中…",
 	"sideChat.addToSideChat": "サイドチャットに追加",
 	"sideChat.referenceLimit": "サイドの質問に含められる参照は 8 件までです。追加するには 1 件削除してください。",
 	"sideChat.defaultLabel": "サイドチャット",

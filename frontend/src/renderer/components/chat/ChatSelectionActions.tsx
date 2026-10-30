@@ -48,7 +48,7 @@ export function ChatSelectionActions({ selection, viewportRef, onInvalid, onAdd,
 		onMouseDown={(event) => event.preventDefault()}>
 		<button type="button" className={selectionActionClass} disabled={pending} onClick={() => void activate(false)}>{t("sideChat.addToChat")}</button>
 		{onSide || checkingSide ? <button type="button" className={selectionActionClass} disabled={pending || checkingSide}
-			onClick={() => void activate(true)}>{t(checkingSide ? "sideChat.checkingAvailability" : "sideChat.addToSideChat")}</button> : null}
+			onClick={() => void activate(true)}>{t("sideChat.addToSideChat")}</button> : null}
 		{error ? <span role="alert" className="max-w-full px-2 text-xs text-destructive break-words">{error}</span> : null}
 	</div>;
 }

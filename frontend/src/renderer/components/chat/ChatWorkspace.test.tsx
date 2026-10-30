@@ -1376,6 +1376,28 @@ describe("ChatWorkspace timeline", () => {
 		expect(onInterrupt).toHaveBeenCalledOnce();
 	});
 
+ it("dismisses selection before interrupting and ignores held Escape repeats", () => {
+  const snapshot = structuredClone(chatFixture);
+  snapshot.items = snapshot.items.filter(item => !(item.kind === "activity" && item.activityKind === "approval" && item.status === "pending"));
+  const onInterrupt = vi.fn();
+  render(<ChatWorkspace snapshot={snapshot} excerptsEnabled onInterrupt={onInterrupt} />);
+  const log = screen.getByRole("log");
+  const source = log.querySelector("[data-chat-message-id] [data-chat-message-body]")!;
+  const range = document.createRange(); range.selectNodeContents(source);
+  const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+  vi.spyOn(Range.prototype, "getBoundingClientRect").mockReturnValue(new DOMRect(40, 150, 100, 20));
+  vi.spyOn(log, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 500));
+  fireEvent.pointerUp(log);
+  expect(screen.getByRole("button", { name: "Add to chat" })).toBeInTheDocument();
+  fireEvent.keyDown(log, { key: "Escape" });
+  fireEvent.keyDown(log, { key: "Escape", repeat: true });
+  expect(onInterrupt).not.toHaveBeenCalled();
+  fireEvent.keyUp(log, { key: "Escape" });
+  fireEvent.keyDown(log, { key: "Escape" });
+  expect(onInterrupt).toHaveBeenCalledTimes(1);
+  selection.removeAllRanges();
+ });
+
 	it("focuses the composer from conversation whitespace but preserves button focus", async () => {
 		const user = userEvent.setup();
 		const snapshot = structuredClone(chatFixture);
@@ -1440,8 +1462,13 @@ describe("ChatWorkspace timeline", () => {
 		fireEvent.keyDown(document, { key: "Escape" });
 		fireEvent.keyUp(log, { key: "Escape" });
 		expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
-		fireEvent.pointerUp(document.body);
-		button = screen.getByRole("button", { name: "Add to chat" });
+		fireEvent.keyUp(log, { key: "Shift" });
+  fireEvent.pointerUp(document.body);
+  expect(screen.queryByRole("button", { name: "Add to chat" })).not.toBeInTheDocument();
+  expect(selection.toString().trim()).toBe(selectedText);
+  selection.removeAllRanges(); fireEvent(document, new Event("selectionchange"));
+  selection.addRange(range); fireEvent.pointerUp(document.body);
+  button = screen.getByRole("button", { name: "Add to chat" });
 		expect(button).toHaveClass("hover:bg-interactive-hover");
 		expect(button.querySelector("svg")).toBeNull();
 		expect(button.parentElement).toHaveClass("bg-overlay", "border-(--color-border-overlay)", "rounded-lg", "w-max");

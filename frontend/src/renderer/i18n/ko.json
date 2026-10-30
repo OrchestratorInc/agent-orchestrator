@@ -3425,7 +3425,6 @@
 	"sideChat.decline": "Decline",
 	"sideChat.working": "Working…",
 	"sideChat.retryQuestion": "Retry question",
-	"sideChat.checkingAvailability": "사이드 채팅 확인 중…",
 	"sideChat.addToSideChat": "사이드 채팅에 추가",
 	"sideChat.referenceLimit": "사이드 질문에는 참조를 최대 8개까지 포함할 수 있습니다. 하나를 제거한 후 추가하세요.",
 	"sideChat.defaultLabel": "사이드 채팅",

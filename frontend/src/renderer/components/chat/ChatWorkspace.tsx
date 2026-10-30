@@ -2757,6 +2757,9 @@ export function Timeline({
 		range: Range;
 	} | null>(null);
 	const clearSelectionAction = useCallback(() => setSelectionAction(null), []);
+ const dismissedSelection = useRef<typeof selectionAction>(null);
+ const dismissedEscapePress = useRef(false);
+ useEffect(() => { dismissedSelection.current = null; clearSelectionAction(); }, [snapshot.conversationId, clearSelectionAction]);
 	const [annotationTarget, setAnnotationTarget] = useState<{ text: string; messageId?: string; revision?: number }>();
 	const [annotationNavigationError, setAnnotationNavigationError] = useState<string>();
 	const annotationHighlightCleanup = useRef<(() => void) | undefined>(undefined);
@@ -2876,6 +2879,10 @@ export function Timeline({
 			return;
 		}
 		const selectedRange = selection.getRangeAt(0).cloneRange();
+  const dismissed = dismissedSelection.current;
+  if (dismissed && dismissed.excerpt.messageId === messageId && dismissed.excerpt.revision === revision &&
+   dismissed.excerpt.text === text && selectionRangesEqual(dismissed.range, selectedRange)) return;
+  dismissedSelection.current = null;
 		const next = {
 			excerpt: {
 				id: crypto.randomUUID(),
@@ -2894,16 +2901,39 @@ export function Timeline({
 	useEffect(() => {
 		if (!excerptsEnabled) return;
 		const capture = (event: Event) => captureTranscriptSelection(event);
-		const escape = (event: KeyboardEvent) => { if (event.key === "Escape") clearSelectionAction(); };
+		const selectionChanged = () => {
+   const current = window.getSelection();
+   if (!current || current.isCollapsed || !current.rangeCount || !selectionRangesEqual(current.getRangeAt(0), dismissedSelection.current?.range)) dismissedSelection.current = null;
+  };
+  const escape = (event: KeyboardEvent) => {
+   if (event.key !== "Escape" || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || isDialogOrMenuOpen()) return;
+   if (event.repeat && dismissedEscapePress.current) { event.preventDefault(); event.stopPropagation(); return; }
+   const pane = scroller.current?.parentElement;
+   const toolbar = pane?.querySelector<HTMLElement>("[data-chat-selection-actions]");
+   if (!selectionAction || !toolbar || toolbar.style.visibility === "hidden" ||
+    (event.target instanceof Node && event.target !== document && !pane?.contains(event.target))) return;
+   dismissedSelection.current = selectionAction;
+   dismissedEscapePress.current = true;
+   clearSelectionAction();
+   event.preventDefault(); event.stopPropagation();
+  };
+  const release = (event: KeyboardEvent) => { if (event.key === "Escape") dismissedEscapePress.current = false; };
+  document.addEventListener("selectionchange", selectionChanged);
+  document.addEventListener("keyup", release);
+  const blur = () => { dismissedEscapePress.current = false; };
+  window.addEventListener("blur", blur);
 		document.addEventListener("pointerup", capture);
 		document.addEventListener("keyup", capture);
-		document.addEventListener("keydown", escape);
+		document.addEventListener("keydown", escape, true);
 		return () => {
 			document.removeEventListener("pointerup", capture);
 			document.removeEventListener("keyup", capture);
-			document.removeEventListener("keydown", escape);
+			document.removeEventListener("keydown", escape, true);
+   document.removeEventListener("selectionchange", selectionChanged);
+   document.removeEventListener("keyup", release);
+   window.removeEventListener("blur", blur);
 		};
-	}, [captureTranscriptSelection, clearSelectionAction, excerptsEnabled]);
+	}, [captureTranscriptSelection, clearSelectionAction, excerptsEnabled, selectionAction]);
 
 	const addSelectionToChat = useCallback(async () => {
 		if (!selectionAction) return;

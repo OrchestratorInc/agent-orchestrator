@@ -3487,7 +3487,6 @@
 	"sideChat.decline": "Decline",
 	"sideChat.working": "Working…",
 	"sideChat.retryQuestion": "Retry question",
-	"sideChat.checkingAvailability": "Comprobando chat lateral…",
 	"sideChat.addToSideChat": "Añadir al chat lateral",
 	"sideChat.referenceLimit": "Una pregunta lateral puede incluir hasta ocho referencias. Quita una para añadir otra.",
 	"sideChat.defaultLabel": "Chat lateral",

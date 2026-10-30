@@ -14,8 +14,8 @@ under `~/.ao/dev/renderer-fixtures`. No real AO projects or provider chats are u
 
 The chat toolbar stays inside the text pane. The file toolbar also excludes the
 sticky filename header. Both disappear when the complete selection leaves view.
-The disabled checking action is deliberate: it prevents a late button insertion
-without claiming that a provider supports side chats before capabilities arrive.
+The side-chat action keeps its “Add to side chat” label and remains disabled until
+capabilities arrive. The original screenshots below predate that label adjustment.
 
 ## Verification
 
@@ -40,3 +40,11 @@ The full Electron Forge app was attempted with separate scratch data/run/profile
 paths under `~/.ao/dev/selection-actions-ux`; the `better-sqlite3` native rebuild
 failed before launch. Renderer fixtures do not establish full-app or real-provider
 verification. Native platform coverage and final-head checks are reported in the PR.
+
+## Follow-up phases
+
+- Phase 0: merged upstream main `dde71cf580cda8aec761eb2d64310b290c70196c` in `1f58b0f78`; 60 focused tests and both typechecks pass.
+- Phase 1: retain native selected content across cache completion and unrelated renders, detect shadow-root selections when suspending refresh, remember dismissed chat selections, and consume the first Escape before the stop shortcut (including held-key repeats). The side-chat label stays unchanged while disabled.
+- New report (human observation): selecting file text shows a toolbar that automatically closes after some time; whether its highlight also disappears is unknown.
+- Agent-collected evidence: shadow-aware selection, deferred refresh completion, explicit navigation, and renderer-prop retention regressions pass. This isolates plausible failure paths; it does not establish the cause in the reporter’s installed app.
+- Phase 1 component run: 297 tests pass and one unrelated Windows locale assertion fails (`2,58,400` versus `258,400`). Narrow follow-up: 26 tests pass; frontend and E2E typechecks pass. Native verification is recorded separately when available.
