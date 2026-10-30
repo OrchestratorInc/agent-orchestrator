@@ -73,6 +73,7 @@ import { CLOUD_PROJECT_KIND, hasConfiguredOrchestratorAgent, newestActiveOrchest
 import type { components } from "../../api/schema";
 import { useAgentInventoryTelemetry } from "../hooks/useAgentInventoryTelemetry";
 import { useSessionSwitchSnap } from "../hooks/useSessionSwitchSnap";
+import { useLinkThisComputerOnSignIn } from "../hooks/useLinkThisComputerOnSignIn";
 import { remoteWorkspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { clientForHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
@@ -311,6 +312,7 @@ function ShellLayout() {
 	// Reports how many agents this install has available, once per launch.
 	useAgentInventoryTelemetry();
 	useSessionSwitchSnap();
+	useLinkThisComputerOnSignIn();
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
