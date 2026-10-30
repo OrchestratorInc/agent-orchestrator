@@ -135,6 +135,7 @@
           "cli",
           {
             "group": "Configuration",
+            "root": "configuration/index",
             "pages": [
               "configuration/projects",
               "configuration/lifecycle-automation",
