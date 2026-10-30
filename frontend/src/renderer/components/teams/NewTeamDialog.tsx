@@ -19,6 +19,7 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { listNames } from "../share/accessLabels";
 import { PeopleField, type Recipient } from "./PeopleField";
 
 /** A readable message for a failed team request. */
@@ -40,7 +41,7 @@ export function NewTeamDialog({ orgId, open, onOpenChange, onCreated, initialPeo
 	onCreated: (team: CloudCpTeamDetail) => void;
 	initialPeople?: Recipient[];
 }) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const { client, ready } = useCloudCp();
 	const queryClient = useQueryClient();
 	const [name, setName] = useState("");
@@ -114,7 +115,7 @@ export function NewTeamDialog({ orgId, open, onOpenChange, onCreated, initialPeo
 						/>
 						{pending.length > 0 ? (
 							<p className="text-xs text-muted-foreground" data-new-team-pending="">
-								{t("teams.pendingHint", { count: pending.length, emails: pending.join(", ") })}
+								{t("teams.pendingHint", { count: pending.length, emails: listNames(pending, i18n.language, (count) => t("share.summary.more", { count })) })}
 							</p>
 						) : null}
 					</div>
