@@ -75,15 +75,18 @@
     return { wrap: wrap, items: items, H: H, hi: wrap.querySelector(".ao-track-hi"), dot: wrap.querySelector(".ao-track-dot"), thumb: wrap.querySelector(".ao-thumb") };
   }
 
-  function updateTrack(track, idx) {
-    if (!track || idx == null || idx < 0) return;
-    var it = track.items[idx];
-    if (!it) return;
-    /* original thumb ends at active row bottom minus its 6px padding (measured on live site) */
-    var center = it.top + it.h - 6;
-    track.hi.style.clipPath = "polygon(0 0, 100% 0, 100% " + center + "px, 0 " + center + "px)";
-    if (track.dot) { track.dot.setAttribute("cx", String(it.x)); track.dot.setAttribute("cy", String(center)); }
-    track.thumb.style.left = (it.x - 2) + "px";
+  function updateTrack(track, firstIdx, lastIdx) {
+    if (!track || firstIdx == null || firstIdx < 0 || lastIdx == null || lastIdx < firstIdx) return;
+    var itF = track.items[firstIdx], itL = track.items[lastIdx];
+    if (!itF || !itL) return;
+    /* original hi segment spans the VISIBLE active rows only: from the first
+       active row top to the last active row bottom minus its 6px padding
+       (measured on live site) */
+    var start = itF.top;
+    var center = itL.top + itL.h - 6;
+    track.hi.style.clipPath = "polygon(0 " + start + "px, 100% " + start + "px, 100% " + center + "px, 0 " + center + "px)";
+    if (track.dot) { track.dot.setAttribute("cx", String(itL.x)); track.dot.setAttribute("cy", String(center)); }
+    track.thumb.style.left = (itL.x - 2) + "px";
     track.thumb.style.top = (center + 2) + "px";
     track.thumb.style.opacity = "1";
   }
@@ -95,38 +98,42 @@
       TOC_STATE.ticking = false;
       var hs = TOC_STATE.headings;
       if (!hs || !hs.length) return;
-      /* Original (fumadocs) semantics, verified against the live site:
-         - ring progress + bright ToC items = headings that have ENTERED the
-           viewport (top <= innerHeight);
+      /* Original (fumadocs) semantics, verified against the live site at
+         multiple scroll positions including the page bottom:
+         - bright ToC items + hi track segment = headings INTERSECTING the
+           viewport right now (top < innerHeight AND bottom > 0); when none
+           intersect, the previous state is kept;
          - pill label = the UPCOMING section (first heading below the
-           viewport top edge). */
+           viewport top edge);
+         - ring progress tracks the deepest visible heading. */
       var vh = window.innerHeight;
-      var activeIdx = -1, labelIdx = -1;
+      var firstVis = -1, lastVis = -1, labelIdx = -1;
       for (var i = 0; i < hs.length; i++) {
-        var top = hs[i].getBoundingClientRect().top;
-        if (top <= vh) activeIdx = i;
-        if (top > 0 && labelIdx < 0) labelIdx = i;
+        var r = hs[i].getBoundingClientRect();
+        if (r.top < vh && r.bottom > 0) { if (firstVis < 0) firstVis = i; lastVis = i; }
+        if (r.top > 0 && labelIdx < 0) labelIdx = i;
       }
       if (labelIdx < 0) labelIdx = hs.length - 1;
       var n = hs.length;
-      if (TOC_STATE.ringFg) {
-        var prog = (activeIdx + 1) / n;
+      if (TOC_STATE.ringFg && lastVis >= 0) {
+        var prog = (lastVis + 1) / n;
         TOC_STATE.ringFg.style.strokeDashoffset = String(47.1239 * (1 - prog));
         var svg = TOC_STATE.ringFg.closest("svg");
         if (svg) svg.setAttribute("aria-valuenow", String(prog.toFixed(4)));
       }
       if (TOC_STATE.activeLabel) TOC_STATE.activeLabel.textContent = clean(hs[labelIdx].textContent);
+      if (firstVis < 0) return;
       if (TOC_STATE.listEl) {
         var as = TOC_STATE.listEl.querySelectorAll("a");
-        as.forEach(function (a, j) { a.classList.toggle("ao-read", j <= activeIdx); });
-        updateTrack(TOC_STATE.mTrack, activeIdx);
+        as.forEach(function (a, j) { a.classList.toggle("ao-read", j >= firstVis && j <= lastVis); });
+        updateTrack(TOC_STATE.mTrack, firstVis, lastVis);
       }
       if (TOC_STATE.dAnchors) {
         TOC_STATE.dAnchors.forEach(function (a, j) {
           if (!a) return;
-          a.classList.toggle("ao-dtoc-active", j <= activeIdx);
+          a.classList.toggle("ao-dtoc-active", j >= firstVis && j <= lastVis);
         });
-        updateTrack(TOC_STATE.dTrack, activeIdx);
+        updateTrack(TOC_STATE.dTrack, firstVis, lastVis);
       }
     });
   }
