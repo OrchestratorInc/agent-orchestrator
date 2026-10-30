@@ -84,15 +84,15 @@ func TestDeviceLoginStoresTokenOnceApproved(t *testing.T) {
 	}
 }
 
-func TestDeviceLoginReportsDenial(t *testing.T) {
+func TestDeviceLoginResetsWhenDeclinedOnGitHub(t *testing.T) {
 	service := newDeviceTestService(t, deviceFlowClient(t, `{"error":"access_denied"}`))
 	if _, err := service.StartDeviceLogin(context.Background()); err != nil {
 		t.Fatalf("StartDeviceLogin: %v", err)
 	}
 
-	failed := waitForDeviceLogin(t, service, DeviceLoginFailed)
-	if failed.Error != "GitHub sign-in was cancelled." {
-		t.Fatalf("error = %q", failed.Error)
+	idle := waitForDeviceLogin(t, service, DeviceLoginIdle)
+	if idle.Error != "" {
+		t.Fatalf("error = %q, want none", idle.Error)
 	}
 	if service.HasPAT(context.Background()) {
 		t.Fatal("a denied sign-in stored a token")

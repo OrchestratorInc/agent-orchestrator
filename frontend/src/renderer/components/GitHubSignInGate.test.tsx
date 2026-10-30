@@ -68,7 +68,7 @@ describe("GitHubSignInGate", () => {
 		expect(await screen.findByTestId("github-sign-in-gate")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
 
-		await user.click(screen.getByRole("button", { name: "Sign in with GitHub" }));
+		await user.click(screen.getByRole("button", { name: "Continue with GitHub" }));
 		expect(mocks.POST).toHaveBeenCalledWith("/api/v1/github/login");
 		expect(await screen.findByText("ABCD-1234")).toBeInTheDocument();
 
@@ -83,7 +83,7 @@ describe("GitHubSignInGate", () => {
 		const user = userEvent.setup();
 		renderGate(<GitHubSignInGate enabled />);
 
-		await user.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
+		await user.click(await screen.findByRole("button", { name: "Continue with GitHub" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("GitHub sign-in is not configured in this build.");
 		expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
 	});

@@ -139,7 +139,7 @@ func (s *Service) pollDeviceLogin(ctx context.Context, deviceCode string, interv
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				s.finishDeviceLogin(deviceCode, DeviceLoginFailed, "", "The sign-in code expired. Start again.")
+				s.finishDeviceLogin(deviceCode, DeviceLoginIdle, "", "")
 			}
 			return
 		case <-time.After(interval):
@@ -167,11 +167,10 @@ func (s *Service) pollDeviceLogin(ctx context.Context, deviceCode string, interv
 		case "slow_down":
 			interval += 5 * time.Second
 			continue
-		case "access_denied":
-			s.finishDeviceLogin(deviceCode, DeviceLoginFailed, "", "GitHub sign-in was cancelled.")
-			return
-		case "expired_token":
-			s.finishDeviceLogin(deviceCode, DeviceLoginFailed, "", "The sign-in code expired. Start again.")
+		case "access_denied", "expired_token":
+			// Declining on GitHub or letting the code run out is not a failure:
+			// the user simply starts again.
+			s.finishDeviceLogin(deviceCode, DeviceLoginIdle, "", "")
 			return
 		default:
 			s.finishDeviceLogin(deviceCode, DeviceLoginFailed, "", firstNonEmpty(out.ErrorDesc, out.Error))
