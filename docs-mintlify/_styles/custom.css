@@ -1305,8 +1305,11 @@ main li::marker { color: rgba(255,255,255,0.5); }
 main :is(ol, ul) { padding-left: 24px !important; }
 /* v36x: native scrollbar gutter added +10/+5px per block vs the original; hide it,
    reserve the original's 5px visual strip (Mintlify renders its own overlay bar). */
-main .code-block div[class*="--scroll-area-fade-size"] { overflow-x: auto !important; scrollbar-width: none !important; padding-bottom: 21px !important; }
-main .code-block div[class*="--scroll-area-fade-size"]::-webkit-scrollbar { height: 0 !important; width: 0 !important; }
+main .code-block div[class*="--scroll-area-fade-size"] { overflow-x: auto !important; padding-bottom: 16px !important; }
+main .code-block div[class*="--scroll-area-fade-size"]::-webkit-scrollbar { width: 5px !important; height: 5px !important; }
+main .code-block div[class*="--scroll-area-fade-size"]::-webkit-scrollbar-thumb { border-radius: 5px !important; background: var(--fd-border) !important; }
+main .code-block div[class*="--scroll-area-fade-size"]::-webkit-scrollbar-track { background: transparent !important; }
+main .code-block div[class*="--scroll-area-fade-size"]::-webkit-scrollbar-corner { display: none !important; }
 /* v36x: Mintlify table wrapper pulls h2->table gap to 20px; original collapses to 16 */
 main .mdx-content > div:has(table) { margin-top: 0 !important; }
 
@@ -1323,3 +1326,16 @@ ul.sidebar-group li.space-y-px > ul::before {
   content: ""; position: absolute; left: 10px; top: 4px; bottom: 4px; width: 1px;
   background: oklch(1 0 0 / 0.1);
 }
+
+/* v38: load the GeistSans variable font (original ships it; deployed fell back to system fonts) */
+@font-face {
+  font-family: 'GeistSans';
+  src: url('/fonts/GeistSans-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* v39: original parity - ordered-list items get 6px marker-text gap; table cells are vertically centered */
+main ol > li { padding-left: 6px !important; }
+main td, main th { vertical-align: middle !important; }
