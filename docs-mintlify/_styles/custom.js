@@ -1103,6 +1103,11 @@
      5) Callout title paragraph (first child, strong-only): original mt0 mb4;
         v36w gave every callout paragraph mt20/mb20. ---------- */
   function fixChromeParity() {
+    /* Mintlify reserves 131px right padding on code for the copy button;
+       the original reserves 0 - the excess made non-overflowing blocks scroll */
+    Array.prototype.forEach.call(document.querySelectorAll(".mdx-content pre code"), function (c) {
+      c.style.setProperty("padding-right", "0", "important");
+    });
     Array.prototype.forEach.call(document.querySelectorAll(".mdx-content pre .line"), function (l) {
       l.style.setProperty("padding-left", "16px", "important");
       l.style.setProperty("padding-right", "32px", "important");
