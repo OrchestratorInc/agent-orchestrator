@@ -1120,6 +1120,10 @@
     });
     Array.prototype.forEach.call(document.querySelectorAll(".mdx-content :not(pre) > code"), function (c) {
       c.style.setProperty("box-decoration-break", "slice", "important");
+      /* original code fragments use overflow/word-break normal; Mintlify's
+         break-word shrank table min-content widths and moved column splits */
+      c.style.setProperty("overflow-wrap", "normal", "important");
+      c.style.setProperty("word-break", "normal", "important");
       if (!c.closest("td, th")) {
         c.style.setProperty("padding", "2.8px 5.6px", "important");
       }
