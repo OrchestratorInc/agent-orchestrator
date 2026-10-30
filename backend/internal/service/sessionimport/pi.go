@@ -16,21 +16,35 @@ import (
 // Pi (binary "pi", driver "piacp") keeps one JSONL per conversation at
 // PI_CODING_AGENT_DIR/sessions/--<cwd-dashed>--/<ISO-time>_<uuid>.jsonl. The
 // file opens with a `session` header record carrying the conversation's own
-// UUID and absolute cwd, followed by `message` records whose content is an
-// array of blocks (text/thinking/toolCall). Only user and assistant text is a
-// display message; thinking, tool calls, and tool results are provider noise.
+// UUID and absolute cwd, followed by records (model_change, thinking_level_change,
+// message) linked into a tree by id/parentId. Only user and assistant message
+// text is a display message; thinking, tool calls, and tool results are noise.
+//
+// The file is a tree, not a list: rewinding or branching appends new records
+// under an earlier parent, so the abandoned turns remain in the file. Only the
+// active branch is a conversation to continue, so this walks parent links back
+// from the last appended record, exactly as the Claude reader does.
 
 // piRecord is the subset of a Pi JSONL record this import reads. The folder
 // name dashes the cwd lossily, so cwd is taken from the header instead.
 type piRecord struct {
 	Type      string    `json:"type"`
 	ID        string    `json:"id"`
+	ParentID  string    `json:"parentId"`
 	CWD       string    `json:"cwd"`
 	Timestamp time.Time `json:"timestamp"`
 	Message   struct {
 		Role    string      `json:"role"`
 		Content contentText `json:"content"`
 	} `json:"message"`
+}
+
+// piNode keeps only display facts and the tree link, so tool payloads are not
+// retained while walking ancestry.
+type piNode struct {
+	id, parent, role, text string
+	at                     time.Time
+	dropped                bool
 }
 
 // piNativeID is the conversation UUID encoded in a Pi session file name,
@@ -45,7 +59,8 @@ func piNativeID(path string) string {
 
 // readPiTranscript reads one Pi conversation JSONL. It reuses the shared
 // os.Root-confined reader and oversize-record skimming so a huge tool result
-// neither hides the text beside it nor is retained.
+// neither hides the text beside it nor is retained, and it follows the active
+// branch so a rewound prompt is not shown beside its replacement.
 func readPiTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: domain.HarnessPi, root: root}
 	if len(paths) == 0 {
@@ -61,40 +76,15 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 	t.nativeID = piNativeID(paths[0])
 
 	var (
-		items     []tagged
-		ids       = map[string]int{}
+		nodes     []piNode
+		index     = map[string]int{}
+		leaf      string
 		sawHeader bool
-		visible   int
+		held      int // bytes of held node text
+		firstText = -1
+		drop      int // the oldest node whose text may still be held
 	)
 	now := time.Now()
-	add := func(id, role, text string, at time.Time) {
-		if role != "user" && role != "assistant" {
-			return
-		}
-		if strings.Contains(text, omittedText) {
-			t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
-		}
-		if strings.TrimSpace(text) == "" {
-			return
-		}
-		msg := tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}, kind: "pi", id: id}
-		if id != "" {
-			// Pi rewrites one message under the same id as it streams; keep its first position.
-			if index, ok := ids["pi\x00"+id]; ok {
-				visible += len(text) - len(items[index].Text)
-				items[index] = msg
-				return
-			}
-			ids["pi\x00"+id] = len(items)
-		}
-		visible += len(text)
-		items = append(items, msg)
-	}
-	trim := func() {
-		n := len(items)
-		items = trimVisible(items)
-		t.shortened = t.shortened || len(items) < n
-	}
 	handle := func(line []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -106,8 +96,7 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 		if r.Timestamp.After(t.last) && r.Timestamp.Before(now.Add(time.Hour)) {
 			t.last = r.Timestamp
 		}
-		switch r.Type {
-		case "session":
+		if r.Type == "session" {
 			if sawHeader {
 				return nil // Later segments or forks repeat the header.
 			}
@@ -116,19 +105,38 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 				return errors.New("native identity mismatch")
 			}
 			t.cwd = r.CWD
-		case "message":
-			add(r.ID, r.Message.Role, string(r.Message.Content), r.Timestamp)
+			return nil
 		}
-		if visible > 2*maxVisibleBytes {
-			trim()
-			visible = 0
-			clear(ids)
-			for i, item := range items {
-				visible += len(item.Text)
-				if item.id != "" {
-					ids[item.kind+"\x00"+item.id] = i
-				}
+		if r.ID == "" {
+			return nil // Without an id a record cannot take its place in the tree.
+		}
+		node := piNode{id: r.ID, parent: r.ParentID, at: r.Timestamp}
+		if r.Type == "message" && (r.Message.Role == "user" || r.Message.Role == "assistant") {
+			node.role = r.Message.Role
+			node.text = string(r.Message.Content)
+		}
+		leaf = r.ID
+		idx, seen := index[r.ID]
+		if seen {
+			// Pi rewrites some records in place; replace and re-account its text.
+			held -= len(nodes[idx].text)
+			nodes[idx] = node
+		} else {
+			idx = len(nodes)
+			index[r.ID] = idx
+			nodes = append(nodes, node)
+		}
+		if firstText < 0 && node.text != "" {
+			firstText = idx
+		}
+		held += len(nodes[idx].text)
+		// Drop the oldest text first, as trimVisible would, but keep the opening prompt.
+		for held > maxClaudeHeld && drop < len(nodes) {
+			if drop != firstText && nodes[drop].text != "" {
+				held -= len(nodes[drop].text)
+				nodes[drop].text, nodes[drop].dropped = "", true
 			}
+			drop++
 		}
 		return nil
 	}
@@ -142,7 +150,44 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 	if !sawHeader {
 		return t, errors.New("no readable native conversation")
 	}
-	trim()
+
+	// Follow the active branch from the last appended record so rewound or
+	// abandoned branches are not shown as history. A dangling parent must not
+	// hide the conversation, so stop at the first unreachable link.
+	var chain []piNode
+	visited := map[string]bool{}
+	for leaf != "" {
+		idx, found := index[leaf]
+		if !found || visited[leaf] {
+			break
+		}
+		visited[leaf] = true
+		node := nodes[idx]
+		chain = append(chain, node)
+		leaf = node.parent
+	}
+	slices.Reverse(chain)
+
+	var items []tagged
+	add := func(role, text string, at time.Time) {
+		if role != "user" && role != "assistant" {
+			return
+		}
+		if strings.Contains(text, omittedText) {
+			t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
+		}
+		if strings.TrimSpace(text) == "" {
+			return
+		}
+		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}, kind: "pi"})
+	}
+	for _, node := range chain {
+		t.shortened = t.shortened || node.dropped
+		add(node.role, node.text, node.at)
+	}
+	n := len(items)
+	items = trimVisible(items)
+	t.shortened = t.shortened || len(items) < n
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
 	}

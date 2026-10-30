@@ -42,6 +42,76 @@ func TestPiTranscriptKeepsOnlyUserAndAssistantText(t *testing.T) {
 	}
 }
 
+// piMsg is one Pi `message` record linked into the tree by id/parentId.
+func piMsg(id, parent, role, text string) string {
+	return `{"type":"message","id":"` + id + `","parentId":"` + parent + `","timestamp":"2026-10-08T09:11:30.000Z","message":{"role":"` + role + `","content":[{"type":"text","text":"` + text + `"}]}}`
+}
+
+func TestPiTranscriptKeepsLinearChatInOrder(t *testing.T) {
+	root := t.TempDir()
+	path := writeFile(t, piPath(root, piSession), `{"type":"session","version":1,"id":"`+piSession+`","timestamp":"2026-10-08T09:11:21.828Z","cwd":"/work/repo"}
+`+piMsg("u1", piSession, "user", "first question")+`
+`+piMsg("a1", "u1", "assistant", "first answer")+`
+`+piMsg("u2", "a1", "user", "second question")+`
+`+piMsg("a2", "u2", "assistant", "second answer")+`
+`)
+	got, err := readTranscript(context.Background(), domain.HarnessPi, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: first question", "assistant: first answer", "user: second question", "assistant: second answer")
+}
+
+// A rewind sends a new prompt under an earlier parent; the abandoned turns stay
+// in the file but must not appear beside their replacement.
+func TestPiTranscriptFollowsActiveBranchAfterRewind(t *testing.T) {
+	root := t.TempDir()
+	path := writeFile(t, piPath(root, piSession), `{"type":"session","version":1,"id":"`+piSession+`","timestamp":"2026-10-08T09:11:21.828Z","cwd":"/work/repo"}
+`+piMsg("u1", piSession, "user", "first question")+`
+`+piMsg("a1", "u1", "assistant", "first answer")+`
+`+piMsg("u2a", "a1", "user", "abandoned followup")+`
+`+piMsg("a2a", "u2a", "assistant", "abandoned answer")+`
+`+piMsg("u2b", "a1", "user", "real followup")+`
+`+piMsg("a2b", "u2b", "assistant", "real answer")+`
+`)
+	got, err := readTranscript(context.Background(), domain.HarnessPi, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: first question", "assistant: first answer", "user: real followup", "assistant: real answer")
+}
+
+// A session branched at its first prompt shows only the branch the last record
+// belongs to.
+func TestPiTranscriptFollowsActiveBranchFromRoot(t *testing.T) {
+	root := t.TempDir()
+	path := writeFile(t, piPath(root, piSession), `{"type":"session","version":1,"id":"`+piSession+`","timestamp":"2026-10-08T09:11:21.828Z","cwd":"/work/repo"}
+`+piMsg("u1a", piSession, "user", "abandoned opener")+`
+`+piMsg("a1a", "u1a", "assistant", "abandoned reply")+`
+`+piMsg("u1b", piSession, "user", "active opener")+`
+`+piMsg("a1b", "u1b", "assistant", "active reply")+`
+`)
+	got, err := readTranscript(context.Background(), domain.HarnessPi, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: active opener", "assistant: active reply")
+}
+
+// A record whose parent is missing must not hide the reachable branch.
+func TestPiTranscriptToleratesMissingParent(t *testing.T) {
+	root := t.TempDir()
+	path := writeFile(t, piPath(root, piSession), `{"type":"session","version":1,"id":"`+piSession+`","timestamp":"2026-10-08T09:11:21.828Z","cwd":"/work/repo"}
+`+piMsg("u1", "ghost-parent", "user", "orphaned question")+`
+`+piMsg("a1", "u1", "assistant", "answer anyway")+`
+`)
+	got, err := readTranscript(context.Background(), domain.HarnessPi, root, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: orphaned question", "assistant: answer anyway")
+}
+
 func TestPiTranscriptRejectsNativeIDMismatch(t *testing.T) {
 	root := t.TempDir()
 	path := writeFile(t, piPath(root, piSession), `{"type":"session","version":1,"id":"01a00000-0000-7000-8000-000000000000","timestamp":"2026-10-08T09:11:21.828Z","cwd":"/work/repo"}
