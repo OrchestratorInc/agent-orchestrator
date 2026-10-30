@@ -241,7 +241,8 @@ function activeStepIndex(plan: ConversationPlan): number {
  * shown, so a step that ticks over cross-fades in place instead of popping.
  *
  * The arc turns only while the turn runs. A turn that has ended, failed or been
- * stopped is not working on anything, so its unfinished step holds still.
+ * stopped is not working on anything, so its unfinished step keeps only the faint
+ * ring: a stopped arc would read as a frozen spinner.
  */
 function StepMark({ status, live }: { status: PlanStepStatus; live: boolean }) {
 	const shown = (mark: PlanStepStatus) =>
@@ -261,7 +262,7 @@ function StepMark({ status, live }: { status: PlanStepStatus; live: boolean }) {
 					className={cn("text-muted-foreground/45", shown("pending"))}
 				/>
 				{/* In progress: a faint ring with an arc turning round it, neutral like the
-				    chat's own Working spinner. */}
+				    chat's own Working spinner. Unfinished once the turn settles: the ring alone. */}
 				<g className={cn("text-foreground", shown("in_progress"))}>
 					<circle cx="8" cy="8" r="6.75" fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="1.5" />
 					<circle
@@ -274,8 +275,8 @@ function StepMark({ status, live }: { status: PlanStepStatus; live: boolean }) {
 						strokeLinecap="round"
 						strokeDasharray="12 43"
 						className={cn(
-							"origin-center [transform-box:fill-box]",
-							live && "animate-spin motion-reduce:animate-none",
+							"origin-center transition-opacity duration-200 [transform-box:fill-box] motion-reduce:transition-none",
+							live ? "animate-spin motion-reduce:animate-none" : "opacity-0",
 						)}
 					/>
 				</g>

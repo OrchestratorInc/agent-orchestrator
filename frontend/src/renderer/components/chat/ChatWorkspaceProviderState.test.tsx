@@ -127,9 +127,9 @@ describe("plan", () => {
 	});
 
 	// Claude can keep working after its turn ends (a background job finishing). That
-	// work belongs to no turn, so each task-list revision arrives as its own row.
-	// Only the newest copy is current: neither the turn's older copy nor the earlier
-	// revision may show, and a step the agent later finished must not keep spinning.
+	// work belongs to no turn, so its task list arrives as a row, one per run of such
+	// work. Only the newest copy is current: neither the turn's older copy nor an
+	// earlier run's may show, and a step the agent later finished must not keep spinning.
 	it("shows a list revised after its turn ended once, at its newest state", () => {
 		const current = chatFixture.turns[1]!.plan!;
 		const planRow = (id: string, sequence: number, done: number) => ({
@@ -164,30 +164,60 @@ describe("plan", () => {
 		expect(container.querySelector("[data-turn-plan] .animate-spin")).toBeNull();
 	});
 
-	// The same holds for a plan with no turn and no cross-turn flag: consecutive
-	// revisions are one plan changing, not several plans.
-	it("shows consecutive revisions of a turnless plan as one card", () => {
-		const orphanRow = (id: string, sequence: number, status: "pending" | "completed") => ({
+	// Provider turns AO never correlated each carry their own plan row. Without the
+	// cross-turn flag those are separate plans, not revisions of one, so each shows.
+	it("keeps each plan row that is not a copy of a cross-turn list", () => {
+		const orphanRow = (id: string, sequence: number, text: string) => ({
 			kind: "activity" as const,
 			id,
 			sequence,
 			revision: 0,
 			activityKind: "plan" as const,
-			status: "running" as const,
+			status: "completed" as const,
 			summary: "Updated plan",
-			detail: { event: "plan" as const, steps: [{ text: "Resumed plan step", status }] },
+			detail: { event: "plan" as const, steps: [{ text, status: "completed" as const }] },
 			createdAt: new Date().toISOString(),
 		});
-		const revised: ConversationSnapshot = {
+		const separate: ConversationSnapshot = {
 			...chatFixture,
 			turns: chatFixture.turns.map((turn) => ({ ...turn, plan: undefined })),
-			items: [...chatFixture.items, orphanRow("orphan-1", 21, "pending"), orphanRow("orphan-2", 22, "completed")],
+			items: [...chatFixture.items, orphanRow("orphan-1", 21, "Read the logs"), orphanRow("orphan-2", 22, "Fix the build")],
 			latestSequence: 22,
 		};
-		render(<ChatWorkspace snapshot={revised} />);
+		render(<ChatWorkspace snapshot={separate} />);
+		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(2);
+	});
+
+	// A row with no turn can land among a running turn's items, as when the agent was
+	// still busy on its own when the user sent. The turn writes its copy later, so the
+	// turn's copy is the newer one even though the turn started first.
+	it("replaces a turnless copy of a list that spans turns with a later turn's copy", () => {
+		const current = chatFixture.turns[1]!.plan!;
+		const turnlessCopy = {
+			kind: "activity" as const,
+			id: "plan-turnless",
+			sequence: 8,
+			revision: 0,
+			activityKind: "plan" as const,
+			status: "running" as const,
+			summary: "",
+			detail: {
+				event: "plan" as const,
+				spansTurns: true,
+				steps: current.steps.map((step) => ({ text: step.text, status: "pending" as const })),
+			},
+			createdAt: new Date().toISOString(),
+		};
+		const superseded: ConversationSnapshot = {
+			...chatFixture,
+			turns: chatFixture.turns.map((turn) =>
+				turn.id === "turn-2" ? { ...turn, plan: { ...current, spansTurns: true } } : { ...turn, plan: undefined },
+			),
+			items: chatFixture.items.map((item) => (item.id === "m-4" ? turnlessCopy : item)),
+		};
+		render(<ChatWorkspace snapshot={superseded} />);
 		expect(screen.getAllByRole("region", { name: "Agent plan" })).toHaveLength(1);
-		// The newest revision, folded to its header because every step is done.
-		expect(screen.getByText("1/1")).toBeInTheDocument();
+		expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
 	});
 
 	// A turn that failed or was stopped is not working on anything, so the step it

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -343,6 +344,68 @@ func TestSuccessfulCompletionKeepsPlanThatSpansTurns(t *testing.T) {
 	// list spans turns as the turn's copy does.
 	if !detail.SpansTurns {
 		t.Errorf("plan activity detail = %s, want spansTurns", activity.Detail)
+	}
+}
+
+// Claude can keep working on its own after a turn has ended. Those plan updates
+// carry no turn, and each run of them must rewrite one row rather than stacking a
+// row per revision, while work after a later turn gets a row of its own.
+func TestTurnlessPlanRevisionsRewriteOneRowPerRun(t *testing.T) {
+	h := newHarness(t)
+	steps := func(done int) []domain.ConversationPlanStep {
+		out := make([]domain.ConversationPlanStep, 2)
+		for i := range out {
+			out[i] = domain.ConversationPlanStep{Text: fmt.Sprintf("step %d", i+1), Status: domain.PlanStepPending}
+			if i < done {
+				out[i].Status = domain.PlanStepCompleted
+			}
+		}
+		return out
+	}
+	turnless := func(done int) ports.ChatEvent {
+		plan := domain.ConversationPlan{SpansTurns: true, Steps: steps(done)}
+		return ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, Plan: &plan, Summary: fmt.Sprintf("Plan %d/2", done)}
+	}
+	turnlessPlans := func(s store.ConversationSnapshot) []domain.ConversationActivity {
+		var plans []domain.ConversationActivity
+		for _, activity := range s.Activities {
+			if activity.Kind == domain.ActivityKindPlan && activity.TurnID == "" {
+				plans = append(plans, activity)
+			}
+		}
+		return plans
+	}
+
+	completeTurn(t, h, "A", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+	h.conv.emit(turnless(0), turnless(1))
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		plans := turnlessPlans(s)
+		return len(plans) == 1 && plans[0].Summary == "Plan 1/2"
+	})
+
+	completeTurn(t, h, "B", "provider-turn-2")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
+	h.conv.emit(turnless(2))
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(turnlessPlans(s)) == 2 })
+
+	plans := turnlessPlans(snapshot)
+	if plans[0].Summary != "Plan 1/2" || plans[1].Summary != "Plan 2/2" {
+		t.Fatalf("turnless plan rows = %q, %q; want each run's newest revision", plans[0].Summary, plans[1].Summary)
+	}
+	if replyB := snapshot.Messages[3]; plans[1].Sequence < replyB.Sequence {
+		t.Errorf("second run's plan sequence = %d, want after turn B's reply (%d)", plans[1].Sequence, replyB.Sequence)
+	}
+	for _, plan := range plans {
+		var detail struct {
+			SpansTurns bool `json:"spansTurns"`
+		}
+		if err := json.Unmarshal(plan.Detail, &detail); err != nil {
+			t.Fatalf("decode plan activity detail: %v", err)
+		}
+		if !detail.SpansTurns {
+			t.Errorf("plan activity detail = %s, want spansTurns", plan.Detail)
+		}
 	}
 }
 
