@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -128,6 +129,12 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 			for _, name := range [...]string{"cordis.yml", "cordis.patch.yml", "package.json"} {
 				paths = append(paths, filepath.Join(root, name))
 			}
+		}
+	case "minimax-code":
+		// `mcode provider list` reads the profile's providers and models from
+		// config.yaml, and the region preference picks the account namespace.
+		if root := miniMaxProfileDir(home, env); root != "" {
+			paths = append(paths, filepath.Join(root, "config.yaml"), filepath.Join(root, "preferences", "mcode-region.json"))
 		}
 	case "vibe":
 		if root := strings.TrimSpace(env["VIBE_HOME"]); root != "" {
@@ -322,6 +329,28 @@ func deepseekProfileDir(home string, env map[string]string) string {
 		root = filepath.Join(home, ".dsh")
 	}
 	return filepath.Join(root, "profiles", "acp")
+}
+
+// miniMaxProfileDir resolves the profile MiniMax Code reads, in the CLI's
+// own precedence order. Its default lives under Node's os.homedir(), which
+// follows the launch environment's HOME (USERPROFILE on Windows).
+func miniMaxProfileDir(home string, env map[string]string) string {
+	for _, key := range []string{"MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"} {
+		if root := envValue(env, key); root != "" {
+			return root
+		}
+	}
+	homeKey := "HOME"
+	if runtime.GOOS == "windows" {
+		homeKey = "USERPROFILE"
+	}
+	if requested := strings.TrimSpace(env[homeKey]); requested != "" {
+		home = requested
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".minimax")
 }
 
 func readModelConfig(path string) ([]byte, error) {

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +39,10 @@ const (
 	commandTerminationWait = 2 * time.Second
 )
 
+// commandInterruptSupported reports whether a canceled discovery can ask the
+// CLI to exit cleanly. Windows has no deliverable interrupt for a child.
+var commandInterruptSupported = runtime.GOOS != "windows"
+
 type commandSpec struct {
 	args   []string
 	parser func([]byte) ([]ports.AgentModelInfo, error)
@@ -45,6 +50,11 @@ type commandSpec struct {
 	// browser sign-in when signed out. Discovery only runs once it confirms a
 	// login, so background refreshes never open that sign-in page.
 	signIn *signInCheck
+	// interruptOnCancel is set for CLIs that hold a profile lock while listing
+	// models. A killed run orphans the lock and blocks every later command, so
+	// cancellation interrupts first; where that cannot be delivered (Windows),
+	// discovery is skipped.
+	interruptOnCancel bool
 	// retryEmpty reruns a listing that exits cleanly with no output once.
 	// OpenCode 2 prints nothing the first time it runs in a new folder.
 	retryEmpty bool
@@ -135,6 +145,7 @@ var commandSpecs = map[string]commandSpec{
 	// `cmd --list-models` prints `provider/model` followed by a marketing
 	// description, not a display name — see parseCommandCodeModels.
 	"command-code": {args: []string{"--list-models"}, parser: parseCommandCodeModels},
+	"minimax-code": {args: []string{"provider", "list", "--json"}, parser: parseMiniMaxModels, interruptOnCancel: true},
 }
 
 // Accepts reports whether model may launch agentID. It rejects a model only
@@ -239,7 +250,7 @@ func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
 		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes":
 		return ports.CustomModelEntryDirect
-	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
+	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent", "minimax-code":
 		return ports.CustomModelEntryConfigured
 	default:
 		return ports.CustomModelEntryNone
@@ -471,9 +482,16 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 			return base, err
 		}
 	}
+	if spec.interruptOnCancel && !commandInterruptSupported {
+		// An error, not an empty success, so the service keeps cached models.
+		return base, errors.New("model discovery is unavailable on this platform because AO cannot stop the agent without leaving its profile locked")
+	}
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
+	if spec.interruptOnCancel {
+		aoprocess.InterruptOnCancel(cmd, commandTerminationWait)
+	}
 	output, err := cmd.CombinedOutput()
 	if err == nil && spec.retryEmpty && len(bytes.TrimSpace(output)) == 0 {
 		cancel()
@@ -923,6 +941,11 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 		// Not routed through configDiscoveryFingerprint: the profile is what the
 		// ACP session reads, not a catalog AO parses itself, so the harness has
 		// no config discovery source to declare.
+		return "config=" + fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
+	}
+	if agentID == "minimax-code" {
+		// The native command reports the profile's configured models, so the
+		// profile config is a discovery input even though AO does not parse it.
 		return "config=" + fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
 	}
 	if config := configDiscoveryFingerprint(agentID, workingDir, env); config != "" {

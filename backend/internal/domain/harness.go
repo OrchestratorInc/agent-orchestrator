@@ -38,6 +38,7 @@ const (
 	HarnessUnreal      AgentHarness = "unreal-agent"
 	HarnessCodewhale   AgentHarness = "codewhale"
 	HarnessMiMoCode    AgentHarness = "mimo-code"
+	HarnessMiniMaxCode AgentHarness = "minimax-code"
 	HarnessMemcode     AgentHarness = "memcode"
 	HarnessDeepSeek    AgentHarness = "deepseek-harness"
 	HarnessOpenHands   AgentHarness = "openhands"
@@ -56,7 +57,7 @@ var AllHarnesses = []AgentHarness{
 	HarnessCopilot, HarnessGoose, HarnessAuggie, HarnessContinue, HarnessDevin,
 	HarnessCline, HarnessKimi, HarnessMuse, HarnessKiro, HarnessKilocode, HarnessVibe, HarnessPi,
 	HarnessKimchi, HarnessPrimeAgent, HarnessAutohand,
-	HarnessOMP, HarnessFX, HarnessUnreal, HarnessCodewhale, HarnessMiMoCode, HarnessDeepSeek, HarnessOpenHands,
+	HarnessOMP, HarnessFX, HarnessUnreal, HarnessCodewhale, HarnessMiMoCode, HarnessMiniMaxCode, HarnessDeepSeek, HarnessOpenHands,
 	HarnessCommandCode, HarnessMemcode, HarnessHermes,
 }
 

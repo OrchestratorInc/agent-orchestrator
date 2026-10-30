@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { claudeChoiceModel } from "../lib/agent-model-choices";
+import { claudeChoiceModel, miniMaxChoiceModelID } from "../lib/agent-model-choices";
 import type { ChatConfigOption, ChatModel } from "../types/conversation";
 import { agentModelsQueryOptions } from "./useAgentModelsQuery";
 import { useOfferedModels } from "./useOfferedModels";
+
+const miniMaxChoiceID = (choice: { id: string }) => miniMaxChoiceModelID(choice.id);
 
 /**
  * The models and provider options a chat composer offers, for local and cloud chats alike.
@@ -62,7 +64,9 @@ export function useChatModelChoices(
 		() => resolveClaudeChoice && ((choice: { id: string; name?: string }) => resolveClaudeChoice(choice.id, choice.name)?.id ?? choice.id),
 		[resolveClaudeChoice],
 	);
-	const { models: offeredProviderModels } = useOfferedModels(harness, providerModelChoices, { hostId, keep: [providerModelOption?.currentValue], modelID: claudeChoiceID });
+	// MiniMax's choices are native selections; Settings names provider/model catalog ids.
+	const choiceModelID = harness === "minimax-code" ? miniMaxChoiceID : claudeChoiceID;
+	const { models: offeredProviderModels } = useOfferedModels(harness, providerModelChoices, { hostId, keep: [providerModelOption?.currentValue], modelID: choiceModelID });
 	const configOptions = useMemo(() => {
 		if (!providerModelOption) return options;
 		const offered = new Set(offeredProviderModels.map((choice) => choice.id));
