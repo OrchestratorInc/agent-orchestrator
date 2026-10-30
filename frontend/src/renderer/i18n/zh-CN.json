@@ -2092,7 +2092,6 @@
 	"startup.installTmux": "安装 tmux",
 	"startup.installingCommand": "正在安装 — {{command}}",
 	"startup.installingEllipsis": "正在安装…",
-	"startup.installOpencodeV2ReplacementWarning": "将 OpenCode 2 安装为默认 opencode 命令会替换默认的 OpenCode 1 安装。",
 	"startup.quit": "退出",
 	"startup.recommendedInstallGh": "推荐：安装 gh",
 	"startup.retryPrefix": "重试：{{label}}",

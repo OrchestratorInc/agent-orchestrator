@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -615,12 +616,19 @@ func TestReadinessCoordinatorDoesNotSurfaceSeparateOpenCodeVersionAsMismatch(t *
 		label               string
 		expected, found     int
 		version, binaryPath string
+		wantReasonHas       string
 	}{
-		{"opencode", "OpenCode", 1, 2, "2.0.0", "/usr/local/bin/opencode"},
-		{"opencode-v2", "OpenCode 2", 2, 1, "1.18.33", "/opt/homebrew/bin/opencode"},
+		// OpenCode 2 at OpenCode 1's default location replaced it; say so and how to repair it.
+		{"opencode", "OpenCode", 1, 2, "2.0.0", "/usr/local/bin/opencode", "/usr/local/bin/opencode is OpenCode 2 (2.0.0), which replaced OpenCode 1"},
+		// OpenCode 2 only where AO keeps it apart: OpenCode 1 simply is not installed.
+		{"opencode", "OpenCode", 1, 2, "2.0.0", "/opt/homebrew/opt/opencode-v2/bin/opencode", ""},
+		{"opencode-v2", "OpenCode 2", 2, 1, "1.18.33", "/opt/homebrew/bin/opencode", ""},
 	} {
-		t.Run(tc.id, func(t *testing.T) {
+		t.Run(tc.id+tc.binaryPath, func(t *testing.T) {
 			t.Parallel()
+			if runtime.GOOS == "windows" && strings.Contains(tc.binaryPath, "/opt/homebrew/opt/") {
+				t.Skip("Homebrew opt links do not exist on Windows")
+			}
 			testAgent := &readinessTestAgent{
 				resolve: func(context.Context) (string, error) {
 					return "", &opencode.IncompatibleVersionError{
@@ -646,8 +654,11 @@ func TestReadinessCoordinatorDoesNotSurfaceSeparateOpenCodeVersionAsMismatch(t *
 			if observation.ReasonCode != domain.AgentReadinessReasonNotInstalled {
 				t.Fatalf("installation reason code = %q, want not_installed", observation.ReasonCode)
 			}
-			wantReason := tc.label + " is not installed."
-			if observation.Reason != wantReason {
+			if tc.wantReasonHas != "" {
+				if !strings.Contains(observation.Reason, tc.wantReasonHas) || !strings.Contains(observation.Reason, "first reinstall OpenCode 2 from AO") {
+					t.Fatalf("installation reason = %q, want replacement explanation %q with repair steps", observation.Reason, tc.wantReasonHas)
+				}
+			} else if wantReason := tc.label + " is not installed."; observation.Reason != wantReason {
 				t.Fatalf("installation reason = %q, want %q", observation.Reason, wantReason)
 			}
 			if items[0].EffectiveReadiness != domain.AgentReadinessNotReady {
