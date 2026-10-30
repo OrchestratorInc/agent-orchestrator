@@ -3473,6 +3473,7 @@
 	"chat.automation.visualChanges_other": "{{count}} visuelle Änderungen",
 	"chat.automation.screenshots_one": "{{count}} Referenz-Screenshot",
 	"chat.automation.screenshots_other": "{{count}} Referenz-Screenshots",
+	"chat.automation.steered": "Gesteuert",
 	"sideChat.deleteConfirm": "Seitenchat löschen?",
 	"sideChat.deleteExplanation": "Dieser Seitenchat und seine Nachrichten werden entfernt.",
 	"sideChat.delete": "Löschen",
