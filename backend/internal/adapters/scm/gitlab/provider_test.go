@@ -3236,7 +3236,8 @@ func TestFetchReviewThreads_FallsBackToApprovalsWhenMRDetailCacheCold(t *testing
 	}
 }
 
-// A branch lookup asks GitLab for the open MRs from that source branch only.
+// A branch lookup asks GitLab for the open MRs from that source branch only,
+// keeping each MR's author, which decides whether AO may attach it.
 func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
 	var query url.Values
 	mux := http.NewServeMux()
@@ -3244,7 +3245,7 @@ func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
 		query = r.URL.Query()
 		_ = json.NewEncoder(w).Encode([]map[string]any{{
 			"iid": 3, "state": "opened", "web_url": "https://gitlab.com/myorg/myrepo/-/merge_requests/3",
-			"source_branch": "fix-bug", "target_branch": "main",
+			"source_branch": "fix-bug", "target_branch": "main", "author": map[string]any{"username": "alice"},
 		}})
 	})
 	_, p := testServer(t, mux)
@@ -3257,7 +3258,7 @@ func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
 	if query.Get("source_branch") != "fix-bug" || query.Get("state") != "opened" {
 		t.Fatalf("query = %v, want source_branch=fix-bug state=opened", query)
 	}
-	if len(prs) != 1 || prs[0].SourceBranch != "fix-bug" {
+	if len(prs) != 1 || prs[0].SourceBranch != "fix-bug" || prs[0].Author != "alice" {
 		t.Fatalf("prs = %+v", prs)
 	}
 }

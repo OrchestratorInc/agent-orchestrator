@@ -136,7 +136,17 @@ type PRRefresher interface {
 // track yet, so a review requested right after opening a PR can attach it
 // instead of failing until the SCM observer's next poll.
 type BranchPRFinder interface {
-	FindBranchPRs(ctx context.Context, workerID domain.SessionID) ([]string, error)
+	FindBranchPRs(ctx context.Context, workerID domain.SessionID) (BranchPRs, error)
+}
+
+// BranchPRs are the open PR URLs a branch lookup found, split by who opened
+// them.
+type BranchPRs struct {
+	// Own are the PRs opened by the account AO is signed in with.
+	Own []string
+	// OtherAuthor are the PRs another account opened on the same branch; they
+	// are attached only when named with --pr.
+	OtherAuthor []string
 }
 
 // prRefreshTimeout bounds the provider fetch a trigger waits for before
@@ -589,36 +599,47 @@ func hasOpenPR(prs []domain.PullRequest) bool {
 // attachBranchPR attaches the one open PR from the worker's branch when AO
 // tracks no open PR yet, typically because the PR was opened moments ago. Finding
 // nothing leaves the engine to report that no PR is tracked, and is reported
-// as true so the engine can say the branch has none; a failed lookup and
-// several candidates are reported with the exact retry command.
+// as true so the engine can say the branch has none; a failed lookup, several
+// candidates, and a PR another account opened are reported with the exact
+// retry command. Another account's PR is never attached without --pr, the
+// same rule the SCM observer follows.
 func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID) (bool, error) {
 	finder, ok := s.prRefresher.(BranchPRFinder)
 	if !ok {
 		return false, nil
 	}
-	urls, err := finder.FindBranchPRs(ctx, workerID)
+	found, err := finder.FindBranchPRs(ctx, workerID)
 	if err != nil {
 		// Nothing is tracked, so the review cannot go ahead; say the lookup
 		// failed rather than that the branch has no PR.
 		slog.Default().WarnContext(ctx, "review trigger: find PR on worker branch failed", "session", workerID, "err", err)
 		return false, fmt.Errorf("%w: AO is not tracking an open PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
 	}
-	switch len(urls) {
+	switch len(found.Own) {
 	case 0:
+		if len(found.OtherAuthor) > 0 {
+			return false, fmt.Errorf("%w: AO is not tracking an open PR for worker %q yet; found a PR from another author on its branch, which AO does not attach automatically; to review it anyway, run %s", ErrInvalid, workerID, retryCommands(workerID, found.OtherAuthor))
+		}
 		return true, nil
 	case 1:
 		// The PR may have closed since the lookup, seconds ago; say it was
 		// found, so a not-found or not-open error does not read as a miss.
-		if err := s.prRefresher.RefreshPR(ctx, workerID, urls[0]); err != nil {
-			return false, fmt.Errorf("found PR %s on worker %q's branch but could not attach it: %w; run `ao review trigger %s --pr %s` to try again", urls[0], workerID, err, workerID, urls[0])
+		prURL := found.Own[0]
+		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil {
+			return false, fmt.Errorf("found PR %s on worker %q's branch but could not attach it: %w; run `ao review trigger %s --pr %s` to try again", prURL, workerID, err, workerID, prURL)
 		}
 		return false, nil
 	}
+	return false, fmt.Errorf("%w: worker %q has %d open PRs from its branch that AO does not track yet; name one: %s", ErrInvalid, workerID, len(found.Own), retryCommands(workerID, found.Own))
+}
+
+// retryCommands lists the `ao review trigger --pr` command for each URL.
+func retryCommands(workerID domain.SessionID, urls []string) string {
 	cmds := make([]string, len(urls))
-	for i, url := range urls {
-		cmds[i] = fmt.Sprintf("`ao review trigger %s --pr %s`", workerID, url)
+	for i, prURL := range urls {
+		cmds[i] = fmt.Sprintf("`ao review trigger %s --pr %s`", workerID, prURL)
 	}
-	return false, fmt.Errorf("%w: worker %q has %d open PRs from its branch that AO does not track yet; name one: %s", ErrInvalid, workerID, len(urls), strings.Join(cmds, ", "))
+	return strings.Join(cmds, ", ")
 }
 
 func firstNonEmpty(values ...string) string {

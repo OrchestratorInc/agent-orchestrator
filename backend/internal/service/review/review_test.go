@@ -996,13 +996,17 @@ type fakePRRefresher struct {
 	err   map[string]error
 	// order records refreshes relative to the engine trigger.
 	order *[]string
-	// branchPRs and findErr answer FindBranchPRs.
-	branchPRs []string
-	findErr   error
+	// branchPRs, otherAuthorPRs, and findErr answer FindBranchPRs; finds
+	// counts the lookups.
+	branchPRs      []string
+	otherAuthorPRs []string
+	findErr        error
+	finds          int
 }
 
-func (f *fakePRRefresher) FindBranchPRs(context.Context, domain.SessionID) ([]string, error) {
-	return f.branchPRs, f.findErr
+func (f *fakePRRefresher) FindBranchPRs(context.Context, domain.SessionID) (BranchPRs, error) {
+	f.finds++
+	return BranchPRs{Own: f.branchPRs, OtherAuthor: f.otherAuthorPRs}, f.findErr
 }
 
 func (f *fakePRRefresher) RefreshPR(_ context.Context, _ domain.SessionID, prURL string) error {
@@ -1227,5 +1231,68 @@ func TestTriggerRequestedNamesEachBranchPRWhenSeveralAreOpen(t *testing.T) {
 	}
 	if len(refresher.calls) != 0 {
 		t.Fatalf("attached %v, want nothing attached", refresher.calls)
+	}
+}
+
+// A PR another developer opened on a branch of the same name is not attached
+// on its own, the rule the SCM observer follows; the error says a PR from
+// another author was found and gives the --pr override.
+func TestTriggerRequestedDoesNotAttachAnotherAuthorsBranchPR(t *testing.T) {
+	url := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{otherAuthorPRs: []string{url}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		t.Fatal("another author's PR must not start a review")
+		return reviewcore.TriggerResult{}, nil
+	}
+	_, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("err = %v, want ErrInvalid", err)
+	}
+	for _, want := range []string{"found a PR from another author on its branch", "`ao review trigger mer-1 --pr " + url + "`"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err = %v, want it to contain %s", err, want)
+		}
+	}
+	if len(refresher.calls) != 0 {
+		t.Fatalf("attached %v, want nothing attached", refresher.calls)
+	}
+}
+
+// The worker's own PR is still attached when another author also has one on
+// a branch of the same name.
+func TestTriggerRequestedAttachesTheOwnBranchPRBesideAnotherAuthors(t *testing.T) {
+	var order []string
+	own := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{order: &order, branchPRs: []string{own}, otherAuthorPRs: []string{"https://github.com/o/r/pull/10"}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(context.Context, domain.SessionID, reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+own+",trigger" {
+		t.Fatalf("order = %v, want only the worker's own PR attached", order)
+	}
+}
+
+// Naming a PR with --pr stays the override: it is attached as named, without
+// a branch lookup or an authorship check.
+func TestTriggerRequestedNamedPRSkipsTheBranchLookup(t *testing.T) {
+	var order []string
+	url := "https://github.com/o/r/pull/9"
+	refresher := &fakePRRefresher{order: &order, otherAuthorPRs: []string{url}}
+	svc := New(nil, &fakeStore{}, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, opts reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger "+opts.PRURL)
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent, PRURL: url}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if strings.Join(order, ",") != "refresh "+url+",trigger "+url || refresher.finds != 0 {
+		t.Fatalf("order = %v finds = %d, want the named PR attached and reviewed without a branch lookup", order, refresher.finds)
 	}
 }

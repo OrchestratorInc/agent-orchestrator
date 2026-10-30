@@ -23,8 +23,8 @@ func (f *fakeClaimer) ClaimPR(_ context.Context, _ domain.SessionID, _ string, o
 	return sessionsvc.ClaimPRResult{}, f.err
 }
 
-func (f *fakeClaimer) FindBranchPRs(context.Context, domain.SessionID) ([]string, error) {
-	return nil, nil
+func (f *fakeClaimer) FindBranchPRs(context.Context, domain.SessionID) (sessionsvc.BranchPRs, error) {
+	return sessionsvc.BranchPRs{Own: []string{"own"}, OtherAuthor: []string{"other"}}, f.err
 }
 
 // The review refresher reuses the session claim, which never takes a PR over
@@ -62,12 +62,25 @@ func TestReviewPRRefresherClaimsWithoutTakeoverAndTranslatesErrors(t *testing.T)
 }
 
 // The session service finds a just-opened branch PR only when the daemon's
-// SCM provider can list a branch's open PRs; keep that capability wired.
+// SCM provider can list a branch's open PRs and name the signed-in account
+// that must have opened it; keep both capabilities wired.
 func TestDaemonSCMProviderListsBranchPRs(t *testing.T) {
 	var provider any = (*scmmulti.Provider)(nil)
 	if _, ok := provider.(interface {
 		ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error)
 	}); !ok {
 		t.Fatal("daemon SCM provider cannot list a branch's open PRs")
+	}
+	if _, ok := provider.(ports.ScopedIdentityResolver); !ok {
+		t.Fatal("daemon SCM provider cannot resolve the signed-in account")
+	}
+}
+
+// The review refresher hands the branch lookup's own and other-author PRs to
+// the review service unchanged.
+func TestReviewPRRefresherKeepsBranchPRAuthorship(t *testing.T) {
+	found, err := reviewPRRefresher{sessions: &fakeClaimer{}}.FindBranchPRs(context.Background(), "mer-1")
+	if err != nil || strings.Join(found.Own, ",") != "own" || strings.Join(found.OtherAuthor, ",") != "other" {
+		t.Fatalf("found = %+v err = %v, want own and other-author PRs kept apart", found, err)
 	}
 }

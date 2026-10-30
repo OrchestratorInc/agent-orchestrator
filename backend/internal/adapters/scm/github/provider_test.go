@@ -1934,7 +1934,8 @@ func TestMergeabilityObservation_UnstableOutranksBlockers(t *testing.T) {
 }
 
 // A branch lookup asks GitHub to filter by head owner:branch in one request,
-// so a repository's other open PRs are never paged through.
+// so a repository's other open PRs are never paged through. It keeps each
+// PR's author, which decides whether AO may attach it.
 func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
 	f := newFakeGH(t)
 	var query url.Values
@@ -1942,6 +1943,7 @@ func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
 		query = r.URL.Query()
 		_ = json.NewEncoder(w).Encode([]map[string]any{{
 			"number": 7, "html_url": "https://github.com/acme/repo/pull/7", "state": "open",
+			"user": map[string]any{"login": "alice"},
 			"head": map[string]any{"ref": "ao/x/fix", "repo": map[string]any{"full_name": "acme/repo"}},
 			"base": map[string]any{"ref": "main", "repo": map[string]any{"full_name": "acme/repo"}},
 		}})
@@ -1955,7 +1957,7 @@ func TestListOpenPRsByBranchFiltersOnTheServer(t *testing.T) {
 	if query.Get("head") != "acme:ao/x/fix" || query.Get("state") != "open" {
 		t.Fatalf("query = %v, want head=acme:ao/x/fix state=open", query)
 	}
-	if len(prs) != 1 || prs[0].HTMLURL != "https://github.com/acme/repo/pull/7" || prs[0].SourceBranch != "ao/x/fix" {
+	if len(prs) != 1 || prs[0].HTMLURL != "https://github.com/acme/repo/pull/7" || prs[0].SourceBranch != "ao/x/fix" || prs[0].Author != "alice" {
 		t.Fatalf("prs = %+v", prs)
 	}
 	if n := f.callsTo(http.MethodGet, "/repos/acme/repo/pulls"); n != 1 {
