@@ -43,10 +43,11 @@ type kimiState struct {
 	UpdatedAt int64  `json:"updatedAt"`
 }
 
-// kimiRecord is one wire.jsonl line. Only user prompts the user actually typed
-// (append_message with user origin) and streamed assistant text (content.part
-// of type text) are display messages; everything else is tool noise, reasoning,
-// injected context, or provider bookkeeping.
+// kimiRecord is one wire.jsonl line. Typed user prompts (append_message with a
+// user/absent origin) and streamed assistant text (content.part of type text)
+// are display messages; everything else is tool noise, reasoning, injected
+// context, or provider bookkeeping. Origin, count and the compaction record also
+// drive context.undo so AO retracts exactly the turns Kimi would.
 type kimiRecord struct {
 	Type string `json:"type"`
 	Time int64  `json:"time"`
@@ -154,7 +155,7 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 
 	now := time.Now()
 	var (
-		items       []tagged
+		items       []kimiItem
 		pendingText strings.Builder
 		pending     bool
 		pendingAt   time.Time
@@ -171,13 +172,11 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		if strings.TrimSpace(text) == "" {
 			return
 		}
-		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role), Text: text, At: at}})
+		items = append(items, kimiItem{msg: Message{Role: domain.MessageRole(role), Text: text, At: at}})
 	}
 	// A turn's assistant text streams as many content.part events, possibly split
-	// across tool-use steps. Every real user prompt starts a new turn, so the run
-	// of assistant text between two prompts is one reply. Grouping on the prompt
-	// boundary avoids depending on the turnId field, whose JSON type (string vs
-	// number) varies across Kimi versions.
+	// across tool-use steps. Grouping assistant text on the turn boundary avoids
+	// depending on the turnId field, whose JSON type varies across Kimi versions.
 	flushAssistant := func() {
 		if !pending {
 			return
@@ -199,13 +198,32 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		note(at)
 		switch r.Type {
 		case "context.append_message":
-			if r.Message.Role != "user" || kimiOriginKind(r.Message.Origin) != "user" {
-				// Drop injected context: environment disclosures, skill expansions
-				// and other non-typed user-role turns so titles are real prompts.
+			if r.Message.Role != "user" {
 				return nil
 			}
-			flushAssistant()
-			appendMessage("user", visibleText(r.Message.Content), at)
+			origin, hadOrigin := parseKimiOrigin(r.Message.Origin)
+			anchor := isKimiUndoAnchor(origin, hadOrigin)
+			switch {
+			case !hadOrigin || origin.Kind == "user":
+				// A typed prompt. An in-turn steer keeps origin.kind "user" but
+				// carries inTurn, so it still shows yet is not an undo anchor.
+				flushAssistant()
+				text := visibleText(r.Message.Content)
+				if strings.Contains(text, omittedText) {
+					t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
+				}
+				if strings.TrimSpace(text) != "" {
+					items = append(items, kimiItem{msg: Message{Role: domain.MessageRoleUser, Text: text, At: at}, anchor: anchor})
+				}
+			case anchor:
+				// A user-slash skill or plugin command: an undo anchor, but its
+				// content is an expansion, so it is tracked hidden, not shown.
+				flushAssistant()
+				items = append(items, kimiItem{anchor: true, hidden: true})
+			default:
+				// Injected context and other non-typed user turns are not messages
+				// and not undo anchors, so titles stay the user's real prompts.
+			}
 		case "context.append_loop_event":
 			if r.Event.Type != "content.part" || r.Event.Part.Type != "text" {
 				// Reasoning ("think"), tool calls and tool results are not messages.
@@ -215,6 +233,11 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 				pending, pendingAt = true, at
 			}
 			pendingText.WriteString(r.Event.Part.Text)
+		case "context.apply_compaction":
+			// Kimi never undoes past a compaction; record a hidden boundary so a
+			// later context.undo stops here, as its reducer does.
+			flushAssistant()
+			items = append(items, kimiItem{compaction: true, hidden: true})
 		case "context.clear":
 			// Kimi resets the conversation here (its reducer sets clearFloor to the
 			// current length); a user who ran /clear and started over must import
@@ -222,9 +245,7 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 			flushAssistant()
 			items = items[:0]
 		case "context.undo":
-			// Kimi retracts the last `count` typed-prompt turns (injected messages
-			// do not count toward it). items holds only typed prompts and their
-			// replies, so dropping the last count user-anchored turns matches it.
+			// Kimi retracts the last `count` undo anchors; mirror its applyUndo.
 			flushAssistant()
 			items = dropLastKimiTurns(items, r.Count)
 		}
@@ -235,10 +256,18 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 	}
 	flushAssistant()
 
-	n := len(items)
-	items = trimVisible(items)
-	t.shortened = t.shortened || len(items) < n
+	// Drop the hidden anchor and compaction markers; only real messages display.
+	display := make([]tagged, 0, len(items))
 	for _, item := range items {
+		if item.hidden || item.msg.Role == "" {
+			continue
+		}
+		display = append(display, tagged{Message: item.msg})
+	}
+	n := len(display)
+	display = trimVisible(display)
+	t.shortened = t.shortened || len(display) < n
+	for _, item := range display {
 		t.messages = append(t.messages, item.Message)
 	}
 
@@ -286,37 +315,70 @@ func readKimiState(providerRoot *os.Root, root, wirePath string) kimiState {
 	return state
 }
 
-// kimiOriginKind reads just the discriminating "kind" from a message origin,
-// which may be a bare string or an object.
-func kimiOriginKind(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
+// kimiItem is one parsed wire.jsonl event. A displayed item carries msg; hidden
+// items are undo anchors (user-slash skill/plugin activations) or a compaction
+// boundary that only matter to context.undo, never to the shown history.
+type kimiItem struct {
+	msg        Message
+	anchor     bool
+	hidden     bool
+	compaction bool
+}
+
+// kimiOrigin is the discriminating part of a message's origin.
+type kimiOrigin struct {
+	Kind    string `json:"kind"`
+	InTurn  bool   `json:"inTurn"`
+	Trigger string `json:"trigger"`
+}
+
+// parseKimiOrigin decodes a message origin, which may be an object or, in some
+// versions, a bare kind string. hadOrigin is false when the field is absent,
+// which Kimi treats as a typed-prompt undo anchor.
+func parseKimiOrigin(raw json.RawMessage) (kimiOrigin, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return kimiOrigin{}, false
+	}
+	var obj kimiOrigin
+	if json.Unmarshal(raw, &obj) == nil {
+		return obj, true
 	}
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
-		return s
+		return kimiOrigin{Kind: s}, true
 	}
-	var obj struct {
-		Kind string `json:"kind"`
-	}
-	if json.Unmarshal(raw, &obj) == nil {
-		return obj.Kind
-	}
-	return ""
+	return kimiOrigin{}, true
 }
 
-// dropLastKimiTurns retracts the last n typed-prompt turns, each being a user
-// prompt and the assistant text that followed it, matching Kimi's undo anchors.
-// Fewer than n surviving prompts means the undo cleared the whole conversation.
-func dropLastKimiTurns(items []tagged, n int) []tagged {
+// isKimiUndoAnchor mirrors Kimi Code's isUndoAnchorOrigin: an in-turn steer is
+// never an anchor; a missing origin or origin.kind "user" is; and a user-slash
+// skill or plugin command is.
+func isKimiUndoAnchor(origin kimiOrigin, hadOrigin bool) bool {
+	if hadOrigin && origin.InTurn {
+		return false
+	}
+	if !hadOrigin || origin.Kind == "user" {
+		return true
+	}
+	return (origin.Kind == "skill_activation" || origin.Kind == "plugin_command") && origin.Trigger == "user-slash"
+}
+
+// dropLastKimiTurns retracts the last n undo anchors and everything after the
+// nth, mirroring Kimi's applyUndo: walk from the end, stop at a compaction
+// boundary (keeping it and all before it), and cut at the nth anchor. Fewer than
+// n anchors with no compaction means the undo emptied the conversation.
+func dropLastKimiTurns(items []kimiItem, n int) []kimiItem {
 	if n <= 0 {
 		return items
 	}
-	seen := 0
+	removed := 0
 	for i := len(items) - 1; i >= 0; i-- {
-		if items[i].Role == domain.MessageRoleUser {
-			seen++
-			if seen == n {
+		if items[i].compaction {
+			return items[:i+1]
+		}
+		if items[i].anchor {
+			removed++
+			if removed >= n {
 				return items[:i]
 			}
 		}

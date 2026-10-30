@@ -193,3 +193,78 @@ func TestKimiContextUndoRetractsTurns(t *testing.T) {
 		}
 	})
 }
+
+// Undo parity with Kimi's isUndoAnchor: origin-less prompts count and show,
+// in-turn steers show but are not anchors, user-slash skill/plugin activations
+// are hidden anchors, and undo never crosses a compaction.
+func TestKimiUndoAnchorParity(t *testing.T) {
+	read := func(t *testing.T, wire string) (transcript, error) {
+		root := t.TempDir()
+		path := kimiFixture(t, root, "wd_repo_abc123def456", kimiSession, "", wire)
+		return readTranscript(context.Background(), domain.HarnessKimi, root, path)
+	}
+
+	t.Run("origin-less prompt shows and is a typed prompt", func(t *testing.T) {
+		got, err := read(t, `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"no origin prompt"}]},"time":1700000001000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"a reply"}},"time":1700000002000}
+`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantTexts(t, got.messages, "user: no origin prompt", "assistant: a reply")
+	})
+
+	t.Run("in-turn steer shows but is not an undo anchor", func(t *testing.T) {
+		got, err := read(t, `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"task A"}],"origin":{"kind":"user"}},"time":1700000001000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"a1"}},"time":1700000002000}
+{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"steer S"}],"origin":{"kind":"user","inTurn":true}},"time":1700000003000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"a2"}},"time":1700000004000}
+{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"task B"}],"origin":{"kind":"user"}},"time":1700000005000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"b1"}},"time":1700000006000}
+{"type":"context.undo","agentId":"main","count":1,"time":1700000007000}
+`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Undo 1 retracts only task B; the steer is not counted, so it survives.
+		wantTexts(t, got.messages, "user: task A", "assistant: a1", "user: steer S", "assistant: a2")
+	})
+
+	t.Run("user-slash skill is a hidden anchor undo retracts", func(t *testing.T) {
+		got, err := read(t, `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"task P"}],"origin":{"kind":"user"}},"time":1700000001000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"p1"}},"time":1700000002000}
+{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"EXPANDED REVIEW SKILL"}],"origin":{"kind":"skill_activation","trigger":"user-slash","skillName":"review"}},"time":1700000003000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"s1"}},"time":1700000004000}
+{"type":"context.undo","agentId":"main","count":1,"time":1700000005000}
+`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Undo 1 retracts the skill turn (hidden anchor), leaving the prior prompt.
+		wantTexts(t, got.messages, "user: task P", "assistant: p1")
+	})
+
+	t.Run("undo stops at a compaction boundary", func(t *testing.T) {
+		got, err := read(t, `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"before compaction"}],"origin":{"kind":"user"}},"time":1700000001000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"a reply"}},"time":1700000002000}
+{"type":"context.apply_compaction","agentId":"main","keptUserMessageCount":1,"time":1700000003000}
+{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"after compaction"}],"origin":{"kind":"user"}},"time":1700000004000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"b reply"}},"time":1700000005000}
+{"type":"context.undo","agentId":"main","count":5,"time":1700000006000}
+`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Undo 5 removes the post-compaction turn then stops; pre-compaction stays.
+		wantTexts(t, got.messages, "user: before compaction", "assistant: a reply")
+	})
+
+	t.Run("undo past every anchor empties the conversation", func(t *testing.T) {
+		if _, err := read(t, `{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"only prompt"}],"origin":{"kind":"user"}},"time":1700000001000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","part":{"type":"text","text":"only reply"}},"time":1700000002000}
+{"type":"context.undo","agentId":"main","count":3,"time":1700000003000}
+`); err == nil {
+			t.Fatal("expected an over-count undo with no compaction to be rejected")
+		}
+	})
+}
