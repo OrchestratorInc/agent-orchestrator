@@ -400,7 +400,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	sideChats: initialSideChats(),
 	windowTranslucency: initialWindowTranslucency(),
 	terminalCopyOnSelect: initialTerminalCopyOnSelect(),
-	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) === "true",
+	navigationGestures: getLocalStorage()?.getItem(navigationGesturesStorageKey) !== "false",
 	renderMath: getLocalStorage()?.getItem(renderMathStorageKey) === "true",
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
