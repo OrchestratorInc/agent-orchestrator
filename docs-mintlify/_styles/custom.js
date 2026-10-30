@@ -951,7 +951,7 @@
       if (svg) { var iw = svg.closest("div") || svg; iw.style.setProperty("display", "none", "important"); }
       var letter = document.createElement("span");
       letter.textContent = letters[key] || key.charAt(0);
-      letter.style.cssText = "display:inline-block;width:18px;height:18px;font-size:16px;font-weight:700;text-transform:uppercase;color:rgba(255,255,255,0.7);line-height:18px;text-align:center;flex:none;";
+      letter.style.cssText = "display:inline-block;width:18px;height:18px;font-size:16px;font-weight:700;color:rgba(255,255,255,0.7);line-height:18px;text-align:center;flex:none;";
       title.style.setProperty("font-size", "13px", "important");
       title.style.setProperty("font-weight", "600", "important");
       title.style.setProperty("line-height", "28px", "important");
