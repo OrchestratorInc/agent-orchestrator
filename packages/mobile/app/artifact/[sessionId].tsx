@@ -1,15 +1,15 @@
 import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as Clipboard from "expo-clipboard";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AccessibilityInfo, ActivityIndicator, Image, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AccessibilityInfo, ActivityIndicator, Image, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { artifactFileUrl, artifactImageSource, artifactMarkdownImageSource, getArtifactText } from "../../lib/api";
 import { useArtifactActions } from "../../lib/artifact-menu";
-import { artifactCommentTarget, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, looksBinary, MAX_ARTIFACT_TEXT_BYTES, type SessionArtifact } from "../../lib/artifacts";
+import { artifactCommentTarget, artifactLanguage, artifactViewKind, canShowArtifactHistory, formatArtifactSize, isTextArtifact, looksBinary, MAX_ARTIFACT_TEXT_BYTES, shownText, showsInWebView, type SessionArtifact } from "../../lib/artifacts";
 import { backOr } from "../../lib/backNavigation";
 import { HighlightedCodeText } from "../../lib/chat/HighlightedCodeText";
 import { useRenderTheme } from "../../lib/chat/RenderFrame";
-import { renderThemeScript } from "../../lib/chat/renderFrameModel";
+import { renderThemeScript, withRenderTheme } from "../../lib/chat/renderFrameModel";
 import { ChatMarkdown, type MarkdownImageSource } from "../../lib/chat/ChatMarkdown";
 import { authHeaders, type ServerConfig } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
@@ -62,6 +62,8 @@ function ArtifactViewerContent() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { artifacts, loading } = useSessionArtifacts(hostMatches ? sessionId : "");
+	// A listed file's modified time, so a document's regenerated image is not served from cache.
+	const versionOf = useCallback((filePath: string) => artifacts?.find((file) => file.path === filePath)?.updatedAt, [artifacts]);
 	const artifact = artifacts?.find((candidate) => candidate.path === path);
 	const leave = useCallback(() => backOr(router), [router]);
 	const { openMenu, menu } = useArtifactActions(sessionId, leave);
@@ -154,7 +156,7 @@ function ArtifactViewerContent() {
 	}
 	return (
 		<View style={styles.screen}>
-			<ArtifactBody config={config} sessionId={sessionId} artifact={artifact} onAsk={askAbout} />
+			<ArtifactBody config={config} sessionId={sessionId} artifact={artifact} versionOf={versionOf} onAsk={askAbout} />
 			{notice ? <View pointerEvents="none" style={styles.notice}><Text style={styles.noticeText}>{notice}</Text></View> : null}
 			{ask ? (
 				<SelectionComposer
@@ -174,7 +176,7 @@ function ArtifactViewerContent() {
 	);
 }
 
-function ArtifactBody({ config, sessionId, artifact, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; onAsk: (quote?: string) => void }) {
+function ArtifactBody({ config, sessionId, artifact, versionOf, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; versionOf: (path: string) => string | undefined; onAsk: (quote?: string) => void }) {
 	const kind = artifactViewKind(artifact);
 	const url = artifactFileUrl(config, sessionId, artifact.path);
 	if (!url) return <Unavailable title="This artifact can't be opened" message="Its path isn't one the phone can request." />;
@@ -182,12 +184,18 @@ function ArtifactBody({ config, sessionId, artifact, onAsk }: { config: ServerCo
 	// daemon serves.
 	const tooLargeForText = artifact.size > MAX_ARTIFACT_TEXT_BYTES;
 	if (kind === "html") return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} page={{ sessionId, path: artifact.path }} />;
+	if (kind === "web-media" && !showsInWebView(artifact.path, Platform.OS)) {
+		return <Unavailable title="PDFs can't be shown on Android yet" message="Open it on the machine, or ask the agent about it from the ⋯ menu." />;
+	}
+	if (kind === "text" && !isTextArtifact(artifact)) {
+		return <Unavailable title="This file can't be shown on the phone" message={`It isn't text (${formatArtifactSize(artifact.size)}). Open it on the machine instead.`} />;
+	}
 	if (kind === "web-media" || ((kind === "markdown" || kind === "text") && tooLargeForText)) {
 		return <ArtifactWeb config={config} url={url} version={artifact.updatedAt} />;
 	}
 	const image = kind === "image" ? artifactImageSource(config, sessionId, artifact.path, artifact.updatedAt) : undefined;
 	if (image) return <ArtifactImage source={image} name={artifact.name} />;
-	return <ArtifactText config={config} sessionId={sessionId} artifact={artifact} markdown={kind === "markdown"} onAsk={onAsk} />;
+	return <ArtifactText config={config} sessionId={sessionId} artifact={artifact} markdown={kind === "markdown"} versionOf={versionOf} onAsk={onAsk} />;
 }
 
 function ArtifactWeb({ config, url, version, page }: {
@@ -204,6 +212,10 @@ function ArtifactWeb({ config, url, version, page }: {
 	const inlined = useInlinedArtifactPage({ enabled: Boolean(page), config, sessionId: page?.sessionId ?? "", path: page?.path ?? "", version });
 	// An inlined page carries AO's theme bootstrap; it takes the app's live theme, as a chat frame does.
 	const theme = useRenderTheme();
+	const themeRef = useRef(theme);
+	themeRef.current = theme;
+	// Written in for first paint (a page from memory has no theme fragment); a change is posted.
+	const html = useMemo(() => inlined.html && withRenderTheme(inlined.html, themeRef.current), [inlined.html]);
 	const loaded = useRef(false);
 	useEffect(() => {
 		if (inlined.html && loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));
@@ -218,7 +230,7 @@ function ArtifactWeb({ config, url, version, page }: {
 				ref={web}
 				// Inlined, the page loads from memory with no origin: it needs no
 				// cookie, and it cannot reach the daemon.
-				source={inlined.html ? { html: inlined.html } : { uri: url, headers: authHeaders(config) }}
+				source={html ? { html } : { uri: url, headers: authHeaders(config) }}
 				style={styles.web}
 				startInLoadingState
 				renderLoading={() => <View style={styles.webLoading}><ActivityIndicator color={t.accent} /></View>}
@@ -269,7 +281,7 @@ function ArtifactImage({ source, name }: { source: { uri: string; headers: Recor
 
 type TextState = { key: string; text?: string; error?: string };
 
-function ArtifactText({ config, sessionId, artifact, markdown, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; markdown: boolean; onAsk: (quote: string) => void }) {
+function ArtifactText({ config, sessionId, artifact, markdown, versionOf, onAsk }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; markdown: boolean; versionOf: (path: string) => string | undefined; onAsk: (quote: string) => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	// Re-read whenever the poll reports a newer version of the file.
@@ -278,7 +290,7 @@ function ArtifactText({ config, sessionId, artifact, markdown, onAsk }: { config
 	const [attempt, setAttempt] = useState(0);
 	// A document's own images live beside it in the artifact folder and need the
 	// connection's credential; a web image loads as it is, with no credential.
-	const resolveImage = useCallback((url: string): MarkdownImageSource | undefined => artifactMarkdownImageSource(config, sessionId, artifact.path, url), [artifact.path, config, sessionId]);
+	const resolveImage = useCallback((url: string): MarkdownImageSource | undefined => artifactMarkdownImageSource(config, sessionId, artifact.path, url, versionOf), [artifact.path, config, sessionId, versionOf]);
 	useEffect(() => {
 		const controller = new AbortController();
 		getArtifactText(config, sessionId, artifact.path, { signal: controller.signal })
@@ -293,25 +305,34 @@ function ArtifactText({ config, sessionId, artifact, markdown, onAsk }: { config
 		return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 	}
 	if (looksBinary(text)) return <Unavailable title="This file can't be shown on the phone" message={`It isn't text (${formatArtifactSize(artifact.size)}). Open it on the machine instead.`} />;
+	// A long file shows its start: a text view is laid out whole, on Android on the UI thread.
+	const shown = shownText(text);
+	const cut = shown.truncated ? <View style={styles.truncated}><Text style={styles.truncatedText}>Showing the start of this file. Copy contents in the ⋯ menu copies all of it.</Text></View> : null;
 	if (markdown) {
 		return (
-			<ScrollView style={styles.screen} contentContainerStyle={styles.document}>
-				{/* One selectable surface per run, as chat responses are, so a selection can span paragraphs. */}
-				<ChatMarkdown text={text} continuousSelection onAddSelection={onAsk} resolveImage={resolveImage} imagesInPlace />
-			</ScrollView>
+			<View style={styles.screen}>
+				{cut}
+				<ScrollView style={styles.screen} contentContainerStyle={styles.document}>
+					{/* One selectable surface per run, as chat responses are, so a selection can span paragraphs. */}
+					<ChatMarkdown text={shown.text} continuousSelection onAddSelection={onAsk} resolveImage={resolveImage} imagesInPlace />
+				</ScrollView>
+			</View>
 		);
 	}
 	return (
-		<ScrollView style={styles.screen} contentContainerStyle={styles.code}>
-			<HighlightedCodeText
-				code={text}
-				language={artifactLanguage(artifact.path)}
-				// Plain text past the cap: highlighting is skipped the same way it is for streaming code.
-				streaming={artifact.size > MAX_HIGHLIGHTED_BYTES}
-				style={styles.codeText}
-				onAddSelection={onAsk}
-			/>
-		</ScrollView>
+		<View style={styles.screen}>
+			{cut}
+			<ScrollView style={styles.screen} contentContainerStyle={styles.code}>
+				<HighlightedCodeText
+					code={shown.text}
+					language={artifactLanguage(artifact.path)}
+					// Plain text past the cap: highlighting is skipped the same way it is for streaming code.
+					streaming={artifact.size > MAX_HIGHLIGHTED_BYTES}
+					style={styles.codeText}
+					onAddSelection={onAsk}
+				/>
+			</ScrollView>
+		</View>
 	);
 }
 
@@ -334,6 +355,8 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	document: { paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.xxxl },
 	code: { padding: space.lg, paddingBottom: space.xxxl },
 	codeText: { fontFamily: t.fontMono, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	truncated: { paddingHorizontal: space.lg, paddingVertical: space.sm, backgroundColor: t.tintAmber },
+	truncatedText: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
 	notice: { position: "absolute", top: space.md, alignSelf: "center", backgroundColor: t.bgElevated, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, paddingHorizontal: space.lg, paddingVertical: space.sm },
 	noticeText: { fontFamily: font.medium, fontSize: type.footnote.fontSize, color: t.textPrimary },
 });

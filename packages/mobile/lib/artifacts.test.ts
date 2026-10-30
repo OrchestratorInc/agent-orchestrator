@@ -5,11 +5,16 @@ import {
 	artifactExtensionLabel,
 	artifactFilePath,
 	artifactMenuActions,
-	artifactPagePath,
+	artifactFilesPath,
 	artifactViewKind,
 	resolveArtifactAssetPath,
 	canCopyArtifact,
+	canShowArtifactHistory,
 	formatArtifactSize,
+	isTextArtifact,
+	MAX_SHOWN_TEXT_CHARS,
+	shownText,
+	showsInWebView,
 	looksBinary,
 	parseArtifacts,
 	sortArtifacts,
@@ -69,6 +74,43 @@ describe("artifactViewKind", () => {
 		expect(canCopyArtifact({ path: "chart.png", kind: "file" })).toBe(false);
 		expect(canCopyArtifact({ path: "demo.mov", kind: "file" })).toBe(false);
 	});
+
+	it("takes a file as text by its extension, and an unknown extension as binary", () => {
+		expect(isTextArtifact({ path: "data.csv", kind: "file" })).toBe(true);
+		expect(isTextArtifact({ path: "src/app.tsx", kind: "file" })).toBe(true);
+		expect(isTextArtifact({ path: "LICENSE", kind: "file" })).toBe(true);
+		expect(isTextArtifact({ path: "deploy/.env", kind: "file" })).toBe(true);
+		for (const path of ["bundle.zip", "report.docx", "sheet.xlsx", "app.sqlite"]) {
+			expect(isTextArtifact({ path, kind: "file" })).toBe(false);
+			expect(canCopyArtifact({ path, kind: "file" })).toBe(false);
+			expect(canShowArtifactHistory({ path, kind: "file" })).toBe(false);
+		}
+	});
+
+	it("does not draw a PDF in an Android WebView, which has no PDF renderer", () => {
+		expect(showsInWebView("spec.pdf", "android")).toBe(false);
+		expect(showsInWebView("spec.PDF", "ios")).toBe(true);
+		expect(showsInWebView("demo.mp4", "android")).toBe(true);
+	});
+});
+
+describe("shownText", () => {
+	it("keeps a short text whole", () => {
+		expect(shownText("a\nb")).toEqual({ text: "a\nb", truncated: false });
+	});
+
+	it("cuts a long text at the last line break before the cap", () => {
+		const line = `${"x".repeat(99)}\n`;
+		const long = line.repeat(Math.ceil(MAX_SHOWN_TEXT_CHARS / line.length) + 10);
+		const shown = shownText(long);
+		expect(shown.truncated).toBe(true);
+		expect(shown.text.length).toBeLessThanOrEqual(MAX_SHOWN_TEXT_CHARS);
+		expect(shown.text.endsWith("x")).toBe(true);
+	});
+
+	it("cuts a long line at the cap", () => {
+		expect(shownText("x".repeat(20), 10)).toEqual({ text: "x".repeat(10), truncated: true });
+	});
 });
 
 describe("artifactFilePath", () => {
@@ -109,6 +151,7 @@ describe("artifactMenuActions", () => {
 	it("offers Open, Ask, Copy and History for text, and Delete last", () => {
 		expect(artifactMenuActions({ path: "notes.md", kind: "markdown", size: 10 })).toEqual(["open", "ask", "copy", "history", "delete"]);
 		expect(artifactMenuActions({ path: "chart.png", kind: "file", size: 10 })).toEqual(["open", "ask", "delete"]);
+		expect(artifactMenuActions({ path: "bundle.zip", kind: "file", size: 10 })).toEqual(["open", "ask", "delete"]);
 	});
 
 	it("leaves out Open in the viewer and Copy for text too large to load, but keeps Ask and History", () => {
@@ -150,9 +193,9 @@ describe("resolveArtifactAssetPath", () => {
 	});
 });
 
-describe("artifactPagePath", () => {
+describe("artifactFilesPath", () => {
 	it("names the route that serves an HTML artifact with AO's theme written in", () => {
-		expect(artifactPagePath("ao-1", "deck/my page.html")).toBe("/api/v1/sessions/ao-1/artifact-files/deck/my%20page.html");
-		expect(artifactPagePath("ao-1", "../x.html")).toBeUndefined();
+		expect(artifactFilesPath("ao-1", "deck/my page.html")).toBe("/api/v1/sessions/ao-1/artifact-files/deck/my%20page.html");
+		expect(artifactFilesPath("ao-1", "../x.html")).toBeUndefined();
 	});
 });

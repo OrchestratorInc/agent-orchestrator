@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { formatVersionTime, parseVersion, parseVersionSummaries, restoredNote, versionAuthor, versionPageHtml, type ArtifactVersionSummary } from "./artifactVersions";
+import { BASE_PAGE_CSS, formatVersionTime, parseVersion, parseVersionSummaries, restoredNote, versionAuthor, versionPageHtml, type ArtifactVersionSummary } from "./artifactVersions";
 
 describe("parseVersionSummaries", () => {
 	it("keeps well-formed versions in the daemon's order", () => {
@@ -71,7 +72,7 @@ describe("versionPageHtml", () => {
 
 	it("writes AO's theme and base style in after the doctype", () => {
 		const page = versionPageHtml('<!doctype html><html><head><meta name="viewport" content="width=device-width"></head><body>b</body></html>', theme);
-		expect(page.startsWith('<!doctype html><style id="ao-theme">:root{color-scheme:dark;--background:#000;--foreground:#fff}</style><style>html{')).toBe(true);
+		expect(page.startsWith('<!doctype html><style id="ao-theme">:root{color-scheme:dark;--background:#000;--foreground:#fff;}</style><style>html{')).toBe(true);
 		expect(page.endsWith('</style><html><head><meta name="viewport" content="width=device-width"></head><body>b</body></html>')).toBe(true);
 	});
 
@@ -83,5 +84,16 @@ describe("versionPageHtml", () => {
 
 	it("gives a fragment a doctype", () => {
 		expect(versionPageHtml("<p>b</p>", theme)).toMatch(/^<!doctype html><style id="ao-theme">.*<p>b<\/p>$/);
+	});
+});
+
+describe("BASE_PAGE_CSS", () => {
+	it("matches the base style the daemon writes into a live page", () => {
+		const go = readFileSync(new URL("../../../backend/internal/renderpage/renderpage.go", import.meta.url), "utf8");
+		const declaration = go.slice(go.indexOf("const baseCSS ="));
+		const literals = declaration.slice(0, declaration.indexOf("\n\n"));
+		const daemonCss = [...literals.matchAll(/`([^`]*)`/g)].map((match) => match[1]).join("");
+		expect(daemonCss.length).toBeGreaterThan(0);
+		expect(BASE_PAGE_CSS).toBe(daemonCss);
 	});
 });

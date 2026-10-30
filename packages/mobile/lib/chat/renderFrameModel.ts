@@ -268,6 +268,30 @@ export function renderThemeFragment(theme: RenderTheme, displayMode: RenderDispl
 }
 
 /**
+ * The rule a page's bootstrap writes into its `#ao-theme` style for a theme
+ * (`apply` in the daemon's render_bootstrap.js), built the same way.
+ */
+export function renderThemeRule(theme: RenderTheme): string {
+	let css = `:root{color-scheme:${theme.appearance === "light" ? "light" : "dark"};`;
+	for (const [name, value] of Object.entries(theme.variables)) {
+		if (/^--[a-z0-9-]+$/.test(name)) css += `${name}:${String(value).replace(/[;{}<>]/g, "")};`;
+	}
+	return `${css}}`;
+}
+
+const THEME_STYLE = /(<style id="ao-theme">)[\s\S]*?(<\/style>)/;
+
+/**
+ * A page served with AO's bootstrap, with the app's theme written into it. A
+ * page loaded from memory has no `#ao-theme=` fragment to seed first paint, so
+ * without this it paints in the system's light or dark until the theme is
+ * posted on load. A page without the bootstrap is returned as it is.
+ */
+export function withRenderTheme(html: string, theme: RenderTheme): string {
+	return html.replace(THEME_STYLE, (_match, open: string, close: string) => `${open}${renderThemeRule(theme)}${close}`);
+}
+
+/**
  * A live theme change, posted inside the page. The bootstrap accepts messages
  * whose source is its parent; a top-level page is its own parent.
  */

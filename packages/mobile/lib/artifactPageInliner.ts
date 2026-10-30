@@ -62,6 +62,11 @@ const CSS_URL = /url\(\s*(["']?)([^"')]+?)\1\s*\)/gi;
 const HREF = /\bhref\s*=\s*(["'])(.*?)\1/i;
 const STYLE_BLOCK = /(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/gi;
 const STYLE_ATTRIBUTE = /(\sstyle\s*=\s*)(["'])(.*?)\2/gi;
+// Every script element, inline or linked, set aside while the markup passes run.
+const SCRIPT_ELEMENT = /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi;
+const SCRIPT_MARK = "\u0000ao-script\u0000";
+const SCRIPT_MARKER = /\u0000ao-script\u0000(\d+)\u0000ao-script\u0000/g;
+const MAX_PARALLEL_LOADS = 4;
 
 /**
  * A reference to a file of the artifact folder: relative to the file it is in,
@@ -81,18 +86,28 @@ export function resolveArtifactReference(fromPath: string, ref: string, sessionI
 export async function inlineArtifactPage(html: string, pagePath: string, load: ArtifactAssetLoader, sessionId: string, limits: InlineLimits = FULL_PAGE_LIMITS): Promise<InlinedPage> {
 	const skipped: string[] = [];
 	let budget = limits.pageBytes - html.length;
-	const images = new Map<string, string | undefined>();
+	// Loads run side by side, a few at a time, so a page of large images is
+	// not all in memory at once. One file is loaded once, however often linked.
+	const run = pool(MAX_PARALLEL_LOADS);
+	const images = new Map<string, Promise<string | undefined>>();
 
-	const image = async (fromPath: string, ref: string): Promise<string | undefined> => {
+	const image = (fromPath: string, ref: string): Promise<string | undefined> => {
 		const path = resolveArtifactReference(fromPath, ref, sessionId);
-		if (!path) return undefined;
-		if (images.has(path)) return images.get(path);
-		const loaded = await load.dataUri(path, Math.min(limits.imageBytes, budget));
-		const fits = loaded && loaded.uri !== "" && loaded.bytes <= limits.imageBytes && loaded.uri.length <= budget;
-		if (fits) budget -= loaded.uri.length;
-		else skipped.push(ref);
-		images.set(path, fits ? loaded.uri : undefined);
-		return fits ? loaded.uri : undefined;
+		if (!path) return Promise.resolve(undefined);
+		const known = images.get(path);
+		if (known) return known;
+		const pending = run(async () => {
+			const loaded = await load.dataUri(path, Math.min(limits.imageBytes, budget));
+			const fits = loaded && loaded.uri !== "" && loaded.bytes <= limits.imageBytes && loaded.uri.length <= budget;
+			if (!fits) {
+				skipped.push(ref);
+				return undefined;
+			}
+			budget -= loaded.uri.length;
+			return loaded.uri;
+		});
+		images.set(path, pending);
+		return pending;
 	};
 
 	// url(...) in CSS, resolved against the file the CSS came from.
@@ -103,7 +118,7 @@ export async function inlineArtifactPage(html: string, pagePath: string, load: A
 		return uri ? `url(${uri})` : match;
 	});
 
-	const text = async (ref: string): Promise<{ path: string; body: string } | undefined> => {
+	const text = (ref: string): Promise<{ path: string; body: string } | undefined> => run(async () => {
 		const path = resolveArtifactReference(pagePath, ref, sessionId);
 		if (!path) return undefined;
 		const body = await load.text(path);
@@ -113,29 +128,34 @@ export async function inlineArtifactPage(html: string, pagePath: string, load: A
 		}
 		budget -= body.length;
 		return { path, body };
-	};
+	});
 
-	// The page's own CSS first, against the page's folder; a linked stylesheet's
-	// url(...) resolve against its own file once it is inlined below.
-	let page = await replaceAsync(html, STYLE_BLOCK, async (_match, open: string, css: string, close: string) => `${open}${await inlineCssUrls(css, pagePath)}${close}`);
+	// Scripts are set aside while the markup passes run, so code that mentions
+	// `src=` or `srcset` (a template string, a variable) is never rewritten.
+	const scripts: string[] = [];
+	let page = html.replace(SCRIPT_ELEMENT, (element) => `${SCRIPT_MARK}${scripts.push(element) - 1}${SCRIPT_MARK}`);
+	// The page's own CSS, against the page's folder.
+	page = await replaceAsync(page, STYLE_BLOCK, async (_match, open: string, css: string, close: string) => `${open}${await inlineCssUrls(css, pagePath)}${close}`);
 	page = await replaceAsync(page, STYLE_ATTRIBUTE, async (_match, prefix: string, quote: string, css: string) => `${prefix}${quote}${await inlineCssUrls(css, pagePath)}${quote}`);
-	page = await replaceAsync(page, STYLESHEET, async (tag) => {
-		const ref = HREF.exec(tag)?.[2];
-		const sheet = ref ? await text(ref) : undefined;
-		if (!sheet) return tag;
-		return `<style>${escapeClosingTag(await inlineCssUrls(sheet.body, sheet.path), "style")}</style>`;
-	});
-	page = await replaceAsync(page, SCRIPT, async (tag, before: string, _quote: string, ref: string, after: string) => {
-		const script = await text(ref);
-		if (!script) return tag;
-		return `<script${before}${after}>${escapeClosingTag(script.body, "script")}</script>`;
-	});
 	page = await replaceAsync(page, IMAGE_ATTRIBUTE, async (match, prefix: string, quote: string, ref: string) => {
 		const uri = await image(pagePath, ref);
 		return uri ? `${prefix}${quote}${uri}${quote}` : match;
 	});
 	// A srcset beside an inlined src would still name files the page cannot load.
 	page = page.replace(SRCSET, "");
+	// Linked stylesheets, whose url(...) resolve against their own file.
+	page = await replaceAsync(page, STYLESHEET, async (tag) => {
+		const ref = HREF.exec(tag)?.[2];
+		const sheet = ref ? await text(ref) : undefined;
+		if (!sheet) return tag;
+		return `<style>${escapeClosingTag(await inlineCssUrls(sheet.body, sheet.path), "style")}</style>`;
+	});
+	page = page.replace(SCRIPT_MARKER, (_marker, index: string) => scripts[Number(index)] ?? "");
+	page = await replaceAsync(page, SCRIPT, async (tag, before: string, _quote: string, ref: string, after: string) => {
+		const script = await text(ref);
+		if (!script) return tag;
+		return `<script${before}${after}>${escapeClosingTag(script.body, "script")}</script>`;
+	});
 	return { html: page, skipped };
 }
 
@@ -144,14 +164,32 @@ function escapeClosingTag(body: string, tag: "style" | "script"): string {
 	return body.replace(new RegExp(`</${tag}`, "gi"), `<\\/${tag}`);
 }
 
+/** Replaces every match, starting all the replacements at once. */
 async function replaceAsync(input: string, pattern: RegExp, replace: (match: string, ...groups: string[]) => Promise<string>): Promise<string> {
 	const matches = [...input.matchAll(pattern)];
 	if (!matches.length) return input;
+	const replacements = await Promise.all(matches.map((match) => replace(match[0], ...(match.slice(1) as string[]))));
 	let out = "";
 	let last = 0;
-	for (const match of matches) {
-		out += input.slice(last, match.index) + await replace(match[0], ...(match.slice(1) as string[]));
+	matches.forEach((match, index) => {
+		out += input.slice(last, match.index) + replacements[index];
 		last = (match.index ?? 0) + match[0].length;
-	}
+	});
 	return out + input.slice(last);
+}
+
+/** Runs tasks with at most `size` at a time. */
+function pool(size: number): <T>(task: () => Promise<T>) => Promise<T> {
+	let active = 0;
+	const waiting: Array<() => void> = [];
+	return async (task) => {
+		if (active >= size) await new Promise<void>((resume) => waiting.push(resume));
+		active += 1;
+		try {
+			return await task();
+		} finally {
+			active -= 1;
+			waiting.shift()?.();
+		}
+	};
 }

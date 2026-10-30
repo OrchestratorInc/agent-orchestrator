@@ -3,11 +3,11 @@ import { StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { WebView } from "react-native-webview";
 import { artifactMarkdownImageSource, getArtifactText } from "./api";
 import { CARD_PAGE_LIMITS } from "./artifactPageInliner";
-import { artifactViewKind, looksBinary, type SessionArtifact } from "./artifacts";
+import { artifactViewKind, isTextArtifact, looksBinary, type SessionArtifact } from "./artifacts";
 import { cachedThumbnailText, MAX_THUMBNAIL_TEXT_BYTES, THUMBNAIL_PAGE_WIDTH, THUMBNAIL_TEXT_CHARS, thumbnailPageHtml, thumbnailScale } from "./artifactThumbnailModel";
 import { ChatMarkdown } from "./chat/ChatMarkdown";
 import { useRenderTheme } from "./chat/RenderFrame";
-import { renderThemeScript } from "./chat/renderFrameModel";
+import { renderThemeScript, withRenderTheme } from "./chat/renderFrameModel";
 import type { ServerConfig } from "./config";
 import type { Theme } from "./theme";
 import { useThemedStyles } from "./ThemeProvider";
@@ -20,7 +20,7 @@ const MARKDOWN_SCALE = 0.5;
 /** Whether a card can show a peek at the file's contents (images have their own). */
 export function hasContentThumbnail(artifact: Pick<SessionArtifact, "path" | "kind" | "size">): boolean {
 	const kind = artifactViewKind(artifact);
-	return kind === "html" || ((kind === "markdown" || kind === "text") && artifact.size <= MAX_THUMBNAIL_TEXT_BYTES);
+	return kind === "html" || ((kind === "markdown" || kind === "text") && isTextArtifact(artifact) && artifact.size <= MAX_THUMBNAIL_TEXT_BYTES);
 }
 
 /**
@@ -31,11 +31,13 @@ export function hasContentThumbnail(artifact: Pick<SessionArtifact, "path" | "ki
  * when it cannot, and takes no touches, so the card's own tap and long-press
  * still work.
  */
-export function ArtifactThumbnail({ config, sessionId, artifact, visible, onFailed }: {
+export function ArtifactThumbnail({ config, sessionId, artifact, visible, versionOf, onFailed }: {
 	config: ServerConfig;
 	sessionId: string;
 	artifact: SessionArtifact;
 	visible: boolean;
+	/** A listed file's modified time, for the images a markdown card shows. */
+	versionOf(path: string): string | undefined;
 	/** The preview cannot load; the card shows its icon instead. */
 	onFailed(): void;
 }) {
@@ -50,7 +52,7 @@ export function ArtifactThumbnail({ config, sessionId, artifact, visible, onFail
 	return (
 		<View pointerEvents="none" style={styles.fill} onLayout={onLayout} importantForAccessibility="no-hide-descendants" accessibilityElementsHidden>
 			{width > 0 && kind === "html" ? <PageThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} height={height} onFailed={onFailed} />
-				: width > 0 && (kind === "markdown" || kind === "text") ? <TextThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} markdown={kind === "markdown"} styles={styles} onFailed={onFailed} />
+				: width > 0 && (kind === "markdown" || kind === "text") ? <TextThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} width={width} markdown={kind === "markdown"} styles={styles} versionOf={versionOf} onFailed={onFailed} />
 				: null}
 		</View>
 	);
@@ -63,7 +65,8 @@ function PageThumbnail({ config, sessionId, artifact, visible, width, height, on
 	const [loaded, setLoaded] = useState(false);
 	// Small images only: a dozen cards may load at once, and each is drawn small.
 	const inlined = useInlinedArtifactPage({ enabled: visible, config, sessionId, path: artifact.path, version: artifact.updatedAt, limits: CARD_PAGE_LIMITS });
-	const html = useMemo(() => inlined.html ? thumbnailPageHtml(inlined.html) : undefined, [inlined.html]);
+	// The app's theme is written in, so the card paints in it rather than the system's.
+	const html = useMemo(() => inlined.html ? withRenderTheme(thumbnailPageHtml(inlined.html), theme) : undefined, [inlined.html, theme]);
 	// The page lays out in a 420-point window, drawn scaled down to the card.
 	const scale = thumbnailScale(width);
 	const frame = { width: THUMBNAIL_PAGE_WIDTH, height: Math.ceil(height / scale), transform: [{ scale }] };
@@ -97,7 +100,7 @@ function PageThumbnail({ config, sessionId, artifact, visible, width, height, on
 	);
 }
 
-function TextThumbnail({ config, sessionId, artifact, visible, width, markdown, styles, onFailed }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean; width: number; markdown: boolean; styles: ReturnType<typeof makeStyles>; onFailed(): void }) {
+function TextThumbnail({ config, sessionId, artifact, visible, width, markdown, styles, versionOf, onFailed }: { config: ServerConfig; sessionId: string; artifact: SessionArtifact; visible: boolean; width: number; markdown: boolean; styles: ReturnType<typeof makeStyles>; versionOf(path: string): string | undefined; onFailed(): void }) {
 	const key = `${config.host}:${config.httpPort}|${sessionId}|${artifact.path}|${artifact.updatedAt}`;
 	const [text, setText] = useState<{ key: string; value?: string }>();
 	useEffect(() => {
@@ -114,7 +117,7 @@ function TextThumbnail({ config, sessionId, artifact, visible, width, markdown, 
 	const empty = text?.key === key && !value;
 	useEffect(() => { if (empty) onFailed(); }, [empty, onFailed]);
 	// The document's own images, as the viewer shows them.
-	const resolveImage = useCallback((url: string) => artifactMarkdownImageSource(config, sessionId, artifact.path, url), [artifact.path, config, sessionId]);
+	const resolveImage = useCallback((url: string) => artifactMarkdownImageSource(config, sessionId, artifact.path, url, versionOf), [artifact.path, config, sessionId, versionOf]);
 	if (!value) return null;
 	if (markdown) {
 		return (

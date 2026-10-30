@@ -1,3 +1,4 @@
+import { useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSession } from "./api";
 import type { SessionArtifact } from "./artifacts";
@@ -6,11 +7,17 @@ import { useApp } from "./store";
 
 type Fetched = { sessionId: string; artifacts: SessionArtifact[] };
 
+/** How often a session the board does not poll is read again while its screen is up. */
+const UNLISTED_POLL_MS = 10_000;
+
 /**
  * One session's artifacts, newest first. The board's poll keeps a listed
  * session's row current; the session is also read directly, for one the board
  * does not list (an orchestrator) and so a pull-to-refresh answers at once.
- * A deleted file leaves the list immediately rather than at the next poll.
+ * For a session the board does not list, the direct read runs again when the
+ * screen comes back into focus (after a restore, say) and every few seconds
+ * while it is up, so a rewrite shows. A deleted file leaves the list
+ * immediately rather than at the next poll.
  */
 export function useSessionArtifacts(sessionId: string) {
 	const { sessions, config, refresh } = useApp();
@@ -41,6 +48,18 @@ export function useSessionArtifacts(sessionId: string) {
 		setLoading(true);
 		void load();
 	}, [load]);
+
+	const isListed = useRef(false);
+	isListed.current = listed !== undefined;
+	const focusedBefore = useRef(false);
+	useFocusEffect(useCallback(() => {
+		// The first focus is the mount, which already read the session; the
+		// board's poll keeps a listed session current.
+		if (focusedBefore.current && !isListed.current) void load();
+		focusedBefore.current = true;
+		const timer = setInterval(() => { if (!isListed.current) void load(); }, UNLISTED_POLL_MS);
+		return () => clearInterval(timer);
+	}, [load]));
 
 	const reload = useCallback(async () => {
 		await Promise.all([load(), refresh().catch(() => {})]);

@@ -26,7 +26,9 @@ import {
 	readRenderRef,
 	renderTheme,
 	renderThemeFragment,
+	renderThemeRule,
 	renderThemeScript,
+	withRenderTheme,
 } from "./renderFrameModel";
 
 const path = "/api/v1/sessions/ao-215/renders/render-be45c556";
@@ -459,5 +461,22 @@ describe("renderViewerStyleScript", () => {
 		const appended: unknown[] = [];
 		new Function("document", renderViewerStyleScript(16))({ createElement: () => ({}), head: null, documentElement: { appendChild: (node: unknown) => appended.push(node) } });
 		expect(appended).toHaveLength(1);
+	});
+});
+
+describe("withRenderTheme", () => {
+	const theme = { appearance: "light" as const, variables: { "--background": "#fff", "--foreground": "#111", "bad name": "x", "--evil": "red;}body{display:none" } };
+
+	it("builds the rule the page's bootstrap applies, dropping what it would drop", () => {
+		expect(renderThemeRule(theme)).toBe(":root{color-scheme:light;--background:#fff;--foreground:#111;--evil:redbodydisplay:none;}");
+	});
+
+	it("writes the app's theme into the bootstrap's theme style, so the page paints in it", () => {
+		const page = '<!doctype html><style id="ao-theme">:root{color-scheme:dark}@media (prefers-color-scheme: light){:root{color-scheme:light}}</style><style>html{}</style><style id="ao-theme">.page{}</style>';
+		expect(withRenderTheme(page, theme)).toBe(`<!doctype html><style id="ao-theme">${renderThemeRule(theme)}</style><style>html{}</style><style id="ao-theme">.page{}</style>`);
+	});
+
+	it("leaves a page without the bootstrap as it is", () => {
+		expect(withRenderTheme("<p>hi</p>", theme)).toBe("<p>hi</p>");
 	});
 });

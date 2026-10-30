@@ -12,27 +12,7 @@ import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
 import { space, type } from "../tokens";
-import {
-	ARTIFACT_FRAME_HEIGHT,
-	RENDER_BRIDGE_SCRIPT,
-	RENDER_ZOOM_SCRIPT,
-	REPORT_SETTLE_LIMIT_MS,
-	clampRenderHeight,
-	initialRenderHeight,
-	isRenderPageLoad,
-	readRenderBridgeMessage,
-	rememberRenderHeight,
-	rememberedRenderHeight,
-	renderFrameLive,
-	renderTheme,
-	renderThemeFragment,
-	renderThemeScript,
-	renderViewerStyleScript,
-	subscribeRenderViewport,
-	type RenderDisplayMode,
-	type RenderRef,
-	type RenderTheme,
-} from "./renderFrameModel";
+import { ARTIFACT_FRAME_HEIGHT, clampRenderHeight, initialRenderHeight, isRenderPageLoad, readRenderBridgeMessage, rememberedRenderHeight, rememberRenderHeight, RENDER_BRIDGE_SCRIPT, RENDER_ZOOM_SCRIPT, type RenderDisplayMode, renderFrameLive, type RenderRef, renderTheme, type RenderTheme, renderThemeFragment, renderThemeScript, renderViewerStyleScript, REPORT_SETTLE_LIMIT_MS, subscribeRenderViewport, withRenderTheme } from "./renderFrameModel";
 import { RenderSkeleton } from "./RenderSkeleton";
 import { startRenderHeightStore } from "./renderHeightStore";
 import { FRAME_PAGE_LIMITS } from "../artifactPageInliner";
@@ -92,7 +72,8 @@ function RenderDocument({ path, html, displayMode, onHeight, onReady, onGone, on
 	const uri = useMemo(() => pageUrl && `${pageUrl}${renderThemeFragment(themeRef.current, displayMode)}`, [pageUrl, displayMode]);
 	const fullscreen = displayMode === "fullscreen";
 	// A stable source: a new object each render would make the WebView re-check it.
-	const source = useMemo(() => html ? { html } : uri && config ? { uri, headers: authHeaders(config) } : undefined, [html, uri, config]);
+	// A page from memory has no fragment, so the theme is written into it for first paint.
+	const source = useMemo(() => html ? { html: withRenderTheme(html, themeRef.current) } : uri && config ? { uri, headers: authHeaders(config) } : undefined, [html, uri, config]);
 
 	useEffect(() => {
 		if (loaded.current) web.current?.injectJavaScript(renderThemeScript(theme));

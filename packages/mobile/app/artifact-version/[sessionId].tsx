@@ -4,7 +4,7 @@ import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-nat
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { getArtifactVersion, restoreArtifactVersion } from "../../lib/api";
-import { artifactLanguage, artifactViewKind } from "../../lib/artifacts";
+import { artifactLanguage, artifactViewKind, shownText } from "../../lib/artifacts";
 import { inlineArtifactPage } from "../../lib/artifactPageInliner";
 import { formatVersionTime, versionPageHtml, type ArtifactVersion } from "../../lib/artifactVersions";
 import { backOr } from "../../lib/backNavigation";
@@ -94,6 +94,8 @@ function ArtifactVersionContent() {
 	if (!loaded) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
 
 	const markdown = artifactViewKind({ path, kind: "file" }) === "markdown";
+	// A long version shows its start, as the viewer does: a text view is laid out whole.
+	const shown = shownText(loaded.content);
 	// Only the path is known here; the daemon calls .html and .htm files pages.
 	const page = /\.html?$/i.test(path) && !loaded.truncated;
 	return (
@@ -101,7 +103,7 @@ function ArtifactVersionContent() {
 			<View style={styles.banner}>
 				<Text style={styles.bannerText}>Viewing the version from {formatVersionTime(loaded.createdAt, now) || `version ${loaded.version}`}</Text>
 			</View>
-			{loaded.truncated ? (
+			{loaded.truncated || shown.truncated ? (
 				<View style={styles.truncated}><Text style={styles.truncatedText}>Showing the start of this version. Restoring it writes the whole file.</Text></View>
 			) : null}
 			{page && config ? (
@@ -109,9 +111,9 @@ function ArtifactVersionContent() {
 			) : (
 				<ScrollView style={styles.screen} contentContainerStyle={markdown ? styles.document : styles.code}>
 					{markdown ? (
-						<ChatMarkdown text={loaded.content} />
+						<ChatMarkdown text={shown.text} />
 					) : (
-						<HighlightedCodeText code={loaded.content} language={artifactLanguage(path)} streaming={loaded.content.length > MAX_HIGHLIGHTED_CHARS} style={styles.codeText} />
+						<HighlightedCodeText code={shown.text} language={artifactLanguage(path)} streaming={shown.text.length > MAX_HIGHLIGHTED_CHARS} style={styles.codeText} />
 					)}
 				</ScrollView>
 			)}

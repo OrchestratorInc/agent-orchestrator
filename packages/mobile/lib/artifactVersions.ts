@@ -4,7 +4,7 @@
  * newest first; the first one is the file's current content.
  */
 
-import type { RenderTheme } from "./chat/renderFrameModel";
+import { renderThemeRule, type RenderTheme } from "./chat/renderFrameModel";
 
 /** One kept version of an artifact file. */
 export type ArtifactVersionSummary = {
@@ -90,9 +90,12 @@ export function versionAuthor(version: ArtifactVersionSummary, fallbackHarness?:
 	return { kind: "agent", harness: version.harness || fallbackHarness || undefined };
 }
 
-// The daemon's base page style (backend/internal/renderpage baseCSS), which
-// pages written for AO expect. The page's own CSS overrides it.
-const BASE_PAGE_CSS = "html{background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;scrollbar-width:none}html::-webkit-scrollbar{display:none}body{margin:0}code,kbd,pre,samp{font-family:var(--font-mono)}"
+/**
+ * The daemon's base page style (backend/internal/renderpage baseCSS), which
+ * pages written for AO expect. The page's own CSS overrides it. A test reads
+ * the Go constant and fails when the two drift apart.
+ */
+export const BASE_PAGE_CSS = "html{background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;scrollbar-width:none}html::-webkit-scrollbar{display:none}body{margin:0}code,kbd,pre,samp{font-family:var(--font-mono)}"
 	+ ":root{--viz-series-1:var(--chart-1);--viz-series-2:var(--chart-2);--viz-series-3:var(--chart-3);--viz-series-4:var(--chart-4);--viz-series-5:var(--chart-5);--viz-series-6:var(--chart-6);--viz-text:var(--foreground);--viz-muted:var(--muted-foreground);--viz-bg:var(--background);--viz-panel:var(--card);--viz-border:var(--border);--viz-accent:var(--accent);--viz-accent-text:var(--accent-foreground);--viz-accent-bg:var(--muted);--viz-warning:var(--warning);--blue:var(--chart-1);--green:var(--success);--orange:var(--warning);--yellow:var(--chart-3);--purple:var(--chart-4);--red:var(--destructive)}";
 
 // A BOM, whitespace and comments may precede the doctype.
@@ -107,8 +110,7 @@ const PAGE_VIEWPORT = /<meta\s[^>]*name\s*=\s*["']?viewport/i;
  * and the daemon only writes this in for the current file.
  */
 export function versionPageHtml(content: string, theme: RenderTheme): string {
-	const variables = Object.entries(theme.variables).map(([name, value]) => `${name}:${value}`).join(";");
-	const head = `<style id="ao-theme">:root{color-scheme:${theme.appearance};${variables}}</style><style>${BASE_PAGE_CSS}</style>`
+	const head = `<style id="ao-theme">${renderThemeRule(theme)}</style><style>${BASE_PAGE_CSS}</style>`
 		+ (PAGE_VIEWPORT.test(content) ? "" : '<meta name="viewport" content="width=device-width, initial-scale=1">');
 	const doctype = LEADING_DOCTYPE.exec(content);
 	return doctype ? doctype[0] + head + content.slice(doctype[0].length) : `<!doctype html>${head}${content}`;

@@ -24,19 +24,30 @@ export type ArtifactViewKind = "html" | "markdown" | "image" | "web-media" | "te
 
 /**
  * The daemon's reserved prefix that routes a preview-file request to the
- * session's artifact directory. Used instead of `?source=artifact` because a
- * page's relative links (its images and CSS) drop the query string but keep
- * this path prefix, and stay inside the preview-files auth cookie's scope.
+ * session's artifact directory. The daemon keeps this form for compatibility,
+ * so the app uses it only where it must: a URL a WebView loads by itself (an
+ * SVG, a video, an unlisted file), whose auth is the preview-files cookie
+ * scoped to that route, and a page's raw HTML. Reads the app makes with the
+ * Bearer header use the artifact-files route (artifactFilesPath).
  */
 const ARTIFACT_ENTRY_PREFIX = "__ao_artifacts__";
 
 /** Text files larger than this are not loaded into the viewer. */
 export const MAX_ARTIFACT_TEXT_BYTES = 1 << 20;
 
+/**
+ * The most text the viewer lays out at once. A text view is laid out whole, on
+ * Android on the UI thread, so a long file shows its start.
+ */
+export const MAX_SHOWN_TEXT_CHARS = 200_000;
+
 const RASTER_IMAGE = /\.(apng|avif|bmp|gif|heic|heif|jpe?g|png|webp)$/i;
 // Formats React Native's Image cannot draw, or players it does not have.
 const WEB_MEDIA = /\.(svg|m4v|mov|mp4|ogv|webm|aac|flac|m4a|mp3|oga|ogg|opus|wav|pdf)$/i;
 const MARKDOWN = /\.(md|markdown)$/i;
+// Files read as text. Any other extension is taken as binary (an archive, an
+// office document, a database), which has no text to copy and no versions.
+const TEXT_EXTENSION = /\.(txt|text|log|out|csv|tsv|json|jsonl|ndjson|geojson|yaml|yml|toml|ini|cfg|conf|properties|env|xml|plist|js|mjs|cjs|jsx|ts|mts|cts|tsx|py|rb|go|rs|java|kt|kts|swift|m|mm|c|h|cc|cpp|cxx|hpp|cs|php|sh|bash|zsh|fish|ps1|bat|sql|graphql|gql|proto|css|scss|sass|less|vue|svelte|astro|lua|pl|r|scala|dart|ex|exs|erl|hs|ml|clj|elm|zig|nim|tf|hcl|diff|patch|mdx|rst|tex|bib|adoc|org|gradle|lock|gitignore|dockerignore|editorconfig|dockerfile|makefile|mermaid|mmd|dot|srt|vtt)$/i;
 
 /** Reads the wire `artifactFiles`, dropping anything malformed. */
 export function parseArtifacts(raw: unknown): SessionArtifact[] {
@@ -75,18 +86,45 @@ export function artifactViewKind(artifact: Pick<SessionArtifact, "path" | "kind"
 	return "text";
 }
 
+/**
+ * Whether the phone reads the file as text: a page, a document, or a file with
+ * a text extension. A file with no extension (`LICENSE`, `.env`) counts as text.
+ */
+export function isTextArtifact(artifact: Pick<SessionArtifact, "path" | "kind">): boolean {
+	const kind = artifactViewKind(artifact);
+	if (kind === "html" || kind === "markdown") return true;
+	if (kind !== "text") return false;
+	const name = artifact.path.split("/").pop() ?? "";
+	return !name.slice(1).includes(".") || TEXT_EXTENSION.test(name);
+}
+
 /** Whether the file's contents can be copied as text. */
 export function canCopyArtifact(artifact: Pick<SessionArtifact, "path" | "kind">): boolean {
-	const kind = artifactViewKind(artifact);
-	return kind === "html" || kind === "markdown" || kind === "text";
+	return isTextArtifact(artifact);
+}
+
+/**
+ * Whether the viewer can draw a web-media file in a WebView on `os`. Android's
+ * WebView has no PDF renderer: it shows nothing, or starts a download.
+ */
+export function showsInWebView(path: string, os: string): boolean {
+	return !(os === "android" && /\.pdf$/i.test(path));
+}
+
+/** The start of a long text, cut at a line break, for the viewer to lay out. */
+export function shownText(text: string, max = MAX_SHOWN_TEXT_CHARS): { text: string; truncated: boolean } {
+	if (text.length <= max) return { text, truncated: false };
+	const lineEnd = text.lastIndexOf("\n", max);
+	return { text: text.slice(0, lineEnd > max / 2 ? lineEnd : max), truncated: true };
 }
 
 /**
  * Whether a file keeps a version history the phone can show. The daemon reads
- * versions back as text, so images and other media have none (as on desktop).
+ * versions back as text, so images, media and binary files have none (as on
+ * desktop, which hides History when the file reads as binary).
  */
 export function canShowArtifactHistory(artifact: Pick<SessionArtifact, "path" | "kind">): boolean {
-	return canCopyArtifact(artifact);
+	return isTextArtifact(artifact);
 }
 
 /** One entry in an artifact's long-press or header menu. */
@@ -108,9 +146,10 @@ export function artifactMenuActions(artifact: Pick<SessionArtifact, "path" | "ki
 }
 
 /**
- * The daemon path serving one artifact's bytes, each segment escaped. Undefined
- * for a path that could leave the artifact directory. `raw` asks for a markdown
- * file's source; without it the daemon serves markdown rendered as a page.
+ * The preview-files path for one artifact, each segment escaped, for a WebView
+ * to load by URL (see ARTIFACT_ENTRY_PREFIX). Undefined for a path that could
+ * leave the artifact directory. `raw` asks for a file's source; without it the
+ * daemon serves markdown rendered as a page.
  */
 export function artifactFilePath(sessionId: string, path: string, { raw = false }: { raw?: boolean } = {}): string | undefined {
 	if (!isSafeArtifactPath(path)) return undefined;
@@ -156,11 +195,13 @@ export function resolveArtifactAssetPath(fromPath: string, ref: string): string 
 }
 
 /**
- * The daemon path serving an HTML artifact as a page: the file with AO's theme
- * variables, font and viewport written in (the render bootstrap), which pages
- * written for AO style against. The desktop frames artifacts from this route.
+ * The artifact-files path for one artifact, served from the artifact folder
+ * only. An HTML file comes back as a page, with AO's theme variables, font and
+ * viewport written in (the render bootstrap, which pages written for AO style
+ * against; the desktop frames artifacts from this route). Any other file comes
+ * back as its bytes, markdown as its source.
  */
-export function artifactPagePath(sessionId: string, path: string): string | undefined {
+export function artifactFilesPath(sessionId: string, path: string): string | undefined {
 	if (!isSafeArtifactPath(path)) return undefined;
 	return `/api/v1/sessions/${encodeURIComponent(sessionId)}/artifact-files/${path.split("/").map(encodeURIComponent).join("/")}`;
 }

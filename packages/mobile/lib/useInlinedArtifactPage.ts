@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { artifactFileUrl, getArtifactPage, getArtifactText } from "./api";
+import { artifactBytesUrl, getArtifactPage, getArtifactText } from "./api";
 import { FULL_PAGE_LIMITS, inlineArtifactPage, type ArtifactAssetLoader, type InlineLimits } from "./artifactPageInliner";
 import { cachedArtifactPage } from "./artifactPageCache";
 import { authHeaders, type ServerConfig } from "./config";
@@ -9,7 +9,7 @@ export function artifactAssetLoader(config: ServerConfig, sessionId: string): Ar
 	return {
 		text: (path) => getArtifactText(config, sessionId, path).catch(() => undefined),
 		dataUri: async (path, maxBytes) => {
-			const url = artifactFileUrl(config, sessionId, path);
+			const url = artifactBytesUrl(config, sessionId, path);
 			if (!url) return undefined;
 			try {
 				const res = await fetch(url, { headers: authHeaders(config) });

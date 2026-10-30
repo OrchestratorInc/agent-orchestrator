@@ -54,6 +54,32 @@ describe("inlineArtifactPage", () => {
 		expect(load.dataUri).toHaveBeenCalledWith("screenshot.png", CARD_PAGE_LIMITS.imageBytes);
 	});
 
+	it("never rewrites code: inline and linked scripts keep their src and srcset text", async () => {
+		const inlineScript = '<script>const srcset = "a.png 1x"; el.innerHTML = `<img src="${url}">`;</script>';
+		const load = loader({ "app.js": 'document.body.innerHTML = \'<img src="logo.png" srcset="logo@2x.png 2x">\';' }, { "logo.png": 10 });
+		const page = await inlineArtifactPage(`${inlineScript}<script src="app.js"></script><img src="logo.png">`, "index.html", load);
+		expect(page.html).toBe(`${inlineScript}<script >document.body.innerHTML = '<img src="logo.png" srcset="logo@2x.png 2x">';</script><img src="data:image/png;base64,logo.png">`);
+		expect(load.dataUri).toHaveBeenCalledTimes(1);
+	});
+
+	it("loads linked files side by side, and one file once while it loads", async () => {
+		const started: string[] = [];
+		const finish: Array<() => void> = [];
+		const load: ArtifactAssetLoader = {
+			text: async () => undefined,
+			dataUri: (path) => new Promise((resolve) => {
+				started.push(path);
+				finish.push(() => resolve({ uri: `data:${path}`, bytes: 1 }));
+			}),
+		};
+		const pending = inline('<img src="a.png"><img src="b.png"><img src="a.png"><img src="c.png">', "index.html", load, "ao-1");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// All three files started before any finished.
+		expect(started).toEqual(["a.png", "b.png", "c.png"]);
+		finish.forEach((done) => done());
+		expect((await pending).html).toBe('<img src="data:a.png"><img src="data:b.png"><img src="data:a.png"><img src="data:c.png">');
+	});
+
 	it("leaves an image the loader declined to read as written", async () => {
 		const load: ArtifactAssetLoader = { text: async () => undefined, dataUri: async () => ({ uri: "", bytes: 5 << 20 }) };
 		const page = await inline('<img src="big.png">', "index.html", load, "ao-1", CARD_PAGE_LIMITS);

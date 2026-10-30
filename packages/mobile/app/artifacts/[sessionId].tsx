@@ -39,6 +39,8 @@ function SessionArtifactsContent() {
 	const { width } = useWindowDimensions();
 	const columns = width >= WIDE_LAYOUT ? 3 : 2;
 	const { artifacts, loading, error, reload, markDeleted } = useSessionArtifacts(hostMatches ? sessionId : "");
+	// A listed file's modified time, so a markdown card's regenerated image is not served from cache.
+	const versionOf = useCallback((filePath: string) => artifacts?.find((file) => file.path === filePath)?.updatedAt, [artifacts]);
 	const onDeleted = useCallback((artifact: SessionArtifact) => markDeleted(artifact.path), [markDeleted]);
 	const { openMenu, menu } = useArtifactActions(sessionId, onDeleted);
 	const [refreshing, setRefreshing] = useState(false);
@@ -103,7 +105,7 @@ function SessionArtifactsContent() {
 				ListEmptyComponent={<EmptyState icon="layers" title="No artifacts yet" message="Pages and documents the agent writes for this session show up here." />}
 				renderItem={({ item }) => (
 					<View style={{ width: `${100 / columns}%`, paddingHorizontal: space.xs }}>
-						<ArtifactCard artifact={item} config={config} sessionId={sessionId} visible={visiblePaths.has(item.path)} refreshes={refreshes} thumbnail={config && artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
+						<ArtifactCard artifact={item} config={config} sessionId={sessionId} visible={visiblePaths.has(item.path)} refreshes={refreshes} versionOf={versionOf} thumbnail={config && artifactViewKind(item) === "image" ? artifactImageSource(config, sessionId, item.path, item.updatedAt) : undefined} onOpen={() => open(item)} onMenu={() => openMenu(item, { onOpen: () => open(item), onAsk: () => ask(item), onHistory: () => openHistory(item) })} />
 					</View>
 				)}
 			/>
@@ -112,7 +114,7 @@ function SessionArtifactsContent() {
 	);
 }
 
-function ArtifactCard({ artifact, config, sessionId, visible, refreshes, thumbnail, onOpen, onMenu }: {
+function ArtifactCard({ artifact, config, sessionId, visible, refreshes, versionOf, thumbnail, onOpen, onMenu }: {
 	artifact: SessionArtifact;
 	config: ServerConfig | null;
 	sessionId: string;
@@ -120,6 +122,7 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, thumbna
 	visible: boolean;
 	/** Pulls to refresh so far; a failed preview is tried again after one. */
 	refreshes: number;
+	versionOf(path: string): string | undefined;
 	/** An image artifact's own picture, drawn over its icon tile. */
 	thumbnail?: { uri: string; headers: Record<string, string> };
 	onOpen(): void;
@@ -158,7 +161,7 @@ function ArtifactCard({ artifact, config, sessionId, visible, refreshes, thumbna
 						<Feather name={visual.icon} size={28} color={visual.color} />
 						<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.extension, { color: visual.color }]}>{artifactExtensionLabel(artifact.path)}</Text>
 					</>}
-					{preview && config ? <ArtifactThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} onFailed={onPreviewFailed} /> : null}
+					{preview && config ? <ArtifactThumbnail config={config} sessionId={sessionId} artifact={artifact} visible={visible} versionOf={versionOf} onFailed={onPreviewFailed} /> : null}
 					{picture ? (
 						<Image
 							accessibilityIgnoresInvertColors
