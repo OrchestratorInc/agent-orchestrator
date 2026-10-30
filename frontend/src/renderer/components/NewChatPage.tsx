@@ -27,6 +27,9 @@ import { topbarDragStyle } from "./ShellTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
+import { isMacPlatform } from "../lib/platform";
+
+const START_NEXT_SHORTCUT = isMacPlatform() ? "⌘↵" : "Ctrl+Enter";
 
 /**
  * New task as a chat that has no session yet. The first send creates the
@@ -71,6 +74,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// lost response cannot create a second session.
 	const fallbackRequest = useRef<string | undefined>(undefined);
 	const fallbackInFlight = useRef(false);
+	// Set by Cmd/Ctrl+Enter just before its send: start the task, then stay here
+	// on a fresh draft for the next one instead of opening the session.
+	const startNextRef = useRef(false);
 	const [heldAttachments, setHeldAttachments] = useState<FileAttachmentPayload[]>([]);
 	const [attachmentsPreparing, setAttachmentsPreparing] = useState(false);
 	const onHeldAttachmentsChange = useCallback((attachments: FileAttachmentPayload[], preparing: boolean) => {
@@ -235,7 +241,20 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		}, 0);
 	};
 
+	// The task is running and listed in the sidebar; this page becomes a new chat
+	// again with a freshly prepared worktree.
+	const openNextDraft = async (target: { projectId: string; hostId?: string }) => {
+		await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(target.hostId) });
+		if (!mounted.current) return;
+		setEcho(undefined);
+		setLaunched(undefined);
+		taskRef.current.prepareNext();
+		useUiStore.getState().showGlobalToast(t("newTask.startNext.started"), t("newTask.startNext.startedBody"));
+	};
+
 	const send = async (text: string, attachments?: FileAttachmentPayload[], clientMessageId: string = crypto.randomUUID()) => {
+		const startNext = startNextRef.current;
+		startNextRef.current = false;
 		const target = { ...targetRef.current };
 		const saved = readPendingLaunch(hostKey, draftScope, clientMessageId);
 		const brief = { clientMessageId, text, createdAt: new Date().toISOString() };
@@ -264,8 +283,17 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
 			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
-			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments });
+			const sessionId = await launch.launch(text, {
+				clientRequestId: clientMessageId,
+				replay,
+				attachments,
+				...(startNext ? { spawnSource: "composer_next" as const } : {}),
+			});
 			resolveLaunch(clientMessageId);
+			if (startNext && !launch.isCloudProject) {
+				await openNextDraft(target);
+				return;
+			}
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
 			setEcho(undefined);
@@ -359,6 +387,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				openingStartedAt={echo?.createdAt}
 				holdAttachments
 				onHeldAttachmentsChange={onHeldAttachmentsChange}
+				onModifierSend={() => {
+					startNextRef.current = true;
+				}}
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}
 				filePathsTruncated={workspaceFiles.data?.truncated}
@@ -398,7 +429,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 						/>
 					</>
 				)}
-				draftNotice={notice}
+				draftNotice={notice ?? (pending || task.isCloudProject ? null : (
+					<p className="px-1 text-xs text-muted-foreground">{t("newTask.startNext.hint", { shortcut: START_NEXT_SHORTCUT })}</p>
+				))}
 			/>
 		</div>
 	);

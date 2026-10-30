@@ -81,7 +81,10 @@ type CreateTaskInput = {
 	approvalMode?: ApprovalMode;
 	attachments?: FileAttachmentPayload[];
 	taskPreparation?: string;
+	spawnSource?: SpawnSource;
 };
+
+type SpawnSource = NonNullable<components["schemas"]["DelegateTaskRequest"]["spawnSource"]>;
 
 const CHAT_PREFLIGHT_CODES = new Set([
 	"SESSION_MODE_UNSUPPORTED",
@@ -140,6 +143,8 @@ export type TaskLaunchOptions = {
 	replay?: LaunchReplay;
 	/** Files to upload with the task, in place of the ones this hook holds. */
 	attachments?: FileAttachmentPayload[];
+	/** The surface that started the task, for the spawn telemetry only. */
+	spawnSource?: SpawnSource;
 };
 
 /** The agent, model and permission parts of a create request, saved so a retry can repeat them exactly. */
@@ -180,6 +185,9 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	// The prepared worktree's session id. It becomes the task's session id on send,
 	// so files uploaded into it before then are already where the agent reads them.
 	const [preparedSessionId, setPreparedSessionId] = useState("");
+	// Bumped to prepare a fresh worktree for the next task after a launch
+	// that keeps this page open.
+	const [preparationRound, setPreparationRound] = useState(0);
 	const requestRef = useRef<{ payload: string; id: string } | undefined>(undefined);
 	const {
 		attachments,
@@ -259,6 +267,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 						...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 						...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
 						...(input.taskPreparation ? { taskPreparation: input.taskPreparation } : {}),
+						...(input.spawnSource ? { spawnSource: input.spawnSource } : {}),
 					},
 				});
 				if (error) {
@@ -308,6 +317,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 					...(input.mode ? { mode: input.mode } : {}),
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 					...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+					...(input.spawnSource ? { spawnSource: input.spawnSource } : {}),
 				},
 			});
 			if (error) {
@@ -378,7 +388,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 			setPreparedSessionId("");
 			if (token !== launchingPreparationRef.current) cancelTaskPreparation(token, hostId);
 		};
-	}, [hostId, projectQuery.data?.id]);
+	}, [hostId, projectQuery.data?.id, preparationRound]);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	const { settings, error: settingsError } = useSettings(hostId);
 	// The composer preselects the agent and model a spawn would actually use
@@ -836,7 +846,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	useEffect(() => () => clearAttachments(), [clearAttachments]);
 
 	// Rejects with the create error after recording it (and any fallback) here.
-	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId, replay, attachments: files }: TaskLaunchOptions = {}): Promise<string> => {
+	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId, replay, attachments: files, spawnSource }: TaskLaunchOptions = {}): Promise<string> => {
 		if (!projectId || !canSubmit || isSubmitting) throw new Error(remoteLoadError ?? t("newTask.unableToStart"));
 
 		setIsSubmitting(true);
@@ -881,6 +891,7 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 				}),
 				attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
 				taskPreparation: submittedPreparation || undefined,
+				spawnSource,
 			};
 			const { taskPreparation: _, attachments: _attachments, ...requestPayload } = request;
 			const payload = JSON.stringify({ ...requestPayload, attachmentIds: attachments.map((attachment) => attachment.id) });
@@ -1065,6 +1076,8 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		effectiveInterface: (submitMode ?? settings?.defaultSessionMode ?? "tui") as "chat" | "tui",
 		refreshModels: refreshSelectedModels,
 		preparedSessionId,
+		/** Prepares a worktree for the next task when the page stays open after a launch. */
+		prepareNext: () => setPreparationRound((round) => round + 1),
 		submitMode,
 		isCloudProject,
 		canSubmit,

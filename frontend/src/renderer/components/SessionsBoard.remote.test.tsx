@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SessionsBoard } from "./SessionsBoard";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -88,7 +88,25 @@ function worker(hostId: string, title = "Fix login", status = "working") {
 	};
 }
 
+// Clients from each test, settled before jsdom goes away: an archive or restore
+// leaves a query refresh whose notify is batched on a timer, and that timer
+// firing after the environment is torn down fails the run with "window is not
+// defined" even though every assertion passed.
+const clients: QueryClient[] = [];
+
+afterEach(async () => {
+	cleanup();
+	for (const client of clients.splice(0)) {
+		await client.cancelQueries();
+		client.clear();
+	}
+	await act(async () => {
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+});
+
 function renderBoard(hostId: string, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+	clients.push(client);
 	const view = (host: string) => <QueryClientProvider client={client}>
 		<TooltipProvider><SessionsBoard key={host} hostId={host} projectId="shared" /></TooltipProvider>
 	</QueryClientProvider>;

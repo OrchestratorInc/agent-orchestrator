@@ -462,6 +462,8 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersDelegateTaskRequest":                      "DelegateTaskRequest",
 	"ControllersDelegateTaskResponse":                     "DelegateTaskResponse",
 	"ControllersPrepareTaskResponse":                      "PrepareTaskResponse",
+	"ControllersTaskSuggestionsResponse":                  "TaskSuggestionsResponse",
+	"ControllersTaskSuggestionView":                       "TaskSuggestionView",
 	"ControllersClaimPRResponse":                          "ClaimPRResponse",
 	"ControllersClaimPRRequest":                           "ClaimPRRequest",
 	"ControllersSessionPRFacts":                           "SessionPRFacts",
@@ -3760,6 +3762,17 @@ func sessionOperations() []operation {
 			pathParams: []any{controllers.ProjectIDParam{}},
 			resps: []respUnit{
 				{http.StatusAccepted, controllers.PrepareTaskResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/projects/{id}/task-suggestions", id: "listTaskSuggestions", tag: "projects",
+			summary:    "Suggest follow-up tasks from open issues and TODO comments",
+			pathParams: []any{controllers.ProjectIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.TaskSuggestionsResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
 				{http.StatusNotImplemented, envelope.APIError{}},

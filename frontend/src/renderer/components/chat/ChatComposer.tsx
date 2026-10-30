@@ -200,6 +200,7 @@ export const ChatComposer = memo(function ChatComposer({
 	starting,
 	holdAttachments,
 	onHeldAttachmentsChange,
+	onModifierSend,
 	settings,
 	addMenuItems,
 	approval,
@@ -291,6 +292,12 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 	holdAttachments?: boolean;
 	onHeldAttachmentsChange?: (attachments: FileAttachmentPayload[], preparing: boolean) => void;
+	/**
+	 * Cmd/Ctrl+Enter when it does not steer a running turn: called just before
+	 * the send, so the caller can treat that send differently (the new-task page
+	 * starts the task and stays on a fresh draft).
+	 */
+	onModifierSend?: () => void;
 	/** A contextual prompt shown before an otherwise empty conversation begins. */
 	emptyPlaceholder?: string;
 	/** A proposed next message, kept out of the draft until accepted with Tab. */
@@ -1650,11 +1657,13 @@ export const ChatComposer = memo(function ChatComposer({
 				setSteerNextRequest((request) => request + 1);
 				return true;
 			}
-			const wantsSteer = (event.metaKey || event.ctrlKey) && canSteerDraft;
+			const modifier = event.metaKey || event.ctrlKey;
+			const wantsSteer = modifier && canSteerDraft;
+			if (modifier && !wantsSteer) onModifierSend?.();
 			void submit(undefined, wantsSteer);
 			return true;
 		},
-		[canSteerDraft, canSteerNext, fileAttachments, onCompact, pick, suggestionsFor],
+		[canSteerDraft, canSteerNext, fileAttachments, onCompact, onModifierSend, pick, suggestionsFor],
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
