@@ -1211,7 +1211,7 @@ button[aria-label="Ask Assistant"] { display: none !important; }
 }
 
 /* v36j: table caption + rounded corners like original */
-main table { border-radius: 8px; }
+main table { border-radius: 8px; overflow: hidden; }
 main table caption {
   caption-side: top;
   text-align: center;
