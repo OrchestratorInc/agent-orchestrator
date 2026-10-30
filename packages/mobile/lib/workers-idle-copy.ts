@@ -2,7 +2,7 @@ import { relativeTime } from "./notificationView";
 import type { ConnStatus } from "./store";
 
 export type WorkersIdleInput = {
-	/** Connected machines in scope, by name. Empty when the app knows none by name. */
+	/** Machines in scope that are `connection`, by name (see idleFleet). Empty when none is known by name. */
 	machines: string[];
 	connection: ConnStatus;
 	/** When the newest worker in scope last did anything; absent with no history. */
@@ -28,4 +28,23 @@ export function workersIdleCopy({ machines, connection, lastFinishedAt, now = Da
 		: since === "now" ? "Last worker finished just now."
 			: `Last worker finished ${since} ago.`;
 	return { title: "Nothing running", status, history };
+}
+
+/**
+ * Which machines the idle state may call idle, and the lamp it shows.
+ *
+ * Only an open machine has sent its workers, so it is the only kind that can be
+ * called idle: with one open and another still connecting, the open one is named
+ * and the other is not counted yet. With none open, the connecting ones are
+ * named instead. `hosts` is the scope the board shows (the selected machine, or
+ * the whole fleet); an empty list falls back to the single-host `connection`.
+ */
+export function idleFleet(
+	hosts: readonly { name: string; connection: ConnStatus }[],
+	connection: ConnStatus,
+): Pick<WorkersIdleInput, "machines" | "connection"> {
+	if (hosts.length === 0) return { machines: [], connection };
+	const fleet: ConnStatus = hosts.some((host) => host.connection === "open") ? "open"
+		: hosts.some((host) => host.connection === "connecting") ? "connecting" : "closed";
+	return { machines: hosts.filter((host) => host.connection === fleet).map((host) => host.name), connection: fleet };
 }

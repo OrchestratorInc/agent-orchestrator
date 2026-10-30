@@ -15,6 +15,7 @@ import { useTabScrollToTop } from "../../lib/useTabScrollToTop";
 import { isArchived } from "../../lib/agentsView";
 import { latestEventAt } from "../../lib/archive/archiveOrder";
 import { useLatestArchivedAt } from "../../lib/archive/useLatestArchivedAt";
+import { idleFleet } from "../../lib/workers-idle-copy";
 import { WorkersIdleState } from "../../lib/workers-idle-state";
 import { Button, EmptyState, HeaderIconButton, ScreenHeader } from "../../lib/ui";
 import { WorkerBoardList, type BoardRow } from "../../lib/worker-board-list";
@@ -135,15 +136,9 @@ export default function FleetScreen() {
 	const selectedProjectLabel = workerProjectLabel(allProjects, workerProjectId, workerEnvironmentId);
 	const selectedEnvironmentLabel = environments.find((environment) => environment.id === workerEnvironmentId)?.name;
 	const selectedHost = hostStates.find((host) => host.hostId === workerEnvironmentId);
-	// The idle state's facts: who is connected and quiet, and when anything in
-	// this scope last happened. Same fleet rule as the sidebar's mascot lamp.
-	const fleetConnection = hostStates.length > 1
-		? hostStates.some((host) => host.connection === "open") ? "open"
-			: hostStates.some((host) => host.connection === "connecting") ? "connecting" : "closed"
-		: connection;
-	const idleMachines = (selectedHost ? [selectedHost] : hostStates)
-		.filter((host) => host.connection !== "closed")
-		.map((host) => host.name);
+	// The idle state's facts: which machines in scope are quiet, and when anything
+	// in this scope last happened.
+	const fleet = idleFleet(selectedHost ? [selectedHost] : hostStates, connection);
 	// Older machines send their archive inline with the poll; newer ones page it,
 	// so their newest finish is read only while the idle board is on screen.
 	const boardIdle = !query.trim() && projectSessions.every(isArchived);
@@ -290,8 +285,8 @@ export default function FleetScreen() {
 							/>
 						) : (
 							<WorkersIdleState
-								machines={idleMachines}
-								connection={fleetConnection}
+								machines={fleet.machines}
+								connection={fleet.connection}
 								lastFinishedAt={lastFinishedAt}
 								onNewAgent={spawnWorker}
 							/>
