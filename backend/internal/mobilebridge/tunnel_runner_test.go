@@ -350,6 +350,48 @@ func TestTunnelRunnerKeepsTheQuickTunnelUntilAReplacementIsMade(t *testing.T) {
 	}
 }
 
+// Each replacement that did not help doubles the wait before the next, so a
+// connector that keeps crashing cannot spend the account's tunnel writes.
+func TestTunnelRunnerBacksOffRepairsThatDidNotHelp(t *testing.T) {
+	_, src := newFixedSource(t)
+	r := namedRunner(t, exitingCloudflared(t, refusedLine), src)
+	r.unhelped, r.repairedAt = 2, time.Now().Add(-5*time.Minute) // the wait is now 8 minutes
+	if err := r.runOnce(context.Background()); err == nil || r.repair {
+		t.Fatalf("runOnce = %v, repair %v; want none within 8 minutes", err, r.repair)
+	}
+	r.repairedAt = time.Now().Add(-9 * time.Minute)
+	if err := r.runOnce(context.Background()); err == nil || !r.repair {
+		t.Fatalf("runOnce = %v, repair %v; want one after 8 minutes", err, r.repair)
+	}
+}
+
+// While a fixed tunnel serves, an answer AO Cloud gave, such as 429, waits for
+// the next check: only a link on its way or an unreachable AO Cloud is asked
+// again at once.
+func TestTunnelRunnerDoesNotRetryAnAnswerAOCloudGave(t *testing.T) {
+	cloud, src := newFixedSource(t)
+	bin, _ := fakeCloudflared(t, registeredLine)
+	r := namedRunner(t, bin, src)
+	r.recheckEvery, r.relinkWait = time.Hour, 2*time.Second
+	nudge := make(chan struct{}, 1)
+	r.nudge = nudge
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.runOnce(ctx) }()
+	defer func() { cancel(); <-done }()
+	for deadline := time.Now().Add(10 * time.Second); r.Runtime.UnsettledHostname() == ""; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("fixed connector never registered")
+		}
+	}
+	cloud.set(http.StatusTooManyRequests)
+	nudge <- struct{}{}
+	time.Sleep(500 * time.Millisecond) // a retry would come every relinkWait/24
+	if n := cloud.requests(); n != 2 {
+		t.Fatalf("asked AO Cloud %d times; want the start and one check", n)
+	}
+}
+
 // An edge restart drops a connection and registers it again within seconds.
 func TestTunnelRunnerDoesNotAskWhenAConnectionComesBack(t *testing.T) {
 	cloud, src := newFixedSource(t)

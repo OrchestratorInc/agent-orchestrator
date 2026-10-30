@@ -35,12 +35,13 @@ export async function listAccountRemoteHosts(baseUrl: string): Promise<AccountRe
 
 /** A host saved without a url is listed at its fixed address: AO Cloud knows it from the host id. */
 export async function saveAccountRemoteHost(baseUrl: string, host: Omit<AccountRemoteHost, "url"> & { url?: string }): Promise<void> {
-	// Without a url AO Cloud makes the tunnel and its DNS record first, which
-	// it may take up to a minute to finish; giving up sooner would leave the
-	// machine listed while the caller thinks it is not.
+	// AO Cloud may first make the machine's tunnel and DNS record, or delete a
+	// standing tunnel a new token retires, with or without a url; either can
+	// take up to a minute. Giving up sooner would report a save that went
+	// through as failed.
 	await request(baseUrl, "PUT", `/${encodeURIComponent(host.hostId)}`, {
 		label: host.label, url: host.url, token: host.token,
-	}, host.url === undefined ? 75_000 : 10_000);
+	}, 75_000);
 }
 
 export async function deleteAccountRemoteHost(baseUrl: string, hostId: string): Promise<void> {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"sync"
@@ -43,10 +44,12 @@ type TunnelRunner struct {
 
 	// repair asks AO Cloud for a replacement tunnel on the next start, after
 	// the fixed one stopped being served, until AO Cloud has made one;
-	// repairedAt is when it last did. next is a tunnel AO Cloud already
+	// repairedAt is when it last did, and unhelped counts replacements made
+	// since a connector last served. next is a tunnel AO Cloud already
 	// handed out for the next start. Run is the only goroutine using them.
 	repair     bool
 	repairedAt time.Time
+	unhelped   int
 	next       *NamedTunnel
 	// nudge makes a quick tunnel ask AO Cloud for the fixed address now.
 	nudge <-chan struct{}
@@ -119,6 +122,12 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		// The client's namedProvisionTimeout is well under stableTunnelRun, so
 		// a failing request never counts as a stable run that resets the
 		// backoff ladder.
+		// This start asks AO Cloud now, so a nudge from before it says nothing
+		// new; one that comes while it asks is kept.
+		select {
+		case <-t.nudge:
+		default:
+		}
 		var err error
 		named, err = t.Fixed.TunnelFor(ctx, t.HostID, t.repair)
 		// A replacement AO Cloud did not make, unheard or too soon after the
@@ -126,13 +135,9 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		switch {
 		case err == nil && t.repair && named.Repaired:
 			t.repair, t.repairedAt = false, time.Now()
+			t.unhelped++
 		case unlinked(err):
 			t.repair = false
-		}
-		// This start has just asked AO Cloud, so a nudge from before it says nothing new.
-		select {
-		case <-t.nudge:
-		default:
 		}
 		switch {
 		case named.RunToken != "" && err != nil && t.repair:
@@ -253,27 +258,31 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	t.next = next.Load()
 	if t.next != nil && t.next.Repaired {
 		t.repair, t.repairedAt = false, time.Now()
+		t.unhelped++
 	}
 	// A tunnel that served is not owed the replacement asked for before.
 	if health != nil && health.servedOnce() {
-		t.repair = false
+		t.repair, t.unhelped = false, 0
 	}
 	// A fixed connector that stopped serving, refused, unconnected or gone,
 	// gets a replacement tunnel at the same address, at most every
-	// repairSpacing: on a network that blocks Cloudflare's edge, a
-	// replacement every restart would spend the account's tunnel writes for
-	// nothing.
+	// repairSpacing, doubling up to an hour for each replacement that did not
+	// help: on a network that blocks Cloudflare's edge, or for a connector
+	// that keeps crashing, a replacement every restart would spend the
+	// account's tunnel writes for nothing.
 	replace := func() {
-		t.repair = t.repairedAt.IsZero() || time.Since(t.repairedAt) >= repairSpacing
+		t.repair = t.repairedAt.IsZero() || time.Since(t.repairedAt) >= min(repairSpacing<<min(t.unhelped, 5), time.Hour)
 	}
 	switch {
+	case withdrawn.Load():
+		// A tunnel AO Cloud handed out instead goes before a refusal of the
+		// old one, which would only ask for another.
+		waitErr = errFixedTunnelChanged
 	case unserved.Load() != nil:
 		waitErr = errors.New(*unserved.Load())
 		replace()
 	case upgraded.Load():
 		waitErr = errFixedTunnelReady
-	case withdrawn.Load():
-		waitErr = errFixedTunnelChanged
 	case fixed && ctx.Err() == nil:
 		replace() // exited by itself
 	}
@@ -406,6 +415,12 @@ const (
 func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, repair bool, ready func(NamedTunnel)) {
 	every := cmp.Or(t.upgradeEvery, fixedUpgradeInterval)
 	wait, tried, triedAt := every, "", time.Time{}
+	// Standing in for a failed fixed tunnel, it asks at least every 5 minutes,
+	// so the address is back soon after AO Cloud is.
+	maxWait := maxFixedUpgradeWait
+	if repair {
+		maxWait = 5 * time.Minute
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -426,7 +441,7 @@ func (t *TunnelRunner) awaitFixedTunnel(ctx context.Context, repair bool, ready 
 		if digest != tried {
 			wait = every
 		} else {
-			wait = min(2*wait, maxFixedUpgradeWait)
+			wait = min(2*wait, maxWait)
 		}
 		tried, triedAt = digest, time.Now()
 	}
@@ -470,9 +485,11 @@ func (t *TunnelRunner) watchFixedTunnel(ctx context.Context, serving NamedTunnel
 		named, err := t.Fixed.TunnelFor(ctx, t.HostID, false)
 		// A new link is written here before it lands at AO Cloud, which
 		// refuses it until then, and a machine waking from sleep can ask
-		// before its network is back: either is asked again for a while.
+		// before its network is back: either is asked again for a while. An
+		// answer AO Cloud gave, such as 429 or 502, waits for the next check.
 		relink := cmp.Or(t.relinkWait, relinkGrace)
-		for deadline := time.Now().Add(relink); err != nil && time.Now().Before(deadline); {
+		var unreachable *url.Error
+		for deadline := time.Now().Add(relink); (unlinked(err) || errors.As(err, &unreachable)) && time.Now().Before(deadline); {
 			select {
 			case <-ctx.Done():
 				return
