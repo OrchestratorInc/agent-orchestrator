@@ -908,7 +908,12 @@
     try { bindCopyFeedback(); } catch (e) {}
     try { spyAll(); } catch (e) {}
   }
-  function initAll() { init(); }
+  function fixTitle() {
+    if (document.title.endsWith(" - Orchestrator")) {
+      document.title = document.title.slice(0, -" - Orchestrator".length) + " | Orchestrator.inc Docs";
+    }
+  }
+  function initAll() { init(); fixTitle(); }
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initAll);
   } else { initAll(); }
@@ -934,6 +939,7 @@
         needPh = si && si.placeholder !== "Search";
       }
       try { fixSearchTrigger(); } catch (e) {}
+      try { fixTitle(); } catch (e) {}
       var needChev = !!document.querySelector('nav#sidebar-content button svg use[href*="ChevronRight"]');
       if (needChev) { try { fixGroupChevrons(); } catch (e) {} }
       if (needToc || needToggle || needActions || needDtoc || needKeys || kebabVisible) init();
@@ -957,7 +963,7 @@
       svg.setAttribute('stroke-width', '2');
       svg.setAttribute('stroke-linecap', 'round');
       svg.setAttribute('stroke-linejoin', 'round');
-      svg.innerHTML = '<path d="m9 18 6-6-6-6"></path>';
+      svg.innerHTML = '<path d="m6 9 6 6 6-6"></path>';
     });
   }
 
@@ -973,7 +979,11 @@
     b.style.setProperty('padding-right', '6px', 'important');
     b.style.setProperty('color', 'rgb(184, 184, 184)', 'important');
     var icon = b.querySelector('svg');
-    if (icon) icon.style.setProperty('stroke-width', '2', 'important');
+    if (icon) {
+      icon.style.setProperty('stroke-width', '2', 'important');
+      icon.style.setProperty('color', 'rgb(184, 184, 184)', 'important');
+      icon.style.setProperty('stroke', 'rgb(184, 184, 184)', 'important');
+    }
   }
 
   mo.observe(document.body, { childList: true, subtree: true });
