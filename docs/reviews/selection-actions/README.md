@@ -49,7 +49,33 @@ verification. Native platform coverage and final-head checks are reported in the
 - Agent-collected evidence: shadow-aware selection, deferred refresh completion, explicit navigation, and renderer-prop retention regressions pass. This isolates plausible failure paths; it does not establish the cause in the reporter’s installed app.
 - Phase 1 component run: 297 tests pass and one unrelated Windows locale assertion fails (`2,58,400` versus `258,400`). Narrow follow-up: 26 tests pass; frontend and E2E typechecks pass. Native verification is recorded separately when available.
 
-- Phase 2: selection operations freeze their creation receipt and destination across retries; repeat activation shares an in-flight request, newer selections get fresh identities, and disposed surfaces reject stale completion. All 68 SessionChatSurface tests pass, including four new operation-ownership regressions; frontend typecheck passes.
+- Phase 2 (historical): selection operations originally froze their creation receipt and destination across retries. This was superseded by the clarified activation semantics below.
+
+## Current activation semantics
+
+Each deliberate Add to side chat click follows the currently active side chat.
+Its destination and creation identity are frozen only while that activation is
+processing, so repeated activation cannot issue duplicate requests. Success or
+failure releases the operation; a later click starts a fresh action, including
+after switching side tabs. No automatic creation retries are added. A user click
+after an uncertain creation reply may deliberately create another destination;
+the app does not interpret that click as an internal retry. Add still attaches to
+an existing active chat; New side chat still permits intentional new chats from
+the same text or parent state. Disposed surfaces reject stale completion.
+
+This supersedes the original reviewer request to preserve selection operation
+identity and destination across failed clicks. Durable command handoffs from
+#7088 retain their existing explicit retry/cancel behavior. Toolbar anchoring,
+Ctrl+L in chat, and command consolidation are reserved for separate PRs.
 
 - Renderer follow-up: Edge reproduced loss of selection on window focus: ChatComposer refocused its editor, clearing native file/diff selection. Passive focus and visibility restoration now respect document and shadow-root selections. Both new idle/cache/focus scenarios pass after this fix; 208 composer/side-delivery tests pass. This is a confirmed fixture failure path, not a diagnosis of the installed app.
 - Complete Node 24 Windows frontend run before the focus follow-up: 573 files passed / 32 failed; 9,555 tests passed / 216 failed / 14 skipped. Broad failures include paths, Unix permissions, native dependencies and locale formatting; not all were independently reproduced on main. No complete local pass is claimed. Shared cloud-client (31) and product-ui (161) tests/builds pass, cloud schema has no content drift, renderer build and both typechecks pass. Docs build passes; docs tests have an alias-resolution suite failure and translation validation reports six untouched markers. Native launch was attempted but Go is unavailable and Electron download timed out.
+
+## Final activation review — 30 October 2026
+
+- An independent subagent reviewed the owner/Ronish comments and final reliability implementation twice with no actionable source findings. The owner explicitly superseded cross-click destination/key persistence.
+- Focused selection/viewer suites: 327 tests pass; one existing Windows locale assertion fails (`2,58,400` versus `258,400`). New destination and pending-activation regressions pass. Both frontend/E2E typechecks and the production renderer build pass.
+- Complete Windows frontend run: 574 files pass / 31 fail; 9,846 tests pass / 216 fail / 14 skip. Platform, native dependency, locale, and timing failures remain; not all were independently reproduced on main. Two timing-sensitive suites pass their full isolated rerun (65 tests). No clean full local pass is claimed.
+- Windows Electron renderer fixtures: two complete runs each pass 21/22, with different timeouts (initial inspector startup; selection toolbar before annotation navigation). The annotation scenario passed the first complete run and all three isolated repetitions afterward. The exact timeout cause remains unconfirmed; this is not a clean complete native pass. These fixtures mock bridge/HTTP and do not verify a live provider.
+- Cloud-client 31 tests and product-ui 161 tests, typechecks, and builds pass. Docs build and catalog compilation pass; docs tests retain an alias-resolution failure and translation validation reports six untouched markers.
+- Existing dependencies were reused without installation. Full-app/provider recording and native macOS/Linux manual checks remain gaps; verify the current-head remote jobs separately.

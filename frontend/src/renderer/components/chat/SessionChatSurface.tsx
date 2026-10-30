@@ -451,7 +451,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
- // A selection owns its destination and receipt until its action succeeds.
+ // Freeze the destination only while an activation is processing. A later
+ // deliberate click follows the currently active side, including after failure.
  const selectionSideScope = useMemo(() => ({ active: true, operations: new Map<string, {
   creationKey: string; destinationId?: string; inFlight?: Promise<void>;
  }>() }), [uiSessionId]);
@@ -482,8 +483,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
   })();
   try {
    await target.inFlight;
-   if (selectionSideScope.active) selectionSideScope.operations.delete(excerpt.id);
   } finally {
+   selectionSideScope.operations.delete(excerpt.id);
    target.inFlight = undefined;
   }
  };
