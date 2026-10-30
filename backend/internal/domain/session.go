@@ -556,6 +556,10 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 // persisted.
 type Session struct {
 	NeedsResume bool `json:"needsResume"`
+	// HistoryOnly is a history-only import: shown but never resumed, because the
+	// provider cannot reopen the native conversation from AO's worktree. Derived
+	// from ImportSource.HistoryOnly so clients need not know which harnesses apply.
+	HistoryOnly bool `json:"historyOnly"`
 	SessionRecord
 	// WorkspaceCleanup is a durable teardown fact for the current generation.
 	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`

@@ -15351,6 +15351,8 @@ components:
           type:
           - "null"
           - string
+        historyOnly:
+          type: boolean
         id:
           type: string
         isPinned:
@@ -15514,6 +15516,7 @@ components:
           type: string
       required:
       - needsResume
+      - historyOnly
       - id
       - kind
       - autoReviewEnabled
