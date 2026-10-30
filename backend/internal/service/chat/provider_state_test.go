@@ -340,8 +340,8 @@ func TestSuccessfulCompletionKeepsPlanThatSpansTurns(t *testing.T) {
 			t.Errorf("plan activity step %d status = %q, want %q", i, step.Status, plan.Steps[i].Status)
 		}
 	}
-	// A plan row with no turn is the only copy a client gets, so it must say the
-	// list spans turns as the turn's copy does.
+	// A plan row no turn holds is the only copy a client gets, so every row of a
+	// cross-turn list must say the list spans turns as the turn's copy does.
 	if !detail.SpansTurns {
 		t.Errorf("plan activity detail = %s, want spansTurns", activity.Detail)
 	}

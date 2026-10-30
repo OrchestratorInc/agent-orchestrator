@@ -613,7 +613,8 @@ export function reviewedPaths(activity: ConversationActivity): string[] {
  * The daemon writes both: the turn column answers "what is the plan now" and this
  * row answers "where in the conversation did the agent plan". They cannot disagree —
  * both are written from one event — so the surface prefers the turn's copy and only
- * falls back to this for a plan whose turn predates the controller.
+ * falls back to this for a plan no turn holds: work the agent did on its own outside
+ * an AO turn, or a provider turn AO never correlated.
  */
 export function activityPlan(activity: ConversationActivity): ConversationPlan | undefined {
 	const steps = activity.detail?.steps;

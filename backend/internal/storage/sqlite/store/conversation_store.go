@@ -1198,7 +1198,7 @@ func (s *Store) HasConversationTurns(ctx context.Context, conversationID string)
 // LatestConversationTurn reads the latest non-rolled-back turn on the active
 // branch lineage without loading messages or activities.
 func (s *Store) LatestConversationTurn(ctx context.Context, conversationID string) (domain.ConversationTurn, error) {
-	row, err := s.qr.SelectLatestConversationTurn(ctx, conversationID)
+	row, err := s.conversationReader(ctx).SelectLatestConversationTurn(ctx, conversationID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.ConversationTurn{}, domain.ErrNoConversationTurn
 	}

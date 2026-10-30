@@ -3990,9 +3990,10 @@ func (c *Controller) handoffActive() bool {
 // is what makes repeated updates rewrite one row. The prefix keeps it from ever
 // colliding with a provider item id.
 //
-// A plan with no turn comes from work the agent does on its own after a turn has
-// ended. It is keyed on the turn that work followed, so the revisions in one such
-// run rewrite one row, and work after a later turn gets a row of its own there.
+// A plan with no turn comes from work the agent does on its own, outside any AO
+// turn. It is keyed on the latest turn and on whether that turn had settled, so
+// the revisions in one such run rewrite one row, and a run that starts once the
+// turn ends gets a row of its own after it.
 func (c *Controller) planItemID(ctx context.Context, providerTurnID string) (string, error) {
 	if providerTurnID != "" {
 		return "ao-plan-" + providerTurnID, nil
@@ -4003,6 +4004,9 @@ func (c *Controller) planItemID(ctx context.Context, providerTurnID string) (str
 	}
 	if err != nil {
 		return "", err
+	}
+	if latest.State == domain.TurnStateQueued || latest.State == domain.TurnStateRunning {
+		return "ao-plan-during-" + latest.ID, nil
 	}
 	return "ao-plan-after-" + latest.ID, nil
 }
@@ -4042,7 +4046,8 @@ func planDetail(plan domain.ConversationPlan) []byte {
 	if plan.Explanation != "" {
 		detail["explanation"] = plan.Explanation
 	}
-	// A row with no turn is the only copy of the plan, so it carries the flag too.
+	// For a row no turn holds, the row is the only copy a client gets, so every
+	// row of a cross-turn list carries the flag.
 	if plan.SpansTurns {
 		detail["spansTurns"] = true
 	}
