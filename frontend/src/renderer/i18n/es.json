@@ -2623,7 +2623,7 @@
 	"settings.diagnostics": "Diagnóstico",
 	"settings.diagnosticsToggleHint": "Muestra el uso de memoria y CPU en las tarjetas de sesión y el tablero, y la página de diagnóstico.",
 	"settings.sideChats": "Chats laterales",
-	"settings.sideChatsHint": "Abre conversaciones laterales independientes en el inspector y usa /btw o /side para hacer una pregunta.",
+	"settings.sideChatsHint": "Abre conversaciones laterales independientes en el inspector y usa /btw para hacer una pregunta.",
 	"settings.chromeAgents.label": "Usar agentes en mi Chrome",
 	"settings.chromeAgents.hint": "Permite que los agentes naveguen en tu propio Chrome, con tus sesiones iniciadas. Configúralo en los ajustes del navegador.",
 	"settings.chromeAgents.goTo": "Ir",

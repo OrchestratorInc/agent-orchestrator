@@ -805,6 +805,24 @@ describe("send keys", () => {
 		expect(onSend).not.toHaveBeenCalled();
 	});
 
+	it.each([true,false])("keeps recovered /side routing distinct for legacy=%s", async legacy => {
+		const sessionId=`side-routing-${legacy}`;
+		writeChatComposerText(sessionId,"/side original question");
+		prepareChatComposerDelivery(sessionId,{kind:"send",composerText:"/side original question",requestText:"/side original question",attachments:[],clientMessageId:"original-key"});
+		if (legacy) {
+			const key=`ao.chat.draft:${encodeURIComponent(sessionId)}`;
+			const saved=JSON.parse(window.localStorage.getItem(key)!);
+			delete saved.composer.delivery.commandRoutingVersion;
+			window.localStorage.setItem(key,JSON.stringify(saved));
+		}
+		expect(readChatSessionDraft(sessionId).composer.delivery?.commandRoutingVersion).toBe(legacy ? undefined : 1);
+		const onSend=vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer draftSessionId={sessionId} onSend={onSend}/>);
+		await userEvent.click(await screen.findByRole("button",{name:"Retry message safely"}));
+		await waitFor(()=>expect(onSend).toHaveBeenCalledTimes(1));
+		expect(onSend.mock.calls[0].slice(0,3)).toEqual(["/side original question",undefined,"original-key"]);
+		expect(onSend.mock.calls[0][6]).toBe(legacy ? true : undefined);
+	});
 	it.each(["read", "write"])("preserves safe retry when recording acceptance fails to %s storage", async (failure) => {
 		const sessionId = `composer-live-acceptance-storage-failure-${failure}`;
 		const durableStorage = window.localStorage;
@@ -1846,6 +1864,18 @@ describe("slash commands", () => {
 		scrollIntoView.mockRestore();
 	});
 
+	it.each(["Enter", "Tab"])("finds /btw through /side and completes with %s before sending the prompt", async key => {
+		const {onSend,field}=renderComposer({skills:[{name:"btw",displayName:"btw",description:"Open a new side chat",source:"AO"}]});
+		await typeInComposer(field,"/side");
+		expect(screen.getByRole("option",{name:/\/btw/})).toBeInTheDocument();
+		expect(screen.queryByRole("option",{name:/^\/side\b/})).not.toBeInTheDocument();
+		await userEvent.keyboard(`{${key}}`);
+		expect(composerWireText(field)).toBe("/btw ");
+		expect(onSend).not.toHaveBeenCalled();
+		await typeInComposer(field,"explain this");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(()=>expect(onSend).toHaveBeenCalledWith(expect.stringContaining("/btw explain this")));
+	});
 	it("inserts the highlighted skill on Enter instead of sending", async () => {
 		const { onSend, field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "/rev");
@@ -3055,7 +3085,7 @@ it("retries a legacy cloud receipt with its original filename format and identit
 	for(let i=0;i<localStorage.length;i++){
 		const key=localStorage.key(i)!;const raw=localStorage.getItem(key)!;
 		if(raw.includes('"clientMessageId":"legacy-receipt"')){
-			const saved=JSON.parse(raw);delete saved.composer.delivery.fileReferenceFormat;localStorage.setItem(key,JSON.stringify(saved));
+			const saved=JSON.parse(raw);delete saved.composer.delivery.fileReferenceFormat;window.localStorage.setItem(key,JSON.stringify(saved));
 		}
 	}
 	const onSend=vi.fn().mockResolvedValue(undefined);

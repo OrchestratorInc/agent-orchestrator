@@ -1617,7 +1617,7 @@
 	"settings.diagnostics": "Diagnostics",
 	"settings.diagnosticsToggleHint": "Show memory and CPU usage on session cards and the board, and the Diagnostics page.",
 	"settings.sideChats": "Side chats",
-	"settings.sideChatsHint": "Open separate side conversations in the inspector, and use /btw or /side to ask one a question.",
+	"settings.sideChatsHint": "Open separate side conversations in the inspector, and use /btw to ask one a question.",
 	"settings.chromeAgents.label": "Use agents in my Chrome",
 	"settings.chromeAgents.hint": "Let agents browse in your own Chrome, signed in as you. Set it up in Browser settings.",
 	"settings.chromeAgents.goTo": "Go to",
