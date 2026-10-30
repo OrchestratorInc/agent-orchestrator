@@ -212,7 +212,7 @@ func WithRunFilePath(path string) LauncherOption {
 
 // NewLauncher builds the production reviewer launcher.
 func NewLauncher(reviewers ports.ReviewerResolver, rt reviewerRuntime, dataDir string, opts ...LauncherOption) Launcher {
-	l := &agentLauncher{reviewers: reviewers, runtime: rt, dataDir: dataDir, executable: os.Executable}
+	l := &agentLauncher{reviewers: reviewers, runtime: rt, dataDir: dataDir, executable: agentlaunch.Executable}
 	for _, opt := range opts {
 		opt(l)
 	}
@@ -689,6 +689,15 @@ func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []
 		env[EnvAOCommandWarning] = fmt.Sprintf("PATH pin failed: %v; AO shim fallback failed: %v", err, shimErr)
 	}
 	sessionmanager.AugmentRuntimePATHForLaunchBinary(ctx, env, argv, exec.LookPath, pinnedDir)
+	if pinnedDir != "" {
+		loginEnv, err := agentlaunch.LoginShellEnv(env["PATH"], os.Getenv, env, l.dataDir)
+		if err != nil {
+			env[EnvAOCommandWarning] = fmt.Sprintf("login-shell PATH pin failed: %v", err)
+		}
+		for key, value := range loginEnv {
+			env[key] = value
+		}
+	}
 	return env
 }
 

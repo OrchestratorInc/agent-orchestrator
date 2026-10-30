@@ -104,12 +104,6 @@ describe("buildDaemonEnv", () => {
 		}
 	});
 
-	it("marks the env only when the login-shell exports reached it", () => {
-		expect(buildDaemonEnv(minimalProcessEnv, { PATH: "/opt/homebrew/bin" }, {}).AO_LOGIN_SHELL_ENV).toBe("1");
-		const failed = buildDaemonEnv({ ...minimalProcessEnv, AO_LOGIN_SHELL_ENV: "1" }, null, {});
-		expect(failed.AO_LOGIN_SHELL_ENV).toBeUndefined();
-	});
-
 	it("defaults TERM when neither shell nor process env sets it (Finder launch)", () => {
 		const env = buildDaemonEnv(minimalProcessEnv, null, {});
 		expect(env.TERM).toBe("xterm-256color");

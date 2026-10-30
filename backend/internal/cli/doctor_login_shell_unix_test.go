@@ -97,7 +97,8 @@ func TestDoctorLoginShellReportsWhichAOItRuns(t *testing.T) {
 				ProcessAlive: func(int) bool { return false },
 			}
 			c := &commandContext{deps: deps.withDefaults()}
-			check, ok := c.checkAOLoginShell(context.Background(), tc.daemonExe, t.TempDir())
+			dataDir := t.TempDir()
+			check, ok := c.checkAOLoginShell(context.Background(), tc.daemonExe, dataDir)
 			if !ok {
 				t.Fatal("check skipped, want a result")
 			}
@@ -116,10 +117,16 @@ func TestDoctorLoginShellReportsWhichAOItRuns(t *testing.T) {
 			if tc.daemonExe != "" {
 				pinned = filepath.Dir(tc.daemonExe)
 			}
-			wantArgs := []string{"-c", `exec "$@" </dev/null >/dev/null 2>&1`, "sh",
-				"/usr/bin/env", "PATH=" + pinned + ":/usr/bin:/bin", "/bin/zsh", "-l", "-c", `command -v ao >"$1"`, "zsh"}
-			if gotName != "/bin/sh" || len(gotArgs) != len(wantArgs)+1 || !slices.Equal(gotArgs[:len(wantArgs)], wantArgs) {
-				t.Fatalf("probe = %s %q, want /bin/sh %q <answer file>", gotName, gotArgs, wantArgs)
+			// The shell starts as a session's does: the pin first, plus the
+			// wrappers that restore it after the user's startup files.
+			head := []string{"-c", `exec "$@" </dev/null >/dev/null 2>&1`, "sh", "/usr/bin/env", "PATH=" + pinned + ":/usr/bin:/bin"}
+			tail := []string{"/bin/zsh", "-l", "-c", `command -v ao >"$1"`, "zsh"}
+			wrappers := filepath.Join(dataDir, "runtime", "login-shell")
+			if gotName != "/bin/sh" || len(gotArgs) < len(head)+len(tail)+1 || !slices.Equal(gotArgs[:len(head)], head) ||
+				!slices.Equal(gotArgs[len(gotArgs)-len(tail)-1:len(gotArgs)-1], tail) ||
+				!slices.Contains(gotArgs, "AO_PATH_PIN="+pinned) || !slices.Contains(gotArgs, "ZDOTDIR="+wrappers) ||
+				!slices.Contains(gotArgs, "BASH_ENV="+filepath.Join(wrappers, "bash_env")) {
+				t.Fatalf("probe = %s %q, want /bin/sh %q <login-shell env> %q <answer file>", gotName, gotArgs, head, tail)
 			}
 			if _, err := os.Stat(gotArgs[len(gotArgs)-1]); !os.IsNotExist(err) {
 				t.Fatalf("answer file left behind (stat err %v)", err)
@@ -210,6 +217,47 @@ func TestDoctorLoginShellCatchesStartupFilePrepend(t *testing.T) {
 	}
 }
 
+// TestDoctorLoginShellPassesWhereAORepins runs real zsh and bash login shells
+// with an isolated HOME whose startup files prepend AO's old dev launcher, the
+// #3562 reproduction: the wrappers sessions use put the app's ao back, so
+// doctor reports what those sessions now run.
+func TestDoctorLoginShellPassesWhereAORepins(t *testing.T) {
+	for _, tc := range []struct{ shell, profile string }{
+		{"/bin/zsh", ".zprofile"},
+		{"/bin/bash", ".bash_profile"},
+	} {
+		t.Run(filepath.Base(tc.shell), func(t *testing.T) {
+			if _, err := os.Stat(tc.shell); err != nil {
+				t.Skipf("%s not installed", tc.shell)
+			}
+			root := t.TempDir()
+			app := writeLoginShellFixture(t, filepath.Join(root, "app", "ao"))
+			devLink := linkDevLauncher(t, root)
+			home := filepath.Join(root, "home")
+			if err := os.MkdirAll(home, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			profile := "export PATH='" + filepath.Dir(devLink) + "':\"$PATH\"\n"
+			if err := os.WriteFile(filepath.Join(home, tc.profile), []byte(profile), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", home)
+			t.Setenv("ZDOTDIR", "")
+			t.Setenv("BASH_ENV", "")
+			t.Setenv("SHELL", tc.shell)
+			t.Setenv("PATH", "/usr/bin:/bin")
+			c := &commandContext{deps: Deps{
+				Executable:   func() (string, error) { return app, nil },
+				ProcessAlive: func(int) bool { return false },
+			}.withDefaults()}
+			check, ok := c.checkAOLoginShell(context.Background(), "", filepath.Join(root, "data"))
+			if !ok || check.Level != doctorPass {
+				t.Fatalf("check with %s prepending the dev launcher = %+v (ok %v), want PASS", tc.profile, check, ok)
+			}
+		})
+	}
+}
+
 // TestDoctorLoginShellPinsWhatSessionsPin covers an app directory that also
 // holds other tools: sessions pin an ao shim under the data dir instead, and
 // the probe must start its shell the same way.
@@ -273,29 +321,5 @@ func TestDoctorLoginShellPassesThroughTheShim(t *testing.T) {
 			t.Fatalf("check through the shim = %+v, want PASS", check)
 		}
 		t.Skipf("system login PATH already holds an ao: %s", check.Message)
-	}
-}
-
-func TestDevLauncherHintPromisesTheRepairOnlyWhenItWillHappen(t *testing.T) {
-	const launcher = "/home/me/.local/bin/ao"
-	const installed = "/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao"
-	for _, tc := range []struct {
-		name, goos, want string
-		env              map[string]string
-		repoints         bool
-	}{
-		{"installed desktop daemon", "darwin", installed, nil, true},
-		{"developer opted out", "darwin", installed, map[string]string{agentlaunch.EnvKeepDevLauncher: "1"}, false},
-		{"headless or dev daemon", "linux", "/home/me/go/bin/ao", nil, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			hint := devLauncherHint(launcher, tc.want, tc.goos, func(key string) string { return tc.env[key] })
-			if got := strings.Contains(hint, "repoints"); got != tc.repoints {
-				t.Fatalf("hint %q promises the repair = %v, want %v", hint, got, tc.repoints)
-			}
-			if !strings.Contains(hint, "`rm '"+launcher+"'`") {
-				t.Fatalf("hint %q missing the rm", hint)
-			}
-		})
 	}
 }

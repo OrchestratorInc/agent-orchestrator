@@ -129,6 +129,3 @@ if [[ "${resolved_path}" != "${install_abs_path}" && "${resolved_path}" != "${sh
 fi
 
 printf 'Built %s\n' "${binary_path}"
-if [[ -z "${goexe}" && -L "${install_path}" ]]; then
-  printf 'The desktop app repoints %s at its own ao when it starts; export AO_KEEP_DEV_LAUNCHER=1 in your shell profile to keep this build.\n' "${install_path}"
-fi

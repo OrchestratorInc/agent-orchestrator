@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -337,16 +339,16 @@ func sameBinary(a, b string) bool {
 // probe (SHELL_ENV_TIMEOUT_MS in frontend/src/main.ts).
 const loginShellProbeTimeout = 3 * time.Second
 
-// checkAOLoginShell reports which ao a login shell runs when it starts with
-// the app's ao first on PATH, as every AO session does. Codex runs each agent
-// command through such a shell, and a new terminal is one. Startup files
-// (/etc/paths through path_helper, ~/.zprofile, ~/.bash_profile) run after
-// that pin, so one that prepends a directory holding an older ao swaps the
-// app's binary for it, which checkAOBinary cannot see from doctor's own PATH
-// (#3562). ok is false when there is nothing to probe: Windows, a shell this
-// probe does not speak, or a binary not named ao, which sessions never pin.
-// dataDir locates the ao shim sessions pin when the app's directory also holds
-// other tools.
+// checkAOLoginShell reports which ao a login shell runs when it starts the way
+// every AO session starts one: the app's ao first on PATH, plus the wrappers
+// that put it back after the user's startup files in zsh and bash. Codex runs
+// each agent command through such a shell, and a new terminal is one. A
+// startup file that prepends a directory holding another ao still wins in a
+// shell AO cannot wrap (sh, dash, ksh), and an alias or function wins in any,
+// which checkAOBinary cannot see from doctor's own PATH (#3562). ok is false
+// when there is nothing to probe: Windows, a shell this probe does not speak,
+// or a binary not named ao, which sessions never pin. dataDir holds the ao
+// shim and wrappers sessions use.
 func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe, dataDir string) (check doctorCheck, ok bool) {
 	const name = "ao-login-shell"
 	if runtime.GOOS == "windows" {
@@ -391,14 +393,22 @@ func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe, dataD
 	if current := os.Getenv("PATH"); current != "" {
 		path += string(os.PathListSeparator) + current
 	}
+	loginEnv, err := agentlaunch.LoginShellEnv(path, os.Getenv, nil, dataDir)
+	if err != nil {
+		return couldNotRun(err)
+	}
+	args := []string{"-c", `exec "$@" </dev/null >/dev/null 2>&1`, "sh", "/usr/bin/env", "PATH=" + path}
+	for _, key := range slices.Sorted(maps.Keys(loginEnv)) {
+		args = append(args, key+"="+loginEnv[key])
+	}
+	args = append(args, shell, "-l", "-c", `command -v ao >"$1"`, shellName, answerPath)
 	reqCtx, cancel := context.WithTimeout(ctx, loginShellProbeTimeout)
 	defer cancel()
 	// The shell answers into a file, and its stdout and stderr point at
 	// /dev/null before any startup file runs. A process a startup file leaves
 	// running then cannot hold doctor's output pipe open past the timeout; the
 	// desktop's probe likewise settles when the shell exits.
-	_, err = c.deps.CommandOutput(reqCtx, "/bin/sh", "-c", `exec "$@" </dev/null >/dev/null 2>&1`, "sh",
-		"/usr/bin/env", "PATH="+path, shell, "-l", "-c", `command -v ao >"$1"`, shellName, answerPath)
+	_, err = c.deps.CommandOutput(reqCtx, "/bin/sh", args...)
 	answer, readErr := os.ReadFile(answerPath) //nolint:gosec // path is inside doctor's own temp dir
 	resolved := strings.TrimSpace(string(answer))
 	timedOut := errors.Is(reqCtx.Err(), context.DeadlineExceeded)
@@ -426,25 +436,12 @@ func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe, dataD
 			Message: fmt.Sprintf("a %s login shell still runs %s (%s)", shellName, wantLabel, want),
 		}, true
 	default:
-		msg = fmt.Sprintf("a %s login shell runs %s, not %s %s: a startup file such as ~/.zprofile puts its directory first, so agent commands that run in a login shell (Codex's) and new terminals run that copy; remove it or stop prepending its directory", shellName, resolved, wantLabel, want)
+		msg = fmt.Sprintf("a %s login shell runs %s, not %s %s: a startup file such as ~/.profile puts its directory first, and AO puts its own ao back only in zsh and bash, so agent commands that run in a login shell (Codex's) and new terminals run that copy; remove it or stop prepending its directory", shellName, resolved, wantLabel, want)
 		if agentlaunch.IsDevLauncher(resolved, agentlaunch.DevLauncherBuildPaths(os.Getenv)) {
-			msg += devLauncherHint(resolved, want, runtime.GOOS, os.Getenv)
+			msg += fmt.Sprintf("; it is the launcher scripts/daemon-build.sh installs, and `rm '%s'` removes it", strings.ReplaceAll(resolved, "'", `'\''`))
 		}
 	}
 	return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: name, Message: msg}, true
-}
-
-// devLauncherHint explains a scripts/daemon-build.sh launcher that shadows
-// want. It promises the desktop's repair only when want is an installed
-// desktop daemon, which is the only kind that makes it, and the developer has
-// not opted out.
-func devLauncherHint(launcher, want, goos string, getenv func(string) string) string {
-	rm := fmt.Sprintf("`rm '%s'`", strings.ReplaceAll(launcher, "'", `'\''`))
-	keep, _ := strconv.ParseBool(getenv(agentlaunch.EnvKeepDevLauncher))
-	if agentlaunch.IsDesktopDaemonPath(goos, want, getenv("HOME")) && !keep {
-		return fmt.Sprintf("; it is the launcher scripts/daemon-build.sh installs, which the desktop app repoints at its own ao when it next starts (%s=1 keeps it), and %s removes it now", agentlaunch.EnvKeepDevLauncher, rm)
-	}
-	return "; it is the launcher scripts/daemon-build.sh installs, and " + rm + " removes it"
 }
 
 func (c *commandContext) checkGit(ctx context.Context) doctorCheck {

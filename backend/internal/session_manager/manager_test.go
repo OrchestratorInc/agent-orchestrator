@@ -8065,11 +8065,18 @@ func TestSpawnAndRestore_PinHookPATHToDaemonBinary(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("PATH", "/usr/bin")
 			m, st, rt, _ := pathPinManager(executable)
+			m.dataDir = t.TempDir()
 			if err := tc.launch(m, st); err != nil {
 				t.Fatal(err)
 			}
 			if got := rt.lastCfg.Env["PATH"]; got != want {
 				t.Fatalf("runtime env PATH = %q, want %q", got, want)
+			}
+			// Login shells the agent starts (Codex's) re-pin after the user's
+			// startup files.
+			if env := rt.lastCfg.Env; runtime.GOOS != "windows" && (env["AO_PATH_PIN"] != filepath.Dir(daemonExe) ||
+				env["ZDOTDIR"] != filepath.Join(m.dataDir, "runtime", "login-shell") || env["BASH_ENV"] != filepath.Join(m.dataDir, "runtime", "login-shell", "bash_env")) {
+				t.Fatalf("runtime env = %v, want the login-shell re-pin for %s", env, filepath.Dir(daemonExe))
 			}
 		})
 	}

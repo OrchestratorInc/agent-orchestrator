@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -84,86 +83,5 @@ func TestIsDevLauncherNeedsTheExactBuildLink(t *testing.T) {
 				t.Fatalf("IsDevLauncher(%s) = %v, want %v", tc.path, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestRepointDevLaunchersRepointsOnlyAOsOwnLinks(t *testing.T) {
-	root := t.TempDir()
-	app := filepath.Join(root, "Agent Orchestrator.app", "Contents", "Resources", "daemon", "ao")
-	writeExecutableFixture(t, app)
-	localBin := filepath.Join(root, "local-bin")
-	goBin := filepath.Join(root, "go-bin")
-	_, buildPaths := devLauncherFixture(t, root, localBin, goBin)
-	foreignDir := filepath.Join(root, "homebrew-bin")
-	foreign := filepath.Join(root, "node_modules", "ao")
-	writeExecutableFixture(t, foreign)
-	if err := os.MkdirAll(foreignDir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(foreign, filepath.Join(foreignDir, "ao")); err != nil {
-		t.Fatal(err)
-	}
-	copyDir := filepath.Join(root, "copy-bin")
-	writeExecutableFixture(t, filepath.Join(copyDir, "ao"))
-
-	dirs := []string{localBin, localBin + "/", "relative/bin", foreignDir, copyDir, filepath.Join(root, "no-such-dir"), goBin}
-	owned := func(target string) bool { return slices.Contains(buildPaths, target) }
-	repointed, err := RepointDevLaunchers(app, dirs, owned)
-	if err != nil {
-		t.Fatalf("repoint: %v", err)
-	}
-	want := []string{filepath.Join(localBin, "ao"), filepath.Join(goBin, "ao")}
-	if !slices.Equal(repointed, want) {
-		t.Fatalf("repointed = %q, want %q", repointed, want)
-	}
-	for _, link := range want {
-		if target, err := os.Readlink(link); err != nil || target != app {
-			t.Fatalf("%s -> %q (%v), want %q", link, target, err, app)
-		}
-	}
-	if target, err := os.Readlink(filepath.Join(foreignDir, "ao")); err != nil || target != foreign {
-		t.Fatalf("foreign link -> %q (%v), want it untouched at %q", target, err, foreign)
-	}
-	if info, err := os.Lstat(filepath.Join(copyDir, "ao")); err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("copied launcher changed: %v %v", info, err)
-	}
-	for _, dir := range []string{localBin, goBin} {
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), ".ao-launcher-") {
-				t.Fatalf("temporary link %s left in %s", entry.Name(), dir)
-			}
-		}
-	}
-
-	// A second start finds nothing left to repoint.
-	if again, err := RepointDevLaunchers(app, dirs, owned); err != nil || len(again) != 0 {
-		t.Fatalf("second repoint = %q, %v; want nothing", again, err)
-	}
-}
-
-func TestRepointDevLaunchersReportsAnUnwritableDirectory(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores directory permissions")
-	}
-	root := t.TempDir()
-	app := filepath.Join(root, "app", "ao")
-	writeExecutableFixture(t, app)
-	locked := filepath.Join(root, "locked-bin")
-	build, buildPaths := devLauncherFixture(t, root, locked)
-	if err := os.Chmod(locked, 0o500); err != nil { //nolint:gosec // test makes the directory read-only on purpose
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(locked, 0o750) }) //nolint:gosec // restore so TempDir cleanup can remove it
-
-	repointed, err := RepointDevLaunchers(app, []string{locked}, func(target string) bool { return slices.Contains(buildPaths, target) })
-	if err == nil || !strings.Contains(err.Error(), filepath.Join(locked, "ao")) || len(repointed) != 0 {
-		t.Fatalf("repoint into read-only dir = %q, %v; want an error naming the link", repointed, err)
-	}
-	if target, err := os.Readlink(filepath.Join(locked, "ao")); err != nil || target != build {
-		t.Fatalf("link -> %q (%v), want it kept at %q", target, err, build)
 	}
 }
