@@ -307,7 +307,7 @@
 	"cloud.planLimit.contactAdmin": "Contactez l'administrateur de votre organisation pour l'augmenter.",
 	"cloud.planLimit.slotsFull": "Cela n'a pas démarré, car toutes les sessions en cours de votre forfait sont utilisées.",
 	"cloud.planLimit.refused": "Votre forfait ne permet pas cela.",
-	"cloud.planLimit.onPlan": "Vous êtes sur {{plan}}.",
+	"cloud.planLimit.onPlan": "Vous êtes sur le forfait {{plan}}.",
 	"cloud.planLimit.upgrade": "Passer à un forfait supérieur",
 	"cloud.lifecycle.restoringAgent": "Restauration de l’agent",
 	"cloud.lifecycle.resumingWorkspace": "Reprise de l’espace de travail",

@@ -306,7 +306,7 @@
 	"cloud.planLimit.contactAdmin": "Wende dich an den Administrator deiner Organisation, um es zu erhöhen.",
 	"cloud.planLimit.slotsFull": "Das wurde nicht gestartet, weil alle laufenden Sitzungen deines Tarifs belegt sind.",
 	"cloud.planLimit.refused": "Dein Tarif erlaubt das nicht.",
-	"cloud.planLimit.onPlan": "Du nutzt {{plan}}.",
+	"cloud.planLimit.onPlan": "Du nutzt den {{plan}}-Tarif.",
 	"cloud.planLimit.upgrade": "Tarif upgraden",
 	"cloud.lifecycle.restoringAgent": "Agent wird wiederhergestellt",
 	"cloud.lifecycle.resumingWorkspace": "Workspace wird fortgesetzt",

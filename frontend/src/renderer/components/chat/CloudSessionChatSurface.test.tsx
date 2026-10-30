@@ -1191,7 +1191,7 @@ describe("CloudSessionChatSurface", () => {
 		expect(screen.queryByRole("alert")).toBeNull();
 		await act(() => queryClient.refetchQueries({ queryKey: key }));
 		const notice = await screen.findByRole("alert");
-		expect(notice.textContent).toContain("all running sessions on your plan are in use. You're on Starter.");
+		expect(notice.textContent).toContain("all running sessions on your plan are in use. You're on the Starter plan.");
 		const openGlobalSettings = vi.fn();
 		useUiStore.setState({ openGlobalSettings });
 		fireEvent.click(screen.getByRole("button", { name: "Upgrade your plan" }));

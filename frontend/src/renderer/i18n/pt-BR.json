@@ -307,7 +307,7 @@
 	"cloud.planLimit.contactAdmin": "Fale com o administrador da sua organização para aumentá-lo.",
 	"cloud.planLimit.slotsFull": "Isto não começou porque todas as sessões em execução do seu plano estão em uso.",
 	"cloud.planLimit.refused": "Seu plano não permite isto.",
-	"cloud.planLimit.onPlan": "Você está no {{plan}}.",
+	"cloud.planLimit.onPlan": "Você está no plano {{plan}}.",
 	"cloud.planLimit.upgrade": "Fazer upgrade do plano",
 	"cloud.lifecycle.restoringAgent": "Restaurando agente",
 	"cloud.lifecycle.resumingWorkspace": "Retomando workspace",
