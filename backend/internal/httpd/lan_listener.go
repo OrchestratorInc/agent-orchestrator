@@ -42,10 +42,20 @@ type LANManager struct {
 // (backed by the shared state) and returns a manager that can start/stop the
 // network-facing listener. Most callers want NewMobileLAN, which owns the state.
 func NewLANManager(handler http.Handler, state *authState, defaultPort int, log *slog.Logger, sink ports.EventSink) *LANManager {
+	return newLANManager(handler, nil, state, defaultPort, log, sink)
+}
+
+// newLANManager is NewLANManager with an optional preAuth wrapper, which runs
+// after the control block and before authMiddleware.
+func newLANManager(handler http.Handler, preAuth func(http.Handler) http.Handler, state *authState, defaultPort int, log *slog.Logger, sink ports.EventSink) *LANManager {
 	lock := newLockout(time.Now)
 	auth := authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))
+	authed := auth(handler)
+	if preAuth != nil {
+		authed = preAuth(authed)
+	}
 	m := &LANManager{
-		handler:     lanControlBlock(auth(handler)),
+		handler:     lanControlBlock(authed),
 		defaultPort: defaultPort,
 		log:         loggerOrDefault(log),
 		state:       state,
@@ -140,12 +150,19 @@ func IsLANControlBlockedPathForTest(path string) bool { return isLANControlBlock
 // since it is unexported; this gives them a LANManager that owns one, and the
 // daemon rotates the connection password exclusively via SetPasswordHash.
 func NewMobileLAN(handler http.Handler, hostID string, defaultPort int, log *slog.Logger, sink ports.EventSink) *LANManager {
-	return NewLANManager(expectedHostGuard(hostID)(handler), &authState{}, defaultPort, log, sink)
+	return newLANManager(handler, expectedHostGuard(hostID), &authState{}, defaultPort, log, sink)
 }
 
 // expectedHostGuard prevents a saved address from sending work to a different
 // AO installation after that address is reassigned. Older clients omit the
 // header; auth still applies to them as before.
+//
+// It runs ahead of auth. Behind it, a phone whose saved address now reaches a
+// different AO install (another machine, or a second daemon on this one that
+// took the port) got that install's 401 and told the user their password was
+// rotated, instead of the 421 that makes it race for its own host, and spent
+// a lockout attempt there. Answering first discloses nothing the
+// unauthenticated identity probe does not, and serves nothing.
 func expectedHostGuard(hostID string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
