@@ -185,6 +185,7 @@ type AppSetting struct {
 	HarnessDefaults    string
 	VersionRefresh     bool
 	ComputerUse        bool
+	LimitHistory       bool
 }
 
 type Automation struct {

@@ -49,3 +49,21 @@ func TestAgentLimitReadingsRoundTripAndExpire(t *testing.T) {
 		t.Fatalf("after 15 days readings = %+v, want only the new one", got)
 	}
 }
+
+// TestLimitHistoryOffUntilTurnedOn pins that limit readings are kept only once
+// the app turns the history on, and stop when it turns it off.
+func TestLimitHistoryOffUntilTurnedOn(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if s.LimitHistoryEnabled(ctx) {
+		t.Fatal("limit history is on before anything turned it on")
+	}
+	mustNoError(t, s.SetLimitHistory(ctx, true, time.Now()))
+	if !s.LimitHistoryEnabled(ctx) {
+		t.Fatal("limit history stayed off after turning it on")
+	}
+	mustNoError(t, s.SetLimitHistory(ctx, false, time.Now()))
+	if s.LimitHistoryEnabled(ctx) {
+		t.Fatal("limit history stayed on after turning it off")
+	}
+}

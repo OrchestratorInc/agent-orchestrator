@@ -1964,6 +1964,16 @@ type UsageReportQuery struct {
 	ProjectID domain.ProjectID `query:"projectId,omitempty" description:"Read one project only."`
 }
 
+// UsageLimitHistoryRequest turns keeping limit readings on or off.
+type UsageLimitHistoryRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UsageLimitHistoryResponse is whether limit readings are now kept.
+type UsageLimitHistoryResponse struct {
+	Enabled bool `json:"enabled"`
+}
+
 // UsageLimitWindowsQuery is the period of limit readings to read.
 type UsageLimitWindowsQuery struct {
 	Days int `query:"days,omitempty" minimum:"1" maximum:"14" description:"Days of readings to read; they are kept for 14. Defaults to 7."`

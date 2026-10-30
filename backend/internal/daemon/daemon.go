@@ -1046,6 +1046,7 @@ func Run(buildVersion string) error {
 		UsageSummary:       usagesvc.NewSummaryReader(store),
 		UsageReport:        usageReportReader(store, usagePricing),
 		UsageLimitHistory:  usagesvc.NewLimitHistoryReader(store),
+		UsageLimitSetting:  store,
 		SessionMemory:      memoryReader,
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,

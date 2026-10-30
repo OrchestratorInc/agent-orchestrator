@@ -4363,6 +4363,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/limit-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Turn keeping limit readings, and reading limits in the background, on or off */
+        put: operations["setUsageLimitHistory"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/limit-windows": {
         parameters: {
             query?: never;
@@ -7866,6 +7883,12 @@ export interface components {
             subagentId?: string;
             subagentTranscriptPath?: string;
             transcriptPath?: string;
+        };
+        UsageLimitHistoryRequest: {
+            enabled: null | boolean;
+        };
+        UsageLimitHistoryResponse: {
+            enabled: boolean;
         };
         UsageLimitLogin: {
             accountId: string;
@@ -24232,6 +24255,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TelemetryIdentityResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setUsageLimitHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageLimitHistoryRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageLimitHistoryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Implemented */

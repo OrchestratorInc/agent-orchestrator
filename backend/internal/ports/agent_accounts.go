@@ -68,6 +68,9 @@ type AgentLimitReadingStore interface {
 	// ListAgentLimitReadings returns readings taken at or after since, oldest
 	// first per account and window.
 	ListAgentLimitReadings(ctx context.Context, since time.Time) ([]domain.AgentLimitReading, error)
+	// LimitHistoryEnabled reports whether readings are kept at all. It is off
+	// unless the app turns it on (Developer Mode).
+	LimitHistoryEnabled(ctx context.Context) bool
 }
 
 // AgentAccountLaunchEnv gives Session Manager the account environment of a

@@ -12987,6 +12987,44 @@ paths:
         can adopt it
       tags:
       - identity
+  /api/v1/usage/limit-history:
+    put:
+      operationId: setUsageLimitHistory
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UsageLimitHistoryRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageLimitHistoryResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Turn keeping limit readings, and reading limits in the background,
+        on or off
+      tags:
+      - usage
   /api/v1/usage/limit-windows:
     get:
       operationId: getUsageLimitWindows
@@ -22063,6 +22101,22 @@ components:
           type: string
       required:
       - harness
+      type: object
+    UsageLimitHistoryRequest:
+      properties:
+        enabled:
+          type:
+          - "null"
+          - boolean
+      required:
+      - enabled
+      type: object
+    UsageLimitHistoryResponse:
+      properties:
+        enabled:
+          type: boolean
+      required:
+      - enabled
       type: object
     UsageLimitLogin:
       properties:

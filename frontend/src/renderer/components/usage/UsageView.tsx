@@ -9,6 +9,7 @@ import { hidesShellTopbar } from "../../lib/platform";
 import { formatRange } from "../../lib/usage-format";
 import type { UsageUnit } from "../../lib/usage-report";
 import { cn } from "../../lib/utils";
+import { useUiStore } from "../../stores/ui-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../../types/workspace";
 import { HARNESS_TAB_CLASS, HARNESS_TABS_CLASS } from "../settings/harness/harness-ui";
 import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
@@ -44,7 +45,10 @@ function useNow(intervalMs: number): Date {
 export function UsageView() {
 	const { t, i18n } = useTranslation();
 	const showPageTitle = hidesShellTopbar();
-	const [tab, setTab] = useState<UsageTab>("spend");
+	const [chosenTab, setTab] = useState<UsageTab>("spend");
+	// The experimental Windows tab, and the readings behind it, exist only in Developer Mode.
+	const developerMode = useUiStore((state) => state.developerMode);
+	const tab = chosenTab === "windows" && !developerMode ? "spend" : chosenTab;
 	const [unit, setUnit] = useState<UsageUnit>("cost");
 	const [days, setDays] = useState(7);
 	// Whole periods stepped back from now; 0 is the current one.
@@ -152,10 +156,12 @@ export function UsageView() {
 						<TabsList aria-label={t("usage.views")} className={HARNESS_TABS_CLASS}>
 							<TabsTrigger value="spend" className={HARNESS_TAB_CLASS}>{t("usage.view.spend")}</TabsTrigger>
 							<TabsTrigger value="limits" className={HARNESS_TAB_CLASS}>{t("usage.view.limits")}</TabsTrigger>
-							<TabsTrigger value="windows" className={cn(HARNESS_TAB_CLASS, "gap-1.5")}>
-								{t("usage.view.windows")}
-								<Badge className="h-4 px-1.5 text-2xs font-normal">{t("usage.windows.experimental")}</Badge>
-							</TabsTrigger>
+							{developerMode ? (
+								<TabsTrigger value="windows" className={cn(HARNESS_TAB_CLASS, "gap-1.5")}>
+									{t("usage.view.windows")}
+									<Badge className="h-4 px-1.5 text-2xs font-normal">{t("usage.windows.experimental")}</Badge>
+								</TabsTrigger>
+							) : null}
 						</TabsList>
 					</Tabs>
 				</div>

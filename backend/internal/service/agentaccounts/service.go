@@ -142,6 +142,9 @@ func (s *Service) KeepReadingLimits(ctx context.Context, every time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if !s.keepingLimits(ctx) {
+				continue
+			}
 			if _, err := s.List(ctx, false); err != nil && ctx.Err() == nil {
 				s.log.DebugContext(ctx, "background limits read failed", "error", err)
 			}
@@ -149,15 +152,24 @@ func (s *Service) KeepReadingLimits(ctx context.Context, every time.Duration) {
 	}
 }
 
-// recordLimits keeps one read's windows. A failed write loses one point of
-// history, never the read itself.
-func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email, plan string, limits domain.AgentAccountLimits) {
+// keepingLimits reports whether limit readings are kept: only while the app
+// has the limit history turned on.
+func (s *Service) keepingLimits(ctx context.Context) bool {
 	s.mu.Lock()
 	log := s.limitLog
 	s.mu.Unlock()
-	if log == nil || len(limits.Windows) == 0 {
+	return log != nil && log.LimitHistoryEnabled(ctx)
+}
+
+// recordLimits keeps one read's windows. A failed write loses one point of
+// history, never the read itself.
+func (s *Service) recordLimits(ctx context.Context, account domain.AgentAccount, email, plan string, limits domain.AgentAccountLimits) {
+	if len(limits.Windows) == 0 || !s.keepingLimits(ctx) {
 		return
 	}
+	s.mu.Lock()
+	log := s.limitLog
+	s.mu.Unlock()
 	at := limits.FetchedAt
 	if at.IsZero() {
 		at = s.now()

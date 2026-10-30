@@ -62,3 +62,20 @@ func (s *Store) ListAgentLimitReadings(ctx context.Context, since time.Time) ([]
 	}
 	return out, nil
 }
+
+// LimitHistoryEnabled reports whether limit readings are kept; an unreadable
+// setting counts as off.
+func (s *Store) LimitHistoryEnabled(ctx context.Context) bool {
+	enabled, err := s.qr.GetLimitHistory(ctx)
+	return err == nil && enabled
+}
+
+// SetLimitHistory turns keeping limit readings on or off.
+func (s *Store) SetLimitHistory(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetLimitHistory(ctx, gen.SetLimitHistoryParams{LimitHistory: enabled, UpdatedAt: now.UTC()}); err != nil {
+		return fmt.Errorf("set limit history: %w", err)
+	}
+	return nil
+}

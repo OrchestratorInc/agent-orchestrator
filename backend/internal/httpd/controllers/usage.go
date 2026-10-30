@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -30,6 +31,11 @@ type UsageReportService interface {
 // UsageLimitHistoryService reads the windows AO's own limit readings show.
 type UsageLimitHistoryService interface {
 	History(ctx context.Context, days int) (domain.UsageLimitHistory, error)
+}
+
+// UsageLimitHistorySetting turns keeping limit readings on and off.
+type UsageLimitHistorySetting interface {
+	SetLimitHistory(ctx context.Context, enabled bool, now time.Time) error
 }
 
 // SessionMemoryService samples resident memory per live session.
@@ -67,16 +73,39 @@ type UsageController struct {
 	Report UsageReportService
 	// LimitHistory is optional: without it the limit windows route is 501.
 	LimitHistory UsageLimitHistoryService
+	// LimitHistorySetting is optional: without it the limit history route is 501.
+	LimitHistorySetting UsageLimitHistorySetting
 }
 
 // Register mounts usage routes on the supplied router.
 func (c *UsageController) Register(r chi.Router) {
 	r.Get("/usage/report", c.getReport)
 	r.Get("/usage/limit-windows", c.getLimitWindows)
+	r.Put("/usage/limit-history", c.setLimitHistory)
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/memory", c.listMemory)
 	r.Get("/usage/memory/pressure", c.getPressure)
 	r.Get("/usage/sessions/{sessionId}", c.getSession)
+}
+
+func (c *UsageController) setLimitHistory(w http.ResponseWriter, r *http.Request) {
+	if c.LimitHistorySetting == nil {
+		apispec.NotImplemented(w, r, "PUT", "/api/v1/usage/limit-history")
+		return
+	}
+	var req UsageLimitHistoryRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.Enabled == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "LIMIT_HISTORY_INVALID", "enabled must be true or false", nil)
+		return
+	}
+	if err := c.LimitHistorySetting.SetLimitHistory(r.Context(), *req.Enabled, time.Now()); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, UsageLimitHistoryResponse{Enabled: *req.Enabled})
 }
 
 func (c *UsageController) getLimitWindows(w http.ResponseWriter, r *http.Request) {
