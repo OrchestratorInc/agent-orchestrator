@@ -103,36 +103,6 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	}
 }
 
-// processRunsPi reads a live process's argv, so a Pi writer is matched by its
-// executable while an unrelated command is not, even one whose name holds "pi".
-func TestProcessRunsPi(t *testing.T) {
-	ctx := context.Background()
-	start := func(name string) *exec.Cmd {
-		t.Helper()
-		bin := filepath.Join(t.TempDir(), name)
-		if err := os.Symlink("/bin/sleep", bin); err != nil {
-			t.Fatal(err)
-		}
-		cmd := exec.Command(bin, "30")
-		if err := cmd.Start(); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
-		return cmd
-	}
-	pi := start("pi")
-	if !processRunsPi(ctx, pi.Process.Pid) {
-		t.Fatal("a live pi executable was not identified as a Pi writer")
-	}
-	other := start("pip")
-	if processRunsPi(ctx, other.Process.Pid) {
-		t.Fatal("pip was wrongly identified as a Pi writer")
-	}
-	if processRunsPi(ctx, 0) {
-		t.Fatal("an invalid pid must not be a Pi writer")
-	}
-}
-
 // Claude Code accepts a second writer, so AO checks its registry after adoption too.
 func TestAdoptedClaudeImportOpenElsewhereBlocksResume(t *testing.T) {
 	home := t.TempDir()

@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -113,6 +112,14 @@ func sameDirectory(a, b string) bool {
 // importOwnedElsewhere reports positive evidence that another provider process
 // holds the conversation: Codex keeps a writer lock per loaded thread, Claude
 // Code registers each live session, and older writers keep the transcript open.
+//
+// Pi has no such signal: it keeps no writer lock or live-session registry and
+// does not hold its session file open (see writableTranscriptOwner), and
+// pi-acp's session/load does not refuse a second writer. So a Pi conversation
+// still open in the Pi CLI/TUI is not detected, and importing it can interleave
+// turns with the other writer. This matches the documented posture for
+// lock-less providers; a reliable per-session Pi owner signal would be needed
+// to protect it.
 func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
 	switch rec.Harness {
@@ -195,6 +202,14 @@ func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) b
 
 // writableTranscriptOwner is the fallback for writers without a lock or registry.
 // Read-only descriptors are not ownership.
+//
+// It cannot see a live Pi owner: the pi CLI/TUI and pi-acp persist with
+// appendFileSync/writeFileSync, opening and closing the session file for each
+// entry rather than holding it open, so lsof reports a Pi writer only during
+// the instant of a write. Pi also keeps no writer lock or live-session
+// registry, and pi-acp's session/load does not refuse a second writer, so an
+// imported Pi conversation that is still open elsewhere is not detected. See
+// importOwnedElsewhere.
 func writableTranscriptOwner(ctx context.Context, path string) bool {
 	if path == "" {
 		return false
@@ -203,55 +218,18 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 	defer cancel()
 	out, _ := process.CommandContext(probeCtx, "lsof", "-F", "pcfa", "--", path).Output()
 	command := ""
-	pid := 0
-	piChecked := map[int]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
-		switch {
-		case strings.HasPrefix(line, "p"):
+		if strings.HasPrefix(line, "p") {
 			command = ""
-			pid, _ = strconv.Atoi(strings.TrimPrefix(line, "p"))
-		case strings.HasPrefix(line, "c"):
-			command = strings.ToLower(line[1:])
-		case line == "aw" || line == "au":
-			// Claude and Codex name themselves in lsof's COMMAND. Pi runs under
-			// node/bun, so lsof reports the interpreter; a writer is only Pi when
-			// its own argv identifies it, read from a bounded per-PID probe.
-			if strings.Contains(command, "claude") || strings.Contains(command, "codex") {
-				return true
-			}
-			if pid > 0 && !piChecked[pid] {
-				piChecked[pid] = true
-				if processRunsPi(ctx, pid) {
-					return true
-				}
-			}
 		}
-	}
-	return false
-}
-
-// identifiesPi reports whether a `ps -o comm= -o args=` line describes a Pi
-// writer: the native `pi`/`pi-acp` executable, or an interpreter (node/bun)
-// whose argv runs the pi CLI or the pi-acp package. An unrelated command that
-// merely contains "pi" (pip, api-server, spin), or a plain interpreter, is not.
-func identifiesPi(psLine string) bool {
-	fields := strings.Fields(psLine)
-	if len(fields) == 0 {
-		return false
-	}
-	// ps prints the executable first; a native pi/pi-acp binary is Pi itself.
-	if base := filepath.Base(fields[0]); base == "pi" || base == "pi-acp" {
-		return true
-	}
-	// Otherwise an interpreter counts only when a later argv token is the pi or
-	// pi-acp bin, or the command line names the pi/pi-acp package.
-	for _, field := range fields[1:] {
-		if base := filepath.Base(field); base == "pi" || base == "pi-acp" {
+		if strings.HasPrefix(line, "c") {
+			command = strings.ToLower(line[1:])
+		}
+		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex")) {
 			return true
 		}
 	}
-	low := strings.ToLower(psLine)
-	return strings.Contains(low, "pi-acp") || strings.Contains(low, "pi-coding-agent")
+	return false
 }
 
 // importCommit fetches unpublished commits into the registered repository so
