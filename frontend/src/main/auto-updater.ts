@@ -38,11 +38,13 @@ import {
   type UpdateTrigger,
 } from "../shared/update-telemetry";
 import {
+  describeUpdateFailure,
   isManifest404Error,
   looksLikeRawUpdateError,
   updateErrorText,
   userFacingUpdateError,
   type UpdateErrorPhase,
+  type UpdateFailure,
 } from "../shared/update-error-message";
 
 // Current AO uses the stock full-ZIP path. A future compatible build explicitly
@@ -194,7 +196,7 @@ export function configureFeed(
 let lastStatus: UpdateStatus = { state: "idle" };
 let independentStatusRevision = 0;
 let eventsWired = false;
-let lastCheckError: string | undefined;
+let lastCheckError: UpdateFailure | undefined;
 
 // Staged-update tracking for the escalation evaluator: set on update-downloaded,
 // re-evaluated every 30 minutes while the update sits uninstalled. stateDir is
@@ -745,7 +747,7 @@ function broadcast(
   // dump (#5755).
   const safeStatus: UpdateStatus =
     status.state === "error" && status.message !== undefined && looksLikeRawUpdateError(status.message)
-      ? { ...status, message: userFacingUpdateError(status.message, failedUpdatePhase()) }
+      ? { ...status, ...updateErrorFields(status.message, failedUpdatePhase()) }
       : status;
   const statusWithCheckTime: UpdateStatus =
     lastCheckedAtMs === undefined || safeStatus.checkedAt !== undefined
@@ -756,7 +758,7 @@ function broadcast(
     ...statusWithoutNotes,
     ...stagedStamp(),
     ...releaseNotesFor(safeStatus),
-    ...(lastCheckError ? { checkError: lastCheckError } : {}),
+    ...checkErrorFields(),
     ...(consecutiveAutomaticNetFailures >= STALE_CHECK_NUDGE_THRESHOLD
       ? { staleCheckNudge: true }
       : {}),
@@ -1633,7 +1635,7 @@ function recordAutomaticNetFailure(): void {
 // server and so breaks the streak — otherwise a single interleaving non-net
 // error would let a stale streak still trip the nudge (#3526).
 function recordAutomaticCheckFailure(err: unknown): void {
-  lastCheckError = userFacingUpdateError(err, "check");
+  lastCheckError = describeUpdateFailure(err, "check");
   if (isNetError(err)) recordAutomaticNetFailure();
   else consecutiveAutomaticNetFailures = 0;
   // Guarded like the net streak: one check can surface as both an "error" event
@@ -1696,6 +1698,23 @@ function failedUpdatePhase(): UpdateErrorPhase {
   if (activeUpdaterOperation === "manual-install") return "install";
   if (activeUpdaterOperation === "return-home" && activeUpdaterPhase === "check") return "return";
   return activeUpdaterPhase;
+}
+
+// An error status's text: the English sentence and, when the failure was
+// rewritten, what it says, so the renderer can show it localized (#5755).
+function failureFields(failure: UpdateFailure): Pick<UpdateStatus, "message" | "errorInfo"> {
+  return failure.info ? { message: failure.message, errorInfo: failure.info } : { message: failure.message };
+}
+
+function updateErrorFields(err: unknown, phase: UpdateErrorPhase): Pick<UpdateStatus, "message" | "errorInfo"> {
+  return failureFields(describeUpdateFailure(err, phase));
+}
+
+function checkErrorFields(): Pick<UpdateStatus, "checkError" | "checkErrorInfo"> {
+  if (!lastCheckError) return {};
+  return lastCheckError.info
+    ? { checkError: lastCheckError.message, checkErrorInfo: lastCheckError.info }
+    : { checkError: lastCheckError.message };
 }
 
 // The restart dialog renders a rejected install's message, so it gets the
@@ -1996,9 +2015,9 @@ function wireUpdaterEvents(): void {
         stagedInCurrentProcess = false;
         // shortStagingMessage passes an unrecognized failure through verbatim;
         // the person asked to install, so they get the install sentence (#5755).
-        const message = userFacingUpdateError(short, "install");
-        void macRestartProgress?.fail(message).catch(() => undefined);
-        broadcast({ state: "error", message });
+        const failure = describeUpdateFailure(short, "install");
+        void macRestartProgress?.fail(failure.message).catch(() => undefined);
+        broadcast({ state: "error", ...failureFields(failure) });
         // Squirrel can close the windows, then fail to persist its relaunch
         // request. Restore AO in that still-running process instead of leaving
         // the user with no app window and no possible automatic restart.
@@ -2295,12 +2314,12 @@ function wireUpdaterEvents(): void {
     if (isManifest404Error(err)) {
       console.info("update check failed (404, manifest not found):", err);
       if (activeUpdaterOperation === "manual-download") {
-        broadcast(withActiveRequest({ state: "error", message: userFacingUpdateError(err, "download") }));
+        broadcast(withActiveRequest({ state: "error", ...updateErrorFields(err, "download") }));
       } else if (stagedAtMs !== undefined) {
-        lastCheckError = userFacingUpdateError(err, "check");
+        lastCheckError = describeUpdateFailure(err, "check");
         broadcastUpdaterStatus(stagedDownloadedStatus());
       } else {
-        broadcastCompletedCheck({ state: "error", message: userFacingUpdateError(err, "check") });
+        broadcastCompletedCheck({ state: "error", ...updateErrorFields(err, "check") });
       }
       return;
     }
@@ -2316,7 +2335,7 @@ function wireUpdaterEvents(): void {
     }
     const status: UpdateStatus = {
       state: "error",
-      message: userFacingUpdateError(err, failedAs),
+      ...updateErrorFields(err, failedAs),
       ...(isNetError(err) ? { netError: true } : {}),
     };
     if (activeUpdaterPhase === "check") broadcastCompletedCheck(status);
@@ -2333,7 +2352,7 @@ export function getUpdateStatus(): UpdateStatus {
     ...statusWithoutNotes,
     ...stagedStamp(),
     ...releaseNotesFor(lastStatus),
-    ...(lastCheckError ? { checkError: lastCheckError } : {}),
+    ...checkErrorFields(),
     ...(consecutiveAutomaticNetFailures >= STALE_CHECK_NUDGE_THRESHOLD
       ? { staleCheckNudge: true }
       : {}),
@@ -2469,7 +2488,7 @@ async function runAutomaticUpdateCheck(
         // (#3526). Record before restoring so the restore broadcast is stamped.
         if (handleMacStagingFailure(err)) return;
         if (activeUpdaterPhase === "download") {
-          if (!downloadStalled && lastStatus.state !== "error") broadcast(withActiveRequest({ state: "error", message: userFacingUpdateError(err, "download"), version: pendingUpdateVersion }));
+          if (!downloadStalled && lastStatus.state !== "error") broadcast(withActiveRequest({ state: "error", ...updateErrorFields(err, "download"), version: pendingUpdateVersion }));
         } else {
           recordAutomaticCheckFailure(err);
           restoreAutomaticCheckPreviousStatus();
@@ -2679,21 +2698,21 @@ export async function checkForUpdatesNow(
     }
     if (isManifest404Error(err)) {
       console.info(`manual update ${failed.phase} failed:`, err);
-      const message = userFacingUpdateError(err, failed.phase);
+      const failure = describeUpdateFailure(err, failed.phase);
       broadcastCompletedCheck({
         state: "error",
-        message,
+        ...failureFields(failure),
         ...(options.requestId === undefined ? {} : { requestId: options.requestId }),
       });
       if (stagedAtMs !== undefined) {
-        lastCheckError = message;
+        lastCheckError = failure;
         broadcast(stagedDownloadedStatus());
       }
     } else {
       console.error(`manual update ${failed.phase} failed:`, err);
       broadcastCompletedCheck({
         state: "error",
-        message: userFacingUpdateError(err, failed.phase),
+        ...updateErrorFields(err, failed.phase),
         ...(isNetError(err) ? { netError: true } : {}),
         ...(options.requestId === undefined ? {} : { requestId: options.requestId }),
       });
@@ -2765,7 +2784,7 @@ export async function returnToHome(
     console.error(`return home ${failed.phase} failed:`, err);
     broadcast({
       state: "error",
-      message: userFacingUpdateError(err, failed.phase === "check" ? "return" : "download"),
+      ...updateErrorFields(err, failed.phase === "check" ? "return" : "download"),
       ...(requestId === undefined ? {} : { requestId }),
     });
   }
@@ -2822,7 +2841,7 @@ export async function downloadUpdateNow(requestId?: string): Promise<void> {
     console.error("update download failed:", err);
     broadcast({
       state: "error",
-      message: userFacingUpdateError(err, "download"),
+      ...updateErrorFields(err, "download"),
       requestId,
     });
   } finally {
@@ -3050,9 +3069,9 @@ export async function quitAndInstallUpdate(confirmedVersion?: string): Promise<U
       stagedInCurrentProcess = false;
       nativeReadyVersion = undefined;
       console.error("failed to prepare update for restart:", err);
-      const message = userFacingUpdateError(err, "install");
-      await progress?.fail(message).catch(() => undefined);
-      broadcast({ state: "error", message });
+      const failure = describeUpdateFailure(err, "install");
+      await progress?.fail(failure.message).catch(() => undefined);
+      broadcast({ state: "error", ...failureFields(failure) });
       throw userFacingInstallError(err);
     }
   }).then(() => confirmation, err => {

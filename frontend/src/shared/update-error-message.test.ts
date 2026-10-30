@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+	describeUpdateFailure,
 	displayableUpdateError,
 	isManifest404Error,
 	looksLikeRawUpdateError,
@@ -128,6 +129,26 @@ describe("userFacingUpdateError", () => {
 		);
 
 		expect(userFacingUpdateError(err, "check")).toBe(`Couldn't check for updates — ${reason}`);
+	});
+
+	it("says what a rewritten failure means so the renderer can localize it", () => {
+		expect(describeUpdateFailure(releasesFeedDump(), "check")).toEqual({
+			message: "Couldn't check for updates — the update server timed out. Try again in a few minutes.",
+			info: { kind: "timeout", phase: "check" },
+		});
+		expect(describeUpdateFailure(releasesFeedDump("418 I'm a teapot"), "download").info).toEqual({
+			kind: "http-error",
+			phase: "download",
+			httpStatus: 418,
+		});
+		expect(describeUpdateFailure(new Error("Error: Something odd\n    at x (app.asar/main.js:1:1)"), "install").info).toEqual({
+			kind: "detail",
+			phase: "install",
+			detail: "Something odd",
+		});
+		expect(describeUpdateFailure(new Error("Not enough disk space to install the update."), "install")).toEqual({
+			message: "Not enough disk space to install the update.",
+		});
 	});
 
 	it("passes AO's own sentences through", () => {

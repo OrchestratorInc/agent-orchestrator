@@ -9,7 +9,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { useRequestUpdateInstall } from "../../hooks/useRequestUpdateInstall";
 import { useUpdateStatus, requestUpdateDownload } from "../../hooks/useUpdateStatus";
 import type { UpdateChannel, UpdateSettings, UpdateState, UpdateStatus } from "../../../main/update-settings";
-import { displayableUpdateError } from "../../../shared/update-error-message";
+import { localizedUpdateError } from "../../lib/update-error-copy";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -259,7 +259,7 @@ export function UpdatesSection({ titleHidden }: { titleHidden?: boolean } = {}) 
 		<>
 			<SettingsSection title={t("settings.updates.versionSection")} sectionId="updates" titleHidden={titleHidden} grouped>
 				<UpdateActions
-					status={manualCheckFailure ? { ...status, state: "error", message: manualCheckFailure } : status}
+					status={manualCheckFailure ? { ...status, state: "error", message: manualCheckFailure, errorInfo: undefined } : status}
 					manualCheckRequestId={manualCheckRequestId}
 					startManualCheck={startManualCheck}
 					finishManualCheck={finishManualCheck}
@@ -529,7 +529,7 @@ function UpdateActions({
 						{/* The primary error already explains the failed check. Keep a separate
 						    notice only when it adds information (for example beside a staged build). */}
 						{status.checkError && !(displayState === "error" && status.message === status.checkError) && (
-							<UpdateNotice tone="error" text={displayableUpdateError(status.checkError, t("settings.updates.updateFailed"))} />
+							<UpdateNotice tone="error" text={localizedUpdateError(status.checkError, status.checkErrorInfo, t("settings.updates.updateFailed"), t)} />
 						)}
 						{!status.checkError && !status.staleCheckNudge && status.checksFailing && (
 							<UpdateNotice tone="warning" text={t("settings.updates.checksFailing")} />
@@ -694,11 +694,12 @@ function UpdateStatusLine({
 		case "error":
 			className = "text-error";
 			icon = <AlertTriangle className="size-icon-sm shrink-0" aria-hidden="true" />;
-			// The main process already rewrites updater failures; this keeps a
-			// dump it has not learned yet out of Settings (#5755).
+			// The main process already rewrites updater failures and says what they
+			// mean, so the sentence is localized here; the English fallback still
+			// keeps a dump it has not learned yet out of Settings (#5755).
 			label = status.netError
 				? t("settings.updates.netErrorRestartGuidance")
-				: displayableUpdateError(status.message, t("settings.updates.updateFailed"));
+				: localizedUpdateError(status.message, status.errorInfo, t("settings.updates.updateFailed"), t);
 			// Name the build being held back (a full disk refuses staging, a
 			// download failed) so the user still learns what they are missing.
 			detail = status.version ? t("settings.updates.availableVersion", { version: status.version }) : null;

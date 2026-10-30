@@ -5,6 +5,7 @@ import { RestartToUpdateDialog } from "./RestartToUpdateDialog";
 import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 import type { UpdateStatus } from "../../main/update-settings";
+import { appI18n } from "../i18n";
 
 const { updInstall, updRelaunch, updGetStatus, updOnStatus, workspaceData } = vi.hoisted(() => ({
 	updInstall: vi.fn(),
@@ -403,6 +404,34 @@ it("keeps only the heading when the install rejects with an updater dump (#5755)
 	expect(alert).toHaveTextContent("AO could not prepare the update. Please try again.");
 	expect(alert).not.toHaveTextContent(/HttpError|set-cookie/);
 	expect(alert.children).toHaveLength(1);
+});
+
+it("shows the install failure in the person's language when the status describes it (#5755)", async () => {
+	let emit: (status: UpdateStatus) => void = () => undefined;
+	updOnStatus.mockImplementation((listener: typeof emit) => {
+		emit = listener;
+		return () => undefined;
+	});
+	const message = "Couldn't install the update — the update server timed out. Try again in a few minutes.";
+	updInstall.mockImplementation(async () => {
+		act(() => emit({ state: "error", message, errorInfo: { kind: "timeout", phase: "install" } }));
+		throw new Error(`Error invoking remote method 'updates:install': Error: ${message}`);
+	});
+	await appI18n.changeLanguage("ja");
+	try {
+		useUiStore.setState({ updateInstallPromptOpen: true });
+		renderDialog({ state: "downloaded", version: "1.2.3" });
+		const confirm = await screen.findByRole("button", { name: appI18n.t("update.restart.confirm") });
+		await userEvent.click(confirm);
+
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent(
+			"アップデートをインストールできませんでした — アップデートサーバーの応答がタイムアウトしました。数分後にもう一度お試しください。",
+		);
+		expect(alert).not.toHaveTextContent("Couldn't install");
+	} finally {
+		await appI18n.changeLanguage("en");
+	}
 });
 
 it("shows the replacement build and requires another explicit confirmation", async () => {

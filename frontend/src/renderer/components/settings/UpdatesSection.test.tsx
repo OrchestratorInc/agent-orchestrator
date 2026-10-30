@@ -4,6 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { UpdatesSection } from "./UpdatesSection";
 import { useUiStore } from "../../stores/ui-store";
 import type { UpdateStatus } from "../../../main/update-settings";
+import { appI18n } from "../../i18n";
 
 const {
 	updGetStatus,
@@ -146,6 +147,43 @@ it("shows a short failure instead of an updater dump beside a staged build (#575
 
 	expect(await screen.findByText("Update failed.")).toBeVisible();
 	expect(screen.queryByText(/set-cookie|app\.asar|HttpError/)).toBeNull();
+});
+
+it("shows a rewritten failure in the person's language (#5755)", async () => {
+	updGetStatus.mockResolvedValue({
+		state: "downloaded",
+		version: "1.2.3",
+		checkError: "Couldn't check for updates — the update server timed out. Try again in a few minutes.",
+		checkErrorInfo: { kind: "timeout", phase: "check" },
+	} satisfies UpdateStatus);
+	await appI18n.changeLanguage("ja");
+	try {
+		renderUpdates();
+
+		expect(await screen.findByText(
+			"アップデートを確認できませんでした — アップデートサーバーの応答がタイムアウトしました。数分後にもう一度お試しください。",
+		)).toBeVisible();
+	} finally {
+		await appI18n.changeLanguage("en");
+	}
+});
+
+it("shows a rewritten error status in the person's language (#5755)", async () => {
+	updGetStatus.mockResolvedValue({
+		state: "error",
+		message: "Download failed — the update server isn't available right now. Try again in a few minutes.",
+		errorInfo: { kind: "unavailable", phase: "download" },
+	} satisfies UpdateStatus);
+	await appI18n.changeLanguage("de");
+	try {
+		renderUpdates();
+
+		expect(await screen.findByText(
+			"Download fehlgeschlagen — der Update-Server ist gerade nicht verfügbar. Bitte in einigen Minuten erneut versuchen.",
+		)).toBeVisible();
+	} finally {
+		await appI18n.changeLanguage("en");
+	}
 });
 
 it.each(["downloaded", "error"] as const)("shows updating feedback immediately until the update reaches %s", async (state) => {

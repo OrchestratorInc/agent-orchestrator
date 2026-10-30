@@ -11,6 +11,7 @@ import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { DesktopReleaseNotes } from "./DesktopReleaseNotes";
 import { displayableUpdateError } from "../../shared/update-error-message";
+import { localizedUpdateError } from "../lib/update-error-copy";
 import {
 	Dialog,
 	DialogContent,
@@ -67,6 +68,11 @@ function RestartToUpdateDialogBody() {
 		};
 	}, []);
 
+	// The rejection crosses IPC as English text. When the broadcast status
+	// describes the same failure, show its localized sentence instead (#5755).
+	const failureText = failureDetail && status.state === "error" && status.message === failureDetail
+		? localizedUpdateError(status.message, status.errorInfo, failureDetail, t)
+		: failureDetail;
 	const version = confirmedBuild?.version ?? status.staged?.version ?? status.version;
 	// The top-level notes follow status.version, which can be a newer build
 	// downloading over the staged one; the staged build's own notes ride on
@@ -222,7 +228,7 @@ function RestartToUpdateDialogBody() {
 					{failureDetail !== null && (
 						<div role="alert" className="space-y-1 text-sm text-destructive">
 							<p>{t("update.restart.prepareFailed")}</p>
-							{failureDetail && <p className="whitespace-pre-line break-words">{failureDetail}</p>}
+							{failureDetail && <p className="whitespace-pre-line break-words">{failureText}</p>}
 						</div>
 					)}
 					{/* On failure the main process turns off install-on-quit, so hide
