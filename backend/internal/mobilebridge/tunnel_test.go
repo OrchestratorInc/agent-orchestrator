@@ -407,6 +407,10 @@ func TestCloudflaredArgsTargetLoopback(t *testing.T) {
 		t.Errorf("autoupdate not disabled — a self-update would swap the binary "+
 			"under a pinned log-format contract: %v", args)
 	}
+	if !strings.Contains(joined, "--protocol http2") {
+		t.Errorf("protocol not pinned to http2 — a quick tunnel defaults to QUIC "+
+			"and never registers where UDP to the edge is dropped: %v", args)
+	}
 }
 
 func TestTunnelBackoffGrowsAndCaps(t *testing.T) {
