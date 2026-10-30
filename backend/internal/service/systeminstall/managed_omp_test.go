@@ -10,7 +10,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -20,19 +22,35 @@ func TestManagedOMPUsesStandaloneInsteadOfTheSystemBun(t *testing.T) {
 	}
 	for _, goos := range []string{"darwin", "linux"} {
 		for _, tc := range []struct {
-			name        string
-			downloadErr bool
-			startupErr  bool
-			unavailable bool
-			wantError   string
+			name         string
+			operation    AgentOperation
+			downloadErr  bool
+			startupErr   bool
+			unavailable  bool
+			missingShell bool
+			wantError    string
 		}{
 			{name: "success"},
+			{name: "reinstall", operation: AgentOperationReinstall},
 			{name: "download fails", downloadErr: true, wantError: "download failed"},
 			{name: "startup fails", startupErr: true, wantError: "invalid standalone binary"},
 			{name: "installer unavailable", unavailable: true, wantError: "standalone installer is unavailable"},
+			{name: "shell unavailable", missingShell: true, wantError: "sh was not found on PATH"},
 		} {
 			t.Run(goos+"/"+tc.name, func(t *testing.T) {
-				s := newTestService(goos, "bun", "sh")
+				operation, wantVersion := tc.operation, "18.14.0"
+				if operation == "" {
+					operation = AgentOperationUpdate
+				}
+				if operation == AgentOperationReinstall {
+					wantVersion = "18.13.2"
+				}
+				found := []string{"bun", "sh"}
+				if tc.missingShell {
+					found = []string{"bun"}
+				}
+				s := newTestService(goos, found...)
+				t.Cleanup(s.stop)
 				s.managedRoot = t.TempDir()
 				targetDir := s.managedTargetDir(TargetOMP)
 				oldBinary := filepath.Join(targetDir, "versions", "v1", "bin", "omp")
@@ -58,7 +76,7 @@ func TestManagedOMPUsesStandaloneInsteadOfTheSystemBun(t *testing.T) {
 				})
 				if !tc.unavailable {
 					s.installScripts = installScriptRunnerFunc(func(_ context.Context, command ports.InstallScriptCommand, _, _ io.Writer) (ports.InstallScriptResult, error) {
-						if command.URL != "https://omp.sh/install" || !command.Isolated || !slices.Equal(command.Args, []string{"--binary", "--ref", "v18.14.0"}) {
+						if command.URL != "https://omp.sh/install" || !command.Isolated || !slices.Equal(command.Interpreter, []string{"/usr/bin/sh"}) || !slices.Equal(command.Args, []string{"--binary", "--ref", "v" + wantVersion}) {
 							t.Errorf("standalone installer = %+v", command)
 						}
 						if tc.downloadErr {
@@ -71,7 +89,7 @@ func TestManagedOMPUsesStandaloneInsteadOfTheSystemBun(t *testing.T) {
 						if err := os.MkdirAll(bin, 0o755); err != nil {
 							return ports.InstallScriptResult{}, err
 						}
-						return ports.InstallScriptResult{}, os.WriteFile(filepath.Join(bin, "omp"), []byte("18.14.0\n"), 0o755)
+						return ports.InstallScriptResult{}, os.WriteFile(filepath.Join(bin, "omp"), []byte(wantVersion+"\n"), 0o755)
 					})
 				}
 				s.commands = commandRunnerFunc(func(_ context.Context, argv []string, stdout, stderr io.Writer) error {
@@ -86,15 +104,67 @@ func TestManagedOMPUsesStandaloneInsteadOfTheSystemBun(t *testing.T) {
 					return err
 				})
 				launcher := filepath.Join(s.ManagedBinDir(), "omp")
-				var output strings.Builder
-				err := s.runManagedInstall(context.Background(), Plan{Target: TargetOMP, Method: "bun", Package: old.Package}, &installedBaseline{path: launcher, latest: "18.14.0"}, nil, &output)
-				if tc.wantError != "" {
-					if err == nil {
-						t.Fatal("failed candidate reported success")
+				s.verifier = harnessVerifierFunc(func(_ context.Context, target Target) (VerifyResult, error) {
+					if target != TargetOMP {
+						return VerifyResult{}, errors.New("not installed")
 					}
-					failureSummary(err, &output)
-					if !strings.Contains(output.String()+err.Error(), tc.wantError) {
-						t.Fatalf("failure lacks %q: %v\n%s", tc.wantError, err, output.String())
+					return VerifyResult{ResolvedPath: launcher, Output: readFile(launcher)}, nil
+				})
+				if operation == AgentOperationUpdate {
+					s.sessions = sessionListerStub{sessions: []domain.SessionRecord{{ID: "omp-1", Harness: domain.HarnessOMP}}}
+				}
+				s.updateAdvisories = map[Target]UpdateAdvisory{TargetOMP: {
+					AgentID: "omp", Status: UpdateStatusBehindLatest, LatestVersion: "18.14.0",
+					MaintenanceMethod: "bun", CheckedAt: time.Now(),
+				}}
+				plans, err := s.AgentPlans(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var bun AgentInstallMethod
+				for _, agent := range plans {
+					if agent.AgentID == "omp" {
+						for _, method := range agent.Methods {
+							if method.ID == "bun" {
+								bun = method
+							}
+						}
+					}
+				}
+				if bun.ID != "bun" {
+					t.Fatal("Bun-owned installation is missing from AgentPlans")
+				}
+				unsupported := tc.unavailable || tc.missingShell
+				if unsupported {
+					if bun.UpdateAvailable || bun.ReinstallAvailable || !strings.Contains(bun.UpdateReason, tc.wantError) || !strings.Contains(bun.ReinstallReason, tc.wantError) {
+						t.Fatalf("unavailable installer was not disclosed: %+v", bun)
+					}
+				} else if !bun.UpdateAvailable || !bun.ReinstallAvailable ||
+					bun.UpdateCommand != "/usr/bin/sh <downloaded from https://omp.sh/install> --binary" ||
+					bun.ReinstallCommand != "/usr/bin/sh <downloaded from https://omp.sh/install> --binary --ref v18.13.2" {
+					t.Fatalf("AgentPlans does not disclose the actual installer: %+v", bun)
+				}
+				job, err := s.StartAgentOperation(context.Background(), TargetOMP, "bun", operation, "")
+				if unsupported {
+					if !errors.Is(err, ErrInstallMethod) || !strings.Contains(err.Error(), tc.wantError) {
+						t.Fatalf("unavailable installer was not rejected before execution: %v", err)
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					if job.Method != "official-installer" || !strings.Contains(job.Command, "/usr/bin/sh <downloaded from https://omp.sh/install> --binary") {
+						t.Fatalf("job does not match the disclosed installer: %+v", job)
+					}
+					s.workers.Wait()
+					job, err = s.Status(context.Background(), TargetOMP)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.wantError != "" {
+					if !unsupported && (job.Status != StatusFailed || !strings.Contains(job.Error+job.Output, tc.wantError)) {
+						t.Fatalf("failure lacks %q: %+v", tc.wantError, job)
 					}
 					if record, ok := s.readManagedRecord(TargetOMP); !ok || record != old {
 						t.Fatalf("working record changed after failure: %+v", record)
@@ -106,13 +176,13 @@ func TestManagedOMPUsesStandaloneInsteadOfTheSystemBun(t *testing.T) {
 						t.Fatalf("failed candidate was retained: %v", err)
 					}
 				} else {
-					if err != nil {
-						t.Fatal(err)
+					if job.Status != StatusSucceeded {
+						t.Fatalf("operation failed: %+v", job)
 					}
-					if record, ok := s.readManagedRecord(TargetOMP); !ok || record.Method != "official-installer" || record.Package != "" || record.Version != "18.14.0" {
+					if record, ok := s.readManagedRecord(TargetOMP); !ok || record.Method != job.Method || record.Package != "" || record.Version != wantVersion {
 						t.Fatalf("standalone ownership was not recorded: %+v", record)
 					}
-					if got := readFile(launcher); got != "18.14.0\n" {
+					if got := readFile(launcher); got != wantVersion+"\n" {
 						t.Fatalf("launcher did not select the verified candidate: %q", got)
 					}
 				}
@@ -121,5 +191,30 @@ func TestManagedOMPUsesStandaloneInsteadOfTheSystemBun(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestOMPStandaloneUpdateRejectsUnconfirmedBunOwner(t *testing.T) {
+	s := newTestService("darwin", "bun", "sh")
+	t.Cleanup(s.stop)
+	s.managedRoot = t.TempDir()
+	s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+		return VerifyResult{ResolvedPath: "/Users/me/.bun/bin/omp", Output: "18.13.2"}, nil
+	})
+	ownershipChecked := false
+	s.ownsInstallation = func(_ context.Context, _ string, method, pkg string, _ bool) (bool, error) {
+		ownershipChecked = true
+		if method != "bun" || pkg != "@oh-my-pi/pi-coding-agent" {
+			t.Errorf("old installation checked against (%q, %q), want Bun's OMP package", method, pkg)
+		}
+		return false, nil
+	}
+	s.installScripts = installScriptRunnerFunc(func(context.Context, ports.InstallScriptCommand, io.Writer, io.Writer) (ports.InstallScriptResult, error) {
+		t.Error("standalone installer ran before ownership was confirmed")
+		return ports.InstallScriptResult{}, errors.New("unexpected installer")
+	})
+	_, err := s.StartAgentOperation(context.Background(), TargetOMP, "bun", AgentOperationUpdate, "")
+	if !errors.Is(err, ErrInstallOwner) || !ownershipChecked {
+		t.Fatalf("unconfirmed Bun owner was not rejected: %v (checked=%t)", err, ownershipChecked)
 	}
 }
