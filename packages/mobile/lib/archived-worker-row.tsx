@@ -1,17 +1,19 @@
-import { Feather } from "./icons";
 import { memo, useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { DashboardSession } from "./api";
 import { AgentLogo } from "./AgentLogo";
+import { AppSymbol } from "./AppSymbol";
 import { sessionMachineIdentity } from "./hostedRows";
 import { MachineIdentity } from "./MachineIdentity";
 import { prLine, workerRowPresentation } from "./agentsView";
+import { usePressFeedback } from "./pressFeedback";
 import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
 import { rowDividerWidth } from "./divider";
+import { Spinner } from "./Spinner";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { Spinning } from "./ui";
-import { iconSize, press, space, type } from "./tokens";
+import { iconSize, radius, space, stateOpacity, touchTarget, type } from "./tokens";
+import { workerActionSymbol } from "./worker-action-model";
 
 /**
  * An archived worker, as desktop's archive strip shows one: read-only, with
@@ -53,6 +55,7 @@ export const ArchivedWorkerRow = memo(function ArchivedWorkerRow({
 	const prs = prLine(session);
 	const details = prs?.text ?? row.branch ?? "";
 	const machine = useMemo(() => sessionMachineIdentity(session), [session]);
+	const feedback = usePressFeedback("icon");
 	const disabled = restoring || restoreDisabled || offline;
 
 	return (
@@ -91,13 +94,13 @@ export const ArchivedWorkerRow = memo(function ArchivedWorkerRow({
 				accessibilityHint={offline ? "Unavailable while this machine is offline." : undefined}
 				accessibilityState={{ disabled, busy: restoring }}
 				disabled={disabled}
-				hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+				android_ripple={feedback.android_ripple}
 				onPress={() => onRestore(session)}
-				style={({ pressed }) => [styles.restore, pressed && styles.restorePressed, disabled && !restoring && styles.restoreDisabled]}
+				style={({ pressed }) => [styles.restore, pressed && feedback.pressed, disabled && !restoring && styles.restoreDisabled]}
 			>
-				<Spinning enabled={restoring}>
-					<Feather name="rotate-ccw" size={iconSize.md} color={restoring ? t.textPrimary : t.textSecondary} />
-				</Spinning>
+				{restoring
+					? <Spinner size={iconSize.lg} color={t.textPrimary} />
+					: <AppSymbol name={workerActionSymbol("restore")} size={iconSize.lg} color={t.textSecondary} />}
 			</Pressable>
 		</View>
 	);
@@ -115,21 +118,21 @@ const makeStyles = (t: Theme) =>
 			paddingRight: space.sm,
 			paddingVertical: space.sm,
 			borderBottomWidth: rowDividerWidth,
-			borderBottomColor: t.borderSubtle,
+			borderBottomColor: t.borderDefault,
 			backgroundColor: t.bgBase,
 		},
 		content: { flex: 1, minWidth: 0, gap: space.hair },
-		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
-		project: { fontFamily: "Geist_500Medium", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500" },
-		trailing: { fontFamily: "Geist_500Medium", flexShrink: 0, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
-		title: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "600", letterSpacing: -0.15 },
+		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: type.footnote.lineHeight },
+		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		trailing: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
+		title: { fontFamily: type.headline.fontFamily, color: t.textPrimary, fontSize: type.headline.fontSize, lineHeight: type.headline.lineHeight, fontWeight: type.headline.fontWeight },
 		metadata: { minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm },
 		metadataSpacer: { flex: 1 },
-		details: { flex: 1, minWidth: 0, color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontFamily: t.fontMono },
+		details: { flex: 1, minWidth: 0, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
 		machineIdentity: { maxWidth: "52%", marginLeft: "auto" },
-		restoreError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-		// A quiet icon control, as on desktop's archive card: 44pt for touch.
-		restore: { width: 44, height: 44, borderRadius: 22, borderCurve: "continuous", alignItems: "center", justifyContent: "center" },
-		restorePressed: { opacity: press.opacity, backgroundColor: t.bgSubtle },
-		restoreDisabled: { opacity: 0.4 },
+		restoreError: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		// A quiet icon control, as on desktop's archive card, at the platform's
+		// touch target.
+		restore: { width: touchTarget, height: touchTarget, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
+		restoreDisabled: { opacity: stateOpacity.disabled },
 	});

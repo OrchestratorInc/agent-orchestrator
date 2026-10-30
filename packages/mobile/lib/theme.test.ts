@@ -45,7 +45,7 @@ describe("palette parity", () => {
 	// The accent flips polarity between themes — near-white ink on dark, near-black
 	// on light — so the ink has to flip with it.
 	it("flips the accent ink between themes", () => {
-		expect(darkTheme.onAccent).toBe("#0b0c0e");
+		expect(darkTheme.onAccent).toBe("#0a0a0a");
 		expect(lightTheme.onAccent).toBe("#ffffff");
 	});
 

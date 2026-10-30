@@ -7,5 +7,4 @@ export type ChatTurnSettingsControlProps = {
 	disabled?: boolean;
 	onSettings(settings: TurnSettings): Promise<void>;
 	onOption(id: string, value: { value: string } | { enabled: boolean }): Promise<ChatConfigOption[]>;
-	onOpenFallback(): void;
 };

@@ -1,93 +1,117 @@
 import { Host } from "@expo/ui";
-import { Button, HStack, Image, Menu, Section, Text } from "@expo/ui/swift-ui";
-import { accessibilityLabel, buttonStyle, disabled as disabledModifier, frame, opacity, padding, tint } from "@expo/ui/swift-ui/modifiers";
-import { StyleSheet, Text as RNText, View } from "react-native";
-import { Feather } from "../icons";
+import { HStack, Menu, Picker, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
+import { pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
+import { useState } from "react";
+import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
-import type { Theme } from "../theme";
-import { useTheme, useThemedStyles, useThemeState } from "../ThemeProvider";
+import { approvalSymbol } from "../approvalSymbol";
+import { ApprovalMenu, Choice, EffortMenu, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
+import { HarnessImage } from "../spawn-composer-controls.ios";
+import type { IOSSymbol } from "../symbols";
+import { useThemeState } from "../ThemeProvider";
+import { space, touchTarget } from "../tokens";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
-import { applyTurnSettingChoice, turnSettingsRows, turnSettingsSummary, type TurnSettingRow } from "./turnSettingsModel";
-import { iconSize, type } from "../tokens";
+import { turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, type TurnSettingRow } from "./turnSettingsModel";
 
+const topicSymbols: Partial<Record<NonNullable<ReturnType<typeof turnSettingTopic>>, IOSSymbol>> = {
+	fast: "bolt",
+	setting: "slider.horizontal.3",
+};
+
+/**
+ * The chat's controls row, drawn as the new task's (see model-controls): the
+ * model in a capsule, the effort as a speedometer beside it, and the approval
+ * mode as its symbol at the row's end. The capsule's menu lists the agent's
+ * models as the new task's lists each agent's, then any other setting the
+ * provider offers, such as Fast mode.
+ */
 export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption }: ChatTurnSettingsControlProps) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
 	const { scheme } = useThemeState();
 	const rows = turnSettingsRows(snapshot, models, options);
-	const label = turnSettingsSummary(snapshot, models, options);
+	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
+	const modelRow = select("model");
+	const effortRow = select("effort");
+	const approvalRow = select("permissions");
+	const otherRows = rows.filter((row) => row !== modelRow && row !== effortRow && row !== approvalRow);
+	const parts = turnSettingsParts(snapshot, models, options);
+	const off = Boolean(disabled);
+	// A SwiftUI menu keeps showing the choice it was given when the save fails
+	// and the setting stays put. Rebuilding the menus then shows the setting as
+	// saved; they have long closed, so nothing visibly moves.
+	const [generation, setGeneration] = useState(0);
 
-	const choose = (row: TurnSettingRow, value: string) => {
-		haptics.select();
-		if (row.target.kind === "option") {
-			void onOption(row.target.optionId, row.kind === "boolean" ? { enabled: value === "on" } : { value }).catch(() => {});
-			return;
-		}
-		void onSettings(applyTurnSettingChoice(snapshot.settings, row, value)).catch(() => {});
+	const choose = (row: TurnSettingRow, choice: string | boolean) => {
+		const write = turnSettingWrite(snapshot.settings, row, choice);
+		const saved = write.kind === "option" ? onOption(write.id, write.value) : onSettings(write.settings);
+		void saved.then(() => {}, () => setGeneration((value) => value + 1));
 	};
 
 	return (
-		<View style={styles.row}>
-			<Host matchContents={{ horizontal: false, vertical: true }} ignoreSafeArea="all" style={styles.host} colorScheme={scheme} seedColor={t.accent}>
+		<Host style={styles.host} ignoreSafeArea="all" colorScheme={scheme}>
+			{/* Who runs the turn and its effort at the row's start beside attach,
+			    approvals at its end beside the round button; the space between
+			    them gives way first. */}
+			<HStack spacing={space.none}>
 				<Menu
-					label={<Text modifiers={[opacity(0)]}>Turn settings</Text>}
-					modifiers={[buttonStyle("plain"), tint(t.textSecondary), padding({ horizontal: 10, vertical: 10 }), frame({ maxWidth: 1000, minHeight: 44, alignment: "leading" }), accessibilityLabel(`Turn settings, ${label}`), disabledModifier(Boolean(disabled))]}
+					key={`model-${generation}`}
+					label={<ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}
+					modifiers={useTriggerModifiers({ label: parts.model ? `Model, ${parts.model}` : "Model", id: "chat-model", disabled: off })}
 				>
-					<Section title="Turn settings">
-						{rows.map((row) => (
-							<Menu key={row.id} label={isApprovalRow(row) ? <ApprovalRowLabel row={row} /> : `${row.label} · ${row.value}`} systemImage={settingSymbol(row)}>
-								{choicesFor(row).map((choice) => (
-									<Button key={choice.value} label={choice.label} systemImage={choice.selected ? "checkmark" : undefined} onPress={() => choose(row, choice.value)} />
-								))}
-							</Menu>
-						))}
-					</Section>
+					{modelRow?.choices.map((choice) => <Choice key={choice.value} label={choice.label} selected={choice.selected} onChoose={() => choose(modelRow, choice.value)} />)}
+					{otherRows.length ? (
+						<Section>
+							{otherRows.map((row) => <SettingPicker key={row.id} row={row} onChoose={(choice) => { haptics.select(); choose(row, choice); }} />)}
+						</Section>
+					) : null}
 				</Menu>
-			</Host>
-			<View pointerEvents="none" accessibilityElementsHidden style={[styles.visibleLabel, disabled && styles.disabledLabel]}>
-				<RNText numberOfLines={1} style={styles.visibleText}>{label}</RNText>
-				<Feather name="chevron-right" size={iconSize.xs} color={t.textSecondary} />
-			</View>
-		</View>
+				{effortRow ? (
+					<EffortMenu
+						key={`effort-${generation}`}
+						choices={effortRow.choices.map((choice) => ({ value: choice.value, label: choice.label, selected: choice.selected }))}
+						onChoose={(value) => choose(effortRow, value)}
+						disabled={off}
+						id="chat-effort"
+					/>
+				) : null}
+				<Spacer minLength={0} />
+				{approvalRow ? (
+					<ApprovalMenu
+						key={`approval-${generation}`}
+						title={approvalRow.label}
+						choices={approvalRow.choices.map((choice) => ({ value: choice.value, label: choice.label, symbol: approvalSymbol(choice.permissionMode, snapshot.harness), selected: choice.selected }))}
+						onChoose={(value) => choose(approvalRow, value)}
+						disabled={off}
+						id="chat-approval"
+					/>
+				) : null}
+			</HStack>
+		</Host>
 	);
 }
 
-function ApprovalRowLabel({ row }: { row: TurnSettingRow }) {
-	// A single native asset stays crisp at every display scale; SwiftUI menu rows
-	// discard the second image when the ring and check are separate symbols.
-	return <HStack spacing={12}><Image assetName="CircleDashedCheck" /><Text>{`${row.label} · ${row.value}`}</Text></HStack>;
+/**
+ * Any other setting as a submenu: a toggle for an on/off option, otherwise a
+ * picker, which shows the current choice under its title and ticks it inside,
+ * and which VoiceOver announces as selected.
+ */
+function SettingPicker({ row, onChoose }: { row: TurnSettingRow; onChoose(choice: string | boolean): void }) {
+	const topic = turnSettingTopic(row);
+	const systemImage = topic ? topicSymbols[topic] : undefined;
+	if (row.kind === "boolean") {
+		return <Toggle label={row.label} systemImage={systemImage} isOn={Boolean(row.enabled)} onIsOnChange={onChoose} />;
+	}
+	const choices = row.choices.map((choice) => <Text key={choice.value} modifiers={[tag(choice.value)]}>{choice.label}</Text>);
+	const selection = row.choices.find((choice) => choice.selected)?.value ?? null;
+	const onSelectionChange = (value: string | null) => {
+		if (value !== null) onChoose(value);
+	};
+	return (
+		<Picker label={row.label} systemImage={systemImage} selection={selection} onSelectionChange={onSelectionChange} modifiers={[pickerStyle("menu")]}>
+			{choices}
+		</Picker>
+	);
 }
 
-function isApprovalRow(row: TurnSettingRow): boolean {
-	const id = row.id.toLowerCase();
-	return row.providerKind === "permissions" || (!id.includes("model") && (id.includes("mode") || id.includes("approval")));
-}
-
-function choicesFor(row: TurnSettingRow) {
-	if (row.kind !== "boolean") return row.choices;
-	return [
-		{ value: "on", label: "On", selected: Boolean(row.enabled) },
-		{ value: "off", label: "Off", selected: !row.enabled },
-	];
-}
-
-function settingSymbol(row: TurnSettingRow): string | undefined {
-	const id = row.id.toLowerCase();
-	if (row.providerKind === "model" || id.includes("model")) return "square.stack.3d.up";
-	if (id.includes("agent")) return undefined;
-	if (isApprovalRow(row)) return undefined;
-	if (id.includes("effort") || id.includes("thought") || id.includes("reason")) return "gauge.with.dots.needle.67percent";
-	if (id.includes("fast")) return "bolt";
-	return "slider.horizontal.3";
-}
-
-const makeStyles = (t: Theme) => StyleSheet.create({
-	row: { width: "100%", height: 44 },
-	// The native trigger stays at the left to anchor its popup there. The full
-	// summary is drawn over it without taking touches; only this left portion
-	// opens the menu (SwiftUI Menu has no programmatic open/anchor API).
-	host: { alignSelf: "flex-start", width: 220, maxWidth: "100%", height: 44 },
-	visibleLabel: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, flexDirection: "row", alignItems: "center", gap: 7, paddingHorizontal: 10 },
-	visibleText: { color: t.textSecondary, fontSize: 13, fontWeight: "600", flexShrink: 1 },
-	disabledLabel: { opacity: 0.45 },
+const styles = StyleSheet.create({
+	host: { alignSelf: "stretch", height: touchTarget },
 });

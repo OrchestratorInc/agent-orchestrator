@@ -36,7 +36,7 @@ vi.mock("./otherHosts", async (importOriginal) => ({ ...(await importOriginal<ty
 
 import { UnreachableError } from "./connectionError";
 import { IncompatibleHostVersionError } from "./race";
-import { AppProvider, HostScope, useApp } from "./store";
+import { AppProvider, FrozenAppScope, HostScope, useApp } from "./store";
 import { EMPTY_LINK_TRACKER, recordPoll } from "./linkHealth";
 let current!: ReturnType<typeof useApp>;
 let renderer: ReactTestRenderer | undefined;
@@ -118,6 +118,27 @@ it("does not start a retained refresh after the provider unmounts", async () => 
 	await act(async () => { renderer!.unmount(); }); renderer = undefined;
 	await refresh();
 	expect(state.sessions).toHaveBeenCalledTimes(calls);
+});
+
+// The board keeps every tab mounted; only the one on screen should re-render
+// when a poll lands.
+it("holds a frozen scope at the state it froze with, then catches up when it thaws", async () => {
+	const slow = deferred(); state.sessions.mockReturnValueOnce(slow.promise);
+	let hidden!: ReturnType<typeof useApp>;
+	let renders = 0;
+	function HiddenTab() { hidden = useApp(); renders += 1; return null; }
+	const tree = (frozen: boolean) => <AppProvider><Harness /><FrozenAppScope frozen={frozen}><HiddenTab /></FrozenAppScope></AppProvider>;
+	await act(async () => { renderer = create(tree(false)); });
+	await act(async () => { slow.resolve(board("First")); });
+	expect(hidden.sessions[0].displayName).toBe("First");
+	await act(async () => { renderer!.update(tree(true)); });
+	const frozenAt = renders;
+	await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+	expect(current.sessions[0].displayName).toBe("Fresh");
+	expect(hidden.sessions[0].displayName).toBe("First");
+	expect(renders).toBe(frozenAt);
+	await act(async () => { renderer!.update(tree(false)); });
+	expect(hidden.sessions[0].displayName).toBe("Fresh");
 });
 
 // One poll that gets no answer used to put "Your machine is offline" on screen,

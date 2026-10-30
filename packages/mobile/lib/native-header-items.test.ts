@@ -26,12 +26,16 @@ describe("glassHeaderControl", () => {
 		]);
 	});
 
-	it("replaces the back button rather than joining it", () => {
-		platformOS = "ios";
-		const options = glassHeaderControl("left", control);
-		expect(options.headerLeft).toBeUndefined();
-		expect(options.headerBackVisible).toBe(false);
-		expect(options.unstable_headerLeftItems?.({} as never)).toHaveLength(1);
+	// The leading side belongs to the system back button, which keeps its
+	// back-history menu on iOS and its arrow, ripple and 48dp target on Android.
+	it("never touches the back button", () => {
+		for (const os of ["ios", "android"]) {
+			platformOS = os;
+			const options = glassHeaderControl("right", control);
+			expect(options).not.toHaveProperty("headerBackVisible");
+			expect(options).not.toHaveProperty("headerLeft");
+			expect(options).not.toHaveProperty("unstable_headerLeftItems");
+		}
 	});
 
 	it("clears the item list when vacating a slot", () => {
@@ -44,14 +48,11 @@ describe("glassHeaderControl", () => {
 		expect(options.headerRight).toBeUndefined();
 	});
 
-	it("keeps the plain slots on Android, which has no shared background", () => {
+	it("keeps the plain slot on Android, which has no shared background", () => {
 		platformOS = "android";
 		const right = glassHeaderControl("right", control);
 		expect(right.headerRight?.({} as never)).toBe(control);
 		expect(right.unstable_headerRightItems).toBeUndefined();
-		expect(right.headerBackVisible).toBeUndefined();
-		const left = glassHeaderControl("left");
-		expect(left.headerLeft).toBeUndefined();
-		expect(left.unstable_headerLeftItems).toBeUndefined();
+		expect(glassHeaderControl("right").headerRight).toBeUndefined();
 	});
 });

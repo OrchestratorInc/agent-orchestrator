@@ -29,8 +29,8 @@ export type ActivityNode = {
 };
 
 export type ConversationTimelineRenderPlan =
-	| { kind: "empty"; inverted: false; groups: [] }
-	| { kind: "list"; inverted: boolean; groups: ConversationGroup[] };
+	| { kind: "empty"; groups: [] }
+	| { kind: "list"; groups: ConversationGroup[] };
 
 export type QueuedConversationMessage = { turnId: string; message: ConversationMessage };
 
@@ -185,26 +185,18 @@ export function startupPlacement(groups: ReadonlyArray<Pick<ConversationGroup, "
 	return openingTurnId && groups.some((group) => group.turnId === openingTurnId) ? "turn" : "standalone";
 }
 
-/** Latest-first data lets an inverted virtualized list paint the live edge first. */
-export function latestFirstConversationGroups(
-	snapshot: ConversationSnapshot,
-	items = readableConversationItems(snapshot),
-): ConversationGroup[] {
-	return groupConversationByTurn(snapshot, items).reverse();
-}
-
+/**
+ * The conversation in reading order, oldest first, on both platforms. The list
+ * is never inverted: Android's text-selection toolbar needs untransformed
+ * screen coordinates, and iOS 26's navigation bar blurs the list's top edge,
+ * which an inverted list turns into its composer end.
+ */
 export function conversationTimelineRenderPlan(
 	snapshot: ConversationSnapshot,
 	items = readableConversationItems(snapshot),
-	platform: "android" | "ios" = "ios",
 ): ConversationTimelineRenderPlan {
-	// Android's native text-selection toolbar needs untransformed screen
-	// coordinates. FlatList's inverted transform detaches it from selected text.
-	const inverted = platform !== "android";
-	const groups = inverted ? latestFirstConversationGroups(snapshot, items) : groupConversationByTurn(snapshot, items);
-	return groups.length === 0
-		? { kind: "empty", inverted: false, groups: [] }
-		: { kind: "list", inverted, groups };
+	const groups = groupConversationByTurn(snapshot, items);
+	return groups.length === 0 ? { kind: "empty", groups: [] } : { kind: "list", groups };
 }
 
 export function conversationMarkers(snapshot: ConversationSnapshot): ConversationMarker[] {

@@ -1,12 +1,26 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const source = readFileSync(fileURLToPath(new URL("./ProjectSwitcher.tsx", import.meta.url)), "utf8");
+const path = (relative: string) => fileURLToPath(new URL(relative, import.meta.url));
+const source = readFileSync(path("./ProjectSwitcher.tsx"), "utf8");
+const layout = readFileSync(path("../app/_layout.tsx"), "utf8");
 
-describe("project picker trigger", () => {
-	it("does not change width when the chosen project name changes", () => {
-		expect(source).toContain('Platform.OS === "ios" ? { width: "60%"');
-		expect(source).toContain('maxWidth: "70%"');
+describe("project picker", () => {
+	// Picking one value from a short list is a pull-down menu on both platforms,
+	// not a half-height sheet of rows.
+	it("is the system pull-down menu, not a sheet", () => {
+		expect(source).toContain("<MenuView");
+		expect(source).not.toContain("projectSheetRoute");
+		expect(source).not.toContain("router.push");
+		expect(existsSync(path("../app/sheets/project.tsx"))).toBe(false);
+		expect(existsSync(path("./ProjectPickerSheet.tsx"))).toBe(false);
+		expect(layout).not.toContain('"sheets/project"');
+	});
+
+	it("labels the row in sentence case", () => {
+		expect(source).toMatch(/>\s*Project\s*</);
+		expect(source).not.toMatch(/>\s*PROJECTS\s*</);
+		expect(source).not.toContain("letterSpacing");
 	});
 });

@@ -1,12 +1,14 @@
-import { Feather } from "./icons";
 import { Pressable, StyleSheet, View } from "react-native";
+import { AppSymbol } from "./AppSymbol";
+import { usePressFeedback, type PressTone } from "./pressFeedback";
+import type { PlatformSymbol } from "./symbols";
 import { type Theme } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { press } from "./tokens";
-import { workerActionGlyph } from "./worker-action-model";
+import { iconSize, radius, touchTarget } from "./tokens";
+import { workerActionSymbol } from "./worker-action-model";
+import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
 
-const ACTION_WIDTH = 64;
-const CONTROL_SIZE = 44;
+const ACTION_WIDTH = WORKER_ACTION_REVEAL_WIDTH / 2;
 
 export function WorkerRowActions({
 	title,
@@ -20,48 +22,54 @@ export function WorkerRowActions({
 	onDelete(): void;
 }) {
 	const styles = useThemedStyles(makeStyles);
-	const archiveGlyph = workerActionGlyph("delete");
 
 	return (
 		<View style={styles.actions}>
 			<Action
 				accessibilityLabel={pinned ? `Unpin ${title}` : `Pin ${title}`}
-				icon={pinned ? "pin-off" : "pin"}
+				icon={workerActionSymbol(pinned ? "unpin" : "pin")}
+				tone="neutral"
 				onPress={() => onSetPinned(!pinned)}
 			/>
 			<Action
 				accessibilityLabel={`Archive ${title}`}
-				icon={archiveGlyph.name}
+				icon={workerActionSymbol("delete")}
+				tone="destructive"
 				onPress={onDelete}
 			/>
 		</View>
 	);
 }
 
-// Pin and archive are one pair of controls, so they share one surface and ink.
-// Foreground ink rather than a hue: `amber` means "needs your attention" in this
-// palette, and neither action is asking for anything.
+// Tonal icon buttons, as Material 3 draws a row's trailing actions. Pin is a
+// neutral one in foreground ink — `amber` means "needs your attention" in this
+// palette, and pinning asks for nothing. Archive is the destructive one: it
+// stops the agent and deletes a clean worktree, so it carries the red.
 function Action({
 	accessibilityLabel,
 	icon,
+	tone,
 	onPress,
 }: {
 	accessibilityLabel: string;
-	icon: keyof typeof Feather.glyphMap;
+	icon: PlatformSymbol;
+	tone: Extract<PressTone, "neutral" | "destructive">;
 	onPress(): void;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("button", { tone });
+	const destructive = tone === "destructive";
 	return (
 		<View style={styles.slot}>
 			<Pressable
 				accessibilityRole="button"
 				accessibilityLabel={accessibilityLabel}
-				android_ripple={{ color: t.accentTint, borderless: false, radius: CONTROL_SIZE / 2 }}
+				android_ripple={feedback.android_ripple}
 				onPress={onPress}
-				style={({ pressed }) => [styles.control, pressed && styles.pressed]}
+				style={({ pressed }) => [styles.control, destructive ? styles.destructive : styles.neutral, pressed && feedback.pressed]}
 			>
-				<Feather name={icon} size={20} color={t.textPrimary} />
+				<AppSymbol name={icon} size={iconSize.xl} color={destructive ? t.red : t.textPrimary} />
 			</Pressable>
 		</View>
 	);
@@ -69,18 +77,17 @@ function Action({
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		actions: { width: ACTION_WIDTH * 2, height: 76, flexDirection: "row" },
-		slot: { width: ACTION_WIDTH, height: 76, alignItems: "center", justifyContent: "center" },
+		actions: { width: WORKER_ACTION_REVEAL_WIDTH, flexDirection: "row" },
+		slot: { width: ACTION_WIDTH, alignItems: "center", justifyContent: "center" },
 		control: {
-			width: CONTROL_SIZE,
-			height: CONTROL_SIZE,
-			borderRadius: CONTROL_SIZE / 2, borderCurve: "continuous",
-			borderWidth: StyleSheet.hairlineWidth,
-			borderColor: t.accent,
-			backgroundColor: t.accentTint,
+			width: touchTarget,
+			height: touchTarget,
+			borderRadius: radius.pill,
+			borderCurve: "continuous",
 			alignItems: "center",
 			justifyContent: "center",
 			overflow: "hidden",
 		},
-		pressed: { opacity: press.opacity },
+		neutral: { backgroundColor: t.accentTint },
+		destructive: { backgroundColor: t.tintRed },
 	});

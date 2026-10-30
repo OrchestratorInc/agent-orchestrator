@@ -1,36 +1,25 @@
 import { MenuView, type MenuAction, type NativeActionEvent } from "@expo/ui/community/menu";
-import { type ReactNode } from "react";
 import { Pressable } from "react-native";
-import type { GestureType } from "react-native-gesture-handler";
-import type { MutableRefObject } from "react";
-import { workerActionSymbol, type WorkerAction, type WorkerActionId } from "./worker-action-model";
+import { usePressFeedback } from "./pressFeedback";
+import { workerAccessibilityActions, workerActionNamed, workerActionSymbol, type WorkerActionId } from "./worker-action-model";
+import type { WorkerRowContextMenuProps } from "./worker-row-interaction.types";
 
+/** The row and its long-press menu: SwiftUI's context menu, lifting the row. */
 export function WorkerRowContextMenu({
 	children,
 	onPress,
 	actions,
 	onAction,
-	gestureRef: _gestureRef,
 	accessibilityLabel,
 	accessibilityHint,
 	style,
-	pressedStyle,
-}: {
-	children: ReactNode;
-	onPress(): void;
-	actions: WorkerAction[];
-	onAction(id: WorkerActionId): void;
-	gestureRef: MutableRefObject<GestureType | undefined>;
-	accessibilityLabel: string;
-	accessibilityHint: string;
-	style: object;
-	pressedStyle: object;
-}) {
+}: WorkerRowContextMenuProps) {
+	const feedback = usePressFeedback("row");
 	// iOS resolves SF Symbols by name at runtime, so every action can carry one.
 	const menuActions: MenuAction[] = actions.map((action) => ({
 		id: action.id,
 		title: action.title,
-		image: workerActionSymbol(action.id),
+		image: workerActionSymbol(action.id).ios,
 		attributes: action.destructive ? { destructive: true } : undefined,
 	}));
 
@@ -49,8 +38,13 @@ export function WorkerRowContextMenu({
 				accessibilityRole="button"
 				accessibilityLabel={accessibilityLabel}
 				accessibilityHint={accessibilityHint}
+				accessibilityActions={workerAccessibilityActions(actions)}
+				onAccessibilityAction={(event) => {
+					const id = workerActionNamed(actions, event.nativeEvent.actionName);
+					if (id) onAction(id);
+				}}
 				onPress={onPress}
-				style={({ pressed }) => [style, pressed && pressedStyle]}
+				style={({ pressed }) => [style, pressed && feedback.pressed]}
 			>
 				{children}
 			</Pressable>

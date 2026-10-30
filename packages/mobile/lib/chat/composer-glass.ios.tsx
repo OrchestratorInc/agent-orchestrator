@@ -3,7 +3,7 @@ import { Group, Spacer } from "@expo/ui/swift-ui";
 import { frame } from "@expo/ui/swift-ui/modifiers";
 import { Platform, StyleSheet, View } from "react-native";
 import { glassPanel } from "../glass";
-import { useTheme, useThemeState } from "../ThemeProvider";
+import { useThemeState } from "../ThemeProvider";
 
 /**
  * The chat composer's Liquid Glass, drawn natively behind the row.
@@ -29,12 +29,11 @@ import { useTheme, useThemeState } from "../ThemeProvider";
 export const composerGlassSupported = parseInt(String(Platform.Version), 10) >= 26;
 
 export function ComposerGlass({ radius }: { radius: number }) {
-	const t = useTheme();
 	const { scheme } = useThemeState();
 	if (!composerGlassSupported) return null;
 	return (
 		<View pointerEvents="none" style={StyleSheet.absoluteFill}>
-			<Host ignoreSafeArea="all" style={StyleSheet.absoluteFill} colorScheme={scheme} seedColor={t.accent}>
+			<Host ignoreSafeArea="all" style={StyleSheet.absoluteFill} colorScheme={scheme}>
 				{/* The frame comes first — the material is drawn in the space the frame
 				    claims — and the spacer is what gives that frame something to lay
 				    out: SwiftUI will not size an empty group. No height: the host already

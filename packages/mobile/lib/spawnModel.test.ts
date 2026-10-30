@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "./spawnModel";
+import { menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "./spawnModel";
 
 describe("spawn agent resolution", () => {
 	it("prefers the project's worker agent when it is available", () => {
@@ -80,5 +80,26 @@ describe("spawn model resolution", () => {
 			{ projectId: "project-1", agentId: "codex" },
 			{ projectId: "project-1", agentId: "claude-code" },
 		)).toBe(true);
+	});
+});
+
+describe("menuModels", () => {
+	const catalog = Array.from({ length: 20 }, (_, index) => ({ id: `m${index}`, label: `Model ${index}`, isDefault: index === 15 }));
+
+	// A menu builds every row up front; opencode's catalog alone is thousands.
+	it("lists the first few models and counts them all", () => {
+		const menu = menuModels(catalog, "__auto__", 3);
+		expect(menu.models.map((model) => model.id)).toEqual(["m0", "m1", "m2"]);
+		expect(menu.total).toBe(20);
+	});
+
+	it("keeps the picked model in the list, so the menu can check it", () => {
+		expect(menuModels(catalog, "m17", 3).models.map((model) => model.id)).toEqual(["m0", "m1", "m2", "m17"]);
+		expect(menuModels(catalog, "m1", 3).models.map((model) => model.id)).toEqual(["m0", "m1", "m2"]);
+	});
+
+	it("names the catalog's own default, wherever it sits", () => {
+		expect(menuModels(catalog, "__auto__", 3).defaultLabel).toBe("Model 15");
+		expect(menuModels([{ id: "a", label: "A" }], "__auto__").defaultLabel).toBeUndefined();
 	});
 });

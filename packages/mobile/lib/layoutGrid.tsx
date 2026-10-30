@@ -15,7 +15,7 @@ import { space } from "./tokens";
  */
 
 const MINOR = space.xxs; // 4
-const MAJOR = 44; // control size: header, dock and drawer circles
+const MAJOR = 44; // control size: header and dock circles
 
 // Defaults ON in a dev build while the four corner controls are being measured —
 // no hunting for the toggle. Flip back to `false` once the review is done.
@@ -72,7 +72,7 @@ const styles = StyleSheet.create({
 		paddingHorizontal: 8,
 		paddingVertical: 3,
 	},
-	caption: { fontFamily: "Geist_600SemiBold",
+	caption: { fontFamily: "DMSans_600SemiBold",
 		color: "#ffffff",
 		fontSize: 11,
 		fontWeight: "600",

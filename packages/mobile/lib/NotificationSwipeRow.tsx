@@ -10,15 +10,18 @@ import Animated, {
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 
-import { Feather } from "./icons";
+import { AppSymbol } from "./AppSymbol";
+import { haptics } from "./haptics";
 import {
 	boundNotificationSwipeTranslation,
 	shouldClearNotificationSwipe,
 } from "./notification-swipe-model";
 import { useTheme } from "./ThemeProvider";
+import { iconSize, space } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
 
 const COMMIT_MS = 180;
+const SETTLE = { damping: 22, stiffness: 260, mass: 0.7 };
 
 export function NotificationSwipeRow({
 	children,
@@ -35,13 +38,22 @@ export function NotificationSwipeRow({
 	const startX = useSharedValue(0);
 	const translateX = useSharedValue(0);
 	const committed = useSharedValue(false);
+	// Whether the row is past the point where letting go clears it.
+	const armed = useSharedValue(false);
 
+	// Settles the row back in place; Reduce Motion puts it there at once.
+	const restore = useCallback(() => {
+		"worklet";
+		translateX.value = reduceMotion ? 0 : withSpring(0, SETTLE);
+	}, [reduceMotion, translateX]);
 	const clear = useCallback(() => {
 		if (!onClear()) {
 			committed.value = false;
-			translateX.value = withSpring(0, { damping: 22, stiffness: 260, mass: 0.7 });
+			restore();
 		}
-	}, [onClear, committed, translateX]);
+	}, [onClear, committed, restore]);
+	// Haptics run on the JS thread; the gesture worklet schedules this by name.
+	const arm = useCallback(() => haptics.armed(), []);
 	const onLayout = useCallback((event: LayoutChangeEvent) => {
 		rowWidth.value = event.nativeEvent.layout.width;
 	}, [rowWidth]);
@@ -51,11 +63,20 @@ export function NotificationSwipeRow({
 		.failOffsetY([-12, 12])
 		.onBegin(() => {
 			startX.value = translateX.value;
+			armed.value = false;
 		})
 		.onUpdate((event) => {
 			translateX.value = boundNotificationSwipeTranslation(startX.value + event.translationX, rowWidth.value);
+			// One firm bump as the row crosses the point of no return, so the clear
+			// is felt before the finger lifts. Backing out re-arms it.
+			const nextArmed = shouldClearNotificationSwipe(translateX.value, rowWidth.value);
+			if (nextArmed !== armed.value) {
+				armed.value = nextArmed;
+				if (nextArmed) scheduleOnRN(arm);
+			}
 		})
 		.onEnd(() => {
+			armed.value = false;
 			if (shouldClearNotificationSwipe(translateX.value, rowWidth.value) && !committed.value) {
 				committed.value = true;
 				translateX.value = withTiming(
@@ -67,16 +88,10 @@ export function NotificationSwipeRow({
 				);
 				return;
 			}
-			translateX.value = withSpring(0, {
-				damping: reduceMotion ? 100 : 22,
-				stiffness: reduceMotion ? 1000 : 260,
-				mass: 0.7,
-			});
+			restore();
 		})
 		.onFinalize((_event, success) => {
-			if (!success && !committed.value) {
-				translateX.value = withSpring(0, { damping: 22, stiffness: 260, mass: 0.7 });
-			}
+			if (!success && !committed.value) restore();
 		});
 
 	const animatedStyle = useAnimatedStyle(() => ({
@@ -86,7 +101,8 @@ export function NotificationSwipeRow({
 	return (
 		<View onLayout={onLayout} style={[styles.shell, style]}>
 			<View pointerEvents="none" style={[styles.deleteRail, { backgroundColor: t.red }]}>
-				<Feather name="trash-2" size={22} color="#ffffff" />
+				{/* White on red, as the system's own delete action draws it. */}
+				<AppSymbol name="delete" size={iconSize.xl} color={t.onDestructive} />
 			</View>
 			<GestureDetector gesture={pan}>
 				<Animated.View style={[styles.foreground, { backgroundColor: t.bgBase }, animatedStyle]}>
@@ -107,7 +123,7 @@ const styles = StyleSheet.create({
 		left: 0,
 		alignItems: "flex-end",
 		justifyContent: "center",
-		paddingRight: 28,
+		paddingRight: space.xxl,
 	},
 	foreground: {},
 });

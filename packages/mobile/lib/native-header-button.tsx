@@ -1,29 +1,27 @@
 import { Button, Host } from "@expo/ui";
-import { useTheme, useThemeState } from "./ThemeProvider";
-import { radius } from "./tokens";
+import { AppSymbol } from "./AppSymbol";
+import { nativeHeaderGlyphs, type NativeHeaderButtonProps } from "./native-header-button.types";
+import { useThemeState } from "./ThemeProvider";
+import { iconSize, radius, touchTarget } from "./tokens";
 
-export type NativeHeaderButtonIcon = "menu" | "bell" | "close" | "check" | "back" | "more" | "add" | "trash";
+export type { NativeHeaderButtonIcon, NativeHeaderButtonProps } from "./native-header-button.types";
 
-export function NativeHeaderButton({
-	icon,
-	label,
-	onPress,
-}: {
-	icon: NativeHeaderButtonIcon;
-	label: string;
-	onPress: () => void;
-}) {
-	const t = useTheme();
+// The fallback for platforms without a variant of their own. It draws no unread
+// dot; the caller's label already names the count.
+export function NativeHeaderButton({ icon, label, onPress }: NativeHeaderButtonProps) {
 	const { scheme } = useThemeState();
 	return (
-		<Host style={{ width: 44, height: 44 }} colorScheme={scheme} seedColor={t.accent}>
+		<Host style={{ width: touchTarget, height: touchTarget }} colorScheme={scheme}>
 			<Button
-				label={icon === "menu" ? "☰" : icon === "close" ? "×" : icon === "check" ? "✓" : icon === "back" ? "‹" : icon === "add" ? "+" : icon === "trash" ? "🗑" : "◉"}
 				onPress={onPress}
 				variant="outlined"
 				testID={`header-${icon}`}
-				style={{ width: 44, height: 44, borderRadius: radius.pill}}
-			/>
+				style={{ width: touchTarget, height: touchTarget, borderRadius: radius.pill }}
+			>
+				{/* The universal Button takes no accessibility label, so the glyph,
+				    its only content, carries the control's name. */}
+				<AppSymbol name={nativeHeaderGlyphs[icon]} size={iconSize.lg} accessibilityLabel={label} />
+			</Button>
 		</Host>
 	);
 }

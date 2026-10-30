@@ -1,3 +1,5 @@
+import type { AppSymbolName } from "./symbols";
+
 export const machineAppearancePalette = {
 	symbols: ["server", "cloud", "linux", "desktop", "laptop", "mac-mini", "mac-studio"] as const,
 };
@@ -19,6 +21,17 @@ export const machineSymbolLabels: Record<MachineSymbol, string> = {
 	"mac-mini": "Mini PC",
 	"mac-studio": "Workstation",
 };
+
+/** The system glyph each machine shape draws as: an SF Symbol on iOS, a Material Symbol on Android. */
+export const machineSymbolNames = {
+	server: "server",
+	cloud: "cloud",
+	linux: "terminal",
+	desktop: "desktop",
+	laptop: "laptop",
+	"mac-mini": "miniPc",
+	"mac-studio": "workstation",
+} as const satisfies Record<MachineSymbol, AppSymbolName>;
 
 const legacySymbols: Record<string, MachineSymbol> = {
 	monitor: "desktop",
@@ -51,16 +64,6 @@ export function machineAppearance(machine: MachineIdentity): MachineAppearance {
 	}
 	const symbols = machineAppearancePalette.symbols;
 	return { symbol: symbols[identityHash(machine.id || machine.name) % symbols.length] };
-}
-
-/** Icons that more than one machine uses; those machines need their name beside the icon. */
-export function sharedMachineSymbols(machines: readonly MachineIdentity[]): ReadonlySet<MachineSymbol> {
-	const counts = new Map<MachineSymbol, number>();
-	for (const machine of machines) {
-		const { symbol } = machineAppearance(machine);
-		counts.set(symbol, (counts.get(symbol) ?? 0) + 1);
-	}
-	return new Set([...counts].filter(([, count]) => count > 1).map(([symbol]) => symbol));
 }
 
 /** The preferred icon unless another machine already has it; then the first free one. */

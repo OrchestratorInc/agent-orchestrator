@@ -35,6 +35,13 @@ describe("reviewer attachment composer", () => {
 		expect(readFileSync(new URL("../voice/MicKey.tsx", import.meta.url), "utf8")).toContain("(disabledByOwner && !live)");
 	});
 
+	// The glyph on the accent fill is the accent's own ink, as in ChatComposer.
+	it("inks the send glyph and spinner for the accent fill", () => {
+		expect(source).toContain('<ActivityIndicator size="small" color={t.onAccent} />');
+		expect(source).toContain('<AppSymbol name="send" size={iconSize.md} color={t.onAccent} />');
+		expect(source).not.toContain("color={t.bgBase}");
+	});
+
 	it("rides the keyboard like the session composer", () => {
 		expect(source).toContain("useReanimatedKeyboardAnimation()");
 		expect(source).toContain("(restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value)");

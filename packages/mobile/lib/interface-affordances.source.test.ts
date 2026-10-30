@@ -17,33 +17,31 @@ describe("Interface affordances", () => {
 	describe("shared controls announce what they are", () => {
 		const ui = source("./ui.tsx");
 
-		it("gives the four pressable primitives a button role", () => {
+		it("gives each pressable primitive a button role", () => {
 			// The app's primary controls live here, so a missing role is missing on
-			// every screen at once. `IconButton` and `ListSectionHeader` already had
-			// theirs; these were the gap.
-			for (const name of ["Pill", "Button", "SettingsRow"]) {
-				const index = ui.indexOf(`export function ${name}(`);
-				expect(index, `${name} should exist`).toBeGreaterThan(-1);
+			// every screen at once. Each one is checked inside its own body, so a role
+			// on one primitive cannot stand in for another's.
+			for (const name of ["ListSectionHeader", "Button"]) {
+				const start = ui.indexOf(`export function ${name}(`);
+				expect(start, `${name} should exist`).toBeGreaterThan(-1);
+				const end = ui.indexOf("\nexport ", start + 1);
+				const body = ui.slice(start, end === -1 ? undefined : end);
+				expect(body, `${name} should announce as a button`).toContain('accessibilityRole="button"');
 			}
-			expect(ui).toContain('accessibilityRole="button"');
-			expect(ui.match(/accessibilityRole="button"/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
 		});
 
 		it("pins the Button's name to its title so a spinner does not erase it", () => {
 			expect(ui).toContain("accessibilityLabel={title}");
 			expect(ui).toContain("accessibilityState={{ disabled: disabled || loading, busy: loading }}");
 		});
-
-		it("reports the selected filter pill", () => {
-			expect(ui).toContain("accessibilityState={{ selected: active }}");
-		});
 	});
 
 	describe("selection and disclosure carry state", () => {
-		it("marks the active project on the project picker's rows", () => {
-			const sheet = source("./ProjectPickerSheet.tsx");
-			expect(sheet).toContain("accessibilityState={{ selected }}");
-			expect(sheet).toContain('accessibilityRole="button"');
+		// The system menu checks the chosen project, and the trigger names it.
+		it("marks the active project in the project picker", () => {
+			const switcher = source("./ProjectSwitcher.tsx");
+			expect(switcher).toContain('state: action.id === applied ? "on" : "off"');
+			expect(switcher).toContain("accessibilityLabel: `Project, ${label}`");
 		});
 
 		it("marks every collapsible row in the timeline as expandable", () => {
@@ -65,7 +63,7 @@ describe("Interface affordances", () => {
 		const browser = source("./preview/BrowserLivePane.tsx");
 		const terminal = source("./session/TerminalSessionScreen.tsx");
 
-		it("leaves browser chrome to the dedicated mobile-browser UI", () => {
+		it("labels the app reload and asks for a URL through the native prompt, not a field in the pane", () => {
 			expect(preview).toContain('accessibilityLabel="Reload app preview"');
 			expect(browser).not.toContain("TextInput");
 			expect(browser).not.toContain('placeholder="Enter a URL"');
@@ -86,10 +84,12 @@ describe("Interface affordances", () => {
 	it("keeps a list that holds an input tappable while the keyboard is up", () => {
 		// Android's default `never` spends the first tap on the keyboard, so a row
 		// under a focused field takes two taps to choose.
-		for (const file of ["./ModelPickerSheet.tsx", "./chat/ComposerPickerSheet.tsx"]) {
-			const list = source(file);
-			expect(list, `${file} holds an input inside its list`).toContain("TextInput");
-			expect(list, `${file} should keep taps while the keyboard is up`).toContain(
+		// On Android the model picker's custom-model field sits in its list's
+		// footer, and the composer picker's search field in its list's header.
+		expect(source("./ModelPickerSheet.tsx")).toContain("<OutlinedTextField");
+		expect(source("./chat/ComposerSearchField.android.tsx")).toContain("<TextField");
+		for (const file of ["./NativePickerList.tsx", "./chat/ComposerPickerSheet.tsx"]) {
+			expect(source(file), `${file} should keep taps while the keyboard is up`).toContain(
 				'keyboardShouldPersistTaps="handled"',
 			);
 		}

@@ -24,7 +24,10 @@ describe("chat composer pill", () => {
 	it("draws a single borderless capsule", () => {
 		const pill = styleRule("composer");
 		expect(pill).toContain("borderRadius: COMPOSER_RADIUS");
-		expect(composerStyles).toContain("const COMPOSER_RADIUS = 28");
+		// Half the resting height: 28 on iOS, around a row of 44pt controls, and
+		// 30 on Android, where the controls are Material's 48dp.
+		expect(composerStyles).toContain("const COMPOSER_HEIGHT = touchTarget + space.xs * 2");
+		expect(composerStyles).toContain("const COMPOSER_RADIUS = COMPOSER_HEIGHT / 2");
 		expect(composer).toContain("...composerStyleRules(t),");
 		expect(pill).not.toContain("borderWidth");
 		expect(pill).not.toContain("borderColor");
@@ -41,10 +44,9 @@ describe("chat composer pill", () => {
 		// SwiftUI was proposed mid-animation, a content-height count — each ended with
 		// the material a different size from the pill behind it, and all three are read
 		// while the keyboard is still moving. Filling reads nothing.
+		// Open or closed, one pill with one corner: it grows rather than becoming a card.
 		expect(composer).toContain("<ComposerGlass radius={COMPOSER_RADIUS} />");
 		expect(composer).not.toContain("<ComposerGlass height=");
-		// The PR card measures its own header for the drag-to-collapse animation;
-		// that measurement does not size the glass behind the composer row.
 		// The field grows from the native content size while glass fills the pill,
 		// avoiding a separately measured glass height that could lag behind it.
 		expect(composer).toContain("onContentSizeChange={(event) => {");
@@ -84,16 +86,81 @@ describe("chat composer pill", () => {
 		expect(composer).toContain('latestText.current = "";\n\t\t\tsetText("");');
 	});
 
-	// Two discs side by side have no hierarchy; the send button is the only shape
-	// that commits, so dictation is a bare glyph here.
-	it("keeps dictation a glyph and the send a filled circle", () => {
-		expect(composer).toContain('<MicKey variant="plain"');
-		expect(styleRule("send")).toContain("borderRadius: 22");
+	// A running turn shows only its stop button: no mic beside it.
+	it("drops the mic while the stop button shows, and keeps the send a filled circle", () => {
+		expect(composer).not.toContain("MicKey");
+		expect(styleRule("send")).toContain("width: touchTarget, height: touchTarget, borderRadius: radius.pill");
 		expect(styleRule("send")).toContain("backgroundColor: t.accent");
 	});
 
+	// The glyph on the filled accent is the accent's own ink. `bgBase` happened
+	// to match it on the default themes and nowhere else.
+	it("inks the send glyph for the accent fill", () => {
+		expect(composer).toContain('<AppSymbol name="send" size={iconSize.sm} weight="bold" color={t.onAccent} />');
+		// The disc is the plus's circle size, inside a full touch target.
+		expect(styleRule("roundTarget")).toContain("width: touchTarget, height: touchTarget");
+		expect(styleRule("roundDisc")).toContain("width: COMPOSER_DISC, height: COMPOSER_DISC");
+		expect(source("./ChatAttachmentMenu.tsx")).toContain("width: COMPOSER_DISC, height: COMPOSER_DISC");
+		expect(composer).toContain('<ActivityIndicator size="small" color={t.onAccent} />');
+		expect(composer).not.toContain("color={t.bgBase}");
+	});
+
+	// The press used to tap and the landing to buzz success: two haptics for one
+	// send. The one that stays is the outcome.
+	it("fires one haptic per send, when it lands", () => {
+		expect(composer).toContain('onPress={() => void submit("send")}');
+		expect(composer).toContain('onPress={() => void submit("steer")}');
+		expect(composer).not.toMatch(/haptics\.tap\(\);\s*void submit/);
+		expect(composer).not.toMatch(/haptics\.tap\(\);\s*set(Promoting|Cancelling)QueuedTurnId/);
+	});
+
+	it("gives every small control in and around the pill a full touch target", () => {
+		for (const rule of ["removeQuote", "queueSteer", "queueDelete", "steerAction"]) {
+			expect(styleRule(rule), rule).toContain("width: touchTarget, height: touchTarget");
+		}
+		expect(styleRule("attachmentRemove")).toContain("width: touchTarget, height: touchTarget");
+		expect(source("./ComposerAttachment.tsx")).toContain('accessibilityRole="button"');
+		expect(composer).toContain("hitSlop={{ top: CHIP_SLOP, bottom: CHIP_SLOP }}");
+		expect(composer).toContain("const CHIP_SLOP = (touchTarget - CHIP_HEIGHT) / 2");
+		expect(styleRule("deliveryNote")).toContain("height: touchTarget");
+		// The corner controls are a touch target tall, and the controls row opens
+		// to that height.
+		expect(styleRule("corner")).toContain("height: touchTarget");
+		expect(composer).toContain("height: interpolate(openness.value, [0, 1], [0, touchTarget], \"clamp\")");
+		expect(styleRule("settingsSlot")).toContain("minHeight: touchTarget");
+		expect(styleRule("settingsSlot")).not.toMatch(/(?<!min)[Hh]eight: /);
+		expect(composer).not.toContain("hitSlop={7}");
+	});
+
+	it("brings a pushed-aside request back with a real button", () => {
+		expect(composer).toContain('<Button title="Answer" variant="secondary" onPress={onRestoreRequest} />');
+		expect(composer).not.toContain("textDecorationLine");
+	});
+
+	// The button alone would announce a bare "Answer", with no word of which
+	// request it brings back.
+	it("names the request a screen reader would bring back", () => {
+		expect(composer).toContain("accessibilityLabel={`${request.title}. Answer it`}");
+		expect(composer).toContain('accessibilityActions={[{ name: "activate", label: "Answer" }]}');
+		expect(composer).toContain("onAccessibilityTap={onRestoreRequest}");
+		expect(composer).toContain('<View importantForAccessibility="no-hide-descendants">\n\t\t\t\t\t<Button title="Answer"');
+	});
+
+	it("draws the queue dock with the shared divider and radius", () => {
+		expect(styleRule("queueDock")).toContain("borderWidth: rowDividerWidth");
+		expect(styleRule("queueDock")).toContain("borderRadius: radius.lg");
+		expect(styleRule("queueRowDivider")).toContain("borderTopWidth: rowDividerWidth");
+		expect(composer).not.toContain("hairlineWidth");
+	});
+
+	// The level is otherwise only a bar's width and colour.
+	it("gives the context meter a value a screen reader can read", () => {
+		expect(composer).toContain('<View accessible accessibilityRole="progressbar" accessibilityLabel="Context window" accessibilityValue={contextMeter.accessibilityValue}');
+		expect(styleRule("contextText")).toContain("fontSize: type.footnote.fontSize");
+	});
+
 	it("opens the row with a plus rather than a paperclip", () => {
-		expect(source("./ChatAttachmentMenu.tsx")).toContain('name="plus"');
+		expect(source("./ChatAttachmentMenu.tsx")).toContain('<AppSymbol name="add"');
 	});
 
 	// The dock used to swap its inset for the keyboard gap on a visibility flag,
@@ -108,53 +175,90 @@ describe("chat composer pill", () => {
 	});
 });
 
-describe("composer meta row", () => {
+describe("composer controls row", () => {
 	const control = source("./ChatTurnSettingsControl.tsx");
 
 	// "GPT-5.6-Sol · Medium · Ask when unsure" is the longest thing in the row, and
-	// two others can join it: the queued-message note and the context meter. The
-	// label was drawn straight across both — the settings control is the one that
-	// yields, and it is clipped so a label that fails to truncate cannot paint over
-	// its neighbours.
-	it("lets the settings label yield instead of the meter", () => {
-		const meta = styleRule("metaRow");
-		expect(meta).toContain("gap: space.sm");
+	// the delivery note or steer can join it. The settings control is the one
+	// that yields, clipped so a label that fails to truncate cannot paint over its
+	// neighbours.
+	it("lets the settings label yield", () => {
+		expect(styleRule("settingsSlot")).toContain("flex: 1, minWidth: 0");
 		expect(styleRule("settingsSlot")).toContain("overflow: \"hidden\"");
-		expect(styleRule("contextMeter")).toContain("flexShrink: 0");
-		expect(styleRule("deliveryNote")).toContain("flexShrink: 0");
 		expect(control).toContain('alignSelf: "stretch"');
 		expect(control).toContain('overflow: "hidden"');
 	});
 });
 
-describe("PR review composer", () => {
-	it("groups the PR prompt, settings selector, and message input inside one review surface", () => {
-		expect(composer).toContain("const reviewPromptAvailable = Boolean(reviewPR && onOpenReview)");
-		expect(composer).toContain("{showReviewPrompt ? <Animated.View style={[styles.reviewArea, styles.reviewAreaWithPrompt]}>");
-		expect(composer).toContain("<Animated.View style={[styles.reviewContainer, reviewCardDragStyle]}");
-		expect(composer).toContain("<PRReviewPrompt pr={activeReviewPR}");
-		expect(composer).toContain("<TextInput");
-		expect(composer).toContain("{activeReviewPR ? <Animated.View pointerEvents=\"none\" style={[StyleSheet.absoluteFill, reviewComposerGlassStyle]}>");
+describe("collapsed and expanded composer", () => {
+	// Collapsed, a slim pill under the session's chips; writing grows it into a
+	// card with the turn settings between attach and the round button.
+	it("opens on focus and stays open while anything waits to be sent or the mic is open", () => {
+		expect(composer).toContain("const expanded = focused || hasDraft || attachments.length > 0 || listening || transcribing;");
+		expect(composer).toContain("onFocus={() => setFocused(true)}");
+		expect(composer).toContain("onBlur={() => setFocused(false)}");
+		expect(composer).toContain('<Animated.View pointerEvents={expanded ? "box-none" : "none"} style={[styles.controlsRow, { paddingLeft: CORNER_CONTROL, paddingRight: CORNER_CONTROL }, controlsOpening]}>');
+		expect(composer).toContain("<ChatTurnSettingsControl snapshot={snapshot}");
 	});
 
-	it("uses supported PR and navigation symbols instead of a blank icon tile", () => {
-		const prompt = source("./PRReviewPrompt.tsx");
-		expect(prompt).toContain('name="git-pull-request"');
-		expect(prompt).toContain('name="chevron-right"');
-		expect(prompt).not.toContain('name="arrow-up-right"');
+	// Moving the field between two parents would remount it and drop the keyboard.
+	it("keeps the field in one row in both shapes", () => {
+		expect(composer.match(/<TextInput\n/g)).toHaveLength(1);
+		expect(composer.match(/\{attachMenu\}/g)).toHaveLength(1);
+		expect(composer.match(/\{roundButton\}/g)).toHaveLength(1);
+	});
+
+	// The corner controls never move: the pill grows up around them, the field is
+	// let out from between them and the controls row opens under it, all on one
+	// spring that Reduce Motion turns into a cut.
+	it("opens on one spring around controls pinned to its corners", () => {
+		expect(composer).toContain("<View style={[styles.corner, styles.cornerLeading]}>{attachMenu}</View>");
+		expect(composer).toContain("<View style={[styles.corner, styles.cornerTrailing]}>");
+		expect(styleRule("corner")).toContain('position: "absolute", bottom: space.xs');
+		expect(composer).toContain("openness.value = reduceMotion ? withTiming(expanded ? 1 : 0, { duration: 0 }) : withSpring(expanded ? 1 : 0, COMPOSER_SPRING);");
+		expect(composer).toContain("paddingLeft: interpolate(openness.value, [0, 1], [CORNER_CONTROL, space.sm])");
+		// The round button changes face in place, with no transition of its own.
+		expect(composer).not.toContain("ZoomIn");
+	});
+
+	// The new-task sheet's round button: stop the mic, stop the turn, send, or
+	// dictate, by what the prompt holds. Dictating drops the keyboard.
+	it("follows the prompt with one round button", () => {
+		expect(composer).toContain('const primary = listening ? "stopDictation" : transcribing ? "transcribing" : primaryAction === "stop" ? "stopTurn" : nothingToSend && canDictate ? "dictate" : "send";');
+		expect(composer).toContain('onPress={() => { if (primary === "dictate") Keyboard.dismiss(); voice.toggleLatched(); }}');
+		expect(styleRule("dictating")).toContain("backgroundColor: t.red");
+	});
+
+	it("floats over the conversation, which fades out behind it", () => {
+		expect(composer).toContain("<Animated.View style={[styles.dock, styles.floatingDock, { paddingBottom: restingInset }, dockRise]}>");
+		expect(styleRule("floatingDock")).toContain('backgroundColor: "transparent"');
+		expect(composer).toContain("<DockFade />");
 	});
 });
 
-describe("session changes pill", () => {
-	// Codex-style: once the session has changed files, the meta row offers them
-	// where the "Sent after this" note sat. The placeholder still says a message
-	// waits for the turn, so nothing is lost, and steering stays reachable.
-	it("replaces the queue note and keeps the steer action", () => {
-		const start = composer.indexOf("{changes && !(deliveryPresentation.showQueueNote && attachments.length)");
-		expect(start).toBeGreaterThan(-1);
-		const pill = composer.slice(start, composer.indexOf(': deliveryPresentation.showQueueNote ? <View style={styles.deliveryNote}>', start));
-		expect(pill).toContain("changes.onOpen()");
-		expect(pill).toContain('accessibilityLabel="Steer this turn now"');
+describe("composer chips", () => {
+	// The session's PR, what it changed and the context meter sit over the
+	// composer, open or not.
+	it("shows the session's state as chips", () => {
+		expect(composer).toContain("const chips = activeReviewPR || changes || contextMeter ?");
+		expect(composer).toContain("const reviewPromptAvailable = Boolean(reviewPR && onOpenReview)");
+		expect(composer).toContain('accessibilityHint="Opens the pull request review" onPress={onOpenReview}');
+		expect(composer).toContain('accessibilityHint="Opens the changed files" onPress={changes.onOpen}');
+		expect(composer).toContain("<ComposerGlass radius={CHIP_HEIGHT / 2} />");
+	});
+
+	it("names the PR by number and its deciding status", () => {
+		const chip = source("./PRChip.tsx");
+		expect(chip).toContain('name="git-pull-request"');
+		expect(chip).toContain("#{pr.number}");
+		expect(chip).toContain("prReviewPromptHeadline(pr, summary)");
+	});
+
+	// Steering stays reachable from the open card, and the note says when a
+	// message will go while a turn runs.
+	it("keeps the steer action and the delivery note in the card", () => {
+		expect(composer).toContain('const steerAction = deliveryPresentation.showSteerAction ? <Pressable');
+		expect(composer).toContain('accessibilityLabel="Steer this turn now"');
 		expect(composer).toContain('{attachments.length ? "Attachments next" : "Sent after this"}');
 	});
 });

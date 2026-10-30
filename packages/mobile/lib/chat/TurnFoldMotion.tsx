@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import type { StyleProp, ViewStyle } from "react-native";
+import { Platform, type StyleProp, type ViewStyle } from "react-native";
 import Animated, {
 	FadeIn,
 	FadeOut,
@@ -9,8 +9,9 @@ import Animated, {
 	withTiming,
 } from "react-native-reanimated";
 
-import { Feather } from "../icons";
+import { AppSymbol } from "../AppSymbol";
 import { CROSSFADE_MS, LAYOUT_MS, ROW_ENTER_MS } from "../motion";
+import { iconSize } from "../tokens";
 import { useReducedMotion } from "../useReducedMotion";
 
 /**
@@ -61,17 +62,22 @@ export function StatusLabel({ children }: { children: ReactNode }) {
 	return <Animated.View layout={LinearTransition.duration(LAYOUT_MS)}>{children}</Animated.View>;
 }
 
-/** A right-pointing chevron that turns down as the fold opens. */
-export function FoldChevron({ open, color }: { open: boolean; color: string }) {
+// Each platform's disclosure: iOS's chevron points forward and turns down, as a
+// DisclosureGroup's does; Material's expand arrow points down and turns up.
+const FOLD_GLYPH = Platform.OS === "android" ? "chevronDown" : "chevronForward";
+const FOLD_TURN = Platform.OS === "android" ? 180 : 90;
+
+/** The disclosure chevron of a fold, turning as the fold opens. */
+export function FoldChevron({ open, color, size = iconSize.sm }: { open: boolean; color: string; size?: number }) {
 	const reduceMotion = useReducedMotion();
 	const progress = useSharedValue(open ? 1 : 0);
 	useEffect(() => {
 		progress.value = withTiming(open ? 1 : 0, { duration: reduceMotion ? 0 : LAYOUT_MS });
 	}, [open, progress, reduceMotion]);
-	const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${progress.value * 90}deg` }] }));
+	const style = useAnimatedStyle(() => ({ transform: [{ rotate: `${progress.value * FOLD_TURN}deg` }] }));
 	return (
 		<Animated.View style={style}>
-			<Feather name="chevron-right" size={12} color={color} />
+			<AppSymbol name={FOLD_GLYPH} size={size} color={color} />
 		</Animated.View>
 	);
 }

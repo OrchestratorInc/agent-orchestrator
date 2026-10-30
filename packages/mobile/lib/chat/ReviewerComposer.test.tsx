@@ -21,6 +21,8 @@ vi.mock("../voice/useVoiceInput", () => ({ useVoiceInput: () => ({}) }));
 vi.mock("./ChatAttachmentMenu", () => ({ ChatAttachmentMenu: "ChatAttachmentMenu" }));
 vi.mock("./useImagePaste", () => ({ useImagePaste: (handler: typeof paste.handler) => { paste.handler = handler; return () => {}; } }));
 vi.mock("./composer-glass", () => ({ ComposerGlass: "ComposerGlass", composerGlassSupported: false }));
+vi.mock("../pressFeedback", () => ({ usePressFeedback: () => ({ android_ripple: undefined, pressed: {} }) }));
+vi.mock("../AppSymbol", () => ({ AppSymbol: "AppSymbol" }));
 
 import { launchImageLibraryAsync } from "expo-image-picker";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";

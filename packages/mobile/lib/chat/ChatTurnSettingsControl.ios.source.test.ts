@@ -7,34 +7,34 @@ import { describe, expect, it } from "vitest";
 
 const source = readFileSync(fileURLToPath(new URL("./ChatTurnSettingsControl.ios.tsx", import.meta.url)), "utf8");
 
-describe("iOS turn settings menu anchor", () => {
-	it("keeps a stable left-side anchor as selected labels change", () => {
-		expect(source).toContain("matchContents={{ horizontal: false, vertical: true }}");
-		expect(source).toContain('ignoreSafeArea="all"');
-		expect(source).toContain('host: { alignSelf: "flex-start", width: 220, maxWidth: "100%", height: 44 }');
-		expect(source).toContain('<View pointerEvents="none" accessibilityElementsHidden style={[styles.visibleLabel, disabled && styles.disabledLabel]}>');
-		expect(source).toContain('<RNText numberOfLines={1} style={styles.visibleText}>{label}</RNText>');
-		expect(source).toContain('accessibilityLabel(`Turn settings, ${label}`)');
+describe("iOS chat controls row", () => {
+	// The new task's row, from the same pieces: the model's capsule, the effort's
+	// speedometer and the approval mode's symbol.
+	it("draws the new task's model capsule, effort speedometer and approval symbol", () => {
+		expect(source).toContain('import { ApprovalMenu, Choice, EffortMenu, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";');
+		expect(source).toContain('label={<ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}');
+		expect(source).toContain("<EffortMenu");
+		expect(source).toContain("<ApprovalMenu");
+		expect(source).toContain("symbol: approvalSymbol(choice.permissionMode, snapshot.harness)");
+		expect(source).toContain('host: { alignSelf: "stretch", height: touchTarget }');
+	});
+
+	// The turn has no settings sheet: everything is in the row's own menus.
+	it("lists the agent's models as checkable items, then any other setting", () => {
+		expect(source).toContain("{modelRow?.choices.map((choice) => <Choice");
+		expect(source).toContain("{otherRows.map((row) => <SettingPicker");
+		expect(source).not.toContain("All turn settings");
+		expect(source).not.toContain("Turn settings");
 	});
 });
 
-describe("iOS model setting", () => {
-	it("shows a layers symbol on the selector, but only checkmarks in its choices", () => {
-		const symbol = source.slice(source.indexOf("function settingSymbol"));
-		expect(symbol).toContain('if (row.providerKind === "model" || id.includes("model")) return "square.stack.3d.up"');
-		expect(source).toContain('systemImage={choice.selected ? "checkmark" : undefined}');
-	});
-
-	it("does not give the agent selector a model icon", () => {
-		const symbol = source.slice(source.indexOf("function settingSymbol"));
-		expect(symbol).toContain('if (id.includes("agent")) return undefined');
-	});
-});
-
-describe("iOS approvals setting", () => {
-	it("shows the complete dashed-check artwork as one image in the menu row", () => {
-		expect(source).toContain('isApprovalRow(row) ? <ApprovalRowLabel row={row} />');
-		expect(source).toContain('<Image assetName="CircleDashedCheck" />');
+describe("iOS other settings", () => {
+	// A checkmark image on a button is not announced; a picker's choice is.
+	it("offers each as a picker, or a toggle when it is on/off", () => {
+		expect(source).toContain('modifiers={[pickerStyle("menu")]}');
+		expect(source).toContain("<Text key={choice.value} modifiers={[tag(choice.value)]}>{choice.label}</Text>");
+		expect(source).toContain("<Toggle label={row.label}");
+		expect(source).not.toContain('systemImage={choice.selected ? "checkmark" : undefined}');
 	});
 });
 

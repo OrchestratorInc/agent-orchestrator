@@ -1,51 +1,44 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { Feather } from "../lib/icons";
-import BottomSheet, { BottomSheetView } from "@expo/ui/community/bottom-sheet";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { File } from "expo-file-system";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-	InteractionManager,
-	Platform,
-	Pressable,
-	StyleSheet,
-	Text,
-	View,
-} from "react-native";
-import { KeyboardStickyView, useKeyboardState } from "react-native-keyboard-controller";
+import { Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
+import { KeyboardAvoidingView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
 import { agentErrorCopy } from "../lib/agentError";
+import { AppSymbol } from "../lib/AppSymbol";
 import { defaultAgent, rankAgents } from "../lib/agentPicker";
-import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type ProjectDetail, type SessionMode } from "../lib/api";
+import { ApiError, getAgentModels, getAgents, getProject, getSettings, type AgentCatalog, type AgentModelCatalog, type AgentModelInfo, type ProjectDetail, type SessionMode } from "../lib/api";
 import { userFacingError } from "../lib/connectionError";
 import { chatErrorCopy, isChatPreflightError } from "../lib/chatError";
 import { haptics } from "../lib/haptics";
 import { connectedSpawnHosts, initialSpawnHostId, selectSpawnHost, spawnHostRequestIsCurrent } from "../lib/hostRoute";
 import { ALL_PROJECTS, STANDALONE_PROJECT, resolveSpawnProject } from "../lib/projectFilter";
-import { modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
+import { menuModels, modelOverride, resolveSpawnAgent, resolveSpawnModel, spawnModelSourceChanged } from "../lib/spawnModel";
 import { appendSpawnAttachments, MAX_SPAWN_ATTACHMENTS, photoPickerAttachment, readSpawnAttachments, type PickedSpawnAttachment, type SpawnAttachment } from "../lib/spawn-attachments";
 import { SpawnAttachmentRow } from "../lib/spawn-attachment-row";
 import { SpawnComposerControls } from "../lib/spawn-composer-controls";
 import { spawnNotices } from "../lib/spawnNotices";
-import { SpawnPromptInput } from "../lib/spawn-prompt-input";
+import { spawnEffortChoices } from "../lib/modelEffort";
 import { useApp } from "../lib/store";
 import { useVoiceInput } from "../lib/voice/useVoiceInput";
 import type { Theme } from "../lib/theme";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
 import { Button } from "../lib/ui";
-import { iconSize, space, type } from "../lib/tokens";
-import { backOr } from "../lib/backNavigation";
+import { iconSize, radius, space, type } from "../lib/tokens";
+import { approvalOptions, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
+import { modelSheetRoute } from "../lib/sheetResult";
+import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
+import { KEYBOARD_DOCK_GAP } from "../lib/session/keyboardInset";
 
-export { SheetErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
+export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";
 
-export default function SpawnModal() {
-	return <SpawnModalContent />;
-}
-
-function SpawnModalContent() {
+export default function SpawnScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const navigation = useNavigation();
 	const { projectId: routeProjectId, hostId: routeHostId } = useLocalSearchParams<{ projectId?: string; hostId?: string }>();
 	const { hostStates, activeProjectId, currentHostId, configForHost, switchHost, setActiveProject, spawn } = useApp();
 	const connectedHosts = useMemo(() => connectedSpawnHosts(hostStates), [hostStates]);
@@ -84,7 +77,13 @@ function SpawnModalContent() {
 	const [attachmentError, setAttachmentError] = useState<string>();
 	const [model, setModel] = useState("");
 	const [modelTouched, setModelTouched] = useState(false);
+	// An effort picked here; until then the model runs at its own default.
+	const [effort, setEffort] = useState<string>();
 	const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>();
+	// Every agent's own models, so the agent menu can offer each one's list
+	// before it is picked. The picked agent's list is the project-aware catalog.
+	const [agentModelLists, setAgentModelLists] = useState<Record<string, AgentModelInfo[]>>({});
+	const [approvalChoice, setApprovalChoice] = useState<ApprovalMode>();
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
 	const [projectDetailLoadedFor, setProjectDetailLoadedFor] = useState<string | null>(null);
 	const [modelLoading, setModelLoading] = useState(false);
@@ -103,13 +102,22 @@ function SpawnModalContent() {
 	// appended, so dictation can extend what was typed rather than replace it.
 	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setPrompt((old) => old ? `${old} ${spoken}` : spoken), []) });
 	const listening = voice.state === "starting" || voice.state === "recording";
-	// iOS: the prompt fills the room above the controls. The controls translate
-	// with the keyboard, which does not reflow their siblings; a spacer below
-	// the attachments and messages makes that entire region reflow instead.
-	const [promptRoom, setPromptRoom] = useState<number>();
-	const keyboardHeight = useKeyboardState((state) => state.height);
-
-
+	// The composer docks to the bottom as the chat's does, on the same keyboard
+	// avoidance: its resting inset closes to the keyboard gap as the keys rise.
+	// The page sits below the stack's opaque bar, so the avoider counts it.
+	const chatKeyboard = useChatKeyboard();
+	const keyboard = useReanimatedKeyboardAnimation();
+	const { restingInset, dockRiseOverride } = chatKeyboard;
+	const dockRise = useAnimatedStyle(() => ({
+		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value) }],
+	}));
+	// A started request can't be called back, so the page holds while it runs.
+	// A ref, not state, so the success path can let go and replace the page in
+	// the same tick.
+	const holding = useRef(false);
+	useEffect(() => navigation.addListener("beforeRemove", (event) => {
+		if (holding.current) event.preventDefault();
+	}), [navigation]);
 
 	// Seed from this machine's routed project, or the selected machine's active
 	// project. A project id is never carried across machines.
@@ -158,10 +166,28 @@ function SpawnModalContent() {
 	const projectWorkerModel = projectDetail?.config?.worker?.agentConfig?.model ?? projectDetail?.config?.agentConfig?.model ?? "";
 	const resolvedModel = resolveSpawnModel({ selectedAgent: harness, projectWorkerAgent, projectWorkerModel });
 	const displayedModel = modelTouched ? model : resolvedModel;
-	// "Automatic" when the project pins nothing, because that is the truth: the
-	// provider picks, and naming a model here promised one the session never ran.
-	const displayedModelLabel = displayedModel ? modelCatalog?.models.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Automatic";
+	// The project-aware catalog once it lists something. An empty one (still
+	// discovering, or a project that names none) must not hide the machine's
+	// list, which is what left the menu offering only the default.
+	const currentModels = modelCatalog?.models.length ? modelCatalog.models : agentModelLists[harness] ?? [];
+	// "Default model" when the project pins nothing, because that is the truth:
+	// the provider picks, and naming a model here promised one the session never
+	// ran. Not "Automatic", which reads as an approval mode.
+	const displayedModelLabel = displayedModel ? currentModels.find((item) => item.id === displayedModel)?.label ?? displayedModel : "Default model";
+	const projectApproval = projectDetail?.config?.worker?.agentConfig?.permissions ?? projectDetail?.config?.agentConfig?.permissions;
+	const approvalMode = resolveApprovalMode({ harness, chosen: approvalChoice, projectMode: projectApproval });
 	const modelSelection = modelTouched ? model : "__auto__";
+	// The model the task will run, picked or the catalog's default, for its
+	// effort levels.
+	const runningModel = displayedModel ? currentModels.find((item) => item.id === displayedModel) : currentModels.find((item) => item.isDefault);
+	const effortChoices = useMemo(() => spawnEffortChoices(runningModel, effort), [effort, runningModel]);
+	const chosenEffort = effortChoices.some((choice) => choice.selected && choice.value === effort) ? effort : undefined;
+	// Each agent's menu list, built once per change rather than per keystroke:
+	// some catalogs run to thousands of models.
+	const agentMenuModels = useMemo(() => Object.fromEntries(agents.filter((agent) => agent.selectable).map((agent) => [
+		agent.id,
+		menuModels(agent.id === harness ? currentModels : agentModelLists[agent.id] ?? [], agent.id === harness ? modelSelection : "__auto__"),
+	])), [agentModelLists, agents, currentModels, harness, modelSelection]);
 	const hostNotices = selectedHostId === null && hostSelectionInitialized.current
 		? [routeHostId ? "That machine is not connected." : "No connected machines are available."]
 		: [];
@@ -179,7 +205,7 @@ function SpawnModalContent() {
 	const hasComposerMessage = Boolean(
 		notices.length > 0
 		|| attachmentError
-		|| (Platform.OS === "android" && listening)
+		|| listening
 		|| voice.error
 		|| error
 		|| offerTUI,
@@ -209,14 +235,37 @@ function SpawnModalContent() {
 		setHarness((current) => current === nextHarness ? current : nextHarness);
 	}, [agentTouched, agents, catalog, loading, projectDetail, projectDetailLoadedFor, projectId]);
 
+	// Each agent's machine-wide models, for the agent menu's lists. Failures
+	// leave that agent's list empty; the picked agent's own load reports errors.
+	const agentIds = agents.filter((agent) => agent.selectable).map((agent) => agent.id).join("|");
 	useEffect(() => {
 		const requestedHostId = selectedHostId;
-		if (!config || !requestedHostId || !projectId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
+		if (!config || !requestedHostId || !agentIds) { setAgentModelLists({}); return; }
+		let cancelled = false;
+		const generation = catalogGeneration.current;
+		const polling = new AbortController();
+		void Promise.all(agentIds.split("|").map(async (id) => {
+			try {
+				return [id, (await getAgentModels(config, id, undefined, polling.signal)).models ?? []] as const;
+			} catch {
+				return [id, []] as const;
+			}
+		})).then((entries) => {
+			if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setAgentModelLists(Object.fromEntries(entries));
+		});
+		return () => { cancelled = true; polling.abort(); };
+	}, [agentIds, config, reloadKey, selectedHostId]);
+
+	useEffect(() => {
+		const requestedHostId = selectedHostId;
+		// The machine's own catalog loads before a project is chosen, so the
+		// model menu is never just the default; choosing a project swaps in its.
+		if (!config || !requestedHostId || !harness) { setModelCatalog(undefined); setModelLoading(false); return; }
 		let cancelled = false;
 		const generation = catalogGeneration.current;
 		setModelLoading(true);
 		const polling = new AbortController();
-		getAgentModels(config, harness, projectId === STANDALONE_PROJECT ? undefined : projectId, polling.signal)
+		getAgentModels(config, harness, !projectId || projectId === STANDALONE_PROJECT ? undefined : projectId, polling.signal)
 			.then((nextCatalog) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) { setModelCatalog(nextCatalog); setModelError(nextCatalog.warning); } })
 			.catch((cause) => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelError(userFacingError(cause)); })
 			.finally(() => { if (!cancelled && spawnHostRequestIsCurrent(generation, catalogGeneration.current, requestedHostId, selectedHostId)) setModelLoading(false); });
@@ -234,7 +283,8 @@ function SpawnModalContent() {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [connection]);
 
-	const clearModelOverride = () => { setModel(""); setModelTouched(false); };
+	// A level belongs to the model it was picked for, so a new model starts at its own default.
+	const clearModelOverride = () => { setModel(""); setModelTouched(false); setEffort(undefined); };
 	const resetModelSource = () => { clearModelOverride(); setModelCatalog(undefined); setModelError(undefined); };
 	const chooseHost = (nextHostId: string) => {
 		if (nextHostId === selectedHostId) return;
@@ -249,6 +299,8 @@ function SpawnModalContent() {
 		setProjectDetailLoadedFor(null);
 		setModelLoading(false);
 		resetModelSource();
+		setAgentModelLists({});
+		setApprovalChoice(undefined);
 		setError(null);
 		setOfferTUI(false);
 		requestRef.current = undefined;
@@ -286,12 +338,28 @@ function SpawnModalContent() {
 			clearModelOverride();
 			return;
 		}
+		if (nextModel !== model) setEffort(undefined);
 		setModel(nextModel);
 		setModelTouched(true);
 	};
+	// The agent menu picks an agent and one of its models together.
+	const selectAgentModel = (nextHarness: string, nextModel: string) => {
+		selectAgent(nextHarness);
+		selectModel(nextModel);
+	};
+	// An agent's whole catalog, searchable, for one too long for its menu.
+	const browseModels = (agentId: string) => {
+		router.push(modelSheetRoute({
+			agentId,
+			projectId: projectId && projectId !== STANDALONE_PROJECT ? projectId : "",
+			selected: agentId === harness && modelTouched ? model : "",
+			// The sheet's default row answers "".
+			onSelect: (id) => selectAgentModel(agentId, id || "__auto__"),
+		}));
+	};
 	const voiceFeedback = listening ? (
 		<View style={styles.voice}>
-			<Feather name="mic" size={iconSize.xs} color={t.red} />
+			<AppSymbol name="mic" size={iconSize.sm} color={t.red} />
 			<Text numberOfLines={2} style={styles.voiceText}>
 				{voice.partial || (voice.state === "starting" ? "Keep holding…" : "Listening…")}
 			</Text>
@@ -363,6 +431,7 @@ function SpawnModalContent() {
 		// choice, and the better one: a disabled button with no explanation is
 		// worse than a message naming what is missing.
 		setBusy(true);
+		holding.current = true;
 		setError(null);
 		setOfferTUI(false);
 		try {
@@ -372,6 +441,11 @@ function SpawnModalContent() {
 				prompt: prompt.trim() || undefined,
 				harness: harness || undefined,
 				model: modelOverride(displayedModel, modelTouched),
+				// Only a level picked here; otherwise the model's default applies.
+				effort: chosenEffort,
+				// Only a mode picked here overrides the project's; an untouched
+				// picker names the project's mode, which the daemon applies anyway.
+				approvalMode: approvalChoice === approvalMode ? approvalChoice : undefined,
 				mode,
 				attachments: attachmentsRef.current.map(({ mimeType, data }) => ({ mimeType, data })),
 			};
@@ -382,22 +456,28 @@ function SpawnModalContent() {
 			}
 			const session = await spawn({ ...request, clientRequestId: requestRef.current.id });
 			if (projectId === STANDALONE_PROJECT) setActiveProject(ALL_PROJECTS);
+			holding.current = false;
+			// Covered while the request ran (a notification or link can still
+			// open a page over this one): the worker shows up on the board, and
+			// replacing this page now would swap out one the user can't see. The
+			// page lets go again, or coming back to it would find it locked for
+			// good; a second Start reuses the request id, so it can't spawn a
+			// second worker.
+			if (!navigation.isFocused()) {
+				setBusy(false);
+				return;
+			}
 			haptics.success();
-			// Dismiss the modal first, then open the freshly spawned session's mode-aware surface
-			// once the dismiss transition has settled. Firing both navigations in the
-			// same tick overlaps their animations (the modal retracts while the session
-			// is already sliding in); runAfterInteractions waits for the modal's
-			// transition to finish so the two happen back-to-back, not on top of each
-			// other. The session screen shows its own "connecting" state while the
-			// terminal attaches, so landing on it before the PTY is ready is expected.
-			backOr(router);
-			InteractionManager.runAfterInteractions(() => {
-				router.push({
-					pathname: "/session/[id]",
-					params: { id: session.id, projectId: session.projectId, hostId: selectedHostId },
-				});
+			// The new task becomes its conversation in place, as a new chat does:
+			// the session replaces this page, so going back returns to wherever
+			// the task was started from. The session screen shows its own
+			// "connecting" state while the agent attaches.
+			router.replace({
+				pathname: "/session/[id]",
+				params: { id: session.id, projectId: session.projectId, hostId: selectedHostId },
 			});
 		} catch (e) {
+			holding.current = false;
 			haptics.error();
 			setError(spawnErrorCopy(e));
 			setOfferTUI(mode === "chat" && isChatPreflightError(e));
@@ -405,53 +485,36 @@ function SpawnModalContent() {
 		}
 	};
 
-	const content = (
-		<View style={[
-			styles.content,
-			Platform.OS === "ios" && styles.iosContent,
-			Platform.OS === "android" && styles.androidContent,
-		]}>
-				<View
-					style={[styles.promptHost, Platform.OS === "ios" && styles.promptHostFill]}
-					onLayout={Platform.OS === "ios" ? (event) => setPromptRoom(Math.floor(event.nativeEvent.layout.height)) : undefined}
-				>
-					<SpawnPromptInput value={prompt} onChangeText={setPrompt} height={Platform.OS === "ios" ? promptRoom : undefined} />
-				</View>
+	// While a request runs, the back swipe is off too, so it never starts a
+	// transition the hold above would cancel.
+	useEffect(() => {
+		if (!busy) return;
+		navigation.setOptions({ gestureEnabled: false });
+		return () => navigation.setOptions({ gestureEnabled: true });
+	}, [busy, navigation]);
 
-				<SpawnAttachmentRow
-					attachments={attachments}
-					onRemove={(item) => {
-						attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
-						setAttachments(attachmentsRef.current);
-					}}
-				/>
+	const harnessLabel = agents.find((item) => item.id === harness)?.label;
 
-		{hasComposerMessage ? <View style={styles.messages}>
+	return (
+		<KeyboardAvoidingView
+			style={[styles.screen, chatKeyboard.rootStyle]}
+			behavior={chatKeyboard.behavior}
+			keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}
+		>
+			{/* The empty conversation the task will become. A tap there puts the
+			    keyboard away, as it does over a conversation. */}
+			<Pressable accessible={false} style={styles.room} onPress={Keyboard.dismiss} />
+
+			<Animated.View style={[styles.dock, { paddingBottom: restingInset }, dockRise]}>
+				{hasComposerMessage ? <View style={styles.messages}>
 					{notices.map((notice) => <Text key={notice} style={styles.warn}>{notice}</Text>)}
 					{attachmentError ? <Text style={styles.warn}>{attachmentError}</Text> : null}
-					{Platform.OS === "android" ? voiceFeedback : null}
+					{voiceFeedback}
 					{voice.error ? <Text accessibilityRole="alert" style={styles.warn}>{voice.error}</Text> : null}
-					{error ? <Text style={styles.error}>{error}</Text> : null}
-					{offerTUI ? <Button title="Create as Terminal UI instead" variant="ghost" icon="terminal" onPress={() => { selectMode("tui"); setOfferTUI(false); setError(null); }} /> : null}
+					{error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+					{offerTUI ? <Button title="Create as Terminal UI instead" variant="secondary" icon="terminal" onPress={() => { selectMode("tui"); setOfferTUI(false); setError(null); }} /> : null}
 				</View> : null}
 
-				{/* The sticky controls move visually but keep their original layout
-				    position. Reserve that movement before them so chips and messages
-				    remain visible above the keyboard, not behind the controls. */}
-				{Platform.OS === "ios" && keyboardHeight > 0 ? (
-					<View pointerEvents="none" style={{ height: keyboardHeight, marginTop: -space.sm }} />
-				) : null}
-
-				{/* The controls ride the keyboard on the UI thread.
-				    iOS does not lift this form sheet for the IME, and every
-				    height-based attempt moved late or not at all: a settled keyboard
-				    height only lands after the animation, animated padding is
-				    interpolated on the JS thread, and a keyboard-avoiding wrapper
-				    mismeasures its own frame inside a sheet, leaving Start task behind
-				    the keyboard. A sticky view translates by the live offset, so
-				    the selectors and the button sit directly above it. */}
-				<KeyboardStickyView offset={{ closed: 0, opened: 0 }}>
-				{Platform.OS === "ios" ? voiceFeedback : null}
 				<SpawnComposerControls
 					hosts={hostOptions}
 					hostId={selectedHostId}
@@ -462,40 +525,40 @@ function SpawnModalContent() {
 					agents={agents.filter((item) => item.selectable).map((item) => ({ id: item.id, label: item.label }))}
 					harness={harness}
 					onSelectHarness={selectAgent}
-					models={modelCatalog?.models.map((item) => ({ id: item.id, label: item.label })) ?? []}
+					models={currentModels.map((item) => ({ id: item.id, label: item.label }))}
+					agentModels={agentMenuModels}
 					modelSelection={modelSelection}
 					modelLabel={displayedModelLabel}
 					onSelectModel={selectModel}
+					onSelectAgentModel={selectAgentModel}
+					usesDefaultModel={!displayedModel}
+					onBrowseModels={browseModels}
+					approvalModes={approvalOptions(harness)}
+					approvalMode={approvalMode}
+					onSelectApprovalMode={(next) => setApprovalChoice(next as ApprovalMode)}
+					effortChoices={effortChoices}
+					onSelectEffort={setEffort}
 					onChoosePhoto={() => { void pickPhotos(); }}
 					onChooseFile={() => { void pickFiles(); }}
-					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut }}
+					voice={{ state: voice.state, mode: voice.mode, onPressIn: voice.pressIn, onPressOut: voice.pressOut, onToggleLatched: voice.toggleLatched }}
+					prompt={prompt}
+					onChangePrompt={setPrompt}
+					placeholder={harnessLabel ? `Ask ${harnessLabel}` : "What should this worker do?"}
+					attachments={<SpawnAttachmentRow
+						attachments={attachments}
+						onRemove={(item) => {
+							attachmentsRef.current = attachmentsRef.current.filter((candidate) => candidate !== item);
+							setAttachments(attachmentsRef.current);
+						}}
+					/>}
+					hasAttachments={attachments.length > 0}
 					onSpawn={() => { void onSpawn(); }}
 					busy={busy}
 					disabled={!selectedHostId || !config || !projectId || !harness || busy || modelLoading || loading || listening || voice.state === "transcribing"}
 				/>
-				</KeyboardStickyView>
-		</View>
+			</Animated.View>
+		</KeyboardAvoidingView>
 	);
-
-	if (Platform.OS === "android") {
-		return (
-			<View style={styles.androidModalRoot}>
-				<BottomSheet
-					index={0}
-					enablePanDownToClose
-					enableDynamicSizing
-					backgroundStyle={{ backgroundColor: t.bgBase }}
-					onClose={() => backOr(router)}
-				>
-					<BottomSheetView style={styles.androidSheet}>
-						{content}
-					</BottomSheetView>
-				</BottomSheet>
-			</View>
-		);
-	}
-
-	return <View style={styles.screen}>{content}</View>;
 }
 
 // Human copy for a failed spawn, matching every other screen. Never the wire
@@ -508,26 +571,16 @@ function spawnErrorCopy(e: unknown): string {
 	return userFacingError(e, "Couldn't start the worker. Try again.");
 }
 
-// Android's compact field height and the iOS host's minimum layout height.
-const PROMPT_MIN_HEIGHT = 112;
-
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
+		// The page a conversation is drawn on, since this is where one begins.
 		screen: { flex: 1, backgroundColor: t.bgBase },
-		content: { flex: 1, paddingHorizontal: space.lg, paddingTop: space.lg, paddingBottom: space.sm, gap: space.sm },
-		iosContent: { paddingTop: space.xxxl },
-		androidModalRoot: { flex: 1, backgroundColor: "transparent" },
-		androidSheet: {
-			paddingTop: space.xs,
-			paddingBottom: space.md,
-			backgroundColor: t.bgBase,
-		},
-		androidContent: { flex: 0, paddingTop: space.md, paddingBottom: space.none },
-		messages: { gap: space.xs },
-		voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: 8, paddingHorizontal: space.sm, paddingVertical: space.xs },
-		voiceText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize },
-		promptHost: { width: "100%", height: PROMPT_MIN_HEIGHT },
-		promptHostFill: { height: undefined, flex: 1, minHeight: 0 },
-		warn: { fontFamily: "Geist_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		error: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		room: { flex: 1 },
+		// The chat composer's dock: its side margin and the gap to the keyboard.
+		dock: { paddingHorizontal: space.md, paddingTop: space.xs, gap: space.xs },
+		messages: { gap: space.xs, paddingHorizontal: space.xs },
+		voice: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: t.tintRed, borderRadius: radius.sm, paddingHorizontal: space.sm, paddingVertical: space.xs },
+		voiceText: { fontFamily: "DMSans_400Regular", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		warn: { fontFamily: "DMSans_400Regular", color: t.amber, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		error: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	});

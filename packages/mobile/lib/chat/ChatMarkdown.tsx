@@ -1,18 +1,21 @@
-import { Feather } from "../icons";
 import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import * as Clipboard from "expo-clipboard";
 import { createContext, isValidElement, memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
+import { AppSymbol } from "../AppSymbol";
+import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
 import { openGitHub } from "../openGitHub";
+import { usePressFeedback } from "../pressFeedback";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { textSelectionColors } from "../textSelection";
 import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
+import { FirstLineMarker } from "./FirstLineMarker";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
 import { parseBlocks, type MarkdownBlock, type TableAlign } from "./markdownBlocks";
-import { iconSize, microLabel, prose, radius, space, type } from "../tokens";
+import { iconSize, prose, radius, space, touchTarget, type } from "../tokens";
 import type { ChatExcerpt } from "./types";
 import { sessionLink } from "./automationMessages";
 
@@ -103,13 +106,29 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} align={block.align} rows={block.rows} selectionColor={selectionColor} />);
 		else if (block.kind === "rule") content.push(<View key={index} style={styles.rule} />);
 		else if (block.kind === "quote") content.push(<View key={index} style={styles.quote}><SelectableInlineText value={block.text} selectionColor={selectionColor} style={styles.quoteText} styles={styles} /></View>);
-		else content.push(<View key={index} style={styles.list}>{block.items.map((item, itemIndex) => <View key={itemIndex} style={styles.listRow}><Text style={styles.marker}>{item.checked !== undefined ? (item.checked ? "☑" : "☐") : block.ordered ? `${itemIndex + 1}.` : "•"}</Text><SelectableInlineText value={item.text} selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]} styles={styles} /></View>)}</View>);
+		else content.push(<View key={index} style={styles.list}>{block.items.map((item, itemIndex) => <View key={itemIndex} style={styles.listRow}><ListMarker checked={item.checked} number={block.ordered ? itemIndex + 1 : undefined} styles={styles} /><SelectableInlineText value={item.text} selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]} styles={styles} /></View>)}</View>);
 	}
 	flushProse();
 	return (
 		<View style={styles.root}>{content}</View>
 	);
 });
+
+// A task's box, in each platform's own checkbox glyph.
+const TASK_DONE = { ios: "checkmark.square", android: "check_box" } as const;
+const TASK_OPEN = { ios: "square", android: "check_box_outline_blank" } as const;
+
+/**
+ * A list item's marker beside its selectable text: a drawn bullet or checkbox,
+ * or the item's number. The continuous selection surface keeps the characters
+ * instead, since they are part of the text a reader copies from there.
+ */
+function ListMarker({ checked, number, styles }: { checked?: boolean; number?: number; styles: ReturnType<typeof makeStyles> }) {
+	const t = useTheme();
+	if (checked !== undefined) return <FirstLineMarker lineStyle={styles.body} style={styles.markerBox}><AppSymbol name={checked ? TASK_DONE : TASK_OPEN} size={iconSize.md} color={t.textTertiary} accessibilityLabel={checked ? "Done" : "Not done"} /></FirstLineMarker>;
+	if (number !== undefined) return <Text style={styles.marker}>{`${number}.`}</Text>;
+	return <FirstLineMarker lineStyle={styles.body} style={styles.markerBox}><View style={styles.bullet} /></FirstLineMarker>;
+}
 
 type TableBlock = Extract<MarkdownBlock, { kind: "table" }>;
 
@@ -204,16 +223,38 @@ function MarkdownTable({ headers, align, rows, selectionColor }: { headers: stri
 	</ScrollView>;
 }
 
+/** How long Copy shows its checkmark before it turns back. */
+const COPIED_MS = 1_400;
+
 function CodeBlock({ text, language, streaming }: { text: string; language?: string; streaming?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("icon");
 	const [copied, setCopied] = useState(false);
 	const [wrap, setWrap] = useState(preferredCodeWrap);
+	useEffect(() => {
+		if (!copied) return;
+		const timer = setTimeout(() => setCopied(false), COPIED_MS);
+		return () => clearTimeout(timer);
+	}, [copied]);
 	return (
 		<View style={styles.codeCard}>
 			<View style={styles.codeHeader}>
 				<Text style={styles.codeLanguage}>{language || "code"}</Text>
-				<Pressable accessibilityRole="button" accessibilityLabel={wrap ? "Disable code wrapping" : "Wrap code"} accessibilityState={{ selected: wrap }} onPress={() => { haptics.select(); preferredCodeWrap = !wrap; setWrap(!wrap); }} style={styles.copyButton}><Feather name="corner-down-left" size={iconSize.xs} color={wrap ? t.accent : t.textTertiary} /><Text style={[styles.copyLabel, wrap && { color: t.accent }]}>Wrap</Text></Pressable>
+				{/* A toggle: while on it sits on a filled backing, so its state never
+				    rests on colour alone, and it is announced as selected. */}
+				<Pressable
+					accessibilityRole="button"
+					accessibilityLabel="Wrap code"
+					accessibilityState={{ selected: wrap }}
+					onPress={() => { preferredCodeWrap = !wrap; setWrap(!wrap); }}
+					android_ripple={feedback.android_ripple}
+					style={({ pressed }) => [styles.codeAction, pressed && feedback.pressed]}
+				>
+					<View style={[styles.codeToggle, wrap && styles.codeToggleOn]}>
+						<AppSymbol name="wrapLines" size={iconSize.md} color={wrap ? t.textPrimary : t.textTertiary} />
+					</View>
+				</Pressable>
 				<Pressable
 					accessibilityRole="button"
 					accessibilityLabel="Copy code"
@@ -221,12 +262,11 @@ function CodeBlock({ text, language, streaming }: { text: string; language?: str
 						void Clipboard.setStringAsync(text);
 						setCopied(true);
 						haptics.success();
-						setTimeout(() => setCopied(false), 1_400);
 					}}
-					style={styles.copyButton}
+					android_ripple={feedback.android_ripple}
+					style={({ pressed }) => [styles.codeAction, pressed && feedback.pressed]}
 				>
-					<Feather name={copied ? "check" : "copy"} size={iconSize.xs} color={copied ? t.green : t.textTertiary} />
-					<Text style={[styles.copyLabel, copied && { color: t.green }]}>{copied ? "Copied" : "Copy"}</Text>
+					<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.md} color={copied ? t.green : t.textTertiary} />
 				</Pressable>
 			</View>
 			<ScrollView horizontal={!wrap} showsHorizontalScrollIndicator={!wrap} contentContainerStyle={wrap ? styles.codeWrap : undefined}>
@@ -250,10 +290,10 @@ function MarkdownLink({ url, label, style }: { url: string; label: string; style
 		const text = bareSessionId ? known || bareSessionId : label;
 		// Without a provider nothing knows which machine the session is on, so it stays words.
 		if (!provided) return <Text>{text}</Text>;
-		return <Text accessibilityRole="link" accessibilityHint="Opens this session's chat" style={style} onPress={() => { haptics.tap(); provided(url); }}>{text}</Text>;
+		return <Text accessibilityRole="link" accessibilityHint="Opens this session's chat" style={style} onPress={() => provided(url)}>{text}</Text>;
 	}
 	const open = provided ?? defaultOpenChatLink;
-	return <Text accessibilityRole="link" style={style} onPress={() => { haptics.tap(); open(url); }}>{label}</Text>;
+	return <Text accessibilityRole="link" style={style} onPress={() => open(url)}>{label}</Text>;
 }
 
 function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>): ReactNode[] {
@@ -288,11 +328,11 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		root: { gap: 10 },
-		body: { fontFamily: "Geist_400Regular", color: t.textPrimary, fontSize: prose.fontSize, lineHeight: prose.lineHeight },
+		body: { fontFamily: "DMSans_400Regular", color: t.textPrimary, fontSize: prose.fontSize, lineHeight: prose.lineHeight },
 		proseGap: { fontSize: 10, lineHeight: 10 },
-		heading: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600", marginTop: space.xs },
-		smallHeading: { fontFamily: "Geist_400Regular", fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
-		strong: { fontFamily: "Geist_600SemiBold", fontWeight: "600" },
+		heading: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, lineHeight: type.title3.lineHeight, fontWeight: "600", marginTop: space.xs },
+		smallHeading: { fontFamily: "DMSans_400Regular", fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
+		strong: { fontFamily: "DMSans_600SemiBold", fontWeight: "600" },
 		em: { fontStyle: "italic" },
 		strike: { textDecorationLine: "line-through" },
 		link: { color: t.highlight, textDecorationLine: "underline" },
@@ -304,31 +344,35 @@ const makeStyles = (t: Theme) =>
 		// items with inline code or links can render past the right edge.
 		listBody: { flex: 1, minWidth: 0 },
 		// The marker sits on the same line as prose, so it borrows prose leading.
-		marker: { fontFamily: "Geist_400Regular", width: 20, flexShrink: 0, color: t.textTertiary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, textAlign: "right" },
+		marker: { fontFamily: "DMSans_400Regular", width: 20, flexShrink: 0, color: t.textTertiary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, textAlign: "right" },
+		// A drawn marker's column takes the numbered marker's width.
+		markerBox: { width: 20 },
+		bullet: { width: 5, height: 5, borderRadius: radius.pill, backgroundColor: t.textTertiary },
 		taskDone: { color: t.textTertiary, textDecorationLine: "line-through" },
-		quote: { borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: 12 },
-		quoteText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, fontStyle: "italic" },
-		rule: { height: 1, backgroundColor: t.borderSubtle, marginVertical: space.xxs },
-		codeCard: { borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden", borderWidth: 1, borderColor: t.borderSubtle, backgroundColor: t.bgColumn },
-		codeHeader: { minHeight: 34, paddingHorizontal: space.md, flexDirection: "row", alignItems: "center", borderBottomWidth: 1, borderBottomColor: t.borderSubtle },
-		codeLanguage: { flex: 1, color: t.textTertiary, ...microLabel, fontFamily: t.fontMono, textTransform: "uppercase" },
-		copyButton: { flexDirection: "row", alignItems: "center", gap: space.xxs, paddingVertical: space.xs, paddingLeft: space.md },
-		copyLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
+		quote: { borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: space.md },
+		quoteText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: prose.lineHeight, fontStyle: "italic" },
+		rule: { height: rowDividerWidth, backgroundColor: t.borderSubtle, marginVertical: space.xxs },
+		codeCard: { borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden", borderWidth: rowDividerWidth, borderColor: t.borderSubtle, backgroundColor: t.bgColumn },
+		codeHeader: { paddingLeft: space.md, flexDirection: "row", alignItems: "center", borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle },
+		codeLanguage: { flex: 1, color: t.textTertiary, fontFamily: t.fontMono, fontSize: type.footnote.fontSize },
+		codeAction: { width: touchTarget, height: touchTarget, alignItems: "center", justifyContent: "center" },
+		codeToggle: { padding: space.xxs, borderRadius: radius.sm, borderCurve: "continuous" },
+		codeToggleOn: { backgroundColor: t.accentTint },
 		// Code keeps looser leading than UI text at the same size.
 		codeText: { color: t.textPrimary, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: 20, padding: space.md },
 		codeWrap: { flexGrow: 1 },
 		codeTextWrap: { flexShrink: 1 },
-		imageCard: { overflow: "hidden", borderRadius: radius.md, borderCurve: "continuous", borderWidth: 1, borderColor: t.borderSubtle, backgroundColor: t.bgColumn },
+		imageCard: { overflow: "hidden", borderRadius: radius.md, borderCurve: "continuous", borderWidth: rowDividerWidth, borderColor: t.borderSubtle, backgroundColor: t.bgColumn },
 		image: { width: "100%", minHeight: 190, maxHeight: 420 },
-		imageCaption: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, paddingHorizontal: space.sm, paddingVertical: space.xs, borderTopWidth: 1, borderTopColor: t.borderSubtle },
-		imageFallback: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize, fontStyle: "italic" },
+		imageCaption: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, paddingHorizontal: space.sm, paddingVertical: space.xs, borderTopWidth: rowDividerWidth, borderTopColor: t.borderSubtle },
+		imageFallback: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, fontStyle: "italic" },
 		tableScroll: { flexGrow: 1 },
-		table: { flexGrow: 1, borderWidth: 1, borderColor: t.borderSubtle, borderRadius: radius.sm, borderCurve: "continuous", overflow: "hidden" },
-		tableRow: { flexDirection: "row", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderSubtle },
+		table: { flexGrow: 1, borderWidth: rowDividerWidth, borderColor: t.borderSubtle, borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden" },
+		tableRow: { flexDirection: "row", borderTopWidth: rowDividerWidth, borderTopColor: t.borderSubtle },
 		tableHeader: { borderTopWidth: 0, backgroundColor: t.bgSubtle },
-		tableCell: { flexShrink: 0, paddingHorizontal: space.sm, paddingVertical: space.xs, borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: t.borderSubtle },
+		tableCell: { flexShrink: 0, paddingHorizontal: space.sm, paddingVertical: space.xs, borderLeftWidth: rowDividerWidth, borderLeftColor: t.borderSubtle },
 		tableFirstCell: { borderLeftWidth: 0 },
-		tableText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		tableHeaderText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
+		tableText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		tableHeaderText: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 		tableCode: { fontSize: type.caption1.fontSize },
 	});

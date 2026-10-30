@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ChatConfigOption, ChatModel, ConversationSnapshot } from "./types";
-import { effortSliderIndex, effortSliderWrite, fastControlEnabled, fastControlValue, nativeModelLabel, NOT_REPORTED, orderedProviderControls, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsModelLabel, turnSettingsRows, turnSettingsSummary } from "./turnSettingsModel";
+import { nativeModelLabel, NOT_REPORTED, providerChoiceLabel, providerTurnControlKind, resolveDefaultChoices, turnSettingsParts, turnSettingsRows, turnSettingTopic, turnSettingWrite, readableModelId } from "./turnSettingsModel";
+
+// What the controls row names, all three parts read together: the model's
+// capsule, the effort's speedometer and the approval mode's symbol.
+const turnSettingsSummary = (...args: Parameters<typeof turnSettingsParts>) => {
+	const parts = turnSettingsParts(...args);
+	return [parts.model, parts.effort, parts.approval].filter(Boolean).join(" · ");
+};
+const turnSettingsModelLabel = (...args: Parameters<typeof turnSettingsParts>) => turnSettingsParts(...args).model;
 
 const snapshot = (over: Partial<ConversationSnapshot> = {}): ConversationSnapshot => ({
 	conversationId: "c",
@@ -28,12 +36,6 @@ describe("turnSettingsRows", () => {
 		];
 
 		expect(controls.map(providerTurnControlKind)).toEqual(["fast", "model", "effort", "permissions"]);
-		expect(orderedProviderControls([...controls].reverse()).map((option) => option.id)).toEqual([
-			"fast",
-			"model",
-			"effort",
-			"permission_mode",
-		]);
 	});
 
 	it("treats a provider's binary Fast mode select as one direct on/off control", () => {
@@ -49,9 +51,6 @@ describe("turnSettingsRows", () => {
 		};
 
 		expect(providerTurnControlKind(fastMode)).toBe("fast");
-		expect(fastControlEnabled(fastMode)).toBe(false);
-		expect(fastControlValue(fastMode, true)).toBe("on");
-		expect(fastControlValue(fastMode, false)).toBe("off");
 	});
 
 	it("orders provider controls as fast mode, model, effort, permissions, then remaining controls", () => {
@@ -125,6 +124,36 @@ describe("turnSettingsRows", () => {
 			{ id: "permission_mode", name: "Permissions", category: "mode", type: "select", currentValue: "plan", choices: [{ value: "plan", name: "Plan only" }] },
 		];
 		expect(turnSettingsSummary(snapshot(), [], options)).toBe("Sonnet · Plan only");
+	});
+});
+
+describe("turn settings menus", () => {
+	const options: ChatConfigOption[] = [
+		{ id: "agent", name: "Agent", category: "model", type: "select", currentValue: "build", choices: [{ value: "build", name: "Build" }] },
+		{ id: "model", name: "Model", category: "model", type: "select", currentValue: "gpt", choices: [{ value: "gpt", name: "GPT" }, { value: "o3", name: "o3" }] },
+		{ id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: "high", choices: [{ value: "high", name: "High" }] },
+		{ id: "fast", name: "Fast mode", type: "boolean", currentBoolean: false, choices: [] },
+		{ id: "sandbox", name: "Sandbox", type: "select", currentValue: "safe", choices: [{ value: "safe", name: "Safe" }] },
+	];
+	const rows = () => turnSettingsRows(snapshot(), [], options);
+
+	it("draws a glyph for what each row adjusts, and none for an agent picker", () => {
+		expect(rows().map((row) => [row.id, turnSettingTopic(row)])).toEqual([
+			["option:fast", "fast"],
+			["option:agent", undefined],
+			["option:model", "model"],
+			["option:effort", "effort"],
+			["approvals", "permissions"],
+			["option:sandbox", "setting"],
+		]);
+	});
+
+	it("saves a provider choice by option and AO's own by settings", () => {
+		const [fast, , model] = rows();
+		expect(turnSettingWrite({}, model, "o3")).toEqual({ kind: "option", id: "model", value: { value: "o3" } });
+		expect(turnSettingWrite({}, fast, true)).toEqual({ kind: "option", id: "fast", value: { enabled: true } });
+		const approvals = rows().find((row) => row.id === "approvals")!;
+		expect(turnSettingWrite({ model: "gpt" }, approvals, "auto")).toEqual({ kind: "settings", settings: { model: "gpt", approvalMode: "auto" } });
 	});
 });
 
@@ -389,22 +418,17 @@ describe("default labels", () => {
 	});
 });
 
-// Review on #6071: the fix for the Android slider's unasked save lived only in
-// the component. These are the two decisions it now delegates.
-describe("effort slider", () => {
-	const levels = [{ value: "low" }, { value: "medium" }, { value: "high" }];
-
-	it("saves nothing when the sheet opens on an effort that is none of its levels", () => {
-		for (const selected of ["default", "ultra", ""]) {
-			const index = effortSliderIndex(levels, selected);
-			expect(index).toBe(-1);
-			expect(effortSliderWrite(levels, selected, index)).toBeUndefined();
-		}
+describe("readableModelId", () => {
+	// A stopped session reports no catalog, so the control named the model by
+	// its raw id ("claude-opus-5-5"); a Claude id reads as the model's name.
+	it("names a Claude model id the way its catalog would", () => {
+		expect(readableModelId("claude-opus-5-5")).toBe("Opus 5.5");
+		expect(readableModelId("claude-sonnet-4-5-20250929")).toBe("Sonnet 4.5");
+		expect(readableModelId("claude-haiku-5")).toBe("Haiku 5");
 	});
 
-	it("saves the level it is moved to, the first one included, and nothing once that level is current", () => {
-		expect(effortSliderWrite(levels, "default", 0)).toBe("low");
-		expect(effortSliderWrite(levels, "low", 2)).toBe("high");
-		expect(effortSliderWrite(levels, "high", effortSliderIndex(levels, "high"))).toBeUndefined();
+	it("leaves any other id as sent", () => {
+		expect(readableModelId("gpt-5.6-sol")).toBe("gpt-5.6-sol");
+		expect(readableModelId("claude-3-5-sonnet")).toBe("claude-3-5-sonnet");
 	});
 });

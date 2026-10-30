@@ -30,6 +30,12 @@ export type UseVoiceInput = {
 	pressIn(): void;
 	/** Finger up off the mic key. */
 	pressOut(): void;
+	/**
+	 * Starts hands-free dictation, or finishes it when it is already running.
+	 * The screen reader's way in: an activation has no hold to time and no
+	 * second tap to wait for.
+	 */
+	toggleLatched(): void;
 };
 
 export function useVoiceInput({
@@ -226,8 +232,9 @@ export function useVoiceInput({
 		if (tapWindowRef.current) {
 			clearTimeout(tapWindowRef.current);
 			tapWindowRef.current = null;
+			// No haptic of its own: the key already tapped for this press, and the
+			// mic buzzes again once it is listening.
 			startedLatchedRef.current = true;
-			haptics.tap();
 			// The tap's own recording was aborted a moment ago; give the native
 			// recogniser time to finish tearing down before asking it to start again.
 			restartRef.current = setTimeout(() => beginRecording("latched"), RESTART_DELAY_MS);
@@ -263,5 +270,18 @@ export function useVoiceInput({
 		finish();
 	}, [device, finish, setPhase]);
 
-	return { state, mode, partial, error, pressIn, pressOut };
+	const toggleLatched = useCallback(() => {
+		if (modeRef.current === "latched" && stateRef.current !== "idle") {
+			finish();
+			return;
+		}
+		if (tapWindowRef.current) {
+			clearTimeout(tapWindowRef.current);
+			tapWindowRef.current = null;
+		}
+		startedLatchedRef.current = false;
+		beginRecording("latched");
+	}, [beginRecording, finish]);
+
+	return { state, mode, partial, error, pressIn, pressOut, toggleLatched };
 }

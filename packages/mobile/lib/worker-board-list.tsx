@@ -1,7 +1,6 @@
-import { Feather } from "./icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactElement, type RefObject } from "react";
-import { ActivityIndicator, Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { Alert, AppState, FlatList, Platform, Pressable, RefreshControl, StyleSheet, Text, View, type ScrollViewProps } from "react-native";
 import { LayoutAnimationConfig } from "react-native-reanimated";
 import {
 	absorbNewHosts,
@@ -16,10 +15,14 @@ import {
 	type OrderSnapshot,
 } from "./agentsView";
 import type { DashboardSession } from "./api";
+import { AppSymbol } from "./AppSymbol";
 import { ArchivedWorkerRow } from "./archived-worker-row";
 import { useArchivedSessions, type ArchiveSource } from "./archive/useArchivedSessions";
 import { haptics } from "./haptics";
 import { hostedProjectKey, hostedRowKey, hostedSessionKey, sessionHostId, sessionMachineIdentity } from "./hostedRows";
+import { usePressFeedback } from "./pressFeedback";
+import { refreshControlColors } from "./refreshControlColors";
+import { Spinner } from "./Spinner";
 import { useApp } from "./store";
 import type { Theme } from "./theme";
 import { statusVisual } from "./theme";
@@ -28,7 +31,7 @@ import { ListSectionHeader } from "./ui";
 import { ARCHIVE_SESSION_CONFIRM } from "./worker-action-model";
 import { WorkerListRow } from "./worker-list-row";
 import { filterWorkerSessions } from "./worker-search";
-import { type, space } from "./tokens";
+import { iconSize, radius, space, touchTarget, type } from "./tokens";
 import { userFacingError } from "./connectionError";
 
 // The archive rides along as one more section so it scrolls with the board
@@ -98,6 +101,8 @@ export function WorkerBoardList({
 	query = "",
 	listRef,
 	contentBottomInset,
+	contentInsetAdjustmentBehavior,
+	overlayTopInset = 0,
 	refreshing,
 	onRefresh,
 	ListHeaderComponent,
@@ -112,6 +117,13 @@ export function WorkerBoardList({
 	query?: string;
 	listRef?: RefObject<FlatList<BoardRow> | null>;
 	contentBottomInset: number;
+	/** "automatic" under a translucent header, which the board tab's large title is. */
+	contentInsetAdjustmentBehavior?: ScrollViewProps["contentInsetAdjustmentBehavior"];
+	/**
+	 * How much of the list's top a translucent header covers. The list insets
+	 * its rows itself; what floats over it starts this far down.
+	 */
+	overlayTopInset?: number;
 	refreshing: boolean;
 	onRefresh(): void | Promise<void>;
 	ListHeaderComponent?: ReactElement | null;
@@ -262,7 +274,6 @@ export function WorkerBoardList({
 		}
 	}, [onRefresh, resort]);
 	const showLatest = useCallback(() => {
-		haptics.select();
 		scrollAfterResort.current = true;
 		resort();
 	}, [resort]);
@@ -313,14 +324,15 @@ export function WorkerBoardList({
 		[collapsedSections, listSections, archiveStatusShown, archiveOpen],
 	);
 
+	// Disclosure and plain presses stay silent; haptics mark an outcome (a pin, a
+	// recovery, a restore) or a destructive confirmation.
 	const toggleSection = useCallback((zone: string) => {
-		haptics.tap();
 		setCollapsedSections((current) => ({ ...current, [zone]: !current[zone] }));
 	}, []);
 
-	// Swipeable's Android callbacks arrive after the UI thread has already begun
-	// opening the next rail. Close the previous native row synchronously so two
-	// action rails cannot be visible while React propagates the active id.
+	// The swipeable's callbacks reach JS after the UI thread has already begun
+	// opening the next rail. Close the previous row synchronously so two action
+	// rails cannot be visible while React propagates the active id.
 	const openExclusiveSwipe = useCallback((id: string, close: () => void) => {
 		const previous = activeSwipeRef.current;
 		if (previous?.id !== id) previous?.close();
@@ -346,7 +358,6 @@ export function WorkerBoardList({
 	// Both are recoveries rather than destructive, so neither asks first — the
 	// failure path is an alert, not a confirmation.
 	const runWorkerRecovery = useCallback(async (session: DashboardSession, kind: "resume" | "restore") => {
-		haptics.tap();
 		try {
 			await (kind === "resume" ? resumeAgent(session.id, sessionHostId(session)) : restore(session.id, sessionHostId(session)));
 			haptics.success();
@@ -407,7 +418,6 @@ export function WorkerBoardList({
 		restoringRef.current = key;
 		setRestoringKey(key);
 		setRestoreErrors(({ [key]: _cleared, ...rest }) => rest);
-		haptics.tap();
 		try {
 			await restore(session.id, sessionHostId(session));
 			if (!current()) return;
@@ -469,10 +479,11 @@ export function WorkerBoardList({
 					keyExtractor={boardRowKey}
 					{...BOARD_LIST_WINDOW}
 					removeClippedSubviews={false}
-					contentContainerStyle={{ paddingBottom: contentBottomInset }}
+					contentContainerStyle={{ flexGrow: 1, paddingBottom: contentBottomInset }}
+					contentInsetAdjustmentBehavior={contentInsetAdjustmentBehavior}
 					keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
 					keyboardShouldPersistTaps="handled"
-					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} tintColor={t.accent} />}
+					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refreshAndResort} {...refreshControlColors(t)} />}
 					ListHeaderComponent={ListHeaderComponent}
 					ListEmptyComponent={ListEmptyComponent}
 					renderItem={renderItem}
@@ -481,7 +492,7 @@ export function WorkerBoardList({
 					onEndReachedThreshold={1.5}
 				/>
 			</LayoutAnimationConfig>
-		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} onPress={showLatest} /> : null}
+		{held.updated > 0 && !query.trim() ? <UpdatesPill count={held.updated} top={overlayTopInset + space.sm} onPress={showLatest} /> : null}
 		</View>
 	);
 }
@@ -516,18 +527,22 @@ const BoundWorkerRow = memo(function BoundWorkerRow({ actions, ...props }: Bound
 
 // News that arrived while the board was held still. Tapping re-sorts and goes
 // to the top, where the news now is.
-function UpdatesPill({ count, onPress }: { count: number; onPress: () => void }) {
+function UpdatesPill({ count, top, onPress }: { count: number; top: number; onPress: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("button", { tone: "onAccent" });
 	const label = `${count} updated`;
 	return (
 		<Pressable
 			accessibilityRole="button"
 			accessibilityLabel={`${label}. Show latest.`}
+			android_ripple={feedback.android_ripple}
+			// The capsule stays compact; its touch area reaches the platform's target.
+			hitSlop={space.sm}
 			onPress={onPress}
-			style={({ pressed }) => [styles.updatesPill, pressed && { opacity: 0.85 }]}
+			style={({ pressed }) => [styles.updatesPill, { top }, pressed && feedback.pressed]}
 		>
-			<Feather name="arrow-up" size={14} color={t.onAccent} />
+			<AppSymbol name={{ ios: "arrow.up", android: "arrow_upward" }} size={iconSize.sm} color={t.onAccent} />
 			<Text style={styles.updatesLabel}>{label}</Text>
 		</Pressable>
 	);
@@ -544,12 +559,15 @@ function ArchiveStatusRow({ loading, error, hasMore, onRetry, onLoadMore }: {
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const buttonFeedback = usePressFeedback("button");
+	const rowFeedback = usePressFeedback("row");
 	if (error) {
 		return (
 			<View style={styles.archiveStatus}>
 				<Text accessibilityRole="alert" style={[styles.archiveStatusText, { color: t.red }]} numberOfLines={2}>{error}</Text>
-				<Pressable accessibilityRole="button" accessibilityLabel="Retry loading archived sessions" hitSlop={8} onPress={onRetry}
-					style={({ pressed }) => pressed && { opacity: 0.6 }}>
+				<Pressable accessibilityRole="button" accessibilityLabel="Retry loading archived sessions" onPress={onRetry}
+					android_ripple={buttonFeedback.android_ripple}
+					style={({ pressed }) => [styles.archiveRetry, pressed && buttonFeedback.pressed]}>
 					<Text style={styles.archiveStatusAction}>Retry</Text>
 				</Pressable>
 			</View>
@@ -558,14 +576,15 @@ function ArchiveStatusRow({ loading, error, hasMore, onRetry, onLoadMore }: {
 	if (loading) {
 		return (
 			<View style={styles.archiveStatus} accessible accessibilityLabel="Loading archived sessions">
-				<ActivityIndicator size="small" color={t.textTertiary} />
+				<Spinner color={t.textTertiary} />
 				<Text style={styles.archiveStatusText}>Loading archived sessions…</Text>
 			</View>
 		);
 	}
 	if (!hasMore) return null;
 	return (
-		<Pressable accessibilityRole="button" onPress={onLoadMore} style={({ pressed }) => [styles.archiveStatus, pressed && { opacity: 0.6 }]}>
+		<Pressable accessibilityRole="button" onPress={onLoadMore} android_ripple={rowFeedback.android_ripple}
+			style={({ pressed }) => [styles.archiveStatus, pressed && rowFeedback.pressed]}>
 			<Text style={styles.archiveStatusAction}>Show more</Text>
 		</Pressable>
 	);
@@ -574,18 +593,17 @@ function ArchiveStatusRow({ loading, error, hasMore, onRetry, onLoadMore }: {
 function ArchiveHeader({ count, open, onToggle }: { count: number; open: boolean; onToggle: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	return (
 		<Pressable
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
 			accessibilityLabel={`Archive, ${count} session${count === 1 ? "" : "s"}`}
-			onPress={() => {
-				haptics.tap();
-				onToggle();
-			}}
-			style={({ pressed }) => [styles.archiveHeader, pressed && { opacity: 0.6 }]}
+			android_ripple={feedback.android_ripple}
+			onPress={onToggle}
+			style={({ pressed }) => [styles.archiveHeader, pressed && feedback.pressed]}
 		>
-			<Feather name={open ? "chevron-down" : "chevron-right"} size={15} color={t.textTertiary} />
+			<AppSymbol name={open ? "chevronDown" : "chevronForward"} size={iconSize.sm} color={t.textTertiary} />
 			<Text style={styles.archiveLabel}>Archive</Text>
 			<Text style={styles.archiveCount}>{count}</Text>
 		</Pressable>
@@ -597,33 +615,38 @@ const makeStyles = (t: Theme) =>
 		listWrap: { flex: 1 },
 		updatesPill: {
 			position: "absolute",
-			top: space.sm,
 			alignSelf: "center",
 			flexDirection: "row",
 			alignItems: "center",
 			gap: space.xs,
 			paddingHorizontal: space.md,
-			paddingVertical: space.xs + 2,
-			borderRadius: 20,
+			paddingVertical: space.sm,
+			borderRadius: radius.pill,
+			borderCurve: "continuous",
 			backgroundColor: t.accent,
-			shadowColor: "#000",
-			shadowOpacity: 0.3,
+			// The scrim's dark, not a fixed black, so the shadow follows the theme.
+			shadowColor: t.scrim,
+			shadowOpacity: 0.5,
 			shadowRadius: 8,
 			shadowOffset: { width: 0, height: 2 },
 			elevation: 6,
+			// Android's ripple is bounded by the view, not its corners; iOS keeps
+			// the shadow that clipping would cut off.
+			overflow: Platform.OS === "android" ? "hidden" : "visible",
 		},
-		updatesLabel: { fontFamily: "Geist_600SemiBold", color: t.onAccent, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		updatesLabel: { fontFamily: "DMSans_600SemiBold", color: t.onAccent, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "600" },
 		archiveHeader: {
 			flexDirection: "row",
 			alignItems: "center",
 			gap: space.sm,
+			minHeight: touchTarget,
+			marginTop: space.sm,
 			paddingHorizontal: space.lg,
-			paddingTop: space.xl,
-			paddingBottom: space.sm,
 		},
-		archiveLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, fontWeight: "500", flex: 1 },
-		archiveCount: { color: t.textFaint, fontSize: type.caption1.fontSize, fontWeight: "600", fontFamily: t.fontMono },
+		archiveLabel: { fontFamily: "DMSans_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", flex: 1 },
+		archiveCount: { color: t.textFaint, fontSize: type.footnote.fontSize, fontWeight: "600", fontFamily: t.fontMono },
 		archiveStatus: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm, minHeight: 56, paddingHorizontal: space.lg },
-		archiveStatusText: { flexShrink: 1, fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-		archiveStatusAction: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		archiveStatusText: { flexShrink: 1, fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		archiveRetry: { minHeight: touchTarget, justifyContent: "center", paddingHorizontal: space.sm, borderRadius: radius.sm, borderCurve: "continuous" },
+		archiveStatusAction: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
 	});

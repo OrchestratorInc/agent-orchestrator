@@ -1,10 +1,10 @@
-import { Feather } from "../lib/icons";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AccessibilityInfo, ActivityIndicator, AppState, Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Stack, useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AccessibilityInfo, AppState, Linking, Platform, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { pingServer } from "../lib/api";
+import { AppSymbol } from "../lib/AppSymbol";
 import { pickNormalLens } from "../lib/cameraLens";
 import { saveConfig } from "../lib/config";
 import {
@@ -32,13 +32,20 @@ import { mayAwaitLocalNetwork, raceAwaitingLocalNetwork } from "../lib/localNetw
 import { loadLocalNetworkConfirmed, setLocalNetworkConfirmed } from "../lib/localNetworkStore";
 import { connectSheetRoute, machineNameSheetRoute } from "../lib/sheetResult";
 import { useApp } from "../lib/store";
-import { Button, NumberedStep } from "../lib/ui";
+import { Button, EmptyState, NumberedStep } from "../lib/ui";
+import { Spinner } from "../lib/Spinner";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
-import { MinimalBackButton } from "../lib/MinimalBackButton";
+import { NativeHeaderButton } from "../lib/native-header-button";
+import { toolbarIcon } from "../lib/toolbarIcon";
 import { MOBILE_EVENTS } from "../lib/telemetry/events";
 import { mobileTelemetry } from "../lib/telemetry/runtime";
-import { iconSize, space, type } from "../lib/tokens";
+import { iconSize, onCamera, radius, space, type } from "../lib/tokens";
 import { backOr } from "../lib/backNavigation";
+
+// Whether the root stack draws this modal's bar (see app/_layout.tsx): a
+// static choice, because a modal whose header appears after it mounts is
+// rebuilt and would lose the scan in progress.
+const NATIVE_BAR = Platform.OS === "ios";
 
 export default function PairScreen() {
 	const t = useTheme();
@@ -105,6 +112,10 @@ export default function PairScreen() {
 		});
 		return () => { current = false; };
 	}, [repairHostId]);
+	// The iOS bar names the task, so a reconnect must not read as a new pairing.
+	// Only the title changes, which updates the bar without rebuilding the modal.
+	const title = repairHostId ? (repairHost ? `Reconnect ${repairHost.name}` : "Reconnect machine") : "Pair a machine";
+	useLayoutEffect(() => navigation.setOptions({ title }), [navigation, title]);
 	// The camera keeps running under the manual-connect sheet, so a QR code in
 	// frame would otherwise pair behind it. This replaces the old `manualOpen`
 	// flag now that the sheet is a route pushed on top rather than local state.
@@ -323,37 +334,52 @@ export default function PairScreen() {
 	}
 
 	const back = () => backOr(router);
+	// iOS presents this as a modal under a native bar, which closes it from an
+	// xmark item. Android's modal is a full-screen page with no bar, so it keeps
+	// the Material close button in its own top row below.
+	const headerItems = useMemo(() => NATIVE_BAR ? (
+		<Stack.Toolbar placement="right">
+			<Stack.Toolbar.Button icon={toolbarIcon("close")} accessibilityLabel="Close" onPress={() => backOr(router)} />
+		</Stack.Toolbar>
+	) : null, [router]);
 	if (repairHost === undefined) {
-		return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
+		return <View style={styles.center}>{headerItems}<Spinner /></View>;
 	}
 	if (repairHostId && !repairHost) {
 		return (
-			<View style={[styles.screen, styles.missing, { paddingTop: insets.top + space.xl }]}>
-				<Feather name="monitor-off" size={iconSize.xl} color={t.textTertiary} />
-				<Text style={styles.missingTitle}>Machine no longer saved</Text>
-				<Text style={styles.missingText}>Return to Settings and choose another machine.</Text>
-				<Button title="Back to Settings" variant="ghost" onPress={back} />
+			<View style={styles.screen}>
+				{headerItems}
+				<EmptyState
+					icon="monitor-off"
+					title="Machine no longer saved"
+					message="Return to Settings and choose another machine."
+					action={<Button title="Back to Settings" onPress={back} />}
+				/>
 			</View>
 		);
 	}
 
+	const live = permission?.granted === true;
 	return (
-		<View style={[styles.screen, { paddingTop: insets.top }]}>
-			<View style={styles.topBar}><MinimalBackButton onPress={back} /></View>
+		<View style={[styles.screen, { paddingTop: NATIVE_BAR ? space.md : insets.top }]}>
+			{headerItems}
+			{/* Presented as a modal, so it closes rather than goes back. */}
+			{NATIVE_BAR ? null : <View style={styles.topBar}><NativeHeaderButton icon="close" label="Close" onPress={back} /></View>}
 
 			{repairHost ? (
 				<View style={styles.repairIntro}>
-					<Text style={styles.repairTitle}>Reconnect {repairHost.name}</Text>
+					{/* iOS shows this in the bar (see `title`); Android has no bar. */}
+					{NATIVE_BAR ? null : <Text accessibilityRole="header" style={styles.repairTitle}>Reconnect {repairHost.name}</Text>}
 					<Text style={styles.repairText}>Scan the new code from Orchestrator → Settings → Connect Mobile on that machine.</Text>
 				</View>
 			) : <View style={styles.steps}>
-					<NumberedStep n={1} title="Enable Orchestrator on a machine" compact />
-					<NumberedStep n={2} title="Open Connect Mobile or run ao remote-host enable" compact />
-					<NumberedStep n={3} title="Scan the code or enter details manually" compact />
+					<NumberedStep n={1} total={3} title="Enable Orchestrator on a machine" compact />
+					<NumberedStep n={2} total={3} title="Open Connect Mobile or run ao remote-host enable" compact />
+					<NumberedStep n={3} total={3} title="Scan the code or enter details manually" compact />
 			</View>}
 
-			<View style={styles.viewfinder}>
-				{permission?.granted ? (
+			<View style={[styles.viewfinder, live && styles.viewfinderLive]}>
+				{live ? (
 					<>
 						<CameraView
 							ref={camera}
@@ -364,10 +390,10 @@ export default function PairScreen() {
 							barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
 							onBarcodeScanned={onScan}
 						/>
-						<Corner style={styles.cTL} />
-						<Corner style={styles.cTR} />
-						<Corner style={styles.cBL} />
-						<Corner style={styles.cBR} />
+						{/* Where to hold the code. Decoration: the steps above say it. */}
+						<View pointerEvents="none" style={styles.reticleLayer} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+							<View style={styles.reticle} />
+						</View>
 					</>
 				) : (
 					<CameraGate
@@ -386,7 +412,7 @@ export default function PairScreen() {
 			    haptic reads as broken. The Local Network line only while waiting on it. */}
 			{paired ? (
 				<View style={styles.notice} accessibilityLiveRegion="polite">
-					<View style={styles.noticeLead}><Feather name="check-circle" size={iconSize.sm} color={t.green} /></View>
+					<View style={styles.noticeLead}><AppSymbol name="checkCircle" size={iconSize.sm} color={t.green} /></View>
 					<View style={styles.noticeBody}>
 						<Text style={styles.noticeTitle}>{paired.title}</Text>
 						{paired.message ? <Text style={styles.noticeText}>{paired.message}</Text> : null}
@@ -394,7 +420,7 @@ export default function PairScreen() {
 				</View>
 			) : (busy || awaitingLocalNetwork) && !failure ? (
 				<View style={styles.notice} accessibilityLiveRegion="polite">
-					<View style={styles.noticeLead}><ActivityIndicator size="small" color={t.textSecondary} /></View>
+					<View style={styles.noticeLead}><Spinner size={iconSize.sm} /></View>
 					<View style={styles.noticeBody}>
 						<Text style={styles.noticeTitle}>Connecting…</Text>
 						{awaitingLocalNetwork ? (
@@ -406,16 +432,16 @@ export default function PairScreen() {
 
 			{failure ? (
 				<View style={styles.notice} accessibilityLiveRegion="polite">
-					<View style={styles.noticeLead}><Feather name="alert-circle" size={iconSize.sm} color={t.red} /></View>
+					<View style={styles.noticeLead}><AppSymbol name="error" size={iconSize.sm} color={t.red} /></View>
 					<View style={styles.noticeBody}>
 						<Text style={styles.noticeTitle}>{failure.title}</Text>
 						<Text style={styles.noticeText}>{failure.message}</Text>
 						{failure.showLocalNetworkHint ? <Text style={styles.noticeText}>{LOCAL_NETWORK_HINT}</Text> : null}
 						<View style={styles.noticeActions}>
 							{/* Re-runs the scanned code without pointing the camera at it again. */}
-							<NoticeAction icon="refresh-cw" title="Try again" onPress={retry} />
+							<Button variant="ghost" icon="refresh" title="Try again" onPress={retry} />
 							{failure.showLocalNetworkHint ? (
-								<NoticeAction icon="settings" title="Open settings" onPress={() => void Linking.openSettings()} />
+								<Button variant="ghost" icon="settings" title="Open settings" onPress={() => void Linking.openSettings()} />
 							) : null}
 						</View>
 					</View>
@@ -424,38 +450,16 @@ export default function PairScreen() {
 
 			{/* Always reachable — including when the camera is permanently denied,
 			    which would otherwise leave the user with no way forward at all. */}
-			<Pressable
-				onPress={() => { haptics.tap(); router.push(connectSheetRoute(() => void finish(), repairHost?.id)); }}
-				style={[styles.manual, { paddingBottom: insets.bottom + 14 }]}
-				accessibilityRole="button"
-			>
-				<Feather name="edit-3" size={iconSize.sm} color={t.textSecondary} />
-				<Text style={styles.manualText}>Enter details manually</Text>
-			</Pressable>
+			<View style={[styles.manual, { paddingBottom: insets.bottom + space.sm }]}>
+				<Button
+					variant="ghost"
+					icon={{ ios: "keyboard", android: "keyboard" }}
+					title="Enter details manually"
+					onPress={() => router.push(connectSheetRoute(() => void finish(), repairHost?.id))}
+				/>
+			</View>
 		</View>
 	);
-}
-
-// Quiet text action, matching "Enter details manually" below it.
-function NoticeAction({ icon, title, onPress }: { icon: "refresh-cw" | "settings"; title: string; onPress: () => void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	return (
-		<Pressable
-			onPress={() => { haptics.tap(); onPress(); }}
-			style={({ pressed }) => [styles.noticeAction, pressed && { opacity: 0.6 }]}
-			accessibilityRole="button"
-			hitSlop={8}
-		>
-			<Feather name={icon} size={iconSize.sm} color={t.textPrimary} />
-			<Text style={styles.noticeActionText}>{title}</Text>
-		</Pressable>
-	);
-}
-
-function Corner({ style }: { style: object }) {
-	const styles = useThemedStyles(makeStyles);
-	return <View style={[styles.corner, style]} />;
 }
 
 function CameraGate({
@@ -478,8 +482,8 @@ function CameraGate({
 	}
 	return (
 		<View style={styles.gate}>
-			<Feather name="camera-off" size={iconSize.xl} color={t.textTertiary} />
-			<Text style={styles.gateTitle}>Camera access needed</Text>
+			<AppSymbol name={{ ios: "camera", android: "photo_camera" }} size={iconSize.xl} color={t.textTertiary} />
+			<Text accessibilityRole="header" style={styles.gateTitle}>Camera access needed</Text>
 			<Text style={styles.gateHint}>
 				{canAskAgain
 					? "Orchestrator uses the camera only to read a pairing QR code."
@@ -493,7 +497,7 @@ function CameraGate({
 			) : (
 				<Button
 					title="Open settings"
-					variant="ghost"
+					variant="secondary"
 					icon="settings"
 					onPress={() => Linking.openSettings()}
 					style={{ marginTop: space.lg }}
@@ -505,8 +509,6 @@ function CameraGate({
 
 // Two short sentences at most; long enough to read without asking for a tap.
 const PAIRED_NOTICE_MS = 2000;
-const CORNER = 26;
-const CORNER_W = 3;
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
@@ -515,35 +517,36 @@ const makeStyles = (t: Theme) =>
 	topBar: { paddingHorizontal: space.lg, paddingTop: space.xxs, paddingBottom: space.sm },
 
 	steps: { paddingHorizontal: space.xl, paddingBottom: space.lg },
-	repairIntro: { paddingHorizontal: space.xl, paddingBottom: space.lg },
-	repairTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600" },
-	repairText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.xs },
-	missing: { paddingHorizontal: space.xl, gap: space.md },
-	missingTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600", textAlign: "center" },
-	missingText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "center" },
+	repairIntro: { paddingHorizontal: space.xl, paddingBottom: space.lg, gap: space.xs },
+	repairTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.title3.fontSize, fontWeight: "600" },
+	repairText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 
+	// A card in the theme until the camera runs: the permission prompt inside it
+	// is themed text, which the dark preview backdrop would swallow in light mode.
 	viewfinder: {
 		flex: 1,
 		marginHorizontal: space.lg,
-		borderRadius: 16, borderCurve: "continuous",
+		borderRadius: radius.lg, borderCurve: "continuous",
 		overflow: "hidden",
-		// The viewfinder is a camera preview, so it stays dark in both themes.
-		backgroundColor: "#0c0d10",
+		backgroundColor: t.bgElevated,
 	},
-	corner: {
-		position: "absolute",
-		width: CORNER,
-		height: CORNER,
-		borderColor: "rgba(255,255,255,0.92)",
+	viewfinderLive: { backgroundColor: onCamera.backdrop },
+	reticleLayer: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, alignItems: "center", justifyContent: "center" },
+	// One rounded square, as the system code scanners frame a code. Square from
+	// the width; the height cap only bites in a viewfinder squeezed by large text.
+	reticle: {
+		width: "62%",
+		aspectRatio: 1,
+		maxHeight: "80%",
+		borderRadius: radius.xl,
+		borderCurve: "continuous",
+		borderWidth: 3,
+		borderColor: onCamera.reticle,
 	},
-	cTL: { top: 14, left: 14, borderTopWidth: CORNER_W, borderLeftWidth: CORNER_W, borderTopLeftRadius: 6 },
-	cTR: { top: 14, right: 14, borderTopWidth: CORNER_W, borderRightWidth: CORNER_W, borderTopRightRadius: 6 },
-	cBL: { bottom: 14, left: 14, borderBottomWidth: CORNER_W, borderLeftWidth: CORNER_W, borderBottomLeftRadius: 6 },
-	cBR: { bottom: 14, right: 14, borderBottomWidth: CORNER_W, borderRightWidth: CORNER_W, borderBottomRightRadius: 6 },
 
 	gate: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xxl },
-	gateTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, fontWeight: "600", marginTop: space.md },
-	gateHint: { fontFamily: "Geist_400Regular",
+	gateTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, fontWeight: "600", marginTop: space.md },
+	gateHint: { fontFamily: "DMSans_400Regular",
 		color: t.textSecondary,
 		fontSize: type.footnote.fontSize,
 		lineHeight: type.footnote.lineHeight,
@@ -563,20 +566,13 @@ const makeStyles = (t: Theme) =>
 	},
 	noticeLead: { width: iconSize.sm, height: type.subheadline.lineHeight, alignItems: "center", justifyContent: "center" },
 	noticeBody: { flex: 1, gap: space.xxs },
-	noticeTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
-	noticeText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	noticeActions: { flexDirection: "row", flexWrap: "wrap", gap: space.lg, marginTop: space.sm },
-	noticeAction: { flexDirection: "row", alignItems: "center", gap: space.xs },
-	noticeActionText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+	noticeTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
+	noticeText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	// Text buttons pad their label for the press state; pulled back by that
+	// padding so the first label lines up with the message above it.
+	noticeActions: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xs, marginLeft: -space.md },
 
-	manual: {
-		flexDirection: "row",
-		alignItems: "center",
-		justifyContent: "center",
-		gap: space.sm,
-		paddingTop: space.lg,
-	},
-	manualText: { fontFamily: "Geist_600SemiBold", color: t.textSecondary, fontSize: type.subheadline.fontSize, fontWeight: "600" },
+	manual: { alignItems: "center", paddingTop: space.sm },
 });
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";

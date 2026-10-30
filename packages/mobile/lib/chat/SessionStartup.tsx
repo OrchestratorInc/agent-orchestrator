@@ -1,15 +1,15 @@
 import { useState } from "react";
-import { Animated as RNAnimated, Pressable, StyleSheet, Text, View } from "react-native";
+import { Animated as RNAnimated, StyleSheet, Text, View } from "react-native";
 import Animated, { FadeOut, LinearTransition } from "react-native-reanimated";
 
-import { Feather } from "../icons";
+import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
-import { haptics } from "../haptics";
 import { LAYOUT_MS, ROW_ENTER_MS } from "../motion";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { space, type } from "../tokens";
-import { Spinning, useBreathing } from "../ui";
+import { Spinner } from "../Spinner";
+import { iconSize, space, touchTarget, type } from "../tokens";
+import { Button, useBreathing } from "../ui";
 import { useNow } from "../useNow";
 import { useReducedMotion } from "../useReducedMotion";
 import {
@@ -43,8 +43,8 @@ export function SessionStartupStatus({ startup, onRetry, retrying }: { startup: 
 		>
 			<View style={styles.header}>
 				{startup.failed
-					? <Feather name="x" size={12} color={t.red} />
-					: <Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning>}
+					? <AppSymbol name="close" size={iconSize.xs} color={t.red} />
+					: <Spinner size={iconSize.xs} color={t.textTertiary} />}
 				<Text accessibilityRole={startup.failed ? "alert" : undefined} accessibilityLiveRegion="polite" style={[styles.headerLabel, startup.failed && { color: t.red }]}>{title}</Text>
 			</View>
 			{startup.steps.length ? <StartupSteps startup={startup} /> : null}
@@ -52,17 +52,7 @@ export function SessionStartupStatus({ startup, onRetry, retrying }: { startup: 
 				<View style={styles.failure}>
 					{startup.error ? <Text selectable style={styles.failureCopy}>{startup.error}</Text> : null}
 					<Text style={styles.failureCopy}>Your messages are saved here and will be sent if you retry.</Text>
-					{onRetry ? (
-						<Pressable
-							accessibilityRole="button"
-							accessibilityState={{ disabled: retrying }}
-							disabled={retrying}
-							onPress={() => { haptics.tap(); onRetry(); }}
-							style={({ pressed }) => [styles.retry, pressed && { opacity: 0.75 }, retrying && { opacity: 0.45 }]}
-						>
-							<Text style={styles.retryLabel}>{retrying ? "Retrying…" : "Retry start"}</Text>
-						</Pressable>
-					) : null}
+					{onRetry ? <Button title="Retry start" icon="refresh" variant="secondary" loading={retrying} onPress={onRetry} /> : null}
 				</View>
 			) : null}
 		</Animated.View>
@@ -117,13 +107,13 @@ function StepIcon({ status }: { status: StepStatus }) {
 	const t = useTheme();
 	switch (status) {
 		case "running":
-			return <Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning>;
+			return <Spinner size={iconSize.xs} color={t.textTertiary} />;
 		case "done":
-			return <Feather name="check" size={12} color={t.textTertiary} />;
+			return <AppSymbol name="checkmark" size={iconSize.xs} color={t.textTertiary} />;
 		case "failed":
-			return <Feather name="x" size={12} color={t.red} />;
+			return <AppSymbol name="close" size={iconSize.xs} color={t.red} />;
 		case "pending":
-			return <Feather name="circle" size={12} color={t.textFaint} />;
+			return <AppSymbol name={{ ios: "circle", android: "radio_button_unchecked" }} size={iconSize.xs} color={t.textFaint} />;
 	}
 }
 
@@ -138,16 +128,16 @@ function BranchNamingLabel() {
 const makeStyles = (t: Theme) => StyleSheet.create({
 	wrap: { paddingBottom: space.sm },
 	// Full width with a rule under it, like the desktop's live status header, so
-	// the checklist reads as its own block under the brief.
-	header: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault, marginBottom: space.xxs },
-	headerLabel: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
+	// the checklist reads as its own block under the brief. A touch target tall,
+	// as is the turn's status row that takes its place, so the handoff holds still.
+	header: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault, marginBottom: space.xxs },
+	headerLabel: { fontFamily: "DMSans_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
 	row: { minHeight: 28, flexDirection: "row", alignItems: "center", gap: space.xs },
-	rowLabel: { flexShrink: 0, fontFamily: "Geist_400Regular", fontSize: type.footnote.fontSize },
-	detail: { flex: 1, minWidth: 0, fontFamily: "GeistMono_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
+	rowLabel: { flexShrink: 0, fontFamily: "DMSans_400Regular", fontSize: type.footnote.fontSize },
+	detail: { flex: 1, minWidth: 0, fontFamily: "GeistMono_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize },
 	spacer: { flex: 1 },
-	elapsed: { flexShrink: 0, paddingLeft: space.sm, fontFamily: "GeistMono_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize, fontVariant: ["tabular-nums"] },
-	failure: { paddingLeft: 18, paddingTop: space.xs, gap: space.sm, alignItems: "flex-start" },
-	failureCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
-	retry: { minHeight: 44, justifyContent: "center", borderRadius: 12, borderCurve: "continuous", paddingHorizontal: space.lg, borderWidth: 1, borderColor: t.borderDefault, backgroundColor: t.bgElevated },
-	retryLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, fontWeight: "600" },
+	elapsed: { flexShrink: 0, paddingLeft: space.sm, fontFamily: "GeistMono_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize, fontVariant: ["tabular-nums"] },
+	// Under the header's label, past its glyph and gap.
+	failure: { paddingLeft: iconSize.xs + space.xs, paddingTop: space.xs, gap: space.sm, alignItems: "flex-start" },
+	failureCopy: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 });
