@@ -43,6 +43,50 @@ func (d WorkspaceDisposition) Settled() bool {
 	return d == DispositionRemoved || d == DispositionNotApplicable
 }
 
+// CleanupSkipCode is the stable class of a workspace that cleanup left alone.
+// Clients and scripts branch on it; the reason reported beside it is wording
+// for people and may change.
+type CleanupSkipCode string
+
+// Cleanup skip codes.
+const (
+	// CleanupSkipDirty: the worktree has uncommitted changes and is kept.
+	CleanupSkipDirty CleanupSkipCode = "dirty"
+	// CleanupSkipLockedWorktree: git holds a deliberate lock on the worktree.
+	CleanupSkipLockedWorktree CleanupSkipCode = "locked_worktree"
+	// CleanupSkipMissingRepo: the project's repository is gone from disk.
+	CleanupSkipMissingRepo CleanupSkipCode = "missing_repo"
+	// CleanupSkipProjectUnresolvable: the project is archived or unregistered.
+	CleanupSkipProjectUnresolvable CleanupSkipCode = "archived_project_unresolvable"
+	// CleanupSkipPermissionDenied: the OS refused removing the worktree.
+	CleanupSkipPermissionDenied CleanupSkipCode = "permission_error"
+	// CleanupSkipScriptFailed: a project Cleanup step failed, so the worktree
+	// was kept for a retry.
+	CleanupSkipScriptFailed CleanupSkipCode = "cleanup_script_failed"
+	// CleanupSkipWorktreeBusy: files in the worktree are still held open
+	// (Windows); a later run retries.
+	CleanupSkipWorktreeBusy CleanupSkipCode = "worktree_busy"
+	// CleanupSkipInUse: a live session works in the same worktree.
+	CleanupSkipInUse CleanupSkipCode = "in_use_by_live_session"
+	// CleanupSkipShellTerminalOpen: a shell terminal in the worktree could not
+	// be confirmed closed.
+	CleanupSkipShellTerminalOpen CleanupSkipCode = "shell_terminal_open"
+	// CleanupSkipAlreadyRunning: another cleanup of the session is running.
+	CleanupSkipAlreadyRunning CleanupSkipCode = "cleanup_running"
+	// CleanupSkipAttachmentsFailed: the session's attachments could not be
+	// preserved first.
+	CleanupSkipAttachmentsFailed CleanupSkipCode = "attachment_preservation_failed"
+	// CleanupSkipTeardownFailed: any other failure; the daemon log has the cause.
+	CleanupSkipTeardownFailed CleanupSkipCode = "teardown_failed"
+)
+
+// CleanupSkipCodes lists every CleanupSkipCode, for API schemas and tests.
+var CleanupSkipCodes = []CleanupSkipCode{
+	CleanupSkipDirty, CleanupSkipLockedWorktree, CleanupSkipMissingRepo, CleanupSkipProjectUnresolvable,
+	CleanupSkipPermissionDenied, CleanupSkipScriptFailed, CleanupSkipWorktreeBusy, CleanupSkipInUse,
+	CleanupSkipShellTerminalOpen, CleanupSkipAlreadyRunning, CleanupSkipAttachmentsFailed, CleanupSkipTeardownFailed,
+}
+
 // SessionCleanupRecord is the persistence shape for one terminated session's
 // runtime + workspace teardown facts (session_cleanup_facts). It records durable
 // disposition only — never a derived display status. Nullable timestamps use the

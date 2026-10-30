@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -129,7 +131,7 @@ func TestCleanup_DoesNotRecordUntrackedFailure(t *testing.T) {
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
 
 	res, err := m.Cleanup(ctx, "mer")
-	if err != nil || len(res.Skipped) != 1 || res.Skipped[0].Reason != "workspace has uncommitted changes" {
+	if err != nil || len(res.Skipped) != 1 || res.Skipped[0].Reason != "workspace has uncommitted changes" || res.Skipped[0].Code != domain.CleanupSkipDirty {
 		t.Fatalf("result = %+v, %v; want a dirty skip", res, err)
 	}
 	if facts, ok := cleanupFacts(t, st, "mer-1"); ok {
@@ -202,10 +204,32 @@ func TestKill_PreservedWorkspaceIsNotRecordedReleased(t *testing.T) {
 	}
 }
 
-func TestCleanupSkipReasonNamesLockedWorktree(t *testing.T) {
-	err := fmt.Errorf("gitworktree: refusing to remove %q: %w", "/ws/mer-1", ports.ErrWorkspaceLocked)
-	if got := cleanupSkipReason(err); got != "worktree is locked by git; run `git worktree unlock` on it, then retry cleanup" {
-		t.Fatalf("reason = %q", got)
+// Each teardown refusal gets a stable code clients can branch on, and a reason
+// that names what to do without the raw error's filesystem paths.
+func TestCleanupRefusalForClassifiesTeardownErrors(t *testing.T) {
+	wrap := func(err error) error { return fmt.Errorf("gitworktree: refusing to remove %q: %w", "/ws/mer-1", err) }
+	for _, tc := range []struct {
+		err    error
+		code   domain.CleanupSkipCode
+		reason string
+	}{
+		{wrap(ports.ErrWorkspaceDirty), domain.CleanupSkipDirty, "workspace has uncommitted changes"},
+		{wrap(ports.ErrWorkspaceLocked), domain.CleanupSkipLockedWorktree, "worktree is locked by git; run `git worktree unlock` on it, then retry cleanup"},
+		{wrap(ports.ErrWorkspaceRepoUnavailable), domain.CleanupSkipMissingRepo, "project repository is missing; remove worktree manually"},
+		{wrap(ErrProjectNotResolvable), domain.CleanupSkipProjectUnresolvable, "project is archived or unregistered — remove worktree manually"},
+		{wrap(ports.ErrWorkspaceDeferred), domain.CleanupSkipWorktreeBusy, "worktree is in use; will retry on a later run"},
+		{wrap(&os.PathError{Op: "unlinkat", Path: "/ws/mer-1/f", Err: fs.ErrPermission}), domain.CleanupSkipPermissionDenied,
+			"permission denied removing the worktree; fix its file permissions, then retry cleanup"},
+		{&cleanupStepError{step: 2, cause: errors.New("boom")}, domain.CleanupSkipScriptFailed, "cleanup step 2 failed: command could not run"},
+		{wrap(errors.New("git exploded")), domain.CleanupSkipTeardownFailed, "workspace teardown failed"},
+	} {
+		got := cleanupRefusalFor(tc.err)
+		if got.code != tc.code || got.reason != tc.reason {
+			t.Errorf("cleanupRefusalFor(%v) = %+v, want %s %q", tc.err, got, tc.code, tc.reason)
+		}
+		if !slices.Contains(domain.CleanupSkipCodes, got.code) {
+			t.Errorf("code %q is missing from domain.CleanupSkipCodes", got.code)
+		}
 	}
 }
 
@@ -289,7 +313,7 @@ func TestReconcileWorkspaceCleanup_LeavesRefusedRegistrationForCleanup(t *testin
 		t.Fatalf("facts = %+v, want none while git refuses the registration", facts)
 	}
 	res, err := m.Cleanup(ctx, "mer")
-	if err != nil || len(res.Skipped) != 1 || res.Skipped[0].Reason != cleanupSkipReason(ports.ErrWorkspaceLocked) {
+	if err != nil || len(res.Skipped) != 1 || res.Skipped[0].Code != domain.CleanupSkipLockedWorktree {
 		t.Fatalf("cleanup = %+v, %v; want the locked registration reported", res, err)
 	}
 }

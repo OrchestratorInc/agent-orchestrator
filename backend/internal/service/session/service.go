@@ -135,10 +135,11 @@ type CleanupOutcome struct {
 }
 
 // CleanupSkipped is one terminal session whose workspace was preserved by
-// cleanup (never force-deleted), with the user-facing reason.
+// cleanup (never force-deleted), with a stable code and the user-facing reason.
 type CleanupSkipped struct {
-	SessionID domain.SessionID `json:"sessionId"`
-	Reason    string           `json:"reason"`
+	SessionID domain.SessionID       `json:"sessionId"`
+	Code      domain.CleanupSkipCode `json:"code"`
+	Reason    string                 `json:"reason"`
 }
 
 // RestoreModeView is the API-facing restore-mode enum.
@@ -1318,7 +1319,7 @@ func (s *Service) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 		out.AlreadyGone = []domain.SessionID{}
 	}
 	for _, skip := range res.Skipped {
-		out.Skipped = append(out.Skipped, CleanupSkipped{SessionID: skip.SessionID, Reason: skip.Reason})
+		out.Skipped = append(out.Skipped, CleanupSkipped{SessionID: skip.SessionID, Code: skip.Code, Reason: skip.Reason})
 	}
 	return out, nil
 }

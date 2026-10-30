@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strconv"
@@ -4911,7 +4912,7 @@ func TestSessionsAPI_SendRejectsOversizedBody(t *testing.T) {
 func TestSessionsAPI_CleanupWithProjectFilter(t *testing.T) {
 	svc := newFakeSessionService()
 	svc.cleanupResult = []domain.SessionID{"ao-1"}
-	svc.cleanupSkipped = []sessionsvc.CleanupSkipped{{SessionID: "ao-2", Reason: "workspace has uncommitted changes"}}
+	svc.cleanupSkipped = []sessionsvc.CleanupSkipped{{SessionID: "ao-2", Code: domain.CleanupSkipDirty, Reason: "workspace has uncommitted changes"}}
 	srv := newSessionTestServer(t, svc)
 
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/cleanup?project=ao", "")
@@ -4923,6 +4924,7 @@ func TestSessionsAPI_CleanupWithProjectFilter(t *testing.T) {
 		Cleaned []string `json:"cleaned"`
 		Skipped []struct {
 			SessionID string `json:"sessionId"`
+			Code      string `json:"code"`
 			Reason    string `json:"reason"`
 		} `json:"skipped"`
 	}
@@ -4930,11 +4932,25 @@ func TestSessionsAPI_CleanupWithProjectFilter(t *testing.T) {
 	if !got.OK || len(got.Cleaned) != 1 || got.Cleaned[0] != "ao-1" {
 		t.Fatalf("cleanup response = %#v", got)
 	}
-	if len(got.Skipped) != 1 || got.Skipped[0].SessionID != "ao-2" || got.Skipped[0].Reason != "workspace has uncommitted changes" {
-		t.Fatalf("cleanup skipped = %#v, want preserved workspace with reason", got.Skipped)
+	if len(got.Skipped) != 1 || got.Skipped[0].SessionID != "ao-2" || got.Skipped[0].Code != "dirty" ||
+		got.Skipped[0].Reason != "workspace has uncommitted changes" {
+		t.Fatalf("cleanup skipped = %#v, want preserved workspace with code and reason", got.Skipped)
 	}
 	if len(svc.cleanupProjects) != 1 || svc.cleanupProjects[0] != "ao" {
 		t.Fatalf("cleanupProjects = %#v, want [ao]", svc.cleanupProjects)
+	}
+}
+
+// The schema's enum for a cleanup skip code must list exactly the codes the
+// session manager can report.
+func TestCleanupSkippedSessionCodeEnumMatchesDomain(t *testing.T) {
+	field, _ := reflect.TypeFor[controllers.CleanupSkippedSession]().FieldByName("Code")
+	want := make([]string, 0, len(domain.CleanupSkipCodes))
+	for _, code := range domain.CleanupSkipCodes {
+		want = append(want, string(code))
+	}
+	if got := strings.Split(field.Tag.Get("enum"), ","); !slices.Equal(got, want) {
+		t.Fatalf("enum = %q, want %q", got, want)
 	}
 }
 

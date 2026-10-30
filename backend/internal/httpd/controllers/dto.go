@@ -1266,9 +1266,11 @@ type DeleteSessionResponse struct {
 
 // CleanupSkippedSession is one terminal session whose workspace cleanup
 // preserved rather than reclaimed (a dirty worktree is never force-deleted),
-// with the user-facing reason.
+// with a stable code to branch on and the user-facing reason. The enum mirrors
+// domain.CleanupSkipCodes.
 type CleanupSkippedSession struct {
 	SessionID domain.SessionID `json:"sessionId"`
+	Code      string           `json:"code" enum:"dirty,locked_worktree,missing_repo,archived_project_unresolvable,permission_error,cleanup_script_failed,worktree_busy,in_use_by_live_session,shell_terminal_open,cleanup_running,attachment_preservation_failed,teardown_failed"`
 	Reason    string           `json:"reason"`
 }
 

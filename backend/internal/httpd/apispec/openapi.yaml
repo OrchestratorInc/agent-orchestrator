@@ -14803,12 +14803,28 @@ components:
       type: object
     CleanupSkippedSession:
       properties:
+        code:
+          enum:
+          - dirty
+          - locked_worktree
+          - missing_repo
+          - archived_project_unresolvable
+          - permission_error
+          - cleanup_script_failed
+          - worktree_busy
+          - in_use_by_live_session
+          - shell_terminal_open
+          - cleanup_running
+          - attachment_preservation_failed
+          - teardown_failed
+          type: string
         reason:
           type: string
         sessionId:
           type: string
       required:
       - sessionId
+      - code
       - reason
       type: object
     ClearNotificationsResponse:

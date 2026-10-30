@@ -149,7 +149,9 @@ type renameSessionResponse struct {
 
 type cleanupSkippedSession struct {
 	SessionID string `json:"sessionId"`
-	Reason    string `json:"reason"`
+	// Code is the stable class of the refusal; a daemon older than it sends none.
+	Code   string `json:"code,omitempty"`
+	Reason string `json:"reason"`
 }
 
 type cleanupSessionsResponse struct {
@@ -906,7 +908,11 @@ func (c *commandContext) cleanupSessions(ctx context.Context, cmd *cobra.Command
 		if mapped := labelByID[skip.SessionID]; mapped != "" {
 			label = mapped
 		}
-		if _, err := fmt.Fprintf(out, "  Skipped: %s (%s)\n", label, skip.Reason); err != nil {
+		code := ""
+		if skip.Code != "" {
+			code = " [" + skip.Code + "]"
+		}
+		if _, err := fmt.Fprintf(out, "  Skipped: %s (%s)%s\n", label, skip.Reason, code); err != nil {
 			return err
 		}
 	}

@@ -2197,7 +2197,7 @@ func (c *SessionsController) cleanup(w http.ResponseWriter, r *http.Request) {
 	}
 	skipped := make([]CleanupSkippedSession, 0, len(out.Skipped))
 	for _, skip := range out.Skipped {
-		skipped = append(skipped, CleanupSkippedSession{SessionID: skip.SessionID, Reason: skip.Reason})
+		skipped = append(skipped, CleanupSkippedSession{SessionID: skip.SessionID, Code: string(skip.Code), Reason: skip.Reason})
 	}
 	envelope.WriteJSON(w, http.StatusOK, CleanupSessionsResponse{
 		OK: true, Cleaned: out.Cleaned, AlreadyGone: out.AlreadyGone, Skipped: skipped,

@@ -230,16 +230,36 @@ func (m *Manager) recordWorkspaceCleanup(ctx context.Context, rec domain.Session
 	return m.store.UpsertSessionCleanupFacts(ctx, facts)
 }
 
-func (m *Manager) recordWorkspaceCleanupResult(ctx context.Context, rec domain.SessionRecord, reason string) error {
+func (m *Manager) recordWorkspaceCleanupResult(ctx context.Context, rec domain.SessionRecord, refusal cleanupRefusal) error {
 	disposition, code := domain.DispositionRemoved, ""
-	if reason != "" {
+	if refusal.refused() {
 		disposition, code = domain.DispositionFailed, "WORKSPACE_CLEANUP_FAILED"
-		if reason == "workspace has uncommitted changes" {
+		if refusal.code == domain.CleanupSkipDirty {
 			disposition, code = domain.DispositionPreservedDirty, "WORKSPACE_DIRTY"
 		}
 	}
 	return m.recordWorkspaceCleanup(ctx, rec, disposition, code)
 }
+
+// cleanupRefusal is why cleanup left a workspace alone this run. The zero
+// value means the workspace was reclaimed.
+type cleanupRefusal struct {
+	code   domain.CleanupSkipCode
+	reason string
+}
+
+func (r cleanupRefusal) refused() bool { return r.code != "" }
+
+// Refusals that do not come from a teardown error; cleanupRefusalFor
+// classifies those.
+var (
+	refusedDirty             = cleanupRefusal{domain.CleanupSkipDirty, "workspace has uncommitted changes"}
+	refusedInUse             = cleanupRefusal{domain.CleanupSkipInUse, "workspace in use by a live session"}
+	refusedShellTerminalOpen = cleanupRefusal{domain.CleanupSkipShellTerminalOpen, "shell terminal still open"}
+	refusedAlreadyRunning    = cleanupRefusal{domain.CleanupSkipAlreadyRunning, "workspace cleanup is already running"}
+	refusedAttachmentsFailed = cleanupRefusal{domain.CleanupSkipAttachmentsFailed, "attachment preservation failed"}
+	refusedTeardownFailed    = cleanupRefusal{domain.CleanupSkipTeardownFailed, "workspace teardown failed"}
+)
 
 // recordSettledWorkspaceCleanup records a teardown outcome that needs no
 // retry, so later cleanup runs and their dry-run preview skip the session. A
@@ -370,7 +390,7 @@ func (m *Manager) reconcileWorkspaceCleanup(ctx context.Context, id domain.Sessi
 		// registration. Cleanup's own path does that under the workspace
 		// gate, skips a path a live successor (an orchestrator's) now holds,
 		// and records the release.
-		if _, reason := m.cleanupWorkspaceUnderGate(ctx, rec, workspaceInfo(rec)); reason == "" {
+		if _, refusal := m.cleanupWorkspaceUnderGate(ctx, rec, workspaceInfo(rec)); !refusal.refused() {
 			m.cleanupSystemPromptDir(rec.ID)
 		}
 		return nil
@@ -403,8 +423,8 @@ func (m *Manager) resumeAcceptedCleanup(ctx context.Context, rec domain.SessionR
 	if !workspaceProject && rec.Metadata.WorkspacePath == "" {
 		return m.recordWorkspaceCleanup(ctx, rec, domain.DispositionNotApplicable, "")
 	}
-	_, reason := m.cleanupWorkspaceUnderGate(ctx, rec, workspaceInfo(rec))
-	if reason == "" && workspaceProject && len(rows) > 0 {
+	_, refusal := m.cleanupWorkspaceUnderGate(ctx, rec, workspaceInfo(rec))
+	if !refusal.refused() && workspaceProject && len(rows) > 0 {
 		return m.store.DeleteSessionWorktrees(ctx, rec.ID)
 	}
 	return nil
