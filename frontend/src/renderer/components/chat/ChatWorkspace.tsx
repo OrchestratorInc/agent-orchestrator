@@ -150,7 +150,7 @@ import {
 	WorkerUpdateRows,
 	workerUpdatesOf,
 } from "./WorkerUpdates";
-import { AutomationMessage } from "./AutomationMessage";
+import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { ChatImageSourceProvider } from "./chat-image-source";
@@ -177,6 +177,7 @@ import {
 	can,
 	isCompaction,
 	isSteer,
+	fullQueuedTurnOrder,
 	hiddenTimelineTurnIds,
 	isUserQueuePrompt,
 	queuedTurnIds,
@@ -1067,6 +1068,12 @@ function ChatWorkspaceContent({
 		],
 		[backgroundWakeQueuedTurnIds, pendingQueuedMessages, queuedMessages],
 	);
+	// The dock omits queued turns that are not the user's own; the daemon needs
+	// the whole queue, with those turns left where they were.
+	const reorderQueuedTurns = useCallback(
+		(dockOrder: string[]) => onReorderQueuedTurns?.(fullQueuedTurnOrder(snapshot, dockOrder)) ?? Promise.resolve(),
+		[onReorderQueuedTurns, snapshot],
+	);
 	const stablePromoteQueuedTurn = useStableCallback(onPromoteQueuedTurn);
 	const stableCancelQueuedTurn = useStableCallback(onCancelQueuedTurn);
 	const [queueEdit, setQueueEdit] = useState<ChatDraftQueuedEdit | undefined>(
@@ -1560,7 +1567,7 @@ function ChatWorkspaceContent({
 						newWorkDisabled || !draftPersistenceAvailable || !onEditQueuedTurn ? undefined : beginQueuedEdit
 					}
 					onCancelQueuedTurn={newWorkDisabled ? undefined : handleCancelQueuedTurn}
-					onReorderQueuedTurns={newWorkDisabled ? undefined : onReorderQueuedTurns}
+					onReorderQueuedTurns={newWorkDisabled || !onReorderQueuedTurns ? undefined : reorderQueuedTurns}
 					promotePendingTurnId={promoteQueuedTurnPendingTurnId}
 					cancelPendingTurnId={cancelQueuedTurnPendingTurnId}
 				/>
@@ -1574,6 +1581,7 @@ function ChatWorkspaceContent({
 			newWorkDisabled,
 			onEditQueuedTurn,
 			onReorderQueuedTurns,
+			reorderQueuedTurns,
 			promoteQueuedTurn,
 			promoteQueuedTurnPendingTurnId,
 			queueEdit?.clientMessageId,
@@ -5029,9 +5037,14 @@ function TimelineItem({
 	// because that is AO's only durable write that can attach to a turn in flight,
 	// but it is the user speaking and the timeline shows it that way.
 	if (isSteer(item)) {
+		const annotations = steeredBrowserFeedback(item);
 		return (
 			<FromAgent item={item}>
-				<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+				{annotations ? (
+					<SteeredBrowserFeedback annotations={annotations} />
+				) : (
+					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} />
+				)}
 			</FromAgent>
 		);
 	}

@@ -705,6 +705,37 @@ describe("ChatWorkspace steering", () => {
 		expect(screen.getByText(/Steered/)).toBeInTheDocument();
 	});
 
+	it("renders a steered browser annotation batch as its annotation card", () => {
+		const transport = [
+			"<browser_annotations>",
+			"Browser feedback",
+			"Page: Download page",
+			"URL: https://example.test/download",
+			"Annotations: 1",
+			"Task: Address the feedback below according to its wording.",
+			"",
+			"Annotation 1 (comment):",
+			"Comment: Rename this file",
+			"</browser_annotations>",
+		].join("\n");
+		const snapshot = {
+			...chatFixture,
+			items: chatFixture.items.map((item) =>
+				item.kind === "activity" && item.id === "a-steer-1"
+					? { ...item, summary: transport, detail: { ...item.detail, text: transport, origin: "automation" } }
+					: item,
+			),
+		};
+		render(<ChatWorkspace snapshot={snapshot} />);
+
+		const card = screen.getByTestId("steered-browser-feedback");
+		expect(within(card).getByText("Download page")).toBeVisible();
+		expect(within(card).getByText("Rename this file")).toBeVisible();
+		expect(within(card).getByText("Steered")).toBeVisible();
+		expect(screen.queryByText(/<browser_annotations>/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/Address the feedback below/)).not.toBeInTheDocument();
+	});
+
 	it("renders a staged image reference on a landed steer in chat history", () => {
 		const snapshot = {
 			...chatFixture,
