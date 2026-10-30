@@ -6,7 +6,7 @@ import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
-import { appendCloudEvents, CloudSessionChatSurface, planRefusalInEvents, cloudStartupChecklist, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -1160,35 +1160,55 @@ describe("CloudSessionChatSurface", () => {
 		expect(merged.at(-1)?.sequence).toBe(501);
 	});
 
-	it("offers the upgrade when a tool hits a plan limit while the chat is open, not for history", async () => {
-		const refused = (sequence: number): CloudCpClientEvent => ({
+	it("offers Upgrade only for a tool that fails with a plan refusal while the chat is open", async () => {
+		const activity = (sequence: number, id: string, status: string, detail: Record<string, unknown>): CloudCpClientEvent => ({
 			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
-			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed",
-				detail: { output: "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)" } } },
+			payload: { turnId: "turn-1", activity: { id, kind: "command", status, detail } },
 		});
+		const refusal = "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)";
+		const page = (...events: CloudCpClientEvent[]) => ({ events, hasMore: false, nextAfter: events.at(-1)?.sequence ?? 0 });
 		cloudMocks.promptPlanRefusal.mockReset();
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
 		cloudMocks.listChatEvents.mockReset()
-			.mockResolvedValueOnce({ events: [refused(1)], hasMore: false, nextAfter: 1 })
-			.mockResolvedValue({ events: [refused(2)], hasMore: false, nextAfter: 2 });
+			// History: an old refusal must not prompt.
+			.mockResolvedValueOnce(page(activity(1, "old", "failed", { output: refusal })))
+			// A successful grep that prints the code is not a refusal.
+			.mockResolvedValueOnce(page(activity(2, "grep", "completed", { output: "WORKER_SLOTS_FULL" })))
+			// A refusal streamed in two chunks across polls, then failed.
+			.mockResolvedValueOnce(page(activity(3, "spawn", "running", { outputDelta: "All your plan's running sessions are in use. (WORKER_" })))
+			.mockResolvedValueOnce(page(activity(4, "spawn", "failed", { outputDelta: "SLOTS_FULL)" })))
+			.mockResolvedValue(page());
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
 		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
-		await waitFor(() => expect(queryClient.getQueryData(["cloud-chat-events", "org-1", session.id])).toHaveLength(1));
+		// Each poll's events have reached the rendered chat before the next one.
+		const shown = (count: number) => waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(count));
+		await shown(1);
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await shown(2);
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await shown(3);
 		expect(cloudMocks.promptPlanRefusal).not.toHaveBeenCalled();
-		await act(() => queryClient.refetchQueries({ queryKey: ["cloud-chat-events", "org-1", session.id] }));
-		expect(cloudMocks.promptPlanRefusal).toHaveBeenCalledOnce();
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await waitFor(() => expect(cloudMocks.promptPlanRefusal).toHaveBeenCalledOnce());
 		expect(cloudMocks.promptPlanRefusal).toHaveBeenCalledWith("WORKER_SLOTS_FULL");
 	});
 
-	it("reads plan refusals only from tool output", () => {
-		const activity = (kind: string, detail: Record<string, unknown>): CloudCpClientEvent => ({
-			sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
-			payload: { turnId: "turn-1", activity: { id: "a", kind, detail } },
+	it("treats a refusal from while the chat was closed as history on reopen", async () => {
+		const failed = (sequence: number): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "mcp_tool", status: "failed", detail: { output: "409 WORKER_SLOTS_FULL" } } },
 		});
-		expect(planRefusalInEvents([activity("mcp_tool", { outputDelta: "409 ORCHESTRATOR_SLOTS_FULL" })])).toBe("ORCHESTRATOR_SLOTS_FULL");
-		expect(planRefusalInEvents([activity("reasoning", { output: "WORKER_SLOTS_FULL" })])).toBeUndefined();
-		expect(planRefusalInEvents([activity("command", { output: "MY_WORKER_SLOTS_FULLY_USED" })])).toBeUndefined();
-		expect(planRefusalInEvents([{ sessionId: session.id, sequence: 2, type: "chat.assistant_delta", payload: { text: "WORKER_SLOTS_FULL" }, createdAt: session.updatedAt }])).toBeUndefined();
+		cloudMocks.promptPlanRefusal.mockReset();
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [failed(2)], hasMore: false, nextAfter: 2 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		queryClient.setQueryData(key, [failed(1)], { updatedAt: Date.now() - 60_000 });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(2));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		expect(cloudMocks.promptPlanRefusal).not.toHaveBeenCalled();
 	});
 
 	it("continues a long history from its last sequence", async () => {

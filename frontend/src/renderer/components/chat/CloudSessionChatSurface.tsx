@@ -186,21 +186,14 @@ export async function loadCloudChatEvents(
 const PLAN_REFUSAL_PATTERN = new RegExp(`\\b(${[...PLAN_REFUSAL_CODES].join("|")})\\b`);
 
 /**
- * The plan refusal code in a tool's output, if any. An agent's own call to the
- * control plane (an orchestrator spawning a worker) is refused inside the
- * sandbox, so its output is the only place this desktop sees the refusal.
+ * The plan refusal code a failed tool reported, if any. An agent's own call to
+ * the control plane (an orchestrator spawning a worker) is refused inside the
+ * sandbox, so the tool's output is the only place this desktop sees it.
  */
-export function planRefusalInEvents(events: CloudCpClientEvent[]): string | undefined {
-	for (const event of events) {
-		if (event.type !== "chat.activity") continue;
-		const activity = eventPayload(event).activity as { kind?: unknown; detail?: Record<string, unknown> } | undefined;
-		if (activity?.kind !== "command" && activity?.kind !== "mcp_tool") continue;
-		for (const output of [activity.detail?.output, activity.detail?.outputDelta]) {
-			const code = typeof output === "string" ? PLAN_REFUSAL_PATTERN.exec(output)?.[1] : undefined;
-			if (code) return code;
-		}
-	}
-	return undefined;
+export function planRefusalCode(item: ConversationItem): string | undefined {
+	if (item.kind !== "activity" || item.status !== "failed") return undefined;
+	if (item.activityKind !== "command" && item.activityKind !== "mcp_tool") return undefined;
+	return item.detail?.output ? PLAN_REFUSAL_PATTERN.exec(item.detail.output)?.[1] : undefined;
 }
 
 function cloudTurnDiff(patch: string): (DiffFile & { patch: string })[] {
@@ -929,12 +922,8 @@ export function CloudSessionChatSurface({
 		refetchInterval: 1_000,
 		queryFn: async () => {
 			if (!cloud) return [] as CloudCpClientEvent[];
-			const cached = queryClient.getQueryData<CloudCpClientEvent[]>(["cloud-chat-events", cloud.orgId, session.id]);
-			const events = await loadCloudChatEvents(client, cloud.orgId, session.id, cached ?? []);
-			// The first load is history; only a refusal that arrives while the chat is open prompts.
-			const refusal = cached ? planRefusalInEvents(events.slice(cached.length)) : undefined;
-			if (refusal) promptPlanRefusal(refusal);
-			return events;
+			const previous = queryClient.getQueryData<CloudCpClientEvent[]>(["cloud-chat-events", cloud.orgId, session.id]) ?? [];
+			return loadCloudChatEvents(client, cloud.orgId, session.id, previous);
 		},
 	});
 	const invalidate = () =>
@@ -1001,6 +990,28 @@ export function CloudSessionChatSurface({
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...settings, approvalMode: shownApprovalMode } };
 	}, [eventsQuery.data, me, session, settings, shownApprovalMode, startFailed, startStopped]);
+	// Failed tools present when this chat opened are history; one that fails
+	// with a plan refusal while it is open offers Upgrade.
+	const refusalBaseline = useRef<{ key: string; openedAt: number; seen?: Set<string> }>(undefined);
+	useEffect(() => {
+		const key = `${cloud?.orgId ?? ""}:${session.id}`;
+		if (refusalBaseline.current?.key !== key) refusalBaseline.current = { key, openedAt: Date.now() };
+		const baseline = refusalBaseline.current;
+		// Events cached from an earlier opening are history too, until refetched.
+		if (eventsQuery.dataUpdatedAt < baseline.openedAt) return;
+		const failed = snapshot.items.filter((item) => item.kind === "activity" && item.status === "failed");
+		if (!baseline.seen) {
+			baseline.seen = new Set(failed.map((item) => item.id));
+			return;
+		}
+		let code: string | undefined;
+		for (const item of failed) {
+			if (baseline.seen.has(item.id)) continue;
+			baseline.seen.add(item.id);
+			code ??= planRefusalCode(item);
+		}
+		if (code) promptPlanRefusal(code);
+	}, [cloud?.orgId, eventsQuery.dataUpdatedAt, session.id, snapshot]);
 	// While Setup runs, or once the checkout, Setup or the agent's start failed,
 	// the session reads as a local start does: the startup checklist in place of a
 	// working timer, and messages that send in order once the agent starts.
