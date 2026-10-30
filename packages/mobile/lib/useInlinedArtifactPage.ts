@@ -1,22 +1,8 @@
 import { useEffect, useState } from "react";
 import { artifactFileUrl, getArtifactPage, getArtifactText } from "./api";
 import { inlineArtifactPage, MAX_INLINED_IMAGE_BYTES, type ArtifactAssetLoader } from "./artifactPageInliner";
+import { cachedArtifactPage } from "./artifactPageCache";
 import { authHeaders, type ServerConfig } from "./config";
-
-// A thread or gallery can show the same page again; a page is read once per version.
-const CACHE_SIZE = 12;
-const cache = new Map<string, Promise<string>>();
-
-function cached(key: string, build: () => Promise<string>): Promise<string> {
-	const hit = cache.get(key);
-	if (hit) return hit;
-	const pending = build();
-	cache.set(key, pending);
-	// A failure is not kept: the next mount tries again.
-	pending.catch(() => cache.delete(key));
-	while (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value!);
-	return pending;
-}
 
 /** Reads the files a session's artifact pages link, with the Bearer header. */
 export function artifactAssetLoader(config: ServerConfig, sessionId: string): ArtifactAssetLoader {
@@ -50,7 +36,8 @@ export function artifactAssetLoader(config: ServerConfig, sessionId: string): Ar
 /**
  * The HTML artifact page at `path` with the files it links inlined (see
  * artifactPageInliner for why). `version` (the file's modified time) re-reads
- * a rewritten page. `failed` asks the caller to fall back to the page's URL.
+ * a rewritten page; without one the page is read afresh on each mount.
+ * `failed` asks the caller to fall back to the page's URL.
  */
 export function useInlinedArtifactPage({ enabled, config, sessionId, path, version }: {
 	enabled: boolean;
@@ -59,13 +46,15 @@ export function useInlinedArtifactPage({ enabled, config, sessionId, path, versi
 	path: string;
 	version?: string;
 }): { html?: string; failed: boolean } {
-	const key = `${config?.host ?? ""}:${config?.httpPort ?? ""}|${sessionId}|${path}|${version ?? ""}`;
+	const page = `${config?.host ?? ""}:${config?.httpPort ?? ""}|${sessionId}|${path}`;
+	const key = `${page}|${version ?? ""}`;
 	const [state, setState] = useState<{ key: string; html?: string; failed: boolean }>({ key: "", failed: false });
 	const active = enabled && Boolean(config);
 	useEffect(() => {
 		if (!active || !config) return;
 		let live = true;
-		cached(key, async () => {
+		// A page with no known version is read on every mount (see cachedArtifactPage).
+		cachedArtifactPage(page, version, async () => {
 			// The page as the desktop frames it, with AO's theme written in.
 			const html = await getArtifactPage(config, sessionId, path);
 			return (await inlineArtifactPage(html, path, artifactAssetLoader(config, sessionId), sessionId)).html;
@@ -73,7 +62,7 @@ export function useInlinedArtifactPage({ enabled, config, sessionId, path, versi
 			.then((html) => { if (live) setState({ key, html, failed: false }); })
 			.catch(() => { if (live) setState({ key, failed: true }); });
 		return () => { live = false; };
-	}, [active, config, key, path, sessionId]);
+	}, [active, config, key, page, path, sessionId, version]);
 	if (!active || state.key !== key) return { failed: false };
 	return { html: state.html, failed: state.failed };
 }
