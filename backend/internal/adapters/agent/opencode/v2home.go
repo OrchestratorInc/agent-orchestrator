@@ -19,6 +19,12 @@ import (
 
 const v2DataHomeDirName = "opencode-v2-home"
 
+// v2LegacyDatabaseBusyTimeout bounds how long the migration waits for a legacy
+// database another OpenCode process holds exclusively. The copy budget covers a
+// large store; this one is short so a locked database fails with recovery
+// guidance instead of consuming the whole budget.
+var v2LegacyDatabaseBusyTimeout = 10 * time.Second
+
 // V2DataHome returns the XDG_DATA_HOME OpenCode 2 runs with: a sibling of the
 // user's own data home, so OpenCode 1 and 2 never share a database.
 func V2DataHome() (string, error) {
@@ -109,7 +115,7 @@ func PrepareV2DataHome(ctx context.Context) (string, error) {
 	}
 	if err := copyTree(ctx, source, staging); err != nil {
 		cleanupErr := os.RemoveAll(staging)
-		return "", errors.Join(fmt.Errorf("opencode: copy legacy data store: %w", err), cleanupErr)
+		return "", errors.Join(legacyStoreMigrationError(ctx, source, err), cleanupErr)
 	}
 	if err := os.Rename(staging, destination); err != nil {
 		if _, statErr := os.Stat(destination); statErr == nil {
@@ -127,6 +133,15 @@ func PrepareV2DataHome(ctx context.Context) (string, error) {
 // legacyToolCacheDir is the data-store subdirectory opencode downloads tools
 // into; the migration leaves it behind.
 const legacyToolCacheDir = "bin"
+
+// legacyStoreMigrationError explains an aborted copy in terms a user can act
+// on. The legacy store is only ever read, so retrying is always safe.
+func legacyStoreMigrationError(ctx context.Context, source string, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return fmt.Errorf("opencode: copy legacy data store timed out before it finished: %w; %s was left unchanged, so retrying is safe (quit any running OpenCode 1 process first so its database can be snapshotted)", err, source)
+	}
+	return fmt.Errorf("opencode: copy legacy data store: %w", err)
+}
 
 func copyTree(ctx context.Context, source, destination string) error {
 	sourceRoot, err := os.OpenRoot(source)
@@ -194,7 +209,10 @@ func copyTree(ctx context.Context, source, destination string) error {
 	} else if err != nil {
 		return err
 	}
-	return snapshotSQLiteDatabase(ctx, databasePath, filepath.Join(destination, "opencode.db"))
+	if err := snapshotSQLiteDatabase(ctx, databasePath, filepath.Join(destination, "opencode.db")); err != nil {
+		return fmt.Errorf("snapshot legacy database: %w", err)
+	}
+	return nil
 }
 
 func copyFileContext(ctx context.Context, destination io.Writer, source io.Reader) error {
@@ -224,6 +242,7 @@ func snapshotSQLiteDatabase(ctx context.Context, source, destination string) err
 	if err != nil {
 		return err
 	}
+	busySince := time.Now()
 	for {
 		_, snapshotErr := db.ExecContext(ctx, `VACUUM INTO ?`, destination)
 		if snapshotErr == nil {
@@ -235,6 +254,9 @@ func snapshotSQLiteDatabase(ctx context.Context, source, destination string) err
 		var sqliteErr *moderncsqlite.Error
 		if !errors.As(snapshotErr, &sqliteErr) || sqliteErr.Code()&0xff != sqlite3.SQLITE_BUSY {
 			return errors.Join(snapshotErr, db.Close())
+		}
+		if time.Since(busySince) > v2LegacyDatabaseBusyTimeout {
+			return errors.Join(fmt.Errorf("legacy database is locked by another OpenCode process for more than %s; quit OpenCode 1 and retry: %w", v2LegacyDatabaseBusyTimeout, snapshotErr), db.Close())
 		}
 		if err := os.Remove(destination); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return errors.Join(err, db.Close())
