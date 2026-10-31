@@ -15,6 +15,7 @@ const cloudMocks = vi.hoisted(() => ({
 	steerTurn: vi.fn(),
 	decideChatApproval: vi.fn(),
 	listChatModels: vi.fn(),
+	listUserAgentModels: vi.fn(),
 	resumeSession: vi.fn(),
 	requestWorkspaceCheckout: vi.fn(),
 	chatProps: vi.fn(),
@@ -44,7 +45,10 @@ const session = {
 } satisfies WorkspaceSession;
 
 describe("CloudSessionChatSurface", () => {
-	beforeEach(() => localStorage.clear());
+	beforeEach(() => {
+		localStorage.clear();
+		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
+	});
 	it("expands cloud captures once at the text boundary with stable retry identity", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({events:[],hasMore:false,nextAfter:0});
 		cloudMocks.listChatModels.mockResolvedValue({models:[]});
@@ -255,6 +259,46 @@ describe("CloudSessionChatSurface", () => {
 		act(() => props().onChooseConfigOption("model", { value: "claude-opus-5" }));
 		await props().onSend("go", [], "model-1");
 		expect(cloudMocks.sendSessionMessage).toHaveBeenLastCalledWith("org-1", session.id, expect.objectContaining({ model: "claude-opus-5" }), { idempotencyKey: "model-1" });
+	});
+
+	it("shows the agent's catalog while the worker cannot list its models yet", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ source: "worker", models: [
+			{ id: "sonnet", displayName: "Sonnet", default: true, efforts: ["low", "high"], defaultEffort: "high" },
+			{ id: "opus", displayName: "Opus", default: false },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().configOptions?.find((option: { id: string }) => option.id === "model")).toMatchObject({
+			currentValue: "sonnet", choices: [{ value: "sonnet" }, { value: "opus" }],
+		}));
+		expect(cloudMocks.listUserAgentModels).toHaveBeenCalledWith("org-1", "claude-code", expect.anything());
+		expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
+	});
+
+	it("replaces the catalog with the worker's own list once it answers", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [{ id: "sonnet", displayName: "Sonnet", default: true }] });
+		let answer: (value: unknown) => void = () => {};
+		cloudMocks.listChatModels.mockReset().mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		const modelOption = () => props().configOptions?.find((option: { id: string }) => option.id === "model");
+		await waitFor(() => expect(modelOption()?.currentValue).toBe("sonnet"));
+		answer({ model: "opus", models: [{ id: "opus", displayName: "Opus", default: true }] });
+		await waitFor(() => expect(modelOption()).toMatchObject({ currentValue: "opus", choices: [{ value: "opus" }] }));
 	});
 
 	it("offers only the approval modes the selected model runs, and shows and sends the mode that runs after a model switch", async () => {

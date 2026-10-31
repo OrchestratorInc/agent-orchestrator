@@ -8,7 +8,8 @@ import { useCloudSessionLive } from "../../hooks/useCloudSessionLive";
 import { useComposerLease } from "../../hooks/useComposerLease";
 import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
-import type { CloudCpClient, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
+import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
+import type { CloudCpAgentProvider, CloudCpClient, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
 import { cloudStartupProblem, isWorkspaceStartupError, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
@@ -723,7 +724,7 @@ export function CloudSessionChatSurface({
 }) {
 	const cloud = session.cloud;
 	const openSessionLink = useSessionLinkNavigation(undefined, "cloud");
-	const { client, ready, userId } = useCloudCp();
+	const { client, ready, userId, baseUrl } = useCloudCp();
 	// A shared session's live state: who else has it open, who holds its
 	// composer (the lock on talking to the agent), and the model and settings
 	// its owner chose.
@@ -851,8 +852,23 @@ export function CloudSessionChatSurface({
 			return { ...catalog, selectionVersionAtFetch };
 		},
 	});
-	const workerModels = modelsQuery.data?.models ?? [];
-	const selectedModel = workerModels.find((model) => model.id === settings.model) ?? workerModels.find((model) => model.default);
+	// Until the worker lists its models (it starts the agent to ask, after a
+	// sandbox waking from a pause has come back), the picker shows the control
+	// plane's catalog for the agent: what a worker on the same CLI and
+	// credential last reported, or what the pinned CLI release runs. It needs
+	// no worker, so a waking session shows its models at once.
+	const catalogAgent = (CLOUD_AGENT_PROVIDERS as readonly string[]).includes(session.provider);
+	const catalogQuery = useQuery({
+		queryKey: ["cloud-agent-models", baseUrl, userId, cloud?.orgId ?? "", session.provider],
+		enabled: Boolean(cloud && ready && catalogAgent && session.isTerminated !== true && !modelsQuery.data),
+		staleTime: 5 * 60_000,
+		refetchOnWindowFocus: false,
+		refetchOnReconnect: false,
+		retry: false,
+		queryFn: ({ signal }) => client.listUserAgentModels(cloud!.orgId, session.provider as CloudCpAgentProvider, { signal }),
+	});
+	const listedModels = modelsQuery.data?.models ?? catalogQuery.data?.models ?? [];
+	const selectedModel = listedModels.find((model) => model.id === settings.model) ?? listedModels.find((model) => model.default);
 	// The session's approval modes the selected model can run: Claude offers
 	// Auto-approve only for models that support it (not Haiku).
 	const selectedModelApprovalModes = selectedModel?.approvalModes;
@@ -929,7 +945,7 @@ export function CloudSessionChatSurface({
 			// cannot run is sent as the mode the composer shows in its place.
 			const picked = selectedSettings.approvalMode && sessionApprovalModes.includes(selectedSettings.approvalMode)
 				? selectedSettings.approvalMode : undefined;
-			const turnModel = workerModels.find((model) => model.id === selectedSettings.model) ?? workerModels.find((model) => model.default);
+			const turnModel = listedModels.find((model) => model.id === selectedSettings.model) ?? listedModels.find((model) => model.default);
 			const approvalMode = picked && (effectiveApprovalMode(session.provider, picked, modelApprovalModes(sessionApprovalModes, turnModel)) ?? picked);
 			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
 				? "read-only" : cloud.permissionMode;
@@ -1053,14 +1069,14 @@ export function CloudSessionChatSurface({
 			? `Model choices unavailable: ${modelsQuery.error.message}`
 			: undefined;
 	// Claude's model and effort as provider options, the shape local Claude Chat gets from its agent.
-	const claudeOptions: ChatConfigOption[] = session.provider === "claude-code" && workerModels.length > 0 ? [
-		{ id: "model", name: "Model", category: "model", type: "select", currentValue: selectedModel?.id, choices: workerModels.map((model) => ({ value: model.id, name: model.displayName, description: model.description })) },
+	const claudeOptions: ChatConfigOption[] = session.provider === "claude-code" && listedModels.length > 0 ? [
+		{ id: "model", name: "Model", category: "model", type: "select", currentValue: selectedModel?.id, choices: listedModels.map((model) => ({ value: model.id, name: model.displayName, description: model.description })) },
 		...(selectedModel?.efforts?.length
 			? [{ id: "effort", name: "Effort", category: "thought_level", type: "select" as const, currentValue: settings.reasoningEffort ?? selectedModel.defaultEffort, choices: selectedModel.efforts.map((value) => ({ value, name: "" })) }]
 			: []),
 	] : [];
 	const providerOptions = [...(planOptions ?? []), ...claudeOptions];
-	const { models, configOptions } = useChatModelChoices(session.provider, workerModels, providerOptions.length ? providerOptions : undefined, settings.model);
+	const { models, configOptions } = useChatModelChoices(session.provider, listedModels, providerOptions.length ? providerOptions : undefined, settings.model);
 	return (
 		<ChatWorkspace
 			snapshot={snapshot}
