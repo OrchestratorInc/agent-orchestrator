@@ -1296,7 +1296,13 @@ describe("startRemoteProxy when the upstream fails", () => {
 			socket.once("close", () => connections.delete(socket));
 		});
 		host.on("session", (session) => directSessions.add(session));
-		const state = { port: 0, upgrades: 0, dropDirect: () => { for (const session of directSessions) session.destroy(); } };
+		const state = {
+			port: 0,
+			upgrades: 0,
+			dropDirect: () => { for (const session of directSessions) session.destroy(); },
+			// Ends every connection with a TCP reset, as a network change does.
+			reset: () => { for (const socket of connections) socket.resetAndDestroy(); },
+		};
 		host.on("upgrade", (req: IncomingMessage, socket: Socket, head: Buffer) => {
 			state.upgrades++;
 			if (options.answerUpgrades === false) return;
@@ -1475,6 +1481,32 @@ describe("startRemoteProxy when the upstream fails", () => {
 		await expect(within(cut.text())).rejects.toThrow();
 		expect(await (await fetch(`${proxy.base}/api/v1/projects`)).json()).toEqual({ proto: "2.0" });
 		expect(host.upgrades).toBe(3);
+	});
+
+	it("opens a new tunnel after a reset, without writing into the old one", async () => {
+		// A reset leaves ws unable to end the old tunnel's stream. Any frame the
+		// session then wrote into it threw ERR_INTERNAL_ASSERTION, uncaught.
+		const uncaught: Error[] = [];
+		const onUncaught = (error: Error) => uncaught.push(error);
+		process.prependListener("uncaughtException", onUncaught);
+		cleanups.push(() => process.off("uncaughtException", onUncaught));
+		const host = await startTunnelDaemon((req, res) => {
+			if (req.url !== "/api/v1/events") return void res.end(JSON.stringify({ proto: req.httpVersion }));
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			res.write(": ready\n\n");
+		});
+		proxy = await startRemoteProxy(daemonEntry(`https://127.0.0.1:${host.port}`), undefined, fast);
+		const events = await fetch(`${proxy.base}/api/v1/events`);
+		const reader = events.body!.getReader();
+		await reader.read();
+		host.reset();
+		await expect(within(reader.read())).rejects.toThrow();
+		const next = await within(fetch(`${proxy.base}/api/v1/projects`));
+		expect(next === "hung" ? "hung" : await next.json()).toEqual({ proto: "2.0" });
+		// Past two ping intervals, when a stale session would have been destroyed.
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		expect(uncaught.map((error) => (error as NodeJS.ErrnoException).code ?? error.message)).toEqual([]);
+		expect(host.upgrades).toBe(2);
 	});
 
 	it("cancels the upstream stream when the browser cancels a preview stream", async () => {
