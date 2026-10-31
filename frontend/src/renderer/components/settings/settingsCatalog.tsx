@@ -1,5 +1,5 @@
 import { BrowserIcon, type AppIcon } from "../icons";
-import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, CreditCard, Keyboard, MousePointerClick, RefreshCw, Server, Settings2, Smartphone, Users } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -18,6 +18,7 @@ import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 import { SettingsSection } from "./SettingsSection";
+import { TeamsSection } from "./TeamsSection";
 
 /** The memory window's own blocks, loaded only when the page is opened: it
  * samples the machine every two seconds while it is on screen. */
@@ -83,6 +84,15 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		// Account tab instead.
 		visible: ({ developerMode }) => !developerMode,
 		render: (_t, titleHidden) => <CodexAccountsSection titleHidden={titleHidden} />,
+	},
+	{
+		id: "teams",
+		icon: Users,
+		label: (t) => t("settings.teams"),
+		// Teams share cloud sessions and projects, so they need AO Cloud.
+		visible: ({ cloudEnabled }) => cloudEnabled,
+		pageOnly: true,
+		render: (_t, titleHidden) => <TeamsSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "billing",

@@ -63,6 +63,16 @@ import type {
 	CloudCpCreateShareLinkRequest,
 	CloudCpShareLink,
 	CloudCpSharedProject,
+	CloudCpCreateShareGrantsRequest,
+	CloudCpShareAccess,
+	CloudCpShareCandidate,
+	CloudCpShareEntry,
+	CloudCpShareRole,
+	CloudCpTeam,
+	CloudCpTeamDetail,
+	CloudCpTeamImpact,
+	CloudCpTeamMemberAccess,
+	CloudCpTeamMemberInput,
 	CloudCpSession,
 	CloudCpSessionChildrenResponse,
 	CloudCpHarnessInspectResponse,
@@ -438,6 +448,33 @@ export interface CloudCpClient {
 	listSharedProjects(options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject[] }>;
 	/** The sessions of a project shared with the caller that their grant reaches. */
 	listSharedProjectSessions(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ sessions: CloudCpSession[] }>;
+	/** The workspace's teams. */
+	listTeams(orgId: string, options?: CloudCpRequestOptions): Promise<{ teams: CloudCpTeam[] }>;
+	createTeam(orgId: string, body: { name: string; members?: CloudCpTeamMemberInput[] }, options?: CloudCpRequestOptions): Promise<CloudCpTeamDetail>;
+	getTeam(orgId: string, teamId: string, options?: CloudCpRequestOptions): Promise<CloudCpTeamDetail>;
+	renameTeam(orgId: string, teamId: string, name: string, options?: CloudCpRequestOptions): Promise<CloudCpTeamDetail>;
+	deleteTeam(orgId: string, teamId: string, options?: CloudCpRequestOptions): Promise<void>;
+	teamImpact(orgId: string, teamId: string, options?: CloudCpRequestOptions): Promise<CloudCpTeamImpact>;
+	addTeamMembers(orgId: string, teamId: string, members: CloudCpTeamMemberInput[], options?: CloudCpRequestOptions): Promise<CloudCpTeamDetail>;
+	updateTeamMember(orgId: string, teamId: string, memberId: string, role: "owner" | "member", options?: CloudCpRequestOptions): Promise<CloudCpTeamDetail>;
+	removeTeamMember(orgId: string, teamId: string, memberId: string, options?: CloudCpRequestOptions): Promise<void>;
+	teamMemberImpact(orgId: string, teamId: string, memberId: string, options?: CloudCpRequestOptions): Promise<CloudCpTeamImpact>;
+	/** The teams the caller is in, in every workspace. */
+	listMyTeams(options?: CloudCpRequestOptions): Promise<{ teams: CloudCpTeam[] }>;
+	getMyTeam(teamId: string, options?: CloudCpRequestOptions): Promise<CloudCpTeamDetail>;
+	leaveTeam(teamId: string, options?: CloudCpRequestOptions): Promise<void>;
+	leaveTeamImpact(teamId: string, options?: CloudCpRequestOptions): Promise<CloudCpTeamImpact>;
+	/** Teams and known people for the share dialog's people field. */
+	listShareCandidates(orgId: string, query: string, options?: CloudCpRequestOptions): Promise<{ candidates: CloudCpShareCandidate[] }>;
+	/** Shares a session or a whole project directly with teams and people. */
+	createShareGrants(orgId: string, projectId: string, body: CloudCpCreateShareGrantsRequest, options?: CloudCpRequestOptions): Promise<{ entries: CloudCpShareEntry[] }>;
+	/** Everyone with access to a session (sessionId) or a whole project. */
+	getShareAccess(orgId: string, projectId: string, sessionId: string | undefined, options?: CloudCpRequestOptions): Promise<CloudCpShareAccess>;
+	/** A team's members and what each can do in the session or project. */
+	getTeamShareAccess(orgId: string, projectId: string, sessionId: string | undefined, teamId: string, options?: CloudCpRequestOptions): Promise<{ members: CloudCpTeamMemberAccess[] }>;
+	updateShareEntry(orgId: string, projectId: string, grantId: string, body: { role: CloudCpShareRole; modeCap?: "read-only" | "standard" | "trusted" }, options?: CloudCpRequestOptions): Promise<{ entry: CloudCpShareEntry }>;
+	/** Stops a grant of any kind: a link redemption, a person, an email or a team. */
+	revokeShareGrant(orgId: string, projectId: string, grantId: string, options?: CloudCpRequestOptions): Promise<void>;
 	listChatEvents(
 		orgId: string,
 		sessionId: string,
@@ -985,6 +1022,41 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("GET", "/shared/projects", { signal: o?.signal }),
 		listSharedProjectSessions: (orgId, projectId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/shared/projects/${seg(projectId)}/sessions`, { signal: o?.signal }),
+		listTeams: (orgId, o) => requestJson("GET", `/orgs/${seg(orgId)}/teams`, { signal: o?.signal }),
+		createTeam: (orgId, body, o) => requestJson("POST", `/orgs/${seg(orgId)}/teams`, { body, signal: o?.signal }),
+		getTeam: (orgId, teamId, o) => requestJson("GET", `/orgs/${seg(orgId)}/teams/${seg(teamId)}`, { signal: o?.signal }),
+		renameTeam: (orgId, teamId, name, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/teams/${seg(teamId)}`, { body: { name }, signal: o?.signal }),
+		deleteTeam: (orgId, teamId, o) => requestVoid("DELETE", `/orgs/${seg(orgId)}/teams/${seg(teamId)}`, { signal: o?.signal }),
+		teamImpact: (orgId, teamId, o) => requestJson("GET", `/orgs/${seg(orgId)}/teams/${seg(teamId)}/impact`, { signal: o?.signal }),
+		addTeamMembers: (orgId, teamId, members, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/teams/${seg(teamId)}/members`, { body: { members }, signal: o?.signal }),
+		updateTeamMember: (orgId, teamId, memberId, role, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/teams/${seg(teamId)}/members/${seg(memberId)}`, { body: { role }, signal: o?.signal }),
+		removeTeamMember: (orgId, teamId, memberId, o) =>
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/teams/${seg(teamId)}/members/${seg(memberId)}`, { signal: o?.signal }),
+		teamMemberImpact: (orgId, teamId, memberId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/teams/${seg(teamId)}/members/${seg(memberId)}/impact`, { signal: o?.signal }),
+		listMyTeams: (o) => requestJson("GET", "/teams", { signal: o?.signal }),
+		getMyTeam: (teamId, o) => requestJson("GET", `/teams/${seg(teamId)}`, { signal: o?.signal }),
+		leaveTeam: (teamId, o) => requestVoid("POST", `/teams/${seg(teamId)}/leave`, { signal: o?.signal }),
+		leaveTeamImpact: (teamId, o) => requestJson("GET", `/teams/${seg(teamId)}/leave-impact`, { signal: o?.signal }),
+		listShareCandidates: (orgId, query, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/share-candidates`, { query: { q: query }, signal: o?.signal }),
+		createShareGrants: (orgId, projectId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares/direct`, { body, signal: o?.signal }),
+		getShareAccess: (orgId, projectId, sessionId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares/access`, {
+				query: { sessionId: sessionId || undefined }, signal: o?.signal,
+			}),
+		getTeamShareAccess: (orgId, projectId, sessionId, teamId, o) =>
+			requestJson("GET", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares/access/teams/${seg(teamId)}`, {
+				query: { sessionId: sessionId || undefined }, signal: o?.signal,
+			}),
+		updateShareEntry: (orgId, projectId, grantId, body, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares/access/${seg(grantId)}`, { body, signal: o?.signal }),
+		revokeShareGrant: (orgId, projectId, grantId, o) =>
+			requestVoid("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares/grants/${seg(grantId)}/revoke`, { signal: o?.signal }),
 		listChatEvents: (orgId, sessionId, query, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/chat-events`, {
 				query: { after: query?.after, limit: query?.limit, types: query?.types?.length ? query.types.join(",") : undefined },
