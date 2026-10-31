@@ -2,9 +2,10 @@ import { expect, test } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { execFileSync } from "node:child_process";
+import { getHeapStatistics } from "node:v8";
 import { installFakeBridge } from "./support/fake-bridge";
 import type { performanceHarness } from "./performance/harness";
+import { sourceIdentity } from "./performance/source-identity";
 
 declare global {
 	interface Window {
@@ -19,6 +20,8 @@ test.describe("live renderer performance workloads", () => {
 	);
 	test.use({ viewport: { width: 1440, height: 1000 } });
 	for (const workload of [
+		"largeTurn",
+		"largeTurnDisclosure",
 		"events",
 		"streaming",
 		"markdownBlocks",
@@ -31,6 +34,8 @@ test.describe("live renderer performance workloads", () => {
 			await page.emulateMedia({ reducedMotion: "no-preference" });
 			await page.goto("/e2e/performance/harness.html");
 			await page.waitForFunction(() => Boolean(window.performanceHarness));
+			const source = sourceIdentity();
+			const hostBefore = { freeMemoryBytes: os.freemem(), loadAverage: os.loadavg() };
 			const result = await page.evaluate(
 				async (name): Promise<Record<string, unknown>> =>
 					await window.performanceHarness[name](),
@@ -38,13 +43,21 @@ test.describe("live renderer performance workloads", () => {
 			);
 			if ("exact" in result) expect(result.exact).toBe(true);
 			if ("textPreserved" in result) expect(result.textPreserved).toBe(true);
+			if ("collapsedBodiesMounted" in result) {
+				expect(result.collapsedBodiesMounted).toBe(false);
+				expect(result.missingOutputs).toBe(0);
+				expect(result.missingNotes).toBe(0);
+			}
 			if ("mountedTurns" in result) expect(result.mountedTurns).toBe(250);
 			const label = process.env.AO_PERF_LABEL ?? "sample";
+			const sourceAfter = sourceIdentity();
+			expect(sourceAfter.head, "HEAD changed during capture").toBe(source.head);
+			expect(sourceAfter.sourceSha256, "Measured source changed during capture").toBe(source.sourceSha256);
 			const record = {
+				recordVersion: 2,
 				label,
-				commit: execFileSync("git", ["rev-parse", "HEAD"], {
-					encoding: "utf8",
-				}).trim(),
+				commit: source.head,
+				source,
 				workload,
 				repeat: testInfo.repeatEachIndex,
 				browser: browser.version(),
@@ -54,6 +67,17 @@ test.describe("live renderer performance workloads", () => {
 				cpus: os.cpus().length,
 				cpuModel: os.cpus()[0]?.model,
 				totalMemoryBytes: os.totalmem(),
+				hostBefore,
+				hostAfter: { freeMemoryBytes: os.freemem(), loadAverage: os.loadavg() },
+				nodeHeapLimitBytes: getHeapStatistics().heap_size_limit,
+				playwrightWorkers: testInfo.config.workers,
+				browserEnvironment: await page.evaluate(() => ({
+					userAgent: navigator.userAgent,
+					hardwareConcurrency: navigator.hardwareConcurrency,
+					devicePixelRatio,
+					visibility: document.visibilityState,
+					reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+				})),
 				viewport: page.viewportSize(),
 				timestamp: new Date().toISOString(),
 				result,
