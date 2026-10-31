@@ -366,6 +366,7 @@
 	"browser.downloads.open": "Открыть {{file}}",
 	"browser.downloads.show": "Показать {{file}} в Проводнике",
 	"browser.downloads.remove": "Удалить {{file}} с компьютера",
+	"browser.downloads.removeHistory": "Удалить {{file}} из истории",
 	"browser.downloads.progressLabel": "Ход загрузки файла {{file}}",
 	"browser.downloads.showAll": "Показать все",
 	"browser.downloads.search": "Поиск в истории загрузок",
