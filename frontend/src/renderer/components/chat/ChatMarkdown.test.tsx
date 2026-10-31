@@ -5,11 +5,13 @@ import { aoBridge } from "../../lib/bridge";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
 import { useUiStore } from "../../stores/ui-store";
-import { ActivityTitle, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
+import { ActivityTitle, ArtifactPathCode, ChatLinkProvider, ChatMarkdown, ChatOpeningRef } from "./ChatMarkdown";
+import { WorkerUpdateRows } from "./WorkerUpdates";
 import { ChatImageSourceProvider } from "./chat-image-source";
 
 const sessionPreview = vi.hoisted(() => vi.fn());
 vi.mock("../SessionLinkPreviewCard", () => ({
+	ArtifactLinkPreviewCard: () => <div data-testid="artifact-link-preview" />,
 	SessionLinkPreviewCard: (props: unknown) => {
 		sessionPreview(props);
 		return <div data-testid="session-link-preview" />;
@@ -302,6 +304,8 @@ describe("ChatMarkdown", () => {
 		fireEvent.click(report);
 		fireEvent.click(report, { metaKey: true });
 		fireEvent.contextMenu(report);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Copy path"]);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
 		await userEvent.click(screen.getByRole("link", { name: "issue" }));
 		expect(onLinkOpen).toHaveBeenCalledExactlyOnceWith("https://example.com/i/1");
 		expect(openExternal).not.toHaveBeenCalled();
@@ -385,7 +389,7 @@ describe("ChatMarkdown", () => {
 		const link = screen.getByRole("link", { name: "final report" });
 
 		fireEvent.contextMenu(link);
-		await user.click(await screen.findByRole("menuitem", { name: "Open in Files" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Open in AO" }));
 
 		expect(onFileOpen).toHaveBeenCalledWith("reports/final.html");
 		expect(onLinkOpen).not.toHaveBeenCalled();
@@ -425,10 +429,61 @@ describe("ChatMarkdown", () => {
 		expect(onSessionLinkOpen).toHaveBeenCalledWith(href);
 	});
 
+	it("offers path actions on an absolute artifact reference while preserving its artifact link", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const open = vi.fn();
+		renderWithSessionLinkHandler("`/tmp/ao/artifacts/worker-1/plan.md`", open);
+		const link = screen.getByRole("link");
+		await userEvent.click(link);
+		expect(open).toHaveBeenCalledExactlyOnceWith("ao://sessions/project/worker-1/artifacts/plan.md");
+		fireEvent.contextMenu(link);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+		expect(copy).toHaveBeenCalledExactlyOnceWith("/tmp/ao/artifacts/worker-1/plan.md");
+		copy.mockRestore();
+	});
+
 	it("leaves inline code naming an unlisted artifact as plain code", () => {
 		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
 		renderWithSessionLinkHandler("`worker-1/other.md` and `/tmp/ao/artifacts/worker-2/plan.md`", vi.fn());
 		expect(screen.queryByRole("link")).not.toBeInTheDocument();
+	});
+
+	it.each(["text", "element"])("keeps an unlisted artifact's %s children renderable and copyable", async (kind) => {
+		linkSource.workspaces = [];
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		try {
+			render(<ArtifactPathCode text="/tmp/ao/artifacts/worker-1/plan.md">
+				{kind === "text" ? "plan.md" : <code>plan.md</code>}
+			</ArtifactPathCode>);
+			fireEvent.contextMenu(screen.getByText("plan.md"));
+			await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+			expect(copy).toHaveBeenCalledExactlyOnceWith("/tmp/ao/artifacts/worker-1/plan.md");
+		} finally {
+			copy.mockRestore();
+		}
+	});
+
+	it("keeps a worker report renderable when its artifact is removed from the catalog", async () => {
+		linkSource.workspaces = [{ id: "project", sessions: [{ id: "worker-1", artifactFiles: [{ path: "plan.md" }] }] }];
+		const copy = vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue(undefined);
+		const report = () => <ChatLinkProvider onSessionLinkOpen={vi.fn()}><WorkerUpdateRows updates={[{
+			key: "report-1", state: "done", name: "Worker", sessionId: "worker-1", projectId: "project",
+			body: "Finished planning\nartifact: plan.md", createdAt: "2026-10-28T12:00:00Z",
+		}]} /></ChatLinkProvider>;
+		try {
+			const view = render(report());
+			expect(screen.getByRole("link", { name: "plan.md" })).toHaveAttribute("href", "ao://sessions/project/worker-1/artifacts/plan.md");
+			linkSource.workspaces = [];
+			view.rerender(report());
+			expect(screen.getByTestId("worker-update")).toHaveTextContent("Finished planning");
+			expect(screen.queryByRole("link", { name: "plan.md" })).not.toBeInTheDocument();
+			fireEvent.contextMenu(screen.getByText("plan.md"));
+			await userEvent.click(screen.getByRole("menuitem", { name: "Copy path" }));
+			expect(copy).toHaveBeenCalledExactlyOnceWith("worker-1/plan.md");
+		} finally {
+			copy.mockRestore();
+		}
 	});
 
 	it("leaves malformed session-like text inert", () => {

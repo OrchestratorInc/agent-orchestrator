@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "Pfad kopieren",
+	"chat.path.revealInFinder": "Im Finder anzeigen",
+	"chat.path.revealInFileManager": "Im Dateimanager anzeigen",
+	"chat.path.openWith": "Mit {{editor}} öffnen",
+	"chat.path.actionFailed": "Die Pfadaktion konnte nicht ausgeführt werden",
 	"sideChat.closingTab": "Wird geschlossen",
 	"sideChat.closing": "Seitenchat wird geschlossen. Er verschwindet nach bestätigtem Herunterfahren.",
 	"sideChat.retryClose": "Schließen erneut versuchen",
@@ -917,7 +922,7 @@
 	"inspector.openInSystemBrowser": "Im Systembrowser öffnen",
 	"link.copy": "Link kopieren",
 	"link.openInAOBrowser": "Im AO-Browser öffnen",
-	"link.openInFiles": "In Dateien öffnen",
+	"link.openInAO": "In AO öffnen",
 	"link.openInExternalBrowser": "Im externen Browser öffnen",
 	"inspector.openInlineComments": "{{count}} offene Inline-Kommentare",
 	"inspector.requestRereviewPR": "Erneute PR-Review anfragen",

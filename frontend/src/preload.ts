@@ -36,6 +36,7 @@ import type {
 	EditorId,
 	EditorPreferenceState,
 	OpenSessionArtifactsInput,
+	ChatPathActionInput,
 	OpenSessionTargetInput,
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
@@ -417,6 +418,7 @@ const api = {
 		},
 	},
 	editorHandoff: {
+		pathAction: (input: ChatPathActionInput) => ipcRenderer.invoke("editorHandoff:pathAction", input) as Promise<void>,
 		getState: (sessionId: string, options?: EditorHandoffStateOptions) =>
 			ipcRenderer.invoke("editorHandoff:getState", sessionId, options) as Promise<EditorHandoffState>,
 		getEditors: () => ipcRenderer.invoke("editorHandoff:getEditors") as Promise<EditorPreferenceState>,

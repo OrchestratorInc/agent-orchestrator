@@ -1,4 +1,9 @@
 {
+	"chat.path.copy": "パスをコピー",
+	"chat.path.revealInFinder": "Finderで表示",
+	"chat.path.revealInFileManager": "ファイルマネージャーで表示",
+	"chat.path.openWith": "{{editor}}で開く",
+	"chat.path.actionFailed": "パスの操作を完了できませんでした",
 	"sideChat.closingTab": "終了中",
 	"sideChat.closing": "サイドチャットを閉じています。終了が確認されると消えます。",
 	"sideChat.retryClose": "閉じる操作を再試行",
@@ -917,7 +922,7 @@
 	"inspector.openInSystemBrowser": "システムブラウザで開く",
 	"link.copy": "リンクをコピー",
 	"link.openInAOBrowser": "AO ブラウザで開く",
-	"link.openInFiles": "ファイルで開く",
+	"link.openInAO": "AOで開く",
 	"link.openInExternalBrowser": "外部ブラウザで開く",
 	"inspector.openInlineComments": "未解決のインラインコメント {{count}} 件",
 	"inspector.requestRereviewPR": "PR の再レビューを依頼",
