@@ -1349,8 +1349,8 @@ main td, main th { vertical-align: middle !important; }
 
 /* ── Sidebar group-label spacing: match original gaps (26px before / 6px after) ── */
 @media (min-width: 1024px) {
-  nav#sidebar-content [class*="sidebar-title"] { margin-top: -1px !important; margin-bottom: -1.5px !important; }
+  nav#sidebar-content [class*="sidebar-title"] { margin-top: -1px !important; margin-bottom: -0.5px !important; }
 }
 @media (max-width: 1023px) {
-  nav#sidebar-content [class*="sidebar-title"] { margin-top: -1px !important; margin-bottom: -3.5px !important; }
+  .ao-dr-nav [class*="sidebar-title"] { margin-top: -1px !important; margin-bottom: -3.5px !important; }
 }
