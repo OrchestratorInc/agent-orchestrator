@@ -1761,6 +1761,26 @@ describe("SessionInspector Activity section", () => {
     expect(within(activityRow).getByText("Conflict")).toBeInTheDocument();
   });
 
+  it("ignores a conflict and changes requested left on a closed PR when the open PR is clean", () => {
+    renderWithQuery(
+      <SessionInspector
+        session={session(
+          [pr(5134, "closed", { mergeability: "conflicting", review: "changes_requested" }), pr(5135, "open", { mergeability: "mergeable" })],
+          {
+            status: "working",
+            activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" },
+          },
+        )}
+      />,
+    );
+
+    const activityRow = activitySection()
+      .getByText("Idle")
+      .closest("[data-testid='inspector-timeline-event']") as HTMLElement;
+    expect(within(activityRow).queryByText("Conflict")).not.toBeInTheDocument();
+    expect(within(activityRow).queryByText("Changes Requested")).not.toBeInTheDocument();
+  });
+
   it("timestamps the live Activity state so it participates in chronological ordering", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));

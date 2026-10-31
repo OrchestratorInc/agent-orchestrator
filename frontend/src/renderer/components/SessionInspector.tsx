@@ -1291,14 +1291,14 @@ function scmTimelineStates(session: WorkspaceSession): ScmTimelineState[] {
 	if (session.status === "commented") add("commented");
 	for (const pr of session.prs) {
 		if (open.has(pr) && pr.ci === "failing") add("ci_failed");
-		if (pr.review === "changes_requested") add("changes_requested");
+		if (open.has(pr) && pr.review === "changes_requested") add("changes_requested");
 		// Read the raw fact directly rather than session.status: status collapses
 		// to "working" while the agent is active, but unresolved comments from a
 		// non-blocking review must stay visible regardless of agent activity.
-		// Gated on the PR still being open so a stale comment on a merged/closed
-		// PR cannot keep the pill around.
+		// Gated on the PR still being open so a stale comment, review or conflict
+		// on a merged/closed PR cannot keep the pill around.
 		if (open.has(pr) && pr.reviewComments) add("commented");
-		if (pr.mergeability === "conflicting") add("conflict");
+		if (open.has(pr) && pr.mergeability === "conflicting") add("conflict");
 	}
 
 	return states;
