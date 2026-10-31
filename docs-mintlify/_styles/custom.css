@@ -1221,8 +1221,8 @@ nav#sidebar-content button svg[data-ao-chev] { transition: rotate 150ms ease; }
   button.ao-side-toggle svg { width: 18px !important; height: 18px !important; }
 }
 
-/* v36i: keep per-code-block Ask Assistant hidden for layout parity; toggle vertical offset */
-button[aria-label="Ask Assistant"] { display: none !important; }
+/* v36i: keep per-code-block Ask Assistant hidden for layout parity (FAB uses the aria-label); toggle vertical offset */
+button[id="ask-assistant-code-block-button"] { display: none !important; }
 @media (min-width: 1024px) {
   button.ao-side-toggle { margin-top: 4px !important; }
 }
@@ -1384,3 +1384,17 @@ main td, main th { vertical-align: middle !important; }
       it as an empty last line (+24px). Hide it to match the original. ── */
 .mdx-content .code-block code > span.line:last-child:empty,
 .mdx-content .code-block code > span.line:last-child:not(:has(*)) { display: none !important; }
+
+/* v37: wide bottom question bar replaced by the floating logo button (custom.js) */
+.chat-assistant-floating-input { display: none !important; }
+#ao-chat-fab {
+  position: fixed; right: 20px; bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  width: 52px; height: 52px; border-radius: 50%; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: #1a1a18; border: 1px solid var(--fd-border, #2a2a28);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); cursor: pointer; z-index: 30;
+}
+#ao-chat-fab img { width: 26px; height: 26px; }
+#ao-chat-fab:hover { background: #242422; }
+#ao-chat-fab:focus-visible { outline: 2px solid #fafaf8; outline-offset: 2px; }
+#ao-chat-fab[data-state="open"] { display: none; }
