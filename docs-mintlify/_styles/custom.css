@@ -1381,3 +1381,8 @@ main td, main th { vertical-align: middle !important; }
   content: ""; position: absolute; left: 0; top: 16px; bottom: 0;
   width: 1px; background: oklch(1 0 0 / 0.1);
 }
+
+/* ── Code blocks: fumadocs strips a fence's trailing newline; Mintlify renders
+      it as an empty last line (+24px). Hide it to match the original. ── */
+.mdx-content .code-block code > span.line:last-child:empty,
+.mdx-content .code-block code > span.line:last-child:not(:has(*)) { display: none !important; }
