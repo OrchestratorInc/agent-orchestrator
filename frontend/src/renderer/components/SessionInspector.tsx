@@ -1,5 +1,5 @@
 import { BrowserIcon } from "./icons";
-import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
+import { Bot, File, FileText, FolderClosed, MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -117,7 +117,7 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
 	{
@@ -145,6 +145,7 @@ const VIEW_DEFS: {
 		icon: <BrowserIcon aria-hidden="true" />,
 	},
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
+	{ id: "subagents", labelKey: "inspector.subagents", icon: <Bot aria-hidden="true" /> },
 	{
 		id: "files",
 		labelKey: "inspector.files",
@@ -182,6 +183,7 @@ export const SessionInspector = memo(function SessionInspector({
 	filesView,
 	browserView,
 	sideChatView,
+	subagentsView,
 	view: viewProp,
 	onViewChange,
 }: {
@@ -204,6 +206,8 @@ export const SessionInspector = memo(function SessionInspector({
 	filesView?: ReactNode;
 	browserView?: BrowserViewModel;
 	sideChatView?: ReactNode;
+	/** The chat's Subagents panel; the tab shows only while the chat has subagents to list. */
+	subagentsView?: ReactNode;
 	/** Controlled active tab. Omit to let the inspector own its own selection. */
 	view?: InspectorView;
 	onViewChange?: (view: InspectorView) => void;
@@ -258,13 +262,18 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
-	const availableViewDefs = onlyBrowser ? VIEW_DEFS.filter((entry) => entry.id === "browser")
+	// A browser-only inspector (the orchestrator's) still offers its chat's Subagents panel.
+	const availableViewDefs = onlyBrowser
+		? VIEW_DEFS.filter((entry) => entry.id === "browser" || (entry.id === "subagents" && subagentsView !== undefined))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
+			&& (entry.id !== "subagents" || subagentsView !== undefined)
 			// The tab is contextual: an artifact click opens it; leaving it hides it.
 			&& (entry.id !== "artifacts" || requestedView === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)));
-	const view: InspectorView = onlyBrowser ? "browser" : availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView)
+		? requestedView
+		: onlyBrowser ? "browser" : "summary";
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
@@ -295,6 +304,7 @@ export const SessionInspector = memo(function SessionInspector({
 		<div className="session-inspector contents">
 			<SessionInspectorShellView
 				sideChatView={sideChatView ?? <p className="p-4 text-xs text-muted-foreground">{t("sideChat.unavailable")}</p>}
+				subagentsView={subagentsView}
 				activeView={view}
 				ariaLabel={t("inspector.aria")}
 				artifactsView={

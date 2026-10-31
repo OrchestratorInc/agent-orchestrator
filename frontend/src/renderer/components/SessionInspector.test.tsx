@@ -396,6 +396,23 @@ describe("SessionInspector tabs", () => {
     expect(screen.getByRole("complementary", { name: "Session inspector" }).querySelector(".session-inspector__body--browser")).toBeInTheDocument();
   });
 
+  it("adds its chat's Subagents panel to an orchestrator's Browser-only inspector", () => {
+    const onViewChange = vi.fn();
+    renderWithQuery(
+      <SessionInspector
+        browserOnly
+        session={session([], { kind: "orchestrator" })}
+        subagentsView={<div data-testid="subagents-slot" />}
+        view="subagents"
+        onViewChange={onViewChange}
+      />,
+    );
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Browser", "Subagents"]);
+    expect(screen.getByRole("tab", { name: "Subagents" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("subagents-slot")).toBeInTheDocument();
+    expect(onViewChange).not.toHaveBeenCalled();
+  });
+
   it("gives the Browser viewport the full inspector body without the default content gutter", async () => {
     renderWithQuery(<SessionInspector session={session([])} />);
 
@@ -2073,6 +2090,23 @@ describe("SessionInspector tabs", () => {
 
     expect(await screen.findByText("Review controls")).toBeInTheDocument();
     expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
+  });
+
+  it("offers a Subagents tab after Side chat while the chat passes its panel", async () => {
+    mockCommonGets([], "", [reviewState(1, "needs_review")]);
+    renderWithQuery(
+      <SessionInspector
+        session={session([pr(1, "open")])}
+        sideChatView={<div />}
+        subagentsView={<div data-testid="subagents-slot" />}
+      />,
+    );
+    const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
+    expect(tabs).toEqual(["Summary", "Reviews", "Browser", "Side chat", "Subagents", "Files"]);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Subagents" }));
+
+    expect(screen.getByTestId("subagents-slot")).toBeInTheDocument();
   });
 
   it("keeps the Reviews tab available for draft PRs", async () => {
