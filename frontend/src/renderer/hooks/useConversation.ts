@@ -383,7 +383,7 @@ export interface ConversationQueryResult {
 
 async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation", {
-		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE } },
+		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE, compactDetails: "1", dedupeBodies: "1" } },
 	});
 	if (error) throw error;
 	return toSnapshot(data as WireSnapshot);
@@ -1992,7 +1992,7 @@ function toMessage(wire: WireMessage): ConversationMessage {
 	};
 }
 
-function toActivity(wire: WireActivity): ConversationActivity {
+export function toActivity(wire: WireActivity): ConversationActivity {
 	const detail = (wire.detail ?? {}) as Record<string, unknown>;
 	return {
 		kind: "activity",
@@ -2001,6 +2001,7 @@ function toActivity(wire: WireActivity): ConversationActivity {
 		sequence: wire.sequence,
 		revision: wire.revision,
 		activityKind: wire.activityKind as ActivityKind,
+		detailOmitted: wire.detailOmitted,
 		status: wire.status as ActivityStatus,
 		summary: wire.summary,
 		requestId: wire.requestId,

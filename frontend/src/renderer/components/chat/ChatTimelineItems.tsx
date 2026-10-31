@@ -1,3 +1,4 @@
+import { useActivityDetail, ActivityDetailStatus } from "../../hooks/useActivityDetail";
 import { AppLink } from "../AppLink";
 import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 /**
@@ -1427,12 +1428,15 @@ function AOActionRow({ activity }: { activity: ConversationActivity }) {
  * A `running` activity with no completion is a real terminal state here, not a
  * spinner that hangs forever — a provider can start a command and supersede it.
  */
-function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
+function GenericActivityRow({ activity: preview }: { activity: ConversationActivity }) {
 	// null means "nobody has decided", which is what lets a running command open
 	// itself and then close again once it settles. Once the user clicks, their
 	// choice sticks: auto-collapsing a log someone is reading is worse than leaving
 	// a finished row open.
 	const [override, setOverride] = useState<boolean | null>(null);
+	const open = override ?? (preview.status === "running" && Boolean(preview.detail?.output));
+	const loaded = useActivityDetail(preview, open);
+	const activity = loaded.activity;
 	const reducedMotion = useReducedMotion();
 	const Icon = activityIcon[activity.activityKind] ?? SquareTerminal;
 	const detail = activity.detail;
@@ -1444,6 +1448,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	const hasFileBody =
 		files.length > 1 || (files.length === 1 && Boolean(fileChangePatch(files[0])));
 	const hasBody = Boolean(
+		preview.detailOmitted ||
 		detail?.command ||
 		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
 	);
@@ -1463,10 +1468,6 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	const noticeDetail = noticeLabel ? retry?.detail : undefined;
 	const singleEdit = activity.activityKind === "file_change" && files.length === 1 ? files[0] : undefined;
 
-	// Live output is only live if it is on screen, so a command that is still
-	// running and already printing opens itself.
-	const streamingOutput = activity.status === "running" && Boolean(detail?.output);
-	const open = override ?? streamingOutput;
 
 	return (
 		<div
@@ -1581,7 +1582,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						{compactSummary &&
+						{loaded.pending ? <ActivityDetailStatus error={loaded.error} retry={loaded.retry} /> : compactSummary &&
 						activity.activityKind === "command" &&
 						(detail?.command || detail?.output || detail?.terminalInput) ? (
 							<CommandExploreBody activity={activity} />
@@ -2034,7 +2035,10 @@ function Patch({ patch, truncated }: { patch: string; truncated?: boolean }) {
  * while the model works and is replaced by the provider's settled summary when the
  * item completes, so one field is read either way.
  */
-function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
+function ReasoningBlock({ activity: preview }: { activity: ConversationActivity }) {
+	const loaded = useActivityDetail(preview, true);
+	const activity = loaded.activity;
+	if (loaded.pending) return <ActivityDetailStatus error={loaded.error} retry={loaded.retry} />;
 	const text = activity.detail?.text ?? activity.detail?.reason ?? "";
 	if (!text) return null;
 	const streaming = activity.status === "running";
@@ -2078,8 +2082,10 @@ function ReasoningBlock({ activity }: { activity: ConversationActivity }) {
  * cwd it appeared to run in did not exist. So the row names the server and the tool,
  * and opens onto the arguments and the answer rather than onto terminal output.
  */
-function McpToolRow({ activity }: { activity: ConversationActivity }) {
+function McpToolRow({ activity: preview }: { activity: ConversationActivity }) {
 	const [open, setOpen] = useState(false);
+	const loaded = useActivityDetail(preview, open);
+	const activity = loaded.activity;
 	const reducedMotion = useReducedMotion();
 	const detail = activity.detail;
 	const tool = detail?.toolName ?? activity.summary;
@@ -2087,6 +2093,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const sourceLabel = server ? `MCP · ${server}` : detail?.progress ? lastLine(detail.progress) : undefined;
 	const failed = activity.status === "failed" || detail?.success === false || Boolean(detail?.error);
 	const hasBody = Boolean(
+			preview.detailOmitted ||
 			detail?.arguments !== undefined ||
 			detail?.result !== undefined ||
 			detail?.content !== undefined ||
@@ -2148,7 +2155,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 						transition={{ duration: reducedMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
 						className="overflow-hidden rounded-lg"
 					>
-						<div className="flex flex-col gap-2 pb-2.5">
+						{loaded.pending ? <ActivityDetailStatus error={loaded.error} retry={loaded.retry} /> : <div className="flex flex-col gap-2 pb-2.5">
 					{detail?.error ? (
 						<p className="border border-destructive/30 bg-background px-2.5 py-1.5 text-xs leading-relaxed text-destructive">
 							{detail.error}
@@ -2171,7 +2178,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 							</pre>
 						</div>
 					) : null}
-						</div>
+						</div>}
 					</motion.div>
 				) : null}
 			</AnimatePresence>

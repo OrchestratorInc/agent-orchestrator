@@ -6689,6 +6689,28 @@ paths:
           type:
           - "null"
           - integer
+      - description: Return 128-byte UTF-8 previews for settled tool and reasoning
+          detail strings.
+        in: query
+        name: compactDetails
+        schema:
+          description: Return 128-byte UTF-8 previews for settled tool and reasoning
+            detail strings.
+          enum:
+          - "1"
+          type:
+          - "null"
+          - string
+      - description: Omit duplicate tool bodies with explicit source-field markers.
+        in: query
+        name: dedupeBodies
+        schema:
+          description: Omit duplicate tool bodies with explicit source-field markers.
+          enum:
+          - "1"
+          type:
+          - "null"
+          - string
       responses:
         "200":
           content:
@@ -6721,6 +6743,63 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Read a chat session's durable conversation
+      tags:
+      - conversations
+  /api/v1/sessions/{sessionId}/conversation/activities/{activityId}:
+    get:
+      operationId: getSessionConversationActivity
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      - in: path
+        name: activityId
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationActivityResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read one full activity in the active conversation, with duplicate bodies
+        omitted
       tags:
       - conversations
   /api/v1/sessions/{sessionId}/conversation/approvals/{requestId}/resolve:
@@ -16078,6 +16157,8 @@ components:
         detail:
           additionalProperties: {}
           type: object
+        detailOmitted:
+          type: boolean
         id:
           type: string
         kind:
