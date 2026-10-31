@@ -121,7 +121,11 @@ type handoffHarness struct {
 
 func newHandoffHarness(t *testing.T, agentHarness domain.AgentHarness) *handoffHarness {
 	t.Helper()
-	h := newHarnessForHarness(t, agentHarness)
+	return handoffHarnessFor(t, newHarnessForHarness(t, agentHarness), agentHarness)
+}
+
+func handoffHarnessFor(t *testing.T, h *harness, agentHarness domain.AgentHarness) *handoffHarness {
+	t.Helper()
 	provider, _ := domain.AgentAccountProviderFor(agentHarness)
 	if err := h.st.BindSessionAgentAccount(context.Background(), testSession, provider, handoffSource, h.now().Add(-time.Hour)); err != nil {
 		t.Fatal(err)
