@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -601,7 +600,8 @@ func ProviderCatalogFingerprint(ctx context.Context, binary, workingDir string, 
 // cheaper and more correct than asking twice.
 //
 // An error means the provider could not be asked. Callers must fall back to
-// their static list rather than presenting an empty picker.
+// their static list rather than presenting an empty picker. Its message is the
+// bare reason: the model catalog already names the agent and the step.
 func ProviderModels(ctx context.Context, binary, workingDir string, env map[string]string) ([]ports.AgentModelInfo, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, agentcreds.DefaultTimeout)
 	defer cancel()
@@ -621,14 +621,14 @@ func (e modelDiscoveryAuthError) Unwrap() error { return e.kind }
 
 func providerModelsFor(probeCtx context.Context, resolved claudeProviderContext) ([]ports.AgentModelInfo, error) {
 	if !resolved.providerOK {
-		return nil, errors.New("claude-code: model discovery: configured provider is unsupported")
+		return nil, errors.New("configured provider is unsupported")
 	}
 	// An expired stored login cannot list models until Claude Code renews it,
 	// and asking would only earn a 401 that reads like a sign-out.
 	if resolved.found && resolved.credential.ExpiredButRenewable(claudeNow()) {
 		return nil, modelDiscoveryAuthError{
 			kind:    ports.ErrAgentModelDiscoveryCredentialExpired,
-			message: "claude-code: model discovery: the saved Claude Code login token expired; Claude Code renews it the next time it runs",
+			message: "the saved Claude Code login token expired; Claude Code renews it the next time it runs",
 		}
 	}
 	result := agentcreds.Result{}
@@ -645,14 +645,14 @@ func providerModelsFor(probeCtx context.Context, resolved claudeProviderContext)
 		claudeAuthCache.put(result)
 	}
 	if result.State != agentcreds.StateValid && len(result.Models) == 0 {
-		message := fmt.Sprintf("claude-code: model discovery: %s", result.Detail)
+		message := result.Detail
 		if result.State == agentcreds.StateInvalid {
 			return nil, modelDiscoveryAuthError{kind: ports.ErrAgentModelDiscoveryCredentialRejected, message: message}
 		}
 		return nil, errors.New(message)
 	}
 	if len(result.Models) == 0 {
-		return nil, errors.New("claude-code: provider reported no Claude models")
+		return nil, errors.New("provider reported no Claude models")
 	}
 
 	models := make([]ports.AgentModelInfo, 0, len(result.Models))
