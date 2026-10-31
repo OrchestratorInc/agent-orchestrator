@@ -42,6 +42,58 @@ func (q *Queries) AdvanceAutomationSchedule(ctx context.Context, arg AdvanceAuto
 	return result.RowsAffected()
 }
 
+const automationSessionReadyToComplete = `-- name: AutomationSessionReadyToComplete :one
+SELECT EXISTS (
+    SELECT 1 FROM sessions s
+    WHERE s.id = ?1 AND s.kind = 'worker'
+      AND s.is_terminated = 0 AND s.activity_state = 'idle'
+      AND NOT EXISTS (
+          SELECT 1 FROM reports r
+          WHERE r.id = (SELECT id FROM reports WHERE session_id = s.id ORDER BY created_at DESC, rowid DESC LIMIT 1)
+            AND r.state IN ('needs_input', 'stuck')
+      )
+      AND NOT EXISTS (SELECT 1 FROM pr WHERE session_id = s.id AND pr_state IN ('open', 'draft'))
+      AND NOT EXISTS (
+          SELECT 1 FROM conversation_turns t
+          JOIN conversations c ON c.id = t.conversation_id
+          WHERE (t.handled_by_session_id = s.id OR c.session_id = s.id OR c.current_session_id = s.id)
+            AND t.state IN ('queued', 'running')
+      )
+      AND (
+          (s.session_mode = 'chat' AND (
+              SELECT t.state FROM conversation_turns t
+              JOIN conversations c ON c.id = t.conversation_id
+              WHERE t.handled_by_session_id = s.id AND c.scope = 'session'
+                AND t.rolled_back_at IS NULL AND t.promoted_to_turn_id IS NULL
+                AND t.branch_id = c.active_branch_id
+              ORDER BY t.requested_at DESC, t.rowid DESC LIMIT 1
+          ) = 'completed')
+          OR (s.session_mode = 'tui' AND EXISTS (
+              SELECT 1 FROM reports r
+              WHERE r.id = (SELECT id FROM reports WHERE session_id = s.id ORDER BY created_at DESC, rowid DESC LIMIT 1)
+                AND r.state = 'done' AND r.settlement_deadline IS NOT NULL
+                AND r.settlement_deadline <= ?2
+                AND r.created_at >= s.created_at
+                AND (s.latest_user_prompt_at IS NULL OR r.created_at >= s.latest_user_prompt_at)
+          ))
+      )
+)
+`
+
+type AutomationSessionReadyToCompleteParams struct {
+	SessionID domain.SessionID
+	Now       sql.NullTime
+}
+
+// Idle alone is not completion: a successful durable turn (Chat) or a settled
+// done report (TUI) is required, with no outstanding work or open PR.
+func (q *Queries) AutomationSessionReadyToComplete(ctx context.Context, arg AutomationSessionReadyToCompleteParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, automationSessionReadyToComplete, arg.SessionID, arg.Now)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const claimAutomationRun = `-- name: ClaimAutomationRun :execrows
 UPDATE automation_runs
 SET status = 'spawning', attempt_count = attempt_count + 1,
@@ -731,6 +783,26 @@ func (q *Queries) ReleaseAutomationRun(ctx context.Context, arg ReleaseAutomatio
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const supersedePendingAutomationRuns = `-- name: SupersedePendingAutomationRuns :exec
+UPDATE automation_runs
+SET status = 'failed', finished_at = ?1, updated_at = ?1,
+    claimed_at = NULL, lease_expires_at = NULL,
+    error_message = 'Superseded by a newer scheduled occurrence'
+WHERE status = 'pending' AND scheduled_for <= ?1
+  AND EXISTS (
+      SELECT 1 FROM automation_runs newer
+      WHERE newer.automation_id = automation_runs.automation_id
+        AND newer.scheduled_for > automation_runs.scheduled_for
+        AND newer.scheduled_for <= ?1
+  )
+`
+
+// Preserve stale queued occurrences in history, without replaying obsolete work.
+func (q *Queries) SupersedePendingAutomationRuns(ctx context.Context, now sql.NullTime) error {
+	_, err := q.db.ExecContext(ctx, supersedePendingAutomationRuns, now)
+	return err
 }
 
 const updateAutomation = `-- name: UpdateAutomation :execrows
