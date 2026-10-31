@@ -6431,6 +6431,7 @@ export interface components {
             secure: boolean;
         };
         MobileStatusResponse: {
+            accountLinked: boolean;
             browserRemoteAccess: boolean;
             enabled: boolean;
             endpoints: components["schemas"]["MobileEndpoint"][];

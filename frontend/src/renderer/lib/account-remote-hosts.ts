@@ -9,13 +9,14 @@ export class AccountHostSyncError extends Error {
 	}
 }
 
-async function request(baseUrl: string, method: string, path: string, body?: unknown, timeoutMs = 10_000): Promise<Response> {
+// timeoutMs null waits as long as AO Cloud takes, as fetch does.
+async function request(baseUrl: string, method: string, path: string, body?: unknown, timeoutMs: number | null = 10_000): Promise<Response> {
 	const response = await cloudCpFetch(`${baseUrl.replace(/\/+$/, "")}/api/cloud/v1/me/hosts${path}`, {
 		method,
 		headers: { Authorization: "Bearer delegated-to-main-process", ...(body ? { "Content-Type": "application/json" } : {}) },
 		body: body ? JSON.stringify(body) : undefined,
 		cache: "no-store",
-		signal: AbortSignal.timeout(timeoutMs),
+		signal: timeoutMs === null ? undefined : AbortSignal.timeout(timeoutMs),
 	});
 	if (!response.ok) throw new AccountHostSyncError(`AO Cloud host sync failed (${response.status}).`, response.status);
 	return response;
@@ -37,15 +38,15 @@ export async function listAccountRemoteHosts(baseUrl: string): Promise<AccountRe
 export async function saveAccountRemoteHost(baseUrl: string, host: Omit<AccountRemoteHost, "url"> & { url?: string }): Promise<void> {
 	// AO Cloud may first make the machine's tunnel and DNS record, or delete a
 	// standing tunnel a new token retires, with or without a url; either can
-	// take up to a minute. Giving up sooner would report a save that went
-	// through as failed.
+	// take more than a minute. No limit: the main process finishes the request
+	// anyway, so giving up would report a save that went through as failed.
 	await request(baseUrl, "PUT", `/${encodeURIComponent(host.hostId)}`, {
 		label: host.label, url: host.url, token: host.token,
-	}, 75_000);
+	}, null);
 }
 
 export async function deleteAccountRemoteHost(baseUrl: string, hostId: string): Promise<void> {
 	// The removal deletes the machine's tunnel first, after any write to it
 	// still running, which can take as long as a save without a url.
-	await request(baseUrl, "DELETE", `/${encodeURIComponent(hostId)}`, undefined, 75_000);
+	await request(baseUrl, "DELETE", `/${encodeURIComponent(hostId)}`, undefined, null);
 }

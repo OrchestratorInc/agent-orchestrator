@@ -365,6 +365,35 @@ func TestTunnelRunnerBacksOffRepairsThatDidNotHelp(t *testing.T) {
 	}
 }
 
+// A connector that registers and soon dies keeps the backoff it had, so it
+// cannot ask for a replacement every repairSpacing.
+func TestTunnelRunnerKeepsTheBackoffForAConnectorThatServedBriefly(t *testing.T) {
+	_, src := newFixedSource(t)
+	r := namedRunner(t, exitingCloudflared(t, registeredLine), src)
+	r.unhelped, r.repairedAt = 2, time.Now().Add(-5*time.Minute) // the wait is 8 minutes
+	if err := r.runOnce(context.Background()); err == nil || r.repair || r.unhelped != 2 {
+		t.Fatalf("runOnce = %v, repair %v, unhelped %d; want no repair within 8 minutes", err, r.repair, r.unhelped)
+	}
+}
+
+// A quick tunnel standing in while AO Cloud cannot replace the fixed one
+// shows why it stopped, rather than starting for as long as AO Cloud fails.
+func TestTunnelRunnerShowsAStandInQuickTunnelsFailure(t *testing.T) {
+	cloud, src := newFixedSource(t)
+	knownTunnel(t, cloud, src)
+	cloud.mu.Lock()
+	cloud.repairStatus = http.StatusBadGateway
+	cloud.mu.Unlock()
+	r := namedRunner(t, exitingCloudflared(t, "connector crashed"), src)
+	r.repair = true
+	if err := r.runOnce(context.Background()); err == nil || !r.repair {
+		t.Fatalf("runOnce = %v, repair %v; want the repair still owed", err, r.repair)
+	}
+	if snap := r.Runtime.Snapshot(); snap.Running || snap.LastError == "" {
+		t.Fatalf("status = %+v, want the failure shown", snap)
+	}
+}
+
 // While a fixed tunnel serves, an answer AO Cloud gave, such as 429, waits for
 // the next check: only a link on its way or an unreachable AO Cloud is asked
 // again at once.

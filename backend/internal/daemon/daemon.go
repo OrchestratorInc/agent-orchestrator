@@ -961,13 +961,17 @@ func Run(buildVersion string) error {
 		return mobilebridge.NewManagedTunnel(deps)
 	}
 	// Looked up again whenever the bridge is enabled, so a cloudflared installed
-	// since boot is picked up without restarting AO. Finding none starts AO's
-	// own pinned download; the connector starts once it lands.
+	// since boot is picked up without restarting AO. Finding none on a machine
+	// an AO account links starts AO's own pinned download, and the connector
+	// starts once it lands. Any other machine waits for the desktop's Install,
+	// as before fixed addresses.
 	bs.ConnectorInstalling = systemInstall.CloudflaredInstalling
 	bs.ResolveTunnel = func() controllers.TunnelController {
 		res := mobilebridge.ResolveCloudflared(mobilebridge.LocalCloudflaredLookup(cfg.DataDir, systeminstall.PinnedCloudflared))
 		if res.NeedsInstall {
-			systemInstall.DownloadCloudflaredInBackground(bs.ConnectorInstalled)
+			if st, err := mobilebridge.Load(bs.ConfigPath); err == nil && st.AccountTokenHash != "" {
+				systemInstall.DownloadCloudflaredInBackground(bs.ConnectorInstalled)
+			}
 			return nil
 		}
 		return managedTunnel(res)

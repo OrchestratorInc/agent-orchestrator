@@ -18393,6 +18393,8 @@ components:
       type: object
     MobileStatusResponse:
       properties:
+        accountLinked:
+          type: boolean
         browserRemoteAccess:
           type: boolean
         enabled:
@@ -18425,6 +18427,7 @@ components:
           type: string
       required:
       - enabled
+      - accountLinked
       - browserRemoteAccess
       - loopbackOnly
       - noPublicTunnel

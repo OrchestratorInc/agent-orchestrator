@@ -338,6 +338,7 @@ func (b *BridgeService) Status() MobileStatusResponse {
 	}
 	res := MobileStatusResponse{
 		Enabled:             enabled,
+		AccountLinked:       st.AccountTokenHash != "",
 		LoopbackOnly:        st.LoopbackOnly,
 		NoPublicTunnel:      st.NoPublicTunnel,
 		Host:                first(lan),

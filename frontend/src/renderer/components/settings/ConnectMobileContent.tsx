@@ -222,6 +222,8 @@ const ICON_ACTION_CLASS =
 
 interface MobileStatus {
 	enabled: boolean;
+	/** An AO account holds this machine's account token, listed or not. */
+	accountLinked?: boolean;
 	/** User intent, independent of whether cloudflared is installed or running. */
 	noPublicTunnel?: boolean;
 	browserRemoteAccess?: boolean;
@@ -406,7 +408,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 			},
 		);
 	};
-	/** Links this computer when signed in, before its tunnel starts, so the code carries its fixed address and stays valid after restarts. */
+	/** Links this computer when signed in, then starts remote access, which moves a running connector to the fixed address the link gave it, so the code stays valid after restarts. */
 	const linkAndStartRemoteAccess = async (password: string, hostId: string) => {
 		const { added } = await linkIfSignedIn(password, hostId);
 		const started = await apiClient.POST("/api/v1/mobile/remote-access");
@@ -460,14 +462,14 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 	const enable = useMutation({
 		mutationFn: async () => {
-			if (!signedIn) {
-				const { data, error } = await apiClient.POST("/api/v1/mobile/enable");
-				if (error) throw new Error(apiErrorMessage(error));
-				return data;
-			}
-			const { data, error } = await apiClient.POST("/api/v1/mobile/enable-lan-only");
+			// Signed in or not, it starts as before fixed addresses: an app that
+			// quits while the link runs leaves remote access on its quick tunnel,
+			// not a computer that only serves this network after a restart. The
+			// link usually lands before the quick tunnel's address is advertised.
+			const { data, error } = await apiClient.POST("/api/v1/mobile/enable");
 			if (error) throw new Error(apiErrorMessage(error));
-			invalidate(); // the LAN code shows while the computer is linked
+			if (!signedIn) return data;
+			invalidate(); // the code shows while the computer is linked
 			return linkAndStartRemoteAccess(data?.password ?? "", data?.hostId ?? "");
 		},
 		// The first call can turn the bridge on before the second fails, so read back what is actually on.

@@ -8,8 +8,8 @@ import { AccountHostSyncError, deleteAccountRemoteHost } from "../../lib/account
 import { linkThisComputer } from "../../lib/link-this-computer";
 
 // Remote access away from home needs sign-in. The daemon fake is just enough
-// to start the bridge: enable-lan-only turns it on without a tunnel, and
-// remote-access asks for one.
+// to start the bridge: enable turns it on with its tunnel, and remote-access
+// asks for one.
 const fake = vi.hoisted(() => ({
 	signedIn: false,
 	signIn: vi.fn(),
@@ -63,16 +63,10 @@ vi.mock("../../lib/api-client", () => ({
 					],
 				});
 			}
-			if (path === "/api/v1/mobile/enable-lan-only") {
-				Object.assign(fake.status, {
-					enabled: true, noPublicTunnel: true, password: "pw-1",
-					endpoints: [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }],
-				});
-			}
 			if (path === "/api/v1/mobile/remote-access") {
 				if (fake.failRemoteAccess) return { error: { error: { message: "connector failed" } } };
 				fake.status.noPublicTunnel = false;
-				if (fake.tunnelHost) fake.status.endpoints.push({ kind: "tunnel", host: fake.tunnelHost, port: 443, secure: true });
+				if (fake.tunnelHost && !fake.status.endpoints.some((e) => e.kind === "tunnel")) fake.status.endpoints.push({ kind: "tunnel", host: fake.tunnelHost, port: 443, secure: true });
 			}
 			if (path === "/api/v1/mobile/regenerate") fake.status.password = "pw-2";
 			return { data: structuredClone(fake.status) };
@@ -117,12 +111,13 @@ test("a signed-out computer pairs with a quick tunnel, as before, and hears what
 	expect(linkThisComputer).not.toHaveBeenCalled();
 });
 
-test("a signed-in computer is linked before its tunnel starts", async () => {
+test("a signed-in computer starts as signed out, then is linked and asks for its fixed address", async () => {
 	fake.signedIn = true;
 	renderContent();
 	await userEvent.click(await screen.findByRole("button", { name: "Generate" }));
 
-	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/enable-lan-only", "/api/v1/mobile/remote-access"]));
+	// enable first: an app that quits during the link leaves the quick tunnel, not a LAN-only computer.
+	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/enable", "/api/v1/mobile/remote-access"]));
 	expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-1", undefined);
 	expect(vi.mocked(linkThisComputer).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(apiClient.POST).mock.invocationCallOrder[1]);
 	expect(screen.queryByTestId("mobile-sign-in-hint")).toBeNull();

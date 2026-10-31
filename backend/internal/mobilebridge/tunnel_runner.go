@@ -192,6 +192,7 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		return notStarted(fmt.Errorf("start cloudflared: %w", err))
 	}
 	t.Runtime.Started()
+	started := time.Now()
 	pidOwner := newTunnelPIDOwner(t.PIDPath)
 
 	// Record the pid before anything can go wrong, so a daemon that dies in the
@@ -260,9 +261,14 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 		t.repair, t.repairedAt = false, time.Now()
 		t.unhelped++
 	}
-	// A tunnel that served is not owed the replacement asked for before.
+	// A tunnel that served is not owed the replacement asked for before. Only
+	// one that stayed up starts the backoff over: a connector that connects
+	// and soon dies would otherwise ask for a replacement every repairSpacing.
 	if health != nil && health.servedOnce() {
-		t.repair, t.unhelped = false, 0
+		t.repair = false
+		if time.Since(started) >= stableTunnelRun {
+			t.unhelped = 0
+		}
 	}
 	// A fixed connector that stopped serving, refused, unconnected or gone,
 	// gets a replacement tunnel at the same address, at most every
@@ -286,9 +292,11 @@ func (t *TunnelRunner) runOnce(ctx context.Context) error {
 	case fixed && ctx.Err() == nil:
 		replace() // exited by itself
 	}
-	if ctx.Err() == nil && (errors.Is(waitErr, errFixedTunnelReady) || errors.Is(waitErr, errFixedTunnelChanged) || t.repair) {
-		// A planned restart, or one onto a replacement tunnel, reads as
-		// starting, not failed: the next connector follows.
+	if ctx.Err() == nil && (errors.Is(waitErr, errFixedTunnelReady) || errors.Is(waitErr, errFixedTunnelChanged) || (fixed && t.repair)) {
+		// A planned restart, or a fixed connector's onto a replacement
+		// tunnel, reads as starting, not failed: the next connector follows.
+		// A quick tunnel standing in until AO Cloud can make one shows its
+		// failures.
 		t.Runtime.Started()
 	} else {
 		t.Runtime.Exited(waitErr)

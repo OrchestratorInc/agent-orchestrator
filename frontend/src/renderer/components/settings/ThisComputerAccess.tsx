@@ -79,12 +79,14 @@ export function ThisComputerAccess() {
 		try {
 			// A running bridge keeps its password, so a phone paired over Connect Mobile stays paired.
 			let password = before.password ?? "";
+			// Started with its tunnel, as before fixed addresses: an app that quits
+			// while the link runs leaves remote access on, not a LAN-only computer.
 			if (!before.enabled) {
-				const started = await apiClient.POST("/api/v1/mobile/enable-lan-only");
+				const started = await apiClient.POST("/api/v1/mobile/enable");
 				if (started.error || !started.data) throw new Error(apiErrorMessage(started.error));
 				password = started.data.password ?? "";
 			}
-			// Linked before the tunnel starts, so the tunnel is this computer's fixed address. When
+			// remote-access then moves the tunnel to the fixed address the link gave this computer. When
 			// AO Cloud cannot give it one, it is listed at the quick tunnel's address below, as before.
 			({ hostId, added } = await linkThisComputer(cloudBaseUrl, accountId, before.hostId ?? "", password).catch(
 				() => ({ hostId: "", added: false }),

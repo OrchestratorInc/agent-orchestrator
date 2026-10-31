@@ -86,6 +86,8 @@ const fake = vi.hoisted(() => {
 				return { data: snapshot() };
 			case "/api/v1/mobile/remote-access":
 				if (daemon.enabled) daemon.noPublicTunnel = false;
+				// A running connector moves to the fixed address a link just gave it.
+				if (daemon.linked && cloud.hosts.has(HOST_ID) && daemon.tunnelHost !== FIXED) daemon.tunnelHost = "";
 				return { data: snapshot() };
 			case "/api/v1/mobile/enable-lan-only":
 				daemon.tunnelHost = "";
@@ -202,7 +204,7 @@ afterEach(() => {
 	fake.computerName = "Dhruv’s Mac mini";
 });
 
-it("links this computer before its tunnel starts, so the tunnel is its fixed address", async () => {
+it("links this computer once remote access is on, and its tunnel moves to its fixed address", async () => {
 	renderAccess();
 	const toggle = await readySwitch();
 	expect(toggle).toHaveAttribute("aria-checked", "false");
@@ -215,7 +217,7 @@ it("links this computer before its tunnel starts, so the tunnel is its fixed add
 	expect(fake.daemon.tunnelHost).toBe(fake.FIXED);
 	expect(fake.tokenRequests).toEqual([{ authorization: "Bearer pw-1", account: "user_01JAO" }]);
 	expect(fake.log).toEqual([
-		"/api/v1/mobile/enable-lan-only",
+		"/api/v1/mobile/enable",
 		"/api/v1/remote-host/account-token",
 		`cloud PUT ${fake.HOST_ID}`,
 		"/api/v1/mobile/remote-access",
@@ -245,7 +247,7 @@ it("links at the quick tunnel's address when AO Cloud has no fixed addresses", a
 	// No address-free link is tried first: its token would be issued for a
 	// listing AO Cloud refuses.
 	expect(fake.log).toEqual([
-		"/api/v1/mobile/enable-lan-only",
+		"/api/v1/mobile/enable",
 		"/api/v1/mobile/remote-access",
 		"/api/v1/remote-host/account-token",
 		`cloud PUT ${fake.HOST_ID}`,
