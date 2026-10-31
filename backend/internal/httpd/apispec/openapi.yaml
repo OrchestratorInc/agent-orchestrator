@@ -19855,6 +19855,7 @@ components:
         state:
           enum:
           - unknown
+          - none
           - pending
           - passing
           - failing
@@ -19878,6 +19879,7 @@ components:
         ci:
           enum:
           - unknown
+          - none
           - pending
           - passing
           - failing

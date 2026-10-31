@@ -7016,7 +7016,7 @@ export interface components {
             autoInjectCI: boolean;
             failingChecks: components["schemas"]["SessionPRFailingCheck"][];
             /** @enum {string} */
-            state: "unknown" | "pending" | "passing" | "failing";
+            state: "unknown" | "none" | "pending" | "passing" | "failing";
         };
         SessionPRConflictFile: {
             path: string;
@@ -7024,7 +7024,7 @@ export interface components {
         };
         SessionPRFacts: {
             /** @enum {string} */
-            ci: "unknown" | "pending" | "passing" | "failing";
+            ci: "unknown" | "none" | "pending" | "passing" | "failing";
             /** @enum {string} */
             mergeability: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
             number: number;
