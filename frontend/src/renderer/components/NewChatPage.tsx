@@ -263,9 +263,14 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			const settings = saved?.settings ?? barRef.current;
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
-			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
+			// The daemon hashes the prompt and display name under this request id, so a
+			// retry must send exactly what the first attempt did. After a reload the
+			// report request is gone from memory; the saved send carries it.
 			const report = reportRequest();
-			const sessionId = await launch.launch(withReportPrompt(report, text), { clientRequestId: clientMessageId, replay, attachments, displayName: report?.displayName });
+			const prompt = saved?.prompt ?? withReportPrompt(report, text);
+			const displayName = saved ? saved.displayName : report?.displayName;
+			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings, prompt, displayName });
+			const sessionId = await launch.launch(prompt, { clientRequestId: clientMessageId, replay, attachments, displayName });
 			consumeReportRequest(report);
 			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
@@ -496,7 +501,15 @@ function sendIsUncertain(error: unknown): boolean {
 	return error.name !== "TaskCreateError";
 }
 
-type PendingLaunch = { clientMessageId: string; projectId: string; replay: LaunchReplay; settings: LaunchSettings };
+type PendingLaunch = {
+	clientMessageId: string;
+	projectId: string;
+	replay: LaunchReplay;
+	settings: LaunchSettings;
+	/** The full prompt sent (report instructions plus typed text), so a retry repeats it byte for byte. */
+	prompt?: string;
+	displayName?: string;
+};
 const PENDING_LAUNCH_KEY = "ao.newTask.pendingLaunch.v1";
 
 function readPendingLaunches(): Record<string, PendingLaunch> {
