@@ -10,7 +10,12 @@ import { cloudSessionsQueryKey } from "../../hooks/useWorkspaceQuery";
 import { appI18n } from "../../i18n";
 import type { CloudCpClient, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
 import { cloudStartupProblem, isWorkspaceStartupError, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
+import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { reportPlanRefusal } from "../../lib/cloud-telemetry";
+import { useCloudBilling } from "../../hooks/useCloudBilling";
+import { useUiStore } from "../../stores/ui-store";
+import { ComposerErrorNotice } from "./AgentSwitchPicker";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { ApprovalMode, ChatConfigOption, ConversationActivity, ConversationItem, ConversationMessage, ConversationSnapshot, ConversationTurn, DiffFile, FileChangeFile, SystemEventDetail, TurnSettings } from "../../types/conversation";
@@ -179,6 +184,63 @@ export async function loadCloudChatEvents(
 		if (page.nextAfter <= after) throw new Error("Cloud event cursor did not advance.");
 		after = page.nextAfter;
 	}
+}
+
+const PLAN_REFUSAL_CODE_ALTERNATION = [...PLAN_REFUSAL_CODES].join("|");
+// The two shapes a control plane refusal reaches a tool's output in: the code in
+// parentheses after its message, or a JSON `code` field. A bare code is not
+// enough, since a failing test or grep prints it without being refused.
+const PLAN_REFUSAL_PATTERN = new RegExp(
+	`\\((${PLAN_REFUSAL_CODE_ALTERNATION})\\)|"code"\\s*:\\s*"(${PLAN_REFUSAL_CODE_ALTERNATION})"`,
+);
+
+/** A command or MCP tool that failed, by the same rule the timeline rows use. */
+function failedTool(item: ConversationItem): item is ConversationItem & { kind: "activity" } {
+	if (item.kind !== "activity") return false;
+	if (item.activityKind === "command") return item.status === "failed";
+	if (item.activityKind !== "mcp_tool") return false;
+	return item.status === "failed" || item.detail?.success === false || Boolean(item.detail?.error);
+}
+
+/**
+ * The plan refusal code a failed tool reported, if any. An agent's own call to
+ * the control plane (an orchestrator spawning a worker) is refused inside the
+ * sandbox, so the tool's output is the only place this desktop sees it. A
+ * command reports it in its output, an MCP tool in its error.
+ */
+export function planRefusalCode(item: ConversationItem): string | undefined {
+	if (!failedTool(item)) return undefined;
+	const text = [item.detail?.error, item.detail?.output].filter((part): part is string => typeof part === "string").join("\n");
+	const match = PLAN_REFUSAL_PATTERN.exec(text);
+	return match?.[1] ?? match?.[2];
+}
+
+/**
+ * Why the agent's request was refused, with Upgrade for an org that can buy a
+ * plan. A shared session runs on its owner's plan, not the viewer's org, so a
+ * guest sees neither this org's plan nor a link to its billing.
+ */
+function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: boolean; onDismiss: () => void }) {
+	const { data, offering } = useCloudBilling();
+	const plan = shared ? undefined : data?.limits?.plan ?? data?.plan;
+	const reason = appI18n.t(code.endsWith("_SLOTS_FULL") ? "cloud.planLimit.slotsFull" : "cloud.planLimit.refused");
+	const onPlan = plan ? appI18n.t("cloud.planLimit.onPlan", { plan: plan.charAt(0).toUpperCase() + plan.slice(1) }) : undefined;
+	return (
+		<ComposerErrorNotice
+			title={appI18n.t("cloud.planLimit.title")}
+			message={<>{reason}{onPlan && <span className="block">{onPlan}</span>}</>}
+			onDismiss={onDismiss}
+			action={!shared && offering.selfServeBilling && offering.canManageBilling ? (
+				<button
+					type="button"
+					className="mt-1 font-medium text-foreground underline underline-offset-2 hover:decoration-dashed"
+					onClick={() => useUiStore.getState().openGlobalSettings("billing")}
+				>
+					{appI18n.t("cloud.planLimit.upgrade")}
+				</button>
+			) : <p className="text-muted-foreground">{appI18n.t(shared ? "cloud.planLimit.contactOwner" : "cloud.planLimit.contactAdmin")}</p>}
+		/>
+	);
 }
 
 function cloudTurnDiff(patch: string): (DiffFile & { patch: string })[] {
@@ -975,6 +1037,35 @@ export function CloudSessionChatSurface({
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...settings, approvalMode: shownApprovalMode } };
 	}, [eventsQuery.data, me, session, settings, shownApprovalMode, startFailed, startStopped]);
+	// Failed tools present when this chat opened are history; one that fails
+	// with a plan refusal while it is open explains the limit above the composer.
+	const refusalKey = `${cloud?.orgId ?? ""}:${session.id}`;
+	const refusalBaseline = useRef<{ key: string; openedAt: number; seen?: Set<string> }>(undefined);
+	const [planRefusal, setPlanRefusal] = useState<{ key: string; code: string }>();
+	useEffect(() => {
+		const key = refusalKey;
+		if (refusalBaseline.current?.key !== key) {
+			refusalBaseline.current = { key, openedAt: Date.now() };
+			setPlanRefusal(undefined);
+		}
+		const baseline = refusalBaseline.current;
+		// Events cached from an earlier opening are history too, until refetched.
+		if (eventsQuery.dataUpdatedAt < baseline.openedAt) return;
+		const failed = snapshot.items.filter(failedTool);
+		if (!baseline.seen) {
+			baseline.seen = new Set(failed.map((item) => item.id));
+			return;
+		}
+		let code: string | undefined;
+		for (const item of failed) {
+			if (baseline.seen.has(item.id)) continue;
+			baseline.seen.add(item.id);
+			code ??= planRefusalCode(item);
+		}
+		if (!code) return;
+		setPlanRefusal({ key, code });
+		reportPlanRefusal(code, false, "chat");
+	}, [eventsQuery.dataUpdatedAt, refusalKey, snapshot]);
 	// While Setup runs, or once the checkout, Setup or the agent's start failed,
 	// the session reads as a local start does: the startup checklist in place of a
 	// working timer, and messages that send in order once the agent starts.
@@ -1115,7 +1206,12 @@ export function CloudSessionChatSurface({
 							: modelsError
 			}
 			headerActions={headerActions}
-			composerNotice={live ? <SharedComposerNotice live={live} lease={lease} userId={me} /> : undefined}
+			composerNotice={planRefusal?.key === refusalKey || live ? (
+				<>
+					{planRefusal?.key === refusalKey && <PlanLimitNotice code={planRefusal.code} shared={cloud?.shared === true} onDismiss={() => setPlanRefusal(undefined)} />}
+					{live && <SharedComposerNotice live={live} lease={lease} userId={me} />}
+				</>
+			) : undefined}
 			composerLockedPlaceholder={readOnly
 				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")
 				// The attached notice already names the writer and the place in line.
