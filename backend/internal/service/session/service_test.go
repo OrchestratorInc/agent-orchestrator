@@ -214,7 +214,7 @@ func TestInterruptedChatSessionShowsInterruptedOnTheBoard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Awaiting PR"}
+	want := map[domain.SessionID]domain.DisplayStatus{"mer-1": "Interrupted", "mer-2": "Idle"}
 	for _, sess := range list {
 		if sess.KanbanColumn != "building" || sess.DisplayStatus != want[sess.ID] {
 			t.Fatalf("list %s = %q/%q, want building/%q", sess.ID, sess.KanbanColumn, sess.DisplayStatus, want[sess.ID])
@@ -5837,8 +5837,8 @@ func TestToSessionWithFactsCanonicalAliasRunSupersedesOlderAliasRun(t *testing.T
 	if sess.KanbanColumn != "needs_review" {
 		t.Fatalf("column = %q, want needs_review", sess.KanbanColumn)
 	}
-	if sess.DisplayStatus != "Needs human review" {
-		t.Fatalf("displayStatus = %q, want Needs human review", sess.DisplayStatus)
+	if sess.DisplayStatus != "Awaiting review" {
+		t.Fatalf("displayStatus = %q, want Awaiting review", sess.DisplayStatus)
 	}
 }
 

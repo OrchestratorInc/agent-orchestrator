@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -147,11 +148,27 @@ func TestSessionListDerivesDisplayStatus(t *testing.T) {
 			want:   contract.DisplayReviewing,
 		},
 		{
-			name:   "a cancelled pass leaves the review pending",
+			name:   "a cancelled pass is reported as cancelled",
 			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer", AutoReviewEnabled: true},
 			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
 			runs:   []domain.CurrentHeadReviewRun{{PRURL: "pr1", Status: domain.ReviewRunCancelled}},
-			want:   contract.DisplayReviewPending,
+			want:   contract.DisplayReviewCancelled,
+		},
+		{
+			name:   "a failed pass with retries left is retrying",
+			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer", AutoReviewEnabled: true},
+			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
+			runs:   []domain.CurrentHeadReviewRun{{PRURL: "pr1", Status: domain.ReviewRunFailed, FailedAutoRuns: 1}},
+			want:   contract.DisplayRetryingReview,
+		},
+		{
+			name:   "a failed pass at the retry limit has failed",
+			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer", AutoReviewEnabled: true},
+			pr:     &domain.PRFacts{URL: "pr1", HeadSHA: "head1"},
+			runs: []domain.CurrentHeadReviewRun{{
+				PRURL: "pr1", Status: domain.ReviewRunFailed, FailedAutoRuns: domain.AutoReviewFailedRetryLimit,
+			}},
+			want: contract.DisplayReviewFailed,
 		},
 		{
 			name: "failing checks on the current head are being fixed",
@@ -339,8 +356,71 @@ func TestSessionGetUsesLatestCurrentHeadRunPerHarness(t *testing.T) {
 	if got.KanbanColumn != domain.KanbanNeedsReview {
 		t.Fatalf("kanban column = %q, want %q after approved rerun on same head", got.KanbanColumn, domain.KanbanNeedsReview)
 	}
-	if got.DisplayStatus != contract.DisplayNeedsHumanReview {
-		t.Fatalf("display status = %q, want %q after approved rerun on same head", got.DisplayStatus, contract.DisplayNeedsHumanReview)
+	if got.DisplayStatus != contract.DisplayAwaitingReview {
+		t.Fatalf("display status = %q, want %q after approved rerun on same head", got.DisplayStatus, contract.DisplayAwaitingReview)
+	}
+}
+
+// The store counts every failed auto pass on the current head, not just the
+// latest one per harness, so the board knows when auto review stops retrying.
+func TestSessionGetCountsFailedAutoReviewPassesOnTheCurrentHead(t *testing.T) {
+	st := newSQLiteKanbanTestStore(t)
+	ctx := context.Background()
+	seedKanbanTestProject(t, st, "mer")
+	now := time.Now().UTC().Truncate(time.Second)
+
+	rec, err := st.CreateSession(ctx, domain.SessionRecord{
+		ProjectID:         "mer",
+		Kind:              domain.KindWorker,
+		Harness:           domain.HarnessClaudeCode,
+		AutoReviewEnabled: true,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.WriteSCMObservation(ctx, domain.PullRequest{
+		URL: "pr/1", SessionID: rec.ID, Number: 1, HeadSHA: "head1", UpdatedAt: now, ObservedAt: now,
+	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertReview(ctx, domain.Review{
+		ID: "rev", SessionID: rec.ID, ProjectID: "mer", Harness: "claude-code",
+		PRURL: "pr/1", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failAuto := func(i int) {
+		t.Helper()
+		if err := st.InsertReviewRun(ctx, domain.ReviewRun{
+			ID: fmt.Sprintf("run-%d", i), ReviewID: "rev", SessionID: rec.ID, Harness: "claude-code",
+			PRURL: "pr/1", TargetSHA: "head1", Status: domain.ReviewRunFailed,
+			TriggerSource: domain.ReviewTriggerAuto, CreatedAt: now.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatalf("insert run %d: %v", i, err)
+		}
+	}
+	svc := &Service{store: st}
+
+	failAuto(1)
+	got, err := svc.Get(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.KanbanColumn != domain.KanbanValidating || got.DisplayStatus != contract.DisplayRetryingReview {
+		t.Fatalf("after one failure = %q/%q, want %q/%q", got.KanbanColumn, got.DisplayStatus, domain.KanbanValidating, contract.DisplayRetryingReview)
+	}
+
+	for i := 2; i <= domain.AutoReviewFailedRetryLimit; i++ {
+		failAuto(i)
+	}
+	got, err = svc.Get(ctx, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.KanbanColumn != domain.KanbanNeedsReview || got.DisplayStatus != contract.DisplayReviewFailed {
+		t.Fatalf("at the retry limit = %q/%q, want %q/%q", got.KanbanColumn, got.DisplayStatus, domain.KanbanNeedsReview, contract.DisplayReviewFailed)
 	}
 }
 

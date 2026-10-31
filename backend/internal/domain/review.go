@@ -145,7 +145,13 @@ type CurrentHeadReviewRun struct {
 	Verdict   ReviewVerdict
 	ID        string
 	CreatedAt time.Time
+	// FailedAutoRuns counts every failed auto review pass on this PR head.
+	FailedAutoRuns int
 }
+
+// AutoReviewFailedRetryLimit is how many failed auto review passes one PR head
+// gets before auto review stops retrying it.
+const AutoReviewFailedRetryLimit = 3
 
 // ReviewerHandle names one live reviewer pane's runtime handle, independent
 // of whether the worker session that spawned it still exists. A reviewer has

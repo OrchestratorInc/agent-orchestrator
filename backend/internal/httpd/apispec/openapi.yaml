@@ -15781,22 +15781,24 @@ components:
           enum:
           - Working
           - Blocked
+          - Needs input
           - Exited
           - No signal
           - Interrupted
-          - Awaiting PR
+          - Idle
           - Fixing CI failures
           - Addressing comments
-          - Needs review
           - Review scheduled
           - Reviewing
-          - Review failed
-          - Review pending
+          - Retrying review
           - Draft
+          - Awaiting review
+          - Review failed
+          - Review cancelled
           - CI failing
+          - Merge conflicts
           - Commented
           - Changes requested
-          - Needs human review
           - Mergeable
           - Approved
           - Merged

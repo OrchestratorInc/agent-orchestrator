@@ -215,7 +215,9 @@ describe("SessionsBoardView", () => {
 
 	it.each([
 		{ displayStatus: "Blocked", status: "idle" as const },
+		{ displayStatus: "Needs input", status: "idle" as const },
 		{ displayStatus: "CI failing", status: "idle" as const },
+		{ displayStatus: "Merge conflicts", status: "idle" as const },
 		{ displayStatus: "Changes requested", status: "idle" as const },
 		{ displayStatus: undefined, status: "ci_failed" as const },
 		{ displayStatus: undefined, status: "changes_requested" as const },
@@ -286,7 +288,7 @@ describe("SessionsBoardView", () => {
 					updatedAt: (timestamp) => `Updated ${timestamp}`,
 				}}
 				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
-				session={{ ...baseSession, status: "changes_requested", displayStatus: "Needs human review" }}
+				session={{ ...baseSession, status: "changes_requested", displayStatus: "Awaiting review" }}
 			/>,
 		);
 

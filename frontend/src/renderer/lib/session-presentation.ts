@@ -62,14 +62,37 @@ export type SessionStatusDotView = {
 	breathe: boolean;
 };
 
-// The session dot carries two independent signals. Colour comes from the board
-// section represented by the SCM state, which survives a running agent —
-// `status` is activity-first, so it collapses to `working` the moment an agent
-// wakes and would otherwise take every pull request tone with it. Merged keeps
-// its split-section tone instead of sharing Ready to merge's tone.
+// The session dot carries two independent signals. Colour comes from the pull
+// request the card's `displayStatus` describes, so the dot and the card's phrase
+// always talk about the same PR. A phrase about the worker rather than the PR
+// ("Working", "Blocked", …) says nothing about the PR, so the dot falls back to
+// the SCM state, which survives a running agent — `status` is activity-first,
+// so it collapses to `working` the moment an agent wakes and would otherwise
+// take every pull request tone with it. Merged keeps its split-section tone
+// instead of sharing Ready to merge's tone.
 //
 // Motion stays on raw agent activity. A no-PR idle session is the exception to
 // the preserved section colour: when its agent starts working it blinks blue.
+const pullRequestToneByDisplayStatus: Partial<Record<string, SessionStatus>> = {
+	"Fixing CI failures": "ci_failed",
+	"CI failing": "ci_failed",
+	"Merge conflicts": "ci_failed",
+	"Addressing comments": "changes_requested",
+	"Changes requested": "changes_requested",
+	Commented: "commented",
+	Draft: "draft",
+	"Review scheduled": "pr_open",
+	Reviewing: "pr_open",
+	"Retrying review": "pr_open",
+	"Awaiting review": "review_pending",
+	"Review failed": "review_pending",
+	"Review cancelled": "review_pending",
+	Approved: "approved",
+	Mergeable: "mergeable",
+	Merged: "merged",
+	"Closed without merge": "exited",
+};
+
 export function getSessionStatusDotView(
 	session: {
 		activity?: SessionActivity | null;
@@ -82,7 +105,9 @@ export function getSessionStatusDotView(
 	const working = isAgentActivityWorking(session.activity);
 	const closedWithoutMerge = session.displayStatus === "Closed without merge";
 	const sectionStatus: SessionStatus =
-		closedWithoutMerge ? "exited" : (session.scmStatus ?? session.status);
+		(session.displayStatus && pullRequestToneByDisplayStatus[session.displayStatus]) ??
+		session.scmStatus ??
+		session.status;
 	const toneStatus = sectionStatus === "idle" && working ? "working" : sectionStatus;
 	const className =
 		closedWithoutMerge

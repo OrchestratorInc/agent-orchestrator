@@ -69,7 +69,7 @@ export type DashboardSession = {
 	kanbanColumn?: KanbanColumn | null;
 	/**
 	 * The daemon's phrase for what is happening inside that column — richer than
-	 * `status` ("Awaiting PR", "Fixing CI failures"), and already localized on the
+	 * `status` ("Awaiting review", "Fixing CI failures"), and already localized on the
 	 * wire so clients print it without a mapping table.
 	 */
 	displayStatus?: string | null;
