@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
+import { newChatDraftScope, writeChatComposerText } from "../../lib/chat-drafts";
 import { captureRendererEvent } from "../../lib/telemetry";
 import { useUiStore } from "../../stores/ui-store";
-import { GlobalNewTaskDialog } from "../GlobalNewTaskDialog";
 import { ReportProblemContent } from "./ReportProblemContent";
 
 const h = vi.hoisted(() => ({ daemonState: "ready", navigate: vi.fn() }));
@@ -14,17 +14,14 @@ vi.mock("../../lib/telemetry", async (importOriginal) => ({
 }));
 vi.mock("../../lib/shell-context", () => ({ useShell: () => ({ daemonStatus: { state: h.daemonState } }) }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => h.navigate }));
-vi.mock("../NewTaskDialog", () => ({
-	NewTaskDialog: ({ open, projectId, hiddenPrompt, displayName, onContentChange }: { open: boolean; projectId?: string; hiddenPrompt?: string; displayName?: string; onContentChange?: (dirty: boolean) => void }) => open
-		? <div role="dialog" data-project={projectId} data-name={displayName} data-hidden-prompt={hiddenPrompt}><textarea aria-label="Prompt" onChange={(event) => onContentChange?.(!!event.target.value.trim())} /></div> : null,
-}));
 function renderReport(active = true) {
-	render(<QueryClientProvider client={new QueryClient()}><ReportProblemContent active={active} /><GlobalNewTaskDialog /></QueryClientProvider>);
+	render(<QueryClientProvider client={new QueryClient()}><ReportProblemContent active={active} /></QueryClientProvider>);
 }
 beforeEach(() => {
 	h.daemonState = "ready";
+	window.localStorage.clear();
 	vi.mocked(captureRendererEvent).mockClear();
-	useUiStore.setState({ newTaskRequest: null, newTaskDialogHasContent: false, settingsModal: { scope: "global", section: "help" } });
+	useUiStore.setState({ newTaskRequest: null, settingsModal: { scope: "global", section: "help" } });
 });
 afterEach(() => vi.restoreAllMocks());
 describe("Report a problem", () => {
@@ -40,38 +37,34 @@ describe("Report a problem", () => {
 		expect(captureRendererEvent).toHaveBeenCalledTimes(2);
 		expect(captureRendererEvent).toHaveBeenLastCalledWith("ao.renderer.support_opened");
 	});
-	it("prepares diagnostics and opens an empty standalone dialog with hidden instructions and the report name", async () => {
+	it("prepares diagnostics and asks for a new chat with hidden instructions and the report name", async () => {
 		const prepare = vi.spyOn(aoBridge.triage, "prepare").mockResolvedValue({ ok: true, prompt: "Read /home/me/.ao/triage/context.md", dir: "/home/me/.ao/triage" });
 		const launch = vi.spyOn(aoBridge.triage, "launch");
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
-		const dialog = await screen.findByRole("dialog");
+		await waitFor(() => expect(useUiStore.getState().newTaskRequest).not.toBeNull());
 		expect(prepare).toHaveBeenCalledWith(); expect(launch).not.toHaveBeenCalled();
-		expect(dialog).toHaveAttribute("data-project", "__standalone__");
-		expect(dialog).toHaveAttribute("data-name", "Report a problem");
-		expect(dialog).toHaveAttribute("data-hidden-prompt", "Read /home/me/.ao/triage/context.md");
-		expect(screen.getByLabelText("Prompt")).toHaveValue("");
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({
+			projectId: "__standalone__", hiddenPrompt: "Read /home/me/.ao/triage/context.md", displayName: "Report a problem",
+		});
 		expect(useUiStore.getState().settingsModal).toBeNull();
 		expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "agent", outcome: "succeeded" });
 	});
-	it.each(["", "keep this draft"])("handles an existing composer containing %s", async (draft) => {
- const prepare = vi.spyOn(aoBridge.triage, "prepare").mockResolvedValue({ ok: true, prompt: "triage prompt", dir: "/triage" });
- renderReport();
- act(() => useUiStore.getState().requestNewTask("project"));
- await screen.findByRole("dialog");
- fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: draft } });
- fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
- if (draft) {
-  expect(await screen.findByRole("alert")).toHaveTextContent("Close the open New agent dialog first.");
-  expect(screen.getByLabelText("Prompt")).toHaveValue(draft);
-  expect(useUiStore.getState().settingsModal).not.toBeNull();
-  expect(prepare).not.toHaveBeenCalled();
-  expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "agent", outcome: "failed" });
- } else {
-  await waitFor(() => expect(screen.getByRole("dialog")).toHaveAttribute("data-hidden-prompt", "triage prompt"));
-  expect(screen.getByLabelText("Prompt")).toHaveValue("");
-  expect(useUiStore.getState().settingsModal).toBeNull();
- }
- });
+	it.each(["", "keep this draft"])("handles a new chat draft containing %j", async (draft) => {
+		const prepare = vi.spyOn(aoBridge.triage, "prepare").mockResolvedValue({ ok: true, prompt: "triage prompt", dir: "/triage" });
+		writeChatComposerText(newChatDraftScope(), draft);
+		renderReport();
+		fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
+		if (draft) {
+			expect(await screen.findByRole("alert")).toHaveTextContent("Send or clear the draft on the new chat page first.");
+			expect(useUiStore.getState().newTaskRequest).toBeNull();
+			expect(useUiStore.getState().settingsModal).not.toBeNull();
+			expect(prepare).not.toHaveBeenCalled();
+			expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "agent", outcome: "failed" });
+		} else {
+			await waitFor(() => expect(useUiStore.getState().newTaskRequest?.hiddenPrompt).toBe("triage prompt"));
+			expect(useUiStore.getState().settingsModal).toBeNull();
+		}
+	});
 	it("uses Auto terminal fallback when the daemon is down", async () => {
 		h.daemonState = "stopped";
 		const launch = vi.spyOn(aoBridge.triage, "launch").mockResolvedValue({ ok: false, error: "report.terminalFailed" });
@@ -79,7 +72,7 @@ describe("Report a problem", () => {
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Could not open a terminal. Try again.");
 		expect(launch).toHaveBeenCalledWith(); expect(prepare).not.toHaveBeenCalled();
-		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		expect(useUiStore.getState().newTaskRequest).toBeNull();
 		expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "terminal", outcome: "failed" });
 	});
 	it("reports a successful terminal fallback when the daemon is down", async () => {
@@ -92,7 +85,7 @@ describe("Report a problem", () => {
 		vi.spyOn(aoBridge.triage, "prepare").mockResolvedValue({ ok: false, error: "report.prepareFailed" });
 		renderReport(); fireEvent.click(screen.getByRole("button", { name: "Report a problem" }));
 		expect(await screen.findByRole("alert")).toHaveTextContent("Could not prepare the report. Try again.");
-		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+		expect(useUiStore.getState().newTaskRequest).toBeNull();
 		expect(useUiStore.getState().settingsModal).not.toBeNull();
 		expect(captureRendererEvent).toHaveBeenCalledWith("ao.renderer.support_submitted", { destination: "agent", outcome: "failed" });
 	});
