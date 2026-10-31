@@ -104,9 +104,9 @@ jobs:
           plutil -insert CFBundleIconFile -string icon.icns "$app/Contents/Info.plist"
           plutil -insert CFBundlePackageType -string APPL "$app/Contents/Info.plist"
           # Builds, then runs --check itself and exits non-zero on any problem.
-          node scripts/build-mac-dmg.mjs --app "$app" --arch arm64 --output "$work/agent-orchestrator-darwin-arm64.dmg"
-          test ! -e "$work/agent-orchestrator-darwin-arm64.dmg.blockmap"
-          node scripts/build-mac-dmg.mjs --check "$work/agent-orchestrator-darwin-arm64.dmg"
+          node scripts/build-mac-dmg.mjs --app "$app" --arch arm64 --output "$work/Orchestrator-darwin-arm64.dmg"
+          test ! -e "$work/Orchestrator-darwin-arm64.dmg.blockmap"
+          node scripts/build-mac-dmg.mjs --check "$work/Orchestrator-darwin-arm64.dmg"
 
           stage="$work/bare"
           mkdir -p "$stage"
