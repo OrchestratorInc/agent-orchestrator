@@ -35,7 +35,13 @@ func TestSend_ClaudeSuggestionUnderCursorDelivers(t *testing.T) {
 				Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
 				Metadata: domain.SessionMetadata{RuntimeHandleID: "h1"},
 			})
-			msg := &fakeMessenger{}
+			// Claude's prompt hook marks the session active once it accepts a
+			// written prompt; the send confirmation waits for that.
+			msg := &fakeMessenger{onSend: func(id domain.SessionID, message string) {
+				rec := st.sessions[id]
+				rec.Activity.State = domain.ActivityActive
+				st.sessions[id] = rec
+			}}
 			m := newSendTestManager(t, claudeagent.New(), msg, st)
 			frame := screen(tt.prompt)
 			m.runtime = &transitionRuntime{fakeRuntime: &fakeRuntime{}, outputForCall: func(int) string { return frame }}

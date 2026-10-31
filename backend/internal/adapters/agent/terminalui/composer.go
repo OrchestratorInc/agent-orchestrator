@@ -12,9 +12,10 @@ import (
 const composerLookbackLines = 8
 
 type styledRune struct {
-	value rune
-	dim   bool
-	bold  bool
+	value   rune
+	dim     bool
+	bold    bool
+	reverse bool
 }
 
 // PlainTerminalText removes terminal control sequences while preserving the
@@ -182,6 +183,56 @@ func LastBorderedPromptIsEmptyOrDimPlaceholder(output, marker string, chromeLabe
 // names provider-owned text that may be painted into the current prompt row
 // and must never read as a human draft.
 func LastBorderedPromptComposerState(output, marker string, chromeLabels ...string) ComposerState {
+	return borderedPromptComposerState(output, marker, false, chromeLabels...)
+}
+
+// LastBorderedPromptComposerStateWithCursorPlaceholder is
+// LastBorderedPromptComposerState that also reads a provider placeholder under
+// the provider's own cursor as empty (see cursorOnPlaceholder).
+func LastBorderedPromptComposerStateWithCursorPlaceholder(output, marker string, chromeLabels ...string) ComposerState {
+	return borderedPromptComposerState(output, marker, true, chromeLabels...)
+}
+
+// cursorOnPlaceholder reports whether a composer holds only a provider
+// placeholder with the provider's own cursor drawn on its first letter: that
+// letter reversed, every later visible letter dim and not reversed, and at
+// least one such letter. Claude Code draws its placeholder and prompt
+// suggestion this way while it believes its terminal has focus. A typed
+// draft under the same cursor keeps normal letters after it, and a lone
+// reversed letter may be a one-letter draft, so both stay drafts.
+func cursorOnPlaceholder(content []styledRune, rows [][]styledRune, chromeLabels []string) bool {
+	content = trimLeftStyledSpace(content)
+	if len(content) == 0 || !content[0].reverse {
+		return false
+	}
+	tail := 0
+	dimOnly := func(runes []styledRune) bool {
+		for _, r := range runes {
+			if unicode.IsSpace(r.value) {
+				continue
+			}
+			if !r.dim || r.reverse {
+				return false
+			}
+			tail++
+		}
+		return true
+	}
+	if !dimOnly(content[1:]) {
+		return false
+	}
+	for _, row := range rows {
+		if isPromptChromeLabel(strings.TrimSpace(styledString(row)), chromeLabels) {
+			continue
+		}
+		if !dimOnly(row) {
+			return false
+		}
+	}
+	return tail > 0
+}
+
+func borderedPromptComposerState(output, marker string, cursorPlaceholder bool, chromeLabels ...string) ComposerState {
 	marker = strings.TrimSpace(marker)
 	if marker == "" {
 		return ComposerUnknown
@@ -210,6 +261,9 @@ func LastBorderedPromptComposerState(output, marker string, chromeLabels ...stri
 		}
 		if upperWidth == 0 || lowerIndex < 0 || upperWidth != lowerWidth {
 			return ComposerUnknown
+		}
+		if cursorPlaceholder && cursorOnPlaceholder(line[len(markerRunes):], lines[i+1:lowerIndex], chromeLabels) {
+			return ComposerEmpty
 		}
 		if !isPromptChromeLabel(strings.TrimSpace(styledString(line[len(markerRunes):])), chromeLabels) {
 			for _, r := range line[len(markerRunes):] {
@@ -257,11 +311,12 @@ func styledTerminalLines(output string) [][]styledRune {
 	lines = append(lines, nil)
 	dim := false
 	bold := false
+	reverse := false
 	for i := 0; i < len(output); {
 		if output[i] == '\x1b' {
 			if next, params, sgr := consumeEscape(output, i); next > i {
 				if sgr {
-					dim, bold = applySGR(dim, bold, params)
+					dim, bold, reverse = applySGR(dim, bold, reverse, params)
 				}
 				i = next
 				continue
@@ -276,7 +331,7 @@ func styledTerminalLines(output string) [][]styledRune {
 		if unicode.IsControl(r) {
 			continue
 		}
-		lines[len(lines)-1] = append(lines[len(lines)-1], styledRune{value: r, dim: dim, bold: bold})
+		lines[len(lines)-1] = append(lines[len(lines)-1], styledRune{value: r, dim: dim, bold: bold, reverse: reverse})
 	}
 	return lines
 }
@@ -310,9 +365,9 @@ func consumeEscape(output string, start int) (next int, params string, sgr bool)
 	}
 }
 
-func applySGR(dim, bold bool, params string) (bool, bool) {
+func applySGR(dim, bold, reverse bool, params string) (bool, bool, bool) {
 	if params == "" {
-		return false, false
+		return false, false, false
 	}
 	fields := strings.Split(params, ";")
 	for i := 0; i < len(fields); i++ {
@@ -342,15 +397,21 @@ func applySGR(dim, bold bool, params string) (bool, bool) {
 			continue
 		}
 		switch code {
-		case 0, 22:
+		case 0:
+			dim, bold, reverse = false, false, false
+		case 22:
 			dim, bold = false, false
 		case 1:
 			bold = true
 		case 2:
 			dim = true
+		case 7:
+			reverse = true
+		case 27:
+			reverse = false
 		}
 	}
-	return dim, bold
+	return dim, bold, reverse
 }
 
 func trimLeftStyledSpace(line []styledRune) []styledRune {

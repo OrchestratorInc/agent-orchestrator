@@ -1,0 +1,83 @@
+package terminalui
+
+import (
+	"strings"
+	"testing"
+)
+
+// Claude Code 2.1.314 draws a placeholder or prompt suggestion as
+// reverse(first letter) + dim(rest) while it believes its terminal has focus,
+// and all dim otherwise; reverse writes ESC[7m ... ESC[27m.
+const (
+	reverseOn  = "\x1b[7m"
+	reverseOff = "\x1b[27m"
+	dimOn      = "\x1b[2m"
+	dimOff     = "\x1b[22m"
+)
+
+func cursorPlaceholderRow(first, rest string) string {
+	return "❯ " + reverseOn + first + reverseOff + dimOn + rest + dimOff
+}
+
+func TestBorderedPromptWithCursorPlaceholderReadsSuggestionAsEmpty(t *testing.T) {
+	rule := strings.Repeat("─", 48)
+	frame := func(rows ...string) string {
+		return rule + "\n" + strings.Join(rows, "\n") + "\n" + rule + "\nstatus line\n-- INSERT --"
+	}
+	for _, tt := range []struct {
+		name, output string
+		want         ComposerState
+	}{
+		{"suggestion under the cursor", frame(cursorPlaceholderRow("g", "o TD 2s fix")), ComposerEmpty},
+		{"suggestion without the cursor", frame("❯ " + dimOn + "go TD 2s fix" + dimOff), ComposerEmpty},
+		{"empty composer under the cursor", frame("❯ " + reverseOn + " " + reverseOff), ComposerEmpty},
+		{"reset ends the cursor", frame("❯ " + reverseOn + "g\x1b[0m" + dimOn + "o TD 2s fix" + dimOff), ComposerEmpty},
+		// The conpty host's emulator re-encodes the same cells with combined attributes.
+		{"emulator re-encoded suggestion", frame("❯ \x1b[7mg\x1b[27;2mo TD 2s fix\x1b[m"), ComposerEmpty},
+		{"wrapped suggestion", frame(cursorPlaceholderRow("g", "o TD 2s fix and"), "  "+dimOn+"more placeholder"+dimOff), ComposerEmpty},
+		{"draft under the cursor", frame("❯ " + reverseOn + "g" + reverseOff + "o TD 2s fix"), ComposerDraft},
+		{"one-letter draft under the cursor", frame("❯ " + reverseOn + "g" + reverseOff), ComposerDraft},
+		{"typed text after the dim tail", frame(cursorPlaceholderRow("g", "o TD") + " typed"), ComposerDraft},
+		{"typed row below the suggestion", frame(cursorPlaceholderRow("g", "o TD 2s fix"), "  typed"), ComposerDraft},
+		{"cursor not on the first letter", frame("❯ g" + reverseOn + "o" + reverseOff + dimOn + " TD 2s fix" + dimOff), ComposerDraft},
+		{"two reversed letters", frame("❯ " + reverseOn + "go" + reverseOff + dimOn + " TD 2s fix" + dimOff), ComposerDraft},
+		{"reversed letter in the tail", frame(cursorPlaceholderRow("g", "o TD") + dimOn + reverseOn + "x" + reverseOff + dimOff), ComposerDraft},
+		{"dim reset keeps reverse on", frame("❯ " + reverseOn + "g\x1b[22m" + dimOn + "o TD 2s fix" + dimOff), ComposerDraft},
+		{"palette color 7 is not reverse", frame("❯ \x1b[38;5;7mg\x1b[39m" + dimOn + "o TD 2s fix" + dimOff), ComposerDraft},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := LastBorderedPromptComposerStateWithCursorPlaceholder(tt.output, "❯"); got != tt.want {
+				t.Fatalf("LastBorderedPromptComposerStateWithCursorPlaceholder() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Provider chrome labels below a suggestion stay exempt, as for any composer.
+func TestCursorPlaceholderSkipsChromeLabelRows(t *testing.T) {
+	rule := strings.Repeat("─", 48)
+	output := rule + "\n" + cursorPlaceholderRow("g", "o TD 2s fix") + "\n  provider label\n" + rule + "\nstatus"
+	if got := LastBorderedPromptComposerStateWithCursorPlaceholder(output, "❯", "provider label"); got != ComposerEmpty {
+		t.Fatalf("with the label named: %v, want empty", got)
+	}
+	if got := LastBorderedPromptComposerStateWithCursorPlaceholder(output, "❯"); got != ComposerDraft {
+		t.Fatalf("without the label named: %v, want draft", got)
+	}
+}
+
+// Only the reader Claude Code uses accepts the cursor. The plain bordered
+// reader (also used by Hermes) and the footer-free reader keep reading any
+// letter that is not dim as a draft.
+func TestCursorPlaceholderIsLimitedToItsOwnReader(t *testing.T) {
+	rule := strings.Repeat("─", 48)
+	row := cursorPlaceholderRow("g", "o TD 2s fix")
+	bordered := rule + "\n" + row + "\n" + rule + "\nstatus"
+	for name, got := range map[string]ComposerState{
+		"LastBorderedPromptComposerState": LastBorderedPromptComposerState(bordered, "❯"),
+		"LastPromptComposerState":         LastPromptComposerState(row, "❯"),
+	} {
+		if got != ComposerDraft {
+			t.Errorf("%s() = %v, want draft", name, got)
+		}
+	}
+}
