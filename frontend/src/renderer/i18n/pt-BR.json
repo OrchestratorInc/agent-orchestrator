@@ -3583,7 +3583,7 @@
 	"settings.billing.featureAgents_one": "{{count}} agente na nuvem simultâneo",
 	"settings.billing.featureAgents_other": "{{count}} agentes na nuvem simultâneos",
 	"settings.billing.featureAgents_many": "{{count}} agentes na nuvem simultâneos",
-	"settings.billing.freeAgents": "Claude Code, Codex e Cursor",
+	"settings.billing.freeAgents": "Qualquer agente de código compatível, incluindo Claude Code, Codex e Cursor",
 	"settings.billing.freeOrchestrator": "Orquestrador, workers e revisões de PR",
 	"settings.billing.freeDevices": "2 dispositivos conectados ao mesmo tempo",
 	"settings.billing.freeNetwork": "Conexão na mesma rede (sem relay na nuvem)",
