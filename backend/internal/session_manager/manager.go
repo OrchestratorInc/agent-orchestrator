@@ -3496,6 +3496,11 @@ func (m *Manager) resumeAgentRecordWithReservedGeneration(
 		SessionID: rec.ID,
 		ProjectID: rec.ProjectID,
 	}
+	if restored, ok, err := m.recreateMissingResumeWorkspace(ctx, project, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: workspace: %w", operation, rec.ID, err)
+	} else if ok {
+		ws.Path, ws.Branch = restored.Path, restored.Branch
+	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || meta.RuntimeHandleID == "" {
 		return m.relaunchSessionWithPolicyAndGeneration(ctx, operation, rec, project, ws, nil, forceFresh, requireNativeHistory, reservedGeneration, domain.SessionInterfaceTransitionHistoryStrict, nil)
 	}
@@ -4639,6 +4644,33 @@ func (m *Manager) provisionRecreatedWorkspace(ctx context.Context, project domai
 	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
 	defer cancel()
 	return m.provisionWorkspace(ctx, project, workspacePath)
+}
+
+// recreateMissingResumeWorkspace re-creates the workspace of an exited agent
+// whose directory no longer exists (removed by hand or by disk cleanup) before
+// the agent is relaunched into it, the same way Restore does for a terminated
+// session. A workspace that is present, and Scratch/standalone sessions, are
+// left untouched. An error refuses the resume, so no agent starts without its
+// workspace.
+func (m *Manager) recreateMissingResumeWorkspace(ctx context.Context, project domain.ProjectRecord, rec domain.SessionRecord) (ports.WorkspaceInfo, bool, error) {
+	if projectKindForSession(project, rec.ProjectID) == domain.ProjectKindScratch {
+		return ports.WorkspaceInfo{}, false, nil
+	}
+	missing, err := workspacePathMissing(rec.Metadata.WorkspacePath)
+	if err != nil || !missing {
+		return ports.WorkspaceInfo{}, false, err
+	}
+	releaseWorkspaceGate := m.acquireWorkspaceGate(rec.ProjectID)
+	defer releaseWorkspaceGate()
+	ws, err := m.restoreSessionWorkspace(ctx, project, rec)
+	if err != nil {
+		return ports.WorkspaceInfo{}, false, err
+	}
+	if ws.Path == "" {
+		return ports.WorkspaceInfo{}, false, errors.New("restored workspace has no path")
+	}
+	m.logger.Info("resume: re-created missing workspace", "sessionID", rec.ID, "path", ws.Path)
+	return ws, true, nil
 }
 
 func workspacePathMissing(path string) (bool, error) {
