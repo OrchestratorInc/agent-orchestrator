@@ -25,6 +25,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/terminal"
 )
 
+const readyCheckTimeout = time.Second
+
 // ControlDeps carries the daemon-control hooks the router exposes, such as the
 // callback that requests a graceful shutdown.
 type ControlDeps struct {
@@ -46,7 +48,8 @@ type ControlDeps struct {
 //	cors          → CORS allowlist for the Electron renderer / dev origins
 //
 // The per-request timeout is deliberately not global: it wraps only bounded
-// REST routes, never long-lived terminal streams or health probes.
+// REST routes, never long-lived terminal streams. Health probes apply their own
+// short dependency-check timeout where needed.
 func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal.Manager, deps APIDeps, control ControlDeps) chi.Router {
 	log = loggerOrDefault(log)
 	deps = normalizeAPIDeps(deps, log)
@@ -70,7 +73,7 @@ func NewRouterWithControl(cfg config.Config, log *slog.Logger, termMgr *terminal
 	r.NotFound(notFoundJSON)
 	r.MethodNotAllowed(methodNotAllowedJSON)
 
-	mountHealth(r, cfg)
+	mountHealth(r, cfg, deps.ReadyCheck)
 	mountTerminalMux(r, termMgr, log, cfg.AllowedOrigins)
 	mountControl(r, control)
 	mountTelemetry(r, cfg, deps.Telemetry)
@@ -114,11 +117,19 @@ func previewOriginMiddleware(sessions *controllers.SessionsController) func(http
 
 // mountHealth registers the liveness and readiness probes the Electron
 // supervisor polls before letting the renderer connect.
-func mountHealth(r chi.Router, cfg config.Config) {
+func mountHealth(r chi.Router, cfg config.Config, readyCheck func(context.Context) error) {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		envelope.WriteJSON(w, http.StatusOK, daemonProbePayload("ok", cfg))
 	})
-	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+	r.Get("/readyz", func(w http.ResponseWriter, req *http.Request) {
+		if readyCheck != nil {
+			ctx, cancel := context.WithTimeout(req.Context(), readyCheckTimeout)
+			defer cancel()
+			if err := readyCheck(ctx); err != nil {
+				envelope.WriteJSON(w, http.StatusServiceUnavailable, daemonProbePayload("not_ready", cfg))
+				return
+			}
+		}
 		envelope.WriteJSON(w, http.StatusOK, daemonProbePayload("ready", cfg))
 	})
 }

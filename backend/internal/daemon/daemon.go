@@ -1027,6 +1027,7 @@ func Run(buildVersion string) error {
 	hookActivity := hookprocess.New(lcStack.LCM, store, runtimeAdapter, nil, log)
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		Awake:              awakeSvc,
+		ReadyCheck:         store.Ping,
 		Projects:           projectSvc,
 		ArtifactVersions:   lcStack.ArtifactVersions,
 		HostID:             hostIdentity.HostID,
