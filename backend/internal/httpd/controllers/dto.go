@@ -2808,12 +2808,13 @@ type ConversationFileReferenceRequest ports.ChatFileReference
 // ConversationExcerptReferenceRequest attaches verified selected transcript
 // text to the next message.
 type ConversationExcerptReferenceRequest struct {
-	ID             string `json:"id,omitempty"`
-	Order          int64  `json:"order,omitempty"`
-	ConversationID string `json:"conversationId"`
-	MessageID      string `json:"messageId"`
-	Revision       int64  `json:"revision"`
-	Text           string `json:"text"`
+	Segments       []domain.ExcerptSegment `json:"segments,omitempty"`
+	ID             string                  `json:"id,omitempty"`
+	Order          int64                   `json:"order,omitempty"`
+	ConversationID string                  `json:"conversationId"`
+	MessageID      string                  `json:"messageId"`
+	Revision       int64                   `json:"revision"`
+	Text           string                  `json:"text"`
 }
 
 // ProviderSwitchRequest switches an idle session to another provider. See
@@ -2958,9 +2959,10 @@ type ConversationContentSummaryResponse struct {
 	Text string `json:"text,omitempty"`
 	// SourceMessageID and SourceRevision let the renderer navigate back to the
 	// verified transcript message without exposing the internal excerpt URI.
-	SourceConversationID string `json:"sourceConversationId,omitempty"`
-	SourceMessageID      string `json:"sourceMessageId,omitempty"`
-	SourceRevision       int64  `json:"sourceRevision,omitempty"`
+	SourceConversationID string                  `json:"sourceConversationId,omitempty"`
+	SourceMessageID      string                  `json:"sourceMessageId,omitempty"`
+	SourceRevision       int64                   `json:"sourceRevision,omitempty"`
+	SourceSegments       []domain.ExcerptSegment `json:"sourceSegments,omitempty"`
 }
 
 // EditConversationMessageResponse identifies the newly selected branch and its

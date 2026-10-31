@@ -904,6 +904,7 @@ export function HumanMessage({
 			data-chat-message-id={!queued && !editing ? message.id : undefined}
 			data-chat-message-revision={!queued && !editing ? message.revision : undefined}
 			data-chat-message-role={!queued && !editing ? message.role : undefined}
+			data-chat-excerpt-turn-id={message.turnId}
 		>
 			{message.authorName && !editing ? (
 				<span className="max-w-full truncate px-1 text-xs text-muted-foreground" data-chat-message-author>
@@ -944,7 +945,7 @@ export function HumanMessage({
 								fileReference: excerpt.fileReference, id: excerpt.annotationId ?? excerpt.fileReference?.id, order: excerpt.annotationOrder ?? excerpt.fileReference?.order,
 								text: excerpt.text ?? "",
 								conversationId: excerpt.sourceConversationId,
- messageId: excerpt.sourceMessageId,
+ messageId: excerpt.sourceMessageId, segments: excerpt.sourceSegments,
 								revision: excerpt.sourceRevision,
 							}))}
 							onSelect={onSelectAnnotation}
@@ -1122,9 +1123,11 @@ export function AssistantMessage({
 		<div
 			className="group/message relative"
 			data-chat-streaming-output={renderingStreaming ? "" : undefined}
+			data-chat-selection-unsupported={live || renderingStreaming ? "activity" : undefined}
 			data-chat-message-id={!live && !renderingStreaming ? message.id : undefined}
 			data-chat-message-revision={!live && !renderingStreaming ? message.revision : undefined}
 			data-chat-message-role={!live && !renderingStreaming ? message.role : undefined}
+			data-chat-excerpt-turn-id={message.turnId}
 		>
 			<div data-chat-message-body=""><ChatMarkdown text={visibleText} streaming={renderingStreaming} /></div>
 			{showActions ? (
@@ -1316,6 +1319,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	// session's, say) is not one this daemon serves.
 	const renderRef = activity.activityKind === "system" ? readRenderRef(activity.detail) : undefined;
 	const artifactRef = activity.activityKind === "system" ? readArtifactRef(activity.detail) : undefined;
+	if (activity.activityKind === "reasoning" && !(activity.detail?.text ?? activity.detail?.reason)) return null;
 
 	let content: ReactNode;
 	if (activity.activityKind === "mcp_tool") content = <McpToolRow activity={activity} />;
@@ -1332,10 +1336,13 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
 	else content = <GenericActivityRow activity={activity} />;
 
-	if (!toolActivity) return content;
+	if (!toolActivity) return <div data-chat-selection-unsupported="activity" className="contents">{content}</div>;
 	return (
 		<ActivityTransition value={`${activity.revision}:${activity.summary}:${activity.status}`}>
-			{content}
+			<div data-chat-activity-id={activity.activityKind === "command" ? activity.id : undefined}
+				data-chat-activity-revision={activity.revision} data-chat-excerpt-turn-id={activity.turnId}
+				data-chat-activity-settled={activity.status === "completed" || activity.status === "failed" ? "true" : "false"}
+				data-chat-selection-unsupported={activity.activityKind !== "command" ? "activity" : undefined}>{content}</div>
 		</ActivityTransition>
 	);
 }
@@ -1615,12 +1622,12 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 							// Said explicitly rather than implied by the label: "Ran command"
 							// alone never tells the reader what ran, and the collapsed row
 							// deliberately keeps only the category.
-							<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
+							<pre data-chat-command-field="command" className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
 								{detail.command}
 							</pre>
 						) : null}
 						{!isFileChange && (detail?.reason || detail?.text) ? (
-							<p className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
+							<p data-chat-command-field="explanation" className="whitespace-pre-wrap px-1 text-caption leading-relaxed text-muted-foreground">
 								{detail.reason ?? detail.text}
 							</p>
 						) : null}
@@ -1663,7 +1670,7 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 						&gt;_
 					</span>
 					<div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-						<span className="min-w-0 break-words text-xs leading-relaxed text-foreground/90">
+						<span data-chat-command-field="explanation" className="min-w-0 break-words text-xs leading-relaxed text-foreground/90">
 							{reason}
 						</span>
 						{binary ? (
@@ -1677,6 +1684,7 @@ function CommandExploreBody({ activity }: { activity: ConversationActivity }) {
 
 			{command ? (
 				<pre
+					data-chat-command-field="command"
 					className={cn(
 						"cursor-chat-explore-command overflow-x-auto px-3 py-2 font-mono text-caption leading-relaxed text-foreground/85",
 						(detail?.output || detail?.terminalInput) && "border-b border-border/60",
@@ -1720,7 +1728,7 @@ function TerminalInput({ text, truncated }: { text: string; truncated?: boolean 
 				<Keyboard aria-hidden="true" className="size-3" />
 				Agent typed
 			</span>
-			<pre className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
+			<pre data-chat-command-field="terminalInput" data-chat-selection-unsupported={/[\x00-\x08\x0b-\x1f\x7f]/.test(text) ? "formatted" : undefined} className="scrollbar-none overflow-x-auto border border-dashed border-border-strong bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-accent">
 				{shown}
 			</pre>
 			{truncated ? (
@@ -1780,6 +1788,8 @@ function CommandOutput({
 		<>
 			<pre
 				ref={pre}
+				data-chat-command-field="output"
+				data-chat-selection-unsupported={typeof detail?.output !== "string" || /[\x00-\x08\x0b-\x1f\x7f]/.test(raw) ? "formatted" : undefined}
 				aria-live={streaming ? "polite" : undefined}
 				className={cn(
 					"scrollbar-none max-h-64 overflow-auto font-mono leading-relaxed text-muted-foreground",

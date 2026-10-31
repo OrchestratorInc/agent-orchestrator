@@ -16234,6 +16234,10 @@ components:
         sourceRevision:
           format: int64
           type: integer
+        sourceSegments:
+          items:
+            $ref: '#/components/schemas/ConversationExcerptSegment'
+          type: array
         text:
           type: string
         type:
@@ -16282,11 +16286,42 @@ components:
         revision:
           format: int64
           type: integer
+        segments:
+          items:
+            $ref: '#/components/schemas/ConversationExcerptSegment'
+          type: array
         text:
           type: string
       required:
       - conversationId
       - messageId
+      - revision
+      - text
+      type: object
+    ConversationExcerptSegment:
+      properties:
+        field:
+          enum:
+          - command
+          - output
+          - terminalInput
+          - explanation
+          type: string
+        kind:
+          enum:
+          - message
+          - command
+          type: string
+        revision:
+          format: int64
+          type: integer
+        sourceId:
+          type: string
+        text:
+          type: string
+      required:
+      - kind
+      - sourceId
       - revision
       - text
       type: object
@@ -17277,6 +17312,10 @@ components:
         revision:
           format: int64
           type: integer
+        segments:
+          items:
+            $ref: '#/components/schemas/ConversationExcerptSegment'
+          type: array
         selection:
           type: string
         sourceRole:
@@ -20729,6 +20768,9 @@ components:
           type: string
         requestId:
           type: string
+        revision:
+          format: int64
+          type: integer
         sideId:
           type: string
         status:
@@ -20842,6 +20884,10 @@ components:
         sourceRevision:
           format: int64
           type: integer
+        sourceSegments:
+          items:
+            $ref: '#/components/schemas/ConversationExcerptSegment'
+          type: array
         state:
           type: string
         updatedAt:

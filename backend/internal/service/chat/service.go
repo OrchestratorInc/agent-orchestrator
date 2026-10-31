@@ -1481,7 +1481,31 @@ func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *
 	if err != nil {
 		return fmt.Errorf("read excerpt transcript: %w", err)
 	}
+	var hydrated []ports.ChatContent
+	var segmentedRows *ConversationRows
 	for _, excerpt := range msg.Excerpts {
+		if excerpt.Segments != nil {
+			if segmentedRows == nil {
+				reader := controller.continuationReader
+				if reader == nil {
+					reader, _ = controller.store.(SnapshotReader)
+				}
+				if reader == nil {
+					return ErrExcerptStale
+				}
+				rows, readErr := reader.LoadConversationSnapshot(ctx, controller.conversation.ID)
+				if readErr != nil {
+					return readErr
+				}
+				segmentedRows = &rows
+			}
+			content, verifyErr := hydrateSegmentedExcerpt(*segmentedRows, excerpt)
+			if verifyErr != nil {
+				return segmentedExcerptError(verifyErr)
+			}
+			hydrated = append(hydrated, content)
+			continue
+		}
 		text := strings.TrimSpace(excerpt.Text)
 		var source domain.ConversationMessage
 		found := false
@@ -1519,7 +1543,7 @@ func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *
 		if userText == "" || assistantText == "" {
 			return fmt.Errorf("%w: source turn has no complete user and assistant messages", ErrExcerptStale)
 		}
-		msg.Content = append(msg.Content, ports.ChatContent{
+		hydrated = append(hydrated, ports.ChatContent{
 			Type: "excerpt", URI: ports.ChatExcerptResourceURIPrefix + source.ID,
 			Name: fmt.Sprintf("%s message", source.Role), MIMEType: "text/plain", Text: text,
 			Excerpt: &ports.ChatExcerptContext{
@@ -1529,6 +1553,7 @@ func hydrateExcerptReferences(ctx context.Context, controller *Controller, msg *
 			},
 		})
 	}
+	msg.Content = append(msg.Content, hydrated...)
 	msg.Excerpts = nil
 	return nil
 }
@@ -1541,11 +1566,10 @@ func validateExcerptReferences(excerpts []ports.ChatExcerptReference, conversati
 	}
 	total := 0
 	for _, excerpt := range excerpts {
-		text := strings.TrimSpace(excerpt.Text)
-		if excerpt.ConversationID != conversationID || excerpt.MessageID == "" || text == "" || excerpt.Revision < 0 {
+		if excerpt.ConversationID != conversationID || validateExcerptShape(excerpt) != nil {
 			return fmt.Errorf("%w: source conversation, message, revision, and text are required", ErrExcerptInvalid)
 		}
-		total += len(text)
+		total += len(excerpt.Text)
 		if total > maxExcerptTextBytes {
 			return fmt.Errorf("%w: attached excerpts exceed %d bytes", ErrExcerptInvalid, maxExcerptTextBytes)
 		}

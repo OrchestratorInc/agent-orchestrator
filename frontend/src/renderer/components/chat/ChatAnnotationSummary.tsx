@@ -7,6 +7,7 @@ import { cn } from "../../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 export interface ChatAnnotationSummaryItem {
+	segments?: import("../../../shared/chat-excerpt").ChatExcerptSegment[];
 	kind?: "chat" | "file";
 	fileReference?: ChatFileReference;
 	order?: number;

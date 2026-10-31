@@ -665,6 +665,16 @@ type RetryPrompt struct {
 	ActiveLineage       bool
 }
 
+// ExcerptSegment identifies selected content in one durable message or command
+// field. UI labels are never part of the source against which it is verified.
+type ExcerptSegment struct {
+	Kind     string `json:"kind" enum:"message,command"`
+	SourceID string `json:"sourceId"`
+	Revision int64  `json:"revision"`
+	Field    string `json:"field,omitempty" enum:"command,output,terminalInput,explanation"`
+	Text     string `json:"text"`
+}
+
 // ConversationMessage is one readable block of text.
 type ConversationMessage struct {
 	// InteractionAt is an internal write fact, independent of history CreatedAt.

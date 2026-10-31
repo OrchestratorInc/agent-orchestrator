@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -493,6 +494,7 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if req.Reference != nil {
 		side.SourceMessageID = req.Reference.MessageID
 		side.SourceRevision = req.Reference.Revision
+		side.SourceSegments = append([]domain.ExcerptSegment(nil), req.Reference.Segments...)
 	}
 	result, created, err := s.sides.store.CreateSideConversation(ctx, side)
 	if err != nil {
@@ -525,6 +527,13 @@ func (s *Service) resolveSideAnchor(ctx context.Context, source *Controller, ref
 
 func resolveSideAnchor(rows ConversationRows, source *Controller, ref *ports.ChatExcerptReference) (string, string, string, error) {
 	if ref != nil {
+		if ref.Segments != nil {
+			if ref.ConversationID != source.conversation.ID {
+				return "", "", "", ErrExcerptInvalid
+			}
+			turn, err := resolveExcerptSegmentsWithAnchorError(rows, *ref, ErrSideAnchorUnavailable)
+			return turn.ID, turn.ProviderTurnID, ref.Text, err
+		}
 		if ref.ConversationID != source.conversation.ID || ref.MessageID == "" || ref.Text == "" || len(ref.Text) > maxExcerptTextBytes {
 			return "", "", "", ErrExcerptInvalid
 		}
@@ -592,14 +601,14 @@ func (s *Service) validateSideReferences(ctx context.Context, session domain.Ses
 	result := make([]domain.SideReference, 0, len(excerpts))
 	total, contextBytes := 0, 0
 	for _, ref := range excerpts {
-		if ref.MessageID == "" || ref.Text == "" || ref.Revision < 0 {
+		if validateExcerptShape(ref) != nil {
 			return nil, ErrExcerptInvalid
 		}
 		total += len(ref.Text)
 		if total > maxExcerptTextBytes {
 			return nil, ErrExcerptInvalid
 		}
-		frozen := domain.SideReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Selection: ref.Text}
+		frozen := domain.SideReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Selection: ref.Text, Segments: append([]domain.ExcerptSegment(nil), ref.Segments...)}
 		switch ref.ConversationID {
 		case side.MainConversationID:
 			if source == nil {
@@ -1308,7 +1317,7 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	if len(turn.References) > 0 && turn.RetryOfTurnID == "" {
 		refs := make([]ports.ChatExcerptReference, 0, len(turn.References))
 		for _, ref := range turn.References {
-			refs = append(refs, ports.ChatExcerptReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection})
+			refs = append(refs, ports.ChatExcerptReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection, Segments: ref.Segments})
 		}
 		if _, err := m.service.validateSideReferences(ctx, side.SessionID, side, refs); err != nil {
 			reason := err.Error()
@@ -1641,7 +1650,7 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 			}
 			for i, ref := range msg.Excerpts {
 				frozen := turn.References[i]
-				if frozen.ConversationID != ref.ConversationID || frozen.MessageID != ref.MessageID || frozen.Revision != ref.Revision || frozen.Selection != ref.Text {
+				if frozen.ConversationID != ref.ConversationID || frozen.MessageID != ref.MessageID || frozen.Revision != ref.Revision || frozen.Selection != ref.Text || !reflect.DeepEqual(frozen.Segments, ref.Segments) {
 					return domain.SideTurn{}, ErrSideIdempotencyConflict
 				}
 			}

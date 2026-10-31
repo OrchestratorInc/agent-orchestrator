@@ -994,6 +994,7 @@ func chatUserMessage(req SendConversationMessageRequest, sessionID string) (port
 		excerpts = append(excerpts, ports.ChatExcerptReference{
 			ConversationID: excerpt.ConversationID, MessageID: excerpt.MessageID,
 			Revision: excerpt.Revision, Text: excerpt.Text, ID: excerpt.ID, Order: excerpt.Order,
+			Segments: excerpt.Segments,
 		})
 	}
 	return ports.ChatUserMessage{
@@ -1508,6 +1509,7 @@ func conversationContentSummary(msg domain.ConversationMessage) ([]ConversationC
 				summary.SourceConversationID = block.Excerpt.Reference.ConversationID
 				summary.SourceMessageID = block.Excerpt.Reference.MessageID
 				summary.SourceRevision = block.Excerpt.Reference.Revision
+				summary.SourceSegments = block.Excerpt.Reference.Segments
 			} else {
 				summary.Text = block.Text
 				if strings.HasPrefix(block.URI, ports.ChatExcerptResourceURIPrefix) {
@@ -1801,7 +1803,7 @@ func (c *ConversationsController) createSideChat(w http.ResponseWriter, r *http.
 	var ref *ports.ChatExcerptReference
 	if req.Reference != nil {
 		ref = &ports.ChatExcerptReference{ConversationID: req.Reference.ConversationID,
-			MessageID: req.Reference.MessageID, Revision: req.Reference.Revision, Text: req.Reference.Text}
+			MessageID: req.Reference.MessageID, Revision: req.Reference.Revision, Text: req.Reference.Text, Segments: req.Reference.Segments}
 	}
 	side, err := svc.CreateIndependentSideChat(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")),
 		chatsvc.SideCreateRequest{IdempotencyKey: req.IdempotencyKey, ForceNew: req.ForceNew, Label: req.Label, Reference: ref})

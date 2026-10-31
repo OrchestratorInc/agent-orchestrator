@@ -1,4 +1,5 @@
 import type { ChatFileReference } from "../../shared/chat-file-reference";
+import { cloneExcerptReference, validExcerptSource, type ChatExcerptSegment } from "../../shared/chat-excerpt";
 import type { ConversationContentSummary } from "../types/conversation";
 
 /**
@@ -106,6 +107,7 @@ export interface ChatComposerDelivery {
 }
 
 export interface ChatDraftExcerptReference {
+	segments?: ChatExcerptSegment[];
 	order?: number;
 	id: string;
 	conversationId: string;
@@ -739,7 +741,7 @@ function isExcerptReference(value: unknown): value is ChatDraftExcerptReference 
 	return (
 		typeof excerpt.id === "string" && excerpt.id.length > 0 &&
 		typeof excerpt.conversationId === "string" && excerpt.conversationId.length > 0 &&
-		typeof excerpt.messageId === "string" && excerpt.messageId.length > 0 &&
+		typeof excerpt.messageId === "string" && validExcerptSource(excerpt as ChatDraftExcerptReference) &&
 		typeof excerpt.revision === "number" && Number.isSafeInteger(excerpt.revision) && excerpt.revision >= 0 &&
 		typeof excerpt.text === "string" && excerpt.text.trim().length > 0 &&
 		(excerpt.role === "user" || excerpt.role === "assistant")
@@ -1036,7 +1038,7 @@ export function prepareChatComposerDelivery(
 			? { ok: true, recovered: true, draft: proof.draft, mutation: existing }
 			: { ok: false, recovered: true, draft: loaded.draft };
 	}
-	const excerpts = input.excerpts ?? [];
+	const excerpts = (input.excerpts ?? []).map(cloneExcerptReference);
 	const fileReferences = input.fileReferences ?? [];
 	const exact =
 		loaded.draft.composer.text === input.composerText &&
