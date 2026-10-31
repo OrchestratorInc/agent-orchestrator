@@ -3,16 +3,21 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 
+const INITIAL_VISIBLE_COUNT = 100;
 const MAX_SEARCH_RESULTS = 50;
+const BATCH_SIZE = 50;
 
 /** Mounted inside menu content so closing either menu also clears its query. */
 export function ModelMenuChoices<T extends { id: string; label: string }>({
 	models,
+	selectedId,
 	searchable,
 	searchPlaceholder,
 	children,
 }: {
 	models: T[];
+	/** The currently active or selected model, ensuring it is included in initial visible rows if known. */
+	selectedId?: string;
 	/** Whether to show the search field, ruled off from the list. Unset shows a plain one on a long list. */
 	searchable?: boolean;
 	/** Set where the rows are a menu that search replaces with matches; nothing is "not found" before a query. */
@@ -24,15 +29,34 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const showSearch = searchable ?? models.length >= 10;
 	const query = showSearch ? search.trim() : "";
 	const normalizedQuery = query.toLocaleLowerCase();
-	// A query can match hundreds of rows across every agent's catalog; rendering them all lagged.
+	// A query or large catalog can contain hundreds of rows (e.g. OpenCode has 500+ models);
+	// rendering them all at once freezes the menu on open. Window initial render and append on scroll.
 	const lowered = useMemo(() => models.map((model) => model.label.toLocaleLowerCase()), [models]);
 	const allMatches = useMemo(() => {
 		if (!normalizedQuery) return models;
 		return models.filter((_, index) => lowered[index].includes(normalizedQuery));
 	}, [models, lowered, normalizedQuery]);
+
+	const initialLimit = useMemo(() => {
+		if (normalizedQuery) return MAX_SEARCH_RESULTS;
+		if (selectedId) {
+			const index = allMatches.findIndex((m) => m.id === selectedId);
+			if (index >= INITIAL_VISIBLE_COUNT) {
+				return Math.min(index + 10, allMatches.length);
+			}
+		}
+		return INITIAL_VISIBLE_COUNT;
+	}, [normalizedQuery, selectedId, allMatches]);
+
+	const [visibleCount, setVisibleCount] = useState(initialLimit);
+
+	useEffect(() => {
+		setVisibleCount(initialLimit);
+	}, [initialLimit]);
+
 	const matches = useMemo(
-		() => (normalizedQuery ? allMatches.slice(0, MAX_SEARCH_RESULTS) : allMatches),
-		[allMatches, normalizedQuery],
+		() => (allMatches.length > visibleCount ? allMatches.slice(0, visibleCount) : allMatches),
+		[allMatches, visibleCount],
 	);
 	const [searchFocused, setSearchFocused] = useState(false);
 	const searchActiveID = normalizedQuery && searchFocused ? matches[0]?.id : undefined;
@@ -48,6 +72,14 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		const element = scrollRef.current;
 		setCanScrollDown(Boolean(element && element.scrollHeight - element.scrollTop > element.clientHeight + 1));
 	}, []);
+	const handleScroll = useCallback(() => {
+		updateScrollCue();
+		const element = scrollRef.current;
+		if (!element) return;
+		if (element.scrollHeight - element.scrollTop - element.clientHeight < 150) {
+			setVisibleCount((current) => Math.min(current + BATCH_SIZE, allMatches.length));
+		}
+	}, [allMatches.length, updateScrollCue]);
 	// A new search starts at the top; a refreshed (polled) list keeps its scroll.
 	// Not on mount: the list opens at the top, and reading scrollTop then forces a
 	// style pass over the whole page while the menu is still being inserted.
@@ -131,8 +163,11 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 				<div
 					ref={scrollRef}
 					className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
-					onScroll={updateScrollCue}
+					onScroll={handleScroll}
 					onKeyDownCapture={(event) => {
+						if (event.key === "ArrowDown") {
+							setVisibleCount((current) => Math.min(current + BATCH_SIZE, allMatches.length));
+						}
 						// A submenu's keys bubble here through React, not the DOM; they are its own.
 						if (!searchRef.current || !event.currentTarget.contains(event.target as Node)) return;
 						const firstItem = event.currentTarget.querySelector('[role^="menuitem"]');
