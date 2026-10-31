@@ -44,6 +44,11 @@ jobs:
           # build.
           cache-dependency-path: backend/go.sum
 
+      - name: Install Cue test shells
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends zsh fish
+
       - name: Check formatting
         if: matrix.shard == 0
         run: |
