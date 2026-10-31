@@ -14,7 +14,7 @@ import {
 	type Http2ServerRequest,
 } from "node:http2";
 import { request as httpsRequest } from "node:https";
-import { connect as netConnect, isIP, type AddressInfo, type Socket } from "node:net";
+import { connect as netConnect, createServer as createNetServer, isIP, type AddressInfo, type Socket } from "node:net";
 import type { Readable, Writable } from "node:stream";
 import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
@@ -283,7 +283,52 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	// carries a WebSocket unchanged. A host without the tunnel gets plain
 	// HTTP/2. On a LAN address plain HTTP/2 is already direct.
 	let tunnelRetryAt = secure ? 0 : Number.POSITIVE_INFINITY;
-	const openTunnel = async (): Promise<Duplex> => {
+	// http2 must be handed a native socket. Over any other Duplex Node wraps it
+	// in a JSStreamSocket, which throws an internal assertion, uncaught, at the
+	// first frame the session writes once the tunnel has reset (#7043). So the
+	// tunnel is relayed through a loopback socket pair, and either end closing
+	// tears down the other, and with it the session.
+	const bridgeTunnel = async (tunnel: Duplex): Promise<Socket> => {
+		const relay = createNetServer();
+		try {
+			await new Promise<void>((resolve, reject) => {
+				relay.once("error", reject);
+				relay.listen(0, "127.0.0.1", resolve);
+			});
+			const near = netConnect((relay.address() as AddressInfo).port, "127.0.0.1");
+			near.on("error", () => undefined);
+			const far = await new Promise<Socket>((resolve, reject) => {
+				near.once("error", reject);
+				// Any local process could dial the port first: only this proxy's own
+				// connection, known by its port, carries the tunnel.
+				relay.on("connection", (accepted: Socket) => {
+					if (accepted.remotePort === near.localPort) resolve(accepted);
+					else accepted.destroy();
+				});
+			}).catch((error: Error) => {
+				near.destroy();
+				throw new UpstreamHttp2Unavailable(`tunnel: ${error.message}`);
+			});
+			far.on("error", () => undefined);
+			const teardown = () => {
+				tunnel.destroy();
+				far.destroy();
+				near.destroy();
+			};
+			for (const end of [tunnel, far, near])
+				for (const event of ["end", "close"] as const) end.once(event, teardown);
+			if (tunnel.destroyed || tunnel.readableEnded) teardown();
+			tunnel.pipe(far);
+			far.pipe(tunnel);
+			return near;
+		} catch (error) {
+			tunnel.destroy();
+			throw error;
+		} finally {
+			relay.close();
+		}
+	};
+	const openTunnel = async (): Promise<Socket> => {
 		// The upgrade itself carries the credential: prove the host first, as
 		// HTTP/1.1 requests do.
 		await verifyUpstream();
@@ -309,7 +354,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			stream.destroy();
 			throw error;
 		}
-		return stream;
+		return bridgeTunnel(stream);
 	};
 	// The tunnel ends at the daemon's own handler, past any reverse proxy, so a
 	// path sent inside it drops the prefix that proxy serves the daemon at
@@ -360,7 +405,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		timer.unref();
 		session.once("close", () => clearInterval(timer));
 	};
-	const openUpstreamSession = (tunnel?: Duplex): Promise<ClientHttp2Session> => {
+	const openUpstreamSession = (tunnel?: Socket): Promise<ClientHttp2Session> => {
 		// Node's default 64 KiB receive window would cap a preview at 64 KiB per
 		// round trip; a few hundred modules need megabytes in flight.
 		const session = http2Connect(`${upstream.protocol}//${upstream.host}`, {

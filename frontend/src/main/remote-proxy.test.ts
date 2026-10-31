@@ -1276,8 +1276,9 @@ describe("startRemoteProxy when the upstream fails", () => {
 	}
 
 	// An HTTPS daemon carrying HTTP/2 inside a WebSocket at /api/v1/tunnel, as
-	// AO's does behind a Cloudflare tunnel. drop() closes every tunnel; direct
-	// requests answer {direct}.
+	// AO's does behind a Cloudflare tunnel. drop() closes every tunnel and
+	// reset() resets their connections, as a network drop does; direct requests
+	// answer {direct}.
 	// holdMs sends what the daemon wrote within that time as one tunnel
 	// message, as the Cloudflare edge passes a small answer on.
 	async function startTunnelDaemon(handler: DaemonHandler, options: { failUpgrades?: number; answerUpgrades?: boolean; holdMs?: number } = {}) {
@@ -1296,9 +1297,21 @@ describe("startRemoteProxy when the upstream fails", () => {
 			socket.once("close", () => connections.delete(socket));
 		});
 		host.on("session", (session) => directSessions.add(session));
-		const state = { port: 0, upgrades: 0, dropDirect: () => { for (const session of directSessions) session.destroy(); } };
+		const upgraded = new Set<Socket>();
+		const state = {
+			port: 0,
+			upgrades: 0,
+			dropDirect: () => { for (const session of directSessions) session.destroy(); },
+			// The TCP connection under each tunnel's TLS: only it can be reset.
+			reset: () => {
+				const ports = new Set([...upgraded].map((socket) => socket.remotePort));
+				for (const socket of connections) if (ports.has(socket.remotePort)) socket.resetAndDestroy();
+			},
+		};
 		host.on("upgrade", (req: IncomingMessage, socket: Socket, head: Buffer) => {
 			state.upgrades++;
+			upgraded.add(socket);
+			socket.once("close", () => upgraded.delete(socket));
 			if (options.answerUpgrades === false) return;
 			if (state.upgrades <= (options.failUpgrades ?? 0)) return void socket.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
 			sockets.handleUpgrade(req, socket, head, (ws) => {
@@ -1475,6 +1488,34 @@ describe("startRemoteProxy when the upstream fails", () => {
 		await expect(within(cut.text())).rejects.toThrow();
 		expect(await (await fetch(`${proxy.base}/api/v1/projects`)).json()).toEqual({ proto: "2.0" });
 		expect(host.upgrades).toBe(3);
+	});
+
+	it("survives streams cancelled after the tunnel reset, then opens a new tunnel", async () => {
+		// A reset tunnel left the session's socket half shut down: the next
+		// RST_STREAM or PING written to it threw ERR_INTERNAL_ASSERTION from
+		// Node's JSStreamSocket, uncaught, in the main process (#7043).
+		const thrown: unknown[] = [];
+		const onUncaught = (error: unknown) => void thrown.push(error);
+		process.on("uncaughtException", onUncaught);
+		cleanups.push(() => process.off("uncaughtException", onUncaught));
+		const host = await startTunnelDaemon((req, res) => {
+			if (req.url === "/api/v1/projects") return void res.end(JSON.stringify({ proto: req.httpVersion }));
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			res.write(": ready\n\n");
+		});
+		proxy = await startRemoteProxy(daemonEntry(`https://127.0.0.1:${host.port}`), undefined, fast);
+		const request = previewBrowser(proxy);
+		const events = ["/a", "/b", "/c", "/d"].map((path) => request(path));
+		await Promise.all(events.map((stream) => new Promise((resolve) => stream.once("data", resolve))));
+		host.reset();
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		for (const stream of events) stream.close(http2Constants.NGHTTP2_CANCEL);
+		// Long enough for a keep-alive ping, which writes too.
+		await new Promise((resolve) => setTimeout(resolve, fast.pingMs * 2));
+		const next = await within(fetch(`${proxy.base}/api/v1/projects`));
+		expect(next === "hung" ? "hung" : await next.json()).toEqual({ proto: "2.0" });
+		expect(thrown).toEqual([]);
+		expect(host.upgrades).toBe(2);
 	});
 
 	it("cancels the upstream stream when the browser cancels a preview stream", async () => {
