@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -328,7 +329,8 @@ func TestSuccessfulCompletionKeepsPlanThatSpansTurns(t *testing.T) {
 		t.Errorf("plan activity summary = %q, want the provider's count", activity.Summary)
 	}
 	var detail struct {
-		Steps []domain.ConversationPlanStep `json:"steps"`
+		Steps      []domain.ConversationPlanStep `json:"steps"`
+		SpansTurns bool                          `json:"spansTurns"`
 	}
 	if err := json.Unmarshal(activity.Detail, &detail); err != nil {
 		t.Fatalf("decode plan activity detail: %v", err)
@@ -338,6 +340,156 @@ func TestSuccessfulCompletionKeepsPlanThatSpansTurns(t *testing.T) {
 			t.Errorf("plan activity step %d status = %q, want %q", i, step.Status, plan.Steps[i].Status)
 		}
 	}
+	// A plan row no turn holds is the only copy a client gets, so every row of a
+	// cross-turn list must say the list spans turns as the turn's copy does.
+	if !detail.SpansTurns {
+		t.Errorf("plan activity detail = %s, want spansTurns", activity.Detail)
+	}
+}
+
+// Claude can keep working on its own after a turn has ended. Those plan updates
+// carry no turn. One run of them rewrites one row, even when the user sends a turn
+// before the agent picks it up, and work after a later turn gets a row of its own.
+func TestTurnlessPlanRevisionsRewriteOneRowPerRun(t *testing.T) {
+	h := newHarness(t)
+
+	completeTurn(t, h, "A", "provider-turn-1")
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 2 })
+	h.conv.emit(turnlessPlan(0), turnlessPlan(1))
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		plans := turnlessPlanRows(s)
+		return len(plans) == 1 && plans[0].Summary == "Plan 1/3"
+	})
+
+	// The user sends B while the run goes on; the agent has not started B yet.
+	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "B", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send B: %v", err)
+	}
+	h.conv.emit(turnlessPlan(2))
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		plans := turnlessPlanRows(s)
+		return len(plans) == 1 && plans[0].Summary == "Plan 2/3"
+	})
+
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-2"},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: "provider-turn-2",
+			ProviderItemID: "msg-provider-turn-2", Text: "reply to B"},
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-2",
+			TurnState: domain.TurnStateCompleted},
+	)
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Messages) == 4 })
+	h.conv.emit(turnlessPlan(3))
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(turnlessPlanRows(s)) == 2 })
+
+	plans := turnlessPlanRows(snapshot)
+	if plans[0].Summary != "Plan 2/3" || plans[1].Summary != "Plan 3/3" {
+		t.Fatalf("turnless plan rows = %q, %q; want each run's newest revision", plans[0].Summary, plans[1].Summary)
+	}
+	if replyB := snapshot.Messages[3]; plans[1].Sequence < replyB.Sequence {
+		t.Errorf("second run's plan sequence = %d, want after turn B's reply (%d)", plans[1].Sequence, replyB.Sequence)
+	}
+	if first, second := planRowDetail(t, plans[0]), planRowDetail(t, plans[1]); !first.Superseded || second.Superseded {
+		t.Errorf("superseded = %v, %v; want only the second run's row current", first.Superseded, second.Superseded)
+	}
+}
+
+// Every turn and run holds a copy of a list that spans turns. The daemon marks the
+// copy written last as the current one, wherever it is, so no client has to date
+// the copies itself.
+func TestSpanningPlanCopyWrittenLastIsCurrent(t *testing.T) {
+	h := newHarness(t)
+	turnPlan := func(providerTurn string, done int) ports.ChatEvent {
+		event := turnlessPlan(done)
+		event.ProviderTurnID = providerTurn
+		return event
+	}
+
+	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "A", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send A: %v", err)
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"},
+		turnPlan("provider-turn-1", 1),
+		ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1",
+			TurnState: domain.TurnStateCompleted},
+		turnlessPlan(2),
+	)
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(turnlessPlanRows(s)) == 1 })
+	if plan := snapshot.Turns[0].Plan; plan == nil || !plan.Superseded {
+		t.Errorf("turn A plan = %#v, want superseded by the later run's copy", plan)
+	}
+	if row := planRowDetail(t, turnlessPlanRows(snapshot)[0]); row.Superseded {
+		t.Errorf("run's plan row superseded, want it current")
+	}
+
+	// A later turn's copy supersedes the run's row in turn.
+	if _, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "B", Origin: domain.MessageOriginHuman,
+	}); err != nil {
+		t.Fatalf("Send B: %v", err)
+	}
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-2"},
+		turnPlan("provider-turn-2", 3),
+	)
+	snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 2 && s.Turns[1].Plan != nil
+	})
+	if plan := snapshot.Turns[1].Plan; plan.Superseded {
+		t.Errorf("turn B plan superseded, want it current")
+	}
+	if plan := snapshot.Turns[0].Plan; plan == nil || !plan.Superseded {
+		t.Errorf("turn A plan = %#v, want still superseded", plan)
+	}
+	if row := planRowDetail(t, turnlessPlanRows(snapshot)[0]); !row.Superseded {
+		t.Errorf("run's plan row current, want superseded by turn B's copy")
+	}
+}
+
+// turnlessPlan is a revision of a three-step list that spans turns, with done
+// steps finished, sent with no turn.
+func turnlessPlan(done int) ports.ChatEvent {
+	plan := domain.ConversationPlan{SpansTurns: true}
+	for i := range 3 {
+		step := domain.ConversationPlanStep{Text: fmt.Sprintf("step %d", i+1), Status: domain.PlanStepPending}
+		if i < done {
+			step.Status = domain.PlanStepCompleted
+		}
+		plan.Steps = append(plan.Steps, step)
+	}
+	return ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, Plan: &plan, Summary: fmt.Sprintf("Plan %d/3", done)}
+}
+
+func turnlessPlanRows(s store.ConversationSnapshot) []domain.ConversationActivity {
+	var plans []domain.ConversationActivity
+	for _, activity := range s.Activities {
+		if activity.Kind == domain.ActivityKindPlan && activity.TurnID == "" {
+			plans = append(plans, activity)
+		}
+	}
+	return plans
+}
+
+type planRowFlags struct {
+	SpansTurns bool `json:"spansTurns"`
+	Superseded bool `json:"superseded"`
+}
+
+func planRowDetail(t *testing.T, activity domain.ConversationActivity) planRowFlags {
+	t.Helper()
+	var detail planRowFlags
+	if err := json.Unmarshal(activity.Detail, &detail); err != nil {
+		t.Fatalf("decode plan activity detail: %v", err)
+	}
+	if !detail.SpansTurns {
+		t.Errorf("plan activity detail = %s, want spansTurns", activity.Detail)
+	}
+	return detail
 }
 
 /* ---- model reroute ----------------------------------------------------- */

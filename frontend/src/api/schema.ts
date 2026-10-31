@@ -5718,6 +5718,7 @@ export interface components {
             explanation?: string;
             spansTurns?: boolean;
             steps: components["schemas"]["ConversationPlanStepResponse"][];
+            superseded?: boolean;
         };
         ConversationPlanStepResponse: {
             /** @enum {string} */

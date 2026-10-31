@@ -2352,6 +2352,32 @@ func (s *Store) SetTurnPlan(
 	return rows > 0, nil
 }
 
+// SupersedeSpanningPlans marks every copy of a list that spans turns superseded
+// except the one just written: the plan of providerTurnID, if any, and the plan
+// row keyed providerItemID.
+func (s *Store) SupersedeSpanningPlans(
+	ctx context.Context,
+	conversationID, providerTurnID, providerItemID string,
+	now time.Time,
+) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if err := q.SupersedeConversationTurnPlans(ctx, gen.SupersedeConversationTurnPlansParams{
+		ConversationID:        conversationID,
+		CurrentProviderTurnID: providerTurnID,
+	}); err != nil {
+		return fmt.Errorf("supersede turn plans in %s: %w", conversationID, err)
+	}
+	if err := q.SupersedeConversationPlanActivities(ctx, gen.SupersedeConversationPlanActivitiesParams{
+		UpdatedAt:             now,
+		ConversationID:        conversationID,
+		CurrentProviderItemID: providerItemID,
+	}); err != nil {
+		return fmt.Errorf("supersede plan rows in %s: %w", conversationID, err)
+	}
+	return nil
+}
+
 // MaxStreamedTextChars caps the provider prose stored for one activity.
 //
 // Reasoning on a long turn is the case this bounds: a model reasoning at high

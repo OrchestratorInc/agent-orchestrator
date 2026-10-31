@@ -1437,6 +1437,29 @@ UPDATE conversation_activities
 SET status = ?, summary = ?, detail_json = ?, revision = revision + 1, updated_at = ?
 WHERE conversation_id = ? AND provider_item_id = ? AND status <> 'cancelled';
 
+-- A list the agent keeps across turns has one current copy: the one written last.
+-- These mark every other copy, on a turn or on a plan row, superseded. A copy is
+-- rewritten whole when its turn or run revises it, which clears the mark.
+-- name: SupersedeConversationTurnPlans :exec
+UPDATE conversation_turns
+SET plan_json = json_set(plan_json, '$.superseded', json('true'))
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND provider_turn_id <> sqlc.arg(current_provider_turn_id)
+  AND plan_json <> ''
+  AND json_extract(plan_json, '$.spansTurns') = 1
+  AND json_extract(plan_json, '$.superseded') IS NULL;
+
+-- name: SupersedeConversationPlanActivities :exec
+UPDATE conversation_activities
+SET detail_json = json_set(detail_json, '$.superseded', json('true')),
+    revision = revision + 1,
+    updated_at = sqlc.arg(updated_at)
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND kind = 'plan'
+  AND provider_item_id <> sqlc.arg(current_provider_item_id)
+  AND json_extract(detail_json, '$.spansTurns') = 1
+  AND json_extract(detail_json, '$.superseded') IS NULL;
+
 -- Resolving an approval matches on the provider's request id, so a card the user
 -- left on screen cannot answer a request that replaced it.
 -- Merge the resolution into the provider payload so the offered decision kinds

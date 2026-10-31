@@ -4893,6 +4893,52 @@ func (q *Queries) SettleStreamingConversationMessagesForTurn(ctx context.Context
 	return err
 }
 
+const supersedeConversationPlanActivities = `-- name: SupersedeConversationPlanActivities :exec
+UPDATE conversation_activities
+SET detail_json = json_set(detail_json, '$.superseded', json('true')),
+    revision = revision + 1,
+    updated_at = ?1
+WHERE conversation_id = ?2
+  AND kind = 'plan'
+  AND provider_item_id <> ?3
+  AND json_extract(detail_json, '$.spansTurns') = 1
+  AND json_extract(detail_json, '$.superseded') IS NULL
+`
+
+type SupersedeConversationPlanActivitiesParams struct {
+	UpdatedAt             time.Time
+	ConversationID        string
+	CurrentProviderItemID string
+}
+
+func (q *Queries) SupersedeConversationPlanActivities(ctx context.Context, arg SupersedeConversationPlanActivitiesParams) error {
+	_, err := q.db.ExecContext(ctx, supersedeConversationPlanActivities, arg.UpdatedAt, arg.ConversationID, arg.CurrentProviderItemID)
+	return err
+}
+
+const supersedeConversationTurnPlans = `-- name: SupersedeConversationTurnPlans :exec
+UPDATE conversation_turns
+SET plan_json = json_set(plan_json, '$.superseded', json('true'))
+WHERE conversation_id = ?1
+  AND provider_turn_id <> ?2
+  AND plan_json <> ''
+  AND json_extract(plan_json, '$.spansTurns') = 1
+  AND json_extract(plan_json, '$.superseded') IS NULL
+`
+
+type SupersedeConversationTurnPlansParams struct {
+	ConversationID        string
+	CurrentProviderTurnID string
+}
+
+// A list the agent keeps across turns has one current copy: the one written last.
+// These mark every other copy, on a turn or on a plan row, superseded. A copy is
+// rewritten whole when its turn or run revises it, which clears the mark.
+func (q *Queries) SupersedeConversationTurnPlans(ctx context.Context, arg SupersedeConversationTurnPlansParams) error {
+	_, err := q.db.ExecContext(ctx, supersedeConversationTurnPlans, arg.ConversationID, arg.CurrentProviderTurnID)
+	return err
+}
+
 const updateConversationAccount = `-- name: UpdateConversationAccount :exec
 UPDATE conversations
 SET account_json = ?, updated_at = ?

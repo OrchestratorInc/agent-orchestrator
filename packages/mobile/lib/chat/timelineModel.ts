@@ -69,7 +69,9 @@ export function readableConversationItems(snapshot: ConversationSnapshot, openin
 	return snapshot.items.filter((item) => !item.turnId || !queued.has(item.turnId)).filter((item) => item.kind === "message" || (
 		item.activityKind !== "usage" &&
 		item.activityKind !== "reasoning" &&
-		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId))
+		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId)) &&
+		// An older copy of a list that spans turns; a later turn or run carries it.
+		!(item.activityKind === "plan" && item.detail?.superseded)
 	));
 }
 
@@ -109,24 +111,14 @@ export function groupConversationByTurn(
 }
 
 /**
- * Gives each turn group the plan it should show, as the desktop does. A list the
- * agent keeps across turns (Claude's task list) reaches every later turn as a copy
- * of the same list. Only the latest copy is current, so only that turn shows it;
- * the earlier copies would otherwise stack down the history.
+ * Gives each turn group the plan it should show, as the desktop does: the turn's
+ * plan, unless the daemon marked it superseded. That is an older copy of a list the
+ * agent keeps across turns (Claude's task list), which a later turn or run carries.
  */
 function attachCurrentPlans(groups: ConversationGroup[]): void {
-	let currentSpanningTurn: string | undefined;
-	for (let index = groups.length - 1; index >= 0; index--) {
-		if (groups[index].turn?.plan?.spansTurns) {
-			currentSpanningTurn = groups[index].turnId;
-			break;
-		}
-	}
 	for (const group of groups) {
 		const plan = group.turn?.plan;
-		if (!plan?.steps.length) continue;
-		if (plan.spansTurns && group.turnId !== currentSpanningTurn) continue;
-		group.plan = plan;
+		if (plan?.steps.length && !plan.superseded) group.plan = plan;
 	}
 }
 

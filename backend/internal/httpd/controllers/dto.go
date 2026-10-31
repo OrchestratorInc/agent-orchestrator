@@ -3169,8 +3169,11 @@ type ConversationPlanResponse struct {
 	Explanation string                         `json:"explanation,omitempty"`
 	Steps       []ConversationPlanStepResponse `json:"steps"`
 	// SpansTurns marks a list the agent keeps across turns. Later turns carry a
-	// copy of the same list, so a client shows it once, on the latest turn.
+	// copy of the same list.
 	SpansTurns bool `json:"spansTurns,omitempty"`
+	// Superseded marks a copy of a list that spans turns which a later copy has
+	// replaced. Only the copy without it is current.
+	Superseded bool `json:"superseded,omitempty"`
 }
 
 // ConversationPlanStepResponse is one step of a plan.
