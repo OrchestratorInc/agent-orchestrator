@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, FolderOpen, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, FolderOpen, Pencil, Pin, PinOff, SquareTerminal, Trash2, X } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { CLOUD_TEXT_ARTIFACT, deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
@@ -71,6 +71,9 @@ export function ArtifactActionsMenu({
 	const queryClient = useQueryClient();
 	const open = useOpenSessionArtifacts();
 	const [copyError, setCopyError] = useState("");
+	// The id of a cloud download in progress, and a short confirmation once one is saved.
+	const [downloadId, setDownloadId] = useState<string | null>(null);
+	const [notice, setNotice] = useState("");
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const actionClassName = cn(className, menuOpen && "opacity-100 [@media(hover:hover)]:opacity-100");
@@ -116,13 +119,27 @@ export function ArtifactActionsMenu({
 	const download = async () => {
 		open.reset();
 		setCopyError("");
+		setNotice("");
+		if (!cloudFileUrl) {
+			setCopyError(t("artifacts.accessError"));
+			return;
+		}
+		// A large file can take minutes; while it saves, the menu offers to cancel
+		// instead of starting a second download.
+		const id = crypto.randomUUID();
+		setDownloadId(id);
 		try {
-			if (!cloudFileUrl) throw new Error(t("artifacts.accessError"));
-			const bytes = await aoBridge.cloudArtifact.fetch(cloudFileUrl);
-			await aoBridge.chatImage.save({ name: artifact.name, bytes });
+			if (await aoBridge.cloudArtifact.save({ url: cloudFileUrl, name: artifact.name, id })) {
+				setNotice(t("artifacts.downloaded", { name: artifact.name }));
+			}
 		} catch (error) {
 			setCopyError(error instanceof Error ? error.message : String(error));
+		} finally {
+			setDownloadId(null);
 		}
+	};
+	const cancelDownload = () => {
+		if (downloadId) void aoBridge.cloudArtifact.cancelSave(downloadId);
 	};
 	const copyable = !fileMediaKind(artifact.path) && (!session.cloud || CLOUD_TEXT_ARTIFACT.test(artifact.path));
 
@@ -136,6 +153,11 @@ export function ArtifactActionsMenu({
 		}, ERROR_CLEAR_MS);
 		return () => clearTimeout(timer);
 	}, [error, resetOpen]);
+	useEffect(() => {
+		if (!notice) return;
+		const timer = setTimeout(() => setNotice(""), ERROR_CLEAR_MS);
+		return () => clearTimeout(timer);
+	}, [notice]);
 	const menuTrigger = (
 		<DropdownMenuTrigger asChild>
 			<Button
@@ -274,10 +296,17 @@ export function ArtifactActionsMenu({
 					{!sidebar ? (
 						<>
 							{session.cloud ? (
-								<DropdownMenuItem onSelect={() => void download()}>
-									<Download aria-hidden="true" />
-									{t("artifacts.download")}
-								</DropdownMenuItem>
+								downloadId ? (
+									<DropdownMenuItem onSelect={cancelDownload}>
+										<X aria-hidden="true" />
+										{t("artifacts.cancelDownload")}
+									</DropdownMenuItem>
+								) : (
+									<DropdownMenuItem onSelect={() => void download()}>
+										<Download aria-hidden="true" />
+										{t("artifacts.download")}
+									</DropdownMenuItem>
+								)
 							) : null}
 							{local || copyable || session.cloud ? <DropdownMenuSeparator /> : null}
 							<DropdownMenuItem
@@ -311,6 +340,16 @@ export function ArtifactActionsMenu({
 					errorClassName,
 				)} role="alert" title={error}>
 					{error}
+				</span>
+			) : notice ? (
+				<span className={cn(
+					"text-caption text-muted-foreground",
+					iconOnly
+						? "absolute bottom-full right-0 mb-2 w-64 max-w-[calc(100vw-2rem)] rounded-md bg-popover p-2 shadow-md"
+						: "min-w-0 truncate",
+					errorClassName,
+				)} role="status" title={notice}>
+					{notice}
 				</span>
 			) : null}
 		</>
