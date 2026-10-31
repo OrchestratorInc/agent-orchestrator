@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -19,6 +21,21 @@ import (
 type UsageSummaryService interface {
 	ListCompact(context.Context, domain.ProjectID) ([]domain.CompactSessionUsage, error)
 	Get(context.Context, domain.SessionID) (domain.SessionUsageSummary, error)
+}
+
+// UsageReportService builds the usage page's report.
+type UsageReportService interface {
+	Report(ctx context.Context, days, offset int, timeZone string, projectID domain.ProjectID) (domain.UsageReport, error)
+}
+
+// UsageLimitHistoryService reads the windows AO's own limit readings show.
+type UsageLimitHistoryService interface {
+	History(ctx context.Context, days int) (domain.UsageLimitHistory, error)
+}
+
+// UsageLimitHistorySetting turns keeping limit readings on and off.
+type UsageLimitHistorySetting interface {
+	SetLimitHistory(ctx context.Context, enabled bool, now time.Time) error
 }
 
 // SessionMemoryService samples resident memory per live session.
@@ -52,14 +69,117 @@ type UsageController struct {
 	Steps SessionStepsReader
 	// Pressure is optional: without it the pressure route is 501.
 	Pressure MemoryPressureReader
+	// Report is optional: without it the report route is 501.
+	Report UsageReportService
+	// LimitHistory is optional: without it the limit windows route is 501.
+	LimitHistory UsageLimitHistoryService
+	// LimitHistorySetting is optional: without it the limit history route is 501.
+	LimitHistorySetting UsageLimitHistorySetting
 }
 
 // Register mounts usage routes on the supplied router.
 func (c *UsageController) Register(r chi.Router) {
+	r.Get("/usage/report", c.getReport)
+	r.Get("/usage/limit-windows", c.getLimitWindows)
+	r.Put("/usage/limit-history", c.setLimitHistory)
 	r.Get("/usage/sessions", c.listSessions)
 	r.Get("/usage/sessions/memory", c.listMemory)
 	r.Get("/usage/memory/pressure", c.getPressure)
 	r.Get("/usage/sessions/{sessionId}", c.getSession)
+}
+
+func (c *UsageController) setLimitHistory(w http.ResponseWriter, r *http.Request) {
+	if c.LimitHistorySetting == nil {
+		apispec.NotImplemented(w, r, "PUT", "/api/v1/usage/limit-history")
+		return
+	}
+	var req UsageLimitHistoryRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.Enabled == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "LIMIT_HISTORY_INVALID", "enabled must be true or false", nil)
+		return
+	}
+	if err := c.LimitHistorySetting.SetLimitHistory(r.Context(), *req.Enabled, time.Now()); err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, UsageLimitHistoryResponse{Enabled: *req.Enabled})
+}
+
+func (c *UsageController) getLimitWindows(w http.ResponseWriter, r *http.Request) {
+	if c.LimitHistory == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/limit-windows")
+		return
+	}
+	days := 7
+	if raw := r.URL.Query().Get("days"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			envelope.WriteError(w, r, apierr.Invalid("INVALID_USAGE_WINDOW", "days must be a whole number", nil))
+			return
+		}
+		days = parsed
+	}
+	history, err := c.LimitHistory.History(r.Context(), days)
+	if err != nil {
+		c.Log.WarnContext(r.Context(), "failed to read limit windows", "error", err)
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, UsageLimitWindowsResponse{
+		Since: history.Since, Until: history.Until, FirstReadingAt: history.FirstReadingAt, Logins: history.Logins,
+	})
+}
+
+func (c *UsageController) getReport(w http.ResponseWriter, r *http.Request) {
+	if c.Report == nil {
+		apispec.NotImplemented(w, r, "GET", "/api/v1/usage/report")
+		return
+	}
+	query := r.URL.Query()
+	days, offset := 7, 0
+	for name, target := range map[string]*int{"days": &days, "offset": &offset} {
+		if raw := query.Get(name); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil {
+				envelope.WriteError(w, r, apierr.Invalid("INVALID_USAGE_WINDOW", name+" must be a whole number", nil))
+				return
+			}
+			*target = parsed
+		}
+	}
+	report, err := c.Report.Report(r.Context(), days, offset, query.Get("tz"), domain.ProjectID(query.Get("projectId")))
+	if err != nil {
+		c.Log.WarnContext(r.Context(), "failed to read usage report", "error", err)
+		envelope.WriteError(w, r, err)
+		return
+	}
+	out := UsageReportResponse{
+		Days: report.Days, TimeZone: report.TimeZone, Resolution: report.Resolution,
+		Since: report.Since, Until: report.Until, Periods: report.Periods,
+		Rows: make([]UsageReportRowResponse, 0, len(report.Rows)), Sessions: make([]UsageReportSessionResponse, 0, len(report.Sessions)),
+	}
+	if out.Periods == nil {
+		out.Periods = []string{}
+	}
+	for _, row := range report.Rows {
+		out.Rows = append(out.Rows, UsageReportRowResponse{
+			Period: row.Period, Harness: string(row.Harness), Model: row.ModelID, Speed: row.Speed,
+			Events: row.Events, PricedEvents: row.PricedEvents,
+			InputTokens: row.InputTokens, CacheReadTokens: row.CacheReadTokens, CacheWriteTokens: row.CacheWriteTokens, OutputTokens: row.OutputTokens,
+			InputCostNanos: row.InputCostNanos, CacheReadCostNanos: row.CacheReadCostNanos, CacheWriteCostNanos: row.CacheWriteCostNanos,
+			OutputCostNanos: row.OutputCostNanos, CostNanos: row.CostNanos, PremiumNanos: row.PremiumNanos, CacheSavingsNanos: row.CacheSavingsNanos,
+		})
+	}
+	for _, session := range report.Sessions {
+		out.Sessions = append(out.Sessions, UsageReportSessionResponse{
+			SessionID: string(session.SessionID), ProjectID: string(session.ProjectID), Harness: string(session.Harness), Title: session.Title,
+			Events: session.Events, PricedEvents: session.PricedEvents, Tokens: session.Tokens, CostNanos: session.CostNanos, LastUsedAt: session.LastUsedAt,
+		})
+	}
+	envelope.WriteJSON(w, http.StatusOK, out)
 }
 
 func (c *UsageController) listSessions(w http.ResponseWriter, r *http.Request) {

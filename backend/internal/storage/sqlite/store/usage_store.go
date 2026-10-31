@@ -434,6 +434,7 @@ func (s *Store) ApplyUsageChunk(
 				if promoteAttribution {
 					rows, err := q.PromoteInferredUsageEventToObserved(ctx, gen.PromoteInferredUsageEventToObservedParams{
 						BillingProviderID:         stringOrNull(ev.BillingProviderID),
+						ServiceTier:               stringOrNull(ev.ServiceTier),
 						InputCostNanos:            ptrInt64ToNull(ev.Costs.InputCostNanos),
 						CachedInputCostNanos:      ptrInt64ToNull(ev.Costs.CachedInputCostNanos),
 						OutputCostNanos:           ptrInt64ToNull(ev.Costs.OutputCostNanos),
@@ -527,6 +528,7 @@ func (s *Store) ListUsageCostCandidates(
 				row.UncachedInputTokens, row.OutputTokens,
 			),
 			ProviderUsageJSON: row.ProviderUsageJson.String,
+			ServiceTier:       row.ServiceTier.String,
 			PricingVersion:    row.PricingVersion,
 			SourceEventKey:    row.SourceEventKey,
 		})
@@ -584,6 +586,7 @@ func (s *Store) ApplyUsageCostUpdates(
 				ExpectedUncachedInputTokens:  ptrInt64ToNull(candidate.Tokens.UncachedInputTokens),
 				ExpectedOutputTokens:         ptrInt64ToNull(candidate.Tokens.OutputTokens),
 				ExpectedProviderUsageJson:    stringOrNull(candidate.ProviderUsageJSON),
+				ExpectedServiceTier:          stringOrNull(candidate.ServiceTier),
 				ExpectedSourceEventKey:       candidate.SourceEventKey,
 				ExpectedPricingVersion:       candidate.PricingVersion,
 			})
@@ -703,6 +706,7 @@ func (s *Store) ApplyLegacyUsageRepairs(
 				BillingProviderID:             sql.NullString{String: billingProviderID, Valid: true},
 				BillingProviderSource:         stringOrNull(string(repair.BillingProviderSource)),
 				ProviderUsageJson:             stringOrNull(repair.ProviderUsageJSON),
+				ServiceTier:                   stringOrNull(repair.ServiceTier),
 				InputCostNanos:                ptrInt64ToNull(repair.Costs.InputCostNanos),
 				CachedInputCostNanos:          ptrInt64ToNull(repair.Costs.CachedInputCostNanos),
 				OutputCostNanos:               ptrInt64ToNull(repair.Costs.OutputCostNanos),
@@ -904,6 +908,7 @@ func usageEventInsertParams(source gen.GetUsageSourceWithBindingAndSessionRow, e
 		UncachedInputTokens:   ptrInt64ToNull(ev.Tokens.UncachedInputTokens),
 		OutputTokens:          ptrInt64ToNull(ev.Tokens.OutputTokens),
 		ProviderUsageJson:     stringOrNull(ev.ProviderUsageJSON),
+		ServiceTier:           stringOrNull(ev.ServiceTier),
 		InputCostNanos:        ptrInt64ToNull(ev.Costs.InputCostNanos),
 		CachedInputCostNanos:  ptrInt64ToNull(ev.Costs.CachedInputCostNanos),
 		OutputCostNanos:       ptrInt64ToNull(ev.Costs.OutputCostNanos),
@@ -1110,4 +1115,54 @@ func int64PtrWhen(v int64, ok bool) *int64 {
 		return nil
 	}
 	return &v
+}
+
+// ListUsageReportEvents reads every timestamped usage event in [since, until).
+func (s *Store) ListUsageReportEvents(ctx context.Context, since, until time.Time) ([]domain.UsageReportEvent, error) {
+	const layout = "2006-01-02 15:04:05"
+	rows, err := s.qr.ListUsageReportEvents(ctx, gen.ListUsageReportEventsParams{
+		SinceUtc: since.UTC().Format(layout),
+		UntilUtc: until.UTC().Format(layout),
+	})
+	if err != nil {
+		return nil, err
+	}
+	reported := func(value int64) *int64 {
+		if value < 0 {
+			return nil
+		}
+		return &value
+	}
+	out := make([]domain.UsageReportEvent, 0, len(rows))
+	for _, row := range rows {
+		event := domain.UsageReportEvent{
+			CreatedAt:         row.CreatedAt.Time,
+			ProviderID:        domain.UsageProviderID(row.ProviderID),
+			BillingProviderID: row.BillingProviderID.String,
+			ModelID:           row.ModelID,
+			ServiceTier:       row.ServiceTier.String,
+			Tokens: domain.UsageTokenMetrics{
+				CachedInputTokens:   nullInt64Ptr(row.CachedInputTokens),
+				UncachedInputTokens: nullInt64Ptr(row.UncachedInputTokens),
+				OutputTokens:        nullInt64Ptr(row.OutputTokens),
+			},
+			CacheWriteTokens:   reported(row.CacheWriteTokens),
+			CacheWrite5mTokens: reported(row.CacheWrite5mTokens),
+			CacheWrite1hTokens: reported(row.CacheWrite1hTokens),
+			Costs: domain.UsageEventCosts{
+				InputCostNanos:       nullInt64Ptr(row.InputCostNanos),
+				CachedInputCostNanos: nullInt64Ptr(row.CachedInputCostNanos),
+				OutputCostNanos:      nullInt64Ptr(row.OutputCostNanos),
+				EstimatedCostNanos:   nullInt64Ptr(row.EstimatedCostNanos),
+			},
+			Harness:      row.Harness,
+			SessionID:    row.SessionID,
+			SessionTitle: row.SessionTitle,
+		}
+		if row.ProjectID != nil {
+			event.ProjectID = *row.ProjectID
+		}
+		out = append(out, event)
+	}
+	return out, nil
 }

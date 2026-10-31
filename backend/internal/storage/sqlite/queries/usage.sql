@@ -361,11 +361,11 @@ INSERT INTO model_usage_events (
     binding_id, usage_source_id, provider_id, billing_provider_id,
     billing_provider_source, model_id, usage_measurement_kind,
     input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
-    provider_usage_json,
+    provider_usage_json, service_tier,
     input_cost_nanos, cached_input_cost_nanos, output_cost_nanos,
     estimated_cost_nanos, pricing_version,
     source_event_key, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id;
 
 -- name: RehomeOpenUsageEventToReplacementSource :execrows
@@ -398,10 +398,12 @@ WHERE model_usage_events.id = sqlc.arg(id)
 -- A later observation supersedes an inferred billing provider and every cost
 -- derived from that inference. ApplyUsageChunk rehomes replacement-generation
 -- rows before this statement, so the source guard also prevents promotion on a
--- stale generation.
+-- stale generation. The new cost is estimated at the replayed service tier, so
+-- a row stored before tiers were recorded takes that tier with it.
 UPDATE model_usage_events
 SET billing_provider_id = sqlc.arg(billing_provider_id),
     billing_provider_source = 'observed',
+    service_tier = COALESCE(service_tier, sqlc.narg(service_tier)),
     input_cost_nanos = sqlc.narg(input_cost_nanos),
     cached_input_cost_nanos = sqlc.narg(cached_input_cost_nanos),
     output_cost_nanos = sqlc.narg(output_cost_nanos),
@@ -448,6 +450,7 @@ SELECT
     event.uncached_input_tokens,
     event.output_tokens,
     event.provider_usage_json,
+    event.service_tier,
     event.pricing_version,
     event.source_event_key
 FROM model_usage_events event
@@ -479,6 +482,7 @@ WHERE id = sqlc.arg(id)
   AND uncached_input_tokens IS sqlc.narg(expected_uncached_input_tokens)
   AND output_tokens IS sqlc.narg(expected_output_tokens)
   AND provider_usage_json IS sqlc.narg(expected_provider_usage_json)
+  AND service_tier IS sqlc.narg(expected_service_tier)
   AND source_event_key = sqlc.arg(expected_source_event_key)
   AND pricing_version = sqlc.arg(expected_pricing_version)
   AND estimated_cost_nanos IS NULL
@@ -526,6 +530,9 @@ SET billing_provider_id = sqlc.arg(billing_provider_id),
     -- The reparse is the only way a pre-capture event can ever gain its bounded
     -- provider object, and it is exactly what makes the event priceable.
     provider_usage_json = sqlc.narg(provider_usage_json),
+    -- Same for the service tier, which Codex reports on another line. The
+    -- repair's cost is estimated at it; a stored tier is never replaced.
+    service_tier = COALESCE(service_tier, sqlc.narg(service_tier)),
     input_cost_nanos = sqlc.narg(input_cost_nanos),
     cached_input_cost_nanos = sqlc.narg(cached_input_cost_nanos),
     output_cost_nanos = sqlc.narg(output_cost_nanos),
@@ -645,3 +652,46 @@ LEFT JOIN usage_session_integrity integrity ON integrity.session_id = ub.session
 WHERE (sqlc.arg(project_id) = '' OR s.project_id = sqlc.arg(project_id))
 GROUP BY ub.session_id, s.project_id, s.num, integrity.incomplete
 ORDER BY s.project_id, s.num;
+
+-- name: ListUsageReportEvents :many
+-- Every timestamped usage event in a window, with the session it belongs to.
+-- created_at is stored as Go's UTC text, so a range over its fixed-width
+-- "YYYY-MM-DD HH:MM:SS" prefix is a time range. The cache-write counts are read
+-- out of the bounded provider object, where each provider reports them; -1
+-- means the object did not report that count.
+SELECT
+    model_usage_events.created_at,
+    model_usage_events.provider_id,
+    model_usage_events.billing_provider_id,
+    model_usage_events.model_id,
+    model_usage_events.service_tier,
+    model_usage_events.cached_input_tokens,
+    model_usage_events.uncached_input_tokens,
+    model_usage_events.output_tokens,
+    model_usage_events.input_cost_nanos,
+    model_usage_events.cached_input_cost_nanos,
+    model_usage_events.output_cost_nanos,
+    model_usage_events.estimated_cost_nanos,
+    CAST(COALESCE(CASE WHEN json_valid(model_usage_events.provider_usage_json) THEN
+        CASE model_usage_events.provider_id
+            WHEN 'anthropic' THEN json_extract(model_usage_events.provider_usage_json, '$.cache_creation_input_tokens')
+            ELSE COALESCE(
+                json_extract(model_usage_events.provider_usage_json, '$.last_token_usage.cache_write_input_tokens'),
+                json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_input_tokens'))
+        END
+    END, -1) AS INTEGER) AS cache_write_tokens,
+    CAST(COALESCE(CASE WHEN model_usage_events.provider_id = 'anthropic' AND json_valid(model_usage_events.provider_usage_json)
+        THEN json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_5m_input_tokens') END, -1) AS INTEGER) AS cache_write_5m_tokens,
+    CAST(COALESCE(CASE WHEN model_usage_events.provider_id = 'anthropic' AND json_valid(model_usage_events.provider_usage_json)
+        THEN json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_1h_input_tokens') END, -1) AS INTEGER) AS cache_write_1h_tokens,
+    usage_bindings.harness,
+    usage_bindings.session_id,
+    sessions.project_id,
+    CAST(COALESCE(NULLIF(trim(sessions.display_name), ''), NULLIF(trim(sessions.issue_id), ''), sessions.id) AS TEXT) AS session_title
+FROM model_usage_events
+JOIN usage_bindings ON usage_bindings.id = model_usage_events.binding_id
+JOIN sessions ON sessions.id = usage_bindings.session_id
+WHERE model_usage_events.created_at IS NOT NULL
+  AND substr(model_usage_events.created_at, 1, 19) >= CAST(sqlc.arg(since_utc) AS TEXT)
+  AND substr(model_usage_events.created_at, 1, 19) < CAST(sqlc.arg(until_utc) AS TEXT)
+ORDER BY model_usage_events.id;

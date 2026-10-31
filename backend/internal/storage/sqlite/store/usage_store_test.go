@@ -693,6 +693,117 @@ INSERT INTO model_usage_events (
 	}
 }
 
+// Break caught: a stored service tier dropped on insert, missing from the
+// backfill candidate (so a priority event is priced at standard), or a backfill
+// estimate made at one tier landing on a row that has since recorded another.
+func TestUsageServiceTierPersistsAndGuardsBackfill(t *testing.T) {
+	dataDir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dataDir)
+	ctx := context.Background()
+	sess := seedUsageSession(t, s, domain.HarnessCodex)
+	now := time.Unix(1700000000, 0).UTC()
+	source := seedUsageSource(t, s, sess, now)
+	event := domain.ModelUsageEvent{
+		ProviderID:        domain.UsageProviderOpenAI,
+		BillingProviderID: "openai", BillingProviderSource: domain.UsageBillingProviderObserved,
+		ModelID:         "gpt-test",
+		MeasurementKind: domain.UsageMeasurementNativeReported,
+		Tokens:          canonicalUsageTokens(3, 1, 2, 2),
+		ServiceTier:     "priority",
+		Costs:           domain.UsageEventCosts{PricingVersion: "old"},
+		SourceEventKey:  "event-priority",
+	}
+	mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{event}))
+
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db"))
+	mustNoError(t, err)
+	t.Cleanup(func() { _ = raw.Close() })
+	var stored string
+	mustNoError(t, raw.QueryRow(`SELECT service_tier FROM model_usage_events WHERE source_event_key = 'event-priority'`).Scan(&stored))
+	if stored != "priority" {
+		t.Fatalf("stored service tier = %q, want priority", stored)
+	}
+
+	candidates, err := s.ListUsageCostCandidates(ctx, "openai", "active", 0)
+	mustNoError(t, err)
+	if len(candidates) != 1 || candidates[0].ServiceTier != "priority" {
+		t.Fatalf("candidates = %+v, want one priority candidate", candidates)
+	}
+	total := int64(42)
+	stale := candidates[0]
+	stale.ServiceTier = ""
+	applied, err := s.ApplyUsageCostUpdates(ctx, []domain.UsageCostUpdate{{
+		Candidate: stale, Costs: domain.UsageEventCosts{EstimatedCostNanos: &total, PricingVersion: "active"},
+	}}, now)
+	mustNoError(t, err)
+	if applied != 0 {
+		t.Fatalf("update with a different tier applied %d rows, want 0", applied)
+	}
+	applied, err = s.ApplyUsageCostUpdates(ctx, []domain.UsageCostUpdate{{
+		Candidate: candidates[0], Costs: domain.UsageEventCosts{EstimatedCostNanos: &total, PricingVersion: "active"},
+	}}, now)
+	mustNoError(t, err)
+	if applied != 1 {
+		t.Fatalf("update at the stored tier applied %d rows, want 1", applied)
+	}
+}
+
+// Break caught: a time range over created_at's stored text that drops or
+// leaks events at the edges, cache writes read from the wrong provider field,
+// or a session title that does not match the one the UI shows.
+func TestListUsageReportEventsReadsWindowCacheWritesAndTitle(t *testing.T) {
+	s := sqlitetest.MustOpen(t)
+	ctx := context.Background()
+	sess := seedUsageSession(t, s, domain.HarnessClaudeCode)
+	now := time.Unix(1700000000, 0).UTC()
+	source := seedUsageSource(t, s, sess, now)
+	event := func(key string, at time.Time, usage string) domain.ModelUsageEvent {
+		return domain.ModelUsageEvent{
+			ProviderID: domain.UsageProviderAnthropic, BillingProviderID: "anthropic", BillingProviderSource: domain.UsageBillingProviderObserved,
+			ModelID: "claude-x", MeasurementKind: domain.UsageMeasurementNativeReported,
+			Tokens:            canonicalUsageTokens(30, 10, 20, 5),
+			ProviderUsageJSON: usage, ServiceTier: "fast", CreatedAt: at, SourceEventKey: key,
+		}
+	}
+	day := time.Date(2026, 10, 25, 0, 0, 0, 0, time.UTC)
+	mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+		ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
+	}, []domain.ModelUsageEvent{
+		event("before", day.Add(-time.Millisecond), ""),
+		event("first", day, `{"cache_creation_input_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":10}}`),
+		event("unsplit", day.Add(time.Hour), `{"cache_creation_input_tokens":7}`),
+		event("after", day.Add(24*time.Hour), ""),
+	}))
+
+	events, err := s.ListUsageReportEvents(ctx, day, day.Add(24*time.Hour))
+	mustNoError(t, err)
+	if len(events) != 2 {
+		t.Fatalf("events = %+v, want the two inside the window", events)
+	}
+	first, unsplit := events[0], events[1]
+	if !first.CreatedAt.Equal(day) || first.ServiceTier != "fast" || first.SessionID != sess.ID || first.Harness != domain.HarnessClaudeCode {
+		t.Fatalf("first = %+v", first)
+	}
+	if tokenOrNil(first.CacheWriteTokens) != 12 || tokenOrNil(first.CacheWrite5mTokens) != 2 || tokenOrNil(first.CacheWrite1hTokens) != 10 {
+		t.Fatalf("first cache writes = %v/%v/%v", first.CacheWriteTokens, first.CacheWrite5mTokens, first.CacheWrite1hTokens)
+	}
+	if tokenOrNil(unsplit.CacheWriteTokens) != 7 || unsplit.CacheWrite5mTokens != nil || unsplit.CacheWrite1hTokens != nil {
+		t.Fatalf("unsplit cache writes = %v/%v/%v", unsplit.CacheWriteTokens, unsplit.CacheWrite5mTokens, unsplit.CacheWrite1hTokens)
+	}
+	if first.SessionTitle != string(sess.ID) && first.SessionTitle != sess.DisplayName {
+		t.Fatalf("title = %q, want the display name or id", first.SessionTitle)
+	}
+}
+
+func tokenOrNil(value *int64) int64 {
+	if value == nil {
+		return -1
+	}
+	return *value
+}
+
 // Break caught: per-row enrichment transactions would emit duplicate CDC
 // invalidations for one binding, while a partial transaction could expose only
 // some estimates from one bounded batch.

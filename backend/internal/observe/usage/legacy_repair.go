@@ -313,6 +313,7 @@ func (r *LegacyRepairer) repairSource(ctx context.Context, source domain.UsageSo
 				BillingProviderID:       billingProviderID,
 				BillingProviderSource:   providerSource,
 				ProviderUsageJSON:       event.ProviderUsageJSON,
+				ServiceTier:             event.ServiceTier,
 				Costs:                   domain.UsageEventCosts{PricingVersion: snapshot.ProviderVersion(billingProviderID)},
 			}
 			estimate, estimateErr := snapshot.Estimate(event)

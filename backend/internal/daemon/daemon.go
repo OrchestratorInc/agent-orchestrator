@@ -584,6 +584,8 @@ func Run(buildVersion string) error {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
 	}
 	agentAccountSvc = newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
+	agentAccountSvc.SetLimitLog(store)
+	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
@@ -1064,6 +1066,9 @@ func Run(buildVersion string) error {
 		NativeSessions:     nativeSessions,
 		UsageHooks:         usageCollector,
 		UsageSummary:       usagesvc.NewSummaryReader(store),
+		UsageReport:        usageReportReader(store, usagePricing),
+		UsageLimitHistory:  usagesvc.NewLimitHistoryReader(store),
+		UsageLimitSetting:  store,
 		SessionMemory:      memoryReader,
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,

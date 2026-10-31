@@ -1183,3 +1183,61 @@ func TestParseCodexNullInfoDoesNotResetTheCumulativeBaseline(t *testing.T) {
 		t.Fatalf("baseline = %+v, want the latest cumulative total", state.Codex.Baseline)
 	}
 }
+
+// Break caught: Codex reports the tier on thread_settings_applied, not on the
+// token_count it prices, so a tier lost at a chunk boundary, or kept after the
+// thread went back to standard, misprices every later request.
+func TestParseCodexCarriesTheThreadServiceTierAcrossChunks(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	settings := func(tier string) []byte {
+		if tier == "" {
+			return []byte(`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":"gpt-5.6"}}}`)
+		}
+		return []byte(`{"type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":"gpt-5.6","service_tier":"` + tier + `"}}}`)
+	}
+	source := usageSource(domain.UsageSourceCodexRollout)
+	first := parseRecords(source, []jsonlRecord{
+		{Offset: 0, Data: []byte(`{"type":"session_meta","payload":{"model_provider":"openai"}}`)},
+		{Offset: 100, Data: []byte(`{"type":"turn_context","payload":{"model":"gpt-5.6"}}`)},
+		{Offset: 200, Data: settings(" Priority ")},
+		{Offset: 300, Data: codexTokenLine("2026-07-01T10:00:00Z", 100, 60, 10, 20, 5)},
+	}, 400, now)
+	if first.err != nil || len(first.Events) != 1 || first.Events[0].ServiceTier != "priority" {
+		t.Fatalf("first chunk = %+v, err %v", first.Events, first.err)
+	}
+
+	source.Source.ParserStateJSON = first.Cursor.ParserStateJSON
+	source.Source.ByteOffset = first.Cursor.ByteOffset
+	second := parseRecords(source, []jsonlRecord{
+		{Offset: 400, Data: codexTokenLine("2026-07-01T10:00:01Z", 160, 90, 10, 35, 8)},
+		{Offset: 500, Data: settings("")},
+		{Offset: 600, Data: codexTokenLine("2026-07-01T10:00:02Z", 200, 100, 10, 40, 8)},
+	}, 700, now)
+	if second.err != nil || len(second.Events) != 2 {
+		t.Fatalf("second chunk = %+v, err %v", second.Events, second.err)
+	}
+	if got := []string{second.Events[0].ServiceTier, second.Events[1].ServiceTier}; got[0] != "priority" || got[1] != "" {
+		t.Fatalf("tiers = %q, want [priority \"\"]", got)
+	}
+}
+
+// Break caught: Claude fast mode reported in usage.speed priced at standard
+// rates, or a speed of an unexpected type dropping the whole event.
+func TestParseClaudeRecordsTheReportedSpeed(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	line := func(id, speed string) []byte {
+		return []byte(`{"type":"assistant","uuid":"` + id + `","timestamp":"2026-07-01T10:00:00Z","message":{"id":"` + id +
+			`","model":"claude-opus-5-5","stop_reason":"end_turn","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":4` + speed + `}}}`)
+	}
+	result := parseRecords(usageSource(domain.UsageSourceClaudeMain), []jsonlRecord{
+		{Offset: 0, Data: line("fast", `,"speed":"fast"`)},
+		{Offset: 300, Data: line("none", ``)},
+		{Offset: 600, Data: line("odd", `,"speed":{"mode":"fast"}`)},
+	}, 900, now)
+	if len(result.Events) != 3 {
+		t.Fatalf("events = %d, want 3 (anomalies %d)", len(result.Events), result.Cursor.AnomalyCount)
+	}
+	if got := []string{result.Events[0].ServiceTier, result.Events[1].ServiceTier, result.Events[2].ServiceTier}; got[0] != "fast" || got[1] != "" || got[2] != "" {
+		t.Fatalf("tiers = %q, want [fast \"\" \"\"]", got)
+	}
+}

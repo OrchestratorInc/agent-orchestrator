@@ -226,6 +226,58 @@ func TestEstimateKeepsUnknownBucketsUnknownAndZeroBucketsKnown(t *testing.T) {
 	}
 }
 
+// Break caught: a priority or fast request priced at standard rates, or a tier
+// the catalog cannot price billed at standard rates instead of left unknown.
+func TestEstimatePricesTheReportedServiceTier(t *testing.T) {
+	snapshot := decodeTestSnapshot(t, map[string][]testModel{
+		"anthropic": {
+			{ID: "claude-test", Input: "0.000001", Output: "0.000002"},
+			{ID: "claude-test#fast", Input: "0.000002", Output: "0.000004"},
+		},
+		"openai": {
+			{ID: "gpt-test", Input: "0.000001", Output: "0.000002"},
+			{ID: "gpt-test#priority", Input: "0.000002", Output: "0.000004"},
+		},
+		"zai": {{ID: "glm-test", Input: "0.000001", Output: "0.000002"}},
+	})
+	const standard, doubled = 3_000_000, 6_000_000
+	for _, tc := range []struct {
+		name     string
+		provider domain.UsageProviderID
+		billing  string
+		model    string
+		tier     string
+		want     int64 // -1 is unknown
+	}{
+		{"codex reported no tier", domain.UsageProviderOpenAI, "openai", "gpt-test", "", standard},
+		{"codex default", domain.UsageProviderOpenAI, "openai", "gpt-test", "default", standard},
+		{"codex priority", domain.UsageProviderOpenAI, "openai", "gpt-test", "priority", doubled},
+		{"codex config alias", domain.UsageProviderOpenAI, "openai", "gpt-test", "fast", doubled},
+		{"codex tier without a row", domain.UsageProviderOpenAI, "openai", "gpt-test", "flex", -1},
+		{"codex unknown tier", domain.UsageProviderOpenAI, "openai", "gpt-test", "scale", -1},
+		{"claude standard", domain.UsageProviderAnthropic, "anthropic", "claude-test", "standard", standard},
+		{"claude fast", domain.UsageProviderAnthropic, "anthropic", "claude-test", "fast", doubled},
+		{"claude fast on a route without a fast row", domain.UsageProviderAnthropic, "zai", "glm-test", "fast", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			estimate, err := snapshot.Estimate(domain.ModelUsageEvent{
+				ProviderID: tc.provider, BillingProviderID: tc.billing, ModelID: tc.model,
+				ServiceTier: tc.tier, Tokens: pricingTokens(1000, 0, 1000, 1000),
+			})
+			if err != nil {
+				t.Fatalf("Estimate: %v", err)
+			}
+			if tc.want < 0 {
+				if estimate.TotalNanos != nil {
+					t.Fatalf("total = %d, want unknown", *estimate.TotalNanos)
+				}
+				return
+			}
+			assertCost(t, "total", estimate.TotalNanos, tc.want)
+		})
+	}
+}
+
 func TestEstimateRejectsInvalidTokensAndOverflow(t *testing.T) {
 	snapshot := decodeTestSnapshot(t, map[string][]testModel{
 		"anthropic": {{ID: "claude-test", Input: "9223372036.854775807", Output: "0"}},
