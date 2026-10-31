@@ -434,7 +434,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		? workspaceSessionQuery.data : undefined;
 	const scopedFallback = routedWorkspace && fallbackSession && Boolean(fallbackSession.cloud) !== isCloudRoute
 		? undefined : fallbackSession;
-	const session = hostId ? (remoteBase && !remoteSessionQuery.isError && remoteSessionQuery.data?.workspaceId === (projectId ?? remoteSessionQuery.data?.workspaceId) ? remoteSessionQuery.data : undefined)
+	// A tunnel blip disconnects the host for seconds. Keep the loaded session (and
+	// its chat, with any send in flight) mounted until the host is back; only a
+	// rejected password or an incompatible version replace it. An unverified
+	// identity is usually the same blip, and the proxy forwards nothing meanwhile.
+	const remoteRejection = remoteSessionQuery.isError ? apiErrorCode(remoteSessionQuery.error) : undefined;
+	const remoteRejected = remoteRejection === "BAD_PASSWORD" || remoteRejection === "HOST_API_INCOMPATIBLE";
+	const session = hostId ? (!remoteRejected && remoteSessionQuery.data?.workspaceId === (projectId ?? remoteSessionQuery.data?.workspaceId) ? remoteSessionQuery.data : undefined)
 		: ambiguousRoute ? undefined : listedSession ?? directCloudSession ?? scopedFallback;
 	// The Files review offers only what the session's kind of project has.
 	const remoteWorkspaceKind = useRemoteSessionProjectKind(sessionId, hostId);

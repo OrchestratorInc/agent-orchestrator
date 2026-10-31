@@ -3154,6 +3154,7 @@
 	"chat.draft.clearRefusedSteerFailed": "The steer was refused, but its local recovery record couldn’t be cleared. Nothing will be resent automatically.",
 	"chat.draft.steerUncertain": "AO can’t determine whether the agent may already have received this guidance. Retry safely with the same delivery ID, or abandon recovery to edit it. Sending it again after abandonment may duplicate it.",
 	"chat.draft.sendUncertain": "Message delivery wasn’t confirmed. Retry safely to reuse the same delivery ID; your draft remains locked until it is reconciled.",
+	"chat.draft.sendRetrying": "Connection lost before delivery was confirmed. Retrying automatically with the same delivery ID.",
 	"chat.draft.storageUnavailable": "Drafts can’t be saved right now. You can keep chatting, but unsent text won’t be kept if you leave this chat.",
 	"chat.draft.queueSaveLocalFailed": "Queued edit could not be saved. Keep this chat open or copy it before leaving.",
 	"chat.draft.queueUnavailable": "Queued message edits are unavailable right now.",

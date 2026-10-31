@@ -1618,7 +1618,9 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
 		setOption: async (optionId: string, value: ChatConfigOptionValue) =>
 			(await mutation.mutateAsync({ optionId, value })).options,
 		pending: mutation.isPending,
-		error: mutation.error || query.error ? apiErrorMessage(mutation.error ?? query.error) : undefined,
+		// A failed poll keeps the options it had (a remote host drops out on every
+		// tunnel blip); only a failed write or a first read is worth a message.
+		error: mutation.error || (query.error && !query.data) ? apiErrorMessage(mutation.error ?? query.error) : undefined,
 	};
 }
 

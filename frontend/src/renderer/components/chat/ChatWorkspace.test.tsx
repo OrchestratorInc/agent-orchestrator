@@ -4055,7 +4055,7 @@ describe("ChatWorkspace message actions", () => {
 		const composer = screen.getByLabelText("Message the agent");
 		await typeInLexicalEditor(composer, "retry this exact draft");
 		fireEvent.keyDown(composer, { key: "Enter" });
-		await screen.findByText(/delivery wasn’t confirmed/);
+		await screen.findByText(/Retrying automatically with the same delivery ID/);
 		const firstClientMessageId = onSend.mock.calls[0]?.[2];
 		expect(firstClientMessageId).toEqual(expect.any(String));
 		firstView.unmount();

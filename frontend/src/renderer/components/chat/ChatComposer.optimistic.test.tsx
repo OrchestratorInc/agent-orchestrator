@@ -238,6 +238,26 @@ describe("optimistic message delivery", () => {
 		expect(replacement).toHaveAttribute("contenteditable", "true");
 	});
 
+	it("keeps retrying a send nobody answered with its delivery ID, and stops at a coded refusal", async () => {
+		const sessionId = "optimistic-transport-retry";
+		const onSend = vi.fn()
+			.mockRejectedValueOnce(new TypeError("Failed to fetch"))
+			.mockRejectedValueOnce({ code: "UPSTREAM_UNAVAILABLE", message: "remote daemon unreachable" })
+			.mockRejectedValueOnce({ code: "CHAT_RESUME_FAILED", message: "Could not resume" })
+			.mockResolvedValue(undefined);
+		renderComposer(sessionId, onSend);
+		await startSend(onSend, "status here");
+		expect(await screen.findByRole("alert")).toHaveTextContent("Retrying automatically with the same delivery ID");
+
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(3), { timeout: 6_000 });
+		expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
+		expect(onSend.mock.calls[2]).toEqual(onSend.mock.calls[0]);
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed"));
+		await new Promise((resolve) => setTimeout(resolve, 2_500));
+		expect(onSend).toHaveBeenCalledTimes(3);
+		expect(readChatSessionDraft(sessionId).composer.delivery?.state).toBe("dispatching");
+	});
+
 	it.each([
 		["response lost", new Error("response lost")],
 		["resume refused", { code: "CHAT_RESUME_FAILED", message: "Could not resume" }],
@@ -260,7 +280,7 @@ describe("optimistic message delivery", () => {
 		await act(async () => pending.reject(error));
 
 		expect(field).toHaveTextContent("write a README");
-		if (error instanceof Error) expect(screen.getByRole("alert")).toHaveTextContent("Message delivery wasn’t confirmed");
+		if (error instanceof Error) expect(screen.getByRole("alert")).toHaveTextContent("Retrying automatically with the same delivery ID");
 		await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
 		await waitFor(() => expect(pending.onSend).toHaveBeenCalledTimes(2));
 		expect(pending.onSend.mock.calls[1]).toEqual(pending.onSend.mock.calls[0]);
