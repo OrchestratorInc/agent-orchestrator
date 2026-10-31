@@ -115,6 +115,7 @@ type projectConfig struct {
 	Env                   map[string]string    `json:"env,omitempty"`
 	Symlinks              []string             `json:"symlinks,omitempty"`
 	PostCreate            []string             `json:"postCreate,omitempty"`
+	PreRemove             []string             `json:"preRemove,omitempty"`
 	AgentRules            string               `json:"agentRules,omitempty"`
 	AgentRulesFile        string               `json:"agentRulesFile,omitempty"`
 	OrchestratorRules     string               `json:"orchestratorRules,omitempty"`
@@ -151,6 +152,7 @@ type projectSetConfigOptions struct {
 	env                   []string
 	symlink               []string
 	postCreate            []string
+	preRemove             []string
 	trackerIntake         bool
 	trackerRepo           string
 	trackerAssignee       string
@@ -299,7 +301,7 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 		Use:   "set-config <id>",
 		Short: "Set the per-project config",
 		Long: "Replace a project's per-project config (branch, session prefix, env, " +
-			"symlinks, post-create, rules, agent model/permissions, role overrides, tracker intake, reviewers). The config " +
+			"symlinks, post-create, pre-remove, rules, agent model/permissions, role overrides, tracker intake, reviewers). The config " +
 			"is resolved when a session spawns.\n\n" +
 			"Set fields via flags, pass the whole object with --config-json, or --clear " +
 			"to remove all config.",
@@ -345,6 +347,7 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	f.StringArrayVar(&opts.env, "env", nil, "Env var KEY=VALUE forwarded into sessions (repeatable)")
 	f.StringArrayVar(&opts.symlink, "symlink", nil, "Repo-relative path to symlink into workspaces (repeatable)")
 	f.StringArrayVar(&opts.postCreate, "post-create", nil, "Command to run after workspace creation (repeatable)")
+	f.StringArrayVar(&opts.preRemove, "pre-remove", nil, "Command to run before workspace removal (repeatable)")
 	f.BoolVar(&opts.trackerIntake, "tracker-intake", false, "Opt this project into issue intake (GitHub or GitLab; provider inferred from git origin). Inert unless the daemon also has AO_TRACKER_INTAKE=on")
 	f.StringVar(&opts.trackerRepo, "tracker-repo", "", "Provider-native repo for issue intake (owner/repo or group/subgroup/repo; default: derive from git origin)")
 	f.StringVar(&opts.trackerAssignee, "tracker-assignee", "", "Issue assignee required for intake eligibility")
@@ -382,6 +385,7 @@ func buildProjectConfig(opts projectSetConfigOptions) (projectConfig, error) {
 		Env:                   env,
 		Symlinks:              opts.symlink,
 		PostCreate:            opts.postCreate,
+		PreRemove:             opts.preRemove,
 		AgentRules:            opts.agentRules,
 		AgentRulesFile:        opts.agentRulesFile,
 		OrchestratorRules:     opts.orchestratorRules,

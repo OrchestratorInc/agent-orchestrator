@@ -152,6 +152,7 @@ ao project set-config <id> [flags]
 | `--orchestrator-rules string` | Project-specific standing instructions appended to orchestrator session prompts | - |
 | `--permission string` | Permission mode: `default`, `accept-edits`, `auto`, `bypass-permissions` | - |
 | `--post-create stringArray` | Command to run after workspace creation (repeatable) | - |
+| `--pre-remove stringArray` | Command to run before workspace removal (repeatable) | - |
 | `--session-prefix string` | Displayed session-id prefix | - |
 | `--symlink stringArray` | Repo-relative path to symlink into workspaces (repeatable) | - |
 | `--tracker-assignee string` | Issue assignee required for tracker intake eligibility | - |
@@ -182,6 +183,11 @@ ao project set-config agent-orchestrator --config-json \
 ```bash
 # Set an env var and a post-create command
 ao project set-config agent-orchestrator --env "NODE_ENV=development" --post-create "npm install"
+```
+
+```bash
+# Set cleanup commands that run before a worktree is removed
+ao project set-config agent-orchestrator --pre-remove "docker compose down -v" --pre-remove "rm -rf .cache"
 ```
 
 ```bash
