@@ -3582,7 +3582,7 @@
 	"settings.billing.featureAgents_one": "{{count}} agent cloud simultané",
 	"settings.billing.featureAgents_other": "{{count}} agents cloud simultanés",
 	"settings.billing.featureAgents_many": "{{count}} agents cloud simultanés",
-	"settings.billing.freeAgents": "Claude Code, Codex et Cursor",
+	"settings.billing.freeAgents": "Tout agent de code pris en charge, dont Claude Code, Codex et Cursor",
 	"settings.billing.freeOrchestrator": "Orchestrateur, workers et revues de PR",
 	"settings.billing.freeDevices": "2 appareils connectés à la fois",
 	"settings.billing.freeNetwork": "Connexion sur le même réseau (sans relais cloud)",
