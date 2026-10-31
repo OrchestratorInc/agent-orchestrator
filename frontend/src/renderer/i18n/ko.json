@@ -2146,7 +2146,7 @@
 	"timeline.ci_failed": "CI 실패",
 	"timeline.commented": "댓글 남김",
 	"timeline.no_signal": "신호 없음",
-	"titlebar.about": "Orchestrator 정보",
+	"titlebar.about": "Orchestrator.inc 정보",
 	"titlebar.collapseSidebarShortcut": "사이드바 접기 · ⌘B",
 	"titlebar.copy": "복사",
 	"titlebar.devtools": "DevTools 전환",

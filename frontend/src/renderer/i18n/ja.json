@@ -2146,7 +2146,7 @@
 	"timeline.ci_failed": "CI 失敗",
 	"timeline.commented": "コメント済み",
 	"timeline.no_signal": "シグナルなし",
-	"titlebar.about": "Orchestrator について",
+	"titlebar.about": "Orchestrator.inc について",
 	"titlebar.collapseSidebarShortcut": "サイドバーを折りたたむ · ⌘B",
 	"titlebar.copy": "コピー",
 	"titlebar.devtools": "DevTools を切り替え",

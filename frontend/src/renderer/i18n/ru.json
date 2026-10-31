@@ -2615,7 +2615,7 @@
 	"timeline.ci_failed": "Ошибка CI",
 	"timeline.commented": "Добавлен комментарий",
 	"timeline.no_signal": "Нет сигнала",
-	"titlebar.about": "Об Agent Orchestrator",
+	"titlebar.about": "Об Orchestrator.inc",
 	"titlebar.collapseSidebarShortcut": "Свернуть боковую панель · ⌘B",
 	"titlebar.copy": "Копировать",
 	"titlebar.devtools": "Переключить DevTools",
