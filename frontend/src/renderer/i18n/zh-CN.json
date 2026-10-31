@@ -2034,6 +2034,7 @@
 	"shortcut.jump-to-session": "跳转到会话 1–9",
 	"shortcut.keyboard-shortcuts": "显示键盘快捷键",
 	"shortcut.model-picker": "选择模型",
+	"shortcut.dictate": "听写",
 	"shortcut.modified": "已修改",
 	"shortcut.movedBody": "{{binding}} 已从 {{from}} 移至 {{to}}",
 	"shortcut.new-session": "新建会话",

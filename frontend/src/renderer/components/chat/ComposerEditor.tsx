@@ -80,6 +80,8 @@ export type ComposerEditorHandle = {
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
 	insertToken(trigger: ComposerTrigger, value: string): void;
+	/** Inserts plain text at the caret (or the end), spaced from the word before it. */
+	insertText(text: string): void;
 	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
 	insertReference(path: string, display: string, wire: string): void;
 	/**
@@ -521,6 +523,19 @@ const EditorBridge = forwardRef<
 			insertToken: (trigger, value) => {
 				editor.update(() => {
 					$insertComposerToken(trigger, value);
+				}, { discrete: true });
+			},
+			insertText: (text) => {
+				editor.update(() => {
+					let selection = $getSelection();
+					if (!$isRangeSelection(selection)) {
+						$getRoot().selectEnd();
+						selection = $getSelection();
+					}
+					if (!$isRangeSelection(selection)) return;
+					const { anchor } = selection;
+					const before = anchor.type === "text" ? anchor.getNode().getTextContent().slice(0, anchor.offset) : "";
+					selection.insertText(before && !/\s$/.test(before) ? ` ${text}` : text);
 				}, { discrete: true });
 			},
 			insertReference: (path, display, wire) => {

@@ -109,7 +109,7 @@ import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
 import { SharedProjectPanel } from "./SharedProjectPanel";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
-import { openComposerModelPicker } from "../lib/composer-shortcuts";
+import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useSideChatsAvailable } from "../lib/side-chats";
 import {
@@ -1888,6 +1888,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		hasInspector,
 	);
 	useSessionShortcut("model-picker", openComposerModelPicker, hasInspector);
+	useSessionShortcut("dictate", toggleComposerDictation, hasInspector);
 
 	const inspectorMotionReadyRef = useRef<string | null>(null);
 	const handleInspectorCloseAnimationComplete = useCallback(() => {

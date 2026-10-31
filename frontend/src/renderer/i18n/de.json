@@ -1977,6 +1977,7 @@
 	"shortcut.jump-to-session": "Zu Sitzung 1–9 springen",
 	"shortcut.keyboard-shortcuts": "Tastenkürzel anzeigen",
 	"shortcut.model-picker": "Modell wählen",
+	"shortcut.dictate": "Diktieren",
 	"shortcut.modified": "Geändert",
 	"shortcut.movedBody": "{{binding}} von {{from}} nach {{to}} verschoben",
 	"shortcut.new-session": "Neue Sitzung",

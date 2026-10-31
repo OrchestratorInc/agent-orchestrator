@@ -50,7 +50,10 @@ import {
 	type ReactNode,
 	type Ref,
 } from "react";
-import { ArrowUp, CornerUpRight, Loader2, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Check, CornerUpRight, Loader2, Mic, Paperclip, Play, Plus, Square, X } from "lucide-react";
+import { isMacPlatform } from "../../lib/platform";
+import { useDictation } from "./useDictation";
+import { DictationLevels } from "./DictationLevels";
 import { OptionMenu, OptionMenuContent, OptionMenuLabel, OptionMenuTrigger } from "../ui/option-menu";
 import { ComposerMenuRow } from "./TurnSettingsBar";
 import { Button } from "../ui/button";
@@ -451,6 +454,11 @@ export const ChatComposer = memo(function ChatComposer({
 	 */
 
 	const editor = useRef<ComposerEditorHandle>(null);
+	const dictation = useDictation((text) => {
+		editor.current?.insertText(text);
+		editor.current?.focus();
+	});
+	const dictating = dictation.phase !== "idle";
 	const filePicker = useRef<HTMLInputElement>(null);
 	const addMenuTrigger = useRef<HTMLButtonElement>(null);
 	const [addMenuBox, setAddMenuBox] = useState<{ lift: number; shift: number; width: number }>();
@@ -2053,6 +2061,11 @@ export const ChatComposer = memo(function ChatComposer({
 				{/* A refused steer is an ordinary outcome, not a failure: the text is still
 			    in the box and the message says which of "send it instead" and "try again
 			    in a moment" applies. */}
+				{dictation.error ? (
+					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
+						{dictation.error}
+					</p>
+				) : null}
 				{steerRefusal ?? steerOutcomeNotice ? (
 					<p role="status" className="px-1.5 text-xs leading-snug text-warning">
 						{translateDraft(steerRefusal ?? steerOutcomeNotice)}
@@ -2060,6 +2073,14 @@ export const ChatComposer = memo(function ChatComposer({
 				) : null}
 
 				<div className="flex h-7 items-center gap-1.5">
+					{dictating ? (
+						<div role="status" aria-label="Dictation" className="flex min-w-0 flex-1 items-center gap-2.5 pl-2">
+							<DictationLevels levels={dictation.levels} muted={dictation.phase !== "listening"} />
+							<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground [direction:rtl] text-left">
+								<bdi>{dictation.transcript || (dictation.phase === "finishing" ? "Finishing…" : "Listening…")}</bdi>
+							</span>
+						</div>
+					) : (
 					<div role="group" aria-label="Message tools" className="flex min-w-0 flex-1 items-center gap-0.5">
 						{canAttach ? (
 							<>
@@ -2141,12 +2162,76 @@ export const ChatComposer = memo(function ChatComposer({
 						) : null}
 						{settings}
 					</div>
+					)}
 
 					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
 						{showSteerButton && canSteerDraft && (hasText || staged) ? (
 							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn" className="h-7 px-2 text-xs">
 								Steer
 							</Button>
+						) : null}
+						{isMacPlatform() && dictating ? (
+							<>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon-sm"
+											onMouseDown={(event) => event.preventDefault()}
+											onClick={dictation.cancel}
+											aria-label="Cancel dictation"
+											className="size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
+										>
+											<X aria-hidden="true" className="size-3.5" />
+										</Button>
+									</TooltipTrigger>
+									<TooltipContent side="bottom">Cancel</TooltipContent>
+								</Tooltip>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon-sm"
+											disabled={dictation.phase === "finishing"}
+											onMouseDown={(event) => event.preventDefault()}
+											onClick={dictation.stop}
+											data-shortcut-target="dictate"
+											aria-label="Finish dictation"
+											className="mr-1 size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
+										>
+											{dictation.phase === "finishing" ? (
+												<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+											) : (
+												<Check aria-hidden="true" className="size-3.5" />
+											)}
+										</Button>
+									</TooltipTrigger>
+									<TooltipContent side="bottom">Insert dictation</TooltipContent>
+								</Tooltip>
+							</>
+						) : isMacPlatform() ? (
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<span className="inline-flex">
+										<Button
+											type="button"
+											variant="ghost"
+											size="icon-sm"
+											disabled={controlsDisabled}
+											onMouseDown={(event) => event.preventDefault()}
+											onClick={dictation.start}
+											data-shortcut-target="dictate"
+											aria-label="Dictate"
+											className="mr-1 size-7 shrink-0 rounded-full p-0 text-muted-foreground hover:bg-interactive-active! hover:text-foreground"
+										>
+											<Mic aria-hidden="true" className="size-3.5" />
+										</Button>
+									</span>
+								</TooltipTrigger>
+								<TooltipContent side="bottom">Dictate</TooltipContent>
+							</Tooltip>
 						) : null}
 						<Tooltip>
 							<TooltipTrigger asChild>

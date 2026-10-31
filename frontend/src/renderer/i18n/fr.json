@@ -2010,6 +2010,7 @@
 	"shortcut.jump-to-session": "Aller à la session 1–9",
 	"shortcut.keyboard-shortcuts": "Afficher les raccourcis clavier",
 	"shortcut.model-picker": "Choisir le modèle",
+	"shortcut.dictate": "Dicter",
 	"shortcut.modified": "Modifié",
 	"shortcut.movedBody": "{{binding}} déplacé de {{from}} vers {{to}}",
 	"shortcut.new-session": "Nouvelle session",

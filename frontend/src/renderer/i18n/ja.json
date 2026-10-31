@@ -1977,6 +1977,7 @@
 	"shortcut.jump-to-session": "セッション 1–9 に移動",
 	"shortcut.keyboard-shortcuts": "キーボードショートカットを表示",
 	"shortcut.model-picker": "モデルを選択",
+	"shortcut.dictate": "音声入力",
 	"shortcut.modified": "変更済み",
 	"shortcut.movedBody": "{{binding}} を {{from}} から {{to}} に移動しました",
 	"shortcut.new-session": "新しいセッション",
