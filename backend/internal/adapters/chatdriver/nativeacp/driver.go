@@ -61,6 +61,8 @@ type Config struct {
 	SessionPreamble func(acpdriver.LaunchConfig) []acpsdk.ContentBlock
 	// SuppressSessionModes: see acpdriver.Config.SuppressSessionModes.
 	SuppressSessionModes bool
+	// ImplicitWorkspaceDirectories: see acpdriver.Config.
+	ImplicitWorkspaceDirectories bool
 	// PromptErrorFailure restates a session/prompt error. See
 	// acpdriver.Config.PromptErrorFailure.
 	PromptErrorFailure func(error, bool) error
@@ -167,6 +169,7 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		ValidateInitialize:           cfg.ValidateInitialize,
 		SessionPreamble:              cfg.SessionPreamble,
 		SuppressSessionModes:         cfg.SuppressSessionModes,
+		ImplicitWorkspaceDirectories: cfg.ImplicitWorkspaceDirectories,
 		HistoryReconciler:            cfg.HistoryReconciler,
 		PromptErrorFailure:           cfg.PromptErrorFailure,
 		PermissionPolicy:             cfg.PermissionPolicy,

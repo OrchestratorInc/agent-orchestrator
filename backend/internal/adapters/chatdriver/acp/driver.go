@@ -103,6 +103,14 @@ type Config struct {
 	// copy then looks like a mode that flips under the user whenever the
 	// approval choice moves.
 	SuppressSessionModes bool
+	// ImplicitWorkspaceDirectories declares that this agent's filesystem reach
+	// is the whole workspace root through its own process (a shell-executing
+	// agent bound to the session cwd), so multi-repo workspaces' child
+	// directories need no ACP additional-directories support: they are
+	// reachable from the agent's cwd and are simply not sent on the wire. An
+	// agent that sandboxes file access to its declared roots must NOT set
+	// this.
+	ImplicitWorkspaceDirectories bool
 	// SessionOptions maps AO's per-turn choices onto ACP config option ids.
 	SessionOptions func(ports.ChatTurnSettings) []SessionOption
 	// LaunchSessionOptions returns config options whose value is fixed for the
@@ -372,7 +380,8 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	// capability is downgraded in conversationCapabilities, and Resume()
 	// returns ErrChatResumeFailed if called.
 	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
-		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil)
+		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil,
+		d.cfg.ImplicitWorkspaceDirectories)
 	if err != nil {
 		conv.discard()
 		return nil, err
@@ -583,7 +592,8 @@ func (d *Driver) resumeSession(
 		return nil, fmt.Errorf("%w: ACP agent supports neither session/load nor session/resume", ports.ErrChatResumeFailed)
 	}
 	additional, err := normalizeAdditionalDirectories(cfg.WorkspacePath, cfg.AdditionalDirectories,
-		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil)
+		init.AgentCapabilities.SessionCapabilities.AdditionalDirectories != nil,
+		d.cfg.ImplicitWorkspaceDirectories)
 	if err != nil {
 		conv.discard()
 		if isACPAuthRequired(err) {

@@ -5647,3 +5647,59 @@ func TestACPHistoryReplaySplitsIDLessPromptsAfterAnswers(t *testing.T) {
 		t.Fatalf("replayed turns = %+v, want %+v", turns, want)
 	}
 }
+
+// A shell-executing agent bound to the session workspace (hermes) reaches every
+// child directory from its cwd, so a multi-repo workspace's additional
+// directories need no ACP capability: they are dropped, not sent, and the
+// session starts instead of failing.
+func TestACPDriverImplicitWorkspaceDirectoriesStartsWithoutProviderSupport(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	driver := New(Config{
+		Harness:                      domain.HarnessHermes,
+		Capabilities:                 ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:                        func(context.Context) error { return nil },
+		Launch:                       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		ImplicitWorkspaceDirectories: true,
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	root := t.TempDir()
+	extra := t.TempDir()
+	conv, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath:         root,
+		AdditionalDirectories: []string{extra},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer conv.Close()
+
+	agent.mu.Lock()
+	newParams := agent.newParams
+	agent.mu.Unlock()
+	if len(newParams.AdditionalDirectories) != 0 {
+		t.Fatalf("additional directories = %#v, want none sent", newParams.AdditionalDirectories)
+	}
+}
+
+// An agent that sandboxes file access to its declared roots and does not
+// advertise additional-directories support still fails a multi-repo spawn:
+// silently dropping the directories would hide work the agent cannot reach.
+func TestACPDriverUnsupportedAdditionalDirectoriesStillFail(t *testing.T) {
+	agent := &fakeAgent{promptNoPermission: true}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	_, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		WorkspacePath:         t.TempDir(),
+		AdditionalDirectories: []string{t.TempDir()},
+	})
+	if err == nil || !strings.Contains(err.Error(), "additional workspace directories") {
+		t.Fatalf("Start err = %v, want the additional-directories refusal", err)
+	}
+}

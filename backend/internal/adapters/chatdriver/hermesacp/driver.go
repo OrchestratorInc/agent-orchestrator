@@ -45,6 +45,13 @@ func newDriver(plugin nativeacp.Plugin, probe nativeacp.VersionProbe, log *slog.
 		HistoryReconciler:  reconcileReplay,
 		PromptErrorFailure: promptErrorFailure,
 		VersionProbe:       probe,
+		// Hermes is a shell agent bound to the session workspace: its filesystem
+		// reach is the whole workspace root, so a multi-repo workspace's child
+		// repositories are reachable from its cwd without ACP
+		// additional-directories support (which hermes does not advertise).
+		// Sending them is neither possible nor needed; the standing prompt's
+		// workspace section names the child repositories for the model.
+		ImplicitWorkspaceDirectories: true,
 		// Hermes' session modes are edit-approval policies (default/accept_edits/
 		// dont_ask) that AO's own permission setting already drives through
 		// sessionMode on every turn. Surfacing the provider list as well rendered
