@@ -1,8 +1,10 @@
+import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { normalizeCodeRowText } from "../../../shared/file-annotations";
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { FileCodeReference } from "../../../shared/file-annotations";
 import type { SelectedLineRange } from "@pierre/diffs";
 import type { DiffRow } from "../../lib/diff-parser";
+import { selectionRangesEqual } from "../../lib/selection-toolbar";
 
 /** Code highlighted with the mouse, read back as the rows it covers. */
 export type CodeSelection = {
@@ -16,6 +18,10 @@ export type CodeSelection = {
 	point: { x: number; y: number };
 	/** True while the mouse button is still down: the selection is still being made. */
 	dragging: boolean;
+	/** Retained geometry only; scrolling never rebuilds captured rows. */
+	textRange?: Range;
+	viewport?: Element;
+	toolbarHeader?: Element;
 };
 
 type ShadowRootWithSelection = ShadowRoot & { getSelection?: () => Selection | null };
@@ -78,6 +84,13 @@ export function codeReference(path: string, selection: CodeSelection, diff: bool
 	};
 }
 
+/** Read native shadow selection without traversing or copying code rows. */
+export function codeSelectionRange(host: HTMLElement): Range | null {
+ const selection = (host.shadowRoot as ShadowRootWithSelection | null)?.getSelection?.();
+ const range = selection ? selectionRange(selection) : null;
+ return range && !range.collapsed && host.shadowRoot?.contains(range.startContainer) && host.shadowRoot.contains(range.endContainer) ? range : null;
+}
+
 /** Reads the rows a selection covers inside one Pierre surface, or null. */
 export function readCodeSelection(host: HTMLElement, dragging = false): CodeSelection | null {
 	const root = host.shadowRoot as ShadowRootWithSelection | null;
@@ -111,12 +124,16 @@ export function readCodeSelection(host: HTMLElement, dragging = false): CodeSele
 	const lastBox = last.getBoundingClientRect();
 	const onLastLine = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.bottom > lastBox.top + 1 && rect.top < lastBox.bottom - 1);
 	const edge = onLastLine.length ? Math.max(...onLastLine.map((rect) => rect.right)) : lastBox.left;
+	const viewport = scrollParent(host);
 	return {
 		host,
 		rows: elements.map(element => ({ ...diffRow(element), side: rowSide(element) === "deletions" ? "old" : "new" })),
 		range: { start: Number(first.getAttribute("data-line")), side: rowSide(first), end: Number(last.getAttribute("data-line")), endSide: rowSide(last) },
 		point: { x: edge, y: lastBox.top + lastBox.height / 2 },
 		dragging,
+		textRange: range,
+		viewport,
+		toolbarHeader: host.querySelector("[data-selection-toolbar-header]") ?? host.closest("[data-selection-toolbar-scope]")?.querySelector("[data-selection-toolbar-header]") ?? undefined,
 	};
 }
 
@@ -161,10 +178,19 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 	const ask = useCallback((): boolean => {
 		const current = selectionRef.current;
 		if (!current) return false;
+		if (current.textRange && (!current.host.isConnected || !current.textRange.startContainer.isConnected || !current.textRange.endContainer.isConnected)) return false;
+		if (current.textRange) {
+			const liveSelection = (current.host.shadowRoot as ShadowRootWithSelection | null)?.getSelection?.();
+			const liveRange = liveSelection ? selectionRange(liveSelection) : null;
+			const toolbarFocused = document.activeElement?.closest("[data-selection-ask]");
+			if (!selectionRangesEqual(liveRange ?? undefined, current.textRange) && !(toolbarFocused && (!liveRange || liveRange.collapsed))) return false;
+		}
 		if (onAskRef.current(current) === false) return false;
 		clearSelection(current.host);
+		selectionRef.current = null;
+		store.set(null);
 		return true;
-	}, []);
+	}, [store]);
 	useEffect(() => {
 		const publish = (next: CodeSelection | null) => {
 			selectionRef.current = next;
@@ -192,12 +218,7 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 			// A redraw that replaces the selected rows does not always announce a
 			// selection change, so watch the surfaces' rows while one is shown.
 			redraws.disconnect();
-			if (next) for (const host of hosts()) if (host.shadowRoot) redraws.observe(host.shadowRoot, { childList: true, subtree: true });
-			// Off screen (scrolled away), the button hides; the selection stays.
-			if (next) {
-				const view = scrollParent(next.host).getBoundingClientRect();
-				if (next.point.y < Math.max(view.top, 0) || next.point.y > Math.min(view.bottom, window.innerHeight)) next = null;
-			}
+			if (next?.host.shadowRoot) redraws.observe(next.host.shadowRoot, { childList: true, subtree: true });
 			publish(next);
 		};
 		const schedule = () => {
@@ -210,11 +231,21 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 			pressed = false;
 			schedule();
 		};
-		const onKeyDown = (event: KeyboardEvent) => {
-			const current = selectionRef.current;
+		let dismissedEscapePress = false;
+  const releaseEscape = (event: KeyboardEvent) => { if (event.key === "Escape") dismissedEscapePress = false; };
+  const blur = () => { dismissedEscapePress = false; };
+  const onKeyDown = (event: KeyboardEvent) => {
+   if (event.defaultPrevented || isDialogOrMenuOpen()) return;
+   if (event.key === "Escape" && event.repeat && dismissedEscapePress) { event.preventDefault(); event.stopPropagation(); return; }
+   const current = selectionRef.current;
 			if (!current) return;
-			if (event.key === "Escape") {
-				clearSelection(current.host);
+			if (event.key === "Escape" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    const toolbar = document.querySelector<HTMLElement>("[data-selection-ask]");
+    if (toolbar?.style.visibility === "hidden") return;
+    dismissedEscapePress = true;
+    event.preventDefault(); event.stopPropagation();
+    clearSelection(current.host);
+    publish(null);
 				return;
 			}
 		};
@@ -222,18 +253,18 @@ export function useCodeSelection(containerRef: RefObject<HTMLElement | null>, on
 		document.addEventListener("pointerdown", onPointerDown, true);
 		document.addEventListener("pointerup", onPointerUp, true);
 		document.addEventListener("pointercancel", onPointerUp, true);
-		document.addEventListener("scroll", schedule, true);
 		document.addEventListener("keydown", onKeyDown, true);
-		window.addEventListener("resize", schedule);
+  document.addEventListener("keyup", releaseEscape, true);
+  window.addEventListener("blur", blur);
 		schedule();
 		return () => {
 			document.removeEventListener("selectionchange", schedule);
 			document.removeEventListener("pointerdown", onPointerDown, true);
 			document.removeEventListener("pointerup", onPointerUp, true);
 			document.removeEventListener("pointercancel", onPointerUp, true);
-			document.removeEventListener("scroll", schedule, true);
 			document.removeEventListener("keydown", onKeyDown, true);
-			window.removeEventListener("resize", schedule);
+   document.removeEventListener("keyup", releaseEscape, true);
+   window.removeEventListener("blur", blur);
 			if (frame !== null) cancelAnimationFrame(frame);
 			redraws.disconnect();
 			publish(null);

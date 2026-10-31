@@ -30,7 +30,28 @@ describe("SelectionAskButton", () => {
 		const button = screen.getByRole("button", { name: "Add to chat" });
 		expect(fireEvent.mouseDown(button)).toBe(false);
 		fireEvent.click(button);
+		fireEvent.click(button);
 		expect(onAsk).toHaveBeenCalledTimes(1);
+		expect(button.querySelector("svg")).toBeNull();
+	});
+
+	it("allows retry when the selection handler refuses the action", () => {
+		const onAsk = vi.fn(() => false);
+		render(<SelectionAskButton onAsk={onAsk} source={source({ range: { start: 2, end: 4 }, point: { x: 120, y: 80 }, dragging: false })} />);
+		const button = screen.getByRole("button", { name: "Add to chat" });
+		fireEvent.click(button); fireEvent.click(button);
+		expect(button).toBeEnabled(); expect(onAsk).toHaveBeenCalledTimes(2);
+	});
+
+	it("sticks below the filename header instead of covering its controls", () => {
+		const host = document.createElement("div"); host.textContent = "selected code";
+		const header = document.createElement("div"); document.body.append(header, host);
+		const range = document.createRange(); range.selectNodeContents(host);
+		vi.spyOn(range, "getBoundingClientRect").mockReturnValue(new DOMRect(20, -100, 400, 2000));
+		vi.spyOn(header, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 600, 48));
+		const view = render(<SelectionAskButton onAsk={vi.fn()} source={source({ host, textRange: range, toolbarHeader: header, range: { start: 1, end: 80 }, point: { x: 20, y: 1900 }, dragging: false })} />);
+		expect(screen.getByRole("button", { name: "Add to chat" }).parentElement).toHaveStyle({ top: "56px" });
+		view.unmount(); host.remove(); header.remove();
 	});
 
 	it("lets a selection still being dragged pass through it", () => {
