@@ -118,6 +118,24 @@ func TestEmbeddedSessionGuidanceDocumentsCanonicalInAppLinks(t *testing.T) {
 	}
 }
 
+func TestEmbeddedSessionGuidanceAnswersFleetQuestionsInOneCall(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/session.md")
+	if err != nil {
+		t.Fatalf("read embedded session guidance: %v", err)
+	}
+	text := strings.Join(strings.Fields(string(body)), " ")
+	for _, required := range []string{
+		"`state` (`draft`, `open`, `merged`, `closed`)",
+		"`mergeability` (`unknown`, `mergeable`, `conflicting`, `blocked`, `unstable`)",
+		"make one `ao session ls --json` call instead of one `ao session get` per session",
+		"never one per PR",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("session fleet guidance missing %q:\n%s", required, body)
+		}
+	}
+}
+
 func TestEmbeddedSpawnGuidanceListsOpenCodeV2(t *testing.T) {
 	body, err := files.ReadFile("using-ao/commands/spawn.md")
 	if err != nil {

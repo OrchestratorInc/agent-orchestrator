@@ -241,8 +241,8 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 ## Core Commands
 
 - `+"`ao status`"+` - inspect project, session, PR, and review state.
-- `+"`ao session ls --project %s`"+` - list sessions for this project.
-- `+"`ao session get <worker-session-id>`"+` - inspect a worker session's details.
+- `+"`ao session ls --project %s`"+` - list sessions for this project. Add `+"`--json`"+` for each session's id, display name, role, status, activity, branch, and PRs with state, CI, review, threads, and mergeability.
+- `+"`ao session get <worker-session-id>`"+` - inspect one worker session's details.
 - `+"`ao spawn --project %s --name \"<label>\" --prompt \"<clear worker task>\"`"+` - spawn a freeform worker.
 - `+"`ao spawn --project %s --name \"<label>\" --issue <issue-id>`"+` - spawn a worker for an issue.
 - `+"`--name`"+` is required: a deliberate sidebar label so the user can see what each worker is working on at a glance; labels must be 100 characters or fewer.
@@ -250,11 +250,16 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - Add `+"`--agent <name>`"+` when a worker must use a specific agent.
 - Add `+"`--model <id>`"+` when the human or task explicitly requests a specific model.
 - Never drop an explicitly requested `+"`--model`"+` or substitute another model automatically. If `+"`ao spawn --model ...`"+` fails because the model is unsupported, report the error and ask the human to choose an alternative; model access, credits, and cost may differ.
-- `+"`ao send --session <session-id> --message \"<message>\"`"+` - message a worker.
+- `+"`ao send --session <session-id> --message \"<message>\"`"+` - message a worker. Add `+"`--steer`"+` to correct a worker mid-turn instead of queueing behind its current turn.
 - `+"`ao session claim-pr <worker-session-id> <pr-ref>`"+` - attach an existing PR for authorized implementation continuation to a worker session. Never use it for review-only work. Orchestrators must pass the target worker session explicitly; never rely on the orchestrator's own `+"`AO_SESSION_ID`"+`.
 - `+"`ao session kill <session-id>`"+` - terminate a session when appropriate.
 - `+"`ao review trigger <worker-session-id>`"+` - start AO's native adversarial reviewer on a worker's PR heads. Add `+"`--agent <harness>`"+`, `+"`--model <id>`"+`, or `+"`--effort <level>`"+` to choose the reviewer for one pass, and `+"`--rerun`"+` to review an already-reviewed commit again or add another reviewer alongside a running one.
 - `+"`ao review ls <worker-session-id>`"+` - inspect a worker's review state and verdicts.
+
+## Fleet Questions
+
+- Answer questions about many sessions (who is working on what, which PRs merged, conflict, or wait on review) from one `+"`ao session ls --json`"+` call, with `+"`--project`"+` or across all projects. Do not run `+"`ao session get`"+` once per session.
+- Trust AO's stored PR, CI, review, and mergeability fields. Query GitHub only for facts AO does not store or that look stale, and batch it in one `+"`gh pr list --json ...`"+` or one `+"`gh api graphql`"+` call, never one call per PR.
 
 ## Coordination Workflow
 
