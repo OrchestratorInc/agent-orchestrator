@@ -27,9 +27,9 @@ describe("spawn composer", () => {
 		expect(attachmentRow).toContain("row: { flexGrow: 0, flexShrink: 0 }");
 	});
 
-	it("shows a prompt-specific error for the daemon's 16 KiB rejection", () => {
+	it("shows a prompt-specific error for the daemon's 100 KiB rejection", () => {
 		expect(spawn).toContain('e instanceof ApiError && e.code === "PROMPT_TOO_LONG"');
-		expect(spawn).toContain('Task prompt is too long. Keep it to 16 KiB or fewer');
+		expect(spawn).toContain('Task prompt is too long. Keep it to 100 KiB or fewer');
 	});
 
 	it("keeps iOS live dictation feedback with the keyboard-sticky controls", () => {
