@@ -1,5 +1,5 @@
-import { BrowserIcon } from "./icons";
-import { Bot, File, FileText, FolderClosed, MessageSquare } from "lucide-react";
+import { BrowserIcon, SubagentIcon } from "./icons";
+import { File, FileText, FolderClosed, MessageSquare } from "lucide-react";
 import { AppLink } from "./AppLink";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -145,7 +145,7 @@ const VIEW_DEFS: {
 		icon: <BrowserIcon aria-hidden="true" />,
 	},
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <MessageSquare aria-hidden="true" /> },
-	{ id: "subagents", labelKey: "inspector.subagents", icon: <Bot aria-hidden="true" /> },
+	{ id: "subagents", labelKey: "inspector.subagents", icon: <SubagentIcon aria-hidden="true" /> },
 	{
 		id: "files",
 		labelKey: "inspector.files",
