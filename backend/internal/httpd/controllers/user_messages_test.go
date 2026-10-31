@@ -12,6 +12,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
@@ -76,5 +77,39 @@ func TestUserMessageRecordedOnlyForHumanSends(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// replayingSteerStub answers a repeated client message id from its stored
+// receipt, as the chat service does for an accepted steer.
+type replayingSteerStub struct {
+	*steerStub
+	accepted map[string]bool
+}
+
+func (s *replayingSteerStub) Steer(_ context.Context, _ domain.SessionID, msg ports.ChatUserMessage) (chatsvc.SteerResult, error) {
+	if s.accepted[msg.ClientMessageID] {
+		return chatsvc.SteerResult{ProviderTurnID: "turn-1", ActivityID: "act-1", Replayed: true}, nil
+	}
+	s.accepted[msg.ClientMessageID] = true
+	return chatsvc.SteerResult{ProviderTurnID: "turn-1", ActivityID: "act-1"}, nil
+}
+
+// A retried steer (same handle, e.g. after a daemon restart) is one steer.
+func TestReplayedSteerIsCountedOnce(t *testing.T) {
+	svc := &replayingSteerStub{steerStub: &steerStub{fakeConversationService: &fakeConversationService{}}, accepted: map[string]bool{}}
+	recorder := &fakeUserMessages{}
+	r := chi.NewRouter()
+	r.Route("/api/v1", (&controllers.ConversationsController{Svc: svc, UserMessages: recorder}).Register)
+	for _, handle := range []string{"same", "same", "other"} {
+		body, _ := json.Marshal(map[string]any{"text": "focus", "clientMessageId": handle})
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/p1-1/conversation/steer", bytes.NewReader(body)))
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("steer %q status = %d", handle, rec.Code)
+		}
+	}
+	if len(recorder.calls) != 2 {
+		t.Fatalf("counted %d steers, want 2 (the replay of %q is not new)", len(recorder.calls), "same")
 	}
 }

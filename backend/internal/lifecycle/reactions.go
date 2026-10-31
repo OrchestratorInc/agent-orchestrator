@@ -299,11 +299,12 @@ func (m *Manager) terminateCompletedSession(ctx context.Context, id domain.Sessi
 		return fmt.Errorf("terminate completed session %s: session terminator is not configured", id)
 	}
 	before, live := m.liveBeforeEnd(ctx, id)
-	if _, err := terminator.Kill(ctx, id); err != nil {
+	_, err := terminator.Kill(ctx, id)
+	// Cleanup can fail after the terminal write; the row decides whether the
+	// session ended (the report is claimed once per termination).
+	m.reportEndIfTerminated(ctx, before, live, err, deliverytelemetry.EndPRMerged)
+	if err != nil {
 		return fmt.Errorf("terminate completed session %s: %w", id, err)
-	}
-	if live {
-		m.delivery.SessionEnded(ctx, before, deliverytelemetry.EndPRMerged)
 	}
 	return nil
 }
@@ -656,13 +657,9 @@ func (m *Manager) ApplyTrackerFacts(ctx context.Context, id domain.SessionID, o 
 			return nil
 		}
 		before, live := m.liveBeforeEnd(ctx, id)
-		if err := m.MarkTerminated(ctx, id); err != nil {
-			return err
-		}
-		if live {
-			m.delivery.SessionEnded(ctx, before, deliverytelemetry.EndIssueClosed)
-		}
-		return nil
+		err := m.MarkTerminated(ctx, id)
+		m.reportEndIfTerminated(ctx, before, live, err, deliverytelemetry.EndIssueClosed)
+		return err
 	}
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil || !ok {

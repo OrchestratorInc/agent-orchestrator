@@ -133,7 +133,10 @@ func (c *ConversationsController) steer(w http.ResponseWriter, r *http.Request) 
 		writeSteerError(w, r, err)
 		return
 	}
-	recordUserMessage(r.Context(), c.UserMessages, domain.SessionID(chi.URLParam(r, "sessionId")), req.SenderSessionID, true)
+	// A replay of an accepted client message id is the same steer, not a new one.
+	if !result.Replayed {
+		recordUserMessage(r.Context(), c.UserMessages, domain.SessionID(chi.URLParam(r, "sessionId")), req.SenderSessionID, true)
+	}
 	envelope.WriteJSON(w, http.StatusAccepted, SteerConversationResponse{
 		ProviderTurnID: result.ProviderTurnID,
 		ActivityID:     result.ActivityID,

@@ -245,3 +245,79 @@ func TestOrchestratorReplacementReportsTerminatedOldSession(t *testing.T) {
 		})
 	}
 }
+
+// postTerminationFailure terminates the row and then fails, like a kill whose
+// pre-remove cleanup command fails after recordTermination.
+type postTerminationFailure struct {
+	*fakeCommander
+	st        *fakeStore
+	terminate bool
+	failure   error
+}
+
+func (c *postTerminationFailure) end(id domain.SessionID) error {
+	if c.terminate {
+		rec := c.st.sessions[id]
+		rec.IsTerminated = true
+		c.st.sessions[id] = rec
+	}
+	return c.failure
+}
+
+func (c *postTerminationFailure) Kill(_ context.Context, id domain.SessionID) (bool, error) {
+	return false, c.end(id)
+}
+
+func (c *postTerminationFailure) RequestKill(_ context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	return sessionmanager.KillResult{}, c.end(id)
+}
+
+func TestKillReportsEndWhenCleanupFailsAfterTermination(t *testing.T) {
+	for _, op := range []string{"Kill", "RequestKill"} {
+		for _, tc := range []struct {
+			name       string
+			terminated bool
+			failure    error
+		}{
+			{name: "cleanup fails after termination", terminated: true, failure: errors.New("pre-remove cleanup failed")},
+			{name: "kill fails before termination", failure: errors.New("runtime unreachable")},
+		} {
+			t.Run(op+"/"+tc.name, func(t *testing.T) {
+				st := newFakeStore()
+				st.sessions["mer-1"] = domain.SessionRecord{
+					ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+					CreatedAt: time.Now().Add(-time.Minute), Activity: domain.Activity{State: domain.ActivityActive},
+				}
+				sink := &fakeTelemetrySink{}
+				cmd := &postTerminationFailure{fakeCommander: &fakeCommander{}, st: st, terminate: tc.terminated, failure: tc.failure}
+				svc := NewWithDeps(Deps{Manager: cmd, Store: st, Delivery: deliverytelemetry.New(sink, deliveryFakeStore{})})
+
+				var err error
+				if op == "Kill" {
+					_, err = svc.Kill(context.Background(), "mer-1")
+				} else {
+					_, err = svc.RequestKill(context.Background(), "mer-1")
+				}
+				if err == nil {
+					t.Fatal("kill error was swallowed; the caller must still see it")
+				}
+				var ended []ports.TelemetryEvent
+				for _, ev := range sink.events {
+					if ev.Name == "ao.sessions.ended" {
+						ended = append(ended, ev)
+					}
+				}
+				if !tc.terminated {
+					if len(ended) != 0 {
+						t.Fatalf("session that survived the kill reported ended: %#v", ended)
+					}
+					return
+				}
+				// The pre-termination record keeps the activity it ended in.
+				if len(ended) != 1 || ended[0].Payload["outcome"] != "killed" {
+					t.Fatalf("ended = %#v, want one killed outcome", ended)
+				}
+			})
+		}
+	}
+}

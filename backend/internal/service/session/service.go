@@ -787,15 +787,8 @@ func (s *Service) SpawnOrchestrator(
 			before, live := s.liveSessionBeforeEnd(retireCtx, orch.ID)
 			_ = s.sendRetireNotice(retireCtx, orch.ID)
 			retireErr := s.manager.RetireForReplacement(retireCtx, orch.ID)
-			if live {
-				// A failed cleanup can follow a successful terminal transition.
-				// On that path, read the row before reporting the outcome.
-				if retireErr == nil {
-					s.recordKilled(retireCtx, before, true)
-				} else if after, ok, err := s.store.GetSession(retireCtx, orch.ID); err == nil && ok && after.IsTerminated {
-					s.recordKilled(retireCtx, before, true)
-				}
-			}
+			// A failed cleanup can follow a successful terminal transition.
+			s.recordKillOutcome(retireCtx, before, live, retireErr)
 			if retireErr != nil {
 				return domain.Session{}, toAPIError(retireErr)
 			}
@@ -1088,6 +1081,7 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	s.cancelTitleRefinement(id)
 	before, live := s.liveSessionBeforeEnd(ctx, id)
 	freed, err := s.manager.Kill(ctx, id)
+	s.recordKillOutcome(ctx, before, live, err)
 	if err != nil {
 		apiErr := toAPIError(err)
 		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
@@ -1097,7 +1091,6 @@ func (s *Service) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	if s.usageArchiveFlush != nil {
 		s.usageArchiveFlush(ctx)
 	}
-	s.recordKilled(ctx, before, live)
 	return freed, nil
 }
 
@@ -1106,14 +1099,14 @@ func (s *Service) RequestKill(ctx context.Context, id domain.SessionID) (session
 	s.cancelTitleRefinement(id)
 	before, live := s.liveSessionBeforeEnd(ctx, id)
 	result, err := s.manager.RequestKill(ctx, id)
+	// Terminal intent is acknowledged even while cleanup still runs: the
+	// session has ended for the user, also when a later step then failed.
+	s.recordKillOutcome(ctx, before, live, err)
 	if err != nil {
 		apiErr := toAPIError(err)
 		s.recordTerminated(ctx, id, actionStatusForError(err), apiErr)
 		return result, apiErr
 	}
-	// Terminal intent is acknowledged even while cleanup still runs: the
-	// session has ended for the user.
-	s.recordKilled(ctx, before, live)
 	// RequestKill can acknowledge terminal intent while cleanup still runs.
 	// A later cleanup failure must not leave a completed action in chat.
 	if !result.CleanupPending {

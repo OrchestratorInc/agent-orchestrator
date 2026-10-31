@@ -86,3 +86,23 @@ func (s *Service) recordKilled(ctx context.Context, before domain.SessionRecord,
 	}
 	s.delivery.SessionEnded(ctx, before, deliverytelemetry.EndKilled)
 }
+
+// recordKillOutcome reports a kill that ended a live session. Teardown can
+// fail after termination is durable (cleanup runs after the terminal write),
+// so an error alone does not mean the session survived: the row decides, and
+// the pre-termination record keeps the activity the session ended in. The
+// end report is claimed once per termination, so a later retry cannot double
+// it, and a session that was already terminated before the call (live=false)
+// is never reported here.
+func (s *Service) recordKillOutcome(ctx context.Context, before domain.SessionRecord, live bool, killErr error) {
+	if !live {
+		return
+	}
+	if killErr != nil {
+		after, ok, err := s.store.GetSession(context.WithoutCancel(ctx), before.ID)
+		if err != nil || !ok || !after.IsTerminated {
+			return
+		}
+	}
+	s.recordKilled(ctx, before, true)
+}

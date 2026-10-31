@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -119,5 +120,50 @@ func TestTrackerCloseReportsCompletedSession(t *testing.T) {
 	ended := endedEvents(sink)
 	if len(ended) != 1 || ended[0].Payload["outcome"] != "completed" {
 		t.Fatalf("ended = %#v, want one completed", ended)
+	}
+}
+
+// terminateThenFail is a completion terminator whose kill commits termination
+// and then fails in cleanup.
+type terminateThenFail struct {
+	st        *deliveryStore
+	terminate bool
+}
+
+func (k terminateThenFail) Kill(_ context.Context, id domain.SessionID) (bool, error) {
+	if k.terminate {
+		rec := k.st.sessions[id]
+		rec.IsTerminated = true
+		k.st.sessions[id] = rec
+	}
+	return false, errors.New("cleanup failed")
+}
+
+func TestMergeTeardownReportsEndWhenCleanupFailsAfterTermination(t *testing.T) {
+	for _, terminate := range []bool{true, false} {
+		m, st, sink := newDeliveryManager()
+		rec := exited("mer-1")
+		rec.Kind = domain.KindWorker
+		st.sessions["mer-1"] = rec
+		m.SetCompletionTerminator(terminateThenFail{st: st, terminate: terminate})
+
+		if err := m.terminateCompletedSession(ctx, "mer-1"); err == nil {
+			t.Fatal("teardown error was swallowed")
+		}
+		ended := endedEvents(sink)
+		if !terminate {
+			if len(ended) != 0 {
+				t.Fatalf("session that survived teardown reported ended: %#v", ended)
+			}
+			continue
+		}
+		if len(ended) != 1 || ended[0].Payload["outcome"] != "pr_opened" {
+			t.Fatalf("ended = %#v, want one pr_opened outcome", ended)
+		}
+		// The poller retries a failed teardown; the end is reported only once.
+		_ = m.terminateCompletedSession(ctx, "mer-1")
+		if got := len(endedEvents(sink)); got != 1 {
+			t.Fatalf("ended events after retry = %d, want 1", got)
+		}
 	}
 }

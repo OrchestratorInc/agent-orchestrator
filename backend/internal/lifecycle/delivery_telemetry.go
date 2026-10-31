@@ -41,3 +41,19 @@ func (m *Manager) liveBeforeEnd(ctx context.Context, id domain.SessionID) (domai
 	}
 	return rec, true
 }
+
+// reportEndIfTerminated reports a lifecycle-driven end of a session that was
+// live before the call. An error can follow the durable terminal write, so the
+// row, not the error, decides; before keeps the activity the session ended in.
+func (m *Manager) reportEndIfTerminated(ctx context.Context, before domain.SessionRecord, live bool, endErr error, reason deliverytelemetry.EndReason) {
+	if !live {
+		return
+	}
+	if endErr != nil {
+		after, ok, err := m.store.GetSession(context.WithoutCancel(ctx), before.ID)
+		if err != nil || !ok || !after.IsTerminated {
+			return
+		}
+	}
+	m.delivery.SessionEnded(ctx, before, reason)
+}
