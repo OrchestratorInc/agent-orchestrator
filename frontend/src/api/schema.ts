@@ -2217,6 +2217,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/session-import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview readable local Claude Code and Codex histories for existing projects or Standalone */
+        get: operations["scanSessionImport"];
+        put?: never;
+        /** Import selected histories as idle AO sessions without starting providers */
+        post: operations["importSelectedSessions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions": {
         parameters: {
             query?: never;
@@ -5490,6 +5508,7 @@ export interface components {
             /** @enum {string} */
             mode: "chat" | "tui";
             model?: string;
+            needsResume: boolean;
             /** @enum {string} */
             outputType: "none" | "pr" | "artifact" | "pr_artifact";
             /** Format: date-time */
@@ -6951,6 +6970,35 @@ export interface components {
             at: string;
             harness?: string;
             userRequest: string;
+        };
+        SessionImportCandidate: {
+            folder?: string;
+            harness: string;
+            id: string;
+            /** Format: date-time */
+            lastActivity: string;
+            messageCount: number;
+            projectId?: string;
+            sessionId?: string;
+            shortened?: boolean;
+            suggested: boolean;
+            title: string;
+        };
+        SessionImportPreview: {
+            candidates: components["schemas"]["SessionImportCandidate"][];
+        };
+        SessionImportRequest: {
+            ids: string[];
+        };
+        SessionImportResponse: {
+            results: components["schemas"]["SessionImportResult"][];
+        };
+        SessionImportResult: {
+            error?: string;
+            id: string;
+            sessionId?: string;
+            /** @enum {string} */
+            status: "created" | "already_imported" | "failed";
         };
         SessionInterfaceTransition: {
             /** Format: date-time */
@@ -15567,6 +15615,95 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    scanSessionImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportPreview"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importSelectedSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionImportRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionImportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -137,6 +137,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	accountMoving,
 	agentResuming,
 	controllerResumeError,
+	controllerResumeErrorCode,
 	newWorkDisabled,
 	arriving,
 	onConversationWorkChange,
@@ -195,6 +196,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** A stopped agent is being resumed in the background after the chat opened. */
 	agentResuming?: boolean;
 	controllerResumeError?: string;
+	/** The API error code that goes with controllerResumeError. */
+	controllerResumeErrorCode?: string;
 	/** An interface handoff fences new agent work while current-turn decisions remain available. */
 	newWorkDisabled?: boolean;
 	/** A switch from the terminal is under way and the conversation is not readable yet. */
@@ -384,11 +387,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// Mode commits before the target controller starts. A cached ready snapshot
 	// can also outlive the source, so wait for the handoff's final snapshot refresh.
 	// A background resume keeps the last-known catalogs visible so the model
-	// picker doesn't blank out while the agent spins up.
+	// picker doesn't blank out while the agent spins up. An imported chat that
+	// was never opened has none to keep, and asking before it is ready fails.
 	// A sleeping, waking or reconnecting agent cannot report its settings yet; the bar shows the saved ones.
 	const waking = snapshot?.harness === session.provider &&
 		(snapshot.controller?.state === "hibernated" || snapshot.controller?.state === "connecting" || snapshot.controller?.state === "recovering");
-	const controllerCatalogsEnabled = (targetChatControllerReady || agentResuming) && !controllerTransitioning && !newWorkDisabled;
+	const controllerCatalogsEnabled = (targetChatControllerReady || (agentResuming && !session.needsResume)) && !controllerTransitioning && !newWorkDisabled;
 	const configOptions = useConversationConfigOptions(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot && can(snapshot, "config_options")),
@@ -429,7 +433,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		if (session.kind !== "worker" || !skillsHarness || skills.length === 0) return;
 		rememberChatSkills(skillsHarness, hostId, skills);
 	}, [hostId, session.kind, skills, skillsHarness]);
-	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot), hostId);
+	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	const [annotationNavigationRequest, setAnnotationNavigationRequest] = useState<{ id: string; text: string; messageId?: string; revision?: number }>();
 	useChatMessageFocus(uiSessionId, undefined, Boolean(snapshot), setAnnotationNavigationRequest);
@@ -795,6 +799,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				}}
 				resumingAgent={commands.resumingAgent || (renderSnapshot.controller.state === "hibernated" && controllerBusy)}
 				resumeError={commands.resumeError ?? controllerResumeError}
+				resumeErrorCode={commands.resumeError ? commands.resumeErrorCode : controllerResumeErrorCode}
 				onOpenShell={onOpenShell}
 				openingShell={openingShell}
 				shellError={shellError}

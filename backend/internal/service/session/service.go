@@ -944,6 +944,21 @@ func (s *Service) ExitAgent(ctx context.Context, id domain.SessionID) (ExitAgent
 func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeAgentOutcome, error) {
 	res, err := s.manager.ResumeAgentWithMode(ctx, id)
 	if err != nil {
+		// Known conditions (open elsewhere, resume in progress, terminated) keep
+		// their codes; any other failure of a pending import keeps its own code
+		// but shows only a fixed, user-written reason: raw Git and filesystem
+		// errors name local paths and stay in the daemon log.
+		var known *apierr.Error
+		if !errors.As(mapSessionError(err), &known) {
+			if rec, ok, readErr := s.store.GetSession(ctx, id); readErr == nil && ok && rec.NeedsImportResume() {
+				if s.logger != nil {
+					s.logger.Warn("resume imported session", "session", id, "err", err)
+				}
+				apiErr := apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", sessionmanager.ImportFailureMessage(err), nil)
+				s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)
+				return ResumeAgentOutcome{}, apiErr
+			}
+		}
 		apiErr := toAPIError(err)
 		s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)
 		return ResumeAgentOutcome{}, apiErr
@@ -1618,6 +1633,7 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		SessionRecord:    rec,
 		WorkspaceCleanup: cleanup,
 		StatusReadiness:  readiness,
+		NeedsResume:      rec.NeedsImportResume(),
 		ChatProviderPreserved: rec.Mode == domain.SessionModeChat && !rec.IsTerminated &&
 			s.chatProviderPreserved != nil && s.chatProviderPreserved(rec.ID),
 		Status:           deriveStatus(rec, prs, now, s.harnessSignals(rec.Harness)),
@@ -1669,6 +1685,8 @@ func mapSessionError(err error) error {
 	case errors.Is(err, sessionmanager.ErrAgentNotExited):
 		return apierr.Conflict("AGENT_NOT_EXITED",
 			"The agent is still running; only exited agents can be resumed", nil)
+	case errors.Is(err, sessionmanager.ErrSessionOpenElsewhere):
+		return apierr.Conflict("SESSION_OPEN_ELSEWHERE", sessionmanager.ErrSessionOpenElsewhere.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrResumeInProgress):
 		return apierr.Conflict("AGENT_RESUME_IN_PROGRESS",
 			"The agent is already being resumed", nil)

@@ -45,6 +45,11 @@ vi.mock("../hooks/useSystemRequirementsGate", () => ({
 	useStartGitHubAuthTerminal: () => ({ mutate: routeMocks.startGitHubAuth, isPending: false, isError: false }),
 }));
 
+// No agent is signed in here, so Home shows no chat-import card.
+vi.mock("../hooks/useAgentReadinessQuery", () => ({
+	useAgentReadinessQuery: () => ({ data: undefined }),
+}));
+
 vi.mock("../hooks/useShellTerminals", () => ({
 	useCloseShellTerminal: () => ({ mutate: routeMocks.closeTerminal }),
 }));

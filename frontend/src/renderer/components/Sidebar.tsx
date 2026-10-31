@@ -2493,7 +2493,7 @@ const SessionRow = memo(function SessionRow({
 	// A stopped agent takes seconds to come back. Start it while the pointer rests
 	// on the row so the chat is ready when it opens; opening joins this request.
 	const warmUpAgent = () => {
-		if (!canPrefetch || !hasTrustedApiBaseUrl() || !canResumeAgent(session)) return;
+		if (!canPrefetch || session.needsResume || !hasTrustedApiBaseUrl() || !canResumeAgent(session)) return;
 		void resumeAgentOnOpen(session.id)
 			.catch(() => {})
 			.finally(() => {

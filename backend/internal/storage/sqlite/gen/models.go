@@ -741,6 +741,7 @@ type Session struct {
 	LaunchOptions                    string
 	BranchNaming                     bool
 	TemporaryBranch                  string
+	ImportSource                     string
 }
 
 type SessionAgentAccount struct {
@@ -780,6 +781,14 @@ type SessionHarnessRelease struct {
 	Launch    string
 	Harness   string
 	Release   string
+}
+
+type SessionImportMessage struct {
+	SessionID string
+	Sequence  int64
+	Role      string
+	Text      string
+	CreatedAt time.Time
 }
 
 type SessionInterfaceTransition struct {
