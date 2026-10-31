@@ -101,7 +101,7 @@ function aoCurLangName() {
     /* original hi segment spans the VISIBLE active rows only: from the first
        active row top to the last active row bottom minus its 6px padding
        (measured on live site) */
-    var start = itF.top;
+    var start = itF.top + 6;
     var center = itL.top + itL.h - 6;
     track.hi.style.clipPath = "polygon(0 " + start + "px, 100% " + start + "px, 100% " + center + "px, 0 " + center + "px)";
     /* dot position is owned by glideDot (transform-based, eased) */
