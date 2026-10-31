@@ -2246,11 +2246,13 @@ describe("TaskComposer", () => {
 		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", "fx"));
 		const picker = await screen.findByRole("button", { name: "Model" });
 		await userEvent.click(picker);
-		expect(await screen.findByRole("menuitem", { name: "Gateway Zeta" })).toBeInTheDocument();
+		// The compact menu names the provider on each row, so the accessible
+		// name carries it too.
+		expect(await screen.findByRole("menuitem", { name: /Gateway Zeta/ })).toBeInTheDocument();
 		if (hideUnrelated) {
-			expect(screen.queryByRole("menuitem", { name: "Gateway Beta" })).not.toBeInTheDocument();
+			expect(screen.queryByRole("menuitem", { name: /Gateway Beta/ })).not.toBeInTheDocument();
 		} else {
-			expect(screen.getByRole("menuitem", { name: "Gateway Beta" })).toBeInTheDocument();
+			expect(screen.getByRole("menuitem", { name: /Gateway Beta/ })).toBeInTheDocument();
 		}
 		await userEvent.keyboard("{Escape}");
 		expect(picker).toHaveTextContent("Codex Alpha");
