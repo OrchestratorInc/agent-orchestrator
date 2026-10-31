@@ -23,7 +23,7 @@ vi.mock("./settings/MobileDevicesSection", () => ({ mobileDevicesQueryKey: ["mob
 vi.mock("./chat/ChatWorkspace", () => ({
 	ChatWorkspace: (props: ChatWorkspaceProps) => {
 		h.workspace = props;
-		return <>{props.draftNotice}</>;
+		return <>{props.draftNotice}{props.composerTray}</>;
 	},
 }));
 vi.mock("./TaskComposer", () => ({
@@ -58,10 +58,10 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 const draftScope = { sessionId: "new-chat:local", incarnation: "new-chat:local" };
 
-function renderPage() {
+function renderPage(initialProject = "proj-1") {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const page = (projectId: string) => <QueryClientProvider client={queryClient}><NewChatPage projectId={projectId} /></QueryClientProvider>;
-	const { rerender } = render(page("proj-1"));
+	const { rerender } = render(page(initialProject));
 	return Object.assign(queryClient, { showProject: (projectId: string) => rerender(page(projectId)) });
 }
 
@@ -130,6 +130,21 @@ describe("NewChatPage", () => {
 
 		await act(async () => { await h.workspace?.onSend?.("Another task", undefined, "cid-2"); });
 		expect(h.launch).toHaveBeenLastCalledWith("Another task", expect.objectContaining({ displayName: undefined }));
+	});
+
+	it("keeps a report's instructions when the user picks a project", async () => {
+		h.launch.mockResolvedValue("sess-1");
+		renderPage("__standalone__");
+		act(() => useUiStore.getState().requestNewTask("__standalone__", undefined, { hiddenPrompt: "Read the report context.", displayName: "Report a problem" }));
+		await act(async () => { fireEvent.pointerDown(screen.getByRole("button", { name: /^Project:/ }), { button: 0, ctrlKey: false }); });
+		await act(async () => { fireEvent.click(await screen.findByRole("menuitem", { name: "Project" })); });
+		expect(h.navigate).toHaveBeenCalledWith({ to: "/new", search: { project: "proj-1", host: undefined }, replace: true });
+
+		// The route now shows the chosen project.
+		cleanup();
+		renderPage();
+		await act(async () => { await h.workspace?.onSend?.("The composer froze.", undefined, "cid-1"); });
+		expect(h.launch).toHaveBeenCalledWith("Read the report context.\n\nThe composer froze.", expect.objectContaining({ displayName: "Report a problem" }));
 	});
 
 	it("ignores a report's instructions raised for another project", async () => {
