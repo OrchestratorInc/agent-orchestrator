@@ -1425,3 +1425,18 @@ main td, main th { vertical-align: middle !important; }
   }
 }
 
+
+
+/* v50: docked assistant panel - rebase the parity grid on the space left of the sheet.
+   Mintlify exposes the state on html[data-assistant-state] and the live sheet width as
+   --assistant-sheet-width on <html>; its TOC column collapses natively while open.
+   Without this, #body-content stays 100vw and content renders under the sheet. */
+@media (min-width: 1024px) {
+html[data-assistant-state="open"] { --ao-gutter: max(0px, calc((100vw - var(--assistant-sheet-width, 0px) - 1552px) / 2)); }
+html[data-assistant-state="open"] #body-content { width: calc(100vw - var(--assistant-sheet-width, 0px)) !important; }
+html[data-assistant-state="open"] #content-area,
+html[data-assistant-state="open"] div[class*="lg:max-w"][class*="mx-auto"] {
+  width: min(900px, calc(100vw - 268px - var(--assistant-sheet-width, 0px))) !important;
+  max-width: min(900px, calc(100vw - 268px - var(--assistant-sheet-width, 0px))) !important;
+}
+}
