@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -4515,6 +4516,83 @@ func TestKill_RuntimeDestroyErrorFailsClosedEvenWhenProbeReadsGone(t *testing.T)
 	}
 	if st.sessions["mer-1"].IsTerminated {
 		t.Fatal("session must stay active while the runtime may be live")
+	}
+}
+
+// forgettingInputGate records which terminals Session Manager tells the
+// terminal mux to forget.
+type forgettingInputGate struct {
+	mu        sync.Mutex
+	forgotten []string
+}
+
+func (g *forgettingInputGate) BeginInputDrain(string) (time.Time, func()) {
+	return time.Time{}, func() {}
+}
+
+func (g *forgettingInputGate) ForgetTerminalInput(terminalID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.forgotten = append(g.forgotten, terminalID)
+}
+
+func (g *forgettingInputGate) calls() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.forgotten)
+}
+
+// A killed session's runtime is gone, so the terminal mux can drop its input
+// timestamp; it is keyed by the runtime handle id (#5691).
+func TestKill_ForgetsTerminalInputAfterRuntimeDestroy(t *testing.T) {
+	m, st, rt, _ := newManager()
+	gate := &forgettingInputGate{}
+	m.SetTerminalInputGate(gate)
+	rt.onDestroy = func(int, ports.RuntimeHandle) {
+		if got := gate.calls(); len(got) != 0 {
+			t.Errorf("forgot %v before the runtime was destroyed", got)
+		}
+	}
+	st.sessions["mer-1"] = mkLive("mer-1")
+
+	if _, err := m.Kill(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gate.calls(); !slices.Equal(got, []string{"h1"}) {
+		t.Fatalf("forgotten terminals = %v, want [h1]", got)
+	}
+}
+
+// A failed destroy leaves the runtime possibly live with a draft in it, so its
+// input timestamp must stay for the idle and draft proofs.
+func TestKill_KeepsTerminalInputWhenRuntimeDestroyFails(t *testing.T) {
+	m, st, rt, _ := newManager()
+	gate := &forgettingInputGate{}
+	m.SetTerminalInputGate(gate)
+	st.sessions["mer-1"] = mkLive("mer-1")
+	rt.destroyErr = errors.New("runtime still alive")
+
+	if _, err := m.Kill(ctx, "mer-1"); err == nil {
+		t.Fatal("kill succeeded, want the runtime error")
+	}
+	if got := gate.calls(); len(got) != 0 {
+		t.Fatalf("forgotten terminals = %v, want none after a failed destroy", got)
+	}
+}
+
+// Cleanup destroys a terminated session's leftover runtime (usually already
+// gone after the agent exited on its own) and then drops its input timestamp.
+func TestCleanup_ForgetsTerminalInputOfTerminatedSessions(t *testing.T) {
+	m, st, _, _ := newManager()
+	gate := &forgettingInputGate{}
+	m.SetTerminalInputGate(gate)
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", RuntimeHandleID: "h-mer-1"})
+
+	if _, err := m.Cleanup(ctx, "mer"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gate.calls(); !slices.Equal(got, []string{"h-mer-1"}) {
+		t.Fatalf("forgotten terminals = %v, want [h-mer-1]", got)
 	}
 }
 

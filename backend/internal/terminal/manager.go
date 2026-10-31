@@ -244,6 +244,21 @@ func (m *Manager) HoldInput(terminalID string) (lastInputAt time.Time, release f
 	return lastInputAt, func() { once.Do(unlock) }
 }
 
+// ForgetTerminalInput drops one terminal's input timestamp. Session Manager
+// calls it only after it destroyed the runtime behind the terminal: the
+// timestamp must outlive viewers (a draft typed before switching tabs still
+// guards the idle and draft proofs), so nothing here drops it on detach
+// (#5691). It takes the write fence first so a keystroke write already in
+// flight finishes before the entry goes. A drain's inputBlocked count is left
+// alone: its holder releases it.
+func (m *Manager) ForgetTerminalInput(terminalID string) {
+	unlock := m.lockInputFence(terminalID)
+	defer unlock()
+	m.inputMu.Lock()
+	delete(m.lastInputAt, terminalID)
+	m.inputMu.Unlock()
+}
+
 // TerminalOnScreen reports whether a client is showing the terminal. A client
 // without a grid keeps it parked off screen: it attached without one, or gave
 // it up with a 0x0 resize when its pane or window was hidden. (Same signal as

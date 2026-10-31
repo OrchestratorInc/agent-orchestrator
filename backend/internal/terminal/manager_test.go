@@ -1070,3 +1070,154 @@ func TestTerminalReportsAreNotInput(t *testing.T) {
 		}
 	}
 }
+
+func typeInto(t *testing.T, mgr *Manager, conn *fakeConn, id string) time.Time {
+	t.Helper()
+	conn.in <- clientMsg{Ch: chTerminal, ID: id, Type: msgOpen}
+	recv(t, conn, chTerminal, msgOpened, time.Second)
+	conn.in <- clientMsg{Ch: chTerminal, ID: id, Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("half-typed draft"))}
+	eventually(t, time.Second, func() bool { return !mgr.LastInputAt(id).IsZero() })
+	return mgr.LastInputAt(id)
+}
+
+func hasLastInput(mgr *Manager, id string) bool {
+	mgr.inputMu.Lock()
+	defer mgr.inputMu.Unlock()
+	_, ok := mgr.lastInputAt[id]
+	return ok
+}
+
+// Closing the last view of a live terminal keeps its input timestamp: Session
+// Manager's draft and idle proofs read it when nobody is viewing. An operator
+// who types a draft and switches tabs must not make an idle report that
+// predates the draft look like proof the composer is empty (#5691).
+func TestServeKeepsLastInputAtWhenTheLastViewerCloses(t *testing.T) {
+	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	connA, connB := newFakeConn(), newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, connA)
+	go mgr.Serve(ctx, connB)
+
+	typedAt := typeInto(t, mgr, connA, "t1")
+	connB.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgOpen}
+	recv(t, connB, chTerminal, msgOpened, time.Second)
+
+	connA.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgClose}
+	connB.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgClose}
+	eventually(t, time.Second, func() bool {
+		mgr.mu.Lock()
+		defer mgr.mu.Unlock()
+		return len(mgr.attachments) == 0
+	})
+	if got := mgr.LastInputAt("t1"); !got.Equal(typedAt) {
+		t.Fatalf("LastInputAt after the last viewer closed = %v, want %v", got, typedAt)
+	}
+	got, release := mgr.BeginInputDrain("t1")
+	release()
+	if !got.Equal(typedAt) {
+		t.Fatalf("drain barrier after the last viewer closed = %v, want %v", got, typedAt)
+	}
+}
+
+// Session Manager drops a terminal's input timestamp once it has destroyed the
+// runtime behind it, so the map does not grow for the daemon's lifetime (#5691).
+func TestForgetTerminalInputDropsTheTimestamp(t *testing.T) {
+	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+
+	typeInto(t, mgr, conn, "t1")
+	typeInto(t, mgr, conn, "t2")
+	mgr.ForgetTerminalInput("t1")
+	if hasLastInput(mgr, "t1") {
+		t.Fatal("t1 input timestamp kept after ForgetTerminalInput")
+	}
+	if !mgr.LastInputAt("t1").IsZero() {
+		t.Fatal("LastInputAt(t1) is not zero after ForgetTerminalInput")
+	}
+	if !hasLastInput(mgr, "t2") {
+		t.Fatal("ForgetTerminalInput(t1) dropped t2's timestamp")
+	}
+}
+
+func TestForgetTerminalInputIgnoresUnknownTerminals(t *testing.T) {
+	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	mgr.ForgetTerminalInput("never-seen")
+	mgr.ForgetTerminalInput("")
+	if n := len(mgr.lastInputAt); n != 0 {
+		t.Fatalf("lastInputAt has %d entries, want 0", n)
+	}
+	mgr.fencesMu.Lock()
+	n := len(mgr.fences)
+	mgr.fencesMu.Unlock()
+	if n != 0 {
+		t.Fatalf("fences has %d entries after ForgetTerminalInput, want 0", n)
+	}
+}
+
+// ForgetTerminalInput takes the terminal's write fence first, so a keystroke
+// write already in flight finishes (and records its time) before the entry is
+// dropped, instead of re-adding it right after.
+func TestForgetTerminalInputWaitsForTheWriteFence(t *testing.T) {
+	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	mgr.recordInputAt("t1", []byte("x"))
+	_, release := mgr.HoldInput("t1")
+	done := make(chan struct{})
+	go func() {
+		mgr.ForgetTerminalInput("t1")
+		close(done)
+	}()
+	select {
+	case <-done:
+		release()
+		t.Fatal("ForgetTerminalInput returned while the write fence was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("ForgetTerminalInput did not return after the fence was released")
+	}
+	if hasLastInput(mgr, "t1") {
+		t.Fatal("t1 input timestamp kept after ForgetTerminalInput")
+	}
+}
+
+// Run with -race: forgetting must not race keystroke writes or readers.
+func TestForgetTerminalInputIsSafeAlongsideInputAndReaders(t *testing.T) {
+	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
+	defer mgr.Close()
+	conn := newFakeConn()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go mgr.Serve(ctx, conn)
+	typeInto(t, mgr, conn, "t1")
+
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 100 {
+				conn.in <- clientMsg{Ch: chTerminal, ID: "t1", Type: msgData, Data: base64.StdEncoding.EncodeToString([]byte("k"))}
+				_ = mgr.LastInputAt("t1")
+				_, release := mgr.HoldInput("t1")
+				release()
+				mgr.ForgetTerminalInput("t1")
+			}
+		}()
+	}
+	wg.Wait()
+	eventually(t, time.Second, func() bool {
+		mgr.ForgetTerminalInput("t1")
+		return !hasLastInput(mgr, "t1")
+	})
+}
