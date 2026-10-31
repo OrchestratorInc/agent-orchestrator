@@ -74,7 +74,7 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessOpenCode: "OPENCODE_DATA_DIR"}[rec.Harness]
+	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR"}[rec.Harness]
 	if key == "" {
 		return
 	}
@@ -96,7 +96,13 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 			}
 		}
 	}
-	setProtectedEnv(env, key, source.ConfigDir, envKeysCaseInsensitive)
+	value := source.ConfigDir
+	if rec.Harness == domain.HarnessDroid {
+		// FACTORY_HOME_OVERRIDE is a home override Droid appends ".factory" to,
+		// not the state dir itself, so point it at the parent of the config dir.
+		value = filepath.Dir(source.ConfigDir)
+	}
+	setProtectedEnv(env, key, value, envKeysCaseInsensitive)
 }
 
 func sameDirectory(a, b string) bool {
@@ -215,7 +221,7 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 		if strings.HasPrefix(line, "c") {
 			command = strings.ToLower(line[1:])
 		}
-		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex")) {
+		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex") || strings.Contains(command, "droid")) {
 			return true
 		}
 	}

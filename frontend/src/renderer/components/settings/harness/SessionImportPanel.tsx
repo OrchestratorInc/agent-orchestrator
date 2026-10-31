@@ -15,7 +15,7 @@ type Candidate = components["schemas"]["SessionImportCandidate"];
 type ImportResult = components["schemas"]["SessionImportResult"];
 
 /** Agents whose local chats AO can import. */
-export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "opencode"]);
+export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "droid", "opencode"]);
 
 const offerClosedKey = "ao.sessionImport.offerClosed";
 const offerListeners = new Set<() => void>();
@@ -190,50 +190,53 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			.map(([n, key]) => t(key, { count: n }))
 			.join(" ");
 	return (
-		<div className="flex flex-col gap-3">
-			<p className="text-xs text-muted-foreground">
-				{t("sessionImport.description", { agent: agentLabel(harness) })}
-			</p>
-			<div className="flex flex-wrap gap-3">
-				<div className="flex flex-col gap-1 text-xs">
-					<span aria-hidden="true">{t("newTask.project")}</span>
-					<Select value={project} onValueChange={setProject} disabled={importing}>
-						<SelectTrigger size="sm" className="w-56 text-control" aria-label={t("newTask.project")}>
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent position="popper" side="bottom" align="start" sideOffset={4} className="max-h-64">
-							<SelectItem value="all">{t("sessionImport.allProjects")}</SelectItem>
-							<SelectItem value="standalone">{t("remote.standalone")}</SelectItem>
-							{projects.map((p) => (
-								<SelectItem key={p.id} value={p.id}>
-									{p.name}
-								</SelectItem>
-							))}
-							{folders.map((path) => (
-								<SelectItem key={path} value={folderFilter + path}>
-									{t("sessionImport.newProject", { name: folderName(path) })}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+		// Only the list scrolls; the filter stays on top and the actions stay on the bottom.
+		<div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+			<div className="flex shrink-0 flex-col gap-3">
+				<p className="text-xs text-muted-foreground">
+					{t("sessionImport.description", { agent: agentLabel(harness) })}
+				</p>
+				<div className="flex flex-wrap gap-3">
+					<div className="flex flex-col gap-1 text-xs">
+						<span aria-hidden="true">{t("newTask.project")}</span>
+						<Select value={project} onValueChange={setProject} disabled={importing}>
+							<SelectTrigger size="sm" className="w-56 text-control" aria-label={t("newTask.project")}>
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent position="popper" side="bottom" align="start" sideOffset={4} className="max-h-64">
+								<SelectItem value="all">{t("sessionImport.allProjects")}</SelectItem>
+								<SelectItem value="standalone">{t("remote.standalone")}</SelectItem>
+								{projects.map((p) => (
+									<SelectItem key={p.id} value={p.id}>
+										{p.name}
+									</SelectItem>
+								))}
+								{folders.map((path) => (
+									<SelectItem key={path} value={folderFilter + path}>
+										{t("sessionImport.newProject", { name: folderName(path) })}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
 				</div>
+				<p className="text-xs text-muted-foreground">
+					{t("sessionImport.selectionHelp")}
+				</p>
+				{preview.isFetching ? (
+					<p role="status" className="flex items-center gap-2 text-sm">
+						<Loader2 className="size-4 animate-spin" aria-hidden="true" />
+						{t("sessionImport.reading")}
+					</p>
+				) : null}
+				{preview.error || error ? (
+					<p role="alert" className="text-sm text-destructive">
+						{error ?? preview.error?.message}
+					</p>
+				) : null}
 			</div>
-			<p className="text-xs text-muted-foreground">
-				{t("sessionImport.selectionHelp")}
-			</p>
-			{preview.isFetching ? (
-				<p role="status" className="flex items-center gap-2 text-sm">
-					<Loader2 className="size-4 animate-spin" aria-hidden="true" />
-					{t("sessionImport.reading")}
-				</p>
-			) : null}
-			{preview.error || error ? (
-				<p role="alert" className="text-sm text-destructive">
-					{error ?? preview.error?.message}
-				</p>
-			) : null}
-			<div className="rounded-md border border-border">
-				<label className="sticky top-0 flex items-center gap-3 border-b border-border bg-surface px-3 py-2 text-xs">
+			<div className="settings-thin-scrollbar min-h-0 w-full min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain rounded-md border border-border">
+				<label className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-surface px-3 py-2 text-xs">
 					<Checkbox
 						aria-label={t("sessionImport.selectAllAria")}
 						checked={
@@ -272,49 +275,51 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 					</p>
 				) : null}
 			</div>
-			{newFolders.length ? (
-				<p className="text-xs text-muted-foreground">
-					{t("sessionImport.addsProjects", {
-						count: newFolders.length,
-						names: newFolders.map(folderName).join(", "),
-					})}
-				</p>
-			) : null}
-			{results.length ? (
-				<p role="status" className="text-sm">
-					{summarize(results)}
-				</p>
-			) : null}
-			<div className="flex items-center justify-between gap-3">
-				<Button
-					variant="ghost"
-					onClick={() => {
-						setError(undefined);
-						void preview.refetch();
-					}}
-					disabled={importing || preview.isFetching}
-				>
-					{t("sessionImport.scanAgain")}
-				</Button>
-				<Button
-					onClick={() => void importSelected()}
-					disabled={
-						!selectedVisible.length ||
-						selectedVisible.length > 500 ||
-						importing ||
-						preview.isFetching
-					}
-				>
-					{importing
-						? t("sessionImport.importing")
-						: t("sessionImport.import", { count: selectedVisible.length })}
-				</Button>
+			<div className="flex shrink-0 flex-col gap-3">
+				{newFolders.length ? (
+					<p className="text-xs text-muted-foreground">
+						{t("sessionImport.addsProjects", {
+							count: newFolders.length,
+							names: newFolders.map(folderName).join(", "),
+						})}
+					</p>
+				) : null}
+				{results.length ? (
+					<p role="status" className="text-sm">
+						{summarize(results)}
+					</p>
+				) : null}
+				<div className="flex items-center justify-between gap-3">
+					<Button
+						variant="ghost"
+						onClick={() => {
+							setError(undefined);
+							void preview.refetch();
+						}}
+						disabled={importing || preview.isFetching}
+					>
+						{t("sessionImport.scanAgain")}
+					</Button>
+					<Button
+						onClick={() => void importSelected()}
+						disabled={
+							!selectedVisible.length ||
+							selectedVisible.length > 500 ||
+							importing ||
+							preview.isFetching
+						}
+					>
+						{importing
+							? t("sessionImport.importing")
+							: t("sessionImport.import", { count: selectedVisible.length })}
+					</Button>
+				</div>
+				{selectedVisible.length > 500 ? (
+					<p role="alert" className="text-xs text-destructive">
+						{t("sessionImport.limit")}
+					</p>
+				) : null}
 			</div>
-			{selectedVisible.length > 500 ? (
-				<p role="alert" className="text-xs text-destructive">
-					{t("sessionImport.limit")}
-				</p>
-			) : null}
 		</div>
 	);
 }
@@ -349,7 +354,7 @@ function ImportRow({
 			/>
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm font-medium">{c.title}</span>
-				<span className="text-xs text-muted-foreground">
+				<span className="block truncate text-xs text-muted-foreground">
 					{projectName} · {agentLabel(c.harness)} · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
 					{new Date(c.lastActivity).toLocaleDateString(i18n.resolvedLanguage)}
 				</span>

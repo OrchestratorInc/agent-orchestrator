@@ -5,13 +5,19 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { workspaceQueryKey } from "../../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../../lib/agent-options";
 import type { WorkspaceSummary } from "../../../types/workspace";
-import { SessionImportPanel } from "./SessionImportPanel";
+import { IMPORTABLE_AGENTS, SessionImportPanel } from "./SessionImportPanel";
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("../../../lib/api-client", () => ({
 	apiClient: api,
 	apiErrorCode: (error: { code?: string }) => error.code,
 	apiErrorMessage: () => "Import failed",
 }));
+it("gates session import to the agents with a readable local history", () => {
+	expect(IMPORTABLE_AGENTS.has("claude-code")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("codex")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("droid")).toBe(true);
+	expect(IMPORTABLE_AGENTS.has("aider")).toBe(false);
+});
 const chat = { suggested: true, lastActivity: "2026-10-06T10:00:00Z", messageCount: 2 };
 function renderPanel(harness: AgentId = "claude-code") {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

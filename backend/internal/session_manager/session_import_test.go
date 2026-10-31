@@ -830,3 +830,47 @@ func TestImportRetryDropsFilesTheSourceNoLongerHas(t *testing.T) {
 		t.Fatalf("a file the earlier attempt did not copy was removed: %v", err)
 	}
 }
+
+type droidHomeAgent struct{ fakeAgent }
+
+// NativeSessionConfigDir mirrors Droid's own resolver: FACTORY_HOME_OVERRIDE (or
+// HOME) with ".factory" appended. The env value is a home override, not the
+// state directory itself.
+func (droidHomeAgent) NativeSessionConfigDir(_ context.Context, env map[string]string) (string, error) {
+	home := strings.TrimSpace(env["FACTORY_HOME_OVERRIDE"])
+	if home == "" {
+		home = strings.TrimSpace(env["HOME"])
+	}
+	return filepath.Join(home, ".factory"), nil
+}
+
+type droidHomeAgents struct{}
+
+func (droidHomeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return droidHomeAgent{}, true }
+
+// Droid's config env is a home override, so AO points FACTORY_HOME_OVERRIDE at
+// the parent of the imported conversation's state directory (not the dir
+// itself), and leaves it unset when the default home already owns it.
+func TestImportedConfigEnvDroidHomeOverride(t *testing.T) {
+	home := t.TempDir()
+	m := &Manager{agents: droidHomeAgents{}}
+	rec := domain.SessionRecord{Harness: domain.HarnessDroid}
+
+	// Default home already holds the conversation: no override forced.
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: "native", ImportSource: &domain.SessionImportSource{NativeID: "native", ConfigDir: filepath.Join(home, ".factory")}}
+	env := map[string]string{"HOME": home}
+	m.applyImportedConfigEnv(context.Background(), rec, env)
+	if value, set := env["FACTORY_HOME_OVERRIDE"]; set {
+		t.Fatalf("default home forced an override: %q", value)
+	}
+
+	// A different, unreachable source home is selected by its parent directory.
+	other := filepath.Join(t.TempDir(), "elsewhere")
+	rec.Metadata.ImportSource.ConfigDir = filepath.Join(other, ".factory")
+	rec.Metadata.NativeTranscriptPath = filepath.Join(other, ".factory", "sessions", "-work", "native.jsonl")
+	env = map[string]string{"HOME": home}
+	m.applyImportedConfigEnv(context.Background(), rec, env)
+	if env["FACTORY_HOME_OVERRIDE"] != other {
+		t.Fatalf("FACTORY_HOME_OVERRIDE = %q, want %q", env["FACTORY_HOME_OVERRIDE"], other)
+	}
+}
