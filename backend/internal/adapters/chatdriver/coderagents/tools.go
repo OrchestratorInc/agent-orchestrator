@@ -19,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/coderagents/coderapi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // AO's client-executed tools. Coder's chat loop calls them through
@@ -153,7 +154,7 @@ type toolRunner struct {
 	readOnly   bool
 }
 
-func (r *toolRunner) run(ctx context.Context, name string, rawArgs string) toolOutcome {
+func (r *toolRunner) run(ctx context.Context, name, rawArgs string) toolOutcome {
 	spec, ok := specFor(name)
 	if !ok {
 		return errorOutcome(fmt.Sprintf("unknown AO tool %q", name))
@@ -192,7 +193,7 @@ func (r *toolRunner) resolve(path string) (string, error) {
 		path = filepath.Join(r.root, path)
 	}
 	path = filepath.Clean(path)
-	real, err := realPath(path)
+	resolved, err := realPath(path)
 	if err != nil {
 		return "", err
 	}
@@ -201,7 +202,7 @@ func (r *toolRunner) resolve(path string) (string, error) {
 		if err != nil {
 			continue
 		}
-		if within(realRoot, real) {
+		if within(realRoot, resolved) {
 			return path, nil
 		}
 	}
@@ -253,7 +254,7 @@ func (r *toolRunner) readFile(args toolArgs) toolOutcome {
 	if err != nil {
 		return errorOutcome(err.Error())
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, maxReadBytes+1))
 	if err != nil {
 		return errorOutcome(err.Error())
@@ -306,7 +307,7 @@ func (r *toolRunner) writeFile(args toolArgs) toolOutcome {
 	}
 	_, statErr := os.Stat(path)
 	created := errors.Is(statErr, fs.ErrNotExist)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return errorOutcome(err.Error())
 	}
 	if err := os.WriteFile(path, []byte(args.Content), 0o644); err != nil { //nolint:gosec // worktree files keep normal permissions
@@ -375,6 +376,7 @@ func (r *toolRunner) execute(ctx context.Context, args toolArgs) toolOutcome {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := shellCommand(ctx, command)
+	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.Dir = dir
 	cmd.Env = r.env
 	cmd.WaitDelay = 2 * time.Second
@@ -405,9 +407,9 @@ func (r *toolRunner) execute(ctx context.Context, args toolArgs) toolOutcome {
 
 func shellCommand(ctx context.Context, command string) *exec.Cmd {
 	if runtime.GOOS == "windows" {
-		return exec.CommandContext(ctx, "cmd.exe", "/d", "/s", "/c", command) //nolint:gosec // the model-requested command is the tool's purpose; approval gates it
+		return aoprocess.CommandContext(ctx, "cmd.exe", "/d", "/s", "/c", command)
 	}
-	return exec.CommandContext(ctx, "/bin/sh", "-c", command) //nolint:gosec // see above
+	return aoprocess.CommandContext(ctx, "/bin/sh", "-c", command)
 }
 
 // toolEnv is the command environment: the session env without any Coder

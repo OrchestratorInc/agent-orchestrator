@@ -134,7 +134,7 @@ func TestVersionIdentityIsAnchored(t *testing.T) {
 		"Coder v1.9.0+old release": false,
 	} {
 		p := &Plugin{runVersion: func(context.Context, string) ([]byte, error) { return []byte(output), nil }}
-		if _, ok := p.version(context.Background(), "/test/bin/coder"); ok != want {
+		if ok := p.versionIdentified(context.Background(), "/test/bin/coder"); ok != want {
 			t.Fatalf("version(%q) ok = %v, want %v", output, ok, want)
 		}
 	}

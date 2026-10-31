@@ -10,7 +10,6 @@ import (
 	"errors"
 	"net/http"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -22,6 +21,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/coderagents/coderapi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const adapterID = "coder-agents"
@@ -97,8 +97,7 @@ func (p *Plugin) ResolveBinary(ctx context.Context) (string, error) {
 				UnixPaths:     []string{"/opt/homebrew/bin/coder", "/usr/local/bin/coder", "/home/linuxbrew/.linuxbrew/bin/coder", "/usr/bin/coder"},
 				UnixHomePaths: [][]string{{".local", "bin", "coder"}},
 				ValidateIdentity: func(ctx context.Context, path string) bool {
-					_, ok := p.version(ctx, path)
-					return ok
+					return p.versionIdentified(ctx, path)
 				},
 			})
 		}
@@ -121,12 +120,12 @@ func (p *Plugin) InvalidateBinaryResolution() {
 // SupportsTerminalVersionRefresh is false: there is no terminal to refresh.
 func (*Plugin) SupportsTerminalVersionRefresh() bool { return false }
 
-// version runs `coder version` and returns the exact "2.x.y" version.
-func (p *Plugin) version(ctx context.Context, binary string) (string, bool) {
+// versionIdentified runs `coder version` and confirms it is the Coder v2 CLI.
+func (p *Plugin) versionIdentified(ctx context.Context, binary string) bool {
 	run := p.runVersion
 	if run == nil {
 		run = func(ctx context.Context, binary string) ([]byte, error) {
-			cmd := exec.CommandContext(ctx, binary, "version") //nolint:gosec // binary is the resolved coder CLI
+			cmd := aoprocess.CommandContext(ctx, binary, "version")
 			return cmd.Output()
 		}
 	}
@@ -134,13 +133,9 @@ func (p *Plugin) version(ctx context.Context, binary string) (string, bool) {
 	defer cancel()
 	out, err := run(ctx, binary)
 	if err != nil {
-		return "", false
+		return false
 	}
-	match := versionPattern.FindSubmatch(bytes.TrimSpace(out))
-	if match == nil {
-		return "", false
-	}
-	return string(match[1]) + "." + string(match[2]) + "." + string(match[3]), true
+	return versionPattern.Match(bytes.TrimSpace(out))
 }
 
 // Connect resolves the deployment and session for env (project overrides
@@ -181,7 +176,7 @@ func (p *Plugin) tokenRunner() func(context.Context, string, []string) ([]byte, 
 		return p.runToken
 	}
 	return func(ctx context.Context, binary string, env []string) ([]byte, []byte, error) {
-		cmd := exec.CommandContext(ctx, binary, "login", "token") //nolint:gosec // binary is the resolved coder CLI
+		cmd := aoprocess.CommandContext(ctx, binary, "login", "token")
 		cmd.Env = env
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr

@@ -34,6 +34,9 @@ func (c *Client) StreamChat(ctx context.Context, chatID string, afterID int64) (
 		HTTPClient: c.http, HTTPHeader: header,
 		CompressionMode: websocket.CompressionDisabled,
 	})
+	if res != nil && res.Body != nil {
+		_ = res.Body.Close()
+	}
 	if err != nil {
 		if errors.Is(err, ErrCrossOriginRedirect) {
 			return nil, ErrCrossOriginRedirect

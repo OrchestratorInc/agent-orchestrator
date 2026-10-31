@@ -160,16 +160,6 @@ func validateLaunch(workspace string, permissions ports.PermissionMode, addition
 	return nil
 }
 
-func (s session) model(id string) (coderapi.ChatModel, error) {
-	id = strings.TrimSpace(id)
-	for _, model := range s.models {
-		if model.ID == id {
-			return model, nil
-		}
-	}
-	return coderapi.ChatModel{}, fmt.Errorf("%w: Coder Agents model config %q is not enabled for this deployment", ports.ErrChatConfigOptionInvalid, id)
-}
-
 // Start prepares a new conversation. The Coder chat itself is created with
 // the first message, because Coder's create call requires one; the
 // conversation key AO persists finds it again through its label.

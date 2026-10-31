@@ -161,7 +161,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		// token travels only in a header.
 		return fmt.Errorf("coder %s %s: %w", method, path, err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxResponseBytes))
 	if err != nil {
 		return fmt.Errorf("read coder response: %w", err)
@@ -194,19 +194,22 @@ func decodeAPIError(status int, data []byte) error {
 // BuildInfo reads the deployment version.
 func (c *Client) BuildInfo(ctx context.Context) (BuildInfo, error) {
 	var info BuildInfo
-	return info, c.do(ctx, http.MethodGet, "/api/v2/buildinfo", nil, nil, &info, http.StatusOK)
+	err := c.do(ctx, http.MethodGet, "/api/v2/buildinfo", nil, nil, &info, http.StatusOK)
+	return info, err
 }
 
 // Me returns the signed-in user. A 401 means the session is invalid.
 func (c *Client) Me(ctx context.Context) (User, error) {
 	var user User
-	return user, c.do(ctx, http.MethodGet, "/api/v2/users/me", nil, nil, &user, http.StatusOK)
+	err := c.do(ctx, http.MethodGet, "/api/v2/users/me", nil, nil, &user, http.StatusOK)
+	return user, err
 }
 
 // Organizations lists the signed-in user's organizations.
 func (c *Client) Organizations(ctx context.Context) ([]Organization, error) {
 	var orgs []Organization
-	return orgs, c.do(ctx, http.MethodGet, "/api/v2/users/me/organizations", nil, nil, &orgs, http.StatusOK)
+	err := c.do(ctx, http.MethodGet, "/api/v2/users/me/organizations", nil, nil, &orgs, http.StatusOK)
+	return orgs, err
 }
 
 // ChatModels lists the organization's chat model configs visible to the user.
@@ -222,13 +225,15 @@ func (c *Client) ChatModels(ctx context.Context, organizationID string) ([]ChatM
 // CreateChat creates a chat with its first user message.
 func (c *Client) CreateChat(ctx context.Context, req CreateChatRequest) (Chat, error) {
 	var chat Chat
-	return chat, c.do(ctx, http.MethodPost, "/api/v2/chats", nil, req, &chat, http.StatusCreated)
+	err := c.do(ctx, http.MethodPost, "/api/v2/chats", nil, req, &chat, http.StatusCreated)
+	return chat, err
 }
 
 // GetChat reads one chat.
 func (c *Client) GetChat(ctx context.Context, chatID string) (Chat, error) {
 	var chat Chat
-	return chat, c.do(ctx, http.MethodGet, "/api/v2/chats/"+url.PathEscape(chatID), nil, nil, &chat, http.StatusOK)
+	err := c.do(ctx, http.MethodGet, "/api/v2/chats/"+url.PathEscape(chatID), nil, nil, &chat, http.StatusOK)
+	return chat, err
 }
 
 // ListChatsByLabels lists the user's chats carrying every given label,
@@ -239,13 +244,15 @@ func (c *Client) ListChatsByLabels(ctx context.Context, labels map[string]string
 		query.Add("label", key+":"+value)
 	}
 	var chats []Chat
-	return chats, c.do(ctx, http.MethodGet, "/api/v2/chats", query, nil, &chats, http.StatusOK)
+	err := c.do(ctx, http.MethodGet, "/api/v2/chats", query, nil, &chats, http.StatusOK)
+	return chats, err
 }
 
 // CreateChatMessage sends a user message to an existing chat.
 func (c *Client) CreateChatMessage(ctx context.Context, chatID string, req CreateChatMessageRequest) (CreateChatMessageResponse, error) {
 	var res CreateChatMessageResponse
-	return res, c.do(ctx, http.MethodPost, "/api/v2/chats/"+url.PathEscape(chatID)+"/messages", nil, req, &res, http.StatusOK)
+	err := c.do(ctx, http.MethodPost, "/api/v2/chats/"+url.PathEscape(chatID)+"/messages", nil, req, &res, http.StatusOK)
+	return res, err
 }
 
 // ChatMessages returns messages after afterID (0 for all).
@@ -255,13 +262,15 @@ func (c *Client) ChatMessages(ctx context.Context, chatID string, afterID int64)
 		query.Set("after_id", strconv.FormatInt(afterID, 10))
 	}
 	var res ChatMessagesResponse
-	return res, c.do(ctx, http.MethodGet, "/api/v2/chats/"+url.PathEscape(chatID)+"/messages", query, nil, &res, http.StatusOK)
+	err := c.do(ctx, http.MethodGet, "/api/v2/chats/"+url.PathEscape(chatID)+"/messages", query, nil, &res, http.StatusOK)
+	return res, err
 }
 
 // InterruptChat cancels the chat's in-flight run.
 func (c *Client) InterruptChat(ctx context.Context, chatID string) (Chat, error) {
 	var chat Chat
-	return chat, c.do(ctx, http.MethodPost, "/api/v2/chats/"+url.PathEscape(chatID)+"/interrupt", nil, nil, &chat, http.StatusOK)
+	err := c.do(ctx, http.MethodPost, "/api/v2/chats/"+url.PathEscape(chatID)+"/interrupt", nil, nil, &chat, http.StatusOK)
+	return chat, err
 }
 
 // SubmitToolResults answers the chat's pending client-executed tool calls.
