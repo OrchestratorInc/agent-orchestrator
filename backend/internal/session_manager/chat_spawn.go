@@ -580,7 +580,7 @@ func (m *Manager) resumeChatController(
 		HistoryPolicy:        historyPolicy,
 		ControllerReady: func(started ChatStarted) (ChatControllerCommit, error) {
 			if rec.NeedsImportResume() && started.ProviderConversationID != rec.Metadata.ImportSource.NativeID {
-				return ChatControllerCommit{}, fmt.Errorf("%w: the provider did not resume the original conversation", ports.ErrChatResumeFailed)
+				return ChatControllerCommit{}, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, importNotice("the provider did not resume the original conversation"))
 			}
 
 			metadata := rec.Metadata

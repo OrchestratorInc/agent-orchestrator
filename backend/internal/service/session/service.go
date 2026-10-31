@@ -945,11 +945,16 @@ func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeA
 	res, err := s.manager.ResumeAgentWithMode(ctx, id)
 	if err != nil {
 		// Known conditions (open elsewhere, resume in progress, terminated) keep
-		// their codes; any other failure of a pending import shows its cause.
+		// their codes; any other failure of a pending import keeps its own code
+		// but shows only a fixed, user-written reason: raw Git and filesystem
+		// errors name local paths and stay in the daemon log.
 		var known *apierr.Error
 		if !errors.As(mapSessionError(err), &known) {
 			if rec, ok, readErr := s.store.GetSession(ctx, id); readErr == nil && ok && rec.NeedsImportResume() {
-				apiErr := apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", err.Error(), nil)
+				if s.logger != nil {
+					s.logger.Warn("resume imported session", "session", id, "err", err)
+				}
+				apiErr := apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", sessionmanager.ImportFailureMessage(err), nil)
 				s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)
 				return ResumeAgentOutcome{}, apiErr
 			}

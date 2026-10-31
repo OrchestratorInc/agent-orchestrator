@@ -298,7 +298,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			return rec, err
 		}
 		if available == ports.NativeSessionAvailabilityUnavailable {
-			return rec, fmt.Errorf("%w: the original provider history is missing; restore it and retry", ports.ErrChatResumeFailed)
+			return rec, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, importNotice("the original provider history is missing; restore it and retry"))
 		}
 	}
 	release := m.acquireWorkspaceGate(rec.ProjectID)
@@ -312,7 +312,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		marker, err := os.ReadFile(importCopyMarker(ws.Path, rec.ID))
 		if err == nil {
 			if string(marker) != string(rec.ID) {
-				return rec, errors.New("invalid workspace transfer marker")
+				return rec, importNotice("invalid workspace transfer marker")
 			}
 			copied = true
 		} else if !errors.Is(err, os.ErrNotExist) {
@@ -344,7 +344,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			if copyFrom != "" {
 				// Never fetch or copy an unrelated repository that sits inside the project folder.
 				if !sessionimport.SameRepository(ctx, repoRoot, project.Path) {
-					return rec, errors.New("the conversation's folder is not a checkout of this project's repository")
+					return rec, importNotice("the conversation's folder is not a checkout of this project's repository")
 				}
 				copyFrom = repoRoot
 			}
@@ -395,10 +395,10 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 					}
 				}
 				if len(overrides) > 1 {
-					return rec, errors.New("the original repository matches multiple workspace children")
+					return rec, importNotice("the original repository matches multiple workspace children")
 				}
 				if len(overrides) == 0 && !pathWithin(copyFrom, source.CWD) {
-					return rec, errors.New("the original workspace no longer matches this AO project")
+					return rec, importNotice("the original workspace no longer matches this AO project")
 				}
 			}
 			baseRefs := map[string]string{}
@@ -495,7 +495,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 					cleanupErr = m.workspace.Destroy(cleanupCtx, ws)
 				}
 				if err == nil {
-					err = errors.New("session changed during workspace creation; retry")
+					err = importNotice("session changed during workspace creation; retry")
 				}
 				return rec, errors.Join(err, cleanupErr)
 			}
@@ -517,7 +517,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			return rec, err
 		}
 		if !updated {
-			return rec, errors.New("session changed during workspace transfer; retry")
+			return rec, importNotice("session changed during workspace transfer; retry")
 		}
 		rec.Metadata.ImportSource = &next
 	}
@@ -536,7 +536,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			return rec, err
 		}
 		if !updated {
-			return rec, errors.New("session changed during workspace setup; retry")
+			return rec, importNotice("session changed during workspace setup; retry")
 		}
 	}
 	current, ok, err := m.store.GetSession(ctx, rec.ID)
@@ -544,7 +544,7 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		return rec, err
 	}
 	if !ok || current.IsTerminated {
-		return rec, errors.New("session was terminated during workspace setup")
+		return rec, importNotice("session was terminated during workspace setup")
 	}
 	return current, nil
 }
@@ -660,7 +660,7 @@ func importGitPaths(root string) ([]string, error) {
 			return nil
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
-			return errors.New("git metadata must not be a symlink")
+			return importNotice("git metadata must not be a symlink")
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
@@ -689,7 +689,7 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		return err
 	}
 	if pathWithin(source, destination) {
-		return errors.New("destination must be outside the original folder")
+		return importNotice("destination must be outside the original folder")
 	}
 	gitPaths, err := importGitPaths(destination)
 	if err != nil {
@@ -733,7 +733,7 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 			native = override
 		}
 		if pathWithin(native, destination) {
-			return errors.New("destination must be outside the original folder")
+			return importNotice("destination must be outside the original folder")
 		}
 		state := gitState{rel: rel, source: native}
 		if err := read(&state); err != nil {
@@ -879,14 +879,14 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 		}
 		if !bytes.Equal(before.head, after.head) || !bytes.Equal(before.staged, after.staged) ||
 			!slices.Equal(before.changed, after.changed) || !maps.Equal(before.facts, after.facts) {
-			return errors.New("source files changed while copying; retry")
+			return importNotice("source files changed while copying; retry")
 		}
 	}
 	if completionMarker == "" {
 		return nil
 	}
 	if _, err := os.Lstat(completionMarker); !errors.Is(err, os.ErrNotExist) {
-		return errors.New("source contains a reserved workspace transfer marker")
+		return importNotice("source contains a reserved workspace transfer marker")
 	}
 	return os.WriteFile(completionMarker, []byte(strings.TrimPrefix(filepath.Base(completionMarker), ".ao-import-complete-")), 0o600)
 }

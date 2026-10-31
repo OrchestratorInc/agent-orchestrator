@@ -17,6 +17,23 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+// waitForExecName waits until a just-started child has replaced the forked test
+// binary with its own executable. Until then ps names the child after the test
+// binary, so an ownership check run too early sees no Claude process.
+func waitForExecName(t *testing.T, pid int, name string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if got, _, ok := processStart(context.Background(), pid); ok && got == name {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("process %d never ran as %q", pid, name)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	ctx := context.Background()
 	home := t.TempDir()
@@ -57,6 +74,7 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = owner.Process.Kill(); _ = owner.Wait() })
+	waitForExecName(t, owner.Process.Pid, "claude")
 	claude := domain.SessionRecord{Harness: domain.HarnessClaudeCode}
 	claude.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "7999f45f-eb7e-43b7-90da-be3d5fd2208d", ConfigDir: home}
 	register := func(pid int, cwd string, startedAt ...time.Time) {
@@ -131,6 +149,7 @@ func TestAdoptedClaudeImportOpenElsewhereBlocksResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = owner.Process.Kill(); _ = owner.Wait() })
+	waitForExecName(t, owner.Process.Pid, "claude")
 	body, _ := json.Marshal(map[string]any{"pid": owner.Process.Pid, "sessionId": "thread-1", "cwd": "/source"})
 	if err := os.MkdirAll(filepath.Join(home, "sessions"), 0o700); err != nil {
 		t.Fatal(err)
