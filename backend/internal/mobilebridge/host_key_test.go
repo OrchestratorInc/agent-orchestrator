@@ -1,6 +1,7 @@
 package mobilebridge
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -110,5 +111,70 @@ func TestAMachineWithoutAHostKeySendsTheDigestAlone(t *testing.T) {
 	AuthorizeHostRequest(req, nil, "digest", "")
 	if req.Header.Get("Authorization") != "Bearer digest" || req.Header.Get("X-AO-Host-Signature") != "" {
 		t.Fatalf("headers = %v", req.Header)
+	}
+}
+
+// A damaged host.key is replaced, and kept aside rather than lost.
+func TestADamagedHostKeyIsReplacedAndKeptAside(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "config.json")
+	keyPath := filepath.Join(filepath.Dir(statePath), "host.key")
+	if err := os.WriteFile(keyPath, []byte("short"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := HostKey(statePath); err != nil {
+		t.Fatal(err)
+	}
+	if seed, err := os.ReadFile(keyPath); err != nil || len(seed) != ed25519.SeedSize {
+		t.Fatalf("host.key = %d bytes (%v)", len(seed), err)
+	}
+	if bad, err := os.ReadFile(keyPath + ".bad"); err != nil || string(bad) != "short" {
+		t.Fatalf("host.key.bad = %q (%v)", bad, err)
+	}
+}
+
+// A request signed before AO Cloud's clock was known, on a machine an hour
+// fast, is refused; signed again on AO Cloud's clock, it goes through. A
+// refusal on a clock that did not move is AO Cloud's answer, not retried.
+func TestAHostRequestIsSignedAgainOnceAOCloudsClockIsKnown(t *testing.T) {
+	aoCloudSkew.Store(0)
+	t.Cleanup(func() { aoCloudSkew.Store(0) })
+	served := time.Now().Add(-time.Hour)
+	var stamps []int64
+	refuse := 1
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		unix, _, _ := strings.Cut(r.Header.Get("X-AO-Host-Signature"), ".")
+		n, _ := strconv.ParseInt(unix, 10, 64)
+		stamps = append(stamps, n)
+		w.Header().Set("Date", served.UTC().Format(http.TimeFormat))
+		if len(stamps) <= refuse {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	statePath := filepath.Join(t.TempDir(), "config.json")
+	send := func() int {
+		body := []byte(`{"url":"https://h-test.example.dev"}`)
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/cloud/v1/remote-hosts/h_1/address", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := DoHostRequest(srv.Client(), req, body, "digest", statePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if code := send(); code != http.StatusNoContent || len(stamps) != 2 {
+		t.Fatalf("status %d after %d requests, want 204 after 2", code, len(stamps))
+	}
+	if d := time.Unix(stamps[1], 0).Sub(served); d > time.Minute || d < -time.Minute {
+		t.Fatalf("signed again %v off AO Cloud's clock", d)
+	}
+	refuse = 3
+	if code := send(); code != http.StatusUnauthorized || len(stamps) != 3 {
+		t.Fatalf("status %d after %d requests, want one refused request", code, len(stamps))
 	}
 }

@@ -94,13 +94,11 @@ func publishRemoteHostAddress(ctx context.Context, client *http.Client, controlP
 	if err != nil {
 		return err
 	}
-	mobilebridge.AuthorizeHostRequest(req, body, hash, statePath)
-	response, err := client.Do(req)
+	response, err := mobilebridge.DoHostRequest(client, req, body, hash, statePath)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = response.Body.Close() }()
-	mobilebridge.NoteAOCloudDate(response.Header.Get("Date"))
 	switch {
 	case response.StatusCode == http.StatusNoContent:
 	case mobilebridge.IsHostDigestRefusal(response):

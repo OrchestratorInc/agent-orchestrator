@@ -97,10 +97,11 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 			if (editing && !editing.hostId && editing.url !== nextUrl) await aoBridge.remotes.remove(editing.url);
 			const current = (await aoBridge.remotes.list()).find((item) => item.url === nextUrl);
 			if (current?.hostId && cloudBaseUrl) {
-				const { token, hostKey } = await aoBridge.remotes.issueAccountToken(current.url);
 				// With the machine's host key AO Cloud needs its own signature; an AO
-				// Cloud that does not say it takes host keys refuses the field.
+				// Cloud that does not say it takes host keys refuses the field. Read
+				// first: issuing the token moves it from any other account.
 				const { hostKeys } = await readAccountHostDirectory(cloudBaseUrl);
+				const { token, hostKey } = await aoBridge.remotes.issueAccountToken(current.url);
 				await saveAccountRemoteHost(cloudBaseUrl, { hostId: current.hostId, label: current.label, url: current.url, token, hostKey: hostKeys ? hostKey : undefined });
 			}
 			await load();

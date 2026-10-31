@@ -170,13 +170,11 @@ func (s *FixedTunnelSource) request(ctx context.Context, hostID, digest string, 
 	if err != nil {
 		return NamedTunnel{}, err
 	}
-	AuthorizeHostRequest(req, body, digest, s.StatePath)
-	resp, err := fixedTunnelClient.Do(req)
+	resp, err := DoHostRequest(fixedTunnelClient, req, body, digest, s.StatePath)
 	if err != nil {
 		return NamedTunnel{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	NoteAOCloudDate(resp.Header.Get("Date"))
 	if resp.StatusCode != http.StatusOK {
 		code := errorCode(resp)
 		// A bare 404 is an AO Cloud that predates the route, or a proxy in

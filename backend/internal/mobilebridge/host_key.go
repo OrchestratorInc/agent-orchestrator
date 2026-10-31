@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -37,7 +38,14 @@ func HostKey(statePath string) (ed25519.PrivateKey, error) {
 	switch {
 	case err == nil && len(seed) == ed25519.SeedSize:
 		return ed25519.NewKeyFromSeed(seed), nil
-	case err != nil && !errors.Is(err, fs.ErrNotExist):
+	case err == nil:
+		// A new key, as for a missing file: a link sends it to AO Cloud. Until
+		// then a listing that holds the old one refuses this machine. The bad
+		// file is kept aside for whoever looks into why.
+		slog.Warn("the host key file is damaged; making a new host key", "path", path, "bytes", len(seed))
+		_ = os.Rename(path, path+".bad")
+	case !errors.Is(err, fs.ErrNotExist):
+		slog.Warn("could not read the host key; AO Cloud requests go unsigned", "path", path, "error", err)
 		return nil, err
 	}
 	_, key, err := ed25519.GenerateKey(nil)
@@ -48,6 +56,7 @@ func HostKey(statePath string) (ed25519.PrivateKey, error) {
 		return nil, err
 	}
 	if err := writeFileAtomic(path, key.Seed()); err != nil {
+		slog.Warn("could not save a new host key; AO Cloud requests go unsigned", "path", path, "error", err)
 		return nil, err
 	}
 	return key, nil
@@ -76,6 +85,32 @@ func NoteAOCloudDate(date string) {
 	}
 }
 
+// DoHostRequest sends a machine's own request to AO Cloud, authorized by
+// AuthorizeHostRequest. A 401 to a request signed on a clock AO Cloud's answer
+// then corrected by more than a minute, as on the first request after a start
+// on a machine whose clock is off, is signed again and sent once more: a
+// wrong clock costs a request, not the fixed address.
+func DoHostRequest(client *http.Client, req *http.Request, body []byte, digest, statePath string) (*http.Response, error) {
+	for retried := false; ; retried = true {
+		before := aoCloudSkew.Load()
+		AuthorizeHostRequest(req, body, digest, statePath)
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		NoteAOCloudDate(resp.Header.Get("Date"))
+		moved := time.Duration(aoCloudSkew.Load() - before)
+		if retried || resp.StatusCode != http.StatusUnauthorized || req.Header.Get("X-AO-Host-Signature") == "" ||
+			(moved < time.Minute && moved > -time.Minute) || req.GetBody == nil {
+			return resp, nil
+		}
+		_ = resp.Body.Close()
+		if req.Body, err = req.GetBody(); err != nil {
+			return nil, err
+		}
+	}
+}
+
 // AuthorizeHostRequest sets what a machine's own request to AO Cloud carries:
 // the account token digest and, when the host key can be read, its signature.
 // Unsigned, it still works on a listing without a key and against an AO
@@ -94,7 +129,7 @@ func AuthorizeHostRequest(req *http.Request, body []byte, digest, statePath stri
 // because that is what AO Cloud receives behind a proxy that strips a prefix.
 func signHostRequest(req *http.Request, body []byte, key ed25519.PrivateKey, at time.Time) {
 	path := req.URL.Path
-	if i := strings.Index(path, "/api/cloud/"); i > 0 {
+	if i := strings.LastIndex(path, "/api/cloud/"); i > 0 {
 		path = path[i:]
 	}
 	sum := sha256.Sum256(body)
