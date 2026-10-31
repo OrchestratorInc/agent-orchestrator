@@ -50,6 +50,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
 	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
+	TargetZCode:       "https://zcode.z.ai/en/docs/install",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -247,6 +248,15 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		plans = []Plan{manualPlan(
 			target,
 			"AO does not automatically install Codewhale. Follow the upstream installation instructions, then refresh harness status.",
+			agentDocumentationURLs[target],
+		)}
+	case TargetZCode:
+		// ZCode's CLI ships inside the desktop/CLI distribution built from
+		// zai-org/ZCode and installed by the vendor's own script; there is no
+		// package-manager package or verified headless installer to run.
+		plans = []Plan{manualPlan(
+			target,
+			"AO does not automatically install ZCode. Install the official ZCode CLI, then refresh harness status.",
 			agentDocumentationURLs[target],
 		)}
 	case TargetUnreal:

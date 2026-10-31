@@ -66,4 +66,8 @@ describe("AgentAvatar", () => {
 		render(<AgentAvatar provider="hermes" />);
 		expect(screen.getByRole("img", { name: "hermes" })).toHaveAttribute("src", expect.stringContaining("hermes.png"));
 	});
+	it("renders the official ZCode icon", () => {
+		render(<AgentAvatar provider="zcode" />);
+		expect(screen.getByRole("img", { name: "zcode" })).toHaveAttribute("src", expect.stringContaining("zcode.png"));
+	});
 });

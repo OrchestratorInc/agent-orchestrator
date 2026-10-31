@@ -64,6 +64,8 @@ import qwenDarkLogo from "../assets/agents/qwen-dark.svg";
 import qwenLightLogo from "../assets/agents/qwen-light.svg";
 import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
+// zai-org/ZCode: public/logo/icons/256x256.png.
+import zcodeLogo from "../assets/agents/zcode.png";
 import vibeLogo from "../assets/agents/vibe.svg";
 
 // Official brand marks keyed by the harness name AO stores on session.provider.
@@ -110,6 +112,7 @@ const LOGOS: AgentLogoSources = {
 	"unreal-agent": { light: unrealAgentLightLogo, dark: unrealAgentDarkLogo },
 	"mimo-code": mimoCodeLogo,
 	"deepseek-harness": { light: deepseekHarnessLightLogo, dark: deepseekHarnessDarkLogo },
+	zcode: zcodeLogo,
 };
 
 /**

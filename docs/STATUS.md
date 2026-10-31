@@ -87,6 +87,12 @@ surface (`npm run sqlc`, `npm run api`).
   model selection, native-session restore, workspace activity hooks, and
   truthful configured-credential readiness. Chat and reviewer support are not
   claimed.
+- ZCode public registration, selection, installation and authentication setup
+  remain deferred until private instruction delivery preserves native configuration
+  and child-tool home behavior. The unsafe HOME overlay is removed. Guarded
+  adapter/auth/model staging, migrations and historical branding remain; normal
+  roles reject ZCode before creating state. See [the deferral and qualification
+  requirements](harnesses/zcode.md). No live integration qualification is claimed.
 - Project CRUD plus per-project config (`PUT /projects/{id}/config`).
 - PR action engine wired into the API: `POST /prs/{id}/merge` and
   `/prs/{id}/resolve-comments`.

@@ -103,6 +103,13 @@ export const AGENT_IDENTITIES: ReadonlyMap<AgentId, AgentIdentity> = new Map(
 );
 
 const identityAliases: Readonly<Record<string, AgentIdentity>> = {
+	// Display persisted sessions without making the deferred harness selectable.
+	zcode: {
+		id: "zcode",
+		label: "ZCode",
+		logoKey: "zcode",
+		initial: "Z",
+	},
 	claude: {
 		id: "claude",
 		label: "Claude",

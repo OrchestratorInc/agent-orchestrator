@@ -24,6 +24,12 @@ type installCapabilitiesStub struct {
 	probe             func(context.Context) error
 }
 
+func TestDeferredZCodeIsNotAnInstallTarget(t *testing.T) {
+	if IsAgentTarget(TargetZCode) || Valid(TargetZCode) {
+		t.Fatal("deferred ZCode must not be offered as an installable harness")
+	}
+}
+
 func (s installCapabilitiesStub) Probe(ctx context.Context) (ports.InstallCapabilities, error) {
 	if s.calls != nil {
 		(*s.calls)++
@@ -123,8 +129,8 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plans) != 38 {
-		t.Fatalf("got %d plans, want 38", len(plans))
+	if len(plans) != len(agentTargets) {
+		t.Fatalf("got %d plans, want %d active targets", len(plans), len(agentTargets))
 	}
 	seen := make(map[string]bool, len(plans))
 	for _, plan := range plans {
@@ -137,6 +143,11 @@ func TestAgentPlansCoverEveryHarnessOnce(t *testing.T) {
 		}
 		if plan.Available && (!plan.Automatic || plan.Command == "" || plan.Method == "") {
 			t.Fatalf("available plan %q is incomplete: %+v", plan.AgentID, plan)
+		}
+	}
+	for _, target := range agentTargets {
+		if !seen[string(target)] {
+			t.Errorf("missing install plan for active target %q", target)
 		}
 	}
 }
