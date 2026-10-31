@@ -1352,5 +1352,5 @@ main td, main th { vertical-align: middle !important; }
   nav#sidebar-content [class*="sidebar-title"] { margin-top: -1px !important; margin-bottom: -0.5px !important; }
 }
 @media (max-width: 1023px) {
-  .ao-dr-nav [class*="sidebar-title"] { margin-top: -1px !important; margin-bottom: -3.5px !important; }
+  .ao-dr-nav [class*="sidebar-title"] { margin-top: -1px !important; margin-bottom: -2.5px !important; }
 }
