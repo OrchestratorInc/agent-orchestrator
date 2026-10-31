@@ -61,6 +61,23 @@ type AgentAccountLimitWindow struct {
 	Scope string `json:"-"`
 }
 
+// AgentAccountLimits is what the provider's CLI reports about an account's
+// subscription limits. AO never reads the account's token to get it.
+type AgentAccountLimits struct {
+	Windows []AgentAccountLimitWindow `json:"windows"`
+	// AutoResumeResetsAt is present only when native rolling limits identify an
+	// unambiguous future deadline. Nil does not establish available capacity.
+	AutoResumeResetsAt *time.Time `json:"-"`
+	// ExtraUsage is Claude's paid usage beyond the plan, in the plan's currency.
+	ExtraUsage *AgentAccountExtraUsage `json:"extraUsage,omitempty"`
+	// ResetCredits counts Codex usage-limit resets the account can spend.
+	ResetCredits *int64 `json:"resetCredits,omitempty" minimum:"0"`
+	// Activity is the provider's own count of the account's use everywhere,
+	// not only in AO. Codex reports it; Claude does not.
+	Activity  *AgentAccountActivity `json:"activity,omitempty"`
+	FetchedAt time.Time             `json:"fetchedAt"`
+}
+
 // HandoffMaxUsedPercent is the fullest a relevant meter may be for an account
 // to receive a session moved off a usage limit, so the retry is not refused at once.
 const HandoffMaxUsedPercent = 90
@@ -95,23 +112,6 @@ func (l AgentAccountLimits) HandoffHeadroom(p AgentAccountProvider, model string
 
 func normalizeLimitScope(s string) string {
 	return strings.NewReplacer(" ", "-", "_", "-").Replace(strings.ToLower(strings.TrimSpace(s)))
-}
-
-// AgentAccountLimits is what the provider's CLI reports about an account's
-// subscription limits. AO never reads the account's token to get it.
-type AgentAccountLimits struct {
-	Windows []AgentAccountLimitWindow `json:"windows"`
-	// AutoResumeResetsAt is present only when native rolling limits identify an
-	// unambiguous future deadline. Nil does not establish available capacity.
-	AutoResumeResetsAt *time.Time `json:"-"`
-	// ExtraUsage is Claude's paid usage beyond the plan, in the plan's currency.
-	ExtraUsage *AgentAccountExtraUsage `json:"extraUsage,omitempty"`
-	// ResetCredits counts Codex usage-limit resets the account can spend.
-	ResetCredits *int64 `json:"resetCredits,omitempty" minimum:"0"`
-	// Activity is the provider's own count of the account's use everywhere,
-	// not only in AO. Codex reports it; Claude does not.
-	Activity  *AgentAccountActivity `json:"activity,omitempty"`
-	FetchedAt time.Time             `json:"fetchedAt"`
 }
 
 // AgentAccountActivity is the provider's own record of an account's use.
