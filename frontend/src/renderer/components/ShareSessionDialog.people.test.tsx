@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpShareAccess, CloudCpShareCandidate, CloudCpTeamMemberAccess } from "../lib/cloud-cp";
 import { useUiStore } from "../stores/ui-store";
+import { GlobalToast } from "./GlobalToast";
 import { ShareSessionDialog } from "./ShareSessionDialog";
 
 const mocks = vi.hoisted(() => ({
@@ -165,6 +166,28 @@ describe("ShareSessionDialog people and teams", () => {
 		await waitFor(() => expect(mocks.calls.filter((call) => call[0] === "createShareGrants").at(-1)).toEqual([
 			"createShareGrants", "org", "proj", { sessionId: "sess", subjects: [{ teamId: "t-platform" }], role: "editor", modeCap: "standard" },
 		]));
+	});
+
+	it("keeps the dialog open when Undo is clicked in the toast", async () => {
+		const onOpenChange = vi.fn();
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<ShareSessionDialog open onOpenChange={onOpenChange} orgId="org" projectId="proj" sessionId="sess" />
+				<GlobalToast />
+			</QueryClientProvider>,
+		);
+		const list = await screen.findByRole("list");
+		await within(list).findByText("Platform");
+		const platformRow = list.querySelector("[data-share-entry=team]") as HTMLElement;
+		await userEvent.click(within(platformRow).getByRole("button", { name: /Change access/ }));
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Stop sharing with Platform" }));
+		// The open modal hides the rest of the page from assistive tech, the toast included,
+		// and jsdom has no stylesheet to see the toast's pointer-events-auto.
+		const pointer = userEvent.setup({ pointerEventsCheck: 0 });
+		await pointer.click(await screen.findByRole("button", { name: "Undo", hidden: true }));
+		await waitFor(() => expect(mocks.calls.filter((call) => call[0] === "createShareGrants")).toHaveLength(1));
+		expect(onOpenChange).not.toHaveBeenCalledWith(false);
 	});
 
 	it("shares the whole project without naming a session", async () => {

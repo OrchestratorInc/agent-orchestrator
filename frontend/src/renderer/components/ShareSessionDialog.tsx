@@ -192,6 +192,10 @@ export function ShareSessionDialog({ open, onOpenChange, orgId, projectId, sessi
 				showCloseButton={false}
 				className={cn(settingsDialogContentClass, "w-[min(540px,calc(100vw-24px))]")}
 				onClick={(event) => event.stopPropagation()}
+				// Stopping a share offers Undo in a toast, outside the dialog; using it keeps the dialog open.
+				onInteractOutside={(event) => {
+					if (event.target instanceof Element && event.target.closest("[data-global-toast]")) event.preventDefault();
+				}}
 				onCloseAutoFocus={restoreFocusOnClose}
 				data-share-session-dialog
 			>

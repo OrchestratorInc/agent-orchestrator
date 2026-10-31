@@ -60,6 +60,7 @@ function GlobalToastItem({ toast }: { toast: Toast }) {
 				isError ? "border border-destructive/40 bg-destructive/10" : "border border-(--color-border-overlay) bg-[var(--color-bg-import-modal)]"
 			}`}
 			role={isError ? "alert" : "status"}
+			data-global-toast=""
 			onMouseEnter={() => setPaused(true)}
 			onMouseLeave={() => setPaused(false)}
 			onFocus={() => setPaused(true)}
