@@ -460,7 +460,7 @@ func TestQueuedTurnSteerRoutePromotesTheSelectedTurn(t *testing.T) {
 	svc := &promoteQueuedStub{
 		fakeConversationService: &fakeConversationService{},
 		result: chatsvc.PromoteQueuedTurnResult{
-			SourceTurnID: "queued-2", ProviderTurnID: "provider-running", InterruptedTurnID: "provider-running",
+			SourceTurnID: "queued-2", ProviderTurnID: "provider-running", ActivityID: "activity-steer",
 		},
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -487,7 +487,7 @@ func TestQueuedTurnSteerRoutePromotesTheSelectedTurn(t *testing.T) {
 	if svc.session != "p1-1" || svc.turnID != "queued-2" {
 		t.Fatalf("service target = (%s, %s)", svc.session, svc.turnID)
 	}
-	if body["sourceTurnId"] != "queued-2" || body["providerTurnId"] != "provider-running" || body["interruptedTurnId"] != "provider-running" {
+	if body["sourceTurnId"] != "queued-2" || body["providerTurnId"] != "provider-running" || body["activityId"] != "activity-steer" {
 		t.Fatalf("response = %#v", body)
 	}
 }

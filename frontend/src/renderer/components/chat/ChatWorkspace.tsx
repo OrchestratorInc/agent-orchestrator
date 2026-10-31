@@ -1549,7 +1549,8 @@ function ChatWorkspaceContent({
 			) : undefined,
 		[onResolveInput, stablePendingUserInput],
 	);
-	const canSteerQueuedMessage = Boolean(onSteer) && turn?.state === "running";
+	const canSteerQueuedMessage =
+		Boolean(onSteer) && can(snapshot, "steer") && turn?.state === "running";
 	const composerQueuedDock = useMemo(
 		() =>
 			visibleQueuedMessages.length > 0 ? (
@@ -2061,7 +2062,7 @@ function ChatWorkspaceContent({
 										// has not reached the provider, so there is nothing to steer.
 										onSteer={newWorkDisabled ? undefined : steer}
 										showSteerButton={showSteerButton}
-										canSteer={Boolean(onSteer) && showSteerButton && turn?.state === "running"}
+										canSteer={Boolean(onSteer) && turn?.state === "running"}
 										sendPending={sendPending || agentResuming}
 										steerPending={steerPending}
 										steerRefusal={steerRefusal}

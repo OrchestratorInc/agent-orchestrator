@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -52,18 +51,8 @@ func TestQueuedEditAttachmentChanges(t *testing.T) {
 		{name: "append over per-file limit", text: "updated", add: []ports.ChatContent{overTenMiB}, wantErr: chatsvc.ErrQueuedContentInvalid},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// interruptCounting settles the cut immediately: promotion is
-			// cut-and-dispatch, and these subtests care about what the dispatched
-			// queued message carries, not about the cut turn.
-			provider := &interruptCounting{steerRecorder: newSteerRecorder()}
-			h := newHarnessWithConversation(t, provider)
+			h, provider := steerHarness(t)
 			ctx := context.Background()
-			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-				Text: "do the long thing", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman,
-			}); err != nil {
-				t.Fatal(err)
-			}
-			provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
 			initial := tc.initial
 			if initial == nil {
 				initial = []ports.ChatContent{{Type: "image", MIMEType: "image/png", Data: "aGVsbG8="}}
@@ -84,9 +73,9 @@ func TestQueuedEditAttachmentChanges(t *testing.T) {
 			if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, turn.ID); err != nil {
 				t.Fatal(err)
 			}
-			sent := provider.sentMessages()
-			if len(sent) != 2 {
-				t.Fatalf("provider calls = %d", len(sent))
+			calls := provider.steers()
+			if len(calls) != 1 {
+				t.Fatalf("provider calls = %d", len(calls))
 			}
 			wantText, wantData := tc.text, tc.wantData
 			if tc.wantErr != nil {
@@ -95,12 +84,11 @@ func TestQueuedEditAttachmentChanges(t *testing.T) {
 					wantData = append(wantData, block.Data)
 				}
 			}
-			msg := sent[1]
-			if !strings.Contains(msg.Text, wantText) || len(msg.Content) != len(wantData) {
-				t.Fatalf("provider got text %q and %d attachments; want %q and %d", msg.Text, len(msg.Content), wantText, len(wantData))
+			if calls[0].msg.Text != wantText || len(calls[0].msg.Content) != len(wantData) {
+				t.Fatalf("provider got text %q and %d attachments; want %q and %d", calls[0].msg.Text, len(calls[0].msg.Content), wantText, len(wantData))
 			}
 			for i, data := range wantData {
-				if msg.Content[i].Data != data {
+				if calls[0].msg.Content[i].Data != data {
 					t.Fatalf("attachment %d changed", i)
 				}
 			}
@@ -109,18 +97,8 @@ func TestQueuedEditAttachmentChanges(t *testing.T) {
 }
 
 func TestQueuedEditRetryAfterCommittedResponseIsLost(t *testing.T) {
-	// interruptCounting settles the cut immediately: promotion is
-	// cut-and-dispatch, and this test cares about what the dispatched queued
-	// message carries, not about the cut turn.
-	provider := &interruptCounting{steerRecorder: newSteerRecorder()}
-	h := newHarnessWithConversation(t, provider)
+	h, provider := steerHarness(t)
 	ctx := context.Background()
-	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-		Text: "do the long thing", ClientMessageID: "turn-1", Origin: domain.MessageOriginHuman,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
 	originalMessage := ports.ChatUserMessage{
 		Text: "original", ClientMessageID: "queue-original", Origin: domain.MessageOriginHuman,
 		Content: []ports.ChatContent{{Type: "image", MIMEType: "image/png", Data: "b2xk"}},
@@ -199,12 +177,8 @@ func TestQueuedEditRetryAfterCommittedResponseIsLost(t *testing.T) {
 	if err := h.svc.EditQueuedTurn(ctx, testSession, turn.ID, edit); err != nil {
 		t.Fatalf("retry after controller teardown: %v", err)
 	}
-	sent := provider.sentMessages()
-	if len(sent) != 2 {
-		t.Fatalf("provider receives %d dispatches, want the original turn plus the promoted one", len(sent))
-	}
-	msg := sent[1]
-	if !strings.Contains(msg.Text, "updated") || len(msg.Content) != 2 || msg.Content[0].Data != "b2xk" || msg.Content[1].Data != "bmV3" {
-		t.Fatalf("provider must receive the edited text and attachments exactly once: %+v", msg)
+	calls := provider.steers()
+	if len(calls) != 1 || calls[0].msg.Text != "updated" || len(calls[0].msg.Content) != 2 || calls[0].msg.Content[0].Data != "b2xk" || calls[0].msg.Content[1].Data != "bmV3" {
+		t.Fatalf("provider must receive the edited text and attachments exactly once: %+v", calls)
 	}
 }

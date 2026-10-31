@@ -6603,7 +6603,7 @@ export interface components {
             sessionPrefix: string;
         };
         PromoteQueuedTurnResponse: {
-            interruptedTurnId?: string;
+            activityId: string;
             providerTurnId: string;
             sourceTurnId: string;
         };
