@@ -51,8 +51,9 @@ type transcript struct {
 	title                     string
 	messages                  []Message
 	last                      time.Time
-	// model is the Claude model the conversation last answered with.
-	model string
+	// model is the model the conversation last answered with: a Claude model
+	// id, or Pi's provider/model. effort is Pi's thinking level.
+	model, effort string
 	// shortened reports visible text that was too large to keep.
 	shortened bool
 }

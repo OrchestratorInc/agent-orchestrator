@@ -37,12 +37,19 @@ type piRecord struct {
 		Role    string      `json:"role"`
 		Content contentText `json:"content"`
 	} `json:"message"`
+
+	// model_change and thinking_level_change records name the model and
+	// thinking level Pi answers with from that point on the branch.
+	Provider      string `json:"provider"`
+	ModelID       string `json:"modelId"`
+	ThinkingLevel string `json:"thinkingLevel"`
 }
 
 // piNode keeps only display facts and the tree link, so tool payloads are not
 // retained while walking ancestry.
 type piNode struct {
 	id, parent, role, text string
+	model, thinking        string
 	at                     time.Time
 	dropped                bool
 }
@@ -111,6 +118,12 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 			return nil // Without an id a record cannot take its place in the tree.
 		}
 		node := piNode{id: r.ID, parent: r.ParentID, at: r.Timestamp}
+		switch {
+		case r.Type == "model_change" && r.Provider != "" && r.ModelID != "":
+			node.model = r.Provider + "/" + r.ModelID
+		case r.Type == "thinking_level_change":
+			node.thinking = r.ThinkingLevel
+		}
 		if r.Type == "message" && (r.Message.Role == "user" || r.Message.Role == "assistant") {
 			node.role = r.Message.Role
 			node.text = string(r.Message.Content)
@@ -184,6 +197,13 @@ func readPiTranscript(ctx context.Context, root string, paths ...string) (transc
 	for _, node := range chain {
 		t.shortened = t.shortened || node.dropped
 		add(node.role, node.text, node.at)
+		// The active branch's latest choice is what Pi itself resumes with.
+		if node.model != "" {
+			t.model = node.model
+		}
+		if node.thinking != "" {
+			t.effort = node.thinking
+		}
 	}
 	n := len(items)
 	items = trimVisible(items)

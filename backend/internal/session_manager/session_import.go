@@ -618,6 +618,39 @@ func (m *Manager) importHeldByLiveSession(ctx context.Context, rec domain.Sessio
 	return false, nil
 }
 
+// chatPermissionModeLister lists the permission modes a harness can run a chat
+// in, strictest first.
+type chatPermissionModeLister interface {
+	PermissionModes(ctx context.Context, harness domain.AgentHarness) ([]ports.PermissionMode, error)
+}
+
+// importedChatPermissions is the permission mode an imported chat opens in. An
+// import never chose one, so it would inherit the project default, which some
+// harnesses cannot run: Pi cannot ask for approval, so it only runs bypassing
+// permissions. The project default is kept when the harness accepts it;
+// otherwise the strictest mode the harness accepts is used, as a new chat on
+// that harness would offer.
+func (m *Manager) importedChatPermissions(ctx context.Context, rec domain.SessionRecord, configured ports.PermissionMode) ports.PermissionMode {
+	if rec.Metadata.ImportSource == nil || rec.Metadata.Permissions != "" {
+		return configured
+	}
+	lister, ok := m.chat.(chatPermissionModeLister)
+	if !ok {
+		return configured
+	}
+	modes, err := lister.PermissionModes(ctx, rec.Harness)
+	if err != nil || len(modes) == 0 {
+		return configured
+	}
+	want := ports.NormalizePermissionMode(configured)
+	for _, mode := range modes {
+		if ports.NormalizePermissionMode(mode) == want {
+			return configured
+		}
+	}
+	return modes[0]
+}
+
 func importCopyMarker(workspace string, id domain.SessionID) string {
 	return filepath.Join(workspace, ".ao-import-complete-"+string(id))
 }
