@@ -354,6 +354,12 @@ func (m *Manager) aoMCPServers(ctx context.Context, harness domain.AgentHarness,
 		// Its harness takes no tool servers; the agent uses `ao render`.
 		return nil
 	}
+	if harness == domain.HarnessCoderAgents {
+		// Coder Agents runs in the Coder deployment, which cannot start a
+		// stdio tool server on this machine; AO's own tools are offered as
+		// client-executed tools instead.
+		return nil
+	}
 	executable, err := m.executable()
 	if err != nil || !filepath.IsAbs(executable) {
 		m.logger.Warn("chat session gets no ao tool server; the agent can still run ao render",

@@ -1,0 +1,7 @@
+Coder brand mark copied unmodified from coder/coder v2.37.9
+(site/static/favicons/favicon-dark.svg -> coder-agents-light.svg,
+site/static/favicons/favicon-light.svg -> coder-agents-dark.svg).
+
+The Coder name and logo are trademarks of Coder Technologies, Inc. They are
+used here only to identify the Coder Agents harness, the same way AO shows
+every other harness's official mark.

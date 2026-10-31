@@ -3,6 +3,7 @@ package systeminstall
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -50,6 +51,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
 	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
+	TargetCoderAgents: "https://coder.com/docs/install/cli",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -283,6 +285,20 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
+	case TargetCoderAgents:
+		// Coder Agents is reached through the official `coder` CLI, which owns
+		// the native login. Coder documents Homebrew and install.sh for macOS,
+		// install.sh for Linux and winget for Windows.
+		switch s.goos {
+		case "windows":
+			plans = []Plan{s.planWinget(target, "Coder.Coder")}
+		case "darwin":
+			plans = []Plan{s.planBrew(target, "coder/coder/coder"), s.planCoderInstaller(target)}
+		case "linux":
+			plans = []Plan{s.planCoderInstaller(target)}
+		default:
+			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official coder CLI release binary", DocsURL: agentDocumentationURLs[target]}}
+		}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}
@@ -596,6 +612,22 @@ func (s *Service) officialByOS(target Target, unixURL, unixShell, windowsURL, do
 	default:
 		return manualPlan(target, fmt.Sprintf("The official installer does not support %s.", s.goos), docsURL)
 	}
+}
+
+// planCoderInstaller runs Coder's official install.sh for the stable channel.
+// The standalone method with a per-user prefix keeps the install free of sudo
+// and of system package managers the script would otherwise prefer.
+func (s *Service) planCoderInstaller(target Target) Plan {
+	plan := s.planShellInstaller(target, "https://coder.com/install.sh", "sh")
+	if plan.Script == nil {
+		return plan
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return Plan{Target: target, Unsupported: true, Method: "official-installer", Reason: "The home directory could not be resolved for a per-user install."}
+	}
+	plan.Script.Args = []string{"--stable", "--method", "standalone", "--prefix", filepath.Join(home, ".local")}
+	return plan
 }
 
 // planHermesInstaller runs Hermes's official installer for the latest release.

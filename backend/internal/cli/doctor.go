@@ -95,6 +95,7 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	"memcode":      {BinaryName: "memcode", VersionArg: "--version"},
 	"command-code": {BinaryName: "command-code", VersionArg: "--version"},
 	"hermes":       {BinaryName: "hermes", VersionArg: "--version"},
+	"coder-agents": {BinaryName: "coder", VersionArg: "version", ExpectedVersionPrefix: "Coder v2."},
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {

@@ -15,7 +15,8 @@ import (
 // detail. Codex uses its native app-server; Claude, Cursor, OpenCode, Droid,
 // Kimi, Kimchi, Pi, OMP, Qwen, and Agy (through Google's Antigravity ACP server)
 // use the reusable ACP transport; Unreal Agent is
-// embedded behind the persistent host. Every remaining
+// embedded behind the persistent host; Coder Agents talks to the user's Coder
+// deployment. Every remaining
 // harness is deliberately TUI-only.
 func TestShippedChatDrivers(t *testing.T) {
 	r := Build(nil, nil)
@@ -35,6 +36,7 @@ func TestShippedChatDrivers(t *testing.T) {
 		domain.HarnessUnreal,
 		domain.HarnessCopilot,
 		domain.HarnessAgy,
+		domain.HarnessCoderAgents,
 	} {
 		if !r.SupportsChat(harness) {
 			t.Errorf("%s has no chat driver", harness)

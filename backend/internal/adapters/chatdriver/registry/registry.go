@@ -12,6 +12,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/agy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
+	coderagentsplugin "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/coderagents"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	commandcodeagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/commandcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
@@ -28,6 +29,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/unrealagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/agyacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/claudeacp"
+	coderagentschat "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/coderagents"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commandcodeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/copilotacp"
@@ -78,6 +80,8 @@ func New(drivers ...ports.ChatDriver) *Registry {
 // resolved by each existing agent plugin. No path scrapes terminal output or
 // packages a second provider CLI.
 // Unreal Agent is compiled into AO and runs behind the same detached host seam.
+// Coder Agents runs in the user's Coder deployment; its file and command tools
+// are client-executed tools AO runs in the local worktree.
 //
 // Every other harness stays TUI-only until the same is true of it. The driver
 // reuses the harness's existing agent plugin for binary resolution and auth, so
@@ -123,6 +127,8 @@ func Build(log *slog.Logger, onClaudeAuthRejected func()) *Registry {
 	add(copilotacp.New(copilotPlugin, log), copilotPlugin)
 	agyPlugin := agy.New()
 	add(agyacp.New(agyPlugin, log), agyPlugin)
+	coderAgentsPlugin := coderagentsplugin.New()
+	add(coderagentschat.New(coderAgentsPlugin, log), coderAgentsPlugin)
 	return r
 }
 

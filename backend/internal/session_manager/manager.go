@@ -1056,6 +1056,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 			cfg.AgentConfig.Permissions = ports.PermissionModeBypassPermissions
 		}
 	}
+	// Coder Agents has no terminal interface either, but AO gates its tools
+	// with ordinary approvals, so only the mode needs a default.
+	if cfg.Harness == domain.HarnessCoderAgents && !cfg.RequestedMode.Valid() {
+		cfg.RequestedMode = domain.SessionModeChat
+	}
 
 	// Resolve the effective agent config (project base + role override + spawn
 	// override) and validate the model before any durable state is created. A
