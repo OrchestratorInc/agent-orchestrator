@@ -898,14 +898,19 @@ export function CloudSessionChatSurface({
 		retry: false,
 		queryFn: ({ signal }) => client.listUserAgentModels(cloud!.orgId, session.provider as CloudCpAgentProvider, { signal }),
 	});
-	const listedModels = modelsQuery.data?.models ?? catalogQuery.data?.models ?? [];
 	// A turn sent without a pick runs the session's own model: the last one its
 	// messages were sent with, else the agent's default (lastChosenChatSettings).
 	// While the catalog stands in for the worker's list, the composer names that
 	// model, as the worker does once it answers. Nothing is named until the
 	// session's messages have loaded, so the label does not switch from the
-	// catalog's default to the session's model. It is only shown: it is not
+	// catalog's default to the session's model: until then the catalog's default
+	// is not marked, and nothing falls back to it. It is only shown: it is not
 	// saved as a pick, and a turn still carries no model unless one is picked.
+	const catalogDefaultUnknown = !modelsQuery.data && !eventsQuery.data;
+	const listedModels = useMemo(() => {
+		const models = modelsQuery.data?.models ?? catalogQuery.data?.models ?? [];
+		return catalogDefaultUnknown ? models.map((model) => model.default ? { ...model, default: false } : model) : models;
+	}, [catalogDefaultUnknown, catalogQuery.data, modelsQuery.data]);
 	const lastChosen = useMemo(() => lastChosenChatSettings(eventsQuery.data), [eventsQuery.data]);
 	const pendingSettings: Pick<CloudTurnSettings, "model" | "reasoningEffort"> | undefined =
 		modelsQuery.data || !catalogQuery.data || !eventsQuery.data ? undefined

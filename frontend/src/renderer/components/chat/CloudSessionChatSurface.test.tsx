@@ -352,8 +352,57 @@ describe("CloudSessionChatSurface", () => {
 		);
 		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
 		await waitFor(() => expect(props().models).toHaveLength(2));
-		// The catalog is there, but the session may have picked another model: none is named yet.
+		// The catalog is there, but the session may have picked another model: none is named yet,
+		// neither as the setting nor as the list's default the composer would fall back to.
 		expect(props().snapshot.settings.model).toBeUndefined();
+		expect(props().models.filter((model: { default?: boolean }) => model.default)).toEqual([]);
+	});
+
+	it("names no Claude model while the catalog stands in until the session's messages have loaded", async () => {
+		cloudMocks.listChatEvents.mockReset().mockReturnValue(new Promise(() => {}));
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [
+			{ id: "sonnet", displayName: "Sonnet", default: true, efforts: ["low", "high"], defaultEffort: "high" },
+			{ id: "haiku", displayName: "Haiku", default: false },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		const option = (id: string) => props().configOptions?.find((entry: { id: string }) => entry.id === id);
+		await waitFor(() => expect(option("model")?.choices).toHaveLength(2));
+		// The session may have last run Haiku: neither the catalog's default model nor its effort is named.
+		expect(option("model")?.currentValue).toBeUndefined();
+		expect(option("effort")).toBeUndefined();
+		expect(props().snapshot.settings.model).toBeUndefined();
+	});
+
+	it("names the Claude model the session's messages last ran with once they load", async () => {
+		const message = (sequence: number, payload: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.user_message", payload: { text: `message ${sequence}`, ...payload }, createdAt: "2026-10-31T07:00:00Z",
+		});
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [message(1, {}), message(2, { model: "haiku" })], hasMore: false, nextAfter: 2 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [
+			{ id: "sonnet", displayName: "Sonnet", default: true, efforts: ["low", "high"], defaultEffort: "high" },
+			{ id: "haiku", displayName: "Haiku", default: false },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		const option = (id: string) => props().configOptions?.find((entry: { id: string }) => entry.id === id);
+		await waitFor(() => expect(option("model")?.currentValue).toBe("haiku"));
+		// Haiku has no effort levels: Sonnet's effort is not offered for it.
+		expect(option("effort")).toBeUndefined();
 	});
 
 	it("replaces the catalog with the worker's own list once it answers", async () => {
