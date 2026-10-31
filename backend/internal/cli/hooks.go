@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -127,6 +128,34 @@ func activityMeta(payload []byte) (toolName, toolUseID string) {
 		p.ToolUseID = ""
 	}
 	return p.ToolName, p.ToolUseID
+}
+
+// kimiApprovalID reuses the existing opaque correlation slot for permission
+// callbacks only. Kimi generates a fresh approval UUID, independent of the tool
+// call; session/agent/turn scope also prevents reused IDs from matching a later
+// approval. Hashing the unambiguous tuple keeps the wire key bounded. Incomplete
+// payloads retain the ID-less compatibility path instead of guessing an ID.
+func kimiApprovalID(payload []byte) string {
+	var p struct {
+		ID        string      `json:"id"`
+		SessionID string      `json:"session_id"`
+		AgentID   string      `json:"agent_id"`
+		TurnID    json.Number `json:"turn_id"`
+	}
+	if json.Unmarshal(normalizeHookPayload(payload), &p) != nil {
+		return ""
+	}
+	for _, value := range []string{p.ID, p.SessionID, p.AgentID} {
+		if value == "" || len(value) > maxActivityMetaLen || domain.SanitizeControlChars(value) != value {
+			return ""
+		}
+	}
+	turn, err := p.TurnID.Int64()
+	if err != nil || turn < 0 {
+		return ""
+	}
+	key := p.SessionID + "\x00" + p.AgentID + "\x00" + strconv.FormatInt(turn, 10) + "\x00" + p.ID
+	return fmt.Sprintf("kimi-approval:%x", sha256.Sum256([]byte(key)))
 }
 
 // claudeSubagentFacts keeps native child identity separate from the resumable
@@ -740,6 +769,9 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	}
 
 	toolName, toolUseID := activityMeta(payload)
+	if domain.AgentHarness(agent) == domain.HarnessKimi && (event == "permission-request" || event == "permission-resolved") {
+		toolUseID = kimiApprovalID(payload)
+	}
 	if domain.AgentHarness(agent) == domain.HarnessCursor && event == "post-tool-use-failure" {
 		if failureEvent, failureTool, ok := cursor.TerminalFailureCorrelation(payload); ok {
 			event = failureEvent
