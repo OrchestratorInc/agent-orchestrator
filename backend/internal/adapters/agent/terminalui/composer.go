@@ -372,6 +372,9 @@ func applySGR(dim, bold, reverse bool, params string) (bool, bool, bool) {
 	fields := strings.Split(params, ";")
 	for i := 0; i < len(fields); i++ {
 		raw := fields[i]
+		if raw == "" {
+			raw = "0" // an empty field is a reset (ESC[;2m is ESC[0;2m)
+		}
 		if colon := strings.IndexByte(raw, ':'); colon >= 0 {
 			raw = raw[:colon]
 		}

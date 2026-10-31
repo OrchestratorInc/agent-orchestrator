@@ -34,6 +34,8 @@ func TestBorderedPromptWithCursorPlaceholderReadsSuggestionAsEmpty(t *testing.T)
 		{"reset ends the cursor", frame("❯ " + reverseOn + "g\x1b[0m" + dimOn + "o TD 2s fix" + dimOff), ComposerEmpty},
 		// The conpty host's emulator re-encodes the same cells with combined attributes.
 		{"emulator re-encoded suggestion", frame("❯ \x1b[7mg\x1b[27;2mo TD 2s fix\x1b[m"), ComposerEmpty},
+		// An empty SGR field is a reset (ECMA-48 default 0), so ESC[;2m ends the cursor.
+		{"empty field resets before dim", frame("❯ \x1b[7mg\x1b[;2mo TD 2s fix\x1b[22m"), ComposerEmpty},
 		{"wrapped suggestion", frame(cursorPlaceholderRow("g", "o TD 2s fix and"), "  "+dimOn+"more placeholder"+dimOff), ComposerEmpty},
 		{"draft under the cursor", frame("❯ " + reverseOn + "g" + reverseOff + "o TD 2s fix"), ComposerDraft},
 		{"one-letter draft under the cursor", frame("❯ " + reverseOn + "g" + reverseOff), ComposerDraft},
@@ -79,5 +81,32 @@ func TestCursorPlaceholderIsLimitedToItsOwnReader(t *testing.T) {
 		if got != ComposerDraft {
 			t.Errorf("%s() = %v, want draft", name, got)
 		}
+	}
+}
+
+// An empty top-level SGR field resets every tracked attribute, as ESC[0m does.
+// An empty field inside an extended color payload is color data, not a reset.
+func TestSGREmptyFieldResets(t *testing.T) {
+	type style struct{ dim, bold, reverse bool }
+	for _, tt := range []struct {
+		name, output string
+		want         []style
+	}{
+		{"reverse then reset and dim", "\x1b[7mg\x1b[;2mo", []style{{reverse: true}, {dim: true}}},
+		{"dim and bold then reset and reverse", "\x1b[2;1ma\x1b[;7mb", []style{{dim: true, bold: true}, {reverse: true}}},
+		{"trailing empty field", "\x1b[2ma\x1b[1;mb", []style{{dim: true}, {}}},
+		{"empty palette index keeps dim", "\x1b[2ma\x1b[38;5;mb", []style{{dim: true}, {dim: true}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := styledTerminalLines(tt.output)
+			if len(lines) != 1 || len(lines[0]) != len(tt.want) {
+				t.Fatalf("styled lines = %+v, want one line of %d cells", lines, len(tt.want))
+			}
+			for i, r := range lines[0] {
+				if got := (style{r.dim, r.bold, r.reverse}); got != tt.want[i] {
+					t.Fatalf("cell %d %q = %+v, want %+v", i, r.value, got, tt.want[i])
+				}
+			}
+		})
 	}
 }
