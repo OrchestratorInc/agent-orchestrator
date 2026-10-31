@@ -126,7 +126,7 @@ describe("side delivery draft ownership", () => {
 		);
 	});
 
-	it.each(["btw", "side"])("/%s opens a fresh side", async (command) => {
+	it.each(["btw"])("/%s opens a fresh side", async (command) => {
 		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
 		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
 		post.mockResolvedValue({ data: { side: { id: "new-side", state: "ready" } } });

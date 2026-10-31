@@ -2640,7 +2640,7 @@
 	"settings.diagnostics": "诊断",
 	"settings.diagnosticsToggleHint": "在会话卡片和看板上显示内存和 CPU 使用情况，并显示诊断页面。",
 	"settings.sideChats": "侧边聊天",
-	"settings.sideChatsHint": "在检查器中打开独立的侧边对话，并使用 /btw 或 /side 提问。",
+	"settings.sideChatsHint": "在检查器中打开独立的侧边对话，并使用 /btw 提问。",
 	"settings.chromeAgents.label": "在我的 Chrome 中使用智能体",
 	"settings.chromeAgents.hint": "让智能体以你的登录身份在你自己的 Chrome 中浏览。请在浏览器设置中进行设置。",
 	"settings.chromeAgents.goTo": "前往",

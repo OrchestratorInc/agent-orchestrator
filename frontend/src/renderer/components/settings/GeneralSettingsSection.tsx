@@ -444,7 +444,7 @@ function DiagnosticsRow() {
 
 /**
  * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
- * off hides the inspector tab, /btw and /side, and "Add to side chat".
+ * off hides the inspector tab, /btw, and "Add to side chat".
  */
 function SideChatsRow() {
 	const { t } = useTranslation();

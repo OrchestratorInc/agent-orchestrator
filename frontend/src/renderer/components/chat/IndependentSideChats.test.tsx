@@ -21,6 +21,7 @@ function renderSideComposer(
 	draft = emptySideChatDraft(),
 	flags: { sending?: boolean; ready?: boolean; deliveryPending?: boolean } = {},
 	canCreate = true,
+	skills = [{ name: "review", displayName: "review", source: "repo" }],
 ) {
 	const onSend = vi.fn();
 	const onFocusSide = vi.fn();
@@ -41,7 +42,7 @@ function renderSideComposer(
 			sending={false}
 			{...flags}
 			models={[]}
-			skills={[{ name: "review", displayName: "review", source: "repo" }]}
+			skills={skills}
 			side={side}
 			onSettings={vi.fn()}
 			onRemoveReference={vi.fn()}
@@ -71,14 +72,30 @@ describe("side composer slash menu", () => {
 		await waitFor(() => expect(onSend).toHaveBeenCalledWith("/btw"));
 		expect(onFocusSide).not.toHaveBeenCalled();
 	});
-	it("shows provider skills and opens /btw without sending", async () => {
+	it("keeps a provider's side command alongside description-matched /btw", async () => {
+		const {field} = renderSideComposer(emptySideChatDraft(), {}, true, [{name:"side",displayName:"side",source:"provider"}]);
+		await typeInLexicalEditor(field, "/side");
+		expect(screen.getByRole("option", {name:/\/side/})).toBeInTheDocument();
+		expect(screen.getByRole("option", {name:/\/btw/})).toBeInTheDocument();
+	});
+	it("shows provider skills and inserts /btw without creating or sending", async () => {
 		const { onSend, onFocusSide, field } = renderSideComposer();
 		await typeInLexicalEditor(field, "/");
 		expect(screen.getByRole("option", { name: /\/review/ })).toBeInTheDocument();
 		expect(screen.getByRole("option", { name: /\/compact/ })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("option", { name: /\/btw/ }));
-		await waitFor(() => expect(onFocusSide).toHaveBeenCalled());
+		await waitFor(() => expect(field).toHaveTextContent("/btw"));
+		expect(onFocusSide).not.toHaveBeenCalled();
 		expect(onSend).not.toHaveBeenCalled();
+	});
+	it("discovers /btw through /side and inserts it on Enter before writing a prompt", async () => {
+		const { onSend, onFocusSide, field } = renderSideComposer();
+		await typeInLexicalEditor(field, "/side");
+		expect(screen.getByRole("option", { name: /\/btw/ })).toBeInTheDocument();
+		expect(screen.queryByRole("option", { name: /^\/side\b/ })).not.toBeInTheDocument();
+		fireEvent.keyDown(field, { key:"Enter" });
+		await waitFor(() => expect(field).toHaveTextContent("/btw"));
+		expect(onSend).not.toHaveBeenCalled(); expect(onFocusSide).not.toHaveBeenCalled();
 	});
 
 	it("shows ordered references in a removable compact summary", async () => {
@@ -121,7 +138,8 @@ describe("side composer slash menu", () => {
 		const { onSend, onFocusSide, field } = renderSideComposer();
 		await typeInLexicalEditor(field, "/btw");
 		fireEvent.keyDown(field, { key: "Enter" });
-		await waitFor(() => expect(onFocusSide).toHaveBeenCalled());
+		await waitFor(() => expect(field).toHaveTextContent("/btw"));
+		expect(onFocusSide).not.toHaveBeenCalled();
 		expect(onSend).not.toHaveBeenCalled();
 	});
 

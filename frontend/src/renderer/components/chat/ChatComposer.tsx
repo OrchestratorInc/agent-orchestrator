@@ -141,7 +141,7 @@ const DEFINITIVE_SEND_REJECTIONS = new Set([
 	// references can only fail again; return them to the draft for removal.
 	"CHAT_EXCERPT_INVALID",
 	"CHAT_EXCERPT_STALE",
-	// A /btw or /side request the daemon refused never opened a side chat, so a
+	// A /btw request the daemon refused never opened a side chat, so a
 	// retry cannot succeed; return the draft instead of locking the composer.
 	"CHAT_SIDE_UNAVAILABLE",
 	"CHAT_SIDE_UNSUPPORTED",
@@ -266,6 +266,7 @@ export const ChatComposer = memo(function ChatComposer({
 		retainedContent?: number[],
 		excerpts?: ChatDraftExcerptReference[],
 	fileReferences?: ChatFileReference[],
+	legacySideAlias?: boolean,
 	) => void | Promise<unknown>;
 	settings?: ReactNode;
 	/** Mode rows for the add menu. With them the plus button opens a menu instead of the file picker. */
@@ -1236,7 +1237,6 @@ export const ChatComposer = memo(function ChatComposer({
 		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | undefined => {
 			const currentTrigger = snapshot.trigger;
 			if (!currentTrigger) return undefined;
-			if (key === "Enter" && /^\/(btw|side)$/.test(snapshot.text.trim()) && skills.some((skill) => skill.name === snapshot.text.trim().slice(1) && skill.source === "AO")) return undefined;
 			if (key === "Enter" && snapshot.text.trim() === "/compact" && onCompact) {
 				return undefined;
 			}
@@ -1564,7 +1564,10 @@ export const ChatComposer = memo(function ChatComposer({
 				}
 			} else {
 				const deliveryAttachments = sendPayloads(sendNativeImages ? nativePayloads : []);
-    if (delivery.fileReferences?.length) {
+    const legacySideAlias = prepared.recovered && delivery.commandRoutingVersion === undefined && /^\/side(?:\s+|$)/i.test(delivery.requestText);
+    if (legacySideAlias && fileReferenceDelivery !== "text") {
+     await onSend(delivery.requestText, deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts, delivery.fileReferences, true);
+    } else if (delivery.fileReferences?.length) {
      if (fileReferenceDelivery === "text") {
       await onSend(formatCapturedFileReferences(delivery.requestText, delivery.fileReferences, delivery.fileReferenceFormat === "quoted-v1"), deliveryAttachments, delivery.clientMessageId, undefined, delivery.excerpts);
      } else {
