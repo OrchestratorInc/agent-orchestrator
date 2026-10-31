@@ -268,8 +268,17 @@ async function main() {
 	}
 
 	const running = submitted && await checkpoint("running-tui", "Spawned jcode task running in the Terminal (TUI)", async () => {
-		const terminal = page.locator('[data-testid="session-terminal"]');
+		// AO keeps other terminal instances mounted but hidden; only the visible
+		// one is this session's, and it must show native jcode with the task.
+		const terminal = page.locator('[data-testid="session-terminal"]:visible');
 		const shown = await visible(terminal, 120_000);
+		const onSession = /#\/(?:projects\/[^/]+\/)?sessions\/[^/?]+/.test(page.url());
+		let screen = "";
+		for (let attempt = 0; attempt < 30 && !(/jcode/.test(screen) && screen.includes(MARKER)); attempt += 1) {
+			screen = shown ? (await terminal.first().innerText().catch(() => "")).replace(/\s+/g, " ") : "";
+			if (!(/jcode/.test(screen) && screen.includes(MARKER))) await sleep(2_000);
+		}
+		const nativeOnScreen = /jcode/.test(screen) && screen.includes(MARKER);
 		let session;
 		for (let attempt = 0; attempt < 60 && !session; attempt += 1) {
 			const listed = await api(base, "sessions");
@@ -283,10 +292,10 @@ async function main() {
 			native = nativeConversation(options.jcodeHome);
 			if (!native) await sleep(3_000);
 		}
-		const pass = shown && session?.mode === "tui" && native?.promptDelivered === true;
+		const pass = shown && onSession && nativeOnScreen && session?.mode === "tui" && native?.promptDelivered === true;
 		return {
 			status: pass ? "PASS" : "FAIL",
-			observed: `terminal ${shown ? "visible" : "missing"}; AO session ${session?.id ?? "none"} mode=${session?.mode} activity=${session?.activity?.state}; jcode session ${native?.id ?? "none"} has the task: ${Boolean(native?.promptDelivered)}`,
+			observed: `terminal ${shown ? "visible" : "missing"} on ${onSession ? "the session route" : `unexpected route ${page.url()}`}; jcode TUI with the task on screen: ${nativeOnScreen}; AO session ${session?.id ?? "none"} mode=${session?.mode} activity=${session?.activity?.state}; jcode session ${native?.id ?? "none"} has the task: ${Boolean(native?.promptDelivered)}`,
 			session: session && { id: session.id, harness: session.harness, mode: session.mode, activity: session.activity, model: session.metadata?.model ?? session.model },
 			native,
 		};
