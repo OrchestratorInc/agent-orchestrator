@@ -26,7 +26,7 @@ func testPlugin(t *testing.T) *Plugin {
 // shortDir is a temp dir short enough for the daemon's socket paths.
 func shortDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "jc")
+	dir, err := os.MkdirTemp("/tmp", "jc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,11 +309,42 @@ func TestRuntimeLaunchEnvIsolatesDaemonAndKeepsUserHooks(t *testing.T) {
 	}
 }
 
-func TestRuntimeDirFitsUnixSocketLimit(t *testing.T) {
+// A long AO data dir (deep home, custom AO_DATA_DIR) cannot hold the daemon
+// socket within sun_path; the session falls back to a short private directory
+// in the OS temp dir, the same one for launch, hooks and Kill.
+func TestRuntimeDirFallsBackWhenTheDataDirIsTooLongForASocket(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix socket limit")
+	}
+	tmp, err := os.MkdirTemp("/tmp", "jc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
+	t.Setenv("TMPDIR", tmp)
 	long := filepath.Join(t.TempDir(), strings.Repeat("d", 120))
-	err := testPlugin(t).GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: t.TempDir(), DataDir: long, SessionID: "proj-1"})
-	if err == nil {
-		t.Fatal("a runtime dir too long for the JCode daemon socket was accepted")
+	dir := runtimeDir(long, "proj-1")
+	if len(filepath.Join(dir, longestSocket)) > maxSocketPath || strings.HasPrefix(dir, long) {
+		t.Fatalf("runtime dir = %q", dir)
+	}
+	if err := testPlugin(t).GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: t.TempDir(), DataDir: long, SessionID: "proj-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("fallback dir = %v, %v", info, err)
+	}
+	env := map[string]string{}
+	testPlugin(t).AugmentRuntimeLaunchEnv(env, long, domain.SessionID("proj-1"), "launch-1")
+	if env["JCODE_RUNTIME_DIR"] != dir || env["JCODE_SOCKET"] != filepath.Join(dir, "jcode.sock") {
+		t.Fatalf("launch env = %v, want %s", env, dir)
+	}
+	// A pre-made path someone else controls is refused rather than reused.
+	other := runtimeDir(long, "proj-2")
+	if err := os.Symlink(t.TempDir(), other); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPlugin(t).GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: t.TempDir(), DataDir: long, SessionID: "proj-2"}); err == nil {
+		t.Fatal("a symlinked runtime dir was accepted")
 	}
 }
 

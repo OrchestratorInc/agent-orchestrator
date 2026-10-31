@@ -47,11 +47,38 @@ func overlayPath(workspace string) string {
 }
 
 // runtimeDir is the per-session JCODE_RUNTIME_DIR. Its daemon is spawned by
-// the session's own TUI, so hooks run with that session's AO environment.
+// the session's own TUI, so hooks run with that session's AO environment. It
+// lives under the AO data dir unless that path is too long for the daemon's
+// sockets (sun_path), in which case it is a private directory in the OS temp
+// dir, where AO keeps its own sockets too. Launch, hooks and Kill all derive
+// the same path from the session id.
 func runtimeDir(dataDir, sessionID string) string {
-	// Kept short: the daemon's socket paths must fit sun_path.
 	sum := sha256.Sum256([]byte(sessionID))
-	return filepath.Join(dataDir, "jc", hex.EncodeToString(sum[:5]))
+	name := hex.EncodeToString(sum[:5])
+	dir := filepath.Join(dataDir, "jc", name)
+	if len(filepath.Join(dir, longestSocket)) <= maxSocketPath {
+		return dir
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("ao-jcode-%d-%s", os.Getuid(), name))
+}
+
+// prepareRuntimeDir creates the session's daemon directory with mode 0700 and
+// refuses one that is a symlink or not owned by this user.
+func prepareRuntimeDir(dir string) error {
+	if len(filepath.Join(dir, longestSocket)) > maxSocketPath {
+		return fmt.Errorf("no directory short enough for the jcode daemon socket (%s)", dir)
+	}
+	if err := os.MkdirAll(dir, runtimeDirMode); err != nil {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !ownedByCurrentUser(info) {
+		return fmt.Errorf("refusing jcode runtime dir %s: not a private directory", dir)
+	}
+	return os.Chmod(dir, runtimeDirMode)
 }
 
 // GetAgentHooks installs AO's instructions as the workspace's JCode prompt
@@ -67,15 +94,8 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if strings.TrimSpace(cfg.DataDir) == "" || strings.TrimSpace(cfg.SessionID) == "" {
 		return errors.New("jcode.GetAgentHooks: DataDir and SessionID are required")
 	}
-	dir := runtimeDir(cfg.DataDir, cfg.SessionID)
-	if len(filepath.Join(dir, longestSocket)) > maxSocketPath {
-		return fmt.Errorf("jcode.GetAgentHooks: AO data dir is too long for the jcode daemon socket (%s)", dir)
-	}
-	if err := os.MkdirAll(dir, runtimeDirMode); err != nil {
-		return fmt.Errorf("jcode.GetAgentHooks: create runtime dir: %w", err)
-	}
-	if err := os.Chmod(dir, runtimeDirMode); err != nil {
-		return fmt.Errorf("jcode.GetAgentHooks: secure runtime dir: %w", err)
+	if err := prepareRuntimeDir(runtimeDir(cfg.DataDir, cfg.SessionID)); err != nil {
+		return fmt.Errorf("jcode.GetAgentHooks: runtime dir: %w", err)
 	}
 	instructions, err := systemPrompt(cfg.SystemPrompt, cfg.SystemPromptFile)
 	if err != nil {
