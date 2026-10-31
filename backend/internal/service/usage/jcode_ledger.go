@@ -21,16 +21,29 @@ var jcodeSessionIDPattern = regexp.MustCompile(`^session_[a-z0-9]+_\d+_[0-9a-f]{
 // the whole transcript including tool output.
 const maxJCodeSessionBytes = 64 << 20
 
+type jcodeNativeMessage struct {
+	ID         string          `json:"id"`
+	Role       string          `json:"role"`
+	Timestamp  string          `json:"timestamp"`
+	TokenUsage json.RawMessage `json:"token_usage"`
+}
+
 type jcodeNativeSession struct {
-	ID          string `json:"id"`
-	Model       string `json:"model"`
-	ProviderKey string `json:"provider_key"`
-	Messages    []struct {
-		ID         string          `json:"id"`
-		Role       string          `json:"role"`
-		Timestamp  string          `json:"timestamp"`
-		TokenUsage json.RawMessage `json:"token_usage"`
-	} `json:"messages"`
+	ID          string               `json:"id"`
+	Model       string               `json:"model"`
+	ProviderKey string               `json:"provider_key"`
+	Messages    []jcodeNativeMessage `json:"messages"`
+}
+
+// jcodeJournalEntry is one line of sessions/<id>.journal.jsonl. Between
+// checkpoints jcode appends each save's new messages there instead of
+// rewriting the snapshot, so a finished turn can exist only in the journal.
+type jcodeJournalEntry struct {
+	Meta struct {
+		Model       *string `json:"model"`
+		ProviderKey *string `json:"provider_key"`
+	} `json:"meta"`
+	AppendMessages []jcodeNativeMessage `json:"append_messages"`
 }
 
 type jcodeLedgerLine struct {
@@ -45,8 +58,11 @@ type jcodeLedgerLine struct {
 
 // syncJCodeLedger appends to AO's ledger every assistant message of the native
 // session whose token_usage is not already there, and returns the ledger path.
-// jcode rewrites sessions/<id>.json on every save and a resumed session lists
-// all earlier messages again, so messages are matched by their native id: a
+// jcode keeps a session as a snapshot (sessions/<id>.json) plus a journal of
+// later saves (sessions/<id>.journal.jsonl) that a checkpoint folds back into
+// the snapshot; both are read. A resumed session lists all earlier messages
+// again and a journal may repeat snapshot messages, so messages are matched by
+// their native id, which jcode keeps unique per session: a
 // message is exported once, whatever happens to the native file. A message is
 // attributed to the session's model at export time; exports run on every hook,
 // so that is the model of the turn that just ran.
@@ -63,6 +79,9 @@ func (c *Collector) syncJCodeLedger(ctx context.Context, nativeID string) (strin
 	}
 	if native.ID != nativeID {
 		return "", nil
+	}
+	if err := applyJCodeJournal(filepath.Join(c.roots.JCodeHome, "sessions", nativeID+".journal.jsonl"), &native); err != nil {
+		return "", fmt.Errorf("read jcode session journal: %w", err)
 	}
 	if err := os.MkdirAll(c.roots.JCodeLedger, 0o700); err != nil {
 		return "", fmt.Errorf("create jcode usage ledger dir: %w", err)
@@ -137,6 +156,40 @@ func readJCodeSession(path string) (jcodeNativeSession, error) {
 		return jcodeNativeSession{}, nil
 	}
 	return session, nil
+}
+
+// applyJCodeJournal adds the journal's messages to the snapshot's and takes
+// the latest model and provider it records. An unreadable line, such as one
+// jcode is still writing, is skipped; the next hook reads it again.
+func applyJCodeJournal(path string, session *jcodeNativeSession) error {
+	file, err := os.Open(path) //nolint:gosec // jcode's own journal for a validated id
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer func() { _ = file.Close() }()
+	reader := bufio.NewReader(io.LimitReader(file, maxJCodeSessionBytes))
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		var entry jcodeJournalEntry
+		if len(bytes.TrimSpace(line)) > 0 && json.Unmarshal(line, &entry) == nil {
+			session.Messages = append(session.Messages, entry.AppendMessages...)
+			if entry.Meta.Model != nil && strings.TrimSpace(*entry.Meta.Model) != "" {
+				session.Model = *entry.Meta.Model
+			}
+			if entry.Meta.ProviderKey != nil && strings.TrimSpace(*entry.Meta.ProviderKey) != "" {
+				session.ProviderKey = *entry.Meta.ProviderKey
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
 }
 
 func ledgerMessageIDs(path string) (map[string]bool, error) {

@@ -88,6 +88,38 @@ func TestCollectorExportsJCodeMessageUsageOnceAcrossRewrites(t *testing.T) {
 	}
 }
 
+// Between checkpoints jcode appends each save's new messages to
+// sessions/<id>.journal.jsonl and leaves the snapshot alone, so a finished
+// turn can exist only in the journal. A journal entry may repeat snapshot
+// messages, and its last line can be half written.
+func TestCollectorExportsJCodeUsageFromTheSessionJournal(t *testing.T) {
+	store := collectorTestStore(t)
+	session := collectorTestSession(t, store, domain.HarnessJCode, jcodeTestNativeID, false)
+	jcodeHome := t.TempDir()
+	ledgerRoot := filepath.Join(t.TempDir(), "jcode", "usage")
+	writeJCodeSession(t, jcodeHome, jcodeUser, jcodeAssistant1)
+	meta := `"meta":{"model":"claude-opus-5-5","provider_key":"claude","status":"active"}`
+	journal := `{` + meta + `,"append_messages":[` + jcodeAssistant1 + `]}` + "\n" +
+		`{` + meta + `,"append_messages":[` + jcodeToolResult + `,` + jcodeAssistant2 + `]}` + "\n" +
+		`{` + meta + `,"append_messages":[` + jcodeAssistant3[:40]
+	writeUsageFixture(t, filepath.Join(jcodeHome, "sessions", jcodeTestNativeID+".journal.jsonl"), journal)
+	collector := NewCollector(store, SourceRoots{JCodeHome: jcodeHome, JCodeLedger: ledgerRoot}, nil)
+	ctx := context.Background()
+
+	mustNoError(t, collector.RecordHook(ctx, session.ID, HookSignal{Harness: domain.HarnessJCode, Event: "stop", NativeSessionID: jcodeTestNativeID}))
+	ledger := filepath.Join(ledgerRoot, jcodeTestNativeID+".jsonl")
+	if got := strings.Join(readLedgerIDs(t, ledger), ","); got != "message_2,message_4" {
+		t.Fatalf("ledger ids = %s, want snapshot and journal messages once each", got)
+	}
+
+	// The half-written entry completes on the next save.
+	writeUsageFixture(t, filepath.Join(jcodeHome, "sessions", jcodeTestNativeID+".journal.jsonl"), journal[:len(journal)-len(jcodeAssistant3[:40])]+jcodeAssistant3+"]}\n")
+	mustNoError(t, collector.RecordHook(ctx, session.ID, HookSignal{Harness: domain.HarnessJCode, Event: "stop", NativeSessionID: jcodeTestNativeID}))
+	if got := strings.Join(readLedgerIDs(t, ledger), ","); got != "message_2,message_4,message_6" {
+		t.Fatalf("ledger ids after the entry completed = %s", got)
+	}
+}
+
 func TestDiscoverJCodePathRejectsUnsafeIDsAndMissingSessions(t *testing.T) {
 	jcodeHome := t.TempDir()
 	ledgerRoot := filepath.Join(t.TempDir(), "usage")

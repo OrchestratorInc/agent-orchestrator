@@ -35,7 +35,7 @@ function assistantText(message) {
 }
 
 function parseArgs(argv) {
-	const options = { cdp: "http://127.0.0.1:9222", out: "", jcodeHome: "", runFile: "", model: "", replyTimeoutMs: 15 * 60_000 };
+	const options = { cdp: "http://127.0.0.1:9222", out: "", jcodeHome: "", runFile: "", model: "", replyTimeoutMs: 25 * 60_000 };
 	for (let i = 0; i < argv.length; i += 1) {
 		const next = () => argv[++i];
 		if (argv[i] === "--cdp") options.cdp = next();
@@ -84,7 +84,27 @@ async function api(base, path, init) {
 }
 
 // jcode's own record of the conversation: the user turn AO typed and the
-// model's reply, read from $JCODE_HOME/sessions/<id>.json.
+// model's reply. jcode keeps a snapshot, $JCODE_HOME/sessions/<id>.json, and
+// appends later saves to <id>.journal.jsonl until a checkpoint folds them in,
+// so both are read; message ids are unique per session.
+function journalMessages(snapshotPath) {
+	let text = "";
+	try {
+		text = readFileSync(snapshotPath.replace(/\.json$/, ".journal.jsonl"), "utf8");
+	} catch {
+		return [];
+	}
+	return text.split("\n").flatMap((line) => {
+		try {
+			const entry = JSON.parse(line);
+			return Array.isArray(entry.append_messages) ? entry.append_messages : [];
+		} catch {
+			// The last line may still be being written.
+			return [];
+		}
+	});
+}
+
 function nativeConversation(jcodeHome) {
 	const dir = join(jcodeHome, "sessions");
 	let files = [];
@@ -100,7 +120,9 @@ function nativeConversation(jcodeHome) {
 		} catch {
 			continue;
 		}
-		const messages = Array.isArray(session.messages) ? session.messages : [];
+		const seen = new Set();
+		const messages = [...(Array.isArray(session.messages) ? session.messages : []), ...journalMessages(join(dir, name))]
+			.filter((message) => message && !seen.has(message.id) && seen.add(message.id));
 		const text = (message) => JSON.stringify(message.content ?? "");
 		const user = messages.find((message) => message.role === "user" && text(message).includes(MARKER));
 		if (!user) continue;
