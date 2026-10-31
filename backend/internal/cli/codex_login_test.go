@@ -192,7 +192,7 @@ func TestRunInteractiveCommandFindsNodeForNPMLauncherOutsidePATH(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 
 	var out bytes.Buffer
-	if err := runInteractiveCommand(context.Background(), launcher, []string{"--device-auth"}, strings.NewReader(""), &out, &out); err != nil {
+	if err := runInteractiveCommand(context.Background(), launcher, "", []string{"--device-auth"}, strings.NewReader(""), &out, &out); err != nil {
 		t.Fatalf("runInteractiveCommand: %v\n%s", err, out.String())
 	}
 	if got := strings.TrimSpace(out.String()); got != "login --device-auth" {
