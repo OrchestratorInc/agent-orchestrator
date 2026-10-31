@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"sync/atomic"
@@ -161,8 +162,14 @@ func TestClaudeDiscoveryFailureUsesCachedModelsWithoutStaticFallback(t *testing.
 		}
 		return []ports.AgentModelInfo{{ID: "claude-opus-5-5", Label: "Claude Opus 5.5"}}, nil
 	}}
+	binary := filepath.Join(t.TempDir(), "claude.exe")
+	if err := os.WriteFile(binary, []byte("MZ fixture"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	harness := harnessAgent("claude-code", "Claude Code", nil)
+	harness.Agent = catalogFixtureAgent{binary: binary}
 	cache := &fakeModelCache{}
-	svc := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, cache, discoverer)
+	svc := newService([]agentregistry.HarnessAgent{harness}, cache, discoverer)
 	fresh, err := svc.Models(context.Background(), "claude-code", "", true)
 	if err != nil || len(fresh.Models) != 1 || fresh.Source != "provider" {
 		t.Fatalf("initial discovery = %#v, %v", fresh, err)
@@ -175,7 +182,7 @@ func TestClaudeDiscoveryFailureUsesCachedModelsWithoutStaticFallback(t *testing.
 		}
 	}
 	// A scope with no cache remains empty and permits manual entry.
-	emptyService := newService([]agentregistry.HarnessAgent{harnessAgent("claude-code", "Claude Code", nil)}, &fakeModelCache{}, discoverer)
+	emptyService := newService([]agentregistry.HarnessAgent{harness}, &fakeModelCache{}, discoverer)
 	got, err := emptyService.Models(context.Background(), "claude-code", "", true)
 	if err != nil || len(got.Models) != 0 || !got.AllowCustom || got.WarningCode != ports.ModelCatalogWarningAuthExpired {
 		t.Fatalf("uncached catalog = %#v, %v; want manual entry with the auth warning", got, err)
@@ -193,3 +200,10 @@ func (e testAuthError) Unwrap() error { return e.kind }
 func wrapAuthError(kind error, message string) error {
 	return testAuthError{kind: kind, message: message}
 }
+
+type catalogFixtureAgent struct {
+	fakeAgent
+	binary string
+}
+
+func (a catalogFixtureAgent) ResolveBinary(context.Context) (string, error) { return a.binary, nil }
