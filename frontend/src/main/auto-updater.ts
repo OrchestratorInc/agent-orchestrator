@@ -2886,9 +2886,9 @@ export function getMacInstallBlocker(): string | undefined {
   if (!bundle.endsWith(".app")) return undefined;
   if (bundle.includes("/AppTranslocation/")) {
     return (
-      "macOS is running Agent Orchestrator from a temporary read-only location " +
+      "macOS is running Orchestrator from a temporary read-only location " +
       "because it was opened straight from where it was downloaded. Quit the app, " +
-      "move Agent Orchestrator.app into /Applications, reopen it from there, and " +
+      "move Orchestrator into /Applications, reopen it from there, and " +
       "then restart to update."
     );
   }
@@ -2901,9 +2901,9 @@ export function getMacInstallBlocker(): string | undefined {
     // Deliberately does NOT say "move it to /Applications": the app may already
     // be there, and telling someone to do what they have done reads as a bug.
     return (
-      "The update can't be installed because Agent Orchestrator's location isn't " +
+      "The update can't be installed because Orchestrator's location isn't " +
       `writable: ${path.dirname(bundle)}. Fix that folder's permissions, or move ` +
-      "Agent Orchestrator.app somewhere you can write to, reopen it, and then " +
+      "Orchestrator somewhere you can write to, reopen it, and then " +
       "restart to update."
     );
   }
@@ -3142,7 +3142,7 @@ export async function ensureUpdatePrefs(stateDir: string): Promise<void> {
     buttons: ["Enable auto-updates", "Not now"],
     defaultId: 0,
     cancelId: 1,
-    message: "Keep Agent Orchestrator up to date automatically?",
+    message: "Keep Orchestrator up to date automatically?",
     detail: "You can change this later in Settings.",
   });
   if (optIn.response !== 0) {

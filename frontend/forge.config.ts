@@ -9,7 +9,7 @@ import MakerNSIS from "./makers/maker-nsis";
 import MakerDMG, { isSigningConfigured, sealDmg, verifyDmg, verifyMacArtifact } from "./makers/maker-dmg";
 import { machoHasX86_64Slice } from "./makers/macho-archs";
 import MakerAppImage from "./makers/maker-appimage";
-import { existsSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -30,7 +30,7 @@ const DEFAULT_RELEASE_REPO = "Untrivial-ai/agent-orchestrator";
 // shortcut on Windows (#2414) or "could not find the Electron app binary" on deb.
 const EXECUTABLE_NAME = "agent-orchestrator";
 const AUTH_PROTOCOL = {
-	name: "Agent Orchestrator authentication callback",
+	name: "Orchestrator authentication callback",
 	schemes: ["ao-app"],
 };
 const AUTH_PROTOCOL_MIME_TYPE = "x-scheme-handler/ao-app";
@@ -63,6 +63,37 @@ async function prepareNativeDependencies(platform: NodeJS.Platform, arch: string
 	});
 }
 
+// Packager app name. It sets the bundle filename ("<name>.app"), which the
+// installed path, updater, and `ao start` keep using, so it is not the label
+// people see in Finder.
+const PACKAGER_NAME = "Agent Orchestrator";
+
+// Finder uses the localized label only when the base display name matches the
+// bundle filename, but the packager defaults it to the executable name. Set it,
+// then copy the localized label into every regional lproj Finder might pick.
+// Must run before signing so the plist and localized strings are sealed.
+// Throws on failure so the Forge hook can pass it to its callback.
+export function labelMacBundle(
+	buildPath: string,
+	setDisplayName: (plistPath: string, name: string) => void = setPlistDisplayName,
+): void {
+	const contents = path.join(buildPath, `${PACKAGER_NAME}.app`, "Contents");
+	setDisplayName(path.join(contents, "Info.plist"), PACKAGER_NAME);
+	const resources = path.join(contents, "Resources");
+	const label = readFileSync(path.join(resources, "en.lproj", "InfoPlist.strings"));
+	for (const locale of readdirSync(resources).filter((entry) => entry.endsWith(".lproj"))) {
+		writeFileSync(path.join(resources, locale, "InfoPlist.strings"), label);
+	}
+}
+
+function setPlistDisplayName(plistPath: string, name: string): void {
+	const result = spawnSync("plutil", ["-replace", "CFBundleDisplayName", "-string", name, plistPath], {
+		encoding: "utf8",
+	});
+	if (result.error) throw result.error;
+	if (result.status !== 0) throw new Error(`Setting macOS display name failed: ${result.stderr}`);
+}
+
 export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 	return [
 		"daemon",
@@ -70,7 +101,7 @@ export function extraResourcesForPlatform(platform: NodeJS.Platform): string[] {
 		"browser-extension",
 		"agent-browser",
 		"resources/acp-runtime",
-		...(platform === "darwin" ? ["update-helper", "wake-helper", "cloudflared"] : []),
+		...(platform === "darwin" ? ["update-helper", "wake-helper", "cloudflared", "assets/mac/en.lproj"] : []),
 		...(platform === "darwin" || platform === "linux" ? ["tmux"] : []),
 		"assets/icon.png",
 		"assets/icon.ico",
@@ -129,8 +160,9 @@ const config: ForgeConfig = {
 		// the .node binary outside app.asar.
 		ignore: ignoreFromVitePackage,
 		appBundleId: "dev.agent-orchestrator.desktop",
-		name: "Agent Orchestrator",
+		name: PACKAGER_NAME,
 		executableName: EXECUTABLE_NAME,
+		extendInfo: { LSHasLocalizedDisplayName: true, CFBundleDevelopmentRegion: "en" },
 		protocols: [AUTH_PROTOCOL],
 		appCategoryType: "public.app-category.developer-tools",
 		// App icon. electron-packager appends the per-platform extension
@@ -138,6 +170,15 @@ const config: ForgeConfig = {
 		// deb/rpm makers below, and the runtime window icon from src/main.ts.
 		icon: "assets/icon",
 		extraResource: extraResourcesForPlatform(process.platform),
+		afterCopyExtraResources: [(buildPath, _version, platform, _arch, callback) => {
+			if (platform !== "darwin") return callback();
+			try {
+				labelMacBundle(buildPath);
+				callback();
+			} catch (error) {
+				callback(error as Error);
+			}
+		}],
 		// Notarization. Two paths:
 		//  - CI: an App Store Connect API key. APPLE_API_KEY is a PATH to the .p8
 		//    (the workflow decodes APPLE_API_KEY_BASE64 to a temp file), plus the
@@ -337,7 +378,8 @@ const config: ForgeConfig = {
 		new MakerAppImage(
 			{
 				appId: "dev.agent-orchestrator.desktop",
-				productName: "Agent Orchestrator",
+				productName: "Orchestrator",
+				appImage: { artifactName: "Agent Orchestrator-${version}.${ext}" },
 				icon: "assets/icon.png",
 				protocols: [AUTH_PROTOCOL],
 			},

@@ -275,7 +275,7 @@ describe("global board first launch", () => {
 		renderBoard(<SessionsBoard />);
 
 		expect(await screen.findByText("Add a project")).toBeInTheDocument();
-		expect(screen.getByText("Choose how you want to add code to Agent Orchestrator")).toBeInTheDocument();
+		expect(screen.getByText("Choose how you want to add code to Orchestrator")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Clone a repo" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Open a workspace" })).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: "Open a local folder" })).toBeInTheDocument();
