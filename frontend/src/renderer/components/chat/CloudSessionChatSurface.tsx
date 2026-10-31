@@ -46,6 +46,9 @@ type EventPayload = {
 	steering?: unknown;
 	error?: unknown;
 	text?: unknown;
+	/** chat.user_message: the model and effort the message was sent with */
+	model?: unknown;
+	reasoningEffort?: unknown;
 	origin?: unknown;
 	senderLabel?: unknown;
 	senderSessionId?: unknown;
@@ -153,6 +156,24 @@ function eventPayload(event: CloudCpClientEvent): EventPayload {
 function eventText(event: CloudCpClientEvent): string | undefined {
 	const text = eventPayload(event).text;
 	return typeof text === "string" && text.trim() !== "" ? text : undefined;
+}
+
+/**
+ * The model and effort a turn sent without them runs: the last a message was
+ * sent with. A session's first prompt carries the model it launched with, and
+ * the agent keeps a model it was given for the turns after it, across a wake
+ * too. Undefined when no message named a model: the agent runs its default.
+ */
+export function lastChosenChatSettings(events: readonly CloudCpClientEvent[] | undefined): Pick<CloudTurnSettings, "model" | "reasoningEffort"> | undefined {
+	let reasoningEffort: string | undefined;
+	for (let index = (events?.length ?? 0) - 1; index >= 0; index--) {
+		const event = events![index];
+		if (event.type !== "chat.user_message") continue;
+		const payload = eventPayload(event);
+		if (reasoningEffort === undefined && typeof payload.reasoningEffort === "string" && payload.reasoningEffort !== "") reasoningEffort = payload.reasoningEffort;
+		if (typeof payload.model === "string" && payload.model !== "") return { model: payload.model, reasoningEffort };
+	}
+	return undefined;
 }
 
 function eventTurnID(event: CloudCpClientEvent): string | undefined {
@@ -852,6 +873,16 @@ export function CloudSessionChatSurface({
 			return { ...catalog, selectionVersionAtFetch };
 		},
 	});
+	const eventsQuery = useQuery({
+		queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id],
+		enabled: Boolean(cloud && ready),
+		refetchInterval: 1_000,
+		queryFn: async () => {
+			if (!cloud) return [] as CloudCpClientEvent[];
+			const previous = queryClient.getQueryData<CloudCpClientEvent[]>(["cloud-chat-events", cloud.orgId, session.id]) ?? [];
+			return loadCloudChatEvents(client, cloud.orgId, session.id, previous);
+		},
+	});
 	// Until the worker lists its models (it starts the agent to ask, after a
 	// sandbox waking from a pause has come back), the picker shows the control
 	// plane's catalog for the agent: what a worker on the same CLI and
@@ -868,12 +899,25 @@ export function CloudSessionChatSurface({
 		queryFn: ({ signal }) => client.listUserAgentModels(cloud!.orgId, session.provider as CloudCpAgentProvider, { signal }),
 	});
 	const listedModels = modelsQuery.data?.models ?? catalogQuery.data?.models ?? [];
-	// A turn sent without a pick runs the session's default model. While the
-	// catalog stands in for the worker's list, the composer shows that default
-	// by name, as it does once the worker reports it, rather than guessing one.
-	const catalogDefaultModel = modelsQuery.data ? undefined
-		: catalogQuery.data?.model ?? catalogQuery.data?.models.find((model) => model.default)?.id;
-	const selectedModel = listedModels.find((model) => model.id === settings.model) ?? listedModels.find((model) => model.default);
+	// A turn sent without a pick runs the session's own model: the last one its
+	// messages were sent with, else the agent's default (lastChosenChatSettings).
+	// While the catalog stands in for the worker's list, the composer names that
+	// model, as the worker does once it answers. Nothing is named until the
+	// session's messages have loaded, so the label does not switch from the
+	// catalog's default to the session's model. It is only shown: it is not
+	// saved as a pick, and a turn still carries no model unless one is picked.
+	const lastChosen = useMemo(() => lastChosenChatSettings(eventsQuery.data), [eventsQuery.data]);
+	const pendingSettings: Pick<CloudTurnSettings, "model" | "reasoningEffort"> | undefined =
+		modelsQuery.data || !catalogQuery.data || !eventsQuery.data ? undefined
+			: lastChosen ?? { model: catalogQuery.data.models.find((model) => model.default)?.id };
+	const pendingModel = pendingSettings?.model;
+	const pendingEffort = pendingSettings?.reasoningEffort;
+	const shownSettings = useMemo<CloudTurnSettings>(() => settings.model ? settings : {
+		...settings,
+		model: pendingModel,
+		reasoningEffort: settings.reasoningEffort ?? pendingEffort,
+	}, [pendingEffort, pendingModel, settings]);
+	const selectedModel = listedModels.find((model) => model.id === shownSettings.model) ?? listedModels.find((model) => model.default);
 	// The session's approval modes the selected model can run: Claude offers
 	// Auto-approve only for models that support it (not Haiku).
 	const selectedModelApprovalModes = selectedModel?.approvalModes;
@@ -923,16 +967,6 @@ export function CloudSessionChatSurface({
 		// the user picked in this session, if any.
 		try { writeCloudTurnSettings(settingsKey, { ...next, approvalMode: readCloudTurnSettings(settingsKey).approvalMode }); } catch { /* keep the mounted choice */ }
 	}, [modelsQuery.dataUpdatedAt, settingsKey]);
-	const eventsQuery = useQuery({
-		queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id],
-		enabled: Boolean(cloud && ready),
-		refetchInterval: 1_000,
-		queryFn: async () => {
-			if (!cloud) return [] as CloudCpClientEvent[];
-			const previous = queryClient.getQueryData<CloudCpClientEvent[]>(["cloud-chat-events", cloud.orgId, session.id]) ?? [];
-			return loadCloudChatEvents(client, cloud.orgId, session.id, previous);
-		},
-	});
 	// A waking session's worker connects in these events, polled every second,
 	// before the sessions list's slower poll says so: refresh the session then,
 	// so Chat stops waiting for a worker that is already back.
@@ -965,7 +999,7 @@ export function CloudSessionChatSurface({
 			// cannot run is sent as the mode the composer shows in its place.
 			const picked = selectedSettings.approvalMode && sessionApprovalModes.includes(selectedSettings.approvalMode)
 				? selectedSettings.approvalMode : undefined;
-			const turnModel = listedModels.find((model) => model.id === selectedSettings.model) ?? listedModels.find((model) => model.default);
+			const turnModel = listedModels.find((model) => model.id === (selectedSettings.model ?? pendingModel)) ?? listedModels.find((model) => model.default);
 			const approvalMode = picked && (effectiveApprovalMode(session.provider, picked, modelApprovalModes(sessionApprovalModes, turnModel)) ?? picked);
 			const mode = selectedSettings.executionMode === "plan" && modelsQuery.data?.modes?.includes("plan")
 				? "read-only" : cloud.permissionMode;
@@ -1009,8 +1043,8 @@ export function CloudSessionChatSurface({
 		const items = withoutFailedSetupAttempts(projected.items, startFailed);
 		// No agent runs until a retry prepares the workspace, as a failed local start reports.
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
-		return { ...projected, items, controller, settings: { ...settings, model: settings.model ?? catalogDefaultModel, approvalMode: shownApprovalMode } };
-	}, [catalogDefaultModel, eventsQuery.data, me, session, settings, shownApprovalMode, startFailed, startStopped]);
+		return { ...projected, items, controller, settings: { ...shownSettings, approvalMode: shownApprovalMode } };
+	}, [eventsQuery.data, me, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
 	// While Setup runs, or once the checkout, Setup or the agent's start failed,
 	// the session reads as a local start does: the startup checklist in place of a
 	// working timer, and messages that send in order once the agent starts.
@@ -1092,11 +1126,11 @@ export function CloudSessionChatSurface({
 	const claudeOptions: ChatConfigOption[] = session.provider === "claude-code" && listedModels.length > 0 ? [
 		{ id: "model", name: "Model", category: "model", type: "select", currentValue: selectedModel?.id, choices: listedModels.map((model) => ({ value: model.id, name: model.displayName, description: model.description })) },
 		...(selectedModel?.efforts?.length
-			? [{ id: "effort", name: "Effort", category: "thought_level", type: "select" as const, currentValue: settings.reasoningEffort ?? selectedModel.defaultEffort, choices: selectedModel.efforts.map((value) => ({ value, name: "" })) }]
+			? [{ id: "effort", name: "Effort", category: "thought_level", type: "select" as const, currentValue: shownSettings.reasoningEffort ?? selectedModel.defaultEffort, choices: selectedModel.efforts.map((value) => ({ value, name: "" })) }]
 			: []),
 	] : [];
 	const providerOptions = [...(planOptions ?? []), ...claudeOptions];
-	const { models, configOptions } = useChatModelChoices(session.provider, listedModels, providerOptions.length ? providerOptions : undefined, settings.model);
+	const { models, configOptions } = useChatModelChoices(session.provider, listedModels, providerOptions.length ? providerOptions : undefined, shownSettings.model);
 	return (
 		<ChatWorkspace
 			snapshot={snapshot}
@@ -1117,7 +1151,17 @@ export function CloudSessionChatSurface({
 				// so only a pick from the approval menu changes the approval mode,
 				// even when it is the shown default.
 				const approvalMode = picked === "approvalMode" ? next.approvalMode : current.approvalMode;
-				updateSettings({ ...current, ...next, approvalMode });
+				// The model and effort shown while the worker's list loads come back
+				// too; they are the session's, not a pick, so they are not saved.
+				const shownOnly = (key: "model" | "reasoningEffort") =>
+					current[key] === undefined && next[key] !== undefined && next[key] === pendingSettings?.[key];
+				updateSettings({
+					...current,
+					...next,
+					approvalMode,
+					...(shownOnly("model") ? { model: undefined } : {}),
+					...(shownOnly("reasoningEffort") ? { reasoningEffort: undefined } : {}),
+				});
 			}}
 			showApprovalMode={sessionApprovalModes.length > 0}
 			approvalModes={approvalModes}

@@ -305,6 +305,57 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).not.toHaveProperty("model");
 	});
 
+	it("names the model the session's messages last ran with while the catalog stands in, without choosing it", async () => {
+		const message = (sequence: number, payload: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.user_message", payload: { text: `message ${sequence}`, ...payload }, createdAt: "2026-10-31T07:00:00Z",
+		});
+		// The session launched on the default; a later message picked Terra at low effort, and the last one named no model.
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({
+			events: [message(1, {}), message(2, { model: "gpt-5.6-terra", reasoningEffort: "low" }), message(3, {})], hasMore: false, nextAfter: 3,
+		});
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [
+			{ id: "gpt-6-luna", displayName: "GPT-6-Luna", default: true, efforts: ["low", "medium"], defaultEffort: "medium" },
+			{ id: "gpt-5.6-terra", displayName: "GPT-5.6-Terra", default: false, efforts: ["low", "medium"], defaultEffort: "medium" },
+		] });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "codex", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		// What a turn sent now runs, as the worker will report: not the catalog's default.
+		await waitFor(() => expect(props().snapshot.settings).toMatchObject({ model: "gpt-5.6-terra", reasoningEffort: "low" }));
+		// The bar sends back what it shows with a new effort: the effort is picked, the shown model is not.
+		act(() => props().onChooseSettings({ ...props().snapshot.settings, reasoningEffort: "medium" }));
+		await props().onSend("go", [], "terra-1");
+		expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).toMatchObject({ reasoningEffort: "medium" });
+		expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).not.toHaveProperty("model");
+	});
+
+	it("names no model while the catalog stands in until the session's messages have loaded", async () => {
+		cloudMocks.listChatEvents.mockReset().mockReturnValue(new Promise(() => {}));
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [
+			{ id: "gpt-6-luna", displayName: "GPT-6-Luna", default: true },
+			{ id: "gpt-5.6-terra", displayName: "GPT-5.6-Terra", default: false },
+		] });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "codex", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().models).toHaveLength(2));
+		// The catalog is there, but the session may have picked another model: none is named yet.
+		expect(props().snapshot.settings.model).toBeUndefined();
+	});
+
 	it("replaces the catalog with the worker's own list once it answers", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [{ id: "sonnet", displayName: "Sonnet", default: true }] });
