@@ -1424,3 +1424,52 @@ function aoCurLangName() {
   var rt;
   window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(function () { init(); }, 200); });
 })();
+
+/* v37: floating "Ask Assistant" logo button (bottom-right), replacing the wide bottom bar */
+(function () {
+  function mount() {
+    if (document.getElementById("ao-chat-fab")) return;
+    if (!document.body) return;
+    var fab = document.createElement("button");
+    fab.id = "ao-chat-fab";
+    fab.type = "button";
+    fab.setAttribute("aria-label", "Ask Assistant");
+    fab.title = "Ask Assistant (Ctrl+I)";
+    var logo = document.querySelector("img.nav-logo");
+    if (logo && (logo.currentSrc || logo.src)) {
+      var img = document.createElement("img");
+      img.src = logo.currentSrc || logo.src;
+      img.alt = "";
+      img.setAttribute("aria-hidden", "true");
+      fab.appendChild(img);
+    } else {
+      fab.textContent = "✦";
+      fab.setAttribute("aria-hidden", "false");
+    }
+    fab.addEventListener("click", function () {
+      var m = document.getElementById("assistant-entry-mobile");
+      if (m && getComputedStyle(m).display !== "none") { m.click(); return; }
+      var d = document.getElementById("assistant-entry");
+      if (d) { d.click(); return; }
+      if (m) m.click();
+    });
+    document.body.appendChild(fab);
+    function sync() {
+      var open = false;
+      var sheets = document.querySelectorAll('[class*="chat-assistant-sheet"]');
+      for (var i = 0; i < sheets.length; i++) {
+        var r = sheets[i].getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && r.left < window.innerWidth && r.right > 0) { open = true; break; }
+      }
+      fab.dataset.state = open ? "open" : "closed";
+    }
+    setInterval(sync, 800);
+    sync();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", mount);
+  } else {
+    mount();
+  }
+  document.addEventListener("mintlify:navigate", function () { setTimeout(mount, 300); });
+})();
