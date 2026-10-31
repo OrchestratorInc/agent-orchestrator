@@ -424,16 +424,17 @@ type AgentModelCatalog struct {
 	RefreshRecommended bool   `json:"refreshRecommended,omitempty"`
 	Stale              bool   `json:"stale"`
 	Warning            string `json:"warning,omitempty"`
-	// WarningCode classifies Warning when it is an authentication problem, so
-	// clients can offer the agent's login instead of showing provider text.
+	// WarningCode classifies actionable discovery failures so clients can offer
+	// installation or login instead of showing provider text.
 	// auth_required: the agent is signed out or its credential was rejected.
 	// auth_expired: a stored login's access token expired; the agent CLI
 	// renews it on its next run.
-	WarningCode string `json:"warningCode,omitempty" enum:"auth_required,auth_expired"`
+	WarningCode string `json:"warningCode,omitempty" enum:"auth_required,auth_expired,not_installed"`
 }
 
 // Model catalog warning codes.
 const (
+	ModelCatalogWarningNotInstalled = "not_installed"
 	ModelCatalogWarningAuthRequired = "auth_required"
 	ModelCatalogWarningAuthExpired  = "auth_expired"
 )

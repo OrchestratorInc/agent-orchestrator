@@ -2447,6 +2447,49 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls[0][1].body).toHaveProperty("model", "fast");
 	});
 
+	describe("missing agent CLI", () => {
+		const detail = "codex model discovery: chat driver unavailable: codex: agent: binary not found on PATH";
+		const catalog = { agentId: "codex", selectionMode: "catalog", models: [], allowCustom: false, stale: true, warningCode: "not_installed", warning: detail };
+		afterEach(() => useUiStore.setState({ settingsModal: null }));
+
+		it("offers managed installation, keeps diagnostics in Details, and recovers on retry", async () => {
+			h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { installation: "not_installed", authentication: "unknown" })] };
+			h.get.mockImplementation(async (path: string) => path.includes("/models")
+				? { data: catalog }
+				: { data: { status: "ok", project: { agent: "codex", config: {} } } });
+			h.post.mockResolvedValue({ data: { ...catalog, warningCode: undefined, warning: undefined, stale: false, models: [{ id: "gpt-5.5", label: "GPT-5.5", isDefault: true }] } });
+			render(<Wrap><TaskComposer projectId="proj-1" onCreated={vi.fn()} /></Wrap>);
+			expect(await screen.findByTestId("model-catalog-notice")).toHaveTextContent("Codex CLI isn't installed.");
+			expect(screen.queryByText(detail)).not.toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Details" }));
+			expect(screen.getByText(detail)).toBeInTheDocument();
+			await userEvent.click(screen.getByRole("button", { name: "Install" }));
+			expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({
+				scope: "global", section: "harness", focusAgentId: "codex", harnessView: "local",
+			}));
+			await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+			await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/agents/{agent}/models/refresh", expect.objectContaining({ params: expect.objectContaining({ path: { agent: "codex" } }) })));
+			await waitFor(() => expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument());
+			await waitFor(() => expect(screen.getByRole("button", { name: "Model" })).toHaveTextContent("GPT-5.5"));
+		});
+
+		it("does not require a local CLI to start a cloud task", async () => {
+			h.cloudProjects.push({ id: "cloud-missing-cli", displayName: "Cloud", repositoryUrl: "https://example.com/repo", defaultBranch: "main", config: { worker: { agent: "codex" } } });
+			h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { installation: "not_installed", authentication: "unknown" })] };
+			h.get.mockResolvedValue({ data: catalog });
+			h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([{ id: "gpt-5.5", displayName: "GPT-5.5", default: true }]));
+			h.cloudCreateSession.mockResolvedValue({ session: { id: "session-1" } });
+			render(<Wrap><TaskComposer projectId="cloud-missing-cli" onCreated={vi.fn()} /></Wrap>);
+			await waitForTaskReady();
+			expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument();
+			expect(h.get.mock.calls.filter(([path]) => String(path).includes("/models"))).toEqual([]);
+			fireEvent.change(task(), { target: { value: "Do the work" } });
+			await waitForTaskReady();
+			fireEvent.click(startTask());
+			await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
+		});
+	});
+
 	describe("model login errors", () => {
 		const expiredDetail = "claude-code model discovery: claude-code: model discovery: Anthropic rejected the credential: OAuth access token has expired. Re-authenticate to continue.";
 		function claudeCatalog(extra: Record<string, unknown>) {
