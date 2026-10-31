@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { QueryClientContext } from "@tanstack/react-query";
 import { AlarmClock, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useCancelReminderMutation, useSessionRemindersQuery } from "../../hooks/useSessionReminders";
@@ -20,8 +22,14 @@ export function formatReminderDue(dueAt: string, now = new Date()): string {
 /**
  * Follow-ups the agent scheduled into this session with `ao remind`, each with
  * a cancel button. Quiet metadata above the composer, like other thread notices.
+ * Surfaces rendered without a query client (some embeds and tests) show none.
  */
 export function SessionReminders({ sessionId }: { sessionId: string }) {
+	const queryClient = useContext(QueryClientContext);
+	return queryClient ? <PendingReminders sessionId={sessionId} /> : null;
+}
+
+function PendingReminders({ sessionId }: { sessionId: string }) {
 	const { t } = useTranslation();
 	const { data: reminders } = useSessionRemindersQuery(sessionId);
 	const cancel = useCancelReminderMutation(sessionId);

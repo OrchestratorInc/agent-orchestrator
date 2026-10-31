@@ -68,3 +68,12 @@ describe("SessionReminders", () => {
 		expect(await screen.findByRole("alert")).toHaveTextContent("Could not cancel the follow-up.");
 	});
 });
+
+describe("SessionReminders without a query client", () => {
+	it("renders nothing instead of throwing", () => {
+		api.GET.mockReset();
+		const { container } = render(<SessionReminders sessionId="s1" />);
+		expect(container).toBeEmptyDOMElement();
+		expect(api.GET).not.toHaveBeenCalled();
+	});
+});
