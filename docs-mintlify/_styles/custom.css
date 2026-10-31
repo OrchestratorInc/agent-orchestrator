@@ -1440,3 +1440,9 @@ html[data-assistant-state="open"] div[class*="lg:max-w"][class*="mx-auto"] {
   max-width: min(900px, calc(100vw - 268px - var(--assistant-sheet-width, 0px))) !important;
 }
 }
+
+
+/* v51: hide the greeting cloud on mobile/tablet - the FAB stays (user request) */
+@media (max-width: 1023.5px) {
+  #ao-chat-bubble { display: none !important; }
+}
