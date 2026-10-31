@@ -6,9 +6,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
-	"syscall"
 
 	"golang.org/x/sys/windows/registry"
 
@@ -16,39 +14,12 @@ import (
 )
 
 func commandContext(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
-	resolved, err := exec.LookPath(name)
-	if err != nil {
+	if _, err := exec.LookPath(name); err != nil {
 		return nil, err
 	}
-	extension := filepath.Ext(resolved)
-	if !strings.EqualFold(extension, ".cmd") && !strings.EqualFold(extension, ".bat") {
-		return aoprocess.CommandContext(ctx, resolved, args...), nil //nolint:gosec // Callers supply server-owned argv.
-	}
-
-	shell := strings.TrimSpace(os.Getenv("ComSpec"))
-	if shell == "" {
-		shell = "cmd.exe"
-	}
-	cmd := aoprocess.CommandContext(ctx, shell) //nolint:gosec // ComSpec is Windows' configured batch interpreter.
-	cmd.Args = nil
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.CmdLine = `/d /s /c "` + windowsBatchCommandLine(resolved, args) + `"`
-	return cmd, nil
-}
-
-func windowsBatchCommandLine(executable string, args []string) string {
-	parts := make([]string, 0, len(args)+1)
-	parts = append(parts, quoteWindowsBatchArg(executable))
-	for _, arg := range args {
-		parts = append(parts, quoteWindowsBatchArg(arg))
-	}
-	return strings.Join(parts, " ")
-}
-
-func quoteWindowsBatchArg(value string) string {
-	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
+	// process.CommandContext starts batch shims' targets directly, so argv never
+	// goes through cmd.exe quoting (issue #7212).
+	return aoprocess.CommandContext(ctx, name, args...), nil
 }
 
 func refreshExecutablePath() {
