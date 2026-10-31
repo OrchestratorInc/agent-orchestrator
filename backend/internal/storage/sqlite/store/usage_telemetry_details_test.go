@@ -201,3 +201,67 @@ func TestUsagePRDiscardMarksPendingCloses(t *testing.T) {
 		t.Fatalf("facts after opt-out = %+v, err=%v", facts, err)
 	}
 }
+
+// A close observed while usage recording is off is consumed at that write, on
+// both the insert path (first sighting) and the conflict path (already
+// tracked), so re-enabling without a discard pass exports nothing from the off
+// interval.
+func TestUsagePRCloseObservedWhileDisabledIsNeverPending(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "repo")
+	allowed := true
+	s.SetUsageTelemetryAllowed(func() bool { return allowed })
+	worker, err := s.CreateSession(ctx, sampleRecord("repo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	write := func(pr domain.PullRequest) {
+		t.Helper()
+		if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending := func() []string {
+		t.Helper()
+		facts, err := s.PendingWorkerPRUsage(ctx, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var closes []string
+		for _, f := range facts {
+			if f.ClosePending {
+				closes = append(closes, f.Key)
+			}
+		}
+		return closes
+	}
+
+	// Conflict path: tracked and reported while enabled, closed while disabled.
+	tracked := domain.PullRequest{URL: "https://github.com/org/repo/pull/10", SessionID: worker.ID, Provider: "github",
+		Host: "github.com", Repo: "org/repo", Number: 10, ProviderID: "PR_10", UpdatedAt: now}
+	write(tracked)
+	facts, err := s.PendingWorkerPRUsage(ctx, 10)
+	if err != nil || len(facts) != 1 {
+		t.Fatalf("facts = %+v, err=%v", facts, err)
+	}
+	if err := s.MarkWorkerPRUsageReported(ctx, facts[0].Key, true, false, false); err != nil {
+		t.Fatal(err)
+	}
+	allowed = false
+	tracked.Closed = true
+	write(tracked)
+
+	// Insert path: first seen, already closed, while disabled.
+	write(domain.PullRequest{URL: "https://github.com/org/repo/pull/11", SessionID: worker.ID, Provider: "github",
+		Host: "github.com", Repo: "org/repo", Number: 11, ProviderID: "PR_11", Closed: true, UpdatedAt: now})
+
+	allowed = true // no DiscardPendingWorkerPRUsage in between
+	if closes := pending(); len(closes) != 0 {
+		t.Fatalf("closes from the disabled interval pending: %v", closes)
+	}
+	if facts, _ := s.PendingWorkerPRUsage(ctx, 10); len(facts) != 0 {
+		t.Fatalf("outcomes from the disabled interval pending: %+v", facts)
+	}
+}
