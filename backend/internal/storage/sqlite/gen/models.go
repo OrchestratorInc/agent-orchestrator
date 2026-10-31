@@ -336,6 +336,13 @@ type ConversationEditDelivery struct {
 	ProviderWorkStarted int64
 }
 
+type ConversationMcpApp struct {
+	ActivityID   string
+	DataJson     string
+	DocumentJson string
+	ContextText  string
+}
+
 type ConversationMessage struct {
 	ID                  string
 	ConversationID      string

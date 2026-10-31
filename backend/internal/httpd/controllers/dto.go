@@ -23,6 +23,25 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
+// MCPAppConversationIDParam identifies the conversation owning an app.
+type MCPAppConversationIDParam struct {
+	ConversationID string `path:"conversationId"`
+}
+
+// MCPAppActivityIDParam identifies the tool activity that produced an app.
+type MCPAppActivityIDParam struct {
+	ActivityID string `path:"activityId"`
+}
+
+// MCPAppSnapshotResponse describes a visible interactive tool app.
+type MCPAppSnapshotResponse chatsvc.MCPAppSnapshot
+
+// MCPAppActionRequest contains an app action and optional approval token.
+type MCPAppActionRequest chatsvc.MCPAppRequest
+
+// MCPAppActionResponse returns an app action result or approval challenge.
+type MCPAppActionResponse chatsvc.MCPAppResponse
+
 // CreateReportRequest is the local caller-to-daemon report submission contract.
 // SessionID attributes the report; like the rest of AO's unauthenticated
 // loopback API, it is not cryptographic proof of worker authorship. Reports do

@@ -126,6 +126,7 @@ export type ActivityDetail = {
 	patchOutputTruncated?: boolean;
 	server?: string;
 	toolName?: string;
+	mcpApp?: { resourceUri: string; conversationId?: string };
 	namespace?: string;
 	arguments?: unknown;
 	result?: unknown;

@@ -99,7 +99,8 @@ export function isOrdinaryActivity(item: ConversationItem): boolean {
 		&& item.activityKind !== "user_input"
 		&& item.activityKind !== "error"
 		&& item.activityKind !== "reasoning"
-		&& item.detail?.event === undefined;
+		&& item.detail?.event === undefined
+		&& !item.detail?.mcpApp;
 }
 
 export function actionDetailLines(activity: ConversationActivity): string[] {

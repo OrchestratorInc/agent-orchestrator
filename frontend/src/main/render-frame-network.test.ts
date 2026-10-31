@@ -8,6 +8,11 @@ const inline = "http://ao-inline-artifact.x.localhost:3042/q3/report.html";
 const resolveTo = (address: string, family = 4) => async () => [{ address, family }];
 
 describe("isAgentPageUrl", () => {
+	it("guards local MCP apps and token-free remote app documents", () => {
+		expect(isAgentPageUrl("http://127.0.0.1:3001/api/v1/conversations/c/mcp-apps/a/document")).toBe(true);
+		expect(isAgentPageUrl("http://127.0.0.1:3001/api/v1/conversations/c/mcp-apps/a/actions")).toBe(false);
+		expect(isAgentPageUrl("about:srcdoc")).toBe(true);
+	});
 	it("knows the frames that hold agent pages", () => {
 		expect(isAgentPageUrl(render)).toBe(true);
 		expect(isAgentPageUrl("http://localhost:3042/api/v1/sessions/p-1/artifact-files/q3/report.html")).toBe(true);

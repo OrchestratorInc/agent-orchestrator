@@ -199,6 +199,10 @@ func isRenderDocumentRequest(r *http.Request) bool {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		return false
 	}
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/conversations/"); ok {
+		parts := strings.Split(rest, "/")
+		return len(parts) == 4 && parts[0] != "" && parts[1] == "mcp-apps" && parts[2] != "" && parts[3] == "document"
+	}
 	rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/sessions/")
 	parts := strings.Split(rest, "/")
 	return ok && len(parts) == 3 && parts[0] != "" && parts[1] == "renders" && parts[2] != "" && parts[2] != "check"

@@ -3,6 +3,7 @@
 // for the renderer, which frames them, and the main process, which guards them.
 
 const PAGE_ROUTE = /^\/api\/v1\/sessions\/[^/]+\/(renders\/[^/]+$|artifact-files\/)/;
+const MCP_APP_ROUTE = /^\/api\/v1\/conversations\/[^/]+\/mcp-apps\/[^/]+\/document$/;
 const LOOPBACK_NAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 function parse(url: string | URL): URL | undefined {
@@ -27,8 +28,11 @@ export function isInlineArtifactUrl(url: string | URL): boolean {
 /** Whether a frame URL is an agent page: a render or an HTML artifact framed in the chat. */
 export function isAgentPageUrl(url: string | URL): boolean {
 	const parsed = parse(url);
+	// Remote MCP apps are fetched by the host and framed without their proxy
+	// capability URL. Treat srcdoc as untrusted for navigation/network guards.
+	if (parsed?.protocol === "about:" && parsed.pathname === "srcdoc") return true;
 	if (parsed?.protocol !== "http:") return false;
-	return isInlineArtifactUrl(parsed) || (LOOPBACK_NAMES.has(parsed.hostname) && PAGE_ROUTE.test(parsed.pathname));
+	return isInlineArtifactUrl(parsed) || (LOOPBACK_NAMES.has(parsed.hostname) && (PAGE_ROUTE.test(parsed.pathname) || MCP_APP_ROUTE.test(parsed.pathname)));
 }
 
 /**
@@ -40,7 +44,7 @@ export function isAgentPageUrl(url: string | URL): boolean {
 export function isOwnPageRequest(page: URL, request: URL): boolean {
 	if (request.protocol !== "http:") return false;
 	if (isInlineArtifactUrl(page)) return request.host === page.host;
-	const scope = PAGE_ROUTE.exec(page.pathname)?.[0];
+	const scope = PAGE_ROUTE.exec(page.pathname)?.[0] ?? MCP_APP_ROUTE.exec(page.pathname)?.[0];
 	if (!scope || !LOOPBACK_NAMES.has(request.hostname) || request.port !== page.port) return false;
 	// A render is one document; an artifact's scope is its session's artifact files.
 	return scope.endsWith("/") ? request.pathname.startsWith(scope) : request.pathname === scope;

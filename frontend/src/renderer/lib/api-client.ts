@@ -60,6 +60,9 @@ export function setApiDaemonStatus(nextStatus: DaemonStatus): void {
 // still normalizes IDs for every resource, including ones a segment heuristic
 // would miss (orchestrators/{id}). Keep in sync with schema.ts.
 const ROUTE_TEMPLATES = [
+	"/api/v1/conversations/{conversationId}/mcp-apps/{activityId}",
+	"/api/v1/conversations/{conversationId}/mcp-apps/{activityId}/document",
+	"/api/v1/conversations/{conversationId}/mcp-apps/{activityId}/actions",
     "/api/v1/awake/observations", "/api/v1/awake", "/api/v1/awake/sessions", "/api/v1/awake/settings",
     "/api/v1/awake/rules", "/api/v1/awake/stop", "/api/v1/awake/resume",
     "/api/v1/awake/recover", "/api/v1/awake/history", "/api/v1/awake/downloads",
