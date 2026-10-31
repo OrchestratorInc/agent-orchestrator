@@ -1351,7 +1351,7 @@ main td, main th { vertical-align: middle !important; }
       (mt24 mb4 from the wrapper rule above; single-line box lh=h=20 desktop,
       22.5 drawer) instead of compensating gaps around the old 22.5px box ── */
 @media (min-width: 1024px) {
-  nav#sidebar-content .sidebar-group-header { height: 20px !important; min-height: 0 !important; align-items: center !important; margin-top: 25.5px !important; margin-bottom: 6px !important; }
+  nav#sidebar-content .sidebar-group-header { height: auto !important; min-height: 0 !important; align-items: center !important; margin-top: 25.5px !important; margin-bottom: 6px !important; padding-top: 0.75px !important; }
   nav#sidebar-content .sidebar-group-header .sidebar-title,
   nav#sidebar-content .sidebar-group-header .sidebar-title > span {
     display: block !important; height: 20px !important; line-height: 20px !important;
@@ -1372,4 +1372,12 @@ main td, main th { vertical-align: middle !important; }
 .steps, .mdx-content .steps {
   border-left: 1px solid oklch(1 0 0 / 0.1) !important;
   margin-bottom: 24px !important;
+}
+
+/* ── Steps rail: start at the first step heading like the original (border
+      started one h3-margin above it). Padding keeps content x at 303. ── */
+.steps, .mdx-content .steps { border-left: none !important; padding-left: 1px !important; position: relative !important; }
+.steps::before, .mdx-content .steps::before {
+  content: ""; position: absolute; left: 0; top: 16px; bottom: 0;
+  width: 1px; background: oklch(1 0 0 / 0.1);
 }
