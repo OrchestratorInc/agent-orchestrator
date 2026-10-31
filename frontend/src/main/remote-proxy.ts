@@ -296,6 +296,11 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 		});
 		// Wrap before "open": the host's first HTTP/2 frame can arrive with it.
 		const stream = createWebSocketStream(socket);
+		// A reset connection (sleep, a network change) closes the WebSocket
+		// without its TCP socket finishing, and ws then never completes the
+		// stream's end. The session would go on writing into that half-closed
+		// stream, which Node fails with an uncaught internal assertion.
+		socket.once("close", () => stream.destroy());
 		// The stream re-emits socket errors. Before "open" they are the upgrade's,
 		// reported below; after, the session sees the close and is replaced.
 		// Unheard, either would crash the main process.
