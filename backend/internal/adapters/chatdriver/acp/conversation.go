@@ -575,6 +575,16 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		if offered, known := c.configOptionOffers(option.ID, option.Value); option.Optional && option.ID == "model" && known && !offered {
 			return nil
 		}
+		// A model value the remap above could not rescue is rejected by the agent
+		// as an opaque JSON-RPC error at the first turn. Enforce the advertised
+		// choices here, like the legacy path does, so the picker's mistake
+		// surfaces as a typed config error before anything is sent. Sessions that
+		// advertise no choices keep their pass-through behavior.
+		if option.ID == "model" {
+			if choices, advertised := c.advertisedModelChoices(); advertised && !choiceOffered(choices, option.Value) {
+				return fmt.Errorf("%w: ACP session model does not offer %q", ports.ErrChatConfigOptionInvalid, option.Value)
+			}
+		}
 		return c.setSessionOption(ctx, sessionID, option)
 	}
 	// A model switch may change the modes an ACP agent offers. Apply a modern
