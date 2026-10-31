@@ -165,13 +165,14 @@ type AgentSwitchFailureReceipt struct {
 }
 
 type AppSetting struct {
-	ID                 int64
-	DefaultSessionMode domain.SessionMode
-	UpdatedAt          time.Time
-	CloudOffering      bool
-	HarnessDefaults    string
-	VersionRefresh     bool
-	ComputerUse        bool
+	ID                   int64
+	DefaultSessionMode   domain.SessionMode
+	UpdatedAt            time.Time
+	CloudOffering        bool
+	HarnessDefaults      string
+	VersionRefresh       bool
+	ComputerUse          bool
+	SessionRetentionDays int64
 }
 
 type Automation struct {
@@ -751,6 +752,7 @@ type Session struct {
 	LaunchOptions                    string
 	BranchNaming                     bool
 	TemporaryBranch                  string
+	TerminatedAt                     sql.NullTime
 }
 
 type SessionAgentAccount struct {
@@ -783,6 +785,7 @@ type SessionCleanupFact struct {
 	LastAttemptAt        sql.NullTime
 	NextAttemptAt        sql.NullTime
 	FailureCode          string
+	ReportOnly           bool
 }
 
 type SessionHarnessRelease struct {

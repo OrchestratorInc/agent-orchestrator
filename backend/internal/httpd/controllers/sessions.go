@@ -2167,18 +2167,19 @@ func (c *SessionsController) rollback(w http.ResponseWriter, r *http.Request) {
 // sessionDeleteService is optional so unrelated controller fakes keep
 // implementing the stable SessionService surface.
 type sessionDeleteService interface {
-	Delete(ctx context.Context, id domain.SessionID) error
+	Delete(ctx context.Context, id domain.SessionID, cleanup bool) error
 }
 
 // deleteSession permanently removes a terminated session's record. The service
-// refuses a live session and one whose worktree is not cleaned up yet.
+// refuses a live session, and one whose worktree is not cleaned up yet unless
+// the caller asks it to clean it up first.
 func (c *SessionsController) deleteSession(w http.ResponseWriter, r *http.Request) {
 	svc, ok := c.Svc.(sessionDeleteService)
 	if !ok {
 		apispec.NotImplemented(w, r, http.MethodDelete, "/api/v1/sessions/{sessionId}")
 		return
 	}
-	if err := svc.Delete(r.Context(), sessionID(r)); err != nil {
+	if err := svc.Delete(r.Context(), sessionID(r), r.URL.Query().Get("cleanup") == "true"); err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}

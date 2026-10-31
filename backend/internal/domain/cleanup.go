@@ -80,11 +80,28 @@ const (
 	CleanupSkipTeardownFailed CleanupSkipCode = "teardown_failed"
 )
 
+// Retryable reports a refusal that says "not now" rather than "cannot": the
+// worktree is busy or shared, so a later run may remove it.
+func (c CleanupSkipCode) Retryable() bool {
+	switch c {
+	case CleanupSkipWorktreeBusy, CleanupSkipInUse, CleanupSkipShellTerminalOpen, CleanupSkipAlreadyRunning:
+		return true
+	}
+	return false
+}
+
 // CleanupSkipCodes lists every CleanupSkipCode, for API schemas and tests.
 var CleanupSkipCodes = []CleanupSkipCode{
 	CleanupSkipDirty, CleanupSkipLockedWorktree, CleanupSkipMissingRepo, CleanupSkipProjectUnresolvable,
 	CleanupSkipPermissionDenied, CleanupSkipScriptFailed, CleanupSkipWorktreeBusy, CleanupSkipInUse,
 	CleanupSkipShellTerminalOpen, CleanupSkipAlreadyRunning, CleanupSkipAttachmentsFailed, CleanupSkipTeardownFailed,
+}
+
+// ArchivedSession is an archived session whose workspace is released, with
+// when it was archived, for the retention that deletes old ones.
+type ArchivedSession struct {
+	ID         SessionID
+	ArchivedAt time.Time
 }
 
 // SessionCleanupRecord is the persistence shape for one terminated session's
@@ -110,4 +127,7 @@ type SessionCleanupRecord struct {
 	NextAttemptAt time.Time
 	// FailureCode is a machine code for the last teardown failure; "" = none.
 	FailureCode string
+	// ReportOnly marks a result first recorded by a cleanup sweep rather than
+	// by archiving the session: its failure is listed but raises no app error.
+	ReportOnly bool
 }

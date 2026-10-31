@@ -372,6 +372,19 @@ WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
     AND trim(provider_conversation_id) <> ''
 ORDER BY id;
 
+-- name: ListReleasedArchivedSessions :many
+-- Archived sessions retention may delete: the worktree is released for the
+-- current generation, or there never was one. A row archived before
+-- terminated_at existed counts from its last update.
+SELECT s.id, s.terminated_at, s.updated_at FROM sessions s
+WHERE s.is_terminated = 1 AND s.is_task_preparation = 0
+    AND (s.workspace_path = '' OR EXISTS (
+        SELECT 1 FROM session_cleanup_facts f
+        WHERE f.session_id = s.id AND f.session_generation = s.cleanup_generation
+            AND f.workspace_disposition IN ('removed', 'not_applicable')
+    ))
+ORDER BY s.id;
+
 -- name: ListTurnFailureCandidates :many
 -- Terminal sessions of one harness that are in a turn and have a native
 -- transcript to check. Only the columns the failed-turn observer reads.

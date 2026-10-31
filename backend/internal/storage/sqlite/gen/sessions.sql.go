@@ -990,6 +990,49 @@ func (q *Queries) ListChatHibernationCandidates(ctx context.Context) ([]domain.S
 	return items, nil
 }
 
+const listReleasedArchivedSessions = `-- name: ListReleasedArchivedSessions :many
+SELECT s.id, s.terminated_at, s.updated_at FROM sessions s
+WHERE s.is_terminated = 1 AND s.is_task_preparation = 0
+    AND (s.workspace_path = '' OR EXISTS (
+        SELECT 1 FROM session_cleanup_facts f
+        WHERE f.session_id = s.id AND f.session_generation = s.cleanup_generation
+            AND f.workspace_disposition IN ('removed', 'not_applicable')
+    ))
+ORDER BY s.id
+`
+
+type ListReleasedArchivedSessionsRow struct {
+	ID           domain.SessionID
+	TerminatedAt sql.NullTime
+	UpdatedAt    time.Time
+}
+
+// Archived sessions retention may delete: the worktree is released for the
+// current generation, or there never was one. A row archived before
+// terminated_at existed counts from its last update.
+func (q *Queries) ListReleasedArchivedSessions(ctx context.Context) ([]ListReleasedArchivedSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listReleasedArchivedSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListReleasedArchivedSessionsRow{}
+	for rows.Next() {
+		var i ListReleasedArchivedSessionsRow
+		if err := rows.Scan(&i.ID, &i.TerminatedAt, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionsByProject = `-- name: ListSessionsByProject :many
 SELECT id, project_id, num, issue_id, kind, harness,
     activity_state, activity_last_at, is_terminated, branch, workspace_path,

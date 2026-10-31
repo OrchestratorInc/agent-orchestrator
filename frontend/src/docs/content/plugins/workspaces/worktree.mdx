@@ -39,4 +39,6 @@ Use `ao project set-config <id> --help` for flags. To pass the complete object w
 
 Only archiving a session (`ao session kill`, including the archive after a merged PR) and `ao session cleanup` remove worktrees. An agent that exits on its own keeps its worktree. In the background, AO only finishes a cleanup that was already accepted but interrupted (for example by a daemon restart) and, for sessions whose worktree folder is already gone, prunes git's leftover registration and records the release; it never removes a worktree that is still on disk. A stale lock that `git worktree add` left behind is lifted during cleanup; any other lock is kept and reported.
 
-After cleanup, `ao session delete <id>` permanently removes the session record and its AO history. Its session ID is never reused.
+After cleanup, `ao session delete <id>` permanently removes the session record and its AO history; with `--cleanup` it cleans the worktree up first, never forced. Its session ID is never reused, and its spend stays in the agent account usage totals. In the desktop app, the trash icon on an archived session card does the same, cleaning up first.
+
+To delete archived sessions automatically, choose a period under Settings → Sessions → **Delete archived sessions** (7, 30 or 90 days; Never by default). Only sessions whose worktree is already cleaned up are deleted: retention never removes a worktree, so a dirty or kept one keeps its session.

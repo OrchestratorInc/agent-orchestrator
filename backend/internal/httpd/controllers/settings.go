@@ -22,6 +22,7 @@ type SettingsService interface {
 	SetChatHibernationEnabled(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetVersionRefresh(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
 	SetComputerUse(ctx context.Context, enabled bool) (settingssvc.Snapshot, error)
+	SetSessionRetentionDays(ctx context.Context, days int) (settingssvc.Snapshot, error)
 	ChatHarnesses(candidates []domain.AgentHarness) []domain.AgentHarness
 	Offering() settingssvc.Offering
 }
@@ -43,6 +44,7 @@ func (c *SettingsController) Register(r chi.Router) {
 	r.Patch("/settings/chat-hibernation", c.setChatHibernation)
 	r.Patch("/settings/version-refresh", c.setVersionRefresh)
 	r.Patch("/settings/computer-use", c.setComputerUse)
+	r.Patch("/settings/session-retention", c.setSessionRetention)
 	r.Patch("/settings/harness-defaults/{agent}", c.setHarnessDefault)
 }
 
@@ -174,6 +176,28 @@ func (c *SettingsController) setComputerUse(w http.ResponseWriter, r *http.Reque
 	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
 }
 
+func (c *SettingsController) setSessionRetention(w http.ResponseWriter, r *http.Request) {
+	if c.Svc == nil {
+		apispec.NotImplemented(w, r, "PATCH", "/api/v1/settings/session-retention")
+		return
+	}
+	var req UpdateSessionRetentionRequest
+	if !decodeConversationBody(w, r, &req) {
+		return
+	}
+	if req.Days == nil {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"SESSION_RETENTION_INVALID", "days is required; use 0 to keep archived sessions", nil)
+		return
+	}
+	snapshot, err := c.Svc.SetSessionRetentionDays(r.Context(), *req.Days)
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, c.response(snapshot))
+}
+
 func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsResponse {
 	// Reported so the client can warn that choosing chat narrows which agents are
 	// available, instead of letting the user discover it at spawn time.
@@ -193,6 +217,7 @@ func (c *SettingsController) response(snapshot settingssvc.Snapshot) SettingsRes
 		ChatHibernationEnabled: snapshot.ChatHibernationEnabled,
 		VersionRefresh:         snapshot.VersionRefresh,
 		ComputerUse:            snapshot.ComputerUse,
+		SessionRetentionDays:   snapshot.SessionRetentionDays,
 		CloudEnabled:           offering.CloudEnabled(snapshot),
 		CloudControlPlaneURL:   offering.CloudControlPlaneURL,
 		TrackerIntakeEnabled:   offering.TrackerIntakeEnabled,

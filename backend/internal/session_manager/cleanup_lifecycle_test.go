@@ -123,9 +123,10 @@ func TestCleanup_BatchesSettledFactsRead(t *testing.T) {
 	}
 }
 
-// An untracked failure stays report-only: recording it would surface an old
-// preserved worktree as a cleanup error in the app.
-func TestCleanup_DoesNotRecordUntrackedFailure(t *testing.T) {
+// A sweep records an untracked session's failure too, but report-only, so an
+// old preserved worktree does not start showing a cleanup error in the app. A
+// retry keeps it report-only.
+func TestCleanup_RecordsUntrackedFailureReportOnly(t *testing.T) {
 	m, st, _, ws := newManager()
 	ws.destroyErr = ports.ErrWorkspaceDirty
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
@@ -134,11 +135,14 @@ func TestCleanup_DoesNotRecordUntrackedFailure(t *testing.T) {
 	if err != nil || len(res.Skipped) != 1 || res.Skipped[0].Reason != "workspace has uncommitted changes" || res.Skipped[0].Code != domain.CleanupSkipDirty {
 		t.Fatalf("result = %+v, %v; want a dirty skip", res, err)
 	}
-	if facts, ok := cleanupFacts(t, st, "mer-1"); ok {
-		t.Fatalf("facts = %+v, want none for an untracked failure", facts)
+	if facts, ok := cleanupFacts(t, st, "mer-1"); !ok || facts.WorkspaceDisposition != domain.DispositionPreservedDirty || !facts.ReportOnly {
+		t.Fatalf("facts = %+v (found %v), want report-only preserved_dirty", facts, ok)
 	}
 	if _, err := m.Cleanup(ctx, "mer"); err != nil || ws.destroyed != 2 {
 		t.Fatalf("a skipped workspace must be retried: destroyed=%d err=%v", ws.destroyed, err)
+	}
+	if facts, _ := cleanupFacts(t, st, "mer-1"); !facts.ReportOnly {
+		t.Fatalf("facts = %+v, want the retry to stay report-only", facts)
 	}
 }
 
@@ -191,16 +195,29 @@ func TestKill_RecordsReleasedWorkspace(t *testing.T) {
 	}
 }
 
-func TestKill_PreservedWorkspaceIsNotRecordedReleased(t *testing.T) {
-	m, st, _, ws := newManager()
-	st.sessions["mer-1"] = mkLive("mer-1")
-	ws.destroyErr = ports.ErrWorkspaceDirty
+// An archive that keeps the worktree records why, for the app to show: a hard
+// refusal as such, a "not now" one as pending for the background pass.
+func TestKill_RecordsPreservedWorkspaceForTheApp(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want domain.WorkspaceDisposition
+	}{
+		{ports.ErrWorkspaceDirty, domain.DispositionPreservedDirty},
+		{ports.ErrWorkspaceLocked, domain.DispositionFailed},
+		{ports.ErrWorkspaceDeferred, domain.DispositionPending},
+	} {
+		t.Run(string(tc.want), func(t *testing.T) {
+			m, st, _, ws := newManager()
+			st.sessions["mer-1"] = mkLive("mer-1")
+			ws.destroyErr = tc.err
 
-	if _, err := m.Kill(ctx, "mer-1"); err != nil {
-		t.Fatal(err)
-	}
-	if facts, ok := cleanupFacts(t, st, "mer-1"); ok {
-		t.Fatalf("facts = %+v, want none for a preserved workspace", facts)
+			if _, err := m.Kill(ctx, "mer-1"); err != nil {
+				t.Fatal(err)
+			}
+			if facts, ok := cleanupFacts(t, st, "mer-1"); !ok || facts.WorkspaceDisposition != tc.want || facts.ReportOnly {
+				t.Fatalf("facts = %+v (found %v), want app-visible %s", facts, ok, tc.want)
+			}
+		})
 	}
 }
 
@@ -299,9 +316,9 @@ func TestReconcileWorkspaceCleanup_PrunesAndRecordsWorkspaceAlreadyGone(t *testi
 	}
 }
 
-// A registration git still refuses to drop (a locked one) is not recorded, so
-// `ao session cleanup` keeps reporting it.
-func TestReconcileWorkspaceCleanup_LeavesRefusedRegistrationForCleanup(t *testing.T) {
+// A registration git still refuses to drop (a locked one) is recorded
+// report-only, not released, so `ao session cleanup` keeps reporting it.
+func TestReconcileWorkspaceCleanup_RecordsRefusedRegistrationReportOnly(t *testing.T) {
 	m, st, _, ws := newManager()
 	ws.destroyErr = ports.ErrWorkspaceLocked
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: filepath.Join(t.TempDir(), "gone")})
@@ -309,8 +326,8 @@ func TestReconcileWorkspaceCleanup_LeavesRefusedRegistrationForCleanup(t *testin
 	if err := m.ReconcileWorkspaceCleanup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if facts, ok := cleanupFacts(t, st, "mer-1"); ok {
-		t.Fatalf("facts = %+v, want none while git refuses the registration", facts)
+	if facts, ok := cleanupFacts(t, st, "mer-1"); !ok || facts.WorkspaceDisposition != domain.DispositionFailed || !facts.ReportOnly {
+		t.Fatalf("facts = %+v (found %v), want report-only failed while git refuses the registration", facts, ok)
 	}
 	res, err := m.Cleanup(ctx, "mer")
 	if err != nil || len(res.Skipped) != 1 || res.Skipped[0].Code != domain.CleanupSkipLockedWorktree {
@@ -368,12 +385,52 @@ func TestDeleteSession(t *testing.T) {
 				facts.SessionID = "mer-1"
 				st.cleanupFacts = map[domain.SessionID]domain.SessionCleanupRecord{"mer-1": facts}
 			}
-			err := m.DeleteSession(ctx, "mer-1")
+			err := m.DeleteSession(ctx, "mer-1", false)
 			if !errors.Is(err, tc.want) || (tc.want == nil && err != nil) {
 				t.Fatalf("DeleteSession = %v, want %v", err, tc.want)
 			}
 			if _, exists := st.sessions["mer-1"]; tc.rec.ID != "" && exists == tc.deleted {
 				t.Fatalf("session exists = %v, want deleted = %v", exists, tc.deleted)
+			}
+		})
+	}
+}
+
+// With cleanup, a worktree still on disk is released first, the way cleanup
+// does it; a refusal keeps both the worktree and the session.
+func TestDeleteSession_CleansUpFirst(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		destroyErr error
+		wantCode   domain.CleanupSkipCode
+	}{
+		{name: "released"},
+		{name: "dirty", destroyErr: ports.ErrWorkspaceDirty, wantCode: domain.CleanupSkipDirty},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, ws := newManager()
+			ws.destroyErr = tc.destroyErr
+			seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
+
+			if err := m.DeleteSession(ctx, "mer-1", false); !errors.Is(err, ErrWorkspaceNotReleased) {
+				t.Fatalf("delete without cleanup = %v, want ErrWorkspaceNotReleased", err)
+			}
+			err := m.DeleteSession(ctx, "mer-1", true)
+			var refused *CleanupRefusedError
+			if tc.wantCode == "" {
+				if err != nil || ws.destroyed != 1 {
+					t.Fatalf("delete with cleanup = %v, destroyed = %d; want deleted after one teardown", err, ws.destroyed)
+				}
+				if _, ok := st.sessions["mer-1"]; ok {
+					t.Fatal("session survived its delete")
+				}
+				return
+			}
+			if !errors.As(err, &refused) || refused.Code != tc.wantCode {
+				t.Fatalf("delete with cleanup = %v, want refusal %s", err, tc.wantCode)
+			}
+			if _, ok := st.sessions["mer-1"]; !ok {
+				t.Fatal("session deleted although its worktree was kept")
 			}
 		})
 	}
@@ -386,7 +443,7 @@ func TestDeleteSession_RefusesWhileAnotherOperationRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer m.endAgentOperation("mer-1", agentOperationRestore)
-	if err := m.DeleteSession(ctx, "mer-1"); !errors.Is(err, ErrOperationInProgress) {
+	if err := m.DeleteSession(ctx, "mer-1", false); !errors.Is(err, ErrOperationInProgress) {
 		t.Fatalf("DeleteSession = %v, want ErrOperationInProgress", err)
 	}
 	if _, ok := st.sessions["mer-1"]; !ok {
@@ -394,6 +451,7 @@ func TestDeleteSession_RefusesWhileAnotherOperationRuns(t *testing.T) {
 	}
 }
 
+// A path a live successor holds is left for a later pass, not failed.
 func TestReconcileWorkspaceCleanup_LeavesPathSharedWithLiveSuccessor(t *testing.T) {
 	m, st, _, _ := newManager()
 	shared := filepath.Join(t.TempDir(), "gone")
@@ -405,7 +463,7 @@ func TestReconcileWorkspaceCleanup_LeavesPathSharedWithLiveSuccessor(t *testing.
 	if err := m.ReconcileWorkspaceCleanup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if facts, ok := cleanupFacts(t, st, "mer-1"); ok {
-		t.Fatalf("facts = %+v, want untouched while a live session shares the path", facts)
+	if facts, ok := cleanupFacts(t, st, "mer-1"); !ok || facts.WorkspaceDisposition != domain.DispositionPending || !facts.ReportOnly {
+		t.Fatalf("facts = %+v (found %v), want report-only pending while a live session shares the path", facts, ok)
 	}
 }

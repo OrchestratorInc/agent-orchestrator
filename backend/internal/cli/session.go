@@ -42,6 +42,7 @@ type sessionCleanupOptions struct {
 type sessionDeleteOptions struct {
 	project string
 	yes     bool
+	cleanup bool
 }
 
 type sessionClaimPROptions struct {
@@ -410,7 +411,7 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 		Use:   "delete <id>",
 		Short: "Permanently delete a terminated session",
 		Long: "Permanently delete a terminated session's record and its AO history (conversation, PR facts, attachments and artifacts). " +
-			"The session must be terminated and its worktree cleaned up first (ao session cleanup). Git branches, pull requests and agent account usage totals are kept.",
+			"The session must be terminated and its worktree cleaned up first (ao session cleanup, or --cleanup). Git branches, pull requests and agent account usage totals are kept.",
 		Args: oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := normalizeSessionID(args[0])
@@ -422,6 +423,7 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 	}
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Skip confirmation prompt")
+	cmd.Flags().BoolVar(&opts.cleanup, "cleanup", false, "Clean up a worktree still on disk first (never forced; a dirty or locked one refuses the delete)")
 	return cmd
 }
 
@@ -745,8 +747,12 @@ func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, 
 			return err
 		}
 	}
+	params := url.Values{}
+	if opts.cleanup {
+		params.Set("cleanup", "true")
+	}
 	var res deleteSessionResponse
-	if err := c.deleteJSON(ctx, "sessions/"+url.PathEscape(id), &res); err != nil {
+	if err := c.deleteJSON(ctx, apiPath("sessions/"+url.PathEscape(id), params), &res); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintf(out, "session %s deleted\n", res.SessionID)

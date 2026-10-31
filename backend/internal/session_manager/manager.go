@@ -2548,16 +2548,23 @@ func expectedWorkspaceRefusal(err error) bool {
 }
 
 // terminateWithPreservedWorkspace records terminal intent for a session whose
-// workspace could not be released. Nothing was force-removed, so the worktree
-// is still on disk for `ao session cleanup` to retry and report on; what must
-// not survive is the session's claim on the sidebar. dropRestoreMarker is false
-// only for workspace projects, whose rows are left as non-restorable inventory
-// for the same retry.
-func (m *Manager) terminateWithPreservedWorkspace(ctx context.Context, id domain.SessionID, cause error, dropRestoreMarker bool) error {
+// workspace could not be released, and why. Nothing was force-removed, so the
+// worktree is still on disk for `ao session cleanup` to retry and report on;
+// what must not survive is the session's claim on the sidebar. The archive
+// started this cleanup, so its failure is the app's to show. dropRestoreMarker
+// is false only for workspace projects, whose rows are left as non-restorable
+// inventory for the same retry.
+func (m *Manager) terminateWithPreservedWorkspace(ctx context.Context, rec domain.SessionRecord, refusal cleanupRefusal, cause error, dropRestoreMarker bool) error {
 	if cause != nil && !expectedWorkspaceRefusal(cause) {
-		m.logger.Warn("kill: workspace teardown failed; worktree preserved", "sessionID", id, "error", cause)
+		m.logger.Warn("kill: workspace teardown failed; worktree preserved", "sessionID", rec.ID, "error", cause)
 	}
-	return m.recordTermination(ctx, id, dropRestoreMarker)
+	if err := m.recordTermination(ctx, rec.ID, dropRestoreMarker); err != nil {
+		return err
+	}
+	if err := m.recordWorkspaceCleanupResult(ctx, rec, refusal, false); err != nil {
+		m.logger.Warn("record preserved workspace", "sessionID", rec.ID, "error", err)
+	}
+	return nil
 }
 
 // killTeardownBudget bounds each detached teardown phase around cleanup scripts.
@@ -2722,7 +2729,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		if err != nil {
 			// Same shape as the dirty-workspace refusal below: the worktree is
 			// left alone and the session is still terminated.
-			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, id, nil, true)
+			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, rec, refusedShellTerminalOpen, err, true)
 		}
 		releaseTerminals = release
 	}
@@ -2739,7 +2746,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 				return KillResult{}, err
 			}
 			if project.Kind.WithDefault() != domain.ProjectKindScratch && len(project.Config.PreRemove) > 0 {
-				if err := m.recordWorkspaceCleanup(ctx, rec, domain.DispositionPending, ""); err != nil {
+				if err := m.recordWorkspaceCleanup(ctx, rec, domain.DispositionPending, "", false); err != nil {
 					return KillResult{}, err
 				}
 				// cleanupOne takes its own terminal guard. Keep the agent-operation
@@ -2759,7 +2766,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 							m.logger.Warn("clear cleanup restore marker", "sessionID", id, "error", err)
 						}
 					}
-					if err := m.recordWorkspaceCleanupResult(m.backgroundContext, rec, refusal); err != nil {
+					if err := m.recordWorkspaceCleanupResult(m.backgroundContext, rec, refusal, false); err != nil {
 						m.logger.Error("record background workspace cleanup", "sessionID", id, "error", err)
 					}
 				})
@@ -2778,7 +2785,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 	if workspaceProject {
 		reclaim, err := m.destroyWorkspaceProjectRows(ctx, workspaceProjectRows)
 		if err != nil {
-			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, id, err, false)
+			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, rec, cleanupRefusalFor(err), err, false)
 		}
 		freed = reclaim != ""
 		if freed {
@@ -2786,7 +2793,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		}
 	} else if ws.Path != "" {
 		if err := m.workspace.Destroy(ctx, ws); err != nil {
-			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, id, err, true)
+			return KillResult{}, m.terminateWithPreservedWorkspace(ctx, rec, cleanupRefusalFor(err), err, true)
 		}
 		freed = true
 		m.cleanupAgentWorkspace(ctx, rec, ws.Path)
@@ -5557,21 +5564,19 @@ func (m *Manager) cleanupWorkspaceUnderGate(ctx context.Context, rec domain.Sess
 	}
 	tracked = tracked && facts.SessionGeneration == rec.CleanupGeneration
 	if tracked {
-		if err := m.recordWorkspaceCleanup(ctx, rec, domain.DispositionPending, ""); err != nil {
+		if err := m.recordWorkspaceCleanup(ctx, rec, domain.DispositionPending, "", false); err != nil {
 			return ports.WorkspaceReclaimRemoved, refusedTeardownFailed
 		}
 	}
 	reclaim, refusal := m.cleanupOne(ctx, rec, ws)
-	if tracked {
-		if err := m.recordWorkspaceCleanupResult(ctx, rec, refusal); err != nil {
-			m.logger.Error("record retried workspace cleanup", "sessionID", rec.ID, "error", err)
+	// A session no archive handed to cleanup gets a report-only first record,
+	// so an old dirty or blocked worktree a sweep finds does not start showing
+	// a cleanup error in the app.
+	if err := m.recordWorkspaceCleanupResult(ctx, rec, refusal, !tracked); err != nil {
+		m.logger.Error("record workspace cleanup", "sessionID", rec.ID, "error", err)
+		if tracked {
 			return reclaim, refusedTeardownFailed
 		}
-	} else if !refusal.refused() {
-		// An untracked session records success only. Its failures stay
-		// report-only, as before, so an old dirty or blocked worktree does not
-		// start showing a cleanup error in the app.
-		m.recordSettledWorkspaceCleanup(ctx, rec, domain.DispositionRemoved)
 	}
 	return reclaim, refusal
 }

@@ -1258,6 +1258,11 @@ type RollbackSessionResponse struct {
 	Killed    bool             `json:"killed,omitempty"`
 }
 
+// DeleteSessionQuery is the query string accepted by DELETE /api/v1/sessions/{sessionId}.
+type DeleteSessionQuery struct {
+	Cleanup bool `query:"cleanup,omitempty" description:"When true, a worktree that is still on disk is cleaned up first, the way session cleanup does it; a dirty or locked worktree is never forced and refuses the delete."`
+}
+
 // DeleteSessionResponse is the body of DELETE /api/v1/sessions/{sessionId}.
 type DeleteSessionResponse struct {
 	OK        bool             `json:"ok"`
@@ -3620,6 +3625,8 @@ type SettingsResponse struct {
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
 	// ComputerUse gives new chat sessions the computer-use tools.
 	ComputerUse bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
+	// SessionRetentionDays is how long an archived session is kept.
+	SessionRetentionDays int `json:"sessionRetentionDays" description:"Days an archived session whose worktree is released is kept before the daemon deletes it permanently; 0 keeps it."`
 	// CloudEnabled reports whether the cloud offering is effectively available:
 	// the user's toggle (or the env override) plus a configured control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
@@ -3657,6 +3664,11 @@ type UpdateCloudOfferingRequest struct {
 // UpdateVersionRefreshRequest flips whether open sessions move to new harness releases.
 type UpdateVersionRefreshRequest struct {
 	Enabled *bool `json:"enabled"`
+}
+
+// UpdateSessionRetentionRequest sets how long archived sessions are kept.
+type UpdateSessionRetentionRequest struct {
+	Days *int `json:"days" description:"Days to keep an archived session whose worktree is released; 0 keeps it." minimum:"0" maximum:"3650"`
 }
 
 // UpdateComputerUseRequest flips whether new chat sessions get the computer-use tools.

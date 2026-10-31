@@ -1258,6 +1258,11 @@ func Run(buildVersion string) error {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
 				}
+				if settings, err := settingsSvc.Get(ctx); err != nil {
+					log.Warn("read session retention", "err", err)
+				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
+					log.Warn("delete expired sessions failed", "err", err)
+				}
 				select {
 				case <-ctx.Done():
 					return

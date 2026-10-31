@@ -45,8 +45,9 @@ import (
 )
 
 type fakeSessionService struct {
-	deleted   []domain.SessionID
-	deleteErr error
+	deleted       []domain.SessionID
+	deleteCleanup []bool
+	deleteErr     error
 	// lastListFilter is the filter the controller parsed; listPage, when set,
 	// replaces the page built from sessions so a test can pin the wire shape.
 	lastListFilter             sessionsvc.ListFilter
@@ -5375,11 +5376,12 @@ func TestSessionsAPI_LegacyPreviewDocumentsHaveNoAPIOrigin(t *testing.T) {
 	}
 }
 
-func (f *fakeSessionService) Delete(_ context.Context, id domain.SessionID) error {
+func (f *fakeSessionService) Delete(_ context.Context, id domain.SessionID, cleanup bool) error {
 	if f.deleteErr != nil {
 		return f.deleteErr
 	}
 	f.deleted = append(f.deleted, id)
+	f.deleteCleanup = append(f.deleteCleanup, cleanup)
 	return nil
 }
 
@@ -5398,6 +5400,12 @@ func TestSessionsAPI_DeleteSession(t *testing.T) {
 	mustJSON(t, body, &got)
 	if !got.OK || got.SessionID != "ao-1" || len(svc.deleted) != 1 || svc.deleted[0] != "ao-1" {
 		t.Fatalf("delete response = %#v, deleted = %v", got, svc.deleted)
+	}
+	if _, status, _ := doRequest(t, srv, http.MethodDelete, "/api/v1/sessions/ao-1?cleanup=true", ""); status != http.StatusOK {
+		t.Fatalf("delete with cleanup = %d, want 200", status)
+	}
+	if !slices.Equal(svc.deleteCleanup, []bool{false, true}) {
+		t.Fatalf("cleanup flags = %v, want [false true]", svc.deleteCleanup)
 	}
 }
 

@@ -886,9 +886,9 @@ const standaloneSessionIDPrefix = "standalone"
 // their usage_bindings, so their spend is first folded into
 // deleted_session_account_usage, which keeps it in the agent account usage
 // view. Its change_log rows are dropped
-// because change_log references sessions without ON DELETE CASCADE, and one
-// project-level session_updated event takes their place so every client
-// refetches the list the session left.
+// because change_log references sessions without ON DELETE CASCADE; the
+// sessions_cdc_delete trigger adds one project-level session_updated event in
+// their place so every client refetches the list the session left.
 //
 // Returns deleted=false when id does not name a terminated session.
 func (s *Store) DeleteTerminatedSession(ctx context.Context, id domain.SessionID) (bool, error) {
@@ -950,11 +950,6 @@ ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`,
 		return false, fmt.Errorf("delete session %s: rows affected: %w", id, err)
 	} else if n == 0 {
 		return false, nil
-	}
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
-VALUES (?, NULL, 'session_updated', json_object('deletedSessionId', ?), datetime('now'))`, projectID, id); err != nil {
-		return false, fmt.Errorf("delete session %s: record change: %w", id, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("delete session %s: commit: %w", id, err)
@@ -1022,6 +1017,24 @@ func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.Ses
 		return nil, fmt.Errorf("list chat hibernation candidates: %w", err)
 	}
 	return ids, nil
+}
+
+// ListReleasedArchivedSessions returns the archived sessions retention may
+// delete, each with when it was archived.
+func (s *Store) ListReleasedArchivedSessions(ctx context.Context) ([]domain.ArchivedSession, error) {
+	rows, err := s.qr.ListReleasedArchivedSessions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list released archived sessions: %w", err)
+	}
+	out := make([]domain.ArchivedSession, 0, len(rows))
+	for _, row := range rows {
+		archivedAt := row.UpdatedAt
+		if row.TerminatedAt.Valid {
+			archivedAt = row.TerminatedAt.Time
+		}
+		out = append(out, domain.ArchivedSession{ID: row.ID, ArchivedAt: archivedAt})
+	}
+	return out, nil
 }
 
 // ListTurnFailureCandidates returns the harness's live terminal sessions that

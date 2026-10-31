@@ -2,15 +2,18 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 func TestDeleteTerminatedSessionRemovesRecordAndNeverReusesItsID(t *testing.T) {
@@ -173,5 +176,71 @@ func TestDeleteTerminatedSessionRefusesSharedConversationHistory(t *testing.T) {
 	}
 	if has, err := s.HasConversationTurns(ctx, conversation.ID); err != nil || !has {
 		t.Fatalf("shared turns lost: has=%v err=%v", has, err)
+	}
+}
+
+// terminated_at follows is_terminated however the row is written. Retention
+// lists only archived sessions with nothing left on disk, each with when it was
+// archived, or its last update for a row archived before terminated_at existed.
+func TestReleasedArchivedSessionsCarryWhenTheyWereArchived(t *testing.T) {
+	dir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dir)
+	ctx := context.Background()
+	seedProject(t, s, "ret")
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "ao.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	terminatedAt := func(id domain.SessionID) sql.NullString {
+		t.Helper()
+		var at sql.NullString
+		if err := raw.QueryRowContext(ctx, `SELECT terminated_at FROM sessions WHERE id = ?`, id).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+
+	released := terminalSession(t, s, "ret", 0)
+	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: released.ID, WorkspaceDisposition: domain.DispositionRemoved})
+	unreleased := terminalSession(t, s, "ret", 0)
+	noWorkspace := sampleRecord("ret")
+	noWorkspace.Metadata.WorkspacePath = ""
+	noWorkspace, err = s.CreateSession(ctx, noWorkspace)
+	mustNoError(t, err)
+	noWorkspace.IsTerminated = true
+	mustNoError(t, s.UpdateSession(ctx, noWorkspace))
+	legacy := terminalSession(t, s, "ret", 0)
+	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: legacy.ID, WorkspaceDisposition: domain.DispositionNotApplicable})
+	if _, err := raw.ExecContext(ctx, `UPDATE sessions SET terminated_at = NULL WHERE id = ?`, legacy.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !terminatedAt(released.ID).Valid {
+		t.Fatal("archiving did not set terminated_at")
+	}
+	restored := terminalSession(t, s, "ret", 0)
+	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: restored.ID, WorkspaceDisposition: domain.DispositionRemoved})
+	restored.IsTerminated = false
+	mustNoError(t, s.UpdateSession(ctx, restored))
+	if terminatedAt(restored.ID).Valid {
+		t.Fatal("restoring did not clear terminated_at")
+	}
+
+	got, err := s.ListReleasedArchivedSessions(ctx)
+	mustNoError(t, err)
+	byID := map[domain.SessionID]time.Time{}
+	for _, sess := range got {
+		byID[sess.ID] = sess.ArchivedAt
+	}
+	if len(byID) != 3 || byID[unreleased.ID] != (time.Time{}) || byID[restored.ID] != (time.Time{}) {
+		t.Fatalf("listed = %+v, want released, no-workspace and legacy only", got)
+	}
+	for _, id := range []domain.SessionID{released.ID, noWorkspace.ID} {
+		if at := byID[id]; time.Since(at) > time.Minute || time.Until(at) > time.Minute {
+			t.Fatalf("%s archived at %v, want about now", id, at)
+		}
+	}
+	if !byID[legacy.ID].Equal(legacy.UpdatedAt) {
+		t.Fatalf("legacy archived at %v, want its last update %v", byID[legacy.ID], legacy.UpdatedAt)
 	}
 }

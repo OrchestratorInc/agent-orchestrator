@@ -19,7 +19,7 @@ func deleteCommandServer(t *testing.T) (*httptest.Server, func() []string) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			mu.Lock()
-			requests = append(requests, r.Method+" "+r.URL.Path)
+			requests = append(requests, r.Method+" "+r.URL.RequestURI())
 			mu.Unlock()
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -97,6 +97,19 @@ func TestSessionDelete_YesSkipsPrompt(t *testing.T) {
 		t.Fatalf("--yes should skip the prompt:\n%s", out)
 	}
 	if got := requests(); !reflect.DeepEqual(got, []string{"DELETE /api/v1/sessions/demo-old"}) {
+		t.Fatalf("requests = %#v", got)
+	}
+}
+
+func TestSessionDelete_CleanupAsksDaemonToCleanUpFirst(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, requests := deleteCommandServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "delete", "demo-old", "-y", "--cleanup"); err != nil {
+		t.Fatalf("session delete failed: %v\nstderr=%s", err, errOut)
+	}
+	if got := requests(); !reflect.DeepEqual(got, []string{"DELETE /api/v1/sessions/demo-old?cleanup=true"}) {
 		t.Fatalf("requests = %#v", got)
 	}
 }

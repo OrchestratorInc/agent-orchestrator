@@ -209,7 +209,9 @@ func (o *cleanupOutput) Write(p []byte) (int, error) {
 }
 
 // Cleanup facts already have CDC triggers, so completion also refreshes the UI.
-func (m *Manager) recordWorkspaceCleanup(ctx context.Context, rec domain.SessionRecord, disposition domain.WorkspaceDisposition, code string) error {
+// reportOnly applies to a generation's first record only: a later retry keeps
+// whether an archive or a sweep started the cleanup.
+func (m *Manager) recordWorkspaceCleanup(ctx context.Context, rec domain.SessionRecord, disposition domain.WorkspaceDisposition, code string, reportOnly bool) error {
 	// Record cancellation too, while shutdown is draining background workers.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminalIntentBudget)
 	defer cancel()
@@ -219,7 +221,7 @@ func (m *Manager) recordWorkspaceCleanup(ctx context.Context, rec domain.Session
 		return err
 	}
 	if !ok || facts.SessionGeneration != rec.CleanupGeneration {
-		facts = domain.SessionCleanupRecord{SessionID: rec.ID, SessionGeneration: rec.CleanupGeneration, RuntimeReleasedAt: now}
+		facts = domain.SessionCleanupRecord{SessionID: rec.ID, SessionGeneration: rec.CleanupGeneration, RuntimeReleasedAt: now, ReportOnly: reportOnly}
 	}
 	if disposition == domain.DispositionPending {
 		facts.AttemptCount++
@@ -230,15 +232,18 @@ func (m *Manager) recordWorkspaceCleanup(ctx context.Context, rec domain.Session
 	return m.store.UpsertSessionCleanupFacts(ctx, facts)
 }
 
-func (m *Manager) recordWorkspaceCleanupResult(ctx context.Context, rec domain.SessionRecord, refusal cleanupRefusal) error {
+func (m *Manager) recordWorkspaceCleanupResult(ctx context.Context, rec domain.SessionRecord, refusal cleanupRefusal, reportOnly bool) error {
 	disposition, code := domain.DispositionRemoved, ""
-	if refusal.refused() {
+	switch {
+	case refusal.code.Retryable():
+		// Still accepted, not failed: the background pass retries it.
+		disposition = domain.DispositionPending
+	case refusal.code == domain.CleanupSkipDirty:
+		disposition, code = domain.DispositionPreservedDirty, "WORKSPACE_DIRTY"
+	case refusal.refused():
 		disposition, code = domain.DispositionFailed, "WORKSPACE_CLEANUP_FAILED"
-		if refusal.code == domain.CleanupSkipDirty {
-			disposition, code = domain.DispositionPreservedDirty, "WORKSPACE_DIRTY"
-		}
 	}
-	return m.recordWorkspaceCleanup(ctx, rec, disposition, code)
+	return m.recordWorkspaceCleanup(ctx, rec, disposition, code, reportOnly)
 }
 
 // cleanupRefusal is why cleanup left a workspace alone this run. The zero
@@ -266,7 +271,7 @@ var (
 // failed write is only logged: the workspace is already settled, and the next
 // cleanup simply revisits the session and finds nothing left.
 func (m *Manager) recordSettledWorkspaceCleanup(ctx context.Context, rec domain.SessionRecord, disposition domain.WorkspaceDisposition) {
-	if err := m.recordWorkspaceCleanup(ctx, rec, disposition, ""); err != nil {
+	if err := m.recordWorkspaceCleanup(ctx, rec, disposition, "", false); err != nil {
 		m.logger.Warn("record workspace cleanup", "sessionID", rec.ID, "disposition", disposition, "error", err)
 	}
 }
@@ -409,7 +414,7 @@ func (m *Manager) reconcileWorkspaceCleanup(ctx context.Context, id domain.Sessi
 		return err
 	}
 	m.cleanupSystemPromptDir(rec.ID)
-	return m.recordWorkspaceCleanup(ctx, rec, domain.DispositionNotApplicable, "")
+	return m.recordWorkspaceCleanup(ctx, rec, domain.DispositionNotApplicable, "", false)
 }
 
 // resumeAcceptedCleanup reruns a pending cleanup the same way a user retry
@@ -421,7 +426,7 @@ func (m *Manager) resumeAcceptedCleanup(ctx context.Context, rec domain.SessionR
 		return err
 	}
 	if !workspaceProject && rec.Metadata.WorkspacePath == "" {
-		return m.recordWorkspaceCleanup(ctx, rec, domain.DispositionNotApplicable, "")
+		return m.recordWorkspaceCleanup(ctx, rec, domain.DispositionNotApplicable, "", false)
 	}
 	_, refusal := m.cleanupWorkspaceUnderGate(ctx, rec, workspaceInfo(rec))
 	if !refusal.refused() && workspaceProject && len(rows) > 0 {
@@ -439,6 +444,15 @@ var (
 	ErrWorkspaceNotReleased = errors.New("session: workspace not released")
 )
 
+// CleanupRefusedError is a delete whose cleanup-first step left the worktree
+// in place, with the same code and reason `ao session cleanup` reports.
+type CleanupRefusedError struct {
+	Code   domain.CleanupSkipCode
+	Reason string
+}
+
+func (e *CleanupRefusedError) Error() string { return "workspace cleanup refused: " + e.Reason }
+
 // terminatedSessionDeleter is the store's session-record delete. It is
 // optional so focused store fakes need not implement it.
 type terminatedSessionDeleter interface {
@@ -447,13 +461,20 @@ type terminatedSessionDeleter interface {
 
 // DeleteSession permanently removes a terminated session's record once its
 // workspace is released (or it never had one), along with its AO-owned files.
-// It holds the session's operation guard, so a restore cannot run between the
-// checks and the delete. Branches and PRs are not touched, and the store keeps
-// the session's spend in the agent account usage totals.
-func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID) error {
+// With cleanup, a worktree still on disk is first cleaned up the way
+// `ao session cleanup` does it, never forced. The delete holds the session's
+// operation guard, so a restore cannot run between the checks and the delete.
+// Branches and PRs are not touched, and the store keeps the session's spend in
+// the agent account usage totals.
+func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID, cleanup bool) error {
 	deleter, ok := m.store.(terminatedSessionDeleter)
 	if !ok {
 		return fmt.Errorf("delete %s: session deletion is not supported by this store", id)
+	}
+	if cleanup {
+		if err := m.cleanupBeforeDelete(ctx, id); err != nil {
+			return fmt.Errorf("delete %s: %w", id, err)
+		}
 	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
@@ -489,5 +510,22 @@ func (m *Manager) DeleteSession(ctx context.Context, id domain.SessionID) error 
 	}
 	m.cleanupSystemPromptDir(id)
 	m.cleanupAttachments(ctx, id)
+	return nil
+}
+
+// cleanupBeforeDelete releases a terminated session's worktree the way Cleanup
+// does. Anything else (a live or missing session) is left for the delete's own
+// checks to refuse under the operation guard.
+func (m *Manager) cleanupBeforeDelete(ctx context.Context, id domain.SessionID) error {
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil || !ok || !rec.IsTerminated || rec.Metadata.WorkspacePath == "" || m.workspaceCleanupSettled(ctx, rec) {
+		return err
+	}
+	if h := runtimeHandle(rec.Metadata); h.ID != "" {
+		_ = m.runtime.Destroy(ctx, h) // best effort; usually already gone
+	}
+	if _, refusal := m.cleanupWorkspaceUnderGate(ctx, rec, workspaceInfo(rec)); refusal.refused() {
+		return &CleanupRefusedError{Code: refusal.code, Reason: refusal.reason}
+	}
 	return nil
 }
