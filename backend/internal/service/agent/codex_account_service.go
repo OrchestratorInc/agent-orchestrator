@@ -7,29 +7,107 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// Service integration.
-func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
-	if agentID != string(domain.HarnessCodex) || s.codexAccounts == nil || s.codexAccounts.factory == nil {
+// authenticationWithAccount decides readiness by the saved account new
+// sessions start on, when they start on one, and otherwise by Codex's
+// structured account check.
+func (s *Service) authenticationWithAccount(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+	if observation, handled := s.savedDefaultAuthentication(ctx, agentID); handled {
+		return observation, true
+	}
+	return s.codexAuthenticationWithAccount(ctx, agentID, purpose)
+}
+
+// codexAuthenticationWithAccount adds the identity of the account a
+// structured Codex verdict checked, when it found that account signed in.
+func (s *Service) codexAuthenticationWithAccount(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+	observation, record, handled := s.structuredCodexAuthenticationRecord(ctx, agentID, purpose)
+	if handled && record.Snapshot.ID != "" && (observation.State == domain.AgentAuthenticationAuthorized || observation.State == domain.AgentAuthenticationConfigured) {
+		observation.Account = codexAccountIdentity(record)
+		observation.Diagnostics = append(observation.Diagnostics, domain.NewAgentAuthDiagnostic("codex_account", "account_context"))
+	}
+	return observation, handled
+}
+
+// SetSavedDefaultSignIn late-binds the per-folder account catalog. When new
+// Claude Code or Codex sessions start on a saved account, that account's
+// sign-in, not the computer's own login, is whether the harness is ready.
+func (s *Service) SetSavedDefaultSignIn(signedIn func(ctx context.Context, harness domain.AgentHarness) (domain.AgentAccountIdentityCheck, bool)) {
+	s.savedDefaultSignIn = signedIn
+}
+
+func (s *Service) savedDefaultAuthentication(ctx context.Context, agentID string) (domain.AgentAuthenticationObservation, bool) {
+	harness := domain.AgentHarness(agentID)
+	if _, ok := domain.AgentAccountProviderFor(harness); !ok || s.savedDefaultSignIn == nil {
 		return domain.AgentAuthenticationObservation{}, false
 	}
+	identity, handled := s.savedDefaultSignIn(ctx, harness)
+	if !handled {
+		return domain.AgentAuthenticationObservation{}, false
+	}
+	now := time.Now().UTC()
+	var observation domain.AgentAuthenticationObservation
+	if identity.SignedIn {
+		observation = successfulAuthentication(now, domain.AgentAuthenticationAuthorized, domain.AgentReadinessReasonAuthorized, "New sessions start on a saved account that is signed in.")
+		observation.Account = domain.AgentAccountIdentity{Email: identity.Email, Plan: identity.Plan, Method: domain.AgentAccountMethodAccount}.Sanitized()
+	} else {
+		observation = successfulAuthentication(now, domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, "The default account is signed out, and no other account is signed in. Sign one in again in Settings.")
+	}
+	// Marks the verdict as the saved account's: a sign-in or sign-out of the
+	// CLI's own login does not change it, so clients check that login itself.
+	observation.Diagnostics = []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("agent_account", "saved_default_account")}
+	return observation, true
+}
+
+func codexAccountIdentity(record codexAccountRecord) *domain.AgentAccountIdentity {
+	var identity domain.AgentAccountIdentity
+	if record.Snapshot.AccountEmail != nil {
+		identity.Email = *record.Snapshot.AccountEmail
+	}
+	switch record.Snapshot.AuthMethod {
+	case domain.CodexAuthMethodChatGPT:
+		identity.Method = domain.AgentAccountMethodAccount
+	case domain.CodexAuthMethodAPIKey:
+		identity.Method = domain.AgentAccountMethodAPIKey
+	}
+	if record.Snapshot.Capacity.Plan != nil {
+		identity.Plan = *record.Snapshot.Capacity.Plan
+	}
+	return identity.Sanitized()
+}
+
+// Service integration.
+func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+	observation, _, handled := s.structuredCodexAuthenticationRecord(ctx, agentID, purpose)
+	return observation, handled
+}
+
+// structuredCodexAuthenticationRecord also returns the account record the
+// verdict is about; it is zero when no account was checked.
+func (s *Service) structuredCodexAuthenticationRecord(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, codexAccountRecord, bool) {
+	none := codexAccountRecord{}
+	if agentID != string(domain.HarnessCodex) || s.codexAccounts == nil || s.codexAccounts.factory == nil {
+		return domain.AgentAuthenticationObservation{}, none, false
+	}
 	if err := s.WaitCodexAccountStoreReady(ctx); err != nil {
+		ports.RecordAuthDiagnostic(ctx, domain.NewAgentAuthDiagnostic("codex_account", "account_store_unavailable"))
 		// Account management is optional for ordinary Codex use. When AO's
 		// local account store cannot answer safely, fall back to the native
 		// readiness path instead of treating that as proof Codex is signed out.
-		return domain.AgentAuthenticationObservation{}, false
+		return domain.AgentAuthenticationObservation{}, none, false
 	}
 	if purpose == domain.AgentReadinessPurposeLaunch {
 		s.codexAccounts.mu.Lock()
 		verified := s.codexAccounts.reconciliation.Status == domain.CodexDeviceReconciliationVerified
 		s.codexAccounts.mu.Unlock()
 		if !verified {
-			return domain.AgentAuthenticationObservation{}, false
+			return domain.AgentAuthenticationObservation{}, none, false
 		}
 	}
 	id := s.codexAccounts.activeAccountID()
@@ -39,26 +117,28 @@ func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID str
 		credentialPresent := s.codexAccounts.deviceCredentialPresent
 		s.codexAccounts.mu.Unlock()
 		if !reconciled || credentialPresent {
-			return uncheckedAuthentication(), true
+			observation := uncheckedAuthentication()
+			observation.Diagnostics = []domain.AgentAuthDiagnostic{domain.NewAgentAuthDiagnostic("codex_account", "account_sync_pending")}
+			return observation, none, true
 		}
-		return successfulAuthentication(s.codexAccounts.now(), domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, "Sign in to Codex or add an account in Settings."), true
+		return successfulAuthentication(s.codexAccounts.now(), domain.AgentAuthenticationUnauthorized, domain.AgentReadinessReasonUnauthorized, "Sign in to Codex or add an account in Settings."), none, true
 	}
 	record, ok := s.codexAccounts.catalog.record(id)
 	if !ok {
-		return failedAuthentication(s.codexAccounts.now(), domain.AgentReadinessReasonAuthCheckInconclusive, "The active Codex account is unavailable."), true
+		return failedAuthentication(s.codexAccounts.now(), domain.AgentReadinessReasonAuthCheckInconclusive, "The active Codex account is unavailable."), none, true
 	}
 	result, err := s.codexAccounts.ensureAuthentication(ctx, record, purpose)
 	if err != nil {
-		return failedAuthentication(s.codexAccounts.now(), domain.AgentReadinessReasonAuthCheckFailed, "Authentication check failed."), true
+		return failedAuthentication(s.codexAccounts.now(), domain.AgentReadinessReasonAuthCheckFailed, "Authentication check failed."), none, true
 	}
 	record, ok = s.codexAccounts.catalog.record(id)
 	if !ok {
-		return domain.AgentAuthenticationObservation{}, false
+		return domain.AgentAuthenticationObservation{}, none, false
 	}
 	if purpose == domain.AgentReadinessPurposeLaunch && result.State == domain.AgentAuthenticationAuthorized && record.Snapshot.AuthMethod == domain.CodexAuthMethodChatGPT {
 		capabilities := s.codexAccounts.detectCapabilities(ctx)
 		if capabilities.CapacityRead.State != domain.CodexCapabilitySupported {
-			return domain.AgentAuthenticationObservation{}, false
+			return domain.AgentAuthenticationObservation{}, none, false
 		}
 		// Launch readiness uses a protected provider call. account/read is only
 		// local metadata discovery and cannot prove that the server accepts the
@@ -66,24 +146,24 @@ func (s *Service) structuredCodexAuthentication(ctx context.Context, agentID str
 		s.codexAccounts.capacity.invalidate(record.Snapshot.ID, false)
 		_, capacityErr := s.codexAccounts.capacity.ensureOne(ctx, record, capabilities, true)
 		if capacityErr != nil {
-			return domain.AgentAuthenticationObservation{}, false
+			return domain.AgentAuthenticationObservation{}, none, false
 		}
 		latest, ok := s.codexAccounts.catalog.record(record.Snapshot.ID)
 		if !ok {
-			return domain.AgentAuthenticationObservation{}, false
+			return domain.AgentAuthenticationObservation{}, none, false
 		}
 		verified, reauthenticationRequired := s.codexAccounts.authenticationVerification(record.Snapshot.ID)
 		if reauthenticationRequired {
-			return latest.Snapshot.Authentication, true
+			return latest.Snapshot.Authentication, latest, true
 		}
 		if !verified {
 			// Offline, timeout, and provider failures are not evidence that the
 			// account is signed out. Let native launch readiness remain advisory.
-			return domain.AgentAuthenticationObservation{}, false
+			return domain.AgentAuthenticationObservation{}, none, false
 		}
-		return latest.Snapshot.Authentication, true
+		return latest.Snapshot.Authentication, latest, true
 	}
-	return result, true
+	return result, record, true
 }
 
 // CachedCodexAccounts returns the current in-memory view without native work.
@@ -430,7 +510,7 @@ func (s *Service) WaitCodexAccountStoreReady(ctx context.Context) error {
 	if !errors.As(err, &failure) {
 		return err
 	}
-	return apierr.New(apierr.KindUnavailable, "CODEX_ACCOUNT_MANAGEMENT_UNAVAILABLE", "Codex account setup did not complete", map[string]any{
+	return apierr.New(apierr.KindUnavailable, "CODEX_ACCOUNT_SETUP_INCOMPLETE", "Codex account setup did not complete", map[string]any{
 		"reasonCode": failure.reason, "retryable": failure.retryable,
 	})
 }

@@ -1,13 +1,34 @@
-// Baked default Sentry DSN for the desktop surfaces (renderer, Electron main,
-// and the Go daemon spawned by the app), mirroring how DEFAULT_POSTHOG_PROJECT_KEY
-// is committed in posthog-config.ts. A client DSN is a write-only ingest
-// endpoint, so it is safe to ship in the client the same way the PostHog project
-// key already is; volume is bounded by the project's Sentry-side spike protection
-// and rate limit, not by anything secret here.
-//
-// Overridable per environment: the renderer reads VITE_AO_SENTRY_DSN, the main
-// process and daemon read AO_SENTRY_DSN, and both fall back to this constant.
-// Mobile has its own project and constant (see packages/mobile), because the
-// Expo bundle cannot reach frontend/src.
-export const DEFAULT_SENTRY_DSN =
-	"https://664339d231569b18bcf50d69a0ce37bf@o4511955966361600.ingest.us.sentry.io/4511955986677760";
+// Separate Sentry projects identify errors from the Go daemon and the desktop
+// Electron surfaces. The daemon sends only when its existing consent gate allows
+// it. Electron main sends consented desktop errors; renderer captures pass
+// through the existing main-owned policy boundary. Mobile has its own project and DSN
+// in packages/mobile because the Expo bundle cannot reach frontend/src.
+// These client DSNs are write-only ingest endpoints, not secrets.
+export const DEFAULT_DAEMON_SENTRY_DSN =
+	"https://e21b875a3f97a58fa0cf4f6754285267@o4511955966361600.ingest.us.sentry.io/4512334276329472";
+
+export const DEFAULT_ELECTRON_SENTRY_DSN =
+	"https://5fe434b5838d57447e2a4b5b4e8b551a@o4511955966361600.ingest.us.sentry.io/4512334283931648";
+
+export function daemonSentryDsn(override: string | undefined, isDev: boolean): string {
+	return override ?? (isDev ? "" : DEFAULT_DAEMON_SENTRY_DSN);
+}
+
+export const SAFE_FUNCTION = /^[A-Za-z_$][A-Za-z0-9_$.:<>]*$/;
+
+const SAFE_EXCEPTION_TYPES = new Set([
+	"Error", "EvalError", "RangeError", "ReferenceError", "SyntaxError", "TypeError", "URIError", "AggregateError", "DOMException",
+]);
+
+export function safeSentryExceptionType(value: unknown): string {
+	return typeof value === "string" && SAFE_EXCEPTION_TYPES.has(value) ? value : "Error";
+}
+
+// Keep this version mapping aligned with sentryEnvironment in the Go daemon.
+export function sentryEnvironment(version: string): "unknown" | "nightly" | "development" | "stable" {
+	const value = version.trim().toLowerCase();
+	if (!value) return "unknown";
+	if (value.includes("nightly")) return "nightly";
+	if (value.includes("edge") || value.includes("pr")) return "development";
+	return "stable";
+}

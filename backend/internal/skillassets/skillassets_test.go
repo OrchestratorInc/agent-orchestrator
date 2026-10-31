@@ -129,6 +129,29 @@ func TestEmbeddedSpawnGuidanceListsOpenCodeV2(t *testing.T) {
 	}
 }
 
+func TestEmbeddedReviewGuidanceSeparatesExternalReviewFromOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"using-ao/commands/review.md", "normal review-only worker without claiming or attaching the target PR"},
+		{"using-ao/commands/spawn.md", "Spawn a normal worker to review someone else's PR without taking ownership"},
+		{"using-ao/commands/session.md", "Reviewing someone else's PR"},
+	} {
+		body, err := files.ReadFile(tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(strings.Fields(string(body)), " "), tc.want) {
+			t.Fatalf("%s missing %q", tc.path, tc.want)
+		}
+	}
+	spawn, _ := files.ReadFile("using-ao/commands/spawn.md")
+	if strings.Contains(string(spawn), `--name "review-pr-88" --claim-pr`) {
+		t.Fatal("spawn guidance still claims the review target")
+	}
+}
+
 // TestInstall_WritesSkillAndIsIdempotent: Install must lay down the embedded
 // skill (SKILL.md plus a commands file) under <dataDir>/skills/using-ao, and a
 // second run must clobber cleanly, leaving no stale files. This is the whole
@@ -169,6 +192,27 @@ func TestInstall_WritesSkillAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestEmbeddedRemoteBrowserGuidanceMatchesRemoteInterface(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/browser-remote.md")
+	if err != nil {
+		t.Fatalf("read embedded remote browser guidance: %v", err)
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{
+		"sessions share tabs, cookies, and logins",
+		"ao browser --help",
+		"ao browser get url",
+		"ao browser snapshot --interactive",
+		"agent-browser",
+		"Desktop-only `status`, `act`, and snapshot `--delta` are not available here",
+		"untrusted external content",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("remote browser guidance missing %q:\n%s", want, body)
+		}
+	}
+}
+
 // TestMaterialize_WritesIntoArbitraryDest covers the opencode adapter path:
 // materialize the skill into .opencode/skills/using-ao (not the data-dir layout).
 func TestMaterialize_WritesIntoArbitraryDest(t *testing.T) {
@@ -183,6 +227,9 @@ func TestMaterialize_WritesIntoArbitraryDest(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "commands", "spawn.md")); err != nil {
 		t.Fatalf("commands/spawn.md missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "commands", "browser-remote.md")); err != nil {
+		t.Fatalf("commands/browser-remote.md missing: %v", err)
 	}
 }
 

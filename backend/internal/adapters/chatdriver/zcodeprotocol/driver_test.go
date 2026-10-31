@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,73 @@ func TestAdmissionPreservesNativePermissionPolicy(t *testing.T) {
 		}
 	}
 }
+func TestModelOverrideShape(t *testing.T) {
+	cfg := ports.ChatStartConfig{WorkspacePath: t.TempDir(), DataDir: t.TempDir(), Model: "ao-audit-zai/glm-4.7", Effort: "low"}
+	if _, err := validateConfig(cfg); err != nil {
+		t.Fatalf("provider-qualified override refused: %v", err)
+	}
+	got := createModelParams("ao-audit-zai/glm-4.7", "low")
+	want := map[string]any{"providerId": "ao-audit-zai", "modelId": "glm-4.7", "options": map[string]string{"reasoningLevel": "low"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("create model params = %#v, want %#v", got, want)
+	}
+	if got := createModelParams("", ""); got != nil {
+		t.Fatalf("empty override produced params: %#v", got)
+	}
+	if got := createModelParams("glm-4.7", ""); got != nil {
+		t.Fatal("createModelParams accepted a bare model id; validateConfig must refuse it first")
+	}
+	for _, bad := range []string{"glm-4.7", "prov/", "/model", "a/b/c"} {
+		if _, err := validateConfig(ports.ChatStartConfig{WorkspacePath: t.TempDir(), DataDir: t.TempDir(), Model: bad}); err == nil {
+			t.Fatalf("override %q accepted; want a helpful refusal", bad)
+		} else if !strings.Contains(err.Error(), "providerId/modelId") {
+			t.Fatalf("override %q refused without the expected shape hint: %v", bad, err)
+		}
+	}
+	// Whitespace-only is treated as no override, like an empty value.
+	if _, err := validateConfig(ports.ChatStartConfig{WorkspacePath: t.TempDir(), DataDir: t.TempDir(), Model: "   "}); err != nil {
+		t.Fatalf("blank override refused: %v", err)
+	}
+	if _, err := validateConfig(ports.ChatStartConfig{WorkspacePath: t.TempDir(), DataDir: t.TempDir(), Effort: "low"}); err == nil {
+		t.Fatal("effort override without a model accepted")
+	}
+}
+
+func TestSnapshotModelsSurfaceThroughListModels(t *testing.T) {
+	c := &conversation{transport: &persistenthost.Transport{}, log: slog.New(slog.NewTextHandler(io.Discard, nil)), pending: make(map[string]chan frame), turns: make(map[string]string), sent: make(map[string]string), events: make(chan ports.ChatEvent, 4), done: make(chan struct{})}
+	note := func(t *testing.T, payload string) nativeSnapshot {
+		t.Helper()
+		var s nativeSnapshot
+		if err := json.Unmarshal([]byte(payload), &s); err != nil {
+			t.Fatal(err)
+		}
+		c.noteModels(s)
+		return s
+	}
+	note(t, `{"protocol":{"name":"ZCode Protocol","version":1}}`)
+	if models, err := c.ListModels(context.Background()); err != nil || len(models) != 0 {
+		t.Fatalf("empty snapshot models = %#v err=%v, want empty catalog", models, err)
+	}
+	note(t, `{"settings":{"model":{"current":{"providerId":"ao-audit-zai","modelId":"glm-4.7"},"available":[
+		{"ref":{"providerId":"ao-audit-zai","modelId":"glm-4.7"},"label":"GLM-4.7","description":"configured"},
+		{"ref":{"providerId":"ao-audit-zai","modelId":"glm-4.7-air"},"label":"GLM-4.7 Air"}]}}}`)
+	models, err := c.ListModels(context.Background())
+	if err != nil || len(models) != 2 {
+		t.Fatalf("models = %#v err=%v, want two entries", models, err)
+	}
+	if models[0].ID != "ao-audit-zai/glm-4.7" || models[0].DisplayName != "GLM-4.7" || models[0].Description != "configured" || !models[0].Default {
+		t.Fatalf("current model entry = %+v", models[0])
+	}
+	if models[1].Default || models[1].ID != "ao-audit-zai/glm-4.7-air" {
+		t.Fatalf("non-current model entry = %+v", models[1])
+	}
+	// A native profile with only a bound model still surfaces it.
+	note(t, `{"settings":{"model":{"current":{"providerId":"ao-audit-zai","modelId":"glm-4.7"}}}}`)
+	if models, err := c.ListModels(context.Background()); err != nil || len(models) != 1 || !models[0].Default || models[0].ID != "ao-audit-zai/glm-4.7" {
+		t.Fatalf("current-only models = %#v err=%v", models, err)
+	}
+}
+
 func TestMCPFingerprintIsStableAndDoesNotDiscardTransports(t *testing.T) {
 	servers := []ports.ChatMCPServerConfig{{Name: "ao", Type: "stdio", Command: "ao", Env: map[string]string{"Z": "z", "A": "a"}}}
 	first, err := nativeMCP(servers)

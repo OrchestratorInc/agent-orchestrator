@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { settingsQueryKey } from "./useSettings";
+import { useUiStore } from "../stores/ui-store";
 
 const { createCloudClientMock, deleteSessionMock, postMock, remotePostMock } = vi.hoisted(() => ({
 	createCloudClientMock: vi.fn(),
@@ -83,6 +84,29 @@ beforeEach(() => {
 });
 
 describe("useTerminateSession", () => {
+	it.each([true, false])("clears review state only after a successful cloud termination (success=%s)", async (succeeds) => {
+		useUiStore.setState({ inspectorSessions: {} });
+		useUiStore.getState().setCloudReviewSelection(localSession.id, "sibling", { scope: "committed", commitSha: "abc123" });
+		useUiStore.getState().setCloudReviewRepository(localSession.id, "sibling");
+		useUiStore.getState().setCloudReviewUi(localSession.id, "sibling", { filter: "src" });
+		const before = useUiStore.getState().inspectorSessions[localSession.id];
+		if (!succeeds) deleteSessionMock.mockRejectedValue(new Error("delete failed"));
+		const queryClient = newQueryClient();
+		queryClient.setQueryData(settingsQueryKey, { cloudControlPlaneUrl: "https://cp.example.com" });
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+		await act(async () => {
+			await result.current.mutateAsync({ ...localSession, cloud: { orgId: "org-1" } }).catch(() => undefined);
+		});
+		const after = useUiStore.getState().inspectorSessions[localSession.id];
+		if (succeeds) {
+			expect(after.cloudReviewSelection).toBeUndefined();
+			expect(after.cloudReviewRepository).toBeUndefined();
+			expect(after.cloudReviewUi).toBeUndefined();
+		} else {
+			expect(after).toBe(before);
+		}
+	});
+
 	it("routes local sessions to the local daemon", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
 		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
@@ -138,6 +162,23 @@ describe("useTerminateSession", () => {
 		expect(createCloudClientMock).toHaveBeenCalledWith("https://cp.example.com");
 		expect(deleteSessionMock).toHaveBeenCalledWith("org-1", "session-1");
 		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		[true, []],
+		[false, [expect.objectContaining({ title: "Session archived, artifacts kept", tone: "error" })]],
+	])("asks the control plane to delete a cloud session's artifacts (confirmed=%s)", async (confirmed, toasts) => {
+		useUiStore.setState({ globalToasts: [] });
+		deleteSessionMock.mockResolvedValue({ session: { id: "session-1", desiredState: "deleted" }, artifactsDeleted: confirmed });
+		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+		queryClient.setQueryData(settingsQueryKey, { cloudControlPlaneUrl: "https://cp.example.com" });
+		const cloudSession = { ...localSession, cloud: { orgId: "org-1" }, deleteArtifacts: true };
+		const { result } = renderHook(() => useTerminateSession(), { wrapper: wrapper(queryClient) });
+
+		await act(async () => result.current.mutateAsync(cloudSession));
+
+		expect(deleteSessionMock).toHaveBeenCalledWith("org-1", "session-1", { deleteArtifacts: true });
+		expect(useUiStore.getState().globalToasts).toEqual(toasts);
 	});
 
 	it("fails closed when a cloud session has no configured control plane", async () => {

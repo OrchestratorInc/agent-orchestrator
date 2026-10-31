@@ -48,6 +48,7 @@ func capabilities() ports.ChatCapabilities {
 		ports.ChatCapabilityStreaming: true,
 		ports.ChatCapabilityTools:     true, ports.ChatCapabilityApprovals: true, ports.ChatCapabilityInterrupt: true,
 		ports.ChatCapabilityResume: true, ports.ChatCapabilityHistory: true,
+		ports.ChatCapabilityModels: true,
 	}
 }
 
@@ -74,8 +75,11 @@ func validateConfig(cfg ports.ChatStartConfig) (string, error) {
 	if len(cfg.AdditionalDirectories) > 0 {
 		return "", fmt.Errorf("%w: ZCode additional roots are unsupported", ports.ErrChatCapabilityUnavailable)
 	}
-	if cfg.Model != "" || cfg.Effort != "" {
-		return "", fmt.Errorf("%w: configure the model in ZCode's native provider settings", ports.ErrChatCapabilityUnavailable)
+	if _, err := parseModelOverride(cfg.Model); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(cfg.Effort) != "" && cfg.Model == "" {
+		return "", fmt.Errorf("%w: a reasoning effort override needs a model, as \"providerId/modelId\" from the models catalog", ports.ErrChatCapabilityUnavailable)
 	}
 	switch ports.NormalizePermissionMode(cfg.Permissions) {
 	case ports.PermissionModeDefault, ports.PermissionModeAuto:
@@ -87,6 +91,36 @@ func validateConfig(cfg ports.ChatStartConfig) (string, error) {
 	default:
 		return "", ports.ErrChatPermissionModeUnsupported
 	}
+}
+
+// parseModelOverride splits AO's "providerId/modelId" model override into the
+// native selection ZCode's session/create accepts. A bare model id is refused
+// with the shape spelled out, because guessing a provider would silently launch
+// a different native profile than the user configured.
+func parseModelOverride(model string) (nativeModelRef, error) {
+	trimmed := strings.TrimSpace(model)
+	if trimmed == "" {
+		return nativeModelRef{}, nil
+	}
+	provider, id, found := strings.Cut(trimmed, "/")
+	if !found || strings.TrimSpace(provider) == "" || strings.TrimSpace(id) == "" || strings.Contains(id, "/") {
+		return nativeModelRef{}, fmt.Errorf("%w: model override %q is not a ZCode selection; use \"providerId/modelId\" from the models catalog", ports.ErrChatCapabilityUnavailable, model)
+	}
+	return nativeModelRef{ProviderID: strings.TrimSpace(provider), ModelID: strings.TrimSpace(id)}, nil
+}
+
+// createModelParams renders the session/create model selection for an override,
+// or nil when the launch defers to the native profile's configured model.
+func createModelParams(model, effort string) map[string]any {
+	ref, err := parseModelOverride(model)
+	if err != nil || ref.ProviderID == "" {
+		return nil
+	}
+	params := map[string]any{"providerId": ref.ProviderID, "modelId": ref.ModelID}
+	if trimmed := strings.TrimSpace(effort); trimmed != "" {
+		params["options"] = map[string]string{"reasoningLevel": trimmed}
+	}
+	return params
 }
 func nativeMCP(servers []ports.ChatMCPServerConfig) ([]map[string]any, error) {
 	result := make([]map[string]any, 0, len(servers))
@@ -210,6 +244,7 @@ func (d *Driver) open(ctx context.Context, cfg ports.ChatStartConfig, nativeID s
 		if err := checkSnapshot(snapshot, nativeID, cfg.WorkspacePath); err != nil {
 			return fail(err)
 		}
+		c.noteModels(snapshot)
 		if err := d.plugin.RefreshProtocolInstructions(ctx, ports.WorkspaceHookConfig{DataDir: cfg.DataDir, SessionID: string(cfg.SessionID), SystemPrompt: cfg.SystemPrompt}); err != nil {
 			return fail(err)
 		}
@@ -222,6 +257,9 @@ func (d *Driver) open(ctx context.Context, cfg ports.ChatStartConfig, nativeID s
 	} else {
 		method := "session/create"
 		params := map[string]any{"workspace": map[string]string{"workspacePath": cfg.WorkspacePath, "workspaceKey": cfg.WorkspacePath}, "mode": mode, "titleGenerationEnabled": false, "mcpServers": mcp}
+		if override := createModelParams(cfg.Model, cfg.Effort); override != nil {
+			params["model"] = override
+		}
 		if nativeID != "" {
 			method = "session/resume"
 			delete(params, "mode")
@@ -235,6 +273,7 @@ func (d *Driver) open(ctx context.Context, cfg ports.ChatStartConfig, nativeID s
 		if err := checkSnapshot(snapshot, nativeID, cfg.WorkspacePath); err != nil {
 			return fail(err)
 		}
+		c.noteModels(snapshot)
 		c.mu.Lock()
 		c.nativeID = snapshot.Session.SessionID
 		c.mu.Unlock()

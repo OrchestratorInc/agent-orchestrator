@@ -55,6 +55,25 @@ type nativeSnapshot struct {
 		PendingRequestIDs []string `json:"pendingRequestIds"`
 		ActiveTurnID      string   `json:"activeTurnId"`
 	} `json:"runtime"`
+	Settings struct {
+		Model struct {
+			Current   *nativeModelRef     `json:"current"`
+			Available []nativeModelOption `json:"available"`
+		} `json:"model"`
+	} `json:"settings"`
+}
+
+// nativeModelRef mirrors the protocol's model selection shape
+// ({providerId, modelId}); AO renders one as "providerId/modelId".
+type nativeModelRef struct {
+	ProviderID string `json:"providerId"`
+	ModelID    string `json:"modelId"`
+}
+
+type nativeModelOption struct {
+	Ref         nativeModelRef `json:"ref"`
+	Label       string         `json:"label"`
+	Description string         `json:"description"`
 }
 type nativeEvent struct {
 	EventID   string          `json:"eventId"`
@@ -117,6 +136,7 @@ type conversation struct {
 	turns        map[string]string
 	activeTurn   string
 	sent         map[string]string
+	models       []ports.ChatModel
 	events       chan ports.ChatEvent
 	done         chan struct{}
 	closeOnce    sync.Once
@@ -129,6 +149,46 @@ var _ ports.ChatHistoryReader = (*conversation)(nil)
 var _ ports.ChatProviderPreserver = (*conversation)(nil)
 var _ ports.ChatProviderTerminator = (*conversation)(nil)
 var _ ports.ChatLiveReconnector = (*conversation)(nil)
+var _ ports.ChatModelLister = (*conversation)(nil)
+
+// noteModels records the native profile's model facts from a session snapshot.
+// The snapshot is the only honest source: ZCode keeps models in its native
+// provider profile, so AO mirrors what the session reports instead of a table.
+func (c *conversation) noteModels(s nativeSnapshot) {
+	current := s.Settings.Model.Current
+	var models []ports.ChatModel
+	for _, option := range s.Settings.Model.Available {
+		if option.Ref.ProviderID == "" || option.Ref.ModelID == "" {
+			continue
+		}
+		models = append(models, ports.ChatModel{
+			ID:          option.Ref.ProviderID + "/" + option.Ref.ModelID,
+			DisplayName: option.Label,
+			Description: option.Description,
+			Default:     current != nil && *current == option.Ref,
+		})
+	}
+	if len(models) == 0 && current != nil && current.ProviderID != "" && current.ModelID != "" {
+		// A native profile can legitimately expose only its bound model.
+		models = append(models, ports.ChatModel{
+			ID:          current.ProviderID + "/" + current.ModelID,
+			DisplayName: current.ModelID,
+			Default:     true,
+		})
+	}
+	c.mu.Lock()
+	c.models = models
+	c.mu.Unlock()
+}
+
+// ListModels reports the models the native session snapshot advertised.
+func (c *conversation) ListModels(ctx context.Context) ([]ports.ChatModel, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]ports.ChatModel, len(c.models))
+	copy(out, c.models)
+	return out, nil
+}
 
 func newConversation(cfg ports.ChatStartConfig, t *persistenthost.Transport, log *slog.Logger) *conversation {
 	c := &conversation{cfg: cfg, transport: t, log: log, pending: make(map[string]chan frame), permissions: make(map[string]pendingPermission), turns: make(map[string]string), sent: make(map[string]string), events: make(chan ports.ChatEvent, 1024), done: make(chan struct{})}

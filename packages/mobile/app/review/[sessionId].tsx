@@ -1,8 +1,9 @@
 import { Feather } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
-import { cancelSessionReview, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, triggerSessionReview, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
+import { cancelSessionReview, getSession, getSessionPR, getSessionReviews, killSessionReviewer, mergeSessionPR, restoreSessionReviewer, sendMessage, sessionTitle, triggerSessionReview, type DashboardSession, type ReviewRun, type SessionPRSummary, type SessionReviews } from "../../lib/api";
 import { ChatMarkdown } from "../../lib/chat/ChatMarkdown";
 import { haptics } from "../../lib/haptics";
 import { hostRouteMatches } from "../../lib/hostRoute";
@@ -12,12 +13,13 @@ import { openGitHub } from "../../lib/openGitHub";
 import { useOpenPage } from "../../lib/pageNavigation";
 import { mergeReadiness, type MergeTone } from "../../lib/prMerge";
 import { formatReviewSummaryMessage, reviewRunsForPullRequest, reviewRunUrl } from "../../lib/reviewFeedback";
-import { latestAutoReviewFailure, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit } from "../../lib/reviewView";
+import { latestAutoReviewFailure, previousRouteIsWorker, pullRequestSummaryForURL, reviewBatchAction, reviewerControls, reviewerDestination, reviewForPullRequest, reviewPrimaryActionLabel, reviewRunMeta, reviewRunSendable, reviewStatusLabel, reviewVerdictLabel, shortCommit, workerRouteForSession } from "../../lib/reviewView";
 import { HostScope, useApp } from "../../lib/store";
 import { statusVisual, type Theme } from "../../lib/theme";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { AgentLogo } from "../../lib/AgentLogo";
 import { rowDividerWidth } from "../../lib/divider";
+import { SwipeToMerge } from "../../lib/SwipeToMerge";
 import { space, type } from "../../lib/tokens";
 import { Button, Dot, EmptyState, ListSectionHeader } from "../../lib/ui";
 
@@ -30,14 +32,31 @@ export default function ReviewDetailScreen() {
 
 function ReviewDetailContent() {
 	const t = useTheme();
+	const insets = useSafeAreaInsets();
 	const styles = useThemedStyles(makeStyles);
 	const navigation = useNavigation();
 	const router = useRouter();
 	const openPage = useOpenPage();
 	const { sessionId, prUrl, prNumber, hostId: routeHostId } = useLocalSearchParams<{ sessionId: string; prUrl?: string; prNumber?: string; hostId?: string }>();
-	const { config, sessions, currentHostId } = useApp();
+	const { config, sessions, currentHostId, restore } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
-	const autoReviewEnabled = sessions.find((session) => session.id === sessionId)?.autoReviewEnabled === true;
+	const listedWorker = sessions.find((session) => session.id === sessionId);
+	// The board poll holds live workers only on a daemon that pages its archive,
+	// so an archived worker is read from its machine. The listed copy wins, so the
+	// row flips to Open once a restore refreshes the host. The read is fresh each
+	// time the worker leaves the poll, not readSession's cached answer: a worker
+	// first read while live and later archived would otherwise keep its old status.
+	const [readWorker, setReadWorker] = useState<DashboardSession | null>();
+	const listed = Boolean(listedWorker);
+	useEffect(() => {
+		if (listed) { setReadWorker(undefined); return; }
+		if (!hostMatches || !config || !sessionId) return;
+		let current = true;
+		void getSession(config, sessionId).then((read) => read, () => null).then((read) => { if (current) setReadWorker(read); });
+		return () => { current = false; };
+	}, [config, hostMatches, listed, sessionId]);
+	const worker = listedWorker ?? readWorker ?? undefined;
+	const autoReviewEnabled = worker?.autoReviewEnabled === true;
 	const [data, setData] = useState<SessionReviews>();
 	const [prs, setPRs] = useState<SessionPRSummary[]>([]);
 	const [sentRuns, setSentRuns] = useState<ReadonlySet<string>>(new Set());
@@ -45,6 +64,8 @@ function ReviewDetailContent() {
 	// the merge call returns. Show the merge at once and poll until it agrees.
 	const [mergedURL, setMergedURL] = useState<string>();
 	const [error, setError] = useState("");
+	// Kept apart from `error`: a quiet poll clears that, and it renders far below the row.
+	const [workerError, setWorkerError] = useState("");
 	const [reviewNotice, setReviewNotice] = useState("");
 	const [dismissedAutoFailureId, setDismissedAutoFailureId] = useState<string>();
 	const [refreshing, setRefreshing] = useState(false);
@@ -77,7 +98,7 @@ function ReviewDetailContent() {
 		return () => clearTimeout(timer);
 	}, [autoReviewFailureId, dismissedAutoFailureId]);
 	useLayoutEffect(() => navigation.setOptions({
-		title: review?.title || "Review",
+		title: review?.title || "Pull request",
 		headerTitleStyle: { color: t.textPrimary, fontFamily: "Geist_600SemiBold", fontWeight: "600" },
 	}), [navigation, review?.title, t.textPrimary]);
 	useLayoutEffect(() => navigation.setOptions({
@@ -133,6 +154,24 @@ function ReviewDetailContent() {
 			setMutation(undefined);
 		}
 	};
+	const openWorker = () => {
+		if (!worker) return;
+		const state = navigation.getState();
+		if (state && previousRouteIsWorker(state.routes, state.index, worker.id) && router.canGoBack()) router.back();
+		else openPage(workerRouteForSession(worker, routeHostId ?? currentHostId ?? undefined));
+	};
+	const restoreWorker = async () => {
+		if (!worker || mutation) return;
+		setMutation("restoreWorker");
+		setWorkerError("");
+		try {
+			await restore(worker.id, routeHostId ?? currentHostId ?? undefined);
+		} catch (value) {
+			setWorkerError(value instanceof Error ? value.message : "Could not restore the worker.");
+		} finally {
+			setMutation(undefined);
+		}
+	};
 	const confirmKillReviewer = () => {
 		if (!config || mutation || !data.reviewerHandleId || autoReviewEnabled) return;
 		Alert.alert("Stop reviewer session?", "This closes the persistent reviewer and cancels any review it is currently running. Review history is preserved.", [
@@ -169,7 +208,7 @@ function ReviewDetailContent() {
 		setMutation(`send:${run.id}`);
 		setError("");
 		try {
-			await sendMessage(config, sessionId, formatReviewSummaryMessage(run));
+			await sendMessage(config, sessionId, formatReviewSummaryMessage(run), { userAuthored: true });
 			setSentRuns((current) => new Set(current).add(run.id));
 			haptics.success();
 		} catch (value) {
@@ -183,16 +222,20 @@ function ReviewDetailContent() {
 	const pr = observedPR && awaitingMerge ? { ...observedPR, state: "merged" as const } : observedPR;
 	const merge = pr ? mergeReadiness(pr) : undefined;
 	const closedPR = pr?.state === "merged" || pr?.state === "closed";
+	const merging = mutation === "merge";
+	// The swipe itself is the confirmation; only the screen reader path asks again.
+	const runMerge = async (): Promise<boolean> => {
+		if (!config || !pr || !merge?.canMerge || (mutation && !merging)) return false;
+		setMutation("merge"); setError("");
+		try { await mergeSessionPR(config, pr); setMergedURL(pr.url); haptics.success(); await load(true); return true; }
+		catch (value) { setError(value instanceof Error ? value.message : `Could not merge PR #${pr.number}.`); return false; }
+		finally { setMutation(undefined); }
+	};
 	const confirmMerge = () => {
 		if (!config || !pr || !merge?.canMerge || mutation) return;
 		Alert.alert(`Merge PR #${pr.number}?`, `This will squash-merge PR #${pr.number} in the remote repository.`, [
 			{ text: "Cancel", style: "cancel" },
-			{ text: "Merge", onPress: () => void (async () => {
-				setMutation("merge"); setError("");
-				try { await mergeSessionPR(config, pr); setMergedURL(pr.url); haptics.success(); await load(true); }
-				catch (value) { setError(value instanceof Error ? value.message : `Could not merge PR #${pr.number}.`); }
-				finally { setMutation(undefined); }
-			})() },
+			{ text: "Merge", onPress: () => void runMerge() },
 		]);
 	};
 
@@ -212,7 +255,8 @@ function ReviewDetailContent() {
 		: primaryAction !== "none" && multiplePullRequests ? "Applies to every eligible pull request in this session." : undefined;
 
 	return (
-		<ScrollView style={styles.screen} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.accent} />}>
+		<View style={styles.screen}>
+		<ScrollView style={styles.scroll} contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={t.accent} />}>
 			{/* Flat rows under section labels, like the worker board and project pages. */}
 			<ListSectionHeader label="Pull request" />
 			<View style={styles.row}>
@@ -228,13 +272,19 @@ function ReviewDetailContent() {
 					</View> : null}
 					{merge?.reason ? <Text style={styles.detail}>{merge.reason}</Text> : null}
 				</View>
-				{merge?.canMerge ? <RowPill label={mutation === "merge" ? "Merging…" : "Merge"} icon="git-merge" tone="merge" busy={mutation === "merge"} disabled={Boolean(mutation)} onPress={confirmMerge} /> : null}
 			</View>
+
+			{worker ? <>
+				<ListSectionHeader label="Worker" />
+				<WorkerRow worker={worker} restoring={mutation === "restoreWorker"} disabled={Boolean(mutation)} onOpen={openWorker} onRestore={() => void restoreWorker()} />
+				{workerError ? <Text accessibilityRole="alert" style={[styles.note, styles.noteError]}>{workerError}</Text> : null}
+			</> : null}
 
 			<ListSectionHeader label="Reviewer" />
 			{/* The row opens the reviewer; its pill and menu are laid over the row rather
 			    than inside its Pressable (as on the project page's orchestrator row), so
-			    a tap on "⋯" never also opens the reviewer. */}
+			    a tap on "⋯" never also opens the reviewer. Its Open is outlined when a
+			    Worker row is shown, so the worker's filled Open stays the main way out. */}
 			<View>
 			<Pressable accessibilityRole={controls.open ? "button" : undefined} accessibilityLabel={controls.open ? `Open reviewer ${controls.open}` : undefined} disabled={!controls.open || Boolean(mutation)} onPress={openReviewer} style={({ pressed }) => [styles.row, styles.rowWithOverlay, pressed && styles.rowPressed]}>
 				<View style={styles.main}>
@@ -253,8 +303,8 @@ function ReviewDetailContent() {
 				<View style={styles.overlaySlot} pointerEvents="box-none">
 				<View style={styles.trailing}>
 					{controls.open
-						? <RowPill label="Open" icon={controls.open === "chat" ? "message-circle" : "terminal"} tone="solid" disabled={Boolean(mutation)} onPress={openReviewer} />
-						: controls.restore ? <RowPill label="Restore" icon="refresh-cw" tone="outline" busy={mutation === "restore"} disabled={Boolean(mutation)} onPress={() => void restoreReviewer()} /> : null}
+						? <RowPill label="Open" accessibilityLabel="Open reviewer" icon={controls.open === "chat" ? "message-circle" : "terminal"} tone={worker ? "outline" : "solid"} disabled={Boolean(mutation)} onPress={openReviewer} />
+						: controls.restore ? <RowPill label="Restore" accessibilityLabel="Restore reviewer" icon="refresh-cw" tone="outline" busy={mutation === "restore"} disabled={Boolean(mutation)} onPress={() => void restoreReviewer()} /> : null}
 					<ItemActionsMenu accessibilityLabel="Reviewer session actions" actions={stopActions} loading={mutation === "kill"} disabled={Boolean(mutation)} />
 				</View>
 				</View>
@@ -291,25 +341,68 @@ function ReviewDetailContent() {
 				? runs.map((run) => <RunRow key={run.id} run={run} sent={sentRuns.has(run.id)} sending={mutation === `send:${run.id}`} disabled={Boolean(mutation)} onSend={() => void sendRun(run)} />)
 				: <Text style={styles.note}>No Orchestrator review for this pull request yet.</Text>}
 		</ScrollView>
+		{/* Docked under the scroll, within thumb reach, like a checkout's slide-to-pay.
+		    It stays after the merge as a purple "Merged" bar rather than vanishing. */}
+		{pr && (merge?.canMerge || pr.state === "merged") ? <View style={[styles.mergeFooter, { paddingBottom: Math.max(insets.bottom, space.md) }]}>
+			<SwipeToMerge label={`Swipe to merge PR #${pr.number}`} busyLabel="Merging…" merged={pr.state === "merged"} mergedLabel={`Merged PR #${pr.number}`} busy={merging} disabled={Boolean(mutation) && !merging} onMerge={runMerge} onAccessibilityActivate={confirmMerge} />
+		</View> : null}
+		</View>
 	);
 }
 
-type PillTone = "solid" | "outline" | "danger" | "merge";
-
-/** The board's row pill: solid for the live action, outlined for the rest. */
-function RowPill({ label, icon, tone, busy = false, disabled = false, onPress }: { label: string; icon: keyof typeof Feather.glyphMap; tone: PillTone; busy?: boolean; disabled?: boolean; onPress: () => void }) {
+/**
+ * The worker that owns this pull request, so the PR page leads back to its chat
+ * the way the chat leads to the PR page. Built like the reviewer row below it.
+ */
+function WorkerRow({ worker, restoring, disabled, onOpen, onRestore }: { worker: DashboardSession; restoring: boolean; disabled: boolean; onOpen: () => void; onRestore: () => void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const filled = tone === "solid" || tone === "merge";
-	const ink = tone === "solid" ? t.bgBase : tone === "merge" ? t.bgBase : tone === "danger" ? t.red : t.textPrimary;
+	const title = sessionTitle(worker);
+	const terminated = worker.isTerminated === true || worker.status === "terminated";
+	const visual = statusVisual(t, worker.status);
+	// The daemon's phrase ("Fixing CI failures") when it says more than the status.
+	const phrase = worker.displayStatus?.trim();
+	const detail = phrase && phrase.toLowerCase() !== visual.label.toLowerCase() ? ` · ${phrase}` : "";
+	return <View>
+		<Pressable accessibilityRole="button" accessibilityLabel={`Open worker ${title}. ${visual.label}.`} disabled={disabled} onPress={() => { haptics.tap(); onOpen(); }} style={({ pressed }) => [styles.row, styles.rowWithPill, pressed && styles.rowPressed]}>
+			<View style={styles.main}>
+				<View style={styles.eyebrow}>
+					{worker.harness ? <AgentLogo harness={worker.harness} size={14} /> : <Feather name="user" size={13} color={t.textSecondary} />}
+					<Text style={styles.eyebrowText} numberOfLines={1}>{worker.harness ? reviewerName(worker.harness) : "Worker"}</Text>
+				</View>
+				<Text style={styles.title} numberOfLines={1}>{title}</Text>
+				<View style={styles.statusLine}>
+					<Dot color={visual.color} size={6} breathing={visual.breathing} />
+					<Text style={[styles.statusStrong, { color: visual.color }]}>{visual.label}</Text>
+					<Text style={styles.statusDetail} numberOfLines={1}>{detail}</Text>
+				</View>
+			</View>
+		</Pressable>
+		{/* Laid over the row, like the reviewer's, so the pill is its own target. */}
+		<View style={styles.overlaySlot} pointerEvents="box-none">
+			{terminated
+				? <RowPill label="Restore" accessibilityLabel="Restore worker" icon="refresh-cw" tone="outline" busy={restoring} disabled={disabled} onPress={onRestore} />
+				: <RowPill label="Open" accessibilityLabel="Open worker" icon="message-circle" tone="solid" disabled={disabled} onPress={onOpen} />}
+		</View>
+	</View>;
+}
+
+type PillTone = "solid" | "outline" | "danger";
+
+/** The board's row pill: solid for the live action, outlined for the rest. */
+function RowPill({ label, accessibilityLabel = label, icon, tone, busy = false, disabled = false, onPress }: { label: string; /** What a screen reader says when several pills read the same. */ accessibilityLabel?: string; icon: keyof typeof Feather.glyphMap; tone: PillTone; busy?: boolean; disabled?: boolean; onPress: () => void }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const filled = tone === "solid";
+	const ink = tone === "solid" ? t.bgBase : tone === "danger" ? t.red : t.textPrimary;
 	return <Pressable
 		accessibilityRole="button"
-		accessibilityLabel={label}
+		accessibilityLabel={accessibilityLabel}
 		accessibilityState={{ busy, disabled: disabled || busy }}
 		disabled={disabled || busy}
 		hitSlop={8}
 		onPress={() => { haptics.tap(); onPress(); }}
-		style={({ pressed }) => [styles.pill, tone === "solid" && styles.pillSolid, tone === "merge" && styles.pillMerge, !filled && styles.pillOutline, tone === "danger" && styles.pillDanger, (disabled && !busy) && styles.pillDisabled, pressed && styles.pillPressed]}
+		style={({ pressed }) => [styles.pill, tone === "solid" && styles.pillSolid, !filled && styles.pillOutline, tone === "danger" && styles.pillDanger, (disabled && !busy) && styles.pillDisabled, pressed && styles.pillPressed]}
 	>
 		{busy ? <ActivityIndicator size="small" color={ink} /> : <Feather name={icon} size={14} color={ink} />}
 		<Text style={[styles.pillLabel, { color: ink }]} numberOfLines={1}>{label}</Text>
@@ -362,13 +455,16 @@ function toneColor(t: Theme, tone: MergeTone, tint = false): string {
 
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
+	scroll: { flex: 1 },
 	content: { paddingBottom: space.huge },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	// A worker row's metrics: eyebrow, title, status line, divider underneath.
 	row: { minHeight: 76, flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: space.lg, paddingVertical: space.sm, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderSubtle, backgroundColor: t.bgBase },
+	mergeFooter: { paddingHorizontal: space.lg, paddingTop: space.md, backgroundColor: t.bgBase, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: t.borderDefault },
 	rowPressed: { backgroundColor: t.bgSubtle },
 	// Room for the pill and menu laid over the row's trailing edge.
 	rowWithOverlay: { paddingRight: 150 },
+	rowWithPill: { paddingRight: 110 },
 	overlaySlot: { position: "absolute", right: space.lg - space.xxs, top: 0, bottom: 0, justifyContent: "center" },
 	main: { flex: 1, minWidth: 0, gap: space.hair },
 	trailing: { flexDirection: "row", alignItems: "center", gap: space.xxs },
@@ -391,7 +487,6 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	markdown: { marginTop: space.xs },
 	pill: { flexDirection: "row", alignItems: "center", gap: space.xs, height: 28, paddingHorizontal: space.md, borderRadius: 12 },
 	pillSolid: { backgroundColor: t.textPrimary },
-	pillMerge: { backgroundColor: t.green },
 	pillOutline: { borderWidth: 1, borderColor: t.borderStrong },
 	pillDanger: { borderColor: t.red },
 	pillDisabled: { opacity: 0.45 },

@@ -54,11 +54,13 @@ type OpenShellTerminalInput struct {
 
 // InitialInputReadyState describes a terminal state relevant to the command's
 // initial input. SkipInput marks a state where the requested action is already
-// open, so the command should not be sent.
+// open, so the command should not be sent. SubmitReadyText can require a
+// completion marker before submitting a RawPrefix.
 type InitialInputReadyState struct {
-	Text      string
-	RawPrefix string
-	SkipInput bool
+	Text            string
+	RawPrefix       string
+	SubmitReadyText string
+	SkipInput       bool
 }
 
 // OpenCommandTerminalInput is a daemon-trusted command terminal request. It

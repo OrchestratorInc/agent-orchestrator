@@ -7,7 +7,6 @@ const { localGet, remoteConnect, remotePreviewUrl } = vi.hoisted(() => ({ localG
 vi.mock("../lib/api-client", () => ({ apiClient: { GET: localGet }, hasTrustedApiBaseUrl: () => true }));
 vi.mock("../lib/bridge", () => ({ aoBridge: { remotes: { connect: remoteConnect, previewUrl: remotePreviewUrl, disconnect: vi.fn() } } }));
 vi.mock("../lib/telemetry", () => ({ captureRendererEvent: vi.fn() }));
-vi.mock("../lib/agent-switch-visibility", () => ({ agentSwitchVisibility: { setQueryHealthy: vi.fn() } }));
 vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ ready: false, baseUrl: "", client: {} }) }));
 vi.mock("./useCloudOrg", () => ({ useCloudOrg: () => ({ org: undefined, ready: false }) }));
 
@@ -68,6 +67,7 @@ it.each([
 	[401, true],
 	[426, true],
 	[502, true],
+	[530, true],
 	[500, false],
 ])("rechecks a connected host after a remote HTTP %i response only when connection health is in doubt", async (status, shouldRecheck) => {
 	const hostId = `box-${status}`;

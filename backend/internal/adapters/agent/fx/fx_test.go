@@ -46,6 +46,9 @@ func TestGetLaunchCommandMapsEnvironmentOverrides(t *testing.T) {
 	}{
 		{name: "empty defaults omitted", want: []string{"fx"}},
 		{name: "default permissions omitted", permissions: ports.PermissionModeDefault, want: []string{"fx"}},
+		{name: "qualified native model preserved exactly", model: "fx:codex:  native/model  ", want: []string{"env", "FX_PROVIDER=codex", "FX_MODEL=  native/model  ", "fx"}},
+		{name: "catalog provider selection", model: "fx:codex:openai/shared", want: []string{"env", "FX_PROVIDER=codex", "FX_MODEL=openai/shared", "fx"}},
+		{name: "catalog custom connection", model: "fx:local:org/model:latest", want: []string{"env", "FX_PROVIDER=local", "FX_MODEL=org/model:latest", "fx"}},
 		{name: "model preserved exactly", model: "  anthropic/claude-sonnet-4-6  ", want: []string{"env", "FX_MODEL=  anthropic/claude-sonnet-4-6  ", "fx"}},
 		{name: "accept edits", permissions: ports.PermissionModeAcceptEdits, want: []string{"env", "FX_PERMISSION_MODE=ask", "fx"}},
 		{name: "auto", permissions: ports.PermissionModeAuto, want: []string{"env", "FX_PERMISSION_MODE=auto", "fx"}},
@@ -97,7 +100,7 @@ func TestPromptDeliveryWaitsBrieflyAfterStart(t *testing.T) {
 func TestContinuationCapabilitiesUseProviderAssignedNativeSessionID(t *testing.T) {
 	provider, ok := any(New()).(ports.AgentContinuationCapabilityProvider)
 	if !ok {
-		t.Fatal("fx must declare its native-session ownership for agent switching")
+		t.Fatal("fx must declare its native-session ownership")
 	}
 	if got := provider.ContinuationCapabilities().FreshNativeSessionID; got != ports.FreshNativeSessionIDProviderAssigned {
 		t.Fatalf("fresh native-session id mode = %q, want %q", got, ports.FreshNativeSessionIDProviderAssigned)
@@ -107,7 +110,7 @@ func TestContinuationCapabilitiesUseProviderAssignedNativeSessionID(t *testing.T
 func TestNativeSessionConfigDirUsesInvocationHome(t *testing.T) {
 	provider, ok := any(New()).(ports.AgentNativeSessionConfigProvider)
 	if !ok {
-		t.Fatal("fx must expose the native session state root used by switching")
+		t.Fatal("fx must expose the native session state root")
 	}
 	home := t.TempDir()
 	got, err := provider.NativeSessionConfigDir(context.Background(), map[string]string{"HOME": home})
@@ -126,7 +129,7 @@ func TestAfterStartPromptWrapsStandingInstructionsAndTaskInOneTurn(t *testing.T)
 	}
 	got, err := builder.BuildAfterStartPrompt(context.Background(), ports.LaunchConfig{
 		SystemPrompt: "Keep changes surgical.",
-		Prompt:       "Implement agent switching.",
+		Prompt:       "Implement a task.",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +140,7 @@ Keep changes surgical.
 
 ## AO Task
 
-Implement agent switching.`
+Implement a task.`
 	if got != want {
 		t.Fatalf("after-start prompt = %q, want %q", got, want)
 	}
@@ -159,7 +162,7 @@ func TestGetRestoreCommandUsesNativeSessionIDAndOverrides(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true")
 	}
-	want := []string{"env", "FX_MODEL=openai/gpt-5", "FX_PERMISSION_MODE=full-access", "fx", "resume", "native-fx-session"}
+	want := []string{"env", "FX_MODEL=openai/gpt-5", "FX_PERMISSION_MODE=full-access", "fx", "--resume", "native-fx-session"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("command = %#v, want %#v", got, want)
 	}
@@ -227,5 +230,16 @@ func TestAdapterMethodsHonorCanceledContext(t *testing.T) {
 	}
 	if _, _, err := plugin.SessionInfo(ctx, ports.SessionRef{}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("SessionInfo error = %v, want context.Canceled", err)
+	}
+}
+
+func TestRestorePreservesCatalogProviderSelection(t *testing.T) {
+	got, ok, err := (&Plugin{resolvedBinary: "fx"}).GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Config:  ports.AgentConfig{Model: "fx:codex:openai/shared"},
+		Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native-session"}},
+	})
+	want := []string{"env", "FX_PROVIDER=codex", "FX_MODEL=openai/shared", "fx", "--resume", "native-session"}
+	if err != nil || !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("restore = %v, %v, %v; want %v", got, ok, err, want)
 	}
 }

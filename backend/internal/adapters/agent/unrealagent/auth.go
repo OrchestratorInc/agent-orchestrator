@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -37,18 +39,41 @@ func (p *Plugin) authStatus(ctx context.Context, getenv func(string) string) (po
 	if provider == "" {
 		provider = "openai"
 	}
-	genericKey := envSet(getenv, "UNREAL_HARNESS_LLM_API_KEY")
+	// keyStatus records the variable that supplies the provider key.
+	keyStatus := func(providerKey string) ports.AgentAuthStatus {
+		for _, name := range []string{"UNREAL_HARNESS_LLM_API_KEY", providerKey} {
+			if envSet(getenv, name) {
+				ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(domain.AgentAccountMethodAPIKey))
+				return credentialStatus(true)
+			}
+		}
+		return credentialStatus(false)
+	}
 	switch provider {
 	case "ollama":
+		// A local model needs no credential; the provider choice is the evidence.
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("UNREAL_HARNESS_LLM_PROVIDER"))
 		return ports.AgentAuthStatusAuthorized, nil
 	case "openai":
-		return credentialStatus(genericKey || envSet(getenv, "OPENAI_API_KEY")), nil
+		return keyStatus("OPENAI_API_KEY"), nil
 	case "openrouter":
-		return credentialStatus(genericKey || envSet(getenv, "OPENROUTER_API_KEY")), nil
+		return keyStatus("OPENROUTER_API_KEY"), nil
 	case "fireworks":
-		return credentialStatus(genericKey || envSet(getenv, "FIREWORKS_API_KEY")), nil
+		return keyStatus("FIREWORKS_API_KEY"), nil
 	case "openai-codex":
-		return credentialStatus(envSet(getenv, "OPENAI_CODEX_ACCESS_TOKEN") || codexAuthFilePresent(getenv)), nil
+		// The stored Codex login decides first; a token in the environment is
+		// the fallback.
+		if path, ok := codexAuthFile(getenv); ok {
+			evidence := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
+			evidence.Email, evidence.Name = authprobe.CodexAuthFileIdentity(ctx, path)
+			ports.RecordAuthEvidence(ctx, evidence)
+			return credentialStatus(true), nil
+		}
+		if envSet(getenv, "OPENAI_CODEX_ACCESS_TOKEN") {
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("OPENAI_CODEX_ACCESS_TOKEN").WithMethod(domain.AgentAccountMethodToken))
+			return credentialStatus(true), nil
+		}
+		return credentialStatus(false), nil
 	default:
 		return ports.AgentAuthStatusUnknown, nil
 	}
@@ -67,7 +92,9 @@ func envSet(getenv func(string) string, name string) bool {
 	return strings.TrimSpace(getenv(name)) != ""
 }
 
-func codexAuthFilePresent(getenv func(string) string) bool {
+// codexAuthFile returns the Codex auth file Unreal reads and whether it holds
+// a credential.
+func codexAuthFile(getenv func(string) string) (string, bool) {
 	path := strings.TrimSpace(getenv("OPENAI_CODEX_AUTH_FILE"))
 	if path == "" {
 		home := strings.TrimSpace(getenv("CODEX_HOME"))
@@ -75,12 +102,12 @@ func codexAuthFilePresent(getenv func(string) string) bool {
 			var err error
 			home, err = os.UserHomeDir()
 			if err != nil || home == "" {
-				return false
+				return "", false
 			}
 			home = filepath.Join(home, ".codex")
 		}
 		path = filepath.Join(home, "auth.json")
 	}
 	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular() && info.Size() > 0
+	return path, err == nil && info.Mode().IsRegular() && info.Size() > 0
 }

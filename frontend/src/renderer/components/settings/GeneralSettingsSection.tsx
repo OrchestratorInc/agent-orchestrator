@@ -7,18 +7,27 @@ import { useLocaleStore } from "../../stores/locale-store";
 import { useSoundNotificationsStore } from "../../stores/sound-notifications-store";
 import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
+import { useAnalyticsOptOutStore } from "../../stores/analytics-opt-out-store";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { CliLinkSettings } from "./CliLinkSettingsRow";
+import { openChromeAgentsSettings } from "./BrowserChromeSection";
+import { Button } from "../ui/button";
+import { ArrowRight } from "lucide-react";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
+import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
 import { SettingsInputRow, SettingsRow } from "./SettingsRow";
 import { SettingsSection } from "./SettingsSection";
 import { ThemePaletteSwatch } from "./ThemePaletteSwatch";
 import { Switch } from "../ui/switch";
 import { cn } from "../../lib/utils";
-import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface } from "../../hooks/useSettings";
+import { useSettings, useUpdateCloudOffering, useUpdateSessionInterface, useUpdateVersionRefresh } from "../../hooks/useSettings";
+import { useEditorPreference, useSetPreferredEditor } from "../../hooks/useEditorHandoff";
+import { TargetIcon } from "../TopbarOpenEditorButton";
+import type { EditorId } from "../../../shared/editor-handoff";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
-import { isWindowsPlatform } from "../../lib/platform";
+import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
 
 /**
  * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
@@ -39,25 +48,90 @@ function SessionInterfaceRow() {
 	// (no chat-capable agent installed) or a save failed.
 	const note = saveError ?? error ?? (!chatAvailable ? t("settings.sessionInterface.unavailable") : null);
 
+	const failed = Boolean(saveError || error);
+
+	return (
+		<SettingsRow
+			label={t("settings.sessionInterface.label")}
+			description={note ? <span className={cn(failed && "text-error")} role={failed ? "alert" : undefined}>{note}</span> : undefined}
+		>
+			<SettingsOptionMenu
+				aria-label={t("settings.sessionInterface.label")}
+				value={settings?.defaultSessionMode ?? "tui"}
+				options={interfaceOptions}
+				onChange={(mode) => update(mode)}
+				disabled={isLoading || saving || !chatAvailable}
+			/>
+		</SettingsRow>
+	);
+}
+
+/**
+ * The editor that "Open in editor" uses from the session top bar and session
+ * menus. Electron main stores it; opening a session in another editor from the
+ * top bar changes it too.
+ */
+function DefaultEditorRow() {
+	const { t } = useTranslation();
+	const preference = useEditorPreference();
+	const setPreferredEditor = useSetPreferredEditor();
+	const editors = preference.data?.editors ?? [];
+	const preferredEditorId = preference.data?.preferredEditorId;
+	const options: SettingsOption<string>[] = editors.map((editor) => ({
+		value: editor.id,
+		label: editor.name,
+		icon: <TargetIcon target={editor} className="size-icon-sm shrink-0" />,
+	}));
+	const failed = setPreferredEditor.isError || preference.isError;
+	const note = setPreferredEditor.isError
+		? t("settings.defaultEditor.saveFailed")
+		: preference.isError
+			? t("settings.defaultEditor.loadFailed")
+			: preference.data && editors.length === 0
+				? t("editor.noEditorInstalled")
+				: preference.data && !editors.some((editor) => editor.id === preferredEditorId)
+					? t("settings.defaultEditor.notInstalled")
+					: null;
+
+	return (
+		<SettingsRow
+			label={t("settings.defaultEditor.label")}
+			description={note ? <span className={cn(failed && "text-error")} role={failed ? "alert" : undefined}>{note}</span> : undefined}
+		>
+			<SettingsOptionMenu
+				aria-label={t("settings.defaultEditor.label")}
+				value={preferredEditorId ?? ""}
+				options={options}
+				placeholder={t("editor.chooseEditor")}
+				onChange={(editorId) => setPreferredEditor.mutate(editorId as EditorId)}
+				disabled={preference.isPending || setPreferredEditor.isPending || editors.length === 0}
+			/>
+		</SettingsRow>
+	);
+}
+
+/**
+ * After a harness update, idle open sessions restart on the new release
+ * instead of running the old one until they happen to restart. Daemon-owned:
+ * the daemon does the moving.
+ */
+function VersionRefreshRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateVersionRefresh();
 	return (
 		<div className="flex w-full flex-col">
-			<SettingsRow className="rounded-none" label={t("settings.sessionInterface.label")}>
-				<SettingsOptionMenu
-					aria-label={t("settings.sessionInterface.label")}
-					value={settings?.defaultSessionMode ?? "tui"}
-					options={interfaceOptions}
-					onChange={(mode) => update(mode)}
-					disabled={isLoading || saving || !chatAvailable}
+			<SettingsRow className="rounded-none" label={t("settings.versionRefresh.label")} description={t("settings.versionRefresh.description")}>
+				<Switch
+					aria-label={t("settings.versionRefresh.label")}
+					checked={settings?.versionRefresh ?? false}
+					disabled={isLoading || saving || !settings}
+					onCheckedChange={update}
 				/>
 			</SettingsRow>
-			{note ? (
-				<p
-					className={cn(
-						"px-3 pt-0 pb-4 text-xs leading-relaxed",
-						saveError || error ? "text-destructive" : "text-muted-foreground",
-					)}
-				>
-					{note}
+			{error ? (
+				<p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">
+					{error}
 				</p>
 			) : null}
 		</div>
@@ -92,7 +166,10 @@ function TerminalShellRows() {
 
 	return (
 		<>
-			<SettingsRow label={t("settings.terminalShell.label")}>
+			<SettingsRow
+				label={t("settings.terminalShell.label")}
+				description={saveError ? <span role="alert" className="text-error">{t("settings.terminalShell.saveFailed")}</span> : undefined}
+			>
 				<SettingsOptionMenu
 					aria-label={t("settings.terminalShell.label")}
 					value={preference.kind}
@@ -113,11 +190,6 @@ function TerminalShellRows() {
 					onCancel={() => setCustomPath(preference.path ?? "")}
 					placeholder={t("settings.terminalShell.customPathPlaceholder")}
 				/>
-			) : null}
-			{saveError ? (
-				<p role="alert" className="px-3 text-caption leading-4 text-error">
-					{t("settings.terminalShell.saveFailed")}
-				</p>
 			) : null}
 		</>
 	);
@@ -146,6 +218,10 @@ export function GeneralSettingsSection({
 	const soundNotificationsSaveError = useSoundNotificationsStore((state) => state.saveError);
 	const developerMode = useUiStore((state) => state.developerMode);
 	const setDeveloperMode = useUiStore((state) => state.setDeveloperMode);
+	const navigationGestures = useUiStore((state) => state.navigationGestures);
+	const setNavigationGestures = useUiStore((state) => state.setNavigationGestures);
+	const renderMath = useUiStore((state) => state.renderMath);
+	const setRenderMath = useUiStore((state) => state.setRenderMath);
 	const terminalCopyOnSelect = useUiStore((state) => state.terminalCopyOnSelect);
 	const setTerminalCopyOnSelect = useUiStore((state) => state.setTerminalCopyOnSelect);
 
@@ -173,6 +249,7 @@ export function GeneralSettingsSection({
 		{ value: "fr", label: t("settings.language.fr") },
 		{ value: "de", label: t("settings.language.de") },
 		{ value: "pt-BR", label: t("settings.language.ptBR") },
+		{ value: "ru", label: t("settings.language.ru") },
 	] satisfies SettingsOption<AppLocale>[];
 
 	return (
@@ -199,7 +276,11 @@ export function GeneralSettingsSection({
 						/>
 					</div>
 				</SettingsRow>
-				<SettingsRow label={t("settings.language")}>
+				{isMacPlatform() && <WindowTranslucencyRow />}
+				<SettingsRow
+					label={t("settings.language")}
+					description={localeSaveError ? <span role="alert" className="text-error">{t("settings.language.saveFailed")}</span> : undefined}
+				>
 					<SettingsOptionMenu
 						aria-label={t("settings.language")}
 						disabled={localeSaving}
@@ -210,16 +291,26 @@ export function GeneralSettingsSection({
 						}}
 					/>
 				</SettingsRow>
-				{localeSaveError ? (
-					<p role="alert" className="px-3 text-caption leading-4 text-error">
-						{t("settings.language.saveFailed")}
-					</p>
-				) : null}
+				<SettingsRow label={t("settings.renderMath")} description={t("settings.renderMathHint")}>
+					<Switch aria-label={t("settings.renderMath")} checked={renderMath} onCheckedChange={setRenderMath} />
+				</SettingsRow>
+			</SettingsSection>
+
+			<SettingsSection title={t("settings.navigation")} grouped>
+				<SettingsRow label={t("settings.navigationGestures")} description={t("settings.navigationGesturesHint")}>
+					<Switch
+						aria-label={t("settings.navigationGestures")}
+						checked={navigationGestures}
+						onCheckedChange={setNavigationGestures}
+					/>
+				</SettingsRow>
 			</SettingsSection>
 
 			{/* Sessions */}
 			<SettingsSection title={t("settings.sessions")} grouped>
 				<SessionInterfaceRow />
+				<DefaultEditorRow />
+				<VersionRefreshRow />
 				{isWindowsPlatform() ? <TerminalShellRows /> : null}
 				<SettingsRow label={t("settings.terminalCopyOnSelect")}>
 					<Switch
@@ -228,7 +319,10 @@ export function GeneralSettingsSection({
 						onCheckedChange={setTerminalCopyOnSelect}
 					/>
 				</SettingsRow>
-				<SettingsRow label={t("settings.soundNotifications")}>
+				<SettingsRow
+					label={t("settings.soundNotifications")}
+					description={soundNotificationsSaveError ? <span role="alert" className="text-error">{t("settings.soundNotifications.saveFailed")}</span> : undefined}
+				>
 					<Switch
 						aria-label={t("settings.soundNotifications")}
 						checked={soundNotificationsEnabled}
@@ -238,15 +332,13 @@ export function GeneralSettingsSection({
 						}}
 					/>
 				</SettingsRow>
-				{soundNotificationsSaveError ? (
-					<p role="alert" className="px-3 text-caption leading-4 text-error">
-						{t("settings.soundNotifications.saveFailed")}
-					</p>
-				) : null}
 			</SettingsSection>
+
+			<DefaultCloudSandboxSection />
 
 			<SettingsSection title={t("settings.privacy")} grouped>
 				<TelemetryEventsRow />
+				<AnalyticsRow />
 			</SettingsSection>
 
 			{/* Advanced */}
@@ -260,9 +352,48 @@ export function GeneralSettingsSection({
 				</SettingsRow>
 				{developerMode && <CloudOfferingRow />}
 				{developerMode && <DiagnosticsRow />}
+				<CliLinkSettings enabled={developerMode} />
 				{developerMode && <SideChatsRow />}
+				{developerMode && <ChromeAgentsRow />}
 			</SettingsSection>
 		</>
+	);
+}
+
+/**
+ * PostHog usage analytics opt-out. Independent of the error-event row above: it
+ * switches off the renderer, the daemon and a paired phone together.
+ */
+function AnalyticsRow() {
+	const { t } = useTranslation();
+	const optedOut = useAnalyticsOptOutStore((state) => state.optedOut);
+	const loaded = useAnalyticsOptOutStore((state) => state.loaded);
+	const saving = useAnalyticsOptOutStore((state) => state.saving);
+	const loadError = useAnalyticsOptOutStore((state) => state.loadError);
+	const saveError = useAnalyticsOptOutStore((state) => state.saveError);
+	const load = useAnalyticsOptOutStore((state) => state.load);
+	const setOptedOut = useAnalyticsOptOutStore((state) => state.setOptedOut);
+	useEffect(() => {
+		void load();
+	}, [load]);
+	return (
+		<SettingsRow
+			label={t("settings.analytics.label")}
+			description={
+				<span className={cn((loadError || saveError) && "text-error")} role={loadError || saveError ? "alert" : undefined}>
+					{t(loadError ? "settings.analytics.loadFailed" : saveError ? "settings.analytics.saveFailed" : "settings.analytics.description")}
+				</span>
+			}
+		>
+			<Switch
+				aria-label={t("settings.analytics.label")}
+				checked={!optedOut}
+				disabled={saving || !loaded}
+				onCheckedChange={(share) => {
+					void setOptedOut(!share);
+				}}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -282,14 +413,18 @@ function TelemetryEventsRow() {
 		: view.reason === "environment_veto" ? "veto"
 		: view.reason === "release_blocked" ? "releaseBlocked"
 		: null;
-	return <div className="flex w-full flex-col">
-		<SettingsRow label={t("settings.telemetryEvents.label")}>
+	return (
+		<SettingsRow
+			label={t("settings.telemetryEvents.label")}
+			description={
+				<span className={cn(status === "failed" && "text-error")} role={status === "failed" ? "alert" : undefined}>
+					{t(status ? `settings.telemetryEvents.${status}` : "settings.telemetryEvents.description")}
+				</span>
+			}
+		>
 			<Switch aria-label={t("settings.telemetryEvents.label")} checked={checked} disabled={saving || !view || blockedEnable} onCheckedChange={(enabled) => { void setEnabled(enabled); }} />
 		</SettingsRow>
-		<p className={cn("pb-2 text-xs leading-relaxed", status === "failed" ? "text-destructive" : "text-muted-foreground")} role={status === "failed" ? "alert" : undefined}>
-			{t(status ? `settings.telemetryEvents.${status}` : "settings.telemetryEvents.description")}
-		</p>
-	</div>;
+	);
 }
 
 /**
@@ -302,12 +437,9 @@ function DiagnosticsRow() {
 	const diagnostics = useUiStore((state) => state.diagnostics);
 	const setDiagnostics = useUiStore((state) => state.setDiagnostics);
 	return (
-		<div className="flex w-full flex-col">
-			<SettingsRow label={t("settings.diagnostics")}>
-				<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
-			</SettingsRow>
-			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.diagnosticsToggleHint")}</p>
-		</div>
+		<SettingsRow label={t("settings.diagnostics")} description={t("settings.diagnosticsToggleHint")}>
+			<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
+		</SettingsRow>
 	);
 }
 
@@ -320,12 +452,45 @@ function SideChatsRow() {
 	const sideChats = useUiStore((state) => state.sideChats);
 	const setSideChats = useUiStore((state) => state.setSideChats);
 	return (
-		<div className="flex w-full flex-col">
-			<SettingsRow label={t("settings.sideChats")}>
-				<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
-			</SettingsRow>
-			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.sideChatsHint")}</p>
-		</div>
+		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
+			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
+		</SettingsRow>
+	);
+}
+
+/**
+ * Developer Mode-only entry to Chrome mode. Setup lives with the rest of the
+ * browser settings, so this row only takes the user there.
+ */
+function ChromeAgentsRow() {
+	const { t } = useTranslation();
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
+	return (
+		<SettingsRow label={t("settings.chromeAgents.label")} description={t("settings.chromeAgents.hint")}>
+			<Button onClick={() => openChromeAgentsSettings(openGlobalSettings)} size="sm" type="button" variant="ghost">
+				{t("settings.chromeAgents.goTo")}
+				<ArrowRight aria-hidden="true" className="size-icon-sm" />
+			</Button>
+		</SettingsRow>
+	);
+}
+
+/**
+ * macOS Appearance toggle for window translucency: native
+ * vibrancy blurs the desktop behind a translucent shell. Renderer state.
+ */
+function WindowTranslucencyRow() {
+	const { t } = useTranslation();
+	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
+	const setWindowTranslucency = useUiStore((state) => state.setWindowTranslucency);
+	return (
+		<SettingsRow label={t("settings.windowTranslucency")} description={t("settings.windowTranslucencyHint")}>
+			<Switch
+				aria-label={t("settings.windowTranslucency")}
+				checked={windowTranslucency}
+				onCheckedChange={setWindowTranslucency}
+			/>
+		</SettingsRow>
 	);
 }
 
@@ -344,7 +509,15 @@ function CloudOfferingRow() {
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	return (
 		<div className="flex w-full flex-col">
-			<SettingsRow label={t("settings.cloud")}>
+			<SettingsRow
+				label={t("settings.cloud")}
+				description={
+					<>
+						{t("settings.cloudToggleHint")}
+						{error ? <span role="alert" className="block text-error">{error}</span> : null}
+					</>
+				}
+			>
 				<Switch
 					aria-label={t("settings.cloud")}
 					checked={settings?.cloudOffering ?? false}
@@ -371,12 +544,6 @@ function CloudOfferingRow() {
 				}}
 				onOpenChange={setConfirmOpen}
 			/>
-			<p className="px-3 pb-2 text-xs leading-relaxed text-muted-foreground">{t("settings.cloudToggleHint")}</p>
-			{error ? (
-				<p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">
-					{error}
-				</p>
-			) : null}
 		</div>
 	);
 }

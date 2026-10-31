@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	workeramp "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/amp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -40,8 +42,9 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	if err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
+	modeArgs := reviewerModeArgs(inv.Config)
 	if inv.TaskPromptRoot == "" {
-		return ports.ReviewCommandSpec{Argv: []string{binary}}, nil
+		return ports.ReviewCommandSpec{Argv: append([]string{binary}, modeArgs...)}, nil
 	}
 	settingsPath, err := writeReviewerSettings(inv.TaskPromptRoot)
 	if err != nil {
@@ -52,7 +55,7 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 		message = fmt.Sprintf("First read and follow the reviewer role in `%s`. Then %s", filepath.ToSlash(inv.SystemPromptFile), inv.Prompt)
 	}
 	return ports.ReviewCommandSpec{
-		Argv:           []string{binary, "--settings-file", settingsPath},
+		Argv:           append([]string{binary, "--settings-file", settingsPath}, modeArgs...),
 		InitialMessage: message,
 	}, nil
 }
@@ -62,6 +65,20 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInvocation) (ports.ReviewCommandSpec, bool, error) {
 	cmd, err := r.ReviewCommand(ctx, inv)
 	return cmd, true, err
+}
+
+// reviewerModeArgs launches the reviewer in the configured Amp mode. Amp's
+// model picker is its mode list, so a configured model value is a mode, as it
+// is for Amp workers. Values Amp does not list are dropped.
+func reviewerModeArgs(config domain.AgentConfig) []string {
+	mode := strings.TrimSpace(config.Mode)
+	if mode == "" {
+		mode = strings.TrimSpace(config.Model)
+	}
+	if mode == "" || !modelcatalog.Accepts(string(domain.ReviewerAmp), mode) {
+		return nil
+	}
+	return []string{"--mode", mode}
 }
 
 func writeReviewerSettings(root string) (string, error) {

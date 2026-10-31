@@ -51,6 +51,11 @@ type attachment struct {
 	onOpen func()
 	onData func(data []byte)
 	onExit func()
+	// lockInput takes the terminal's write fence (see Manager.lockInputFence);
+	// nil means unfenced.
+	lockInput func() (unlock func())
+	// onInputReplay observes bytes replayed into the PTY while lockInput is held.
+	onInputReplay func([]byte)
 
 	maxReattach int
 	resetGrace  time.Duration
@@ -309,25 +314,42 @@ func (a *attachment) setPTY(p ports.Stream) bool {
 
 	for {
 		a.mu.Lock()
-		pending := append([]pendingInput(nil), a.pendingInput...)
-		a.pendingInput = nil
-		if len(pending) == 0 {
+		if len(a.pendingInput) == 0 {
 			a.inputReady = true
 			a.mu.Unlock()
 			return true
 		}
 		a.mu.Unlock()
-
-		for i, input := range pending {
-			_, err := p.Write(input.data)
-			releaseInput(input.release)
-			if err != nil {
-				releasePendingInput(pending[i+1:])
-				a.fail("flush pending input: " + err.Error())
-				return false
-			}
+		if err := a.flushPendingInput(p); err != nil {
+			a.fail("flush pending input: " + err.Error())
+			return false
 		}
 	}
+}
+
+// flushPendingInput writes the input buffered while no PTY was ready. It holds
+// the terminal's write fence like a live keystroke, so a held HoldInput keeps
+// buffered input off the pane too (#5711).
+func (a *attachment) flushPendingInput(p ports.Stream) error {
+	if a.lockInput != nil {
+		defer a.lockInput()()
+	}
+	a.mu.Lock()
+	pending := a.pendingInput
+	a.pendingInput = nil
+	a.mu.Unlock()
+	for i, input := range pending {
+		n, err := p.Write(input.data)
+		if n > 0 && a.onInputReplay != nil {
+			a.onInputReplay(input.data)
+		}
+		releaseInput(input.release)
+		if err != nil {
+			releasePendingInput(pending[i+1:])
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *attachment) clearPTY(p ports.Stream) {

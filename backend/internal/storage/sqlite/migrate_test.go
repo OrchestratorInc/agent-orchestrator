@@ -1087,13 +1087,14 @@ INSERT INTO projects (id, path, registered_at) VALUES ('alpha', '/repos/alpha', 
 	}
 }
 
-// TestMigration0198AddsZcodeToLegacyQMConstraint seeds the QM-variant
+// TestZcodeHarnessMigrationAddsZcodeToLegacyQMConstraint seeds the QM-variant
 // post-0163 constraint (... 'omp', 'unreal-agent', 'fx', 'qm', 'fake') and
-// runs only migration 0198, asserting the QM replace pair inserted 'zcode'.
-// Without the QM pair, the replace() source string omits 'qm' and no-ops,
-// leaving zcode session inserts to fail with a CHECK violation on installs
-// that took the legacy QM branch.
-func TestMigration0198AddsZcodeToLegacyQMConstraint(t *testing.T) {
+// runs every migration through the zcode harness migration, asserting the
+// zcode insertion kept the legacy 'qm' entry. Without the QM-safe shape, the
+// replace() source string omits 'qm' and no-ops, leaving zcode session
+// inserts to fail with a CHECK violation on installs that took the legacy QM
+// branch.
+func TestZcodeHarnessMigrationAddsZcodeToLegacyQMConstraint(t *testing.T) {
 	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -1120,8 +1121,8 @@ WHERE type = 'table' AND name = 'sessions'`,
 		t.Fatalf("reparse legacy qm harness constraint: %v", err)
 	}
 
-	// Run only migration 0198 (including all intervening migrations).
-	upTo(t, db, 198)
+	// Run every migration through the zcode harness migration.
+	upTo(t, db, 20261031000000000)
 
 	var schema string
 	if err := db.QueryRow(
@@ -1131,7 +1132,7 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	for _, harness := range []string{"'zcode'", "'qm'", "'omp'"} {
 		if !strings.Contains(schema, harness) {
-			t.Fatalf("sessions.harness CHECK is missing %s after migration 0198:\n%s", harness, schema)
+			t.Fatalf("sessions.harness CHECK is missing %s after the zcode harness migration:\n%s", harness, schema)
 		}
 	}
 }

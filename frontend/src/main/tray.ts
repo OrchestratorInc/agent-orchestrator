@@ -1,8 +1,21 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
-import { catalogFor, type MessageKey, type PluralMessageKey } from "../renderer/i18n/messages";
+// A tray-only catalog: importing the renderer's catalogs put every locale file
+// (1.3 MB) into main.js. Regenerate with `node scripts/sync-tray-catalog.mjs`.
+import { trayCatalogs, type TrayMessageKey } from "./tray-catalog.generated";
 import type { AppLocale } from "../shared/ui-locale";
+
+type MessageKey = TrayMessageKey;
+type PluralMessageKey = TrayMessageKey extends infer Key extends string
+	? Key extends `${infer Base}_${"one" | "other"}`
+		? Base
+		: never
+	: never;
+
+function catalogFor(locale: AppLocale): Record<TrayMessageKey, string> & Partial<Record<string, string>> {
+	return trayCatalogs[locale] ?? trayCatalogs.en;
+}
 import type { TrayAttentionState, TrayAttentionZone, TrayOpenSessionTarget, TraySessionEntry } from "../shared/tray";
 
 const MAX_MENU_SESSIONS = 8;
@@ -45,7 +58,8 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 
 	const tray = new Tray(icon);
 	let sessions: TraySessionEntry[] = [];
-	let catalog = catalogFor(options.locale);
+	let locale = options.locale;
+	let catalog = catalogFor(locale);
 
 	const t = (key: MessageKey, vars?: Record<string, string | number>): string => {
 		const raw = catalog[key] ?? key;
@@ -53,8 +67,8 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 	};
 
 	const tPlural = (base: PluralMessageKey, count: number): string => {
-		const key = (count === 1 ? `${base}_one` : `${base}_other`) as MessageKey;
-		return t(key, { count });
+		const form = new Intl.PluralRules(locale).select(count);
+		return format(catalog[`${base}_${form}`] ?? catalog[`${base}_other`], { count });
 	};
 
 	const sessionItem = (entry: TraySessionEntry): MenuItemConstructorOptions => {
@@ -107,7 +121,8 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 			sessions = state.sessions ?? [];
 			render();
 		},
-		setLocale(locale) {
+		setLocale(next) {
+			locale = next;
 			catalog = catalogFor(locale);
 			render();
 		},

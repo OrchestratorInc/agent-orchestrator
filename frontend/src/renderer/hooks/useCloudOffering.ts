@@ -25,7 +25,7 @@ export const cloudBillingQueryKey = ["cloud-billing"] as const;
 
 export interface UseCloudOfferingResult extends Omit<ResolvedCloudOffering, "source"> {
 	source: ResolvedCloudOffering["source"] | undefined;
-	/** The org's providers include coder: Coder settings and project options apply. */
+	/** The org's providers include coder: Coder project options apply. */
 	hasCoder: boolean;
 	/** More than one server-sent provider: a project picks where its sessions run. */
 	offersProviderChoice: boolean;
@@ -33,6 +33,8 @@ export interface UseCloudOfferingResult extends Omit<ResolvedCloudOffering, "sou
 	selfServeBilling: boolean;
 	/** The signed-in user may buy, change or reset the org's plan. */
 	canManageBilling: boolean;
+	/** Harnesses a session can start in Chat with (`/me` chatHarnesses). */
+	chatHarnesses: string[];
 	org: CloudCpOrganization | undefined;
 	/** Mirrors useCloudCp().ready so callers can gate on one hook. */
 	ready: boolean;
@@ -49,12 +51,17 @@ const EMPTY: ResolvedCloudOffering = {
 	kind: "none",
 	billingMode: undefined,
 	features: [],
+	customCoder: false,
+	artifacts: false,
+	coderWorkerWorkingFolder: false,
 	source: "fallback",
 };
 
-export function useCloudOffering(): UseCloudOfferingResult {
-	const { client, ready, baseUrl, userId } = useCloudCp();
-	const { org } = useCloudOrg();
+// enabled=false keeps a caller that may not need the offering (a remote host's
+// board) from reading this machine's settings, as useCloudCp(enabled) does.
+export function useCloudOffering(enabled = true): UseCloudOfferingResult {
+	const { client, ready, baseUrl, userId } = useCloudCp(enabled);
+	const { org } = useCloudOrg(enabled);
 	const orgId = org?.id ?? "";
 	const me = useQuery<CloudCpMeResponse>({
 		queryKey: [...cloudMeQueryKey, baseUrl, userId],
@@ -85,6 +92,7 @@ export function useCloudOffering(): UseCloudOfferingResult {
 		offersProviderChoice: me.data !== undefined && offersProviderChoice(resolved),
 		selfServeBilling: resolved.billingMode === "self_serve",
 		canManageBilling: canManageBilling(org),
+		chatHarnesses: me.data?.chatHarnesses ?? [],
 		org,
 		ready,
 		loaded,
