@@ -96,6 +96,8 @@ func TestSGREmptyFieldResets(t *testing.T) {
 		{"dim and bold then reset and reverse", "\x1b[2;1ma\x1b[;7mb", []style{{dim: true, bold: true}, {reverse: true}}},
 		{"trailing empty field", "\x1b[2ma\x1b[1;mb", []style{{dim: true}, {}}},
 		{"empty palette index keeps dim", "\x1b[2ma\x1b[38;5;mb", []style{{dim: true}, {dim: true}}},
+		{"empty palette index before bold", "\x1b[2ma\x1b[38;5;;1mb", []style{{dim: true}, {dim: true, bold: true}}},
+		{"empty field in a colon color", "\x1b[2ma\x1b[38:2::255:0:0mb", []style{{dim: true}, {dim: true}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			lines := styledTerminalLines(tt.output)
