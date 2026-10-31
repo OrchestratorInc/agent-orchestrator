@@ -3029,8 +3029,6 @@
 	"artifacts.noAgent.description": "Install or sign in to an agent to create artifacts.",
 	"artifacts.noAgent.action": "Open agent settings",
 	"artifacts.share.menu": "分享",
-	"artifacts.share.comingSoon": "分享 · 即将推出",
-	"artifacts.share.signInMenu": "登录后分享",
 	"artifacts.share.signInTitle": "登录后分享",
 	"artifacts.share.signInDescription": "分享文件需要一个免费的 AO 账号。",
 	"artifacts.share.signIn": "登录",

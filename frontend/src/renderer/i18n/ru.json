@@ -3155,8 +3155,6 @@
 	"artifacts.noAgent.description": "Чтобы создавать артефакты, установите агент или войдите в его аккаунт.",
 	"artifacts.noAgent.action": "Открыть настройки агентов",
 	"artifacts.share.menu": "Поделиться",
-	"artifacts.share.comingSoon": "Поделиться · Скоро",
-	"artifacts.share.signInMenu": "Войдите, чтобы поделиться",
 	"artifacts.share.signInTitle": "Войдите, чтобы поделиться",
 	"artifacts.share.signInDescription": "Чтобы поделиться файлом, нужна бесплатная учётная запись AO.",
 	"artifacts.share.signIn": "Войти",

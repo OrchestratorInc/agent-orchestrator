@@ -12,6 +12,7 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ShareArtifactButton } from "./ShareArtifactDialog";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
@@ -56,6 +57,13 @@ export function ArtifactPreviewModal({ artifact, projectName, onClose }: {
 							<DialogDescription className="truncate text-caption">{projectName} · {artifact.sessionTitle}</DialogDescription>
 						</div>
 						<div className="relative z-10 flex shrink-0 items-center gap-1">
+							{artifact.cloud ? null : (
+								<ShareArtifactButton
+									className="transition-none"
+									file={{ sessionId: artifact.sessionId, path: artifact.path, projectId: artifact.projectId ?? "" }}
+									name={artifact.name}
+								/>
+							)}
 							<ArtifactActionsMenu
 								artifact={artifact}
 								session={{ id: artifact.sessionId, cloud: artifact.cloud, workspaceId: artifact.projectId }}

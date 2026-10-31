@@ -530,7 +530,9 @@ describe("ArtifactsView", () => {
 		const modal = within(screen.getByRole("dialog", { name: "pricing.md" }));
 		expect(modal.queryByRole("button", { name: "Pin artifact: pricing.md" })).not.toBeInTheDocument();
 		expect(modal.getByRole("button", { name: "Open in session" })).toBeInTheDocument();
+		expect(modal.getByRole("button", { name: "Share: pricing.md" })).toHaveTextContent("Share");
 		await user.click(modal.getByRole("button", { name: "More actions: pricing.md" }));
+		expect(screen.queryByRole("menuitem", { name: /share/i })).not.toBeInTheDocument();
 		expect(screen.queryByRole("menuitem", { name: "Open in session" })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Delete artifact" })).toBeInTheDocument();
 		await user.click(screen.getByRole("menuitem", { name: "Pin artifact" }));

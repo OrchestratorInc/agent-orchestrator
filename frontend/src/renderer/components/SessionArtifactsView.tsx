@@ -17,6 +17,7 @@ import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ShareArtifactButton } from "./ShareArtifactDialog";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
@@ -445,6 +446,13 @@ export function SessionArtifactsView({
 					</ArtifactActionsMenu>
 					<div className="flex shrink-0 items-center gap-0.5">
 						<div className="flex shrink-0 items-center" ref={setToolbarHost} />
+						{/* Beside the viewer's Edit button: a local artifact's public link. */}
+						{!hostId && !session.cloud ? (
+							<ShareArtifactButton
+								file={{ sessionId: session.id, path: selected.path, projectId: session.workspaceId }}
+								name={selected.name}
+							/>
+						) : null}
 						{hasHtmlPreview && previewVersion === null ? (
 							<div className="flex shrink-0 items-center gap-0.5">
 								<Button className="transition-none" aria-label={t("files.rendered")} aria-pressed={!showingHtmlSource} onClick={() => setHtmlSourcePath(null)} size="icon-sm" variant="ghost"><Eye aria-hidden="true" className="size-icon-sm" /></Button>

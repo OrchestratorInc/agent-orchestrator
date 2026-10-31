@@ -3047,8 +3047,6 @@
 	"artifacts.noAgent.description": "Install or sign in to an agent to create artifacts.",
 	"artifacts.noAgent.action": "Open agent settings",
 	"artifacts.share.menu": "Teilen",
-	"artifacts.share.comingSoon": "Teilen · Bald verfügbar",
-	"artifacts.share.signInMenu": "Zum Teilen anmelden",
 	"artifacts.share.signInTitle": "Zum Teilen anmelden",
 	"artifacts.share.signInDescription": "Zum Teilen einer Datei brauchst du ein kostenloses AO-Konto.",
 	"artifacts.share.signIn": "Anmelden",

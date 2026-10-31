@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, FolderOpen, Link2, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
+import { ArrowUpRight, ChevronDown, Copy, Download, Ellipsis, FolderOpen, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { CLOUD_TEXT_ARTIFACT, deleteSessionArtifactFile, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
@@ -16,7 +16,6 @@ import { cn } from "../lib/utils";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { ShareArtifactDialog, useShareAccess } from "./ShareArtifactDialog";
 import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -73,8 +72,6 @@ export function ArtifactActionsMenu({
 	const open = useOpenSessionArtifacts();
 	const [copyError, setCopyError] = useState("");
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
-	const [sharing, setSharing] = useState(false);
-	const shareAccess = useShareAccess();
 	const [menuOpen, setMenuOpen] = useState(false);
 	const actionClassName = cn(className, menuOpen && "opacity-100 [@media(hover:hover)]:opacity-100");
 	// The artifact directory is on this machine only for a local session.
@@ -98,8 +95,6 @@ export function ArtifactActionsMenu({
 		},
 	});
 	const markdown = /\.(md|markdown)$/i.test(artifact.path);
-	// Video is not shared yet (no partial-file serving): the item says so.
-	const video = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)$/i.test(artifact.path);
 	const confirmDelete = () => {
 		remove.reset();
 		setConfirmingDelete(true);
@@ -265,10 +260,6 @@ export function ArtifactActionsMenu({
 										<SquareTerminal aria-hidden="true" />
 										{t("artifacts.showIn", { name: terminalName() })}
 									</DropdownMenuItem>
-									<DropdownMenuItem disabled={video} onSelect={() => setSharing(true)}>
-										<Link2 aria-hidden="true" />
-										{t(video ? "artifacts.share.comingSoon" : shareAccess.signedIn ? "artifacts.share.menu" : "artifacts.share.signInMenu")}
-									</DropdownMenuItem>
 									{copyable || session.cloud ? <DropdownMenuSeparator /> : null}
 								</>
 							) : null}
@@ -300,14 +291,6 @@ export function ArtifactActionsMenu({
 					) : null}
 				</DropdownMenuContent>
 			</DropdownMenu> : null}
-			{local ? (
-				<ShareArtifactDialog
-					file={{ sessionId: session.id, path: artifact.path, projectId: session.workspaceId ?? "" }}
-					name={artifact.name}
-					open={sharing}
-					onOpenChange={setSharing}
-				/>
-			) : null}
 			<ConfirmDialog
 				busy={remove.isPending}
 				confirmLabel={t("artifacts.delete")}

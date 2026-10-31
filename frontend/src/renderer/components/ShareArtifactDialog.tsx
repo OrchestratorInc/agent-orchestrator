@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Share } from "lucide-react";
 import type { CloudShareFile, CloudShareInspection, CloudShareLink, CloudShareLinks } from "../../shared/cloud-share";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
 import { useUiStore } from "../stores/ui-store";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { Button } from "./ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 type Phase =
 	| { kind: "loading" }
@@ -28,6 +31,49 @@ export function formatBytes(bytes: number): string {
 		unit++;
 	}
 	return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
+/** Videos are not shared yet: there is no partial-file serving for them. */
+const VIDEO_FILE = /\.(mp4|m4v|mov|webm|ogv|avi|mkv)$/i;
+
+/**
+ * The Share button beside an open local artifact's other actions: it opens
+ * the share dialog. For a video it is disabled and says why.
+ */
+export function ShareArtifactButton({ file, name, className }: { file: Omit<CloudShareFile, "baseUrl">; name: string; className?: string }) {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	const video = VIDEO_FILE.test(file.path);
+	const button = (
+		<Button
+			aria-label={`${t("artifacts.share.menu")}: ${name}`}
+			className={className}
+			disabled={video}
+			onClick={() => setOpen(true)}
+			size="sm"
+			type="button"
+			variant="ghost"
+		>
+			<Share aria-hidden="true" className="size-icon-sm" />
+			{t("artifacts.share.menu")}
+		</Button>
+	);
+	if (video) {
+		return (
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="inline-flex" tabIndex={0}>{button}</span>
+				</TooltipTrigger>
+				<TooltipContent side="bottom">{t("artifacts.share.videoSoon")}</TooltipContent>
+			</Tooltip>
+		);
+	}
+	return (
+		<>
+			{button}
+			<ShareArtifactDialog file={file} name={name} open={open} onOpenChange={setOpen} />
+		</>
+	);
 }
 
 /** The control plane URL and whether the person is signed in to share. */

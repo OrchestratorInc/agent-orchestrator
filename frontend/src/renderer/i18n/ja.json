@@ -3047,8 +3047,6 @@
 	"artifacts.noAgent.description": "Install or sign in to an agent to create artifacts.",
 	"artifacts.noAgent.action": "Open agent settings",
 	"artifacts.share.menu": "共有",
-	"artifacts.share.comingSoon": "共有 · 近日公開",
-	"artifacts.share.signInMenu": "共有するにはサインイン",
 	"artifacts.share.signInTitle": "共有するにはサインイン",
 	"artifacts.share.signInDescription": "ファイルを共有するには無料の AO アカウントが必要です。",
 	"artifacts.share.signIn": "サインイン",
