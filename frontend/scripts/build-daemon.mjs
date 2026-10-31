@@ -51,7 +51,23 @@ if (isWindowsDev) {
 	mkdirSync(outDir, { recursive: true });
 }
 
-const result = spawnSync("go", ["build", "-o", buildOutPath, "./cmd/ao"], {
+// Stamp `ao version` so a packaged CLI names its build instead of "dev".
+const cliPackage = "github.com/aoagents/agent-orchestrator/backend/internal/cli";
+const appVersion = JSON.parse(readFileSync(join(frontendRoot, "package.json"), "utf8")).version;
+const ldflags = [
+	`-X ${cliPackage}.Version=${process.argv.includes("--dev") ? `${appVersion}-dev` : appVersion}`,
+	`-X ${cliPackage}.Date=${new Date().toISOString().replace(/\.\d+Z$/, "Z")}`,
+];
+const commit = spawnSync("git", ["rev-parse", "--short=12", "HEAD"], {
+	cwd: repoRoot,
+	encoding: "utf8",
+	windowsHide: true,
+});
+if (commit.status === 0 && commit.stdout.trim()) {
+	ldflags.push(`-X ${cliPackage}.Commit=${commit.stdout.trim()}`);
+}
+
+const result = spawnSync("go", ["build", "-ldflags", ldflags.join(" "), "-o", buildOutPath, "./cmd/ao"], {
 	cwd: backendRoot,
 	stdio: "inherit",
 	windowsHide: true,
