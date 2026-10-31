@@ -1,10 +1,12 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Columns2, Maximize2, Minimize2, Rows3, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { cloudWorkspaceReviewSummaryQueryOptions, useCloudWorkspaceReviewEvents } from "../../hooks/useCloudWorkspaceReview";
+import { refreshCloudSessionLifecycle } from "../../hooks/useWorkspaceQuery";
 import { joinWorkspaceRepositoryPath, splitWorkspaceRepositoryPath, withWorkspaceRepository, type CloudCpWorkspaceReviewFileSummary, type CloudCpWorkspaceReviewScope } from "../../lib/cloud-cp";
+import { cloudStartupProblem, resumeCloudSession } from "../../lib/cloud-lifecycle";
 import type { WorkspaceSession } from "../../types/workspace";
 import { useUiStore } from "../../stores/ui-store";
 import { PanelMessage, RetryButton, type FileAnnotationModel } from "../WorkspaceDiffView";
@@ -43,6 +45,21 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	// refuses every request, so the summary is not polled until it is back.
 	// What was read before stays on screen meanwhile.
 	const workerConnected = session.runtimeConnected === true;
+	// A worker that will not come back (the session was deleted, or AO gave up
+	// starting it) never answers. With nothing read before, the panel says so,
+	// with Retry to start the session again, instead of loading forever.
+	const startupProblem = cloudStartupProblem(session);
+	const workerGone = !workerConnected &&
+		(session.isTerminated === true || startupProblem?.phase === "failed" || startupProblem?.phase === "unavailable");
+	const queryClient = useQueryClient();
+	const [restartError, setRestartError] = useState<string>();
+	const restart = () => {
+		if (!orgId) return;
+		setRestartError(undefined);
+		void resumeCloudSession(client, orgId, session.id)
+			.then(() => refreshCloudSessionLifecycle(queryClient))
+			.catch((error: unknown) => setRestartError(error instanceof Error ? error.message : String(error)));
+	};
 	const [internalSplit, setInternalSplit] = useState(() => window.localStorage.getItem("ao.cloud.files.diffStyle") === "split");
 	const split = controlledSplit ?? internalSplit;
 	const repository = useUiStore((state) => state.inspectorSessions[session.id]?.cloudReviewRepository ?? "");
@@ -112,7 +129,9 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 					return <Button aria-selected={selected} className="h-6 shrink-0 px-2 font-mono text-2xs" disabled={!entry.present} key={entry.name} onClick={() => { setRepository(session.id, value); setReviewUi(session.id, value, { filter: "" }); }} role="tab" size="sm" title={entry.present ? entry.repository ?? label : t("files.repositoryMissing", { defaultValue: "{{name}} is not checked out in this session", name: label })} variant={selected ? "secondary" : "ghost"}>{label}</Button>;
 				})}
 			</div> : null}
-			{!enabled || summaryQuery.isPending ? <PanelMessage>{t("files.loading")}</PanelMessage> : summaryQuery.isError ? <PanelMessage action={<RetryButton onClick={() => void summaryQuery.refetch()} />}>{summaryQuery.error.message}</PanelMessage> : showChanges ? (
+			{!enabled || (summaryQuery.isPending && !workerGone) ? <PanelMessage>{t("files.loading")}</PanelMessage> : summaryQuery.isPending ? (
+				<PanelMessage action={session.isTerminated ? undefined : <RetryButton onClick={restart} />}>{restartError ?? startupProblem?.message ?? t("inspector.filesUnavailable")}</PanelMessage>
+			) : summaryQuery.isError ? <PanelMessage action={<RetryButton onClick={() => void summaryQuery.refetch()} />}>{summaryQuery.error.message}</PanelMessage> : showChanges ? (
 				<CloudWorkspaceReviewPane annotation={scopedAnnotation} baseUrl={baseUrl} client={scopedClient} data={summaryQuery.data} filter={filter} key={activeRepository} onBrowseAll={() => setShowChanges(false)} onOpenFile={open} orgId={orgId!} repository={activeRepository || undefined} sessionId={session.id} split={split} />
 			) : <CloudFileTree baseUrl={baseUrl} client={scopedClient} filterText={filter} key={activeRepository} onOpenFile={(path) => open(path, { mode: "file" })} orgId={orgId!} selectedPath={selectedInRepository} sessionId={session.id} />}
 		</section>
