@@ -139,6 +139,95 @@ function aoCurLangName() {
     track.thumb.style.opacity = "1";
   }
 
+  /* ---------- fumadocs-core Observer replication (exact activation timing) ----------
+     Original (fumadocs-core toc.tsx, verified against the dist source the original
+     site bundles): AnchorProvider watches the page headings with an
+     IntersectionObserver { threshold: 0.9 }, viewport root, no rootMargin.
+     item.active = isIntersecting; an item with no entry in a callback keeps its
+     active state only when it was not a fallback. When no item is active, the
+     heading nearest the viewport top becomes the active fallback (timestamp
+     restamped every callback). Bright rows are the active items; the hi segment
+     spans the first..last active rows; the marker rides the leading edge (last
+     active row scrolling down, first active row scrolling up), eased by its CSS
+     transition. */
+  var SPY = { obs: null, items: [], isUp: false, first: null, last: null };
+
+  function spySetup() {
+    var hs = TOC_STATE.headings || [];
+    if (SPY.obs && hs.length && SPY.items.length === hs.length &&
+        SPY.items[0].el === hs[0] && SPY.items[SPY.items.length - 1].el === hs[hs.length - 1]) return;
+    if (SPY.obs) { SPY.obs.disconnect(); SPY.obs = null; }
+    SPY.items = Array.prototype.map.call(hs, function (h) { return { el: h, active: false, fallback: false, t: 0 }; });
+    SPY.isUp = false; SPY.first = null; SPY.last = null;
+    if (!("IntersectionObserver" in window) || !SPY.items.length) return;
+    SPY.obs = new IntersectionObserver(spyCallback, { threshold: 0.9 });
+    SPY.items.forEach(function (it) { SPY.obs.observe(it.el); });
+  }
+
+  function spyCallback(entries) {
+    if (!entries || !entries.length) return;
+    var hasActive = false;
+    SPY.items.forEach(function (it) {
+      var entry = null;
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].target === it.el) { entry = entries[i]; break; }
+      }
+      var active = entry ? entry.isIntersecting : (it.active && !it.fallback);
+      if (it.active !== active) { it.active = active; it.fallback = false; it.t = Date.now(); }
+      if (it.active) hasActive = true;
+    });
+    if (!hasActive && entries[0].rootBounds) {
+      var viewTop = entries[0].rootBounds.top;
+      var min = Infinity, idx = -1;
+      SPY.items.forEach(function (it, i) {
+        var d = Math.abs(viewTop - it.el.getBoundingClientRect().top);
+        if (d < min) { min = d; idx = i; }
+      });
+      if (idx >= 0) {
+        var f = SPY.items[idx];
+        f.active = true; f.fallback = true; f.t = Date.now();
+      }
+    }
+    spyRender();
+  }
+
+  function spyRender() {
+    var items = SPY.items;
+    if (!items || !items.length) return;
+    var firstAct = -1, lastAct = -1;
+    for (var i = 0; i < items.length; i++) {
+      if (!items[i].active) continue;
+      if (firstAct < 0) firstAct = i;
+      lastAct = i;
+    }
+    if (TOC_STATE.listEl) {
+      var as = TOC_STATE.listEl.querySelectorAll("a");
+      Array.prototype.forEach.call(as, function (a, j) {
+        a.classList.toggle("ao-read", firstAct >= 0 && j >= firstAct && j <= lastAct);
+      });
+    }
+    if (TOC_STATE.dAnchors) {
+      TOC_STATE.dAnchors.forEach(function (a, j) {
+        if (!a) return;
+        a.classList.toggle("ao-dtoc-active", firstAct >= 0 && j >= firstAct && j <= lastAct);
+      });
+    }
+    if (firstAct < 0) return;
+    /* leading edge (fumadocs clerk thumb semantics): the marker rides the bottom
+       of the active range scrolling down, the top of it scrolling up */
+    var isUp = SPY.isUp;
+    if (SPY.first != null) {
+      isUp = SPY.first > firstAct || SPY.last > lastAct ||
+             (SPY.first === firstAct && SPY.last === lastAct && SPY.isUp);
+    }
+    SPY.isUp = isUp; SPY.first = firstAct; SPY.last = lastAct;
+    var markerIdx = isUp ? firstAct : lastAct;
+    updateTrack(TOC_STATE.mTrack, firstAct, lastAct);
+    glideDot(TOC_STATE.mTrack, markerIdx);
+    updateTrack(TOC_STATE.dTrack, firstAct, lastAct);
+    glideDot(TOC_STATE.dTrack, markerIdx);
+  }
+
   function spyAll() {
     if (TOC_STATE.ticking) return;
     TOC_STATE.ticking = true;
@@ -146,63 +235,24 @@ function aoCurLangName() {
       TOC_STATE.ticking = false;
       var hs = TOC_STATE.headings;
       if (!hs || !hs.length) return;
-      /* Original (fumadocs) semantics, verified against the live site at
-         multiple scroll positions including the page bottom:
-         - bright ToC items + hi track segment = headings INTERSECTING the
-           viewport right now (top < innerHeight AND bottom > 0); when none
-           intersect, the previous state is kept;
-         - pill label = the UPCOMING section (first heading below the
-           viewport top edge);
-         - ring progress tracks the deepest visible heading. */
+      /* mobile ring + upcoming-section label chrome (scroll based; verified
+         against the original in an earlier pass) */
       var vh = window.innerHeight;
-      var firstVis = -1, lastVis = -1, labelIdx = -1;
+      var lastVis = -1, labelIdx = -1;
       for (var i = 0; i < hs.length; i++) {
         var r = hs[i].getBoundingClientRect();
-        if (r.top < vh && r.bottom > 0) { if (firstVis < 0) firstVis = i; lastVis = i; }
+        if (r.top < vh && r.bottom > 0) lastVis = i;
         if (r.top > 0 && labelIdx < 0) labelIdx = i;
       }
       if (labelIdx < 0) labelIdx = hs.length - 1;
-      var n = hs.length;
       if (TOC_STATE.ringFg && lastVis >= 0) {
-        var prog = (lastVis + 1) / n;
+        var prog = (lastVis + 1) / hs.length;
         TOC_STATE.ringFg.style.strokeDashoffset = String(47.1239 * (1 - prog));
         var svg = TOC_STATE.ringFg.closest("svg");
         if (svg) svg.setAttribute("aria-valuenow", String(prog.toFixed(4)));
       }
       if (TOC_STATE.activeLabel) TOC_STATE.activeLabel.textContent = clean(hs[labelIdx].textContent);
-      /* fractional heading index: how far the reference line (96px below the
-         viewport top, matching the original's reading position) has passed
-         between consecutive heading offsets */
-      var sy = window.scrollY || window.pageYOffset || 0;
-      var line = sy + 96;
-      var fracIdx = 0;
-      for (var k = 0; k < n; k++) {
-        var off = hs[k].getBoundingClientRect().top + sy;
-        if (off <= line) fracIdx = k; else { var prev = k > 0 ? hs[k - 1].getBoundingClientRect().top + sy : off; fracIdx = off > prev ? (k - 1) + (line - prev) / (off - prev) : k - 1; break; }
-      }
-      if (fracIdx < 0) fracIdx = 0;
-      if (fracIdx > n - 1) fracIdx = n - 1;
-      /* at page bottom the original rests the marker on the last row */
-      if (sy + vh >= document.documentElement.scrollHeight - 4) fracIdx = n - 1;
-      if (firstVis < 0) {
-        if (TOC_STATE.mTrack) glideDot(TOC_STATE.mTrack, fracIdx);
-        if (TOC_STATE.dTrack) glideDot(TOC_STATE.dTrack, fracIdx);
-        return;
-      }
-      if (TOC_STATE.listEl) {
-        var as = TOC_STATE.listEl.querySelectorAll("a");
-        as.forEach(function (a, j) { a.classList.toggle("ao-read", j >= firstVis && j <= lastVis); });
-        updateTrack(TOC_STATE.mTrack, firstVis, lastVis);
-        glideDot(TOC_STATE.mTrack, fracIdx);
-      }
-      if (TOC_STATE.dAnchors) {
-        TOC_STATE.dAnchors.forEach(function (a, j) {
-          if (!a) return;
-          a.classList.toggle("ao-dtoc-active", j >= firstVis && j <= lastVis);
-        });
-        updateTrack(TOC_STATE.dTrack, firstVis, lastVis);
-        glideDot(TOC_STATE.dTrack, fracIdx);
-      }
+      spyRender();
     });
   }
 
@@ -1260,6 +1310,7 @@ function aoCurLangName() {
 
   function init() {
     try { TOC_STATE.headings = collectHeadings(); } catch (e) {}
+    try { spySetup(); } catch (e) {}
     try { buildTocBar(); } catch (e) {}
     try { buildBreadcrumb(); } catch (e) {}
     try { buildDesktopToc(); } catch (e) {}
