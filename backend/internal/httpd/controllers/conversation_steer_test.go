@@ -253,6 +253,25 @@ func TestSteerOrSendRouteReturnsAtomicOutcome(t *testing.T) {
 	}
 }
 
+// The cut-and-send path reports the turn it cut so a client can attribute the
+// timeline's interrupted marker to this request.
+func TestSteerOrSendRouteNamesTheInterruptedTurn(t *testing.T) {
+	svc := &steerStub{
+		fakeConversationService: &fakeConversationService{},
+		atomicResult: chatsvc.SteerOrSendResult{
+			Turn:              domain.ConversationTurn{ID: "turn-2", State: domain.TurnStateRunning},
+			InterruptedTurnID: "turn-1",
+		},
+	}
+	status, body, _ := postSteerOrSend(t, svc, map[string]any{
+		"text": "pivot instead", "clientMessageId": "atomic-2",
+	})
+	if status != http.StatusAccepted || body["outcome"] != "sent" ||
+		body["interruptedTurnId"] != "turn-1" || body["turnId"] != "turn-2" {
+		t.Fatalf("status=%d body=%v", status, body)
+	}
+}
+
 // 202, not 200: the provider takes the guidance and acts on it at its next model
 // boundary. The body names the turn it joined so a client can attach it.
 func TestSteerRouteAcceptsGuidanceAndNamesTheTurn(t *testing.T) {

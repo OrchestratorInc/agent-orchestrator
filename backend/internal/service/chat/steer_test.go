@@ -1258,6 +1258,9 @@ func TestSteerOrSendOnASteerlessDriverCutsTheRunningTurnAndSends(t *testing.T) {
 	if cut == nil || cut.State != domain.TurnStateInterrupted {
 		t.Fatalf("cut turn = %+v, want provider-turn-1 interrupted", cut)
 	}
+	if result.InterruptedTurnID != cut.ProviderTurnID {
+		t.Fatalf("result.InterruptedTurnID = %q, want the cut turn's provider id %q reported to the caller", result.InterruptedTurnID, cut.ProviderTurnID)
+	}
 	sent := provider.sentTexts()
 	if len(sent) != 2 || sent[1] != "pivot to the parser instead" {
 		t.Fatalf("provider received %q, want the guidance dispatched as the next turn", sent)

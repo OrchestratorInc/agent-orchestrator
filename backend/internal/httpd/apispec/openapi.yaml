@@ -21465,6 +21465,8 @@ components:
           type: string
         duplicate:
           type: boolean
+        interruptedTurnId:
+          type: string
         outcome:
           enum:
           - steered

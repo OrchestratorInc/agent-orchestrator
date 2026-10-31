@@ -80,6 +80,10 @@ type SteerOrSendResult struct {
 	Duplicate bool
 	Steer     SteerResult
 	Turn      domain.ConversationTurn
+	// InterruptedTurnID names the running turn this request cut so the guidance
+	// could dispatch as its own turn (the no-steer-capability path). Empty when
+	// nothing was cut: native steering, a plain send, or a duplicate replay.
+	InterruptedTurnID string
 }
 
 // resolveSteerSender enriches CLI-originated steering with the source session's
@@ -646,16 +650,25 @@ func (c *Controller) SteerOrSend(
 	ctx context.Context,
 	msg ports.ChatUserMessage,
 	recoverOnly bool,
-) (SteerOrSendResult, error) {
+) (result SteerOrSendResult, err error) {
 	// The cut decision runs before the dispatch lock: crossing the provider
 	// boundary under sendMu would deadlock the interrupted completion, which
 	// needs that lock to commit.
 	if !recoverOnly {
 		if _, active := c.awaitAcknowledgedTurn(ctx); active {
 			if _, canSteer := c.steerer(); !canSteer {
-				if err := c.cutRunningTurnForSteer(ctx); err != nil && !errors.Is(err, ErrNoActiveTurn) {
-					return SteerOrSendResult{}, err
+				cutTurnID, cutErr := c.cutRunningTurnForSteer(ctx)
+				if cutErr != nil && !errors.Is(cutErr, ErrNoActiveTurn) {
+					return SteerOrSendResult{}, cutErr
 				}
+				// The delivery is reported as cut-and-sent regardless of which
+				// shape the dispatch below took, so the caller can attribute
+				// the timeline's interrupted marker to this request.
+				defer func() {
+					if result.InterruptedTurnID == "" {
+						result.InterruptedTurnID = cutTurnID
+					}
+				}()
 			}
 		}
 	}
@@ -664,34 +677,34 @@ func (c *Controller) SteerOrSend(
 
 // cutRunningTurnForSteer cancels the running turn without Stop's queue cutoff:
 // only the running turn is cut, and the queued messages keep their place behind
-// the guidance the caller sends next. Best effort at the edges: a turn that
-// settled on its own in the race window is reported as ErrNoActiveTurn (the send
-// becomes an ordinary next message), and a provider that accepted the cancel but
-// never settled is reconciled the way Stop reconciles, with a zero cutoff so
-// nothing queued is cancelled.
-func (c *Controller) cutRunningTurnForSteer(ctx context.Context) error {
+// the guidance the caller sends next. It returns the id of the turn it cut.
+// Best effort at the edges: a turn that settled on its own in the race window is
+// reported as ErrNoActiveTurn (the send becomes an ordinary next message), and a
+// provider that accepted the cancel but never settled is reconciled the way Stop
+// reconciles, with a zero cutoff so nothing queued is cancelled.
+func (c *Controller) cutRunningTurnForSteer(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	turn := c.pendingTurnID
 	c.mu.Unlock()
 	if turn == "" {
-		return ErrNoActiveTurn
+		return "", ErrNoActiveTurn
 	}
 	if err := c.conv.Interrupt(ctx, turn); err != nil {
 		if errors.Is(err, ports.ErrChatNoActiveTurn) {
-			return ErrNoActiveTurn
+			return "", ErrNoActiveTurn
 		}
-		return fmt.Errorf("interrupt turn %s for steer: %w", turn, err)
+		return "", fmt.Errorf("interrupt turn %s for steer: %w", turn, err)
 	}
 	if c.awaitTurnSettled(ctx, turn) {
-		return nil
+		return turn, nil
 	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 	providerTurnIDs, err := c.store.ListVisibleRunningTurnProviderIDs(ctx, c.conversation.ID)
 	if err != nil {
-		return fmt.Errorf("check running turns after steer cancel: %w", err)
+		return "", fmt.Errorf("check running turns after steer cancel: %w", err)
 	}
-	return c.reconcileDurableTurnsLocked(ctx, turn, providerTurnIDs, time.Time{})
+	return turn, c.reconcileDurableTurnsLocked(ctx, turn, providerTurnIDs, time.Time{})
 }
 
 // steerOrSendLocked selects and persists one delivery outcome while holding the
