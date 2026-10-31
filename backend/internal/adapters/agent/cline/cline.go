@@ -161,12 +161,10 @@ func (p *Plugin) GetRestoreCommandWithSessionID(ctx context.Context, cfg ports.R
 				agentSessionID = recoveredID
 			} else if ctx.Err() != nil {
 				return nil, "", false, ctx.Err()
-			} else if agentSessionID == "" {
-				return nil, "", false, historyErr
 			} else {
-				// History failure is not evidence that the stored ID is lost.
-				// The manager still probes this ID before choosing native restore.
-				slog.Default().WarnContext(ctx, "cline: history lookup failed; using stored session ID",
+				// Recovery is best effort: retain a stored ID when available,
+				// otherwise let the manager choose its normal fresh-launch fallback.
+				slog.Default().WarnContext(ctx, "cline: history lookup failed; skipping recovery",
 					"sessionID", cfg.Session.ID, "error", historyErr)
 			}
 		}

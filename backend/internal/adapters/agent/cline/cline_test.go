@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -519,8 +520,8 @@ func TestGetRestoreCommandRecoversStaleAgentSessionID(t *testing.T) {
 		{"no matching workspace", "deleted-session", "other", "", false},
 		{"history failure keeps stored ID", "stored-session", "failure", "stored-session", false},
 		{"malformed history keeps stored ID", "stored-session", "malformed", "stored-session", false},
-		{"history failure without stored ID", "", "failure", "", true},
-		{"malformed history without stored ID", "", "malformed", "", true},
+		{"history failure without stored ID", "", "failure", "", false},
+		{"malformed history without stored ID", "", "malformed", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -560,6 +561,19 @@ func TestGetRestoreCommandRecoversStaleAgentSessionID(t *testing.T) {
 				t.Fatalf("restore = %v, %v; want ID %s", cmd, ok, tc.want)
 			}
 		})
+	}
+}
+
+func TestGetRestoreCommandPreservesCancellation(t *testing.T) {
+	for _, storedID := range []string{"", "stored-session"} {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		cmd, selectedID, ok, err := (&Plugin{resolvedBinary: "cline"}).GetRestoreCommandWithSessionID(ctx, ports.RestoreConfig{
+			Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: storedID}},
+		})
+		if !errors.Is(err, context.Canceled) || ok || cmd != nil || selectedID != "" {
+			t.Fatalf("cancelled restore with stored ID %q = %q, %q, %v, %v", storedID, cmd, selectedID, ok, err)
+		}
 	}
 }
 

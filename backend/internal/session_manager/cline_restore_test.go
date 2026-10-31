@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cline"
@@ -101,5 +102,58 @@ func TestClineRestoreProbesRecoveredConversation(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestClineRestoreWithoutIDFallsBackWhenHistoryFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	for _, operation := range []string{"restore", "resume"} {
+		t.Run(operation, func(t *testing.T) {
+			home, workspace, binDir := t.TempDir(), t.TempDir(), t.TempDir()
+			binary := filepath.Join(binDir, "cline")
+			if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", binDir)
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+
+			rt := &fakeRuntime{outputs: []string{"Type a message"}}
+			m, st, ws := newExitedResumeManager(t, rt, cline.New())
+			ws.path = workspace
+			rec := st.sessions["mer-1"]
+			rec.Harness = domain.HarnessCline
+			rec.IsTerminated = operation == "restore"
+			rec.Metadata.WorkspacePath = workspace
+			rec.Metadata.AgentSessionID = ""
+			const savedPrompt = "continue the saved task"
+			rec.Metadata.Prompt = savedPrompt
+			st.sessions[rec.ID] = rec
+			msg := &fakeMessenger{}
+			m.messenger = sessionguard.New(st, msg, m.logger)
+			m.messenger.SetInputLease(m)
+
+			var result RestoreResult
+			var err error
+			if operation == "restore" {
+				result, err = m.RestoreWithMode(ctx, rec.ID)
+			} else {
+				result, err = m.ResumeAgentWithMode(ctx, rec.ID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Mode != RestoreModeSavedPrompt || rt.created != 1 {
+				t.Fatalf("mode = %q, runtimes created = %d; want saved_prompt and one fresh runtime", result.Mode, rt.created)
+			}
+			if slices.Contains(rt.lastCfg.Argv, "--id") {
+				t.Fatalf("fresh launch attempted native restore: %q", rt.lastCfg.Argv)
+			}
+			if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], savedPrompt) {
+				t.Fatalf("fresh launch did not deliver the saved prompt: %q", msg.msgs)
+			}
+		})
 	}
 }
