@@ -3520,7 +3520,7 @@
 	"settings.billing.freeAgents": "Claude Code, Codex und Cursor",
 	"settings.billing.freeOrchestrator": "Orchestrator, Worker und PR-Reviews",
 	"settings.billing.freeDevices": "2 Geräte gleichzeitig angemeldet",
-	"settings.billing.freeNetwork": "Verbindung im selben Netzwerk (kein Cloud-Relay)",
+	"settings.billing.freeNetwork": "Verbindung im selben Netzwerk oder von überall über Tailscale oder den HTTPS-Tunnel",
 	"settings.billing.starterRelay": "Cloud-Relay für nahtlose Verbindung zwischen Geräten",
 	"settings.billing.starterDevices": "Unbegrenzt viele Geräte, auch mobile (eigene Geräte)",
 	"settings.billing.cloudAway": "Agenten arbeiten weiter, wenn dein Computer schläft",

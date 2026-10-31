@@ -3585,7 +3585,7 @@
 	"settings.billing.freeAgents": "Claude Code, Codex e Cursor",
 	"settings.billing.freeOrchestrator": "Orquestrador, workers e revisões de PR",
 	"settings.billing.freeDevices": "2 dispositivos conectados ao mesmo tempo",
-	"settings.billing.freeNetwork": "Conexão na mesma rede (sem relay na nuvem)",
+	"settings.billing.freeNetwork": "Conexão na mesma rede, ou de qualquer lugar pelo Tailscale ou pelo túnel HTTPS",
 	"settings.billing.starterRelay": "Relay na nuvem para conexão contínua entre dispositivos",
 	"settings.billing.starterDevices": "Dispositivos ilimitados, incluindo celulares (use os seus)",
 	"settings.billing.cloudAway": "Os agentes continuam trabalhando quando o computador hiberna",

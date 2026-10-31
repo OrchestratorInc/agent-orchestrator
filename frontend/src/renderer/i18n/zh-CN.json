@@ -3502,7 +3502,7 @@
 	"settings.billing.freeAgents": "Claude Code、Codex 和 Cursor",
 	"settings.billing.freeOrchestrator": "编排器、工作代理和 PR 审查",
 	"settings.billing.freeDevices": "最多 2 台设备同时登录",
-	"settings.billing.freeNetwork": "同一网络内连接（无云端中继）",
+	"settings.billing.freeNetwork": "在同一网络内连接，或通过 Tailscale 或 HTTPS 隧道随时随地连接",
 	"settings.billing.starterRelay": "云端中继，跨设备无缝连接",
 	"settings.billing.starterDevices": "设备数量不限，包括移动设备（自带设备）",
 	"settings.billing.cloudAway": "电脑休眠时代理仍继续工作",
