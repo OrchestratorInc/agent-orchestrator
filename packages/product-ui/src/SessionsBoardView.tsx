@@ -69,6 +69,11 @@ export type BoardSessionPresentation = {
 	statusPresentation?: BoardSessionStatusPresentation;
 	title: string;
 	trackerIssueId?: string;
+	/**
+	 * Generic activity line for the card, printed verbatim beneath the title.
+	 * Absent (or a daemon too old to send one) means no summary line renders.
+	 */
+	summary?: string;
 	updatedAt: string;
 	lastUserMessageAt?: string;
 };
@@ -364,6 +369,14 @@ export function SessionCardView({
 						</div>
 					) : null}
 				</div>
+				{session.summary ? (
+					<div
+						className="mt-1 line-clamp-3 overflow-hidden text-xs leading-snug text-muted-foreground"
+						data-testid="board-session-summary"
+					>
+						{session.summary}
+					</div>
+				) : null}
 				{showBranch && (
 					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground">
 						{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
