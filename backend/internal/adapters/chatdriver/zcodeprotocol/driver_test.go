@@ -41,12 +41,12 @@ func TestAdmissionPreservesNativePermissionPolicy(t *testing.T) {
 	}
 }
 func TestModelOverrideShape(t *testing.T) {
-	cfg := ports.ChatStartConfig{WorkspacePath: t.TempDir(), DataDir: t.TempDir(), Model: "ao-audit-zai/glm-4.7", Effort: "low"}
+	cfg := ports.ChatStartConfig{WorkspacePath: t.TempDir(), DataDir: t.TempDir(), Model: "example-zai/glm-4.7", Effort: "low"}
 	if _, err := validateConfig(cfg); err != nil {
 		t.Fatalf("provider-qualified override refused: %v", err)
 	}
-	got := createModelParams("ao-audit-zai/glm-4.7", "low")
-	want := map[string]any{"providerId": "ao-audit-zai", "modelId": "glm-4.7", "options": map[string]string{"reasoningLevel": "low"}}
+	got := createModelParams("example-zai/glm-4.7", "low")
+	want := map[string]any{"providerId": "example-zai", "modelId": "glm-4.7", "options": map[string]string{"reasoningLevel": "low"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("create model params = %#v, want %#v", got, want)
 	}
@@ -87,22 +87,22 @@ func TestSnapshotModelsSurfaceThroughListModels(t *testing.T) {
 	if models, err := c.ListModels(context.Background()); err != nil || len(models) != 0 {
 		t.Fatalf("empty snapshot models = %#v err=%v, want empty catalog", models, err)
 	}
-	note(t, `{"settings":{"model":{"current":{"providerId":"ao-audit-zai","modelId":"glm-4.7"},"available":[
-		{"ref":{"providerId":"ao-audit-zai","modelId":"glm-4.7"},"label":"GLM-4.7","description":"configured"},
-		{"ref":{"providerId":"ao-audit-zai","modelId":"glm-4.7-air"},"label":"GLM-4.7 Air"}]}}}`)
+	note(t, `{"settings":{"model":{"current":{"providerId":"example-zai","modelId":"glm-4.7"},"available":[
+		{"ref":{"providerId":"example-zai","modelId":"glm-4.7"},"label":"GLM-4.7","description":"configured"},
+		{"ref":{"providerId":"example-zai","modelId":"glm-4.7-air"},"label":"GLM-4.7 Air"}]}}}`)
 	models, err := c.ListModels(context.Background())
 	if err != nil || len(models) != 2 {
 		t.Fatalf("models = %#v err=%v, want two entries", models, err)
 	}
-	if models[0].ID != "ao-audit-zai/glm-4.7" || models[0].DisplayName != "GLM-4.7" || models[0].Description != "configured" || !models[0].Default {
+	if models[0].ID != "example-zai/glm-4.7" || models[0].DisplayName != "GLM-4.7" || models[0].Description != "configured" || !models[0].Default {
 		t.Fatalf("current model entry = %+v", models[0])
 	}
-	if models[1].Default || models[1].ID != "ao-audit-zai/glm-4.7-air" {
+	if models[1].Default || models[1].ID != "example-zai/glm-4.7-air" {
 		t.Fatalf("non-current model entry = %+v", models[1])
 	}
 	// A native profile with only a bound model still surfaces it.
-	note(t, `{"settings":{"model":{"current":{"providerId":"ao-audit-zai","modelId":"glm-4.7"}}}}`)
-	if models, err := c.ListModels(context.Background()); err != nil || len(models) != 1 || !models[0].Default || models[0].ID != "ao-audit-zai/glm-4.7" {
+	note(t, `{"settings":{"model":{"current":{"providerId":"example-zai","modelId":"glm-4.7"}}}}`)
+	if models, err := c.ListModels(context.Background()); err != nil || len(models) != 1 || !models[0].Default || models[0].ID != "example-zai/glm-4.7" {
 		t.Fatalf("current-only models = %#v err=%v", models, err)
 	}
 }

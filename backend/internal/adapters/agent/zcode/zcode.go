@@ -164,3 +164,10 @@ func (p *Plugin) InterruptInput() string { return "\x1b" }
 func (p *Plugin) ExitDetectionMode() ports.AgentExitDetectionMode {
 	return ports.AgentExitDetectionSupervisor
 }
+
+// SupportsTerminalVersionRefresh declares unattended exact-conversation resume.
+// ZCode is Chat-only through the native app-server and refuses terminal
+// launches, so there is no refreshable TUI conversation to restart.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return false }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)
