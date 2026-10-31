@@ -163,7 +163,6 @@ import type { QueuedMessageEditOptions } from "../../types/conversation";
 import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
-import { LiveActivityWindow } from "./LiveActivityWindow";
 import { isOrdinaryActivity } from "./activity-action";
 import { TurnPlan } from "./TurnPlan";
 import { ComposerModeItems, TurnSettingsBar, type ApprovalModeLimits } from "./TurnSettingsBar";
@@ -4718,11 +4717,11 @@ const TurnGroup = memo(function TurnGroup({
 	const quietReply = workerUpdates && outcome?.state === "completed" ? quietWorkerReply(group.items) : undefined;
 	// "Worked for" is the fold for the turn's work, so it appears only when there is
 	// work to fold: a turn that went straight to its answer has nothing to open and
-	// shows the answer alone. It opens where the live window was, over the same beat
-	// the window folds, so the top of the turn reads as the work collapsing into its
-	// summary rather than one line appearing while another vanishes. A settled turn
-	// loaded from history mounts it without the animation. The wrapper's own gutter
-	// keeps the summary's hover wash, which overhangs by 4px, inside the clip.
+	// shows the answer alone. It opens from zero height as the live steps leave, so
+	// the top of the turn reads as the work collapsing into its summary rather than
+	// one line appearing while the steps vanish. A settled turn loaded from history
+	// mounts it without the animation. The wrapper's own gutter keeps the summary's
+	// hover wash, which overhangs by 4px, inside the clip.
 	const disclosureKey = `${group.key}:worked`;
 	body.push(
 		<AnimatePresence key="turn-worked" initial={false}>
@@ -4745,53 +4744,13 @@ const TurnGroup = memo(function TurnGroup({
 			) : null}
 		</AnimatePresence>,
 	);
-	// While the agent works, its steps scroll in a window that follows the newest one.
-	// The reply being written stays outside at full size, so streaming text is never
-	// squeezed into the window. Once the turn settles the window folds away beneath
-	// "Worked for", which holds the same work.
-	const windowed = group.live;
+	// While the agent works, its steps draw in the conversation itself as they arrive,
+	// with no scroll box of their own. They go straight into the turn's flat list, so
+	// a step keeps its element as later ones land under it and an image the reader
+	// opened from it stays open. Once the turn settles they fold beneath "Worked for".
 	const tail = workedRuns.at(-1);
 	const tailIsReply = group.live && tail?.kind === "single" && tail.items[0].kind === "message" && tail.items[0].role === "assistant";
-	const windowRuns = windowed ? (tailIsReply ? workedRuns.slice(0, -1) : workedRuns) : [];
-	body.push(
-		<AnimatePresence key="live-activity" initial={false}>
-			{windowRuns.length > 0 ? (
-				<motion.div
-					key="live-activity-window"
-					initial={{ height: 0, opacity: 0 }}
-					animate={{ height: "auto", opacity: 1 }}
-					exit={{ height: 0, opacity: 0 }}
-					transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
-					className="overflow-hidden"
-				>
-					<LiveActivityWindow>{windowRuns.flatMap(renderWorkerRun)}</LiveActivityWindow>
-				</motion.div>
-			) : null}
-		</AnimatePresence>,
-	);
-	if (!outcome) {
-		if (!windowed) body.push(...workedRuns.flatMap(renderWorkerRun));
-		else {
-			// The first chunks of a reply open a row where there was none. Growing it
-			// from zero keeps the live row under it (and the transcript's end) gliding
-			// down instead of jumping by a line. Clipped only while it opens; a reply
-			// already streaming when the chat opens mounts at full height.
-			body.push(
-				<AnimatePresence key="live-reply" initial={false}>
-					{tailIsReply ? (
-						<motion.div
-							key={tail.key}
-							initial={{ height: 0, opacity: 0, overflow: "hidden" }}
-							animate={{ height: "auto", opacity: 1, transitionEnd: { overflow: "visible" } }}
-							transition={{ duration: reducedMotion ? 0 : 0.24, ease: [0.22, 1, 0.36, 1] }}
-						>
-							{renderRun(tail)}
-						</motion.div>
-					) : null}
-				</AnimatePresence>,
-			);
-		}
-	}
+	if (!outcome) body.push(...workedRuns.flatMap(renderWorkerRun));
 	if (outcome) body.push(...noticeRuns.map(renderRun));
 	if (quietReply && finalRun) {
 		body.push(

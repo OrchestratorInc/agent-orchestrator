@@ -2000,7 +2000,7 @@ textarea,
 	}
 }
 
-/* Chat scroll windows (the plan, a live turn's activity): content fades out at
+/* Chat scroll windows (the plan): content fades out at
    whichever edge still has more to scroll to, so a long list reads as continuing
    rather than cut off. syncEdgeFade (chat/edge-fade.ts) sets the data attributes
    from the scroll position; the lengths are registered so the fade eases in and out
