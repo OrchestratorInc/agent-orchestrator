@@ -146,6 +146,9 @@
 		"ws": "^8.21.1",
 		"zustand": "^5.0.14"
 	},
+	"overrides": {
+		"extract-zip": "npm:@electron-internal/extract-zip@1.0.5"
+	},
 	"optionalDependencies": {
 		"electron-installer-debian": "^3.2.0",
 		"electron-installer-redhat": "^3.4.0"
