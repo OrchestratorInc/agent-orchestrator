@@ -89,6 +89,24 @@ type Credential struct {
 	// BaseURL overrides the provider's default endpoint. It is how a gateway
 	// is validated, and how tests point a probe at a local server.
 	BaseURL string
+	// ExpiresAt is the access-token expiry Claude Code recorded next to a
+	// stored subscription login. Zero when the source records none (env vars,
+	// bare tokens, managed API keys).
+	ExpiresAt time.Time
+	// Renewable reports that the stored login also carries a refresh token, so
+	// Claude Code itself mints a new access token the next time it runs. AO
+	// never performs that refresh: Claude Code serializes it behind its own
+	// cross-process lock and rotates the refresh token, so a second writer
+	// could sign the user out everywhere.
+	Renewable bool
+}
+
+// ExpiredButRenewable reports whether this is a stored subscription login
+// whose access token is past its recorded expiry while a refresh token
+// remains. The provider will reject the access token, but that is not
+// evidence the user is signed out: Claude Code renews it on its next run.
+func (c Credential) ExpiredButRenewable(now time.Time) bool {
+	return c.Renewable && !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt)
 }
 
 // Fingerprint identifies the credential and provider configuration used by a
@@ -126,6 +144,8 @@ type Model struct {
 
 // Result is a validation outcome together with what can be said about it.
 type Result struct {
+	// HTTPStatus is the provider response code, without its body or URL.
+	HTTPStatus int
 	// State is the three-state verdict.
 	State State
 	// Provider is the API surface that was asked.
@@ -229,6 +249,7 @@ func (v *Validator) probe(result Result, spec requestSpec) Result {
 		return result
 	}
 	defer func() { _ = response.Body.Close() }()
+	result.HTTPStatus = response.StatusCode
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxBodyBytes))
 	if readErr != nil {
 		result.State = StateUnknown

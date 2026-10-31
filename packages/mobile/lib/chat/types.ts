@@ -1,6 +1,6 @@
 import type { SessionMode } from "../api";
 
-export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "stopped";
+export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
 export type TurnState = "queued" | "running" | "completed" | "interrupted" | "failed";
 export type ActivityStatus = "running" | "completed" | "failed" | "cancelled" | "pending" | "resolved";
 export type ActivityKind =
@@ -14,13 +14,19 @@ export type ActivityKind =
 	| "system"
 	| "mcp_tool"
 	| "auto_review"
-	| "user_input";
+	| "user_input"
+	| "ao_action";
 
 export type ApprovalMode = "default" | "accept-edits" | "auto" | "bypass-permissions";
 export type TurnSettings = { model?: string; reasoningEffort?: string; approvalMode?: ApprovalMode };
 
 export type PlanStep = { text: string; status: "pending" | "in_progress" | "completed" };
-export type ConversationPlan = { explanation?: string; steps: PlanStep[] };
+export type ConversationPlan = {
+	explanation?: string;
+	steps: PlanStep[];
+	/** A list the agent keeps across turns (Claude's task list): every later turn carries a copy. */
+	spansTurns?: boolean;
+};
 export type DiffFile = {
 	path: string;
 	oldPath?: string;
@@ -44,6 +50,8 @@ export type ConversationTurn = {
 };
 
 export type DeliveryState = "queued" | "sending" | "accepted" | "uncertain" | "failed";
+export type ChatExcerpt = { conversationId: string; messageId: string; revision: number; text: string };
+export type ConversationContentSummary = { type: string; text?: string; sourceMessageId?: string; sourceRevision?: number };
 export type ConversationMessage = {
 	kind: "message";
 	id: string;
@@ -53,9 +61,16 @@ export type ConversationMessage = {
 	role: "user" | "assistant";
 	origin: "human" | "automation" | "daemon" | "provider";
 	text: string;
+	content?: ConversationContentSummary[];
 	streaming: boolean;
 	delivery?: DeliveryState;
 	senderLabel?: string;
+	/** The AO session that sent this message (`ao send`), when another agent did. */
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
+	/** The daemon can branch before this human prompt and resend it edited. */
+	editAvailable?: boolean;
 	createdAt: string;
 };
 
@@ -129,6 +144,10 @@ export type ActivityDetail = {
 	host?: string;
 	commandSource?: string;
 	event?: "compaction" | "model.rerouted" | "auth.reauth_required" | "steer" | "plan" | string;
+	/** steer: the AO session that sent it, when another agent did. */
+	senderSessionId?: string;
+	senderProjectId?: string;
+	senderDisplayName?: string;
 	fromModel?: string;
 	toModel?: string;
 	origin?: string;
@@ -203,6 +222,8 @@ export type ConversationThreadState = {
 export type McpServer = { name: string; status: string; error?: string; failureReason?: string };
 
 export type ConversationSnapshot = {
+	/** Daemon-owned source verification; absent on older hosts. */
+	supportsExcerpts?: boolean;
 	conversationId: string;
 	sessionId: string;
 	harness: string;
@@ -223,6 +244,10 @@ export type ConversationSnapshot = {
 	threadState?: ConversationThreadState;
 	mcpServers?: McpServer[];
 	capabilities?: string[];
+	/** The branch these rows belong to; an edit or branch switch changes it. Absent on older hosts. */
+	activeBranchId?: string;
+	/** Human prompts after this sequence can fork natively; 0 or absent means none. */
+	nativeForkAvailableAfterSequence?: number;
 };
 
 export type ChatModel = {
@@ -267,6 +292,7 @@ export function activeTurn(snapshot: ConversationSnapshot): ConversationTurn | u
 }
 
 export function can(snapshot: ConversationSnapshot | undefined, capability: string): boolean {
+	if (snapshot?.controller.state === "hibernated" && (capability === "compaction" || capability === "rollback")) return false;
 	return Boolean(snapshot?.capabilities?.includes(capability));
 }
 

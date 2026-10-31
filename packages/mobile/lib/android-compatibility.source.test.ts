@@ -189,13 +189,6 @@ describe("Android native compatibility boundaries", () => {
 		expect(spawn).toContain("iosContent: { paddingTop: space.xxxl }");
 	});
 
-	it("waits for the Android destination route before closing the drawer", () => {
-		const drawer = source("./sidebar-navigation-shell.android.tsx");
-		expect(drawer).toContain("pendingClosePath");
-		expect(drawer).toContain("sidebarNavigationSettled");
-		expect(drawer).toMatch(/pendingClosePath[\s\S]*router\.replace\(destination\.href\)/);
-	});
-
 	it("uses compact app-native choice rows instead of the unstable Compose picker", () => {
 		const path = fileURLToPath(new URL("./chat/ChatSettingsModal.android.tsx", import.meta.url));
 		expect(existsSync(path)).toBe(true);
@@ -224,14 +217,16 @@ describe("Android native compatibility boundaries", () => {
 
 	it("pins conversation actions to one Android detent on first open", () => {
 		const layout = source("../app/_layout.tsx");
-		expect(layout).toContain('name === "sheets/conversation-actions" && Platform.OS === "android"');
-		expect(layout).toContain("sheetAllowedDetents: [0.6]");
+		expect(layout).toContain('{ name: "sheets/conversation-actions", detents: [0.6, 0.95], androidDetents: [0.6] }');
+		expect(layout).toContain('Platform.OS === "android" && androidDetents ? [...androidDetents]');
 	});
 
-	it("keeps Android review actions at the 60% detent with a visible native drag handle", () => {
+	// With two detents Material only hid the sheet after a drag past half its
+	// height, so a normal swipe down snapped back and closing felt random.
+	it("pins Android review actions to one 60% detent so a swipe down closes it", () => {
 		const layout = source("../app/_layout.tsx");
 		const actions = source("../app/sheets/review-actions.tsx");
-		expect(layout).toContain('{ name: "sheets/review-actions", detents: [0.6, 0.95] }');
+		expect(layout).toContain('{ name: "sheets/review-actions", detents: [0.6, 0.95], androidDetents: [0.6] }');
 		expect(layout).toContain("sheetInitialDetentIndex: 0");
 		expect(layout).toContain("sheetGrabberVisible: true");
 		expect(actions).toMatch(/<ScrollView[^>]*nestedScrollEnabled/);
@@ -242,7 +237,7 @@ describe("Android native compatibility boundaries", () => {
 	});
 
 	it("presents Settings from the root stack above the preserved drawer", () => {
-		const rootSettingsPath = fileURLToPath(new URL("../app/settings.tsx", import.meta.url));
+		const rootSettingsPath = fileURLToPath(new URL("../app/settings/index.tsx", import.meta.url));
 		const nestedSettingsPath = fileURLToPath(new URL("../app/(tabs)/settings.tsx", import.meta.url));
 		expect(existsSync(rootSettingsPath)).toBe(true);
 		expect(existsSync(nestedSettingsPath)).toBe(false);

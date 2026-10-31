@@ -86,6 +86,34 @@ it("reconciles missed progress without checking a remote feed and ignores late p
 	}
 });
 
+it("polls a waiting update every 30s and does not re-render on unchanged results", async () => {
+	vi.useFakeTimers();
+	onStatus.mockReturnValue(vi.fn());
+	getStatus.mockImplementation(async () => ({ state: "downloaded", checkedAt: 7, staged: { stagedAt: 1, escalated: false } }));
+	let renders = 0;
+	function CountingProbe() {
+		const status = useUpdateStatus();
+		renders += 1;
+		return <span data-testid="state">{status.state}</span>;
+	}
+	const view = render(<CountingProbe />);
+	try {
+		await act(async () => {});
+		expect(screen.getByTestId("state")).toHaveTextContent("downloaded");
+		const rendersAfterSeed = renders;
+		const callsAfterSeed = getStatus.mock.calls.length;
+
+		await act(async () => { await vi.advanceTimersByTimeAsync(27_000); });
+		expect(getStatus).toHaveBeenCalledTimes(callsAfterSeed);
+		await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+		expect(getStatus).toHaveBeenCalledTimes(callsAfterSeed + 1);
+		expect(renders).toBe(rendersAfterSeed);
+	} finally {
+		view.unmount();
+		vi.useRealTimers();
+	}
+});
+
 it("uses one status subscription and reconciles every mounted surface", async () => {
 	vi.useFakeTimers();
 	onStatus.mockReturnValue(vi.fn());

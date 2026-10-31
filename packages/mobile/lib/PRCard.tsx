@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Feather } from "./icons";
 import { useOpenPage } from "./pageNavigation";
 import { Pressable, StyleSheet, Text, View } from "react-native";
@@ -19,7 +20,7 @@ import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { iconSize, space, type } from "./tokens";
 
 /** A pull-request row with the same hierarchy and density as WorkerListRow. */
-export function PRCard({
+export const PRCard = memo(function PRCard({
 	pr,
 	session,
 	summary,
@@ -92,7 +93,7 @@ export function PRCard({
 			{blockers ? <Text style={styles.blockers} numberOfLines={1}>{blockers}</Text> : null}
 		</Pressable>
 	);
-}
+});
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({

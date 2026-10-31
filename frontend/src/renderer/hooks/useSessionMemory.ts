@@ -71,9 +71,10 @@ export function useFastMemorySampling() {
 	}, [queryClient]);
 }
 
-/** Memory monitoring is a Developer mode tool: with it off, nothing polls the daemon. */
-function useMemoryEnabled(): boolean {
-	return useUiStore((state) => state.developerMode);
+/** Memory monitoring is a Developer mode tool behind its own Diagnostics
+ * toggle: with either off, nothing polls the daemon and nothing renders. */
+export function useDiagnosticsEnabled(): boolean {
+	return useUiStore((state) => state.developerMode && state.diagnostics);
 }
 
 /*
@@ -104,7 +105,7 @@ function selectAppReading(data: SessionMemoryResponse) {
 /** `local` is false on another machine's board: these readings are this
  * machine's, so they must not colour that board's sessions. */
 export function useSessionMemory(projectId?: string, local = true) {
-	const enabled = useMemoryEnabled() && local;
+	const enabled = useDiagnosticsEnabled() && local;
 	return useQuery({
 		enabled,
 		...sessionMemoryQueryOptions(projectId),
@@ -115,7 +116,7 @@ export function useSessionMemory(projectId?: string, local = true) {
 /** Host RAM and pressure. Shares the session-memory query, so mounting both
  * hooks costs one fetch, not two. Absent where unsupported. */
 export function useSystemMemory(projectId?: string) {
-	const enabled = useMemoryEnabled();
+	const enabled = useDiagnosticsEnabled();
 	return useQuery({
 		enabled,
 		...sessionMemoryQueryOptions(projectId),
@@ -126,7 +127,7 @@ export function useSystemMemory(projectId?: string) {
 /** Everything AO runs, app-wide, for the status bar. Same query as the
  * sessions so the bar and the window it opens never disagree. */
 export function useAppMemory(local = true) {
-	const enabled = useMemoryEnabled() && local;
+	const enabled = useDiagnosticsEnabled() && local;
 	return useQuery({
 		enabled,
 		...sessionMemoryQueryOptions(),
@@ -140,7 +141,7 @@ export const memoryPressureRefetchIntervalMs = 10_000;
 export const memoryPressureQueryKey = ["memory-pressure"] as const;
 
 export function useMemoryPressure(local = true) {
-	const enabled = useMemoryEnabled() && local;
+	const enabled = useDiagnosticsEnabled() && local;
 	return useQuery({
 		enabled,
 		queryKey: memoryPressureQueryKey,

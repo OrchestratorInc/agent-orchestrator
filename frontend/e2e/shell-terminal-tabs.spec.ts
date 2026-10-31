@@ -28,7 +28,9 @@ test("opens, selects, and closes standalone shell terminals from the tab strip",
 	await sessionTab.click();
 	await expect(sessionTab).toHaveAttribute("aria-selected", "true");
 
-	// Closing a shell removes exactly its own tab.
+	// Closing a shell removes exactly its own tab. Its close control takes the
+	// glyph's slot on hover, so reach it the way a pointer does.
+	await page.locator("[data-terminal-tab-frame]").filter({ has: closeButtons.last() }).hover();
 	await closeButtons.last().click();
 	await expect(closeButtons).toHaveCount(initialCount);
 });

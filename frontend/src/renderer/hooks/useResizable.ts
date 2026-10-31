@@ -51,7 +51,7 @@ interface UseResizableOptions {
  * - On pointerdown, seed the drag from the painted box when it disagrees with
  *   the var (CSS max-width can hold paint below the custom property). Nothing is
  *   written or persisted until the width actually changes.
- * - Drag applies once per frame; ResizeHandle follows the painted border before paint.
+ * - Drag applies once per frame.
  * - Dragging never auto-collapses: clamp at `min`; collapse stays on explicit UI.
  */
 export function useResizable({

@@ -9,8 +9,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	gopty "github.com/aymanbagabas/go-pty"
+	"golang.org/x/sys/windows"
 )
 
 func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
@@ -20,7 +22,7 @@ func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
 			if fallback || len(argv) == 0 {
 				t.Skip("shell unavailable")
 			}
-			ready, err := prepareCueShellReadiness(t.TempDir(), argv)
+			ready, err := prepareCueShellReadiness(t.TempDir(), argv, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -30,10 +32,6 @@ func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
 			if choice == "powershell" || choice == "pwsh" {
 				command = "[IO.File]::WriteAllText((Join-Path (Get-Location) 'output'), 'left\tright\r\n雪')"
 				want = "left\tright\r\n雪"
-			}
-			input, env := cueCommandInput(argv, command)
-			for key, value := range env {
-				ready.env[key] = value
 			}
 			p, err := gopty.New()
 			if err != nil {
@@ -76,7 +74,12 @@ func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
 					if choice == "cmd" {
 						return
 					}
-					if _, err := io.WriteString(cp, input+"\r"); err != nil {
+					delivery, err := prepareCueCommand(t.TempDir(), argv, command)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer delivery.cleanup()
+					if _, err := io.WriteString(cp, delivery.input+"\r"); err != nil {
 						t.Fatal(err)
 					}
 					for time.Now().Before(deadline) {
@@ -100,5 +103,59 @@ func TestCueReadinessFromInteractiveWindowsShell(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCueCommandWindowsPayloadDirectoryIsPrivate(t *testing.T) {
+	delivery, err := prepareCueCommand(t.TempDir(), []string{"powershell.exe"}, "Write-Output private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer delivery.cleanup()
+	for _, path := range []string{filepath.Dir(delivery.file), delivery.file} {
+		sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dacl, _, err := sd.DACL()
+		if err != nil || dacl == nil {
+			t.Fatalf("missing payload DACL: %v", err)
+		}
+		token, err := windows.OpenCurrentProcessToken()
+		if err != nil {
+			t.Fatal(err)
+		}
+		user, err := token.GetTokenUser()
+		token.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index := uint32(0); index < 3; index++ {
+			var ace *windows.ACCESS_ALLOWED_ACE
+			err := windows.GetAce(dacl, index, &ace)
+			if index == 2 {
+				if err == nil {
+					t.Fatal("payload ACL grants access to more than two principals")
+				}
+				break
+			}
+			if err != nil || ace == nil {
+				t.Fatalf("missing payload allow ACE %d: %v", index, err)
+			}
+			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+			if !sid.Equals(user.User.Sid) && !sid.Equals(system) {
+				t.Fatalf("payload ACL grants access to %s", sid)
+			}
+		}
+		if path == filepath.Dir(delivery.file) {
+			control, _, err := sd.Control()
+			if err != nil || control&windows.SE_DACL_PROTECTED == 0 {
+				t.Fatalf("payload directory inherits permissions: %v", err)
+			}
+		}
 	}
 }

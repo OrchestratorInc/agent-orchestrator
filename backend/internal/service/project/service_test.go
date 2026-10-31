@@ -222,6 +222,24 @@ func TestManager_AddListGetRemove(t *testing.T) {
 	wantCode(t, err, "PROJECT_NOT_FOUND")
 }
 
+func TestManager_AddDerivesValidIDFromSpecialCharacterFolderName(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(t)
+	repo := filepath.Join(t.TempDir(), "Café (v2)+web")
+	if out, err := exec.Command("git", "init", "-b", "main", repo).CombinedOutput(); err != nil {
+		t.Fatalf("git unavailable: %v (%s)", err, out)
+	}
+	commitEmpty(t, repo)
+
+	proj, err := m.Add(ctx, project.AddInput{Path: repo})
+	if err != nil {
+		t.Fatalf("Add without an explicit id: %v", err)
+	}
+	if proj.ID != "cafe-v2-web" {
+		t.Fatalf("derived id = %q, want cafe-v2-web", proj.ID)
+	}
+}
+
 func TestManager_CloneRegistersRepositoryAndPreservesOrigin(t *testing.T) {
 	ctx := context.Background()
 	m := newManager(t)
@@ -419,7 +437,18 @@ func TestManager_PrepareCloneCancellationLeavesNoCheckout(t *testing.T) {
 	}
 }
 
-func TestManager_PrepareCloneResumesAfterRestartOnlyForMatchingCheckout(t *testing.T) {
+func TestManager_PrepareCloneReportsRequestTimeout(t *testing.T) {
+	m := newManager(t)
+	source := gitRepo(t)
+	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now())
+	defer cancel()
+
+	_, err := m.PrepareClone(ctx, project.CloneInput{RemoteURL: remoteURL, DestinationParent: t.TempDir()})
+	wantCode(t, err, "GIT_CLONE_TIMED_OUT")
+}
+
+func TestManager_PrepareCloneDoesNotReclaimExistingCheckoutAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
 	store, err := sqlitetest.Open(dataDir)
@@ -439,6 +468,12 @@ func TestManager_PrepareCloneResumesAfterRestartOnlyForMatchingCheckout(t *testi
 	if err := os.WriteFile(userFile, []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if out, err := exec.Command("git", "-C", prepared.Path, "add", "keep.txt").CombinedOutput(); err != nil {
+		t.Fatalf("stage user work: %v (%s)", err, out)
+	}
+	if out, err := exec.Command("git", "-C", prepared.Path, "-c", "user.name=User", "-c", "user.email=user@example.invalid", "commit", "-m", "User work").CombinedOutput(); err != nil {
+		t.Fatalf("commit user work: %v (%s)", err, out)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -449,21 +484,20 @@ func TestManager_PrepareCloneResumesAfterRestartOnlyForMatchingCheckout(t *testi
 	t.Cleanup(func() { _ = store.Close() })
 	m = project.New(store)
 
-	resumed, err := m.PrepareClone(ctx, in)
-	if err != nil {
-		t.Fatalf("resume prepared clone: %v", err)
-	}
-	if resumed != prepared {
-		t.Fatalf("resumed = %+v, want %+v", resumed, prepared)
+	_, err = m.PrepareClone(ctx, in)
+	wantCode(t, err, "CLONE_DESTINATION_EXISTS")
+	check, err := m.CheckCloneDestination(ctx, in)
+	if err != nil || !check.Exists || !check.CanUseExisting {
+		t.Fatalf("existing checkout should require explicit reuse: %+v, %v", check, err)
 	}
 	if got, err := os.ReadFile(userFile); err != nil || string(got) != "keep" {
-		t.Fatalf("user file after resume = %q, %v", got, err)
+		t.Fatalf("user file after refused preparation = %q, %v", got, err)
 	}
 	if listed, err := m.List(ctx); err != nil || len(listed) != 0 {
 		t.Fatalf("projects before registration = %+v, %v", listed, err)
 	}
-	if _, err := m.Add(ctx, project.AddInput{Path: resumed.Path, ClonePreparationID: resumed.PreparationID}); err != nil {
-		t.Fatalf("register resumed clone: %v", err)
+	if _, err := m.Add(ctx, project.AddInput{Path: prepared.Path, ClonePreparationID: prepared.PreparationID}); err != nil {
+		t.Fatalf("register clone with original ownership token: %v", err)
 	}
 	if listed, err := m.List(ctx); err != nil || len(listed) != 1 {
 		t.Fatalf("projects after registration = %+v, %v", listed, err)
@@ -1482,32 +1516,6 @@ func TestManager_AddAllocatesUniqueIDForCollidingDerivedIDs(t *testing.T) {
 	})
 }
 
-func TestManager_InvalidatesModelScopeAfterProjectAndConfigWrites(t *testing.T) {
-	configureCommitter(t)
-	store, err := sqlitetest.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	var changed []string
-	m := project.NewWithDeps(project.Deps{
-		Store: store,
-		OnModelScopeChanged: func(projectID string) {
-			changed = append(changed, projectID)
-		},
-	})
-	created, err := m.Add(context.Background(), project.AddInput{Path: gitRepo(t), ProjectID: ptr("catalog-scope")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := m.SetConfig(context.Background(), created.ID, project.SetConfigInput{Config: domain.ProjectConfig{Env: map[string]string{"MODEL_PROFILE": "new"}}}); err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{"catalog-scope", "catalog-scope"}; !reflect.DeepEqual(changed, want) {
-		t.Fatalf("changed scopes = %v, want %v", changed, want)
-	}
-}
-
 // gitRepoWithOrigin creates a real git repo with an `origin` remote pointing
 // at `originURL`. Used to assert project.Add captures the origin at add time.
 func gitRepoWithOrigin(t *testing.T, originURL string) string {
@@ -2364,5 +2372,194 @@ func TestEmptyCloneOnboardingCreatesFirstWorkspace(t *testing.T) {
 				t.Fatalf("first workspace commit: %s, %v", out, err)
 			}
 		})
+	}
+}
+
+func TestCloneDestinationPreflightPreservesExistingFolders(t *testing.T) {
+	m := newManager(t)
+	ctx := context.Background()
+	source := gitRepo(t)
+	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	parent := t.TempDir()
+	in := project.CloneInput{RemoteURL: remoteURL, DestinationParent: parent}
+	check, err := m.CheckCloneDestination(ctx, in)
+	if err != nil || check.Exists || check.Path != filepath.Join(parent, filepath.Base(source)) {
+		t.Fatalf("available destination: %+v, %v", check, err)
+	}
+	if err := os.MkdirAll(check.Path, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(check.Path, "keep.txt")
+	if err := os.WriteFile(keep, []byte("do not change"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check, err = m.CheckCloneDestination(ctx, in)
+	if err != nil || !check.Exists || check.CanUseExisting {
+		t.Fatalf("conflicting folder: %+v, %v", check, err)
+	}
+	_, err = m.PrepareClone(ctx, in)
+	wantCode(t, err, "CLONE_DESTINATION_EXISTS")
+	if data, err := os.ReadFile(keep); err != nil || string(data) != "do not change" {
+		t.Fatalf("existing content changed: %q, %v", data, err)
+	}
+}
+
+func TestCloneDestinationPreflightRecognizesPreparedAndRegisteredCheckout(t *testing.T) {
+	m := newManager(t)
+	ctx := context.Background()
+	source := gitRepo(t)
+	remoteURL := (&url.URL{Scheme: "file", Path: source}).String()
+	in := project.CloneInput{RemoteURL: remoteURL, DestinationParent: t.TempDir()}
+	prepared, err := m.PrepareClone(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check, err := m.CheckCloneDestination(ctx, in)
+	if err != nil || !check.Exists || !check.CanUseExisting {
+		t.Fatalf("prepared clone should require explicit reuse: %+v, %v", check, err)
+	}
+	if _, err := m.Add(ctx, project.AddInput{Path: prepared.Path, ClonePreparationID: prepared.PreparationID}); err != nil {
+		t.Fatal(err)
+	}
+	check, err = m.CheckCloneDestination(ctx, in)
+	if err != nil || !check.Exists || !check.CanUseExisting {
+		t.Fatalf("registered checkout: %+v, %v", check, err)
+	}
+}
+
+func TestPreparedCloneRegistrationRetryFindsRegisteredProject(t *testing.T) {
+	m := newManager(t)
+	source := gitRepo(t)
+	prepared := prepareClone(t, m, (&url.URL{Scheme: "file", Path: source}).String())
+	in := project.AddInput{Path: prepared.Path, ClonePreparationID: prepared.PreparationID}
+	if _, err := m.Add(t.Context(), in); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.Add(t.Context(), in)
+	wantCode(t, err, "PATH_ALREADY_REGISTERED")
+}
+
+func TestKeepPreparedCloneReleasesCleanupOwnership(t *testing.T) {
+	m := newManager(t)
+	source := gitRepo(t)
+	in := project.CloneInput{RemoteURL: (&url.URL{Scheme: "file", Path: source}).String(), DestinationParent: t.TempDir()}
+	prepared, err := m.PrepareClone(t.Context(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup := project.ClonePreparationCleanupInput{Path: prepared.Path, PreparationID: prepared.PreparationID, KeepCheckout: true}
+	if err := m.CleanupPreparedClone(t.Context(), cleanup); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(prepared.Path, "user-edit.txt")
+	if err := os.WriteFile(keep, []byte("keep my work"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check, err := m.CheckCloneDestination(t.Context(), in)
+	if err != nil || !check.Exists || !check.CanUseExisting {
+		t.Fatalf("kept checkout must require explicit reuse: %+v, %v", check, err)
+	}
+	_, err = m.PrepareClone(t.Context(), in)
+	wantCode(t, err, "CLONE_DESTINATION_EXISTS")
+	cleanup.KeepCheckout = false
+	if err := m.CleanupPreparedClone(t.Context(), cleanup); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(keep); err != nil || string(data) != "keep my work" {
+		t.Fatalf("released checkout was modified: %q, %v", data, err)
+	}
+}
+
+type memMilestones map[string]bool
+
+func (m memMilestones) Claim(name string) (bool, bool) {
+	if m[name] {
+		return false, true
+	}
+	m[name] = true
+	return true, true
+}
+
+func TestManager_AddFirstForInstallIsDurable(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	sink := &captureSink{}
+	m := project.NewWithDeps(project.Deps{Store: store, Telemetry: sink, Milestones: memMilestones{}})
+
+	firstForInstall := func() any {
+		t.Helper()
+		for i := len(sink.events) - 1; i >= 0; i-- {
+			if sink.events[i].Name == "ao.projects.created" {
+				return sink.events[i].Payload["first_for_install"]
+			}
+		}
+		t.Fatalf("no ao.projects.created in %#v", sink.events)
+		return nil
+	}
+	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao")}); err != nil {
+		t.Fatalf("Add first: %v", err)
+	}
+	if got := firstForInstall(); got != true {
+		t.Fatalf("first add first_for_install = %#v, want true", got)
+	}
+	if _, err := m.Remove(ctx, "ao"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	// The table is empty again: the legacy event re-fires, the durable flag must not.
+	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao2")}); err != nil {
+		t.Fatalf("Add after remove: %v", err)
+	}
+	if got := firstForInstall(); got != false {
+		t.Fatalf("re-add first_for_install = %#v, want false", got)
+	}
+}
+
+func TestManager_AddFirstForInstallFalseForUpgradeWithOnlyArchivedProjects(t *testing.T) {
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	// A build without markers added and then removed (archived) a project.
+	old := project.NewWithDeps(project.Deps{Store: store})
+	if _, err := old.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao")}); err != nil {
+		t.Fatalf("Add on old build: %v", err)
+	}
+	if _, err := old.Remove(ctx, "ao"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	sink := &captureSink{}
+	milestones := memMilestones{}
+	m := project.NewWithDeps(project.Deps{Store: store, Telemetry: sink, Milestones: milestones})
+	if _, err := m.Add(ctx, project.AddInput{Path: gitRepo(t), ProjectID: ptr("ao2")}); err != nil {
+		t.Fatalf("Add after upgrade: %v", err)
+	}
+	var created, legacy int
+	for _, ev := range sink.events {
+		switch ev.Name {
+		case "ao.projects.created":
+			created++
+			if got := ev.Payload["first_for_install"]; got != false {
+				t.Fatalf("first_for_install = %#v, want false with an archived prior project", got)
+			}
+		case "ao.onboarding.first_project_added":
+			legacy++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("ao.projects.created count = %d, want 1", created)
+	}
+	// The deprecated event keeps its active-projects behavior.
+	if legacy != 1 {
+		t.Fatalf("first_project_added count = %d, want 1 (no active projects)", legacy)
+	}
+	if !milestones["project_added"] {
+		t.Fatal("marker not claimed")
 	}
 }

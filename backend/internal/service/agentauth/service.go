@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
@@ -36,6 +37,8 @@ type Action string
 const (
 	// ActionLogin opens an agent's native login flow.
 	ActionLogin Action = "login"
+	// ActionLogout opens an agent's native logout flow.
+	ActionLogout Action = "logout"
 	// ActionSetup opens an agent's native provider/setup flow.
 	ActionSetup Action = "setup"
 	// ActionInstructions points the user to agent-owned setup documentation.
@@ -56,14 +59,18 @@ const (
 // Plan is the display-safe authentication plan for one harness. Trusted
 // command and terminal details remain private to this package.
 type Plan struct {
-	AgentID          string     `json:"agentId"`
-	Action           Action     `json:"action"`
-	LaunchMode       LaunchMode `json:"launchMode" enum:"terminal,documentation"`
-	Available        bool       `json:"available"`
-	DisplayCommand   string     `json:"displayCommand,omitempty"`
-	Guidance         string     `json:"guidance,omitempty"`
-	DocumentationURL string     `json:"documentationUrl"`
-	Reason           string     `json:"reason,omitempty"`
+	AgentID    string     `json:"agentId"`
+	Action     Action     `json:"action"`
+	LaunchMode LaunchMode `json:"launchMode" enum:"terminal,documentation"`
+	Available  bool       `json:"available"`
+	// LogoutCommand is empty when native logout is unsupported. It is display
+	// text only; clients cannot supply or override the private command.
+	LogoutCommand    string `json:"logoutCommand,omitempty"`
+	logoutCommand    []string
+	DisplayCommand   string `json:"displayCommand,omitempty"`
+	Guidance         string `json:"guidance,omitempty"`
+	DocumentationURL string `json:"documentationUrl"`
+	Reason           string `json:"reason,omitempty"`
 	command          []string
 	title            string
 	terminalInput    string
@@ -72,6 +79,9 @@ type Plan struct {
 	// state, instead of waiting for the user to trigger terminalInput.
 	initialInput            string
 	initialInputReadyStates []shellterm.InitialInputReadyState
+	// sendInitialInputOnReadyTimeout delivers initialInput even when no ready
+	// state appears in time, for harnesses whose input is safe once started.
+	sendInitialInputOnReadyTimeout bool
 	// prepareWorkspace, when set, runs reviewed harness-specific setup against
 	// the plan's stable auth workspace before the terminal launches (for
 	// example pre-recording workspace trust so a first-run dialog cannot
@@ -149,6 +159,29 @@ func (s *Service) Start(ctx context.Context, agentID string) (StartResult, error
 	if !ok {
 		return StartResult{}, apierr.Invalid("AGENT_AUTH_TARGET_UNKNOWN", fmt.Sprintf("unknown agent authentication target %q", agentID), nil)
 	}
+	return s.start(ctx, plan)
+}
+
+// Logout opens the fixed native logout flow using the binary sessions launch.
+func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, error) {
+	plan, ok := planByAgentID[agentID]
+	if !ok {
+		return StartResult{}, apierr.Invalid("AGENT_AUTH_TARGET_UNKNOWN", fmt.Sprintf("unknown agent authentication target %q", agentID), nil)
+	}
+	if len(plan.logoutCommand) == 0 {
+		return StartResult{}, apierr.Invalid("AGENT_LOGOUT_UNSUPPORTED", "This harness does not have a supported native logout command.", nil)
+	}
+	plan.command = plan.logoutCommand
+	plan.Action = ActionLogout
+	plan.title = strings.Replace(plan.title, "Log in to", "Log out of", 1)
+	plan.Guidance = "Complete the harness's native logout flow, then close the terminal to check authentication again."
+	plan.launcher, plan.terminalInput, plan.initialInput = "", "", ""
+	plan.launcherArgs, plan.initialInputReadyStates = nil, nil
+	plan.prepareWorkspace = nil
+	return s.start(ctx, plan)
+}
+
+func (s *Service) start(ctx context.Context, plan Plan) (StartResult, error) {
 	plan = s.resolve(ctx, plan)
 	if !plan.Available {
 		return StartResult{}, apierr.Invalid("AGENT_AUTH_UNAVAILABLE", plan.Reason, nil)
@@ -171,10 +204,23 @@ func (s *Service) Start(ctx context.Context, agentID string) (StartResult, error
 		argv = append([]string{self, plan.launcher, "--executable", plan.command[0]}, plan.launcherArgs...)
 	}
 	input := shellterm.OpenCommandTerminalInput{
-		Argv:                    argv,
-		Title:                   plan.title,
-		InitialInput:            plan.initialInput,
-		InitialInputReadyStates: plan.initialInputReadyStates,
+		Argv:                           argv,
+		Title:                          plan.title,
+		InitialInput:                   plan.initialInput,
+		InitialInputReadyStates:        plan.initialInputReadyStates,
+		SendInitialInputOnReadyTimeout: plan.sendInitialInputOnReadyTimeout,
+	}
+	if plan.AgentID == "claude-code" && s.dataDir != "" {
+		// The launcher runs in a private auth workspace. Preserve the daemon's
+		// resolved data root instead of re-resolving a relative inherited value.
+		input.Env = map[string]string{"AO_DATA_DIR": s.dataDir}
+	}
+	if plan.AgentID == "opencode-v2" {
+		dataHome, err := opencodev2.DataHome(ctx)
+		if err != nil {
+			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", err.Error())
+		}
+		input.Env = map[string]string{"XDG_DATA_HOME": dataHome}
 	}
 	if plan.prepareWorkspace != nil {
 		workingDir, err := s.prepareAuthWorkspace(ctx, plan)

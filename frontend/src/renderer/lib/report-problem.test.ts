@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	collectReportProblemDiagnostics,
 	formatReportProblemDraft,
+	formatReportTimestamp,
 	reportProblemDestinationUrl,
 	type ReportProblemDiagnostics,
 	type ReportProblemInput,
@@ -40,6 +41,22 @@ describe("report problem drafts", () => {
 			expect(draft).toContain("AO version: 1.2.3-test");
 			expect(draft).toContain("Daemon: ready");
 			expect(draft).toContain("Route surface: session_detail");
+		}
+	});
+
+	it("shows the generated time as readable local time with a UTC reference", () => {
+		expect(formatReportTimestamp("2026-10-21T20:50:24.025Z", "America/Los_Angeles")).toBe(
+			"Oct 21, 2026, 1:50:24 PM PDT (2026-10-21 20:50:24 UTC)",
+		);
+		expect(formatReportTimestamp("2026-10-21T20:50:24.025Z", "Asia/Kolkata")).toBe(
+			"Oct 22, 2026, 2:20:24 AM GMT+5:30 (2026-10-21 20:50:24 UTC)",
+		);
+		expect(formatReportTimestamp("unknown")).toBe("unknown");
+
+		for (const output of ["github", "discord", "email"] as const) {
+			const draft = formatReportProblemDraft(completeInput, diagnostics, output);
+			expect(draft).toContain("(2026-07-02 00:00:00 UTC)");
+			expect(draft).not.toContain("2026-07-02T00:00:00.000Z");
 		}
 	});
 

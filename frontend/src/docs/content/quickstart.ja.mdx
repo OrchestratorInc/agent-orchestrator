@@ -1,0 +1,126 @@
+---
+title: クイックスタート
+description: プロジェクトを追加し、ワーカーを 1 つ起動して、タスクからプルリクエストまでを追いかけます。
+translatedFrom: ec341474c9bc
+---
+
+このガイドでは、デスクトップアプリで最初のタスクを進める流れを説明します。リポジトリを追加し、ワーカーを起動し、その作業を追いかけ、結果をレビューします。
+
+<Callout type="info" title="始める前に">
+	Orchestrator をインストールし、GitHub のプロジェクトを使う場合は `gh` でサインインしておきます。外部のコーディングエージェントを選ぶ場合は、それをインストールしてサインインを済ませてください。Orchestrator では、これらのツールをハーネスと呼びます。Unreal Agent は、macOS と Linux の Chat 用に組み込まれています。[インストール](/installation)を参照してください。
+</Callout>
+
+<span id="pick-a-safe-first-task" />
+## 安全な最初のタスクを選ぶ
+
+ブランチとプルリクエストを作成できるリポジトリを選びます。最初のタスクには、終わりがはっきりしたものが向いています。
+
+- 再現できる失敗がある小さなバグを修正する。
+- 範囲を絞ったテストを 1 つ追加する。
+- 短いドキュメントのページを更新する。
+- 受け入れ条件が明確な、小さなリファクタリングを行う。
+
+<span id="run-the-first-session" />
+## 最初のセッションを実行する
+
+<Steps>
+<Step>
+
+<span id="add-the-repository" />
+### リポジトリを追加する
+
+Orchestrator を開き、**Add project** を選んで、ローカルのリポジトリを選択します。デスクトップアプリはリポジトリを登録し、元のチェックアウトはそのまま残します。
+
+</Step>
+<Step>
+
+<span id="create-a-worker" />
+### ワーカーを作成する
+
+プロジェクトから新しいタスクを作成し、短い名前と具体的なプロンプトを入力します。使えるコーディングエージェントを選びます。外部のエージェントはインストール後に表示されます。Unreal Agent は、対応する macOS と Linux の Chat 用に Orchestrator に組み込まれています。Orchestrator では、エージェントは Settings の **Harness** に一覧表示されます。
+
+タスクに合ったインターフェースを選びます。
+
+- **Chat**：構造化された会話、アクティビティ、承認、プラン、残り続ける履歴が必要なとき。
+- **Terminal UI**：ハーネスのネイティブな対話型ターミナルを使いたいとき。
+
+Orchestrator は、選択したコントローラーを起動する前に、そのセッション用の分離された git ワークツリーとブランチを作成します。
+
+</Step>
+<Step>
+
+<span id="follow-the-session" />
+### セッションを追いかける
+
+サイドバーまたはボードでセッションを選択します。メインのペインには、そのセッションの Chat の会話またはライブのターミナルが表示されます。インスペクターには、セッションの詳細、プルリクエストの状態、レビュー、変更されたファイル、ブラウザプレビューが表示されます。
+
+Orchestrator は、active、idle、入力待ち、blocked、終了といったアクティビティと、プルリクエストの情報を組み合わせて、セッションの状態を表示します。
+
+</Step>
+<Step>
+
+<span id="give-feedback" />
+### フィードバックを送る
+
+追加の指示には、Chat の入力欄またはセッションのメッセージ操作を使います。修正の指示は具体的にしてください。
+
+```text
+Keep this change limited to the API route. Do not refactor the shared client.
+```
+
+TUI セッションでは、直接やり取りが必要なときのためにターミナルを引き続き使えます。
+
+</Step>
+<Step>
+
+<span id="review-the-pull-request" />
+### プルリクエストをレビューする
+
+ワーカーがプルリクエストを作成するか担当すると、Orchestrator は CI、レビュアー、未解決のレビューコメント、マージ可否の簡潔な概要を表示します。レビュー担当のエージェントを実行したり、求められた変更をワーカーに戻したり、コメントを解決したり、適切であればマージしたりできます。
+
+Orchestrator は、未コミットの変更があるワークツリーを強制的に削除することはありません。セッションのワークスペースを安全に削除できない場合、クリーンアップはユーザーの作業を残します。
+
+</Step>
+</Steps>
+
+<span id="try-a-browser-preview" />
+## ブラウザプレビューを試す
+
+Web のタスクでは、セッションの中でアプリを起動し、任意の CLI でその URL を選択します。
+
+```bash
+ao preview http://127.0.0.1:5173
+```
+
+リポジトリに `.ao/launch.json` がある場合は、`ao preview start` で設定済みの開発サーバーを起動できます。Browser タブには、選択した対象が表示されます。ワーカーがあるというだけで、Orchestrator がプレビューの対象を推測することはありません。
+
+<span id="try-switching-interfaces" />
+## インターフェースの切り替えを試す
+
+対応するセッションには **Switch to chat UI** または **Switch to terminal UI** が表示されます。表示されるかどうかは、エージェントと、そのエージェントが作業中かどうかによって決まります。Orchestrator は、同じセッションとワークツリーを保ったまま、コントローラーを 1 つずつ入れ替えます。
+
+**Finish work, then switch** が表示された場合は、受け付け済みの作業が終わるのを待ってから切り替えます。**Stop now and switch** は作業を中断します。ターミナルセッションによっては **Terminate and then switch** が必要です。下書き、添付ファイル、キューに入ったターンを送り直す必要が出ることがあるため、ダイアログをよく読んでください。会話履歴の扱いについては、[Dashboard：インターフェースの切り替え](/dashboard#switch-interfaces)を参照してください。
+
+<span id="optional-cli" />
+## 任意の CLI
+
+CLI は、アプリが管理するデーモンに接続する薄いクライアントです。スクリプトやターミナル中心の作業に便利ですが、通常のデスクトップでの利用には必要ありません。
+
+```bash
+ao status
+ao session ls
+ao send --session <session-id> --message "Run the focused tests before you finish."
+```
+
+既定のインターフェースは **Settings → General** で選ぶか、新しいタスクごとに選びます。プロジェクトのエージェント設定では、コーディングエージェント、モデル、推論の強さ、プロバイダーの実行モードを選びます。全体の既定を Chat と Terminal UI のどちらにするかは、ここでは設定しません。
+
+<span id="next" />
+
+<span id="next-steps" />
+## 次のステップ
+
+<Cards>
+	<Card title="ダッシュボード" description="ボード、セッションビュー、インスペクター、Chat、ターミナルの使い方を学びます。" href="/dashboard" />
+	<Card title="アーキテクチャ" description="デスクトップアプリとデーモンがセッションをどう連携させるかを確認します。" href="/architecture" />
+	<Card title="使用例" description="現在のデスクトップと CLI のワークフローを試します。" href="/examples" />
+</Cards>

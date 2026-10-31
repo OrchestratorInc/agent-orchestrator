@@ -3,6 +3,7 @@ import type {
 	ConversationItem,
 	ConversationMessage,
 	ConversationSnapshot,
+	ConversationPlan,
 	ConversationTurn,
 } from "./types";
 import { stagedAttachmentParts } from "./messageAttachments";
@@ -13,6 +14,8 @@ export type ConversationGroup = {
 	anchor: number;
 	items: ConversationItem[];
 	turn?: ConversationTurn;
+	/** The turn's plan when this turn should show it; see attachCurrentPlans. */
+	plan?: ConversationPlan;
 };
 
 export type ConversationMarker = {
@@ -30,29 +33,40 @@ export type ActivityNode = {
 
 export type ConversationTimelineRenderPlan =
 	| { kind: "empty"; inverted: false; groups: [] }
-	| { kind: "list"; inverted: true; groups: ConversationGroup[] };
+	| { kind: "list"; inverted: boolean; groups: ConversationGroup[] };
 
 export type QueuedConversationMessage = { turnId: string; message: ConversationMessage };
 
-/** Queued prompts stay next to the composer until they are actually dispatched. */
-export function queuedConversationMessages(snapshot: ConversationSnapshot): QueuedConversationMessage[] {
-	const queuedTurnIds = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
+/** Queued turns, except a starting session's opening brief, which reads as sent. */
+function queuedTurnIds(snapshot: ConversationSnapshot, openingTurnId?: string): Set<string> {
+	const ids = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
+	if (openingTurnId) ids.delete(openingTurnId);
+	return ids;
+}
+
+/**
+ * Queued prompts stay next to the composer until they are actually dispatched.
+ * `openingTurnId` names a starting session's brief: it sits in the timeline
+ * above the setup checklist instead, as on the desktop.
+ */
+export function queuedConversationMessages(snapshot: ConversationSnapshot, openingTurnId?: string): QueuedConversationMessage[] {
+	const queued = queuedTurnIds(snapshot, openingTurnId);
 	return snapshot.items.flatMap((item) =>
 		item.kind === "message" &&
 		item.role === "user" &&
 		item.origin === "human" &&
 		item.turnId &&
-		queuedTurnIds.has(item.turnId)
+		queued.has(item.turnId)
 			? [{ turnId: item.turnId, message: item }]
 			: [],
 	);
 }
 
 /** Keep conversation signal while removing provider telemetry/noise. */
-export function readableConversationItems(snapshot: ConversationSnapshot): ConversationItem[] {
+export function readableConversationItems(snapshot: ConversationSnapshot, openingTurnId?: string): ConversationItem[] {
 	const plannedTurns = new Set(snapshot.turns.filter((turn) => turn.plan?.steps.length).map((turn) => turn.id));
-	const queuedTurnIds = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
-	return snapshot.items.filter((item) => !item.turnId || !queuedTurnIds.has(item.turnId)).filter((item) => item.kind === "message" || (
+	const queued = queuedTurnIds(snapshot, openingTurnId);
+	return snapshot.items.filter((item) => !item.turnId || !queued.has(item.turnId)).filter((item) => item.kind === "message" || (
 		item.activityKind !== "usage" &&
 		item.activityKind !== "reasoning" &&
 		!(item.activityKind === "plan" && item.turnId && plannedTurns.has(item.turnId))
@@ -89,7 +103,113 @@ export function groupConversationByTurn(
 			groups.push(group);
 		}
 	}
-	return groups.sort((left, right) => left.anchor - right.anchor);
+	groups.sort((left, right) => left.anchor - right.anchor);
+	attachCurrentPlans(groups);
+	return groups;
+}
+
+/**
+ * Gives each turn group the plan it should show, as the desktop does. A list the
+ * agent keeps across turns (Claude's task list) reaches every later turn as a copy
+ * of the same list. Only the latest copy is current, so only that turn shows it;
+ * the earlier copies would otherwise stack down the history.
+ */
+function attachCurrentPlans(groups: ConversationGroup[]): void {
+	let currentSpanningTurn: string | undefined;
+	for (let index = groups.length - 1; index >= 0; index--) {
+		if (groups[index].turn?.plan?.spansTurns) {
+			currentSpanningTurn = groups[index].turnId;
+			break;
+		}
+	}
+	for (const group of groups) {
+		const plan = group.turn?.plan;
+		if (!plan?.steps.length) continue;
+		if (plan.spansTurns && group.turnId !== currentSpanningTurn) continue;
+		group.plan = plan;
+	}
+}
+
+export type TurnItemPartition = {
+	/** Settled turns fold their work behind a "Worked for" header; a running turn shows it inline. */
+	settled: boolean;
+	/** Only the prompt that opened the turn sits above the status row. */
+	prompt: ConversationItem[];
+	/** The work between prompt and answer: tool calls, interim prose, later steers. */
+	work: ConversationItem[];
+	/** Errors and system warnings, which stay readable after the work folds away. */
+	notices: ConversationItem[];
+	/** The agent's last non-empty reply, shown below the folded work. */
+	final: ConversationItem[];
+};
+
+function isSteerItem(item: ConversationItem): boolean {
+	return item.kind === "activity" && item.activityKind === "system" && item.detail?.event === "steer";
+}
+
+function isHumanItem(item: ConversationItem): boolean {
+	return (item.kind === "message" && item.role === "user") || isSteerItem(item);
+}
+
+function isNoticeItem(item: ConversationItem): boolean {
+	if (item.kind !== "activity") return false;
+	if (item.activityKind === "error") return true;
+	return item.detail?.event !== undefined && !isSteerItem(item) && item.detail.event !== "compaction" && item.activityKind !== "plan";
+}
+
+/** Blank assistant messages are the only items the timeline draws nothing for;
+ * approval and user-input cards always render, so they fold with the work. */
+function rendersNothing(item: ConversationItem): boolean {
+	return item.kind === "message" && item.role === "assistant" && item.text.trim() === "";
+}
+
+/**
+ * The one reply that draws the typing cursor: the newest item, while it is
+ * still streaming. ACP providers settle a turn's text blocks only when the turn
+ * ends, so earlier blocks stay marked streaming after a tool call follows them.
+ */
+export function streamingCursorMessageId(items: ConversationItem[]): string | undefined {
+	const last = items.at(-1);
+	return last?.kind === "message" && last.role === "assistant" && last.streaming ? last.id : undefined;
+}
+
+/**
+ * Split one turn's items for the Working / Worked presentation, matching desktop.
+ * A running turn keeps its work inline under a live "Working" row; once the turn
+ * settles the work folds behind "Worked for", leaving the final reply and any
+ * notices visible. Queued turns (and turns with no daemon record) stay flat.
+ */
+export function partitionTurnItems(items: ConversationItem[], turn: ConversationTurn | undefined): TurnItemPartition | undefined {
+	if (!turn || turn.state === "queued") return undefined;
+	const settled = turn.state !== "running";
+	const firstWork = items.findIndex((item) => !isHumanItem(item));
+	const leading = firstWork < 0 ? items.length : firstWork;
+	const prompt = items.slice(0, leading);
+	let rest = items.slice(leading);
+	if (!settled) return { settled, prompt, work: rest, notices: [], final: [] };
+	let final: ConversationItem[] = [];
+	for (let index = rest.length - 1; index >= 0; index -= 1) {
+		const item = rest[index];
+		if (item.kind === "message" && item.role === "assistant" && item.text.trim() !== "") {
+			final = [item];
+			rest = rest.filter((_, i) => i !== index);
+			break;
+		}
+	}
+	const notices = rest.filter(isNoticeItem);
+	const work = rest.filter((item) => !isNoticeItem(item) && !rendersNothing(item));
+	return { settled, prompt, work, notices, final };
+}
+
+/**
+ * Where a visible setup checklist renders: inside the turn that carries the
+ * opening brief, or on its own at the live edge when no loaded turn does. It
+ * must never go undrawn, because while it shows the screen suppresses the
+ * failure and resume banners, and a failed start's Retry lives in it.
+ */
+export function startupPlacement(groups: ReadonlyArray<Pick<ConversationGroup, "turnId">>, openingTurnId: string | undefined, visible: boolean): "turn" | "standalone" | "none" {
+	if (!visible) return "none";
+	return openingTurnId && groups.some((group) => group.turnId === openingTurnId) ? "turn" : "standalone";
 }
 
 /** Latest-first data lets an inverted virtualized list paint the live edge first. */
@@ -103,11 +223,15 @@ export function latestFirstConversationGroups(
 export function conversationTimelineRenderPlan(
 	snapshot: ConversationSnapshot,
 	items = readableConversationItems(snapshot),
+	platform: "android" | "ios" = "ios",
 ): ConversationTimelineRenderPlan {
-	const groups = latestFirstConversationGroups(snapshot, items);
+	// Android's native text-selection toolbar needs untransformed screen
+	// coordinates. FlatList's inverted transform detaches it from selected text.
+	const inverted = platform !== "android";
+	const groups = inverted ? latestFirstConversationGroups(snapshot, items) : groupConversationByTurn(snapshot, items);
 	return groups.length === 0
 		? { kind: "empty", inverted: false, groups: [] }
-		: { kind: "list", inverted: true, groups };
+		: { kind: "list", inverted, groups };
 }
 
 export function conversationMarkers(snapshot: ConversationSnapshot): ConversationMarker[] {
@@ -129,8 +253,49 @@ function humanMessageTitle(text: string): string {
 	return body.trim() || (attachments.length === 1 ? "1 attachment" : `${attachments.length} attachments`);
 }
 
+/**
+ * Human prompts the daemon can branch before and resend edited, mirroring the
+ * desktop's gate: an idle controller, a settled turn, and either the binding's
+ * first prompt, a native fork point, or replayable history. `reconstructed`
+ * names prompts whose earlier context would be replayed rather than forked.
+ */
+export function editableHumanTurns(snapshot: ConversationSnapshot): { editable: Set<string>; reconstructed: Set<string> } {
+	const editable = new Set<string>();
+	const reconstructed = new Set<string>();
+	if (snapshot.controller.state !== "ready") return { editable, reconstructed };
+	const settled = new Set(snapshot.turns
+		.filter((turn) => turn.state === "completed" || turn.state === "interrupted" || turn.state === "failed")
+		.map((turn) => turn.id));
+	const prompts = snapshot.items.filter((item): item is ConversationMessage =>
+		item.kind === "message" && item.role === "user" && item.origin === "human" && Boolean(item.turnId));
+	const firstTurnId = prompts.find((item) => item.editAvailable)?.turnId;
+	const forkAfter = snapshot.nativeForkAvailableAfterSequence ?? 0;
+	const canFork = snapshot.capabilities?.includes("fork") === true;
+	const canReplay = snapshot.capabilities?.includes("prompt_replay") === true && snapshot.capabilities.includes("embedded_context");
+	for (const item of prompts) {
+		const turnId = item.turnId as string;
+		if (!item.editAvailable || !settled.has(turnId)) continue;
+		const first = !snapshot.hasMoreBefore && turnId === firstTurnId;
+		const nativeFork = canFork && forkAfter > 0 && item.sequence > forkAfter;
+		if (!first && !nativeFork && !canReplay) continue;
+		editable.add(turnId);
+		if (!first && !nativeFork) reconstructed.add(turnId);
+	}
+	return { editable, reconstructed };
+}
+
+/** Whether two editable-turn results name the same turns, so a caller can keep the older identity. */
+export function sameEditableTurns(
+	a: ReturnType<typeof editableHumanTurns> | undefined,
+	b: ReturnType<typeof editableHumanTurns> | undefined,
+): boolean {
+	if (!a || !b) return a === b;
+	const same = (x: ReadonlySet<string>, y: ReadonlySet<string>) => x.size === y.size && [...x].every((id) => y.has(id));
+	return same(a.editable, b.editable) && same(a.reconstructed, b.reconstructed);
+}
+
 export function canRollbackTurn(snapshot: ConversationSnapshot, turn: ConversationTurn): boolean {
-	return snapshot.capabilities?.includes("rollback") === true &&
+	return snapshot.controller.state !== "hibernated" && snapshot.capabilities?.includes("rollback") === true &&
 		!snapshot.turns.some((candidate) => candidate.state === "running" || candidate.state === "queued") &&
 		turn.state !== "running" && turn.state !== "queued" &&
 		Boolean(turn.providerTurnId) &&
@@ -173,6 +338,52 @@ export function countActivityNodes(nodes: ActivityNode[]): number {
 export function activityNodesRunning(nodes: ActivityNode[]): boolean {
 	return nodes.some((node) => node.activity.status === "running" || activityNodesRunning(node.children));
 }
+
+export function summarizeActivities(activities: ConversationActivity[]): string {
+	let reads = 0;
+	let searches = 0;
+	let vcs = 0;
+	let commands = 0;
+	let tools = 0;
+	let reviews = 0;
+	let plans = 0;
+	let actions = 0;
+	for (const activity of activities) {
+		if (activity.activityKind === "ao_action") { actions++; continue; }
+		if (activity.activityKind === "mcp_tool") { tools++; continue; }
+		if (activity.activityKind === "auto_review") { reviews++; continue; }
+		if (activity.activityKind === "plan") { plans++; continue; }
+		switch (commandCategory(activity.detail?.command ?? activity.summary)) {
+			case "read": reads++; break;
+			case "search": searches++; break;
+			case "vcs": vcs++; break;
+			default: commands++;
+		}
+	}
+	const parts: string[] = [];
+	if (reads) parts.push(`${reads} ${reads === 1 ? "file" : "files"}`);
+	if (searches) parts.push(`${searches} ${searches === 1 ? "search" : "searches"}`);
+	if (vcs) parts.push(`${vcs} git ${vcs === 1 ? "check" : "checks"}`);
+	if (commands) parts.push(`${commands} ${commands === 1 ? "command" : "commands"}`);
+	if (tools) parts.push(`${tools} tool ${tools === 1 ? "call" : "calls"}`);
+	if (reviews) parts.push(`${reviews} auto-${reviews === 1 ? "decision" : "decisions"}`);
+	if (plans) parts.push("updated plan");
+	if (actions) parts.push(`${actions} ${actions === 1 ? "action" : "actions"}`);
+	const verb = reads || searches ? "Explored" : actions && parts.length === 1 ? "Performed" : "Ran";
+	return `${verb} ${parts.length ? parts.join(", ") : `${activities.length} steps`}`;
+}
+
+function commandCategory(text: string): "read" | "search" | "vcs" | "run" {
+	const head = text.trim().split(/\s+/, 1)[0] ?? "";
+	const binary = head.slice(head.lastIndexOf("/") + 1);
+	if (READ_COMMANDS.has(binary)) return "read";
+	if (SEARCH_COMMANDS.has(binary)) return "search";
+	if (binary === "git" || binary === "gh") return "vcs";
+	return "run";
+}
+
+const READ_COMMANDS = new Set(["cat", "sed", "nl", "head", "tail", "bat", "less", "more", "wc", "jq"]);
+const SEARCH_COMMANDS = new Set(["rg", "grep", "find", "fd", "ls", "tree", "glob", "ag"]);
 
 function activityCycle(node: ActivityNode, parent: ActivityNode, byProvider: Map<string, ActivityNode>): boolean {
 	const visited = new Set<ActivityNode>([node]);

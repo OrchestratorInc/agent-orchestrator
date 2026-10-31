@@ -3,6 +3,8 @@ package shellterm
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -11,26 +13,120 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestCueCommandInput(t *testing.T) {
 	command := "printf '%s\\n' 'left\tright'\n# '\"雪\r\n"
 	for _, shell := range []string{"bash", "zsh", "sh", "fish", "bash.exe", "sh.exe", "pwsh.exe", "powershell.exe"} {
 		t.Run(shell, func(t *testing.T) {
-			input, env := cueCommandInput([]string{filepath.Join("shells", shell)}, command)
-			if env["AO_CUE_COMMAND"] != command {
-				t.Fatalf("payload = %q, want %q", env["AO_CUE_COMMAND"], command)
+			delivery, err := prepareCueCommand(t.TempDir(), []string{filepath.Join("shells", shell)}, command)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if strings.ContainsAny(input, "\t\r\n") || strings.Contains(input, "left") || !strings.Contains(input, "AO_CUE_COMMAND") {
-				t.Fatalf("input is not a fixed single-line dispatcher: %q", input)
+			defer delivery.cleanup()
+			payload, err := os.ReadFile(delivery.file)
+			if err != nil || !strings.HasSuffix(string(payload), cueEvaluationSuffix([]string{shell}, command)) {
+				t.Fatalf("payload = %q, err = %v, want exact evaluated command %q", payload, err, command)
+			}
+			if strings.ContainsAny(delivery.input, "\t\r\n") || strings.Contains(delivery.input, "left") || !strings.Contains(delivery.input, "command") {
+				t.Fatalf("input is not a single-line file dispatcher: %q", delivery.input)
 			}
 		})
 	}
 	for _, argv := range [][]string{nil, {"cmd.exe"}, {"unknown"}} {
-		input, env := cueCommandInput(argv, command)
-		if input != command || len(env) != 0 {
-			t.Fatalf("legacy shell %v: input = %q, env = %v", argv, input, env)
+		delivery, err := prepareCueCommand(t.TempDir(), argv, command)
+		if err != nil || delivery.input != command || delivery.file != "" {
+			t.Fatalf("legacy shell %v: delivery = %+v, err = %v", argv, delivery, err)
 		}
+	}
+}
+
+func cueEvaluationSuffix(argv []string, command string) string {
+	switch strings.ToLower(filepath.Base(argv[0])) {
+	case "fish":
+		return "eval " + fishSingleQuote("set -e AO_CUE_COMMAND; "+command) + "\n"
+	case "pwsh.exe", "powershell.exe":
+		return "Invoke-Expression " + powershellSingleQuote("Remove-Item Env:AO_CUE_COMMAND -ErrorAction SilentlyContinue; "+command) + "\n"
+	default:
+		return "eval " + shellSingleQuote("unset AO_CUE_COMMAND; "+command) + "\n"
+	}
+}
+
+func TestCueCommandDoesNotExposePayloadDuringStartup(t *testing.T) {
+	for _, ready := range []bool{false, true} {
+		t.Run(fmt.Sprint(ready), func(t *testing.T) {
+			rt := newFakeShellRuntime()
+			rt.cueReady = ready
+			rt.childExited = !ready
+			rt.onCreate = func(cfg ports.RuntimeConfig) {
+				for key, value := range cfg.Env {
+					if strings.Contains(value, "private-cue-payload") {
+						t.Errorf("command payload exposed in startup environment key %s", key)
+					}
+				}
+				files, err := filepath.Glob(filepath.Join(filepath.Dir(filepath.Dir(cfg.Env["AO_CUE_READY_FILE"])), "cue-commands", "*", "command"))
+				if err != nil || len(files) != 0 {
+					t.Errorf("payload created before readiness: %v, %v", files, err)
+				}
+			}
+			svc := newTestService(rt, &fakeShellTerminalStore{}, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"project": t.TempDir()}})
+			svc.dataDir = t.TempDir()
+			_, err := svc.RunCueCommand(context.Background(), RunCueCommandInput{ProjectID: "project", Shell: cueTestShell(t), Command: "echo private-cue-payload"})
+			if ready && err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCueCommandPayloadLifetime(t *testing.T) {
+	previousTimeout := cueCommandConsumeTimeout
+	cueCommandConsumeTimeout = 80 * time.Millisecond
+	t.Cleanup(func() { cueCommandConsumeTimeout = previousTimeout })
+	for _, phase := range []string{"consumed", "create failure", "persist failure", "send failure", "consume timeout", "consume cancellation"} {
+		t.Run(phase, func(t *testing.T) {
+			rt := newFakeShellRuntime()
+			rt.cueReady = true
+			st := &fakeShellTerminalStore{}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			switch phase {
+			case "create failure":
+				rt.createErr = errors.New("create failed")
+			case "persist failure":
+				st.insertErr = errors.New("persist failed")
+			case "send failure":
+				rt.sendErr = errors.New("ambiguous send")
+			case "consume timeout":
+				rt.cueDoNotConsume = true
+			case "consume cancellation":
+				rt.cueDoNotConsume = true
+				rt.onSendMessage = cancel
+			}
+			svc := newTestService(rt, st, &fakeProjectRootLocator{roots: map[domain.ProjectID]string{"project": t.TempDir()}})
+			svc.dataDir = t.TempDir()
+			_, err := svc.RunCueCommand(ctx, RunCueCommandInput{ProjectID: "project", Shell: cueTestShell(t), Command: "echo payload"})
+			if (err == nil) != (phase == "consumed") {
+				t.Fatalf("unexpected result for %s: %v", phase, err)
+			}
+			if phase == "consume cancellation" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation lost: %v", err)
+			}
+			if phase == "consume timeout" {
+				var apiErr *apierr.Error
+				if !errors.As(err, &apiErr) || apiErr.Code != "CUE_COMMAND_NOT_CONSUMED" {
+					t.Fatalf("consume timeout = %v", err)
+				}
+			}
+			files, globErr := filepath.Glob(filepath.Join(svc.dataDir, "cue-commands", "*"))
+			if globErr != nil || len(files) != 0 {
+				t.Fatalf("payload artifacts remain: %v, %v", files, globErr)
+			}
+			if len(rt.sentCh) > 1 {
+				t.Fatal("delivery was retried")
+			}
+		})
 	}
 }
 
@@ -47,14 +143,14 @@ func assertCueDelivery(t *testing.T, rt *fakeShellRuntime, handleID, command str
 	t.Helper()
 	sent := <-rt.sentCh
 	cfg := rt.created[len(rt.created)-1]
-	input, env := cueCommandInput(cfg.Argv, command)
-	if sent.handleID != handleID || sent.input != input {
-		t.Fatalf("sent = %+v, want handle %q and input %q", sent, handleID, input)
+	if sent.handleID != handleID || !strings.Contains(sent.input, filepath.Base(sent.payloadFile)) || !strings.HasSuffix(sent.payload, cueEvaluationSuffix(cfg.Argv, command)) {
+		t.Fatalf("sent = %+v, want handle %q and exact evaluated command %q", sent, handleID, command)
 	}
-	for key, value := range env {
-		if cfg.Env[key] != value {
-			t.Fatalf("launch environment %s = %q, want %q", key, cfg.Env[key], value)
-		}
+	if cfg.Env["AO_CUE_COMMAND"] != "" {
+		t.Fatal("command payload was passed in the environment")
+	}
+	if _, err := os.Stat(sent.payloadFile); !os.IsNotExist(err) {
+		t.Fatalf("command file remains after delivery: %v", err)
 	}
 }
 
@@ -104,7 +200,7 @@ func TestCueCommandReceivesProjectEnvironment(t *testing.T) {
 	if got := rt.created[0].Env["AO_CUE_READY_FILE"]; got == "untrusted" || got == "" {
 		t.Fatalf("cue readiness marker = %q", got)
 	}
-	if got := rt.created[0].Env["AO_CUE_COMMAND"]; got != "pwd" {
+	if got := rt.created[0].Env["AO_CUE_COMMAND"]; got != "" {
 		t.Fatalf("cue command = %q", got)
 	}
 }

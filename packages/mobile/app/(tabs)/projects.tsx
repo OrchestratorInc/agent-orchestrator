@@ -89,7 +89,7 @@ export default function ProjectsScreen() {
 					/>
 				}
 			/>
-			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : null}
+			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
 
 			{fleetLoading && allProjects.length === 0 ? (
 				<View style={styles.center}>
@@ -124,7 +124,7 @@ export default function ProjectsScreen() {
 								action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={onRefresh} />}
 							/>
 						) : (
-							<EmptyState icon="folder" title="No projects" message="Add a project in AO to get started." />
+							<EmptyState icon="folder" title="No projects" message="Add a project in Orchestrator to get started." />
 						)
 					}
 				/>

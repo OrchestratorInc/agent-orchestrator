@@ -1,5 +1,6 @@
 import type { DashboardSession, ProjectInfo } from "./api";
 import { isArchived } from "./agentsView";
+import { reconcileRows } from "./rowSharing";
 
 /** The board filter that means "every project". */
 export const ALL_PROJECTS = "all";
@@ -58,7 +59,11 @@ export function retainProjects(
 	if (answer.machine !== activeMachine) return prev;
 	// Explicitly against null, not truthiness: a successful [] takes this branch
 	// and becomes known, which is the distinction the whole type exists for.
-	if (answer.projects !== null) return { machine: answer.machine, projects: answer.projects, known: true };
+	if (answer.projects !== null) {
+		const projects = prev.machine === answer.machine ? reconcileRows(prev.projects, answer.projects) : answer.projects;
+		return prev.known && prev.machine === answer.machine && projects === prev.projects
+			? prev : { machine: answer.machine, projects, known: true };
+	}
 	if (prev.machine === answer.machine && prev.known) return prev;
 	return { machine: answer.machine, projects: [], known: false };
 }
