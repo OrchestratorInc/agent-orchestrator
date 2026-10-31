@@ -1394,7 +1394,26 @@ main td, main th { vertical-align: middle !important; }
   background: #1a1a18; border: 1px solid var(--fd-border, #2a2a28);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); cursor: pointer; z-index: 30;
 }
-#ao-chat-fab img { width: 26px; height: 26px; }
+#ao-chat-fab svg { width: 26px; height: 26px; }
 #ao-chat-fab:hover { background: #242422; }
 #ao-chat-fab:focus-visible { outline: 2px solid #fafaf8; outline-offset: 2px; }
 #ao-chat-fab[data-state="open"] { display: none; }
+
+/* v38: greeting pill beside the chat launcher (user-approved copy) */
+#ao-chat-bubble {
+  position: fixed; right: 84px; bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+  max-width: 240px; padding: 8px 14px; border-radius: 18px;
+  background: #1a1a18; border: 1px solid var(--fd-border, #2a2a28);
+  color: #fafaf8; font-size: 13px; line-height: 1.35; text-align: left;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); cursor: pointer; z-index: 30;
+}
+#ao-chat-bubble::after {
+  content: ""; position: absolute; right: -6px; top: 50%; margin-top: -6px;
+  border: 6px solid transparent; border-left-color: #1a1a18; border-right: 0;
+}
+#ao-chat-bubble:hover { background: #242422; }
+#ao-chat-bubble:focus-visible { outline: 2px solid #fafaf8; outline-offset: 2px; }
+#ao-chat-bubble[data-state="open"] { display: none; }
+@media (max-width: 480px) {
+  #ao-chat-bubble { max-width: 170px; font-size: 12px; padding: 7px 12px; }
+}
