@@ -174,7 +174,12 @@ func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configur
 	branch := strings.TrimSpace(configuredBranch)
 	if branch == "" {
 		resolver := gitdefault.New(w.binary, gitdefault.Runner(w.run))
-		resolution, err := resolver.Resolve(ctx, ctx, repo)
+		// Bound the live remote lookup with its own budget. Callers pass the
+		// REST request context here, so an unbounded ls-remote against a
+		// stalled route would wedge the whole spawn until that outer deadline.
+		remoteCtx, cancelRemote := context.WithTimeout(ctx, defaultBranchResolutionBudget)
+		defer cancelRemote()
+		resolution, err := resolver.Resolve(ctx, remoteCtx, repo)
 		if err != nil {
 			return ports.WorkspaceDefaultBranch{}, fmt.Errorf("gitworktree: resolve repository default for %q: %w", repo, err)
 		}
