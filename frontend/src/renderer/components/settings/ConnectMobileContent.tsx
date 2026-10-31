@@ -161,25 +161,27 @@ export function qrIsReady(status: PairingReadinessStatus): boolean {
 }
 
 /**
- * Why the code on screen has no public tunnel, or null when it has one (or
- * when there is no code to judge). Without the tunnel the code reaches this
- * machine from elsewhere only over Tailscale, if it carries a tailnet address.
- *
- * qrIsReady shows a LAN code while the tunnel is still starting, and the
- * phone races only what the code carries. A code scanned or photographed in
- * that window looks identical to a complete one, then fails away from home
- * with "is your phone on the same Wi-Fi?" — so the panel has to say so.
- * cloudflared being absent is stated separately (remoteAccessUnavailable), and
- * opting out of the tunnel is the user's own choice, so neither is reported.
+ * "failed" when the code on screen has no public tunnel because remote access
+ * could not start, or null. Without the tunnel the code reaches this machine
+ * from elsewhere only over Tailscale, if it carries a tailnet address, and a
+ * LAN-only code looks identical to a complete one, so the panel says so.
+ * While the tunnel is still starting nothing is said: the code refreshes by
+ * itself once it is up. cloudflared being absent is stated separately
+ * (remoteAccessUnavailable), and opting out of the tunnel is the user's own
+ * choice, so neither is reported.
  */
-export function localOnlyReason(status: PairingReadinessStatus): "starting" | "failed" | null {
+export function localOnlyReason(status: PairingReadinessStatus): "failed" | null {
 	if (!status.enabled || !status.endpoints || status.endpoints.length === 0) return null;
 	if (status.endpoints.some((e) => e.kind === "tunnel")) return null;
 	if (status.noPublicTunnel === true || status.tunnel?.supported === false) return null;
-	if (pairingIsPending(status)) return "starting";
 	if (status.tunnel?.lastError) return "failed";
 	return null;
 }
+
+/** The Settings opening the sidebar's auto-start last ran for. Settings makes a
+ * new object for every opening; kept outside the component, it survives the
+ * Mobile page unmounting when the user visits another page and comes back. */
+let pairingHandledFor: unknown = null;
 
 /** The app's registered scheme (app.json `expo.scheme`), not a universal link:
  * it works today, with no association files to host and no store listing
@@ -377,7 +379,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	// A signed-in computer is linked, and its code carries a fixed address that
 	// survives restarts. Signed out, pairing works as it always has, with a
 	// quick tunnel whose address changes on restart.
-	const { session, configured: signInConfigured } = useCloudSession();
+	const { session, status: sessionStatus, configured: signInConfigured } = useCloudSession();
 	const { settings } = useSettings();
 	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
 	const accountId = session?.user.id ?? "";
@@ -421,10 +423,16 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		return started.data;
 	};
 
+	// Opened from the sidebar's Connect mobile, the user asked to pair a phone.
+	const settingsModal = useUiStore((state) => state.settingsModal);
+	const startPairing = settingsModal?.scope === "global" && settingsModal.startPairing === true;
+
 	const query = useQuery({
 		queryKey: mobileStatusQueryKey,
 		queryFn: fetchMobileStatus,
 		enabled: active,
+		// The auto-start below acts only on a fresh read.
+		refetchOnMount: startPairing ? "always" : true,
 		// Keep refreshing through every enabled-but-not-advertisable startup
 		// state — see mobileStatusRefetchInterval.
 		refetchInterval: (q) => mobileStatusRefetchInterval(q.state.data),
@@ -643,27 +651,30 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		void captureRendererEvent("ao.renderer.mobile_bridge_toggled", { enabled: next, outcome });
 	};
 
-	const startBridge = () => {
+	const turnOn = (report: boolean) => {
 		if (busy || enabled) return;
 		clearActionErrors();
 		setAnimateQr(true);
 		setOptimisticEnabled(true);
-		enable.mutate(undefined, {
+		enable.mutate(undefined, report ? {
 			onSuccess: () => reportToggle(true, "succeeded"),
 			onError: () => reportToggle(true, "failed"),
-		});
+		} : undefined);
 	};
+	const startBridge = () => turnOn(true);
 
-	// Opened from the sidebar's Connect mobile, the user asked to pair a phone,
-	// so Connect Mobile turns on without a second click, once per opening.
-	// Browsing to this page from Settings turns nothing on.
-	const startPairing = useUiStore((state) => state.settingsModal?.scope === "global" && state.settingsModal.startPairing === true);
-	const pairingStarted = useRef(false);
+	// From the sidebar, Connect Mobile turns on without a second click, once
+	// per opening, and only if a fresh read says it is off: every enable makes
+	// a new password, so a cached "off" for a running bridge would disconnect
+	// its phones. Sign-in must have loaded, since enable links a signed-in
+	// computer. Not a toggle the user made, so not reported as one. Browsing
+	// to this page from Settings turns nothing on.
 	useEffect(() => {
-		if (!startPairing) pairingStarted.current = false;
-		if (!startPairing || pairingStarted.current || !active || !hasStatus || serverEnabled !== false || busy) return;
-		pairingStarted.current = true;
-		startBridge();
+		if (!startPairing || pairingHandledFor === settingsModal) return;
+		if (!active || !query.isFetchedAfterMount || query.isFetching || query.isError || busy) return;
+		if (sessionStatus === "loading" || settings === undefined) return;
+		pairingHandledFor = settingsModal;
+		if (query.data?.enabled === false) turnOn(false);
 	});
 
 	const actionError =
@@ -680,7 +691,10 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 	const turnOff = () => {
 		clearActionErrors();
 		setOptimisticEnabled(false);
-		disable.mutate();
+		disable.mutate(undefined, {
+			onSuccess: () => reportToggle(false, "succeeded"),
+			onError: () => reportToggle(false, "failed"),
+		});
 	};
 
 	// Each return is one or more direct children of the settings card: the
@@ -865,8 +879,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 
 				{qrValue && localOnly === "failed" && (
 					// A LAN-only code looks exactly like a full one, so say what it
-					// cannot reach. (While the tunnel is still starting, the note under
-					// the code says so instead.)
+					// cannot reach.
 					<p
 						className="mt-4 flex items-start gap-1.5 text-xs leading-5 text-settings-muted"
 						data-testid="mobile-local-only"

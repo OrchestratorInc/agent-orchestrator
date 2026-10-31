@@ -134,6 +134,9 @@ beforeEach(() => {
 	};
 	mobileStatus.keepAwake = undefined;
 	vi.mocked(apiClient.POST).mockClear();
+	// A test that failed before closing Settings must not leave the next one
+	// opened from the sidebar.
+	useUiStore.setState({ settingsModal: null });
 });
 
 test("QR payload carries host, port, and password for one-scan connect", () => {
@@ -658,12 +661,6 @@ test("shows the LAN QR before a supported tunnel starts", () => {
 	).toBe(true);
 });
 
-// The QR shows before the tunnel is up, so a code scanned or photographed in
-// that window carries no tunnel and fails away from home. Seen in the field: a
-// photographed code held only the LAN and Tailscale addresses, and the phone
-// reported "same Wi-Fi?" from mobile data with nothing on the desktop to warn.
-// The code refreshes itself once the tunnel is up; until then the note under
-// it says remote access is still being enabled.
 // Connect mobile in the sidebar asks to pair a phone, so Connect Mobile turns
 // on as the page opens. Browsing to the page from Settings turns nothing on.
 test("turns Connect Mobile on when opened to pair a phone", async () => {
@@ -672,6 +669,43 @@ test("turns Connect Mobile on when opened to pair a phone", async () => {
 	renderMobileSettings();
 	await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/enable"));
 	act(() => useUiStore.getState().closeSettings());
+});
+
+test("an opening that found Connect Mobile on leaves it off once switched off", async () => {
+	act(() => useUiStore.getState().openGlobalSettings("mobile", { startPairing: true }));
+	vi.mocked(apiClient.POST).mockImplementationOnce(async () => {
+		mobileStatus.enabled = false;
+		return { data: undefined, error: undefined } as never;
+	});
+	renderMobileSettings();
+	await userEvent.click(await screen.findByRole("switch", { name: "Connect mobile" }));
+	await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/disable"));
+	await waitFor(() => expect(screen.getByRole("switch", { name: "Connect mobile" })).toHaveAttribute("aria-checked", "false"));
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/mobile/enable");
+});
+
+test("turns Connect Mobile on once per opening, not again when the page comes back", async () => {
+	mobileStatus.enabled = false;
+	act(() => useUiStore.getState().openGlobalSettings("mobile", { startPairing: true }));
+	const first = renderMobileSettings();
+	await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/mobile/enable"));
+	first.unmount();
+	// Another Settings page and back: the same opening, still off.
+	renderMobileSettings();
+	await screen.findByRole("button", { name: "Generate" });
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	expect(vi.mocked(apiClient.POST).mock.calls.filter(([path]) => path === "/api/v1/mobile/enable")).toHaveLength(1);
+});
+
+test("does not turn Connect Mobile on from a cached off status", async () => {
+	// The bridge runs; only the cache still says off. Enabling would give it a new password.
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	client.setQueryData(mobileStatusQueryKey, { ...structuredClone(mobileStatus), enabled: false });
+	act(() => useUiStore.getState().openGlobalSettings("mobile", { startPairing: true }));
+	renderMobileSettings(client);
+	await waitFor(() => expect(screen.getByRole("switch", { name: "Connect mobile" })).toHaveAttribute("aria-checked", "true"));
+	expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/mobile/enable");
 });
 
 test("does not turn Connect Mobile on when browsed to", async () => {
@@ -783,7 +817,8 @@ test("says a LAN-only code stays local when remote access failed", async () => {
 test("reports why a code has no public tunnel", () => {
 	const lan = [{ kind: "lan" as const, host: "192.168.1.42", port: 3011, secure: false }];
 	const starting = { supported: true, running: true, ready: false, lastError: "" };
-	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: starting })).toBe("starting");
+	// Still starting: nothing to say, the code refreshes once the tunnel is up.
+	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: starting })).toBeNull();
 	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: { ...starting, running: false, lastError: "boom" } })).toBe("failed");
 	// Covered by remoteAccessUnavailable, or the user's own choice.
 	expect(localOnlyReason({ enabled: true, endpoints: lan, tunnel: { ...starting, supported: false, running: false } })).toBeNull();
