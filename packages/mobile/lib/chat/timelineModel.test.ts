@@ -121,19 +121,6 @@ describe("mobile Chat timeline model", () => {
 		expect(planRows.map((item) => item.id)).toEqual(["plan-5", "plan-6"]);
 	});
 
-	it("shows a turn's plan unless the daemon marked it superseded, and keeps per-turn plans", () => {
-		const value = snapshot();
-		const shown = () => groupConversationByTurn(value).flatMap((group) => group.plan && group.turnId ? [group.turnId] : []);
-		value.turns[0].state = "failed";
-		value.turns[0].plan = { spansTurns: true, superseded: true, steps: [{ text: "Render", status: "in_progress" }] };
-		value.turns[1].plan = { spansTurns: true, steps: [{ text: "Render", status: "completed" }] };
-		expect(shown()).toEqual(["t2"]);
-
-		value.turns[0].plan = { steps: [{ text: "Read", status: "completed" }] };
-		value.turns[1].plan = { steps: [{ text: "Write", status: "completed" }] };
-		expect(shown()).toEqual(["t1", "t2"]);
-	});
-
 	it("docks queued human messages instead of rendering them as sent timeline turns", () => {
 		const value = snapshot();
 		value.turns[1].state = "queued";
@@ -365,7 +352,9 @@ describe("turn plans", () => {
 
 	it("shows a list the agent keeps across turns only on the latest turn that carries it", () => {
 		const value = snapshot();
-		value.turns[0].plan = { spansTurns: true, steps: list("in_progress") };
+		// The daemon marks every older copy superseded, a failed turn's included.
+		value.turns[0].state = "failed";
+		value.turns[0].plan = { spansTurns: true, superseded: true, steps: list("in_progress") };
 		value.turns[1].plan = { spansTurns: true, steps: list("completed") };
 		const groups = groupConversationByTurn(value);
 		expect(groups.find((group) => group.turnId === "t1")?.plan).toBeUndefined();
