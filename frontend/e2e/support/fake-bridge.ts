@@ -74,6 +74,10 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// resolves — an incomplete object would throw the moment the app touched
 			// a missing method.
 			const ao = {
+				triage: {
+					launch: async () => ({ ok: true }),
+					prepare: async () => ({ ok: false, error: "report.prepareFailed" as const }),
+				},
 					app: {
 						getVersion: async () => version,
 						chooseDirectory: async () => null,
@@ -980,6 +984,10 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				...(error ? { error } : {}),
 			});
 			const ao = {
+				triage: {
+					launch: async () => ({ ok: true }),
+					prepare: async () => ({ ok: false, error: "report.prepareFailed" as const }),
+				},
 					app: {
 						getVersion: async () => version,
 						chooseDirectory: async () => null,

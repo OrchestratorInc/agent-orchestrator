@@ -6,6 +6,10 @@ export type { FeatureBuild } from "../../main/feature-builds";
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
+		triage: {
+			launch: async () => ({ ok: false, error: "report.desktopRequired" as const }),
+			prepare: async () => ({ ok: false, error: "report.desktopRequired" as const }),
+		},
 		app: {
 			getVersion: async () => "0.0.0-preview",
 			chooseDirectory: async () => null,

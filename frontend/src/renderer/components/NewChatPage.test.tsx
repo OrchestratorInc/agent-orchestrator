@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareChatComposerDelivery, writeChatComposerText } from "../lib/chat-drafts";
+import { useUiStore } from "../stores/ui-store";
 import type { ChatWorkspaceProps } from "./chat/ChatWorkspace";
 import { NewChatPage } from "./NewChatPage";
 
@@ -22,7 +23,7 @@ vi.mock("./settings/MobileDevicesSection", () => ({ mobileDevicesQueryKey: ["mob
 vi.mock("./chat/ChatWorkspace", () => ({
 	ChatWorkspace: (props: ChatWorkspaceProps) => {
 		h.workspace = props;
-		return <>{props.draftNotice}</>;
+		return <>{props.draftNotice}{props.composerTray}</>;
 	},
 }));
 vi.mock("./TaskComposer", () => ({
@@ -57,10 +58,10 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 
 const draftScope = { sessionId: "new-chat:local", incarnation: "new-chat:local" };
 
-function renderPage() {
+function renderPage(initialProject = "proj-1") {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	const page = (projectId: string) => <QueryClientProvider client={queryClient}><NewChatPage projectId={projectId} /></QueryClientProvider>;
-	const { rerender } = render(page("proj-1"));
+	const { rerender } = render(page(initialProject));
 	return Object.assign(queryClient, { showProject: (projectId: string) => rerender(page(projectId)) });
 }
 
@@ -71,6 +72,7 @@ beforeEach(() => {
 	h.launchFallback.mockReset();
 	h.fallbackAction = undefined;
 	h.workspace = undefined;
+	useUiStore.setState({ newTaskRequest: null });
 	window.localStorage.clear();
 });
 
@@ -113,6 +115,64 @@ describe("NewChatPage", () => {
 			params: { projectId: "proj-1", sessionId: "sess-1" },
 			replace: true,
 		}));
+	});
+
+	it("sends a report's hidden instructions ahead of the typed text once, and names the session", async () => {
+		h.launch.mockResolvedValue("sess-1");
+		renderPage();
+		act(() => useUiStore.getState().requestNewTask("proj-1", undefined, { hiddenPrompt: "Read the report context.", displayName: "Report a problem" }));
+
+		await act(async () => { await h.workspace?.onSend?.("The composer froze.", undefined, "cid-1"); });
+
+		expect(h.launch).toHaveBeenCalledWith("Read the report context.\n\nThe composer froze.", expect.objectContaining({ displayName: "Report a problem" }));
+		expect(h.workspace?.localEchos).toEqual([expect.objectContaining({ text: "The composer froze." })]);
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ hiddenPrompt: undefined, displayName: undefined });
+
+		await act(async () => { await h.workspace?.onSend?.("Another task", undefined, "cid-2"); });
+		expect(h.launch).toHaveBeenLastCalledWith("Another task", expect.objectContaining({ displayName: undefined }));
+	});
+
+	it("keeps a report's instructions when the user picks a project", async () => {
+		h.launch.mockResolvedValue("sess-1");
+		renderPage("__standalone__");
+		act(() => useUiStore.getState().requestNewTask("__standalone__", undefined, { hiddenPrompt: "Read the report context.", displayName: "Report a problem" }));
+		await act(async () => { fireEvent.pointerDown(screen.getByRole("button", { name: /^Project:/ }), { button: 0, ctrlKey: false }); });
+		await act(async () => { fireEvent.click(await screen.findByRole("menuitem", { name: "Project" })); });
+		expect(h.navigate).toHaveBeenCalledWith({ to: "/new", search: { project: "proj-1", host: undefined }, replace: true });
+
+		// The route now shows the chosen project.
+		cleanup();
+		renderPage();
+		await act(async () => { await h.workspace?.onSend?.("The composer froze.", undefined, "cid-1"); });
+		expect(h.launch).toHaveBeenCalledWith("Read the report context.\n\nThe composer froze.", expect.objectContaining({ displayName: "Report a problem" }));
+	});
+
+	it("ignores a report's instructions raised for another project", async () => {
+		h.launch.mockResolvedValue("sess-1");
+		renderPage();
+		act(() => useUiStore.getState().requestNewTask("proj-2", undefined, { hiddenPrompt: "Read the report context.", displayName: "Report a problem" }));
+		await act(async () => { await h.workspace?.onSend?.("Fix the build", undefined, "cid-1"); });
+		expect(h.launch).toHaveBeenCalledWith("Fix the build", expect.objectContaining({ displayName: undefined }));
+	});
+
+	it("retries a lost report send with the same full prompt and name after the renderer reloads", async () => {
+		prepareChatComposerDelivery(draftScope, { kind: "send", clientMessageId: "cid-1", requestText: "The composer froze.", composerText: "The composer froze.", attachments: [] });
+		h.launch.mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValueOnce("sess-1");
+		renderPage();
+		act(() => useUiStore.getState().requestNewTask("proj-1", undefined, { hiddenPrompt: "Read the report context.", displayName: "Report a problem" }));
+		await act(async () => {
+			await Promise.resolve(h.workspace?.onSend?.("The composer froze.", undefined, "cid-1")).catch(() => undefined);
+		});
+		expect(h.launch).toHaveBeenLastCalledWith("Read the report context.\n\nThe composer froze.", expect.objectContaining({ clientRequestId: "cid-1", displayName: "Report a problem" }));
+
+		// A reload loses the in-memory report request; the saved send still has it.
+		cleanup();
+		useUiStore.setState({ newTaskRequest: null });
+		renderPage();
+		await act(async () => { await h.workspace?.onSend?.("The composer froze.", undefined, "cid-1"); });
+
+		expect(h.launch).toHaveBeenCalledTimes(2);
+		expect(h.launch).toHaveBeenLastCalledWith("Read the report context.\n\nThe composer froze.", expect.objectContaining({ clientRequestId: "cid-1", displayName: "Report a problem" }));
 	});
 
 	it("takes attachments before a workspace exists and uploads them with the task", async () => {
@@ -195,7 +255,7 @@ describe("NewChatPage", () => {
 
 		act(() => h.workspace?.onHeldAttachmentsChange?.(files, false));
 		await act(async () => fireEvent.click(button));
-		expect(h.launchFallback).toHaveBeenCalledWith("Read the attached file", expect.any(String), files);
+		expect(h.launchFallback).toHaveBeenCalledWith("Read the attached file", expect.any(String), files, undefined);
 	});
 
 	it("keeps a refused retry on its project and shows why", async () => {

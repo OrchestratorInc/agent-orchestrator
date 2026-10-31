@@ -7,7 +7,7 @@ import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from
 import { seedOpeningLocalEcho, useStageAttachments, type ConversationLocalEcho } from "../hooks/useConversation";
 import { purgeFileAttachments, type FileAttachmentPayload } from "../hooks/useFileAttachments";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { chatDraftScopeKey, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
+import { chatDraftScopeKey, newChatDraftScope, readChatSessionDraft, writeChatAttachments, writeChatComposerText } from "../lib/chat-drafts";
 import { clientForHost, labelForHost } from "../lib/host-clients";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { openComposerModelPicker } from "../lib/composer-shortcuts";
@@ -57,7 +57,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	// One draft per host, so switching project keeps what was typed.
 	const hostKey = hostId ?? "local";
 	const draftId = `new-chat:${hostKey}`;
-	const draftScope = useMemo(() => ({ sessionId: draftId, incarnation: draftId }), [draftId]);
+	const draftScope = useMemo(() => newChatDraftScope(hostId), [hostId]);
 	const [echo, setEcho] = useState<ConversationLocalEcho>();
 	// The settings bar the brief was sent with, held still until the session takes over.
 	const [launched, setLaunched] = useState<LaunchSettings>();
@@ -263,8 +263,15 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			const settings = saved?.settings ?? barRef.current;
 			const replay = saved?.replay ?? launch.launchSnapshot();
 			setLaunched(settings);
-			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings });
-			const sessionId = await launch.launch(text, { clientRequestId: clientMessageId, replay, attachments });
+			// The daemon hashes the prompt and display name under this request id, so a
+			// retry must send exactly what the first attempt did. After a reload the
+			// report request is gone from memory; the saved send carries it.
+			const report = reportRequest();
+			const prompt = saved?.prompt ?? withReportPrompt(report, text);
+			const displayName = saved ? saved.displayName : report?.displayName;
+			writePendingLaunch(hostKey, { clientMessageId, projectId: target.projectId, replay, settings, prompt, displayName });
+			const sessionId = await launch.launch(prompt, { clientRequestId: clientMessageId, replay, attachments, displayName });
+			consumeReportRequest(report);
 			resolveLaunch(clientMessageId);
 			await openSession(sessionId, brief, settings, replay.mode ?? launch.effectiveInterface, target);
 		} catch (error) {
@@ -279,6 +286,27 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			resolveLaunch(clientMessageId);
 			throw Object.assign(new Error(apiErrorMessage(error, t("newTask.unableToStart"))), { code: "TASK_CREATE_FAILED" });
 		}
+	};
+
+	// Report a problem hands this page instructions for the agent. They go ahead of
+	// what the user typed and stay out of the composer; only the page they were
+	// raised for uses them.
+	const reportRequest = () => {
+		const request = useUiStore.getState().newTaskRequest;
+		const here = targetRef.current;
+		return request?.hiddenPrompt && request.projectId === here.projectId && request.hostId === here.hostId ? request : undefined;
+	};
+	// Picking another project keeps the report: its instructions follow the user to
+	// the project they chose rather than being dropped as raised for another one.
+	const changeProject = (project: string) => {
+		const report = reportRequest();
+		const current = useUiStore.getState().newTaskRequest;
+		if (report && current?.nonce === report.nonce) useUiStore.setState({ newTaskRequest: { ...current, projectId: project } });
+		void navigate({ to: "/new", search: { project, host: hostId }, replace: true });
+	};
+	const consumeReportRequest = (report: ReturnType<typeof reportRequest>) => {
+		const current = useUiStore.getState().newTaskRequest;
+		if (report && current?.nonce === report.nonce) useUiStore.setState({ newTaskRequest: { ...current, hiddenPrompt: undefined, displayName: undefined } });
 	};
 
 	// The fallback starts what the composer holds now; a brief the user cleared stays cleared.
@@ -300,7 +328,9 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		setEcho(brief);
 		setLaunched(settings);
 		try {
-			const sessionId = await task.launchFallback(brief.text, clientMessageId, heldAttachments);
+			const report = reportRequest();
+			const sessionId = await task.launchFallback(withReportPrompt(report, brief.text), clientMessageId, heldAttachments, report?.displayName);
+			consumeReportRequest(report);
 			fallbackRequest.current = undefined;
 			writeChatComposerText(draftScope, "");
 			writeChatAttachments(draftScope, []);
@@ -365,7 +395,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				skills={skills}
 				composerTray={
 					<>
-						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
+						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen} onChange={changeProject} />
 						{hostId ? null : <MobileConnected />}
 					</>
 				}
@@ -409,6 +439,11 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
  * Undefined when they cannot show exactly what the task will start with; the page
  * then draws AO's own controls instead.
  */
+/** The report's agent instructions ahead of what the user typed, if any. */
+function withReportPrompt(report: { hiddenPrompt?: string } | undefined, text: string): string {
+	return report?.hiddenPrompt ? report.hiddenPrompt + (text.trim() ? `\n\n${text}` : "") : text;
+}
+
 function draftProviderOptions(options: ChatConfigOption[], harness: string, models: ChatModel[], settings: TurnSettings, cloud: boolean): ChatConfigOption[] | undefined {
 	const grouped = partitionConfigOptions(options);
 	const out: ChatConfigOption[] = [];
@@ -461,7 +496,15 @@ function sendIsUncertain(error: unknown): boolean {
 	return error.name !== "TaskCreateError";
 }
 
-type PendingLaunch = { clientMessageId: string; projectId: string; replay: LaunchReplay; settings: LaunchSettings };
+type PendingLaunch = {
+	clientMessageId: string;
+	projectId: string;
+	replay: LaunchReplay;
+	settings: LaunchSettings;
+	/** The full prompt sent (report instructions plus typed text), so a retry repeats it byte for byte. */
+	prompt?: string;
+	displayName?: string;
+};
 const PENDING_LAUNCH_KEY = "ao.newTask.pendingLaunch.v1";
 
 function readPendingLaunches(): Record<string, PendingLaunch> {

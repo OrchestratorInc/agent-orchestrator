@@ -1048,7 +1048,7 @@ export async function sanitizeRendererProperties(
 			// The report's summary, details, and diagnostics block are the user's own
 			// words and machine state. Only the chosen destination and whether the
 			// hand-off worked are reported.
-			if (properties?.destination === "github" || properties?.destination === "discord" || properties?.destination === "email") {
+			if (properties?.destination === "agent" || properties?.destination === "terminal" || properties?.destination === "github" || properties?.destination === "discord" || properties?.destination === "email") {
 				safe.destination = properties.destination;
 			}
 			if (properties?.outcome === "succeeded" || properties?.outcome === "failed") safe.outcome = properties.outcome;

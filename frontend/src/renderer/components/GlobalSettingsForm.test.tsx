@@ -12,7 +12,10 @@ import { useTelemetryPolicyStore } from "../stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "../stores/analytics-opt-out-store";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { harnessSettingsSectionMock } = vi.hoisted(() => ({ harnessSettingsSectionMock: vi.fn() }));
+const { harnessSettingsSectionMock, triagePrepare, triageLaunch } = vi.hoisted(() => ({
+	harnessSettingsSectionMock: vi.fn(), triagePrepare: vi.fn(), triageLaunch: vi.fn(),
+}));
+vi.mock("../lib/shell-context", () => ({ useShell: () => ({ daemonStatus: { state: "ready" } }) }));
 
 vi.mock("./settings/HarnessSettingsSection", () => ({
 	HarnessSettingsSection: (props: { focusAgentId?: string; hostId?: string; titleHidden?: boolean }) => {
@@ -114,6 +117,7 @@ vi.mock("../lib/platform", async (importOriginal) => {
 vi.mock("../lib/bridge", () => ({
 	aoBridge: {
 		app: { getVersion, openExternal },
+		triage: { prepare: triagePrepare, launch: triageLaunch },
 		clipboard: { writeText },
 		daemon: { getStatus: getDaemonStatus },
 		remotes: { list: vi.fn(async () => []) },
@@ -218,6 +222,9 @@ beforeEach(async () => {
 	updOnStatus.mockReturnValue(() => undefined);
 	getVersion.mockResolvedValue("1.4.0");
 	getDaemonStatus.mockResolvedValue({ state: "ready" });
+	triagePrepare.mockResolvedValue({ ok: true, prompt: "Read the report context", dir: "/home/test/.ao/triage/1" });
+	triageLaunch.mockResolvedValue({ ok: true });
+	useUiStore.setState({ newTaskRequest: null });
 	writeText.mockResolvedValue(undefined);
 	openExternal.mockResolvedValue(undefined);
 	featListBuilds.mockResolvedValue([]);
@@ -322,9 +329,8 @@ describe("GlobalSettingsForm", () => {
 		expect(await screen.findByRole("heading", { name: "Version" }, { timeout: 5_000 })).toBeInTheDocument();
 		expect(screen.getByRole("heading", { name: "Preferences" })).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
-		expect(screen.getByText("Report a problem")).toBeInTheDocument();
-		// Report form is inline — no dialog, fields directly present.
-		expect(screen.getByLabelText("Title")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Report a problem" })).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "GitHub" })).toBeInTheDocument();
 	});
 
 	it("persists developer mode and reveals feature builds", async () => {
@@ -604,9 +610,9 @@ describe("GlobalSettingsForm", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("renders the report form inline without a dialog", async () => {
+	it("renders the report action inline without a dialog", async () => {
 		renderForm();
-		expect(await screen.findByLabelText("Title")).toBeInTheDocument();
+		expect(await screen.findByRole("button", { name: "Report a problem" })).toBeInTheDocument();
 		expect(screen.queryByRole("dialog", { name: "Report a problem" })).not.toBeInTheDocument();
 	});
 
@@ -887,114 +893,28 @@ describe("GlobalSettingsForm", () => {
 		expect(guidance).toBeInTheDocument();
 	});
 
-	it("opens feedback from settings and copies redacted report drafts", async () => {
-		const user = userEvent.setup();
-		const open = vi.spyOn(window, "open").mockReturnValue(null);
-		getVersion.mockResolvedValue("9.9.9-test");
-		getDaemonStatus.mockResolvedValue({
-			state: "ready",
-			message: "Listening at http://127.0.0.1:31001?token=secret",
-		});
+	it("opens the normal standalone agent dialog from the report action", async () => {
 		renderForm();
-
-		await user.type(await screen.findByLabelText("Title"), "Create project fails in /Users/alice/private-repo");
-		await user.type(
-			screen.getByLabelText("What happened?"),
-			"Open http://127.0.0.1:5173/projects/demo?access_token=local-secret and click Create. Show a clear prerequisite error.",
-		);
-		expect(screen.queryByRole("combobox", { name: "Report type" })).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Include safe diagnostics")).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Expected behavior")).not.toBeInTheDocument();
-		expect(screen.getByRole("group", { name: "Report destination" })).toBeInTheDocument();
-		expect(screen.queryByRole("radiogroup", { name: "Report destination" })).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Report preview")).not.toBeInTheDocument();
-
-		expect(screen.getByRole("button", { name: /copy & create github issue/i })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /copy & open discord/i })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeInTheDocument();
-		expect(screen.getByLabelText("What happened?")).toHaveClass("resize-none");
-		await user.click(screen.getByRole("button", { name: /copy & create github issue/i }));
-
-		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-		const copied = writeText.mock.calls[0][0] as string;
-		expect(copied).toContain("Create project fails");
-		expect(copied).toContain("AO version: 9.9.9-test");
-		expect(copied).toContain("Daemon: ready");
-		expect(copied).toContain("[redacted-local-path]");
-		expect(copied).toContain("[redacted-local-url]");
-		expect(copied).not.toContain("/Users/alice");
-		expect(copied).not.toContain("local-secret");
-		expect(copied).not.toContain("## Type");
-		expect(copied).not.toContain("Generated locally by AO");
-		expect(openExternal).toHaveBeenCalledWith(
-			expect.stringContaining("https://github.com/Untrivial-ai/agent-orchestrator/issues/new"),
-		);
-		expect(open).not.toHaveBeenCalled();
-		expect(screen.getByLabelText("Title")).toHaveValue("");
-		expect(screen.getByLabelText("What happened?")).toHaveValue("");
+		await userEvent.click(await screen.findByRole("button", { name: "Report a problem" }));
+		expect(triagePrepare).toHaveBeenCalledWith();
+		expect(useUiStore.getState().newTaskRequest).toEqual(expect.objectContaining({
+			projectId: "__standalone__", hiddenPrompt: "Read the report context", displayName: "Report a problem",
+		}));
+		expect(triageLaunch).not.toHaveBeenCalled();
 	});
 
-	it("opens Discord support and lets Windows users choose an email provider", async () => {
-		const user = userEvent.setup();
-		const open = vi.spyOn(window, "open").mockReturnValue(null);
-		getVersion.mockRejectedValue(new Error("version unavailable"));
-		getDaemonStatus.mockRejectedValue(new Error("daemon unavailable"));
+	it("opens secondary support links without requiring a draft", async () => {
 		renderForm();
-
-		await user.type(await screen.findByLabelText("Title"), "Need help with setup");
-		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
-
-		expect(screen.getByRole("button", { name: /copy & open discord/i })).toBeInTheDocument();
-		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeInTheDocument();
-		await user.click(screen.getByRole("button", { name: /copy & open discord/i }));
-		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-		expect(writeText.mock.calls[0][0]).toContain("**AO feedback**");
-		expect(screen.getByText("Discord draft copied.")).toBeInTheDocument();
-		expect(screen.getByLabelText("Title")).toHaveValue("");
-		expect(screen.getByLabelText("What happened?")).toHaveValue("");
-
-		expect(screen.getByRole("button", { name: /copy & open email/i })).toBeDisabled();
-		await user.type(screen.getByLabelText("Title"), "Need help with setup");
-		expect(screen.queryByText("Discord draft copied.")).not.toBeInTheDocument();
-		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
-		await user.click(screen.getByRole("button", { name: /copy & open email/i }));
-		await user.click(await screen.findByRole("menuitem", { name: "Gmail" }));
-
-		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
-		expect(writeText.mock.calls[0][0]).toContain("Daemon: unknown");
-		expect(writeText.mock.calls[1][0]).toContain("To: prasad@untrivial.ai");
-		expect(writeText.mock.calls[1][0]).toContain("AO feedback");
+		await waitFor(() => expect(screen.getByRole("link", { name: "GitHub" }).getAttribute("href")).toContain("body="));
+		for (const name of ["GitHub", "Discord", "Email"]) {
+			await userEvent.click(await screen.findByRole("link", { name }));
+		}
+		const github = new URL(openExternal.mock.calls[0][0]);
+		expect(`${github.origin}${github.pathname}`).toBe("https://github.com/OrchestratorInc/agent-orchestrator/issues/new");
+		expect(github.searchParams.get("body")).toContain("Safe diagnostics");
 		expect(openExternal).toHaveBeenCalledWith("https://discord.gg/WjKNa7EbB8");
-		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("https://mail.google.com/mail/"));
-		expect(open).not.toHaveBeenCalled();
-	});
-
-	it("keeps the direct system email handoff outside Windows", async () => {
-		const user = userEvent.setup();
-		isWindowsPlatform.mockReturnValue(false);
-		renderForm();
-
-		await user.type(await screen.findByLabelText("Title"), "Need help with setup");
-		await user.type(screen.getByLabelText("What happened?"), "The setup flow stalls after the first prompt.");
-		await user.click(screen.getByRole("button", { name: /copy & open email/i }));
-
-		await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-		expect(openExternal).toHaveBeenCalledWith(expect.stringContaining("mailto:prasad@untrivial.ai"));
-		expect(screen.queryByRole("menuitem", { name: "Gmail" })).not.toBeInTheDocument();
-	});
-
-	it("keeps the report form to title and details while tailoring placeholder guidance", async () => {
-		renderForm();
-
-		expect(await screen.findByLabelText("Title")).toHaveAttribute("placeholder", "Brief Title");
-		expect(screen.getByLabelText("What happened?")).toHaveAttribute(
-			"placeholder",
-			"Share what happened, what you expected, and how to reproduce it.",
-		);
-		expect(screen.queryByLabelText("Expected behavior")).not.toBeInTheDocument();
-		expect(screen.queryByRole("combobox", { name: "Report type" })).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Include safe diagnostics")).not.toBeInTheDocument();
-		expect(screen.queryByLabelText("Report preview")).not.toBeInTheDocument();
+		expect(openExternal).toHaveBeenCalledWith("mailto:prasad@untrivial.ai?cc=prateek@untrivial.ai");
+		expect(writeText).not.toHaveBeenCalled();
 	});
 
 	it("surfaces a Return action for a persisted feature pin", async () => {
