@@ -113,7 +113,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string> & Pa
 		"tray.attentionTooltip_other": "{{count}} сессии требуют внимания",
 		"tray.empty": "Нет сессий, требующих внимания",
 		"tray.more": "Ещё",
-		"tray.show": "Показать Agent Orchestrator",
+		"tray.show": "Показать Orchestrator",
 		"tray.quit": "Полностью выйти из AO",
 		"zone.merge": "Готово к слиянию",
 		"zone.action": "Требуется ваше действие",
