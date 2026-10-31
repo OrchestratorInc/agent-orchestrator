@@ -353,7 +353,12 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if len(paths) == 0 {
 		return t, errors.New("no transcript")
 	}
-	if harness == domain.HarnessOpenCode {
+	// Harnesses whose transcript format differs from the Claude/Codex JSONL
+	// handled below parse in their own file.
+	switch harness {
+	case domain.HarnessKimi:
+		return readKimiTranscript(ctx, root, paths...)
+	case domain.HarnessOpenCode:
 		// OpenCode's history lives in a SQLite database read by session id.
 		return readOpenCodeTranscript(ctx, root, paths...)
 	}

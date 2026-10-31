@@ -535,6 +535,36 @@ func TestImportedConfigEnvKeepsDefaultProviderLogin(t *testing.T) {
 	}
 }
 
+type kimiHomeAgent struct{ fakeAgent }
+
+func (kimiHomeAgent) NativeSessionConfigDir(_ context.Context, env map[string]string) (string, error) {
+	return nativeconfig.Resolve(env, "KIMI_CODE_HOME", ".kimi-code")
+}
+
+type kimiHomeAgents struct{}
+
+func (kimiHomeAgents) Agent(domain.AgentHarness) (ports.Agent, bool) { return kimiHomeAgent{}, true }
+
+// Kimi stores sessions only under its home, so an imported Kimi chat must launch
+// in the source home that holds the conversation, overriding AO's managed home.
+func TestImportedConfigEnvPointsKimiAtSourceHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("KIMI_CODE_HOME", "")
+	m := &Manager{agents: kimiHomeAgents{}}
+	source := filepath.Join(home, ".kimi-code")
+	sessionID := "session_11111111-2222-3333-4444-555555555555"
+	transcript := filepath.Join(source, "sessions", "wd_repo_abc123", sessionID, "agents", "main", "wire.jsonl")
+	rec := domain.SessionRecord{Harness: domain.HarnessKimi}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: sessionID, NativeTranscriptPath: transcript, ImportSource: &domain.SessionImportSource{NativeID: sessionID, ConfigDir: source}}
+	// The launch starts in AO's managed Kimi home, which does not hold this session.
+	env := map[string]string{"KIMI_CODE_HOME": filepath.Join(home, "managed-kimi")}
+	m.applyImportedConfigEnv(context.Background(), rec, env)
+	if env["KIMI_CODE_HOME"] != source {
+		t.Fatalf("KIMI_CODE_HOME = %q, want source home %q", env["KIMI_CODE_HOME"], source)
+	}
+}
+
 // Startup health treats a ready row without a workspace as an interrupted
 // spawn and rolls it back; an idle import must survive every daemon restart.
 func TestStartupHealthKeepsIdleImportedHistory(t *testing.T) {

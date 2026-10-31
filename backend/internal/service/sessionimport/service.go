@@ -109,7 +109,12 @@ func New(store Store, dataDir string) *Service {
 	if pi == "" {
 		pi = filepath.Join(home, ".pi", "agent")
 	}
-	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home), domain.HarnessPi: pi}
+	// Kimi Code keeps its sessions under KIMI_CODE_HOME, defaulting to ~/.kimi-code.
+	kimi := os.Getenv("KIMI_CODE_HOME")
+	if kimi == "" {
+		kimi = filepath.Join(home, ".kimi-code")
+	}
+	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home), domain.HarnessPi: pi, domain.HarnessKimi: kimi}
 	if opencode := openCodeRoot(home); opencode != "" {
 		roots[domain.HarnessOpenCode] = opencode
 	}
@@ -349,7 +354,12 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 
 // discover lists transcripts without reading them, newest first.
 func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, root string) ([]sourceFiles, error) {
-	if harness == domain.HarnessOpenCode {
+	// Per-harness layouts that do not fit the projects/sessions directory model
+	// discover their own conversations.
+	switch harness {
+	case domain.HarnessKimi:
+		return discoverKimi(ctx, root)
+	case domain.HarnessOpenCode:
 		// OpenCode stores conversations in a SQLite database, not a projects tree.
 		return discoverOpenCode(ctx, root)
 	}
@@ -493,7 +503,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessOpenCode, domain.HarnessPi}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessOpenCode, domain.HarnessPi, domain.HarnessKimi}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {
