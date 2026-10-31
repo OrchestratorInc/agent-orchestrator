@@ -1351,7 +1351,7 @@ main td, main th { vertical-align: middle !important; }
       (mt24 mb4 from the wrapper rule above; single-line box lh=h=20 desktop,
       22.5 drawer) instead of compensating gaps around the old 22.5px box ── */
 @media (min-width: 1024px) {
-  nav#sidebar-content .sidebar-group-header { height: 20px !important; min-height: 0 !important; align-items: center !important; }
+  nav#sidebar-content .sidebar-group-header { height: 20px !important; min-height: 0 !important; align-items: center !important; margin-top: 25px !important; margin-bottom: 6px !important; }
   nav#sidebar-content .sidebar-group-header .sidebar-title,
   nav#sidebar-content .sidebar-group-header .sidebar-title > span {
     display: block !important; height: 20px !important; line-height: 20px !important;
