@@ -44,7 +44,12 @@ model tokens:
 | --- | --- |
 | No provider configured | Not signed in |
 | Configured, and the active provider's usage report has no error | Connected |
+| The active provider is a keyless local endpoint (for example `jcode login ollama`, no key stored) and that loopback endpoint answers a one-token chat completion with jcode's selected model | Connected |
 | Configured, but the usage check failed (quota, rejected, timeout) or the active provider has no usage API (most API-key providers) | Credentials configured, not verified |
+
+For a keyless local provider AO uses the endpoint `jcode auth status` reports
+for it, only when that is `localhost`, `127.0.0.1` or `::1`, and sends no
+credential. A local entry that also stores an optional API key is not probed.
 
 AO does not use `jcode auth-test`: its refresh step rotates OAuth refresh
 tokens and its smoke steps send prompts.

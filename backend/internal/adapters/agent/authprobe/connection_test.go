@@ -87,3 +87,34 @@ func TestVerifyConnectionCancellationAndUnreachable(t *testing.T) {
 		t.Fatalf("status=%s step=%+v", status, step)
 	}
 }
+
+// A keyless local server (Ollama, LM Studio) is verified by the same real
+// one-token completion, without an Authorization header, and only on loopback.
+func TestVerifyConnectionKeylessLoopbackRequiresCompletion(t *testing.T) {
+	var sawAuth bool
+	client := &http.Client{Transport: connectionTransport(func(req *http.Request) (*http.Response, error) {
+		sawAuth = req.Header.Get("Authorization") != ""
+		if req.URL.String() != "http://localhost:11434/v1/chat/completions" {
+			t.Fatalf("wrong request: %s", req.URL.Redacted())
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`)), Header: http.Header{}}, nil
+	})}
+	status, step := VerifyConnection(context.Background(), Connection{Provider: "Ollama", BaseURL: "http://localhost:11434/v1", Model: "qwen3:1.7b", Keyless: true}, client)
+	if status != ports.AgentAuthStatusAuthorized || step.Code != "provider_accepted" || sawAuth {
+		t.Fatalf("keyless loopback = %s/%s, auth header sent=%v", status, step.Code, sawAuth)
+	}
+	for name, route := range map[string]Connection{
+		"remote host":     {Provider: "x", BaseURL: "https://api.example.com/v1", Model: "m", Keyless: true},
+		"no model":        {Provider: "x", BaseURL: "http://127.0.0.1:11434/v1", Keyless: true},
+		"key not keyless": {Provider: "x", BaseURL: "http://127.0.0.1:11434/v1", Model: "m"},
+	} {
+		called := false
+		probe := &http.Client{Transport: connectionTransport(func(*http.Request) (*http.Response, error) {
+			called = true
+			return nil, io.EOF
+		})}
+		if got, _ := VerifyConnection(context.Background(), route, probe); got != ports.AgentAuthStatusConfigured || called {
+			t.Fatalf("%s: status=%s request sent=%v; want configured without a request", name, got, called)
+		}
+	}
+}

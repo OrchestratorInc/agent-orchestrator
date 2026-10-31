@@ -17,8 +17,10 @@ import { chromium } from "playwright";
 const HARNESS = "jcode";
 const MARKER = "NEW_TASK_OK";
 // "/no_think" is Qwen3's documented switch for a direct answer without a
-// reasoning phase; the reply must still be exactly the marker.
-const PROMPT = `Reply with exactly ${MARKER} and nothing else. Do not run any tools. /no_think`;
+// reasoning phase; the reply must still be exactly the marker. It sits mid
+// sentence: a leading slash is a jcode command and a trailing one opens AO's
+// composer skill menu.
+const PROMPT = `Reply with exactly ${MARKER} and nothing else. /no_think Do not run any tools.`;
 
 // The text of one assistant message as jcode stored it: its text parts only,
 // without Qwen's <think> block, whitespace-normalized. Tool calls, reasoning
@@ -188,8 +190,15 @@ async function main() {
 		};
 	});
 
-	// The home page is AO's New Task page.
-	const agentControl = page.getByLabel("Agent", { exact: true });
+	// The home page is AO's New Chat page. Its turn settings carry one picker
+	// for agent, model and effort; it appears once AO has a ready agent to
+	// default to, and its Agent and Model submenus stay open on selection.
+	const trigger = page.getByRole("button", { name: "Agent, model and reasoning effort for the next message" });
+	const subTrigger = (label) => page.locator('[role="menuitem"][aria-haspopup="menu"]').filter({ hasText: new RegExp(`^\\s*${label}`) }).first();
+	const submenuWith = (row) => page.locator('[role="menu"]').filter({ has: row }).last();
+	const agentRow = page.locator('[role="menuitemradio"]').filter({ hasText: /\bjcode\b/i });
+	const modelRow = page.locator('[role="menuitemradio"]').filter({ hasText: options.model });
+
 	const agentPicker = await checkpoint("new-task-agent-picker", "New Task: Agent picker open, jcode offered", async () => {
 		await page.evaluate(() => { window.location.hash = "#/"; });
 		// A fresh install may open an optional "Connect GitHub" sign-in terminal
@@ -198,57 +207,64 @@ async function main() {
 		if (await visible(github, 3_000)) await github.getByRole("button").last().click().catch(() => {});
 		// A fresh install shows "Get started"; its "Start a standalone agent"
 		// entry opens New Task, as a user would.
-		if (!(await visible(agentControl, 10_000))) {
+		if (!(await visible(trigger, 10_000))) {
 			const start = page.getByRole("button", { name: /Start a standalone agent/ });
 			if (await visible(start, 30_000)) await start.first().click();
 		}
-		if (!(await visible(agentControl, 60_000))) return { status: "FAIL", observed: "no Agent control on the New Task page" };
-		await agentControl.first().click();
-		const menu = page.locator('[role="menu"], [role="listbox"]').last();
-		if (!(await visible(menu, 10_000))) return { status: "FAIL", observed: "the Agent picker did not open" };
-		const option = menu.locator(MENU_ITEMS).filter({ hasText: /\bjcode\b/i });
-		const offered = await visible(option, 10_000);
-		return { status: offered ? "PASS" : "FAIL", observed: `picker open; items: ${await textOf(menu)}`, jcodeOffered: offered };
+		if (!(await visible(trigger, 60_000))) {
+			const alert = await textOf(page.locator('[role="alert"]'));
+			return { status: "FAIL", observed: `no agent/model picker on the New Task page${alert ? `; alert: ${alert}` : ""}` };
+		}
+		await trigger.first().click();
+		if (!(await visible(subTrigger("Agent"), 10_000))) return { status: "FAIL", observed: "the picker did not open an Agent menu" };
+		await subTrigger("Agent").click();
+		const offered = await visible(agentRow, 10_000);
+		return { status: offered ? "PASS" : "FAIL", observed: `Agent menu: ${await textOf(offered ? submenuWith(agentRow) : page.locator('[role="menu"]').last())}`, jcodeOffered: offered };
 	});
 
 	const agentSelected = agentPicker.status === "PASS" && await checkpoint("new-task-agent-selected", "New Task: jcode selected", async () => {
-		await page.locator('[role="menu"], [role="listbox"]').last().locator(MENU_ITEMS).filter({ hasText: /\bjcode\b/i }).first().click();
-		await sleep(1_000);
-		const label = await textOf(agentControl);
-		return { status: /jcode/i.test(label) ? "PASS" : "FAIL", observed: `Agent control shows: ${label}` };
+		await agentRow.first().click();
+		await sleep(1_500);
+		const checked = await agentRow.first().getAttribute("aria-checked").catch(() => null);
+		const label = await textOf(subTrigger("Agent"));
+		return { status: checked === "true" && /jcode/i.test(label) ? "PASS" : "FAIL", observed: `jcode row aria-checked=${checked}; Agent row shows: ${label}` };
 	});
 
-	const modelControl = page.getByLabel("Model", { exact: true });
 	const modelPicker = agentSelected?.status === "PASS" && await checkpoint("new-task-model-picker", "New Task: Model picker open with jcode's models", async () => {
-		if (!(await visible(modelControl, 60_000))) return { status: "FAIL", observed: "no Model control after choosing jcode" };
-		for (let attempt = 0; attempt < 60 && await modelControl.first().isDisabled().catch(() => false); attempt += 1) await sleep(1_000);
-		await modelControl.first().click();
-		const menu = page.locator('[role="menu"], [role="listbox"], [role="dialog"]').last();
-		if (!(await visible(menu, 10_000))) return { status: "FAIL", observed: "the Model picker did not open" };
-		const option = menu.locator(`${MENU_ITEMS}, button`).filter({ hasText: options.model });
-		const listed = await visible(option, 30_000);
-		return { status: listed ? "PASS" : "FAIL", observed: `picker open; shows: ${(await textOf(menu)).slice(0, 500)}`, modelListed: listed };
+		if (!(await visible(subTrigger("Model"), 60_000))) return { status: "FAIL", observed: "no Model menu after choosing jcode" };
+		await subTrigger("Model").click();
+		const listed = await visible(modelRow, 30_000);
+		return { status: listed ? "PASS" : "FAIL", observed: `Model menu: ${(await textOf(listed ? submenuWith(modelRow) : page.locator('[role="menu"]').last())).slice(0, 500)}`, modelListed: listed };
 	});
 
 	const modelSelected = modelPicker?.status === "PASS" && await checkpoint("new-task-model-selected", "New Task: model selected", async () => {
-		await page.locator('[role="menu"], [role="listbox"], [role="dialog"]').last().locator(`${MENU_ITEMS}, button`).filter({ hasText: options.model }).first().click();
-		await sleep(1_000);
-		const label = await textOf(modelControl);
-		return { status: label.includes(options.model) ? "PASS" : "FAIL", observed: `Model control shows: ${label}` };
+		await modelRow.first().click();
+		await sleep(1_500);
+		const checked = await modelRow.first().getAttribute("aria-checked").catch(() => null);
+		const row = await textOf(subTrigger("Model"));
+		await page.keyboard.press("Escape");
+		await sleep(500);
+		const label = await textOf(trigger);
+		return { status: checked === "true" && label.includes(options.model) ? "PASS" : "FAIL", observed: `model row aria-checked=${checked}; Model row: ${row}; picker shows: ${label}` };
 	});
 
 	let submitted = false;
 	if (modelSelected?.status === "PASS") {
 		await checkpoint("new-task-ready-to-submit", "New Task: task typed with jcode and the model chosen", async () => {
-			const field = page.getByLabel("Task", { exact: true }).or(page.locator("textarea")).first();
+			const field = page.getByRole("combobox", { name: "Message the agent" }).first();
 			await field.click();
 			await field.fill(PROMPT);
-			const submit = page.locator('button[type="submit"]').first();
+			const submit = page.getByRole("button", { name: "Send message", exact: true }).first();
 			const enabled = await visible(submit, 5_000) && !(await submit.isDisabled());
-			return { status: enabled ? "OK" : "FAIL", observed: `submit ${enabled ? "enabled" : "not available"}; composer: ${(await textOf(page.locator("main"))).slice(0, 400)}` };
+			return { status: enabled ? "OK" : "FAIL", observed: `send ${enabled ? "enabled" : "not available"}; composer: ${await textOf(field)}; picker: ${await textOf(trigger)}` };
 		});
-		await page.locator('button[type="submit"]').first().click();
+		await page.getByRole("button", { name: "Send message", exact: true }).first().click();
 		submitted = true;
+		// A Chat-only start error offers the Terminal UI instead; jcode is TUI
+		// only, so AO should have asked for the TUI itself. Record, never click.
+		if (await visible(page.getByRole("button", { name: "Create as Terminal UI" }), 5_000)) {
+			await checkpoint("new-task-tui-fallback", "New Task offered Create as Terminal UI", async () => ({ status: "FAIL", observed: `AO did not start jcode as a TUI: ${await textOf(page.locator('[role="alert"]'))}` }));
+		}
 	}
 
 	const running = submitted && await checkpoint("running-tui", "Spawned jcode task running in the Terminal (TUI)", async () => {

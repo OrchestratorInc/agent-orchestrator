@@ -16,11 +16,14 @@ import (
 )
 
 // Connection names an adapter-resolved route. APIKey must never enter diagnostics.
+// Keyless marks a local server that takes no key (Ollama, LM Studio); it is
+// honoured only for a loopback BaseURL and sends no Authorization header.
 type Connection struct {
 	Provider string
 	BaseURL  string
 	Model    string
 	APIKey   string
+	Keyless  bool
 }
 
 // VerifyConnection makes one bounded, one-token request without tools or a native
@@ -30,9 +33,12 @@ func VerifyConnection(ctx context.Context, route Connection, client *http.Client
 	step := domain.NewAgentAuthDiagnostic("provider_validation", "provider_unsupported")
 	step.Provider = route.Provider
 	base, err := url.Parse(route.BaseURL)
-	if err != nil || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" ||
-		(base.Scheme != "https" && (base.Scheme != "http" || (base.Hostname() != "127.0.0.1" && base.Hostname() != "localhost" && base.Hostname() != "::1"))) ||
-		route.APIKey == "" || route.Model == "" {
+	if err != nil || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || route.Model == "" {
+		return ports.AgentAuthStatusConfigured, step
+	}
+	loopback := base.Hostname() == "127.0.0.1" || base.Hostname() == "localhost" || base.Hostname() == "::1"
+	if (base.Scheme != "https" && (base.Scheme != "http" || !loopback)) ||
+		(route.APIKey == "" && (!route.Keyless || !loopback)) {
 		return ports.AgentAuthStatusConfigured, step
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + "/chat/completions"
@@ -46,7 +52,9 @@ func VerifyConnection(ctx context.Context, route Connection, client *http.Client
 	if err != nil {
 		return ports.AgentAuthStatusConfigured, step
 	}
-	req.Header.Set("Authorization", "Bearer "+route.APIKey)
+	if route.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+route.APIKey)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	// Never forward a credential to a redirect target, including the same host.
 	transport := http.DefaultTransport

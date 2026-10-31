@@ -2,10 +2,14 @@ package jcode
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -165,5 +169,69 @@ func TestAuthDiagnosticsDescribeTheProviderCheck(t *testing.T) {
 				t.Fatalf("last diagnostic = %+v, want %s", last, tc.code)
 			}
 		})
+	}
+}
+
+// jcode set up with `jcode login ollama` reports the active provider as a
+// keyless local endpoint. AO asks that loopback endpoint for one token with
+// jcode's selected model; only an answered completion is authorized.
+func TestAuthStatusVerifiesAKeylessLocalProviderWithACompletion(t *testing.T) {
+	var mu sync.Mutex
+	var gotModel, gotAuth string
+	answer := http.StatusOK
+	seen := func() (string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		return gotModel, gotAuth
+	}
+	setAnswer := func(code int) {
+		mu.Lock()
+		defer mu.Unlock()
+		answer, gotModel, gotAuth = code, "", ""
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		gotModel, gotAuth = body.Model, r.Header.Get("Authorization")
+		ok := r.URL.Path == "/v1/chat/completions" && answer == http.StatusOK
+		mu.Unlock()
+		if !ok {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`))
+	}))
+	defer server.Close()
+	status := func(method string) string {
+		return `{"any_available":true,"providers":[{"id":"claude","status":"not_configured","method":"not configured"},{"id":"ollama","status":"available","method":"` + method + `"}]}`
+	}
+	current := `{"requested_provider":"auto","resolved_provider":"Ollama","selected_model":"qwen3:1.7b"}`
+
+	binary, _ := fakeJCodeProvider(t, status("local endpoint (`"+server.URL+"/v1`)"), `{"providers":[]}`, current)
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	got, err := (&Plugin{resolvedBinary: binary}).AuthStatus(ctx)
+	if model, auth := seen(); err != nil || got != ports.AgentAuthStatusAuthorized || model != "qwen3:1.7b" || auth != "" {
+		t.Fatalf("AuthStatus = %q, %v (model %q, auth header %q); want authorized after a keyless completion", got, err, model, auth)
+	}
+	if last := evidence.Diagnostics()[len(evidence.Diagnostics())-1]; last.Code != "provider_accepted" || last.Provider != "Ollama" {
+		t.Fatalf("diagnostic = %+v", last)
+	}
+
+	setAnswer(http.StatusServiceUnavailable)
+	if got, _ := (&Plugin{resolvedBinary: binary}).AuthStatus(context.Background()); got != ports.AgentAuthStatusConfigured {
+		t.Fatalf("AuthStatus with a failing local server = %q, want configured", got)
+	}
+
+	// An entry with a stored optional key is not a keyless route.
+	binary, _ = fakeJCodeProvider(t, status("local endpoint (`"+server.URL+"/v1`) + optional API key (`OLLAMA_API_KEY`)"), `{"providers":[]}`, current)
+	setAnswer(http.StatusOK)
+	if got, _ := (&Plugin{resolvedBinary: binary}).AuthStatus(context.Background()); got != ports.AgentAuthStatusConfigured {
+		t.Fatalf("AuthStatus with an optional key = %q, want configured", got)
+	}
+	if model, _ := seen(); model != "" {
+		t.Fatalf("an entry with an optional key was probed with model %q", model)
 	}
 }

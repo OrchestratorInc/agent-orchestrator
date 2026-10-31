@@ -91,7 +91,8 @@ jobs:
           tar --zstd -xf ollama.tar.zst && rm ollama.tar.zst
           ln -sf "$dir/bin/ollama" "$BASE/bin/ollama"
           # jcode's system prompt does not fit Ollama's default 4K serving window.
-          OLLAMA_HOST=127.0.0.1:11434 OLLAMA_MODELS="$BASE/ollama-models" OLLAMA_CONTEXT_LENGTH=32768 \
+          # Keep the weights loaded between the warm-up and the UI-created task.
+          OLLAMA_HOST=127.0.0.1:11434 OLLAMA_MODELS="$BASE/ollama-models" OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_KEEP_ALIVE=60m \
             nohup "$dir/bin/ollama" serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
           for i in $(seq 1 60); do curl -fsS http://127.0.0.1:11434/api/version && break; sleep 1; done
           echo

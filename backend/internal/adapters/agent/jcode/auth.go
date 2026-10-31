@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -29,6 +30,11 @@ const (
 // spends no model tokens. A provider report without an error proves the
 // credential was accepted. `jcode auth-test` is not used: it rotates OAuth
 // refresh tokens, and its smoke steps send prompts.
+//
+// A keyless local provider (Ollama, LM Studio) has no credential and no usage
+// API. When jcode reports the active provider as a plain local endpoint, AO
+// asks that loopback endpoint for one token with jcode's selected model; an
+// answered completion proves the provider jcode will use can run the model.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
 	binary, err := p.ResolveBinary(ctx)
 	if err != nil {
@@ -37,10 +43,7 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	statusArgs := []string{"--no-update", "auth", "status", "--json"}
 	out, started, err := runProbe(ctx, binary, statusArgs, authStatusTimeout)
 	var status struct {
-		Providers []struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-		} `json:"providers"`
+		Providers []jcodeProviderStatus `json:"providers"`
 	}
 	if err == nil {
 		err = json.Unmarshal(out, &status)
@@ -64,8 +67,14 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 
 	usageArgs := []string{"--no-update", "usage", "--json"}
 	method := strings.Join(append([]string{filepath.Base(binary)}, usageArgs...), " ")
-	provider, usagePrefix, err := p.activeUsageProvider(ctx, binary)
+	provider, model, usagePrefix, err := p.activeUsageProvider(ctx, binary)
 	if errors.Is(err, errNoUsageCheck) {
+		if base, ok := localEndpoint(status.Providers, provider); ok {
+			verdict, step := authprobe.VerifyConnection(ctx, authprobe.Connection{Provider: provider, BaseURL: base, Model: model, Keyless: true}, nil)
+			step.Method = "local endpoint completion"
+			ports.RecordAuthDiagnostic(ctx, step)
+			return verdict, nil
+		}
 		ports.RecordAuthDiagnostic(ctx, providerDiagnostic(method, "provider_unsupported", provider, time.Now()))
 		return ports.AgentAuthStatusConfigured, nil
 	}
@@ -114,25 +123,55 @@ var usageProviders = map[string]string{
 
 var errNoUsageCheck = errors.New("the active jcode provider has no live credential check")
 
-// activeUsageProvider returns the provider JCode resolves for new sessions and
-// the usage report name that belongs to it.
-func (p *Plugin) activeUsageProvider(ctx context.Context, binary string) (provider, prefix string, err error) {
+// activeUsageProvider returns the provider and model JCode resolves for new
+// sessions and the usage report name that belongs to the provider.
+func (p *Plugin) activeUsageProvider(ctx context.Context, binary string) (provider, model, prefix string, err error) {
 	out, _, err := runProbe(ctx, binary, []string{"--no-update", "provider", "current", "--json"}, authStatusTimeout)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	var current struct {
 		Resolved string `json:"resolved_provider"`
+		Model    string `json:"selected_model"`
 	}
 	if err := json.Unmarshal(out, &current); err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	provider = strings.TrimSpace(current.Resolved)
+	provider, model = strings.TrimSpace(current.Resolved), strings.TrimSpace(current.Model)
 	prefix, ok := usageProviders[strings.ToLower(provider)]
 	if !ok {
-		return provider, "", errNoUsageCheck
+		return provider, model, "", errNoUsageCheck
 	}
-	return provider, prefix, nil
+	return provider, model, prefix, nil
+}
+
+type jcodeProviderStatus struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Method string `json:"method"`
+}
+
+// localEndpointMethod is how `jcode auth status` describes a keyless local
+// provider set up with `jcode login`, e.g. "local endpoint (`http://localhost:11434/v1`)".
+// An entry that also stores an optional API key says "+ optional API key" and
+// does not match: that key is not AO's to send.
+var localEndpointMethod = regexp.MustCompile("^local endpoint \\(`(https?://[^`]+)`\\)$")
+
+// localEndpoint returns the base URL jcode reports for the active provider
+// when that provider is an available keyless local endpoint.
+func localEndpoint(providers []jcodeProviderStatus, active string) (string, bool) {
+	normalize := func(value string) string {
+		return strings.NewReplacer(" ", "", "-", "", "_", "").Replace(strings.ToLower(strings.TrimSpace(value)))
+	}
+	for _, provider := range providers {
+		if provider.Status != "available" || normalize(provider.ID) != normalize(active) {
+			continue
+		}
+		if match := localEndpointMethod.FindStringSubmatch(strings.TrimSpace(provider.Method)); match != nil {
+			return match[1], true
+		}
+	}
+	return "", false
 }
 
 // usageVerifies reports whether the active provider's usage report came back
