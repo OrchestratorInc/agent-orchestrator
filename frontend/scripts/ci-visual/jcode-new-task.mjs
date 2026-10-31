@@ -251,7 +251,15 @@ async function main() {
 		await page.getByRole("menuitem", { name: "Dark", exact: true }).first().click();
 		await sleep(1_000);
 		const applied = await page.evaluate(() => document.documentElement.dataset.theme);
-		return { status: applied === "dark" ? "OK" : "FAIL", observed: `document theme: ${applied}; Theme control shows: ${await textOf(theme)}` };
+		const shown = await textOf(theme);
+		// Leave Settings the way a user does; it stays open across hash changes.
+		await page.getByRole("button", { name: "Back", exact: true }).first().click().catch(() => {});
+		let closed = !(await visible(theme, 3_000));
+		if (!closed) {
+			await page.keyboard.press("Escape");
+			closed = !(await visible(theme, 3_000));
+		}
+		return { status: applied === "dark" && closed ? "OK" : "FAIL", observed: `document theme: ${applied}; Theme control showed: ${shown}; Settings closed: ${closed}` };
 	});
 
 	await checkpoint("readiness", "AO's own readiness for jcode before New Task", async () => {
