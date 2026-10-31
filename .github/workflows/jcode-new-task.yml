@@ -108,9 +108,15 @@ jobs:
           jcode --no-update auth status --json | jq -c '.providers[] | select(.status != "not_configured") | {id, status, method}'
           JCODE_NON_INTERACTIVE=1 jcode --no-update provider current --json
           JCODE_NON_INTERACTIVE=1 jcode --no-update model list --json | jq -c '{provider, selected_model, models}'
-          # Load the model once so the UI task does not wait for a cold start.
-          (cd "$RUNNER_TEMP" && timeout 900 jcode --no-update run "Reply with exactly NATIVE_OK and nothing else." 2>&1 | tail -5) || true
-          rm -rf "$JCODE_HOME/sessions"
+
+      - name: Model weights warm-up (Ollama API only, not evidence)
+        run: |
+          set -euo pipefail
+          # Loads the weights into memory so the UI-created task does not include
+          # a cold start. Bounded; it proves nothing about jcode or AO.
+          curl -fsS --max-time 300 http://127.0.0.1:11434/api/generate \
+            -d "{\"model\":\"$OLLAMA_MODEL\",\"prompt\":\"Say OK.\",\"think\":false,\"stream\":false,\"keep_alive\":\"60m\",\"options\":{\"num_predict\":8}}" \
+            | jq -c '{model, done, done_reason, total_duration, load_duration, eval_count}'
 
       - name: Install frontend dependencies
         working-directory: frontend

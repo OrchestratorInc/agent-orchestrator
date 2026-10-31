@@ -16,7 +16,21 @@ import { chromium } from "playwright";
 
 const HARNESS = "jcode";
 const MARKER = "NEW_TASK_OK";
-const PROMPT = `Reply with exactly ${MARKER} and nothing else. Do not run any tools.`;
+// "/no_think" is Qwen3's documented switch for a direct answer without a
+// reasoning phase; the reply must still be exactly the marker.
+const PROMPT = `Reply with exactly ${MARKER} and nothing else. Do not run any tools. /no_think`;
+
+// The text of one assistant message as jcode stored it: its text parts only,
+// without Qwen's <think> block, whitespace-normalized. Tool calls, reasoning
+// parts and the user's own words never count.
+function assistantText(message) {
+	const parts = typeof message.content === "string"
+		? [message.content]
+		: (Array.isArray(message.content) ? message.content : [])
+			.filter((part) => part && part.type === "text" && typeof part.text === "string")
+			.map((part) => part.text);
+	return parts.join(" ").replace(/<think>[\s\S]*?<\/think>/g, " ").replace(/\s+/g, " ").trim();
+}
 
 function parseArgs(argv) {
 	const options = { cdp: "http://127.0.0.1:9222", out: "", jcodeHome: "", runFile: "", model: "", replyTimeoutMs: 15 * 60_000 };
@@ -88,14 +102,16 @@ function nativeConversation(jcodeHome) {
 		const text = (message) => JSON.stringify(message.content ?? "");
 		const user = messages.find((message) => message.role === "user" && text(message).includes(MARKER));
 		if (!user) continue;
-		const replies = messages.filter((message) => message.role === "assistant").map(text);
+		const replies = messages.filter((message) => message.role === "assistant").map(assistantText).filter(Boolean);
 		return {
 			id: session.id,
 			workingDir: session.working_dir,
 			model: session.model,
 			provider: session.provider_key,
 			promptDelivered: true,
-			replyHasMarker: replies.some((reply) => reply.includes(MARKER)),
+			// The final assistant answer must be the requested output itself, not a
+			// longer reply that merely mentions it.
+			replyHasMarker: replies.at(-1) === MARKER,
 			lastReply: (replies.at(-1) ?? "").slice(0, 400),
 			tokenUsage: messages.filter((message) => message.token_usage).map((message) => message.token_usage),
 		};
@@ -271,7 +287,7 @@ async function main() {
 			await sleep(2_000);
 			return {
 				status: native?.replyHasMarker ? "PASS" : "FAIL",
-				observed: native?.replyHasMarker ? `reply recorded by jcode: ${native.lastReply}` : `no ${MARKER} reply within ${Math.round(options.replyTimeoutMs / 60_000)} min; last reply: ${native?.lastReply ?? "none"}`,
+				observed: native?.replyHasMarker ? `final reply recorded by jcode: ${native.lastReply}` : `final reply is not exactly ${MARKER} within ${Math.round(options.replyTimeoutMs / 60_000)} min; last reply: ${native?.lastReply ?? "none"}`,
 				native,
 			};
 		});
@@ -281,7 +297,7 @@ async function main() {
 	writeFileSync(join(options.out, "results.json"), `${JSON.stringify({ harness: HARNESS, model: options.model, appReady: ready.status, summary, results }, null, 2)}\n`);
 	console.log(JSON.stringify(summary));
 	await browser.close().catch(() => {});
-	if (["new-task-agent-picker", "new-task-model-picker", "running-tui"].some((id) => summary[id] !== "PASS")) process.exitCode = 1;
+	if (["new-task-agent-picker", "new-task-model-picker", "running-tui", "reply"].some((id) => summary[id] !== "PASS")) process.exitCode = 1;
 }
 
 main().catch((error) => {
