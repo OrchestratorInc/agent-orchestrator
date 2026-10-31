@@ -10,7 +10,7 @@ import { cloudSessionsQueryKey, refreshCloudSessionLifecycle } from "../../hooks
 import { appI18n } from "../../i18n";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClient, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
-import { cloudStartupProblem, isWorkspaceStartupError, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
+import { cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
@@ -883,13 +883,14 @@ export function CloudSessionChatSurface({
 	useEffect(() => {
 		setWakeError(undefined);
 		if (!cloud || !ready || liveRef.current.connected || liveRef.current.terminated) return;
-		const abort = new AbortController();
-		client.resumeSession(cloud.orgId, session.id, { signal: abort.signal }).catch((error: unknown) => {
+		let active = true;
+		// Shared with the session view's own resume, so opening sends one request.
+		resumeCloudSession(client, cloud.orgId, session.id).catch((error: unknown) => {
 			// A session deleted under this view says so; any other refusal leaves
 			// the session's own lifecycle state to explain itself.
-			if (!abort.signal.aborted && error instanceof CloudCpError && error.code === "SESSION_TERMINATED") setWakeError(error);
+			if (active && error instanceof CloudCpError && error.code === "SESSION_TERMINATED") setWakeError(error);
 		});
-		return () => abort.abort();
+		return () => { active = false; };
 	}, [client, cloud?.orgId, ready, session.id]);
 	useEffect(() => {
 		const native = modelsQuery.data;

@@ -30,7 +30,7 @@ vi.mock("../../hooks/useCloudWorkspaceReview", async (importOriginal) => {
 const session: WorkspaceSession = {
 	branch: "ao/cloud", cloud: { orgId: "org-1", sandboxProvider: "nodeops" }, id: "session-1", prs: [],
 	provider: "codex", status: "working", title: "Cloud", updatedAt: "2026-09-20T00:00:00Z",
-	workspaceId: "workspace-1", workspaceName: "Cloud workspace",
+	workspaceId: "workspace-1", workspaceName: "Cloud workspace", runtimeConnected: true,
 };
 
 const changed = (path: string, status: CloudCpWorkspaceReviewFileSummary["status"] = "modified"): CloudCpWorkspaceReviewFileSummary => ({
@@ -87,6 +87,38 @@ describe("CloudWorkspaceExplorer", () => {
 		searchWorkspaceReview.mockReset().mockResolvedValue({ results: [] });
 		window.localStorage.clear();
 		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it("does not ask a waking session's absent worker for its files, and keeps what it read before", async () => {
+		const review = {
+			workspaceVersion: "v1", files: [], truncated: false,
+			sections: { staged: [], unstaged: [changed("src/App.tsx")], untracked: [], committed: [] }, commits: [],
+			summary: { files: 1, additions: 1, deletions: 0 },
+		};
+		getWorkspaceReview.mockResolvedValue(review);
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider><CloudWorkspaceExplorer session={{ ...session, runtimeConnected: false }} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("Loading files...")).toBeInTheDocument();
+		expect(getWorkspaceReview).not.toHaveBeenCalled();
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider><CloudWorkspaceExplorer session={session} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(await screen.findByText("src/App.tsx")).toBeInTheDocument();
+		const calls = getWorkspaceReview.mock.calls.length;
+		// The worker goes away again (a pause): the files read stay, and nothing more is asked.
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<TooltipProvider><CloudWorkspaceExplorer session={{ ...session, runtimeConnected: false }} /></TooltipProvider>
+			</QueryClientProvider>,
+		);
+		expect(screen.getByText("src/App.tsx")).toBeInTheDocument();
+		expect(getWorkspaceReview).toHaveBeenCalledTimes(calls);
 	});
 
 	it("switches from categorized changes to the complete repository tree", async () => {

@@ -555,7 +555,7 @@ describe("CloudSessionChatSurface", () => {
 				<CloudSessionChatSurface session={starting} />
 			</QueryClientProvider>,
 		);
-		await waitFor(() => expect(cloudMocks.resumeSession).toHaveBeenCalledWith("org-1", session.id, { signal: expect.any(AbortSignal) }));
+		await waitFor(() => expect(cloudMocks.resumeSession).toHaveBeenCalledWith("org-1", session.id));
 		expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
 		expect(cloudMocks.chatProps.mock.lastCall?.[0].commandError).toBeUndefined();
 		// Still not connected on the next session poll: nothing is asked again.

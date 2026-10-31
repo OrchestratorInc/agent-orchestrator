@@ -1725,6 +1725,19 @@ describe("SessionView", () => {
 		expect(cloudResumeMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("does not ask a waking session's absent worker to prepare its workspace", async () => {
+		const checkout = cloudCpClientMock.requestWorkspaceCheckout;
+		checkout.mockClear();
+		const session = workerSession("sess-2");
+		session.runtimeConnected = false;
+		session.cloud = { orgId: "cloud-org", sandboxProvider: "freestyle", desiredState: "paused", observedState: "stopped" };
+		render(<SessionView sessionId="sess-2" />);
+		await waitFor(() => expect(cloudResumeMock).toHaveBeenCalledWith("cloud-org", "sess-2"));
+		// The checkout would follow the resume; let that chain settle first.
+		await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+		expect(checkout).not.toHaveBeenCalled();
+	});
+
 	it("asks the worker to prepare the workspace on open, but never re-runs a failed Setup just for viewing it", async () => {
 		const checkout = cloudCpClientMock.requestWorkspaceCheckout;
 		const id = "sess-2";

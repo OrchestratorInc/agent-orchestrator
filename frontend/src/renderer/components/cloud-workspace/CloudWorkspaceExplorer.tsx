@@ -39,12 +39,16 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	const { client, ready, baseUrl } = useCloudCp();
 	const orgId = session.cloud?.orgId;
 	const enabled = ready && orgId !== undefined;
+	// Only a connected worker answers for its files: a waking session's worker
+	// refuses every request, so the summary is not polled until it is back.
+	// What was read before stays on screen meanwhile.
+	const workerConnected = session.runtimeConnected === true;
 	const [internalSplit, setInternalSplit] = useState(() => window.localStorage.getItem("ao.cloud.files.diffStyle") === "split");
 	const split = controlledSplit ?? internalSplit;
 	const repository = useUiStore((state) => state.inspectorSessions[session.id]?.cloudReviewRepository ?? "");
 	const setRepository = useUiStore((state) => state.setCloudReviewRepository);
 	const mainSummaryQuery = useQuery({
-		...cloudWorkspaceReviewSummaryQueryOptions({ client, baseUrl, orgId: orgId ?? "", sessionId: session.id, enabled, visible: true }),
+		...cloudWorkspaceReviewSummaryQueryOptions({ client, baseUrl, orgId: orgId ?? "", sessionId: session.id, enabled: enabled && workerConnected, visible: true }),
 	});
 	const repositories = mainSummaryQuery.data?.repositories ?? [];
 	const switchable = repositories.length > 1;
@@ -58,7 +62,7 @@ export function CloudWorkspaceExplorer({ annotation = noAnnotation, session, isM
 	const setFilter = (value: string) => setReviewUi(session.id, activeRepository, { filter: value });
 	const scopedClient = withWorkspaceRepository(client, activeRepository || undefined);
 	const siblingSummaryQuery = useQuery({
-		...cloudWorkspaceReviewSummaryQueryOptions({ client: scopedClient, baseUrl, orgId: orgId ?? "", sessionId: session.id, enabled: enabled && activeRepository !== "", visible: true }),
+		...cloudWorkspaceReviewSummaryQueryOptions({ client: scopedClient, baseUrl, orgId: orgId ?? "", sessionId: session.id, enabled: enabled && workerConnected && activeRepository !== "", visible: true }),
 	});
 	const summaryQuery = activeRepository !== "" ? siblingSummaryQuery : mainSummaryQuery;
 	const scopedAnnotation = useMemo(() => repositoryAnnotationModel(annotation, activeRepository || undefined), [annotation, activeRepository]);
