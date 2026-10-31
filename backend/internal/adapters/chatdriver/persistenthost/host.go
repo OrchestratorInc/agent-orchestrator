@@ -42,6 +42,13 @@ const (
 	providerStopDeadline = 3 * time.Second
 )
 
+// clientWriteTimeout bounds controller writes without observed reader progress.
+// Socket backpressure alone is not evidence of a stalled controller: a slow
+// projector can keep consuming while a TCP write blocks. Attachment-scoped read
+// receipts renew an active write's deadline; idle time has no deadline. Expiry
+// still takes the existing detach/journal path without killing the provider.
+var clientWriteTimeout = 30 * time.Second
+
 // Protocol selects the provider-wire behavior owned by the host.
 type Protocol string
 
@@ -142,9 +149,10 @@ type Transport struct {
 }
 
 type hello struct {
-	Version int    `json:"version"`
-	Token   string `json:"token"`
-	Action  string `json:"action"`
+	Version       int    `json:"version"`
+	Token         string `json:"token"`
+	Action        string `json:"action"`
+	ProgressToken string `json:"progressToken,omitempty"`
 	// QuickStop on a shutdown: see ShutdownQuick.
 	QuickStop bool `json:"quickStop,omitempty"`
 }
@@ -154,6 +162,7 @@ type helloResponse struct {
 	Error         string    `json:"error,omitempty"`
 	NextRequestID int64     `json:"nextRequestId,omitempty"`
 	ACPState      *ACPState `json:"acpState,omitempty"`
+	ProgressToken string    `json:"progressToken,omitempty"`
 }
 
 func hostDir(dataDir, sessionID string) (string, error) {
@@ -486,8 +495,20 @@ func attach(ctx context.Context, d Descriptor, reconnected bool) (*Transport, er
 			return nil, errors.New(response.Error)
 		}
 	}
+	var stdin io.WriteCloser = conn
+	var stdout io.Reader = reader
+	if response.ProgressToken != "" {
+		progress, progressErr := connectReadProgress(handshakeCtx, d, response.ProgressToken)
+		if progressErr != nil {
+			_ = conn.Close()
+			return nil, progressErr
+		}
+		signal := &readProgress{conn: progress}
+		stdin = &progressTransport{Conn: conn, signal: signal}
+		stdout = &progressReader{reader: reader, signal: signal}
+	}
 	return &Transport{
-		Stdin: conn, Stdout: reader, Reconnected: reconnected,
+		Stdin: stdin, Stdout: stdout, Reconnected: reconnected,
 		NextRequestID: response.NextRequestID, ACPState: response.ACPState,
 	}, nil
 }
@@ -783,6 +804,7 @@ type host struct {
 	stdin    io.WriteCloser
 	token    string
 	acp      *acpRelay
+	progress sync.Map // attachment capability -> *controllerConn; independent of mu during replay
 
 	mu               sync.Mutex
 	cond             *sync.Cond
@@ -813,6 +835,14 @@ func (h *host) accept() error {
 	}
 }
 
+func writeClientFrame(conn net.Conn, frame []byte) error {
+	n, err := conn.Write(frame)
+	if err == nil && n != len(frame) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+
 func (h *host) handle(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 	var request hello
@@ -828,6 +858,16 @@ func (h *host) handle(conn net.Conn) {
 	if subtle.ConstantTimeCompare([]byte(request.Token), []byte(h.token)) != 1 {
 		_ = json.NewEncoder(conn).Encode(helloResponse{Error: ErrUnauthorized.Error()})
 		_ = conn.Close()
+		return
+	}
+	if request.Action == "progress" {
+		value, _ := h.progress.Load(request.ProgressToken)
+		if output, ok := value.(*controllerConn); ok {
+			output.serveProgress(conn, reader)
+		} else {
+			_ = json.NewEncoder(conn).Encode(helloResponse{Error: ErrUnauthorized.Error()})
+			_ = conn.Close()
+		}
 		return
 	}
 	if request.Action == "shutdown" {
@@ -852,20 +892,37 @@ func (h *host) handle(conn net.Conn) {
 		_ = conn.Close()
 		return
 	}
+	progressToken, err := randomToken()
+	if err != nil {
+		h.mu.Unlock()
+		_ = conn.Close()
+		return
+	}
+	output := &controllerConn{Conn: conn}
+	conn = output
+	h.progress.Store(progressToken, output)
+	defer h.progress.Delete(progressToken)
+	defer func() { _ = output.Close() }()
 	h.client = conn
 	h.clientGeneration++
 	generation := h.clientGeneration
-	response := helloResponse{OK: true, NextRequestID: h.maxRequestID}
+	response := helloResponse{OK: true, NextRequestID: h.maxRequestID, ProgressToken: progressToken}
 	if h.acp != nil {
 		response.ACPState = h.acp.snapshot()
 	}
-	writeErr := json.NewEncoder(conn).Encode(response)
+	var writeErr error
+	encoded, encodeErr := json.Marshal(response)
+	if encodeErr != nil {
+		writeErr = encodeErr
+	} else {
+		writeErr = writeClientFrame(conn, append(encoded, '\n'))
+	}
 	if writeErr == nil && h.acp != nil {
 		writeErr = h.acp.replayTo(h.ctx, conn)
 	}
 	if writeErr == nil {
 		for _, frame := range h.detached {
-			if _, writeErr = conn.Write(frame); writeErr != nil {
+			if writeErr = writeClientFrame(conn, frame); writeErr != nil {
 				break
 			}
 		}
@@ -912,7 +969,7 @@ func (h *host) handle(conn net.Conn) {
 				}
 			}
 			if readErr == nil && len(clientFrame) > 0 {
-				if _, err := conn.Write(clientFrame); err != nil {
+				if err := writeClientFrame(conn, clientFrame); err != nil {
 					readErr = err
 				}
 			}
@@ -978,7 +1035,7 @@ func (h *host) deliverProviderFrameLocked(frame []byte, retainedByACP bool) {
 		h.cond.Wait()
 	}
 	if h.client != nil {
-		if _, writeErr := h.client.Write(frame); writeErr != nil {
+		if writeErr := writeClientFrame(h.client, frame); writeErr != nil {
 			_ = h.client.Close()
 			h.client = nil
 			h.bufferPendingRequestsLocked()
