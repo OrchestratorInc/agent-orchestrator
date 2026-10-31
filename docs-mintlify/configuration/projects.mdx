@@ -54,11 +54,12 @@ ao project rm <project-id>
 | `agentRules` | Standing instructions for workers. |
 | `agentRulesFile` | Repository-relative instructions appended to worker instructions. |
 | `orchestratorRules` | Standing instructions for orchestrators. |
+| `orchestratorRulesFile` | Repository-relative instructions appended to orchestrator instructions. |
 | `reviewers` | Harnesses used for Orchestrator review runs. |
 | `trackerIntake` | Opt-in, read-only issue intake that can start workers. Also requires `AO_TRACKER_INTAKE=on` in the daemon environment. |
 | `containerReap` | Project-wide opt-out from Orchestrator's session-container cleanup. |
 
-`symlinks` and `agentRulesFile` must stay inside the repository. Orchestrator rejects absolute paths and paths that traverse outside it. Scratch projects do not support Git-only fields such as `defaultBranch` or `symlinks`.
+`symlinks`, `agentRulesFile`, and `orchestratorRulesFile` must stay inside the repository. Orchestrator rejects absolute paths and paths that traverse outside it. Scratch projects do not support Git-only fields such as `defaultBranch` or `symlinks`.
 
 ### Choose a base branch
 
@@ -114,7 +115,7 @@ The same command list runs on every platform. Use `sh` syntax on macOS/Linux and
 
 Cleanup steps use `preRemove`. They run in order after processes stop and before permanent worktree removal. They have no execution time limit unless you set one for a step (1 to 120 minutes); a step that runs out of time fails like any other. Daemon shutdown cancels them. A failed step preserves the worktree. Save a fix, then use **Retry cleanup** for terminated sessions. Dirty worktrees remain intact. Replacing an orchestrator is the exception: its cleanup gets 90 seconds, and Orchestrator removes the old worktree even if a step fails or runs out of time. Cleanup does not run on ordinary agent exit or app quit, and it excludes scratch workspaces.
 
-Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` for supervision instructions. If both worker fields are set, Orchestrator combines the inline rules and file contents.
+Use `agentRules` or `agentRulesFile` for worker instructions and `orchestratorRules` or `orchestratorRulesFile` for supervision instructions. If both fields for a role are set, Orchestrator combines the inline rules and file contents. Rules files are read when a session starts, so an edit applies to sessions started after it.
 
 For example, these fields link local setup files, install dependencies, and load worker rules. This is a configuration fragment; keep any other existing fields when applying it:
 
