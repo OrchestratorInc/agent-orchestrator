@@ -1347,10 +1347,29 @@ main td, main th { vertical-align: middle !important; }
   .mdx-content > div[class*="--page-padding"] div[class*="px-("] { padding-left: 0 !important; padding-right: 0 !important; }
 }
 
-/* ── Sidebar group-label spacing: match original gaps (26px before / 6px after) ── */
+/* ── Sidebar group labels: replicate the original's label box itself
+      (mt24 mb4 from the wrapper rule above; single-line box lh=h=20 desktop,
+      22.5 drawer) instead of compensating gaps around the old 22.5px box ── */
 @media (min-width: 1024px) {
-  nav#sidebar-content [class*="sidebar-title"] { margin-top: -1px !important; margin-bottom: -0.5px !important; }
+  nav#sidebar-content .sidebar-group-header { height: 20px !important; min-height: 0 !important; align-items: center !important; }
+  nav#sidebar-content .sidebar-group-header .sidebar-title,
+  nav#sidebar-content .sidebar-group-header .sidebar-title > span {
+    display: block !important; height: 20px !important; line-height: 20px !important;
+    font-size: 14px !important; font-weight: 400 !important; margin: 0 !important; padding: 0 !important;
+  }
 }
 @media (max-width: 1023px) {
-  .ao-dr-nav [class*="sidebar-title"] { margin-top: -1px !important; margin-bottom: -2.5px !important; }
+  .ao-dr-nav .sidebar-group-header { height: 22.5px !important; min-height: 0 !important; align-items: center !important; }
+  .ao-dr-nav .sidebar-group-header .sidebar-title,
+  .ao-dr-nav .sidebar-group-header .sidebar-title > span {
+    display: block !important; height: 22.5px !important; line-height: 22.5px !important;
+    font-size: 15px !important; font-weight: 400 !important; margin: 0 !important; padding: 0 !important;
+  }
+}
+/* ── Steps: restore the original's continuous left rail (orig: border-l
+      oklch(1 0 0 / 0.1) on the steps container, content x+1, mb 24).
+      Mintlify per-step badge/segment chrome stays hidden (original has none). ── */
+.steps, .mdx-content .steps {
+  border-left: 1px solid oklch(1 0 0 / 0.1) !important;
+  margin-bottom: 24px !important;
 }
