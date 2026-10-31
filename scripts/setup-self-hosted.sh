@@ -383,6 +383,11 @@ fi
 # A release without `link` exits 0 for it too, printing its parent's help, so
 # look for a flag only `link` has.
 link_help="$("$host_root/current/resources/daemon/ao" remote-host link --help 2>/dev/null || true)"
+# An upgrade of a linked host keeps its account; its devices already list it.
+if "$tunnel" && [[ "$enable_output" == *"Linked to an AO account"* ]]; then
+	printf '\n%s\n' "${addresses[@]}"
+	exit 0
+fi
 if "$tunnel" && [[ "$link_help" == *--no-qr* ]]; then
 	if [[ -t 1 ]]; then
 		printf '\n%s\n' 'Press Ctrl-C to skip signing in and see the pairing details instead.'

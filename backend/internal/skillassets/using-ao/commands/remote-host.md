@@ -49,8 +49,7 @@ The VM needs Ubuntu 24.04 x64, outbound internet, and a non-root user with
 2. Start the sign-in in the background, then read the link:
 
    ```bash
-   ssh USER@HOST 'nohup ~/.local/bin/ao remote-host link --no-qr > ~/.ao/link.log 2>&1 < /dev/null &'
-   ssh USER@HOST 'cat ~/.ao/link.log'
+   ssh USER@HOST 'nohup ~/.local/bin/ao remote-host link --no-qr > ~/.ao/link.log 2>&1 < /dev/null & sleep 5; cat ~/.ao/link.log'
    ```
 
 3. Give the user the `https://…/device?user_code=…` link and its code. Ask them

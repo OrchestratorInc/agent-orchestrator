@@ -75,6 +75,11 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Remote host enabled\nHost ID: %s\n", status.HostID); err != nil {
 					return err
 				}
+				if status.AccountLinked {
+					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Linked to an AO account: its signed-in devices list this machine."); err != nil {
+						return err
+					}
+				}
 				publicAddress := false
 				for _, endpoint := range status.Endpoints {
 					scheme := "http"
@@ -93,7 +98,7 @@ func newRemoteHostCommand(ctx *commandContext) *cobra.Command {
 					if !status.Tunnel.Fixed {
 						message = "Quick tunnel: the address changes on restart and has no uptime guarantee."
 						if !status.AccountLinked {
-							message += " Run `ao remote-host link` to add this machine to your AO account; it then gets a fixed address."
+							message += " Run `ao remote-host link` to add this machine to your AO account, which gives it a fixed address when the account has one free."
 						}
 					}
 					if _, err := fmt.Fprintln(cmd.OutOrStdout(), message); err != nil {

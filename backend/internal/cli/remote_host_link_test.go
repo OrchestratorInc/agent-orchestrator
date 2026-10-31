@@ -268,6 +268,9 @@ func TestRemoteHostLinkStopsWhenTheSignInIsNotFinished(t *testing.T) {
 			if len(f.registrations) != 0 {
 				t.Fatalf("registrations = %v, want none", f.registrations)
 			}
+			if f.enabled || f.tunnel {
+				t.Fatal("remote access was turned on for a sign-in that did not finish")
+			}
 		})
 	}
 }

@@ -48,7 +48,8 @@ Cloudflare tunnel.
    new machines only while its window is open.
 
 The VM uses your sign-in once, to add itself to your account; it does not keep
-it. Re-run the install command to upgrade without deleting sessions. The
+it. Re-run the install command to upgrade without deleting sessions; a
+linked VM stays linked and skips the sign-in. The
 installer uses `~/.ao/host`; it does not copy agent or GitHub credentials from
 your laptop.
 
@@ -97,8 +98,7 @@ in the background and read its output:
 2. Start the sign-in and read the link:
 
    ```bash
-   ssh USER@HOST 'nohup ~/.local/bin/ao remote-host link --no-qr > ~/.ao/link.log 2>&1 < /dev/null &'
-   ssh USER@HOST 'cat ~/.ao/link.log'
+   ssh USER@HOST 'nohup ~/.local/bin/ao remote-host link --no-qr > ~/.ao/link.log 2>&1 < /dev/null & sleep 5; cat ~/.ao/link.log'
    ```
 
    Add `--label "Name"` to choose the name devices show; the default is the

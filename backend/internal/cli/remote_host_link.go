@@ -109,6 +109,12 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 		return errors.New("AO Cloud is not configured for this machine's AO")
 	}
 
+	// Nothing on this machine changes until the sign-in succeeds, so a
+	// declined or abandoned sign-in leaves remote access as it was.
+	session, err := c.signInWithDeviceCode(ctx, out, showQR)
+	if err != nil {
+		return err
+	}
 	var status remoteHostStatus
 	if err := c.doJSON(ctx, http.MethodGet, "mobile/status", nil, &status); err != nil {
 		return remoteHostDaemonError(err)
@@ -122,11 +128,6 @@ func (c *commandContext) runRemoteHostLink(ctx context.Context, out io.Writer, l
 	}
 	if status.Password == "" || status.HostID == "" {
 		return errors.New("remote access did not start; run `ao remote-host status`")
-	}
-
-	session, err := c.signInWithDeviceCode(ctx, out, showQR)
-	if err != nil {
-		return err
 	}
 	// The account's devices reach the machine through its tunnel; this starts
 	// one on a listener that was LAN-only, as `enable --tunnel` does.
