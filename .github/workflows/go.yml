@@ -276,7 +276,7 @@ jobs:
       - name: Regenerate API spec and TS types
         run: npm run api
 
-      # openapi.yaml drift is already caught by TestBuild_MatchesEmbedded in
-      # the build-test job (go test -race ./...). Only schema.ts needs checking here.
-      - name: Check for schema.ts drift
-        run: git diff --exit-code -- frontend/src/api/schema.ts
+      # TestBuild_MatchesEmbedded also catches openapi.yaml drift, but it only
+      # reports sizes; printing the diff here gives the exact regeneration patch.
+      - name: Check for openapi.yaml and schema.ts drift
+        run: git diff --exit-code -- backend/internal/httpd/apispec/openapi.yaml frontend/src/api/schema.ts

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/coderagents"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -295,6 +296,9 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 	if request.AgentID == "muse" || request.AgentID == "memcode" {
 		return Base(request.AgentID), nil
 	}
+	if request.AgentID == "coder-agents" {
+		return discoverCoderAgentsCatalog(ctx, request)
+	}
 	if request.AgentID == "codex" {
 		return discoverCodexCatalog(ctx, request, d.CodexModels)
 	}
@@ -564,6 +568,33 @@ func applyCodewhaleResolvedModel(models []ports.AgentModelInfo, resolveOutput []
 	return models
 }
 
+// discoverCoderAgentsCatalog reads the deployment's enabled model configs.
+// The ID AO stores is Coder's model config UUID, the value its chat API takes.
+func discoverCoderAgentsCatalog(ctx context.Context, request ports.AgentModelDiscoveryRequest) (ports.AgentModelCatalog, error) {
+	base := Base("coder-agents")
+	base.Source = "api"
+	models, err := coderagents.DiscoverModels(ctx, request.Binary, request.Env)
+	if err != nil {
+		return base, fmt.Errorf("coder agents model catalog: %w", err)
+	}
+	for _, item := range models {
+		entry := ports.AgentModelInfo{
+			ID: item.ID, Label: coderagentsModelLabel(item.DisplayName, item.Model),
+			IsDefault: item.IsDefault, ContextWindow: item.ContextLimit,
+			Efforts: append([]string(nil), item.ReasoningEfforts...),
+		}
+		base.Models = append(base.Models, entry)
+	}
+	return base, nil
+}
+
+func coderagentsModelLabel(display, model string) string {
+	if display = strings.TrimSpace(display); display != "" {
+		return display
+	}
+	return model
+}
+
 func discoverUnrealCatalog(env map[string]string) ports.AgentModelCatalog {
 	base := Base("unreal-agent")
 	base.SelectionMode = ports.ModelSelectionCatalog
@@ -745,7 +776,7 @@ func hasDiscoverySource(agentID string) bool {
 	// Harnesses whose catalog comes from a daemon-injected surface rather than a
 	// command spec: Codex's app-server, Claude's provider probe, and the ACP
 	// configuration catalog for Cline, DeepSeek Harness, and Devin.
-	case "claude-code", "codex", "deepseek-harness", "devin":
+	case "claude-code", "codex", "deepseek-harness", "devin", "coder-agents":
 		return true
 	}
 	if hasConfigDiscoverySource(agentID) {
@@ -915,6 +946,9 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 	if agentID == "unreal-agent" {
 		provider, selected := unrealConfiguredModel(env)
 		return "provider=" + provider + ";model=" + selected
+	}
+	if agentID == "coder-agents" {
+		return coderagents.DiscoveryFingerprint(env)
 	}
 	if agentID == "claude-code" {
 		return "config=" + claudeCodeDiscoveryFingerprint(ctx, workingDir, env)

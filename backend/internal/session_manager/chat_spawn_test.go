@@ -1298,6 +1298,36 @@ func TestUnrealSpawnDefaultsToChatWithBypassPermissions(t *testing.T) {
 	}
 }
 
+// Coder Agents is Chat-only, but AO gates its client-executed tools with
+// ordinary approvals: selecting it defaults the mode and leaves the
+// permission mode to the caller rather than forcing bypass.
+func TestCoderAgentsSpawnDefaultsToChatWithoutForcingBypass(t *testing.T) {
+	launcher := &recordingLauncher{}
+	mgr, _, runtime := newChatManager(launcher)
+	mgr.defaults = fixedSessionModeDefaults(domain.SessionModeTUI)
+
+	rec, _, _, err := mgr.Spawn(context.Background(), ports.SpawnConfig{
+		ProjectID: chatTestProject,
+		Kind:      domain.KindWorker,
+		Harness:   domain.HarnessCoderAgents,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if rec.Mode != domain.SessionModeChat {
+		t.Fatalf("mode = %q, want chat", rec.Mode)
+	}
+	if runtime.created != 0 {
+		t.Fatalf("Coder Agents spawn created %d terminal runtimes, want 0", runtime.created)
+	}
+	if len(launcher.preflightPermissions) != 1 || launcher.preflightPermissions[0] == ports.PermissionModeBypassPermissions {
+		t.Fatalf("preflight permissions = %v, want the unforced default", launcher.preflightPermissions)
+	}
+	if got := mgr.aoMCPServers(context.Background(), domain.HarnessCoderAgents, nil); got != nil {
+		t.Fatalf("coder agents got local tool servers %+v; the Coder deployment cannot start them", got)
+	}
+}
+
 // A TUI spawn must never reach the chat launcher, even when one is wired.
 func TestTUISpawnNeverTouchesTheChatLauncher(t *testing.T) {
 	launcher := &recordingLauncher{}
