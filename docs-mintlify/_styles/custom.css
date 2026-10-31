@@ -1399,19 +1399,22 @@ main td, main th { vertical-align: middle !important; }
 #ao-chat-fab:focus-visible { outline: 2px solid #fafaf8; outline-offset: 2px; }
 #ao-chat-fab[data-state="open"] { display: none; }
 
-/* v41: transparent cloud-outline greeting balloon above the chat launcher */
+/* v42: small translucent cloud-outline greeting balloon above the chat launcher */
 #ao-chat-bubble {
   position: fixed; right: 20px; bottom: calc(84px + env(safe-area-inset-bottom, 0px));
-  width: 188px; box-sizing: border-box; padding: 36px 27px 47px 27px;
+  width: 200px; height: 136.4px; box-sizing: border-box;
+  padding: 32.7px 48.2px 56.4px 51.8px;
+  display: inline-flex; align-items: center; justify-content: center;
   border: 0; border-radius: 0; background-color: transparent;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 130'><path d='M 128 103 L 50 100 A 19 19 0 0 1 33 68 A 25 25 0 0 1 56 43 A 29 29 0 0 1 103 31 A 25 25 0 0 1 150 38 A 21 21 0 0 1 183 57 A 21 21 0 0 1 192 84 A 16 16 0 0 1 152 99 Q 174 106 194 126 Q 166 112 128 103 Z' fill='rgba(255,255,255,0.10)' stroke='rgba(255,255,255,0.9)' stroke-width='3' stroke-linejoin='round'/></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 150'><path d='M 19.2 59.1 L 18.5 63.8 L 19.0 68.3 L 20.7 72.4 L 22.5 75.4 L 24.4 77.1 L 26.6 78.6 L 29.3 79.9 L 32.8 82.5 L 37.3 86.7 L 42.0 90.2 L 47.1 93.0 L 53.3 95.8 L 60.6 98.5 L 68.8 100.9 L 78.2 103.0 L 88.5 104.5 L 100.0 105.5 L 110.8 105.8 L 121.2 105.5 L 128.2 105.8 L 131.8 106.8 L 141.4 110.4 L 156.9 116.6 L 171.8 123.8 L 186.1 132.0 L 189.7 132.7 L 182.8 125.9 L 172.2 117.3 L 157.8 106.8 L 155.1 100.0 L 163.9 97.0 L 171.5 93.6 L 178.0 90.0 L 183.6 85.9 L 188.2 81.2 L 192.7 77.5 L 196.8 74.8 L 199.7 72.2 L 201.3 69.7 L 202.6 66.9 L 203.5 63.9 L 203.8 60.5 L 203.4 56.5 L 202.2 52.6 L 199.9 48.5 L 197.6 45.5 L 195.3 43.6 L 192.6 42.1 L 189.7 41.0 L 186.6 40.3 L 183.2 40.2 L 180.0 40.5 L 176.9 41.4 L 175.1 39.9 L 174.6 36.1 L 173.7 32.8 L 172.5 29.9 L 170.7 27.0 L 168.4 24.1 L 165.8 21.8 L 163.1 20.0 L 159.7 18.6 L 155.6 17.5 L 151.5 17.2 L 147.5 17.7 L 143.8 18.7 L 140.4 20.4 L 137.0 22.9 L 133.6 26.4 L 130.9 25.5 L 129.0 20.4 L 125.8 15.6 L 121.4 11.2 L 116.7 8.1 L 111.8 6.2 L 106.5 5.4 L 101.0 5.7 L 96.7 6.5 L 93.4 7.8 L 90.1 9.7 L 86.8 12.4 L 83.9 15.5 L 81.5 19.2 L 79.7 22.9 L 78.6 26.6 L 76.1 26.9 L 72.4 23.9 L 68.5 21.6 L 64.7 20.1 L 60.4 19.4 L 55.6 19.4 L 51.2 20.2 L 47.1 21.8 L 43.5 23.9 L 40.5 26.4 L 38.0 29.3 L 36.0 32.5 L 34.5 35.7 L 33.6 38.9 L 33.2 42.0 L 33.1 45.1 L 31.1 47.5 L 27.2 49.2 L 23.9 51.7 L 21.0 55.0 Z' fill='rgba(10,10,9,0.55)' stroke='rgba(255,255,255,0.92)' stroke-width='3' stroke-linejoin='round'/></svg>");
   background-repeat: no-repeat; background-position: center; background-size: 100% 100%;
-  color: #fafaf8; font-size: 12px; font-weight: 500; line-height: 1.35; text-align: center;
+  color: #fafaf8; font-size: 12px; font-weight: 500; line-height: 1.3; text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
   filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.35)); cursor: pointer; z-index: 30;
 }
 #ao-chat-bubble:hover { filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.35)) brightness(1.25); }
 #ao-chat-bubble:focus-visible { outline: 2px solid #fafaf8; outline-offset: 3px; }
 #ao-chat-bubble[data-state="open"] { display: none; }
 @media (max-width: 480px) {
-  #ao-chat-bubble { width: 152px; padding: 30px 22px 39px 22px; font-size: 10.5px; }
+  #ao-chat-bubble { width: 176px; height: 120px; padding: 28.8px 42.4px 49.6px 45.6px; font-size: 10.5px; }
 }
