@@ -144,7 +144,7 @@ function fakeControlPlane(partSize: number, options: { failPart?: number; finali
 			}
 			if (pathname.endsWith("/uploads/parts")) {
 				const { parts } = JSON.parse(body as string) as { parts: Array<{ partNumber: number }> };
-				return json({ parts: parts.map(({ partNumber }) => ({ partNumber, method: "PUT", url: `https://s3.test/part/${partNumber}`, headers: { "X-Amz-Checksum-Sha256": "sig" }, size: 0 })) });
+				return json({ parts: parts.map(({ partNumber }) => ({ partNumber, method: "PUT", url: `https://s3.test/part/${partNumber}`, headers: { "Content-Length": "4", Host: "s3.test", "X-Amz-Checksum-Sha256": "sig" }, size: 0 })) });
 			}
 			if (pathname.startsWith("/part/")) {
 				const number = Number(pathname.split("/").pop());
@@ -186,6 +186,12 @@ describe("uploadShare", () => {
 		expect(presign.parts).toEqual([{ partNumber: 1, sha256: sha("0123") }, { partNumber: 2, sha256: sha("4567") }, { partNumber: 3, sha256: sha("89") }]);
 		const finalize = JSON.parse(calls.find((call) => call.url.endsWith("/finalize"))!.body as string);
 		expect(finalize.parts.map((part: { partNumber: number; etag: string }) => [part.partNumber, part.etag])).toEqual([[1, '"etag-1"'], [2, '"etag-2"'], [3, '"etag-3"']]);
+
+		// Chromium sets Content-Length and Host itself and refuses a request
+		// that names them; the other signed headers go with each part.
+		for (const call of calls.filter((candidate) => candidate.url.startsWith("https://s3.test/"))) {
+			expect(call.headers).toEqual({ "x-amz-checksum-sha256": "sig" });
+		}
 
 		// The token goes only to the control plane, never to storage.
 		for (const call of calls) {

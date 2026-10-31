@@ -28,6 +28,15 @@ const SCAN_OVERLAP = 512;
 const PRESIGN_BATCH = 8;
 /** Parts uploaded at once. */
 const UPLOAD_CONCURRENCY = 2;
+/**
+ * Headers Chromium sets itself: net.fetch refuses a request that names them
+ * (net::ERR_INVALID_ARGUMENT). The body's own length is the signed one.
+ */
+const CHROMIUM_MANAGED_HEADERS = new Set(["content-length", "host"]);
+
+function partHeaders(headers: Record<string, string>): Record<string, string> {
+	return Object.fromEntries(Object.entries(headers).filter(([name]) => !CHROMIUM_MANAGED_HEADERS.has(name.toLowerCase())));
+}
 
 export class CloudShareError extends Error {
 	constructor(
@@ -320,7 +329,7 @@ export async function uploadShare(
 					const range = partRange(start, snapshot.size, part.partNumber);
 					const body = Buffer.alloc(range.length);
 					await handle.read(body, 0, range.length, range.offset);
-					const response = await api.fetch(part.url, { method: part.method, headers: part.headers, body, signal });
+					const response = await api.fetch(part.url, { method: part.method, headers: partHeaders(part.headers), body, signal });
 					const etag = response.headers.get("etag");
 					if (!response.ok || !etag) throw new CloudShareError("upload_failed", `Uploading part ${part.partNumber} failed (${response.status}).`, response.status);
 					completed.push({ partNumber: part.partNumber, sha256: signed.sha256, etag });
