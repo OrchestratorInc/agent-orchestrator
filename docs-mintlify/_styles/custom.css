@@ -1399,16 +1399,16 @@ main td, main th { vertical-align: middle !important; }
 #ao-chat-fab:focus-visible { outline: 2px solid #fafaf8; outline-offset: 2px; }
 #ao-chat-fab[data-state="open"] { display: none; }
 
-/* v46: compact landscape speech-cloud greeting - wider, shorter body with shallow scallops and a short curved tail; shape-clipped backdrop blur keeps it readable over page content */
+/* v47: compact landscape speech-cloud greeting - smooth circular-arc scallops (no straight segments), short curved tail; shape-clipped backdrop blur keeps it readable over page content */
 #ao-chat-bubble {
   position: fixed; right: 20px; bottom: calc(84px + env(safe-area-inset-bottom, 0px));
-  width: 220px; height: 115px; box-sizing: border-box;
-  padding: 27.2px 48.2px 39.7px 37.7px;
+  width: 210px; height: 110px; box-sizing: border-box;
+  padding: 16px 19px 34px 19.5px;
   display: inline-flex; align-items: center; justify-content: center;
   border: 0; border-radius: 0; background-color: transparent;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 210 110'><path d='M 8 49 L 8 55 L 13 62 L 21 68 L 36 74 L 52 78 L 84 82 L 116 82 L 132 80 L 155 92 L 178 99 L 185 104 L 188 103 L 188 101 L 165 81 L 161 75 L 174 70 L 187 62 L 192 55 L 192 49 L 182 38 L 168 32 L 165 29 L 163 21 L 155 15 L 145 15 L 134 24 L 119 23 L 116 20 L 114 12 L 104 4 L 92 4 L 88 6 L 82 12 L 80 20 L 77 23 L 65 24 L 56 15 L 43 14 L 33 22 L 32 30 L 28 34 L 18 38 Z' fill='none' stroke='rgba(255,255,255,0.92)' stroke-width='3' stroke-linejoin='round'/></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 210 110'><path d='M 18.0 12.0 A 21.75 21.75 0 0 1 47.0 12.0 A 21.75 21.75 0 0 1 76.0 12.0 A 21.75 21.75 0 0 1 105.0 12.0 A 21.75 21.75 0 0 1 134.0 12.0 A 21.75 21.75 0 0 1 163.0 12.0 A 21.75 21.75 0 0 1 192.0 12.0 A 10.00 10.00 0 0 1 202.0 22.0 A 18.00 18.00 0 0 1 202.0 46.0 A 18.00 18.00 0 0 1 202.0 70.0 A 10.00 10.00 0 0 1 192.0 80.0 A 17.25 17.25 0 0 1 169.0 80.0 A 17.25 17.25 0 0 1 146.0 80.0 Q 168.0 94.0 172.0 102.0 Q 178.0 105.0 162.0 100.0 Q 141.0 96.0 112.0 80.0 A 23.50 23.50 0 0 1 80.7 80.0 A 23.50 23.50 0 0 1 49.3 80.0 A 23.50 23.50 0 0 1 18.0 80.0 A 10.00 10.00 0 0 1 8.0 70.0 A 18.00 18.00 0 0 1 8.0 46.0 A 18.00 18.00 0 0 1 8.0 22.0 A 10.00 10.00 0 0 1 18.0 12.0 Z' fill='none' stroke='rgba(255,255,255,0.92)' stroke-width='3' stroke-linejoin='round'/></svg>");
   background-repeat: no-repeat; background-position: center; background-size: 100% 100%;
-  clip-path: path('M 8.4 51.2 L 8.4 57.5 L 13.6 64.8 L 22.0 71.1 L 37.7 77.4 L 54.5 81.5 L 88.0 85.7 L 121.5 85.7 L 138.3 83.6 L 162.4 96.2 L 186.5 103.5 L 193.8 108.7 L 197.0 107.7 L 197.0 105.6 L 172.9 84.7 L 168.7 78.4 L 182.3 73.2 L 195.9 64.8 L 201.1 57.5 L 201.1 51.2 L 190.7 39.7 L 176.0 33.5 L 172.9 30.3 L 170.8 22.0 L 162.4 15.7 L 151.9 15.7 L 140.4 25.1 L 124.7 24.0 L 121.5 20.9 L 119.4 12.5 L 109.0 4.2 L 96.4 4.2 L 92.2 6.3 L 85.9 12.5 L 83.8 20.9 L 80.7 24.0 L 68.1 25.1 L 58.7 15.7 L 45.0 14.6 L 34.6 23.0 L 33.5 31.4 L 29.3 35.5 L 18.9 39.7 Z');
+  clip-path: path('M 18.0 12.0 A 21.75 21.75 0 0 1 47.0 12.0 A 21.75 21.75 0 0 1 76.0 12.0 A 21.75 21.75 0 0 1 105.0 12.0 A 21.75 21.75 0 0 1 134.0 12.0 A 21.75 21.75 0 0 1 163.0 12.0 A 21.75 21.75 0 0 1 192.0 12.0 A 10.00 10.00 0 0 1 202.0 22.0 A 18.00 18.00 0 0 1 202.0 46.0 A 18.00 18.00 0 0 1 202.0 70.0 A 10.00 10.00 0 0 1 192.0 80.0 A 17.25 17.25 0 0 1 169.0 80.0 A 17.25 17.25 0 0 1 146.0 80.0 Q 168.0 94.0 172.0 102.0 Q 178.0 105.0 162.0 100.0 Q 141.0 96.0 112.0 80.0 A 23.50 23.50 0 0 1 80.7 80.0 A 23.50 23.50 0 0 1 49.3 80.0 A 23.50 23.50 0 0 1 18.0 80.0 A 10.00 10.00 0 0 1 8.0 70.0 A 18.00 18.00 0 0 1 8.0 46.0 A 18.00 18.00 0 0 1 8.0 22.0 A 10.00 10.00 0 0 1 18.0 12.0 Z');
   -webkit-backdrop-filter: blur(6px) brightness(0.75);
   backdrop-filter: blur(6px) brightness(0.75);
   color: #fafaf8; font-size: 12px; font-weight: 500; line-height: 1.2; text-align: center;
@@ -1420,7 +1420,7 @@ main td, main th { vertical-align: middle !important; }
 #ao-chat-bubble[data-state="open"] { display: none; }
 @media (max-width: 480px) {
   #ao-chat-bubble {
-    width: 200px; height: 105px; padding: 24.8px 43.8px 36.3px 34.3px;
-    clip-path: path('M 7.6 46.8 L 7.6 52.5 L 12.4 59.2 L 20.0 64.9 L 34.3 70.6 L 49.5 74.5 L 80.0 78.3 L 110.5 78.3 L 125.7 76.4 L 147.6 87.8 L 169.5 94.5 L 176.2 99.3 L 179.0 98.3 L 179.0 96.4 L 157.1 77.3 L 153.3 71.6 L 165.7 66.8 L 178.1 59.2 L 182.9 52.5 L 182.9 46.8 L 173.3 36.3 L 160.0 30.5 L 157.1 27.7 L 155.2 20.0 L 147.6 14.3 L 138.1 14.3 L 127.6 22.9 L 113.3 22.0 L 110.5 19.1 L 108.6 11.5 L 99.0 3.8 L 87.6 3.8 L 83.8 5.7 L 78.1 11.5 L 76.2 19.1 L 73.3 22.0 L 61.9 22.9 L 53.3 14.3 L 41.0 13.4 L 31.4 21.0 L 30.5 28.6 L 26.7 32.5 L 17.1 36.3 Z'); font-size: 11px; line-height: 1.18;
+    width: 190px; height: 100px; padding: 14.5px 17.2px 30.9px 17.7px;
+    clip-path: path('M 16.3 10.9 A 19.68 19.77 0 0 1 42.5 10.9 A 19.68 19.77 0 0 1 68.8 10.9 A 19.68 19.77 0 0 1 95.0 10.9 A 19.68 19.77 0 0 1 121.2 10.9 A 19.68 19.77 0 0 1 147.5 10.9 A 19.68 19.77 0 0 1 173.7 10.9 A 9.05 9.09 0 0 1 182.8 20.0 A 16.29 16.36 0 0 1 182.8 41.8 A 16.29 16.36 0 0 1 182.8 63.6 A 9.05 9.09 0 0 1 173.7 72.7 A 15.61 15.68 0 0 1 152.9 72.7 A 15.61 15.68 0 0 1 132.1 72.7 Q 152.0 85.5 155.6 92.7 Q 161.0 95.5 146.6 90.9 Q 127.6 87.3 101.3 72.7 A 21.26 21.36 0 0 1 73.0 72.7 A 21.26 21.36 0 0 1 44.6 72.7 A 21.26 21.36 0 0 1 16.3 72.7 A 9.05 9.09 0 0 1 7.2 63.6 A 16.29 16.36 0 0 1 7.2 41.8 A 16.29 16.36 0 0 1 7.2 20.0 A 9.05 9.09 0 0 1 16.3 10.9 Z'); font-size: 11px; line-height: 1.18;
   }
 }
