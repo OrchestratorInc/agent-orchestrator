@@ -29,17 +29,36 @@ export function useChatSelectionPosition(
 				onInvalid();
 				return;
 			}
-			const rect = Array.from(range.getClientRects()).find((line) => line.width > 0 && line.height > 0)
-				?? range.getBoundingClientRect();
-			const bounds = viewport.getBoundingClientRect();
+			const lines = range.getClientRects();
+			let rect = range.getBoundingClientRect();
+			const extent = rect;
+			for (let i = 0; i < lines.length; i++) {
+				if (lines[i].width > 0 && lines[i].height > 0) { rect = lines[i]; break; }
+			}
+			const visual = window.visualViewport;
+			const bounds = { left: visual?.offsetLeft ?? 0, top: visual?.offsetTop ?? 0,
+				right: (visual?.offsetLeft ?? 0) + (visual?.width ?? innerWidth),
+				bottom: (visual?.offsetTop ?? 0) + (visual?.height ?? innerHeight) };
+			for (let node: HTMLElement | null = viewport; node; node = node.parentElement) {
+				const style = getComputedStyle(node);
+				const box = node.getBoundingClientRect();
+				if (node === viewport || /(auto|scroll|hidden|clip)/.test(style.overflowX)) {
+					bounds.left = Math.max(bounds.left, box.left); bounds.right = Math.min(bounds.right, box.right);
+				}
+				if (node === viewport || /(auto|scroll|hidden|clip)/.test(style.overflowY)) {
+					bounds.top = Math.max(bounds.top, box.top); bounds.bottom = Math.min(bounds.bottom, box.bottom);
+				}
+			}
 			const parent = button.offsetParent?.getBoundingClientRect() ?? bounds;
 			const size = button.getBoundingClientRect();
 			const left = Math.max(bounds.left + 8, Math.min(
 				rect.left + rect.width / 2 - size.width / 2, bounds.right - size.width - 8,
 			)) - parent.left;
-			const top = rect.top - parent.top - size.height - 6;
-			const visible = rect.bottom > bounds.top && rect.top < bounds.bottom &&
-				rect.right > bounds.left && rect.left < bounds.right;
+			const top = Math.max(bounds.top + 8, Math.min(rect.top - size.height - 6,
+				Math.max(bounds.top + 8, bounds.bottom - size.height - 8))) - parent.top;
+			const visible = bounds.bottom > bounds.top && bounds.right > bounds.left &&
+				extent.bottom > bounds.top && extent.top < bounds.bottom &&
+				extent.right > bounds.left && extent.left < bounds.right;
 			setPosition((previous) => previous?.left === left && previous.top === top && previous.visible === visible
 				? previous : { left, top, visible });
 		};
@@ -50,7 +69,9 @@ export function useChatSelectionPosition(
 		resize.observe(button);
 		const mutation = new MutationObserver(schedule);
 		mutation.observe(viewport, { subtree: true, childList: true, characterData: true, attributes: true });
-		viewport.addEventListener("scroll", schedule, true);
+		document.addEventListener("scroll", schedule, true);
+		window.visualViewport?.addEventListener("resize", schedule);
+		window.visualViewport?.addEventListener("scroll", schedule);
 		window.addEventListener("resize", schedule);
 		document.addEventListener("selectionchange", schedule);
 		update();
@@ -58,7 +79,9 @@ export function useChatSelectionPosition(
 			if (frame !== undefined) window.cancelAnimationFrame(frame);
 			resize.disconnect();
 			mutation.disconnect();
-			viewport.removeEventListener("scroll", schedule, true);
+			document.removeEventListener("scroll", schedule, true);
+			window.visualViewport?.removeEventListener("resize", schedule);
+			window.visualViewport?.removeEventListener("scroll", schedule);
 			window.removeEventListener("resize", schedule);
 			document.removeEventListener("selectionchange", schedule);
 		};

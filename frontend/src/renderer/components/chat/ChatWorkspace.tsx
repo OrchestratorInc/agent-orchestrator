@@ -2913,6 +2913,29 @@ export function Timeline({
 		setSelectionAction(null);
 		window.getSelection()?.removeAllRanges();
 	}, [draftScope, onAddToChat, selectionAction]);
+	useEffect(() => {
+		if (!selectionAction || !selectionPosition?.visible) return;
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.defaultPrevented || event.key.toLowerCase() !== "l" || event.shiftKey || event.altKey ||
+				(isMacPlatform() ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey)) return;
+			const toolbar = selectionButton.current;
+			const target = event.target instanceof Element ? event.target : document.activeElement;
+			if (!toolbar || document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]') ||
+				target?.closest('input, textarea, select, [contenteditable], .xterm, webview, [data-browser-view]')) return;
+			if (target && target !== document.body && !scroller.current?.contains(target) && !toolbar.contains(target)) return;
+			const native = window.getSelection();
+			const range = native?.rangeCount ? native.getRangeAt(0) : undefined;
+			const saved = selectionAction.range;
+			if (!range || native?.isCollapsed || !saved.startContainer.isConnected || !saved.endContainer.isConnected ||
+				!scroller.current?.contains(saved.startContainer) ||
+				range.startContainer !== saved.startContainer || range.startOffset !== saved.startOffset ||
+				range.endContainer !== saved.endContainer || range.endOffset !== saved.endOffset) return;
+			event.preventDefault(); event.stopPropagation();
+			if (!event.repeat) void addSelectionToChat();
+		};
+		document.addEventListener("keydown", onKeyDown, true);
+		return () => document.removeEventListener("keydown", onKeyDown, true);
+	}, [selectionAction, selectionPosition?.visible, addSelectionToChat]);
 	const inlineEditRecoveryLabel = durableInlineEditDelivery
 		? durableInlineEditDelivery.state === "accepted"
 			? "chat.draft.clearEdit"
@@ -4144,12 +4167,12 @@ export function Timeline({
 		>
 			{selectionAction ? (
 				<div
-					ref={selectionButton}
+					ref={selectionButton} data-chat-selection-actions=""
 					style={{ left: selectionPosition?.left ?? 0, top: selectionPosition?.top ?? 0, visibility: selectionPosition?.visible ? "visible" : "hidden" }}
 					onMouseDown={(event) => event.preventDefault()}
 					className={cn(actionMenuContentClass, "absolute flex-row min-w-0 w-max max-w-full")}
 				>
-					<button type="button" onClick={() => void addSelectionToChat()} className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover hover:text-foreground")}>
+					<button type="button" title={`${t("sideChat.addToChat")} (${isMacPlatform() ? "⌘L" : "Ctrl+L"})`} onClick={() => void addSelectionToChat()} className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover hover:text-foreground")}>
 						<MessageSquarePlus aria-hidden="true" className="size-3.5" /> Add to chat
 					</button>
 					{onAddToSideChat ? <button type="button" className={cn(actionMenuItemClass, "shrink-0 whitespace-nowrap hover:bg-interactive-hover")} onClick={() => { void onAddToSideChat(selectionAction.excerpt); clearSelectionAction(); window.getSelection()?.removeAllRanges(); }}><MessageSquarePlus aria-hidden="true" className="size-3.5" /> {t("sideChat.addToSideChat")}</button> : null}
