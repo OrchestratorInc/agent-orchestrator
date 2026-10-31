@@ -108,10 +108,24 @@ describe("ChatMarkdown", () => {
 
 	it("renders a fenced code block with its language and a copy control, and no stray backticks", () => {
 		render(<ChatMarkdown text={"```go\nfunc main() {}\n```"} />);
-		expect(screen.getByText("go")).toBeInTheDocument();
+		expect(document.querySelector('[data-language="go"]')).toBeInTheDocument();
 		expect(screen.getByText("func main() {}")).toBeInTheDocument();
 		expect(screen.getByRole("button", { name: /copy code/i })).toBeInTheDocument();
 		expect(document.body.textContent).not.toContain("```");
+	});
+
+	it("keeps code block chrome out of a selection that spans the fence", () => {
+		// Chat excerpts are verified against the stored Markdown, which has no
+		// language label and no Copy button. Selected chrome made the send fail
+		// as a stale excerpt (#6628).
+		const { container } = render(<ChatMarkdown text={"Use this address:\n\n```\nhttps://example.trycloudflare.com\n```\n\nIt works."} />);
+		const range = document.createRange();
+		range.selectNodeContents(container);
+		const selected = range.toString();
+		expect(selected).toContain("https://example.trycloudflare.com");
+		expect(selected).not.toMatch(/\btext\b/);
+		expect(selected).not.toContain("Copy");
+		expect(screen.getByRole("button", { name: /copy code/i })).toBeInTheDocument();
 	});
 
 	it("keeps inline code inline rather than promoting it to a block", () => {
@@ -748,7 +762,7 @@ describe("ChatMarkdown code highlighting", () => {
 		// prove no upgrade is coming.
 		await waitFor(() => expect(screen.getByText("++++[>++++<-]")).toBeInTheDocument());
 		expect(tokens()).toHaveLength(0);
-		expect(screen.getByText("brainfuck")).toBeInTheDocument();
+		expect(document.querySelector('[data-language="brainfuck"]')).toBeInTheDocument();
 	});
 
 	it("does not tokenize a fence that is still streaming, and does once it settles", async () => {
