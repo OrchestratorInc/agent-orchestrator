@@ -11,6 +11,38 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+func TestMemorySideStoreRetainsCreationAliasesUntilLaunchEnds(t *testing.T) {
+	ctx := t.Context()
+	store := newMemorySideStore()
+	_, _ = store.ClaimSideLaunch(ctx, "launch", time.Now())
+	one := domain.SideConversation{ID: "one", SessionID: "session", MainConversationID: "main", AppRunID: "launch", AnchorTurnID: "first", CreateKey: "original"}
+	if _, _, err := store.CreateSideConversation(ctx, one); err != nil {
+		t.Fatal(err)
+	}
+	reused := one
+	reused.ID, reused.CreateKey = "unused", "alias"
+	if got, created, err := store.CreateSideConversation(ctx, reused); err != nil || created || got.ID != one.ID {
+		t.Fatalf("reuse: %+v %v %v", got, created, err)
+	}
+	reused.AnchorTurnID = "advanced"
+	if got, created, err := store.CreateSideConversation(ctx, reused); err != nil || created || got.ID != one.ID {
+		t.Fatalf("alias after advance: %+v %v %v", got, created, err)
+	}
+	if _, found, err := store.SideConversationByCreateKey(ctx, "other-session", "launch", "alias"); err != nil || found {
+		t.Fatalf("cross-session alias: %v %v", found, err)
+	}
+	if _, err := store.CloseSideConversation(ctx, one.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.SideConversationByCreateKey(ctx, "session", "launch", "alias"); !errors.Is(err, ErrSideClosed) {
+		t.Fatalf("closed alias: %v", err)
+	}
+	_, _ = store.ClaimSideLaunch(ctx, "next-launch", time.Now())
+	if _, found, err := store.SideConversationByCreateKey(ctx, "session", "next-launch", "alias"); err != nil || found {
+		t.Fatalf("old launch alias: %v %v", found, err)
+	}
+}
+
 func TestMemorySideStoreReusesAnchorAcrossConcurrentCreates(t *testing.T) {
 	ctx := context.Background()
 	store := newMemorySideStore()

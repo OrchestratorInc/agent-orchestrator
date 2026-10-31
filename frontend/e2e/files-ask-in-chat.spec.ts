@@ -120,7 +120,7 @@ async function openChatSession(page: Page, fullText = after, selectedPath = file
 }
 
 async function openFilesTab(page: Page, id: string, project: string, selectedPath = filePath) {
-	await page.goto(`${origin}/#/projects/${project}/sessions/${id}`);
+	await page.goto(`${origin}/#/projects/${project}/sessions/${id}`, { waitUntil: "domcontentloaded" });
 	const inspector = await openInspector(page);
 	await inspector.getByRole("tab", { name: /Files?$/ }).click();
 	await expect(page.getByRole("button", { name: `Collapse ${selectedPath}` })).toBeVisible();
@@ -253,6 +253,28 @@ test.describe("Add to chat from highlighted code", () => {
 		await check();
 		await log.evaluate((pane) => { pane.scrollTop += 300; });
 		await check();
+		const highlighted = await page.evaluate(() => getSelection()?.toString());
+		if (activeElectron) {
+			await activeElectron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].blur());
+			await activeElectron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
+		}
+		await expect(toolbar).toBeVisible();
+		expect(await page.evaluate(() => getSelection()?.toString())).toBe(highlighted);
+		await log.evaluate((pane) => { pane.tabIndex = 0; pane.focus(); });
+		await page.keyboard.down("Escape");
+		await page.keyboard.down("Escape");
+		await page.keyboard.up("Escape");
+		await expect(toolbar).toBeHidden();
+		await page.keyboard.press("Shift");
+		await expect(toolbar).toBeHidden();
+		expect(await page.evaluate(() => getSelection()?.toString())).toBe(highlighted);
+		await log.evaluate((pane) => {
+			const selection = getSelection()!; selection.removeAllRanges();
+			document.dispatchEvent(new Event("selectionchange"));
+			const range = document.createRange(); range.selectNodeContents(pane.querySelector("[data-chat-message-body]")!);
+			selection.addRange(range); document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+		});
+		await expect(toolbar.getByRole("button", { name: "Add to side chat" })).toBeDisabled();
 		const beforeGrowth = await log.evaluate((pane) => pane.scrollTop);
 		await log.evaluate((pane) => {
 			const line = document.createElement("p"); line.textContent = "Later streamed text outside the frozen selection.";

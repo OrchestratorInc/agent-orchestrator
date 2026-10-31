@@ -34,6 +34,7 @@ type memorySideStore struct {
 	runID       string
 	closed      map[string]bool
 	sides       map[string]domain.SideConversation
+	createKeys  map[sideCreateIdentity]string
 	turns       map[string][]domain.SideTurn
 	messages    map[string][]domain.SideMessage
 	activities  map[string][]domain.SideActivity
@@ -41,6 +42,11 @@ type memorySideStore struct {
 	hostCleanup map[string]domain.SideConversation
 	hostStopped map[string]bool
 	cleanup     map[string]domain.SideProviderCleanup
+}
+
+type sideCreateIdentity struct {
+	session domain.SessionID
+	key     string
 }
 
 // SideRecoveryRecord travels only between the daemon and Electron main process.
@@ -245,7 +251,7 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 }
 
 func newMemorySideStore() *memorySideStore {
-	return &memorySideStore{hostCleanup: map[string]domain.SideConversation{}, hostStopped: map[string]bool{}, closed: map[string]bool{}, sides: map[string]domain.SideConversation{}, turns: map[string][]domain.SideTurn{}, messages: map[string][]domain.SideMessage{}, activities: map[string][]domain.SideActivity{}, drafts: map[string]string{}, cleanup: map[string]domain.SideProviderCleanup{}}
+	return &memorySideStore{hostCleanup: map[string]domain.SideConversation{}, hostStopped: map[string]bool{}, closed: map[string]bool{}, sides: map[string]domain.SideConversation{}, createKeys: map[sideCreateIdentity]string{}, turns: map[string][]domain.SideTurn{}, messages: map[string][]domain.SideMessage{}, activities: map[string][]domain.SideActivity{}, drafts: map[string]string{}, cleanup: map[string]domain.SideProviderCleanup{}}
 }
 
 func (m *memorySideStore) ClaimSideLaunch(_ context.Context, runID string, _ time.Time) ([]domain.SideConversation, error) {
@@ -264,6 +270,7 @@ func (m *memorySideStore) ClaimSideLaunch(_ context.Context, runID string, _ tim
 	m.runID = runID
 	m.closed = map[string]bool{}
 	m.sides = map[string]domain.SideConversation{}
+	m.createKeys = map[sideCreateIdentity]string{}
 	m.turns = map[string][]domain.SideTurn{}
 	m.messages = map[string][]domain.SideMessage{}
 	m.activities = map[string][]domain.SideActivity{}
@@ -294,8 +301,18 @@ func (m *memorySideStore) CreateSideConversation(_ context.Context, side domain.
 	if side.AppRunID == "" || side.AppRunID != m.runID {
 		return domain.SideConversation{}, false, ErrSideLaunchUnclaimed
 	}
+	if id, ok := m.createKeys[sideCreateIdentity{side.SessionID, side.CreateKey}]; ok {
+		current, exists := m.sides[id]
+		if !exists || current.ClosedAt != nil {
+			return domain.SideConversation{}, false, ErrSideClosed
+		}
+		return current, false, nil
+	}
 	for _, current := range m.sides {
 		if current.MainConversationID == side.MainConversationID && current.ClosedAt == nil && ((side.CreateKey != "" && current.CreateKey == side.CreateKey) || (!side.ForceNew && current.AnchorTurnID == side.AnchorTurnID)) {
+			if side.CreateKey != "" {
+				m.createKeys[sideCreateIdentity{side.SessionID, side.CreateKey}] = current.ID
+			}
 			return current, false, nil
 		}
 	}
@@ -314,7 +331,34 @@ func (m *memorySideStore) CreateSideConversation(_ context.Context, side domain.
 		side.Label = fmt.Sprintf("Side Chat %d", largest+1)
 	}
 	m.sides[side.ID] = side
+	if side.CreateKey != "" {
+		m.createKeys[sideCreateIdentity{side.SessionID, side.CreateKey}] = side.ID
+	}
 	return side, true, nil
+}
+
+// Remember request aliases when anchor reuse returns a side created by another
+// request. A retry must find that same destination even after the main advances.
+func (m *memorySideStore) SideConversationByCreateKey(_ context.Context, session domain.SessionID, runID, key string) (domain.SideConversation, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if runID != m.runID {
+		return domain.SideConversation{}, false, ErrSideLaunchUnclaimed
+	}
+	if id, ok := m.createKeys[sideCreateIdentity{session, key}]; ok {
+		side, exists := m.sides[id]
+		if !exists || side.ClosedAt != nil {
+			return domain.SideConversation{}, false, ErrSideClosed
+		}
+		return side, true, nil
+	}
+	// Primary keys are restored by the existing desktop recovery contract.
+	for _, side := range m.sides {
+		if side.SessionID == session && side.AppRunID == runID && side.ClosedAt == nil && side.CreateKey == key {
+			return side, true, nil
+		}
+	}
+	return domain.SideConversation{}, false, nil
 }
 
 func sideChatNumber(label string) int {

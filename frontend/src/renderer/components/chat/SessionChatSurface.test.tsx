@@ -1399,28 +1399,72 @@ describe("selection side-chat operation ownership", () => {
   expect(sideMocks.addReference).toHaveBeenCalledWith("unrelated-side", excerpt);
   expect(sideMocks.show).toHaveBeenCalledWith("unrelated-side");
  });
- it("coalesces repeated activation and gives later selections fresh creation identities", async () => {
+ it("coalesces reselected text while processing and releases confirmed creation identities", async () => {
   mount(); let resolve!: (side:{id:string})=>void;
   sideMocks.create.mockImplementationOnce(()=>new Promise(done=>{resolve=done;})).mockResolvedValue({id:"next"});
-  await act(async()=>{
-   const first = sideMocks.attach!(excerpt); const second = sideMocks.attach!(excerpt);
-   expect(sideMocks.create).toHaveBeenCalledTimes(1); resolve({id:"original"}); await Promise.all([first,second]);
-  });
+  let first!: Promise<void>; let second!: Promise<void>;
+  act(()=>{ first = sideMocks.attach!(excerpt); second = sideMocks.attach!({...excerpt,id:"reselected"}); });
+  await waitFor(()=>expect(sideMocks.create).toHaveBeenCalledTimes(1));
+  await act(async()=>{ resolve({id:"original"}); await Promise.all([first,second]); });
   await act(async()=>{ await sideMocks.attach!({...excerpt,id:"next-selection"}); });
   expect(sideMocks.create.mock.calls[1][2]).not.toBe(sideMocks.create.mock.calls[0][2]);
  });
- it("starts a fresh creation attempt for a deliberate click after failure", async () => {
-  mount();
-  sideMocks.create.mockRejectedValueOnce(new Error("Reply lost")).mockResolvedValueOnce({id:"new-side"});
+ it("recovers a lost creation reply after the parent advances and text is reselected", async () => {
+  const view = mount();
+  const creations = new Map<string, string>();
+  sideMocks.create.mockImplementation(async (_excerpt, _forceNew, key) => {
+   const existed = creations.has(key);
+   if (!existed) creations.set(key, `side-${creations.size + 1}`);
+   if (!existed) throw new Error("Reply lost");
+   return { id: creations.get(key) };
+  });
   await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost");});
-  await act(async()=>{await sideMocks.attach!(excerpt);});
+  view.advance();
+  await act(async()=>{await sideMocks.attach!({...excerpt,id:"reselected"});});
   expect(sideMocks.create).toHaveBeenCalledTimes(2);
+  expect(sideMocks.create.mock.calls[1].slice(0,3)).toEqual(sideMocks.create.mock.calls[0].slice(0,3));
+  expect(creations.size).toBe(1);
+ });
+ it("keeps an unanswered creation receipt when a later click attaches to another side", async () => {
+  const view = mount();
+  sideMocks.create.mockRejectedValueOnce(new Error("Reply lost")).mockResolvedValue({id:"recovered"});
+  await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost");});
+  sideMocks.activeId="other";sideMocks.sides=[{id:"other",hasWork:false}];view.advance();
+  await act(async()=>{await sideMocks.attach!({...excerpt,id:"another-range"});});
+  expect(sideMocks.addReference).toHaveBeenCalledWith("other",expect.objectContaining({text:excerpt.text}));
+  sideMocks.activeId=undefined;sideMocks.sides=[];view.advance();
+  await act(async()=>{await sideMocks.attach!(excerpt);});
+  expect(sideMocks.create.mock.calls[1][2]).toBe(sideMocks.create.mock.calls[0][2]);
+ });
+ it.each(["text", "messageId", "revision", "conversationId"] as const)("keeps changed %s selections independent of an unanswered creation", async (field) => {
+  mount();
+  sideMocks.create.mockRejectedValueOnce(new Error("Reply lost")).mockResolvedValue({id:"next"});
+  await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost");});
+  const changed = {...excerpt, [field]:field === "revision" ? 2 : "changed"};
+  await act(async()=>{await sideMocks.attach!(changed);});
   expect(sideMocks.create.mock.calls[1][2]).not.toBe(sideMocks.create.mock.calls[0][2]);
+ });
+ it("retains rejected creation receipts without leaving processing locked", async () => {
+  mount();
+  sideMocks.create.mockRejectedValueOnce({code:"CHAT_EXCERPT_INVALID"}).mockResolvedValue({id:"next"});
+  await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toEqual({code:"CHAT_EXCERPT_INVALID"});});
+  await act(async()=>{await sideMocks.attach!(excerpt);});
+  expect(sideMocks.create.mock.calls[1][2]).toBe(sideMocks.create.mock.calls[0][2]);
+ });
+ it("discards an unanswered creation when its session surface is replaced", async () => {
+  const first = mount();
+  sideMocks.create.mockRejectedValueOnce(new Error("Reply lost"));
+  await act(async()=>{await expect(sideMocks.attach!(excerpt)).rejects.toThrow("Reply lost");});
+  const key = sideMocks.create.mock.calls[0][2]; first.unmount();
+  mount(); sideMocks.create.mockResolvedValue({id:"new"});
+  await act(async()=>{await sideMocks.attach!(excerpt);});
+  expect(sideMocks.create.mock.calls[0][2]).not.toBe(key);
  });
  it("keeps an in-flight creation scoped to its original activation when the active tab changes", async () => {
   const view=mount();let resolve!:(side:{id:string})=>void;
   sideMocks.create.mockImplementationOnce(()=>new Promise(done=>{resolve=done;}));
   let first!:Promise<void>;act(()=>{first=sideMocks.attach!(excerpt);});
+  await waitFor(()=>expect(sideMocks.create).toHaveBeenCalledTimes(1));
   sideMocks.activeId="other";sideMocks.sides=[{id:"other",hasWork:false}];view.advance();
   await act(async()=>{
    const repeated=sideMocks.attach!(excerpt);
@@ -1444,6 +1488,7 @@ describe("selection side-chat operation ownership", () => {
   const view=mount();let resolve!:(side:{id:string})=>void;
   sideMocks.create.mockImplementation(()=>new Promise(done=>{resolve=done;}));
   let request!:Promise<void>;act(()=>{request=sideMocks.attach!(excerpt);});
+  await waitFor(()=>expect(sideMocks.create).toHaveBeenCalledTimes(1));
   view.unmount();
   await act(async()=>{resolve({id:"old-side"});await expect(request).rejects.toThrow("no longer active");});
   expect(sideMocks.show).not.toHaveBeenCalled();

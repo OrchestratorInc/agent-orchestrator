@@ -451,41 +451,58 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
- // Freeze the destination only while an activation is processing. A later
- // deliberate click follows the currently active side, including after failure.
- const selectionSideScope = useMemo(() => ({ active: true, operations: new Map<string, {
-  creationKey: string; destinationId?: string; inFlight?: Promise<void>;
- }>() }), [uiSessionId]);
+ // A pending action owns its destination; an unanswered creation owns only its
+ // request identity. Reselecting text must not turn a lost reply into a new fork.
+ const selectionSideScope = useMemo(() => ({ active: true,
+  processing: new Map<string, Promise<void>>(),
+  receipts: new Map<string, { creationKey: string; excerpt: ChatDraftExcerptReference }>(),
+ }), [uiSessionId, snapshot?.conversationId]);
+ const selectionSideScopeRef = useRef(selectionSideScope);
+ selectionSideScopeRef.current = selectionSideScope;
+ const selectionSideChatsRef = useRef(sideChats);
+ selectionSideChatsRef.current = sideChats;
  useEffect(() => {
   selectionSideScope.active = true;
-  return () => { selectionSideScope.active = false; selectionSideScope.operations.clear(); };
+  return () => {
+   selectionSideScope.active = false;
+   selectionSideScope.processing.clear(); selectionSideScope.receipts.clear();
+  };
  }, [selectionSideScope]);
  const attachToSide = async (excerpt: ChatDraftExcerptReference) => {
-  if (!selectionSideScope.active) throw new Error("Side chat is no longer active.");
-  let operation = selectionSideScope.operations.get(excerpt.id);
-  if (!operation) {
-   operation = { creationKey: crypto.randomUUID(), destinationId: sideChats.activeId };
-   selectionSideScope.operations.set(excerpt.id, operation);
-  }
-  if (operation.inFlight) return operation.inFlight;
-  openSideInspector();
-  const target = operation;
-  target.inFlight = (async () => {
-   if (target.destinationId) {
-    if (!sideChats.sides.some(side => side.id === target.destinationId)) throw new Error("Side chat is no longer active.");
-    sideChats.addReference(target.destinationId, excerpt);
-    sideChats.show(target.destinationId);
+  const current = () => selectionSideScope.active && selectionSideScopeRef.current === selectionSideScope;
+  if (!current()) throw new Error("Side chat is no longer active.");
+  const identity = JSON.stringify([uiSessionId, excerpt.conversationId, excerpt.messageId, excerpt.revision, excerpt.text]);
+  const pending = selectionSideScope.processing.get(identity);
+  if (pending) return pending;
+  const destination = selectionSideChatsRef.current;
+  const destinationId = destination.activeId;
+  // Reserve before any UI update or synchronous failure can trigger activation.
+  const action = Promise.resolve().then(async () => {
+   if (!current()) throw new Error("Side chat is no longer active.");
+   openSideInspector();
+   if (destinationId) {
+    if (!selectionSideChatsRef.current.sides.some(side => side.id === destinationId)) throw new Error("Side chat is no longer active.");
+    destination.addReference(destinationId, excerpt);
+    destination.show(destinationId);
    } else {
-    const created = await sideChats.create(excerpt, false, target.creationKey);
-    if (!selectionSideScope.active) throw new Error("Side chat is no longer active.");
-    target.destinationId = created.id;
+    let receipt = selectionSideScope.receipts.get(identity);
+    if (!receipt) {
+     receipt = { creationKey: crypto.randomUUID(), excerpt: { ...excerpt } };
+     selectionSideScope.receipts.set(identity, receipt);
+    }
+    await destination.create(receipt.excerpt, false, receipt.creationKey, {
+     isCurrent: current,
+     shouldActivate: () => current() && selectionSideChatsRef.current.activeId === destinationId,
+    });
+    if (!current()) throw new Error("Side chat is no longer active.");
+    selectionSideScope.receipts.delete(identity);
    }
-  })();
+  });
+  selectionSideScope.processing.set(identity, action);
   try {
-   await target.inFlight;
+   await action;
   } finally {
-   selectionSideScope.operations.delete(excerpt.id);
-   target.inFlight = undefined;
+   selectionSideScope.processing.delete(identity);
   }
  };
 
