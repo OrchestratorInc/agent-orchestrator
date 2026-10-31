@@ -1,12 +1,15 @@
 import { useCallback, useRef, useState } from "react";
 import { renameSession } from "../lib/rename-session";
-import type { WorkspaceSession } from "../types/workspace";
+import { canRenameSession, type WorkspaceSession } from "../types/workspace";
 
 export const MAX_SESSION_DISPLAY_NAME_LEN = 100;
 
-type RenameableSession = Pick<WorkspaceSession, "id" | "title" | "hostId">;
+type RenameableSession = Pick<WorkspaceSession, "id" | "title" | "hostId" | "kind" | "cloud">;
 
-export function useSessionRename(session?: RenameableSession, onRenamed?: () => void | Promise<void>) {
+// A Cloud session or the project orchestrator never enters rename, whichever
+// surface asks; `canRename` tells the caller whether to offer it at all.
+export function useSessionRename(candidate?: RenameableSession, onRenamed?: () => void | Promise<void>) {
+  const session = candidate && canRenameSession(candidate) ? candidate : undefined;
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(session?.title ?? "");
   const cancelledRef = useRef(false);
@@ -43,5 +46,5 @@ export function useSessionRename(session?: RenameableSession, onRenamed?: () => 
     }
 	}, [draft, onRenamed, session]);
 
-  return { begin, cancel, commit, draft, isEditing, setDraft };
+  return { begin, canRename: Boolean(session), cancel, commit, draft, isEditing, setDraft };
 }

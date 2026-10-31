@@ -25,7 +25,7 @@ import { formatTimeCompact } from "../lib/format-time";
 import { prBrowserUrl, sessionPRDisplaySummaries } from "../lib/pr-display";
 import { agentLabel } from "../lib/agent-options";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
-import { canonicalTrackerIssueId, sessionArtifacts } from "../types/workspace";
+import { canonicalTrackerIssueId, canRenameSession, sessionArtifacts } from "../types/workspace";
 import { formatCPU, formatMemory, type SessionMemoryReading } from "../hooks/useSessionMemory";
 import type { ChipTone } from "@aoagents/product-ui";
 import { useSessionScmSummary } from "../hooks/useSessionScmSummary";
@@ -349,7 +349,7 @@ function DesktopSessionCard({
 					/>
 				</ContextMenuContent>
 			</ContextMenu>
-			<SessionRenameDialog onOpenChange={setRenameOpen} open={renameOpen} session={session} />
+			{canRenameSession(session) ? <SessionRenameDialog onOpenChange={setRenameOpen} open={renameOpen} session={session} /> : null}
 		</>
 	);
 }

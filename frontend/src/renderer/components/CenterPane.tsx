@@ -714,9 +714,10 @@ export function SessionPaneTab({
 	// A session object supplies the tab presentation; refresh wiring explicitly
 	// opts the owning surface into rename so shared preview/cloud tabs cannot
 	// persist a title without updating their query cache. The project
-	// orchestrator's tab shows its role, not a name, so it is never renamable.
-	const renameSession = onRenamed && session && !isOrchestratorSession(session) ? session : undefined;
-	const rename = useSessionRename(renameSession, onRenamed);
+	// orchestrator's tab shows its role, not a name, and a Cloud session has no
+	// rename route, so the hook refuses both.
+	const rename = useSessionRename(onRenamed ? session : undefined, onRenamed);
+	const renameSession = rename.canRename ? session : undefined;
 	const editingContent = renameSession && rename.isEditing ? (
 		<input
 			aria-label={t("shell.renameSession", { title: renameSession.title })}

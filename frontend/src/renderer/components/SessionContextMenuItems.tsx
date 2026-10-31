@@ -11,7 +11,7 @@ import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { sessionBranchPresentation } from "../lib/session-branch";
 import { useUiStore } from "../stores/ui-store";
-import { isOrchestratorSession, primaryPR, type WorkspaceSession } from "../types/workspace";
+import { canRenameSession, isOrchestratorSession, primaryPR, type WorkspaceSession } from "../types/workspace";
 import { TargetIcon } from "./TopbarOpenEditorButton";
 import {
 	ContextMenuItem,
@@ -62,8 +62,9 @@ export function SessionContextMenuItems({
 	const canResume = useCanResumeAgent(session.hostId || isOrchestratorSession(session) ? undefined : session);
 	// Remote and Cloud sessions have no local workspace for Electron to hand off.
 	const hasLocalWorkspace = !session.hostId && !session.cloud;
-	// Rename and pin go to the daemon that owns the session; a Cloud session has none.
+	// Pin goes to the daemon that owns the session; a Cloud session has none.
 	const isCloud = Boolean(session.cloud);
+	const canRename = canRenameSession(session);
 
 	const resume = () => {
 		void resumeAgentOnOpen(session.id)
@@ -86,17 +87,17 @@ export function SessionContextMenuItems({
 	return (
 		<>
 			{hasLocalWorkspace ? <SessionWorkspaceMenuItems session={session} /> : null}
+			{canRename ? (
+				<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={onRename}>
+					<Pencil aria-hidden="true" />
+					{t("shell.rename")}
+				</ContextMenuItem>
+			) : null}
 			{isCloud ? null : (
-				<>
-					<ContextMenuItem aria-label={t("shell.renameSession", { title: session.title })} onSelect={onRename}>
-						<Pencil aria-hidden="true" />
-						{t("shell.rename")}
-					</ContextMenuItem>
-					<ContextMenuItem onSelect={() => (session.isPinned ? unpinSession(session) : pinSession(session))}>
-						{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
-						{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
-					</ContextMenuItem>
-				</>
+				<ContextMenuItem onSelect={() => (session.isPinned ? unpinSession(session) : pinSession(session))}>
+					{session.isPinned ? <PinOff aria-hidden="true" /> : <Pin aria-hidden="true" />}
+					{session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
+				</ContextMenuItem>
 			)}
 			{canResume ? (
 				<ContextMenuItem onSelect={resume}>
