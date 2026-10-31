@@ -898,7 +898,7 @@ export function LocalHarnessContent({ focusAgentId, hostId, search, onDetailChan
 									})()}
 								/>
 							</TabsContent>
-							{importable ? <TabsContent value="import" className="settings-thin-scrollbar min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain pt-4">
+							{importable ? <TabsContent value="import" className="min-h-0 min-w-0 overflow-hidden pt-4 data-[state=active]:flex data-[state=active]:flex-col">
 								<SessionImportPanel harness={selectedDetails.agentId} />
 							</TabsContent> : null}
 						</Tabs>
