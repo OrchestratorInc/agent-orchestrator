@@ -1473,10 +1473,10 @@ describe("Sidebar", () => {
 	});
 
 	it("lists a shared project's orchestrator for its guest and offers none of the owner's actions", async () => {
-		const orchestrator: WorkspaceSession = { ...session, id: "shared-orc", workspaceId: "proj-1", kind: "orchestrator", title: "Orchestrator" };
+		const orchestrator: WorkspaceSession = { ...session, id: "shared-orc", workspaceId: "proj-1", kind: "orchestrator", title: "Shared orchestrator" };
 		const shared: WorkspaceSummary = { ...workspace, kind: "cloud", cloudOrgId: "org-elsewhere", shared: { byName: "Alice" }, sessions: [orchestrator] };
 		renderSidebar({ workspaces: [shared], expandedProjectIds: ["proj-1"] });
-		await userEvent.click(await screen.findByText("Orchestrator"));
+		await userEvent.click(await screen.findByText("Shared orchestrator"));
 		expect(navigateMock).toHaveBeenCalledWith({
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-1", sessionId: "shared-orc" },
@@ -2240,11 +2240,11 @@ describe("Sidebar", () => {
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
-	it("opens the Mobile settings page from the footer", async () => {
+	it("opens the Mobile settings page from the footer and starts pairing", async () => {
 		const user = userEvent.setup();
 		renderSidebar();
 		await user.click((await screen.findAllByRole("button", { name: "Connect mobile" }))[0]);
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "mobile" });
+		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "mobile", startPairing: true });
 		expect(navigateMock).not.toHaveBeenCalled();
 	});
 

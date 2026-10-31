@@ -901,7 +901,13 @@ func (c chatLauncher) StopChat(ctx context.Context, id domain.SessionID) error {
 type reviewPRRefresher struct {
 	sessions interface {
 		ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
+		FindBranchPRs(ctx context.Context, id domain.SessionID) (sessionsvc.BranchPRs, error)
 	}
+}
+
+func (r reviewPRRefresher) FindBranchPRs(ctx context.Context, workerID domain.SessionID) (reviewsvc.BranchPRs, error) {
+	found, err := r.sessions.FindBranchPRs(ctx, workerID)
+	return reviewsvc.BranchPRs{Own: found.Own, OtherAuthor: found.OtherAuthor}, err
 }
 
 func (r reviewPRRefresher) RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error {

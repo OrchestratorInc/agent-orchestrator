@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -107,7 +108,7 @@ func TestRemoteHostCLITunnelFromDisabledAndStatus(t *testing.T) {
 	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/enable-lan-only,POST /api/v1/mobile/remote-access" {
 		t.Fatalf("requests = %s", got)
 	}
-	for _, want := range []string{"pairing-secret", "Tunnel: starting", "Cloudflare terminates TLS", "no uptime guarantee"} {
+	for _, want := range []string{"pairing-secret", "Tunnel: starting", "Cloudflare terminates TLS"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("enable output %q missing %q", out, want)
 		}
@@ -118,7 +119,7 @@ func TestRemoteHostCLITunnelFromDisabledAndStatus(t *testing.T) {
 
 	ready = true
 	out, _, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
-	if err != nil || !strings.Contains(out, "https://live.trycloudflare.com:443") {
+	if err != nil || !strings.Contains(out, "https://live.trycloudflare.com:443") || !strings.Contains(out, "Quick tunnel: the address changes on restart") {
 		t.Fatalf("ready tunnel status = %q, %v", out, err)
 	}
 	failed = true
@@ -174,27 +175,36 @@ func TestRemoteHostCLITunnelRefusesLoopbackOnlyListener(t *testing.T) {
 }
 
 func TestRemoteHostCLITunnelExistingListenerKeepsPassword(t *testing.T) {
-	cfg := setConfigEnv(t)
-	var requests []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
-			requests = append(requests, r.Method+" "+r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"existing-secret","tunnel":{"supported":false}}`)
-	}))
-	t.Cleanup(srv.Close)
-	writeRunFileFor(t, cfg, srv)
+	// The connector line follows the daemon's own cloudflared download: only
+	// one in progress is reported as on its way.
+	for installing, want := range map[bool]string{
+		true:  "Tunnel: downloading cloudflared",
+		false: "Tunnel unavailable: install cloudflared, then rerun `ao remote-host enable --tunnel`",
+	} {
+		t.Run(fmt.Sprint(installing), func(t *testing.T) {
+			cfg := setConfigEnv(t)
+			var requests []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if strings.HasPrefix(r.URL.Path, "/api/v1/mobile/") {
+					requests = append(requests, r.Method+" "+r.URL.Path)
+				}
+				_, _ = fmt.Fprintf(w, `{"enabled":true,"hostId":"host-a","password":"existing-secret","tunnel":{"supported":false,"installing":%v}}`, installing)
+			}))
+			t.Cleanup(srv.Close)
+			writeRunFileFor(t, cfg, srv)
 
-	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "enable", "--tunnel")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/remote-access" {
-		t.Fatalf("requests = %s, want no listener restart", got)
-	}
-	if !strings.Contains(out, "existing-secret") || !strings.Contains(out, "Tunnel unavailable: install cloudflared") {
-		t.Fatalf("tunnel output = %q", out)
+			out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "enable", "--tunnel")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(requests, ","); got != "GET /api/v1/mobile/status,POST /api/v1/mobile/remote-access" {
+				t.Fatalf("requests = %s, want no listener restart", got)
+			}
+			if !strings.Contains(out, "existing-secret") || !strings.Contains(out, want) {
+				t.Fatalf("tunnel output = %q, want %q", out, want)
+			}
+		})
 	}
 }
 
@@ -263,5 +273,20 @@ func TestRemoteHostCLIHeadlessStartupHint(t *testing.T) {
 	_, _, err := executeCLI(t, Deps{}, "remote-host", "enable")
 	if err == nil || !strings.Contains(err.Error(), "ao daemon") {
 		t.Fatalf("missing daemon error = %v, want headless startup hint", err)
+	}
+}
+
+func TestRemoteHostCLISaysALinkedMachinesAddressIsFixed(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"enabled":true,"hostId":"host-a","password":"pairing-secret","endpoints":[{"kind":"tunnel","host":"h-0d483066194a12a5dc17.useao.dev","port":443,"secure":true}],"tunnel":{"supported":true,"running":true,"ready":true,"fixed":true}}`)
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "remote-host", "status")
+	if err != nil || !strings.Contains(out, "https://h-0d483066194a12a5dc17.useao.dev:443") ||
+		!strings.Contains(out, "Fixed address: it stays the same after restarts.") || strings.Contains(out, "Quick tunnel") {
+		t.Fatalf("fixed address status = %q, %v", out, err)
 	}
 }

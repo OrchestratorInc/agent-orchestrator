@@ -51,6 +51,7 @@ function RestartToUpdateDialogBody() {
 	const [targetChanged, setTargetChanged] = useState(false);
 	const [failureDetail, setFailureDetail] = useState<string | null>(null);
 	const installing = useRef(false);
+	const installStartedStatus = useRef(status);
 	const mounted = useRef(true);
 	// Keep the confirmed build details visible when preparation emits a status
 	// without release metadata (for example a download progress event).
@@ -90,9 +91,20 @@ function RestartToUpdateDialogBody() {
 	);
 
 	const hasFailed = failureDetail !== null;
+	// Native staging can finish after the watchdog rejected the install request.
+	// A fresh ready status for the displayed target restores explicit install
+	// confirmation instead of leaving a recovered update behind a relaunch action.
+	useEffect(() => {
+		if (
+			status !== installStartedStatus.current &&
+			status.state === "downloaded" && status.staged?.ready !== false &&
+			(status.staged?.version ?? status.version) === version && !pending
+		) {
+			setFailureDetail(null);
+		}
+	}, [status, pending, version]);
 
-	// Squirrel can't be reset in-process, so retry restarts AO like a manual
-	// quit-and-reopen.
+	// Start a fresh process when native staging has not recovered.
 	const retry = async () => {
 		if (installing.current) return;
 		installing.current = true;
@@ -111,6 +123,7 @@ function RestartToUpdateDialogBody() {
 		// A ref guards same-turn clicks before React commits the disabled state.
 		if (installing.current || !version) return;
 		installing.current = true;
+		installStartedStatus.current = status;
 		setConfirmedBuild({ version, releaseNotes });
 		setPending(true);
 		setFailureDetail(null);
