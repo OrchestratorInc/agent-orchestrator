@@ -42,6 +42,9 @@ import grokDarkLogo from "../assets/agents/grok-dark.svg";
 import grokLightLogo from "../assets/agents/grok-light.svg";
 // NousResearch/hermes-agent: apps/desktop/assets/icon.png.
 import hermesLogo from "../assets/agents/hermes.png";
+// 1jehuang/jcode (MIT, LICENSE-jcode.txt): assets/brand/jcode-mark.svg and jcode-mark-inverse.svg.
+import jcodeDarkLogo from "../assets/agents/jcode-dark.svg";
+import jcodeLightLogo from "../assets/agents/jcode-light.svg";
 import kilocodeDarkLogo from "../assets/agents/kilocode-dark.svg";
 import kilocodeLightLogo from "../assets/agents/kilocode-light.svg";
 import kimiDarkLogo from "../assets/agents/kimi-dark.svg";
@@ -94,6 +97,7 @@ const LOGOS: AgentLogoSources = {
 	kimi: { light: kimiLightLogo, dark: kimiDarkLogo },
 	muse: museLogo,
 	memcode: memcodeLogo,
+	jcode: { light: jcodeLightLogo, dark: jcodeDarkLogo },
 	omp: ompLogo,
 	openhands: { light: openhandsLightLogo, dark: openhandsDarkLogo },
 	kiro: kiroLogo,

@@ -1,0 +1,162 @@
+name: jcode New Task visual evidence
+
+# Screenshots of the real AO Electron app and its real dev daemon creating a
+# jcode task from New Task (PR #7519): the Agent picker offering jcode, the
+# Model picker listing the models jcode itself reports, and the spawned
+# Terminal (TUI) session replying.
+#
+# No credentials are used. jcode runs against a local Ollama server on
+# 127.0.0.1 with an open-weights model, configured through jcode's own
+# `jcode login ollama`. jcode, Ollama and the model are pinned and verified
+# against their published checksums/digests. This shows a keyless local
+# provider only; it says nothing about hosted-provider sign-in.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/jcode-new-task.yml"
+      - "frontend/scripts/ci-visual/jcode-new-task.mjs"
+      - "backend/internal/adapters/agent/jcode/**"
+      - "backend/internal/adapters/agent/modelcatalog/jcode*.go"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jcode-new-task-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      ELECTRON_DISABLE_SANDBOX: "1"
+      JCODE_VERSION: v0.99.1
+      # SHA256SUMS of the v0.99.1 GitHub release.
+      JCODE_SHA256: 0b2a612de97c6e01ae6de1c0cff555b3460cf8364d1a11d2f8649fc0c9d7a1e6
+      OLLAMA_VERSION: v0.40.13
+      # GitHub release asset digest of ollama-linux-amd64.tar.zst.
+      OLLAMA_SHA256: c9490e0f520be21271d969e6703f012268b1d39f8b70dd58854e5bfef7a75bb6
+      OLLAMA_MODEL: qwen3:1.7b
+      # Model layer of registry.ollama.ai/library/qwen3:1.7b (Apache-2.0).
+      OLLAMA_MODEL_LAYER: sha256:3d0b790534fe4b79525fc3692950408dca41171676ed7e21db57af5c65ef6ab6
+      JCODE_NO_TELEMETRY: "1"
+      DO_NOT_TRACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install display server, Electron libraries and tmux
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libgbm1 libnss3 libasound2t64 libgtk-3-0t64 libxss1 tmux zstd
+
+      - name: Prepare isolated state
+        run: |
+          base="$HOME/.ao/dev/pr7519-new-task"
+          mkdir -p "$base/bin" "$base/tools" "$base/jcode-home" "$base/ollama-models"
+          echo "BASE=$base" >> "$GITHUB_ENV"
+          echo "JCODE_HOME=$base/jcode-home" >> "$GITHUB_ENV"
+          echo "$base/bin" >> "$GITHUB_PATH"
+
+      - name: Install jcode ${{ env.JCODE_VERSION }} (checksum-verified)
+        run: |
+          set -euo pipefail
+          dir="$BASE/tools/jcode"; mkdir -p "$dir"; cd "$dir"
+          release="https://github.com/1jehuang/jcode/releases/download/$JCODE_VERSION"
+          curl -fsSL -o jcode-linux-x86_64.tar.gz "$release/jcode-linux-x86_64.tar.gz"
+          curl -fsSL -o SHA256SUMS "$release/SHA256SUMS"
+          echo "$JCODE_SHA256  jcode-linux-x86_64.tar.gz" | sha256sum -c -
+          grep ' jcode-linux-x86_64.tar.gz$' SHA256SUMS | sha256sum -c -
+          tar xzf jcode-linux-x86_64.tar.gz && rm jcode-linux-x86_64.tar.gz
+          ln -sf "$dir/jcode-linux-x86_64" "$BASE/bin/jcode"
+          "$BASE/bin/jcode" --version
+
+      - name: Install Ollama ${{ env.OLLAMA_VERSION }} (checksum-verified) and serve on 127.0.0.1
+        run: |
+          set -euo pipefail
+          dir="$BASE/tools/ollama"; mkdir -p "$dir"; cd "$dir"
+          curl -fsSL -o ollama.tar.zst "https://github.com/ollama/ollama/releases/download/$OLLAMA_VERSION/ollama-linux-amd64.tar.zst"
+          echo "$OLLAMA_SHA256  ollama.tar.zst" | sha256sum -c -
+          tar --zstd -xf ollama.tar.zst && rm ollama.tar.zst
+          ln -sf "$dir/bin/ollama" "$BASE/bin/ollama"
+          # jcode's system prompt does not fit Ollama's default 4K serving window.
+          # Keep the weights loaded between the warm-up and the UI-created task.
+          OLLAMA_HOST=127.0.0.1:11434 OLLAMA_MODELS="$BASE/ollama-models" OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_KEEP_ALIVE=60m \
+            nohup "$dir/bin/ollama" serve > "$RUNNER_TEMP/ollama.log" 2>&1 &
+          for i in $(seq 1 60); do curl -fsS http://127.0.0.1:11434/api/version && break; sleep 1; done
+          echo
+          OLLAMA_HOST=127.0.0.1:11434 "$dir/bin/ollama" pull "$OLLAMA_MODEL"
+          test -f "$BASE/ollama-models/blobs/${OLLAMA_MODEL_LAYER/:/-}"
+          curl -fsS http://127.0.0.1:11434/api/tags | jq -c '.models[] | {name, digest, size}'
+          ss -ltnp | grep 11434
+
+      - name: Configure jcode for Ollama with its own login command
+        run: |
+          set -euo pipefail
+          printf '[provider]\ndefault_provider = "ollama"\ndefault_model = "%s"\n' "$OLLAMA_MODEL" > "$JCODE_HOME/config.toml"
+          jcode --no-update login ollama --api-key "" --no-validate </dev/null
+          jcode --no-update auth status --json | jq -c '.providers[] | select(.status != "not_configured") | {id, status, method}'
+          JCODE_NON_INTERACTIVE=1 jcode --no-update provider current --json
+          JCODE_NON_INTERACTIVE=1 jcode --no-update model list --json | jq -c '{provider, selected_model, models}'
+
+      - name: Model weights warm-up (Ollama API only, not evidence)
+        run: |
+          set -euo pipefail
+          # Loads the weights into memory so the UI-created task does not include
+          # a cold start. Bounded; it proves nothing about jcode or AO.
+          curl -fsS --max-time 300 http://127.0.0.1:11434/api/generate \
+            -d "{\"model\":\"$OLLAMA_MODEL\",\"prompt\":\"Say OK.\",\"think\":false,\"stream\":false,\"keep_alive\":\"60m\",\"options\":{\"num_predict\":8}}" \
+            | jq -c '{model, done, done_reason, total_duration, load_duration, eval_count}'
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install product UI dependencies
+        working-directory: packages/product-ui
+        run: npm ci
+
+      - name: Create a jcode task from New Task in the real desktop app
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/jcode-new-task"
+          mkdir -p "$out"
+          export AO_DATA_DIR="$BASE/data" AO_RUN_FILE="$BASE/running.json" AO_DEV_ELECTRON_DIR="$BASE/electron"
+          unset AO_PORT
+          xvfb-run -a -s "-screen 0 1440x900x24" npm run dev -- -- --remote-debugging-port=9222 > "$RUNNER_TEMP/ao-dev.log" 2>&1 &
+          dev_pid=$!
+          status=0
+          node scripts/ci-visual/jcode-new-task.mjs --out "$out" --jcode-home "$JCODE_HOME" --run-file "$AO_RUN_FILE" --model "$OLLAMA_MODEL" || status=$?
+          grep -E "Launched Electron app|daemon listening|jcode|error|Error" "$RUNNER_TEMP/ao-dev.log" | tail -60 || true
+          kill "$dev_pid" 2>/dev/null || true
+          pkill -f "$GITHUB_WORKSPACE/frontend/node_modules/electron" 2>/dev/null || true
+          {
+            echo "jcode: $(jcode --version)"
+            echo "ollama: $("$BASE/bin/ollama" --version 2>&1 | tail -1)"
+            curl -fsS http://127.0.0.1:11434/api/tags | jq -c '.models[] | {name, digest}'
+          } > "$out/runtime.txt"
+          cp "$RUNNER_TEMP/ollama.log" "$out/ollama.log" || true
+          cp "$RUNNER_TEMP/ao-dev.log" "$out/ao-dev.log" || true
+          ls -la "$out"
+          exit "$status"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jcode-new-task-${{ github.sha }}
+          path: ${{ runner.temp }}/jcode-new-task/
+          retention-days: 7
+          if-no-files-found: warn

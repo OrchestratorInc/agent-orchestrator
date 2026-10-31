@@ -4,6 +4,8 @@ import { AgentAvatar } from "./AgentAvatar";
 import fxDarkLogo from "../assets/agents/fx-dark.svg";
 import fxLightLogo from "../assets/agents/fx-light.svg";
 import geminiLogo from "../assets/agents/gemini.svg";
+import jcodeDarkLogo from "../assets/agents/jcode-dark.svg";
+import jcodeLightLogo from "../assets/agents/jcode-light.svg";
 import memcodeLogo from "../assets/agents/memcode.png";
 import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
@@ -22,6 +24,12 @@ describe("AgentAvatar", () => {
 		render(<AgentAvatar provider="fx" />);
 
 		expect(themeSources("fx")).toEqual([fxLightLogo, fxDarkLogo]);
+	});
+
+	it("renders the official jcode halftone mark and its inverse", () => {
+		render(<AgentAvatar provider="jcode" />);
+
+		expect(themeSources("jcode")).toEqual([jcodeLightLogo, jcodeDarkLogo]);
 	});
 
 	it("renders a single mark when the brand reads on both themes", () => {

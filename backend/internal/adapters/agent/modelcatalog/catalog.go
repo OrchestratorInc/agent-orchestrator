@@ -237,7 +237,7 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes", "jcode":
 		return ports.CustomModelEntryDirect
 	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
@@ -294,6 +294,9 @@ func (d Discoverer) discover(ctx context.Context, request ports.AgentModelDiscov
 	}
 	if request.AgentID == "muse" || request.AgentID == "memcode" {
 		return Base(request.AgentID), nil
+	}
+	if request.AgentID == "jcode" {
+		return discoverJCodeCatalog(ctx, request)
 	}
 	if request.AgentID == "codex" {
 		return discoverCodexCatalog(ctx, request, d.CodexModels)
@@ -745,7 +748,7 @@ func hasDiscoverySource(agentID string) bool {
 	// Harnesses whose catalog comes from a daemon-injected surface rather than a
 	// command spec: Codex's app-server, Claude's provider probe, and the ACP
 	// configuration catalog for Cline, DeepSeek Harness, and Devin.
-	case "claude-code", "codex", "deepseek-harness", "devin":
+	case "claude-code", "codex", "deepseek-harness", "devin", "jcode":
 		return true
 	}
 	if hasConfigDiscoverySource(agentID) {
