@@ -1438,6 +1438,8 @@
 	"settings.renderMath": "Mathematik darstellen",
 	"settings.renderMathHint": "$…$, $$…$$, \\(…\\) und \\[…\\] in Chats und Markdown-Vorschauen als Formeln anzeigen. Ein Preis mit $ kann als Formel erscheinen.",
 	"settings.terminalCopyOnSelect": "Bei Auswahl kopieren",
+	"settings.projectAvatars": "Projekt-Avatare",
+	"settings.projectAvatars.description": "Zeigt statt des Ordnersymbols den Avatar des Repository-Besitzers.",
 	"settings.general": "Allgemein",
 	"settings.appearance": "Erscheinungsbild",
 	"settings.privacy": "Datenschutz",

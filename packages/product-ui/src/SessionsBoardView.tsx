@@ -93,6 +93,17 @@ const IN_PROGRESS_DISPLAY_STATUSES = new Set<string>([
 	"Reviewing",
 ]);
 
+// Display statuses whose PR is done for good. A live worker still reads
+// `status: working` under them (the agent can keep running after its PR
+// merges), but the delivery loop has nothing left to turn, so the loader stays
+// off. "Mergeable" and "Approved" are absent: the agent may still be working
+// on a PR that has not landed.
+const SETTLED_DISPLAY_STATUSES = new Set<string>([
+	"Merged",
+	"Closed without merge",
+	"Terminated",
+]);
+
 export type BoardReviewerPresentation = {
 	id: string;
 	avatarUrl?: string;
@@ -238,6 +249,8 @@ export type SessionCardViewProps = {
 	overlay?: ReactNode;
 	prs?: BoardPullRequestPresentation[];
 	renderAvatar: (provider: string) => ReactNode;
+	/** A static rendering of the card (a hover preview): no attention pulse. */
+	still?: boolean;
 	renderUsage?: (usage: BoardUsagePresentation) => ReactNode;
 	/** Live cost on the machine (memory, CPU while working), shown before
 	 * token usage. Grey unless this card is part of the fix for a tight machine. */
@@ -268,6 +281,7 @@ export function SessionCardView({
 	resource,
 	session,
 	tag,
+	still = false,
 	translate,
 	usage,
 }: SessionCardViewProps) {
@@ -280,7 +294,9 @@ export function SessionCardView({
 	const statusClassName =
 		session.displayStatus === "Closed without merge"
 			? "text-status-exited"
-			: session.status === "mergeable" || session.displayStatus === "Mergeable"
+			: session.displayStatus === "Merged"
+				? "text-status-merged"
+				: session.status === "mergeable" || session.displayStatus === "Mergeable"
 				? "text-success"
 				: (session.statusPresentation?.className ?? column.titleClassName);
 	const branch = session.branch ?? "";
@@ -310,7 +326,7 @@ export function SessionCardView({
 		// "Draft" describes the PR, not work AO is turning, so it gets no loader
 		// even while the worker is live.
 		session.displayStatus !== "Draft" &&
-		(session.status === "working" ||
+		((session.status === "working" && !SETTLED_DISPLAY_STATUSES.has(session.displayStatus ?? "")) ||
 			// The label reads `displayStatus`, so the loader must too. `status`
 			// aggregates the session's WORST open PR while `displayStatus` describes
 			// its BEST one, so keying the loader off `status` spun a settled
@@ -324,14 +340,19 @@ export function SessionCardView({
 	return (
 		<div
 			onClick={interactive ? onOpen : undefined}
-			role={interactive ? undefined : "listitem"}
+			role={interactive || still ? undefined : "listitem"}
 			className={cn(
-				"group relative w-full rounded-lg border border-border text-left transition-[background-color,box-shadow,transform] duration-[120ms] ease-out",
-				badge.cardClassName ?? "border-border bg-surface",
+				still
+					? // A hover preview: one elevated surface, no outline, no motion.
+						"relative w-full rounded-lg bg-popover text-left"
+					: "group relative w-full rounded-lg border border-border text-left transition-[background-color,box-shadow,transform] duration-[120ms] ease-out",
+				!still && (badge.cardClassName ?? "border-border bg-surface"),
 				interactive &&
 					"cursor-pointer hover:bg-interactive-hover focus-within:bg-interactive-hover active:scale-[0.99] has-[button:active]:scale-100 has-[a:active]:scale-100",
 				needsAttention &&
-					"animate-attention-card-pulse border-status-needs-you bg-[color-mix(in_srgb,var(--color-status-needs-you)_8%,var(--color-surface))]",
+					(still
+						? "bg-[color-mix(in_srgb,var(--color-status-needs-you)_10%,var(--popover))]"
+						: "animate-attention-card-pulse border-status-needs-you bg-[color-mix(in_srgb,var(--color-status-needs-you)_8%,var(--color-surface))]"),
 			)}
 			data-testid="board-session-card"
 			data-session-id={session.id}
@@ -343,13 +364,13 @@ export function SessionCardView({
 					type="button"
 				/>
 			) : null}
-			<div className="px-3.5 pb-2.5 pt-2.5">
+			<div className={still ? "px-3 pb-1.5 pt-2.5" : "px-3.5 pb-2.5 pt-2.5"}>
 				{tag ? (
 					<div className="mb-1.5 flex min-w-0" data-testid="board-session-tag">
 						{tag}
 					</div>
 				) : null}
-				<div className="flex min-w-0 items-center gap-2.5">
+				<div className={cn("flex min-w-0 items-center", still ? "gap-2" : "gap-2.5")}>
 					{renderAvatar(session.provider)}
 					<div
 						className="min-w-0 flex-1 line-clamp-2 overflow-hidden text-balance text-sm-md font-semibold leading-tight tracking-tight text-foreground"
@@ -365,7 +386,7 @@ export function SessionCardView({
 					) : null}
 				</div>
 				{showBranch && (
-					<div className="mt-1.5 flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground">
+					<div className={cn("flex min-w-0 items-center gap-1.5 font-sans text-2xs text-muted-foreground", still ? "mt-1" : "mt-1.5")}>
 						{branchIcon ?? <GitBranchIcon aria-hidden="true" className="size-icon-2xs shrink-0" />}
 						{branchLabel ?? <span className="truncate text-muted-foreground">{branch}</span>}
 						{branchAction}
@@ -373,7 +394,7 @@ export function SessionCardView({
 				)}
 			</div>
 			{prs.length > 0 && (
-				<div className="flex min-w-0 flex-col gap-1.5 px-3.5 pb-1">
+				<div className={cn("flex min-w-0 flex-col gap-1.5 pb-1", still ? "px-3" : "px-3.5")}>
 					{prs.length > 0 && (
 						<div className="flex min-w-0 flex-col gap-y-1 font-sans text-2xs text-muted-foreground">
 							{groupBoardPullRequests(prs).flatMap((group) => {
@@ -396,7 +417,12 @@ export function SessionCardView({
 				</div>
 			)}
 			{artifacts ? <div className="relative z-10 min-w-0 px-3.5 pb-2">{artifacts}</div> : null}
-			<div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 border-t border-border px-3.5 py-2.5">
+			<div
+				className={cn(
+					"grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2",
+					still ? "px-3 pb-2.5 pt-1" : "border-t border-border px-3.5 py-2.5",
+				)}
+			>
 				<div className="flex min-w-0 flex-1">
 					<span
 						className={cn(

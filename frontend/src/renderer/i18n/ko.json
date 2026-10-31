@@ -1438,6 +1438,8 @@
 	"settings.renderMath": "수식 표시",
 	"settings.renderMathHint": "채팅과 Markdown 미리보기에서 $…$, $$…$$, \\(…\\), \\[…\\]를 수식으로 표시합니다. $로 쓴 가격이 수식으로 표시될 수 있습니다.",
 	"settings.terminalCopyOnSelect": "선택 시 복사",
+	"settings.projectAvatars": "프로젝트 아바타",
+	"settings.projectAvatars.description": "프로젝트 폴더 아이콘 대신 저장소 소유자의 아바타를 표시합니다.",
 	"settings.general": "일반",
 	"settings.appearance": "모양",
 	"settings.privacy": "개인정보",

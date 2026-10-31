@@ -34,6 +34,7 @@ import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
+import { resetSessionPreviewWarmth } from "../hooks/useSessionPreviewHover";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 
 type DragOverTestEvent = {
@@ -1312,13 +1313,13 @@ describe("Sidebar", () => {
 			"opacity-100",
 			"group-has-[:focus-visible]/session-row:opacity-0",
 		);
-		expect(openSession).toHaveClass("pl-1.5");
+		expect(openSession).toHaveClass("pl-2.5");
 		expect(openSession.closest("li")).toHaveClass("pl-0.5");
 	});
 
 	it("keeps session status and actions stable when an action receives keyboard focus", async () => {
 		const user = userEvent.setup();
-		renderSidebar({ workspaces: [{ ...workspace, sessions: [session] }] });
+		renderSidebar({ workspaces: [{ ...workspace, sessions: [{ ...session, status: "needs_input" }] }] });
 
 		const openSession = screen.getByLabelText("Open fix login");
 		const row = openSession.closest<HTMLElement>("[data-session-row]");
@@ -2778,7 +2779,7 @@ describe("Sidebar", () => {
 		}
 	});
 
-	it("paints the dot from its board section while activity drives the pulse", () => {
+	it("shows actionable status icons and spins only while unmarked sessions work", () => {
 		renderSidebar({
 			workspaces: [
 				{
@@ -2804,6 +2805,8 @@ describe("Sidebar", () => {
 							title: "ci failed task",
 							status: "working",
 							scmStatus: "ci_failed",
+							kanbanColumn: "validating",
+							displayStatus: "Fixing CI failures",
 							activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR({ ci: "failing" })],
 						},
@@ -2813,6 +2816,7 @@ describe("Sidebar", () => {
 							title: "review task",
 							status: "working",
 							scmStatus: "pr_open",
+							kanbanColumn: "needs_review",
 							activity: { state: "active", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR()],
 						},
@@ -2841,22 +2845,269 @@ describe("Sidebar", () => {
 		const sessionDot = (title: string) =>
 			screen.getByLabelText(`Open ${title}`).querySelector<HTMLElement>("[data-session-status]");
 
-		// No pull request: the dot falls back to runtime status.
-		expect(sessionDot("idle task")).toHaveClass("bg-status-idle");
-		expect(sessionDot("idle task")).not.toHaveClass("animate-status-pulse");
+		expect(sessionDot("idle task")).not.toBeInTheDocument();
 
 		const workingDot = sessionDot("working task");
-		expect(workingDot).toHaveClass("bg-status-working");
-		expect(workingDot).toHaveClass("animate-status-pulse");
+		expect(workingDot).toHaveAttribute("data-session-spinner");
+		expect(workingDot).toHaveClass("animate-spin");
 
-		// The board-section tone stays visible while the pulse says the agent is busy.
-		expect(sessionDot("ci failed task")).toHaveClass("bg-status-needs-you", "animate-status-pulse");
-		expect(sessionDot("review task")).toHaveClass("bg-status-in-review", "animate-status-pulse");
-		expect(sessionDot("ready task")).toHaveClass("bg-status-ready", "animate-status-pulse");
-		expect(sessionDot("merged task")).toHaveClass("bg-status-merged", "animate-status-pulse");
+		expect(sessionDot("ci failed task")).toHaveAttribute("data-session-spinner");
+		expect(sessionDot("review task")).toHaveAttribute("data-session-marker", "review");
+		expect(sessionDot("review task")).toHaveClass("lucide-circle-alert", "text-status-in-review");
+		expect(sessionDot("ready task")).toHaveAttribute("data-session-marker", "ready");
+		expect(sessionDot("merged task")).toHaveAttribute("data-session-marker", "merged");
+		expect(sessionDot("merged task")).not.toHaveClass("animate-spin");
 	});
 
-	it("blinks blue when an idle-section session has working activity", () => {
+	it("shows a red alert icon instead of a dot when a session needs input", () => {
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{
+							...session,
+							id: "proj-1-input",
+							title: "input task",
+							status: "needs_input",
+							activity: { state: "waiting_input", lastActivityAt: "2026-06-30T00:00:00Z" },
+						},
+						{
+							...session,
+							id: "proj-1-ci",
+							title: "ci task",
+							status: "ci_failed",
+							displayStatus: "CI failing",
+							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
+						},
+					],
+				},
+			],
+		});
+
+		const marker = (title: string) =>
+			screen.getByLabelText(`Open ${title}`).querySelector<SVGElement | HTMLElement>("[data-session-status]");
+
+		expect(marker("input task")).toHaveAttribute("data-session-marker", "attention");
+		expect(marker("input task")).toHaveClass("text-destructive");
+		expect(marker("input task")).not.toHaveClass("rounded-full");
+		expect(marker("ci task")).toHaveAttribute("data-session-marker", "attention");
+		expect(marker("ci task")).toHaveClass("text-destructive");
+	});
+
+	it("shows the pending review warning on the session and keeps its project folder", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [{
+				...workspace,
+				sessions: [{ ...session, status: "commented", scmStatus: "commented", kanbanColumn: "validating", displayStatus: "Needs review" }],
+			}],
+		});
+		const marker = screen.getByLabelText("Open fix login").querySelector("[data-session-marker]");
+		expect(marker).toHaveAttribute("data-session-marker", "needs_review");
+		expect(marker).toHaveClass("lucide-circle-alert", "text-status-validating");
+		expect(document.querySelector("[data-project-folder-icon] .lucide-folder-open")).toBeInTheDocument();
+		await user.click(screen.getByLabelText("Toggle Project One sessions"));
+		expect(screen.queryByLabelText("Open fix login")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).toBeInTheDocument();
+	});
+
+	it("replaces the folder with a warning when a collapsed project needs attention", () => {
+		renderSidebar({
+			expandedProjectIds: [],
+			workspaces: [{ ...workspace, sessions: [{ ...session, status: "needs_input" }] }],
+		});
+		expect(document.querySelector('[data-project-folder-icon] [data-project-marker="attention"]')).toHaveClass("lucide-circle-alert", "text-destructive");
+		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).not.toBeInTheDocument();
+	});
+
+	it.each(["ci_failed", "exited"] as const)("keeps the folder for a collapsed project with a %s session", (status) => {
+		renderSidebar({
+			expandedProjectIds: [],
+			workspaces: [{ ...workspace, sessions: [{ ...session, status }] }],
+		});
+		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
+		expect(document.querySelector("[data-project-folder-icon] .lucide-folder")).toBeInTheDocument();
+	});
+
+	it("previews the board card to the right of a hovered session row", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{
+							...session,
+							id: "proj-1-preview",
+							title: "preview task",
+							status: "needs_input",
+							displayStatus: "Blocked",
+							kanbanColumn: "building",
+							activity: { state: "waiting_input", lastActivityAt: "2026-06-30T00:00:00Z" },
+						},
+					],
+				},
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+		await user.hover(screen.getByLabelText("Open preview task"));
+		// The first preview waits out a short hover before it opens.
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+
+		const card = await screen.findByTestId("board-session-card");
+		expect(card).toHaveTextContent("preview task");
+		expect(within(card).getByTestId("session-status")).toHaveTextContent("Blocked");
+		// Static: attention styling without the pulse, and no card-level click target.
+		expect(card).not.toHaveClass("animate-attention-card-pulse");
+		expect(card).not.toHaveClass("cursor-pointer");
+		// One elevated surface with no outline, even for a session that needs input.
+		expect(card.className).toMatch(/bg-popover|var\(--popover\)/);
+		expect(card).not.toHaveClass("border", "border-status-needs-you");
+		expect(card.querySelector(".border-t")).toBeNull();
+		// The first preview fades in; it never zooms, and closing is instant.
+		const content = card.closest('[data-slot="hover-card-content"]');
+		expect(content).not.toBeNull();
+		expect(content?.className).toMatch(/animate-in/);
+		expect(content?.className).not.toMatch(/zoom-|animate-out/);
+
+		await user.unhover(screen.getByLabelText("Open preview task"));
+		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+	});
+
+	it("replaces the preview straight away when the pointer moves to another row", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-first", title: "first task", status: "working" },
+						{ ...session, id: "proj-1-second", title: "second task", status: "idle" },
+					],
+				},
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		await user.hover(screen.getByLabelText("Open first task"));
+		expect(await screen.findByTestId("board-session-card")).toHaveTextContent("first task");
+
+		// Well inside the first-open delay: only a warm preview can appear this fast.
+		await user.hover(screen.getByLabelText("Open second task"));
+		await waitFor(
+			() => {
+				const cards = screen.getAllByTestId("board-session-card");
+				expect(cards).toHaveLength(1);
+				expect(cards[0]).toHaveTextContent("second task");
+			},
+			{ timeout: 150 },
+		);
+		const content = screen.getByTestId("board-session-card").closest('[data-slot="hover-card-content"]');
+		expect(content?.className).not.toMatch(/animate-|zoom-|fade-|slide-/);
+	});
+
+	it("keeps the preview open while the pointer is on the card, and closes it once it leaves", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{ ...workspace, sessions: [{ ...session, id: "proj-1-card", title: "card task", status: "working" }] },
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		const row = screen.getByLabelText("Open card task");
+		await user.hover(row);
+		const card = await screen.findByTestId("board-session-card");
+
+		// Off the row and onto the card: past the leave grace, it is still there.
+		await user.hover(card);
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(screen.getByTestId("board-session-card")).toBeInTheDocument();
+		// The card takes the pointer: it is not click-through.
+		expect(card.closest('[data-slot="hover-card-content"]')?.className).not.toMatch(/pointer-events-none/);
+
+		await user.unhover(card);
+		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+	});
+
+	it("shows only the last row's preview after a quick sweep across cold rows", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-a", title: "sweep a", status: "working" },
+						{ ...session, id: "proj-1-b", title: "sweep b", status: "idle" },
+						{ ...session, id: "proj-1-c", title: "sweep c", status: "idle" },
+					],
+				},
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		// All three hovers land inside the first-open delay, so none has opened yet.
+		await user.hover(screen.getByLabelText("Open sweep a"));
+		await user.hover(screen.getByLabelText("Open sweep b"));
+		await user.hover(screen.getByLabelText("Open sweep c"));
+
+		const card = await screen.findByTestId("board-session-card");
+		expect(card).toHaveTextContent("sweep c");
+		// Past every row's delay: nothing from the rows swept over may open late.
+		await new Promise((resolve) => setTimeout(resolve, 600));
+		const cards = screen.getAllByTestId("board-session-card");
+		expect(cards).toHaveLength(1);
+		expect(cards[0]).toHaveTextContent("sweep c");
+	});
+
+	it("goes back to a delayed, animated first preview after the pointer has left every row", async () => {
+		const user = userEvent.setup();
+		renderSidebar({
+			workspaces: [
+				{ ...workspace, sessions: [{ ...session, id: "proj-1-cool", title: "cool task", status: "working" }] },
+			],
+		});
+
+		resetSessionPreviewWarmth();
+		const row = screen.getByLabelText("Open cool task");
+		await user.hover(row);
+		await screen.findByTestId("board-session-card");
+		await user.unhover(row);
+		await waitFor(() => expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument());
+
+		await new Promise((resolve) => setTimeout(resolve, 400));
+		await user.hover(row);
+		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
+		const card = await screen.findByTestId("board-session-card");
+		expect(card.closest('[data-slot="hover-card-content"]')?.className).toMatch(/animate-in/);
+	});
+
+	it("lists sessions that need input above the rest", () => {
+		const at = "2026-06-30T00:00:00Z";
+		renderSidebar({
+			workspaces: [
+				{
+					...workspace,
+					sessions: [
+						{ ...session, id: "proj-1-a", title: "newest calm task", status: "working", updatedAt: "2026-06-30T03:00:00Z", activity: { state: "active", lastActivityAt: at } },
+						{ ...session, id: "proj-1-b", title: "older input task", status: "needs_input", updatedAt: "2026-06-30T01:00:00Z", activity: { state: "waiting_input", lastActivityAt: at } },
+						{ ...session, id: "proj-1-c", title: "middle calm task", status: "idle", updatedAt: "2026-06-30T02:00:00Z", activity: { state: "idle", lastActivityAt: at } },
+					],
+				},
+			],
+		});
+
+		const titles = screen
+			.getAllByLabelText(/^Open (newest calm|older input|middle calm) task$/)
+			.map((row) => row.getAttribute("aria-label"));
+		expect(titles).toEqual(["Open older input task", "Open newest calm task", "Open middle calm task"]);
+	});
+
+	it("shows a spinner when an idle-section session has working activity", () => {
 		renderSidebar({
 			workspaces: [
 				{
@@ -2877,10 +3128,11 @@ describe("Sidebar", () => {
 		const dot = screen
 			.getByLabelText("Open idle task receiving work")
 			.querySelector<HTMLElement>("[data-session-status]");
-		expect(dot).toHaveClass("bg-status-working", "animate-status-pulse");
+		expect(dot).toHaveAttribute("data-session-spinner");
+		expect(dot).toHaveClass("animate-spin");
 	});
 
-	it("holds the dot still for idle activity and keeps its PR tone", async () => {
+	it("keeps idle sessions quiet and shows a review marker without motion", async () => {
 		renderSidebar({
 			workspaces: [
 				{
@@ -2899,6 +3151,7 @@ describe("Sidebar", () => {
 							title: "idle draft task",
 							status: "draft",
 							scmStatus: "draft",
+							kanbanColumn: "needs_review",
 							activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" },
 							prs: [sidebarPR({ state: "draft" })],
 						},
@@ -2911,14 +3164,11 @@ describe("Sidebar", () => {
 		const idleActivityDot = screen
 			.getByLabelText("Open idle activity task")
 			.querySelector<HTMLElement>("span.rounded-full");
-		const idleDraftDot = screen.getByLabelText("Open idle draft task").querySelector<HTMLElement>("span.rounded-full");
+		const idleDraftDot = screen.getByLabelText("Open idle draft task").querySelector("[data-session-marker]");
 
-		// An idle session with no pull request stays gray; a parked draft keeps
-		// the in-review tone the board gives it, without any motion.
-		expect(idleActivityDot).toHaveClass("bg-status-idle");
-		expect(idleDraftDot).toHaveClass("bg-status-in-review");
-		expect(idleActivityDot).not.toHaveClass("animate-status-pulse");
-		expect(idleDraftDot).not.toHaveClass("animate-status-pulse");
+		expect(idleActivityDot).not.toBeInTheDocument();
+		expect(idleDraftDot).toHaveAttribute("data-session-marker", "review");
+		expect(idleDraftDot).not.toHaveClass("animate-spin");
 	});
 
 	it("shows sessions on load and hides them once collapsed", async () => {
