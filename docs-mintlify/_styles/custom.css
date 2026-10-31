@@ -1224,7 +1224,7 @@ nav#sidebar-content button svg[data-ao-chev] { transition: rotate 150ms ease; }
 /* v36i: keep per-code-block Ask Assistant hidden for layout parity (FAB uses the aria-label); toggle vertical offset */
 button[id="ask-assistant-code-block-button"] { display: none !important; }
 @media (min-width: 1024px) {
-  button.ao-side-toggle { margin-top: 4px !important; }
+  button.ao-side-toggle { top: 9px !important; margin-top: 0 !important; }
 }
 
 /* v36j: table caption + rounded corners like original */
@@ -1424,3 +1424,4 @@ main td, main th { vertical-align: middle !important; }
     clip-path: path('M 16.3 10.9 A 19.68 19.77 0 0 1 42.5 10.9 A 19.68 19.77 0 0 1 68.8 10.9 A 19.68 19.77 0 0 1 95.0 10.9 A 19.68 19.77 0 0 1 121.2 10.9 A 19.68 19.77 0 0 1 147.5 10.9 A 19.68 19.77 0 0 1 173.7 10.9 A 9.05 9.09 0 0 1 182.8 20.0 A 16.29 16.36 0 0 1 182.8 41.8 A 16.29 16.36 0 0 1 182.8 63.6 A 9.05 9.09 0 0 1 173.7 72.7 A 15.61 15.68 0 0 1 152.9 72.7 A 15.61 15.68 0 0 1 132.1 72.7 Q 152.0 85.5 155.6 92.7 Q 161.0 95.5 146.6 90.9 Q 127.6 87.3 101.3 72.7 A 21.26 21.36 0 0 1 73.0 72.7 A 21.26 21.36 0 0 1 44.6 72.7 A 21.26 21.36 0 0 1 16.3 72.7 A 9.05 9.09 0 0 1 7.2 63.6 A 16.29 16.36 0 0 1 7.2 41.8 A 16.29 16.36 0 0 1 7.2 20.0 A 9.05 9.09 0 0 1 16.3 10.9 Z'); font-size: 11px; line-height: 1.18;
   }
 }
+
