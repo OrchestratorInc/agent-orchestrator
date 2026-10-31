@@ -2888,7 +2888,7 @@ export function getMacInstallBlocker(): string | undefined {
     return (
       "macOS is running Orchestrator from a temporary read-only location " +
       "because it was opened straight from where it was downloaded. Quit the app, " +
-      "move Agent Orchestrator.app into /Applications, reopen it from there, and " +
+      "move Orchestrator into /Applications, reopen it from there, and " +
       "then restart to update."
     );
   }
@@ -2903,7 +2903,7 @@ export function getMacInstallBlocker(): string | undefined {
     return (
       "The update can't be installed because Orchestrator's location isn't " +
       `writable: ${path.dirname(bundle)}. Fix that folder's permissions, or move ` +
-      "Agent Orchestrator.app somewhere you can write to, reopen it, and then " +
+      "Orchestrator somewhere you can write to, reopen it, and then " +
       "restart to update."
     );
   }
