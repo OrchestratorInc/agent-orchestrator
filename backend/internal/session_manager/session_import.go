@@ -74,7 +74,7 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR"}[rec.Harness]
+	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR"}[rec.Harness]
 	if key == "" {
 		return
 	}
@@ -118,6 +118,14 @@ func sameDirectory(a, b string) bool {
 // importOwnedElsewhere reports positive evidence that another provider process
 // holds the conversation: Codex keeps a writer lock per loaded thread, Claude
 // Code registers each live session, and older writers keep the transcript open.
+//
+// Pi has no such signal: it keeps no writer lock or live-session registry and
+// does not hold its session file open (see writableTranscriptOwner), and
+// pi-acp's session/load does not refuse a second writer. So a Pi conversation
+// still open in the Pi CLI/TUI is not detected, and importing it can interleave
+// turns with the other writer. This matches the documented posture for
+// lock-less providers; a reliable per-session Pi owner signal would be needed
+// to protect it.
 func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
 	switch rec.Harness {
@@ -206,6 +214,14 @@ func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) b
 
 // writableTranscriptOwner is the fallback for writers without a lock or registry.
 // Read-only descriptors are not ownership.
+//
+// It cannot see a live Pi owner: the pi CLI/TUI and pi-acp persist with
+// appendFileSync/writeFileSync, opening and closing the session file for each
+// entry rather than holding it open, so lsof reports a Pi writer only during
+// the instant of a write. Pi also keeps no writer lock or live-session
+// registry, and pi-acp's session/load does not refuse a second writer, so an
+// imported Pi conversation that is still open elsewhere is not detected. See
+// importOwnedElsewhere.
 func writableTranscriptOwner(ctx context.Context, path string) bool {
 	if path == "" {
 		return false

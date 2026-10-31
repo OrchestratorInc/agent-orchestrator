@@ -63,6 +63,10 @@ it("lists only this agent's chats, preselects recent ones and imports only the s
 	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
 });
 
+it("gates importable harnesses to the ones with a verified resume path", () => {
+	expect(IMPORTABLE_AGENTS.has("pi")).toBe(true);
+});
+
 it("reports new, existing and failed imports separately", async () => {
 	api.POST.mockResolvedValue({
 		data: {
