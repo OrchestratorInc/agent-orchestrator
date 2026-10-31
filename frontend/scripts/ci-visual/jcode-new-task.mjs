@@ -176,6 +176,16 @@ async function main() {
 	const agentControl = page.getByLabel("Agent", { exact: true });
 	const agentPicker = await checkpoint("new-task-agent-picker", "New Task: Agent picker open, jcode offered", async () => {
 		await page.evaluate(() => { window.location.hash = "#/"; });
+		// A fresh install may open an optional "Connect GitHub" sign-in terminal
+		// on the home page; close it without signing in.
+		const github = page.locator("div").filter({ has: page.getByText("Connect GitHub", { exact: true }) }).filter({ has: page.getByText("Complete sign-in in this terminal") }).last();
+		if (await visible(github, 3_000)) await github.getByRole("button").last().click().catch(() => {});
+		// A fresh install shows "Get started"; its "Start a standalone agent"
+		// entry opens New Task, as a user would.
+		if (!(await visible(agentControl, 10_000))) {
+			const start = page.getByRole("button", { name: /Start a standalone agent/ });
+			if (await visible(start, 30_000)) await start.first().click();
+		}
 		if (!(await visible(agentControl, 60_000))) return { status: "FAIL", observed: "no Agent control on the New Task page" };
 		await agentControl.first().click();
 		const menu = page.locator('[role="menu"], [role="listbox"]').last();
