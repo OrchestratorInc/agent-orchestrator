@@ -3535,6 +3535,7 @@
 	"chat.automation.visualChanges_many": "{{count}} mudanças visuais",
 	"chat.automation.screenshots_one": "{{count}} captura de referência",
 	"chat.automation.screenshots_other": "{{count}} capturas de referência",
+	"chat.automation.steered": "Orientado",
 	"chat.automation.screenshots_many": "{{count}} capturas de referência",
 	"sideChat.deleteConfirm": "Excluir o chat lateral?",
 	"sideChat.deleteExplanation": "Este chat lateral e suas mensagens serão removidos.",

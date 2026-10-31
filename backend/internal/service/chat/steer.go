@@ -250,7 +250,9 @@ func (c *Controller) PromoteQueuedTurn(
 			c.log.Error("failed to release queued turn promotion", "turn", turnID, "error", releaseErr)
 		}
 	}
-	if queued.Origin != domain.MessageOriginHuman {
+	// Only the user's own queued words can be promoted: typed messages, and
+	// user-authored content AO relayed as automation (Browser annotations).
+	if queued.Origin != domain.MessageOriginHuman && !queued.AuthoredByUser {
 		release()
 		return PromoteQueuedTurnResult{}, fmt.Errorf("%w: %s", ErrTurnNotQueued, turnID)
 	}
@@ -276,7 +278,7 @@ func (c *Controller) PromoteQueuedTurn(
 	}
 	msg := ports.ChatUserMessage{
 		Text: queued.Text, Content: content, Origin: queued.Origin,
-		ClientMessageID: queued.ClientMessageID,
+		AuthoredByUser: queued.AuthoredByUser, ClientMessageID: queued.ClientMessageID,
 	}
 	ref, err := steerer.Steer(ctx, target, excerptDeliveryMessage(msg))
 	if err != nil {

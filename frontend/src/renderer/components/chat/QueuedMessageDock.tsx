@@ -18,6 +18,7 @@ import { cn } from "../../lib/utils";
 import type { ConversationMessage } from "../../types/conversation";
 import { useTranslation } from "react-i18next";
 import { labelInlineImages } from "./messageAttachments";
+import { parseBrowserAnnotationMessage } from "../../../shared/browser-annotations";
 
 export type QueuedMessage = {
 	turnId: string;
@@ -106,7 +107,13 @@ function QueuedMessageRowContent({
 	dragHandleProps?: Record<string, unknown>;
 }) {
 	const { t } = useTranslation();
-	const text = labelInlineImages(message.text, (index) => t("chat.image.numbered", { index }));
+	const annotations = message.origin === "human" ? null : parseBrowserAnnotationMessage(message.text);
+	const text = annotations
+		? `${annotations.pageTitle} · ${t("browser.annotationCount", { count: annotations.items.length })}`
+		: labelInlineImages(message.text, (index) => t("chat.image.numbered", { index }));
+	// Relayed user-authored text is generated, so it can be steered or cancelled
+	// but not edited.
+	const editable = message.origin === "human";
 	const showHoverSteerButton =
 		showHoverSteer ||
 		Boolean(onPromoteQueuedTurn && canSteer && !showPersistentSteer && !suppressHoverSteer);
@@ -163,7 +170,7 @@ function QueuedMessageRowContent({
 						Steer
 					</button>
 				) : null}
-				{onBeginQueuedEdit ? (
+				{onBeginQueuedEdit && editable ? (
 					<button
 						type="button"
 						disabled={busy}

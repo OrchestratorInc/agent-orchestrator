@@ -3535,6 +3535,7 @@
 	"chat.automation.visualChanges_many": "{{count}} modifications visuelles",
 	"chat.automation.screenshots_one": "{{count}} capture de référence",
 	"chat.automation.screenshots_other": "{{count}} captures de référence",
+	"chat.automation.steered": "Guidé",
 	"chat.automation.screenshots_many": "{{count}} captures de référence",
 	"sideChat.deleteConfirm": "Supprimer le chat latéral ?",
 	"sideChat.deleteExplanation": "Ce chat latéral et ses messages seront supprimés.",
