@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { History, LoaderCircle, User } from "lucide-react";
-import { useArtifactVersion, useArtifactVersions, useSyncArtifactVersions, type ArtifactVersionSummary } from "../hooks/useArtifactVersions";
+import { useArtifactVersion, useArtifactVersions, useSyncArtifactVersions, type ArtifactVersionSummary, type CloudArtifactVersions } from "../hooks/useArtifactVersions";
 import { GithubAvatar } from "@aoagents/product-ui";
 import { useQuery } from "@tanstack/react-query";
 import { AgentAvatar } from "./AgentAvatar";
@@ -87,6 +87,7 @@ function VersionItem({
  * opening it records any edit the observer has not picked up yet.
  */
 export function ArtifactHistoryMenu({
+	cloud,
 	fallbackHarness,
 	hostId,
 	onSelect,
@@ -94,6 +95,8 @@ export function ArtifactHistoryMenu({
 	selectedVersion,
 	sessionId,
 }: {
+	/** A cloud session's versions, kept by the control plane. */
+	cloud?: CloudArtifactVersions;
 	/** The session's agent, shown for versions recorded before their own agent was kept. */
 	fallbackHarness: string;
 	hostId?: string;
@@ -105,8 +108,8 @@ export function ArtifactHistoryMenu({
 }) {
 	const { t } = useTranslation();
 	const [showAll, setShowAll] = useState(false);
-	const versions = useArtifactVersions({ enabled: true, hostId, path, sessionId });
-	const syncVersions = useSyncArtifactVersions({ hostId, path, sessionId });
+	const versions = useArtifactVersions({ cloud, enabled: true, hostId, path, sessionId });
+	const syncVersions = useSyncArtifactVersions({ cloud, hostId, path, sessionId });
 	// Whose avatar marks a version saved in the app: the GitHub account the daemon is signed in as.
 	const { data: github } = useQuery({ queryKey: ["github-status"], queryFn: getGitHubStatus, staleTime: 5 * 60_000 });
 	const login = github?.login;
@@ -178,6 +181,7 @@ export function ArtifactHistoryMenu({
  */
 export function ArtifactVersionPreview({
 	artifactOrigin,
+	cloud,
 	hostId,
 	onBack,
 	onRestore,
@@ -188,6 +192,7 @@ export function ArtifactVersionPreview({
 	version,
 }: {
 	artifactOrigin?: string;
+	cloud?: CloudArtifactVersions;
 	hostId?: string;
 	onBack: () => void;
 	onRestore: () => void;
@@ -198,7 +203,7 @@ export function ArtifactVersionPreview({
 	version: number;
 }) {
 	const { t } = useTranslation();
-	const query = useArtifactVersion({ hostId, path, sessionId, version });
+	const query = useArtifactVersion({ cloud, hostId, path, sessionId, version });
 	const markdown = /\.(md|markdown)$/i.test(path);
 	return (
 		<div className="flex h-full min-h-0 flex-col bg-background">

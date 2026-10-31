@@ -246,13 +246,14 @@ describe("ArtifactsView", () => {
 		expect(screen.queryByRole("button", { name: "agent-orchestrator" })).not.toBeInTheDocument();
 	});
 
-	it("keeps gallery cloud actions on the cloud session instead of local file actions", async () => {
+	it("keeps gallery cloud actions on the cloud session, showing its files in a folder under ~/.ao", async () => {
 		const cloud = session("cloud-1", "Cloud notes", [{ name: "notes.md", updatedAt: "2026-10-11T10:00:00Z" }]);
 		cloud.cloud = { orgId: "org-1" };
 		mocks.workspaces = [{ id: "cloud-project", name: "Cloud project", path: "", kind: CLOUD_PROJECT_KIND, cloudOrgId: "org-1", sessions: [cloud] }];
 		renderView();
 		await userEvent.click(screen.getByRole("button", { name: "More actions: notes.md" }));
-		expect(screen.queryByRole("menuitem", { name: /^Show in / })).not.toBeInTheDocument();
+		expect(screen.getAllByRole("menuitem", { name: /^Show in / })).toHaveLength(1);
+		expect(screen.queryByRole("menuitem", { name: "Show in Terminal" })).not.toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: "Download" })).toBeInTheDocument();
 		await userEvent.click(screen.getByRole("menuitem", { name: "Delete artifact" }));
 		const dialog = screen.getByRole("dialog");

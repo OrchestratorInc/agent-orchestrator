@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
 	launch: vi.fn(),
 	launchFallback: vi.fn(),
 	fallbackAction: undefined as string | undefined,
+	isCloudProject: false,
 	workspace: undefined as ChatWorkspaceProps | undefined,
 }));
 
@@ -32,7 +33,7 @@ vi.mock("./TaskComposer", () => ({
 		fallbackAction: h.fallbackAction,
 		fallbackLabel: "Create as Terminal UI",
 		submitMode: undefined,
-		isCloudProject: false,
+		isCloudProject: h.isCloudProject,
 		canSubmit: true,
 		launchSnapshot: () => ({ agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined }),
 		effectiveInterface: "chat",
@@ -70,6 +71,7 @@ beforeEach(() => {
 	h.launch.mockReset();
 	h.launchFallback.mockReset();
 	h.fallbackAction = undefined;
+	h.isCloudProject = false;
 	h.workspace = undefined;
 	window.localStorage.clear();
 });
@@ -113,6 +115,24 @@ describe("NewChatPage", () => {
 			params: { projectId: "proj-1", sessionId: "sess-1" },
 			replace: true,
 		}));
+	});
+
+	it("starts a cloud project's task on the page, with its approval mode and without attachments", async () => {
+		h.isCloudProject = true;
+		h.launch.mockResolvedValue("cloud-sess-1");
+		const queryClient = renderPage();
+		const queryClientEchos = () => queryClient.getQueryData(["conversation-local-echos"]);
+		// No hand-over to the old dialog: the page stays and offers the same composer.
+		expect(h.navigate).not.toHaveBeenCalled();
+		expect(h.workspace?.holdAttachments).toBe(false);
+		expect(h.workspace?.skills).toEqual([]);
+		// The settings bar (inside the draft's fragment) offers the approval mode.
+		expect(h.workspace?.draftSettings).toEqual(expect.objectContaining({ props: { children: expect.objectContaining({ props: expect.objectContaining({ showApprovalMode: true }) }) } }));
+		await act(async () => { await h.workspace?.onSend?.("Fix the build", undefined, "cid-1"); });
+		expect(h.launch).toHaveBeenCalledWith("Fix the build", expect.objectContaining({ clientRequestId: "cid-1" }));
+		// A cloud session opens on its own surface, so no local echo is seeded for it.
+		expect(queryClientEchos()).toBeUndefined();
+		await waitFor(() => expect(h.navigate).toHaveBeenCalledWith(expect.objectContaining({ params: { projectId: "proj-1", sessionId: "cloud-sess-1" } })));
 	});
 
 	it("takes attachments before a workspace exists and uploads them with the task", async () => {

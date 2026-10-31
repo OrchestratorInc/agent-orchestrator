@@ -95,6 +95,8 @@ export interface AgentSwitchProps {
 	autoCompact?: AutoCompactControl;
 	/** The agents to offer in place of the chat switch targets, for choosing one before a session exists. */
 	agents?: Array<{ id: string; label: string }>;
+	/** Which agents settings "Manage agents" opens: a Cloud session's are the Cloud ones. */
+	harnessView?: "local" | "cloud";
 }
 
 export interface PickerModel {
@@ -245,7 +247,7 @@ export function AgentModelPicker({
 			return agent && !isLaunchableAgent(agent) ? [] : [{ id: id as string, label }];
 		}),
 	], [chatUnavailable, choices, currentHarness, readiness, terminal]);
-	const management = useAgentManagementMenu(undefined, hostId);
+	const management = useAgentManagementMenu(undefined, hostId, agentSwitch.harnessView);
 	const [open, setOpen] = useState(false);
 	const favorites = useModelFavorites();
 	const keepCurrent = () => { if (pending) onPendingChange(undefined); };

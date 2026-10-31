@@ -119,7 +119,9 @@ export function useSessionScmSummary(
 			const response = await cloudClient.listSessionPullRequests(cloudOrgId, sessionId!);
 			return {
 				prs: response.pullRequests.map((pr) => cloudPRSummaryToSessionPRSummary(pr, cloudAutoInjectCI)),
-				linkedPrs: [],
+				linkedPrs: (response.linkedPullRequests ?? []).map((pr): SessionPRReference => ({
+					host: "github.com", number: pr.number, provider: "github", repo: pr.repository, url: pr.url,
+				})),
 			};
 		},
 		retry: 1,

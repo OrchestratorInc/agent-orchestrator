@@ -43,7 +43,7 @@ import { apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
-import { WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
+import { defaultReviewerHarness, WORKER_DEFAULT_REVIEWERS } from "../lib/reviewer-harnesses";
 import { cloudSessionsQueryKey, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { captureRendererEvent } from "../lib/telemetry";
 import { formatTimeCompact } from "../lib/format-time";
@@ -107,7 +107,7 @@ import {
 	type PRReviewState,
 	type ReviewRunFacts,
 } from "../lib/session-reviews";
-import type { CloudCpAOReviewRun, CloudCpSessionReviewState, CloudCpPullRequestSummary } from "../lib/cloud-cp";
+import type { CloudCpAOReviewRun, CloudCpProjectRepo, CloudCpSessionReviewState, CloudCpPullRequestSummary } from "../lib/cloud-cp";
 
 type ProjectConfig = components["schemas"]["ProjectConfig"];
 type OpenReviewerTerminal = (target: { handleId: string; harness: string }) => void;
@@ -413,6 +413,20 @@ const SummaryView = memo(function SummaryView({
 			return data?.status === "ok" && "repo" in data.project ? data.project : undefined;
 		},
 	});
+	// A Cloud project's repositories come from the control plane: its own and
+	// the additional ones its sessions check out.
+	const { client: cloudClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp(Boolean(session.cloud));
+	const cloudProjectQuery = useQuery({
+		queryKey: ["cloud-project-repositories", cloudBaseUrl, session.cloud?.orgId ?? "", session.workspaceId],
+		enabled: linkedPRs.length > 0 && Boolean(session.cloud) && cloudReady,
+		staleTime: 60_000,
+		queryFn: async () => {
+			const { project } = await cloudClient.getProject(session.cloud!.orgId, session.workspaceId);
+			const repos = (project.config as { repos?: CloudCpProjectRepo[] } | undefined)?.repos ?? [];
+			return [project.repositoryUrl, ...repos.map((repo) => repo.url)];
+		},
+	});
+	const projectRepositories = session.cloud ? cloudProjectQuery.data : projectRepositoryUrls(projectQuery.data);
 	const prSummaries = sessionPRDisplaySummaries(session, query.data?.prs);
 	const prCount = prSummaries.length + linkedPRs.length;
 	const hasPRs = prCount > 0;
@@ -480,7 +494,7 @@ const SummaryView = memo(function SummaryView({
 									projectId={session.workspaceId}
 								/>
 							))}
-							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectQuery.data)} key={pr.url} pr={pr} />)}
+							{linkedPRs.map((pr) => <LinkedPRCard external={isExternalRepository(pr, projectRepositories)} key={pr.url} pr={pr} />)}
 						</>
 					) : null}
 					session={session}
@@ -594,9 +608,13 @@ function InspectorPolicyRow({
 	);
 }
 
-function isExternalRepository(pr: SessionPRReference, project: components["schemas"]["Project"] | undefined): boolean {
-	if (!project) return false;
-	const repositories = [project.repo, project.config?.canonicalRepoURL, ...(project.workspaceRepos?.map((repo) => repo.repo) ?? [])];
+function projectRepositoryUrls(project: components["schemas"]["Project"] | undefined): Array<string | undefined> | undefined {
+	if (!project) return undefined;
+	return [project.repo, project.config?.canonicalRepoURL, ...(project.workspaceRepos?.map((repo) => repo.repo) ?? [])];
+}
+
+function isExternalRepository(pr: SessionPRReference, repositories: Array<string | null | undefined> | undefined): boolean {
+	if (!repositories) return false;
 	const identities = repositories.flatMap((repository) => {
 		if (!repository) return [];
 		try {
@@ -1096,6 +1114,17 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		placeholderData: (previous) => previous,
 		enabled: !session.cloud && session.kind !== "orchestrator",
 	});
+	// A Cloud session's commits come from its worker's workspace review, the
+	// same read (and cache entry) the inspector polls for its Files count.
+	const { client: cloudCpClient, ready: cloudReady, baseUrl: cloudBaseUrl } = useCloudCp();
+	const cloudOrgId = session.cloud?.orgId;
+	const cloudReview = useQuery({
+		queryKey: ["cloud-workspace-review", cloudBaseUrl, cloudOrgId ?? "", session.id, "summary"],
+		enabled: cloudReady && cloudOrgId !== undefined && session.runtimeConnected === true && session.kind !== "orchestrator",
+		placeholderData: (previous) => previous,
+		queryFn: () => cloudCpClient.getWorkspaceReview(cloudOrgId!, session.id),
+	});
+	const commits = session.cloud ? cloudReview.data?.commits : history.data?.commits;
 	const events: SortableTimelineEvent[] = [];
 	const pushEvent = (event: InspectorTimelineEvent, timestamp?: string | null) => {
 		events.push({ ...event, sortTime: timelineSortTime(timestamp) });
@@ -1111,7 +1140,7 @@ function ActivityTimeline({ hostId, prs, session }: { hostId?: string; prs: Sess
 		createdAt,
 	);
 
-	for (const commit of history.data?.commits.slice(0, TIMELINE_COMMIT_LIMIT) ?? []) {
+	for (const commit of commits?.slice(0, TIMELINE_COMMIT_LIMIT) ?? []) {
 		pushEvent(
 			{
 				tone: "neutral",
@@ -1664,7 +1693,10 @@ function CloudReviewsSection({
 		queryFn: () => client.inspectSessionReviewerHarnesses(orgId, session.id),
 		retry: 1,
 	});
-	const effectiveReviewerHarness = reviewsQuery.data?.reviewerHarness || session.reviewerHarness || session.provider;
+	// With no reviewer chosen, the worker's agent maps to its default reviewer
+	// the way a local project's does (WORKER_DEFAULT_REVIEWERS).
+	const defaultReviewer = defaultReviewerHarness(session.provider, true);
+	const effectiveReviewerHarness = reviewsQuery.data?.reviewerHarness || session.reviewerHarness || defaultReviewer;
 	const [selectedReviewerHarness, setSelectedReviewerHarness] = useState(effectiveReviewerHarness);
 	useEffect(() => setSelectedReviewerHarness(effectiveReviewerHarness), [effectiveReviewerHarness, session.id]);
 	const [autoReviewEnabled, setAutoReviewEnabled] = useState(session.autoReviewEnabled === true);
@@ -1681,7 +1713,7 @@ function CloudReviewsSection({
 			if (running && data.reviewerHandleId) {
 				onOpenReviewerTerminal?.({
 					handleId: data.reviewerHandleId,
-					harness: data.reviewerHarness || session.provider,
+					harness: data.reviewerHarness || defaultReviewer,
 				});
 			} else if (!running) {
 				setReviewNotice(t("inspector.reviewAlreadyRanForCommit"));
@@ -1753,7 +1785,7 @@ function CloudReviewsSection({
 		...session,
 		prs: (pullRequestsQuery.data?.pullRequests ?? []).map(cloudPullRequestFacts),
 	};
-	const reviewState = cloudReviewsToLocal(reviewsQuery.data, session.provider);
+	const reviewState = cloudReviewsToLocal(reviewsQuery.data, effectiveReviewerHarness);
 	return (
 		<>
 			<ReviewPanel

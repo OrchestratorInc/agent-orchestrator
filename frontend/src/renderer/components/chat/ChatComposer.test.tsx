@@ -3041,7 +3041,10 @@ it("keeps cloud captures in shared drafts through reload and retries with the sa
 	expect(onSend.mock.calls[1]).toEqual(onSend.mock.calls[0]);
 	expect(onSend.mock.calls[0][0]).toContain('"cloud.ts"#L1-L1');
 	expect(onSend.mock.calls[0][0].match(/CLOUD_CAPTURE/g)).toHaveLength(1);
-	expect(onSend.mock.calls[0][5]).toBeUndefined();
+	// The captures come along for the transcript only, with the message as typed;
+	// the text already carries them for the agent.
+	expect(onSend.mock.calls[0][5]?.map((item: { id: string })=>item.id)).toEqual([ref.id]);
+	expect(onSend.mock.calls[0][6]).not.toContain("CLOUD_CAPTURE");
 	await waitFor(()=>expect(readChatSessionDraft(sessionId).composer.fileReferences ?? []).toHaveLength(0));
 	view.unmount();
 });

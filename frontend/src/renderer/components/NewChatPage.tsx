@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { Folder, Plus, Smartphone, StickyNote } from "lucide-react";
+import { Cloud, Folder, Plus, Smartphone, StickyNote } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
@@ -110,7 +110,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		attachmentsProject.current = projectId;
 		writeChatAttachments(draftScope, []);
 	}
-	const skills = useMemo(() => readChatSkills(task.agent.value, hostId), [hostId, task.agent.value]);
+	// "/" skills come from this computer's agent; a Cloud task's agent runs in its sandbox without them.
+	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId), [hostId, task.agent.value, task.isCloudProject]);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],
@@ -120,7 +121,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 	const harness = task.agent.value;
 	const template = useMemo(() => readChatSettingsTemplate(harness, hostId), [harness, hostId]);
 	const barFor = (settings: TurnSettings): LaunchSettings => {
-		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings, task.isCloudProject) : undefined;
+		const providerOptions = template ? draftProviderOptions(template.options, harness, task.chatModels, settings) : undefined;
 		return {
 			harness,
 			projectId: task.catalogProjectId,
@@ -128,7 +129,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			models: providerOptions ? [] : task.chatModels,
 			settings,
 			configOptions: providerOptions,
-			showApprovalMode: !task.isCloudProject,
+			showApprovalMode: true,
 		};
 	};
 	const barSettings = barFor(task.turnSettings);
@@ -191,13 +192,6 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		};
 	}, [router]);
 
-	// Cloud projects keep the New Task dialog for now: a link here hands over to it.
-	useEffect(() => {
-		if (!task.isCloudProject) return;
-		void navigate({ to: "/new", search: { host: hostId }, replace: true });
-		useUiStore.getState().requestNewTask(projectId, hostId);
-	}, [hostId, navigate, projectId, task.isCloudProject]);
-
 	// Load the session page's code now: a first visit otherwise renders the
 	// router's empty pending frame between this page and the session.
 	useEffect(() => {
@@ -218,7 +212,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 			rememberLaunchSettings(queryClient, sessionId, target.hostId, settings);
 			rememberOpeningStart(queryClient, sessionId, target.hostId, brief.createdAt);
 		}
-		await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(target.hostId) });
+		// A Cloud task is already on the board (the launch refreshed the Cloud list).
+		if (!taskRef.current.isCloudProject) await queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(target.hostId) });
 		// After the composer settles this send, so its draft never outlives the page.
 		// Someone who has since left, or opened another new task, stays where they are.
 		setTimeout(() => {
@@ -357,7 +352,8 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				centerInWindow
 				localEchos={echo ? [echo] : undefined}
 				openingStartedAt={echo?.createdAt}
-				holdAttachments
+				// A Cloud task cannot carry files yet, so its composer offers none.
+				holdAttachments={!task.isCloudProject}
 				onHeldAttachmentsChange={onHeldAttachmentsChange}
 				onStageAttachments={workspaceReady ? stagePrepared : undefined}
 				filePaths={workspaceFiles.data?.paths}
@@ -409,7 +405,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
  * Undefined when they cannot show exactly what the task will start with; the page
  * then draws AO's own controls instead.
  */
-function draftProviderOptions(options: ChatConfigOption[], harness: string, models: ChatModel[], settings: TurnSettings, cloud: boolean): ChatConfigOption[] | undefined {
+function draftProviderOptions(options: ChatConfigOption[], harness: string, models: ChatModel[], settings: TurnSettings): ChatConfigOption[] | undefined {
 	const grouped = partitionConfigOptions(options);
 	const out: ChatConfigOption[] = [];
 	const model = grouped.model[0];
@@ -435,8 +431,8 @@ function draftProviderOptions(options: ChatConfigOption[], harness: string, mode
 		if (listedEfforts.length !== offered.size || listedEfforts.some((value) => !offered.has(value))) return undefined;
 		out.push({ ...effort, currentValue: settings.reasoningEffort || "default" });
 	}
-	// Cloud tasks do not send a permission choice, so none is offered.
-	if (grouped.mode && !cloud) {
+	// A Cloud task sends its permission choice with the opening prompt, as a local one does.
+	if (grouped.mode) {
 		// Only choices a new task can start with: those with an AO permission equivalent.
 		const choices = grouped.mode.choices.filter((choice) => choice.permissionMode);
 		const value = choices.find((choice) => choice.permissionMode === settings.approvalMode)?.value;
@@ -526,10 +522,10 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 	const localWorkspaces = useWorkspaceQuery().data ?? [];
 	const remoteWorkspaces = useRemoteWorkspaces().data ?? [];
 	const workspaces = hostId ? remoteWorkspaces.filter((workspace) => workspace.hostId === hostId) : localWorkspaces;
-	// Cloud projects start tasks from the New Task dialog for now.
 	const projects = workspaces.filter(
-		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND && workspace.kind !== CLOUD_PROJECT_KIND,
+		(workspace) => workspace.id !== STANDALONE_WORKSPACE_ID && workspace.kind !== STANDALONE_PROJECT_KIND,
 	);
+	const cloudProjectIds = new Set(projects.filter((project) => project.kind === CLOUD_PROJECT_KIND).map((project) => project.id));
 	const projectOptions = [
 		{ value: STANDALONE_WORKSPACE_ID, label: t("standalone.workspaceName") },
 		...projects.map((project) => ({ value: project.id, label: project.name })),
@@ -562,14 +558,14 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 			}}
 			renderTrigger={() => (
 				<span className="inline-flex min-w-0 items-center gap-1.5">
-					<ProjectIcon projectId={projectId} className="size-3.5 text-muted-foreground" />
+					<ProjectIcon projectId={projectId} cloud={cloudProjectIds.has(projectId)} className="size-3.5 text-muted-foreground" />
 					<span className="min-w-0 truncate">{selectedProjectName}</span>
 					{hostLabel ? <span className="shrink-0 text-muted-foreground">· {hostLabel}</span> : null}
 				</span>
 			)}
 			renderMenuItem={(option) => (
 				<>
-					<ProjectIcon projectId={option.value} className="size-icon-sm" />
+					<ProjectIcon projectId={option.value} cloud={cloudProjectIds.has(option.value)} className="size-icon-sm" />
 					<span className="min-w-0 truncate">{option.label}</span>
 				</>
 			)}
@@ -577,8 +573,8 @@ function NewChatProjectPicker({ projectId, hostId, disabled, onChange }: { proje
 	);
 }
 
-function ProjectIcon({ projectId, className }: { projectId: string; className: string }) {
-	const Icon = projectId === STANDALONE_WORKSPACE_ID ? StickyNote : Folder;
+function ProjectIcon({ projectId, cloud, className }: { projectId: string; cloud?: boolean; className: string }) {
+	const Icon = projectId === STANDALONE_WORKSPACE_ID ? StickyNote : cloud ? Cloud : Folder;
 	return <Icon aria-hidden="true" className={cn("shrink-0", className)} />;
 }
 

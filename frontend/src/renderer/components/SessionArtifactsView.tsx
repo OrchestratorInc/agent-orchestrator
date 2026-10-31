@@ -1,22 +1,24 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ChevronLeft, Code2, Eye, FolderOpen, Maximize2, MessageSquarePlus, Minimize2, SquareTerminal } from "lucide-react";
 import { isInlineArtifactUrl } from "../../shared/agent-page-url";
 import type { OpenArtifactsTargetId } from "../../shared/editor-handoff";
 import { useOpenSessionArtifacts } from "../hooks/useEditorHandoff";
 import { cloudArtifactFileUrl, useCloudArtifactAccess, usePinnedArtifactUrl } from "../hooks/useCloudArtifacts";
-import { useRestoreArtifactVersion } from "../hooks/useArtifactVersions";
+import { useRestoreArtifactVersion, type CloudArtifactVersions } from "../hooks/useArtifactVersions";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useFileAnnotation } from "../hooks/useFileAnnotation";
-import { CloudArtifactAccessError, sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
+import { CloudArtifactAccessError, sessionArtifactFileQueryOptions, type ArtifactSave } from "../hooks/useSessionWorkspaceFiles";
+import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
+import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import type { ArtifactRow } from "../lib/artifacts";
 import { sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
-import { ArtifactActionsMenu } from "./ArtifactActionsMenu";
+import { ArtifactActionsMenu, openCloudArtifactsFolder } from "./ArtifactActionsMenu";
 import { ArtifactGalleryCard } from "./ArtifactGalleryCard";
 import { ArtifactFileView } from "./ArtifactFileView";
 import { CloudArtifactFrame } from "./CloudArtifactFrame";
@@ -83,6 +85,37 @@ function OpenArtifactsFolderButtons({ sessionId }: { sessionId: string }) {
 					<TooltipContent side="bottom">{label}</TooltipContent>
 				</Tooltip>
 			))}
+		</>
+	);
+}
+
+/** A cloud session's artifacts copied to its folder under ~/.ao and opened there. */
+function OpenCloudArtifactsFolderButton({ orgId, sessionId }: { orgId: string; sessionId: string }) {
+	const { t } = useTranslation();
+	const { client, baseUrl } = useCloudCp();
+	const open = useMutation({ mutationFn: () => openCloudArtifactsFolder(client, baseUrl, orgId, sessionId) });
+	const resetOpen = open.reset;
+	useEffect(() => {
+		if (!open.error) return;
+		const timer = setTimeout(resetOpen, ERROR_CLEAR_MS);
+		return () => clearTimeout(timer);
+	}, [open.error, resetOpen]);
+	const label = t("editor.openInTarget", { name: fileManagerName() });
+	return (
+		<>
+			{open.error ? (
+				<span className="min-w-0 truncate text-caption text-destructive" role="alert" title={open.error.message}>
+					{open.error.message}
+				</span>
+			) : null}
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button aria-label={label} disabled={open.isPending} onClick={() => open.mutate()} size="icon-sm" type="button" variant="ghost">
+						<FolderOpen aria-hidden="true" className="size-icon-sm" />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent side="bottom">{label}</TooltipContent>
+			</Tooltip>
 		</>
 	);
 }
@@ -164,6 +197,7 @@ function ArtifactViewerBody({
 	artifact,
 	artifactRoot,
 	cloud = false,
+	cloudVersions,
 	onAccessRefused,
 	feedbackRequestKey,
 	initialEditing,
@@ -173,6 +207,7 @@ function ArtifactViewerBody({
 	onPreviewVersion,
 	previewVersion,
 	readOnly,
+	save,
 	sendMessage,
 	sessionId,
 	toolbarHost,
@@ -182,6 +217,10 @@ function ArtifactViewerBody({
 	artifactRoot?: string;
 	/** Reads the file through the cloud bridge. */
 	cloud?: boolean;
+	/** A cloud file's versions, kept by the control plane. */
+	cloudVersions?: CloudArtifactVersions;
+	/** Saves an edit to the control plane, for a cloud file. */
+	save?: ArtifactSave;
 	/** Takes a fresh access link for a cloud file whose link was refused. */
 	onAccessRefused?: () => void;
 	feedbackRequestKey?: number;
@@ -197,7 +236,7 @@ function ArtifactViewerBody({
 	sessionId: string;
 	toolbarHost: HTMLElement | null;
 }) {
-	const restore = useRestoreArtifactVersion({ hostId, path: artifact.path, rawUrl: artifact.rawUrl, sessionId });
+	const restore = useRestoreArtifactVersion({ cloud: cloudVersions, hostId, path: artifact.path, rawUrl: artifact.rawUrl, sessionId });
 	const previewing = previewVersion !== null;
 	const page = artifact.kind === "html" && artifact.inlineUrl && isInlineArtifactUrl(artifact.inlineUrl) ? artifact.inlineUrl : undefined;
 	const showingPage = Boolean(page) && !htmlSource && !previewing;
@@ -227,6 +266,7 @@ function ArtifactViewerBody({
 						path={artifact.path}
 						rawUrl={artifact.rawUrl}
 						readOnly={readOnly}
+						save={save}
 						sendMessage={sendMessage}
 						sessionId={sessionId}
 						toolbarHost={previewing || showingPage ? null : toolbarHost}
@@ -236,6 +276,7 @@ function ArtifactViewerBody({
 				{previewing ? (
 					<ArtifactVersionPreview
 						artifactOrigin={artifactOrigin}
+						cloud={cloudVersions}
 						hostId={hostId}
 						onBack={() => onPreviewVersion(null)}
 						onRestore={() => {
@@ -361,6 +402,20 @@ export function SessionArtifactsView({
 	const uiKey = sessionUiKey(session.id, hostId);
 	const { client: cloudClient } = useCloudCp(cloud);
 	const cloudOrgId = session.cloud?.orgId;
+	const queryClient = useQueryClient();
+	// A cloud session's artifacts are edited and versioned in the control plane,
+	// which hands a save to the session's worker.
+	const cloudVersions = useMemo<CloudArtifactVersions | undefined>(
+		() => (cloudOrgId ? { client: cloudClient, orgId: cloudOrgId } : undefined),
+		[cloudClient, cloudOrgId],
+	);
+	const saveCloudArtifact = useCallback<ArtifactSave>(async ({ content, expectedFileFingerprint, path }) => {
+		if (!cloudOrgId) throw new Error(t("files.saveError"));
+		const { artifact } = await cloudClient.saveSessionArtifact(cloudOrgId, session.id, { path, content, expectedSha256: expectedFileFingerprint });
+		// The file's link changes with it, so the list's refresh reads it again.
+		await queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+		return { fileFingerprint: artifact.sha256, size: artifact.size };
+	}, [cloudClient, cloudOrgId, queryClient, session.id, t]);
 	// A cloud session's worker gets feedback from the control plane, not the daemon.
 	const sendCloudFeedback = useCallback(async (message: string) => {
 		if (!cloudOrgId) throw new Error(t("files.feedbackError"));
@@ -400,7 +455,8 @@ export function SessionArtifactsView({
 	// cloud file also shows when its access link was refused.
 	const selectedFile = useQuery({
 		...sessionArtifactFileQueryOptions(session.id, selected?.path ?? "", selected?.rawUrl, t("files.error.loadArtifact"), cloud),
-		enabled: Boolean(selected) && (!cloud || (Boolean(selected?.rawUrl) && selected?.kind !== "html")),
+		// A cloud page is framed, not read, until its source is shown.
+		enabled: Boolean(selected) && (!cloud || (Boolean(selected?.rawUrl) && (selected?.kind !== "html" || htmlSourcePath === selected?.path))),
 	});
 	const refetchAccess = cloudAccess.refetch;
 	const repin = pinned.repin;
@@ -423,7 +479,7 @@ export function SessionArtifactsView({
 	if (selected) {
 		const fullscreenLabel = t(fullscreen ? "common.returnToPanel" : "common.maximize");
 		const FullscreenIcon = fullscreen ? Minimize2 : Maximize2;
-		const hasHtmlPreview = selected.kind === "html" && selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl);
+		const hasHtmlPreview = selected.kind === "html" && (cloud || (selected.inlineUrl && isInlineArtifactUrl(selected.inlineUrl)));
 		const showingHtmlSource = htmlSourcePath === selected.path;
 		return (
 			<ArtifactViewerFrame fullscreen={fullscreen} label={selected.name} onExitFullscreen={exitFullscreen}>
@@ -439,8 +495,8 @@ export function SessionArtifactsView({
 						<ChevronLeft aria-hidden="true" className="size-icon-sm" />
 					</Button>
 					<ArtifactActionsMenu artifact={selected} downloadUrl={listed?.rawUrl} className="min-w-0 flex-1 shrink justify-start" hostId={hostId} key={selected.path} session={session}>
-						{session.cloud || selectedFile.data?.binary ? null : (
-							<ArtifactHistoryMenu fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
+						{selectedFile.data?.binary || fileMediaKind(selected.path) ? null : (
+							<ArtifactHistoryMenu cloud={cloudVersions} fallbackHarness={session.provider} hostId={hostId} onSelect={setPreviewVersion} path={selected.path} selectedVersion={previewVersion} sessionId={session.id} />
 						)}
 					</ArtifactActionsMenu>
 					<div className="flex shrink-0 items-center gap-0.5">
@@ -476,7 +532,7 @@ export function SessionArtifactsView({
 						) : (
 							<PanelMessage>{t("files.loading")}</PanelMessage>
 						)
-					) : cloud && selected.kind === "html" ? (
+					) : cloud && selected.kind === "html" && !showingHtmlSource && previewVersion === null ? (
 						<CloudHtmlArtifactView
 							artifact={selected}
 							feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
@@ -492,16 +548,18 @@ export function SessionArtifactsView({
 						<ArtifactViewerBody
 							artifact={selected}
 							htmlSource={showingHtmlSource}
-							initialEditing={editingPath === selected.path && Boolean(selectedFile.data?.editable && selectedFile.data?.fileFingerprint) && !selectedFile.data?.binary && !selectedFile.data?.contentTruncated && !cloud}
+							initialEditing={editingPath === selected.path && Boolean(selectedFile.data?.editable && selectedFile.data?.fileFingerprint) && !selectedFile.data?.binary && !selectedFile.data?.contentTruncated}
 							artifactRoot={cloud ? pinned.root : undefined}
 							cloud={cloud}
+							cloudVersions={cloud ? cloudVersions : undefined}
 							onAccessRefused={cloud ? accessRefused : undefined}
 							feedbackRequestKey={request?.feedback && request.path === selected.path ? request.key : undefined}
 							hostId={hostId}
 							onFeedbackRequestConsumed={onRequestConsumed}
 							onPreviewVersion={setPreviewVersion}
 							previewVersion={previewVersion}
-							readOnly={cloud}
+							readOnly={false}
+							save={cloud ? saveCloudArtifact : undefined}
 							sendMessage={cloud ? sendCloudFeedback : undefined}
 							sessionId={session.id}
 							toolbarHost={toolbarHost}
@@ -518,6 +576,7 @@ export function SessionArtifactsView({
 				<span className="min-w-0 flex-1 truncate">{t("artifacts.title")}</span>
 				{/* The artifact directory is on this machine only for a local session. */}
 				{!hostId && !session.cloud && artifacts.length > 0 ? <OpenArtifactsFolderButtons sessionId={session.id} /> : null}
+				{session.cloud && artifacts.length > 0 ? <OpenCloudArtifactsFolderButton orgId={session.cloud.orgId} sessionId={session.id} /> : null}
 			</div>
 			{artifacts.length === 0 ? (
 				<PanelMessage>{t("artifacts.sessionEmpty")}</PanelMessage>

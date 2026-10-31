@@ -3169,7 +3169,16 @@ registerChatImageIpc({
 	dialog,
 	downloadsDirectory: () => app.getPath("downloads"),
 });
-registerCloudArtifactIpc({ ipcMain });
+registerCloudArtifactIpc({
+	ipcMain,
+	openInFileManager: async (target, isFile) => {
+		if (isFile) shell.showItemInFolder(target);
+		else {
+			const error = await shell.openPath(target);
+			if (error) throw new Error(error);
+		}
+	},
+});
 
 // A file dropped onto the terminal is delivered as raw bytes (its original path
 // is unavailable to the sandboxed renderer on macOS — see webUtils.getPathForFile

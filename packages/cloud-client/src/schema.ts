@@ -235,6 +235,107 @@ export interface paths {
         patch: operations["updateProjectSettings"];
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/environment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description The project's environment variables, which every session of the project gets (its coding agent, shells, and Setup and Cleanup commands). They are stored encrypted. Only an organization owner or admin sees their values; other members see their names. */
+        get: operations["getProjectEnvironment"];
+        /** @description Replace the project's environment variables as a whole; an empty map removes them. Organization owners and admins only. New sessions get them. */
+        put: operations["putProjectEnvironment"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/intake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /** @description How the project's issue intake (config.trackerIntake) last went. */
+        get: operations["getProjectIntakeStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/projects/{projectId}/cues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get: operations["listProjectCues"];
+        put?: never;
+        /** @description Add a cue. A name the project already has is refused with CUE_NAME_TAKEN. */
+        post: operations["createProjectCue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/cues/{cueId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteProjectCue"];
+        options?: never;
+        head?: never;
+        /** @description Replace a cue's whole definition. */
+        patch: operations["updateProjectCue"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/cues/{cueId}/invoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Run a cue into one of its project's sessions. An agent cue's prompt is sent to the session as the caller's message (a shared session's composer lease applies). A command cue is returned for the client to run in a new shell of the session's sandbox. Accepts an optional Idempotency-Key. */
+        post: operations["invokeProjectCue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/github/installations": {
         parameters: {
             query?: never;
@@ -382,6 +483,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/chat-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        /** @description Returns, newest first, the chat messages of the organization's sessions in live projects whose text contains q, case insensitively: prompts, and assistant replies assembled from their streamed text. Only the organization's most recent chat events are searched. */
+        get: operations["searchChats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions": {
         parameters: {
             query?: never;
@@ -433,6 +553,27 @@ export interface paths {
         put?: never;
         post?: never;
         delete: operations["deleteSession"];
+        options?: never;
+        head?: never;
+        /** @description Renames the session: the title every viewer sees. Anyone who may write in the session may rename it; a viewer is refused. */
+        patch: operations["updateSession"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Pins the session in the caller's sidebar. A pin is one person's: nobody else sees the session move. Pinning a pinned session keeps its first pin time. */
+        post: operations["pinSession"];
+        delete: operations["unpinSession"];
         options?: never;
         head?: never;
         patch?: never;
@@ -557,6 +698,107 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Replaces the text of one committed artifact file with an edit made in the app, when the committed file still has expectedSha256 (409 artifact_changed otherwise). The save is kept as the file's newest version and reaches the session's worker, which writes it to its disk unless the file changed there since. Present only when the deployment reports offering.artifacts; otherwise 404. */
+        put: operations["saveSessionArtifact"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description Lists the kept versions of one artifact file, newest first; the first is the committed file. A session keeps the newest twenty versions of each file. */
+        get: operations["listSessionArtifactVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        /** @description Returns one kept version of an artifact file with the start of its UTF-8 text (the first 256 KiB; truncated says when it was cut). */
+        get: operations["getSessionArtifactVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/artifacts/versions/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Makes a kept version the committed file again, kept as its newest version (restoredFrom names the one it restored), and hands it to the session's worker. Restoring the committed version changes nothing. */
+        post: operations["restoreSessionArtifactVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Starts a live session's terminal agent again in its worker after it exited (Ctrl+C, /exit, a crash), resuming its conversation where the agent keeps one, and reads the session as idle rather than exited. requested is false when the agent is still running or starting. A session in Chat starts its agent with its next message instead; a session viewer cannot restart it. */
+        post: operations["restartSessionAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pull-requests": {
         parameters: {
             query?: never;
@@ -647,6 +889,92 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["sendSessionReviewToWorker"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        /** @description One review conversation's events after a sequence, for a review whose run reports interfaceMode chat. */
+        get: operations["listReviewChatEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Queues a message to the reviewer of a review that runs in Chat. A conversation that stopped after its verdict starts again. */
+        post: operations["sendReviewChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/reviews/{reviewRunId}/chat/interrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["interruptReviewChat"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat/prompt-suggestion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The next message the person could send after a settled turn. The
+         *     session's agent reads the supplied recent transcript once, with no
+         *     tools. An empty prompt means no clear next step; a worker that cannot
+         *     suggest fails the request.
+         *      */
+        post: operations["suggestChatPrompt"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2317,6 +2645,8 @@ export interface components {
             workingDirectory?: components["schemas"]["ProjectWorkingDirectory"];
             agentRules?: components["schemas"]["ProjectRules"];
             orchestratorRules?: components["schemas"]["ProjectRules"];
+            workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
+            trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
             /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
             source?: string;
         } & {
@@ -2495,6 +2825,90 @@ export interface components {
             workingDirectory?: components["schemas"]["ProjectWorkingDirectory"];
             agentRules?: components["schemas"]["ProjectRules"];
             orchestratorRules?: components["schemas"]["ProjectRules"];
+            workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
+            trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
+        };
+        /** @description Workers request AO's review of their own pull request once it is pushed and ready, instead of waiting to be asked. Defaults to off. */
+        ProjectWorkersRequestReview: boolean;
+        /** @description Issue intake: while enabled, every open GitHub issue of the project's repository (or repo) that assignee matches gets one worker session, started as the organization owner or admin who last saved the rule. An enabled rule needs an assignee. A patch merges into the stored rule. Setting it requires an organization owner or admin. */
+        ProjectTrackerIntake: {
+            enabled?: boolean;
+            /** @enum {string} */
+            provider?: "github";
+            /** @description owner/name; empty uses the project's repository. */
+            repo?: string;
+            /** @description A GitHub login, "*" for any assigned issue, or "none" for unassigned issues. */
+            assignee?: string;
+        };
+        ProjectEnvironment: {
+            variables: components["schemas"]["ProjectEnvironmentVariable"][];
+            /** @description Whether the caller may change the variables (an organization owner or admin). */
+            editable: boolean;
+        };
+        ProjectEnvironmentVariable: {
+            name: string;
+            /** @description Omitted for a member who cannot change the variables. */
+            value?: string;
+        };
+        PutProjectEnvironmentInput: {
+            /** @description Name to value. Names are shell variable names, unique without case; AO_* and HOME, PATH, PWD, SHELL, USER and TERM are reserved. Values are text of at most 32 KB, 64 KB in all. */
+            variables: {
+                [key: string]: string;
+            };
+        };
+        ProjectIntakeStatus: {
+            enabled: boolean;
+            /** Format: date-time */
+            lastPolledAt?: string;
+            /** @description Why the last poll failed; absent when it did not. */
+            lastError?: string;
+        };
+        /** @description One of a project's reusable quick actions, run into a session from the desktop's top bar. */
+        Cue: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            projectId: string;
+            name: string;
+            /** @enum {string} */
+            type: "command" | "agent";
+            command?: string;
+            prompt?: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CueDefinitionInput: {
+            /** @description Unique within the project; trimmed. */
+            name: string;
+            /** @enum {string} */
+            type: "command" | "agent";
+            /** @description The shell command of a command cue; cleared for an agent cue. */
+            command?: string;
+            /** @description The agent instruction of an agent cue; cleared for a command cue. */
+            prompt?: string;
+        };
+        CueList: {
+            cues: components["schemas"]["Cue"][];
+        };
+        CueEnvelope: {
+            cue: components["schemas"]["Cue"];
+        };
+        InvokeCueInput: {
+            /**
+             * Format: uuid
+             * @description A session of the cue's project.
+             */
+            sessionId: string;
+        };
+        InvokeCueResult: {
+            /** @enum {string} */
+            kind: "agent" | "command";
+            /** Format: uuid */
+            sessionId: string;
+            /** @description For a command cue, the command to run in a new shell of the session. */
+            command?: string;
         };
         ProjectSettingsInput: {
             displayName?: string;
@@ -3000,6 +3414,14 @@ export interface components {
              * @description The composer lease grant the sender holds (see composerAcquire). Omitted or 0, the request succeeds only while nobody holds the lease and nobody is waiting; otherwise it fails with 409 COMPOSER_LOCKED. Succeeding releases the lease to the next person in line.
              */
             composerEpoch?: number;
+            /** @description How the message reads in the transcript when `text` carries quoted messages or file selections inlined for the agent. Recorded on the chat.user_message event only; the agent receives `text`. */
+            displayText?: string;
+            /** @description The quoted messages and file selections the message attaches, as the transcript shows them. Recorded on the chat.user_message event only. */
+            content?: ({
+                type: string;
+            } & {
+                [key: string]: unknown;
+            })[];
         };
         ChatApprovalDecisionInput: {
             decisionId: string;
@@ -3332,6 +3754,13 @@ export interface components {
             artifactsUpdatedAt?: string;
             /** @description The session's committed artifact files, on the session read route while the deployment keeps artifacts. The list route sends only artifactCount; listSessionArtifacts returns the files. */
             artifactFiles?: components["schemas"]["SessionArtifact"][];
+            /** @description Whether the caller pinned the session in their sidebar, on the session read, list and rename routes. A pin is one person's; absent means not pinned. */
+            pinned?: boolean;
+            /**
+             * Format: date-time
+             * @description When the caller pinned the session; present only while pinned.
+             */
+            pinnedAt?: string;
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
@@ -3362,6 +3791,68 @@ export interface components {
              * @description When the control plane last committed a new version of the file.
              */
             updatedAt: string;
+        };
+        SessionArtifactResult: {
+            artifact: components["schemas"]["SessionArtifact"];
+        };
+        SaveSessionArtifactInput: {
+            path: string;
+            /** @description The file's new UTF-8 text, 8 MiB at most. */
+            content: string;
+            /** @description The committed file's SHA-256 the edit started from. */
+            expectedSha256: string;
+        };
+        SessionArtifactVersionSummary: {
+            /** Format: int64 */
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Hex SHA-256 of the version's content. */
+            fileFingerprint: string;
+            /** Format: int64 */
+            size: number;
+            /**
+             * @description Who wrote it, the session's agent or a person through a save or restore.
+             * @enum {string}
+             */
+            source: "agent" | "user";
+            /** @description The session's agent when the version was recorded. */
+            harness?: string;
+            /**
+             * Format: int64
+             * @description The version this one restored, when it is a restore.
+             */
+            restoredFrom?: number;
+        };
+        SessionArtifactVersionList: {
+            versions: components["schemas"]["SessionArtifactVersionSummary"][];
+        };
+        SessionArtifactVersion: components["schemas"]["SessionArtifactVersionSummary"] & {
+            path: string;
+            /** @description The version's UTF-8 text, cut short when truncated is set. */
+            content: string;
+            truncated?: boolean;
+        };
+        ChatSearchHit: {
+            /** Format: uuid */
+            sessionId: string;
+            sessionTitle: string;
+            /** Format: uuid */
+            projectId: string;
+            /**
+             * Format: int64
+             * @description The message's first event in the session's chat.
+             */
+            sequence: number;
+            /** @enum {string} */
+            role: "user" | "assistant";
+            /** @description The matched text around the match, on one line. */
+            snippet: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ChatSearchResults: {
+            results: components["schemas"]["ChatSearchHit"][];
         };
         SessionArtifactList: {
             artifacts: components["schemas"]["SessionArtifact"][];
@@ -3459,6 +3950,18 @@ export interface components {
             mode: components["schemas"]["SessionMode"];
             /** @description Coding-agent model the session launches with (harness-native id, e.g. "anthropic/claude-opus-4-8"). Optional; empty uses the harness default. */
             model?: string;
+            /**
+             * @description Reasoning effort the opening prompt runs with. Optional; empty uses the model's default.
+             * @enum {string}
+             */
+            reasoningEffort?: "default" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+            /**
+             * @description Approval mode the opening prompt's turn runs with in a session that starts in chat. Optional; empty lets the worker derive it from the session's mode, as for any turn sent without one.
+             * @enum {string}
+             */
+            approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
+            /** @description Sandbox provider the session runs on, one the deployment offers (see /me). Optional; empty uses the organization's default. A project set up for a provider, or a worker linked to the project's orchestrator, runs there instead. */
+            provider?: string;
             /** @default [] */
             deniedCommands: string[];
             /** Format: uuid */
@@ -3468,6 +3971,17 @@ export interface components {
             interfaceMode?: components["schemas"]["SessionInterfaceMode"];
             /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
             defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
+        };
+        UpdateSessionInput: {
+            /** @description The session's new title, trimmed. */
+            displayName: string;
+        };
+        SessionPinResponse: {
+            /** Format: uuid */
+            sessionId: string;
+            pinned: boolean;
+            /** Format: date-time */
+            pinnedAt?: string;
         };
         UpdateSessionPreferencesInput: {
             reviewerHarness?: components["schemas"]["CloudReviewerHarness"] | string;
@@ -3615,6 +4129,14 @@ export interface components {
         SessionPullRequests: {
             sessionId: string;
             pullRequests: components["schemas"]["PullRequestSummary"][];
+            /** @description GitHub pull requests the session's agent reported that AO does not track, such as one in a repository the session has no grant for. */
+            linkedPullRequests?: components["schemas"]["LinkedPullRequest"][];
+        };
+        LinkedPullRequest: {
+            url: string;
+            /** @description owner/name */
+            repository: string;
+            number: number;
         };
         /** @enum {string} */
         AOReviewRunStatus: "running" | "complete" | "delivered" | "failed" | "cancelled";
@@ -3641,6 +4163,13 @@ export interface components {
             /** Format: date-time */
             deliveredAt?: string;
             autoInjectReview: boolean;
+            /** @description The reviewer terminal of a review that runs in a terminal. */
+            reviewerTerminalId?: string;
+            /**
+             * @description chat for a review that runs as a Chat conversation; absent for one in a reviewer terminal.
+             * @enum {string}
+             */
+            interfaceMode?: "chat";
         };
         AOPullRequestReviewState: {
             pullRequestUrl: string;
@@ -3660,6 +4189,53 @@ export interface components {
             availableReviewerHarnesses: components["schemas"]["CloudReviewerHarness"][];
             reviews: components["schemas"]["AOPullRequestReviewState"][];
             runs: components["schemas"]["AOReviewRun"][];
+            reviewerSurface?: components["schemas"]["ReviewerSurface"];
+        };
+        /** @description The reviewer conversation the session shows, its newest review that runs in Chat. */
+        ReviewerSurface: {
+            /** @enum {string} */
+            mode: "chat";
+            /** @description The review run whose conversation this is. */
+            reviewId: string;
+            harness: string;
+        };
+        /** @description One event of a review conversation. Payloads carry reviewRunId and
+         *     reviewTurnId (never turnId), plus what the session's own chat event of
+         *     the same name carries: text and authorUserId for a message, text and
+         *     itemId for assistant text, activity for an activity, error for an
+         *     aborted turn.
+         *      */
+        ReviewChatEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @enum {string} */
+            type: "review.user_message" | "review.turn_started" | "review.assistant_delta" | "review.activity" | "review.turn_completed" | "review.turn_interrupted" | "review.turn_aborted";
+            payload: {
+                [key: string]: unknown;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ReviewChatEventPage: {
+            events: components["schemas"]["ReviewChatEvent"][];
+            hasMore: boolean;
+            /** Format: int64 */
+            nextAfter: number;
+        };
+        PromptSuggestionInput: {
+            /** @description The settled turn the suggestion follows; echoed back. */
+            turnId: string;
+            /** @description The conversation's most recent text messages, oldest first. */
+            messages: {
+                /** @enum {string} */
+                role: "user" | "assistant";
+                text: string;
+            }[];
+        };
+        PromptSuggestion: {
+            turnId: string;
+            prompt: string;
         };
         SessionViewer: {
             /** Format: uuid */
@@ -4135,6 +4711,8 @@ export interface components {
         };
     };
     parameters: {
+        CueId: string;
+        ReviewRunId: string;
         /** @description The machine's stable identity, `h_` followed by a UUID. */
         RemoteHostId: string;
         /** @description The file name, without a directory. */
@@ -4693,6 +5271,212 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    getProjectEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's environment variables. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEnvironment"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putProjectEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutProjectEnvironmentInput"];
+            };
+        };
+        responses: {
+            /** @description The saved environment variables. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectEnvironment"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getProjectIntakeStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's issue intake status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectIntakeStatus"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listProjectCues: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's cues, by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CueList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CueDefinitionInput"];
+            };
+        };
+        responses: {
+            /** @description The created cue. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CueEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cue was deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CueDefinitionInput"];
+            };
+        };
+        responses: {
+            /** @description The updated cue. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CueEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    invokeProjectCue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                cueId: components["parameters"]["CueId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvokeCueInput"];
+            };
+        };
+        responses: {
+            /** @description What the cue did. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvokeCueResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listGitHubInstallations: {
         parameters: {
             query?: never;
@@ -4917,6 +5701,32 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    searchChats: {
+        parameters: {
+            query: {
+                q: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The matching messages. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSearchResults"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listSessions: {
         parameters: {
             query?: {
@@ -5052,6 +5862,84 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteSessionResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSessionInput"];
+            };
+        };
+        responses: {
+            /** @description The renamed session. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        session: components["schemas"]["Session"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    pinSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's pin. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionPinResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    unpinSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session is no longer pinned for the caller. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionPinResponse"];
                 };
             };
             default: components["responses"]["Error"];
@@ -5261,6 +6149,145 @@ export interface operations {
             default: components["responses"]["Error"];
         };
     };
+    saveSessionArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveSessionArtifactInput"];
+            };
+        };
+        responses: {
+            /** @description The saved artifact file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSessionArtifactVersions: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file's kept versions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactVersionList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    getSessionArtifactVersion: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The version and its text. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactVersion"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restoreSessionArtifactVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    path: string;
+                    /** Format: int64 */
+                    version: number;
+                };
+            };
+        };
+        responses: {
+            /** @description The restored artifact file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArtifactResult"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restartSessionAgent: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Whether a start was requested. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        requested: boolean;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     listSessionPullRequests: {
         parameters: {
             query?: never;
@@ -5393,6 +6420,124 @@ export interface operations {
                     "application/json": {
                         event: components["schemas"]["UserMessageEvent"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listReviewChatEvents: {
+        parameters: {
+            query?: {
+                /** @description Return events with a sequence strictly greater than this value. */
+                after?: components["parameters"]["After"];
+                limit?: components["parameters"]["EventLimit"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The review conversation's events after the supplied sequence. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewChatEventPage"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    sendReviewChatMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Reusing a key with the same command returns the original result.
+                 *     Reusing it with a different command returns an IDEMPOTENCY_CONFLICT.
+                 *      */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    text: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The message was queued for the reviewer. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        event: components["schemas"]["ReviewChatEvent"];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    interruptReviewChat: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                reviewRunId: components["parameters"]["ReviewRunId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The reviewer's running turn was asked to stop and its queued messages were dropped. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    suggestChatPrompt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PromptSuggestionInput"];
+            };
+        };
+        responses: {
+            /** @description The suggestion, or an empty prompt. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptSuggestion"];
                 };
             };
             default: components["responses"]["Error"];

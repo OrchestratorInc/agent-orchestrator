@@ -423,17 +423,47 @@ describe("AssistantMessage streaming", () => {
 		expect(frames.size).toBe(0);
 	});
 
-	it("flushes buffered text when streaming completes and restores actions", () => {
+	it("plays out buffered text quickly when streaming completes and restores actions", () => {
 		const view = render(<AssistantMessage message={message()} showCopy />);
 		view.rerender(<AssistantMessage message={message({ text: "aThe complete answer", streaming: true })} showCopy />);
 		runFrame(0);
 		view.rerender(
 			<AssistantMessage message={message({ text: "aThe complete answer", streaming: false })} showCopy />,
 		);
+		// The remainder plays out over a few frames rather than landing at once.
+		expect(document.querySelector("p")?.textContent).not.toBe("aThe complete answer");
+		drain(32);
 
 		// The fade spans linger briefly after the stream settles, so match the paragraph.
 		expect(document.querySelector("p")?.textContent).toBe("aThe complete answer");
 		expect(screen.getByRole("button", { name: "Copy message as markdown" })).toBeInTheDocument();
+	});
+
+	it("shows a finished reply whole when its unrevealed remainder is too long to play out", () => {
+		const view = render(<AssistantMessage message={message()} />);
+		const text = "a".padEnd(5_000, "x");
+		view.rerender(<AssistantMessage message={message({ text, streaming: true })} />);
+		runFrame(0);
+		view.rerender(<AssistantMessage message={message({ text, streaming: false })} />);
+		expect(document.querySelector("p")?.textContent).toBe(text);
+		expect(frames.size).toBe(0);
+	});
+
+	it("spreads bursts that arrive far apart over most of the gap between them", () => {
+		const view = render(<AssistantMessage message={message()} />);
+		view.rerender(<AssistantMessage message={message({ text: "a".padEnd(200, "x") })} />);
+		drain(0);
+		frameTime = 3_000;
+		const text = "a".padEnd(400, "x");
+		view.rerender(<AssistantMessage message={message({ text })} />);
+		runFrame(3_000);
+		runFrame(3_032);
+		// A 140ms settle would reveal about a fifth of the burst in one frame; a
+		// second-apart stream reveals only a few percent.
+		const shown = document.querySelector("p")?.textContent?.length ?? 0;
+		expect(shown - 200).toBeLessThan(20);
+		drain(3_032);
+		expect(document.querySelector("p")?.textContent).toBe(text);
 	});
 
 	it("hides message actions while text is still buffered", () => {

@@ -16,7 +16,7 @@ import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { captureRendererEvent } from "../lib/telemetry";
-import { CloudCpError, type CloudCpAgentProvider, type CloudCpChatModelsResponse } from "../lib/cloud-cp";
+import { CloudCpError, type CloudCpAgentProvider, type CloudCpChatModelsResponse, type CloudCpSession } from "../lib/cloud-cp";
 import {
 	cacheAgentReadiness,
 	ensureAgentReadiness,
@@ -54,7 +54,7 @@ import {
 import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
 import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
-import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
+import { STANDALONE_WORKSPACE_ID, toAgentProvider } from "../types/workspace";
 import { type EffortAvailability } from "./settings/EffortPicker";
 import { COMPOSER_MENU_WIDTH, TaskEffortPicker, TaskModelPicker } from "./TaskModelControls";
 import { useModelTuning } from "./settings/ModelTuningControls";
@@ -226,7 +226,13 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 					...(input.model ? { model: input.model } : {}),
 					...(input.effort ? { reasoningEffort: input.effort } : {}),
 					...(input.mode ? { interfaceMode: input.mode } : {}),
+					// Only a permission the user picked, as for a local task; without
+					// one the worker derives it from the session's mode.
+					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 				}, input.clientRequestId ? { idempotencyKey: input.clientRequestId } : undefined);
+				// The session's Chat composer shows, and its turns keep, what the task
+				// was started with, as a local task's chat does.
+				rememberCloudChatSettings(cloudOrg.id, session.id, session.harness, input);
 				// The control plane provisions the sandbox asynchronously; surface the
 				// new session on the board immediately.
 				seedCreatedFreestyleSession(queryClient, cloudBaseUrl, cloudOrg.id, session);
@@ -565,11 +571,22 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	// so its composer never asks for it.
 	const modelAuthIssue = !isCloudProject && revalidationWarning === undefined ? modelCatalogAuthIssue(localCatalog) : undefined;
 	useModelCatalogAuthRecovery(selectedAgent, hostId, modelAuthIssue);
-	// Settings → Harness → Models picks the models this machine offers; cloud VMs keep their own catalog.
+	// Settings → Harness → Models picks the models a picker offers, for Cloud
+	// tasks too: a switched-off model is left out of the Cloud catalog as well.
 	const { models: offeredModels } = useOfferedModels(selectedAgent, localCatalog?.models, {
 		hostId,
 		keep: [model, mode, projectModelForSelectedAgent, projectModeForSelectedAgent],
-		skip: isCloudProject,
+	});
+	const listedCloudModels = useMemo((): AgentModelOption[] | undefined => cloudCatalog?.models.map((item) => ({
+		id: item.id,
+		label: item.displayName,
+		isDefault: false,
+		efforts: item.efforts,
+		defaultEffort: item.defaultEffort,
+	})), [cloudCatalog]);
+	const { models: offeredCloudModels } = useOfferedModels(selectedAgent, listedCloudModels, {
+		keep: [model, mode, projectModelForSelectedAgent, rememberedModel],
+		skip: !isCloudProject,
 	});
 	const localModelCatalog: TaskComposerModelCatalog | undefined = localCatalog
 		? {
@@ -588,19 +605,13 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const keptCloudModels = [projectModelForSelectedAgent, rememberedModel].filter(isConcreteModelID).join("\n");
 	const cloudModels = useMemo((): AgentModelOption[] => {
 		if (cloudCatalog) {
-			const listed: AgentModelOption[] = cloudCatalog.models.map((item) => ({
-				id: item.id,
-				label: item.displayName,
-				isDefault: false,
-				efforts: item.efforts,
-				defaultEffort: item.defaultEffort,
-			}));
+			const listed = offeredCloudModels;
 			const kept = keptCloudModels === "" ? [] : keptCloudModels.split("\n");
 			const unlisted = kept.filter((id, index) => kept.indexOf(id) === index && !listed.some((item) => item.id === id));
 			return [...listed, ...unlisted.map((id) => ({ id, label: id, isDefault: false }))];
 		}
 		return localCatalogForCloud ? offeredModels.map((item) => ({ ...item, isDefault: false })) : NO_MODELS;
-	}, [cloudCatalog, keptCloudModels, localCatalogForCloud, offeredModels]);
+	}, [cloudCatalog, keptCloudModels, localCatalogForCloud, offeredCloudModels, offeredModels]);
 	const modelCatalog: TaskComposerModelCatalog | undefined = isCloudProject
 		? {
 				...(localCatalogForCloud ? localModelCatalog : undefined),
@@ -615,15 +626,20 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 	const catalogDefaultOption =
 		isCloudProject ? "" : catalogModels.find((item) => item.isDefault)?.id ?? "";
 	const catalogUsesModes = modelCatalog?.selectionMode === "mode";
-	// The model this user ran most recently.
+	// The model this user ran most recently. Cloud reports no last use per
+	// model; the newest Cloud session of this agent that named one stands in.
+	const cloudSessions = queryClient.getQueryData<CloudCpSession[]>([...cloudSessionsQueryKey, cloudBaseUrl, cloudOrg?.id ?? ""]);
+	// Only a model the control plane's catalog lists is picked for a Cloud task:
+	// this computer's models, listed for an older control plane, are suggestions.
+	const cloudPicksAllowed = !isCloudProject || cloudCatalog !== undefined;
 	const lastUsedOption = isCloudProject
-		? ""
+		? cloudPicksAllowed ? lastCloudSessionModel(cloudSessions, selectedAgent, catalogModels) : ""
 		: catalogModels
 			.filter((item) => item.lastUsedAt)
 			.sort((a, b) => Date.parse(b.lastUsedAt ?? "") - Date.parse(a.lastUsedAt ?? ""))[0]?.id ?? "";
 	// With nothing remembered, run, or configured, Claude Code opens on the newest Opus.
 	const claudeFallbackOption =
-		!isCloudProject && selectedAgent === "claude-code" && !catalogUsesModes
+		cloudPicksAllowed && selectedAgent === "claude-code" && !catalogUsesModes
 			? (splitClaudeModels(catalogModels).current.find((item) => /opus/i.test(modelChoiceLabel(item)))?.id ?? "")
 			: "";
 	const rememberedModelIsValid =
@@ -1029,7 +1045,10 @@ export function useTaskLaunch({ projectId, hostId }: { projectId?: string; hostI
 		model: (selectedModel || selectedMode) || undefined,
 		reasoningEffort: showEffort ? effectiveEffort || undefined : undefined,
 		// A session started without a permission choice runs in auto (applySpawnAgentConfig).
-		approvalMode: approvalMode ?? (APPROVAL_MODES.includes(projectPermissions as ApprovalMode) ? projectPermissions as ApprovalMode : "auto"),
+		// A Cloud task's runs in trusted mode, whose turns skip prompts unless one is picked.
+		approvalMode: approvalMode ?? (isCloudProject
+			? "bypass-permissions"
+			: APPROVAL_MODES.includes(projectPermissions as ApprovalMode) ? projectPermissions as ApprovalMode : "auto"),
 	};
 	const chooseTurnSettings = (next: TurnSettings) => {
 		if ((next.model ?? "") !== (turnSettings.model ?? "")) {
@@ -1267,6 +1286,42 @@ export function TaskComposer({
 }
 
 const APPROVAL_MODES: ApprovalMode[] = ["default", "accept-edits", "auto", "bypass-permissions"];
+
+/**
+ * The model of the newest Cloud session of this agent that named one, when the
+ * catalog still lists it: Cloud keeps no last use per model, and a session
+ * records the model it was started with.
+ */
+export function lastCloudSessionModel(sessions: CloudCpSession[] | undefined, agent: string, catalog: { id: string }[]): string {
+	const newest = (sessions ?? [])
+		.filter((session) => session.harness === agent && isConcreteModelID(session.model ?? "") && catalog.some((item) => item.id === session.model))
+		.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+	return newest?.model ?? "";
+}
+
+/**
+ * Seeds a new Cloud session's Chat settings (CloudSessionChatSurface reads this
+ * key) with what its task was started with, so its composer shows them. Only a
+ * picked approval mode is saved as the user's pick.
+ */
+function rememberCloudChatSettings(
+	orgId: string,
+	sessionId: string,
+	harness: string,
+	input: Pick<CreateTaskInput, "model" | "effort" | "approvalMode">,
+): void {
+	const saved = {
+		...(input.model ? { model: input.model } : {}),
+		...(input.effort ? { reasoningEffort: input.effort } : {}),
+		...(input.approvalMode ? { approvalMode: input.approvalMode, approvalModeChosen: true } : {}),
+	};
+	if (Object.keys(saved).length === 0) return;
+	try {
+		window.localStorage.setItem(`cloud-chat-settings:${orgId}:${sessionId}:${toAgentProvider(harness)}`, JSON.stringify(saved));
+	} catch {
+		// The composer then shows the session's own defaults.
+	}
+}
 
 // Both local and cloud list only harnesses that can run, plus a way to manage
 // them: local logins, or cloud connections for cloud projects.

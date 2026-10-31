@@ -2583,7 +2583,7 @@ describe("TaskComposer", () => {
 });
 
 describe("TaskComposer Cloud model catalog", () => {
-	it("lists the release catalog without a live worker and starts on the default", async () => {
+	it("lists the release catalog without a live worker and opens Claude Code on the newest Opus", async () => {
 		const queryClient = cloudFixture("claude-code");
 		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
 			{ id: "claude-sonnet-test", displayName: "Sonnet", default: true, efforts: ["low", "medium", "high"] },
@@ -2597,15 +2597,46 @@ describe("TaskComposer Cloud model catalog", () => {
 		expect(screen.getByRole("menuitem", { name: "Use project or agent default" })).toBeInTheDocument();
 		expect(screen.getByText("Models for Claude Code 2.1.287")).toBeInTheDocument();
 		await userEvent.keyboard("{Escape}");
-		// The catalog's own default is the agent's, not a pick made for the user.
-		expect(picker).toHaveTextContent("Project or agent default");
-		expect(screen.queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
+		// With nothing remembered, run or configured, Claude Code opens on Opus, as a local task does.
+		await waitFor(() => expect(picker).toHaveTextContent("Opus"));
 		fireEvent.change(task(), { target: { value: "Use the default" } });
 		fireEvent.click(startTask());
 		await waitFor(() => expect(h.cloudCreateSession).toHaveBeenCalled());
-		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("model");
+		expect(h.cloudCreateSession.mock.calls[0][1]).toMatchObject({ model: "claude-opus-test" });
 		expect(h.cloudCreateSession.mock.calls[0][1]).not.toHaveProperty("reasoningEffort");
 		expect(localModelReads()).toEqual([]);
+	});
+
+	it("opens a Cloud task on the model its agent's newest Cloud session ran", async () => {
+		const queryClient = cloudFixture("claude-code");
+		queryClient.setQueryData(["cloud-sessions", h.cloudBaseUrl, h.cloudOrgId], [
+			{ id: "s-old", harness: "claude-code", model: "claude-opus-test", createdAt: "2026-01-01T00:00:00Z" },
+			{ id: "s-new", harness: "claude-code", model: "claude-sonnet-test", createdAt: "2026-02-01T00:00:00Z" },
+			{ id: "s-codex", harness: "codex", model: "gpt-5", createdAt: "2026-03-01T00:00:00Z" },
+		]);
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "claude-sonnet-test", displayName: "Sonnet", default: true },
+			{ id: "claude-opus-test", displayName: "Opus", default: false },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await waitFor(() => expect(picker).toHaveTextContent("Sonnet"));
+	});
+
+	it("leaves models switched off in Settings out of the Cloud catalog", async () => {
+		const queryClient = cloudFixture("claude-code");
+		h.get.mockImplementation(async (path: string) => path === "/api/v1/settings"
+			? { data: { defaultSessionMode: "tui", chatHarnesses: [], harnessDefaults: { "claude-code": { disabledModels: ["claude-sonnet-test"] } } } }
+			: { data: { status: "ok", project: { config: {} } } });
+		h.cloudListUserAgentModels.mockResolvedValue(releaseCatalog([
+			{ id: "claude-sonnet-test", displayName: "Sonnet", default: true },
+			{ id: "claude-opus-test", displayName: "Opus", default: false },
+		]));
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		expect(await screen.findByRole("menuitem", { name: "Opus" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Sonnet" })).not.toBeInTheDocument();
 	});
 
 	it("says when Cloud workers verified the catalog and sends the chosen model and effort", async () => {

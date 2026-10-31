@@ -6,7 +6,7 @@ import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
 import type { WorkspaceSession } from "../../types/workspace";
-import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, loadCloudChatEvents, toSnapshot } from "./CloudSessionChatSurface";
+import { appendCloudEvents, CloudSessionChatSurface, cloudStartupChecklist, loadCloudChatEvents, mergeCloudEvents, toSnapshot } from "./CloudSessionChatSurface";
 
 const cloudMocks = vi.hoisted(() => ({
 	listChatEvents: vi.fn(),
@@ -66,6 +66,44 @@ describe("CloudSessionChatSurface", () => {
 		expect(calls[0][2].text).toContain('"cloud.ts"#L1-L1');
 		expect(calls[0][3]).toEqual({idempotencyKey:"capture-retry"});
 	});
+	it("sends quotes and captures inlined for the agent and as content blocks for the transcript", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [
+			{ sessionId: session.id, sequence: 1, type: "chat.user_message", payload: { text: "Why?", turnId: "turn-1" }, createdAt: session.updatedAt },
+			{ sessionId: session.id, sequence: 2, type: "chat.assistant_delta", payload: { text: "Because of the cache.", turnId: "turn-1", itemId: "reply" }, createdAt: session.updatedAt },
+		], hasMore: false, nextAfter: 2 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.sendSessionMessage.mockReset()
+			.mockRejectedValueOnce(new CloudCpError("The request body is invalid.", { status: 400, code: "invalid_request" }))
+			.mockResolvedValue({ event: {} });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(2));
+		const props = cloudMocks.chatProps.mock.lastCall?.[0];
+		expect(props.excerptsEnabled).toBe(true);
+		expect(props.fileReferencesEnabled).toBe(true);
+		expect(props.snapshot.supportsFileReferences).toBe(true);
+		const excerpt = { id: "ex-1", order: 0, conversationId: `cloud:${session.id}`, messageId: "cloud-assistant-turn-1:reply", revision: 1, text: "the cache", role: "assistant" as const };
+		await props.onSend("Explain this", undefined, "quote-1", [excerpt], undefined, "Explain this");
+		const [first, second] = cloudMocks.sendSessionMessage.mock.calls;
+		expect(first[2].text).toContain("Selected text:\n---\nthe cache");
+		expect(first[2].text).toContain("Full paired turn:\nUser:\nWhy?\nAssistant:\nBecause of the cache.");
+		expect(first[2].displayText).toBe("Explain this");
+		expect(first[2].content).toEqual([expect.objectContaining({ type: "excerpt", text: "the cache", sourceMessageId: excerpt.messageId })]);
+		// An older control plane refuses the display; the same text goes alone, with the same key.
+		expect(second[2]).not.toHaveProperty("content");
+		expect(second[2].text).toBe(first[2].text);
+		expect(second[3]).toEqual({ idempotencyKey: "quote-1" });
+	});
+
+	it("shows a message with recorded quotes as typed, with its quotes beside it", () => {
+		const snapshot = toSnapshot(session, [{
+			sessionId: session.id, sequence: 1, type: "chat.user_message",
+			payload: { text: "Explain this\n\nReferenced chat excerpt...", displayText: "Explain this", content: [{ type: "excerpt", text: "the cache", annotationId: "ex-1", sourceMessageId: "m-1" }, { type: "unknown" }] },
+			createdAt: session.updatedAt,
+		}]);
+		expect(snapshot.items[0]).toMatchObject({ text: "Explain this", content: [{ type: "excerpt", text: "the cache", annotationId: "ex-1", sourceMessageId: "m-1" }] });
+	});
+
 	it("attributes delivered worker reports as automation without changing the agent prompt", () => {
 		const events: CloudCpClientEvent[] = [{
 			sessionId: session.id, sequence: 1, type: "chat.user_message",
@@ -1391,6 +1429,58 @@ describe("CloudSessionChatSurface", () => {
 		const merged = appendCloudEvents(existing, [event(500), event(501)]);
 		expect(merged.map((item) => item.sequence)).toEqual([1, 500, 501]);
 		expect(merged.at(-1)?.sequence).toBe(501);
+	});
+
+	it("merges streamed and polled events in order without dropping either side's", () => {
+		const event = (sequence: number): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.assistant_delta",
+			payload: { text: String(sequence) }, createdAt: session.updatedAt,
+		});
+		// The stream got further than the page the poll is about to write.
+		const streamed = [event(1), event(2), event(3), event(4)];
+		const polled = [event(1), event(2), event(3)];
+		expect(mergeCloudEvents(streamed, polled)).toBe(streamed);
+		expect(mergeCloudEvents(polled, streamed).map((item) => item.sequence)).toEqual([1, 2, 3, 4]);
+		expect(mergeCloudEvents([event(1), event(4)], [event(2), event(3)]).map((item) => item.sequence)).toEqual([1, 2, 3, 4]);
+		expect(mergeCloudEvents([event(1)], [event(2), event(3)]).map((item) => item.sequence)).toEqual([1, 2, 3]);
+	});
+
+	it("carries the worker's plan, context use, subagent parents and approval subject into the snapshot", () => {
+		const event = (sequence: number, type: string, payload: unknown): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type, payload, createdAt: session.updatedAt,
+		});
+		const snapshot = toSnapshot({ ...session, provider: "claude-code" }, [
+			event(1, "chat.user_message", { text: "Plan it", turnId: "turn-1" }),
+			event(2, "chat.turn_started", { turnId: "turn-1" }),
+			event(3, "chat.activity", { turnId: "turn-1", activity: { id: "plan", kind: "turn_plan", status: "completed", detail: { plan: { steps: [{ text: "Read", status: "completed" }, { text: "Write", status: "in_progress" }] } } } }),
+			event(4, "chat.activity", { turnId: "turn-1", activity: { id: "plan", kind: "turn_plan", status: "completed", detail: { plan: { explanation: "Two steps", steps: [{ text: "Read", status: "completed" }, { text: "Write", status: "completed" }], spansTurns: true } } } }),
+			event(5, "chat.activity", { turnId: "turn-1", activity: { id: "usage", kind: "usage", status: "completed", detail: { usage: { contextUsed: 50_000, contextWindow: 200_000, inputTokens: 10, outputTokens: 5, cachedTokens: 0, totalTokens: 15 } } } }),
+			event(6, "chat.activity", { turnId: "turn-1", activity: { id: "task-1", kind: "mcp_tool", status: "running", summary: "Task", detail: { toolName: "Task" } } }),
+			event(7, "chat.activity", { turnId: "turn-1", activity: { id: "cmd-1", kind: "command", status: "completed", summary: "ls", detail: { command: "ls", exitCode: 0, parentProviderItemId: "task-1" } } }),
+			event(8, "chat.approval_requested", { turnId: "turn-1", requestId: "req-1", summary: "Edit main.go", subjectKind: "file_change", decisions: [] }),
+		]);
+		expect(snapshot.turns[0].plan).toEqual({ explanation: "Two steps", steps: [{ text: "Read", status: "completed" }, { text: "Write", status: "completed" }], spansTurns: true });
+		expect(snapshot.usage).toMatchObject({ contextUsed: 50_000, contextWindow: 200_000 });
+		expect(snapshot.items.some((item) => item.kind === "activity" && (item.activityKind as string) === "turn_plan")).toBe(false);
+		const command = snapshot.items.find((item) => item.kind === "activity" && item.activityKind === "command");
+		expect(command).toMatchObject({ providerItemId: "cmd-1", detail: { exitCode: 0, parentProviderItemId: "task-1" } });
+		const approval = snapshot.items.find((item) => item.kind === "activity" && item.activityKind === "approval");
+		expect(approval).toMatchObject({ detail: { subjectKind: "file_change" } });
+	});
+
+	it("marks a stopped turn's unfinished steps as stopped, not of unknown outcome", () => {
+		const event = (sequence: number, type: string, payload: unknown): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type, payload, createdAt: session.updatedAt,
+		});
+		const steps = [
+			event(1, "chat.user_message", { text: "Go", turnId: "turn-1" }),
+			event(2, "chat.turn_started", { turnId: "turn-1" }),
+			event(3, "chat.activity", { turnId: "turn-1", activity: { id: "cmd-1", kind: "command", status: "running", summary: "sleep", detail: { command: "sleep 100" } } }),
+		];
+		const stopped = toSnapshot(session, [...steps, event(4, "chat.turn_interrupted", { turnId: "turn-1" })]);
+		expect(stopped.items.find((item) => item.kind === "activity")).toMatchObject({ status: "cancelled" });
+		const failed = toSnapshot(session, [...steps, event(4, "chat.turn_aborted", { turnId: "turn-1", error: "boom" })]);
+		expect(failed.items.find((item) => item.kind === "activity")).toMatchObject({ status: "recovered" });
 	});
 
 	it("continues a long history from its last sequence", async () => {

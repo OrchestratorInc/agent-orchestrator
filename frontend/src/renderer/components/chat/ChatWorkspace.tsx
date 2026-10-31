@@ -425,6 +425,8 @@ export interface ChatWorkspaceProps {
 		clientMessageId?: string,
 		excerpts?: ChatDraftExcerptReference[],
 		fileReferences?: ChatFileReference[],
+		/** With text delivery, the message as typed, before its file captures were inlined into `text`. */
+		displayText?: string,
 	) => void | Promise<unknown>;
 	onDecide?: (requestId: string, decisionId: string) => void;
 	onResolveInput?: (
@@ -548,6 +550,8 @@ export interface ChatWorkspaceProps {
 	skills?: ChatSkill[];
 	/** Worktree paths offered for `@`. */
 	filePaths?: string[];
+	/** Told what follows "@" in the composer, for files that are searched rather than listed (see ChatComposer). */
+	onFileQuery?: (query: string) => void;
 	/** The path list was capped by the daemon rather than being all of them. */
 	filePathsTruncated?: boolean;
 	/** Renderer-only human messages awaiting their exact durable counterpart. */
@@ -789,6 +793,7 @@ function ChatWorkspaceContent({
 	skills,
 	filePaths,
 	filePathsTruncated,
+	onFileQuery,
 	localEchos,
 	onStageAttachments,
 	nativeImages,
@@ -1144,7 +1149,7 @@ function ChatWorkspaceContent({
 	// Keep the dispatch target with this composer instance while attachment staging
 	// awaits. A newer queue editor must not redirect an older ordinary send.
 	const handleComposerSend = useCallback(
-		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[]) => {
+		async (text: string, attachments?: Parameters<NonNullable<typeof onSend>>[1], clientMessageId?: string, retainedContent?: number[], excerpts?: ChatDraftExcerptReference[], fileReferences?: ChatFileReference[], displayText?: string) => {
 			if (queueEdit) {
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
@@ -1195,7 +1200,7 @@ function ChatWorkspaceContent({
 			if (wasConversationEmpty.current && composerBoxRef.current) {
 				composerCenteredTopRef.current = composerBoxRef.current.getBoundingClientRect().top;
 			}
-			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences);
+			return onSend?.(text, attachments, clientMessageId, excerpts, fileReferences, displayText);
 		},
 		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
@@ -2053,6 +2058,7 @@ function ChatWorkspaceContent({
 										skills={skills}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
+										onFileQuery={onFileQuery}
 										onStageAttachments={newWorkDisabled ? undefined : onStageAttachments}
 										holdAttachments={newWorkDisabled ? undefined : holdAttachments}
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
