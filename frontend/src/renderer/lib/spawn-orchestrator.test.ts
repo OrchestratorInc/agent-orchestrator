@@ -123,6 +123,8 @@ describe("spawnOrchestrator", () => {
 		expect(captureMock).toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_failed", {
 			project_id: "proj",
 			source: "topbar",
+			error_code: undefined,
+			http_status: 500,
 		});
 		expect(captureMock).not.toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_succeeded", expect.anything());
 	});

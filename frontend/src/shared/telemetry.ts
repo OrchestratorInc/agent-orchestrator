@@ -23,6 +23,8 @@ export type TelemetryInstallContext = {
 export type TelemetryBootstrap = {
 	distinctId: string;
 	installId: string;
+	daysSinceInstall?: number;
+	lifetimeSessions?: number;
 	appVersion: string;
 	platform: NodeJS.Platform;
 	/**
@@ -235,9 +237,18 @@ export async function buildTelemetryBootstrap(
 	// This policy controls failure reporting only. Existing anonymous PostHog
 	// product analytics retain their own packaged/env gate above.
 	const eventsEnabled = policy.eventsEnabled && policy.acknowledged;
+	const installId = await loadOrCreateTelemetryInstallId(dataDir);
+	let daysSinceInstall: number | undefined;
+	try {
+		const installedAt = (await stat(path.join(dataDir, "telemetry_install_id"))).mtimeMs;
+		if (installedAt > 0 && installedAt <= Date.now()) daysSinceInstall = Math.floor((Date.now() - installedAt) / 86_400_000);
+	} catch {
+		// An unreadable creation time is unknown.
+	}
 	return {
 		distinctId: await bootstrapDistinctId(dataDir),
-		installId: await loadOrCreateTelemetryInstallId(dataDir),
+		installId,
+		...(daysSinceInstall === undefined ? {} : { daysSinceInstall }),
 		appVersion,
 		platform,
 		disabledEvents: parseDisabledEvents(env.AO_TELEMETRY_DISABLED_EVENTS),

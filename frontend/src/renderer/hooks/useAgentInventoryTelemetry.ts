@@ -20,6 +20,8 @@ export function useAgentInventoryTelemetry(): void {
   useEffect(() => {
     if (!data || reported.current) return;
     reported.current = true;
-    void captureRendererEvent("ao.renderer.agents_available", buildAgentInventory(data));
+    const inventory = buildAgentInventory(data);
+    void captureRendererEvent("ao.renderer.agents_available", inventory);
+    if (inventory.installed_count === 0) void captureRendererEvent("ao.setup.agent_missing", { reason: "none_installed" });
   }, [data]);
 }

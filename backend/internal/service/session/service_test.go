@@ -3391,6 +3391,29 @@ func TestSpawnEmitsFirstSessionOnboardingAndDuration(t *testing.T) {
 	}
 }
 
+func TestStandaloneSessionTelemetryKind(t *testing.T) {
+	rec := domain.SessionRecord{ID: "standalone-1", Kind: domain.KindWorker, Harness: domain.HarnessCodex}
+	st := newFakeStore()
+	st.sessions[rec.ID] = rec
+	sink := &fakeTelemetrySink{}
+	svc := NewWithDeps(Deps{Store: st, Telemetry: sink})
+	svc.emitSpawned(context.Background(), rec, 1, false, false)
+	svc.emitSpawnFailed(context.Background(), ports.SpawnConfig{Kind: domain.KindWorker, Harness: domain.HarnessCodex}, errors.New("launch failed"), 1)
+	originalCapture := captureRelaunchError
+	captureRelaunchError = func(context.Context, error, map[string]string, string) {}
+	t.Cleanup(func() { captureRelaunchError = originalCapture })
+	cause := &sessionmanager.RelaunchError{Step: "runtime", Err: errors.New("launch failed")}
+	svc.emitRelaunchFailed(context.Background(), "resume_agent", rec.ID, cause, apierr.Conflict("AGENT_RESUME_FAILED", "Agent resume failed", nil))
+	if len(sink.events) != 3 {
+		t.Fatalf("events = %d, want three session outcomes", len(sink.events))
+	}
+	for _, ev := range sink.events {
+		if got := ev.Payload["kind"]; got != "standalone" {
+			t.Fatalf("%s kind = %#v, want standalone", ev.Name, got)
+		}
+	}
+}
+
 type fakeTracker struct {
 	issue domain.Issue
 	err   error

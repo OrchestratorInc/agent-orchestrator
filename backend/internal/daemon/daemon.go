@@ -1068,6 +1068,7 @@ func Run(buildVersion string) error {
 		SessionSteps:       lcStack.LCM,
 		Telemetry:          telemetrySink,
 		TelemetryIdentity:  telemetryIdentity,
+		LifetimeSessions:   store.LifetimeSessions,
 		UsageFlush: func(ctx context.Context) {
 			if usage != nil {
 				usage.flush(ctx, false)
@@ -1275,7 +1276,7 @@ func Run(buildVersion string) error {
 		}()
 		go func() {
 			defer sentryobs.RecoverBackground()
-			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, telemetrySink, log)
+			runVersionRefreshSweep(ctx, cfg, settingsSvc, sessMgr, systemInstall, log)
 		}()
 	})
 
