@@ -147,7 +147,7 @@ func (s *Service) reconcileBranchTarget(ctx context.Context, writer branchStateW
 	}
 
 	root := rec.Metadata.WorkspacePath
-	var state domain.SessionBranchState
+	state := domain.SessionBranchState{HeadSHA: local}
 	if base != "" {
 		commits, ok := gitRevListCount(ctx, root, base+".."+local)
 		if !ok {

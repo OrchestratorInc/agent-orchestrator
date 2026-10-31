@@ -50,6 +50,7 @@ type GitActionPlan = { primary: SessionGitActionKind; menu: SessionGitActionKind
 
 export function SessionBranchSummary({
 	hostId,
+	mergedPRHeadShas,
 	onOpenFiles,
 	openPRNumber,
 	pullRequests,
@@ -57,6 +58,8 @@ export function SessionBranchSummary({
 	title,
 }: {
 	hostId?: string;
+	/** Head commits of the session's merged PRs. */
+	mergedPRHeadShas: readonly string[];
 	onOpenFiles: () => void;
 	/** The open or draft PR that new commits would update. */
 	openPRNumber?: number;
@@ -84,7 +87,7 @@ export function SessionBranchSummary({
 		// head_fallback compares against HEAD because the base is unknown.
 		base: manifest.data?.compareMode === "head_fallback" ? undefined : displayBaseRef(manifest.data?.compareBaseRef),
 	};
-	const plan = gitActionPlan(facts, openPRNumber);
+	const plan = gitActionPlan(facts, openPRNumber, mergedPRHeadShas);
 
 	const send = useMutation({
 		mutationFn: async (kind: SessionGitActionKind) => {
@@ -315,7 +318,7 @@ function commitsRowView(facts: GitFacts, t: TFunction): { label: string; note?: 
 	return { label, note: t("inspector.git.pushed"), noteTone: "muted" };
 }
 
-export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined): GitActionPlan | null {
+export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined, mergedPRHeadShas: readonly string[] = []): GitActionPlan | null {
 	if (!facts.loaded) return null;
 	const dirty = facts.uncommitted.length > 0;
 	const unpushed = facts.branch?.unpushed ?? 0;
@@ -324,6 +327,10 @@ export function gitActionPlan(facts: GitFacts, openPRNumber: number | undefined)
 		if (unpushed > 0) return { primary: "push", menu: [] };
 		return null;
 	}
+	// A merged PR already shipped this exact commit. Commit counts cannot tell:
+	// squash and rebase merges leave the branch commits outside the base.
+	const head = facts.branch?.headSha;
+	if (!dirty && head && mergedPRHeadShas.includes(head)) return null;
 	if (dirty) return { primary: "createPR", menu: ["commit", "commitPush", "createDraftPR"] };
 	if (unpushed > 0) return { primary: "createPR", menu: ["push", "createDraftPR"] };
 	if (facts.branch && facts.branch.commits > 0) return { primary: "createPR", menu: ["createDraftPR"] };
