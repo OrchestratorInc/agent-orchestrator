@@ -7,10 +7,10 @@ import {
 	connect as http2Connect, constants as http2Constants, createSecureServer, createServer as createHttp2Server,
 	type Http2SecureServer, type Http2Server, type Http2ServerRequest, type Http2ServerResponse, type ServerHttp2Session,
 } from "node:http2";
-import { WebSocketServer, createWebSocketStream, type WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 import * as agentViewer from "./agent-viewer";
 import { previewCertificate } from "./preview-certificate";
-import { startRemoteProxy, type ActiveProxy } from "./remote-proxy";
+import { startRemoteProxy, webSocketTunnelStream, type ActiveProxy } from "./remote-proxy";
 
 // App previews are HTTPS. Trust exactly the proxy's preview certificate; its
 // "*.localhost" name is a TLD wildcard Node won't match, which Electron's
@@ -1179,7 +1179,7 @@ describe("startRemoteProxy through an HTTPS host's tunnel", () => {
 				return;
 			}
 			state.tunnels++;
-			sockets.handleUpgrade(req, socket, head, (ws) => inner.emit("connection", createWebSocketStream(ws)));
+			sockets.handleUpgrade(req, socket, head, (ws) => inner.emit("connection", webSocketTunnelStream(ws)));
 		});
 		await new Promise<void>((resolve) => secureUpstream?.listen(0, "127.0.0.1", resolve));
 		state.port = (secureUpstream.address() as AddressInfo).port;
@@ -1256,12 +1256,12 @@ describe("startRemoteProxy when the upstream fails", () => {
 	// AO's remote listener speaks HTTP/2 without TLS. drop() closes every
 	// connection to it, as a daemon restart does; onIdentity decides when the
 	// identity probe is answered.
-	async function startH2Daemon(handler: DaemonHandler, onIdentity = (answer: () => void) => answer()): Promise<number> {
+	async function startH2Daemon(handler: DaemonHandler, onIdentity = (answer: () => void, _res: Http2ServerResponse) => answer()): Promise<number> {
 		const sockets = new Set<Socket>();
 		const drop = () => { for (const socket of sockets) socket.destroy(); };
 		const server = createHttp2Server((req, res) => {
 			if (req.url !== "/api/v1/identity") return handler(req, res, drop);
-			onIdentity(() => res.end(identity));
+			onIdentity(() => res.end(identity), res);
 		});
 		server.on("connection", (socket: Socket) => {
 			sockets.add(socket);
@@ -1296,7 +1296,15 @@ describe("startRemoteProxy when the upstream fails", () => {
 			socket.once("close", () => connections.delete(socket));
 		});
 		host.on("session", (session) => directSessions.add(session));
-		const state = { port: 0, upgrades: 0, dropDirect: () => { for (const session of directSessions) session.destroy(); } };
+		const state = {
+			port: 0,
+			upgrades: 0,
+			dropDirect: () => { for (const session of directSessions) session.destroy(); },
+			// Ends every connection with a TCP reset, as a network change does.
+			reset: () => { for (const socket of connections) socket.resetAndDestroy(); },
+			// Closes every tunnel with a close frame, as a daemon shutting down does.
+			closeTunnels: () => { for (const tunnel of tunnels) tunnel.close(); },
+		};
 		host.on("upgrade", (req: IncomingMessage, socket: Socket, head: Buffer) => {
 			state.upgrades++;
 			if (options.answerUpgrades === false) return;
@@ -1305,7 +1313,7 @@ describe("startRemoteProxy when the upstream fails", () => {
 				tunnels.add(ws);
 				ws.once("close", () => tunnels.delete(ws));
 				if (options.holdMs) holdSends(ws, options.holdMs);
-				const stream = createWebSocketStream(ws);
+				const stream = webSocketTunnelStream(ws);
 				stream.on("error", () => undefined);
 				inner.emit("connection", stream);
 			});
@@ -1474,7 +1482,119 @@ describe("startRemoteProxy when the upstream fails", () => {
 		const cut = await fetch(`${proxy.base}/api/v1/cut`);
 		await expect(within(cut.text())).rejects.toThrow();
 		expect(await (await fetch(`${proxy.base}/api/v1/projects`)).json()).toEqual({ proto: "2.0" });
-		expect(host.upgrades).toBe(3);
+		// The cut-off GET to /slow went once more, over a tunnel of its own.
+		expect(host.upgrades).toBe(4);
+	});
+
+	// Collects uncaught exceptions for the rest of the test.
+	function catchUncaught(): Error[] {
+		const uncaught: Error[] = [];
+		const onUncaught = (error: Error) => uncaught.push(error);
+		process.prependListener("uncaughtException", onUncaught);
+		cleanups.push(() => process.off("uncaughtException", onUncaught));
+		return uncaught;
+	}
+
+	it("opens a new tunnel after a reset, without writing into the old one", async () => {
+		// A reset leaves ws unable to end a tunnel's stream. Any frame a session
+		// then wrote into it threw ERR_INTERNAL_ASSERTION, uncaught: the proxy's
+		// session and the host's alike.
+		const uncaught = catchUncaught();
+		let events: Http2ServerResponse | undefined;
+		const host = await startTunnelDaemon((req, res) => {
+			if (req.url !== "/api/v1/events") return void res.end(JSON.stringify({ proto: req.httpVersion }));
+			events = res;
+			res.writeHead(200, { "content-type": "text/event-stream" });
+			res.write(": ready\n\n");
+		});
+		proxy = await startRemoteProxy(daemonEntry(`https://127.0.0.1:${host.port}`), undefined, fast);
+		const reader = (await fetch(`${proxy.base}/api/v1/events`)).body!.getReader();
+		await reader.read();
+		host.reset();
+		await expect(within(reader.read())).rejects.toThrow();
+		// The host has one more event for the stream it lost.
+		events?.write("data: late\n\n", () => undefined);
+		const next = await within(fetch(`${proxy.base}/api/v1/projects`));
+		expect(next === "hung" ? "hung" : await next.json()).toEqual({ proto: "2.0" });
+		// Past two ping intervals, when a stale session would have been destroyed.
+		await new Promise((resolve) => setTimeout(resolve, fast.pingMs * 2.5));
+		expect(uncaught.map((error) => error.stack)).toEqual([]);
+		expect(host.upgrades).toBe(2);
+		expect(warned).toContainEqual(expect.stringContaining(`upstream 127.0.0.1:${host.port} tunnel WebSocket closed with code 1006`));
+	});
+
+	it("delivers an answer the host sent just before closing its tunnel", async () => {
+		// While one of its writes is in flight (here a slow uplink), a session
+		// stops reading, and the tunnel holds what arrives meanwhile, the host's
+		// last answer and its close included.
+		const host = await startTunnelDaemon((req, res) => {
+			res.end(JSON.stringify({ last: req.method }));
+			if (req.method === "DELETE") setTimeout(() => host.closeTunnels(), 20);
+		});
+		// Default timing: pings must outlast the slow uplink.
+		proxy = await startRemoteProxy(daemonEntry(`https://127.0.0.1:${host.port}`));
+		expect((await fetch(`${proxy.base}/api/v1/projects`)).status).toBe(200);
+		const send = WebSocket.prototype.send;
+		vi.spyOn(WebSocket.prototype, "send").mockImplementation(function (this: WebSocket, data: unknown, callback?: unknown) {
+			// The proxy's end of the tunnel (a client WebSocket has a URL).
+			if (this.url === undefined || typeof callback !== "function") return send.call(this, data as Buffer, {}, callback as () => void);
+			send.call(this, data as Buffer, {}, (error?: Error) => void setTimeout(() => callback(error), 300));
+		} as typeof send);
+		// A DELETE without a body: all headers, so the write in flight is its
+		// only one, and never sent twice, so only the first answer can count.
+		const answer = await within(fetch(`${proxy.base}/api/v1/sessions/ao-1`, { method: "DELETE" }));
+		expect(answer === "hung" ? "hung" : [answer.status, await answer.json()]).toEqual([200, { last: "DELETE" }]);
+	});
+
+	it("answers 502 unreachable for a host it can't reach or that never answers, unverified for one that answers otherwise", async () => {
+		const gone = createNetServer();
+		await new Promise<void>((resolve) => gone.listen(0, "127.0.0.1", resolve));
+		const port = (gone.address() as AddressInfo).port;
+		await new Promise<void>((resolve) => gone.close(() => resolve()));
+		// A captive portal answers, with a redirect.
+		const portal = await startUpstream(() => ({ status: 302, body: "", headers: { location: "http://portal.invalid/" } }));
+		// Or the identity probe gets no answer in time.
+		let stall = false;
+		const realFetch = globalThis.fetch;
+		vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => stall && String(input).endsWith("/api/v1/identity")
+			? Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError"))
+			: realFetch(input, init));
+		const answers: string[] = [];
+		for (const [url, stalls] of [
+			[`https://127.0.0.1:${port}`, false],
+			[`http://127.0.0.1:${port}`, false],
+			[`https://127.0.0.1:${port}`, true],
+			[`http://127.0.0.1:${portal.port}`, false],
+		] as const) {
+			stall = stalls;
+			proxy = await startRemoteProxy(daemonEntry(url), undefined, fast);
+			const response = await fetch(`${proxy.base}/api/v1/projects`);
+			answers.push(`${response.status} ${(await response.json()).code}`);
+			await proxy.close();
+			proxy = undefined;
+		}
+		expect(answers).toEqual(["502 UPSTREAM_UNAVAILABLE", "502 UPSTREAM_UNAVAILABLE", "502 UPSTREAM_UNAVAILABLE", "502 HOST_IDENTITY_UNVERIFIED"]);
+		// What failed, not only "fetch failed".
+		expect(warned).toContainEqual(expect.stringContaining("(fetch failed: ECONNREFUSED); answering 502"));
+		expect(warned.filter((line) => line.includes("identity check failed"))).toEqual([expect.stringContaining("(fetch failed: unexpected redirect)")]);
+	});
+
+	it("sends a GET again, not a DELETE, when a reset cut its tunnel before the answer", async () => {
+		const seen: string[] = [];
+		const host = await startTunnelDaemon((req, res) => {
+			seen.push(req.method);
+			// The first try of each is cut off by a reset.
+			if (seen.filter((method) => method === req.method).length === 1) return void host.reset();
+			res.end(JSON.stringify({ method: req.method }));
+		});
+		proxy = await startRemoteProxy(daemonEntry(`https://127.0.0.1:${host.port}`), undefined, fast);
+		const get = await within(fetch(`${proxy.base}/api/v1/projects`));
+		expect(get === "hung" ? "hung" : [get.status, await get.json()]).toEqual([200, { method: "GET" }]);
+		// Without a body, so only its method keeps it from going twice.
+		const deleted = await within(fetch(`${proxy.base}/api/v1/sessions/ao-1`, { method: "DELETE" }));
+		expect(deleted === "hung" ? "hung" : [deleted.status, (await deleted.json()).code]).toEqual([502, "UPSTREAM_UNAVAILABLE"]);
+		expect(seen).toEqual(["GET", "GET", "DELETE"]);
+		expect(warned).toContainEqual(expect.stringMatching(/failed on GET \/api\/v1\/projects \(.+\); sending it again$/));
 	});
 
 	it("cancels the upstream stream when the browser cancels a preview stream", async () => {
@@ -1541,10 +1661,68 @@ describe("startRemoteProxy when the upstream fails", () => {
 		proxy = await startRemoteProxy(daemonEntry(`http://127.0.0.1:${relay.port}`), undefined, fast);
 		expect((await fetch(`${proxy.base}/api/v1/projects`)).status).toBe(200);
 		relay.silence();
-		const stalled = await within(fetch(`${proxy.base}/api/v1/projects`));
+		// A POST, which is not sent again (even without a body), fails with the session...
+		const stalled = await within(fetch(`${proxy.base}/api/v1/projects`, { method: "POST" }));
 		expect(stalled === "hung" ? "hung" : stalled.status).toBe(502);
-		// A fresh session, over a fresh connection.
+		// ...and the next request takes a fresh session, over a fresh connection.
 		expect((await fetch(`${proxy.base}/api/v1/projects`)).status).toBe(200);
+		relay.silence();
+		// A GET the silence cut off goes again over a fresh connection.
+		const retried = await within(fetch(`${proxy.base}/api/v1/projects`));
+		expect(retried === "hung" ? "hung" : retried.status).toBe(200);
+		expect(warned).toContainEqual(expect.stringContaining("on GET /api/v1/projects (upstream stopped answering pings); sending it again"));
+	});
+
+	it("keeps HTTP/2 for a LAN host whose restart refused a GET's retry", async () => {
+		const sockets = new Set<Socket>();
+		const daemon = createHttp2Server((req, res) => {
+			if (req.url === "/api/v1/identity") return void res.end(identity);
+			if (req.url !== "/api/v1/slow") return void res.end(JSON.stringify({ proto: req.httpVersion }));
+			// A restart: the daemon stops listening and drops every connection.
+			daemon.close();
+			for (const socket of sockets) socket.destroy();
+		});
+		daemon.on("connection", (socket: Socket) => {
+			sockets.add(socket);
+			socket.once("close", () => sockets.delete(socket));
+		});
+		await new Promise<void>((resolve) => daemon.listen(0, "127.0.0.1", resolve));
+		const { port } = daemon.address() as AddressInfo;
+		cleanups.push(() => {
+			for (const socket of sockets) socket.destroy();
+			return new Promise<void>((resolve) => daemon.close(() => resolve()));
+		});
+		proxy = await startRemoteProxy(daemonEntry(`http://127.0.0.1:${port}`));
+		// The GET goes again at once, and finds the daemon down.
+		const cut = await within(fetch(`${proxy.base}/api/v1/slow`));
+		expect(cut === "hung" ? "hung" : [cut.status, (await cut.json()).code]).toEqual([502, "UPSTREAM_UNAVAILABLE"]);
+		await new Promise<void>((resolve) => daemon.listen(port, "127.0.0.1", resolve));
+		expect(await (await fetch(`${proxy.base}/api/v1/projects`)).json()).toEqual({ proto: "2.0" });
+	});
+
+	it("opens no upstream session after close(), not even for a request that was waiting on one", async () => {
+		let identities = 0;
+		let answerFirst!: () => void;
+		let asked!: () => void;
+		const verifying = new Promise<void>((resolve) => { asked = resolve; });
+		const port = await startH2Daemon((_req, res) => res.end("{}"), (answer, res) => {
+			if (++identities > 1) return answer();
+			// The host answers, then sends GOAWAY: the session arrives closed.
+			answerFirst = () => {
+				answer();
+				res.stream.session?.close();
+			};
+			asked();
+		});
+		const closing = await startRemoteProxy(daemonEntry(`http://127.0.0.1:${port}`));
+		const request = fetch(`${closing.base}/api/v1/projects`).catch(() => undefined);
+		await verifying;
+		const closed = closing.close();
+		answerFirst();
+		await closed;
+		await request;
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		expect(identities).toBe(1);
 	});
 
 	it("forwards a DELETE request's body over HTTP/2", async () => {
