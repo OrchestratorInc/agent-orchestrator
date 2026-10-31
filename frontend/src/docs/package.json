@@ -24,12 +24,12 @@
     "geist": "^1.7.0",
     "lucide-react": "^0.563.0",
     "mdast-util-directive": "^3.1.0",
-    "next": "16.2.11",
+    "next": "16.4.3",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "remark-gfm": "^4.0.1",
     "satteri": "^0.9.5",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@lingui/cli": "6.8.0",
