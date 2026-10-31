@@ -68,6 +68,24 @@ type ProxyResponse = Writable & {
 // host or an intermediary, or the session failed); HTTP/1.1 takes over.
 class UpstreamHttp2Unavailable extends Error {}
 
+// fetch's own failure to reach the host (a TypeError carrying its cause) or its
+// timeout: the host could not be asked who it is, which does not make it another host.
+const unreachable = (error: unknown): boolean =>
+	(error instanceof TypeError && error.cause !== undefined) || (error as Error | undefined)?.name === "TimeoutError";
+
+// A WebSocket as a stream to carry HTTP/2. Once a reset (sleep, a network
+// change) has destroyed the WebSocket's connection, ws never finishes ending
+// the stream: its end waits for a "finish" the TCP socket will not emit. A
+// session would then write into that half-closed stream, which Node fails with
+// an uncaught ERR_INTERNAL_ASSERTION. So the stream goes once it has handed on
+// all it read (it ends only after the WebSocket closed): nothing more can
+// arrive, and nothing can be sent over a closed WebSocket.
+export function webSocketTunnelStream(socket: WebSocket): Duplex {
+	const stream = createWebSocketStream(socket);
+	stream.once("end", () => stream.destroy());
+	return stream;
+}
+
 // Cloudflare quick tunnels answer 429 past 200 requests in flight.
 const MAX_PENDING_UPSTREAM_STREAMS = 100;
 // Preview requests stop this far short of it: a dev server that leaves its
@@ -277,6 +295,8 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 	// intermediary without HTTP/2 gets HTTP/1.1 for a minute, then a retry.
 	let upstreamSession: Promise<ClientHttp2Session> | null = null;
 	let http2RetryAt = 0;
+	// Set by close(): a GET whose session close() destroyed must not open a new one.
+	let closing = false;
 	// Over HTTPS the session rides inside one WebSocket to the host's tunnel
 	// (backend lan_tunnel.go): a Cloudflare quick tunnel answers 429 past 200
 	// plain requests in flight and holds back small streamed writes, but
@@ -295,12 +315,12 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			...(isIP(hostname) ? {} : { servername: hostname }),
 		});
 		// Wrap before "open": the host's first HTTP/2 frame can arrive with it.
-		const stream = createWebSocketStream(socket);
-		// A reset connection (sleep, a network change) closes the WebSocket
-		// without its TCP socket finishing, and ws then never completes the
-		// stream's end. The session would go on writing into that half-closed
-		// stream, which Node fails with an uncaught internal assertion.
-		socket.once("close", () => stream.destroy());
+		const stream = webSocketTunnelStream(socket);
+		// Unless this side ended or destroyed the stream first, the host or the
+		// network closed it: 1006 is a reset.
+		socket.once("close", (code: number) => {
+			if (!stream.writableEnded && !stream.destroyed) warn(`upstream ${upstream.host} tunnel WebSocket closed with code ${code}`);
+		});
 		// The stream re-emits socket errors. Before "open" they are the upgrade's,
 		// reported below; after, the session sees the close and is replaced.
 		// Unheard, either would crash the main process.
@@ -627,16 +647,20 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			return;
 		}
 		const upstreamStream = stream;
-		// The host never acted on a stream it refused (RFC 9113 §8.7): the
-		// request goes again, if the caller allows, instead of answering 502.
-		const refused = () => retry !== undefined && upstreamStream.rstCode === http2Constants.NGHTTP2_REFUSED_STREAM;
+		// The host never acted on a stream it refused (RFC 9113 §8.7), and a GET
+		// or HEAD is safe to send again when its session was lost (a reset
+		// tunnel) before it was answered: the request goes again, if the caller
+		// allows, instead of answering 502.
+		const safe = req.method === undefined || req.method === "GET" || req.method === "HEAD";
+		const retriable = () => retry !== undefined && !closing &&
+			(upstreamStream.rstCode === http2Constants.NGHTTP2_REFUSED_STREAM || (safe && session.destroyed));
 		let responded = false;
 		upstreamStream.once("close", () => {
 			settle();
 			// Closed before its response: the host restarted, the tunnel closed or
 			// the stream was reset. Node reports a cancelled stream without "error".
 			if (responded || clientGone || res.writableEnded) return;
-			if (refused()) retry?.();
+			if (retriable()) retry?.();
 			else answerUpstreamFailure(res, new Error(`stream closed with code ${upstreamStream.rstCode}`), req.method, path, kind);
 		});
 		upstreamStream.once("response", (responseHeaders) => {
@@ -650,7 +674,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				() => session.destroyed || upstreamStream.rstCode !== http2Constants.NGHTTP2_NO_ERROR);
 		});
 		upstreamStream.on("error", (error: Error) => {
-			if (!refused()) answerUpstreamFailure(res, error, req.method, path, kind);
+			if (!retriable()) answerUpstreamFailure(res, error, req.method, path, kind);
 		});
 		req.pipe(upstreamStream);
 	};
@@ -698,7 +722,8 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				session = await sessionForRequest();
 				if (!session) await verifyUpstream();
 			} catch (error) {
-				answerIdentityFailure(res, error, req.method, path, preview?.kind);
+				if (unreachable(error)) answerUpstreamFailure(res, error as Error, req.method, path, preview?.kind);
+				else answerIdentityFailure(res, error, req.method, path, preview?.kind);
 			}
 			// Only a request sent over the session keeps its slot.
 			if (!session || left || res.writableEnded) releaseStream();
@@ -773,7 +798,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 				socket.on(event, drop);
 			}
 		}).catch((error: Error) => {
-			warn(`upstream ${upstream.host} identity check failed on ${safeLogPath(path, preview?.kind)} (${error.message})`);
+			warn(`upstream ${upstream.host} ${unreachable(error) ? "unreachable" : "identity check failed"} on ${safeLogPath(path, preview?.kind)} (${error.message})`);
 			stopPending();
 		});
 	};
@@ -900,6 +925,7 @@ export async function startRemoteProxy(entry: RemoteEntry, rendererOrigin = REND
 			new Promise((resolve) => {
 				// close() alone waits on keep-alive and tunnelled sockets forever;
 				// a deactivated proxy must actually stop serving.
+				closing = true;
 				for (const drop of tunnels) drop();
 				server.closeAllConnections();
 				for (const socket of secureSockets) socket.destroy();
