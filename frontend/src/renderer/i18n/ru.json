@@ -2158,6 +2158,8 @@
 	"artifacts.copyMarkdown": "Копировать как Markdown",
 	"artifacts.copyContents": "Копировать содержимое",
 	"artifacts.download": "Скачать",
+	"artifacts.cancelDownload": "Отменить скачивание",
+	"artifacts.downloaded": "Файл {{name}} сохранён",
 	"artifacts.delete": "Удалить артефакт",
 	"artifacts.deleteTitle": "Удалить артефакт?",
 	"artifacts.deleteDescription": "Файл {{name}} будет навсегда удалён из папки артефактов этой сессии.",
