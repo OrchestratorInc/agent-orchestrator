@@ -1,0 +1,82 @@
+name: Coder Agents visual evidence
+
+# Screenshots of the real AO Electron app and its real dev daemon for the
+# Coder Agents harness (PR #7520): Settings > Harness > Coder Agents and New
+# Task. The runner has no coder CLI and no Coder login, so the captured state
+# is a genuine fresh install; nothing is mocked or pre-seeded.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/coder-agents-visual.yml"
+      - "frontend/scripts/ci-visual/**"
+      - "backend/internal/adapters/agent/coderagents/**"
+      - "backend/internal/adapters/chatdriver/coderagents/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coder-agents-visual-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ELECTRON_DISABLE_SANDBOX: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install display server and Electron runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libgbm1 libnss3 libasound2t64 libgtk-3-0t64 libxss1
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install product UI dependencies
+        working-directory: packages/product-ui
+        run: npm ci
+
+      - name: Capture Coder Agents screens in the real desktop app
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          base="$HOME/.ao/dev/pr7520-visual"
+          out="$RUNNER_TEMP/coder-agents-visual"
+          mkdir -p "$base" "$out"
+          export AO_DATA_DIR="$base/data" AO_RUN_FILE="$base/running.json" AO_DEV_ELECTRON_DIR="$base/electron"
+          unset AO_PORT
+          # The dev log stays on the runner; only screenshots and results leave it.
+          xvfb-run -a -s "-screen 0 1440x900x24" npm run dev -- -- --remote-debugging-port=9222 > "$RUNNER_TEMP/ao-dev.log" 2>&1 &
+          dev_pid=$!
+          status=0
+          node scripts/ci-visual/coder-agents-harness.mjs --out "$out" || status=$?
+          grep -E "Launched Electron app|daemon listening|error|Error" "$RUNNER_TEMP/ao-dev.log" | grep -v -i "token" | tail -40 || true
+          kill "$dev_pid" 2>/dev/null || true
+          pkill -f "$GITHUB_WORKSPACE/frontend/node_modules/electron" 2>/dev/null || true
+          ls -la "$out"
+          exit "$status"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coder-agents-visual-${{ github.sha }}
+          path: ${{ runner.temp }}/coder-agents-visual/
+          retention-days: 7
+          if-no-files-found: warn
