@@ -1425,7 +1425,7 @@ function aoCurLangName() {
   window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(function () { init(); }, 200); });
 })();
 
-/* v38: floating "Ask Assistant" chat launcher (bottom-right): speech-bubble icon + greeting pill */
+/* v39: floating "Ask Assistant" chat launcher (bottom-right): AO logo + small greeting above */
 (function () {
   function openChat() {
     var m = document.getElementById("assistant-entry-mobile");
@@ -1442,7 +1442,16 @@ function aoCurLangName() {
     fab.type = "button";
     fab.setAttribute("aria-label", "Ask Assistant");
     fab.title = "Ask Assistant (Ctrl+I)";
-    fab.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="#fafaf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>';
+    var logo = document.querySelector("img.nav-logo");
+    if (logo && (logo.currentSrc || logo.src)) {
+      var img = document.createElement("img");
+      img.src = logo.currentSrc || logo.src;
+      img.alt = "";
+      img.setAttribute("aria-hidden", "true");
+      fab.appendChild(img);
+    } else {
+      fab.textContent = "\u2726";
+    }
     fab.addEventListener("click", openChat);
     document.body.appendChild(fab);
     var bubble = document.createElement("button");
