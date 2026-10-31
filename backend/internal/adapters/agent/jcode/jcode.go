@@ -123,15 +123,15 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 }
 
 // PromptReadinessHints waits for the empty first composer line, `1>`, which
-// JCode renders on its own line only once the input box is live (not while its
-// first-run onboarding page is shown).
+// jcode renders on its own line only once the input box is live, or for its
+// first-run start-choice page, which AfterStartCommand answers.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
 	}
 	return ports.PromptReadinessHints{
 		InitialDelay: 500 * time.Millisecond,
-		Patterns:     []string{"\n1>\n", "\n1> \n"},
+		Patterns:     readinessPatterns,
 		PollInterval: 200 * time.Millisecond,
 		Timeout:      120 * time.Second,
 		Lines:        80,
