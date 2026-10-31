@@ -362,7 +362,10 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		t.nativeID = strings.TrimSuffix(filepath.Base(paths[0]), ".jsonl")
 	case domain.HarnessCodex:
 		t.nativeID = codexThreadID(paths[0])
+	case domain.HarnessDroid:
+		t.nativeID = strings.TrimSuffix(filepath.Base(paths[0]), ".jsonl")
 	}
+	var droidState droidParse
 	var (
 		items       []tagged
 		ids         = map[string]int{}
@@ -420,6 +423,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	handle := func(line []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if harness == domain.HarnessDroid {
+			return droidState.handle(line, &t, now, add)
 		}
 		var r record
 		if err := json.Unmarshal(line, &r); err != nil {
@@ -536,6 +542,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if harness == domain.HarnessCodex && !sawMeta {
 		return t, errors.New("no readable native conversation")
 	}
+	if harness == domain.HarnessDroid && !droidState.sawStart {
+		return t, errors.New("no readable native conversation")
+	}
 	chain := claude
 	if claudeLeaf != "" {
 		// Follow the active branch so rewound prompts are not shown as history.
@@ -592,6 +601,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	}
 	if harness == domain.HarnessCodex {
 		prompted = true
+	}
+	if harness == domain.HarnessDroid {
+		prompted = droidState.prompted
 	}
 	trim()
 	for _, item := range items {
