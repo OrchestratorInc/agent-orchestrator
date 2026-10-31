@@ -817,11 +817,17 @@ func (p *Plugin) sessionCommand(ctx context.Context, cfg ports.LaunchConfig, tit
 		return nil, err
 	}
 	cmd := []string{binary, "chat", "--cli", "--in", cfg.WorkspacePath, "--continue", title}
+	// Creation overrides ride only fresh launches. Hermes rejects them on
+	// resume — "Resume retains gateway session policy; creation overrides are
+	// unsupported on resume. -m/--model, --provider differ from this session's
+	// launch: resume without them and use /model after resuming to switch." —
+	// so a restore that carried a configured --model/--reasoning died at
+	// startup and the switch surfaced a dead terminal.
 	if create {
 		cmd = append(cmd, "--create-if-missing")
+		agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+		agentbase.AppendEffortFlag(&cmd, cfg.Config, "--reasoning")
 	}
-	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
-	agentbase.AppendEffortFlag(&cmd, cfg.Config, "--reasoning")
 	return append(cmd, permissionArgs(cfg.Permissions)...), nil
 }
 
