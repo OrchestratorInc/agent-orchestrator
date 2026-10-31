@@ -232,8 +232,9 @@ func TestPlanFor(t *testing.T) {
 			wantUnsupported: true, wantReasonHas: "No supported Linux package manager",
 		},
 		// cloudflared is what makes a phone reachable from outside the local
-		// network. Nothing installed it before, so a machine without it showed a
-		// normal QR that only ever worked on Wi-Fi.
+		// network. These are the package-manager fallbacks: newTestService has
+		// no downloader, so AO's own pinned copy is not on offer (see
+		// cloudflared_test.go for that).
 		{
 			name: "cloudflared darwin uses brew", target: TargetCloudflared, goos: "darwin", found: []string{"brew"},
 			wantCommand: []string{"brew", "install", "cloudflared"},

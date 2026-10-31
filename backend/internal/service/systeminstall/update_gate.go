@@ -247,7 +247,7 @@ func (s *Service) updateInUse(ctx context.Context, target Target, advisory Updat
 		level = UpdateWhileRunningBlocked
 		if planner, err := s.newRequestPlanner(ctx); err == nil {
 			for _, plan := range planner.agentMethodPlans(target, AgentOperationUpdate) {
-				if plan.Method == advisory.MaintenanceMethod && !plan.Unsupported {
+				if plan.ownershipMethod() == advisory.MaintenanceMethod && !plan.Unsupported {
 					level = plan.UpdateWhileRunning
 					break
 				}

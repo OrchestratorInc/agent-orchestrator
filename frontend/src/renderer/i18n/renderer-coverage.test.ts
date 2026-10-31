@@ -31,8 +31,8 @@ const approvedLiterals: Record<string, readonly string[]> = {
 	"components/QuitConfirmDialog.tsx": ["Esc"],
 	"components/RemoteDirectoryPicker.tsx": ["/home/you/code"],
 	"components/SessionInspector.tsx": ["PR #"],
-	"components/Sidebar.tsx": ["Orchestrator.inc", "daemon"],
-	"components/TitlebarNav.tsx": ["Orchestrator.inc"],
+	"components/Sidebar.tsx": ["Orchestrator", "daemon"],
+	"components/TitlebarNav.tsx": ["Orchestrator"],
 	"components/WindowTitlebar.tsx": [
 		"Alt+F4",
 		"Ctrl+Z",

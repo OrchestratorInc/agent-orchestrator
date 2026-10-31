@@ -11,8 +11,11 @@ account. Desktop and daemon events include a random installation identifier
 to group activity even when the event uses an account ID as `distinct_id`.
 Telemetry is not wholly anonymous.
 
-Remote telemetry is enabled in production desktop and mobile releases. A
-packaged desktop release also enables telemetry for the daemon it starts.
+Share usage analytics and Share error events are on by default in production
+desktop releases for fresh installs and existing users, unless a user turned
+either choice off or an environment setting disables it. Both can be turned
+off at any time in Settings > General > Privacy. A packaged desktop release
+also enables telemetry for the daemon it starts.
 Development builds and daemons started directly do not send remote telemetry by
 default.
 
@@ -27,14 +30,17 @@ Electron main and the renderer have a separate desktop Sentry project. Their
 default DSN is distinct from the daemon project; Electron main uses
 `AO_ELECTRON_SENTRY_DSN` for an explicit override. Without one, development
 builds use an empty Electron DSN. The renderer uses this main-owned sender
-and has no independent DSN override. The production release gate remains
-closed until the privacy policy names Sentry and its data categories.
-Once that gate opens, Electron main sends consented error events through its
-own Sentry transport.
+and has no independent DSN override. Packaged stable and nightly builds send
+error events through Electron main only when Share error events is enabled.
+On a fresh or existing packaged install, Share error events starts on unless
+it was explicitly turned off. You can turn it off at any time in Settings.
 Renderer diagnostics pass through the existing main-owned consent boundary;
 the renderer has no direct Sentry transport. The mobile app keeps its own
-Sentry project and DSN. A desktop opt-in recorded while the Electron release
-gate was closed requires a fresh opt-in before this sender starts.
+Sentry project and DSN. Earlier error-sharing choices remain effective on
+upgrade. On Windows, the policy is saved with a flushed temporary file and
+an atomic replacement that retries temporary file locks, so the same Settings
+choice controls Electron and daemon Sentry there. Share usage analytics is a
+separate choice for PostHog.
 Once enabled, renderer exceptions go to Electron Sentry rather than PostHog. Failed
 Sentry sends can wait in an offline queue under AO's Electron data directory.
 Error events can include a standard exception type and allowlisted in-app
@@ -44,6 +50,41 @@ Turning off Share error events drains the sender and removes that queue before
 the opt-out is complete. If the app exits during that cleanup, startup purges
 the leftover queue while sharing is off, before a later opt-in can start the
 sender.
+
+The mobile app uses the existing ao-mobile Sentry project in non-development
+builds when mobile telemetry is active. Its JavaScript error sender starts after the
+saved phone analytics preference is restored. It follows the paired desktop's
+analytics opt-out, which remains sticky while the phone is unpaired or waiting
+for a replacement desktop. Development builds and
+`EXPO_PUBLIC_AO_TELEMETRY_DISABLED=1` do not initialize it. An explicit empty
+`EXPO_PUBLIC_SENTRY_DSN` disables it; otherwise the app uses its bundled
+mobile DSN. Reportable React render failures, uncaught JavaScript failures,
+and server API failures are captured. Native crash capture is disabled because
+the native SDK's offline envelope queue cannot be cleared at the phone's
+analytics opt-out boundary. No failed mobile Sentry send is persisted for retry.
+The sender checks consent both before capture and immediately before network
+send, so an event still queued when opt-out arrives is discarded.
+
+Mobile Sentry receives fixed error titles and categories, safe stack line
+numbers with generic frame names, release version and build number, and the
+production or preview environment. It receives no raw error message, URL,
+request body, repository or workspace path, project or session identifier,
+credential, or account identity. Its `user.id` is the authenticated paired
+desktop installation ID only. It is absent before pairing, during repair, and
+after unpairing or a failed identity refresh. The phone retains its separate
+PostHog identity across those changes. A paired Sentry error can therefore be
+associated with the desktop installation. The Sentry package and Expo plugin
+require a native prebuild before a mobile binary can include this change.
+All EAS profiles disable automatic Sentry source map and debug file upload,
+so builds do not require Sentry credentials. Mobile Sentry stack traces use
+generic frame names and line numbers; source maps are not available for them.
+
+For workspace file streams, a deleted worktree or a linked worktree whose
+owning Git repository disappeared returns a missing-workspace or
+`PROJECT_FOLDER_MISSING` 404. A recognized Git lock returns retryable
+`WORKSPACE_GIT_BUSY` 503. Other Git read failures remain
+`WORKSPACE_GIT_READ_FAILED` 500 for investigation; the app does not infer
+session death or remove worktrees from these read failures.
 
 ## What Orchestrator.inc sends
 
@@ -67,7 +108,20 @@ Orchestrator.inc sends structured events in a few broad categories:
   stack trace after path redaction, an HTTP status, or an agent waiting for
   input
 - Basic environment information, such as the Orchestrator.inc version, operating system,
-  release channel, and which supported agent types are available
+  release channel, and which supported agent types are available. Desktop and
+  daemon events carry the operating system name (`$os`) and version
+  (`$os_version`), `platform`, CPU architecture (`arch`), and the update
+  channel you chose (`release_channel`)
+- How Orchestrator.inc was installed, on every desktop and daemon event:
+  `install_source` is one of `npm-bootstrap` (`ao start`), `dmg`, `brew-cask`,
+  `exe`, `appimage`, `deb`, `rpm`, `dev`, `unknown`, or `other`, and
+  `installed_at` is the UTC day the app first ran. Both come from
+  `~/.ao/app-state.json`; no download path or file name is sent
+- Whether the app is running in CI or a container (`is_ci`, plus `ci_signal`
+  of `ci_env` or `container`), detected from well-known CI environment
+  variables and container marker files. Only the boolean and the category are
+  sent, never the variables themselves, so automated runs can be excluded from
+  usage counts
 - If you are signed in to AO Cloud: your AO Cloud user ID on every
   desktop and daemon event, and a PostHog person profile holding your email
   address, AO Cloud user ID, and GitHub username. The email is set at sign-in
@@ -79,6 +133,18 @@ Orchestrator.inc sends structured events in a few broad categories:
   session-start events)
 - Desktop onboarding progress, such as viewing, completing, or leaving the
   welcome and GitHub sign-in steps, and a one-time install event on first run
+- One-time lifecycle markers: `ao.app.first_open` is sent once per
+  installation identifier on any build, including installations that predate
+  the install event, and `ao.app.installed` and `ao.app.first_open` say
+  whether the desktop app or the CLI started the daemon (`launcher`).
+  `ao.session.spawned` and `ao.projects.created` carry `first_for_install`,
+  true only for the installation's first session or project. These are
+  recorded by marker files under `~/.ao/data` (`telemetry_first_open_emitted`,
+  `telemetry_first_session_spawned`, `telemetry_first_project_added`). The
+  older `ao.onboarding.first_session_spawned` and
+  `ao.onboarding.first_project_added` events are deprecated: they fire again
+  whenever the session or project list is empty, and are kept only so
+  existing dashboards continue
 - The Orchestrator.inc version on every daemon event
 - A random `install_id` on every desktop and daemon event, the phone's own
   stored `install_id` when available, and a `paired_install_id` on phone events

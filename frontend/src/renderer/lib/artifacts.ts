@@ -1,4 +1,3 @@
-import { isAgentActivityWorking } from "@aoagents/product-ui";
 import {
 	sessionArtifacts,
 	STANDALONE_WORKSPACE_ID,
@@ -23,8 +22,6 @@ export type ArtifactRow = {
 	cloud?: WorkspaceSession["cloud"];
 	/** Undefined for a Scratchpad session. */
 	projectId?: string;
-	/** The writing session's agent is working, so the file may still change. */
-	generating: boolean;
 };
 
 export function artifactKey(artifact: Pick<ArtifactRow, "sessionId" | "path">): string {
@@ -67,7 +64,6 @@ export function groupArtifactsByProject(workspaces: readonly WorkspaceSummary[])
 					sessionTitle: session.title,
 					cloud: session.cloud,
 					projectId: isScratchpad ? undefined : workspace.id,
-					generating: isAgentActivityWorking(session.activity),
 				})),
 			)
 			.sort(newestFirst);
