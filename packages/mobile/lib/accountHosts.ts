@@ -69,7 +69,7 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 		headers: { Authorization: `Bearer ${access}`, Accept: "application/json" },
 	}, 10_000, signal);
 	if (!response.ok) throw new Error(`Orchestrator Cloud host sync failed (${response.status}).`);
-	const { hosts } = response.body as { hosts: AccountHost[] };
+	const { hosts, hostKeys } = response.body as { hosts: AccountHost[]; hostKeys?: boolean };
 	if (!await current()) return;
 	const paired = await loadHosts();
 	for (const manual of paired.filter((host) => !host.accountUserId && host.id && !hosts.some((item) => item.hostId === host.id))) {
@@ -87,13 +87,14 @@ async function performSync(account: Account, signal: AbortSignal, current: () =>
 					method: "POST", headers: { Authorization: `Bearer ${manual.token}`, "X-AO-Expected-Host-ID": manual.id, "X-AO-Account-ID": account.id },
 				}, 5_000, signal);
 				if (!claim.ok) continue;
-				const issued = claim.body as { hostId?: string; token?: string };
+				const issued = claim.body as { hostId?: string; token?: string; hostKey?: string };
 				if (issued.hostId !== manual.id || !/^[0-9a-f]{64}$/.test(issued.token ?? "")) continue;
 				const item = { hostId: manual.id, label: manual.name, url: base, token: issued.token! };
 				if (!await current() || (await ignoredAccountHosts(account.id)).has(manual.id)) break;
 				const saved = await syncFetch(`${CONTROL_PLANE}/api/cloud/v1/me/hosts/${encodeURIComponent(manual.id)}`, {
 					method: "PUT", headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },
-					body: JSON.stringify({ label: item.label, url: item.url, token: item.token }),
+					// The machine's host key, only where AO Cloud says it takes one: it then needs the machine's own signature.
+					body: JSON.stringify({ label: item.label, url: item.url, token: item.token, hostKey: hostKeys === true ? issued.hostKey : undefined }),
 				}, 10_000, signal);
 				if (saved.ok) hosts.push(item);
 				break;

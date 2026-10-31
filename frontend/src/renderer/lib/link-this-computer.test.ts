@@ -4,7 +4,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 // them is what is tested: nothing may move the machine's account token to an
 // account that would then refuse to list it.
 const fake = vi.hoisted(() => ({
-	directory: { hosts: [] as Array<{ hostId: string }>, fixedAddresses: true },
+	directory: { hosts: [] as Array<{ hostId: string }>, fixedAddresses: true, hostKeys: true },
 	calls: [] as string[],
 }));
 vi.mock("./account-remote-hosts", async (original) => ({
@@ -13,23 +13,30 @@ vi.mock("./account-remote-hosts", async (original) => ({
 	saveAccountRemoteHost: vi.fn(async () => { fake.calls.push("save"); }),
 }));
 vi.mock("./api-client", () => ({
-	apiClient: { POST: vi.fn(async () => { fake.calls.push("token"); return { data: { hostId: "h_this", token: "0f".repeat(32) } }; }) },
+	apiClient: { POST: vi.fn(async () => { fake.calls.push("token"); return { data: { hostId: "h_this", token: "0f".repeat(32), hostKey: "k".repeat(43) } }; }) },
 	apiErrorMessage: () => "failed",
 }));
 vi.mock("./bridge", () => ({ aoBridge: { remotes: { computerName: async () => "Mac" } } }));
 
+import { saveAccountRemoteHost } from "./account-remote-hosts";
 import { linkThisComputer } from "./link-this-computer";
 
 const link = (options?: { url?: string; ifListed?: boolean }) => linkThisComputer("https://cp.example.test", "user_01", "h_this", "pw", options);
 
 beforeEach(() => {
-	fake.directory = { hosts: [], fixedAddresses: true };
+	fake.directory = { hosts: [], fixedAddresses: true, hostKeys: true };
 	fake.calls.length = 0;
 });
 
 it("links at the fixed address when AO Cloud gives one", async () => {
 	expect(await link()).toEqual({ hostId: "h_this", added: true });
 	expect(fake.calls).toEqual(["directory", "token", "save"]);
+	// The listing carries the machine's host key, only where AO Cloud takes it.
+	expect(saveAccountRemoteHost).toHaveBeenLastCalledWith("https://cp.example.test", expect.objectContaining({ hostKey: "k".repeat(43) }));
+	fake.directory.hostKeys = false;
+	await link();
+	expect(saveAccountRemoteHost).toHaveBeenLastCalledWith("https://cp.example.test", expect.objectContaining({ hostKey: undefined }));
+	fake.directory.hostKeys = true;
 	// Linked again, it was already listed.
 	fake.directory.hosts = [{ hostId: "h_this" }];
 	expect(await link()).toEqual({ hostId: "h_this", added: false });

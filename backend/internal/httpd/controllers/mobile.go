@@ -44,6 +44,9 @@ type MobileController struct{ Bridge mobileBridge }
 type RemoteHostAccountTokenResponse struct {
 	HostID string `json:"hostId"`
 	Token  string `json:"token"`
+	// HostKey is the machine's Ed25519 public key, unpadded base64url, for
+	// the account listing: AO Cloud then needs the machine's own signature.
+	HostKey string `json:"hostKey"`
 }
 
 // IssueAccountToken returns a credential for account discovery after the caller
@@ -853,6 +856,17 @@ func (b *BridgeService) RestoreOnBoot(state mobilebridge.State) error {
 	return nil
 }
 
+// hostPublicKey is the machine's host key for the listing, or empty when it
+// cannot be read: the listing then has none, and the machine's requests keep
+// working with the digest alone.
+func (b *BridgeService) hostPublicKey() string {
+	key, err := mobilebridge.HostPublicKey(b.ConfigPath)
+	if err != nil {
+		return ""
+	}
+	return key
+}
+
 // IssueAccountToken returns the existing credential for a retry by the same
 // account, or replaces it after the caller proves the original pairing
 // password while linking a different account.
@@ -869,7 +883,7 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	// A current account token is already the desired credential. Returning it
 	// makes retries safe even when the cloud registration request was lost.
 	if state.AccountToken != "" && mobilebridge.PasswordMatches(state.AccountTokenHash, password) {
-		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken}, nil
+		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken, HostKey: b.hostPublicKey()}, nil
 	}
 	if !mobilebridge.PasswordMatches(mobilebridge.HashPassword(state.Password), password) {
 		return RemoteHostAccountTokenResponse{}, errors.New("connection password required")
@@ -882,7 +896,7 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	// durable token. A different account intentionally rotates it.
 	if accountID != "" && accountID == state.AccountTokenOwner && state.AccountToken != "" &&
 		mobilebridge.PasswordMatches(state.AccountTokenHash, state.AccountToken) {
-		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken}, nil
+		return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: state.AccountToken, HostKey: b.hostPublicKey()}, nil
 	}
 	setter, ok := b.LAN.(interface{ SetAccountTokenHash(string) })
 	if !ok {
@@ -905,7 +919,7 @@ func (b *BridgeService) IssueAccountToken(password, accountID string) (RemoteHos
 	// token only after this returns; until then the connector reads AO
 	// Cloud's refusal as a link on its way and keeps serving.
 	b.nudgeTunnel()
-	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token}, nil
+	return RemoteHostAccountTokenResponse{HostID: b.HostID, Token: token, HostKey: b.hostPublicKey()}, nil
 }
 
 // nudgeTunnel has a running connector ask AO Cloud for its address now: the

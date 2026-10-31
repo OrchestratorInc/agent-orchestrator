@@ -5420,6 +5420,7 @@ export interface components {
         };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
+            hostKey: string;
             token: string;
         };
         ControllersRequestRereviewRequest: {

@@ -48,6 +48,9 @@ export async function linkThisComputer(
 		label: fitLabel(await aoBridge.remotes.computerName()),
 		url: options.url,
 		token: issued.data.token,
+		// AO Cloud then needs the machine's own signature on its requests. An
+		// AO Cloud that does not say it takes host keys refuses the field.
+		hostKey: directory.hostKeys ? issued.data.hostKey : undefined,
 	});
 	return { hostId: issued.data.hostId, added: !listed };
 }

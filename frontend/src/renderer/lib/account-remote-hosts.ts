@@ -22,12 +22,12 @@ async function request(baseUrl: string, method: string, path: string, body?: unk
 	return response;
 }
 
-/** The account's machines, and whether this AO Cloud gives machines fixed addresses. */
-export type AccountHostDirectory = { hosts: AccountRemoteHost[]; fixedAddresses: boolean };
+/** The account's machines, whether this AO Cloud gives machines fixed addresses, and whether it takes their host keys. */
+export type AccountHostDirectory = { hosts: AccountRemoteHost[]; fixedAddresses: boolean; hostKeys: boolean };
 
 export async function readAccountHostDirectory(baseUrl: string): Promise<AccountHostDirectory> {
 	const body = await (await request(baseUrl, "GET", "")).json() as Partial<AccountHostDirectory>;
-	return { hosts: body.hosts ?? [], fixedAddresses: body.fixedAddresses === true };
+	return { hosts: body.hosts ?? [], fixedAddresses: body.fixedAddresses === true, hostKeys: body.hostKeys === true };
 }
 
 export async function listAccountRemoteHosts(baseUrl: string): Promise<AccountRemoteHost[]> {
@@ -35,13 +35,13 @@ export async function listAccountRemoteHosts(baseUrl: string): Promise<AccountRe
 }
 
 /** A host saved without a url is listed at its fixed address: AO Cloud knows it from the host id. */
-export async function saveAccountRemoteHost(baseUrl: string, host: Omit<AccountRemoteHost, "url"> & { url?: string }): Promise<void> {
+export async function saveAccountRemoteHost(baseUrl: string, host: Omit<AccountRemoteHost, "url"> & { url?: string; hostKey?: string }): Promise<void> {
 	// AO Cloud may first make the machine's tunnel and DNS record, or delete a
 	// standing tunnel a new token retires, with or without a url; either can
 	// take more than a minute. No limit: the main process finishes the request
 	// anyway, so giving up would report a save that went through as failed.
 	await request(baseUrl, "PUT", `/${encodeURIComponent(host.hostId)}`, {
-		label: host.label, url: host.url, token: host.token,
+		label: host.label, url: host.url, token: host.token, hostKey: host.hostKey || undefined,
 	}, null);
 }
 

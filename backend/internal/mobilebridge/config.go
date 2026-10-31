@@ -121,6 +121,11 @@ func writeFileAtomic(path string, b []byte) error {
 		_ = tmp.Close()
 		return err
 	}
+	// On disk before the rename, so a power loss cannot leave an empty file.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}

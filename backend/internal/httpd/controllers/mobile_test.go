@@ -127,6 +127,10 @@ func TestIssueAccountTokenRequiresPairingPasswordAndPersistsHash(t *testing.T) {
 	if issued.HostID != "h_test" || len(issued.Token) != 64 {
 		t.Fatalf("bad token: %+v", issued)
 	}
+	// The listing gets the machine's host key with the token.
+	if want, err := mobilebridge.HostPublicKey(path); err != nil || issued.HostKey != want || len(want) != 43 {
+		t.Fatalf("host key = %q, want %q (%v)", issued.HostKey, want, err)
+	}
 	state, err := mobilebridge.Load(path)
 	if err != nil {
 		t.Fatal(err)

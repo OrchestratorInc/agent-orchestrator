@@ -108,7 +108,7 @@ const fake = vi.hoisted(() => {
 					return { error: { error: { code: "forbidden", message: "connection password required" } } };
 				}
 				daemon.linked = true;
-				return { data: { hostId: HOST_ID, token: TOKEN } };
+				return { data: { hostId: HOST_ID, token: TOKEN, hostKey: "k".repeat(43) } };
 			}
 			default:
 				return { error: { error: { code: "not_found", message: `unexpected POST ${path}` } } };
@@ -128,7 +128,9 @@ const fake = vi.hoisted(() => {
 		}
 		log.push(`cloud ${method} ${hostId}`);
 		if (method === "PUT") {
-			const input = JSON.parse(body ?? "{}") as { label: string; url?: string; token: string };
+			const input = JSON.parse(body ?? "{}") as { label: string; url?: string; token: string; hostKey?: string };
+			// This AO Cloud lists no hostKeys, so it refuses the field, as an older one does.
+			if (input.hostKey !== undefined) return reply(400);
 			if (cloud.failPut) return reply(503);
 			// An account that uses all its fixed addresses can still list more machines.
 			if (cloud.full && input.url === undefined) return reply(409, { code: "fixed_address_limit_reached" });

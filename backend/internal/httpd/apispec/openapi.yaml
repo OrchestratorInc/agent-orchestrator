@@ -15663,11 +15663,14 @@ components:
       properties:
         hostId:
           type: string
+        hostKey:
+          type: string
         token:
           type: string
       required:
       - hostId
       - token
+      - hostKey
       type: object
     ControllersRequestRereviewRequest:
       properties:
