@@ -185,7 +185,7 @@ func TestPayloadCannotOverrideSegmentation(t *testing.T) {
 	// Common properties are not in any per-event allowlist, so an event payload
 	// cannot smuggle a different install_source or is_ci past the sanitizer.
 	for name, allowed := range remotePayloadAllowlist {
-		for _, key := range []string{"install_source", "installed_at", "is_ci", "ci_signal", "arch", "platform", "$os", "$os_version", "release_channel"} {
+		for _, key := range []string{"install_source", "installed_at", "is_ci", "ci_signal", "arch", "platform", "$os", "$os_version", "release_channel", "experiment_cohort"} {
 			if _, ok := allowed[key]; ok {
 				t.Errorf("%s allowlists common property %s", name, key)
 			}

@@ -246,7 +246,7 @@ func TestUsagePRTracksWorkerAssociationAndMergedTransitionOnce(t *testing.T) {
 	if facts[0].Historical || !facts[0].AssociationPending || facts[0].MergePending {
 		t.Fatalf("association = %+v", facts[0])
 	}
-	if err := s.MarkWorkerPRUsageReported(ctx, facts[0].Key, true, false); err != nil {
+	if err := s.MarkWorkerPRUsageReported(ctx, facts[0].Key, true, false, false); err != nil {
 		t.Fatal(err)
 	}
 	write()
@@ -261,7 +261,7 @@ func TestUsagePRTracksWorkerAssociationAndMergedTransitionOnce(t *testing.T) {
 	if facts[0].AssociationPending || !facts[0].MergePending {
 		t.Fatalf("merge = %+v", facts[0])
 	}
-	if err := s.MarkWorkerPRUsageReported(ctx, facts[0].Key, false, true); err != nil {
+	if err := s.MarkWorkerPRUsageReported(ctx, facts[0].Key, false, true, false); err != nil {
 		t.Fatal(err)
 	}
 	write()

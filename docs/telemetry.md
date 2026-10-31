@@ -139,6 +139,16 @@ Orchestrator.inc sends structured events in a few broad categories:
   `ao.onboarding.first_project_added` events are deprecated: they fire again
   whenever the session or project list is empty, and are kept only so
   existing dashboards continue
+- A fixed experiment bucket, `experiment_cohort` (a whole number from 0 to
+  99), on every desktop and daemon event. It is picked at random on the first
+  run that reaches it and stored in `~/.ao/data/telemetry_experiment_cohort`,
+  so onboarding experiments can compare bucket ranges without feature flags.
+  It is random and says nothing about you
+- Whether sessions get used and deliver: who started a session and how it
+  ended, plus categories and timings on the usage counts below. These carry
+  only categories, counts, and durations, never message text, titles, branch
+  names, or URLs. See "Usage counts by project" and "How sessions start and
+  end" below
 - The Orchestrator.inc version on every daemon event
 - A random `install_id` on every desktop and daemon event, the phone's own
   stored `install_id` when available, and a `paired_install_id` on phone events
@@ -170,13 +180,14 @@ identifier can still be associated with that attribution in PostHog.
 
 ## Usage counts by project
 
-The daemon sends three usage summaries when remote product telemetry is enabled:
+The daemon sends four usage summaries when remote product telemetry is enabled:
 
 | Event | What is counted |
 | --- | --- |
 | `ao.usage.messages_sent` | New, direct human Chat messages accepted into a session. One count per accepted message. |
 | `ao.usage.worker_pr_associated` | A provider PR first associated with an AO worker session. This is not proof the worker created the PR. |
 | `ao.usage.worker_pr_merged` | An associated worker PR first observed as merged. |
+| `ao.prs.closed` | An associated worker PR first observed as closed without merging. |
 
 The project grouping value, `project_telemetry_id`, is a random UUID persisted
 locally for each project and installation. It is not a hash of a repository,
@@ -219,9 +230,12 @@ are excluded. Repeated observations do not add counts. A PR already associated
 with a worker when this measurement is first installed contributes one
 association count, and an already merged PR also contributes one merged
 count. Both carry `historical: true`; newly observed associations and merges
-carry `historical: false`. Counts are grouped per project at each full flush,
-about every 30 minutes and at daemon or desktop shutdown. The one-minute
-archive pass skips the PR scan.
+carry `historical: false`. Historical counts are grouped per project; each new
+outcome is sent as its own event with `count: 1`, so summing `count` gives the
+same totals either way. PR summaries go out at each full flush, about every 30
+minutes and at daemon or desktop shutdown. The one-minute archive pass skips
+the PR scan. A PR already closed when closed outcomes started being measured
+is not reported as closed.
 PRs and messages accepted while product telemetry is off are not exported
 after a later opt-in.
 If events export is disabled in configuration when this version first runs,
@@ -229,6 +243,59 @@ backfilled worker PR associations that have not been observed again remain
 eligible for historical export if events export is enabled later. An observation
 while export is disabled marks that association reported locally. Explicit
 product telemetry opt-out discards pending associations before export.
+### Detail on the usage counts
+
+`ao.usage.messages_sent` keeps `count` as defined above and adds:
+
+- `steer_count`: guidance you steered into a running turn.
+- `send_count`: messages you sent with `/send`, meaning `ao send` outside an
+  AO session or a TUI session's composer. Messages an AO session sends another
+  session are not counted.
+- `desktop_count`, `mobile_count`, `cli_count`: all of the above split by the
+  client the message came from. The daemon works the client out from how the
+  request arrived; `cli` covers any local client without a browser origin.
+- `kind` (`orchestrator` or `worker`) and `harness` of the included project
+  session. Standalone message counts are excluded as noted above.
+
+New (`historical: false`) PR outcomes add:
+
+- `kind` and `harness` of the owning worker when known, plus
+  `scm_provider` (`github` or `gitlab`).
+- `ms_since_spawn`: from the worker starting to the PR opening, merging, or
+  closing.
+- `ms_since_open` (merged and closed): from the PR opening to its outcome.
+- `review_rounds` (merged and closed): reviews recorded on the PR.
+  `ao_review_used`: whether an AO review ran on it.
+- `merged_via` (merged): `desktop`, `mobile`, or `cli` when merged through
+  Orchestrator.inc, and `github` when the merge happened on GitHub. It is
+  omitted when the external merge surface is unknown, such as GitLab.
+- `first_for_install` (associated and merged): true only for the
+  installation's first new worker PR and first merge, recorded by
+  `telemetry_first_pr_opened` and `telemetry_first_pr_merged` under
+  `~/.ao/data`. An installation with earlier, already measured PRs reports
+  false.
+
+## How sessions start and end
+
+| Event | When it is sent | Properties |
+| --- | --- | --- |
+| `ao.session.spawned` | A session starts (existing event) | adds `created_by` and, for sessions a request started, `surface` |
+| `ao.sessions.ended` | A session is killed, replaced, torn down after its pull requests merged or its issue closed, or its runtime dies | `kind` (`standalone`, `worker`, or `orchestrator`), `harness`, `outcome`, `duration_ms`, `had_pr`, `waiting_input_count`, `created_by`, and for project sessions the same `project_telemetry_id` and `session_telemetry_id` as the usage counts |
+
+- `surface` is `desktop`, `mobile`, or `cli`, as above.
+- `created_by` is `user`, `orchestrator` (an orchestrator ran `ao spawn`),
+  `scheduled` (an automation's schedule), or `automation` (issue intake, or a
+  worker session starting another session). It is stored in the local
+  database next to the session. Sessions created before this was recorded
+  report no `created_by`.
+- `outcome` is `pr_opened` (the session has a pull request), `completed` (a
+  done report or a closed issue without a pull request), `killed` (stopped
+  while the agent was working), `abandoned` (stopped while it was idle or
+  waiting on you, with nothing delivered), or `failed` (its runtime died).
+- `waiting_input_count` is how many times the session stopped to wait for
+  you.
+- An ended event claims its session once in local storage after the terminal
+  state is durable. Concurrent end paths cannot export duplicate outcomes.
 
 ## Automation usage and creation
 
