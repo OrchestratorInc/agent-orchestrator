@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	sqlite3 "modernc.org/sqlite"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry/policyauthority"
 	"github.com/aoagents/agent-orchestrator/backend/internal/telemetrymeta"
 )
 
@@ -56,8 +59,8 @@ func TestCaptureTagsAuthoritativeInstallID(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "1.2.3", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 	CaptureError(context.Background(), errString("boom"), map[string]string{"install_id": "ins_spoofed"}, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
 	select {
 	case event := <-transport.events:
@@ -77,8 +80,8 @@ func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 	if !Enabled() {
 		t.Fatal("missing installation ID disabled Sentry")
 	}
@@ -96,6 +99,66 @@ func TestCaptureWithoutInstallIDKeepsErrorReportingEnabled(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Sentry event missing")
+	}
+}
+
+func TestCaptureChecksDurableConsentAtEachCapture(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 4)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	policyPath := filepath.Join(t.TempDir(), policyauthority.FileName)
+	reader := policyauthority.New(policyPath)
+	SetPolicyCheck(func(ctx context.Context) bool { return reader.EventsAllowed(ctx, true, true) })
+	writePolicy := func(eventsEnabled, productionConsent bool) {
+		t.Helper()
+		raw := fmt.Sprintf(`{"schema_version":2,"events_enabled":%t,"consent_generation":"7f80c8a9-ec67-4a16-a067-a444ffcc5cca","consent_production_enabled":%t,"updated_at":"2026-08-28T10:15:30.000Z"}`, eventsEnabled, productionConsent)
+		if err := os.WriteFile(policyPath, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capture := func() {
+		CaptureError(context.Background(), errString("synthetic"), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	}
+	capture()
+	if len(transport.events) != 1 {
+		t.Fatal("missing policy did not use default on")
+	}
+	writePolicy(true, false)
+	capture()
+	if len(transport.events) != 2 {
+		t.Fatal("legacy production flag vetoed opt-in")
+	}
+	writePolicy(true, true)
+	capture()
+	if len(transport.events) != 3 {
+		t.Fatal("opt-in did not reach transport")
+	}
+	writePolicy(false, true)
+	capture()
+	if len(transport.events) != 3 {
+		t.Fatal("durable opt-out reached transport")
+	}
+}
+
+func TestCaptureRejectsPolicyReplacedDuringCheck(t *testing.T) {
+	transport := &recordingTransport{events: make(chan *sentry.Event, 1)}
+	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	ctx := context.Background()
+	SetPolicyCheck(func(got context.Context) bool {
+		if got != ctx {
+			t.Error("capture context was not passed to the policy reader")
+		}
+		SetPolicyCheck(nil)
+		return true
+	})
+	CaptureError(ctx, errString("synthetic"), nil, "fp", telemetrymeta.RoutePattern(nil), telemetrymeta.FailureSite{})
+	if len(transport.events) != 0 {
+		t.Fatal("capture entered after its policy check was replaced")
 	}
 }
 
@@ -149,8 +212,8 @@ func TestCaptureBoundaryKeepsDiagnosticsWithoutUserNames(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 
 	const secret = "PrivateProjectOrSession_Z9"
 	tags := map[string]string{
@@ -225,8 +288,8 @@ func TestCaptureBoundaryKeepsRegisteredRouteTemplate(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 
 	router := chi.NewRouter()
 	router.Get("/api/v1/projects/{projectID}", func(w http.ResponseWriter, r *http.Request) {
@@ -261,8 +324,8 @@ func TestCaptureBoundaryScrubsAgentRelaunchFailure(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Release: "2.0.0", Environment: "stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 	const secret = "PrivateProjectOrSession_Z9"
 	CaptureError(context.Background(), fmt.Errorf("resume session %s: %s", secret, secret), map[string]string{
 		"component": "session_service", "operation": "resume_agent", "area": "agent",
@@ -287,8 +350,8 @@ func TestCaptureBoundaryUsesFailureSiteAndFixedAreaLabel(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", Release: "2.0.0", Environment: "nightly", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 	const secret = "PrivateProjectOrSession_Z9"
 	tags := map[string]string{"operation": "http_request", "error_code": "WORKSPACE_GIT_READ_FAILED", "area": "git", "path": "/" + secret}
 	site := telemetrymeta.CurrentFailureSite()
@@ -326,8 +389,8 @@ func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
 	if err := Init(Config{DSN: "https://public@example.com/1", InstallID: "ins_stable", Transport: transport}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { SetPolicyEnabled(false); enabled.Store(false) })
-	SetPolicyEnabled(true)
+	t.Cleanup(func() { SetPolicyCheck(nil); enabled.Store(false) })
+	SetPolicyCheck(func(context.Context) bool { return true })
 	assertRepanic := func(value string) {
 		t.Helper()
 		func() {
@@ -356,7 +419,7 @@ func TestRecoverBackgroundReportsSanitizedPanicUnderConsent(t *testing.T) {
 	default:
 		t.Fatal("background panic was not captured")
 	}
-	SetPolicyEnabled(false)
+	SetPolicyCheck(func(context.Context) bool { return false })
 	assertRepanic("private branch")
 	select {
 	case event := <-transport.events:
@@ -418,10 +481,10 @@ func TestPolicyDisableDrainsEnteredProviderCallAndRejectsLaterCapture(t *testing
 		t.Fatalf("Init: %v", err)
 	}
 	t.Cleanup(func() {
-		SetPolicyEnabled(false)
+		SetPolicyCheck(nil)
 		enabled.Store(false)
 	})
-	SetPolicyEnabled(true)
+	SetPolicyCheck(func(context.Context) bool { return true })
 
 	captured := make(chan struct{})
 	go func() {
@@ -434,7 +497,7 @@ func TestPolicyDisableDrainsEnteredProviderCallAndRejectsLaterCapture(t *testing
 		t.Fatal("provider call did not start")
 	}
 
-	SetPolicyEnabled(false)
+	SetPolicyCheck(func(context.Context) bool { return false })
 	drained := make(chan error, 1)
 	go func() { drained <- Drain(context.Background()) }()
 	select {

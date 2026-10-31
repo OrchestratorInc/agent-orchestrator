@@ -220,8 +220,10 @@ func Run(buildVersion string) error {
 	// policy file. It gates Sentry capture only: product telemetry answers to
 	// AO_TELEMETRY_EVENTS alone, as documented.
 	telemetryPolicy := policyauthority.New(filepath.Join(cfg.DataDir, policyauthority.FileName))
-	eventsAllowed := telemetryPolicy.EventsAllowed(context.Background(), cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
-	sentryobs.SetPolicyEnabled(eventsAllowed)
+	sentryobs.SetPolicyCheck(func(ctx context.Context) bool {
+		return telemetryPolicy.EventsAllowed(ctx, cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit)
+	})
+	defer sentryobs.SetPolicyCheck(nil)
 	telemetrySink, telemetryIdentity, remoteTelemetryActive := newTelemetrySink(cfg, store, log)
 	configureUsageRecording(cfg, store, telemetryIdentity)
 	defer func() { _ = telemetrySink.Close(context.Background()) }()
@@ -266,10 +268,6 @@ func Run(buildVersion string) error {
 			usage.flush(flushCtx, false)
 		}()
 	}
-	go func() {
-		defer sentryobs.RecoverBackground()
-		telemetryPolicy.Watch(ctx, time.Second, cfg.Telemetry.Events, cfg.Telemetry.EventsExplicit, eventsAllowed, sentryobs.SetPolicyEnabled)
-	}()
 	startGitHubLoginResolver(ctx, cfg, telemetryIdentity, log)
 	cdcPipe, err := startCDC(ctx, store, log)
 	if err != nil {
