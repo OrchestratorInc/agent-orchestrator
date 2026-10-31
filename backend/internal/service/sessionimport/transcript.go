@@ -450,13 +450,15 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			if r.Sidechain {
 				return nil
 			}
-			if r.SessionID != "" && r.SessionID != t.nativeID {
-				return errors.New("native identity mismatch")
-			}
-			if title := strings.TrimSpace(r.CustomTitle); title != "" {
+			// A forked or resumed conversation (--fork-session, older --resume)
+			// opens its own file with copies of the ancestor's records, which
+			// keep the ancestor's sessionId. They are this conversation's history
+			// too; only its own records name it.
+			own := r.SessionID == "" || r.SessionID == t.nativeID
+			if title := strings.TrimSpace(r.CustomTitle); title != "" && own {
 				customTitle = title
 			}
-			if title := strings.TrimSpace(r.AITitle); title != "" {
+			if title := strings.TrimSpace(r.AITitle); title != "" && own {
 				t.title = title
 			}
 			node := claudeNode{typ: r.Type, role: r.Message.Role, id: r.Message.ID, model: r.Message.Model, uuid: r.UUID, parent: r.ParentUUID, logicalParent: r.LogicalParentUUID, cwd: r.CWD, at: r.Timestamp, hidden: r.Meta || r.CompactSummary, omitted: r.Omitted}
@@ -653,26 +655,38 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	return t, nil
 }
 
-// codexVisible keeps one representation per role: Codex writes prompts as
-// events and/or response items, and only events exclude injected context.
-// Prompts are already unwrapped, so running it again changes nothing.
+// codexVisible keeps one representation of each message. Codex writes a prompt
+// as an event and/or a response item (only events exclude injected context),
+// and a reply as a response item and/or an event. Which ones it writes depends
+// on the client and version, and a thread continued elsewhere mixes them, so
+// the choice is made per run of consecutive same-role messages, one turn's
+// prompt or replies: the run's most preferred representation stands for it,
+// and a run with no preferred one keeps what it has. Prompts are already
+// unwrapped, so running it again changes nothing.
 func codexVisible(items []tagged) []tagged {
-	pick := func(kinds ...string) string {
-		for _, kind := range kinds {
-			if slices.ContainsFunc(items, func(i tagged) bool { return i.kind == kind }) {
-				return kind
+	preference := map[string]int{
+		"event-user": 0, "item-user": 1, "response-user": 2,
+		"response-assistant": 0, "event-assistant": 1, "item-assistant": 2,
+	}
+	out := items[:0]
+	for start := 0; start < len(items); {
+		end := start + 1
+		for end < len(items) && items[end].Role == items[start].Role {
+			end++
+		}
+		best := -1
+		for _, item := range items[start:end] {
+			if rank, ok := preference[item.kind]; ok && (best < 0 || rank < best) {
+				best = rank
 			}
 		}
-		return ""
-	}
-	user := pick("event-user", "item-user", "response-user")
-	assistant := pick("response-assistant", "event-assistant", "item-assistant")
-	out := items[:0]
-	for _, item := range items {
-		if item.kind != user && item.kind != assistant {
-			continue
+		// Writes trail reads, so filtering in place is safe.
+		for _, item := range items[start:end] {
+			if rank, ok := preference[item.kind]; ok && rank == best {
+				out = append(out, item)
+			}
 		}
-		out = append(out, item)
+		start = end
 	}
 	return out
 }

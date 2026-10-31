@@ -156,3 +156,31 @@ func TestOpenCodeMissingDatabaseYieldsNoCandidates(t *testing.T) {
 		t.Fatalf("discover = %+v, err = %v", files, err)
 	}
 }
+
+// A long OpenCode session is bounded while its parts are read: the oldest
+// text goes first and the opening prompt stays.
+func TestOpenCodeHeldTextIsBoundedWhileReading(t *testing.T) {
+	held := maxClaudeHeld
+	maxClaudeHeld = 60
+	t.Cleanup(func() { maxClaudeHeld = held })
+	root, db := newOpenCodeStore(t)
+	const id = "ses_e830c4a8affelmmC9j6HFbCZAr"
+	addSession(t, db, id, "", "/work/repo", "Long chat", 1700000009000, nil)
+	addMessage(t, db, id, "msg_00", "user", 1700000000000, "text:opening prompt")
+	for i := 1; i <= 6; i++ {
+		addMessage(t, db, id, fmt.Sprintf("msg_%02da", i), "assistant", int64(1700000000000+i*10+1), fmt.Sprintf("text:answer %d %s", i, strings.Repeat("x", 12)))
+		addMessage(t, db, id, fmt.Sprintf("msg_%02db", i), "user", int64(1700000000000+i*10+2), fmt.Sprintf("text:prompt %d", i))
+	}
+	got, err := readTranscript(context.Background(), domain.HarnessOpenCode, root, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.shortened || got.messages[0].Text != "opening prompt" || got.messages[len(got.messages)-1].Text != "prompt 6" {
+		t.Fatalf("shortened=%v messages=%q", got.shortened, texts(got.messages))
+	}
+	for _, m := range got.messages {
+		if strings.HasPrefix(m.Text, "answer 1 ") {
+			t.Fatalf("the oldest text was kept past the bound: %q", texts(got.messages))
+		}
+	}
+}

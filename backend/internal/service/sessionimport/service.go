@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -187,25 +188,57 @@ func originURL(config, worktree string) string {
 			continue
 		}
 		if key, value, ok := strings.Cut(line, "="); inOrigin && ok && strings.TrimSpace(key) == "url" {
-			// GitHub SSH and HTTPS URLs identify the same repository. Other remotes match exactly.
 			remote := strings.TrimSuffix(strings.TrimSpace(value), "/")
 			if path, ok := strings.CutPrefix(remote, "file://"); ok {
 				remote = path
 			}
-			if colon, slash := strings.Index(remote, ":"), strings.Index(remote, "/"); !strings.Contains(remote, "://") && (colon < 0 || slash >= 0 && slash < colon) {
-				if !filepath.IsAbs(remote) {
-					remote = filepath.Join(worktree, remote)
-				}
-				remote = canonical(remote)
+			if identity, ok := remoteIdentity(remote); ok {
+				return identity
 			}
-			remote = strings.TrimSuffix(remote, ".git")
-			for _, prefix := range []string{"git@github.com:", "https://github.com/", "ssh://git@github.com/"} {
-				remote = strings.TrimPrefix(remote, prefix)
+			// A local path, which keeps its case: the filesystem may be case-sensitive.
+			if !filepath.IsAbs(remote) {
+				remote = filepath.Join(worktree, remote)
 			}
-			return remote
+			return strings.TrimSuffix(canonical(remote), ".git")
 		}
 	}
 	return ""
+}
+
+// remoteIdentity reduces a network remote to host/path, so the SSH, scp-style
+// and HTTPS forms of one repository, with or without a user, a default port or
+// .git, compare equal. Hosts such as GitHub ignore case in owner and repository
+// names, so the identity is lowercase. ok is false for a local path.
+func remoteIdentity(remote string) (string, bool) {
+	if filepath.IsAbs(remote) || filepath.VolumeName(remote) != "" {
+		return "", false
+	}
+	var authority, path string
+	if scheme, rest, found := strings.Cut(remote, "://"); found {
+		switch strings.ToLower(scheme) {
+		case "ssh", "git+ssh", "https", "http", "git":
+		default:
+			return "", false
+		}
+		authority, path, _ = strings.Cut(rest, "/")
+		if host, port, hasPort := strings.Cut(authority[strings.LastIndex(authority, "@")+1:], ":"); hasPort {
+			switch port {
+			case "", "22", "80", "443":
+				authority = host
+			}
+		}
+	} else if colon, slash := strings.Index(remote, ":"), strings.Index(remote, "/"); colon > 1 && (slash < 0 || colon < slash) {
+		// scp-like syntax: [user@]host:path. A one-letter "host" is a drive.
+		authority, path = remote[:colon], remote[colon+1:]
+	} else {
+		return "", false
+	}
+	host := authority[strings.LastIndex(authority, "@")+1:]
+	path = strings.TrimSuffix(strings.Trim(path, "/"), ".git")
+	if host == "" || path == "" {
+		return "", false
+	}
+	return strings.ToLower(host + "/" + path), true
 }
 
 // SameRepository recognizes linked worktrees and separate clones of the same origin.
@@ -441,6 +474,29 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 	return out, nil
 }
 
+// codexThreadSegments finds one thread's rollout files. It runs before each
+// first-open attempt, so unlike discover it matches file names only: no other
+// rollout is stat'ed or grouped.
+func codexThreadSegments(ctx context.Context, root, threadID string) ([]string, error) {
+	var paths []string
+	err := filepath.WalkDir(filepath.Join(root, "sessions"), func(path string, entry fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if walkErr != nil {
+			return nil //nolint:nilerr // Unreadable provider files are deliberately hidden.
+		}
+		if entry.Type().IsRegular() && codexThreadID(path) == threadID {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	return codexSegments(paths), nil
+}
+
 // codexSegments orders a thread's files by their timestamped names. While
 // Codex compresses a segment both copies can exist; the plain one is current.
 func codexSegments(paths []string) []string {
@@ -491,7 +547,13 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	imported := map[[2]string]domain.SessionID{}
 	managed := map[string]domain.SessionID{}
 	for _, rec := range sessions {
-		if imp := rec.Metadata.ImportSource; imp != nil {
+		imp := rec.Metadata.ImportSource
+		if imp != nil && rec.IsTerminated {
+			// A terminated import no longer holds its conversation, which may
+			// be imported again.
+			continue
+		}
+		if imp != nil {
 			imported[[2]string{imp.ConfigDir, imp.NativeID}] = rec.ID
 		}
 		for _, native := range []string{rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID} {
@@ -512,7 +574,13 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		root := canonical(configured)
 		files, err := s.discover(ctx, harness, root)
 		if err != nil {
-			return Preview{}, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return Preview{}, ctxErr
+			}
+			// An unreadable provider store, such as a locked, corrupt or
+			// older-schema opencode.db, hides only its own chats.
+			slog.Warn("session import: skipping a provider whose history could not be read", "harness", harness, "err", err)
+			continue
 		}
 		// ponytail: every scan reads all histories (4 GiB took 27 s cold, under 1 s once
 		// cached by size and mtime). Add a persistent index if that first scan grows.
@@ -598,15 +666,12 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 	paths := []string{rec.Metadata.NativeTranscriptPath}
 	if rec.Harness == domain.HarnessCodex {
 		// Long Codex threads continue in later segment files.
-		files, err := s.discover(ctx, rec.Harness, source.ConfigDir)
+		segments, err := codexThreadSegments(ctx, source.ConfigDir, source.NativeID)
 		if err != nil {
 			return err
 		}
-		for _, file := range files {
-			if file.key == source.NativeID {
-				paths = file.paths
-				break
-			}
+		if len(segments) > 0 {
+			paths = segments
 		}
 	}
 	fresh, err := readTranscript(ctx, rec.Harness, source.ConfigDir, paths...)
@@ -617,6 +682,51 @@ func (s *Service) RefreshArchive(ctx context.Context, rec domain.SessionRecord) 
 		return errors.New("the source no longer holds this conversation")
 	}
 	return replacer.ReplaceImportedMessages(ctx, rec.ID, fresh.messages)
+}
+
+// importOne registers one selected conversation from its fresh read. s.mu is held.
+func (s *Service) importOne(ctx context.Context, dests *destinations, id string, source transcript, readErr error) Result {
+	result := Result{ID: id, Status: "failed"}
+	// Out of time: report every row, so the dialog shows what was created.
+	if ctx.Err() != nil {
+		result.Error = "The import stopped before this conversation. Import it again."
+		return result
+	}
+	item, found := s.selections[id]
+	if !found {
+		result.Error = "Scan again; this selection is no longer available"
+		return result
+	}
+	if item.candidate.SessionID != "" {
+		result.Status = "already_imported"
+		result.SessionID = item.candidate.SessionID
+		return result
+	}
+	project, eligible := dests.resolve(source.cwd)
+	if readErr != nil || !eligible || project != item.candidate.ProjectID || source.nativeID != item.source.nativeID || source.cwd != item.source.cwd {
+		result.Error = "The source or project changed. Scan again before importing."
+		return result
+	}
+	now := time.Now().UTC()
+	rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: domain.SessionModeChat, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
+	rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd}}
+	// Claude resumes on the user's default model unless told otherwise; keep the chat's own.
+	if source.harness == domain.HarnessClaudeCode {
+		rec.Metadata.Model = source.model
+	}
+	created, fresh, createErr := s.store.CreateImportedSession(ctx, rec, source.messages)
+	if createErr != nil {
+		result.Error = fmt.Sprintf("Import failed: %v", createErr)
+		return result
+	}
+	result.SessionID = created.ID
+	result.Status = "already_imported"
+	if fresh {
+		result.Status = "created"
+	}
+	item.candidate.SessionID = created.ID
+	s.selections[id] = item
+	return result
 }
 
 // Import revalidates source identity and destination before each atomic registration.
@@ -631,54 +741,33 @@ func (s *Service) Import(ctx context.Context, ids []string) ([]Result, error) {
 		return nil, err
 	}
 	results := make([]Result, 0, len(ids))
-	for _, id := range ids {
-		result := Result{ID: id, Status: "failed"}
-		// Out of time: report every row, so the dialog shows what was created.
-		if ctx.Err() != nil {
-			result.Error = "The import stopped before this conversation. Import it again."
-			results = append(results, result)
-			continue
+	// Histories are read in parallel, as Scan reads them, a batch at a time so
+	// only one batch of full histories is held; each batch then registers in
+	// order.
+	batch := max(1, runtime.GOMAXPROCS(0)/2)
+	for start := 0; start < len(ids); start += batch {
+		chunk := ids[start:min(start+batch, len(ids))]
+		type fresh struct {
+			source transcript
+			err    error
 		}
-		item, found := s.selections[id]
-		if !found {
-			result.Error = "Scan again; this selection is no longer available"
-			results = append(results, result)
-			continue
-		}
-		if item.candidate.SessionID != "" {
-			result.Status = "already_imported"
-			result.SessionID = item.candidate.SessionID
-			results = append(results, result)
-			continue
-		}
-		// The fresh read is what gets stored, so ordinary growth since the scan is fine.
-		source, readErr := readTranscript(ctx, item.source.harness, item.source.root, item.source.paths...)
-		project, eligible := dests.resolve(source.cwd)
-		if readErr != nil || !eligible || project != item.candidate.ProjectID || source.nativeID != item.source.nativeID || source.cwd != item.source.cwd {
-			result.Error = "The source or project changed. Scan again before importing."
-			results = append(results, result)
-			continue
-		}
-		now := time.Now().UTC()
-		rec := domain.SessionRecord{ProjectID: project, Kind: domain.KindWorker, Harness: source.harness, Mode: domain.SessionModeChat, DisplayName: item.candidate.Title, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: source.last}, CreatedAt: now, UpdatedAt: source.last, ProvisionState: domain.SessionProvisionReady}
-		rec.Metadata = domain.SessionMetadata{ProviderConversationID: source.nativeID, AgentSessionID: source.nativeID, NativeTranscriptPath: source.path, ImportSource: &domain.SessionImportSource{NativeID: source.nativeID, ConfigDir: source.root, CWD: source.cwd}}
-		// Claude resumes on the user's default model unless told otherwise; keep the chat's own.
-		if source.harness == domain.HarnessClaudeCode {
-			rec.Metadata.Model = source.model
-		}
-		created, fresh, createErr := s.store.CreateImportedSession(ctx, rec, source.messages)
-		if createErr != nil {
-			result.Error = fmt.Sprintf("Import failed: %v", createErr)
-		} else {
-			result.SessionID = created.ID
-			result.Status = "already_imported"
-			if fresh {
-				result.Status = "created"
+		reads := make([]fresh, len(chunk))
+		var group errgroup.Group
+		for i, id := range chunk {
+			item, found := s.selections[id]
+			if !found || item.candidate.SessionID != "" || ctx.Err() != nil {
+				continue
 			}
-			item.candidate.SessionID = created.ID
-			s.selections[id] = item
+			group.Go(func() error {
+				// The fresh read is what gets stored, so ordinary growth since the scan is fine.
+				reads[i].source, reads[i].err = readTranscript(ctx, item.source.harness, item.source.root, item.source.paths...)
+				return nil
+			})
 		}
-		results = append(results, result)
+		_ = group.Wait()
+		for i, id := range chunk {
+			results = append(results, s.importOne(ctx, dests, id, reads[i].source, reads[i].err))
+		}
 	}
 	return results, nil
 }

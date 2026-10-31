@@ -363,13 +363,13 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 				if err != nil {
 					return rec, err
 				}
-				// Like a session started from a feature branch, show only this
-				// session's own changes: compare with the commit the chat continued
-				// from, following the default branch while that commit is on it.
-				diffSHA, diffRef = resolveSpawnDiffBase(ctx, ws.Path, project.Config.WorktreeBaseBranch())
-				if diffSHA != sha {
-					diffSHA, diffRef = sha, "HEAD"
-				}
+			}
+			// Like a session started from a feature branch, show only this
+			// session's own changes: compare with the commit the chat continued
+			// from. A retry resets an existing workspace to the source's current
+			// HEAD, so the base follows the commit transferred this time.
+			if ws.Path != "" {
+				diffSHA, diffRef = importDiffBase(ctx, ws.Path, sha, project.Config.WorktreeBaseBranch())
 			}
 		case domain.ProjectKindWorkspace:
 			copyFrom = project.Path
@@ -503,6 +503,18 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 			workspace.ImportSource = &stored
 			rec.Metadata = workspace
 			source = rec.Metadata.ImportSource
+		} else if diffSHA != "" && (rec.Metadata.DiffBaseSHA != diffSHA || rec.Metadata.DiffBaseRef != diffRef) {
+			// Record the new base before the copy moves the workspace to it.
+			workspace := rec.Metadata
+			workspace.DiffBaseSHA, workspace.DiffBaseRef = diffSHA, diffRef
+			updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, source, workspace, m.clock())
+			if err != nil {
+				return rec, err
+			}
+			if !updated {
+				return rec, importNotice("session changed during workspace transfer; retry")
+			}
+			rec.Metadata = workspace
 		}
 		if copyFrom != "" {
 			if err := copyImportedWorkspace(ctx, copyFrom, ws.Path, overrides, importCopyMarker(ws.Path, rec.ID)); err != nil {
@@ -526,7 +538,13 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 	}
 	// Retry setup after a failed post-create command, without copying over AO edits.
 	if !rec.Metadata.ImportSource.Prepared {
-		if err := m.provisionWorkspace(ctx, project, ws.Path); err != nil {
+		// Like a native spawn, give the post-create steps their own limits on
+		// top of the resume request's budget, so a long install is not cut
+		// short and rerun from the start on every retry.
+		setupCtx, cancelSetup := ports.ExtendSpawnRequestBudget(ctx, postCreateBudget(0, project.Config.PostCreate))
+		err := m.provisionWorkspace(setupCtx, project, ws.Path)
+		cancelSetup()
+		if err != nil {
 			return rec, err
 		}
 		prepared := *rec.Metadata.ImportSource
@@ -547,6 +565,57 @@ func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.Sessi
 		return rec, importNotice("session was terminated during workspace setup")
 	}
 	return current, nil
+}
+
+// importDiffBase is the diff base for an imported workspace whose history ends
+// at sha: the commit itself, named after the default branch while that commit
+// is on it.
+func importDiffBase(ctx context.Context, root, sha, defaultBranch string) (string, string) {
+	for _, ref := range spawnDiffBaseRefCandidates(defaultBranch) {
+		if base, ok := spawnGitSingleLine(ctx, root, "merge-base", sha, ref); ok {
+			if base == sha {
+				return sha, ref
+			}
+			break
+		}
+	}
+	return sha, "HEAD"
+}
+
+// importLaunchPath is the folder an imported chat continues in: the subfolder
+// it ran in when the new worktree has it. Only Git's changes are copied, so a
+// git-ignored or empty folder, or one inside an unregistered nested repository,
+// is missing there; the provider would then fail to start on every retry, so
+// the chat continues from the worktree root instead.
+func importLaunchPath(workspace, subdir string) string {
+	path := filepath.Join(workspace, subdir)
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		return workspace
+	}
+	return path
+}
+
+// importHeldByLiveSession reports whether a terminated imported session's
+// conversation was imported again into a live session. Only one live session
+// may hold an imported conversation, so the terminated one cannot come back.
+func (m *Manager) importHeldByLiveSession(ctx context.Context, rec domain.SessionRecord) (bool, error) {
+	source := rec.Metadata.ImportSource
+	if source == nil {
+		return false, nil
+	}
+	sessions, err := m.store.ListAllSessions(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, other := range sessions {
+		if other.ID == rec.ID || other.IsTerminated || other.Metadata.ImportSource == nil {
+			continue
+		}
+		if other.Metadata.ImportSource.ConfigDir == source.ConfigDir && other.Metadata.ImportSource.NativeID == source.NativeID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func importCopyMarker(workspace string, id domain.SessionID) string {
@@ -598,7 +667,9 @@ func importFacts(ctx context.Context, root *os.Root, paths []string) (map[string
 			return nil, err
 		}
 		info, err := root.Lstat(path)
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || err != nil && importAncestorNotDir(root, path) {
+			// A tracked folder replaced by a file (ENOTDIR on its children)
+			// deleted everything that was under it.
 			continue
 		}
 		if err != nil {
@@ -612,6 +683,17 @@ func importFacts(ctx context.Context, root *os.Root, paths []string) (map[string
 		}
 	}
 	return facts, nil
+}
+
+// importAncestorNotDir reports whether a folder above path now exists as
+// something other than a folder, so path itself cannot exist.
+func importAncestorNotDir(root *os.Root, path string) bool {
+	for dir := filepath.Dir(path); dir != "." && dir != string(filepath.Separator); dir = filepath.Dir(dir) {
+		if info, err := root.Lstat(dir); err == nil {
+			return !info.IsDir()
+		}
+	}
+	return false
 }
 
 // clearEarlierImportCopy removes what an earlier, failed copy left that the

@@ -945,16 +945,16 @@ func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeA
 	res, err := s.manager.ResumeAgentWithMode(ctx, id)
 	if err != nil {
 		// Known conditions (open elsewhere, resume in progress, terminated) keep
-		// their codes; any other failure of a pending import keeps its own code
-		// but shows only a fixed, user-written reason: raw Git and filesystem
-		// errors name local paths and stay in the daemon log.
+		// their codes; any other failure of a pending import is logged in full
+		// and reported by importResumeAPIError. The record is read even after
+		// the request's budget ran out, so a timeout is still recognized.
 		var known *apierr.Error
 		if !errors.As(mapSessionError(err), &known) {
-			if rec, ok, readErr := s.store.GetSession(ctx, id); readErr == nil && ok && rec.NeedsImportResume() {
+			if rec, ok, readErr := s.store.GetSession(context.WithoutCancel(ctx), id); readErr == nil && ok && rec.NeedsImportResume() {
 				if s.logger != nil {
 					s.logger.Warn("resume imported session", "session", id, "err", err)
 				}
-				apiErr := apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", sessionmanager.ImportFailureMessage(err), nil)
+				apiErr := importResumeAPIError(err)
 				s.emitRelaunchFailed(ctx, "resume_agent", id, err, apiErr)
 				return ResumeAgentOutcome{}, apiErr
 			}
@@ -968,6 +968,20 @@ func (s *Service) ResumeAgent(ctx context.Context, id domain.SessionID) (ResumeA
 		return ResumeAgentOutcome{}, err
 	}
 	return ResumeAgentOutcome{Session: session, Mode: restoreModeView(res.Mode)}, nil
+}
+
+// importResumeAPIError reports a pending import's failure without its raw
+// text: a reason written for the user (or a failed Setup step, as a native
+// spawn shows it) is a conflict the user can act on, a timeout asks for a
+// retry, and anything else is a server fault with a fixed message.
+func importResumeAPIError(err error) *apierr.Error {
+	if message, ok := sessionmanager.ImportFailureNotice(err); ok {
+		return apierr.Conflict("SESSION_IMPORT_RESUME_FAILED", message, nil)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return apierr.Unavailable("SESSION_IMPORT_RESUME_TIMEOUT", "Preparing this imported chat took too long. Try again.")
+	}
+	return apierr.Internal("SESSION_IMPORT_RESUME_FAILED", sessionmanager.ImportFailureFallback)
 }
 
 // StartAccountTransition moves the session's agent to another provider account

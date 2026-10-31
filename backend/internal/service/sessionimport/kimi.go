@@ -160,6 +160,39 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 		pending     bool
 		pendingAt   time.Time
 	)
+	// held is the visible text kept so far. Past maxClaudeHeld the oldest text
+	// is dropped while reading, as Claude and Pi do, so a huge wire.jsonl is not
+	// held whole; the opening prompt (first) stays.
+	held, drop, first := 0, 0, -1
+	// hold accounts for the visible item just appended and drops the oldest
+	// text over the bound. A dropped item stays as a hidden entry, so undo
+	// anchors and compaction boundaries keep their counts.
+	hold := func() {
+		last := len(items) - 1
+		if first < 0 {
+			first = last
+		}
+		held += len(items[last].msg.Text)
+		for ; held > maxClaudeHeld && drop < len(items); drop++ {
+			if drop != first && !items[drop].hidden {
+				held -= len(items[drop].msg.Text)
+				items[drop].msg.Text, items[drop].hidden = "", true
+				t.shortened = true
+			}
+		}
+	}
+	// recount follows a clear or undo that removed newer items.
+	recount := func() {
+		held, drop = 0, min(drop, len(items))
+		if first >= len(items) {
+			first = -1
+		}
+		for _, item := range items {
+			if !item.hidden {
+				held += len(item.msg.Text)
+			}
+		}
+	}
 	note := func(at time.Time) {
 		if at.After(t.last) && at.Before(now.Add(time.Hour)) {
 			t.last = at
@@ -173,6 +206,7 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 			return
 		}
 		items = append(items, kimiItem{msg: Message{Role: domain.MessageRole(role), Text: text, At: at}})
+		hold()
 	}
 	// A turn's assistant text streams as many content.part events, possibly split
 	// across tool-use steps. Grouping assistant text on the turn boundary avoids
@@ -215,6 +249,7 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 				switch {
 				case strings.TrimSpace(text) != "":
 					items = append(items, kimiItem{msg: Message{Role: domain.MessageRoleUser, Text: text, At: at}, anchor: anchor})
+					hold()
 				case anchor:
 					// A typed prompt with no visible text (image/attachment-only, or
 					// only the omitted marker) still anchors undo in Kimi; keep it
@@ -250,10 +285,12 @@ func readKimiTranscript(ctx context.Context, root string, paths ...string) (tran
 			// only what followed, so its session/load replay and this history agree.
 			flushAssistant()
 			items = items[:0]
+			recount()
 		case "context.undo":
 			// Kimi retracts the last `count` undo anchors; mirror its applyUndo.
 			flushAssistant()
 			items = dropLastKimiTurns(items, r.Count)
+			recount()
 		}
 		return nil
 	}

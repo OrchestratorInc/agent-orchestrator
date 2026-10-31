@@ -129,6 +129,12 @@ func openCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map
 	defer func() { _ = rows.Close() }()
 	textByMessage := map[string]string{}
 	shortened := false
+	// As Claude and Pi do, drop the oldest text once the held text passes
+	// maxClaudeHeld, so a huge session is not held whole; the opening message
+	// stays, and a dropped message's later parts stay dropped.
+	var order []string
+	dropped := map[string]bool{}
+	held, drop := 0, 0
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
@@ -146,10 +152,24 @@ func openCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map
 			chunk = chunk[:maxVisibleBytes]
 			shortened = true
 		}
+		if dropped[messageID] {
+			continue
+		}
 		if existing := textByMessage[messageID]; existing != "" {
 			textByMessage[messageID] = existing + "\n\n" + chunk
+			held += len("\n\n" + chunk)
 		} else {
 			textByMessage[messageID] = chunk
+			held += len(chunk)
+			order = append(order, messageID)
+		}
+		for ; held > maxClaudeHeld && drop < len(order); drop++ {
+			if drop == 0 {
+				continue // the opening message stays
+			}
+			held -= len(textByMessage[order[drop]])
+			delete(textByMessage, order[drop])
+			dropped[order[drop]], shortened = true, true
 		}
 	}
 	return textByMessage, shortened, rows.Err()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,7 +137,8 @@ func (p *Plugin) LocateTranscript(ctx context.Context, ref ports.NativeSessionRe
 		switch {
 		case err == nil && info.Mode().IsRegular():
 			return path, true, nil
-		case errors.Is(err, os.ErrNotExist):
+		case errors.Is(err, os.ErrNotExist) || errors.Is(err, fs.ErrPermission):
+			// A missing or unreadable session folder is simply not a match.
 			continue
 		case err != nil:
 			return "", false, fmt.Errorf("droid: stat transcript: %w", err)

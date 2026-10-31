@@ -240,7 +240,9 @@ func setupRoute(req *http.Request) bool {
 		return false
 	}
 	switch chi.RouteContext(req.Context()).RoutePattern() {
-	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore":
+	case "/api/v1/sessions", "/api/v1/orchestrators", "/api/v1/sessions/{sessionId}/restore",
+		// The first open of an imported chat runs Setup in its new workspace.
+		"/api/v1/sessions/{sessionId}/resume-agent":
 		return true
 	}
 	return false
@@ -302,13 +304,13 @@ func (a *API) Register(root chi.Router) {
 					// Setup steps' limits once it knows its project.
 					if setupRoute(req) {
 						budget := timeout
-						if attachmentUploadRoute(req) {
+						if attachmentUploadRoute(req) || resumeAgentRoute(req) {
 							budget = max(timeout, 10*time.Minute)
 						}
 						serveWithSetupBudget(next, w, req, budget)
 						return
 					}
-					if attachmentUploadRoute(req) || resumeAgentRoute(req) || sessionImportRoute(req) {
+					if attachmentUploadRoute(req) || sessionImportRoute(req) {
 						upload.ServeHTTP(w, req)
 						return
 					}

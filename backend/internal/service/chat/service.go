@@ -1982,6 +1982,41 @@ func withDispatchingTurnRunning(turns []domain.ConversationTurn, dispatching ...
 	return out
 }
 
+// adoptedImportSnapshot is the whole history of an adopted import: every page
+// of the paged read, which alone puts the archive in place of the provider's
+// replay, joined oldest first, as a full Snapshot promises.
+func (s *Service) adoptedImportSnapshot(ctx context.Context, id domain.SessionID) (Snapshot, error) {
+	snap, err := s.SnapshotPage(ctx, id, 0, 0)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	seenTurns := make(map[string]bool, len(snap.Turns))
+	for _, turn := range snap.Turns {
+		seenTurns[turn.ID] = true
+	}
+	for snap.HasMoreBefore && snap.OldestSequence > 0 {
+		page, err := s.SnapshotPage(ctx, id, snap.OldestSequence, 0)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if page.OldestSequence <= 0 || page.OldestSequence >= snap.OldestSequence {
+			break // No progress: stop rather than loop on a malformed page.
+		}
+		var turns []domain.ConversationTurn
+		for _, turn := range page.Turns {
+			if !seenTurns[turn.ID] {
+				seenTurns[turn.ID] = true
+				turns = append(turns, turn)
+			}
+		}
+		snap.Turns = append(turns, snap.Turns...)
+		snap.Messages = append(page.Messages, snap.Messages...)
+		snap.Activities = append(page.Activities, snap.Activities...)
+		snap.OldestSequence, snap.HasMoreBefore = page.OldestSequence, page.HasMoreBefore
+	}
+	return snap, nil
+}
+
 // Snapshot reads a session's conversation.
 //
 // It does not require a live controller: history must remain readable after the
@@ -2000,7 +2035,7 @@ func (s *Service) Snapshot(ctx context.Context, id domain.SessionID) (Snapshot, 
 	// An adopted import shows its archive in place of the provider's replay,
 	// which only the paged read assembles.
 	if source := record.Metadata.ImportSource; source != nil && source.HistoryThrough > 0 && s.pageReader != nil {
-		return s.SnapshotPage(ctx, id, 0, 0)
+		return s.adoptedImportSnapshot(ctx, id)
 	}
 
 	conversation, err := s.store.ConversationForSession(ctx, id)

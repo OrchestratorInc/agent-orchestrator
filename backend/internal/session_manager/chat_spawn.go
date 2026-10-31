@@ -524,7 +524,7 @@ func (m *Manager) resumeChatController(
 	}
 	launchPath := ws.Path
 	if source := rec.Metadata.ImportSource; source != nil && source.WorkingSubdir != "" {
-		launchPath = filepath.Join(ws.Path, source.WorkingSubdir)
+		launchPath = importLaunchPath(ws.Path, source.WorkingSubdir)
 	}
 	freshIfMissing := !requireNativeHistory && !reconnectOnly && providerHandoff == nil && m.providerNeverPersisted(ctx, rec)
 	var awakeTarget *domain.AwakeAgentTarget

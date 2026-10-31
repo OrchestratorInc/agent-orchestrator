@@ -39,6 +39,7 @@ type timeoutProbeSessionService struct {
 	spawnRuns     time.Duration
 	spawnLive     chan bool
 	resumeBudget  chan time.Duration
+	resumeSetup   time.Duration
 }
 
 // Spawn extends the request's budget by spawnSetup (none when negative), runs
@@ -74,6 +75,10 @@ func (s *timeoutProbeSessionService) recordBudget(t *testing.T) time.Duration {
 }
 
 func (s *timeoutProbeSessionService) ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error) {
+	// An import's first open extends the budget by its Setup steps; with none
+	// the request keeps its base budget.
+	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, s.resumeSetup)
+	defer cancel()
 	s.resumeBudget <- remainingRequestBudget(ctx)
 	return sessionsvc.ResumeAgentOutcome{Session: domain.Session{ID: id}}, nil
 }
@@ -300,12 +305,13 @@ func TestSetupRoutesAreTheOnesThatRunSetup(t *testing.T) {
 	router.Post("/api/v1/sessions", record)
 	router.Post("/api/v1/orchestrators", record)
 	router.Post("/api/v1/sessions/{sessionId}/restore", record)
+	router.Post("/api/v1/sessions/{sessionId}/resume-agent", record)
 	router.Post("/api/v1/sessions/{sessionId}/send", record)
 	router.Get("/api/v1/sessions", record)
-	for _, call := range [][2]string{{"POST", "/api/v1/sessions"}, {"POST", "/api/v1/orchestrators"}, {"POST", "/api/v1/sessions/s1/restore"}, {"POST", "/api/v1/sessions/s1/send"}, {"GET", "/api/v1/sessions"}} {
+	for _, call := range [][2]string{{"POST", "/api/v1/sessions"}, {"POST", "/api/v1/orchestrators"}, {"POST", "/api/v1/sessions/s1/restore"}, {"POST", "/api/v1/sessions/s1/resume-agent"}, {"POST", "/api/v1/sessions/s1/send"}, {"GET", "/api/v1/sessions"}} {
 		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(call[0], call[1], nil))
 	}
-	want := map[string]bool{"POST /api/v1/sessions": true, "POST /api/v1/orchestrators": true, "POST /api/v1/sessions/s1/restore": true, "POST /api/v1/sessions/s1/send": false, "GET /api/v1/sessions": false}
+	want := map[string]bool{"POST /api/v1/sessions": true, "POST /api/v1/orchestrators": true, "POST /api/v1/sessions/s1/restore": true, "POST /api/v1/sessions/s1/resume-agent": true, "POST /api/v1/sessions/s1/send": false, "GET /api/v1/sessions": false}
 	for call, setup := range want {
 		if seen[call] != setup {
 			t.Errorf("setupRoute(%s) = %v, want %v", call, seen[call], setup)
@@ -332,6 +338,27 @@ func TestResumeAgentRouteUsesExtendedTimeout(t *testing.T) {
 	budget := <-svc.resumeBudget
 	if budget < 9*time.Minute || budget > 10*time.Minute {
 		t.Fatalf("resume-agent budget = %s, want about 10 minutes", budget)
+	}
+}
+
+// The first open of an imported chat runs the project's Setup, which may be
+// allowed longer than the base resume budget.
+func TestResumeAgentRouteExtendsBudgetForSetup(t *testing.T) {
+	svc := &timeoutProbeSessionService{resumeBudget: make(chan time.Duration, 1), resumeSetup: 20 * time.Minute}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: 250 * time.Millisecond},
+		discardLogger(),
+		nil,
+		APIDeps{Sessions: svc},
+		ControlDeps{},
+	)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/ao-1/resume-agent", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST resume-agent status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	if budget := <-svc.resumeBudget; budget < 29*time.Minute || budget > 30*time.Minute {
+		t.Fatalf("resume-agent budget with 20 minutes of Setup = %s, want about 30 minutes", budget)
 	}
 }
 

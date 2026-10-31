@@ -15,16 +15,21 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/processalive"
 )
 
 // waitForExecName waits until a just-started child has replaced the forked test
-// binary with its own executable. Until then ps names the child after the test
-// binary, so an ownership check run too early sees no Claude process.
+// binary with its own executable and is still running. Until then ps names the
+// child after the test binary, so an ownership check run too early sees no
+// Claude process; a child that already exited is a zombie, never an owner.
 func waitForExecName(t *testing.T, pid int, name string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		if got, _, ok := processStart(context.Background(), pid); ok && got == name {
+			if !processalive.Alive(pid) {
+				t.Fatalf("process %d ran as %q but already exited", pid, name)
+			}
 			return
 		}
 		if time.Now().After(deadline) {
@@ -70,6 +75,10 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := exec.Command(claudeBin, "30")
+	// A multicall coreutils (uutils, Ubuntu's default since 25.10) picks the
+	// tool from argv[0] and would exit at once as "claude"; the executable's
+	// own name, which ps reports, stays "claude".
+	owner.Args[0] = "sleep"
 	if err := owner.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -145,6 +154,10 @@ func TestAdoptedClaudeImportOpenElsewhereBlocksResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := exec.Command(claudeBin, "30")
+	// A multicall coreutils (uutils, Ubuntu's default since 25.10) picks the
+	// tool from argv[0] and would exit at once as "claude"; the executable's
+	// own name, which ps reports, stays "claude".
+	owner.Args[0] = "sleep"
 	if err := owner.Start(); err != nil {
 		t.Fatal(err)
 	}

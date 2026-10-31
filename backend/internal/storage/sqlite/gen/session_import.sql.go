@@ -40,7 +40,7 @@ func (q *Queries) DeleteSessionImportMessages(ctx context.Context, sessionID str
 
 const findImportedSession = `-- name: FindImportedSession :one
 SELECT id FROM sessions
-WHERE import_source <> ''
+WHERE import_source <> '' AND is_terminated = 0
   AND CAST(json_extract(NULLIF(import_source, ''), '$.configDir') AS TEXT) = CAST(?1 AS TEXT)
   AND CAST(json_extract(NULLIF(import_source, ''), '$.nativeId') AS TEXT) = CAST(?2 AS TEXT)
 LIMIT 1
@@ -52,6 +52,7 @@ type FindImportedSessionParams struct {
 }
 
 // Matches the sessions_import_identity expressions, so this is an index search.
+// A terminated session no longer holds the conversation.
 func (q *Queries) FindImportedSession(ctx context.Context, arg FindImportedSessionParams) (domain.SessionID, error) {
 	row := q.db.QueryRowContext(ctx, findImportedSession, arg.ConfigDir, arg.NativeID)
 	var id domain.SessionID

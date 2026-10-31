@@ -3028,6 +3028,11 @@ func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (res
 	if !rec.IsTerminated {
 		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrNotRestorable)
 	}
+	if held, err := m.importHeldByLiveSession(ctx, rec); err != nil {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, err)
+	} else if held {
+		return RestoreResult{}, fmt.Errorf("restore %s: %w", id, ErrSessionOpenElsewhere)
+	}
 	meta := rec.Metadata
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
