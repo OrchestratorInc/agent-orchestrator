@@ -18,6 +18,9 @@ describe("isAllowedAppExternalURL", () => {
 		expect(isAllowedAppExternalURL("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")).toBe(true);
 		expect(isAllowedAppExternalURL("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")).toBe(true);
 		expect(isAllowedAppExternalURL("x-apple.systempreferences:com.apple.preference.security")).toBe(false);
+		expect(isAllowedAppExternalURL("x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=dev.agent-orchestrator.desktop")).toBe(true);
+		expect(isAllowedAppExternalURL("ms-settings:notifications")).toBe(true);
+		expect(isAllowedAppExternalURL("ms-settings:privacy")).toBe(false);
 		expect(isAllowedAppExternalURL("x-apple.systempreferences:com.apple.Sharing-Settings.extension")).toBe(false);
 	});
 

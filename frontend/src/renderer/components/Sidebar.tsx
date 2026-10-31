@@ -96,6 +96,7 @@ import { useLocalSignInDialogStore } from "../stores/local-signin-dialog-store";
 import { useShellMaybe } from "../lib/shell-context";
 import { useSidebarUpdateDismissal } from "../hooks/useSidebarUpdateDismissal";
 import { useUpdateStatus } from "../hooks/useUpdateStatus";
+import { WhatsNewCard, WhatsNewDialog } from "./WhatsNew";
 import { MAX_SESSION_DISPLAY_NAME_LEN, useSessionRename } from "../hooks/useSessionRename";
 import { effectiveShortcutBindings, shortcutBindingKeys } from "../../shared/shortcuts";
 import {
@@ -1251,6 +1252,7 @@ export function Sidebar({
 						daemon {daemonStatus.state}
 					</span>
 				)}
+				<WhatsNewDialog />
 				{settingsPage ? (
 					<>
 						<UpdateStatusRow
@@ -1289,6 +1291,7 @@ export function Sidebar({
 					hidden={isIconRail}
 					className="sidebar-expanded-chrome relative flex w-full min-w-46.5 flex-col gap-0.5"
 				>
+					<WhatsNewCard tabIndex={isCollapsed ? -1 : 0} />
 					<UpdateStatusRow
 						availableDismissed={updateDismissal.dismissed}
 						onDismissAvailable={updateDismissal.dismiss}

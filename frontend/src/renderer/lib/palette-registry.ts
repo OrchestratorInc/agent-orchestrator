@@ -115,6 +115,7 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "browser-import", section: "browserProfiles", label: "settings.browserImport.rowLabel", keywords: ["import", "firefox", "safari", "cookies"] },
 	{ id: "downloads", section: "browserProfiles", label: "settings.downloads", keywords: ["download history"] },
 	{ id: "updates", section: "updates", label: "settings.updates", keywords: [] },
+	{ id: "whats-new", section: "updates", label: "whatsNew.title", keywords: ["changelog", "release notes", "news", "announcements"] },
 	{ id: "auto-updates", section: "updates", label: "settings.updates.automatic", keywords: ["auto update"] },
 	{ id: "updates-channel", section: "updates", label: "settings.updates.channel", keywords: ["nightly", "beta", "stable", "release channel"] },
 	{ id: "feature-build", section: "updates", label: "settings.updates.featureBuild", keywords: ["preview build", "branch build"] },

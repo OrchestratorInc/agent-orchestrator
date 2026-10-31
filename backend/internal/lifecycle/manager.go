@@ -1048,6 +1048,7 @@ retryProjection:
 			SessionDisplayName: next.DisplayName,
 		}
 	}
+	completed := agentCompletedIntent(prevState, next)
 	// Leaving the needs-input family is the user answering: the notification
 	// that pinged them has nothing left to resolve.
 	resolutions := needsInputResolutions(rec, next, now)
@@ -1067,8 +1068,29 @@ retryProjection:
 		m.emitTelemetry(ctx, ev)
 	}
 	m.emitNotification(ctx, intent)
+	m.emitNotification(ctx, completed)
 	m.resolveNotifications(ctx, resolutions...)
 	return nil
+}
+
+// agentCompletedIntent pings the user when a worker agent ends a working turn
+// (active -> idle), so they can come back to its result. Orchestrator turns
+// are coordination chatter, and a session leaving needs-input or exit for idle
+// did no new work. The turn's end time keys the row so each finished turn
+// notifies once, even across hook retries.
+func agentCompletedIntent(prev domain.ActivityState, next domain.SessionRecord) *ports.NotificationIntent {
+	if prev != domain.ActivityActive || next.Activity.State != domain.ActivityIdle ||
+		next.IsTerminated || next.Kind == domain.KindOrchestrator {
+		return nil
+	}
+	return &ports.NotificationIntent{
+		Type:               domain.NotificationAgentCompleted,
+		SessionID:          next.ID,
+		ProjectID:          next.ProjectID,
+		CreatedAt:          next.Activity.LastActivityAt,
+		SourceKey:          fmt.Sprintf("agent_completed:%s:%d", next.ID, next.Activity.LastActivityAt.UnixNano()),
+		SessionDisplayName: next.DisplayName,
+	}
 }
 
 // toolFlight tracks one session's in-flight tool executions and the pending

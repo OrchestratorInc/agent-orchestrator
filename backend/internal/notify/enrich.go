@@ -20,7 +20,7 @@ func enrich(intent Intent) (domain.NotificationRecord, error) {
 	if !intent.Type.Valid() {
 		return domain.NotificationRecord{}, domain.ErrInvalidNotificationType
 	}
-	if intent.Type != domain.NotificationNeedsInput && rec.PRURL == "" {
+	if intent.Type != domain.NotificationNeedsInput && intent.Type != domain.NotificationAgentCompleted && rec.PRURL == "" {
 		return domain.NotificationRecord{}, domain.ErrInvalidNotificationRecord
 	}
 	rec.Title = titleForIntent(intent)
@@ -35,6 +35,8 @@ func titleForIntent(intent Intent) string {
 	switch intent.Type {
 	case domain.NotificationNeedsInput:
 		return fmt.Sprintf("%s needs your input", sessionLabel(intent))
+	case domain.NotificationAgentCompleted:
+		return fmt.Sprintf("%s finished", sessionLabel(intent))
 	case domain.NotificationReadyToMerge:
 		if title := strings.TrimSpace(intent.PRTitle); title != "" {
 			if label := prLabel(intent); label != "PR" {
@@ -60,6 +62,8 @@ func bodyForIntent(intent Intent) string {
 	switch intent.Type {
 	case domain.NotificationNeedsInput:
 		return "Your agent is waiting on you to continue."
+	case domain.NotificationAgentCompleted:
+		return "Your agent finished its work and is ready for review."
 	case domain.NotificationReadyToMerge:
 		if session := sessionLabel(intent); session != "session" {
 			return fmt.Sprintf("PR from session %s is ready to merge. CI passed with no blocking review feedback.", session)

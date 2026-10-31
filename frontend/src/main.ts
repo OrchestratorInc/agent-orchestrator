@@ -218,6 +218,9 @@ import {
 	shouldToast,
 	toastSilent,
 } from "./main/notification-signals";
+import { sendTestNotification } from "./main/notification-test";
+import { WhatsNewService } from "./main/whats-new";
+import type { TestNotificationCopy } from "./shared/notification-permission";
 import { buildLinuxAppMenuTemplate, buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
 import { ancestorRepositorySetupWarning, resolveCheckedOutBranch, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
@@ -3139,6 +3142,25 @@ ipcMain.handle("keybindings:setRecording", (event, active: unknown): void => {
 	keybindingRecordingActive = active;
 });
 
+// Remote "What's new" feed (src/main/whats-new.ts). Lazily built once the
+// state dir is known; refreshed once per launch shortly after startup.
+let whatsNewService: WhatsNewService | null = null;
+function whatsNew(): WhatsNewService | null {
+	if (whatsNewService) return whatsNewService;
+	const runFile = runFilePath();
+	if (!runFile) return null;
+	whatsNewService = new WhatsNewService({ stateDir: path.dirname(runFile), appVersion: app.getVersion(), fetch: globalThis.fetch });
+	return whatsNewService;
+}
+ipcMain.handle("whatsNew:list", async (event) => {
+	if (event.sender !== getShellWebContents()) return [];
+	return (await whatsNew()?.list().catch(() => [])) ?? [];
+});
+ipcMain.handle("whatsNew:dismiss", async (event, ids: unknown) => {
+	if (event.sender !== getShellWebContents()) return;
+	await whatsNew()?.dismiss(ids).catch(() => undefined);
+});
+
 ipcMain.handle("featureBuilds:list", () => listFeatureBuilds());
 ipcMain.handle("featureBuilds:getActive", () => getActiveFeatureBuild());
 
@@ -3269,6 +3291,37 @@ ipcMain.handle(
 		}
 	},
 );
+
+// Onboarding's "Send test notification": shows one real toast (which also
+// raises the macOS permission prompt the first time) and reports whether the
+// OS showed it or refused, so the renderer can diagnose blocked notifications.
+// Unlike notifications:show it fires while the window is focused.
+const testNotifications = new Set<ElectronNotification>();
+ipcMain.handle("notifications:test", (event, copy: Partial<TestNotificationCopy> | undefined) => {
+	if (event.sender !== getShellWebContents()) return "unknown";
+	return sendTestNotification(copy, {
+		isSupported: () => ElectronNotification.isSupported(),
+		create: ({ title, body }) => {
+			const toast = new ElectronNotification({
+				title,
+				body,
+				silent: toastSilent(process.platform, soundNotificationsEnabled, false),
+				icon: process.platform === "darwin" ? undefined : windowIconPath(),
+			});
+			// Hold a reference so the toast's events still fire after this returns.
+			testNotifications.add(toast);
+			toast.once("close", () => testNotifications.delete(toast));
+			toast.once("failed", () => testNotifications.delete(toast));
+			return toast;
+		},
+		onClick: () => {
+			if (!mainWindow) return;
+			if (mainWindow.isMinimized()) mainWindow.restore();
+			mainWindow.show();
+			mainWindow.focus();
+		},
+	});
+});
 
 // The renderer could not decode or start the bundled sound. Beep so the
 // notification still makes a sound where the OS beep works at all.
@@ -3568,6 +3621,13 @@ app.whenReady().then(async () => {
 		);
 	}
 	void refreshGitHubOwners();
+	// Off the startup path: the card can wait, and a slow or offline network
+	// must never delay the window.
+	setTimeout(() => {
+		void whatsNew()?.refresh().then((changed) => {
+			if (changed) getShellWebContents()?.send("whatsNew:changed");
+		});
+	}, 5_000);
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
 	const policyController = new DesktopTelemetryController({
 		authority,

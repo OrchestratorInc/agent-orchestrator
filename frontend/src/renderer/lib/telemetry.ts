@@ -2,6 +2,8 @@ import type posthogModule from "posthog-js/dist/module.full.no-external";
 import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
 import { ONBOARDING_STEPS } from "./onboarding-steps";
+import { NOTIFICATION_PERMISSION_STATES } from "../../shared/notification-permission";
+import { isWhatsNewItemId } from "../../shared/whats-new";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
@@ -866,8 +868,18 @@ export async function sanitizeRendererProperties(
 			break;
 		case "ao.onboarding.step_viewed":
 		case "ao.onboarding.step_completed":
+		case "ao.onboarding.step_skipped":
 		case "ao.onboarding.step_abandoned":
 			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
+			break;
+		case "ao.notifications.permission":
+			if (NOTIFICATION_PERMISSION_STATES.some((state) => state === properties?.state)) safe.state = properties?.state as string;
+			break;
+		case "ao.whats_new.shown":
+		case "ao.whats_new.clicked":
+		case "ao.whats_new.dismissed":
+			// Feed item ids are authored by the team in the published feed, never by the user.
+			if (typeof properties?.item_id === "string" && isWhatsNewItemId(properties.item_id)) safe.item_id = properties.item_id;
 			break;
 		case "ao.renderer.loaded":
 			break;
