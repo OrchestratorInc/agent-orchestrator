@@ -178,13 +178,21 @@ export function readableModelLabel(label: string): string {
 	return words.join(" ");
 }
 
-/** A running agent's "<provider>/<model>" choice (Pi's chat) named as its catalog shows it, under its provider. */
+/** A running agent's "<provider>/<model>" choice named as its catalog shows it, under its provider. */
 export function providerQualifiedChoice<T extends { value: string; name: string; group?: string; groupName?: string }>(choice: T, harness: string): T {
 	const slash = choice.value.indexOf("/");
 	if (slash <= 0 || choice.group || choice.groupName) return choice;
 	const provider = choice.value.slice(0, slash);
-	if (!choice.name.toLowerCase().startsWith(`${provider.toLowerCase()}/`)) return choice;
-	return { ...choice, name: readableModelLabel(choice.name.slice(slash + 1)), group: modelGroupLabel(provider, harness) };
+	const namedByProvider = choice.name.toLowerCase().startsWith(`${provider.toLowerCase()}/`);
+	const isOpenCode = harness === "opencode" || harness === "opencode-v2";
+	if (!namedByProvider && !isOpenCode) return choice;
+	return {
+		...choice,
+		name: namedByProvider ? readableModelLabel(choice.name.slice(slash + 1)) : choice.name,
+		// OpenCode's provider IDs are distinct routes, even its own opencode and
+		// opencode-go. Suppressing either group lets same-name choices collapse.
+		group: isOpenCode ? provider : modelGroupLabel(provider, harness),
+	};
 }
 
 /**
