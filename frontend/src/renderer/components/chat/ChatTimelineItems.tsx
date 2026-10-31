@@ -11,6 +11,7 @@ import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
 
 import { stagedAttachmentParts, attachmentName, attachmentURL, IMAGE_ATTACHMENT_PATH, splitInlineImagePaths } from "./messageAttachments";
 import { ChatImage } from "./ChatImage";
+import { normalizeToolContent, splitToolResult, ToolImage } from "./tool-content-images";
 import {
 	ACCENT_ACTION_SEGMENT,
 	ACCENT_ACTION_SHELL,
@@ -2158,7 +2159,7 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 						<JsonPayload label="Arguments" value={detail.arguments} />
 					) : null}
 					{detail?.result !== undefined ? (
-						<JsonPayload label="Result" value={detail.result} />
+						<ToolResult value={detail.result} />
 					) : null}
 					{detail?.content !== undefined ? <ToolContent value={detail.content} /> : null}
 					{detail?.progress ? (
@@ -2179,7 +2180,33 @@ function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	);
 }
 
+function ToolResult({ value }: { value: unknown }) {
+	const result = splitToolResult(value);
+	if (result.images.length === 0) return <JsonPayload label="Result" value={value} />;
+	return (
+		<div className="flex max-w-full flex-col gap-2">
+			{result.images.map((image, index) => <ToolImage key={index} image={image} />)}
+			<JsonPayload label="Result" value={result.value} />
+		</div>
+	);
+}
+
 function ToolContent({ value }: { value: unknown }) {
+	const parts = normalizeToolContent(value);
+	if (parts.some((part) => part.kind === "image")) {
+		return (
+			<div className="flex max-w-full flex-col gap-2">
+				{parts.map((part, index) => part.kind === "image"
+					? <ToolImage key={index} image={part} />
+					: part.kind === "text" ? <ToolTextContent key={index} value={part.text} />
+					: <ToolTextContent key={index} value={formatJson(part.value)} />)}
+			</div>
+		);
+	}
+	return <ToolTextContent value={value} />;
+}
+
+function ToolTextContent({ value }: { value: unknown }) {
 	const text = normalizeToolCode(toolContentText(value));
 	if (text) {
 		if (looksLikeUnifiedDiff(text)) return <ToolDiffCode text={text} />;
