@@ -1346,3 +1346,11 @@ main td, main th { vertical-align: middle !important; }
   .mdx-content > div[class*="--page-padding"] { margin-left: 0 !important; margin-right: 0 !important; width: 100% !important; }
   .mdx-content > div[class*="--page-padding"] div[class*="px-("] { padding-left: 0 !important; padding-right: 0 !important; }
 }
+
+/* ── Sidebar group-label spacing: match original gaps (26px before / 6px after) ── */
+@media (min-width: 1024px) {
+  nav#sidebar-content [class*="sidebar-title"] { margin-top: -1px !important; margin-bottom: -1.5px !important; }
+}
+@media (max-width: 1023px) {
+  nav#sidebar-content [class*="sidebar-title"] { margin-top: -1px !important; margin-bottom: -3.5px !important; }
+}
