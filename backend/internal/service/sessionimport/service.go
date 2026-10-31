@@ -105,12 +105,20 @@ func New(store Store, dataDir string) *Service {
 	if codex == "" {
 		codex = filepath.Join(home, ".codex")
 	}
+	pi := os.Getenv("PI_CODING_AGENT_DIR")
+	if pi == "" {
+		pi = filepath.Join(home, ".pi", "agent")
+	}
 	// Kimi Code keeps its sessions under KIMI_CODE_HOME, defaulting to ~/.kimi-code.
 	kimi := os.Getenv("KIMI_CODE_HOME")
 	if kimi == "" {
 		kimi = filepath.Join(home, ".kimi-code")
 	}
-	s := &Service{store: store, home: canonical(home), roots: map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessKimi: kimi}}
+	roots := map[domain.AgentHarness]string{domain.HarnessClaudeCode: claude, domain.HarnessCodex: codex, domain.HarnessDroid: droidRoot(home), domain.HarnessPi: pi, domain.HarnessKimi: kimi}
+	if opencode := openCodeRoot(home); opencode != "" {
+		roots[domain.HarnessOpenCode] = opencode
+	}
+	s := &Service{store: store, home: canonical(home), roots: roots}
 	if dataDir != "" {
 		s.excluded = []string{canonical(dataDir)}
 	}
@@ -348,14 +356,24 @@ func candidateID(harness domain.AgentHarness, root, nativeID string) string {
 func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, root string) ([]sourceFiles, error) {
 	// Per-harness layouts that do not fit the projects/sessions directory model
 	// discover their own conversations.
-	if harness == domain.HarnessKimi {
+	switch harness {
+	case domain.HarnessKimi:
 		return discoverKimi(ctx, root)
+	case domain.HarnessOpenCode:
+		// OpenCode stores conversations in a SQLite database, not a projects tree.
+		return discoverOpenCode(ctx, root)
 	}
 	byKey := map[string]*sourceFiles{}
 	dir := filepath.Join(root, "projects")
-	if harness == domain.HarnessCodex {
+	switch harness {
+	case domain.HarnessCodex:
 		// Archived Codex threads are not resumable without unarchiving them in Codex.
 		dir = filepath.Join(root, "sessions")
+	case domain.HarnessPi:
+		// Pi stores one JSONL per conversation under sessions/<cwd-dashed>/.
+		dir = filepath.Join(root, "sessions")
+	case domain.HarnessDroid:
+		dir = filepath.Join(root, droidSessions)
 	}
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
@@ -379,8 +397,19 @@ func (s *Service) discover(ctx context.Context, harness domain.AgentHarness, roo
 			if !strings.HasSuffix(entry.Name(), ".jsonl") {
 				return nil
 			}
+		case domain.HarnessDroid:
+			// One conversation per <id>.jsonl; the <id>.settings.json sidecar
+			// and its .bak are not transcripts.
+			if !strings.HasSuffix(entry.Name(), ".jsonl") {
+				return nil
+			}
 		case domain.HarnessCodex:
 			if key = codexThreadID(path); key == "" {
+				return nil
+			}
+		case domain.HarnessPi:
+			// Each Pi JSONL is one conversation; the default key (its path) groups it alone.
+			if !strings.HasSuffix(entry.Name(), ".jsonl") {
 				return nil
 			}
 		}
@@ -429,8 +458,11 @@ func codexSegments(paths []string) []string {
 // nativeID names the conversation as readTranscript will: Claude's file name,
 // Codex's thread id.
 func (f sourceFiles) nativeID() string {
-	if f.harness == domain.HarnessClaudeCode && len(f.paths) > 0 {
+	if (f.harness == domain.HarnessClaudeCode || f.harness == domain.HarnessDroid) && len(f.paths) > 0 {
 		return strings.TrimSuffix(filepath.Base(f.paths[0]), ".jsonl")
+	}
+	if f.harness == domain.HarnessPi && len(f.paths) > 0 {
+		return piNativeID(f.paths[0])
 	}
 	return f.key
 }
@@ -471,7 +503,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 	selected := make(map[string]selection)
 	preview := Preview{Candidates: []Candidate{}}
 	cache := map[string]parsed{}
-	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessKimi}
+	harnesses := []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessDroid, domain.HarnessOpenCode, domain.HarnessPi, domain.HarnessKimi}
 	for _, harness := range harnesses {
 		configured, ok := s.roots[harness]
 		if !ok {

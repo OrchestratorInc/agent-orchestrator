@@ -86,7 +86,7 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 	if source == nil || rec.Metadata.ProviderConversationID != source.NativeID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessKimi: "KIMI_CODE_HOME"}[rec.Harness]
+	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME"}[rec.Harness]
 	if key == "" {
 		return
 	}
@@ -108,7 +108,13 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 			}
 		}
 	}
-	setProtectedEnv(env, key, source.ConfigDir, envKeysCaseInsensitive)
+	value := source.ConfigDir
+	if rec.Harness == domain.HarnessDroid {
+		// FACTORY_HOME_OVERRIDE is a home override Droid appends ".factory" to,
+		// not the state dir itself, so point it at the parent of the config dir.
+		value = filepath.Dir(source.ConfigDir)
+	}
+	setProtectedEnv(env, key, value, envKeysCaseInsensitive)
 }
 
 func sameDirectory(a, b string) bool {
@@ -124,6 +130,14 @@ func sameDirectory(a, b string) bool {
 // importOwnedElsewhere reports positive evidence that another provider process
 // holds the conversation: Codex keeps a writer lock per loaded thread, Claude
 // Code registers each live session, and older writers keep the transcript open.
+//
+// Pi has no such signal: it keeps no writer lock or live-session registry and
+// does not hold its session file open (see writableTranscriptOwner), and
+// pi-acp's session/load does not refuse a second writer. So a Pi conversation
+// still open in the Pi CLI/TUI is not detected, and importing it can interleave
+// turns with the other writer. This matches the documented posture for
+// lock-less providers; a reliable per-session Pi owner signal would be needed
+// to protect it.
 func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
 	switch rec.Harness {
@@ -139,6 +153,12 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		// Kimi publishes a per-session lock file holding the live writer's pid;
 		// its transcript is append-open-close so it is never held open for lsof.
 		return kimiSessionLocked(ctx, source.ConfigDir, source.NativeID)
+	case domain.HarnessOpenCode:
+		// OpenCode keeps all conversations in one shared SQLite store with no
+		// per-session lock or live-session registry, and its transcript path is a
+		// row id rather than a writable file. With no positive evidence that
+		// another process holds this conversation, report not-owned.
+		return false
 	}
 	// A writer holds the plain file; Codex restores a compressed one on resume.
 	return writableTranscriptOwner(ctx, strings.TrimSuffix(rec.Metadata.NativeTranscriptPath, ".zst"))
@@ -212,6 +232,14 @@ func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) b
 
 // writableTranscriptOwner is the fallback for writers without a lock or registry.
 // Read-only descriptors are not ownership.
+//
+// It cannot see a live Pi owner: the pi CLI/TUI and pi-acp persist with
+// appendFileSync/writeFileSync, opening and closing the session file for each
+// entry rather than holding it open, so lsof reports a Pi writer only during
+// the instant of a write. Pi also keeps no writer lock or live-session
+// registry, and pi-acp's session/load does not refuse a second writer, so an
+// imported Pi conversation that is still open elsewhere is not detected. See
+// importOwnedElsewhere.
 func writableTranscriptOwner(ctx context.Context, path string) bool {
 	if path == "" {
 		return false
@@ -227,7 +255,7 @@ func writableTranscriptOwner(ctx context.Context, path string) bool {
 		if strings.HasPrefix(line, "c") {
 			command = strings.ToLower(line[1:])
 		}
-		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex")) {
+		if (line == "aw" || line == "au") && (strings.Contains(command, "claude") || strings.Contains(command, "codex") || strings.Contains(command, "droid")) {
 			return true
 		}
 	}

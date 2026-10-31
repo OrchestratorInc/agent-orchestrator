@@ -346,14 +346,21 @@ type claudeNode struct {
 
 // readTranscript reads one native conversation; Codex segments are passed oldest first.
 func readTranscript(ctx context.Context, harness domain.AgentHarness, root string, paths ...string) (transcript, error) {
+	if harness == domain.HarnessPi {
+		return readPiTranscript(ctx, root, paths...)
+	}
 	t := transcript{harness: harness, root: root}
 	if len(paths) == 0 {
 		return t, errors.New("no transcript")
 	}
 	// Harnesses whose transcript format differs from the Claude/Codex JSONL
 	// handled below parse in their own file.
-	if harness == domain.HarnessKimi {
+	switch harness {
+	case domain.HarnessKimi:
 		return readKimiTranscript(ctx, root, paths...)
+	case domain.HarnessOpenCode:
+		// OpenCode's history lives in a SQLite database read by session id.
+		return readOpenCodeTranscript(ctx, root, paths...)
 	}
 	root = canonical(root)
 	providerRoot, err := os.OpenRoot(root)
@@ -367,7 +374,10 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		t.nativeID = strings.TrimSuffix(filepath.Base(paths[0]), ".jsonl")
 	case domain.HarnessCodex:
 		t.nativeID = codexThreadID(paths[0])
+	case domain.HarnessDroid:
+		t.nativeID = strings.TrimSuffix(filepath.Base(paths[0]), ".jsonl")
 	}
+	var droidState droidParse
 	var (
 		items       []tagged
 		ids         = map[string]int{}
@@ -425,6 +435,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	handle := func(line []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if harness == domain.HarnessDroid {
+			return droidState.handle(line, &t, now, add)
 		}
 		var r record
 		if err := json.Unmarshal(line, &r); err != nil {
@@ -541,6 +554,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if harness == domain.HarnessCodex && !sawMeta {
 		return t, errors.New("no readable native conversation")
 	}
+	if harness == domain.HarnessDroid && !droidState.sawStart {
+		return t, errors.New("no readable native conversation")
+	}
 	chain := claude
 	if claudeLeaf != "" {
 		// Follow the active branch so rewound prompts are not shown as history.
@@ -597,6 +613,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	}
 	if harness == domain.HarnessCodex {
 		prompted = true
+	}
+	if harness == domain.HarnessDroid {
+		prompted = droidState.prompted
 	}
 	trim()
 	for _, item := range items {
