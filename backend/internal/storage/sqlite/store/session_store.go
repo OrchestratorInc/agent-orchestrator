@@ -811,7 +811,7 @@ func (s *Store) DeleteSession(ctx context.Context, id domain.SessionID) (bool, e
 		return false, fmt.Errorf("begin delete seed session: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 
 	isSeed, err := q.SessionIsSeed(ctx, id)
 	if err != nil {
@@ -1281,7 +1281,8 @@ func timeToNullTime(t time.Time) sql.NullTime {
 	if t.IsZero() {
 		return sql.NullTime{}
 	}
-	return sql.NullTime{Time: t, Valid: true}
+	// Also used by handwritten SQL that does not go through utcTimes.
+	return sql.NullTime{Time: t.UTC(), Valid: true}
 }
 
 func nullTimeToTimePtr(t sql.NullTime) *time.Time {
