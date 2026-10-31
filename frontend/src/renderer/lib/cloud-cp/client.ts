@@ -435,6 +435,8 @@ export interface CloudCpClient {
 	revokeShareLink(orgId: string, projectId: string, linkId: string, options?: CloudCpRequestOptions): Promise<void>;
 	/** Turns a share link's token into the caller's own access grant. */
 	redeemShareLink(orgId: string, token: string, options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject }>;
+	/** Redeems a link by its short code, which names no organization. */
+	redeemShareLinkCode(code: string, options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject }>;
 	listSharedProjects(options?: CloudCpRequestOptions): Promise<{ shared: CloudCpSharedProject[] }>;
 	/** The sessions of a project shared with the caller that their grant reaches. */
 	listSharedProjectSessions(orgId: string, projectId: string, options?: CloudCpRequestOptions): Promise<{ sessions: CloudCpSession[] }>;
@@ -981,6 +983,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestVoid("POST", `/orgs/${seg(orgId)}/projects/${seg(projectId)}/shares/${seg(linkId)}/revoke`, { signal: o?.signal }),
 		redeemShareLink: (orgId, token, o) =>
 			requestJson("POST", "/share-links/redeem", { body: { orgId, token }, signal: o?.signal }),
+		redeemShareLinkCode: (code, o) =>
+			requestJson("POST", "/share-links/redeem", { body: { code }, signal: o?.signal }),
 		listSharedProjects: (o) =>
 			requestJson("GET", "/shared/projects", { signal: o?.signal }),
 		listSharedProjectSessions: (orgId, projectId, o) =>

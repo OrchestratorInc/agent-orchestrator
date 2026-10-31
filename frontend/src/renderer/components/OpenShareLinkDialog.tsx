@@ -7,9 +7,10 @@ import { cn } from "@/lib/utils";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { sharedCloudWorkspacesQueryKey } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import type { CloudCpClient } from "../lib/cloud-cp/client";
 import { CloudCpError } from "../lib/cloud-cp/errors";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
-import { parseShareLink } from "../lib/share-links";
+import { parseShareLink, type ShareLinkTarget } from "../lib/share-links";
 import { Button } from "./ui/button";
 import {
 	Dialog,
@@ -47,6 +48,11 @@ export function requestOpenShareLink(link?: string): void {
  * Redeeming a link gives this person their own access to the session, which
  * then appears beside their projects; the session opens at once.
  */
+/** Redeems a share by its short code, or by the organization and token of a link from before codes. */
+export function redeemShareTarget(client: Pick<CloudCpClient, "redeemShareLink" | "redeemShareLinkCode">, target: ShareLinkTarget) {
+	return "code" in target ? client.redeemShareLinkCode(target.code) : client.redeemShareLink(target.orgId, target.token);
+}
+
 export function ShareLinkHost() {
 	const { t } = useTranslation();
 	const { client, baseUrl, ready } = useCloudCp();
@@ -60,8 +66,7 @@ export function ShareLinkHost() {
 		mutationFn: async (link: string) => {
 			const target = parseShareLink(link);
 			if (!target) throw new Error(t("shareLink.invalid"));
-			const { shared } = await client.redeemShareLink(target.orgId, target.token);
-			return shared;
+			return (await redeemShareTarget(client, target)).shared;
 		},
 		onSuccess: async (shared) => {
 			await queryClient.invalidateQueries({ queryKey: [...sharedCloudWorkspacesQueryKey, baseUrl] });
