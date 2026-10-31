@@ -36,7 +36,7 @@
 	"chat.accountSwitched": "Cambiado a {{email}}",
 	"chat.accountSwitchedDetail": "El agente se detuvo aquí por el cambio. Pulsa Continuar para retomar este turno o envía un mensaje nuevo.",
 	"chat.accountHandoff": "Límite de uso alcanzado. Movido a {{email}}",
-	"chat.accountHandoffDetail": "AO reintentó una vez la indicación rechazada en esta cuenta.",
+	"chat.accountHandoffDetail": "AO reintenta una vez la indicación rechazada en esta cuenta, salvo que antes envíes un mensaje nuevo.",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Añade un mensaje mientras {{agent}} se prepara",

@@ -35,7 +35,7 @@
 	"chat.accountSwitched": "{{email}} に切り替えました",
 	"chat.accountSwitchedDetail": "切り替えのため、エージェントはここで停止しました。続行を押してこのターンを再開するか、新しいメッセージを送ってください。",
 	"chat.accountHandoff": "使用上限に達しました。{{email}} に移動しました",
-	"chat.accountHandoffDetail": "AO はこのアカウントで、拒否されたプロンプトを 1 回だけ再試行しました。",
+	"chat.accountHandoffDetail": "新しいメッセージを先に送らない限り、AO はこのアカウントで拒否されたプロンプトを 1 回だけ再試行します。",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} の準備中にメッセージを追加できます",

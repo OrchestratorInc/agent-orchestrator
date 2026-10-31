@@ -174,7 +174,6 @@ function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseRes
 	</div>;
 }
 
-/** The account's limit meters, shared by the Accounts page and the session summary. */
 /** The daemon-owned choice to move a Chat session refused for a usage limit
  * to another signed-in account with room, and retry the prompt there once. */
 function AccountHandoffRow() {

@@ -35,7 +35,7 @@
 	"chat.accountSwitched": "Switched to {{email}}",
 	"chat.accountSwitchedDetail": "The agent stopped here for the switch. Press Continue to resume this turn, or send a new message.",
 	"chat.accountHandoff": "Usage limit reached. Moved to {{email}}",
-	"chat.accountHandoffDetail": "AO retried the refused prompt once on this account.",
+	"chat.accountHandoffDetail": "AO retries the refused prompt once on this account, unless you send a new message first.",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Queue a follow-up while {{agent}} gets ready",

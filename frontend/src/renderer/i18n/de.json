@@ -35,7 +35,7 @@
 	"chat.accountSwitched": "Zu {{email}} gewechselt",
 	"chat.accountSwitchedDetail": "Der Agent hat hier für den Wechsel angehalten. Drücke Fortsetzen, um diesen Schritt wieder aufzunehmen, oder sende eine neue Nachricht.",
 	"chat.accountHandoff": "Nutzungslimit erreicht. Zu {{email}} gewechselt",
-	"chat.accountHandoffDetail": "AO hat den abgelehnten Prompt auf diesem Konto einmal erneut gesendet.",
+	"chat.accountHandoffDetail": "AO sendet den abgelehnten Prompt auf diesem Konto einmal erneut, sofern du nicht vorher eine neue Nachricht sendest.",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Folgenachricht einreihen, während {{agent}} startet",

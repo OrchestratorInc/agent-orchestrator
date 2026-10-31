@@ -5,13 +5,13 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { TooltipProvider } from "../ui/tooltip";
 import { AgentAccountsPanel, type CliLoginControls } from "./AgentAccountsSection";
 
-const { getMock, postMock, terminalState } = vi.hoisted(() => ({
-	getMock: vi.fn(), postMock: vi.fn(),
+const { getMock, patchMock, postMock, terminalState } = vi.hoisted(() => ({
+	getMock: vi.fn(), patchMock: vi.fn(), postMock: vi.fn(),
 	terminalState: { value: undefined as ((state: "attached" | "exited" | "error") => void) | undefined },
 }));
 
 vi.mock("../../lib/api-client", () => ({
-	apiClient: { DELETE: vi.fn(), GET: getMock, POST: postMock },
+	apiClient: { DELETE: vi.fn(), GET: getMock, PATCH: patchMock, POST: postMock },
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "request failed",
 }));
 
@@ -121,4 +121,26 @@ it("offers only a sign-in on a signed-out CLI login, held while a login terminal
 	const row = await findCliLoginRow();
 	expect(within(row).getByRole("button", { name: "Sign in again" })).toBeDisabled();
 	expect(within(row).queryByRole("button", { name: "Log out" })).not.toBeInTheDocument();
+});
+
+it("turns the usage-limit handoff on through the daemon and shows what it stored", async () => {
+	const user = userEvent.setup();
+	let stored = false;
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/settings" ? { accountHandoff: stored }
+			: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, saved] },
+	}));
+	patchMock.mockReset().mockImplementation((_path: string, { body }: { body: { enabled: boolean } }) => {
+		stored = body.enabled;
+		return Promise.resolve({ data: { accountHandoff: stored } });
+	});
+	renderPanel();
+	const toggle = await screen.findByRole("switch", { name: "Move to another account at a usage limit" });
+	await waitFor(() => expect(toggle).toBeEnabled());
+	expect(toggle).not.toBeChecked();
+
+	await user.click(toggle);
+
+	expect(patchMock).toHaveBeenCalledWith("/api/v1/settings/account-handoff", { body: { enabled: true } });
+	await waitFor(() => expect(toggle).toBeChecked());
 });

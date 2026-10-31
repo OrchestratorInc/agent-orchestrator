@@ -35,7 +35,7 @@
 	"chat.accountSwitched": "已切换到 {{email}}",
 	"chat.accountSwitchedDetail": "智能体因切换在此停止。按“继续”恢复此轮，或发送一条新消息。",
 	"chat.accountHandoff": "已达到用量上限。已移至 {{email}}",
-	"chat.accountHandoffDetail": "AO 已在此账户上重试被拒绝的提示一次。",
+	"chat.accountHandoffDetail": "除非你先发送新消息，AO 会在此账户上重试被拒绝的提示一次。",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 准备期间可先排队发送消息",

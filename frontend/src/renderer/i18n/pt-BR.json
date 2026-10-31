@@ -36,7 +36,7 @@
 	"chat.accountSwitched": "Trocado para {{email}}",
 	"chat.accountSwitchedDetail": "O agente parou aqui por causa da troca. Pressione Continuar para retomar este turno ou envie uma nova mensagem.",
 	"chat.accountHandoff": "Limite de uso atingido. Movido para {{email}}",
-	"chat.accountHandoffDetail": "O AO tentou novamente uma vez o prompt recusado nesta conta.",
+	"chat.accountHandoffDetail": "O AO tenta novamente uma vez o prompt recusado nesta conta, a menos que você envie uma nova mensagem antes.",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "Adicione uma mensagem enquanto {{agent}} se prepara",

@@ -35,7 +35,7 @@
 	"chat.accountSwitched": "{{email}}(으)로 전환됨",
 	"chat.accountSwitchedDetail": "전환 때문에 에이전트가 여기서 멈췄습니다. 계속을 눌러 이 턴을 재개하거나 새 메시지를 보내세요.",
 	"chat.accountHandoff": "사용 한도에 도달했습니다. {{email}}(으)로 이동했습니다",
-	"chat.accountHandoffDetail": "AO가 이 계정에서 거부된 프롬프트를 한 번 다시 시도했습니다.",
+	"chat.accountHandoffDetail": "먼저 새 메시지를 보내지 않으면 AO가 이 계정에서 거부된 프롬프트를 한 번 다시 시도합니다.",
 	"chat.removeAllAnnotations": "Remove all annotations",
 	"chat.removeAnnotation": "Remove annotation {{count}}",
 	"chat.startup.queuePlaceholder": "{{agent}} 준비 중에 다음 메시지를 대기열에 추가하세요",
