@@ -50,9 +50,8 @@ Cloud also has a configurable concurrent-sandbox limit. A provider can have a lo
 - **Session stuck or disconnected:** reopen the session and check its state. A sleeping or replacing remote worker can need time to reconnect; retry a failed action only after checking whether it already completed.
 - **Provider or organization access changed:** sign in again with the account that has the intended organization access. The desktop uses the first organization returned for that account and has no organization switcher. Do not copy a local project into Cloud merely to work around an authorization error.
 
-<details>
-<summary>Verification scope</summary>
+<Accordion title="Verification scope">
 
 This guide was checked against the desktop Cloud source and the control-plane implementation on 3 October 2026. An authenticated production session was not tested. Cloud entitlements, sandbox providers, capacity, and available agents can differ by organization; use the choices shown in your app as the final check.
 
-</details>
+</Accordion>
