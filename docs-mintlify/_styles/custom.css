@@ -394,10 +394,8 @@ td, th { border-color: var(--fd-border) !important; }
 hr { border-color: var(--fd-border) !important; }
 .eyebrow, [class*="eyebrow"] { display: none !important; }
 
-/* hide Mintlify-only chrome: page context menu, assistant, floating copy */
+/* hide Mintlify-only chrome: page context menu, floating copy (assistant restored) */
 #page-context-menu { display: none !important; }
-.chat-assistant-floating-input, [class*="chat-assistant"] { display: none !important; }
-header [class*="assistant"], header button[id*="assistant"], header a[id*="assistant"], [id*="assistant-entry"] { display: none !important; }
 
 /* ── Page actions: Copy Markdown / Open in / View on GitHub ─────────────── */
 #ao-page-actions {
@@ -980,8 +978,8 @@ a[href*="mintlify.com?utm_campaign=poweredBy"] { display: none !important; }
 .ao-dr-nav > div:first-child { margin-top: 0 !important; }
 .ao-dr-nav .sidebar-group > li > a { margin-top: 2px; }
 .ao-dr-nav li.ao-dr-collapsed > ul { display: none; }
-/* Mintlify's own mobile drawer is superseded by the parity drawer above */
-[role="dialog"][class*="--bleed"]:not(:has([data-component-part="search-modal"])) { display: none !important; }
+/* Mintlify's own mobile drawer is superseded by the parity drawer above (assistant drawer exempt) */
+[role="dialog"][class*="--bleed"]:not(:has([data-component-part="search-modal"])):not(:has([class*="chat-assistant"])) { display: none !important; }
 
 .ao-dr-toplinks a { margin-top: 2px !important; }
 .ao-dr-nav ul.sidebar-group { margin-top: 6px !important; padding-bottom: 2px !important; }
@@ -1223,7 +1221,7 @@ nav#sidebar-content button svg[data-ao-chev] { transition: rotate 150ms ease; }
   button.ao-side-toggle svg { width: 18px !important; height: 18px !important; }
 }
 
-/* v36i: hide Mintlify assistant affordances absent from original; toggle vertical offset */
+/* v36i: keep per-code-block Ask Assistant hidden for layout parity; toggle vertical offset */
 button[aria-label="Ask Assistant"] { display: none !important; }
 @media (min-width: 1024px) {
   button.ao-side-toggle { margin-top: 4px !important; }
