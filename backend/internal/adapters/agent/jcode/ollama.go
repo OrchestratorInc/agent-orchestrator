@@ -73,7 +73,7 @@ func ollamaInventoryURL(providers []jcodeProviderStatus) (string, bool) {
 func InstalledOllamaModels(ctx context.Context, inventoryURL string) ([]string, error) {
 	probeCtx, cancel := context.WithTimeout(ctx, ollamaProbeTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, inventoryURL, nil)
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, inventoryURL, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
