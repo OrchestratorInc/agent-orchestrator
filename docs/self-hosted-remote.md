@@ -18,7 +18,7 @@ Cloudflare tunnel.
 2. Install AO:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash
    ```
 
    This installs the prerequisites, the latest stable AO, a user service that
@@ -62,14 +62,14 @@ sign-in link; pair it by hand, or install nightly.
 **Nightly** (the newest published nightly; experimental):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash -s -- --nightly
+curl -fsSL https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash -s -- --nightly
 ```
 
 **An unreleased branch** (builds from that branch): replace both
 `codex/your-pr-branch` with the branch name published on GitHub.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/codex/your-pr-branch/scripts/bootstrap-self-hosted.sh | bash -s -- --source-ref codex/your-pr-branch
+curl -fsSL https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/codex/your-pr-branch/scripts/bootstrap-self-hosted.sh | bash -s -- --source-ref codex/your-pr-branch
 ```
 
 **A trusted LAN/VPN** instead of the tunnel: append `--lan` to the script
@@ -86,7 +86,7 @@ in the background and read its output:
 1. Install:
 
    ```bash
-   ssh USER@HOST 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash'
+   ssh USER@HOST 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash'
    ```
 
    For nightly, end it with `bash -s -- --nightly`.

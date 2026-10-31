@@ -108,8 +108,8 @@ PY
 else
 	command -v curl >/dev/null || { printf '%s\n' 'curl is required.' >&2; exit 1; }
 	metadata="$stage/release.json"
-	release_api='https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases/latest'
-	"$nightly" && release_api='https://api.github.com/repos/Untrivial-ai/agent-orchestrator/releases?per_page=100'
+	release_api='https://api.github.com/repos/OrchestratorInc/agent-orchestrator/releases/latest'
+	"$nightly" && release_api='https://api.github.com/repos/OrchestratorInc/agent-orchestrator/releases?per_page=100'
 	curl -fsSL --retry 3 "$release_api" -o "$metadata"
 	asset_info="$(python3 - "$metadata" "$asset" "$nightly" <<'PY'
 import json, re, sys

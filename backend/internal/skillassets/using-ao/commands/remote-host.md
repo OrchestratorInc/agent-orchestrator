@@ -41,7 +41,7 @@ The VM needs Ubuntu 24.04 x64, outbound internet, and a non-root user with
    a failed download exit non-zero:
 
    ```bash
-   ssh USER@HOST 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash'
+   ssh USER@HOST 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/scripts/bootstrap-self-hosted.sh | bash'
    ```
 
    This installs stable. For nightly, end it with `bash -s -- --nightly`.
@@ -75,4 +75,4 @@ while its window is open.
 | Listed but does not connect, on a desktop that paired by hand earlier | The host's password changed since. The user removes the host in **Settings → Remote hosts**; it comes back with the account's credential within 30 seconds. |
 | Link expired | Run `ao remote-host link` again. |
 
-Full guide: [docs/self-hosted-remote.md](https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/self-hosted-remote.md).
+Full guide: [docs/self-hosted-remote.md](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/self-hosted-remote.md).
