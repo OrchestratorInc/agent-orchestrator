@@ -382,11 +382,19 @@ func TestDeleteTaskPreparationRemovesItsCDC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	before, err := s.LatestSeq(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if deleted, err := s.DeleteTaskPreparation(ctx, created.ID); err != nil || !deleted {
 		t.Fatalf("delete preparation = %v, %v", deleted, err)
 	}
 	if _, ok, err := s.GetSession(ctx, created.ID); err != nil || ok {
 		t.Fatalf("get deleted preparation = %v, %v", ok, err)
+	}
+	// A preparation is never listed, so its delete asks no client to refetch.
+	if events, err := s.EventsAfter(ctx, before, 10); err != nil || len(events) != 0 {
+		t.Fatalf("events after deleting a preparation = %+v, %v; want none", events, err)
 	}
 }
 

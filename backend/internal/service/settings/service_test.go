@@ -26,6 +26,9 @@ func (*hibernationSettingsStore) SetVersionRefresh(context.Context, bool, time.T
 func (*hibernationSettingsStore) SetComputerUse(context.Context, bool, time.Time) error {
 	return nil
 }
+func (*hibernationSettingsStore) SetSessionRetentionDays(context.Context, int, time.Time) error {
+	return nil
+}
 
 func TestChatHibernationGateResetsOnDaemonBoot(t *testing.T) {
 	ctx := context.Background()
@@ -212,5 +215,38 @@ func TestComputerUseNeedsCuaDriverToTurnOn(t *testing.T) {
 	installed = false
 	if snapshot, err := svc.SetComputerUse(ctx, false); err != nil || snapshot.ComputerUse {
 		t.Fatalf("disable after Cua Driver was removed: snapshot=%+v err=%v", snapshot, err)
+	}
+}
+
+type retentionStore struct {
+	hibernationSettingsStore
+	days int
+}
+
+func (s *retentionStore) GetAppSettings(context.Context) (Snapshot, error) {
+	return Snapshot{SessionRetentionDays: s.days}, nil
+}
+
+func (s *retentionStore) SetSessionRetentionDays(_ context.Context, days int, _ time.Time) error {
+	s.days = days
+	return nil
+}
+
+// Retention is days a session stays archived; anything outside 0 (keep) to ten
+// years is refused before it is stored.
+func TestSessionRetentionDays(t *testing.T) {
+	ctx := context.Background()
+	store := &retentionStore{days: 30}
+	svc := New(store, nil, Offering{}, nil)
+	for _, days := range []int{-1, maxSessionRetentionDays + 1} {
+		var apiErr *apierr.Error
+		if _, err := svc.SetSessionRetentionDays(ctx, days); !errors.As(err, &apiErr) || apiErr.Code != "SESSION_RETENTION_INVALID" || store.days != 30 {
+			t.Fatalf("days=%d: err=%v stored=%d, want SESSION_RETENTION_INVALID and no change", days, err, store.days)
+		}
+	}
+	for _, days := range []int{0, 90} {
+		if snapshot, err := svc.SetSessionRetentionDays(ctx, days); err != nil || snapshot.SessionRetentionDays != days {
+			t.Fatalf("days=%d: snapshot=%+v err=%v", days, snapshot, err)
+		}
 	}
 }

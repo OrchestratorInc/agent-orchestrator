@@ -107,12 +107,20 @@ func (s *Store) createSessionLocked(ctx context.Context, rec domain.SessionRecor
 	prefix := string(rec.ProjectID)
 	if rec.ProjectID == "" {
 		num, err = s.qw.NextStandaloneSessionNum(ctx)
-		prefix = "standalone"
+		prefix = standaloneSessionIDPrefix
 	} else {
 		num, err = s.qw.NextSessionNum(ctx, optionalProjectID(rec.ProjectID))
 	}
 	if err != nil {
 		return domain.SessionRecord{}, false, fmt.Errorf("next session num for %s: %w", rec.ProjectID, err)
+	}
+	// A deleted session's number is never handed out again.
+	floor, err := s.sessionNumFloor(ctx, prefix)
+	if err != nil {
+		return domain.SessionRecord{}, false, fmt.Errorf("session num floor for %s: %w", rec.ProjectID, err)
+	}
+	if num <= floor {
+		num = floor + 1
 	}
 	for {
 		rec.ID = domain.SessionID(fmt.Sprintf("%s-%d", prefix, num))
@@ -862,6 +870,103 @@ WHERE id = ?
 	return n > 0, nil
 }
 
+// standaloneSessionIDPrefix is the id prefix of sessions with no project.
+const standaloneSessionIDPrefix = "standalone"
+
+// DeleteTerminatedSession removes a terminated session's row; its own
+// conversations, cleanup facts, PR facts and the other per-session rows go with
+// it through ON DELETE CASCADE. Callers decide whether the session's workspace
+// is released first; this only refuses live sessions and, with
+// domain.ErrSessionHistoryShared, shared conversation history, all in one
+// transaction so a concurrent restore cannot slip between
+// the checks and the delete.
+//
+// The session's number is recorded in session_num_floors so the next spawn
+// never reuses its id (or its branch name). Its usage events cascade away with
+// their usage_bindings, so their spend is first folded into
+// deleted_session_account_usage, which keeps it in the agent account usage
+// view. Its change_log rows are dropped
+// because change_log references sessions without ON DELETE CASCADE; the
+// sessions_cdc_delete trigger adds one project-level session_updated event in
+// their place so every client refetches the list the session left.
+//
+// Returns deleted=false when id does not name a terminated session.
+func (s *Store) DeleteTerminatedSession(ctx context.Context, id domain.SessionID) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	tx, err := s.writeDB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("delete session %s: begin: %w", id, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var projectID sql.NullString
+	var num int64
+	err = tx.QueryRowContext(ctx, `SELECT project_id, num FROM sessions WHERE id = ? AND is_terminated = 1`, id).Scan(&projectID, &num)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("delete session %s: read: %w", id, err)
+	}
+	var shared bool
+	if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM conversation_turns t
+    JOIN conversations c ON c.id = t.conversation_id
+    WHERE t.handled_by_session_id = ?1
+      AND (c.session_id IS NULL OR c.session_id <> ?1)
+) OR EXISTS (
+    SELECT 1 FROM conversations
+    WHERE current_session_id = ?1
+      AND (session_id IS NULL OR session_id <> ?1)
+)`, id).Scan(&shared); err != nil {
+		return false, fmt.Errorf("delete session %s: check shared history: %w", id, err)
+	}
+	if shared {
+		return false, fmt.Errorf("delete session %s: %w", id, domain.ErrSessionHistoryShared)
+	}
+	prefix := standaloneSessionIDPrefix
+	if projectID.Valid && projectID.String != "" {
+		prefix = projectID.String
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO session_num_floors (id_prefix, max_num) VALUES (?, ?)
+ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`, prefix, num); err != nil {
+		return false, fmt.Errorf("delete session %s: record number floor: %w", id, err)
+	}
+	if err := foldDeletedSessionAccountUsage(ctx, s.qw.WithTx(tx), id); err != nil {
+		return false, fmt.Errorf("delete session %s: keep account usage: %w", id, err)
+	}
+	// Raw ExecContext for the same sqlc DELETE-parsing reason as DeleteSession.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE session_id = ?`, id); err != nil {
+		return false, fmt.Errorf("delete session %s: clear change log: %w", id, err)
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE id = ? AND is_terminated = 1`, id)
+	if err != nil {
+		return false, fmt.Errorf("delete session %s: %w", id, err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return false, fmt.Errorf("delete session %s: rows affected: %w", id, err)
+	} else if n == 0 {
+		return false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("delete session %s: commit: %w", id, err)
+	}
+	return true, nil
+}
+
+// sessionNumFloor is the highest number a deleted session under prefix held.
+func (s *Store) sessionNumFloor(ctx context.Context, prefix string) (int64, error) {
+	var floor int64
+	err := s.writeDB.QueryRowContext(ctx, `SELECT max_num FROM session_num_floors WHERE id_prefix = ?`, prefix).Scan(&floor)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return floor, err
+}
+
 // GetSession returns the full record for a session, or ok=false if absent.
 func (s *Store) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	row, err := s.qr.GetSession(ctx, id)
@@ -912,6 +1017,24 @@ func (s *Store) ListChatHibernationCandidates(ctx context.Context) ([]domain.Ses
 		return nil, fmt.Errorf("list chat hibernation candidates: %w", err)
 	}
 	return ids, nil
+}
+
+// ListReleasedArchivedSessions returns the archived sessions retention may
+// delete, each with when it was archived.
+func (s *Store) ListReleasedArchivedSessions(ctx context.Context) ([]domain.ArchivedSession, error) {
+	rows, err := s.qr.ListReleasedArchivedSessions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list released archived sessions: %w", err)
+	}
+	out := make([]domain.ArchivedSession, 0, len(rows))
+	for _, row := range rows {
+		archivedAt := row.UpdatedAt
+		if row.TerminatedAt.Valid {
+			archivedAt = row.TerminatedAt.Time
+		}
+		out = append(out, domain.ArchivedSession{ID: row.ID, ArchivedAt: archivedAt})
+	}
+	return out, nil
 }
 
 // ListTurnFailureCandidates returns the harness's live terminal sessions that

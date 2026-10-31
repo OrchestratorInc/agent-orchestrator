@@ -933,6 +933,11 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 		return reclaim, err
 	}
 	_, removeErr := w.run(ctx, w.binary, worktreeRemoveArgs(repo, path)...)
+	// The lift reads the registration's lock from porcelain output, which git
+	// never translates, rather than matching the remove error's text.
+	if removeErr != nil && w.liftStaleAddLock(ctx, repo, path) {
+		_, removeErr = w.run(ctx, w.binary, worktreeRemoveArgs(repo, path)...)
+	}
 	if _, err := w.run(ctx, w.binary, worktreePruneArgs(repo)...); err != nil {
 		return reclaim, fmt.Errorf("gitworktree: worktree prune: %w", err)
 	}
@@ -940,10 +945,10 @@ func (w *Workspace) destroy(ctx context.Context, info ports.WorkspaceInfo) (port
 	if err != nil {
 		return reclaim, err
 	}
-	if _, ok := findWorktree(records, path); ok {
+	if rec, ok := findWorktree(records, path); ok {
 		if removeErr != nil {
-			if isLockedWorktreeRemoveError(removeErr) {
-				return reclaim, fmt.Errorf("gitworktree: refusing to remove %q: path is still registered after git worktree prune (worktree remove: %w)", path, removeErr)
+			if rec.Locked || isLockedWorktreeRemoveError(removeErr) {
+				return reclaim, fmt.Errorf("gitworktree: refusing to remove %q: %w (worktree remove: %w)", path, ports.ErrWorkspaceLocked, removeErr)
 			}
 			// Distinguish the dirty-worktree refusal (uncommitted agent work)
 			// from other registration leftovers (e.g. a locked worktree) so the
@@ -1832,6 +1837,31 @@ func isMissingRegisteredWorktreeError(err error) bool {
 	return strings.Contains(err.Error(), "is a missing but already registered worktree")
 }
 
+// gitAddLockReason is the lock git itself writes while `git worktree add`
+// checks the tree out, and removes once it finishes.
+const gitAddLockReason = "initializing"
+
+// liftStaleAddLock unlocks a registration still carrying git's own add-time
+// lock. Destroy only runs on a workspace AO has retired, so no add is still in
+// flight there: the lock outlived a `git worktree add` that died midway, and it
+// would otherwise block every later removal. Only the lock is lifted; removal
+// stays the ordinary non-forced one, so uncommitted work is still refused. A
+// lock with any other reason is someone's deliberate "keep" and is left alone.
+// Reports whether the lock was lifted; when it was not, removal reports the
+// lock as before.
+func (w *Workspace) liftStaleAddLock(ctx context.Context, repo, path string) bool {
+	records, err := w.listRecords(ctx, repo)
+	if err != nil {
+		return false
+	}
+	rec, ok := findWorktree(records, path)
+	if !ok || !rec.Locked || rec.LockReason != gitAddLockReason {
+		return false
+	}
+	_, err = w.run(ctx, w.binary, "-C", repo, "worktree", "unlock", path)
+	return err == nil
+}
+
 func isLockedWorktreeRemoveError(err error) bool {
 	return strings.Contains(err.Error(), "cannot remove a locked working tree")
 }
@@ -2319,12 +2349,40 @@ func moveStrayPathAside(path string) (string, error) {
 
 func runCommand(ctx context.Context, binary string, args ...string) ([]byte, error) {
 	cmd := aoprocess.CommandContext(ctx, binary, args...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
+	cmd.Env = append(untranslatedGitEnv(os.Environ()), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return out, commandError{args: append([]string{binary}, args...), output: string(out), err: err}
 	}
 	return out, nil
+}
+
+// untranslatedGitEnv keeps git's own messages in English. This adapter matches
+// git's error text, and `git worktree add` writes its add-time lock reason
+// ("initializing") through git's translations. Only the message language
+// changes: LANG=C with LC_ALL, LC_MESSAGES and LANGUAGE dropped selects it on
+// both glibc and macOS, and the user's character type is kept, so hooks git
+// runs still see their UTF-8 locale.
+func untranslatedGitEnv(environ []string) []string {
+	out := make([]string, 0, len(environ)+2)
+	locale := map[string]string{}
+	for _, kv := range environ {
+		key, val, _ := strings.Cut(kv, "=")
+		switch key {
+		case "LC_ALL", "LC_CTYPE", "LANG":
+			locale[key] = val
+		case "LC_MESSAGES", "LANGUAGE":
+		default:
+			out = append(out, kv)
+		}
+	}
+	out = append(out, "LANG=C")
+	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
+		if ctype := locale[key]; ctype != "" {
+			return append(out, "LC_CTYPE="+ctype)
+		}
+	}
+	return out
 }
 
 type commandError struct {

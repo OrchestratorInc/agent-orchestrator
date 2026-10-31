@@ -29,6 +29,7 @@ type Store interface {
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
 	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
 	SetComputerUse(ctx context.Context, enabled bool, now time.Time) error
+	SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -44,7 +45,11 @@ type Snapshot struct {
 	// ComputerUse gives new chat sessions the computer-use tools and their
 	// standing instruction (Settings, Computer use agents). Off by default.
 	ComputerUse bool
-	UpdatedAt   time.Time
+	// SessionRetentionDays is how long an archived session whose worktree is
+	// released is kept before the daemon deletes it (Settings, General). 0, the
+	// default, keeps it.
+	SessionRetentionDays int
+	UpdatedAt            time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -220,6 +225,21 @@ func (s *Service) SetDefaultSessionMode(ctx context.Context, mode domain.Session
 		return Snapshot{}, fmt.Errorf("%w: %q", ports.ErrChatUnsupported, mode)
 	}
 	if err := s.store.SetDefaultSessionMode(ctx, mode, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
+}
+
+// maxSessionRetentionDays bounds the retention setting to ten years.
+const maxSessionRetentionDays = 3650
+
+// SetSessionRetentionDays sets how long archived sessions are kept; 0 keeps
+// them. The daemon's next cleanup pass applies it.
+func (s *Service) SetSessionRetentionDays(ctx context.Context, days int) (Snapshot, error) {
+	if days < 0 || days > maxSessionRetentionDays {
+		return Snapshot{}, apierr.Invalid("SESSION_RETENTION_INVALID", fmt.Sprintf("days must be between 0 and %d", maxSessionRetentionDays), nil)
+	}
+	if err := s.store.SetSessionRetentionDays(ctx, days, s.now()); err != nil {
 		return Snapshot{}, err
 	}
 	return s.Get(ctx)

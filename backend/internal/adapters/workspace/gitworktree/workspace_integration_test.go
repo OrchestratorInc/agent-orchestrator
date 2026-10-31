@@ -469,8 +469,8 @@ func TestWorkspaceIntegrationDestroyRefusesLockedWorktree(t *testing.T) {
 	runGit(t, git, repo, "worktree", "lock", info.Path)
 
 	err = ws.Destroy(ctx, info)
-	if err == nil || !strings.Contains(err.Error(), "still registered") {
-		t.Fatalf("destroy locked error = %v, want still registered refusal", err)
+	if !errors.Is(err, ports.ErrWorkspaceLocked) {
+		t.Fatalf("destroy locked error = %v, want ports.ErrWorkspaceLocked", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(info.Path, "README.md")); statErr != nil {
 		t.Fatalf("locked worktree was not preserved: %v", statErr)
@@ -1614,5 +1614,72 @@ func run(t *testing.T, binary string, args ...string) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", binary, strings.Join(args, " "), err, out)
+	}
+}
+
+// git locks a worktree "initializing" while `git worktree add` checks it out.
+// One left behind by an add that died is lifted, and the worktree is removed
+// the ordinary, non-forced way.
+func TestWorkspaceIntegrationDestroyLiftsStaleAddLock(t *testing.T) {
+	testDestroyLiftsStaleAddLock(t)
+}
+
+// A translated git (German here, when its catalog is installed) words the
+// locked-remove error differently; the lift must not depend on that text.
+func TestWorkspaceIntegrationDestroyLiftsStaleAddLockUnderTranslatedLocale(t *testing.T) {
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("LANG", "de_DE.UTF-8")
+	t.Setenv("LANGUAGE", "de")
+	testDestroyLiftsStaleAddLock(t)
+}
+
+func testDestroyLiftsStaleAddLock(t *testing.T) {
+	t.Helper()
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ctx := context.Background()
+	info, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess-stale", Branch: "child-stale"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	runGit(t, git, repo, "worktree", "lock", "--reason", "initializing", info.Path)
+
+	if err := ws.Destroy(ctx, info); err != nil {
+		t.Fatalf("destroy: %v", err)
+	}
+	if _, err := os.Stat(info.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("worktree still on disk: %v", err)
+	}
+}
+
+// Lifting a stale add lock never bypasses the dirty-work refusal.
+func TestWorkspaceIntegrationDestroyStaleAddLockStillPreservesDirtyWork(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	repo := setupOriginClone(t, git, tmp)
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": repo}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	ctx := context.Background()
+	info, err := ws.Create(ctx, ports.WorkspaceConfig{ProjectID: "proj", SessionID: "sess-dirty", Branch: "child-dirty"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(info.Path, "agent-work.txt"), []byte("unsaved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, git, repo, "worktree", "lock", "--reason", "initializing", info.Path)
+
+	if err := ws.Destroy(ctx, info); !errors.Is(err, ports.ErrWorkspaceDirty) {
+		t.Fatalf("destroy = %v, want ports.ErrWorkspaceDirty", err)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, "agent-work.txt")); err != nil {
+		t.Fatalf("dirty work lost: %v", err)
 	}
 }

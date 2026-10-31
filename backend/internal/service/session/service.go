@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -134,10 +135,11 @@ type CleanupOutcome struct {
 }
 
 // CleanupSkipped is one terminal session whose workspace was preserved by
-// cleanup (never force-deleted), with the user-facing reason.
+// cleanup (never force-deleted), with a stable code and the user-facing reason.
 type CleanupSkipped struct {
-	SessionID domain.SessionID `json:"sessionId"`
-	Reason    string           `json:"reason"`
+	SessionID domain.SessionID       `json:"sessionId"`
+	Code      domain.CleanupSkipCode `json:"code"`
+	Reason    string                 `json:"reason"`
 }
 
 // RestoreModeView is the API-facing restore-mode enum.
@@ -1138,6 +1140,84 @@ func (s *Service) DeleteArtifacts(ctx context.Context, id domain.SessionID) erro
 	return err
 }
 
+// sessionDeleteCommander is optional so focused fakes keep implementing the
+// stable commander surface.
+type sessionDeleteCommander interface {
+	DeleteSession(ctx context.Context, id domain.SessionID, cleanup bool) error
+}
+
+// Delete permanently removes a terminated session whose workspace is released,
+// then its artifact files; with cleanup it first releases a worktree still on
+// disk, never forced. The record goes first: a refused delete must not have
+// already thrown the artifacts away.
+func (s *Service) Delete(ctx context.Context, id domain.SessionID, cleanup bool) error {
+	deleter, ok := s.manager.(sessionDeleteCommander)
+	if !ok {
+		return apierr.NotImplemented("SESSION_DELETE_UNSUPPORTED", "Session deletion is not supported by this daemon")
+	}
+	if err := deleter.DeleteSession(ctx, id, cleanup); err != nil {
+		return toAPIError(err)
+	}
+	s.cancelTitleRefinement(id)
+	s.deleteArtifactDir(ctx, id)
+	return nil
+}
+
+// archivedSessionLister is optional so focused store fakes need not implement it.
+type archivedSessionLister interface {
+	ListReleasedArchivedSessions(ctx context.Context) ([]domain.ArchivedSession, error)
+}
+
+// DeleteExpired permanently deletes the archived sessions whose worktree is
+// released and that were archived more than days ago, the same way Delete
+// does. A session the delete refuses (shared history, an operation running) or
+// that is already gone is left for a later pass.
+func (s *Service) DeleteExpired(ctx context.Context, days int) error {
+	lister, ok := s.store.(archivedSessionLister)
+	if !ok || days <= 0 {
+		return nil
+	}
+	sessions, err := lister.ListReleasedArchivedSessions(ctx)
+	if err != nil {
+		return err
+	}
+	cutoff := s.now().AddDate(0, 0, -days)
+	var errs []error
+	for _, sess := range sessions {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if sess.ArchivedAt.After(cutoff) {
+			continue
+		}
+		err := s.Delete(ctx, sess.ID, false)
+		var apiErr *apierr.Error
+		if err == nil || errors.As(err, &apiErr) && (apiErr.Kind == apierr.KindConflict || apiErr.Kind == apierr.KindNotFound) {
+			continue
+		}
+		errs = append(errs, fmt.Errorf("delete expired session %s: %w", sess.ID, err))
+	}
+	return errors.Join(errs...)
+}
+
+// deleteArtifactDir removes a deleted session's artifact directory. Failures
+// are logged, not returned: the record is already gone.
+func (s *Service) deleteArtifactDir(ctx context.Context, id domain.SessionID) {
+	dir := sessionartifacts.Dir(s.dataDir, id)
+	if s.artifactDeleter == nil || dir == "" {
+		return
+	}
+	// The deleter waits out an in-flight capture, then leaves an empty
+	// directory for a restore that cannot happen now, so remove that too.
+	err := s.artifactDeleter.DeleteSession(ctx, id)
+	if err == nil {
+		err = os.Remove(dir)
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) && s.logger != nil {
+		s.logger.Warn("delete artifacts of deleted session", "session", id, "err", err)
+	}
+}
+
 // RollbackSpawn deletes a seed-state session row, or falls back to a Kill if
 // the session has spawn output. Used by the CLI to undo a `spawn --claim-pr`
 // when the claim step fails, avoiding the orphan terminated row that a plain
@@ -1333,7 +1413,7 @@ func (s *Service) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 		out.AlreadyGone = []domain.SessionID{}
 	}
 	for _, skip := range res.Skipped {
-		out.Skipped = append(out.Skipped, CleanupSkipped{SessionID: skip.SessionID, Reason: skip.Reason})
+		out.Skipped = append(out.Skipped, CleanupSkipped{SessionID: skip.SessionID, Code: skip.Code, Reason: skip.Reason})
 	}
 	return out, nil
 }
@@ -1552,7 +1632,7 @@ func (s *Service) Get(ctx context.Context, id domain.SessionID) (domain.Session,
 	return sess, nil
 }
 
-func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.WorkspaceDisposition) (domain.Session, error) {
+func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionRecord, prs []domain.PRFacts, runs []domain.CurrentHeadReviewRun, interrupted bool, cleanup domain.SessionCleanupRecord) (domain.Session, error) {
 	// A row created before artifact_dir existed carries it as '' (the
 	// migration's default) even though session_manager always prompts the
 	// agent to write into the deterministic dataDir/artifacts/<id> path.
@@ -1615,9 +1695,10 @@ func (s *Service) toSessionWithFacts(ctx context.Context, rec domain.SessionReco
 		readiness = recovery.SessionStatusReadiness(rec)
 	}
 	return domain.Session{
-		SessionRecord:    rec,
-		WorkspaceCleanup: cleanup,
-		StatusReadiness:  readiness,
+		SessionRecord:              rec,
+		WorkspaceCleanup:           cleanup.WorkspaceDisposition,
+		WorkspaceCleanupReportOnly: cleanup.ReportOnly,
+		StatusReadiness:            readiness,
 		ChatProviderPreserved: rec.Mode == domain.SessionModeChat && !rec.IsTerminated &&
 			s.chatProviderPreserved != nil && s.chatProviderPreserved(rec.ID),
 		Status:           deriveStatus(rec, prs, now, s.harnessSignals(rec.Harness)),
@@ -1639,6 +1720,7 @@ func toAPIError(err error) error {
 
 func mapSessionError(err error) error {
 	var relaunchErr *sessionmanager.RelaunchError
+	var cleanupRefused *sessionmanager.CleanupRefusedError
 	switch {
 	case err == nil:
 		return nil
@@ -1663,6 +1745,17 @@ func mapSessionError(err error) error {
 		return apierr.Conflict("SESSION_NOT_RESTORABLE", "Session is not restorable", nil)
 	case errors.Is(err, sessionmanager.ErrTerminated):
 		return apierr.Conflict("SESSION_TERMINATED", "Session is terminated", nil)
+	case errors.Is(err, sessionmanager.ErrSessionNotTerminated):
+		return apierr.Conflict("SESSION_NOT_TERMINATED", "Archive the session before deleting it.", nil)
+	case errors.As(err, &cleanupRefused):
+		return apierr.Conflict("WORKSPACE_CLEANUP_REFUSED", "The worktree was kept, so the session was not deleted: "+cleanupRefused.Reason,
+			map[string]any{"code": string(cleanupRefused.Code)})
+	case errors.Is(err, sessionmanager.ErrWorkspaceNotReleased):
+		return apierr.Conflict("WORKSPACE_NOT_RELEASED",
+			"The session's worktree has not been cleaned up yet. Run `ao session cleanup` first.", nil)
+	case errors.Is(err, domain.ErrSessionHistoryShared):
+		return apierr.Conflict("SESSION_HISTORY_SHARED",
+			"This session's turns belong to a conversation that outlives it, so it cannot be deleted.", nil)
 	case errors.Is(err, sessionmanager.ErrAgentExited):
 		return apierr.Conflict("AGENT_EXITED",
 			"The agent process exited; relaunch it before sending another message", nil)
@@ -1903,7 +1996,7 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	if err != nil {
 		return domain.Session{}, err
 	}
-	var cleanup domain.WorkspaceDisposition
+	var cleanup domain.SessionCleanupRecord
 	if rec.IsTerminated {
 		facts, found, err := s.store.GetSessionCleanupFacts(ctx, rec.ID)
 		if err != nil {
@@ -1918,13 +2011,13 @@ func (s *Service) toSession(ctx context.Context, rec domain.SessionRecord) (doma
 	return s.toSessionWithFacts(ctx, rec, prs, runs, interrupted[rec.ID], cleanup)
 }
 
-// currentWorkspaceCleanup is the teardown disposition recorded for an archived
-// session, provided the facts row belongs to its current cleanup generation.
-func currentWorkspaceCleanup(rec domain.SessionRecord, facts domain.SessionCleanupRecord, found bool) domain.WorkspaceDisposition {
+// currentWorkspaceCleanup is the teardown recorded for an archived session,
+// provided the facts row belongs to its current cleanup generation.
+func currentWorkspaceCleanup(rec domain.SessionRecord, facts domain.SessionCleanupRecord, found bool) domain.SessionCleanupRecord {
 	if found && facts.SessionGeneration == rec.CleanupGeneration {
-		return facts.WorkspaceDisposition
+		return facts
 	}
-	return ""
+	return domain.SessionCleanupRecord{}
 }
 
 // currentHeadReviewRuns reads the session's AO review passes for the Kanban

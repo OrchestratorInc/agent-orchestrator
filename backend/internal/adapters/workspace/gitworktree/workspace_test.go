@@ -102,6 +102,51 @@ func TestParseWorktreePorcelain(t *testing.T) {
 	}
 }
 
+func TestParseWorktreePorcelainKeepsLockReason(t *testing.T) {
+	recs, err := parseWorktreePorcelain("worktree /managed/a\nHEAD abc\nlocked initializing\n\nworktree /managed/b\nHEAD def\nlocked\n\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(recs) != 2 || !recs[0].Locked || recs[0].LockReason != "initializing" || !recs[1].Locked || recs[1].LockReason != "" {
+		t.Fatalf("records = %#v", recs)
+	}
+}
+
+func TestUntranslatedGitEnv(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{
+			name: "LC_ALL keeps its character type",
+			in:   []string{"HOME=/h", "LC_ALL=de_DE.UTF-8", "LANG=fr_FR.UTF-8", "LC_MESSAGES=de_DE.UTF-8", "LANGUAGE=de"},
+			want: []string{"HOME=/h", "LANG=C", "LC_CTYPE=de_DE.UTF-8"},
+		},
+		{
+			name: "LC_CTYPE wins over LANG",
+			in:   []string{"LANG=de_DE.UTF-8", "LC_CTYPE=UTF-8"},
+			want: []string{"LANG=C", "LC_CTYPE=UTF-8"},
+		},
+		{
+			name: "LANG alone",
+			in:   []string{"LANG=de_DE.UTF-8"},
+			want: []string{"LANG=C", "LC_CTYPE=de_DE.UTF-8"},
+		},
+		{
+			name: "no locale",
+			in:   []string{"PATH=/bin"},
+			want: []string{"PATH=/bin", "LANG=C"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := untranslatedGitEnv(tc.in); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("env = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestManagedPathSafety(t *testing.T) {
 	root := t.TempDir()
 	ws, err := New(Options{ManagedRoot: root, RepoResolver: StaticRepoResolver{"proj": root}})
