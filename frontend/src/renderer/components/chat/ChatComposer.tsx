@@ -1767,12 +1767,24 @@ export const ChatComposer = memo(function ChatComposer({
 
 	function onDrop(event: DragEvent<HTMLFormElement>) {
 		setDragging(false);
-		if (!canAttach || fileAttachments.preparing || draftMutationPending || submitInFlight.current) return;
+		if (submitInFlight.current) return;
 		const files = Array.from(event.dataTransfer?.files ?? []);
 		if (files.length === 0) return;
+		if (!canAttach || fileAttachments.preparing || draftMutationPending) return;
 		event.preventDefault();
 		event.stopPropagation();
 		attachFiles(files);
+	}
+
+	function onFormDrop(event: DragEvent<HTMLFormElement>) {
+		if (event.defaultPrevented || disabled || controlsDisabled || submitInFlight.current) return;
+		const files = Array.from(event.dataTransfer?.files ?? []);
+		if (files.length > 0) return;
+		const text = event.dataTransfer?.getData("text/plain") || event.dataTransfer?.getData("text/uri-list");
+		if (text) {
+			event.preventDefault();
+			editor.current?.insertText(text);
+		}
 	}
 
 	// Only modifier transitions re-render: React bails out when the value is unchanged.
@@ -1846,12 +1858,23 @@ export const ChatComposer = memo(function ChatComposer({
 			// Cmd/Ctrl steering remains available as a quiet power-user action.
 			onSubmit={(event) => void submit(event, steersDraft)}
 				onDragOver={(event) => {
-					if (!canAttach || submitInFlight.current) return;
-					event.preventDefault();
-					setDragging(true);
+					if (submitInFlight.current) return;
+					const types = Array.from(event.dataTransfer?.types ?? []);
+					const isFileDrag = types.includes("Files");
+					if (isFileDrag) {
+						if (!canAttach) return;
+						event.preventDefault();
+						setDragging(true);
+						return;
+					}
+					const isTextDrag = types.some((t) => t === "text/plain" || t === "text/uri-list");
+					if (isTextDrag && !disabled && !controlsDisabled) {
+						event.preventDefault();
+					}
 				}}
 				onDragLeave={() => setDragging(false)}
 				onDropCapture={onDrop}
+				onDrop={onFormDrop}
 				// The border colors for rest, hover, focus and drag are one set of states
 				// on one surface, so they are declared together in CSS rather than half
 				// here and half there.
