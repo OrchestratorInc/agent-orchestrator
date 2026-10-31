@@ -2,7 +2,8 @@ name: Frontend
 
 # Runs the renderer vitest suite and typechecks the codebase.
 #
-# This job ensures both compiler/type checking passes and vitest tests succeed.
+# The vitest suite is sharded and typechecking runs in its own job so the
+# slowest pieces run in parallel; `test` gates on all of them.
 
 on:
   push:
@@ -18,6 +19,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   mac-update-helper:
@@ -64,7 +69,58 @@ jobs:
           xcrun swiftc -module-cache-path "$HOME/.ao/build-cache/update-helper/tests" native/update-helper/UpdateProgressState.swift native/update-helper/StateTests.swift -o "$HOME/.ao/build-cache/update-helper/state-tests"
           "$HOME/.ao/build-cache/update-helper/state-tests"
 
-  test:
+  mac-dmg-layout:
+    # The macOS install window. Builds a real dmg with scripts/build-mac-dmg.mjs
+    # (the builder the release conductor runs on the stapled app), mounts it
+    # read-only and asserts the .DS_Store, background and icon positions are
+    # there. The control proves the check still catches what shipped through
+    # v0.14.7: a bare `hdiutil create -srcfolder` image with no layout at all.
+    runs-on: macos-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        # Only app-builder-lib (pure JS) is needed; skip Electron's download.
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build and check a dmg around a fixture app
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/dmg-layout"
+          app="$work/Agent Orchestrator.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp assets/icon.icns "$app/Contents/Resources/icon.icns"
+          printf '#!/bin/sh\n' > "$app/Contents/MacOS/agent-orchestrator"
+          chmod +x "$app/Contents/MacOS/agent-orchestrator"
+          plutil -create xml1 "$app/Contents/Info.plist"
+          plutil -insert CFBundleExecutable -string agent-orchestrator "$app/Contents/Info.plist"
+          plutil -insert CFBundleIconFile -string icon.icns "$app/Contents/Info.plist"
+          plutil -insert CFBundlePackageType -string APPL "$app/Contents/Info.plist"
+          # Builds, then runs --check itself and exits non-zero on any problem.
+          node scripts/build-mac-dmg.mjs --app "$app" --arch arm64 --output "$work/agent-orchestrator-darwin-arm64.dmg"
+          test ! -e "$work/agent-orchestrator-darwin-arm64.dmg.blockmap"
+          node scripts/build-mac-dmg.mjs --check "$work/agent-orchestrator-darwin-arm64.dmg"
+
+          stage="$work/bare"
+          mkdir -p "$stage"
+          ditto "$app" "$stage/Agent Orchestrator.app"
+          ln -s /Applications "$stage/Applications"
+          hdiutil create -volname "Agent Orchestrator" -srcfolder "$stage" -ov -format UDZO "$work/bare.dmg"
+          if node scripts/build-mac-dmg.mjs --check "$work/bare.dmg"; then
+            echo "::error::the layout check accepted a dmg with no layout"
+            exit 1
+          fi
+          # Nothing may stay mounted after either check.
+          ! hdiutil info | grep -q ao-dmg-check
+
+  checks:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -131,8 +187,82 @@ jobs:
       - name: Install docs dependencies
         run: npm ci --prefix src/docs
 
+      # Re-extracts the docs catalogs, then fails if any locale is missing a
+      # translation for a string in the source.
+      - name: Check docs translations
+        run: npm run check:i18n --prefix src/docs
+
+      - name: Test docs
+        run: npm test --prefix src/docs
+
       - name: Build docs
         run: npm run build --prefix src/docs
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Verify terminal origin boundary in real Electron
+        working-directory: backend
+        run: |
+          # Keep lazy-download output out of the executable-path capture.
+          node ../frontend/node_modules/electron/install.js
+          AO_MUX_ELECTRON="$(node -p "require('../frontend/node_modules/electron')")" xvfb-run -a go test -count=1 -run '^TestMuxOriginElectron$' ./internal/httpd
+
+      - name: Verify daemon browser boundary in real Electron
+        working-directory: backend
+        run: |
+          AO_BOUNDARY_ELECTRON="$(node -p "require('../frontend/node_modules/electron')")" xvfb-run -a go test -count=1 -run '^TestBrowserBoundaryElectron$' ./internal/httpd
+
+      - name: Verify mobile control boundary in real Electron
+        working-directory: backend
+        run: |
+          # Install first so lazy-download output cannot become part of the executable path.
+          node ../frontend/node_modules/electron/install.js
+          electron_binary="$(node -p "require('../frontend/node_modules/electron')")"
+          test -x "$electron_binary"
+          AO_MOBILE_CONTROL_ELECTRON="$electron_binary" xvfb-run -a go test -count=1 -run '^TestMobileControlOriginElectron$' ./internal/httpd
+
+      - name: Run guarded-navigation browser integration
+        run: npm run test:browser-postcondition-integration
+
+  typecheck:
+    runs-on: ubuntu-latest
+    env:
+      # tsc needs Electron's types, not its binary; skip the flaky download.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            packages/product-ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "npm ci failed; retrying Electron dependency download ($attempt/3)"
+          done
+
+      # tsconfig maps @aoagents/product-ui to its source, whose imports resolve
+      # from packages/product-ui/node_modules.
+      - name: Install product UI dependencies
+        run: npm ci
+        working-directory: packages/product-ui
 
       - name: Typecheck project
         run: npm run typecheck
@@ -140,13 +270,62 @@ jobs:
       - name: Typecheck E2E suite
         run: npm run typecheck:e2e
 
-      - name: Run vitest suite
+  vitest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            packages/product-ui/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          for attempt in 1 2 3; do
+            if npm ci; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            echo "npm ci failed; retrying Electron dependency download ($attempt/3)"
+          done
+
+      - name: Install product UI dependencies
+        run: npm ci
+        working-directory: packages/product-ui
+
+      - name: Prepare pinned agent-browser runtime
+        run: npm run browser-runtime:prepare -- --quiet
+
+      - name: Run vitest shard
         env:
           AO_AGENT_BROWSER_TEST_BINARY: ${{ github.workspace }}/frontend/agent-browser/agent-browser
-        run: npx vitest run
+        run: npx vitest run --shard=${{ matrix.shard }}/4
 
-      - name: Run guarded-navigation browser integration
-        run: npm run test:browser-postcondition-integration
+  # Keep the existing check name as the gate for the split frontend jobs.
+  test:
+    if: always()
+    needs: [checks, typecheck, vitest, mac-dmg-layout]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check frontend results
+        run: |
+          test '${{ needs.mac-dmg-layout.result }}' = success
+          test '${{ needs.checks.result }}' = success
+          test '${{ needs.typecheck.result }}' = success
+          test '${{ needs.vitest.result }}' = success
 
   renderer-smoke:
     # RENDERER smoke (issue #2483, renderer slice) — the Playwright specs that run

@@ -14,7 +14,7 @@ import { useTranslation } from "react-i18next";
 import { settingsQueryKey, type Settings } from "./useSettings";
 import type { CloudCpSession } from "../lib/cloud-cp";
 import { clientForHost } from "../lib/host-clients";
-import { LOCAL_HOST, refKey } from "../lib/hosts";
+import { LOCAL_HOST, refKey, sessionUiKey } from "../lib/hosts";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import { useUiStore } from "../stores/ui-store";
 
@@ -28,19 +28,25 @@ type TerminateSessionOptions = {
 export const terminateSessionMutationKey = ["terminate-session"] as const;
 
 /**
- * The session to archive. `deleteArtifacts` asks the daemon to also delete the
- * session's artifact files; only the archive dialog sets it.
+ * The session to archive. `deleteArtifacts` asks the daemon, or the control
+ * plane for a cloud session, to also delete the session's artifact files; only
+ * the archive dialog sets it.
  */
 export type TerminateSessionRequest = WorkspaceSession & { deleteArtifacts?: boolean };
 
-/** Resolves to whether the daemon confirmed it deleted the artifacts. */
+/** Resolves to whether the daemon or control plane confirmed it deleted the artifacts. */
 async function terminateSession(queryClient: QueryClient, session: TerminateSessionRequest): Promise<boolean> {
 	if (session.cloud) {
 		const settings = queryClient.getQueryData<Settings>(settingsQueryKey);
 		const baseUrl = settings?.cloudControlPlaneUrl ?? "";
 		if (baseUrl === "") throw new Error("The cloud control plane is not configured.");
-		await createRendererCloudCpClient(baseUrl).deleteSession(session.cloud.orgId, session.id);
-		return false;
+		const client = createRendererCloudCpClient(baseUrl);
+		if (!session.deleteArtifacts) {
+			await client.deleteSession(session.cloud.orgId, session.id);
+			return false;
+		}
+		const deleted = await client.deleteSession(session.cloud.orgId, session.id, { deleteArtifacts: true });
+		return deleted.artifactsDeleted === true;
 	}
 
 	const { data, error, response } = await (session.hostId ? clientForHost(session.hostId) : apiClient).POST("/api/v1/sessions/{sessionId}/kill", {
@@ -120,7 +126,6 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 		mutationKey: terminateSessionMutationKey,
 		mutationFn: async (session: TerminateSessionRequest) => {
 			recordDirectWorkerInteraction(session.id, "lifecycle", session.kind, session.hostId);
-			void captureRendererEvent("ao.renderer.session_kill_requested", { project_id: session.workspaceId });
 
 			return terminateSession(queryClient, session);
 		},
@@ -158,6 +163,7 @@ export function useTerminateSession(options: TerminateSessionOptions = {}) {
 			return { workspace, cloud };
 		},
 		onSuccess: async (artifactsDeleted, session) => {
+			useUiStore.getState().resetFilesSelection(sessionUiKey(session.id, session.hostId));
 			void captureRendererEvent("ao.renderer.session_kill_succeeded", { project_id: session.workspaceId });
 			// The archive stands either way. A failed delete, or a host whose daemon
 			// predates the option, leaves the files on disk, so say so.

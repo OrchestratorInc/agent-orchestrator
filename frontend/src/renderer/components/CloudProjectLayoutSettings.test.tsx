@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
+import { appI18n } from "../i18n";
 import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } from "./CloudProjectLayoutSettings";
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 	listRepos: vi.fn(),
 	orgCoderConfig: null as Record<string, unknown> | null,
 	org: { id: "org-1", role: "admin" } as { id: string; role?: string },
+	workerWorkingFolder: undefined as boolean | undefined,
 }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({
@@ -18,7 +20,9 @@ vi.mock("../hooks/useCloudCp", () => ({
 		baseUrl: "https://cloud.test",
 	}),
 }));
-vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "coder", hasCoder: true }) }));
+vi.mock("../hooks/useCloudOffering", () => ({
+	useCloudOffering: () => ({ defaultProvider: "coder", hasCoder: true, coderWorkerWorkingFolder: mocks.workerWorkingFolder }),
+}));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: mocks.org }) }));
 vi.mock("../hooks/useOrgCoderConfig", () => ({ useOrgCoderConfig: () => ({ data: mocks.orgCoderConfig, isLoading: false }) }));
 
@@ -33,6 +37,7 @@ const repository = (id: string, name: string) => ({
 
 beforeEach(() => {
 	mocks.orgCoderConfig = null;
+	mocks.workerWorkingFolder = undefined;
 	mocks.org = { id: "org-1", role: "admin" };
 	mocks.get.mockReset().mockResolvedValue({ project: project({ repos: [{ url: "https://github.com/acme/11x", branch: "develop" }] }) });
 	mocks.patch.mockReset().mockImplementation((_org: string, _id: string, body: { config: Record<string, unknown> }) =>
@@ -53,7 +58,6 @@ it("adds an additional repository and keeps a stored branch for one that stays",
 	expect(await screen.findByText("acme/alice")).toBeInTheDocument();
 	expect(screen.getByText("../11x")).toBeInTheDocument();
 	await userEvent.click(screen.getByRole("button", { name: "Add a repository" }));
-	await userEvent.click(screen.getByRole("combobox", { name: "Additional repository 2" }));
 	// Neither the main repository nor one already listed is offered.
 	expect(screen.queryByRole("option", { name: /acme\/alice/ })).toBeNull();
 	expect(screen.queryByRole("option", { name: /acme\/11x/ })).toBeNull();
@@ -63,6 +67,25 @@ it("adds an additional repository and keeps a stored branch for one that stays",
 	expect(mocks.patch.mock.calls[0][2]).toEqual({
 		config: { repos: [{ url: "https://github.com/acme/11x", branch: "develop" }, { url: "https://github.com/acme/voice-calling-ai" }] },
 	});
+});
+
+it("opens the picker for a newly added repository and drops the row when it is dismissed", async () => {
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	expect(await screen.findByText("acme/alice")).toBeInTheDocument();
+	const add = screen.getByRole("button", { name: "Add a repository" });
+	await userEvent.click(add);
+	// One click is enough: the new row's list is already open.
+	expect(await screen.findByRole("listbox", { name: "Additional repository 2" })).toBeInTheDocument();
+	expect(screen.getByRole("combobox", { name: "Additional repository 2" })).toHaveAttribute("aria-expanded", "true");
+
+	await userEvent.keyboard("{Escape}");
+	await waitFor(() => expect(screen.queryByRole("combobox", { name: "Additional repository 2" })).toBeNull());
+	expect(screen.queryByRole("listbox")).toBeNull();
+	await waitFor(() => expect(add).toHaveFocus());
+	expect(add).toBeEnabled();
+	// The stored repository is untouched and nothing is left to save.
+	expect(screen.getByText("../11x")).toBeInTheDocument();
+	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
 });
 
 it("saves where the agent starts on its own", async () => {
@@ -169,4 +192,30 @@ it("blocks instructions over 16 KB", async () => {
 	fireEvent.change(await screen.findByLabelText("Worker instructions"), { target: { value: "x".repeat(16 * 1024 + 1) } });
 	expect(screen.getByText("Instructions must be at most 16 KB.")).toBeInTheDocument();
 	expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
+});
+
+it("describes the working folder as the workspace user's until the control plane checks ao-worker sessions out there", async () => {
+	mocks.orgCoderConfig = { baseUrl: "https://coder.test", workerUser: "ao-worker" };
+	mocks.get.mockResolvedValue({ project: project({ workingDirectory: "~/work/{repo}" }) });
+	const view = renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	expect(await screen.findByText(/Leave empty to use your Coder connection's folder\./)).toBeInTheDocument();
+	view.unmount();
+	mocks.workerWorkingFolder = true;
+	renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+	expect(await screen.findByText(/Leave empty for the default location\./)).toBeInTheDocument();
+	expect(screen.queryByText(/Leave empty to use your Coder connection's folder/)).not.toBeInTheDocument();
+});
+
+it("shows the working folder in the app's language", async () => {
+	mocks.orgCoderConfig = { baseUrl: "https://coder.acme.test" };
+	await appI18n.changeLanguage("de");
+	try {
+		renderWith(<CloudProjectRepositoriesSettings projectId="p" cloudOrgId="org-1" />);
+		const field = await screen.findByLabelText("Arbeitsordner");
+		expect(screen.getByText(/Wo das Haupt-Repository in deinem Coder-Workspace ausgecheckt wird/)).toBeInTheDocument();
+		fireEvent.change(field, { target: { value: "~/work/{name}" } });
+		expect(screen.getByRole("alert")).toHaveTextContent("Der Arbeitsordner darf nur {repo} als Platzhalter verwenden.");
+	} finally {
+		await act(() => appI18n.changeLanguage("en"));
+	}
 });

@@ -34,21 +34,36 @@ Every product command resolves to a daemon HTTP route. Run `ao <command>
 | `ao version` / `ao --version` | Print build metadata.                                                                                                             |
 | `ao daemon`                   | Run the daemon in the foreground (normally supervised by the desktop app or an OS service manager).                               |
 | `ao remote-host status/enable/disable` | Inspect or toggle this machine's authenticated remote listener through the local daemon. |
+| `ao remote-host link` | Add this machine to your AO account by signing in from another device; it then gets a fixed address. |
 
 For a self-hosted machine, use the [host setup command](../self-hosted-remote.md)
 to install the daemon with its Claude Chat runtime and start the OS user
-service. It calls `ao remote-host enable` and prints the host ID, address, and
-pairing password for **Settings → Remote hosts** on another desktop. With
-`cloudflared` installed, setup `--tunnel` calls `ao remote-host enable
---tunnel-only`: its authenticated listener binds only to loopback. Direct
+service. With `cloudflared` installed, setup `--tunnel` calls `ao remote-host
+enable --tunnel-only`: its authenticated listener binds only to loopback. At a
+terminal it then runs `ao remote-host link`; otherwise, or when the sign-in
+does not finish, it prints the host ID, address, and pairing password for
+**Settings → Remote hosts** on another desktop. Direct
 `ao remote-host enable --tunnel` keeps both LAN and Cloudflare access for users
 who deliberately want both. Check `ao remote-host status` when the HTTPS
 address is ready.
 Running `enable` again prints the current details without rotating the
 password. `status` shows the password from the host's local shell. The LAN
 listener uses plain HTTP; do not publish its port directly to the internet.
-Cloudflare terminates tunnel TLS and can see its traffic; quick-tunnel
-addresses change on restart.
+Cloudflare terminates tunnel TLS and can see its traffic. Until the machine is
+linked to an account, by `ao remote-host link` or a signed-in desktop adding
+it, it uses a quick tunnel whose address changes on restart; once linked, it
+moves to a fixed address.
+
+`ao remote-host link` prints a sign-in link and a QR code, then waits up to 5
+minutes. Open the link on any device, check that it shows the same code, and
+sign in: the machine joins that AO account, every device signed in to it lists
+the machine within about 30 seconds, and the machine keeps none of the sign-in.
+`--label` sets the name devices show (default: the name the account already
+has for the machine, else the hostname); `--no-qr` prints only the link. On a
+LAN-only listener it adds a Cloudflare tunnel, as `enable --tunnel` does. Run
+it again to move the machine to another account. An agent
+without a terminal runs it in the background and reads its output; see
+[Set up a VM as an agent](../self-hosted-remote.md#set-up-a-vm-as-an-agent).
 
 ### Product commands
 
@@ -65,14 +80,11 @@ addresses change on restart.
 | `ao cue create/list`                | `POST/GET /api/v1/projects/{id}/cues`         |
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
 | `ao session ls`                     | `GET /api/v1/sessions` plus per-session PR summaries; shows branch, PR, CI, review, unresolved threads, activity, and age. |
-| `ao session get <id>`               | `GET /api/v1/sessions/{id}`                    |
+| `ao session get <id>`               | `GET /api/v1/sessions/{id}`. `--transcript N` also reads `GET /api/v1/sessions/{id}/conversation` for chat sessions on the local daemon. |
 | `ao session kill <id>`              | `POST /api/v1/sessions/{id}/kill`              |
 | `ao session restore <id>`           | `POST /api/v1/sessions/{id}/restore`           |
 | `ao session exit-agent <id>`        | `POST /api/v1/sessions/{id}/exit-agent`        |
 | `ao session resume-agent <id>`      | `POST /api/v1/sessions/{id}/resume-agent`      |
-| `ao session switch-agent <id> <target-harness>` | `POST /api/v1/sessions/{id}/switch-agent` |
-| `ao session agent-switch ls <session-id>` | `GET /api/v1/sessions/{id}/agent-switches` |
-| `ao session handoff submit`         | `POST /api/v1/sessions/{id}/agent-switches/{switchId}/handoff` |
 | `ao session rename <id> <name>`     | `PATCH /api/v1/sessions/{id}`                  |
 | `ao session cleanup`                | `POST /api/v1/sessions/cleanup`                |
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
@@ -82,6 +94,7 @@ addresses change on restart.
 | `ao preview [url]`                  | `POST /api/v1/sessions/{id}/preview`           |
 | `ao preview start/status/stop`      | `POST/GET/DELETE /api/v1/sessions/{id}/preview/server` |
 | `ao browser ...`                    | `GET /api/v1/browser/status`, `POST /api/v1/browser/commands` |
+| `ao browser chrome status\|setup\|remove` | `GET`, `POST`, `DELETE /api/v1/browser/chrome` |
 | `ao hooks <agent> <event>`          | `POST /api/v1/sessions/{id}/activity` (hidden) |
 
 `ao agent ls` asks the daemon to ensure display readiness, then prints the
@@ -97,39 +110,6 @@ paths. If `AO_SESSION_ID` is set but the session cannot be fetched, pass
 <name>` to launch a worker in an AO-managed plain directory without resolving
 or registering a project. Standalone sessions do not support orchestrator,
 branch, issue, or PR-claim options.
-
-Agent switching is initially available only for worker sessions whose source
-and target harnesses are Claude Code or Codex. The main command
-accepts an idempotency key:
-
-```bash
-ao session switch-agent ao-7 codex \
-  --idempotency-key switch-ao-7-to-codex
-
-ao session agent-switch ls ao-7 --json
-```
-
-`switch-agent` and `agent-switch ls` both support `--json`.
-The `agent-switch` command also has the `agent-switches` alias, and `ls` has the
-`list` alias.
-
-`ao session handoff submit` is the internal source-agent path for optional
-semantic enrichment, not a required human step in a normal switch. It requires
-the switch ID, exact source launch generation, and a regular file containing
-one JSON object no larger than 64 KiB. `--session` defaults to
-`AO_SESSION_ID`:
-
-```bash
-AO_SESSION_ID=ao-7 ao session handoff submit \
-  --switch switch-123 \
-  --source-generation generation-456 \
-  --file /tmp/ao-handoff.json \
-  --json
-```
-
-Switching preserves the AO worker session and worktree. It does not translate,
-clip, or rewrite provider transcript files; providers continue to own their
-native history and compaction.
 
 `ao session claim-pr <pr-ref>` attaches a PR to the current worker by reading
 `AO_SESSION_ID`. From an orchestrator or external shell, pass the target
@@ -238,6 +218,16 @@ query values are redacted.
 
 `go run .` in `backend/` remains a compatibility wrapper around the daemon.
 
+Merge a tracked PR with its full URL and the head SHA you reviewed:
+
+```bash
+ao pr merge 42 --url https://github.com/acme/widgets/pull/42 --expected-head-sha <sha>
+```
+
+Both flags are required. The URL identifies the repository, and the daemon
+rejects the request if the tracked or provider head has changed. A rejected
+head must be reviewed again before retrying with a new SHA.
+
 PR actions are available through `ao pr merge` and
 `ao pr resolve-comments`. Review actions are available through `ao review ls`,
 `ao review trigger` (also `execute` and `restart`), `ao review cancel` (also
@@ -253,7 +243,7 @@ The CLI and daemon share the same environment-driven config:
 | `AO_RUN_FILE`         | `~/.ao/running.json` | PID/port handshake.                                                                            |
 | `AO_DATA_DIR`         | `~/.ao/data`         | SQLite data directory.                                                                         |
 | `AO_REQUEST_TIMEOUT`  | `60s`                | REST request timeout.                                                                          |
-| `AO_SHUTDOWN_TIMEOUT` | `10s`                | Graceful shutdown cap.                                                                         |
+| `AO_SHUTDOWN_TIMEOUT` | `10s`                | Graceful shutdown cap. Also scales how long a new daemon waits for the data dir (9x + 18s).    |
 | `AO_KEEP_DAEMON`      | unset (off)          | Keep the desktop app's daemon running after the window closes; stop only via `ao stop`. (fork) |
 | `AO_DISABLE_GPU`      | unset (off)          | Skip Chromium hardware acceleration; escape hatch for broken Linux GPU drivers.                |
 

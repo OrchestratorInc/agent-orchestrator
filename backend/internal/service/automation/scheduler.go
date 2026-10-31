@@ -146,7 +146,9 @@ func (s *Service) dispatch(ctx context.Context, store schedulerStore, run domain
 	}
 	session, _, _, spawnErr := s.spawner.Spawn(ctx, ports.SpawnConfig{
 		ProjectID: definition.ProjectID, Kind: definition.Kind, Harness: definition.Harness,
-		Prompt: definition.Prompt, DisplayName: definition.DisplayName, AutomationRunID: &run.ID,
+		AgentConfig:    ports.AgentConfig{Model: definition.Model, Mode: definition.Mode, Effort: definition.Effort},
+		EffortOverride: definition.Model != "" || definition.Effort != "",
+		Prompt:         definition.Prompt, DisplayName: definition.DisplayName, AutomationRunID: &run.ID,
 	})
 	if spawnErr != nil {
 		var apiError *apierr.Error

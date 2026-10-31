@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	WorkspaceRequestError,
+	retryWorkspaceRead,
 	sessionWorkspaceFileQueryOptions,
 	sessionWorkspaceFilesQueryOptions,
 	sessionWorkspaceSearchQueryOptions,
 	sessionSourceFileQueryOptions,
 	sessionSourceFileRevisionQueryOptions,
-	sessionSourceFilesQueryOptions,
 	updateSessionWorkspaceFile,
 	workspaceFilesRefetchInterval,
 } from "./useSessionWorkspaceFiles";
@@ -39,11 +40,20 @@ describe("workspaceFilesRefetchInterval", () => {
 	});
 });
 
+describe("retryWorkspaceRead", () => {
+	it("retries a failed read three times, but never a 4xx answer, which would only fail again", () => {
+		expect(retryWorkspaceRead(0, new Error("offline"))).toBe(true);
+		expect(retryWorkspaceRead(2, new WorkspaceRequestError("busy", "INTERNAL", 500))).toBe(true);
+		expect(retryWorkspaceRead(3, new Error("offline"))).toBe(false);
+		expect(retryWorkspaceRead(0, new WorkspaceRequestError("moved", "WORKSPACE_REF_MOVED", 409))).toBe(false);
+		expect(retryWorkspaceRead(0, new WorkspaceRequestError("gone", "WORKSPACE_BRANCH_NOT_FOUND", 404))).toBe(false);
+	});
+});
+
 describe("pull request file query keys", () => {
 	const source = { kind: "pull_request", number: 42, url: "https://example.test/pull/42", label: "PR #42", snapshot: "head-2" } as const;
 
-	it("isolates list, detail, and revision caches by snapshot", () => {
-		expect(sessionSourceFilesQueryOptions("session-1", source).queryKey).toContain("head-2");
+	it("isolates detail and revision caches by snapshot", () => {
 		expect(sessionSourceFileQueryOptions("session-1", source, "README.md").queryKey).toContain("head-2");
 		expect(sessionSourceFileRevisionQueryOptions({ path: "README.md", scope: "combined", sessionId: "session-1", side: "after", source }).queryKey).toContain("head-2");
 	});

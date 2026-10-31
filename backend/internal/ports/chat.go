@@ -178,6 +178,9 @@ const (
 	ChatCapabilityUsage     ChatCapability = "usage"
 	ChatCapabilityDiffs     ChatCapability = "diffs"
 	ChatCapabilityPlans     ChatCapability = "plans"
+	// ChatCapabilityPlanMode is a plan mode AO switches per turn, for a
+	// provider that does not offer one as a session setting of its own.
+	ChatCapabilityPlanMode ChatCapability = "plan_mode"
 	// ChatCapabilityModels means the provider can enumerate the models it offers
 	// and accept one per turn.
 	ChatCapabilityModels ChatCapability = "models"
@@ -279,6 +282,12 @@ func MissingCapabilitiesForPermissions(caps ChatCapabilities, permissions Permis
 	return out
 }
 
+// PermissionModesStrictestFirst is AO's permission modes from the one that asks
+// before every action to the one that never asks.
+var PermissionModesStrictestFirst = []PermissionMode{
+	PermissionModeDefault, PermissionModeAcceptEdits, PermissionModeAuto, PermissionModeBypassPermissions,
+}
+
 // ChatStartConfig is what a driver needs to open a new provider conversation.
 type ChatStartConfig struct {
 	SessionID domain.SessionID
@@ -316,6 +325,9 @@ type ChatStartConfig struct {
 	// DisableNetwork requests tool network isolation for read-only background
 	// conversations. Supporting drivers must not inherit reviewer network access.
 	DisableNetwork bool
+	// DisableTools requests text-only generation for background tasks from
+	// providers that expose a native tool-selection option.
+	DisableTools bool
 	// SystemPrompt carries AO's standing instructions for the session.
 	SystemPrompt string
 	// ProviderScopeID identifies the AO ownership boundary for opaque provider
@@ -399,6 +411,8 @@ const ChatExcerptResourceURIPrefix = "ao://conversation-excerpt/"
 // message. Revision makes stale selections fail closed when streaming updates
 // replace the source text before the user sends their draft.
 type ChatExcerptReference struct {
+	ID             string `json:"id,omitempty"`
+	Order          int64  `json:"order,omitempty"`
 	ConversationID string `json:"conversationId"`
 	MessageID      string `json:"messageId"`
 	Revision       int64  `json:"revision"`
@@ -419,13 +433,14 @@ type ChatExcerptContext struct {
 // the durable transcript has an ordinary readable message; these blocks enrich
 // what the provider receives without leaking protocol DTOs above the adapter.
 type ChatContent struct {
-	Type     string              `json:"type"`
-	Data     string              `json:"data,omitempty"`
-	MIMEType string              `json:"mimeType,omitempty"`
-	URI      string              `json:"uri,omitempty"`
-	Name     string              `json:"name,omitempty"`
-	Text     string              `json:"text,omitempty"`
-	Excerpt  *ChatExcerptContext `json:"excerpt,omitempty"`
+	Type          string              `json:"type"`
+	Data          string              `json:"data,omitempty"`
+	MIMEType      string              `json:"mimeType,omitempty"`
+	URI           string              `json:"uri,omitempty"`
+	Name          string              `json:"name,omitempty"`
+	Text          string              `json:"text,omitempty"`
+	Excerpt       *ChatExcerptContext `json:"excerpt,omitempty"`
+	FileReference *ChatFileReference  `json:"fileReference,omitempty"`
 	// Internal distinguishes AO-owned prompt context from a user attachment.
 	// Public request DTOs never expose this bit; it is durable so edit/retry and
 	// snapshot reconstruction can hide only content AO actually synthesized.
@@ -443,6 +458,9 @@ type ChatUserMessage struct {
 	// InteractionAt preserves initial acceptance across transition outbox replay.
 	InteractionAt time.Time
 	Text          string
+	// SpawnOpeningPrompt excludes the task brief delivered during session creation
+	// from direct Chat message usage, regardless of who requested the spawn.
+	SpawnOpeningPrompt bool
 	// SenderSessionID identifies the AO session that authored an automation steer.
 	// It is presentation metadata only and is never sent to the provider.
 	SenderSessionID string
@@ -502,6 +520,10 @@ type ChatTurnSettings struct {
 	// Approval is AO's permission mode for this turn. The driver maps it onto
 	// whatever approval policy and sandbox its provider understands.
 	Approval PermissionMode
+	// Fast asks for the provider's faster tier, on models that offer one.
+	Fast bool
+	// Plan asks the provider to plan the work rather than carry it out.
+	Plan bool
 }
 
 // IsZero reports whether nothing was chosen, so a dispatch can omit the fields
@@ -527,6 +549,9 @@ type ChatModel struct {
 	Efforts []string
 	// DefaultEffort is the level the provider uses when none is chosen.
 	DefaultEffort string
+	// FastTier is the provider's id for this model's faster tier. Empty means
+	// the model has none.
+	FastTier string
 }
 
 // ChatModelLister is implemented by drivers whose provider can enumerate models.
@@ -1017,7 +1042,7 @@ type chatProviderFailure struct {
 
 // NewChatProviderFailure preserves provider prose as opaque display text. An
 // adapter may attach an existing sentinel (e.g. ErrChatAuthRequired) when native
-// metadata proves it; callers never infer recovery from the message.
+// metadata proves it; callers never infer authentication recovery from the message.
 func NewChatProviderFailure(title, detail string, cause error) error {
 	title = strings.TrimSpace(title)
 	detail = strings.TrimSpace(detail)
@@ -1133,6 +1158,18 @@ type ChatEvent struct {
 	// Err carries display text and optional typed causes. Its presence does not
 	// imply the conversation is over; check Kind and ControllerState.
 	Err error
+}
+
+// ChatInstallChecker is implemented by chat drivers that can tell, without
+// starting anything, that the adapter they need is missing.
+type ChatInstallChecker interface {
+	CheckChatInstall(ctx context.Context) error
+}
+
+// ChatPermissionModeChecker is implemented by chat drivers whose agent refuses
+// some AO permission modes, so a caller can pick one it accepts before starting.
+type ChatPermissionModeChecker interface {
+	SupportsPermissionMode(mode PermissionMode) bool
 }
 
 // ChatDriver opens conversations for one harness.

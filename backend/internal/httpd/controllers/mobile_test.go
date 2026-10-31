@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
@@ -48,6 +49,28 @@ func (f *fakeBridge) SetSecurePairing(on bool) (MobileStatusResponse, error) {
 	r := f.Status()
 	r.SecurePairing.Enabled = on
 	return r, nil
+}
+func (f *fakeBridge) SetBrowserRemoteAccess(on bool) (MobileStatusResponse, error) {
+	r := f.Status()
+	r.BrowserRemoteAccess = on
+	return r, nil
+}
+
+func TestMobileBrowserRemoteAccess(t *testing.T) {
+	c := &MobileController{Bridge: &fakeBridge{}}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/mobile/browser-control", strings.NewReader(`{"enabled":true}`))
+	rr := httptest.NewRecorder()
+	c.BrowserRemoteAccess(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	var got MobileStatusResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.BrowserRemoteAccess {
+		t.Fatal("browser remote access was not enabled")
+	}
 }
 
 // fakeLAN is a minimal LANController for exercising BridgeService directly.
@@ -103,6 +126,10 @@ func TestIssueAccountTokenRequiresPairingPasswordAndPersistsHash(t *testing.T) {
 	}
 	if issued.HostID != "h_test" || len(issued.Token) != 64 {
 		t.Fatalf("bad token: %+v", issued)
+	}
+	// The listing gets the machine's host key with the token.
+	if want, err := mobilebridge.HostPublicKey(path); err != nil || issued.HostKey != want || len(want) != 43 {
+		t.Fatalf("host key = %q, want %q (%v)", issued.HostKey, want, err)
 	}
 	state, err := mobilebridge.Load(path)
 	if err != nil {
@@ -1056,6 +1083,43 @@ func TestStartRemoteAccessWhileDisabledDoesNothing(t *testing.T) {
 	}
 }
 
+// The daemon downloads cloudflared itself when an enable finds none. Once it
+// lands, remote access must come up without another click, on the same
+// password, and only where the user asked for a public tunnel.
+func TestConnectorInstalledStartsTheTunnelTheBridgeWanted(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		enable    func(*BridgeService) (MobileStatusResponse, error)
+		wantStart bool
+	}{
+		{name: "public", enable: (*BridgeService).Enable, wantStart: true},
+		{name: "lan only", enable: (*BridgeService).EnableLANOnly},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tun TunnelController // no connector yet, as at the first enable
+			b := &BridgeService{
+				ConfigPath: filepath.Join(t.TempDir(), "mobile.json"), LAN: &fakeLAN{}, DefaultPort: 3011,
+				ResolveTunnel: func() TunnelController { return tun },
+			}
+			before, err := tc.enable(b)
+			if err != nil {
+				t.Fatalf("enable: %v", err)
+			}
+
+			landed := &fakeTunnel{}
+			tun = landed
+			b.ConnectorInstalled()
+
+			if started := landed.startedOn == 3011; started != tc.wantStart {
+				t.Fatalf("connector started on %d, want started=%v", landed.startedOn, tc.wantStart)
+			}
+			if b.Status().Password != before.Password {
+				t.Fatal("password rotated: the phone paired a moment ago can no longer authenticate")
+			}
+		})
+	}
+}
+
 type startErrorLAN struct {
 	fakeLAN
 	err error
@@ -1077,5 +1141,19 @@ func TestMobileRestoreOnBootRollsBackHashWhenStartFails(t *testing.T) {
 	}
 	if got := lan.AccountTokenHash(); got != "previous-account-hash" {
 		t.Fatalf("account token hash after failed restore = %q, want previous-account-hash", got)
+	}
+}
+
+// A bridge with no connector says when one is being installed, so a client
+// waits for it rather than offering to install one.
+func TestTunnelStatusSaysWhenAConnectorIsOnItsWay(t *testing.T) {
+	installing := true
+	b := &BridgeService{LAN: &fakeLAN{}, ConfigPath: filepath.Join(t.TempDir(), "mobile", "config.json"), ConnectorInstalling: func() bool { return installing }}
+	if st := b.tunnelStatus(); st.Supported || !st.Installing {
+		t.Fatalf("installing: %+v", st)
+	}
+	installing = false
+	if st := b.tunnelStatus(); st.Installing {
+		t.Fatalf("not installing: %+v", st)
 	}
 }

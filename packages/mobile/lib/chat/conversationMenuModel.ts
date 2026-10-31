@@ -1,6 +1,8 @@
 export type ConversationMenuAction =
+	| "files"
 	| "shell"
 	| "preview"
+	| "artifacts"
 	| "pull_requests"
 	| "map"
 	| "refresh"
@@ -34,7 +36,7 @@ export function conversationMenuSections({
 	canDelete: boolean;
 }): ConversationMenuSection[] {
 	return [
-		{ title: "Workspace", actions: ["shell", "preview", "pull_requests"] },
+		{ title: "Workspace", actions: ["files", "artifacts", "shell", "preview", "pull_requests"] },
 		{
 			title: "Conversation",
 			actions: [

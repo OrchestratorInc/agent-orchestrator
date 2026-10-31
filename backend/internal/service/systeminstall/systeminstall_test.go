@@ -232,8 +232,9 @@ func TestPlanFor(t *testing.T) {
 			wantUnsupported: true, wantReasonHas: "No supported Linux package manager",
 		},
 		// cloudflared is what makes a phone reachable from outside the local
-		// network. Nothing installed it before, so a machine without it showed a
-		// normal QR that only ever worked on Wi-Fi.
+		// network. These are the package-manager fallbacks: newTestService has
+		// no downloader, so AO's own pinned copy is not on offer (see
+		// cloudflared_test.go for that).
 		{
 			name: "cloudflared darwin uses brew", target: TargetCloudflared, goos: "darwin", found: []string{"brew"},
 			wantCommand: []string{"brew", "install", "cloudflared"},
@@ -1810,7 +1811,7 @@ func TestFailedUpdateQuotesWhatTheUpdaterReported(t *testing.T) {
 	plan := Plan{Target: TargetDroid, Method: "official-installer", Command: []string{"/Users/test/.local/bin/droid", "update"}}
 	baseline := &installedBaseline{path: "/Users/test/.local/bin/droid", version: "0.159.1", expected: "0.242.0", scheme: versionSchemeFor(TargetDroid)}
 	s.runAgentOperation(context.Background(), plan, AgentOperationUpdate, job, baseline)
-	want := `the update finished, but the installed version 0.159.1 did not reach the requested version 0.242.0; the update command reported: "Droid is already up to date."`
+	want := `The update finished, but it reports 0.159.1, not the requested version 0.242.0. The updater said: "Droid is already up to date."`
 	if job.Status != StatusFailed || job.Error != want {
 		t.Fatalf("status = %s, error = %q; want failed with %q", job.Status, job.Error, want)
 	}
@@ -2034,5 +2035,34 @@ func TestHomebrewUpdateRefreshesMetadataBeforeUpgrading(t *testing.T) {
 	final, _ := s.Status(context.Background(), TargetKimi)
 	if !strings.Contains(final.Output, "brew update failed") {
 		t.Fatalf("output %q does not note the failed refresh", final.Output)
+	}
+}
+
+// Without the shell AO runs Cua's installer with, Settings must offer Cua's
+// own one-line command to copy, not an Install button that fails again.
+func TestStatus_CuaDriverWithoutShellOffersTheOneLiner(t *testing.T) {
+	for goos, want := range map[string]string{
+		"windows": "irm https://cua.ai/driver/install.ps1 | iex",
+		"darwin":  "curl -fsSL https://cua.ai/driver/install.sh | bash",
+		"linux":   "curl -fsSL https://cua.ai/driver/install.sh | bash",
+	} {
+		t.Run(goos, func(t *testing.T) {
+			job, err := newTestService(goos).Status(context.Background(), TargetCuaDriver)
+			if err != nil {
+				t.Fatalf("Status() error = %v", err)
+			}
+			if job.Status != StatusUnsupported || job.Command != want {
+				t.Fatalf("job = %+v, want unsupported with command %q", job, want)
+			}
+			if !strings.Contains(job.Error, "was not found on PATH") || !strings.Contains(job.Error, cuaDriverDocs) {
+				t.Fatalf("Error = %q, want the missing shell and the install guide", job.Error)
+			}
+		})
+	}
+
+	// With the shell present, AO runs the installer itself.
+	job, err := newTestService("darwin", "bash").Status(context.Background(), TargetCuaDriver)
+	if err != nil || job.Status == StatusUnsupported {
+		t.Fatalf("with bash: job = %+v, err = %v", job, err)
 	}
 }

@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import * as jestDomMatchers from "@testing-library/jest-dom/matchers";
-import { expect } from "vitest";
+import { beforeEach, expect } from "vitest";
 import { appI18n } from "../i18n";
 import { appCatalogs } from "../i18n/all-messages";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
@@ -96,6 +96,8 @@ if (typeof window !== "undefined") {
 	const localStorageStub = (() => {
 		const values = new Map<string, string>();
 		return {
+			get length() { return values.size; },
+			key: (index: number) => [...values.keys()][index] ?? null,
 			clear: () => values.clear(),
 			getItem: (key: string) => values.get(key) ?? null,
 			removeItem: (key: string) => values.delete(key),
@@ -103,10 +105,18 @@ if (typeof window !== "undefined") {
 		};
 	})();
 
-	Object.defineProperty(window, "localStorage", {
-		configurable: true,
-		writable: true,
-		value: localStorageStub,
+	const installLocalStorage = () => {
+		Object.defineProperty(window, "localStorage", {
+			configurable: true,
+			writable: true,
+			value: localStorageStub,
+		});
+	};
+	installLocalStorage();
+	// A test can spy on the getter and return a Storage that has no clear().
+	// The next file's beforeEach calls clear(). Put the stub back first.
+	beforeEach(() => {
+		if (typeof window.localStorage?.clear !== "function") installLocalStorage();
 	});
 
 	HTMLCanvasElement.prototype.getContext = (() => ({})) as unknown as typeof HTMLCanvasElement.prototype.getContext;
@@ -134,6 +144,8 @@ if (typeof window !== "undefined") {
 			onOpenFolderPath: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
+			onQuitConfirmRequest: () => () => undefined,
+			resolveQuitConfirm: () => undefined,
 			onNewShellTerminalShortcut: () => () => undefined,
 			onCloseShellTerminalShortcut: () => () => undefined,
 			setCloseShellTerminalShortcutEnabled: () => undefined,
@@ -144,6 +156,7 @@ if (typeof window !== "undefined") {
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
+			onScrollPhase: () => () => undefined,
 		},
 		terminal: {
 			saveDroppedFile: async () => "",
@@ -177,6 +190,10 @@ if (typeof window !== "undefined") {
 			fetch: async () => ({ bytes: new Uint8Array(), mimeType: "image/png" }),
 			save: async () => true,
 		},
+		cloudArtifact: {
+			fetch: async () => new Uint8Array(),
+			onFrameNavigated: () => () => undefined,
+		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),
 			start: async () => ({ state: "starting" }),
@@ -184,7 +201,7 @@ if (typeof window !== "undefined") {
 			restart: async () => ({ state: "starting" }),
 			onStatus: () => () => undefined,
 		},
-		sideChats: { capture: async () => undefined },
+		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
 	editorHandoff: {
 			getState: async () => ({
 				targets: [
@@ -195,6 +212,8 @@ if (typeof window !== "undefined") {
 				preferredEditorId: "cursor",
 				workspaceAvailable: true,
 			}),
+			getEditors: async () => ({ editors: [{ id: "cursor", name: "Cursor", kind: "editor" }], preferredEditorId: "cursor" }),
+			setPreferredEditor: async (editorId) => editorId,
 			open: async ({ targetId }) => {
 				if (targetId === "file-manager") return { id: "file-manager", name: "Finder", kind: "file_manager" };
 				if (targetId === "terminal") return { id: "terminal", name: "Terminal", kind: "terminal" };
@@ -207,12 +226,16 @@ if (typeof window !== "undefined") {
 		},
 		telemetry: {
 			getBootstrap: async () => null,
-			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
-			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, consentRenewalRequired: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
+			getAnalyticsOptOut: async () => false,
+			setAnalyticsOptOut: async (optedOut: boolean) => optedOut,
+			onAnalyticsOptOut: () => () => undefined,
+			setCloudUser: async () => false,
+			getGithubLogin: async () => null,
+			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
+			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			onPolicy: () => () => false,
 			onClearQueues: () => () => false,
 			capture: async () => false,
-			signalAgentSwitchVisibility: () => false,
 		},
 		browser: {
 			nativeCompositionEnabled: true,
@@ -342,7 +365,8 @@ if (typeof window !== "undefined") {
 				return { id, name, createdAt: now, updatedAt: now };
 			},
 			clear: async () => undefined,
-			delete: async () => undefined,
+			usage: async () => ({ sessions: [] }),
+			delete: async () => ({}),
 			setDefault: async () => undefined,
 			discoverImportSources: async () => ({ sources: [] }),
 			import: async () => ({ sourceName: "", entries: [] }),
@@ -403,12 +427,13 @@ if (typeof window !== "undefined") {
 			list: async () => [],
 			importAccountHost: async () => undefined,
 			pruneAccountHosts: async () => undefined,
-			issueAccountToken: async () => "",
+			issueAccountToken: async () => ({ token: "" }),
 			add: async () => "offline" as const,
 			update: async () => "offline" as const,
 			remove: async () => undefined,
 			connect: async () => { throw new Error("no remote hosts in test bridge"); },
 			disconnect: async () => undefined,
+			computerName: async () => "Test computer",
 			previewUrl: async (_hostId: string, _sessionId: string, sourceUrl: string) => sourceUrl,
 			resolvePreviewUrl: async (_hostId: string, _sessionId: string, viewedUrl: string) => viewedUrl,
 		agentBrowserUrl: async () => "",
@@ -428,6 +453,8 @@ if (typeof window !== "undefined") {
 				throw new Error("not available in tests");
 			},
 			onSessionChanged: () => () => undefined,
+			onOpenShareLink: () => () => undefined,
+			takePendingShareLink: async () => null,
 		},
 		cloudCp: {
 			request: async () => ({ status: 401, headers: {}, body: "" }),

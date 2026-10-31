@@ -15,11 +15,12 @@ import (
 )
 
 // `ao mcp` is the stdio MCP server AO passes to every chat session, so the
-// agent sees html_preview and html_render in its tool list. The agent's
+// agent sees html_preview and html_render in its tool list, and the computer
+// use tools when the session has computer use (mcp_cua.go). The agent's
 // harness spawns it outside the shell sandbox, so it reaches the loopback
 // daemon even when the agent's own shell commands cannot. Hand-written, and
-// only what these two tools need: newline-delimited JSON-RPC 2.0, one request
-// at a time, nothing on stdout but replies.
+// only what these tools need: newline-delimited JSON-RPC 2.0, one request at
+// a time, nothing on stdout but replies.
 
 const (
 	mcpDefaultProtocolVersion = "2025-06-18"
@@ -62,10 +63,11 @@ type mcpResponse struct {
 func (c *commandContext) serveMCP(ctx context.Context, in io.Reader, out io.Writer) error {
 	reader := bufio.NewReader(in)
 	encoder := json.NewEncoder(out)
+	state := &mcpState{}
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if line = bytes.TrimSpace(line); len(line) > 0 {
-			if resp := c.handleMCP(ctx, line); resp != nil {
+			if resp := c.handleMCP(ctx, state, line); resp != nil {
 				if err := encoder.Encode(resp); err != nil {
 					return err
 				}
@@ -81,7 +83,7 @@ func (c *commandContext) serveMCP(ctx context.Context, in io.Reader, out io.Writ
 }
 
 // handleMCP answers one message; a notification gets no reply.
-func (c *commandContext) handleMCP(ctx context.Context, line []byte) *mcpResponse {
+func (c *commandContext) handleMCP(ctx context.Context, state *mcpState, line []byte) *mcpResponse {
 	var req mcpRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		if !json.Valid(line) {
@@ -116,7 +118,8 @@ func (c *commandContext) handleMCP(ctx context.Context, line []byte) *mcpRespons
 	case "ping":
 		resp.Result = map[string]any{}
 	case "tools/list":
-		resp.Result = map[string]any{"tools": mcpTools}
+		tools := append(append([]map[string]any{}, mcpTools...), c.cuaTools(ctx, state)...)
+		resp.Result = map[string]any{"tools": tools}
 	case "tools/call":
 		var p struct {
 			Name      string          `json:"name"`
@@ -129,6 +132,10 @@ func (c *commandContext) handleMCP(ctx context.Context, line []byte) *mcpRespons
 		case "html_render":
 			resp.Result = c.callHTMLRender(ctx, p.Arguments)
 		default:
+			if c.cuaTools(ctx, state) != nil && state.cuaNames[p.Name] {
+				resp.Result = c.callCua(ctx, p.Name, p.Arguments)
+				break
+			}
 			resp.Error = &mcpError{Code: -32602, Message: fmt.Sprintf("unknown tool %q", p.Name)}
 		}
 	default:

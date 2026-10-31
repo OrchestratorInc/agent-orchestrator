@@ -23,7 +23,7 @@ type fakeAutomationService struct {
 
 func (f *fakeAutomationService) Create(_ context.Context, input automationsvc.CreateInput) (domain.Automation, error) {
 	f.created = input
-	return domain.Automation{ID: "automation-1", ProjectID: input.ProjectID, DisplayName: input.DisplayName, Prompt: input.Prompt, Kind: input.Kind, Timezone: input.Timezone, Enabled: true, NextRunAt: time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)}, nil
+	return domain.Automation{ID: "automation-1", ProjectID: input.ProjectID, DisplayName: input.DisplayName, Prompt: input.Prompt, Kind: input.Kind, Model: input.Model, Mode: input.Mode, Effort: input.Effort, Timezone: input.Timezone, Enabled: true, NextRunAt: time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)}, nil
 }
 func (f *fakeAutomationService) Get(_ context.Context, id domain.AutomationID) (domain.Automation, error) {
 	return f.items[0], nil
@@ -52,18 +52,21 @@ func automationTestRouter(service AutomationService) http.Handler {
 // automation service rather than launching a session from the controller.
 func TestAutomationsCreateReturnsDefinition(t *testing.T) {
 	service := &fakeAutomationService{}
-	body := `{"projectId":"demo","displayName":"Morning","prompt":"Review","kind":"worker","cron":"0 9 * * *","timezone":"Asia/Calcutta"}`
+	body := `{"projectId":"demo","displayName":"Morning","prompt":"Review","kind":"worker","model":"gpt-5","effort":"high","cron":"0 9 * * *","timezone":"Asia/Calcutta"}`
 	req := httptest.NewRequest(http.MethodPost, "/automations", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	automationTestRouter(service).ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if service.created.Model != "gpt-5" || service.created.Effort != "high" {
+		t.Fatalf("model settings = %#v", service.created)
+	}
 	if service.created.ProjectID != "demo" || service.created.Cron != "0 9 * * *" || service.created.Timezone != "Asia/Calcutta" {
 		t.Fatalf("create input = %#v", service.created)
 	}
 	var response AutomationEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || response.Automation.ID != "automation-1" {
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || response.Automation.ID != "automation-1" || response.Automation.Model != "gpt-5" || response.Automation.Effort != "high" {
 		t.Fatalf("response=%#v err=%v", response, err)
 	}
 }
