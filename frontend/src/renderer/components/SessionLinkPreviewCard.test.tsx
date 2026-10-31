@@ -163,6 +163,18 @@ describe("SessionLinkPreviewCard", () => {
 		expect(appI18n.t("pr.count", { count: 1, lng: "es" })).toBe("1 PR");
 		expect(appI18n.t("pr.count", { count: 2, lng: "es" })).toBe("2 PR");
 	});
+
+	it("formats the updated-at time in the app language, not the OS locale", async () => {
+		const worker = session({ updatedAt: new Date(Date.now() - 42 * 60_000).toISOString() });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(worker)] }));
+		await appI18n.changeLanguage("zh-CN");
+		try {
+			render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" />);
+			expect(screen.getByText("更新于 42 分钟前")).toBeInTheDocument();
+		} finally {
+			await appI18n.changeLanguage("en");
+		}
+	});
 });
 
 function artifact(overrides: Partial<SessionArtifact> = {}): SessionArtifact {

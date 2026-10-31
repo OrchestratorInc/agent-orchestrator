@@ -206,6 +206,7 @@
 	--spacing-toolbar: var(--size-toolbar);
 	--spacing-window-titlebar: var(--size-window-titlebar);
 	--spacing-titlebar-content-offset: var(--size-titlebar-content-offset);
+	--spacing-mac-panel-header-bottom: var(--size-mac-panel-header-bottom);
 	--spacing-titlebar-cluster-left: var(--size-titlebar-cluster-left);
 	/* Linux has no traffic lights — the cluster sits at the sidebar's own inset,
 	 * and clears the framed panel border when the sidebar is off-canvas. */
@@ -536,7 +537,10 @@ html[data-modal-handoff] .dialog-overlay,
 	padding-top: var(--size-center-panel-inset-mac);
 	padding-right: var(--size-center-panel-inset-mac);
 	padding-bottom: var(--size-center-panel-inset-mac);
-	padding-left: 0;
+	/* Same inset on the left whether or not the sidebar is open, so the frame
+	 * never resizes or jumps with the sidebar; only the sidebar slides. */
+	padding-left: var(--size-center-panel-inset-mac);
+	transition: none;
 }
 
 /* Keep the center surface closed on all four edges, including macOS where the
@@ -576,15 +580,10 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	-webkit-app-region: drag;
 }
 
-/* Sidebar closed on mac: content panel expands to fill the full window.
- * Remove all padding and strip the surface border + radius so it's flush. */
-.sidebar-hidden .center-panel-shell.center-panel-shell--mac {
-	padding: 0;
-}
-
-.sidebar-hidden .center-panel-shell--mac .center-panel-surface {
-	border-color: transparent;
-	border-radius: 0;
+/* Sidebar closed on mac: the panel keeps its frame, which recedes to half
+ * strength without a sidebar beside it. Native fullscreen stays flush. */
+.sidebar-hidden .center-panel-shell--mac:not(.center-panel-shell--fullscreen) > .center-panel-surface {
+	border-color: color-mix(in srgb, var(--color-border-strong) 50%, transparent);
 }
 
 /* Session topbar now lives inside .center-panel-surface. When it's rendered
@@ -657,7 +656,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * Native macOS fullscreen removes the traffic lights, so the cluster moves to
  * the compact panel inset instead of retaining the windowed 79px reserve. */
 .app-shell-root {
-	--ao-titlebar-content-left: var(--size-titlebar-content-offset);
+	--ao-titlebar-content-left: var(--size-titlebar-content-offset-mac-panel);
 }
 .native-fullscreen {
 	--ao-titlebar-content-left: calc(var(--space-2) + var(--size-titlebar-cluster-width) + var(--size-titlebar-content-gap));
@@ -751,7 +750,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * Pad the title past that cluster so it sits next to the buttons. Fullscreen
  * drops the traffic-light reserve so title sits next to the left-edge buttons. */
 .center-panel-shell--titlebar-clearance .center-panel-titlebar {
-	padding-left: var(--size-titlebar-content-offset);
+	padding-left: var(--size-titlebar-content-offset-mac-panel);
 }
 
 /* Linux: same cluster clearance without the traffic-light reserve. Keep the

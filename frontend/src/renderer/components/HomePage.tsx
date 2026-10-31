@@ -7,6 +7,7 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
+import { formatTimeCompact } from "../lib/format-time";
 import { isMacPlatform } from "../lib/platform";
 import { getProjectLastOpenedAt } from "../lib/project-history";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -65,13 +66,11 @@ function latestProjectTimestamp(project: WorkspaceSummary): string {
 		.at(-1) ?? "";
 }
 
-function relativeProjectTime(timestamp: string | undefined, emptyLabel: string, justNowLabel: string): string {
+// Relative times must follow the app language (i18n catalogs), not the OS locale —
+// formatTimeCompact routes through appI18n like every other time surface.
+function relativeProjectTime(timestamp: string | undefined, emptyLabel: string): string {
 	if (!timestamp) return emptyLabel;
-	const elapsedMinutes = Math.floor((Date.now() - new Date(timestamp).getTime()) / 60_000);
-	if (!Number.isFinite(elapsedMinutes) || elapsedMinutes < 1) return justNowLabel;
-	const unit: Intl.RelativeTimeFormatUnit = elapsedMinutes < 60 ? "minute" : elapsedMinutes < 1_440 ? "hour" : "day";
-	const amount = unit === "minute" ? elapsedMinutes : unit === "hour" ? Math.floor(elapsedMinutes / 60) : Math.floor(elapsedMinutes / 1_440);
-	return new Intl.RelativeTimeFormat(undefined, { numeric: "always" }).format(-amount, unit);
+	return formatTimeCompact(timestamp);
 }
 
 function sortProjectsByActivity(projects: WorkspaceSummary[]): WorkspaceSummary[] {
@@ -80,7 +79,7 @@ function sortProjectsByActivity(projects: WorkspaceSummary[]): WorkspaceSummary[
 		.sort((left, right) => latestProjectTimestamp(right).localeCompare(latestProjectTimestamp(left)));
 }
 
-function ProjectRow({ project, onClick, emptyTimeLabel, justNowLabel }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string; justNowLabel: string }) {
+function ProjectRow({ project, onClick, emptyTimeLabel }: { project: WorkspaceSummary; onClick: () => void; emptyTimeLabel: string }) {
 	const { t } = useTranslation();
 	const lastOpenedAt = getProjectLastOpenedAt(project.id);
 	const latestProjectFact = latestProjectTimestamp(project) || lastOpenedAt;
@@ -109,7 +108,7 @@ function ProjectRow({ project, onClick, emptyTimeLabel, justNowLabel }: { projec
 				</span>
 			</span>
 			<span className="relative z-[1] ml-auto shrink-0 text-right text-caption tabular-nums text-muted-foreground">
-				{relativeProjectTime(latestProjectFact, emptyTimeLabel, justNowLabel)}
+				{relativeProjectTime(latestProjectFact, emptyTimeLabel)}
 			</span>
 		</button>
 	);
@@ -274,7 +273,6 @@ export function HomePage() {
 										openProject(project.id);
 									}}
 										emptyTimeLabel={t("home.never")}
-										justNowLabel={t("time.justNow")}
 									/>
 								))}
 							</div>
