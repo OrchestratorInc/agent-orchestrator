@@ -1399,19 +1399,19 @@ main td, main th { vertical-align: middle !important; }
 #ao-chat-fab:focus-visible { outline: 2px solid #fafaf8; outline-offset: 2px; }
 #ao-chat-fab[data-state="open"] { display: none; }
 
-/* v40: white cloud greeting balloon above the chat launcher */
+/* v41: transparent cloud-outline greeting balloon above the chat launcher */
 #ao-chat-bubble {
   position: fixed; right: 20px; bottom: calc(84px + env(safe-area-inset-bottom, 0px));
-  width: 240px; box-sizing: border-box; padding: 46px 34px 60px 34px;
+  width: 188px; box-sizing: border-box; padding: 36px 27px 47px 27px;
   border: 0; border-radius: 0; background-color: transparent;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 130'><g fill='%23ffffff'><ellipse cx='110' cy='62' rx='86' ry='36'/><circle cx='56' cy='44' r='26'/><circle cx='102' cy='33' r='28'/><circle cx='150' cy='39' r='24'/><circle cx='182' cy='58' r='20'/><circle cx='36' cy='62' r='17'/><path d='M 126 94 Q 170 104 194 128 Q 160 112 118 102 Z'/></g></svg>");
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 130'><path d='M 128 103 L 50 100 A 19 19 0 0 1 33 68 A 25 25 0 0 1 56 43 A 29 29 0 0 1 103 31 A 25 25 0 0 1 150 38 A 21 21 0 0 1 183 57 A 21 21 0 0 1 192 84 A 16 16 0 0 1 152 99 Q 174 106 194 126 Q 166 112 128 103 Z' fill='rgba(255,255,255,0.10)' stroke='rgba(255,255,255,0.9)' stroke-width='3' stroke-linejoin='round'/></svg>");
   background-repeat: no-repeat; background-position: center; background-size: 100% 100%;
-  color: #1a1a18; font-size: 13px; font-weight: 500; line-height: 1.35; text-align: center;
-  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35)); cursor: pointer; z-index: 30;
+  color: #fafaf8; font-size: 12px; font-weight: 500; line-height: 1.35; text-align: center;
+  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.35)); cursor: pointer; z-index: 30;
 }
-#ao-chat-bubble:hover { filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.35)) brightness(0.94); }
+#ao-chat-bubble:hover { filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.35)) brightness(1.25); }
 #ao-chat-bubble:focus-visible { outline: 2px solid #fafaf8; outline-offset: 3px; }
 #ao-chat-bubble[data-state="open"] { display: none; }
 @media (max-width: 480px) {
-  #ao-chat-bubble { width: 190px; padding: 38px 26px 50px 26px; font-size: 11px; }
+  #ao-chat-bubble { width: 152px; padding: 30px 22px 39px 22px; font-size: 10.5px; }
 }
