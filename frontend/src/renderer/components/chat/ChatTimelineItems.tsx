@@ -1447,7 +1447,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 		detail?.command ||
 		(!isFileChange && (detail?.output || detail?.reason || detail?.text || detail?.terminalInput)) || hasFileBody,
 	);
-	const { label, path, hover } = splitSummary(activity);
+	const { label, path } = splitSummary(activity);
 	// Commands and file edits share the explore-style summary line: muted label,
 	// no icon column, always-visible chevron. Everything else keeps the denser
 	// bordered activity row.
@@ -1526,12 +1526,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 					<strong
 						className={cn(
 							compactSummary
-								? cn(
-										"activity-row-label text-xs font-normal text-muted-foreground group-hover/activity:text-foreground",
-										// A command label is the command text, so it can be long:
-										// let it truncate instead of pinning the row's width.
-										hover ? "min-w-0 flex-1 truncate" : "shrink-0",
-									)
+								? "activity-row-label shrink-0 text-xs font-normal text-muted-foreground group-hover/activity:text-foreground"
 								: "min-w-0 truncate font-medium",
 							!compactSummary &&
 								(activity.status === "failed"
@@ -1540,7 +1535,7 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 										? "font-normal text-muted-foreground"
 										: "text-foreground"),
 						)}
-						title={compactSummary ? hover : noticeLabel ?? label}
+						title={compactSummary ? undefined : noticeLabel ?? label}
 					>
 						<ActivityTitle text={noticeLabel ?? label} />
 					</strong>
@@ -1599,8 +1594,9 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 						) : null}
 						{files.length > 1 ? <FileChangeList files={files} /> : null}
 						{!isFileChange && detail?.command ? (
-							// The body repeats the command verbatim, independent of the
-							// possibly truncated collapsed label above.
+							// Said explicitly rather than implied by the label: "Ran command"
+							// alone never tells the reader what ran, and the collapsed row
+							// deliberately keeps only the category.
 							<pre className="scrollbar-none overflow-x-auto border border-border bg-background px-2.5 py-1.5 font-mono text-caption leading-relaxed text-foreground">
 								{detail.command}
 							</pre>
@@ -1805,11 +1801,10 @@ function commandOutputText(raw: unknown): string {
 
 /**
  * Split a summary into a bold action and a muted target, which is how the row
- * scans: what happened, then what it happened to. Read/search/vcs commands keep
- * their intent labels; any other command names what ran — binary plus args —
- * with `hover` carrying the untouched full text for the title attribute.
+ * scans: what happened, then what it happened to. A command becomes its binary
+ * plus its arguments; anything without a natural split keeps its whole label.
  */
-function splitSummary(activity: ConversationActivity): { label: string; path?: string; hover?: string } {
+function splitSummary(activity: ConversationActivity): { label: string; path?: string } {
 	if (activity.activityKind === "command") {
 		const rawCommand = activity.detail?.command ?? activity.summary;
 		const category = commandCategory(rawCommand);
@@ -1818,13 +1813,7 @@ function splitSummary(activity: ConversationActivity): { label: string; path?: s
 			if (category === "search") return { label: "Search" };
 			return { label: count && count > 1 ? "Read files" : "Read file" };
 		}
-		if (category === "vcs") return { label: "Checked repository" };
-		// "Ran command" tells the reader nothing; the row says what ran. The
-		// label collapses to one line — the full text stays on hover and in
-		// the expanded body.
-		const full = rawCommand.replace(/\s+/g, " ").trim();
-		if (!full) return { label: "Ran command" };
-		return { label: truncateCommandLabel(full), hover: full };
+		return { label: category === "vcs" ? "Checked repository" : "Ran command" };
 	}
 	const files = fileChangeFiles(activity);
 	if (activity.activityKind === "file_change" && files.length === 1) {
@@ -1834,12 +1823,6 @@ function splitSummary(activity: ConversationActivity): { label: string; path?: s
 		};
 	}
 	return { label: activity.summary };
-}
-
-/** One line for the row label: ≤72 chars, a single ellipsis when cut. */
-function truncateCommandLabel(command: string): string {
-	if (command.length <= 72) return command;
-	return `${command.slice(0, 71).trimEnd()}…`;
 }
 
 function ActivityState({

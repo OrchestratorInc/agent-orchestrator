@@ -1212,11 +1212,7 @@ describe("ChatWorkspace timeline", () => {
 		const toggle = (name: RegExp) => screen.getByText(name).closest("button");
 		expect(toggle(/^Explored 2 tool calls$/)).toHaveAttribute("aria-expanded", "false");
 		expect(toggle(/^Ran 2 tool calls$/)).toHaveAttribute("aria-expanded", "true");
-		// The open run names each command; the generic "Ran command" label is
-		// gone, and the folded run still hides its rows.
-		expect(screen.getByText("go build ./...")).toBeInTheDocument();
-		expect(screen.getByText("go vet ./...")).toBeInTheDocument();
-		expect(screen.queryByText("Ran command")).not.toBeInTheDocument();
+		expect(screen.getAllByText("Ran command")).toHaveLength(2);
 	});
 
 	it("starts a new visual turn at a steer: earlier work settles, the steer gets its own Working row", () => {
