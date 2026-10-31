@@ -48,21 +48,25 @@ type fakeShellRuntime struct {
 	styledOutput string
 	styledErr    error
 	// aliveByHandle answers IsAlive; a handle absent from the map is dead.
-	aliveByHandle map[string]bool
-	aliveErr      error
-	handlePrefix  string
-	childExited   bool
-	childProbeErr error
-	childProbeCh  chan struct{}
-	cueReady      bool
-	cueReadyGate  <-chan struct{}
+	aliveByHandle   map[string]bool
+	aliveErr        error
+	handlePrefix    string
+	childExited     bool
+	childProbeErr   error
+	childProbeCh    chan struct{}
+	cueReady        bool
+	cueReadyGate    <-chan struct{}
+	cueDoNotConsume bool
+	onSendMessage   func()
 
 	childProbeWaitForCancellation bool
 }
 
 type sentInput struct {
-	handleID string
-	input    string
+	handleID    string
+	input       string
+	payload     string
+	payloadFile string
 }
 
 func newFakeShellRuntime() *fakeShellRuntime {
@@ -119,6 +123,25 @@ func (f *fakeShellRuntime) SendInput(_ context.Context, handle ports.RuntimeHand
 }
 
 func (f *fakeShellRuntime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, input string) error {
+	if f.onSendMessage != nil {
+		f.onSendMessage()
+	}
+	if strings.Contains(input, "/command") || strings.Contains(input, `\command`) {
+		cfg := f.created[len(f.created)-1]
+		root := filepath.Dir(filepath.Dir(cfg.Env["AO_CUE_READY_FILE"]))
+		files, _ := filepath.Glob(filepath.Join(root, "cue-commands", "*", "command"))
+		if len(files) == 1 {
+			data, err := os.ReadFile(files[0])
+			if err != nil {
+				return err
+			}
+			if !f.cueDoNotConsume && f.sendErr == nil {
+				_ = os.Remove(files[0])
+			}
+			f.sentCh <- sentInput{handleID: handle.ID, input: input, payload: string(data), payloadFile: files[0]}
+			return f.sendErr
+		}
+	}
 	return f.SendInput(ctx, handle, input)
 }
 
