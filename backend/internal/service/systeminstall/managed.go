@@ -293,7 +293,9 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 
 	binary := filepath.Join(dir, binRel)
 	if _, err := os.Stat(binary); err != nil {
-		return installFailed(fmt.Sprintf("Installed, but %s was not found.", cli), fmt.Errorf("%s is missing", binary))
+		// Listing what the install did link makes a name mismatch obvious.
+		return installFailed(fmt.Sprintf("Installed, but %s was not found.", cli),
+			fmt.Errorf("%s is missing; %s contains: %s", binary, filepath.Dir(binary), directoryListing(filepath.Dir(binary))))
 	}
 	version, err := s.probeManagedVersion(ctx, plan.Target, cli, binary)
 	if err != nil {
@@ -371,6 +373,22 @@ func (s *Service) runManagedInstall(ctx context.Context, plan Plan, baseline *in
 		invalidate(plan.Target)
 	}
 	return nil
+}
+
+// directoryListing names dir's entries for a diagnostic line.
+func directoryListing(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "(missing)"
+	}
+	if len(entries) == 0 {
+		return "(empty)"
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return strings.Join(names, ", ")
 }
 
 // probeManagedVersion runs the new copy's --version.
