@@ -103,6 +103,22 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	}
 }
 
+// OpenCode has no per-session lock or live-session registry and stores no
+// writable transcript file, so there is never positive evidence that another
+// process holds the conversation.
+func TestImportOwnedElsewhereOpenCodeNeverOwned(t *testing.T) {
+	ctx := context.Background()
+	oc := domain.SessionRecord{Harness: domain.HarnessOpenCode}
+	oc.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "ses_e830c4a8affelmmC9j6HFbCZAr", ConfigDir: t.TempDir()}
+	oc.Metadata.NativeTranscriptPath = oc.Metadata.ImportSource.NativeID
+	if importOwnedElsewhere(ctx, oc) {
+		t.Fatal("OpenCode import must report not-owned without positive evidence")
+	}
+	if adoptedOwnedElsewhere(ctx, oc) {
+		t.Fatal("adopted OpenCode import must report not-owned")
+	}
+}
+
 // Claude Code accepts a second writer, so AO checks its registry after adoption too.
 func TestAdoptedClaudeImportOpenElsewhereBlocksResume(t *testing.T) {
 	home := t.TempDir()

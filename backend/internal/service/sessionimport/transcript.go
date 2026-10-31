@@ -350,6 +350,10 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if len(paths) == 0 {
 		return t, errors.New("no transcript")
 	}
+	if harness == domain.HarnessOpenCode {
+		// OpenCode's history lives in a SQLite database read by session id.
+		return readOpenCodeTranscript(ctx, root, paths...)
+	}
 	root = canonical(root)
 	providerRoot, err := os.OpenRoot(root)
 	if err != nil {
