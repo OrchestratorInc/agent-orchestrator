@@ -1250,13 +1250,13 @@ func (s *Store) AppendUserMessage(
 	turnID string,
 	now time.Time,
 ) (created bool, err error) {
-	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, "", false, now)
+	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, "", retryConsentNone, now)
 }
 
 // AppendReviewUserMessage preserves the worker session needed for lifecycle
 // projection while recording the typed reviewer that owns the turn.
 func (s *Store) AppendReviewUserMessage(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation string, msg domain.ConversationMessage, turnID string, now time.Time) (bool, error) {
-	return s.appendUserMessage(ctx, conversationID, session, reviewID, generation, msg, turnID, "", false, now)
+	return s.appendUserMessage(ctx, conversationID, session, reviewID, generation, msg, turnID, "", retryConsentNone, now)
 }
 
 // AppendRetryUserMessage records a retry and its source as one transaction.
@@ -1272,18 +1272,34 @@ func (s *Store) AppendRetryUserMessage(
 	retryOfTurnID string,
 	now time.Time,
 ) (created bool, err error) {
-	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, retryOfTurnID, false, now)
+	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, retryOfTurnID, retryConsentNone, now)
 }
 
 // AppendAutoResumeRetryUserMessage consumes due consent in the retry transaction.
 // Cancellation and account binding changes use the same writer boundary.
 func (s *Store) AppendAutoResumeRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error) {
-	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, retryOfTurnID, true, now)
+	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, retryOfTurnID, retryConsentAutoResume, now)
 }
+
+// AppendAccountHandoffRetryUserMessage consumes a moved handoff's one-time
+// consent in the retry transaction, and only while the session still runs on
+// the account the handoff moved it to.
+func (s *Store) AppendAccountHandoffRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error) {
+	return s.appendUserMessage(ctx, conversationID, session, "", generation, msg, turnID, retryOfTurnID, retryConsentAccountHandoff, now)
+}
+
+// retryConsent is the one-time authorization a retry transaction consumes.
+type retryConsent int
+
+const (
+	retryConsentNone retryConsent = iota
+	retryConsentAutoResume
+	retryConsentAccountHandoff
+)
 
 // AppendReviewRetryUserMessage atomically persists a retry for a reviewer chat.
 func (s *Store) AppendReviewRetryUserMessage(ctx context.Context, conversationID string, session domain.SessionID, reviewID, generation string, msg domain.ConversationMessage, turnID, retryOfTurnID string, now time.Time) (bool, error) {
-	return s.appendUserMessage(ctx, conversationID, session, reviewID, generation, msg, turnID, retryOfTurnID, false, now)
+	return s.appendUserMessage(ctx, conversationID, session, reviewID, generation, msg, turnID, retryOfTurnID, retryConsentNone, now)
 }
 
 func (s *Store) appendUserMessage(
@@ -1295,9 +1311,10 @@ func (s *Store) appendUserMessage(
 	msg domain.ConversationMessage,
 	turnID string,
 	retryOfTurnID string,
-	autoResume bool,
+	consent retryConsent,
 	now time.Time,
 ) (created bool, err error) {
+	autoResume := consent == retryConsentAutoResume
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if generation == "" && reviewID == "" {
@@ -1386,6 +1403,11 @@ func (s *Store) appendUserMessage(
 				return domain.ErrNoConversationTurn
 			}
 		}
+		if consent == retryConsentAccountHandoff {
+			if err := consumeAccountHandoff(ctx, q, session, retryOfTurnID, now); err != nil {
+				return err
+			}
+		}
 		sequence, err := q.NextConversationSequence(ctx, gen.NextConversationSequenceParams{
 			UpdatedAt: now,
 			ID:        conversationID,
@@ -1402,6 +1424,7 @@ func (s *Store) appendUserMessage(
 			return fmt.Errorf("insert reviewer turn: %w", err)
 		}
 		if retryOfTurnID != "" && !autoResume {
+			// Any other retry withdraws the source's pending auto-resume.
 			if _, err := q.SetConversationTurnAutoResume(ctx, gen.SetConversationTurnAutoResumeParams{
 				ID: retryOfTurnID, ConversationID: conversationID,
 			}); err != nil {
@@ -4543,6 +4566,45 @@ func rateLimitsFromRow(row gen.Conversation) *domain.ConversationRateLimits {
 		limits.SecondaryUsedPercent = row.RateLimitSecondaryPercent.Float64
 	}
 	return limits
+}
+
+// consumeAccountHandoff moves the source's handoff from moved to retried. A
+// handoff already used or withdrawn, or a session that has left the target
+// account since, refuses the retry.
+func consumeAccountHandoff(ctx context.Context, q *gen.Queries, session domain.SessionID, sourceTurnID string, now time.Time) error {
+	handoff, err := q.GetChatAccountHandoff(ctx, sourceTurnID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.ErrChatAccountHandoffConsumed
+	}
+	if err != nil {
+		return fmt.Errorf("read account handoff: %w", err)
+	}
+	record, err := q.GetSession(ctx, session)
+	if err != nil {
+		return fmt.Errorf("read account handoff session: %w", err)
+	}
+	provider, ok := domain.AgentAccountProviderFor(record.Harness)
+	if !ok || handoff.SessionID != string(session) {
+		return domain.ErrChatAccountHandoffConsumed
+	}
+	bound, err := q.GetSessionAgentAccount(ctx, gen.GetSessionAgentAccountParams{SessionID: string(session), Provider: string(provider)})
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && bound != handoff.TargetAccountID) {
+		return domain.ErrChatAccountHandoffConsumed
+	}
+	if err != nil {
+		return fmt.Errorf("read account handoff binding: %w", err)
+	}
+	consumed, err := q.AdvanceChatAccountHandoff(ctx, gen.AdvanceChatAccountHandoffParams{
+		NextPhase: string(domain.ChatAccountHandoffRetried), TargetAccountID: handoff.TargetAccountID, TransitionID: handoff.TransitionID,
+		UpdatedAt: now, SourceTurnID: sourceTurnID, ExpectedPhase: string(domain.ChatAccountHandoffMoved),
+	})
+	if err != nil {
+		return fmt.Errorf("consume account handoff: %w", err)
+	}
+	if consumed == 0 {
+		return domain.ErrChatAccountHandoffConsumed
+	}
+	return nil
 }
 
 func turnToDomain(row gen.ConversationTurn) domain.ConversationTurn {

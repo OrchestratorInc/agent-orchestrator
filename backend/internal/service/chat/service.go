@@ -100,6 +100,11 @@ type Service struct {
 	autoResumeInFlight    map[string]bool
 	autoResumeScanning    bool
 	usageLimitAccounts    usageLimitAccountReader
+	handoffMu             sync.Mutex
+	handoff               accountHandoffDeps
+	handoffScanning       bool
+	handoffInFlight       map[string]bool
+	handoffRetryAt        map[string]time.Time
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
 	updateStops map[domain.SessionID]bool
@@ -2684,19 +2689,32 @@ func (s *Service) RetryTurn(
 	id domain.SessionID,
 	turnID string,
 ) (domain.ConversationTurn, error) {
-	return s.retryTurn(ctx, id, turnID, false)
+	return s.retryTurn(ctx, id, turnID, retryManual)
 }
 
-func (s *Service) retryTurn(ctx context.Context, id domain.SessionID, turnID string, autoResume bool) (domain.ConversationTurn, error) {
+// retryMode is the authorization a retry consumes: a person's click, due
+// usage-limit auto-resume consent, or a committed account handoff.
+type retryMode int
+
+const (
+	retryManual retryMode = iota
+	retryAutoResume
+	retryAccountHandoff
+)
+
+func (s *Service) retryTurn(ctx context.Context, id domain.SessionID, turnID string, mode retryMode) (domain.ConversationTurn, error) {
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return domain.ConversationTurn{}, err
 	}
 	defer release()
 	var result domain.ConversationTurn
-	if autoResume {
+	switch mode {
+	case retryAutoResume:
 		result, err = controller.retryUsageLimitTurn(ctx, turnID)
-	} else {
+	case retryAccountHandoff:
+		result, err = controller.retryAccountHandoffTurn(ctx, turnID)
+	default:
 		result, err = controller.RetryTurn(ctx, turnID)
 	}
 	if err != nil {

@@ -1310,6 +1310,7 @@ export function ActivityRow({ activity }: { activity: ConversationActivity }) {
 	else if (activity.detail?.event === "workspace.script.run" && activity.detail.scriptRun) content = <ScriptRunPanel collapsible run={activity.detail.scriptRun} />;
 	else if (activity.detail?.event === "workspace.setup") content = <ProjectSetupRow activity={activity} />;
 	else if (activity.detail?.event === "account.switched") content = <AccountSwitchedRow accountId={activity.detail.accountId} />;
+	else if (activity.detail?.event === "account.limit_handoff") content = <AccountHandoffRow accountId={activity.detail.accountId} />;
 	else if (renderRef) content = <RenderFrame render={renderRef} />;
 	else if (artifactRef) content = <RenderFrame artifact={artifactRef} />;
 	else content = <GenericActivityRow activity={activity} />;
@@ -2754,6 +2755,14 @@ function AccountSwitchedRow({ accountId }: { accountId?: string }) {
 	const { t } = useTranslation();
 	const label = useAgentAccountLabel();
 	return <TwoRowTimelineMarker message={t("chat.accountSwitched", { email: label(accountId) })} detail={t("chat.accountSwitchedDetail")} wrapDetail />;
+}
+
+/** Where a usage limit moved the session to another account: AO retries the
+ * refused prompt there once, as the next turn. */
+function AccountHandoffRow({ accountId }: { accountId?: string }) {
+	const { t } = useTranslation();
+	const label = useAgentAccountLabel();
+	return <TwoRowTimelineMarker message={t("chat.accountHandoff", { email: label(accountId) })} detail={t("chat.accountHandoffDetail")} wrapDetail />;
 }
 
 function ReauthRow({ activity }: { activity: ConversationActivity }) {

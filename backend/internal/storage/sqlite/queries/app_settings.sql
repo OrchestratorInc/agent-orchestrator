@@ -27,3 +27,6 @@ UPDATE app_settings
 SET harness_defaults = json_remove(harness_defaults, sqlc.arg(harness_path)),
     updated_at = sqlc.arg(updated_at)
 WHERE id = 1;
+
+-- name: SetAccountHandoff :exec
+UPDATE app_settings SET account_handoff = ?, updated_at = ? WHERE id = 1;

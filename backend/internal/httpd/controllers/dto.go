@@ -3620,6 +3620,8 @@ type SettingsResponse struct {
 	VersionRefresh bool `json:"versionRefresh" description:"After a harness update, idle open sessions restart on the new release instead of running the old one until they happen to restart."`
 	// ComputerUse gives new chat sessions the computer-use tools.
 	ComputerUse bool `json:"computerUse" description:"New chat sessions get tools to drive desktop apps through Cua Driver (Settings, Computer use agents)."`
+	// AccountHandoff moves usage-limited Chat sessions to another account.
+	AccountHandoff bool `json:"accountHandoff" description:"A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts)."`
 	// CloudEnabled reports whether the cloud offering is effectively available:
 	// the user's toggle (or the env override) plus a configured control plane.
 	CloudEnabled bool `json:"cloudEnabled"`
@@ -3661,6 +3663,12 @@ type UpdateVersionRefreshRequest struct {
 
 // UpdateComputerUseRequest flips whether new chat sessions get the computer-use tools.
 type UpdateComputerUseRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// UpdateAccountHandoffRequest flips whether usage-limited Chat sessions move
+// to another account automatically.
+type UpdateAccountHandoffRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
@@ -3946,6 +3954,13 @@ type AgentAccountUsageByModel struct {
 type SessionAgentAccountsResponse struct {
 	Claude string `json:"claude,omitempty"`
 	Codex  string `json:"codex,omitempty"`
+	// StayOnAccount keeps a usage limit from moving the session automatically.
+	StayOnAccount bool `json:"stayOnAccount"`
+}
+
+// SetSessionStayOnAccountRequest records or clears "Stay on this account".
+type SetSessionStayOnAccountRequest struct {
+	Stay *bool `json:"stay"`
 }
 
 // SwitchSessionAgentAccountRequest moves a session to another account.

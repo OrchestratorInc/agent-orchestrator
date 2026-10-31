@@ -141,6 +141,13 @@ func validateUsageLimitSource(ctx context.Context, turns Store, store usageLimit
 	if source.UsageLimit.ResetsAt == nil {
 		return ErrUsageLimitResetUnknown
 	}
+	return validateUsageLimitRetry(ctx, turns, store, source)
+}
+
+// validateUsageLimitRetry holds what every automatic usage-limit retry needs,
+// whatever the deadline: the human prompt is still the latest on the active
+// branch, was delivered, and has no retry yet.
+func validateUsageLimitRetry(ctx context.Context, turns Store, store usageLimitStore, source domain.ConversationTurn) error {
 	prompt, err := turns.RetryPrompt(ctx, source.ConversationID, source.ID)
 	if err != nil {
 		return err
@@ -193,7 +200,7 @@ func (c *Controller) retryUsageLimitTurn(ctx context.Context, turnID string) (do
 	if source.UsageLimit.ResetsAt.After(c.now()) {
 		return domain.ConversationTurn{}, domain.ErrConversationAutoResumeNotDue
 	}
-	return c.retryTurnLocked(ctx, turnID, true)
+	return c.retryTurnLocked(ctx, turnID, retryAutoResume)
 }
 
 func permanentUsageLimitResumeError(err error) bool {
@@ -321,7 +328,7 @@ func (s *Service) resumeUsageLimitedTurn(ctx context.Context, store usageLimitSt
 	if err == nil {
 		// Hibernation recovery already permits a 60-second native wake.
 		attemptCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		_, err = s.retryTurn(attemptCtx, source.HandledBySessionID, source.ID, true)
+		_, err = s.retryTurn(attemptCtx, source.HandledBySessionID, source.ID, retryAutoResume)
 		cancel()
 	}
 	if ctx.Err() != nil {

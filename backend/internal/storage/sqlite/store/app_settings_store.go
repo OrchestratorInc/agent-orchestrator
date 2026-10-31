@@ -33,7 +33,10 @@ type AppSettings struct {
 	// ComputerUse gives new chat sessions tools to drive desktop apps through
 	// Cua Driver.
 	ComputerUse bool
-	UpdatedAt   time.Time
+	// AccountHandoff moves a Chat session refused for a usage limit to another
+	// account with quota and retries the prompt there once.
+	AccountHandoff bool
+	UpdatedAt      time.Time
 }
 
 // GetAppSettings reads the preference row.
@@ -54,6 +57,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		CloudOffering:      row.CloudOffering,
 		VersionRefresh:     row.VersionRefresh,
 		ComputerUse:        row.ComputerUse,
+		AccountHandoff:     row.AccountHandoff,
 		UpdatedAt:          row.UpdatedAt,
 	}, nil
 }
@@ -109,6 +113,20 @@ func (s *Store) SetComputerUse(ctx context.Context, enabled bool, now time.Time)
 		UpdatedAt:   now,
 	}); err != nil {
 		return fmt.Errorf("set computer use: %w", err)
+	}
+	return nil
+}
+
+// SetAccountHandoff persists whether usage-limited Chat sessions move to
+// another account automatically.
+func (s *Store) SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetAccountHandoff(ctx, gen.SetAccountHandoffParams{
+		AccountHandoff: enabled,
+		UpdatedAt:      now,
+	}); err != nil {
+		return fmt.Errorf("set account handoff: %w", err)
 	}
 	return nil
 }

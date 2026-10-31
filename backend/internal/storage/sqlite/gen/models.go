@@ -172,6 +172,7 @@ type AppSetting struct {
 	HarnessDefaults    string
 	VersionRefresh     bool
 	ComputerUse        bool
+	AccountHandoff     bool
 }
 
 type Automation struct {
@@ -221,6 +222,20 @@ type ChangeLog struct {
 	EventType cdc.EventType
 	Payload   string
 	CreatedAt time.Time
+}
+
+type ChatAccountHandoff struct {
+	SourceTurnID    string
+	SessionID       string
+	ConversationID  string
+	SourceAccountID string
+	TargetAccountID string
+	TransitionID    string
+	Phase           string
+	Detail          string
+	SourceResetsAt  sql.NullTime
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type CodexAccountSwitch struct {
@@ -742,6 +757,11 @@ type Session struct {
 	LaunchOptions                    string
 	BranchNaming                     bool
 	TemporaryBranch                  string
+}
+
+type SessionAccountPin struct {
+	SessionID string
+	PinnedAt  time.Time
 }
 
 type SessionAgentAccount struct {

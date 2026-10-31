@@ -4,12 +4,14 @@ import { useTranslation } from "react-i18next";
 import { agentAccountName, agentAccountProviderNames, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
 import { useShellMaybe } from "../../lib/shell-context";
+import { useSettings, useUpdateAccountHandoff } from "../../hooks/useSettings";
 import { useResolvedTheme } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { HarnessDetailGroup } from "./harness/harness-ui";
+import { HarnessDetailGroup, HarnessDetailRow } from "./harness/harness-ui";
 import { formatCompactNumber, formatPercentage, formatPlanName, formatResetTime } from "./CodexAccountDetails";
 
 const providerNames = agentAccountProviderNames;
@@ -113,6 +115,7 @@ export function AgentAccountsPanel({ provider, cliLogin }: { provider: AgentAcco
 				onSignInAgain={() => void startLogin(account.id)}
 				onRemove={() => { setError(""); setRemoving(account); }}
 			/>)}
+			<AccountHandoffRow />
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
@@ -172,6 +175,25 @@ function AccountRow({ account, aoTokens, busy, cliLogin, onMakeDefault, onUseRes
 }
 
 /** The account's limit meters, shared by the Accounts page and the session summary. */
+/** The daemon-owned choice to move a Chat session refused for a usage limit
+ * to another signed-in account with room, and retry the prompt there once. */
+function AccountHandoffRow() {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = useUpdateAccountHandoff();
+	return <>
+		<HarnessDetailRow label={t("settings.agentAccounts.handoff")} description={t("settings.agentAccounts.handoffDescription")}>
+			<Switch
+				aria-label={t("settings.agentAccounts.handoff")}
+				checked={settings?.accountHandoff ?? false}
+				disabled={isLoading || saving || !settings}
+				onCheckedChange={update}
+			/>
+		</HarnessDetailRow>
+		{error ? <p role="alert" className="px-3 pb-2 text-xs text-error">{error}</p> : null}
+	</>;
+}
+
 export function AccountLimits({ account }: { account: AgentAccount }) {
 	const { t, i18n } = useTranslation();
 	const windows = account.limits?.windows ?? [];

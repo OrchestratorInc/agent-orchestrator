@@ -14,7 +14,7 @@ import (
 
 const getAppSettings = `-- name: GetAppSettings :one
 
-SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use FROM app_settings WHERE id = 1
+SELECT id, default_session_mode, updated_at, cloud_offering, harness_defaults, version_refresh, computer_use, account_handoff FROM app_settings WHERE id = 1
 `
 
 // Daemon-owned user preferences. One row, seeded by migration 0042, so a read
@@ -30,6 +30,7 @@ func (q *Queries) GetAppSettings(ctx context.Context) (AppSetting, error) {
 		&i.HarnessDefaults,
 		&i.VersionRefresh,
 		&i.ComputerUse,
+		&i.AccountHandoff,
 	)
 	return i, err
 }
@@ -48,6 +49,20 @@ type ResetHarnessDefaultParams struct {
 
 func (q *Queries) ResetHarnessDefault(ctx context.Context, arg ResetHarnessDefaultParams) error {
 	_, err := q.db.ExecContext(ctx, resetHarnessDefault, arg.HarnessPath, arg.UpdatedAt)
+	return err
+}
+
+const setAccountHandoff = `-- name: SetAccountHandoff :exec
+UPDATE app_settings SET account_handoff = ?, updated_at = ? WHERE id = 1
+`
+
+type SetAccountHandoffParams struct {
+	AccountHandoff bool
+	UpdatedAt      time.Time
+}
+
+func (q *Queries) SetAccountHandoff(ctx context.Context, arg SetAccountHandoffParams) error {
+	_, err := q.db.ExecContext(ctx, setAccountHandoff, arg.AccountHandoff, arg.UpdatedAt)
 	return err
 }
 

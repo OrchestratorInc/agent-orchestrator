@@ -29,6 +29,7 @@ type Store interface {
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
 	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
 	SetComputerUse(ctx context.Context, enabled bool, now time.Time) error
+	SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -44,7 +45,11 @@ type Snapshot struct {
 	// ComputerUse gives new chat sessions the computer-use tools and their
 	// standing instruction (Settings, Computer use agents). Off by default.
 	ComputerUse bool
-	UpdatedAt   time.Time
+	// AccountHandoff moves a Chat session refused for a usage limit to another
+	// signed-in account with quota and retries the prompt there once
+	// (Settings, Agent accounts). Off by default.
+	AccountHandoff bool
+	UpdatedAt      time.Time
 }
 
 // Offering reports which AO offerings this daemon exposes to clients. It is
@@ -103,6 +108,8 @@ type Service struct {
 	chatHibernation atomic.Bool
 	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
 	versionRefresh atomic.Int32
+	// accountHandoff caches the durable toggle the same way.
+	accountHandoff atomic.Int32
 	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
 	cuaInstalled atomic.Pointer[func(context.Context) (bool, error)]
 }
@@ -135,8 +142,45 @@ func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	snapshot.ChatHibernationEnabled = s.chatHibernation.Load()
 	if err == nil {
 		s.cacheVersionRefresh(snapshot.VersionRefresh)
+		s.cacheAccountHandoff(snapshot.AccountHandoff)
 	}
 	return snapshot, err
+}
+
+func (s *Service) cacheAccountHandoff(enabled bool) {
+	if enabled {
+		s.accountHandoff.Store(1)
+	} else {
+		s.accountHandoff.Store(2)
+	}
+}
+
+// AccountHandoffEnabled reports the "Move to another account at a usage
+// limit" toggle. The scheduler asks every tick, so it reads the store once and
+// then serves the cached value; an unreadable store counts as off.
+func (s *Service) AccountHandoffEnabled(ctx context.Context) bool {
+	switch s.accountHandoff.Load() {
+	case 1:
+		return true
+	case 2:
+		return false
+	}
+	snapshot, err := s.store.GetAppSettings(ctx)
+	if err != nil {
+		return false
+	}
+	s.cacheAccountHandoff(snapshot.AccountHandoff)
+	return snapshot.AccountHandoff
+}
+
+// SetAccountHandoff changes whether usage-limited Chat sessions move to
+// another account automatically. Moves already underway finish either way.
+func (s *Service) SetAccountHandoff(ctx context.Context, enabled bool) (Snapshot, error) {
+	if err := s.store.SetAccountHandoff(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	s.cacheAccountHandoff(enabled)
+	return s.Get(ctx)
 }
 
 func (s *Service) cacheVersionRefresh(enabled bool) {
