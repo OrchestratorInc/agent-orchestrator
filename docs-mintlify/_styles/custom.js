@@ -124,7 +124,11 @@ function aoCurLangName() {
     if (!n) return;
     var i = Math.max(0, Math.min(n - 1, Math.floor(F)));
     var A = track.items[i];
-    var x = A.x, y = (A.cy != null ? A.cy : A.top + A.h / 2);
+    /* original anchors the marker to the active range's leading edge:
+       last active row bottom minus its 6px padding (measured live:
+       dot center = row bottom - 6, e.g. Give feedback 266 - 6 = 260),
+       NOT the row center. */
+    var x = A.x, y = (A.top + A.h - 6);
     if (track.dot) {
       if (!track.dot._aoGlide) {
         track.dot._aoGlide = true;
