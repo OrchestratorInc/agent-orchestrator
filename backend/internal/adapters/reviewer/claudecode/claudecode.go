@@ -51,8 +51,9 @@ var _ ports.ReviewerRestorer = (*Reviewer)(nil)
 // mode where these rules are honored: allow rules auto-approve without
 // prompting, so the reviewer can read the checkout and run the few commands it
 // needs (git diff/log/show to inspect the PR, gh pr view/diff/checks to read
-// PR metadata, printf to pipe review JSON into the downstream commands without
-// writing a worktree file, and `ao review submit` to record the verdict).
+// PR metadata, printf to pipe review text into the downstream commands when a
+// read-only sandbox cannot run the prompt's heredoc form, and
+// `ao review submit` to record the verdict).
 // Claude Code ≥ 2.1.257 still prompts on Bash commands its analyzer cannot
 // verify statically even when an allow rule matches; the PermissionRequest
 // hook AO installs answers those for reviewers (see

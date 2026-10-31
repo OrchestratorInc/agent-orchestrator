@@ -236,5 +236,24 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 	} {
 		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "deny"})
 	}
+	// A heredoc submit's resource is its whole redirected statement: the command
+	// line, the quoted body, and the closing delimiter. The body may contain any
+	// character, so the heredoc shapes are allowed after the denies above, then
+	// redirects on the command line before the heredoc start are denied again.
+	heredoc := " <<'" + ports.ReviewSubmitHeredocDelimiter + "'\n"
+	for _, resource := range []string{
+		"gh api --method POST repos/*/pulls/*/reviews --input - --jq '.id'" + heredoc + "*\n" + ports.ReviewSubmitHeredocDelimiter,
+		"ao review submit --session *" + heredoc + "*\n" + ports.ReviewSubmitHeredocDelimiter,
+	} {
+		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "allow"})
+	}
+	for _, resource := range []string{
+		"gh api *>*" + heredoc + "*",
+		"gh api *<*" + heredoc + "*",
+		"ao review submit *>*" + heredoc + "*",
+		"ao review submit *<*" + heredoc + "*",
+	} {
+		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "deny"})
+	}
 	return rules
 }
