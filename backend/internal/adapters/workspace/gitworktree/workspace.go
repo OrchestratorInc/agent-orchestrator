@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -1540,7 +1541,7 @@ func registeredWorktreeDirMissing(rec worktreeRecord) (bool, error) {
 		if rec.Locked {
 			return false, fmt.Errorf(
 				"%w: %q (branch %q) is registered but its directory is missing; unlock it (`git worktree unlock %s`) and retry, or remove the registration manually",
-				ErrWorktreeLocked, rec.Path, rec.Branch, rec.Path,
+				ErrWorktreeLocked, rec.Path, rec.Branch, quoteRecoveryPath(rec.Path),
 			)
 		}
 		return true, nil
@@ -1559,8 +1560,13 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 	if err != nil {
 		return "", err
 	}
-	if conflict, ok := findWorktreeByBranch(records, branch); ok && filepath.Clean(conflict.Path) != filepath.Clean(path) {
-		return "", fmt.Errorf("%w: %q is checked out at %q", ErrBranchCheckedOutElsewhere, branch, conflict.Path)
+	// Refuse early if the branch is already checked out in another worktree:
+	// `git worktree add` will fail, but its stderr leaks through as an opaque
+	// 500. A typed sentinel lets the HTTP layer surface a 409. An AO-shaped
+	// orphan is recognized and reported with remediation (resolveBranchConflict).
+	records, err = w.resolveBranchConflict(records, repo, branch, path)
+	if err != nil {
+		return "", err
 	}
 	// A registration at path whose directory is gone makes a plain add fail
 	// ("is a missing but already registered worktree; use 'add -f' to
@@ -1628,6 +1634,132 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 		return "", fmt.Errorf("gitworktree: worktree add branch %q from %q: %w", branch, seedRef, err)
 	}
 	return baseRef, nil
+}
+
+// resolveBranchConflict enforces git's one-worktree-per-branch rule for branch
+// at path, recognizing AO's own leftovers before it refuses.
+//
+// A registration holding branch anywhere but path is ambiguous on its face: it
+// can be a live sibling AO session, a checkout belonging to the user, or an
+// orphan left behind when an AO data root moved, was renamed, or was cleaned up
+// out of band. The last one blocked that project's orchestrator permanently
+// (#6918): the orchestrator branch is a fixed name per project, `git worktree
+// prune` cannot clear a registration whose directory still exists, and AO could
+// not tell the orphan from the other two cases, so it reported all three as a
+// foreign checkout and left the user with a 409 and no way out of AO.
+//
+// Path is what separates them. managedPath is deterministic, so an orphan for
+// this same project and session ends with exactly the same relative path under
+// some other root, while a worktree AO still owns sits inside the managed root
+// (orphanedManagedWorktree). An orphan is surfaced as the typed 409 with the
+// exact, shell-quoted `git -C <repo> worktree remove '<path>'` command, so the
+// user can clear it from any directory; it is never removed automatically,
+// because a path-suffix match cannot prove the other owner is inactive (two
+// active AO instances share the layout) and `git worktree remove` (without
+// --force) still deletes ignored local files such as a `.env` with credentials.
+// A locked orphan reports the sequence that actually clears it: confirm it is
+// unused, unlock, remove. Every other case keeps the plain typed 409 unchanged.
+func (w *Workspace) resolveBranchConflict(records []worktreeRecord, repo, branch, path string) ([]worktreeRecord, error) {
+	conflict, ok := findWorktreeByBranch(records, branch)
+	if !ok || filepath.Clean(conflict.Path) == filepath.Clean(path) {
+		return records, nil
+	}
+	if !w.orphanedManagedWorktree(conflict.Path, path) {
+		return records, branchCheckedOutElsewhereError(branch, conflict.Path, "")
+	}
+	// It looks like AO's own leftover (same managed-relative path, outside the
+	// managed root), but that shape alone cannot prove the other owner is
+	// inactive: two active AO instances (e.g. production and an isolated dev
+	// instance) on the same machine share the layout, and normal AO worktrees
+	// are not locked. Reclaiming automatically would delete a live worktree's
+	// directory and, because `git worktree remove` (without --force) only checks
+	// tracked status, would also delete ignored local files such as a `.env`
+	// with credentials. So the reclaim stays an explicit user action: surface
+	// the typed 409 with the exact, copy-pasteable remediation instead.
+	//
+	// The commands name the repository with -C because the user is pasting them
+	// into whatever directory their terminal happens to be in, and every path is
+	// quoted as a literal argument (quoteRecoveryPath) so spaces stay part of the
+	// path and shell expansion cannot rewrite it.
+	gitCommand := "git -C " + quoteRecoveryPath(repo)
+	quoted := quoteRecoveryPath(conflict.Path)
+	remediation := fmt.Sprintf("this looks like an orphaned AO worktree from a previous data root; remove it (`%s worktree remove %s`), then retry", gitCommand, quoted)
+	if conflict.Locked {
+		// Unlocking alone leaves the registration and the branch checkout in
+		// place, and removing a locked worktree fails, so spell out the order
+		// that works: confirm, unlock, remove, retry.
+		remediation = fmt.Sprintf("this looks like an orphaned AO worktree but it is locked; confirm it is no longer in use, then unlock it (`%s worktree unlock %s`), remove it (`%s worktree remove %s`), then retry", gitCommand, quoted, gitCommand, quoted)
+	}
+	return records, branchCheckedOutElsewhereError(branch, conflict.Path, remediation)
+}
+
+// quoteRecoveryPath renders path as one literal argument in the copy-pasteable
+// remediation command. Double quotes are not enough for that: POSIX shells and
+// PowerShell still expand `$VAR`, `$(...)` and backticks inside them, so a data
+// root that really contains those characters would resolve to a different path
+// or even run the substitution. Single quotes suppress every expansion in both
+// shells and also keep spaces in one argument; only the escape for an embedded
+// single quote differs, because POSIX closes and reopens the string while
+// PowerShell doubles the quote. cmd.exe has no literal quoting form at all, so
+// these commands assume a POSIX shell or PowerShell (which includes the default
+// Windows terminals AO users reach for).
+func quoteRecoveryPath(path string) string {
+	if runtime.GOOS == "windows" {
+		return "'" + strings.ReplaceAll(path, "'", "''") + "'"
+	}
+	return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+}
+
+// branchCheckedOutElsewhereError keeps the typed sentinel and the conflicting
+// path that callers, the HTTP 409 mapping and existing tests all match on, and
+// appends remediation only when AO has something specific to suggest.
+func branchCheckedOutElsewhereError(branch, path, remediation string) error {
+	if remediation != "" {
+		remediation = "; " + remediation
+	}
+	return fmt.Errorf("%w: %q is checked out at %q%s", ErrBranchCheckedOutElsewhere, branch, path, remediation)
+}
+
+// orphanedManagedWorktree reports whether path is a registration that AO's own
+// layout claims - it ends with exactly the managed-relative path of
+// managedPath - but sits outside the managed root, which is what a registration
+// left behind by a previous AO data root looks like from here.
+//
+// A registration inside the managed root is never an orphan. AO still owns it,
+// whether a live sibling session holds it or an earlier sessionPrefix left it
+// behind, and reclaiming it would delete work AO is expected to keep.
+func (w *Workspace) orphanedManagedWorktree(path, managedPath string) bool {
+	clean := filepath.Clean(path)
+	if clean == "." || clean == string(os.PathSeparator) {
+		return false
+	}
+	inside, err := pathWithin(w.managedRoot, clean)
+	// pathWithin returns an error when the paths sit on different volumes (on
+	// Windows, filepath.Rel cannot relate them). Treat that as "outside the
+	// managed root" rather than unclassifiable, so an orphan on another drive
+	// (e.g. D:\ao-... with a C:\ managed root) is still recognised. Only a
+	// successful "inside" result protects a worktree.
+	if err == nil && inside {
+		return false
+	}
+	rel, err := filepath.Rel(w.managedRoot, managedPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return false
+	}
+	return hasPathSuffix(clean, rel)
+}
+
+// hasPathSuffix reports whether path ends with the exact path components of
+// suffix. Comparison is case-insensitive on Windows, where the filesystem
+// resolves those components case-insensitively too, and exact elsewhere so two
+// projects differing only in case cannot be confused.
+func hasPathSuffix(path, suffix string) bool {
+	p := filepath.ToSlash(filepath.Clean(path))
+	s := filepath.ToSlash(filepath.Clean(suffix))
+	if runtime.GOOS == "windows" {
+		p, s = strings.ToLower(p), strings.ToLower(s)
+	}
+	return strings.HasSuffix(p, "/"+s)
 }
 
 // staleRegistrationForPath reports whether records carries a registration for
