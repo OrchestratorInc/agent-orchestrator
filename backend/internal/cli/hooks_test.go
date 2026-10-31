@@ -2506,3 +2506,23 @@ func TestClaudeHookArtifactNudgeFailsOpen(t *testing.T) {
 		t.Fatalf("stdout=%q err=%v", stdout, err)
 	}
 }
+
+// JCode runs hooks detached with stdin closed and passes the event as JSON in
+// JCODE_HOOK_PAYLOAD, so the native session id and activity come from there.
+func TestHooks_JCodeReadsPayloadFromEnvironment(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("JCODE_HOOK_PAYLOAD", `{"cwd":"/tmp/ws","event":"session_start","model":"claude-opus-5-5","session_id":"session_snail_1793367671021_d953353552ec79e9","source":"create"}`)
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	if _, stderr, err := executeCLI(t, Deps{In: strings.NewReader(""), ProcessAlive: func(int) bool { return true }}, "hooks", "jcode", "session-start"); err != nil {
+		t.Fatalf("hook: %v: %s", err, stderr)
+	}
+	var request setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
+		t.Fatalf("body %q: %v", capture.body, err)
+	}
+	if request.AgentSessionID != "session_snail_1793367671021_d953353552ec79e9" || request.State != string(domain.ActivityIdle) {
+		t.Fatalf("request = %+v; want the native id and idle", request)
+	}
+}

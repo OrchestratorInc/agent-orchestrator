@@ -64,6 +64,12 @@ type SourceRoots struct {
 	CodexSessions  string
 	CodexArchived  string
 	KimiHome       string
+	// JCodeHome is jcode's state root, whose sessions/<id>.json files carry
+	// per-message token_usage. JCodeLedger is AO's directory of append-only
+	// usage ledgers derived from them (jcode rewrites its session file, which
+	// the JSONL ingestor cannot tail).
+	JCodeHome   string
+	JCodeLedger string
 }
 
 // DefaultSourceRoots resolves provider-owned transcript directories. dataDir
@@ -89,11 +95,17 @@ func DefaultSourceRoots(ctx context.Context, dataDir string) (SourceRoots, error
 	if strings.TrimSpace(dataDir) == "" {
 		dataDir = filepath.Join(home, ".ao", "data")
 	}
+	jcodeHome := strings.TrimSpace(os.Getenv("JCODE_HOME"))
+	if jcodeHome == "" {
+		jcodeHome = filepath.Join(home, ".jcode")
+	}
 	return SourceRoots{
 		ClaudeProjects: filepath.Join(claudeHome, "projects"),
 		CodexSessions:  filepath.Join(codexHome, "sessions"),
 		CodexArchived:  filepath.Join(codexHome, "archived_sessions"),
 		KimiHome:       filepath.Join(dataDir, "kimi"),
+		JCodeHome:      jcodeHome,
+		JCodeLedger:    filepath.Join(dataDir, "jcode", "usage"),
 	}, nil
 }
 
@@ -200,6 +212,12 @@ func (c *Collector) FinalizeSession(
 		return err
 	}
 	for _, binding := range bindings {
+		if binding.Harness == domain.HarnessJCode {
+			// jcode's last turn can be saved after its last hook.
+			if _, err := c.syncJCodeLedger(ctx, binding.NativeRootID); err != nil {
+				return err
+			}
+		}
 		if _, err := c.reactivateLatestSources(ctx, binding.ID, now); err != nil {
 			return err
 		}
@@ -290,7 +308,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 		}
 	}
 	if signal.NativeSessionID != "" && mainPath == "" &&
-		(session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessKimi ||
+		(session.Harness == domain.HarnessCodex || session.Harness == domain.HarnessKimi || session.Harness == domain.HarnessJCode ||
 			finalizing && !existsForDiscovery) {
 		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID)
 		if err != nil {
@@ -2001,6 +2019,11 @@ func validateSourceAttribution(
 			filepath.Base(sessionDir) != binding.NativeRootID || subagentID != wantSubagent {
 			return rejected()
 		}
+	case domain.UsageSourceJCodeLedger:
+		if binding.Harness != domain.HarnessJCode || nativeSessionID != binding.NativeRootID ||
+			subagentID != "" || filepath.Base(resolved) != binding.NativeRootID+".jsonl" {
+			return rejected()
+		}
 	default:
 		return rejected()
 	}
@@ -2048,6 +2071,8 @@ func (c *Collector) allowedRoots(harness domain.AgentHarness) []string {
 		return []string{c.roots.CodexSessions, c.roots.CodexArchived}
 	case domain.HarnessKimi:
 		return []string{c.roots.KimiHome}
+	case domain.HarnessJCode:
+		return []string{c.roots.JCodeLedger}
 	default:
 		return nil
 	}
@@ -2061,6 +2086,8 @@ func sourceKindForHarness(harness domain.AgentHarness) (domain.UsageSourceKind, 
 		return domain.UsageSourceCodexRollout, true
 	case domain.HarnessKimi:
 		return domain.UsageSourceKimiWire, true
+	case domain.HarnessJCode:
+		return domain.UsageSourceJCodeLedger, true
 	default:
 		return "", false
 	}
@@ -2110,6 +2137,8 @@ func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarnes
 		return c.discoverCodexPath(ctx, nativeID, "")
 	case domain.HarnessKimi:
 		return c.discoverKimiPath(ctx, nativeID)
+	case domain.HarnessJCode:
+		return c.syncJCodeLedger(ctx, nativeID)
 	}
 	type candidate struct {
 		path string

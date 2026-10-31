@@ -50,6 +50,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
 	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
+	TargetJCode:       "https://github.com/1jehuang/jcode",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -283,6 +284,17 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		}
 	case TargetCommandCode:
 		plans = []Plan{s.planNPM(target, "command-code")}
+	case TargetJCode:
+		// Both official installers download the release archive for the
+		// platform and refuse it unless its SHA-256 matches SHA256SUMS.
+		official := s.officialByOS(target, "https://jcode.sh/install", "bash", "https://jcode.sh/install.ps1", agentDocumentationURLs[target])
+		if official.Script != nil && s.goos == "windows" {
+			// install.ps1 sets up a hotkey or Alacritty only when asked; say
+			// no explicitly, and keep it from reloading a running jcode server.
+			official.Script.Args = []string{"-SkipHotkeySetup", "-SkipAlacrittySetup"}
+			official.Script.Env = []string{"JCODE_SKIP_SERVER_RELOAD=1", "JCODE_NO_TELEMETRY=1"}
+		}
+		plans = []Plan{official}
 	default:
 		plans = []Plan{{Target: target, Unsupported: true, Method: "manual", Reason: "unknown install target"}}
 	}
@@ -366,7 +378,14 @@ func (s requestPlanner) planForOperation(plan Plan, operation AgentOperation) Pl
 		plan.deferredReason = plan.Reason
 		plan.Unsupported, plan.Reason = false, ""
 	}
-	if operation == AgentOperationInstall || plan.Unsupported {
+	if operation == AgentOperationInstall && !plan.Unsupported {
+		if recipe, ok := s.officialManagedRecipeFor(plan); ok && recipe.firstInstall && s.managedEligible(plan) {
+			plan.managed = true
+			plan.UpdateWhileRunning = UpdateWhileRunningSafe
+		}
+		return plan
+	}
+	if plan.Unsupported {
 		return plan
 	}
 	installScript := plan.Script
