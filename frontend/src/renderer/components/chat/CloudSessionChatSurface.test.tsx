@@ -283,6 +283,28 @@ describe("CloudSessionChatSurface", () => {
 		expect(cloudMocks.listChatModels).not.toHaveBeenCalled();
 	});
 
+	it("names the session's default model while the catalog stands in, as the worker will", async () => {
+		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
+		cloudMocks.listChatModels.mockReset().mockResolvedValue({ models: [] });
+		cloudMocks.resumeSession.mockReset().mockResolvedValue({});
+		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [
+			{ id: "opus", displayName: "Opus", default: false },
+			{ id: "default", displayName: "Sonnet", default: true },
+		] });
+		cloudMocks.sendSessionMessage.mockReset().mockResolvedValue({ event: {} });
+		cloudMocks.chatProps.mockClear();
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<CloudSessionChatSurface session={{ ...session, provider: "claude-code", runtimeConnected: false, cloud: { orgId: "org-1", permissionMode: "trusted" } }} />
+			</QueryClientProvider>,
+		);
+		const props = () => cloudMocks.chatProps.mock.lastCall?.[0];
+		await waitFor(() => expect(props().snapshot.settings.model).toBe("default"));
+		// Shown, not chosen: the turn still runs the session's default.
+		await props().onSend("go", [], "default-1");
+		expect(cloudMocks.sendSessionMessage.mock.lastCall?.[2]).not.toHaveProperty("model");
+	});
+
 	it("replaces the catalog with the worker's own list once it answers", async () => {
 		cloudMocks.listChatEvents.mockResolvedValue({ events: [], hasMore: false, nextAfter: 0 });
 		cloudMocks.listUserAgentModels.mockResolvedValue({ models: [{ id: "sonnet", displayName: "Sonnet", default: true }] });

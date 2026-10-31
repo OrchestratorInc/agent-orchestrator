@@ -868,6 +868,11 @@ export function CloudSessionChatSurface({
 		queryFn: ({ signal }) => client.listUserAgentModels(cloud!.orgId, session.provider as CloudCpAgentProvider, { signal }),
 	});
 	const listedModels = modelsQuery.data?.models ?? catalogQuery.data?.models ?? [];
+	// A turn sent without a pick runs the session's default model. While the
+	// catalog stands in for the worker's list, the composer shows that default
+	// by name, as it does once the worker reports it, rather than guessing one.
+	const catalogDefaultModel = modelsQuery.data ? undefined
+		: catalogQuery.data?.model ?? catalogQuery.data?.models.find((model) => model.default)?.id;
 	const selectedModel = listedModels.find((model) => model.id === settings.model) ?? listedModels.find((model) => model.default);
 	// The session's approval modes the selected model can run: Claude offers
 	// Auto-approve only for models that support it (not Haiku).
@@ -1004,8 +1009,8 @@ export function CloudSessionChatSurface({
 		const items = withoutFailedSetupAttempts(projected.items, startFailed);
 		// No agent runs until a retry prepares the workspace, as a failed local start reports.
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
-		return { ...projected, items, controller, settings: { ...settings, approvalMode: shownApprovalMode } };
-	}, [eventsQuery.data, me, session, settings, shownApprovalMode, startFailed, startStopped]);
+		return { ...projected, items, controller, settings: { ...settings, model: settings.model ?? catalogDefaultModel, approvalMode: shownApprovalMode } };
+	}, [catalogDefaultModel, eventsQuery.data, me, session, settings, shownApprovalMode, startFailed, startStopped]);
 	// While Setup runs, or once the checkout, Setup or the agent's start failed,
 	// the session reads as a local start does: the startup checklist in place of a
 	// working timer, and messages that send in order once the agent starts.
