@@ -204,6 +204,16 @@ query values are redacted.
 
 `go run .` in `backend/` remains a compatibility wrapper around the daemon.
 
+Merge a tracked PR with its full URL and the head SHA you reviewed:
+
+```bash
+ao pr merge 42 --url https://github.com/acme/widgets/pull/42 --expected-head-sha <sha>
+```
+
+Both flags are required. The URL identifies the repository, and the daemon
+rejects the request if the tracked or provider head has changed. A rejected
+head must be reviewed again before retrying with a new SHA.
+
 PR actions are available through `ao pr merge` and
 `ao pr resolve-comments`. Review actions are available through `ao review ls`,
 `ao review trigger` (also `execute` and `restart`), `ao review cancel` (also

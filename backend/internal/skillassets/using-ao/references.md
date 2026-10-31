@@ -38,7 +38,7 @@ Natural-language-to-command mappings for common AO tasks.
 | List orchestrator sessions | `ao orchestrator ls` |
 | Claim an existing PR for the current session | `ao session claim-pr <pr-ref>` (`AO_SESSION_ID`) |
 | Claim an existing PR for another session | `ao session claim-pr <id> <pr-ref>` |
-| Merge a pull request | `ao pr merge <pr-number>` |
+| Merge a pull request | `ao pr merge <pr-number> --url <pr-url> --expected-head-sha <sha>` |
 | Resolve pull-request review threads | `ao pr resolve-comments <pr-number> [comment-id...]` |
 | Submit a code review verdict | `ao review submit <session-id> --run <run-id> --verdict approved` |
 | Get an independent / adversarial review of an AO worker's implementation PR | `ao review trigger` (inside the owning worker), or `ao review trigger <worker-session-id>` |
