@@ -3762,5 +3762,9 @@
 	"newTask.cloudModelsUnavailable": "A nuvem não tem uma lista de modelos para o {{agent}}. Use o padrão ou digite um ID de modelo.",
 	"newTask.cloudModelsVerified": "Verificado nos seus workers na nuvem",
 	"newTask.cloudModelUnlisted": "{{model}} não está na lista de modelos do {{agent}} na nuvem, então pode não funcionar.",
-	"settings.models.useConfiguredDefault": "Usar o padrão do projeto ou do agente"
+	"settings.models.useConfiguredDefault": "Usar o padrão do projeto ou do agente",
+	"chat.reminders.label": "Acompanhamentos agendados",
+	"chat.reminders.cancel": "Cancelar acompanhamento",
+	"chat.reminders.cancelFailed": "Não foi possível cancelar o acompanhamento.",
+	"chat.reminders.item": "{{time}}: {{label}}"
 }

@@ -5083,6 +5083,150 @@ paths:
       summary: Unpair this phone from the daemon, removing it from the roster
       tags:
       - push
+  /api/v1/reminders:
+    get:
+      operationId: listReminders
+      parameters:
+      - description: Session whose pending reminders to list.
+        in: query
+        name: sessionId
+        required: true
+        schema:
+          description: Session whose pending reminders to list.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListRemindersResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List a session's pending reminders
+      tags:
+      - reminders
+    post:
+      operationId: createReminder
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReminderRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReminderEnvelope'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Schedule a one-shot follow-up into a session
+      tags:
+      - reminders
+  /api/v1/reminders/{reminderId}:
+    delete:
+      operationId: cancelReminder
+      parameters:
+      - description: When set, only cancel the reminder if it belongs to this session.
+        in: query
+        name: sessionId
+        schema:
+          description: When set, only cancel the reminder if it belongs to this session.
+          type: string
+      - description: Reminder identifier.
+        in: path
+        name: reminderId
+        required: true
+        schema:
+          description: Reminder identifier.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReminderEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Cancel a pending reminder
+      tags:
+      - reminders
   /api/v1/remote-host/account-token:
     post:
       operationId: issueRemoteHostAccountToken
@@ -16932,6 +17076,34 @@ components:
       required:
       - side
       type: object
+    CreateReminderRequest:
+      properties:
+        createdBy:
+          description: Who scheduled it. Defaults to agent.
+          enum:
+          - agent
+          - user
+          type: string
+        dueAt:
+          description: When to deliver the follow-up (RFC 3339), at least 1 minute
+            and at most 30 days ahead.
+          format: date-time
+          type: string
+        message:
+          maxLength: 4000
+          minLength: 1
+          type: string
+        name:
+          maxLength: 120
+          type: string
+        sessionId:
+          minLength: 1
+          type: string
+      required:
+      - sessionId
+      - message
+      - dueAt
+      type: object
     CreateReportRequest:
       properties:
         message:
@@ -18078,6 +18250,15 @@ components:
       required:
       - projects
       type: object
+    ListRemindersResponse:
+      properties:
+        reminders:
+          items:
+            $ref: '#/components/schemas/ReminderResponse'
+          type: array
+      required:
+      - reminders
+      type: object
     ListReportsResponse:
       properties:
         reports:
@@ -19014,6 +19195,60 @@ components:
           type: array
       required:
       - servers
+      type: object
+    ReminderEnvelope:
+      properties:
+        reminder:
+          $ref: '#/components/schemas/ReminderResponse'
+      required:
+      - reminder
+      type: object
+    ReminderResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        createdBy:
+          enum:
+          - agent
+          - user
+          type: string
+        dueAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        message:
+          type: string
+        name:
+          type: string
+        projectId:
+          type: string
+        resolvedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        sessionId:
+          type: string
+        status:
+          enum:
+          - pending
+          - delivered
+          - cancelled
+          - dropped
+          type: string
+        statusReason:
+          type: string
+      required:
+      - id
+      - sessionId
+      - projectId
+      - message
+      - dueAt
+      - createdBy
+      - status
+      - createdAt
       type: object
     RemoveProjectResult:
       properties:
@@ -22824,6 +23059,8 @@ tags:
   name: notifications
 - description: Durable worker reports
   name: reports
+- description: One-shot follow-ups an agent schedules into its own session
+  name: reminders
 - description: Token usage telemetry for AO sessions
   name: usage
 - description: Mobile push-device registration for OS push notifications
