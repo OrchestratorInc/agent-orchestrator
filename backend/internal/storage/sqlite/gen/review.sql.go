@@ -7,6 +7,7 @@ package gen
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -299,7 +300,7 @@ func (q *Queries) GetReviewBySessionAndHarness(ctx context.Context, arg GetRevie
 }
 
 const getReviewRun = `-- name: GetReviewRun :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE id = ?
 `
 
@@ -322,12 +323,17 @@ func (q *Queries) GetReviewRun(ctx context.Context, id string) (ReviewRun, error
 		&i.BatchID,
 		&i.AutoInjectReview,
 		&i.TriggerSource,
+		&i.ReviewerModel,
+		&i.WorkerNotice,
+		&i.WorkerNoticeAttempts,
+		&i.WorkerNoticeError,
+		&i.WorkerNoticeAttemptedAt,
 	)
 	return i, err
 }
 
 const getReviewRunBySessionPRAndSHA = `-- name: GetReviewRunBySessionPRAndSHA :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? ORDER BY created_at DESC LIMIT 1
 `
 
@@ -356,12 +362,17 @@ func (q *Queries) GetReviewRunBySessionPRAndSHA(ctx context.Context, arg GetRevi
 		&i.BatchID,
 		&i.AutoInjectReview,
 		&i.TriggerSource,
+		&i.ReviewerModel,
+		&i.WorkerNotice,
+		&i.WorkerNoticeAttempts,
+		&i.WorkerNoticeError,
+		&i.WorkerNoticeAttemptedAt,
 	)
 	return i, err
 }
 
 const getReviewRunBySessionPRSHAAndHarness = `-- name: GetReviewRunBySessionPRSHAAndHarness :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? AND harness = ? ORDER BY created_at DESC LIMIT 1
 `
 
@@ -396,13 +407,18 @@ func (q *Queries) GetReviewRunBySessionPRSHAAndHarness(ctx context.Context, arg 
 		&i.BatchID,
 		&i.AutoInjectReview,
 		&i.TriggerSource,
+		&i.ReviewerModel,
+		&i.WorkerNotice,
+		&i.WorkerNoticeAttempts,
+		&i.WorkerNoticeError,
+		&i.WorkerNoticeAttemptedAt,
 	)
 	return i, err
 }
 
 const insertReviewRun = `-- name: InsertReviewRun :exec
-INSERT INTO review_run (id, review_id, session_id, batch_id, harness, trigger_source, pr_url, target_sha, status, verdict, body, github_review_id, created_at, auto_inject_review)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO review_run (id, review_id, session_id, batch_id, harness, trigger_source, pr_url, target_sha, status, verdict, body, github_review_id, created_at, auto_inject_review, reviewer_model)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertReviewRunParams struct {
@@ -420,6 +436,7 @@ type InsertReviewRunParams struct {
 	GithubReviewID   string
 	CreatedAt        time.Time
 	AutoInjectReview bool
+	ReviewerModel    string
 }
 
 func (q *Queries) InsertReviewRun(ctx context.Context, arg InsertReviewRunParams) error {
@@ -438,6 +455,7 @@ func (q *Queries) InsertReviewRun(ctx context.Context, arg InsertReviewRunParams
 		arg.GithubReviewID,
 		arg.CreatedAt,
 		arg.AutoInjectReview,
+		arg.ReviewerModel,
 	)
 	return err
 }
@@ -620,6 +638,65 @@ func (q *Queries) ListLiveReviewerHandles(ctx context.Context) ([]ListLiveReview
 	return items, nil
 }
 
+const listPendingReviewRunNoticesBySession = `-- name: ListPendingReviewRunNoticesBySession :many
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
+FROM review_run WHERE session_id = ?1 AND worker_notice = 'pending'
+  AND worker_notice_attempts < ?2
+ORDER BY created_at ASC, id ASC
+`
+
+type ListPendingReviewRunNoticesBySessionParams struct {
+	SessionID   domain.SessionID
+	MaxAttempts int64
+}
+
+// Final passes that still owe the worker a "review done" message, oldest
+// first so notices arrive in the order the passes were requested. A notice
+// whose delivery failed max_attempts times has given up and is not listed.
+func (q *Queries) ListPendingReviewRunNoticesBySession(ctx context.Context, arg ListPendingReviewRunNoticesBySessionParams) ([]ReviewRun, error) {
+	rows, err := q.db.QueryContext(ctx, listPendingReviewRunNoticesBySession, arg.SessionID, arg.MaxAttempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ReviewRun{}
+	for rows.Next() {
+		var i ReviewRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReviewID,
+			&i.SessionID,
+			&i.Harness,
+			&i.PRURL,
+			&i.TargetSha,
+			&i.Status,
+			&i.Verdict,
+			&i.Body,
+			&i.CreatedAt,
+			&i.GithubReviewID,
+			&i.DeliveredAt,
+			&i.BatchID,
+			&i.AutoInjectReview,
+			&i.TriggerSource,
+			&i.ReviewerModel,
+			&i.WorkerNotice,
+			&i.WorkerNoticeAttempts,
+			&i.WorkerNoticeError,
+			&i.WorkerNoticeAttemptedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecoverableChatReviews = `-- name: ListRecoverableChatReviews :many
 SELECT id, session_id, project_id, harness, pr_url, reviewer_handle_id, agent_session_id, reviewer_activity_state, reviewer_launch_id, interface_mode, provider_conversation_id, controller_generation, controller_error, is_archived, created_at, updated_at
 FROM review WHERE interface_mode = 'chat' AND is_archived = FALSE AND provider_conversation_id != '' ORDER BY updated_at, id
@@ -685,7 +762,7 @@ func (q *Queries) ListRecoverableChatReviews(ctx context.Context) ([]ListRecover
 }
 
 const listReviewRunsByBatch = `-- name: ListReviewRunsByBatch :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE session_id = ? AND batch_id = ? ORDER BY created_at ASC, id ASC
 `
 
@@ -719,6 +796,11 @@ func (q *Queries) ListReviewRunsByBatch(ctx context.Context, arg ListReviewRunsB
 			&i.BatchID,
 			&i.AutoInjectReview,
 			&i.TriggerSource,
+			&i.ReviewerModel,
+			&i.WorkerNotice,
+			&i.WorkerNoticeAttempts,
+			&i.WorkerNoticeError,
+			&i.WorkerNoticeAttemptedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -734,7 +816,7 @@ func (q *Queries) ListReviewRunsByBatch(ctx context.Context, arg ListReviewRunsB
 }
 
 const listReviewRunsBySession = `-- name: ListReviewRunsBySession :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE session_id = ? ORDER BY created_at DESC
 `
 
@@ -763,6 +845,11 @@ func (q *Queries) ListReviewRunsBySession(ctx context.Context, sessionID domain.
 			&i.BatchID,
 			&i.AutoInjectReview,
 			&i.TriggerSource,
+			&i.ReviewerModel,
+			&i.WorkerNotice,
+			&i.WorkerNoticeAttempts,
+			&i.WorkerNoticeError,
+			&i.WorkerNoticeAttemptedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -842,7 +929,7 @@ func (q *Queries) ListReviewsBySession(ctx context.Context, sessionID domain.Ses
 }
 
 const listRunningReviewRunsBySession = `-- name: ListRunningReviewRunsBySession :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE session_id = ? AND status = 'running' AND verdict = '' ORDER BY created_at DESC
 `
 
@@ -871,6 +958,11 @@ func (q *Queries) ListRunningReviewRunsBySession(ctx context.Context, sessionID 
 			&i.BatchID,
 			&i.AutoInjectReview,
 			&i.TriggerSource,
+			&i.ReviewerModel,
+			&i.WorkerNotice,
+			&i.WorkerNoticeAttempts,
+			&i.WorkerNoticeError,
+			&i.WorkerNoticeAttemptedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -885,6 +977,51 @@ func (q *Queries) ListRunningReviewRunsBySession(ctx context.Context, sessionID 
 	return items, nil
 }
 
+const listSessionsWithPendingReviewRunNotices = `-- name: ListSessionsWithPendingReviewRunNotices :many
+SELECT DISTINCT review_run.session_id
+FROM review_run
+JOIN sessions ON sessions.id = review_run.session_id
+WHERE review_run.worker_notice = 'pending' AND review_run.worker_notice_attempts < ?1
+  AND NOT sessions.is_terminated
+`
+
+// Live workers still owed a "review done" message. Terminated sessions are
+// skipped: they cannot receive one until they are restored.
+func (q *Queries) ListSessionsWithPendingReviewRunNotices(ctx context.Context, maxAttempts int64) ([]domain.SessionID, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionsWithPendingReviewRunNotices, maxAttempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []domain.SessionID{}
+	for rows.Next() {
+		var session_id domain.SessionID
+		if err := rows.Scan(&session_id); err != nil {
+			return nil, err
+		}
+		items = append(items, session_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markReviewRunNoticeSent = `-- name: MarkReviewRunNoticeSent :execrows
+UPDATE review_run SET worker_notice = 'sent' WHERE id = ? AND worker_notice = 'pending'
+`
+
+func (q *Queries) MarkReviewRunNoticeSent(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markReviewRunNoticeSent, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const recordReviewChatControllerError = `-- name: RecordReviewChatControllerError :execrows
 UPDATE review SET controller_error = ?, updated_at = ? WHERE id = ? AND interface_mode = 'chat' AND is_archived = FALSE
 `
@@ -897,6 +1034,28 @@ type RecordReviewChatControllerErrorParams struct {
 
 func (q *Queries) RecordReviewChatControllerError(ctx context.Context, arg RecordReviewChatControllerErrorParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, recordReviewChatControllerError, arg.ControllerError, arg.UpdatedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const recordReviewRunNoticeFailure = `-- name: RecordReviewRunNoticeFailure :execrows
+UPDATE review_run SET worker_notice_attempts = worker_notice_attempts + 1,
+    worker_notice_error = ?, worker_notice_attempted_at = ?
+WHERE id = ? AND worker_notice = 'pending'
+`
+
+type RecordReviewRunNoticeFailureParams struct {
+	WorkerNoticeError       string
+	WorkerNoticeAttemptedAt sql.NullTime
+	ID                      string
+}
+
+// A failed delivery keeps the notice pending and records why, for the retry
+// backoff and for diagnosis.
+func (q *Queries) RecordReviewRunNoticeFailure(ctx context.Context, arg RecordReviewRunNoticeFailureParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordReviewRunNoticeFailure, arg.WorkerNoticeError, arg.WorkerNoticeAttemptedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -943,6 +1102,37 @@ func (q *Queries) RestoreReviewLaunchState(ctx context.Context, arg RestoreRevie
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const selectReviewNoticeChatDelivery = `-- name: SelectReviewNoticeChatDelivery :one
+SELECT conversation_turns.state, conversation_turns.error_message
+FROM conversations
+JOIN conversation_messages ON conversation_messages.conversation_id = conversations.id
+    AND conversation_messages.client_message_id = ?1
+JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
+WHERE conversations.current_session_id = ?2
+LIMIT 1
+`
+
+type SelectReviewNoticeChatDeliveryParams struct {
+	ClientMessageID string
+	SessionID       *domain.SessionID
+}
+
+type SelectReviewNoticeChatDeliveryRow struct {
+	State        domain.TurnState
+	ErrorMessage string
+}
+
+// The Chat turn carrying one "review done" delivery attempt, found by the
+// attempt's client message id in the worker's conversation. Its state tells
+// whether the message reached the agent, is still queued (a sleeping session
+// not yet woken), or failed (the wake or drain failed).
+func (q *Queries) SelectReviewNoticeChatDelivery(ctx context.Context, arg SelectReviewNoticeChatDeliveryParams) (SelectReviewNoticeChatDeliveryRow, error) {
+	row := q.db.QueryRowContext(ctx, selectReviewNoticeChatDelivery, arg.ClientMessageID, arg.SessionID)
+	var i SelectReviewNoticeChatDeliveryRow
+	err := row.Scan(&i.State, &i.ErrorMessage)
+	return i, err
 }
 
 const setReviewInterfaceMode = `-- name: SetReviewInterfaceMode :execrows

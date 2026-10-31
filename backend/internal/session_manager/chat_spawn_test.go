@@ -1740,6 +1740,15 @@ func TestSendRoutesIntoTheChatConversation(t *testing.T) {
 		}
 	}
 
+	// A lifecycle notice names its delivery attempt so it can later read
+	// whether that exact message reached the agent.
+	if err := mgr.SendWithClientMessageID(ctx, rec.ID, "AO review done: approved", "review-done:run-1:0"); err != nil {
+		t.Fatalf("SendWithClientMessageID: %v", err)
+	}
+	last := len(launcher.relayed) - 1
+	if launcher.relayed[last] != "AO review done: approved" || launcher.relayIDs[last] != "review-done:run-1:0" {
+		t.Fatalf("relay = %q under %q, want the notice under its attempt id", launcher.relayed[last], launcher.relayIDs[last])
+	}
 }
 
 // A terminated chat session cannot receive a message, matching the terminal path.

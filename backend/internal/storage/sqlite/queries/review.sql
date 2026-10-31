@@ -84,8 +84,8 @@ WHERE id = ?
     OR (? = '' AND reviewer_launch_id = ''));
 
 -- name: InsertReviewRun :exec
-INSERT INTO review_run (id, review_id, session_id, batch_id, harness, trigger_source, pr_url, target_sha, status, verdict, body, github_review_id, created_at, auto_inject_review)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO review_run (id, review_id, session_id, batch_id, harness, trigger_source, pr_url, target_sha, status, verdict, body, github_review_id, created_at, auto_inject_review, reviewer_model)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: UpdateReviewRunResult :execrows
 UPDATE review_run SET status = ?, verdict = ?, body = ?, github_review_id = ?, auto_inject_review = ? WHERE id = ? AND status = 'running';
@@ -100,28 +100,56 @@ UPDATE review_run SET status = 'cancelled', body = ? WHERE session_id = ? AND st
 UPDATE review_run SET status = 'cancelled', body = ? WHERE session_id = ? AND harness = ? AND status = 'running' AND verdict = '';
 
 -- name: GetReviewRun :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE id = ?;
 
 -- name: GetReviewRunBySessionPRAndSHA :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? ORDER BY created_at DESC LIMIT 1;
 
 -- name: GetReviewRunBySessionPRSHAAndHarness :one
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE session_id = ? AND pr_url = ? AND target_sha = ? AND harness = ? ORDER BY created_at DESC LIMIT 1;
 
 -- name: ListReviewRunsBySession :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE session_id = ? ORDER BY created_at DESC;
 
 -- name: ListRunningReviewRunsBySession :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE session_id = ? AND status = 'running' AND verdict = '' ORDER BY created_at DESC;
 
 -- name: ListReviewRunsByBatch :many
-SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
 FROM review_run WHERE session_id = ? AND batch_id = ? ORDER BY created_at ASC, id ASC;
+
+-- name: ListPendingReviewRunNoticesBySession :many
+-- Final passes that still owe the worker a "review done" message, oldest
+-- first so notices arrive in the order the passes were requested. A notice
+-- whose delivery failed max_attempts times has given up and is not listed.
+SELECT id, review_id, session_id, harness, pr_url, target_sha, status, verdict, body, created_at, github_review_id, delivered_at, batch_id, auto_inject_review, trigger_source, reviewer_model, worker_notice, worker_notice_attempts, worker_notice_error, worker_notice_attempted_at
+FROM review_run WHERE session_id = sqlc.arg(session_id) AND worker_notice = 'pending'
+  AND worker_notice_attempts < sqlc.arg(max_attempts)
+ORDER BY created_at ASC, id ASC;
+
+-- name: ListSessionsWithPendingReviewRunNotices :many
+-- Live workers still owed a "review done" message. Terminated sessions are
+-- skipped: they cannot receive one until they are restored.
+SELECT DISTINCT review_run.session_id
+FROM review_run
+JOIN sessions ON sessions.id = review_run.session_id
+WHERE review_run.worker_notice = 'pending' AND review_run.worker_notice_attempts < sqlc.arg(max_attempts)
+  AND NOT sessions.is_terminated;
+
+-- name: MarkReviewRunNoticeSent :execrows
+UPDATE review_run SET worker_notice = 'sent' WHERE id = ? AND worker_notice = 'pending';
+
+-- name: RecordReviewRunNoticeFailure :execrows
+-- A failed delivery keeps the notice pending and records why, for the retry
+-- backoff and for diagnosis.
+UPDATE review_run SET worker_notice_attempts = worker_notice_attempts + 1,
+    worker_notice_error = ?, worker_notice_attempted_at = ?
+WHERE id = ? AND worker_notice = 'pending';
 
 -- name: ListCurrentHeadReviewRunsBySession :many
 -- AO review passes recorded against each PR's CURRENT head commit. Passes for
@@ -193,3 +221,16 @@ WHERE status = 'running' AND verdict = '' AND batch_id != ''
 -- name: ArchiveReviewsBySession :exec
 UPDATE review SET is_archived = TRUE, reviewer_handle_id = '', reviewer_launch_id = '',
     controller_generation = '', reviewer_activity_state = 'exited', updated_at = ? WHERE session_id = ?;
+
+-- name: SelectReviewNoticeChatDelivery :one
+-- The Chat turn carrying one "review done" delivery attempt, found by the
+-- attempt's client message id in the worker's conversation. Its state tells
+-- whether the message reached the agent, is still queued (a sleeping session
+-- not yet woken), or failed (the wake or drain failed).
+SELECT conversation_turns.state, conversation_turns.error_message
+FROM conversations
+JOIN conversation_messages ON conversation_messages.conversation_id = conversations.id
+    AND conversation_messages.client_message_id = sqlc.arg(client_message_id)
+JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
+WHERE conversations.current_session_id = sqlc.arg(session_id)
+LIMIT 1;
