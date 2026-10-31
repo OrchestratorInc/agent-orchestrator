@@ -2901,10 +2901,28 @@ func workspaceRepoUnavailable(root string) bool {
 			gitdir = filepath.Join(root, gitdir)
 		}
 		info, err := os.Stat(gitdir)
-		return err != nil || !info.IsDir()
+		if err != nil || !info.IsDir() {
+			return os.IsNotExist(err)
+		}
+		// A linked worktree's per-worktree gitdir can survive after the common
+		// repository disappears. Git follows commondir and fails every read.
+		// Resolve it relative to gitdir, including on Windows drive paths.
+		commonFile, err := os.ReadFile(filepath.Join(gitdir, "commondir"))
+		if err != nil {
+			return false
+		}
+		commonDir := strings.TrimSpace(string(commonFile))
+		if commonDir == "" {
+			return false
+		}
+		if !filepath.IsAbs(commonDir) {
+			commonDir = filepath.Join(gitdir, commonDir)
+		}
+		_, err = os.Stat(commonDir)
+		return os.IsNotExist(err)
 	}
 	info, err := os.Stat(gitPath)
-	return err != nil || !info.IsDir()
+	return os.IsNotExist(err) || err == nil && !info.IsDir()
 }
 
 // parseGitDirFile extracts the path from a git worktree `.git` file's

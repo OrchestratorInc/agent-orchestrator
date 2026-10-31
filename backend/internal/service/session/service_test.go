@@ -2,8 +2,11 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,8 +20,10 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/observe/ownership"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
 
@@ -911,6 +916,67 @@ func TestListWorkspaceFilesRepoUnavailableWrapsSentinel(t *testing.T) {
 	}
 	if !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
 		t.Fatalf("error = %v, want errors.Is(ErrWorkspaceRepoUnavailable)", err)
+	}
+}
+
+func TestLinkedWorkspaceMissingCommonRepository(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "worktree with spaces")
+	gitdir := filepath.Join(parent, "metadata with spaces", "worktrees", "session")
+	common := filepath.Join(parent, "owning repo", ".git")
+	for _, dir := range []string{root, gitdir, common} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	backpointer, err := filepath.Rel(root, gitdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+backpointer+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	commonPointer, err := filepath.Rel(gitdir, common)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitdir, "commondir"), []byte(commonPointer+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceRepoUnavailable(root) {
+		t.Fatal("existing common repository classified as missing")
+	}
+	if err := os.RemoveAll(common); err != nil {
+		t.Fatal(err)
+	}
+	if !workspaceRepoUnavailable(root) {
+		t.Fatal("missing common repository was not detected")
+	}
+	_, err = gitWorkspaceOutput(context.Background(), root, "status", "--porcelain=v1")
+	if !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+		t.Fatalf("Git error = %v, want missing repository", err)
+	}
+	st := newFakeStore()
+	st.sessions["ao-1"] = domain.SessionRecord{
+		ID:       "ao-1",
+		Metadata: domain.SessionMetadata{WorkspacePath: root},
+	}
+	svc := NewWithDeps(Deps{Store: st})
+	_, err = svc.ReconcileWorkspaceManifest(context.Background(), "ao-1")
+	if !errors.Is(err, ports.ErrWorkspaceRepoUnavailable) {
+		t.Fatalf("stream startup reconciliation = %v, want missing repository", err)
+	}
+}
+
+func TestWorkspaceGitErrorClassificationPreservesUnknownFailure(t *testing.T) {
+	busy := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: Unable to create C:\\repo\\.git\\index.lock")
+	var apiErr *apierr.Error
+	if !errors.As(busy, &apiErr) || apiErr.Code != "WORKSPACE_GIT_BUSY" {
+		t.Fatalf("lock error = %v, want retryable WORKSPACE_GIT_BUSY", busy)
+	}
+	unknown := classifyWorkspaceGitError(context.Background(), errors.New("git exit"), "fatal: bad object")
+	if !errors.As(unknown, &apiErr) || apiErr.Code != "WORKSPACE_GIT_READ_FAILED" {
+		t.Fatalf("unknown Git error = %v, want WORKSPACE_GIT_READ_FAILED", unknown)
 	}
 }
 
@@ -4011,6 +4077,34 @@ func TestToAPIError_NotResumable(t *testing.T) {
 	var e *apierr.Error
 	if !errors.As(mapped, &e) || e.Kind != apierr.KindConflict || e.Code != "SESSION_NOT_RESUMABLE" {
 		t.Fatalf("mapped = %v, want Conflict SESSION_NOT_RESUMABLE", mapped)
+	}
+}
+
+// A send to a chat session with no live controller (it stopped, or never
+// started because provisioning failed) must answer the same 409
+// CHAT_CONTROLLER_NOT_READY that steer-or-send gives, not a bare 500.
+func TestSendWithoutChatControllerIsControllerNotReady(t *testing.T) {
+	for _, sentinel := range []error{chatsvc.ErrNoController, chatsvc.ErrNotProvisioning} {
+		svc := &Service{manager: &fakeCommander{sendErr: fmt.Errorf("send mer-1: %w", sentinel)}}
+		for name, send := range map[string]func() error{
+			"send": func() error { return svc.Send(context.Background(), "mer-1", "hello", nil) },
+			"send with options": func() error {
+				return svc.SendWithOptions(context.Background(), "mer-1", "hello", nil, ports.MessageDeliveryOptions{AuthoredByUser: true})
+			},
+		} {
+			t.Run(sentinel.Error()+"/"+name, func(t *testing.T) {
+				rec := httptest.NewRecorder()
+				envelope.WriteError(rec, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/mer-1/send", nil), send())
+				var body envelope.APIError
+				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+					t.Fatal(err)
+				}
+				if rec.Code != http.StatusConflict || body.Code != "CHAT_CONTROLLER_NOT_READY" ||
+					body.Message != "the agent controller for this session is not running" {
+					t.Fatalf("status=%d body=%s, want 409 CHAT_CONTROLLER_NOT_READY", rec.Code, rec.Body)
+				}
+			})
+		}
 	}
 }
 

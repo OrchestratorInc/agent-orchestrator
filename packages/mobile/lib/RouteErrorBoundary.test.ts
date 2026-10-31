@@ -14,9 +14,11 @@ const rootLayout = "_layout.tsx";
 
 const screenRoutes = [
 	"(tabs)/index.tsx",
-	"artifact/[sessionId].tsx",
 	"(tabs)/projects.tsx",
 	"(tabs)/prs.tsx",
+	"artifact/[sessionId].tsx",
+	"artifact-version/[sessionId].tsx",
+	"artifacts/[sessionId].tsx",
 	"files/[sessionId]/file.tsx",
 	"files/[sessionId]/index.tsx",
 	"settings/environments.tsx",
@@ -37,6 +39,7 @@ const screenRoutes = [
 const sheetRoutes = [
 	"spawn.tsx",
 	"sheets/agent.tsx",
+	"sheets/artifact-history.tsx",
 	"sheets/chat-settings.tsx",
 	"sheets/composer-picker.tsx",
 	"sheets/connect.tsx",
