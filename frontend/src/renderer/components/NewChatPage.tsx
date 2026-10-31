@@ -296,6 +296,14 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 		const here = targetRef.current;
 		return request?.hiddenPrompt && request.projectId === here.projectId && request.hostId === here.hostId ? request : undefined;
 	};
+	// Picking another project keeps the report: its instructions follow the user to
+	// the project they chose rather than being dropped as raised for another one.
+	const changeProject = (project: string) => {
+		const report = reportRequest();
+		const current = useUiStore.getState().newTaskRequest;
+		if (report && current?.nonce === report.nonce) useUiStore.setState({ newTaskRequest: { ...current, projectId: project } });
+		void navigate({ to: "/new", search: { project, host: hostId }, replace: true });
+	};
 	const consumeReportRequest = (report: ReturnType<typeof reportRequest>) => {
 		const current = useUiStore.getState().newTaskRequest;
 		if (report && current?.nonce === report.nonce) useUiStore.setState({ newTaskRequest: { ...current, hiddenPrompt: undefined, displayName: undefined } });
@@ -400,7 +408,7 @@ export function NewChatPage({ projectId, hostId }: { projectId: string; hostId?:
 				skills={skills}
 				composerTray={
 					<>
-						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen} onChange={(project) => void navigate({ to: "/new", search: { project, host: hostId }, replace: true })} />
+						<NewChatProjectPicker projectId={projectId} hostId={hostId} disabled={frozen} onChange={changeProject} />
 						{hostId ? null : <MobileConnected />}
 					</>
 				}
