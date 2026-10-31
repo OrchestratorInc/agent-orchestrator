@@ -1,0 +1,2 @@
+Error: cortex is not configured, and onboarding requires an interactive terminal (stdin is not a TTY).
+Run cortex once in an interactive shell to complete onboarding.
