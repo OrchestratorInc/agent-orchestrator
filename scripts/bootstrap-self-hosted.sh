@@ -2,6 +2,9 @@
 # Fresh Ubuntu x64 entry point. The lower-level installer owns AO releases and service setup.
 set -euo pipefail
 
+# Braced so bash reads the whole script before running any of it: a download
+# cut off mid-way by `curl ... | bash` runs nothing.
+{
 usage() {
 	printf '%s\n' 'Usage: bootstrap-self-hosted.sh [--nightly | --source-ref BRANCH] [--lan]'
 	printf '%s\n' 'Installs prerequisites, then installs released AO or builds a source branch.'
@@ -94,3 +97,4 @@ bash "$installer" "${args[@]}"
 
 printf '\nDay-two commands: %s\n' "$HOME/.ao/host/current/resources/daemon/ao remote-host status"
 printf 'Service logs: journalctl --user -u ao-self-hosted.service -n 100 --no-pager\n'
+}

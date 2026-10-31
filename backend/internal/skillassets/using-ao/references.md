@@ -31,6 +31,7 @@ Natural-language-to-command mappings for common AO tasks.
 | Clean up terminated sessions | `ao session cleanup` |
 | Make a Docker container this session starts survive AO cleanup | `docker run --label ao.session=$AO_SESSION_ID --label ao.spare=true ...` |
 | See a session's details | `ao session get <id>` |
+| Set up a VM or headless machine so it shows up on the user's devices | Read [commands/remote-host.md](commands/remote-host.md); install over SSH, then `ao remote-host link` |
 | Open the desktop app | `ao start` |
 | Check the daemon is up | `ao status` |
 | Run health checks | `ao doctor` |

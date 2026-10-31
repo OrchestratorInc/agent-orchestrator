@@ -402,7 +402,7 @@ PY
 			[[ "$result" == 0 ]] || { cat "$tmp/out" >&2; exit 1; }
 			grep -q '^Address: https://example.trycloudflare.com:443$' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			awk '/^Address: https:\/\/example.trycloudflare.com:443$/ { address = NR } /^Password: test-secret$/ { password = NR } END { exit !(address && password > address + 1) }' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
-			grep -q 'enable Developer mode, then Settings' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
+			grep -q 'On your laptop: Settings → Remote hosts → Add host' "$tmp/out" || { cat "$tmp/out" >&2; exit 1; }
 			TEST_SERVICE_PATH_CAPTURE="$tmp/service-path" "$tmp/host/run-daemon.sh"
 			[[ ":$(<"$tmp/service-path"):" == *":$tmp/host/current/resources/acp-runtime/node/bin:"* ]] || {
 				printf '%s\n' 'daemon service PATH omits bundled Node' >&2; exit 1;
