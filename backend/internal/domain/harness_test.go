@@ -132,3 +132,18 @@ func TestOpenHandsHarnessIsKnown(t *testing.T) {
 		t.Fatal("HarnessOpenHands.IsKnown() = false, want true")
 	}
 }
+
+func TestQoderCLIHarnessIsKnown(t *testing.T) {
+	if HarnessQoderCLI != AgentHarness("qodercli") {
+		t.Fatalf("HarnessQoderCLI = %q, want qodercli", HarnessQoderCLI)
+	}
+	if !HarnessQoderCLI.IsKnown() {
+		t.Fatal("HarnessQoderCLI.IsKnown() = false, want true")
+	}
+	for _, harness := range AllHarnesses {
+		if harness == HarnessQoderCLI {
+			return
+		}
+	}
+	t.Fatal("AllHarnesses does not contain HarnessQoderCLI")
+}

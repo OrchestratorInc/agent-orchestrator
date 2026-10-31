@@ -344,3 +344,20 @@ func TestMemcodeAdapterIsSelectable(t *testing.T) {
 		t.Fatal("missing TUI agent")
 	}
 }
+
+func TestQoderCLIAdapterIsSelectable(t *testing.T) {
+	reg, err := Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter, ok := reg.Get("qodercli")
+	if !ok || !domain.HarnessQoderCLI.IsKnown() {
+		t.Fatal("Qoder CLI is not selectable")
+	}
+	if adapter.Manifest().Name != "Qoder CLI" {
+		t.Fatalf("manifest name = %q, want Qoder CLI", adapter.Manifest().Name)
+	}
+	if _, ok := adapter.(ports.Agent); !ok {
+		t.Fatal("missing TUI agent")
+	}
+}

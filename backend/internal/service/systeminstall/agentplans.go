@@ -50,6 +50,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetOpenHands:   "https://docs.openhands.dev/openhands/usage/cli/installation",
 	TargetCommandCode: "https://commandcode.ai/docs/quickstart",
 	TargetHermes:      "https://github.com/NousResearch/hermes-agent",
+	TargetQoderCLI:    "https://docs.qoder.com/cli",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -274,6 +275,15 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		} else {
 			plans = []Plan{{Target: target, Method: "manual", Unsupported: true, Reason: "Install the official native memcode release binary", DocsURL: agentDocumentationURLs[target]}}
 		}
+	case TargetQoderCLI:
+		// Qoder CLI ships an npm package and a curl installer. AO does not run a
+		// remote-shell installer, and the npm package would install the CLI
+		// against AO's own Node runtime, so the setup stays with the user.
+		plans = []Plan{manualPlan(
+			target,
+			"AO does not automatically install Qoder CLI. Run `npm install -g @qoder-ai/qodercli`, then refresh harness status.",
+			agentDocumentationURLs[target],
+		)}
 	case TargetHermes:
 		// Homebrew ships prebuilt release bottles; the official installer clones
 		// the GitHub repository, so it stays the fallback (lastResortInstallers).

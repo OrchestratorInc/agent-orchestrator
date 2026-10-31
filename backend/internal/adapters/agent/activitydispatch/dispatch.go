@@ -33,6 +33,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/qodercli"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -78,6 +79,7 @@ var Derivers = map[string]DeriveFunc{
 	"kilocode":     activitystate.StandardDeriveActivityState,
 	"autohand":     activitystate.StandardDeriveActivityState,
 	"vibe":         vibe.DeriveActivityState,
+	"qodercli":     qodercli.DeriveActivityState,
 	"fake":         fake.DeriveActivityState,
 }
 
