@@ -181,7 +181,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	cmd := []string{binary, "--no-update"}
+	cmd := make([]string, 0, 6)
+	cmd = append(cmd, binary, "--no-update")
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
 	return append(cmd, "--resume", id), true, nil
 }
@@ -210,7 +211,7 @@ func (p *Plugin) NativeConversationExists(ctx context.Context, session ports.Ses
 }
 
 // nativeIDPattern is JCode's session id: session_<word>_<millis>_<16 hex>.
-var nativeIDPattern = regexp.MustCompile(`^session_[a-z0-9]+_[0-9]+_[0-9a-f]{16}$`)
+var nativeIDPattern = regexp.MustCompile(`^session_[a-z0-9]+_\d+_[0-9a-f]{16}$`)
 
 type nativeSession struct {
 	ID         string `json:"id"`

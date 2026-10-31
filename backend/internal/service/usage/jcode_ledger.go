@@ -15,7 +15,7 @@ import (
 )
 
 // jcodeSessionIDPattern is jcode's session id: session_<word>_<millis>_<16 hex>.
-var jcodeSessionIDPattern = regexp.MustCompile(`^session_[a-z0-9]+_[0-9]+_[0-9a-f]{16}$`)
+var jcodeSessionIDPattern = regexp.MustCompile(`^session_[a-z0-9]+_\d+_[0-9a-f]{16}$`)
 
 // maxJCodeSessionBytes bounds one read of a native session file, which holds
 // the whole transcript including tool output.
