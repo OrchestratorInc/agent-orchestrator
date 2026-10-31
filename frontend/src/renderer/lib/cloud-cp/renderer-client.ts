@@ -12,6 +12,7 @@ type CloudCpBridgeRequest = (init: {
 	method: string;
 	headers?: Record<string, string>;
 	body?: string;
+	bodyBase64?: string;
 }) => Promise<{ status: number; headers: Record<string, string>; body: string }>;
 
 const API_PREFIX = "/api/cloud/v1";
@@ -45,6 +46,34 @@ export const cloudCpFetch: typeof fetch = async (input, init) => {
 	const body = NULL_BODY_STATUSES.has(result.status) || result.body === "" ? null : result.body;
 	return new Response(body, { status: result.status, headers: result.headers });
 };
+
+/**
+ * Sends a binary body to a control-plane path through the main-process
+ * bridge, which carries it base64-encoded. Without a bridge (browser preview)
+ * there is no credential, so it answers 401 like a signed-out request.
+ */
+export async function cloudCpUpload(
+	baseUrl: string,
+	path: string,
+	method: "POST" | "PUT",
+	bytes: Uint8Array,
+	headers: Record<string, string>,
+): Promise<Response> {
+	const request = bridgeRequest();
+	if (request === undefined) return new Response(null, { status: 401 });
+	const result = await request({ baseUrl, path, method, headers, bodyBase64: bytesToBase64(bytes) });
+	const body = NULL_BODY_STATUSES.has(result.status) || result.body === "" ? null : result.body;
+	return new Response(body, { status: result.status, headers: result.headers });
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+	let binary = "";
+	const chunk = 0x8000;
+	for (let index = 0; index < bytes.length; index += chunk) {
+		binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+	}
+	return btoa(binary);
+}
 
 export function createRendererCloudCpClient(baseUrl: string): CloudCpClient {
 	// Funnel telemetry (cloud-telemetry.ts) wraps the client; it passes results
